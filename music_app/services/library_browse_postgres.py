@@ -963,7 +963,6 @@ class PostgresLibraryBrowseRepository:
             "gallery_scale_percent": view_state["gallery_scale_percent"],
             "local_tree_submode": "",
             "visible_library_categories": view_state["visible_library_categories"],
-            "music_dir": str(self._config_value("MUSIC_DIR")),
             "app_name": str(self._config_value("APP_NAME", "Album Haven")),
             "app_version": str(self._config_value("APP_VERSION", RELEASE_VERSION)),
             "ignored_version_keys": support_state["ignored_version_keys"],
@@ -1313,7 +1312,6 @@ class PostgresLibraryBrowseRepository:
             "gallery_scale_percent": view_state["gallery_scale_percent"],
             "local_tree_submode": "",
             "visible_library_categories": view_state["visible_library_categories"],
-            "music_dir": str(self._config_value("MUSIC_DIR")),
             "app_name": str(self._config_value("APP_NAME", "Album Haven")),
             "app_version": str(self._config_value("APP_VERSION", RELEASE_VERSION)),
             "non_album_tracks": build_non_album_track_list(
@@ -1867,7 +1865,6 @@ class PostgresLibraryBrowseRepository:
             "gallery_scale_percent": view_state["gallery_scale_percent"],
             "local_tree_submode": "",
             "visible_library_categories": view_state["visible_library_categories"],
-            "music_dir": str(self._config_value("MUSIC_DIR")),
             "app_name": str(self._config_value("APP_NAME", "Album Haven")),
             "app_version": str(self._config_value("APP_VERSION", RELEASE_VERSION)),
             "ignored_version_keys": support_state["ignored_version_keys"],
@@ -2226,7 +2223,6 @@ class PostgresLibraryBrowseRepository:
             "gallery_scale_percent": view_state["gallery_scale_percent"],
             "local_tree_submode": "",
             "visible_library_categories": view_state["visible_library_categories"],
-            "music_dir": str(self._config_value("MUSIC_DIR")),
             "app_name": str(self._config_value("APP_NAME", "Album Haven")),
             "app_version": str(self._config_value("APP_VERSION", RELEASE_VERSION)),
             "ignored_version_keys": support_state["ignored_version_keys"],
@@ -2839,7 +2835,6 @@ class PostgresLibraryBrowseRepository:
             "gallery_scale_percent": view_state["gallery_scale_percent"],
             "local_tree_submode": "",
             "visible_library_categories": view_state["visible_library_categories"],
-            "music_dir": str(self._config_value("MUSIC_DIR")),
             "app_name": str(self._config_value("APP_NAME", "Album Haven")),
             "app_version": str(self._config_value("APP_VERSION", RELEASE_VERSION)),
             "ignored_version_keys": support_state["ignored_version_keys"],
@@ -7689,6 +7684,7 @@ def _selected_artist_family_context_from_state(
         projection_artist,
         connect=connect,
         connection=connection,
+        include_alias_maps=alias_to_canonical is None or canonical_to_aliases is None,
     )
     postgres_alias_to_canonical = {
         str(alias or "").strip(): str(canonical or "").strip()
@@ -7704,22 +7700,17 @@ def _selected_artist_family_context_from_state(
         for canonical, aliases in dict(postgres_family_projection.get("canonical_to_aliases") or {}).items()
         if str(canonical or "").strip()
     }
-    effective_alias_to_canonical = {
-        str(alias or "").strip(): str(canonical or "").strip()
-        for alias, canonical in dict(alias_to_canonical or postgres_alias_to_canonical).items()
-        if str(alias or "").strip() and str(canonical or "").strip()
-    }
-    effective_canonical_to_aliases = {
-        str(canonical or "").strip(): [
-            str(alias or "").strip()
-            for alias in list(aliases or [])
-            if str(alias or "").strip()
-        ]
-        for canonical, aliases in dict(
-            canonical_to_aliases or postgres_canonical_to_aliases
-        ).items()
-        if str(canonical or "").strip()
-    }
+    # Caller maps are already normalized; copying the complete projection blocks search.
+    effective_alias_to_canonical = (
+        alias_to_canonical
+        if alias_to_canonical is not None
+        else postgres_alias_to_canonical
+    )
+    effective_canonical_to_aliases = (
+        canonical_to_aliases
+        if canonical_to_aliases is not None
+        else postgres_canonical_to_aliases
+    )
     postgres_family_artists = list(postgres_family_projection.get("family_artists") or [])
     postgres_projection_loaded = bool(postgres_family_projection.get("loaded"))
     family_artists = (
@@ -7798,7 +7789,7 @@ def _queue_display_cover_variants_for_groups(
                 ):
                     inventory_options = {}
                     recorder = config.get("_GENERATED_PREVIEW_INVENTORY_RECORDER")
-                    if recorder is not None:
+                    if recorder is not None and preview_policy is not None:
                         inventory_options["on_published"] = recorder
                     queue_cover_display_variant_generation(
                         source_path,
@@ -8726,23 +8717,26 @@ def _album_musicbrainz_artist(connection: Any, album_id: object) -> dict[str, ob
     return identity
 
 
+def _projected_identities(identities: object) -> list[dict[str, object]]:
+    if isinstance(identities, str):
+        identities = json.loads(identities)
+    return [
+        {"artist_mbid": str(item.get("artist_mbid")),
+         "musicbrainz_url": f"https://musicbrainz.org/artist/{item.get('artist_mbid')}",
+         "canonical_name": item.get("canonical_name"), "disambiguation": item.get("disambiguation") or None,
+         "album_count": int(item.get("album_count") or 0)}
+        for item in identities or [] if isinstance(item, Mapping) and item.get("artist_mbid")
+    ] if isinstance(identities, list) else []
+
+
 def _artist_musicbrainz_projection(
     row: Mapping[str, object],
 ) -> dict[str, object] | None:
     artist_mbid = str(row.get("artist_mbid") or "").strip().lower()
     if not artist_mbid:
-        identities = row.get("artist_identities")
-        if isinstance(identities, str):
-            identities = json.loads(identities)
-        if not isinstance(identities, list) or not identities:
-            return None
+        identities = _projected_identities(row.get("artist_identities"))
         # A local name whose albums belong to several MusicBrainz artists.
-        return {"identities": [
-            {"artist_mbid": str(item.get("artist_mbid")),
-             "musicbrainz_url": f"https://musicbrainz.org/artist/{item.get('artist_mbid')}",
-             "canonical_name": item.get("canonical_name"), "disambiguation": item.get("disambiguation") or None,
-             "album_count": int(item.get("album_count") or 0)}
-            for item in identities if isinstance(item, Mapping) and item.get("artist_mbid")]}
+        return {"identities": identities} if identities else None
     raw_genres = row.get("artist_genres")
     genres = (
         [
@@ -9313,6 +9307,7 @@ def _artist_musicbrainz_projection_joins_sql(
              and identity.album_key = identity_album.album_key
             join integration.musicbrainz_artists identity_artist
               on identity_artist.mbid = identity.artist_mbid
+            -- The first test depends only on the outer row: other artists skip the scan.
             where split_match.local_artist_id is not null
               and identity_album.library_id = {library_id}
               and identity_album.artist_id = {artist_id}

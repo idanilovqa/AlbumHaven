@@ -20,6 +20,7 @@ const ANDROID_BRIDGE_POLICY = /* android-bridge-policy */ {
     "playback.album_details.v1": "optional",
     "sandbox.select.v1": "optional",
     "updates.manual.v1": "optional",
+    "updates.choose.v1": "optional",
     "downloads.link.v1": "optional",
     "files.save.v1": "optional",
     "app.copy.v1": "optional"
@@ -122,6 +123,29 @@ function sendAndroidBridgeCommand(name, payload = {}) {
     }));
   });
 }
+
+function foregroundDocumentHealthy() {
+  const loader = document.getElementById?.('library-loader');
+  const loadingSelection = loader && !loader.hidden
+    && document.getElementById?.('library-loader-title')?.textContent === 'Loading selection';
+  return document.visibilityState !== 'hidden' && !loadingSelection;
+}
+
+// The native shell replaces a foregrounded document only when it cannot paint and report healthy.
+function acknowledgeAndroidForeground(token) {
+  if (!isAndroidShell() || !Number.isSafeInteger(token) || token <= 0) return false;
+  const deadline = Date.now() + 4000;
+  const afterPaint = () => requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (foregroundDocumentHealthy()) {
+      void sendAndroidBridgeCommand('shell.foregroundReady', { token }).catch(() => {});
+    } else if (Date.now() < deadline) {
+      setTimeout(afterPaint, 100);
+    }
+  }));
+  afterPaint();
+  return true;
+}
+window.AlbumHavenForegroundHealth = acknowledgeAndroidForeground;
 
 // A shell that negotiated outside this site's range, or lacks a required capability, cannot run it.
 // Current shells refuse such a handshake themselves; this also covers one that did not.
@@ -549,7 +573,7 @@ function androidNativeStoredTrack(track) {
     ...(track.albumArtist ? { albumArtist: String(track.albumArtist) } : {}),
     album: String(track.album || ''),
     ...(track.year ? { year: String(track.year) } : {}),
-    coverPath: String(track.coverPath || ''),
+    coverRef: String(track.coverRef || ''),
     ...(track.trackNumber ? { trackNumber: String(track.trackNumber) } : {}),
     ...(Number(track.durationSeconds) > 0 ? { durationSeconds: Number(track.durationSeconds) } : {}),
   };

@@ -399,6 +399,26 @@ replaces an artist's automatic identities; owner choices are kept. Rollback stop
 the readers, drops the table and restores the state check without `per_album`
 (after re-checking those artists).
 
+Migration `0178_add_musicbrainz_associated_artists.sql` adds the nullable
+`associated_artist_mbids` array to `local_artist_musicbrainz_matches`: the
+same-named MusicBrainz groups a matched person is a member of (Alice Cooper and
+his 1969-74 group), shown under the one local artist while each album keeps its
+own MBID. It is additive; running code that does not know the column ignores it.
+Rollback stops the readers and drops the column.
+
+Migration `0210_create_schema_migration_attestations.sql` adds the append-only
+`ops.schema_migration_attestations` table used to reconcile a database's
+`ops.schema_migrations` ledger with the repository without rewriting history. A
+row binds a migration name, its repository checksum, the checksum the ledger
+actually holds (null when the name is absent), the SHA-256 of the catalog
+evidence manifest proving the database's state, the reconciliation migration and
+the owner's approval. Updates, deletes and truncation are rejected by triggers and
+privileges; the runtime role has no access and the read-only role may select. The
+migration creates an empty table: rows are written per database by the reviewed
+reconciliation tooling. Fresh databases built from the repository never need
+attestations. Rollback is not expected; removing the table also removes the
+reconciliation evidence, so it requires an owner-approved contraction.
+
 Migration `0171_create_musicbrainz_artist_enrichment.sql` uses a reserved number:
 `0099` through `0170` are already taken by unmerged branches or recorded in the
 production ledger, so it skips them instead of colliding. It adds the bounded

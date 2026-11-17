@@ -159,7 +159,10 @@ def start_musicbrainz_enrichment_worker(app):
         return existing
     config = app.state.config
     if (
-        config.get("MUSICBRAINZ_ENRICHMENT_ENABLED") is not True
+        config.get(
+            "MUSICBRAINZ_ENRICHMENT_WORKER_ENABLED",
+            config.get("MUSICBRAINZ_ENRICHMENT_ENABLED"),
+        ) is not True
         or not str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()
     ):
         return None

@@ -1100,13 +1100,13 @@ async function authenticateFunctionalFixture(port, options = {}) {
   return { Cookie: sessionCookie };
 }
 
-function collectLocalCoverPreviewUrls(value, baseUrl, found = new Set(), options = {}) {
+// Every local cover the fixture page names: the server names only its own library's covers.
+function collectLocalCoverPreviewUrls(value, baseUrl, found = new Set()) {
   if (typeof value === 'string') {
-    if (!value.startsWith('/cover?')) return found;
+    if (!value.startsWith('/cover/')) return found;
     try {
       const candidate = new URL(value, baseUrl);
-      const expectedOrigin = new URL(baseUrl).origin;
-      if (candidate.origin === expectedOrigin && candidate.pathname === '/cover') {
+      if (candidate.origin === new URL(baseUrl).origin && candidate.pathname.startsWith('/cover/')) {
         found.add(candidate.toString());
       }
     } catch {
@@ -1115,29 +1115,18 @@ function collectLocalCoverPreviewUrls(value, baseUrl, found = new Set(), options
     return found;
   }
   if (Array.isArray(value)) {
-    for (const item of value) collectLocalCoverPreviewUrls(item, baseUrl, found, options);
+    for (const item of value) collectLocalCoverPreviewUrls(item, baseUrl, found);
     return found;
   }
   if (value && typeof value === 'object') {
-    const mediaRoot = String(options.mediaRoot || '').trim();
-    const coverPath = String(value.cover_path || '').trim();
-    if (mediaRoot && coverPath) {
-      const resolvedMediaRoot = path.resolve(mediaRoot);
-      const resolvedCoverPath = path.resolve(coverPath);
-      const relativeCoverPath = path.relative(resolvedMediaRoot, resolvedCoverPath);
-      if (
-        relativeCoverPath
-        && !relativeCoverPath.startsWith('..')
-        && !path.isAbsolute(relativeCoverPath)
-      ) {
-        const candidate = new URL('/cover', baseUrl);
-        candidate.searchParams.set('path', resolvedCoverPath);
-        candidate.searchParams.set('size', '480');
-        found.add(candidate.toString());
-      }
+    const coverRef = String(value.cover_ref || '').trim();
+    if (coverRef) {
+      const candidate = new URL(`/cover/${encodeURIComponent(coverRef)}`, baseUrl);
+      candidate.searchParams.set('size', '480');
+      found.add(candidate.toString());
     }
     for (const item of Object.values(value)) {
-      collectLocalCoverPreviewUrls(item, baseUrl, found, options);
+      collectLocalCoverPreviewUrls(item, baseUrl, found);
     }
   }
   return found;
@@ -1208,9 +1197,7 @@ async function prewarmFunctionalFixture(port, options = {}) {
     reportFailure('view-data-json', viewResponse);
     return false;
   }
-  const coverUrls = [...collectLocalCoverPreviewUrls(payload, baseUrl, new Set(), {
-    mediaRoot: options.mediaRoot,
-  })].sort();
+  const coverUrls = [...collectLocalCoverPreviewUrls(payload, baseUrl)].sort();
   if (coverUrls.length === 0) {
     reportFailure('cover-discovery');
     return false;
@@ -1225,7 +1212,9 @@ async function prewarmFunctionalFixture(port, options = {}) {
         },
       )),
     );
-    const failedResponse = responses.find((response) => !response?.ok);
+    // A cover the library names but whose file a fixture left dangling has nothing to warm (the app
+    // shows its placeholder); every other failure still stops the run.
+    const failedResponse = responses.find((response) => !response?.ok && Number(response?.statusCode) !== 404);
     if (failedResponse) {
       reportFailure('cover-preview', failedResponse);
       return false;
@@ -1416,7 +1405,6 @@ async function startManagedIsolatedApp(childEnv, options = {}) {
         || prewarmFunctionalFixture;
       const warmed = await prewarmFunctionalFixtureFn(port, {
         fetchHttpResponseCompleteFn: options.fetchHttpResponseCompleteFn,
-        mediaRoot: childEnv.ALBUM_HAVEN_MEDIA_ROOT,
         requestHeaders,
         diagnosticWriteFn: (line) => stderr.write(line),
       });
@@ -1643,7 +1631,13 @@ function createManagedIsolatedAppRestartController(options = {}) {
 
   const readPendingRequest = () => {
     if (!fs.existsSync(requestPath)) return null;
-    const request = JSON.parse(fs.readFileSync(requestPath, 'utf8'));
+    let request;
+    try {
+      request = JSON.parse(fs.readFileSync(requestPath, 'utf8'));
+    } catch (error) {
+      if (error?.code === 'ENOENT') return null;
+      throw error;
+    }
     const nonce = String(request?.nonce || '').trim();
     if (!nonce || nonce.length > 256) {
       throw new Error('Managed isolated restart request requires a valid nonce.');

@@ -201,7 +201,7 @@ test('resume tokens reach only a resumption-capable shell and artwork needs a va
       expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
       tracks: body.tracks.map((track, index) => ({
         clientKey: track.clientKey, playbackRef: `opaque-ref-${index}`,
-        ...(index === 0 ? {} : { resumeToken: index === 1 ? '../cover?path=C:/Music' : 7 }),
+        ...(index === 0 ? {} : { resumeToken: index === 1 ? '../cover/C:/Music' : 7 }),
       })),
     }),
   });

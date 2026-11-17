@@ -42,7 +42,7 @@ function albumCardHtml(album, options = {}) {
     track_count_preview: Number(album?.track_count_preview || 0),
     total_duration_seconds: Number(album?.total_duration_seconds || 0),
     total_duration_display: String(album?.total_duration_display || ''),
-    cover_path: String(album?.cover_path || ''),
+    cover_ref: String(album?.cover_ref || ''),
     cover_preview_url: String(album?.cover_preview_url || ''),
     cover_revision: String(album?.cover_revision || ''),
     remote_cover_url: String(album?.remote_cover_url || ''),
@@ -56,14 +56,14 @@ function albumCardHtml(album, options = {}) {
       ? album.allowed_actions
       : {},
   });
-  const localCoverPath = escapeHtml(String(album?.cover_path || '').trim());
+  const localCoverRef = escapeHtml(String(album?.cover_ref || '').trim());
   const remoteCoverUrl = escapeHtml(String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim());
   const coverHtml = albumMissing
     ? ''
     : (albumHasDisplayCover(album)
       ? buildAlbumCardCoverHtml(album, {
         coverPriority: options.coverPriority,
-        localCoverPath,
+        localCoverRef,
         remoteCoverUrl,
       })
       : '<div class="cover-placeholder">No cover art</div>');
@@ -127,7 +127,7 @@ function getAlbumCardRenderKey(album) {
     Number(summary.trackCount || 0),
     String(summary.lengthDisplay || ''),
     albumHasDisplayCover(album) ? buildAlbumDisplayCoverUrl(album) : '',
-    String(album?.cover_path || '').trim(),
+    String(album?.cover_ref || '').trim(),
     String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim(),
     String(album?.inventory_status || ''),
     String(album?.missing_since || ''),
@@ -182,18 +182,20 @@ function buildAlbumCardCoverHtml(album, options = {}) {
   if (!albumHasDisplayCover(album)) {
     return '<div class="cover-placeholder">No cover art</div>';
   }
-  const coverPriority = options.coverPriority === 'visible' ? 'visible' : 'near';
+  const coverPriority = ['visible', 'background'].includes(options.coverPriority)
+    ? options.coverPriority
+    : 'near';
   const loadingAttribute = coverPriority === 'visible' ? 'eager' : 'lazy';
   const fetchPriorityAttribute = coverPriority === 'visible' ? 'high' : 'low';
   const coverSrc = buildAlbumDisplayCoverUrl(album);
-  const localCoverPath = typeof options.localCoverPath === 'string'
-    ? options.localCoverPath
-    : escapeHtml(String(album?.cover_path || '').trim());
+  const localCoverRef = typeof options.localCoverRef === 'string'
+    ? options.localCoverRef
+    : escapeHtml(String(album?.cover_ref || '').trim());
   const remoteCoverUrl = typeof options.remoteCoverUrl === 'string'
     ? options.remoteCoverUrl
     : escapeHtml(String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim());
   const coverAlt = escapeHtml(`Album cover for ${album.display_name || album.name}`);
-  return `<img loading="${loadingAttribute}" fetchpriority="${fetchPriorityAttribute}" decoding="async" data-gallery-cover-priority="${coverPriority}" data-gallery-cover-src="${coverSrc}" data-production-cover-src="${coverSrc}" data-cover-visual-state="pending" aria-hidden="true" alt="${coverAlt}" data-cover-path="${localCoverPath}" data-remote-cover-url="${remoteCoverUrl}" onload="handleAlbumDisplayCoverImageLoad(this)" onerror="handleAlbumDisplayCoverImageError(this)">`;
+  return `<img loading="${loadingAttribute}" fetchpriority="${fetchPriorityAttribute}" decoding="async" data-gallery-cover-priority="${coverPriority}" data-gallery-cover-src="${coverSrc}" data-production-cover-src="${coverSrc}" data-cover-visual-state="pending" aria-hidden="true" alt="${coverAlt}" data-cover-ref="${localCoverRef}" data-remote-cover-url="${remoteCoverUrl}" onload="handleAlbumDisplayCoverImageLoad(this)" onerror="handleAlbumDisplayCoverImageError(this)">`;
 }
 
 function refreshRenderedAlbumCoverOnly(updatedAlbum) {
@@ -332,6 +334,7 @@ class VirtualArtistGrid {
     this._scrollRestoreRaf = null;
     this._stabilizeRaf = null;
     this._albumDetailPrewarmRaf = 0;
+    this._albumDetailPrewarmTimeout = 0;
     this._albumDetailPrewarmGeneration = 0;
     this._stabilizeGeneration = 0;
     this._pendingStabilizationScroll = null;
@@ -507,9 +510,14 @@ class VirtualArtistGrid {
 
   cancelVisibleAlbumDetailPrewarm() {
     this._albumDetailPrewarmGeneration += 1;
-    if (!this._albumDetailPrewarmRaf) return;
-    cancelBrowserAnimationFrame(this._albumDetailPrewarmRaf);
-    this._albumDetailPrewarmRaf = 0;
+    if (this._albumDetailPrewarmRaf) {
+      cancelBrowserAnimationFrame(this._albumDetailPrewarmRaf);
+      this._albumDetailPrewarmRaf = 0;
+    }
+    if (this._albumDetailPrewarmTimeout) {
+      clearBrowserTimeout(this._albumDetailPrewarmTimeout);
+      this._albumDetailPrewarmTimeout = 0;
+    }
   }
 
   scheduleVisibleAlbumDetailPrewarm(rangeKey, scrollTop) {
@@ -528,18 +536,22 @@ class VirtualArtistGrid {
       this._albumDetailPrewarmRaf = scheduleBrowserAnimationFrame(() => {
         if (generation !== this._albumDetailPrewarmGeneration) return;
         this._albumDetailPrewarmRaf = 0;
-        if (
-          renderGeneration !== this._renderGeneration
-          || !this.isScrollSettled
-          || this.lastKey !== rangeKey
-          || Math.abs(Number(this.scrollEl?.scrollTop || 0) - normalizedScrollTop) > 2
-        ) {
-          return;
-        }
-        queueVisibleTrackModalAlbumDetailsPrewarm(this.containerEl, this.scrollEl, 2);
-        if (typeof preloadVisibleAlbumDetailsCovers === 'function') {
-          preloadVisibleAlbumDetailsCovers(this.containerEl, this.scrollEl);
-        }
+        this._albumDetailPrewarmTimeout = scheduleBrowserTimeout(() => {
+          this._albumDetailPrewarmTimeout = 0;
+          if (
+            generation !== this._albumDetailPrewarmGeneration
+            || renderGeneration !== this._renderGeneration
+            || !this.isScrollSettled
+            || this.lastKey !== rangeKey
+            || Math.abs(Number(this.scrollEl?.scrollTop || 0) - normalizedScrollTop) > 2
+          ) {
+            return;
+          }
+          queueVisibleTrackModalAlbumDetailsPrewarm(this.containerEl, this.scrollEl, 2);
+          if (typeof preloadVisibleAlbumDetailsCovers === 'function') {
+            preloadVisibleAlbumDetailsCovers(this.containerEl, this.scrollEl);
+          }
+        }, 250);
       });
     });
   }
@@ -941,6 +953,12 @@ class VirtualArtistGrid {
     const normalizedToken = Number(token);
     if (!force && (!normalizedToken || !this._activeCoverLoadUserActionTokens.has(normalizedToken))) {
       return false;
+    }
+    if (!force && (this._raf || this._measureRaf || this._measureTimeout || this._stabilizeRaf)) {
+      scheduleBrowserAnimationFrame(() => {
+        this.resumeSelectedArtistCoverLoadsAfterUserAction(normalizedToken);
+      });
+      return true;
     }
     if (!this._activeCoverLoadUserActionTokens.size) return false;
     if (force) {
@@ -1519,6 +1537,7 @@ class VirtualArtistGrid {
         restoreScroll();
         if (typeof loadPreviousRootGalleryPage === 'function') void loadPreviousRootGalleryPage();
         if (typeof loadNextRootGalleryPage === 'function') void loadNextRootGalleryPage();
+        if (this._raf) return;
         const latestRender = this.diagnostics.latestRender;
         if (
           Number(latestRender?.renderGeneration || 0) !== renderGeneration
@@ -2183,9 +2202,6 @@ class VirtualArtistGrid {
 
   primeVisibleCoverImages() {
     if (!(this.scrollEl instanceof HTMLElement) || !(this.containerEl instanceof HTMLElement)) {
-      return;
-    }
-    if (String(state?.view?.selected_artist || '').trim()) {
       return;
     }
     const scrollRect = this.scrollEl.getBoundingClientRect();
@@ -2866,10 +2882,13 @@ class VirtualArtistGrid {
       }
       const blockTop = Number(section.top || 0) + Number(section.blockOffsets?.[blockIndex] || 0);
       const blockBottom = blockTop + Number(section.blockHeights?.[blockIndex] || 0);
-      const coverPriority = blockBottom >= Number(options.viewportTop || 0)
-        && blockTop <= Number(options.viewportBottom || 0)
+      const visible = blockBottom >= Number(options.viewportTop || 0)
+        && blockTop <= Number(options.viewportBottom || 0);
+      const coverPriority = visible
         ? 'visible'
-        : 'near';
+        : section.sectionType === 'primary' && String(state?.view?.selected_artist || '').trim()
+          ? 'background'
+          : 'near';
       const rowColumns = this.columns;
       return `
         <div class="album-row" data-section-key="${escapeHtml(section.sectionKey)}" data-block-index="${blockIndex}" style="grid-template-columns:${buildAlbumRowGridTemplate(rowColumns, this.cardTrackWidth)};justify-content:start;">

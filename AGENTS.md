@@ -36,6 +36,22 @@ operate, or contribute to the application.
   colors, and buttons share visibly disabled states. Keep light-theme alerts
   readable without changing approved dark-theme alerts; do not add page-local
   copies or overrides of these rules.
+- Postgres migrations (owner rule, 2026-11-10): every file in `migrations/postgres`
+  has a unique four-digit number. Numbers may leave gaps and may be applied out
+  of order, but a new migration never reuses a number that main or any open pull
+  request already uses; renumber before merging when two branches collide. Only
+  code merged to main may apply migrations to a shared or production database;
+  branch work uses an isolated database or a disposable copy.
+- Production-copy development (owner rule, 2026-11-14): production stays up and
+  is never a development database. Each branch or sandbox develops against its
+  own restored copy of the production database, with media writes disabled or a
+  test library, because a database copy does not isolate the real music files.
+  Never place such copies or dumps in CI, pull requests or artifacts; CI keeps
+  synthetic fixtures. Reserve migration numbers in the owner's shared ledger
+  (private repository) before creating the file. A migration that needs
+  another migration starts with `-- depends on: <file>`, carries a higher
+  number and merges only after its dependency is on main. Never edit a
+  migration after a shared database has applied it.
 - Run focused tests locally for changed behavior. Use CI for the broader
   JavaScript and Python suites before proposing a release.
 - E2E tests for owner-reported regressions must assert every named
@@ -71,6 +87,31 @@ operate, or contribute to the application.
 - Stop and redesign when bounded behavior cannot be demonstrated before
   implementation. During review, treat an unbounded interaction path as a
   correctness defect even when functional tests pass.
+
+## Where the mandatory regression gates run
+
+- Run the search, HTML reload, Edit Tags, Problematic Files, and
+  bounded-interaction gates on GitHub-hosted runners, not on the owner's
+  machine. The bounded-interaction gate joins once
+  `npm run test:bounded-interactions` is on the tested ref. Push the exact
+  commit, then start
+  `gh workflow run heavy-gates.yml --ref main -f ref=<commit-sha> -f gates=<gates>`
+  with a comma-separated gate list. Wait with `gh run watch`; read failures
+  with `gh run view --log-failed`, the job summary timing table, and the
+  `heavy-gate-<gate>` artifact. Locally, `scripts/run-regression-gate.ps1
+  -Gate <gate>` runs the same stages.
+- A hosted run satisfies a gate only when that gate's job succeeded on the
+  commit being handed off. It uses isolated PostgreSQL 17, released synthetic
+  fixtures, and the `local` timing contract. It is not the pull-request
+  pipeline: it never records review coverage or authorizes merge or
+  publication.
+- Run locally, under the machine-wide heavy-job lock, only checks that need
+  the owner's real library or real MP3 media and full-size-library
+  measurements. Do not take the heavy-job lock for a gate the hosted workflow
+  covers.
+- Hosted runs keep every budget, grace band, and hard ceiling. Do not switch
+  timing contracts, relax budgets, or rerun until green; diagnose a hosted
+  performance failure exactly like a local one.
 
 ## Mandatory search regression gate
 
@@ -239,6 +280,8 @@ The intended behavior is basically: worker still running → keep waiting
   250 or more lines, a binary functional change, an unavailable baseline, or
   `ci:full-review` uses whole-PR review.
 - Reproduce and verify failing cases locally, then push directly to the complete review-first CI pipeline. Use focused hosted tests only for unusually difficult failures or CI-specific infrastructure diagnosis; state the reason and return to full CI as soon as the focused failure is fixed. Keep native area tags and focused-selection tooling available. A focused result never authorizes merge or publication.
+  The Heavy Regression Gates workflow in "Where the mandatory regression gates
+  run" is the normal way to run those gates and is not this focused exception.
   If the focused exception is needed, follow the authenticated PR-head promotion procedure in the private E2E investigation workflow. Never use `workflow_dispatch` for hosted reviews or assume a `GITHUB_TOKEN` label write emits a new workflow event.
 - Only a successful full pipeline may record review coverage, authorize merge,
   or authorize publication. Focused verification never weakens or replaces an

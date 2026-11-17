@@ -9,7 +9,7 @@ function buildAlbumTrackPlayButtonHtml(track = {}) {
   const artist = String(track.artist || '');
   const albumArtist = String(track.albumArtist || track.album_artist || '');
   const album = String(track.album || '');
-  const coverPath = String(track.coverPath || track.cover_path || '');
+  const coverRef = String(track.coverRef || track.cover_ref || '');
   const durationSeconds = Number(track.durationSeconds || track.duration_seconds || 0);
   const isPlaying = Boolean(track.isPlaying);
   const iconName = isPlaying ? 'pause' : 'play';
@@ -21,7 +21,7 @@ function buildAlbumTrackPlayButtonHtml(track = {}) {
     : mediaRef
       ? `/track?ref=${encodeURIComponent(mediaRef)}`
       : `/track?cue=${encodeURIComponent(cueSegmentRef)}`;
-  return `<button class="play-track-button album-track-table__play" data-src="${source}" data-track-path="${escapeHtml(trackIdentity)}"${mediaRef ? ` data-media-ref="${escapeHtml(mediaRef)}"` : ''}${cueSegmentRef ? ` data-cue-segment-ref="${escapeHtml(cueSegmentRef)}"` : ''}${playbackRef ? ` data-playback-ref="${escapeHtml(playbackRef)}"` : ''}${playbackRefExpiresAt ? ` data-playback-ref-expires-at="${escapeHtml(playbackRefExpiresAt)}"` : ''} data-track-title="${escapeHtml(title)}" data-track-artist="${escapeHtml(artist)}" data-track-album-artist="${escapeHtml(albumArtist)}" data-track-album="${escapeHtml(album)}" data-track-cover="${escapeHtml(coverPath)}" data-track-duration-seconds="${durationSeconds}" type="button" aria-label="${isPlaying ? 'Pause track' : 'Play track'}">${icon}</button>`;
+  return `<button class="play-track-button album-track-table__play" data-src="${source}" data-track-path="${escapeHtml(trackIdentity)}"${mediaRef ? ` data-media-ref="${escapeHtml(mediaRef)}"` : ''}${cueSegmentRef ? ` data-cue-segment-ref="${escapeHtml(cueSegmentRef)}"` : ''}${playbackRef ? ` data-playback-ref="${escapeHtml(playbackRef)}"` : ''}${playbackRefExpiresAt ? ` data-playback-ref-expires-at="${escapeHtml(playbackRefExpiresAt)}"` : ''} data-track-title="${escapeHtml(title)}" data-track-artist="${escapeHtml(artist)}" data-track-album-artist="${escapeHtml(albumArtist)}" data-track-album="${escapeHtml(album)}" data-track-cover="${escapeHtml(coverRef)}" data-track-duration-seconds="${durationSeconds}" type="button" aria-label="${isPlaying ? 'Pause track' : 'Play track'}">${icon}</button>`;
 }
 
 function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {

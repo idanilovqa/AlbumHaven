@@ -81,7 +81,7 @@ test(`${CASE_ID} allowed Chrome policy automatically continues playback after re
   });
 
   await stepLogger.step('Reload a paused snapshot and sustain playback after explicit Play', async () => {
-    await globalPlayerActions.pauseIfPlaying();
+    await globalPlayerActions.pauseAndReadListenCheckpoint();
     const pausedOffset = (await globalPlayerActions.waitForFullTrackTiming()).currentTime;
     const pausedRestore = await globalPlayerActions.reloadAndWaitForRestoredTrack({
       path: playedTrack.path,

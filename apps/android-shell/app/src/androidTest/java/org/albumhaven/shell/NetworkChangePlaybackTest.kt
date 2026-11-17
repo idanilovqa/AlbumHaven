@@ -150,7 +150,9 @@ class NetworkChangePlaybackTest {
         assertTrue("the cut came $cut frames in, too late to hear what follows it", cut < 10L * RATE)
         origin.cutPcmSocket()
         waitUntil("fifteen seconds heard") { sink.heardFrames() >= 15L * RATE }
-        main.removeCallbacks(sampling)
+        InstrumentationRegistry.getInstrumentation().runOnMainSync {
+            main.removeCallbacks(sampling)
+        }
         val afterCut = sink.operations().drop(operationsBeforeCut)
         controller.pause()
         waitUntil("paused") { controller.snapshot.state == NativePlaybackState.PAUSED }

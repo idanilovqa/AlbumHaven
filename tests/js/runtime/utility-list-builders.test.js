@@ -446,12 +446,12 @@ test('player album resolution prefers fresh exact-track data over the active que
     key: 'album-alpha',
     name: 'Album Alpha',
     album_artist: 'Artist Alpha',
-    cover_path: 'C:\\Music\\Artist Alpha\\Album Alpha\\old-cover.jpg',
+    cover_ref: 'C:\\Music\\Artist Alpha\\Album Alpha\\old-cover.jpg',
     tracks: [{ path: playingTrackPath }],
   };
   const freshAlbum = {
     ...queueSnapshot,
-    cover_path: 'C:\\Music\\Artist Alpha\\Album Alpha\\new-cover.jpg',
+    cover_ref: 'C:\\Music\\Artist Alpha\\Album Alpha\\new-cover.jpg',
   };
   const playingTrack = {
     path: playingTrackPath,
@@ -1335,18 +1335,18 @@ test('findVisibleAlbumByTrackPaths fills missing cover authority from duplicate 
     key: 'preferred',
     track_paths: [sharedPath],
     album_preference: { rating: 8 },
-    cover_path: null,
+    cover_ref: null,
   }, {
     key: 'covered',
     track_paths: [sharedPath],
-    cover_path: 'D:\\Synthetic Music\\Rarity Artist\\Duplicate\\cover.png',
+    cover_ref: 'D:\\Synthetic Music\\Rarity Artist\\Duplicate\\cover.png',
   }];
 
   const album = context.findVisibleAlbumByTrackPaths(new Set([sharedPath]));
 
   assert.equal(album.key, 'preferred');
   assert.equal(
-    album.cover_path,
+    album.cover_ref,
     'D:\\Synthetic Music\\Rarity Artist\\Duplicate\\cover.png',
   );
 });
@@ -1386,7 +1386,7 @@ test('applyUpdatedAlbumsToCurrentView merges a second moved track into the stabl
     release_date: '2026-07-22',
     genres: ['Progressive Rock'],
     label: 'Fixture Records',
-    cover_path: 'D:\\Synthetic Music\\Rarity Artist\\Split\\folder.jpg',
+    cover_ref: 'D:\\Synthetic Music\\Rarity Artist\\Split\\folder.jpg',
     remote_cover_url: 'https://covers.example/stable-destination.jpg',
     remote_cover_thumbnail_url: 'https://covers.example/stable-destination-thumb.jpg',
     tracks: [firstMovedTrack],
@@ -1443,14 +1443,14 @@ test('applyUpdatedAlbumsToCurrentView keeps mounted covers when finalized split 
   const context = loadHelpers();
   const sourcePath = 'D:\\Music\\Artist\\Album\\02 Source.mp3';
   const destinationPath = 'D:\\Music\\Artist\\Album\\01 Destination.mp3';
-  const coverPath = 'D:\\Music\\Artist\\Album\\cover.png';
+  const coverRef = 'D:\\Music\\Artist\\Album\\cover.png';
   const remoteCoverUrl = 'https://covers.example/album.jpg';
   const visibleSource = {
     key: 'artist::album::2000',
     name: 'Album',
     album_artist: 'Artist',
     year: 2000,
-    cover_path: coverPath,
+    cover_ref: coverRef,
     remote_cover_url: remoteCoverUrl,
     tracks: [{ path: sourcePath }],
   };
@@ -1459,13 +1459,13 @@ test('applyUpdatedAlbumsToCurrentView keeps mounted covers when finalized split 
     name: 'Album Renamed',
     album_artist: 'Artist',
     year: 2000,
-    cover_path: coverPath,
+    cover_ref: coverRef,
     remote_cover_url: remoteCoverUrl,
     tracks: [{ path: destinationPath }],
   };
   const finalized = [visibleSource, visibleDestination].map((album) => ({
     ...album,
-    cover_path: null,
+    cover_ref: null,
     remote_cover_url: null,
   }));
   context.state.view.selected_artist = '';
@@ -1484,15 +1484,15 @@ test('applyUpdatedAlbumsToCurrentView keeps mounted covers when finalized split 
   });
 
   for (const album of context.lastMergedPayload.artist_groups[0].albums) {
-    assert.equal(album.cover_path, coverPath);
+    assert.equal(album.cover_ref, coverRef);
     assert.equal(album.remote_cover_url, remoteCoverUrl);
   }
 });
 
 test('applyUpdatedAlbumsToCurrentView keeps covers through consecutive selected-artist splits', () => {
   const context = loadHelpers();
-  const coverPath = 'D:\\Music\\Artist\\Album\\cover.png';
-  const coverPreviewUrl = '/cover?path=opaque&size=480&v=revision';
+  const coverRef = 'D:\\Music\\Artist\\Album\\cover.png';
+  const coverPreviewUrl = '/cover/opaque?size=480&v=revision';
   const remoteCoverUrl = 'https://covers.example/album.jpg';
   const albums = [
     ['artist::source::2000', 'Source', '03 Source.mp3'],
@@ -1508,13 +1508,13 @@ test('applyUpdatedAlbumsToCurrentView keeps covers through consecutive selected-
   }));
   const coveredAlbums = albums.map((album) => ({
     ...album,
-    cover_path: coverPath,
+    cover_ref: coverRef,
     cover_preview_url: coverPreviewUrl,
     remote_cover_url: remoteCoverUrl,
   }));
   const finalizedAlbums = albums.map((album) => ({
     ...album,
-    cover_path: null,
+    cover_ref: null,
     cover_preview_url: null,
     remote_cover_url: null,
   }));
@@ -1531,7 +1531,7 @@ test('applyUpdatedAlbumsToCurrentView keeps covers through consecutive selected-
   });
 
   for (const album of context.lastMergedPayload.primary_artist_groups[0].albums) {
-    assert.equal(album.cover_path, coverPath);
+    assert.equal(album.cover_ref, coverRef);
     assert.equal(album.cover_preview_url, coverPreviewUrl);
     assert.equal(album.remote_cover_url, remoteCoverUrl);
   }
@@ -1759,7 +1759,7 @@ test('compact canonical enrichment preserves finalized modal membership while ad
     album_artist: 'DDT',
     year: 1999,
     edition: 'Original',
-    cover_path: 'D:\\Synthetic Music\\DDT\\Studio Records\\cover.jpg',
+    cover_ref: 'D:\\Synthetic Music\\DDT\\Studio Records\\cover.jpg',
     preview_only: true,
     track_count_preview: 13,
     tracks: [],
@@ -1774,7 +1774,7 @@ test('compact canonical enrichment preserves finalized modal membership while ad
   assert.equal(enrichedAlbum.request_key, 'postgres-studio-source');
   assert.equal(enrichedAlbum.identity_key, 'postgres-studio-source');
   assert.equal(enrichedAlbum.edition, 'Original');
-  assert.equal(enrichedAlbum.cover_path, canonicalCompactAlbum.cover_path);
+  assert.equal(enrichedAlbum.cover_ref, canonicalCompactAlbum.cover_ref);
   assert.equal(enrichedAlbum.preview_only, false);
   assert.equal(enrichedAlbum.track_count_preview, 13);
   assert.deepEqual(
@@ -3317,7 +3317,7 @@ test('watchSaveTask adopts canonical structural membership transfers without a s
     request_key: 'postgres-studio-source',
     identity_key: 'postgres-studio-source',
     edition: 'Original',
-    cover_path: 'D:\\Synthetic Music\\DDT\\Studio Records\\cover.jpg',
+    cover_ref: 'D:\\Synthetic Music\\DDT\\Studio Records\\cover.jpg',
     track_count_preview: 13,
     tracks: [restoredTrack, ...existingTracks],
   };
@@ -3399,7 +3399,7 @@ test('watchSaveTask adopts canonical structural membership transfers without a s
   assert.equal(canonicalHydratedSource.request_key, finalizedSource.request_key);
   assert.equal(canonicalHydratedSource.identity_key, finalizedSource.identity_key);
   assert.equal(canonicalHydratedSource.edition, finalizedSource.edition);
-  assert.equal(canonicalHydratedSource.cover_path, finalizedSource.cover_path);
+  assert.equal(canonicalHydratedSource.cover_ref, finalizedSource.cover_ref);
   assert.equal(canonicalHydratedSource.track_count_preview, 13);
   assert.deepEqual(
     Array.from(canonicalHydratedSource.tracks, (track) => track.path),
@@ -3764,11 +3764,13 @@ test('terminal Problematic Files refresh does not render its prior selection dur
   const targetAlbum = {
     key: 'studio-records-5',
     name: 'Studio Records5',
-    detail_loaded: true,
+    detail_loaded: false,
     problematic_track_paths: [trackPath],
     track_paths: [trackPath],
   };
   const renderedTitles = [];
+  let detailLoads = 0;
+  let summaryLoads = 0;
   let releaseCanonicalRefresh;
   let markCanonicalRefreshStarted;
   const canonicalRefreshStarted = new Promise((resolve) => {
@@ -3796,15 +3798,27 @@ test('terminal Problematic Files refresh does not render its prior selection dur
     if (selected?.name) renderedTitles.push(selected.name);
   };
   context.openUtilityModal = () => context.renderUtilityModalContent();
-  context.loadProblematicAlbumDetail = async () => targetAlbum;
+  context.loadProblematicAlbumDetail = async () => {
+    detailLoads += 1;
+    if (detailLoads < 3) return null;
+    const hydratedAlbum = { ...targetAlbum, detail_loaded: true };
+    context.state.utility.problematicFiles = [hydratedAlbum];
+    return hydratedAlbum;
+  };
   context.loadProblematicFiles = async (force, options = {}) => {
     assert.equal(force, true);
+    summaryLoads += 1;
     const titleAtRefreshStart = previousAlbum.name;
     context.state.utility.problematicSummaryRequestToken = Number(
       context.state.utility.problematicSummaryRequestToken || 0,
     ) + 1;
+    canonicalRefreshRelease.problematicSummaryRequestToken = (
+      context.state.utility.problematicSummaryRequestToken
+    );
+    context.state.utility.completeLoadPromise = canonicalRefreshRelease;
     markCanonicalRefreshStarted();
     await canonicalRefreshRelease;
+    context.state.utility.completeLoadPromise = null;
     context.state.utility.problematicFiles = [targetAlbum];
     if (options.render !== false) renderedTitles.push(titleAtRefreshStart);
     return context.state.utility.problematicFiles;
@@ -3846,6 +3860,8 @@ test('terminal Problematic Files refresh does not render its prior selection dur
   );
   assert.equal(context.state.utility.selectedProblematicKey, targetAlbum.key);
   assert.equal(context.state.utility.problematicNavigationActiveToken, 0);
+  assert.equal(summaryLoads, 1, 'navigation must reuse the terminal post-save summary');
+  assert.equal(detailLoads, 3, 'navigation must retry canonical detail without refreshing the summary');
 });
 
 test('terminal Problematic Files refresh does not repaint stale detail while Settings is hidden', async () => {
@@ -4960,7 +4976,7 @@ test('watchSaveTask preserves finalized raw credits for album-only splits', asyn
     request_key: 'postgres-raw-credit-source',
     identity_key: 'postgres-raw-credit-source',
     edition: 'Original',
-    cover_path: 'D:\\Music\\DDT\\Studio Records\\source-cover.jpg',
+    cover_ref: 'D:\\Music\\DDT\\Studio Records\\source-cover.jpg',
     preview_only: true,
     track_count_preview: 1,
     tracks: [],
@@ -4970,7 +4986,7 @@ test('watchSaveTask preserves finalized raw credits for album-only splits', asyn
     request_key: 'postgres-raw-credit-suffix',
     identity_key: 'postgres-raw-credit-suffix',
     edition: 'Original',
-    cover_path: 'D:\\Music\\DDT\\Studio Records\\suffix-cover.jpg',
+    cover_ref: 'D:\\Music\\DDT\\Studio Records\\suffix-cover.jpg',
     preview_only: true,
     track_count_preview: 1,
     tracks: [],
@@ -4979,7 +4995,7 @@ test('watchSaveTask preserves finalized raw credits for album-only splits', asyn
     request_key: canonicalCompactSource.request_key,
     identity_key: canonicalCompactSource.identity_key,
     edition: canonicalCompactSource.edition,
-    cover_path: canonicalCompactSource.cover_path,
+    cover_ref: canonicalCompactSource.cover_ref,
     preview_only: false,
     track_count_preview: 1,
   });
@@ -4987,7 +5003,7 @@ test('watchSaveTask preserves finalized raw credits for album-only splits', asyn
     request_key: canonicalCompactSuffix.request_key,
     identity_key: canonicalCompactSuffix.identity_key,
     edition: canonicalCompactSuffix.edition,
-    cover_path: canonicalCompactSuffix.cover_path,
+    cover_ref: canonicalCompactSuffix.cover_ref,
     preview_only: false,
     track_count_preview: 1,
   });
@@ -5084,7 +5100,7 @@ test('watchSaveTask preserves finalized raw credits for album-only splits', asyn
       requestKey: album.request_key,
       identityKey: album.identity_key,
       edition: album.edition,
-      coverPath: album.cover_path,
+      coverRef: album.cover_ref,
       previewOnly: album.preview_only,
       trackCount: album.track_count_preview,
       trackPaths: album.tracks.map((track) => track.path),
@@ -5093,7 +5109,7 @@ test('watchSaveTask preserves finalized raw credits for album-only splits', asyn
       requestKey: canonicalCompactSource.request_key,
       identityKey: canonicalCompactSource.identity_key,
       edition: canonicalCompactSource.edition,
-      coverPath: canonicalCompactSource.cover_path,
+      coverRef: canonicalCompactSource.cover_ref,
       previewOnly: false,
       trackCount: 1,
       trackPaths: [siblingPath],
@@ -5101,7 +5117,7 @@ test('watchSaveTask preserves finalized raw credits for album-only splits', asyn
       requestKey: canonicalCompactSuffix.request_key,
       identityKey: canonicalCompactSuffix.identity_key,
       edition: canonicalCompactSuffix.edition,
-      coverPath: canonicalCompactSuffix.cover_path,
+      coverRef: canonicalCompactSuffix.cover_ref,
       previewOnly: false,
       trackCount: 1,
       trackPaths: [movedPath],
@@ -5111,7 +5127,7 @@ test('watchSaveTask preserves finalized raw credits for album-only splits', asyn
   assert.equal(context.state.modalReleases[0].request_key, 'postgres-raw-credit-source');
   assert.equal(context.state.modalReleases[0].identity_key, 'postgres-raw-credit-source');
   assert.equal(context.state.modalReleases[0].edition, 'Original');
-  assert.equal(context.state.modalReleases[0].cover_path, canonicalCompactSource.cover_path);
+  assert.equal(context.state.modalReleases[0].cover_ref, canonicalCompactSource.cover_ref);
   assert.equal(context.state.modalReleases[0].track_count_preview, 1);
   assert.equal(context.state.modalReleases[0].preview_only, false);
   assert.equal(
@@ -7104,6 +7120,52 @@ test('track problem navigation waits out a stale summary before refreshing resto
   assert.deepEqual(opens, [canonicalAlbum.key]);
   assert.equal(staleDetailLoads, 2);
   assert.equal(context.state.utility.selectedProblematicKey, canonicalAlbum.key);
+});
+
+test('track problem navigation reuses an in-flight summary before refreshing it again', async () => {
+  const { context, album: staleAlbum, trackPath } = loadProblematicTrackNavigationHelpers();
+  const summaryAlbum = {
+    ...staleAlbum,
+    detail_loaded: false,
+    problematic_track_paths: [],
+    track_paths: [],
+  };
+  const hydratedAlbum = { ...staleAlbum, detail_loaded: true };
+  let releaseSummary;
+  const inFlightSummary = new Promise((resolve) => {
+    releaseSummary = resolve;
+  });
+  const detailLoads = [];
+  const opens = [];
+  let summaryLoads = 0;
+  staleAlbum.detail_loaded = false;
+  context.state.utility.problematicFilesComplete = false;
+  context.state.utility.completeLoadPromise = inFlightSummary;
+  context.loadProblematicAlbumDetail = async (albumKey) => {
+    detailLoads.push(albumKey);
+    if (detailLoads.length === 1) return null;
+    context.state.utility.problematicFiles = [hydratedAlbum];
+    return hydratedAlbum;
+  };
+  context.loadProblematicFiles = async () => {
+    summaryLoads += 1;
+    return context.state.utility.problematicFiles;
+  };
+  context.openUtilityModal = () => {
+    opens.push(context.state.utility.selectedProblematicKey);
+  };
+
+  const navigation = context.openUtilityModalForTrack(trackPath);
+  setImmediate(() => {
+    context.state.utility.problematicFiles = [summaryAlbum];
+    context.state.utility.completeLoadPromise = null;
+    releaseSummary(context.state.utility.problematicFiles);
+  });
+  await navigation;
+
+  assert.equal(summaryLoads, 0);
+  assert.deepEqual(detailLoads, [staleAlbum.key, staleAlbum.key]);
+  assert.deepEqual(opens, [staleAlbum.key]);
 });
 
 test('track problem navigation refreshes canonical membership when the stale detail key is missing', async () => {

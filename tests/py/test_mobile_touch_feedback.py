@@ -53,18 +53,18 @@ def test_gallery_keeps_canonical_authority_and_exposes_picker_source(tmp_path):
         file_cache=cache, image_extensions={".jpg"}, image_dimensions=lambda _path: (32, 32),
         is_squareish_cover=lambda _width, _height: True)
     assert payload["active_cover_path"] == str(canonical)
-    assert payload["selected_source_path"] == str(source)
+    assert payload["selected_source_cover_path"] == str(source)
     active = [item for item in payload["local_covers"] if item["is_active"]]
     assert len(active) == 1
-    assert active[0]["path"] == str(canonical)
+    assert active[0]["candidate_cover_path"] == str(canonical)
     assert active[0]["cover_revision"] == revision
-    source_row = next(row for row in payload["local_covers"] if row["path"] == str(source))
+    source_row = next(row for row in payload["local_covers"] if row["candidate_cover_path"] == str(source))
     assert source_row["cover_revision"] == revision
     cache["track.mp3"]["remote_cover_url"] = "https://example.test/cover.jpg"
     remote = serialize_cover_gallery_payload(album_root=tmp_path, track_paths={"track.mp3"},
         file_cache=cache, image_extensions={".jpg"}, image_dimensions=lambda _path: (32, 32),
         is_squareish_cover=lambda _width, _height: True)
-    assert remote["selected_source_path"] is None
+    assert remote["selected_source_cover_path"] is None
     assert not any(item["is_active"] for item in remote["local_covers"])
 
 
@@ -77,8 +77,8 @@ def test_initial_gallery_keeps_canonical_candidate_without_claiming_a_saved_sour
         file_cache=cache, image_extensions={".jpg"}, image_dimensions=lambda _path: (32, 32),
         is_squareish_cover=lambda _width, _height: True)
     assert payload["active_cover_path"] == str(canonical)
-    assert payload["selected_source_path"] == str(canonical)
-    assert [row["path"] for row in payload["local_covers"] if row["is_active"]] == [str(canonical)]
+    assert payload["selected_source_cover_path"] == str(canonical)
+    assert [row["candidate_cover_path"] for row in payload["local_covers"] if row["is_active"]] == [str(canonical)]
     assert all("cover_revision" not in row for row in payload["local_covers"])
 
 
@@ -94,8 +94,8 @@ def test_gallery_lists_every_local_file_including_exact_duplicates(tmp_path):
     payload = serialize_cover_gallery_payload(album_root=tmp_path, track_paths={"track.mp3"},
         file_cache=cache, image_extensions={".jpg"}, image_dimensions=lambda _path: (32, 32),
         is_squareish_cover=lambda _width, _height: True)
-    assert {row["path"] for row in payload["local_covers"]} == {str(canonical), str(original), str(alternate)}
-    assert payload["selected_source_path"] == str(canonical)
+    assert {row["candidate_cover_path"] for row in payload["local_covers"]} == {str(canonical), str(original), str(alternate)}
+    assert payload["selected_source_cover_path"] == str(canonical)
 
 
 def test_remote_cover_claims_no_local_source(tmp_path):
@@ -108,6 +108,6 @@ def test_remote_cover_claims_no_local_source(tmp_path):
         return serialize_cover_gallery_payload(album_root=tmp_path, track_paths={"track.mp3"},
             file_cache=cache, image_extensions={".jpg"}, image_dimensions=lambda _path: (32, 32),
             is_squareish_cover=lambda _width, _height: True)
-    assert read()["selected_source_path"] == str(source)
+    assert read()["selected_source_cover_path"] == str(source)
     cache["track.mp3"]["remote_cover_url"] = "https://example.test/cover.jpg"
-    assert read()["selected_source_path"] is None
+    assert read()["selected_source_cover_path"] is None

@@ -329,6 +329,37 @@ def test_worker_discovers_existing_previews_before_claiming(tmp_path):
     assert target.read_bytes() == content
 
 
+def test_worker_retries_finish_without_rescanning_existing_previews():
+    class FinishConflictRepository(FakeRepository):
+        def __init__(self):
+            super().__init__([])
+            self.finish_attempts = 0
+
+        def finish_operation(self, operation_id):
+            self.finish_attempts += 1
+            if self.finish_attempts == 1:
+                raise RuntimeError("finish conflict")
+            return super().finish_operation(operation_id)
+
+    repository = FinishConflictRepository()
+    discoveries = []
+    worker = GeneratedPreviewRelocationWorker(
+        repository,
+        discover_inventory=lambda: discoveries.append(True),
+        retry_seconds=0.01,
+        sync_grace_seconds=0,
+    )
+    worker.start()
+    deadline = time.monotonic() + 2
+    while not repository.finished and time.monotonic() < deadline:
+        time.sleep(0.01)
+    asyncio.run(worker.stop(timeout_seconds=2))
+
+    assert repository.finished == [repository.operation_id]
+    assert discoveries == [True]
+    assert repository.staged == [repository.operation_id, repository.operation_id]
+
+
 def test_worker_sweeps_previews_published_while_finishing(tmp_path):
     content = b"late-preview"
     source = tmp_path / "source.webp"

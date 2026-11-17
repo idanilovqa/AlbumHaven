@@ -477,7 +477,10 @@ function normalizeStreamingContinuityOptions(options = {}) {
     .includes(options.kind) ? options.kind : 'queued-next';
   const startSeconds = Math.max(0, Number(options.startSeconds) || 0);
   const endSeconds = Math.max(startSeconds, Number(options.endSeconds) || 0);
-  return { kind, startSeconds, endSeconds };
+  if (kind !== 'queued-next') return { kind, startSeconds, endSeconds };
+  return {
+    kind, startSeconds, endSeconds, consecutiveAlbumBoundary: options.consecutiveAlbumBoundary === true,
+  };
 }
 
 function streamingContinuityIdentity(track, options) {
@@ -874,6 +877,7 @@ function handleStreamingControl(message) {
       ? pending.requestedSeekSeconds
       : null;
     engine.pendingPromotion = null;
+    keepHeardStreamingWire(engine.roles.current);
     if (retainedSeekSeconds !== null) {
       void seekStreamingPlayback(retainedSeekSeconds);
     } else {
@@ -897,7 +901,7 @@ function handleStreamingControl(message) {
     if (roleState.encoded && !roleState.encoded.delivered) {
       const { wire } = roleState.encoded;
       wire.eos = message;
-      keepStreamingWire(wire, message);
+      keepStreamingWire(wire, message, roleState.role);
       for (const follower of [...wire.followers]) {
         if (follower.delivered || !streamingRoleIsLive(follower.roleState)) continue;
         follower.eos = message;
@@ -1538,6 +1542,15 @@ function handleStreamingWorkletMessage(message) {
     );
     return;
   }
+  if (message.type === 'boundary-padding') {
+    const { edge, streamId, inspectedFrames, removableFrames, edgeRmsDb, contentRmsDb, confident } = message;
+    engine.diagnostics.boundaryPadding = {
+      ...engine.diagnostics.boundaryPadding,
+      [edge]: { streamId, inspectedFrames, removableFrames, edgeRmsDb, contentRmsDb, confident },
+    };
+    publishStreamingDiagnostics();
+    return;
+  }
   if (message.type === 'buffered-seek-reserved') {
     const match = findBufferedSeekForMessage(message);
     if (!match) {
@@ -1636,6 +1649,7 @@ function handleStreamingWorkletMessage(message) {
     continuity.replacementPromotion = pendingSeek.kind === 'replacement';
     engine.roles.current = continuity;
     engine.roles.continuity = null;
+    keepHeardStreamingWire(continuity);
     if (continuity.encoded) refillStreamingEncodedBytes(continuity);
     promoteStreamingPcmEvidence(continuity);
     engine.pcmEvidenceByStream?.delete(current.streamId);
@@ -1744,6 +1758,7 @@ function handleStreamingWorkletMessage(message) {
     engine.roles.current.acceptsPromotedContinuityWireRole = true;
     engine.roles.current.renderedFrameBase = boundaryRenderedFrame;
     engine.roles.continuity = null;
+    keepHeardStreamingWire(continuity);
     if (engine.roles.current.encoded) refillStreamingEncodedBytes(engine.roles.current);
     promoteStreamingPcmEvidence(continuity);
     engine.pcmEvidenceByStream?.delete(current.streamId);
@@ -2306,9 +2321,16 @@ function openStreamingRole(role, track, startFrame = 0, continuityOptions = null
 }
 
 // A whole stream from the track's first frame is kept for the next time it plays.
-function keepStreamingWire(wire, eos) {
+// Keeps a whole track once it is heard. A successor prepared ahead waits until it is promoted, so
+// a song fetched and then skipped is never kept as recently played.
+function keepStreamingWire(wire, eos, role) {
   if (wire.serverless || wire.streamStart !== 0 || !wire.bytes
       || typeof keepStreamingCachedTrack !== 'function') return;
+  if (role !== 'current') {
+    wire.keepWhenHeard = eos;
+    return;
+  }
+  wire.keepWhenHeard = null;
   keepStreamingCachedTrack(streamingTrackCacheKey(wire.track, wire.quality), {
     codec: wire.codec,
     sampleRate: streamingEngineState().sampleRate,
@@ -2318,6 +2340,11 @@ function keepStreamingWire(wire, eos) {
     table: wire.table,
     bytes: wire.bytes.slice(0, wire.size),
   });
+}
+
+function keepHeardStreamingWire(roleState) {
+  const wire = roleState?.encoded?.wire;
+  if (wire?.keepWhenHeard) keepStreamingWire(wire, wire.keepWhenHeard, 'current');
 }
 
 // Loads `track` from the cache before a role opens it, so the open itself stays synchronous.
@@ -2601,7 +2628,7 @@ async function startBrowserStreamingTrack(track, {
   let sampleRate = 0;
   try {
     await prepareStreamingPlaybackEngine();
-    if (typeof ensureStreamingDecoders === 'function') await ensureStreamingDecoders();
+    if (typeof ensureStreamingDecoders === 'function') void ensureStreamingDecoders();
     await requestStreamingSampleRate(track);
     sampleRate = streamingPlaybackRate(track);
     if (engine.startRequestId === startRequestId && !sampleRate) {
@@ -2974,7 +3001,19 @@ async function scheduleBrowserStreamingContinuity(track, options = {}) {
   }
   const identity = streamingContinuityIdentity(track, normalized);
   if (engine.roles.continuity?.continuityIdentity === identity) {
-    return engine.roles.continuity;
+    const prepared = engine.roles.continuity;
+    // A queue that changed under the prepared successor may change whether it is consecutive.
+    if (normalized.kind === 'queued-next'
+        && prepared.continuityOptions.consecutiveAlbumBoundary !== normalized.consecutiveAlbumBoundary) {
+      prepared.continuityOptions = normalized;
+      engine.node.port.postMessage({
+        type: 'expect-continuity',
+        generation: engine.generation,
+        active: true,
+        consecutiveAlbumBoundary: normalized.consecutiveAlbumBoundary,
+      });
+    }
+    return prepared;
   }
   if (engine.pendingPromotion) {
     engine.pendingContinuityTrack = track;
@@ -3010,6 +3049,7 @@ async function scheduleBrowserStreamingContinuity(track, options = {}) {
       type: 'expect-continuity',
       generation: engine.generation,
       active: true,
+      consecutiveAlbumBoundary: normalized.consecutiveAlbumBoundary,
     });
   }
   if (normalized.kind !== 'queued-next') {

@@ -162,6 +162,12 @@ class NativePcmEngine(
 
         /** Played from the device's cache: the server never heard of it, so no control names it. */
         var local = false
+
+        /** A queued successor that is the next track of the same album, as the queue named it. */
+        var consecutiveAlbumBoundary = false
+
+        /** Whether this stream's tail was already judged for consecutive-album padding. */
+        var boundaryTailDecided = false
     }
 
     /**
@@ -188,6 +194,7 @@ class NativePcmEngine(
         /** Every frame the decoder produced, trimmed or not, for the stream's measured byte rate. */
         var decoderFrames = 0L
         var serverEos: PcmServerEvent.Eos? = null
+        var keepWhenHeard = false
         var decoderFinished = false
         var closed = false
 
@@ -334,6 +341,8 @@ class NativePcmEngine(
     private var current: Stream? = null
     private var continuity: Stream? = null
     private var queuedNext: PcmTrack? = null
+    private var queuedNextIsConsecutiveAlbum = false
+    private val boundaryWindowFrames = BoundaryPadding.windowFrames(config.sampleRate)
     private var loop: LoopRange? = null
     private var pendingSeek: PendingSeek? = null
     private var pendingPromotion: PendingPromotion? = null
@@ -398,6 +407,14 @@ class NativePcmEngine(
 
     @VisibleForTesting
     internal fun bufferedFrames(role: PcmRole): Int = ringFor(role).bufferedFrames
+
+    @VisibleForTesting
+    internal val preparedSuccessorIsConsecutiveAlbum: Boolean
+        get() = continuity?.let { it.kind == StreamKind.QUEUED_NEXT && it.consecutiveAlbumBoundary } == true
+
+    /** The latest consecutive-album padding decision for each edge; aggregates only, never samples. */
+    @VisibleForTesting
+    internal val boundaryPadding = mutableMapOf<BoundaryEdge, PaddingDecision>()
 
     @VisibleForTesting
     internal fun inFlightFrames(role: PcmRole): Int = streamFor(role)?.inFlightFrames ?: 0
@@ -476,9 +493,14 @@ class NativePcmEngine(
     /**
      * Sets the immediate successor of the current track. As in `scheduleStreamingContinuity`, a
      * different successor waits while one is already prepared and follows it once it has promoted.
+     * [consecutiveAlbumBoundary] says the successor is the next track of the current one's album, so
+     * proven decoder padding at their natural boundary may be removed.
      */
-    fun setQueuedNext(track: PcmTrack?) {
+    fun setQueuedNext(track: PcmTrack?, consecutiveAlbumBoundary: Boolean = false) {
         queuedNext = track
+        queuedNextIsConsecutiveAlbum = track != null && consecutiveAlbumBoundary
+        continuity?.takeIf { it.kind == StreamKind.QUEUED_NEXT && it.track == track }
+            ?.consecutiveAlbumBoundary = queuedNextIsConsecutiveAlbum
         reconcileContinuity()
     }
 
@@ -667,7 +689,8 @@ class NativePcmEngine(
                 if (encoded.serverEos != null) return
                 encoded.serverEos = event
                 encoded.end()
-                keepInCache(stream, encoded)
+                // A successor prepared ahead is kept once it is heard, never when it is skipped.
+                if (stream.role == PcmRole.CURRENT) keepInCache(stream, encoded) else encoded.keepWhenHeard = true
                 finishEncodedWhenDrained(stream)
             } ?: acceptEos(stream, event)
             is PcmServerEvent.Promoted -> acceptPromoted(event)
@@ -978,7 +1001,14 @@ class NativePcmEngine(
                 if (!finishDrainedCurrent(stream)) break
                 continue
             }
+            val tailUndecided = stream.eosReceived && !stream.boundaryTailDecided
+            if (tailUndecided && currentRing.bufferedFrames <= boundaryWindowFrames) {
+                trimConsecutiveAlbumTail(stream)
+                continue
+            }
             var frames = minOf(maxFrames - written, currentRing.contiguousFrames())
+            // The tail is judged before any of it is heard.
+            if (tailUndecided) frames = minOf(frames, currentRing.bufferedFrames - boundaryWindowFrames)
             if (loopRange != null) frames = minOf(frames.toLong(), loopRange.endFrame - timelineFrame).toInt()
             val accepted = sink.write(currentRing.samples, currentRing.readFrame * PcmRing.CHANNELS, frames)
             check(accepted in 0..frames) { "audio output answered $accepted for $frames frames" }
@@ -1021,7 +1051,12 @@ class NativePcmEngine(
                 StreamKind.SEEK -> PcmBoundaryKind.SEEK
                 else -> PcmBoundaryKind.QUEUED_NEXT
             }
-            promote(kind, next.startFrame)
+            val skippedFrames = if (next.kind == StreamKind.QUEUED_NEXT && next.consecutiveAlbumBoundary) {
+                trimConsecutiveAlbumHead(next)
+            } else {
+                0
+            }
+            promote(kind, next.startFrame + skippedFrames)
             return true
         }
         if (expectContinuity && next?.eosReceived != true) {
@@ -1032,6 +1067,29 @@ class NativePcmEngine(
         events(PcmEngineEvent.Ended(stream.streamId, timelineFrame))
         return false
     }
+
+    /** The worklet's `trimConsecutiveAlbumTail`: proven padding at the end of the outgoing track goes unheard. */
+    private fun trimConsecutiveAlbumTail(stream: Stream) {
+        stream.boundaryTailDecided = true
+        val next = continuity
+        if (next?.kind != StreamKind.QUEUED_NEXT || !next.consecutiveAlbumBoundary || loop != null || pendingSeek != null) return
+        val frames = currentRing.bufferedFrames
+        val decision = BoundaryPadding.classify(copyBuffered(currentRing, frames), config.sampleRate, BoundaryEdge.SUFFIX)
+        currentRing.dropNewest(decision.removableFrames)
+        boundaryPadding[BoundaryEdge.SUFFIX] = decision
+    }
+
+    /** The worklet's `trimConsecutiveAlbumHead`: returns the proven leading padding skipped from [next]. */
+    private fun trimConsecutiveAlbumHead(next: Stream): Int {
+        val frames = minOf(continuityRing.bufferedFrames, boundaryWindowFrames)
+        val decision = BoundaryPadding.classify(copyBuffered(continuityRing, frames), config.sampleRate, BoundaryEdge.PREFIX)
+        continuityRing.skip(decision.removableFrames)
+        boundaryPadding[BoundaryEdge.PREFIX] = decision
+        return decision.removableFrames
+    }
+
+    private fun copyBuffered(ring: PcmRing, frames: Int): FloatArray =
+        FloatArray(frames * PcmRing.CHANNELS).also { ring.copyTo(0, frames, it, 0) }
 
     /**
      * The worklet's short-loop wrap: once the whole loop is retained, replay restarts at its first
@@ -1068,6 +1126,10 @@ class NativePcmEngine(
         continuityRing.clear()
         incoming.role = PcmRole.CURRENT
         incoming.acceptsPromotedContinuityWireRole = true
+        incoming.encoded?.takeIf { it.keepWhenHeard }?.let { encoded ->
+            encoded.keepWhenHeard = false
+            keepInCache(incoming, encoded)
+        }
         incoming.targetBufferFrames = capacityFrames(PcmRole.CURRENT)
         current = incoming
         continuity = null
@@ -1273,6 +1335,7 @@ class NativePcmEngine(
             StreamKind.START -> capacity
         }
         val stream = Stream(track, generation, nextStreamId++, role, kind, startFrame, minOf(capacity, target))
+        if (kind == StreamKind.QUEUED_NEXT) stream.consecutiveAlbumBoundary = queuedNextIsConsecutiveAlbum
         ringFor(role).clear()
         if (role == PcmRole.CURRENT) current = stream else continuity = stream
         if (kind == StreamKind.LOOP) {

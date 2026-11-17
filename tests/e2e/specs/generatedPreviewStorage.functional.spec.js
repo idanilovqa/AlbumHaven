@@ -94,12 +94,19 @@ async function waitForStorageState(page, predicate, message) {
 
 // The controls stay disabled while a follow-up reconciliation of late previews runs.
 async function openIdleStorageSettings(page) {
+  const activeStates = ['queued', 'running', 'cancel_requested'];
+  const cleanStates = ['idle', 'completed'];
   await page.goto('/admin/server');
-  await waitForStorageState(
+  const state = await waitForStorageState(
     page,
-    (state) => !['queued', 'running', 'cancel_requested'].includes(state.operation_state),
+    (current) => !activeStates.includes(current.operation_state),
     'preview storage should be idle before its controls are used',
   );
+  if (!cleanStates.includes(state.operation_state)
+      || state.requested_mode !== null
+      || state.failed_count !== 0) {
+    throw new Error(`Preview storage baseline is not clean: ${JSON.stringify(state)}`);
+  }
   await page.goto('/admin/server');
 }
 
@@ -186,7 +193,7 @@ test(
         const cover = galleryActions.albumCoverByName(ALBUM);
         await coverLookupActions.readDisplayedImageEvidence(cover, 'owned album cover');
         const productionSource = await cover.getAttribute('data-production-cover-src');
-        expect(productionSource).toContain('/cover?');
+        expect(productionSource).toContain('/cover/');
         await generateVariants(page, productionSource, Array.from({ length: 160 }, (_, index) => 80 + index));
 
         const albumCacheRoot = path.join(fixture.albumDirectory, '.album-haven');
@@ -213,15 +220,20 @@ test(
 
         await galleryActions.goto('/?surface=albums');
         await galleryActions.waitForGalleryReady();
-        const searchStartedAt = performance.now();
-        await searchToolbarActions.search(ARTIST, { submitWithEnter: true });
+        let searchSubmittedAt = 0;
+        await searchToolbarActions.search(ARTIST, {
+          submitWithEnter: true,
+          recordSubmissionBoundary() {
+            searchSubmittedAt = performance.now();
+          },
+        });
         await searchToolbarActions.waitForQuery(ARTIST);
         await galleryActions.waitForAlbumVisible(ALBUM);
-        const galleryReadyMs = performance.now() - searchStartedAt;
+        const galleryReadyMs = performance.now() - searchSubmittedAt;
         const cover = galleryActions.albumCoverByName(ALBUM);
         // parity-check: allow-read-only-measurement-evaluate -- wait for the rendered image to decode
         await cover.evaluate(waitForDisplayedImageDecode);
-        const firstDecodedCoverMs = performance.now() - searchStartedAt;
+        const firstDecodedCoverMs = performance.now() - searchSubmittedAt;
         const galleryReady = expectTimingBudget(
           expect,
           galleryReadyMs,

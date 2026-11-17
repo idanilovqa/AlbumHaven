@@ -23,7 +23,7 @@ _DOCKED_COMPACT_FIELDS = (*_COMPACT_FIELDS, "docked_compact_player_behavior")
 _LEGACY_COMPACT_FIELDS = (*_FIELDS, "compact_player_style")
 _ALBUM_PAGE_FIELDS = ("album_details_layout", "album_playing_row_animation")
 _ALERT_FIELDS = ("alert_family",)
-_SOURCE_INDICATOR_DEFAULTS = {"card_colors": False, "hover_outline_colors": False, "icons": True}
+_SOURCE_INDICATOR_DEFAULTS = {"card_colors": False, "hover_outline_colors": True, "icons": True}
 _PLAYER_FIELDS = ("background", "fill", "edge")
 _PLAYER_COLUMNS = (
     "player_background_color", "player_waveform_fill_color", "player_waveform_edge_color"
@@ -549,8 +549,8 @@ def _known_device_profile_values(payload: object) -> object:
 
     Saving stays strict, but a stored profile is read by every deployed build:
     sandbox3 saved Album "album_art_quality_alert", and builds without that
-    field rejected the whole appearance, so every page fell back to the default
-    blue theme with no source frames.
+    field rejected the whole appearance, so every page fell back instead of
+    retaining the known settings.
     """
     if not isinstance(payload, Mapping):
         return payload
@@ -715,7 +715,7 @@ class PostgresAppearancePreferencesRepository:
                        coalesce(compact_player_motion, 'normal'), coalesce(floating_player_edge, '{{"source":"player","color":null}}'::jsonb), album_details_layout, album_playing_row_animation,
                           alert_family, player_background, player_fill, player_edge,
                           coalesce(loop_control_style, 'capsule'), outlines, profiles,
-                          coalesce(library_source_indicators, '{{"card_colors":false,"hover_outline_colors":false,"icons":true}}'::jsonb)
+                          coalesce(library_source_indicators, '{{"card_colors":false,"hover_outline_colors":true,"icons":true}}'::jsonb)
                      from incoming where expected_revision = 0
                        and (loop_control_style is null or loop_control_style = 'capsule' or allow_loop_control_style)
                        and (allow_loop_control_style or (
@@ -852,7 +852,7 @@ class PostgresAppearancePreferencesRepository:
                        coalesce(compact_player_motion, 'normal'), coalesce(floating_player_edge, '{{"source":"player","color":null}}'::jsonb),
                           album_details_layout, album_playing_row_animation, alert_family,
                           player_background, player_fill, player_edge, coalesce(loop_control_style, 'capsule'),
-                          coalesce(library_source_indicators, '{{"card_colors":false,"hover_outline_colors":false,"icons":true}}'::jsonb)
+                          coalesce(library_source_indicators, '{{"card_colors":false,"hover_outline_colors":true,"icons":true}}'::jsonb)
                      from incoming where expected_revision = 0
                        and (loop_control_style is null or loop_control_style = 'capsule'
                             or allow_loop_control_style)
@@ -955,7 +955,7 @@ class PostgresAppearancePreferencesRepository:
                        coalesce(docked_compact_player_regular_style, false),
                        coalesce(compact_player_motion, 'normal'), coalesce(floating_player_edge, '{{"source":"player","color":null}}'::jsonb), coalesce(album_details_layout, 'classic_bar'),
                           coalesce(album_playing_row_animation, 'enabled'), coalesce(alert_family, 'ember'),
-                          coalesce(library_source_indicators, '{{"card_colors":false,"hover_outline_colors":false,"icons":true}}'::jsonb), 1
+                          coalesce(library_source_indicators, '{{"card_colors":false,"hover_outline_colors":true,"icons":true}}'::jsonb), 1
                      from incoming where true
                    on conflict (account_id, client_profile) do update
                      set main_surface_color = excluded.main_surface_color,

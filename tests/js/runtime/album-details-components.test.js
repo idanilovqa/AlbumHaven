@@ -561,6 +561,12 @@ test('a split artist\'s panel lists each MusicBrainz artist with its albums and 
   assert.match(html, /Amarok \(Polish progressive rock band\) · 4 albums.*href="https:\/\/musicbrainz\.org\/artist\/75d43a2e-ba60-427c-b2c7-bb666053d2f1"/s);
   assert.match(html, /Amarok \(Spanish fusion band\) · 1 album<.*href="https:\/\/musicbrainz\.org\/artist\/b42d111d-5932-4c00-8562-8bbf7203f850"/s);
   assert.equal(context.buildGalleryArtistIdentitiesHtml({ canonical_name: 'Amarok' }), '');
+
+  // Owner 2026-11-14: a person and their same-named band are separate artists; nothing
+  // lists a band "also on MusicBrainz" under the person any more.
+  assert.equal(context.buildGalleryArtistIdentitiesHtml({ canonical_name: 'Alice Cooper', associated: [
+    { artist_mbid: '4d7928cd-7ed2-4282-8c29-c0c9f966f1bd', canonical_name: 'Alice Cooper', album_count: 7 },
+  ] }), '');
 });
 
 test('Editorial Album Details wraps long titles without covering header actions', () => {

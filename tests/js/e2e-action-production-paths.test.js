@@ -234,13 +234,14 @@ test('notification hover evidence waits for finite owned transitions before read
 test('cover toast entrance observer detects movement and owns bounded cleanup', async (t) => {
   const { CoverLookup } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/poms/coverLookup.js')).href);
   const vm = require('node:vm');
-  for (const scenario of ['stable', 'translation', 'resize', 'already-settled', 'timeout', 'cancel']) {
+  for (const scenario of ['stable', 'translation', 'resize', 'settled-after-baseline', 'settled-first-running-frame', 'already-settled', 'already-animating', 'timeout', 'cancel']) {
     await t.test(scenario, async () => {
       const frames = new Map();
       const timers = new Map();
       let nextId = 0;
       let settled = scenario === 'already-settled';
       let progressVisible = false;
+      let toastVisible = ['already-settled', 'already-animating'].includes(scenario);
       let rectangle = { x: 100, y: 50, width: 800, height: 700 };
       const toast = {
         querySelector: () => ({ textContent: 'Cover search started.' }),
@@ -263,7 +264,7 @@ test('cover toast entrance observer detects movement and owns bounded cleanup', 
             if (selector === '.modal-status') return modalStatus;
             return modal;
           },
-          querySelectorAll: () => [toast],
+          querySelectorAll: () => toastVisible ? [toast] : [],
         },
         getComputedStyle: () => ({ opacity: settled ? '1' : '0.5' }),
         requestAnimationFrame: (callback) => { frames.set(++nextId, callback); return nextId; },
@@ -284,15 +285,36 @@ test('cover toast entrance observer detects movement and owns bounded cleanup', 
         callback();
       };
       paint();
-      assert.equal(frames.size, 1, 'no baseline until running progress is rendered');
+      if (scenario.startsWith('already-')) {
+        assert.equal(frames.size, 0, 'a pre-existing matching toast must reject observation');
+      } else {
+        assert.equal(frames.size, 1, 'the pre-search observer must remain armed');
+      }
       if (scenario === 'timeout') {
         [...timers.values()][0]();
       } else if (scenario === 'cancel') {
         measurement.cancel();
+      } else if (scenario.startsWith('already-')) {
+        // The observer rejected the stale toast before the new search action.
       } else {
         progressVisible = true;
+        if (scenario === 'settled-first-running-frame') {
+          toastVisible = true;
+          settled = true;
+        } else if (scenario !== 'settled-after-baseline') {
+          toastVisible = true;
+        }
         paint();
-        if (scenario !== 'already-settled') {
+        if (scenario === 'settled-first-running-frame') {
+          if (frames.size) paint();
+          if (frames.size) paint();
+        } else if (scenario === 'settled-after-baseline') {
+          toastVisible = true;
+          settled = true;
+          paint();
+          if (frames.size) paint();
+          if (frames.size) paint();
+        } else if (scenario !== 'already-settled') {
           if (scenario === 'translation') rectangle = { ...rectangle, x: 104, y: 48 };
           if (scenario === 'resize') rectangle = { ...rectangle, height: 710, width: 802 };
           paint();
@@ -304,12 +326,13 @@ test('cover toast entrance observer detects movement and owns bounded cleanup', 
         }
       }
       const result = await measurement.result;
-      if (scenario === 'already-settled') assert.match(result.error, /already settled/);
+      if (scenario.startsWith('already-')) assert.match(result.error, /already present/);
       else if (scenario === 'timeout') assert.match(result.error, /Timed out/);
       else if (scenario === 'cancel') assert.match(result.error, /cancelled/);
       else {
         assert.equal(result.baselineUnsettled, true);
-        assert.equal(result.sampledFrames, 4);
+        assert.equal(result.sampledFrames,
+          ['settled-after-baseline', 'settled-first-running-frame'].includes(scenario) ? 3 : 4);
         assert.deepEqual(JSON.parse(JSON.stringify(result.delta)), {
           height: scenario === 'resize' ? 10 : 0,
           width: scenario === 'resize' ? 2 : 0,
@@ -1308,7 +1331,7 @@ test('cover lookup and loop journeys select exact seeded albums before feature a
     coverLookup,
     /FTC-COVERS-013[\s\S]*holdLaterProviderFixture\(\)[\s\S]*waitForLaterProviderFixtureBlocked\(\)[\s\S]*waitForPartialRemoteCandidates\(\)[\s\S]*waitForTaskActive\(taskTitle\)[\s\S]*selectFirstRemoteCoverAndSave\(\{[\s\S]*?stableCoverLocator:\s*trackModalActions\.trackModal\.detailedCoverImage,[\s\S]*?\}\)[\s\S]*waitForTaskStatus\(taskTitle, '1 covers found'[\s\S]*releaseLaterProviderFixture\(\)[\s\S]*reloadAndOpenDrawer\(\)/,
   );
-  assert.match(coverLookup, /selectedRemoteCover = selection\.candidate[\s\S]*selectedCoverPath = String\(selection\.payload\?\.optimistic_cover_path[\s\S]*modal\.activeLocalCover\.coverPath[\s\S]*selectedCoverPath/);
+  assert.match(coverLookup, /selectedRemoteCover = selection\.candidate[\s\S]*selectedCoverPath = await coverPathForReference\(selection\.payload\?\.optimistic_cover_ref\)[\s\S]*modal\.activeLocalCover\.coverPath[\s\S]*selectedCoverPath/);
   assert.match(
     coverLookup,
     /selectedRemoteCandidateId = selection\.candidateId[\s\S]*readRemoteCandidateEvidence\([\s\S]*selectedRemoteCandidateId[\s\S]*persistedSelectedRemoteCover\.sha256[\s\S]*selectedRemoteCover\.sha256/,
@@ -1739,7 +1762,7 @@ test('FTC-COVERS-018 proves the neutral Fixture 09 candidate cannot mutate its u
   );
   assert.match(
     beforeScan,
-    /neutralBaselineFullSizeCover\s*=\s*await coverLookupActions\.readFullSizeCoverEvidence\(\{[\s\S]*?coverPath:\s*neutralBaselineAlbum\.cover_path,[\s\S]*?coverRevision:\s*neutralBaselineAlbum\.cover_revision,[\s\S]*?\}\)/u,
+    /neutralBaselineFullSizeCover\s*=\s*await coverLookupActions\.readFullSizeCoverEvidence\(\{[\s\S]*?coverPath:\s*await coverPathForReference\(neutralBaselineAlbum\.cover_ref\),[\s\S]*?coverRevision:\s*neutralBaselineAlbum\.cover_revision,[\s\S]*?\}\)/u,
   );
   assert.match(beforeScan, /trackModalActions\.waitForCoverLookupImprovementIndicator\(false\)/u);
 
@@ -1759,7 +1782,7 @@ test('FTC-COVERS-018 proves the neutral Fixture 09 candidate cannot mutate its u
   );
   assert.match(
     afterScan,
-    /expect\(neutralPreservedAlbum\.cover_path\)\.toBe\(neutralBaselineAlbum\.cover_path\)/u,
+    /expect\(neutralPreservedAlbum\.cover_ref\)\.toBe\(neutralBaselineAlbum\.cover_ref\)/u,
   );
   assert.match(
     afterScan,
@@ -2252,7 +2275,7 @@ test('gallery cover readiness requires decoded images or explicit final placehol
 
   assert.match(gallery, /coverImage\.complete\s*&&\s*coverImage\.naturalWidth\s*>\s*0/);
   assert.match(gallery, /url\.origin\s*===\s*window\.location\.origin/);
-  assert.match(gallery, /url\.pathname\s*===\s*'\/cover'/);
+  assert.match(gallery, /url\.pathname\.startsWith\('\/cover\/'\)/);
   assert.match(gallery, /options\.allowPlaceholder\s*===\s*true/);
   assert.match(gallery, /allowPlaceholder requires a named placeholderScenario/);
   assert.match(gallery, /cover-placeholder-deferred/);
@@ -2771,6 +2794,11 @@ test('functional race checks arm transient mutation observation before submit an
   assert.match(
     playerActions,
     /const preReload = await this\.globalPlayer\.readPlaybackTiming\(\);[\s\S]*?page\.reload[\s\S]*?preReload,/,
+  );
+  assert.match(
+    reloadSpec,
+    /pauseAndReadListenCheckpoint\(\)[\s\S]*?waitForFullTrackTiming\(\)[\s\S]*?reloadAndWaitForRestoredTrack\(/,
+    'paused reload must await the listen checkpoint and claim release before reading its snapshot',
   );
   assert.match(
     reloadSpec,
@@ -3594,14 +3622,14 @@ test('decoded gallery window ignores terminal no-art cards while enforcing the r
   });
   const firstDecodedCover = new FakeImageElement({
     naturalWidth: 480,
-    productionSrc: '/cover?path=first',
+    productionSrc: '/cover/firstCoverReference000',
   });
   const secondDecodedCover = new FakeImageElement({
     naturalWidth: 480,
-    productionSrc: '/cover?path=second',
+    productionSrc: '/cover/secondCoverReference00',
   });
   const cards = [
-    card('first', firstDecodedCover, { cover_path: 'C:/covers/first.jpg' }),
+    card('first', firstDecodedCover, { cover_ref: 'firstCoverReference000' }),
     card('second', secondDecodedCover),
     card('legitimate-no-art'),
   ];
@@ -3635,7 +3663,7 @@ test('decoded gallery window ignores terminal no-art cards while enforcing the r
       true,
       'a legitimate no-art card must not block two decoded production covers',
     );
-    cards.push(card('covered-without-image', null, { cover_path: 'C:/covers/expected.jpg' }));
+    cards.push(card('covered-without-image', null, { cover_ref: 'expectedCoverReference' }));
     assert.equal(
       readDecodedProductionCardWindow(args),
       false,
@@ -3722,7 +3750,7 @@ test('FTC-COVERS-014 ends visible-cover timing at decode before collecting visua
   );
   assert.match(
     spec,
-    /const baselineResponse = await coverTraffic\.waitForResponse\(baseline\.productionSrc\);\s*expectJosephCoverRouteResponse\(expect, baselineResponse\);/,
+    /const baselineResponse = await coverTraffic\.waitForResponse\(baseline\.productionSrc\);\s*expectJosephCoverRouteResponse\(expect, baselineResponse, \{ josephReference \}\);/,
   );
   assert.doesNotMatch(spec, /page\.(?:route|evaluate|addInitScript|setContent)\s*\(/);
 });
@@ -5084,6 +5112,8 @@ test('search readiness waits for the committed URL query and completed view requ
   assert.match(searchPom, /searchParams\.get\('q'\)/);
   assert.match(searchPom, /const timeout = Number\(options\.timeout \|\| 30000\)/);
   assert.match(searchPom, /const initialObservation = this\.productionViewObserver\.read\(\)/);
+  assert.match(searchPom, /if \(initiallyBusy\) \{[\s\S]*?continue;/);
+  assert.match(searchPom, /await Promise\.all\(\[/);
   assert.match(searchPom, /const finalObservation = this\.productionViewObserver\.read\(\)/);
   assert.match(searchPom, /finalObservation\.stateRevision !== initialObservation\.stateRevision/);
   assert.match(searchPom, /!hasStableDomEvidence\(/);
@@ -5237,6 +5267,53 @@ test('cover lookup decode readiness wakes on image load without polling delay', 
   }
 });
 
+test('cover lookup decode readiness waits for a deferred image source', async () => {
+  const moduleUrl = pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/coverLookupActions.js')).href;
+  const { waitForDisplayedImageDecode } = await import(moduleUrl);
+  const originalImageElement = globalThis.HTMLImageElement;
+  class FakeImageElement extends EventTarget {
+    constructor() {
+      super();
+      this.complete = true;
+      this.naturalWidth = 0;
+      this.naturalHeight = 0;
+      this.currentSrc = '';
+      this.attributes = new Map([['data-cover-lookup-deferred-src', '/cover.jpg']]);
+    }
+
+    async decode() {}
+
+    getAttribute(name) {
+      return this.attributes.get(name) || '';
+    }
+
+    hasAttribute(name) {
+      return this.attributes.has(name);
+    }
+
+    getBoundingClientRect() {
+      return { width: 240, height: 240 };
+    }
+  }
+  globalThis.HTMLImageElement = FakeImageElement;
+  try {
+    const image = new FakeImageElement();
+    const readiness = waitForDisplayedImageDecode(image);
+    image.attributes.delete('data-cover-lookup-deferred-src');
+    image.currentSrc = 'http://127.0.0.1:4173/cover.jpg';
+    image.naturalWidth = 480;
+    image.naturalHeight = 480;
+    image.dispatchEvent(new Event('load'));
+
+    const state = await readiness;
+    assert.equal(state.currentSrc, image.currentSrc);
+    assert.equal(state.naturalWidth, 480);
+  } finally {
+    if (originalImageElement === undefined) delete globalThis.HTMLImageElement;
+    else globalThis.HTMLImageElement = originalImageElement;
+  }
+});
+
 test('cover lookup rejects a pending gallery blob transition before hashing response evidence', async () => {
   const moduleUrl = pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/coverLookupActions.js')).href;
   const { isDisplayedImageEvidenceReady } = await import(moduleUrl);
@@ -5298,7 +5375,13 @@ test('cover lookup measures exact no-size production cover bytes through the act
       };
     },
   };
-  const actions = new CoverLookupActions({ page });
+  const reference = 'CrackTheSkyeReference0';
+  const actions = new CoverLookupActions({ page }, {
+    coverReferences: {
+      coverReferenceForPath: async (coverPath) => (coverPath === 'Mastodon/Crack The Skye/cover.jpg' ? reference : ''),
+      coverPathForReference: async (named) => (named === reference ? 'Mastodon/Crack The Skye/cover.jpg' : ''),
+    },
+  });
 
   const evidence = await actions.readFullSizeCoverEvidence({
     coverPath: 'Mastodon/Crack The Skye/cover.jpg',
@@ -5308,8 +5391,7 @@ test('cover lookup measures exact no-size production cover bytes through the act
 
   assert.equal(requested.length, 1);
   const requestedUrl = new URL(requested[0].url);
-  assert.equal(requestedUrl.pathname, '/cover');
-  assert.equal(requestedUrl.searchParams.get('path'), 'Mastodon/Crack The Skye/cover.jpg');
+  assert.equal(requestedUrl.pathname, `/cover/${reference}`);
   assert.equal(requestedUrl.searchParams.get('v'), 'A'.repeat(64));
   assert.equal(requestedUrl.searchParams.has('size'), false);
   assert.deepEqual(requested[0].options, {
@@ -5326,7 +5408,7 @@ test('cover lookup measures exact no-size production cover bytes through the act
   });
   await assert.rejects(
     actions.readFullSizeCoverEvidence({
-      source: '/cover?path=Mastodon%2FCrack%20The%20Skye%2Fcover.jpg&size=480',
+      source: `/cover/${reference}?size=480`,
       label: 'resized candidate',
     }),
     /cannot use a resized cover variant/,
@@ -5339,7 +5421,7 @@ test('cover lookup records same-origin cover response evidence loaded through fe
   const page = new EventEmitter();
   page.url = () => 'http://127.0.0.1:4173/';
   const actions = new CoverLookupActions({ page });
-  const responseUrl = 'http://127.0.0.1:4173/cover?path=fixture%2Fcover.jpg&size=480';
+  const responseUrl = 'http://127.0.0.1:4173/cover/fixtureCoverReference0?size=480';
   const body = Buffer.from('selected local cover bytes');
 
   page.emit('response', {
@@ -5761,7 +5843,7 @@ test('loop creation coverage uses the shared app dialog and POM-owned inline ran
   assert.match(spec, /revealCreateAnotherLoopEditorByName\('Warmup Loop'\)/);
   assert.match(expirySpec, /installLoopEditExpiryClock\(\)/);
   assert.match(expirySpec, /pauseLoopEditExpiryClockBeforeRenewal\(\)\)\.paused\)\.toBe\(false\);\s*await globalPlayerActions\.dragLoopBoundary\('end', 0\.8\)/);
-  assert.match(expirySpec, /advanceLoopEditExpiryClock\(299000\)[\s\S]*expectLoopEditorActive\(\)[\s\S]*advanceLoopEditExpiryClock\(1000\)[\s\S]*waitForAutomaticLoopEditorExpiry\(\)/);
+  assert.match(expirySpec, /dragLoopBoundary\('end', 0\.8\)[\s\S]*pauseToReleasePlaybackClaim\(\)[\s\S]*advanceLoopEditExpiryClock\(299000\)[\s\S]*expectLoopEditorActive\(\)[\s\S]*advanceLoopEditExpiryClock\(1000\)[\s\S]*waitForAutomaticLoopEditorExpiry\(\)/);
   assert.match(expirySpec, /waitForRepeatCycle\(untouchedEditor\.loopId\)[\s\S]*advanceLoopEditExpiryClock\(13000\)[\s\S]*expectCreateAnotherLoopEditorActiveByName\(SAVED_LOOP_NAME\)[\s\S]*advanceLoopEditExpiryClock\(2000\)[\s\S]*waitForAutomaticLoopEditorExpiryByName\(SAVED_LOOP_NAME\)/);
   assert.match(spec, /dragLoopBoundaryByName\('Warmup Loop', 'start', 0\.25\)/);
   assert.match(spec, /dragLoopBoundaryByName\('Warmup Loop', 'end', 0\.75\)/);
@@ -5994,6 +6076,7 @@ test('Problematic Files selection polling preserves POM selectors in the seriali
   const originalDocument = global.document;
   const originalGetSelected = global.getSelectedProblematicAlbum;
   try {
+    let artistDetailVisible = false;
     global.state = { utility: { selectedProblematicKey: 'neal morse::?' } };
     global.document = {
       querySelector(selector) {
@@ -6003,12 +6086,18 @@ test('Problematic Files selection polling preserves POM selectors in the seriali
         if (selector === '#utility-problematic-detail .utility-detail-title') {
           return { textContent: '?' };
         }
+        if (selector === '#utility-problematic-detail [data-musicbrainz-artist-problem]') {
+          return artistDetailVisible
+            ? { getAttribute: () => '7' }
+            : null;
+        }
         return null;
       },
     };
     global.getSelectedProblematicAlbum = () => ({ key: 'neal morse::?', detail_loaded: true });
     const actions = new UtilityProblematicFilesActions({
       activeListItemSelector: '[data-problematic-album-key].is-active',
+      artistDetailSelector: '#utility-problematic-detail [data-musicbrainz-artist-problem]',
       detailTitleSelector: '#utility-problematic-detail .utility-detail-title',
       async waitForPageCondition(callback, options, argument) {
         assert.equal(options.timeout, 4321);
@@ -6016,9 +6105,23 @@ test('Problematic Files selection polling preserves POM selectors in the seriali
           key: 'neal morse::?',
           title: '?',
           activeListItemSelector: '[data-problematic-album-key].is-active',
+          artistDetailSelector: '#utility-problematic-detail [data-musicbrainz-artist-problem]',
           detailTitleSelector: '#utility-problematic-detail .utility-detail-title',
         });
         assert.equal(callback(argument), true);
+        global.getSelectedProblematicAlbum = () => ({
+          key: 'neal morse::?',
+          entity_kind: 'artist',
+          local_artist_id: 7,
+          detail_loaded: false,
+        });
+        assert.equal(callback(argument), false, 'stale detail cannot satisfy artist selection');
+        artistDetailVisible = true;
+        assert.equal(
+          callback(argument),
+          true,
+          'matching visible artist detail is authoritative even though its summary row remains unloaded',
+        );
       },
     });
 
@@ -6364,7 +6467,7 @@ test('search actions record the submission boundary before clicking Apply', asyn
 
 test('album cover checkpoint accepts coherent production blobs and rejects stale display sources', async () => {
   const { AlbumCard } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/poms/albumCard.js')).href);
-  const productionSrc = 'http://localhost/cover?path=album-cover&size=480&v=revision';
+  const productionSrc = 'http://localhost/cover/albumCoverReference000?size=480&v=revision';
   const blobSrc = 'blob:http://localhost/displayed-cover';
   for (const [label, overrides, expected] of [
     ['production blob', {}, true],
@@ -6372,7 +6475,7 @@ test('album cover checkpoint accepts coherent production blobs and rejects stale
     ['foreign blob', { src: 'blob:http://elsewhere/displayed-cover', currentSrc: 'blob:http://elsewhere/displayed-cover' }, false],
     ['uncommitted image', { visualState: 'pending' }, false],
     ['missing production identity', { productionSrc: '' }, false],
-    ['wrong production origin', { productionSrc: 'http://elsewhere/cover?path=album-cover' }, false],
+    ['wrong production origin', { productionSrc: 'http://elsewhere/cover/albumCoverReference000' }, false],
     ['non-cover production identity', { productionSrc: 'http://localhost/unrelated' }, false],
     ['undecoded image', { complete: false }, false],
   ]) {
@@ -6662,6 +6765,27 @@ test('direct gallery traversal preserves finite deadlines across boundary reconc
       },
     }, 'Mastodon', 'Later album', { ...supplied, waitAtBoundary: true }), error => error === stop);
   }
+});
+
+test('MusicBrainz identity E2E covers native names and every manual resolution path through owned actions', () => {
+  const spec = read('tests/e2e/specs/musicbrainzArtistIdentity.spec.js');
+
+  assert.match(spec, /MBD1-07:[\s\S]*native-script names[\s\S]*nativeDdt[\s\S]*nativeAria[\s\S]*readSidebarArtistLabel[\s\S]*readArtistHeadings[\s\S]*readArtistInfoSnapshot/);
+  assert.match(spec, /MBD1-11:[\s\S]*enterManualArtistReference/);
+  assert.match(spec, /MBD1-12:[\s\S]*readMusicBrainzIdentityTable[\s\S]*expectMusicBrainzAssignmentDisabled[\s\S]*openMusicBrainzCandidate[\s\S]*selectMusicBrainzCandidate/);
+  assert.match(spec, /MBD1-13:[\s\S]*readMusicBrainzIdentityTable[\s\S]*keepCurrentMusicBrainzIdentity/);
+  assert.match(spec, /MBD1-20:[\s\S]*assignSelectedMusicBrainzIdentity/);
+  assert.doesNotMatch(spec, /\.locator\s*\(|\.evaluate\s*\(|page\.route\s*\(/);
+});
+
+test('MusicBrainz retry status reads rendered label and value boundaries', () => {
+  const actions = read('tests/e2e/actions/utilityProblematicFilesActions.js');
+  const start = actions.indexOf('async readMusicBrainzRetryStatus()');
+  const method = actions.slice(start, actions.indexOf('async retryMusicBrainzIdentity', start));
+
+  assert.ok(start >= 0);
+  assert.match(method, /musicBrainzRetryStatus\.innerText\(\)/);
+  assert.doesNotMatch(method, /musicBrainzRetryStatus\.textContent\(\)/);
 });
 
 test('Edit Tags duration gates use the shared timing-budget helper', () => {

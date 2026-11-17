@@ -33,6 +33,7 @@ class Repository:
         self.contexts = {}
         self.automatic_outcomes = []
         self.candidate_replacements = []
+        self.projection_refreshes = []
         self.retry_calls = []
         self.completed = []
 
@@ -59,6 +60,10 @@ class Repository:
     def replace_candidates(self, **kwargs):
         self.candidate_replacements.append(kwargs)
         return len(kwargs["candidates"])
+
+    def refresh_artist_projection(self, **kwargs):
+        self.projection_refreshes.append(kwargs)
+        return True
 
     def schedule_retry(self, **kwargs):
         self.retry_calls.append(kwargs)
@@ -283,6 +288,67 @@ def test_unconfirmed_single_name_match_is_stored_for_review_not_as_multiple_matc
     assert result["state"] == "needs_review"
     assert repository.candidate_replacements[0]["match_state"] == "manual_review"
     assert repository.candidate_replacements[0]["candidates"] == candidates
+
+
+def test_unconfirmed_recheck_refreshes_the_complete_projection_for_the_preserved_match():
+    artist = {
+        "mbid": ARTIST_MBID,
+        "canonical_name": "Compilation Signal Guest",
+        "sort_name": "Compilation Signal Guest",
+        "preferred_native_name": None,
+        "artist_type": "Group",
+        "disambiguation": "Finnish progressive rock band",
+        "country_code": "FI",
+        "source_url": f"https://musicbrainz.org/artist/{ARTIST_MBID}",
+        "aliases": [{
+            "name": "Compilation Signal",
+            "normalized_name": "compilation signal",
+            "sort_name": "Compilation Signal",
+            "locale": "en",
+            "type": None,
+            "primary": True,
+        }],
+        "tags": [],
+        "genres": [
+            {"name": "progressive rock", "normalized_name": "progressive rock", "vote_count": 12},
+            {"name": "art rock", "normalized_name": "art rock", "vote_count": 8},
+        ],
+        "discogs_artist_id": 218108,
+    }
+    _result, repository = _process(
+        {"existing_artist_mbid": ARTIST_MBID, "existing_match_state": "matched"},
+        {
+            "classification": "unconfirmed",
+            "candidates": [{"artist_mbid": ARTIST_MBID, "candidate_score": 1}],
+            "refreshed_artist": artist,
+            "evidence_summary": "One MusicBrainz artist has this name, but none of your albums confirm it.",
+        },
+    )
+
+    assert repository.projection_refreshes == [{
+        "local_artist_id": 41,
+        "artist": artist,
+        "observed_at": NOW,
+    }]
+    assert repository.candidate_replacements == []
+
+
+def test_unconfirmed_recheck_does_not_refresh_from_an_incomplete_artist_snapshot():
+    _result, repository = _process(
+        {"existing_artist_mbid": ARTIST_MBID, "existing_match_state": "matched"},
+        {
+            "classification": "unconfirmed",
+            "candidates": [{"artist_mbid": ARTIST_MBID, "candidate_score": 1}],
+            "refreshed_artist": {
+                "mbid": ARTIST_MBID,
+                "canonical_name": "Compilation Signal Guest",
+            },
+            "evidence_summary": "One MusicBrainz artist has this name, but none of your albums confirm it.",
+        },
+    )
+
+    assert repository.projection_refreshes == []
+    assert repository.candidate_replacements == []
 
 
 @pytest.mark.parametrize("classification", ["invalid_response", "permanent_mismatch"])

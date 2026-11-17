@@ -12,6 +12,7 @@ import android.content.pm.SigningInfo
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.storage.StorageManager
 import android.provider.Settings
 import androidx.core.content.IntentCompat
 import androidx.core.content.edit
@@ -20,6 +21,7 @@ import org.albumhaven.shell.BuildConfig
 import org.albumhaven.shell.OriginPolicy
 import org.albumhaven.shell.R
 import org.albumhaven.shell.ShellApplication
+import org.albumhaven.shell.ShellChannel
 import org.albumhaven.shell.ShellPreferences
 import org.albumhaven.shell.downloadManagerOrNull
 import org.albumhaven.shell.enqueueDownload
@@ -31,6 +33,14 @@ import java.util.concurrent.Executors
 /** The process's one [Updater], or null when this build has no compiled update certificate. */
 object Updates {
     private var instance: Updater? = null
+
+    /**
+     * One artifact client for the updater and the build picker, so their signed requests run one at
+     * a time and never attest two device keys for the same origin at once.
+     */
+    private var ports: AndroidUpdatePorts? = null
+
+    private fun ports(app: Context, policy: UpdatePolicy) = ports ?: AndroidUpdatePorts(app, policy).also { ports = it }
 
     /** Read for every check, so artifacts come from the origin the app is signed in to: albumhaven.org, or the selected sandbox. */
     fun policy(context: Context) = UpdatePolicy(
@@ -49,14 +59,27 @@ object Updates {
         val app = context.applicationContext
         val policy = policy(app)
         if (!policy.enabled) return null
-        return Updater({ policy(app) }, AndroidUpdatePorts(app, policy), PreferencesUpdateStore(app)).also { instance = it }
+        return Updater({ policy(app) }, ports(app, policy), PreferencesUpdateStore(app)).also { instance = it }
     }
 
     /** For the install receiver, which must never create an updater of its own. */
     fun current(): Updater? = instance
+
+    private var picker: BuildPicker? = null
+
+    /** The sandbox app's build picker; null on stable, or without a compiled update certificate. Main thread only. */
+    fun picker(context: Context): BuildPicker? {
+        picker?.let { return it }
+        val app = context.applicationContext
+        val policy = policy(app)
+        if (!policy.enabled || policy.channel != ShellChannel.SANDBOX) return null
+        val preferences = ShellPreferences(app)
+        return BuildPicker({ policy(app) }, { preferences.selectedSandboxSlot }, ports(app, policy), PreferencesUpdateStore(app))
+            .also { picker = it }
+    }
 }
 
-private class PreferencesUpdateStore(context: Context) : UpdateStore {
+private class PreferencesUpdateStore(context: Context) : UpdateStore, RebuildStore {
     private val preferences = context.getSharedPreferences("updates", Context.MODE_PRIVATE)
 
     // Written synchronously: the package replacement that follows ends this process.
@@ -68,9 +91,14 @@ private class PreferencesUpdateStore(context: Context) : UpdateStore {
         get() = preferences.getString(KEY_STAGED, null)
         set(value) = preferences.edit(commit = true) { if (value == null) remove(KEY_STAGED) else putString(KEY_STAGED, value) }
 
+    override var pendingRebuilds: String?
+        get() = preferences.getString(KEY_REBUILDS, null)
+        set(value) = preferences.edit { if (value == null) remove(KEY_REBUILDS) else putString(KEY_REBUILDS, value) }
+
     private companion object {
         const val KEY_CHECKED = "last_checked_at_ms"
         const val KEY_STAGED = "staged_manifest"
+        const val KEY_REBUILDS = "pending_rebuilds"
     }
 }
 
@@ -79,7 +107,7 @@ private class PreferencesUpdateStore(context: Context) : UpdateStore {
  * directory; the file is then moved into no-backup internal storage while it is hashed, and only
  * that private copy is inspected and installed.
  */
-private class AndroidUpdatePorts(private val context: Context, private val policy: UpdatePolicy) : UpdatePorts {
+private class AndroidUpdatePorts(private val context: Context, private val policy: UpdatePolicy) : UpdatePorts, BuildPickerPorts {
     private val main = Handler(Looper.getMainLooper())
     private val io = Executors.newSingleThreadExecutor()
     private val app = context.applicationContext as ShellApplication
@@ -94,6 +122,7 @@ private class AndroidUpdatePorts(private val context: Context, private val polic
     )
     private val downloads = context.getSystemService(DownloadManager::class.java)
     private val installer = context.packageManager.packageInstaller
+    private val storage = context.getSystemService(StorageManager::class.java)
     private var downloadId: Long? = null
 
     // The finished download's row, removed once its file has been moved into private storage.
@@ -114,6 +143,20 @@ private class AndroidUpdatePorts(private val context: Context, private val polic
     override fun fetchManifest(url: String, done: (FetchResult) -> Unit) {
         io.execute {
             val result = http.fetchManifest(url)
+            main.post { done(result) }
+        }
+    }
+
+    override fun fetchIndex(url: String, done: (FetchResult) -> Unit) {
+        io.execute {
+            val result = http.fetchManifest(url, SandboxIndex.MAX_INDEX_BYTES)
+            main.post { done(result) }
+        }
+    }
+
+    override fun requestRebuild(origin: String, sandbox: Int, done: (RebuildResult) -> Unit) {
+        io.execute {
+            val result = http.requestRebuild(origin, sandbox)
             main.post { done(result) }
         }
     }
@@ -156,8 +199,8 @@ private class AndroidUpdatePorts(private val context: Context, private val polic
                 }
             }
 
-            private fun progressed(progress: Pair<Int, Long>?) {
-                val (status, bytes) = progress ?: return finish(id, DownloadResult.Failed, done)
+            private fun progressed(progress: Triple<Int, Long, Int>?) {
+                val (status, bytes, reason) = progress ?: return finish(id, DownloadResult.Failed, done)
                 when {
                     bytes > manifest.apkSize -> finish(id, DownloadResult.Refused(Rejection.SIZE_MISMATCH), done)
                     status == DownloadManager.STATUS_SUCCESSFUL -> {
@@ -166,7 +209,11 @@ private class AndroidUpdatePorts(private val context: Context, private val polic
                         completedId = id
                         done(DownloadResult.Completed)
                     }
-                    status == DownloadManager.STATUS_FAILED -> finish(id, DownloadResult.Failed, done)
+                    status == DownloadManager.STATUS_FAILED -> finish(
+                        id,
+                        if (reason == DownloadManager.ERROR_INSUFFICIENT_SPACE) DownloadResult.NoSpace else DownloadResult.Failed,
+                        done,
+                    )
                     else -> {
                         onProgress(bytes)
                         main.postDelayed(this, POLL_MS)
@@ -184,12 +231,14 @@ private class AndroidUpdatePorts(private val context: Context, private val polic
         done(result)
     }
 
-    private fun query(id: Long): Pair<Int, Long>? = downloadManagerOrNull {
+    /** Status, bytes so far, and the failure reason. */
+    private fun query(id: Long): Triple<Int, Long, Int>? = downloadManagerOrNull {
         downloads.query(DownloadManager.Query().setFilterById(id))?.use { cursor ->
             if (!cursor.moveToFirst()) return@use null
             val status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
             val bytes = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
-            status to bytes
+            val reason = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
+            Triple(status, bytes, reason)
         }
     }
 
@@ -297,7 +346,7 @@ private class AndroidUpdatePorts(private val context: Context, private val polic
         val id = try {
             installer.createSession(params)
         } catch (_: IOException) {
-            return StageResult.Failed
+            return stagingFailed(manifest)
         }
         return try {
             // The private copy is hashed again as it is written, so the session holds exactly the verified bytes.
@@ -314,10 +363,23 @@ private class AndroidUpdatePorts(private val context: Context, private val polic
                 else -> StageResult.Staged(id)
             }
         } catch (_: IOException) {
-            abandoned(id, StageResult.Failed)
+            abandoned(id, stagingFailed(manifest))
         } catch (_: SecurityException) {
             abandoned(id, StageResult.Failed)
         }
+    }
+
+    /**
+     * Android reports a full phone during staging only as an [IOException], so a failure counts as
+     * [StageResult.NoSpace] when Android cannot make room for the staged and the installed copy.
+     */
+    private fun stagingFailed(manifest: UpdateManifest): StageResult {
+        val allocatable = try {
+            storage.getAllocatableBytes(StorageManager.UUID_DEFAULT)
+        } catch (_: IOException) {
+            return StageResult.Failed
+        }
+        return if (allocatable < 2 * manifest.apkSize) StageResult.NoSpace else StageResult.Failed
     }
 
     private fun abandoned(id: Int, result: StageResult): StageResult {
@@ -374,6 +436,7 @@ class UpdateInstallReceiver : BroadcastReceiver() {
             }
             PackageInstaller.STATUS_SUCCESS -> InstallStatus.Succeeded
             PackageInstaller.STATUS_FAILURE_ABORTED -> InstallStatus.Cancelled
+            PackageInstaller.STATUS_FAILURE_STORAGE -> InstallStatus.NoSpace
             else -> InstallStatus.Failed
         }
         updater.onInstallStatus(sessionId, status)

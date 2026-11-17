@@ -11,6 +11,26 @@ function readRepoFile(relativePath) {
   return fs.readFileSync(path.join(repoRoot, relativePath), 'utf8');
 }
 
+test('gapless boundary waits for replacement continuity traffic before sampling controls', () => {
+  const spec = readRepoFile('tests/e2e/performance/gaplessPlayback.spec.js');
+  const boundaryStep = spec.slice(
+    spec.indexOf("'Capture the same-quantum lossless boundary from the production worklet'"),
+    spec.indexOf("stepLogger.step('Honor a visible near-end seek"),
+  );
+  const replacementWait = boundaryStep.indexOf("path: replacement.path");
+  const settledDiagnostics = boundaryStep.indexOf(
+    'const settledDiagnostics = await readGaplessPlaybackDiagnostics(page)',
+  );
+  const controlSnapshot = boundaryStep.indexOf('traffic.snapshotSince(0)');
+
+  assert.ok(replacementWait >= 0);
+  assert.ok(settledDiagnostics >= 0);
+  assert.ok(controlSnapshot >= 0);
+  assert.ok(replacementWait < settledDiagnostics);
+  assert.ok(settledDiagnostics < controlSnapshot);
+  assert.match(boundaryStep, /expect\(settledDiagnostics\.continuityStreamId\)/);
+});
+
 class PlaybackEvidencePage extends EventEmitter {
   async waitForFunction() {}
 }
@@ -1263,7 +1283,7 @@ test('Problematic Files runtime partition accepts only one-to-one production-aut
     kind: 'requestfailed',
     type: 'net::ERR_ABORTED',
     method: 'GET',
-    url: 'http://127.0.0.1:4173/cover?path=private%2Falbum&size=480&v=secret',
+    url: 'http://127.0.0.1:4173/cover/privateAlbumReference0?size=480&v=secret',
     coverRequestId: 'gallery-cover-session-1',
   };
   const window = {
@@ -1702,7 +1722,7 @@ test('shared cover-preemption partition accepts only one authenticated render-ge
     kind: 'requestfailed',
     type: 'net::ERR_ABORTED',
     method: 'GET',
-    url: 'http://127.0.0.1:4173/cover?path=private%2Falbum&size=480&v=secret',
+    url: 'http://127.0.0.1:4173/cover/privateAlbumReference0?size=480&v=secret',
     coverRequestId: 'gallery-cover-render-1',
   };
   const window = {
@@ -2065,5 +2085,56 @@ test('cover lookup times the first decoded candidate before Spotify save setup',
   assert.match(
     spec,
     /candidateReadyMs = performance\.now\(\) - lookupStartedAt[\s\S]*?selectedCandidate = candidates\.find\([\s\S]*?spotify/,
+  );
+});
+
+test('generated preview storage timings start at search submission', () => {
+  const spec = readRepoFile('tests/e2e/specs/generatedPreviewStorage.functional.spec.js');
+  const relocation = spec.slice(
+    spec.indexOf("stepLogger.step('Relocate to custom storage"),
+    spec.indexOf('await galleryActions.clickAlbumDetailsByAlbumName(ALBUM)'),
+  );
+
+  assert.match(
+    relocation,
+    /recordSubmissionBoundary\(\)\s*\{\s*searchSubmittedAt = performance\.now\(\);\s*\}/,
+  );
+  assert.match(relocation, /galleryReadyMs = performance\.now\(\) - searchSubmittedAt/);
+  assert.match(relocation, /firstDecodedCoverMs = performance\.now\(\) - searchSubmittedAt/);
+  assert.doesNotMatch(relocation, /searchStartedAt/);
+});
+
+test('generated preview storage fails closed on a dirty prior relocation', () => {
+  const spec = readRepoFile('tests/e2e/specs/generatedPreviewStorage.functional.spec.js');
+  const helper = spec.slice(
+    spec.indexOf('async function openIdleStorageSettings'),
+    spec.indexOf('async function selectStorage'),
+  );
+
+  assert.match(helper, /const activeStates = \['queued', 'running', 'cancel_requested'\]/);
+  assert.match(helper, /const cleanStates = \['idle', 'completed'\]/);
+  assert.match(helper, /!cleanStates\.includes\(state\.operation_state\)/);
+  assert.match(helper, /state\.requested_mode !== null/);
+  assert.match(helper, /state\.failed_count !== 0/);
+  assert.match(helper, /Preview storage baseline is not clean: \$\{JSON\.stringify\(state\)\}/);
+  assert.doesNotMatch(helper, /authenticatedPagePost|\/retry|retryableStates/);
+});
+
+test('loop expiry E2E releases playback ownership before long clock advances', () => {
+  const spec = readRepoFile('tests/e2e/specs/loop-edit-expiry.functional.spec.js');
+  const savedLoopStart = spec.indexOf('await utilityLoopsActions.playLoopByName(SAVED_LOOP_NAME)');
+  const savedLoopEnd = spec.indexOf('await globalPlayerActions.installLoopEditExpiryClock()');
+  const renewalStart = spec.indexOf('await globalPlayerActions.pauseLoopEditExpiryClockBeforeRenewal()');
+  const renewalEnd = spec.indexOf('await globalPlayerActions.resumeLoopEditExpiryClock()');
+
+  assert.ok(savedLoopStart >= 0 && savedLoopEnd > savedLoopStart);
+  assert.ok(renewalStart >= 0 && renewalEnd > renewalStart);
+  const savedLoopStep = spec.slice(savedLoopStart, savedLoopEnd);
+  const renewalStep = spec.slice(renewalStart, renewalEnd);
+
+  assert.doesNotMatch(savedLoopStep, /globalPlayerActions\.resumeIfPaused\(\)/);
+  assert.match(
+    renewalStep,
+    /dragLoopBoundary\('end', 0\.8\)[\s\S]*?pauseToReleasePlaybackClaim\(\)[\s\S]*?advanceLoopEditExpiryClock\(299000\)[\s\S]*?dragLoopBoundary\('end', 0\.75\)[\s\S]*?advanceLoopEditExpiryClock\(299000\)/,
   );
 });

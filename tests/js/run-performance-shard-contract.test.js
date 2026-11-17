@@ -30,6 +30,7 @@ $targetNames = @('first', 'second')
 $failedTargets = [System.Collections.Generic.List[string]]::new()
 $targetIndex = 0
 $stateRoot = $foundationRoot = $profileSessionRoot = [IO.Path]::GetTempPath()
+$verifiedBaseFixtureRoot = [IO.Path]::GetTempPath()
 $ShardName = 'unit'
 $bootstrap = 'Invoke-TestBootstrap'
 $nodePath = 'Invoke-TestNode'
@@ -278,6 +279,14 @@ test('performance shard prepares and owns the preloaded artwork derivative befor
   );
 });
 
+test('performance shard restores verified preloaded release roots after clearing runtime selectors', () => {
+  const source = fs.readFileSync(runnerPath, 'utf8');
+  assert.match(
+    source,
+    /Set-ClearedRuntimeSelectors[\s\S]*?if\s*\(\$FixtureMode\s+-eq\s+['"]preloaded-release['"]\)\s*\{[\s\S]*?Env:ALBUM_HAVEN_FIXTURE_ROOT['"]\s+-Value\s+\$verifiedBaseFixtureRoot[\s\S]*?Env:ALBUM_HAVEN_MEDIA_ROOT['"]\s+-Value\s+\(Join-Path\s+\$verifiedBaseFixtureRoot\s+['"]media['"]\)/i,
+  );
+});
+
 test('performance profile runner removes copied derived provenance only after cleanup is proven', () => {
   const source = fs.readFileSync(runnerPath, 'utf8');
   const databaseTeardownIndex = source.search(/&\s*\$bootstrap\s+`[\s\S]*?-Mode\s+Teardown/i);
@@ -341,6 +350,13 @@ test('performance profile runner defaults local imitation to local and propagate
     /&\s*\$nodePath\s+\$performanceRunner\s+["']--test=\$target["'][^\r\n]*--performance-contract=\$PerformanceContract/i,
     'every shard target must propagate the validated local-or-CI timing contract',
   );
+});
+
+test('performance profile runner can select one exact case without broadening the target', () => {
+  const source = fs.readFileSync(runnerPath, 'utf8');
+  assert.match(source, /\[string\]\$Grep\s*=\s*['"]['"]/i);
+  assert.match(source, /\$grepArgument\s*=\s*if\s*\(\[string\]::IsNullOrWhiteSpace\(\$Grep\)\)/i);
+  assert.match(source, /--test=\$target["'][^\r\n]*@grepArgument[^\r\n]*--prepared-fixture/i);
 });
 
 test('performance shard runner never parallelizes targets or hides the one-worker runner contract', () => {

@@ -84,6 +84,8 @@ def test_private_routes_have_explicit_action_classification():
         ("POST", "/artifacts/android/attest", "account.self.android_updates"),
         ("GET", "/artifacts/android/{channel}/manifest.json", "account.self.android_updates"),
         ("POST", "/artifacts/android/{channel}/{name}", "account.self.android_updates"),
+        ("GET", "/artifacts/android/sandbox/index.json", "account.self.android_updates"),
+        ("POST", "/artifacts/android/sandbox/rebuild/{sandbox}", "system.android_sandbox_rebuild"),
         ("POST", "/downloads/links", "account.self.downloads"),
         ("GET", "/utilities/integrations/lastfm/scrobbles", "integration.settings.read"),
         (

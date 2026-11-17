@@ -787,8 +787,16 @@ export class SearchToolbar extends BasePage {
       }
       const initiallyBusy = initialObservation.activeRequestCount > 0
         || initialObservation.pendingPayloadReadCount > 0;
- let bootstrapPayload = initialObservation.bootstrapPresenceEligible !== false
-        && !initialObservation.latestFullPayload && !initiallyBusy
+      if (initiallyBusy) {
+        lastObservedState = {
+          activeRequestCount: initialObservation.activeRequestCount,
+          pendingPayloadReadCount: initialObservation.pendingPayloadReadCount,
+        };
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        continue;
+      }
+      let bootstrapPayload = initialObservation.bootstrapPresenceEligible !== false
+        && !initialObservation.latestFullPayload
         ? await this.readProductionBootstrapPayload()
         : null;
       if (bootstrapPayload && !this.productionViewObserver.acceptBootstrapPresence(
@@ -799,38 +807,44 @@ export class SearchToolbar extends BasePage {
         || bootstrapPayload?.startup_payload?.first_paint_view
         || bootstrapPayload?.initial_view
         || null;
-      // parity-check: allow-read-only-measurement-evaluate -- runtime view is canonical for local transitions that intentionally reuse a prior production payload
-      const runtimeView = await this.page.evaluate(() => {
-        if (typeof state === 'undefined' || !state.gallery?.mainState
-          || typeof getFilteredGalleryMainModel !== 'function') return null;
-        const artists = [...new Set(getFilteredGalleryMainModel().groups
-          .map(group => String(group?.artist_display || group?.artist || '').trim())
-          .filter(Boolean))];
-        return {
-          query: String(state?.view?.query || '').trim(),
-          surface: String(state?.view?.surface?.active || '').trim().toLowerCase(),
-          artists,
-          sidebarArtists: (Array.isArray(state.view.artists_sidebar) ? state.view.artists_sidebar : [])
-            .map(artist => String(artist?.artist_display || artist?.artist || '').trim())
-            .filter(Boolean),
-          activeViewRequestId: Number(state?.ui?.activeViewRequestId || 0),
-          activeViewRequestUrl: String(state?.ui?.activeViewRequestUrl || ''),
-          busy: Boolean(state?.busy),
-          viewStateRevision: Number(state?.ui?.viewStateRevision || 0),
-        };
-      });
-      const inputQuery = await this.input.inputValue();
-      const locationQuery = new URL(this.page.url()).searchParams.get('q') || '';
       const loader = this.page.locator(this.libraryLoaderSelector);
-      const loaderVisible = await loader.isVisible();
-      const spinnerVisible = loaderVisible
-        && await this.page.locator(this.libraryLoaderSpinnerSelector).isVisible();
-      const loaderTitle = loaderVisible
-        ? String(await this.page.locator(this.libraryLoaderTitleSelector).textContent() || '').trim()
-        : '';
-      const loaderStatus = loaderVisible
-        ? String(await this.page.locator(this.libraryLoaderStatusSelector).textContent() || '').trim()
-        : '';
+      const [runtimeView, inputQuery, loaderVisible, attachedArtistTexts,
+        attachedSidebarArtistTexts] = await Promise.all([
+        // parity-check: allow-read-only-measurement-evaluate -- runtime view is canonical for local transitions that intentionally reuse a prior production payload
+        this.page.evaluate(() => {
+          if (typeof state === 'undefined' || !state.gallery?.mainState
+            || typeof getFilteredGalleryMainModel !== 'function') return null;
+          const artists = [...new Set(getFilteredGalleryMainModel().groups
+            .map(group => String(group?.artist_display || group?.artist || '').trim())
+            .filter(Boolean))];
+          return {
+            query: String(state?.view?.query || '').trim(),
+            surface: String(state?.view?.surface?.active || '').trim().toLowerCase(),
+            artists,
+            sidebarArtists: (Array.isArray(state.view.artists_sidebar) ? state.view.artists_sidebar : [])
+              .map(artist => String(artist?.artist_display || artist?.artist || '').trim())
+              .filter(Boolean),
+            activeViewRequestId: Number(state?.ui?.activeViewRequestId || 0),
+            activeViewRequestUrl: String(state?.ui?.activeViewRequestUrl || ''),
+            busy: Boolean(state?.busy),
+            viewStateRevision: Number(state?.ui?.viewStateRevision || 0),
+          };
+        }),
+        this.input.inputValue(),
+        loader.isVisible(),
+        this.page.locator(this.artistHeadingSelector).allTextContents(),
+        this.page.locator(this.sidebarArtistNameSelector).allTextContents(),
+      ]);
+      const locationQuery = new URL(this.page.url()).searchParams.get('q') || '';
+      const [spinnerVisible, loaderTitleText, loaderStatusText] = loaderVisible
+        ? await Promise.all([
+          this.page.locator(this.libraryLoaderSpinnerSelector).isVisible(),
+          this.page.locator(this.libraryLoaderTitleSelector).textContent(),
+          this.page.locator(this.libraryLoaderStatusSelector).textContent(),
+        ])
+        : [false, '', ''];
+      const loaderTitle = String(loaderTitleText || '').trim();
+      const loaderStatus = String(loaderStatusText || '').trim();
       const settledEmpty = loaderVisible
         && !spinnerVisible
         && loaderTitle === 'Nothing found'
@@ -838,14 +852,12 @@ export class SearchToolbar extends BasePage {
       const activeLoader = loaderVisible && !settledEmpty;
       const canonicalView = resolveCurrentCanonicalView(payload, runtimeView);
       const canonicalArtists = canonicalView.artists;
-      const attachedArtists = (await this.page.locator(this.artistHeadingSelector).allTextContents())
+      const attachedArtists = attachedArtistTexts
         .map((artist) => String(artist || '').trim())
         .filter(Boolean);
       const canonicalSurface = canonicalView.surface;
       const canonicalSidebarArtists = resolveCurrentCanonicalSidebar(payload, runtimeView);
-      const attachedSidebarArtists = (await this.page
-        .locator(this.sidebarArtistNameSelector)
-        .allTextContents())
+      const attachedSidebarArtists = attachedSidebarArtistTexts
         .map((artist) => String(artist || '').trim())
         .filter(Boolean);
       const payloadObserved = payload !== null || initialObservation.galleryPayloadObserved === true
@@ -853,14 +865,14 @@ export class SearchToolbar extends BasePage {
       const startupHydrating = !payloadObserved || Boolean(
         bootstrapPayload?.bootstrap?.startupHydration?.required,
       );
-      const finalAttachedArtists = (await this.page
-        .locator(this.artistHeadingSelector)
-        .allTextContents())
+      const [finalArtistTexts, finalSidebarArtistTexts] = await Promise.all([
+        this.page.locator(this.artistHeadingSelector).allTextContents(),
+        this.page.locator(this.sidebarArtistNameSelector).allTextContents(),
+      ]);
+      const finalAttachedArtists = finalArtistTexts
         .map((artist) => String(artist || '').trim())
         .filter(Boolean);
-      const finalAttachedSidebarArtists = (await this.page
-        .locator(this.sidebarArtistNameSelector)
-        .allTextContents())
+      const finalAttachedSidebarArtists = finalSidebarArtistTexts
         .map((artist) => String(artist || '').trim())
         .filter(Boolean);
       const finalObservation = this.productionViewObserver.read();

@@ -78,7 +78,12 @@
     "music_app/services/duplicate_copy_review.py",
     "music_app/static/js/runtime/compact-data-table.js",
     "music_app/static/css/runtime/compact-data-table.css",
-    "music_app/services/duplicate_copy_retirement.py"
+    "music_app/services/duplicate_copy_retirement.py",
+    "music_app/services/cover_reference_boundary.py",
+    "music_app/services/cover_references.py",
+    "migrations/postgres/0200_create_cover_references.sql",
+    "migrations/postgres/0201_backfill_cover_references.sql",
+    "music_app/static/js/runtime/modal-and-overlay-helpers.js"
   ],
   "rules": [
     {
@@ -178,13 +183,29 @@
         "music_app/static/vendor/wasm-audio-decoders/mpg123-decoder.min.js",
         "music_app/static/js/runtime/album-details-components.js",
         "music_app/static/js/runtime/modal-and-overlay-helpers.js",
-        "music_app/static/js/runtime/track-modal-lightbox-helpers.js",
         "music_app/static/css/runtime/album-details-components.css"
       ],
       "targets": [
         "selected-artist",
         "all-artists",
         "gapless-playback"
+      ]
+    },
+    {
+      "paths": [
+        "music_app/static/js/audio-worklets/gapless-playback-processor.js",
+        "music_app/static/js/runtime/player-streaming-engine.js"
+      ],
+      "targets": ["gapless-playback"]
+    },
+    {
+      "paths": ["music_app/static/js/runtime/track-modal-lightbox-helpers.js"],
+      "targets": [
+        "selected-artist",
+        "all-artists",
+        "gapless-playback",
+        "utility-problematic-files",
+        "problematic-files-focused"
       ]
     },
     {
@@ -289,6 +310,25 @@
         "tests/e2e/helpers/realAppBenchmarkHelpers.js"
       ],
       "targets": [
+        "gallery-artwork-diversity"
+      ]
+    },
+    {
+      "paths": [
+        "music_app/services/cover_reference_boundary.py",
+        "music_app/services/cover_references.py",
+        "migrations/postgres/0200_create_cover_references.sql",
+        "migrations/postgres/0201_backfill_cover_references.sql",
+        "music_app/static/js/runtime/modal-and-overlay-helpers.js"
+      ],
+      "targets": [
+        "artist-family",
+        "search-all-artists",
+        "search-browse",
+        "utility-problematic-files",
+        "problematic-files-focused",
+        "app-open-all-artists",
+        "artist-tree-scroll-navigation",
         "gallery-artwork-diversity"
       ]
     }

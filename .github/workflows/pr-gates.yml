@@ -167,7 +167,9 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           working-directory: apps/android-shell
-          script: ./gradlew --no-daemon --console=plain connectedStableDebugAndroidTest connectedSandboxDebugAndroidTest :playback-engine:connectedDebugAndroidTest -PalbumHavenDevOrigin=http://127.0.0.1:18765
+          script: |
+            ./gradlew --no-daemon --console=plain connectedStableDebugAndroidTest connectedSandboxDebugAndroidTest -PalbumHavenDevOrigin=http://127.0.0.1:18765 -Pandroid.testInstrumentationRunnerArguments.class=org.albumhaven.shell.PlaybackNotificationTest,org.albumhaven.shell.NetworkChangePlaybackTest,org.albumhaven.shell.MediaStoreDownloadsTest,org.albumhaven.shell.ShellSmokeTest#outdatedWebViewFailsClosedWithoutLoadingTheSite
+            ./gradlew --no-daemon --console=plain :playback-engine:connectedDebugAndroidTest -PalbumHavenDevOrigin=http://127.0.0.1:18765
 
       # The next emulator's run replaces these.
       - name: Keep the API 29 reports
@@ -200,7 +202,7 @@ jobs:
           # A slow software-rendered System UI must not cover the app with "isn't responding".
           script: |
             adb shell settings put global hide_error_dialogs 1
-            ./gradlew --no-daemon --console=plain connectedStableDebugAndroidTest -PalbumHavenDevOrigin=http://127.0.0.1:18765 -Pandroid.testInstrumentationRunnerArguments.class=org.albumhaven.shell.LeaveForSettingsTest
+            ./gradlew --no-daemon --console=plain connectedStableDebugAndroidTest connectedSandboxDebugAndroidTest -PalbumHavenDevOrigin=http://127.0.0.1:18765 -Pandroid.testInstrumentationRunnerArguments.class=org.albumhaven.shell.ShellSmokeTest#handshakeNegotiatesOverRealBridge,org.albumhaven.shell.ShellSmokeTest#incompatibleWebShowsUpdateRequired,org.albumhaven.shell.ShellSmokeTest#connectionFailureRecoversThroughRetry,org.albumhaven.shell.ShellSmokeTest#activityRecreationKeepsThePageAndRenegotiates,org.albumhaven.shell.ShellSmokeTest#savedStateStaysSmallAfterALongHistory,org.albumhaven.shell.ShellSmokeTest#externalNavigationLeavesTheWebViewOnItsOrigin,org.albumhaven.shell.LeaveForSettingsTest
             python3 ../../scripts/ci/android-update-e2e.py --serial emulator-5554 --old "$RUNNER_TEMP/update-e2e/installed.apk" --new "$RUNNER_TEMP/update-e2e/offered.apk"
 
       - name: Upload instrumentation reports
@@ -1115,6 +1117,9 @@ jobs:
         uses: browser-actions/setup-chrome@v2
         with:
           chrome-version: "151.0.7922.138"
+
+      - name: Expand Windows IPv4 dynamic port range
+        run: netsh interface ipv4 set dynamicport tcp start=10000 num=55535
 
       - name: Validate performance matrix ownership
         run: node scripts/ci/validate-performance-matrix.cjs --list

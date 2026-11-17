@@ -507,6 +507,7 @@ function openLocallyEditedSplitRelease(albumKey, album, releases) {
     && String(release?.year || '') === String(album?.year || '')
   ));
   if (matches.length !== 1) return false;
+  rememberLocallyEditedAlbum({ key: matches[0].album_key || matches[0].key });
   state.ui.trackModalIdentitySplitChoices = releases;
   return selectTrackModalCurrentRelease(matches[0].album_id);
 }
@@ -1084,7 +1085,28 @@ function closeImageLightbox() {
   }
   const returnFocus = imageLightboxReturnFocus;
   imageLightboxReturnFocus = null;
-  if (returnFocus?.isConnected) returnFocus.focus?.();
+  let focusTarget = returnFocus?.isConnected ? returnFocus : null;
+  if (!focusTarget && returnFocus?.getAttribute) {
+    const triggerAttribute = ['data-open-lightbox', 'data-cover-lookup-open-lightbox']
+      .find((attribute) => returnFocus.getAttribute(attribute) === '1');
+    if (triggerAttribute) {
+      const coverSrc = returnFocus.getAttribute('data-cover-src') || '';
+      const coverAlt = returnFocus.getAttribute('data-cover-alt') || '';
+      const replacements = Array.from(document.querySelectorAll(`[${triggerAttribute}="1"]`))
+        .filter((candidate) => {
+          const visibility = getComputedStyle(candidate).visibility;
+          return candidate.disabled !== true
+            && !candidate.closest('[hidden], [inert]')
+            && candidate.getClientRects().length > 0
+            && visibility !== 'hidden'
+            && visibility !== 'collapse'
+            && (candidate.getAttribute('data-cover-src') || '') === coverSrc
+            && (candidate.getAttribute('data-cover-alt') || '') === coverAlt;
+        });
+      if (replacements.length === 1) [focusTarget] = replacements;
+    }
+  }
+  focusTarget?.focus?.();
 }
 
 function closeTrackModal() {

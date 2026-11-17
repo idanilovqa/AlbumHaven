@@ -3,31 +3,39 @@
   "channel": "stable",
   "shells": {
     "latest": {
-      "versionCode": null,
-      "sourceCommit": null,
+      "versionCode": 7,
+      "sourceCommit": "f7d46ecf7ba82297d83dca2eb600abaa619a34c0",
       "fixture": "v1.json",
       "bridgeProtocolMin": 1,
       "bridgeProtocolMax": 1,
       "capabilities": [
-        "playback.native.v1",
-        "playback.queue.v1",
+        "app.copy.v1",
+        "downloads.link.v1",
+        "files.save.v1",
+        "playback.album_details.v1",
         "playback.loops.v2",
         "playback.media_session.v1",
+        "playback.native.v1",
+        "playback.queue.v1",
         "playback.resumption.v1",
         "updates.manual.v1"
       ]
     },
     "previous": {
-      "versionCode": null,
-      "sourceCommit": null,
+      "versionCode": 6,
+      "sourceCommit": "8fcc3f8cd6d09386c87f4bd032c0b212497c091c",
       "fixture": "v1.json",
       "bridgeProtocolMin": 1,
       "bridgeProtocolMax": 1,
       "capabilities": [
-        "playback.native.v1",
-        "playback.queue.v1",
+        "app.copy.v1",
+        "downloads.link.v1",
+        "files.save.v1",
+        "playback.album_details.v1",
         "playback.loops.v2",
         "playback.media_session.v1",
+        "playback.native.v1",
+        "playback.queue.v1",
         "playback.resumption.v1",
         "updates.manual.v1"
       ]

@@ -119,6 +119,7 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("GET", "/virtual-releases/{virtual_release_ref}"): "library.virtual_discography.read",
     ("GET", "/track"): "library.media.read",
     ("GET", "/cover"): "library.artwork.read",
+    ("GET", "/cover/{reference}"): "library.artwork.read",
     ("GET", "/loops/media/{loop_id}"): "library.loops.media.read",
     ("GET", "/loops/pitch-preview/{preview_id}"): "library.loops.media.read",
     ("GET", "/utilities/cover-lookup/remote-image"): "library.covers.remote.read",
@@ -136,6 +137,9 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/artifacts/android/attest"): "account.self.android_updates",
     ("GET", "/artifacts/android/{channel}/manifest.json"): "account.self.android_updates",
     ("POST", "/artifacts/android/{channel}/{name}"): "account.self.android_updates",
+    ("GET", "/artifacts/android/sandbox/index.json"): "account.self.android_updates",
+    # The owner only: dispatches a CI rebuild of a sandbox's build (also signed by an attested key).
+    ("POST", "/artifacts/android/sandbox/rebuild/{sandbox}"): "system.android_sandbox_rebuild",
     # Self-service for any active account (no capability); the route also runs the linked
     # download route's own authorization, then and whenever the link is fetched.
     ("POST", "/downloads/links"): "account.self.downloads",
@@ -421,6 +425,8 @@ def _private_resource(request: Request, route_path: str) -> ResourceScope | None
         private_path = str(request.query_params.get("path") or "").strip()
         if private_path:
             return ResourceScope("media", _privacy_reference(private_path, request))
+    if route_path == "/cover/{reference}":
+        return ResourceScope("cover", _safe_reference(request.url.path.rsplit("/", 1)[-1], request))
     if route_path == "/loops/media/{loop_id}":
         return ResourceScope(
             "loop", _safe_reference(request.url.path.rsplit("/", 1)[-1], request)

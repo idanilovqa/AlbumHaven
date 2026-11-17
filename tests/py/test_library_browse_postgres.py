@@ -9363,7 +9363,41 @@ def test_postgres_cover_variant_queue_uses_preview_and_full_card_sizes(monkeypat
         ("covers/preview.jpg", str(Path(r"C:\AlbumHavenData") / "display-cover-cache"), 480),
         ("covers/full.jpg", str(Path(r"C:\AlbumHavenData") / "display-cover-cache"), 480),
     ]
-    assert queued_recorders == [recorder, recorder]
+    # Unrevisioned previews stay in app data, outside the relocation inventory.
+    assert queued_recorders == [None, None]
+
+
+def test_postgres_cover_variant_queue_records_revisioned_policy_previews(monkeypatch, tmp_path):
+    from music_app.services import covers as covers_module
+    from music_app.services.generated_preview_storage import (
+        PreviewStoragePolicy,
+        PreviewStorageSnapshot,
+    )
+    from music_app.services.library_browse_postgres import _queue_display_cover_variants_for_groups
+
+    queued = []
+    recorder = object()
+    source = tmp_path / "Artist" / "Album" / "cover.jpg"
+    monkeypatch.setattr(
+        covers_module,
+        "queue_cover_display_variant_generation",
+        lambda source_path, *, cache_root, max_size, revision=None, on_published=None: queued.append(
+            (Path(cache_root), revision, on_published)
+        ),
+    )
+
+    _queue_display_cover_variants_for_groups(
+        {
+            "DATA_DIR": str(tmp_path / "app-data"),
+            "_GENERATED_PREVIEW_STORAGE_POLICY": PreviewStoragePolicy(
+                PreviewStorageSnapshot(mode="album_folders")
+            ),
+            "_GENERATED_PREVIEW_INVENTORY_RECORDER": recorder,
+        },
+        [{"albums": [{"cover_path": str(source), "cover_revision": "a" * 64}]}],
+    )
+
+    assert queued == [(source.parent / ".album-haven", "a" * 64, recorder)]
 
 
 def test_postgres_cover_variant_queue_deduplicates_without_consuming_limit(monkeypatch):
@@ -13609,6 +13643,52 @@ def test_selected_artist_family_context_keeps_loaded_projection_without_runtime_
     )
 
     assert context["family_artists"] == ["Morse Portnoy George"]
+
+
+def test_selected_artist_family_context_reuses_caller_alias_maps(monkeypatch):
+    from music_app.services import artist_family_postgres as artist_family_postgres_module
+    from music_app.services.library_browse_postgres import _selected_artist_family_context_from_state
+
+    loader_kwargs = []
+
+    def fake_load_selected_artist_family_projection(*_args, **kwargs):
+        loader_kwargs.append(kwargs)
+        return {
+            "family_artists": ["The Neal Morse Band"],
+            "relations_last_built": 0.0,
+            "loaded": True,
+            "alias_to_canonical": {},
+            "canonical_to_aliases": {},
+        }
+
+    monkeypatch.setattr(
+        artist_family_postgres_module,
+        "load_selected_artist_family_projection",
+        fake_load_selected_artist_family_projection,
+    )
+    alias_to_canonical = {
+        "Neal Morse": "Neal Morse",
+        "The Neal Morse Band": "The Neal Morse Band",
+    }
+    canonical_to_aliases = {
+        "Neal Morse": ["Neal Morse"],
+        "The Neal Morse Band": ["The Neal Morse Band"],
+    }
+
+    context = _selected_artist_family_context_from_state(
+        "Neal Morse",
+        config={"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        alias_to_canonical=alias_to_canonical,
+        canonical_to_aliases=canonical_to_aliases,
+    )
+
+    assert loader_kwargs[0]["include_alias_maps"] is False
+    assert context["alias_to_canonical"] is alias_to_canonical
+    assert context["canonical_to_aliases"] is canonical_to_aliases
+    assert context["alias_to_canonical"] == alias_to_canonical
+    assert context["canonical_to_aliases"] == canonical_to_aliases
+
+
 def test_selected_artist_family_context_keeps_loaded_projection_when_runtime_state_missing(monkeypatch):
     from music_app.services import artist_family_postgres as artist_family_postgres_module
     from music_app.services import library_browse_postgres as browse_module
@@ -13855,6 +13935,43 @@ def test_load_selected_artist_family_projection_reuses_caller_owned_snapshot():
     assert projection["loaded"] is True
     assert projection["family_artists"] == ["Joseph Family"]
     assert len(calls) == 3
+
+
+def test_load_selected_artist_family_projection_can_skip_alias_queries():
+    from music_app.services.artist_family_postgres import load_selected_artist_family_projection
+
+    calls = []
+
+    class FakeCursor:
+        def fetchall(self):
+            return [
+                {
+                    "selected_artist_key": "neal morse",
+                    "selected_artist_name": "Neal Morse",
+                    "family_artist_name": "The Neal Morse Band",
+                    "family_artist_key": "the neal morse band",
+                    "relations_last_built": 1.0,
+                }
+            ]
+
+    class FakeConnection:
+        def execute(self, _sql, params=None):
+            calls.append(dict(params or {}))
+            if "relationship_source" not in (params or {}):
+                raise AssertionError("alias query should be skipped")
+            return FakeCursor()
+
+    projection = load_selected_artist_family_projection(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        "Neal Morse",
+        connection=FakeConnection(),
+        include_alias_maps=False,
+    )
+
+    assert projection["family_artists"] == ["The Neal Morse Band"]
+    assert projection["alias_to_canonical"] == {}
+    assert projection["canonical_to_aliases"] == {}
+    assert len(calls) == 1
 
 
 def test_load_selected_artist_family_projection_does_not_swallow_caller_connection_failure():

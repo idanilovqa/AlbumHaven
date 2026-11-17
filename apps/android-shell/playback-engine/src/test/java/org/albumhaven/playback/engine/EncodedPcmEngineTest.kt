@@ -130,6 +130,24 @@ class EncodedPcmEngineTest {
     }
 
     @Test
+    fun aSuccessorFetchedAheadIsKeptOnlyOnceItIsHeard() {
+        val cache = MemoryTrackCache()
+        val long = SyntheticTrack(tag = 3, frames = 48_000L * 30)
+        val skipped = PcmHarness(long, second, encoded = true, cache = cache)
+        skipped.engine.start(long.pcm)
+        skipped.engine.setQueuedNext(second.pcm)
+        skipped.playUntil { skipped.sent<PcmClientControl.Open>().size == 2 && skipped.server.outbox.isEmpty() && skipped.sink.writtenFrames > 48_000 }
+        // The successor arrived whole but was never heard.
+        assertEquals(false, "key-2" in cache.tracks.keys)
+
+        val heard = PcmHarness(first, second, encoded = true, cache = cache)
+        heard.engine.start(first.pcm)
+        heard.engine.setQueuedNext(second.pcm)
+        heard.playToEnd()
+        assertTrue("key-2" in cache.tracks.keys)
+    }
+
+    @Test
     fun aCachedSuccessorFollowsWithoutAGapOrAServerPromote() {
         val cache = MemoryTrackCache()
         PcmHarness(second, encoded = true, cache = cache).apply {
@@ -279,7 +297,9 @@ class EncodedPcmEngineTest {
 
         assertEquals(null, harness.failure())
         assertEquals(listOf(Run(4, 0, whole.frames), Run(2, 0, second.frames)), harness.sink.runs())
-        assertEquals("only the successor came from the server", listOf("ref-2"), opened(harness))
+        // The successor prepared on the lost socket was never heard, so it was not kept; the next
+        // socket prepares it again. The cached song itself never asked the server for anything.
+        assertEquals("only the successor came from the server", listOf("ref-2", "ref-2"), opened(harness))
         assertEquals(emptyList<String>(), harness.server.violations)
     }
 

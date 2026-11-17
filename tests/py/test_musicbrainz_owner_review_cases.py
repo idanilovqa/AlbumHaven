@@ -56,8 +56,10 @@ CREDITED = {"3 Crows": "3 Crows", "Alan Parsons Project": "Alan Parsons Project"
             "Eric Mongrain": "Eric Mongrain", "Birgir": "Birgir"}
 UNCONFIRMED: dict[str, str] = {}
 # Owner decision 2026-11-08: each album takes the artist it certainly matches, with no
-# margin. Alice Cooper's albums are the singer's and the 1969-74 band's.
-PER_ALBUM = {"Alice Cooper": {"ee58c59f-8e7f-4430-b8ca-236c4d3745ae", "4d7928cd-7ed2-4282-8c29-c0c9f966f1bd"}}
+# margin. Owner 2026-11-14 (reversing 2026-11-09): Alice Cooper the singer and his 1969-73
+# band are different artists with different MBIDs, split per album.
+ALICE_COOPER_ALBUM_ARTISTS = {"ee58c59f-8e7f-4430-b8ca-236c4d3745ae", "4d7928cd-7ed2-4282-8c29-c0c9f966f1bd"}
+PER_ALBUM: dict[str, set[str]] = {"Alice Cooper": ALICE_COOPER_ALBUM_ARTISTS}
 
 
 def _client():
@@ -93,3 +95,16 @@ def test_owner_named_artist(case):
 
 def test_every_named_case_is_covered():
     assert {case["case"] for case in FIXTURE["cases"]} == set(MATCHED) | set(UNCONFIRMED) | set(PER_ALBUM)
+
+
+def test_alice_cooper_the_singer_and_his_band_split_by_album():
+    """Owner review 4: Alice Cooper's solo albums were left undecided on their year alone
+    when the split spent the lookups; each now has its tracks compared. Owner 2026-11-14:
+    the singer and the band are separate artists."""
+    case = next(case for case in FIXTURE["cases"] if case["case"] == "Alice Cooper")
+    outcome = resolve_artist(case["context"], client=_client())
+
+    assert outcome["classification"] == "per_album"
+    assert {item["artist_mbid"] for item in outcome["album_identities"]} == ALICE_COOPER_ALBUM_ARTISTS
+    decided = {item["local_title"] for item in outcome["album_identities"]}
+    assert [album["title"] for album in case["context"]["albums"] if album["title"] not in decided] == ["Killer"]

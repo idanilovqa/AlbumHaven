@@ -65,6 +65,11 @@ test('FTC-PLAYER-016 production playback crosses a sample-exact stable-stream bo
     const encodedChainIndex = gaplessPlaybackFixture.tracks.findIndex(
       (track) => track.kind === 'encoded-chain-a',
     );
+    const untaggedChain = ['untagged-chain-a', 'untagged-chain-b']
+      .map((kind) => gaplessPlaybackFixture.tracks.find((track) => track.kind === kind));
+    const untaggedChainIndex = gaplessPlaybackFixture.tracks.findIndex(
+      (track) => track.kind === 'untagged-chain-a',
+    );
     expect(outgoing).toBeTruthy();
     expect(incoming).toBeTruthy();
     expect(replacement).toBeTruthy();
@@ -78,12 +83,47 @@ test('FTC-PLAYER-016 production playback crosses a sample-exact stable-stream bo
     expect(encodedChainIndex).toBeGreaterThanOrEqual(0);
     expect(gaplessPlaybackFixture.tracks.slice(encodedChainIndex, encodedChainIndex + 3)
       .map((track) => track.path)).toEqual(encodedChain.map((track) => track.path));
+    expect(untaggedChain.every(Boolean)).toBe(true);
+    expect(gaplessPlaybackFixture.tracks.slice(untaggedChainIndex, untaggedChainIndex + 2)
+      .map((track) => track.path)).toEqual(untaggedChain.map((track) => track.path));
 
     let continuityOpen = null;
     await stepLogger.step('Select the outgoing row and observe production streaming roles', async () => {
-      const selected = await trackModalActions.playTrackAt(0);
-      expect(selected.path).toBe(outgoing.path);
-      await globalPlayerActions.waitForCurrentTrack({ path: outgoing.path, trackTitle: outgoing.title });
+      const initialStartDiagnostics = await createStreamingReplacementDiagnosticsObserver(page);
+      try {
+        const selected = await trackModalActions.playTrackAt(0);
+        expect(selected.path).toBe(outgoing.path);
+        await globalPlayerActions.waitForCurrentTrack({
+          path: outgoing.path,
+          trackTitle: outgoing.title,
+        });
+      } catch (error) {
+        let failureState;
+        let timeline = [];
+        try {
+          timeline = await initialStartDiagnostics.finish();
+          const { src: _privateSource, ...diagnostics } = await readGaplessPlaybackDiagnostics(page);
+          failureState = {
+            diagnostics,
+            protocolControls: traffic.snapshotSince(0).map(({ path: _privatePath, ...control }) => control),
+            timeline,
+          };
+        } catch (diagnosticError) {
+          failureState = {
+            diagnosticsUnavailable: {
+              message: String(diagnosticError?.message || diagnosticError),
+              name: String(diagnosticError?.name || 'Error'),
+            },
+            timeline,
+          };
+        }
+        await testInfo.attach('initial-playback-start-failure-state', {
+          body: Buffer.from(JSON.stringify(failureState, null, 2)),
+          contentType: 'application/json',
+        });
+        throw error;
+      }
+      await initialStartDiagnostics.finish();
       await globalPlayerActions.waitForPlaybackState({ paused: false, minimumCurrentTime: 0.02 });
       continuityOpen = await traffic.waitForControl({ type: 'open', role: 'continuity' });
       const diagnostics = await readGaplessPlaybackDiagnostics(page);
@@ -118,6 +158,13 @@ test('FTC-PLAYER-016 production playback crosses a sample-exact stable-stream bo
       },
     });
 
+    await traffic.waitForControl({
+      type: 'open',
+      role: 'continuity',
+      path: replacement.path,
+    });
+    const settledDiagnostics = await readGaplessPlaybackDiagnostics(page);
+
     const controls = traffic.snapshotSince(0);
     const opens = controls.filter((control) => control.type === 'open');
     const promotion = controls.find((control) => control.type === 'promote');
@@ -136,16 +183,16 @@ test('FTC-PLAYER-016 production playback crosses a sample-exact stable-stream bo
     expect(replacementOpen?.streamId).not.toBe(opens[0]?.streamId);
     expect(replacementOpen?.streamId).not.toBe(opens[1]?.streamId);
     expect(controls.indexOf(replacementOpen)).toBeGreaterThan(controls.indexOf(promotion));
-    expect(diagnostics.currentStreamId).toBe(continuityOpen.streamId);
-    expect(diagnostics.continuityStreamId).toBe(replacementOpen.streamId);
-    expect(diagnostics.activeRoles).toEqual(['current', 'continuity']);
+    expect(settledDiagnostics.currentStreamId).toBe(continuityOpen.streamId);
+    expect(settledDiagnostics.continuityStreamId).toBe(replacementOpen.streamId);
+    expect(settledDiagnostics.activeRoles).toEqual(['current', 'continuity']);
     expect(
-      diagnostics.bufferedFrames.current + diagnostics.inFlightFrames.current,
-    ).toBeLessThanOrEqual(diagnostics.currentCapacityFrames);
+      settledDiagnostics.bufferedFrames.current + settledDiagnostics.inFlightFrames.current,
+    ).toBeLessThanOrEqual(settledDiagnostics.currentCapacityFrames);
     expect(
-      diagnostics.bufferedFrames.continuity + diagnostics.inFlightFrames.continuity,
-    ).toBeLessThanOrEqual(diagnostics.continuityCapacityFrames);
-    gaplessPlaybackReport.recordBoundary({ diagnostics, controls });
+      settledDiagnostics.bufferedFrames.continuity + settledDiagnostics.inFlightFrames.continuity,
+    ).toBeLessThanOrEqual(settledDiagnostics.continuityCapacityFrames);
+    gaplessPlaybackReport.recordBoundary({ diagnostics, settledDiagnostics, controls });
 
     await stepLogger.step('Honor a visible near-end seek, move its waveform cursor, and keep playing into queued-next', async () => {
       const nearEndEventMark = traffic.eventMark();
@@ -354,6 +401,67 @@ test('FTC-PLAYER-016 production playback crosses a sample-exact stable-stream bo
         expect(nextWaveform.path).toBe(nextTrack.path);
         expect(nextWaveform.nonPlayheadPixels).toBeGreaterThan(0);
       }
+    });
+
+    await stepLogger.step('Cross a natural album boundary between untagged MP3s without decoder padding', async () => {
+      const [outgoingTrack, incomingTrack] = untaggedChain;
+      const selected = await trackModalActions.playTrackAt(untaggedChainIndex);
+      expect(selected.path).toBe(outgoingTrack.path);
+      await globalPlayerActions.waitForCurrentTrack({
+        path: outgoingTrack.path,
+        trackTitle: outgoingTrack.title,
+      });
+      await globalPlayerActions.waitForPlaybackState({ paused: false, minimumCurrentTime: 0.02 });
+      const startDiagnostics = await readGaplessPlaybackDiagnostics(page);
+      await globalPlayerActions.waitForStreamingContinuity(incomingTrack.path, {
+        generation: startDiagnostics.generation,
+      });
+      await expect.poll(async () => (
+        await readGaplessPlaybackDiagnostics(page)
+      ).bufferedFrames.continuity).toBeGreaterThan(0);
+      const preparedDiagnostics = await readGaplessPlaybackDiagnostics(page);
+      const seekResult = await globalPlayerActions.seekToSeconds(
+        Number(outgoingTrack.durationSeconds) - 0.5,
+        { toleranceSeconds: 0.25 },
+      );
+      await globalPlayerActions.waitForStreamingContinuity(incomingTrack.path, {
+        generation: seekResult.generation,
+      });
+      const seekDiagnostics = await readGaplessPlaybackDiagnostics(page);
+      const incomingOpen = traffic.snapshotSince(0).findLast((control) => (
+        control.type === 'open'
+          && control.role === 'continuity'
+          && control.streamId === seekDiagnostics.continuityStreamId
+      ));
+      expect(incomingOpen).toBeTruthy();
+      const outgoingStreamId = seekDiagnostics.currentStreamId;
+      const boundary = await waitForGaplessBoundary(page, {
+        expectedPromotedStreamId: incomingOpen.streamId,
+      });
+      await globalPlayerActions.waitForCurrentTrack({
+        path: incomingTrack.path,
+        trackTitle: incomingTrack.title,
+      });
+      await globalPlayerActions.waitForPlaybackState({ paused: false, minimumCurrentTime: 0.02 });
+      // A trim stops at the first sample at or above -40 dBFS, so the last frame heard before the
+      // boundary and the first after it are real audio; untrimmed, both would be decoder padding.
+      // (A tone's MP3 rings as it starts, so the window's mean sign proves nothing here.)
+      const capture = boundary.boundaryCapture;
+      assertAudibleBoundaryCapture(expect, capture);
+      const louder = (side, index) => Math.max(
+        Math.abs(Number(capture[side].left[index])),
+        Math.abs(Number(capture[side].right[index])),
+      );
+      expect(louder('outgoing', Number(capture.outgoing.frames) - 1)).toBeGreaterThanOrEqual(0.01);
+      expect(louder('incoming', 0)).toBeGreaterThanOrEqual(0.01);
+      const padding = (await readGaplessPlaybackDiagnostics(page)).boundaryPadding;
+      expect(padding?.suffix).toMatchObject({ streamId: outgoingStreamId, confident: true });
+      expect(padding?.prefix).toMatchObject({ streamId: incomingOpen.streamId, confident: true });
+      expect(padding.suffix.removableFrames).toBeGreaterThan(0);
+      expect(padding.prefix.removableFrames).toBeGreaterThan(0);
+      expect(padding.prefix.removableFrames).toBeLessThanOrEqual(Math.round(0.064 * seekDiagnostics.sampleRate));
+      expect(boundary.underruns).toBe(preparedDiagnostics.underruns);
+      expect(traffic.activeSocketCount()).toBe(1);
     });
 
     await stepLogger.step('Reload and render the persisted six-minute waveform from one cache-only response', async () => {

@@ -253,6 +253,15 @@ def selected_local_cover_source(
     return next(_matching_local_cover_sources(candidates, active_path, revision), str(active_path))
 
 
+def _client_candidate(item: Mapping[str, object]) -> dict[str, object]:
+    """A lookup candidate named by fields the cover reference boundary turns into references."""
+    candidate = {key: value for key, value in item.items() if key not in {"path", "duplicate_of"}}
+    candidate["candidate_cover_path"] = item["path"]
+    if item.get("duplicate_of"):
+        candidate["duplicate_of_cover_path"] = item["duplicate_of"]
+    return candidate
+
+
 def serialize_cover_gallery_payload(
     *,
     album_root: Path,
@@ -286,12 +295,11 @@ def serialize_cover_gallery_payload(
                 candidate["cover_revision"] = active_cover_revision
     return {
         "ok": True,
-        "album_root": str(album_root),
         "active_cover_path": str(active_cover_path) if active_cover_path else None,
-        "selected_source_path": selected_source_path,
+        "selected_source_cover_path": selected_source_path,
         "remote_cover": active_remote_cover,
-        "local_covers": [item for item in local_candidates if item.get("is_squareish")],
-        "other_art": [item for item in local_candidates if not item.get("is_squareish")],
+        "local_covers": [_client_candidate(item) for item in local_candidates if item.get("is_squareish")],
+        "other_art": [_client_candidate(item) for item in local_candidates if not item.get("is_squareish")],
         "task": task_payload if task_payload else None,
         "candidate_snapshot": serialize_cover_candidate_snapshot(candidate_snapshot),
     }

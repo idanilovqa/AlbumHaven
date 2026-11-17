@@ -20,11 +20,13 @@ param(
     [string]$RunAttempt = $env:GITHUB_RUN_ATTEMPT,
     [string]$ShardName = 'performance-shard',
     [ValidateSet('chrome')][string]$Browser = 'chrome',
-    [ValidateSet('local', 'ci')][string]$PerformanceContract = 'local'
+    [ValidateSet('local', 'ci')][string]$PerformanceContract = 'local',
+    [string]$Grep = ''
 )
 
 $ErrorActionPreference = 'Stop'
 $targetNames = @($Targets.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+$grepArgument = if ([string]::IsNullOrWhiteSpace($Grep)) { @() } else { @("--grep=$Grep") }
 if ($targetNames.Count -lt 1 -or $targetNames.Count -gt 17) {
     throw 'Performance profile runner must own between one and seventeen targets.'
 }
@@ -280,6 +282,10 @@ try {
     $env:ALBUM_HAVEN_FIXTURE_PROFILE = $FixtureProfile
     $env:ALBUM_HAVEN_ARTWORK_DIVERSITY_PROVENANCE = $null
     Set-ClearedRuntimeSelectors
+    if ($FixtureMode -eq 'preloaded-release') {
+        Set-Item -LiteralPath 'Env:ALBUM_HAVEN_FIXTURE_ROOT' -Value $verifiedBaseFixtureRoot
+        Set-Item -LiteralPath 'Env:ALBUM_HAVEN_MEDIA_ROOT' -Value (Join-Path $verifiedBaseFixtureRoot 'media')
+    }
     if ($FixtureMode -eq 'generated-isolated') {
         Set-Item -LiteralPath 'Env:ALBUM_HAVEN_FIXTURE_ROOT' -Value ' '
         Set-Item -LiteralPath 'Env:ALBUM_HAVEN_MEDIA_ROOT' -Value ' '
@@ -318,7 +324,7 @@ try {
             & $nodePath $foundationWriter --profile=windows "--postgres-major=$ExpectedPostgresMajor" "--output=$foundationPath"
             if ($LASTEXITCODE -ne 0) { throw "Foundation manifest failed for $target." }
 
-            & $nodePath $performanceRunner "--test=$target" --headless "--browser=$Browser" --prepared-fixture "--performance-contract=$PerformanceContract"
+            & $nodePath $performanceRunner "--test=$target" @grepArgument --headless "--browser=$Browser" --prepared-fixture "--performance-contract=$PerformanceContract"
             $targetExitCode = $LASTEXITCODE
             if ($targetExitCode -eq $processCleanupFailureExitCode) {
                 $processCleanupFailed = $true

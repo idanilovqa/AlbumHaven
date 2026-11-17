@@ -14,7 +14,7 @@
     { id: 'graphite-moss', name: 'Graphite moss', description: 'Dark graphite with muted moss details.', style: { surface: { mode: 'gradient', angle: 0, start: '#292B23', end: '#151713' }, controls: { fill: '#9BAA64', border: '#D0D8AA' }, waveform: { fill: '#74884D', edge: '#C4D19A' }, handles: { color: '#C4D19A' } } },
     { id: 'soft-black', name: 'Soft black', description: 'A quiet neutral player with silver detail.', style: { surface: { mode: 'gradient', angle: 0, start: '#171817', end: '#050606' }, controls: { fill: '#BFC4C1', border: '#F0F2F1' }, waveform: { fill: '#8E9691', edge: '#E5E8E6' }, handles: { color: '#E5E8E6' } } },
   ];
-  const sourceIndicatorDefaults = () => ({ card_colors: false, hover_outline_colors: false, icons: true });
+  const sourceIndicatorDefaults = () => ({ card_colors: false, hover_outline_colors: true, icons: true });
   function normalizeSourceIndicators(value = sourceIndicatorDefaults()) {
     const fields = Object.keys(sourceIndicatorDefaults());
     if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length !== fields.length

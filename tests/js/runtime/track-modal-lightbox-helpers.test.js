@@ -352,7 +352,7 @@ function loadHelper(options = {}) {
       return String(value);
     },
     albumHasDisplayCover(album) {
-      return Boolean(album?.cover_path || options.albumHasDisplayCover);
+      return Boolean(album?.cover_ref || options.albumHasDisplayCover);
     },
     buildAlbumDisplayCoverUrlCalls: [],
     buildAlbumDisplayCoverUrl(album) {
@@ -582,13 +582,23 @@ test('stale album hydration sends its id and renders current split choices', asy
   );
 });
 
-test('this session opens the release it split without asking which one it meant', async () => {
+test('this session keeps its recovered split release rendered during inventory refresh', async () => {
   const choices = [
     { album_id: 92, album_key: 'artist::album::year::2014', name: 'Album', year: 2014, track_count: 1 },
     { album_id: 93, album_key: 'artist::album::year::2004', name: 'Album', year: 2004, track_count: 17 },
   ];
-  const { context } = loadHelper({
-    onFetchAlbumDetails: () => ({
+  const selected = {
+    album_id: 93,
+    key: 'artist::album::year::2004',
+    request_key: 'artist::album::year::2004',
+    name: 'Album',
+    year: 2004,
+    preview_only: false,
+    tracks: [{ path: 'one', title: 'Recovered track' }],
+  };
+  let resolveRefresh = null;
+  const responses = [
+    {
       ok: false,
       status: 409,
       json: () => Promise.resolve({
@@ -596,10 +606,26 @@ test('this session opens the release it split without asking which one it meant'
         resolution_kind: 'album_split',
         current_releases: choices,
       }),
+    },
+    {
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ ok: true, album: selected }),
+    },
+  ];
+  const { context } = loadHelper({
+    onFetchAlbumDetails: () => responses.shift() || new Promise((resolve) => {
+      resolveRefresh = resolve;
     }),
   });
-  const card = { album_id: 17, key: 'artist::album', name: 'Album', year: 2004, preview_only: true };
 
+  const card = {
+    album_id: 17,
+    key: 'artist::album',
+    name: 'Album',
+    year: 2004,
+    preview_only: true,
+  };
   context.rememberLocallyEditedAlbum(card);
   context.openTrackModal(card);
   await flushMicrotasks();
@@ -608,6 +634,19 @@ test('this session opens the release it split without asking which one it meant'
     context.fetchCalls[1].url,
     '/album-details?album_key=artist%3A%3Aalbum%3A%3Ayear%3A%3A2004&album_id=93',
   );
+
+  const elements = context.getTrackModalElements();
+  const renderedRows = elements.list.innerHTML;
+  context.refreshOpenTrackModalVersionState = () => {};
+  const refresh = context.refreshOpenTrackModalAfterInventoryMutation();
+  assert.equal(elements.list.innerHTML, renderedRows);
+  assert.doesNotMatch(context.fetchCalls[2].url, /resolve_lineage=1/);
+  resolveRefresh({
+    ok: true,
+    status: 200,
+    json: async () => ({ ok: true, album: selected }),
+  });
+  assert.equal(await refresh, true);
 });
 
 test('a card rendered before an inventory mutation resolves lineage before current identity', () => {
@@ -934,11 +973,82 @@ test('S05 lightbox wraps Tab and Shift+Tab inside its enabled controls', () => {
 });
 
 test('S05 closing artwork never restores focus to a detached trigger', () => {
-  const { context, trigger } = lightboxFocusHarness();
+  const { context, close, trigger } = lightboxFocusHarness();
   context.openImageLightbox('/cover.png', 'Test artwork');
   trigger.isConnected = false;
   trigger.focus = () => { assert.fail('detached artwork trigger cannot receive focus'); };
   assert.doesNotThrow(() => context.closeImageLightbox());
+  assert.equal(context.document.activeElement, close);
+});
+
+test('S04 closing artwork restores focus to one equivalent replacement trigger', () => {
+  const { context, trigger } = lightboxFocusHarness();
+  const replacement = new FakeHtmlElement('replacement-settings-artwork');
+  for (const element of [trigger, replacement]) {
+    element.setAttribute('data-open-lightbox', '1');
+    element.setAttribute('data-cover-src', '/cover.png');
+    element.setAttribute('data-cover-alt', 'Test artwork');
+  }
+  replacement.isConnected = true;
+  replacement.hidden = false;
+  replacement.focus = () => { context.document.activeElement = replacement; };
+  context.document.querySelectorAll = (selector) => (
+    selector === '[data-open-lightbox="1"]' ? [replacement] : []
+  );
+
+  context.openImageLightbox('/cover.png', 'Test artwork');
+  trigger.isConnected = false;
+  trigger.focus = () => { assert.fail('detached artwork trigger cannot receive focus'); };
+  context.closeImageLightbox();
+
+  assert.equal(context.document.activeElement, replacement);
+});
+
+test('S04 closing artwork does not restore focus to a hidden replacement trigger', () => {
+  const { context, close, trigger } = lightboxFocusHarness();
+  const replacement = new FakeHtmlElement('hidden-settings-artwork');
+  for (const element of [trigger, replacement]) {
+    element.setAttribute('data-open-lightbox', '1');
+    element.setAttribute('data-cover-src', '/cover.png');
+    element.setAttribute('data-cover-alt', 'Test artwork');
+  }
+  replacement.isConnected = true;
+  replacement.focus = () => { context.document.activeElement = replacement; };
+  context.document.querySelectorAll = (selector) => (
+    selector === '[data-open-lightbox="1"]' ? [replacement] : []
+  );
+
+  context.openImageLightbox('/cover.png', 'Test artwork');
+  trigger.isConnected = false;
+  context.closeImageLightbox();
+
+  assert.equal(context.document.activeElement, close);
+});
+
+test('S04 closing artwork does not restore focus to a visually hidden replacement trigger', () => {
+  const { context, close, trigger } = lightboxFocusHarness();
+  const replacement = new FakeHtmlElement('visually-hidden-settings-artwork');
+  for (const element of [trigger, replacement]) {
+    element.setAttribute('data-open-lightbox', '1');
+    element.setAttribute('data-cover-src', '/cover.png');
+    element.setAttribute('data-cover-alt', 'Test artwork');
+  }
+  replacement.isConnected = true;
+  replacement.hidden = false;
+  replacement.focus = () => { context.document.activeElement = replacement; };
+  context.document.querySelectorAll = (selector) => (
+    selector === '[data-open-lightbox="1"]' ? [replacement] : []
+  );
+  const getComputedStyle = context.getComputedStyle;
+  context.getComputedStyle = (element) => (
+    element === replacement ? { visibility: 'hidden' } : getComputedStyle(element)
+  );
+
+  context.openImageLightbox('/cover.png', 'Test artwork');
+  trigger.isConnected = false;
+  context.closeImageLightbox();
+
+  assert.equal(context.document.activeElement, close);
 });
 
 async function flushAlbumDetailsHydration() {
@@ -1816,13 +1926,13 @@ async function run() {
 
   {
     const { context, trackModal, trackModalCover, galleryImages } = loadHelper({
-      galleryImageSources: ['/cover?path=one', '/cover?path=two'],
+      galleryImageSources: ['/cover/one', '/cover/two'],
       onFetchAlbumDetails({ url }) {
         assert.equal(url, '/album-details?album_key=alpha');
         assert.equal(trackModal.hidden, false, 'the loading shell should be visible before the detail fetch starts');
         assert.deepEqual(
           galleryImages.map((image) => image.src),
-          ['/cover?path=one', '/cover?path=two'],
+          ['/cover/one', '/cover/two'],
           'opening the real modal must not strip already-loaded gallery image sources',
         );
         return new Promise(() => {});
@@ -1833,7 +1943,7 @@ async function run() {
       key: 'alpha',
       name: 'Album Alpha',
       preview_only: true,
-      cover_path: 'C:/Music/Album Alpha/cover.jpg',
+      cover_ref: 'C:/Music/Album Alpha/cover.jpg',
     });
 
     assert.equal(trackModal.hidden, false);
@@ -1841,12 +1951,12 @@ async function run() {
     assert.deepEqual(context.modalSchedulingEvents, ['fetch-album-details']);
     assert.match(trackModalCover.innerHTML, /Loading cover art/);
     assert.doesNotMatch(trackModalCover.innerHTML, /<img/);
-    assert.deepEqual(galleryImages.map((image) => image.src), ['/cover?path=one', '/cover?path=two']);
+    assert.deepEqual(galleryImages.map((image) => image.src), ['/cover/one', '/cover/two']);
     assert.deepEqual(galleryImages.map((image) => image.dataset.modalSuspendedSrc), [undefined, undefined]);
 
     context.closeTrackModal();
 
-    assert.deepEqual(galleryImages.map((image) => image.src), ['/cover?path=one', '/cover?path=two']);
+    assert.deepEqual(galleryImages.map((image) => image.src), ['/cover/one', '/cover/two']);
     assert.deepEqual(galleryImages.map((image) => image.dataset.modalSuspendedSrc), [undefined, undefined]);
   }
 
@@ -1951,7 +2061,7 @@ async function run() {
       key: 'alpha',
       name: 'Album Alpha',
       preview_only: true,
-      cover_path: 'C:/Music/Album Alpha/cover.jpg',
+      cover_ref: 'C:/Music/Album Alpha/cover.jpg',
     });
     const elements = context.getTrackModalElements();
 
@@ -1974,7 +2084,7 @@ async function run() {
     const hydratedAlbum = {
       key: 'alpha',
       name: 'Album Alpha',
-      cover_path: 'C:/Music/Album Alpha/cover.jpg',
+      cover_ref: 'C:/Music/Album Alpha/cover.jpg',
       tracks: [{ path: 'C:\\Music\\Album Alpha\\01 Track.flac' }],
     };
     resolveAlbumDetails({
@@ -1985,7 +2095,7 @@ async function run() {
     await flushMicrotasks();
 
     assert.deepEqual(context.renderTrackModalReleaseCalls, ['alpha']);
-    assert.equal(context.renderTrackModalReleaseAlbums[0].cover_path, hydratedAlbum.cover_path);
+    assert.equal(context.renderTrackModalReleaseAlbums[0].cover_ref, hydratedAlbum.cover_ref);
     assert.equal(context.state.ui.pendingTrackModalLoadAlbumKey, '');
 
     context.closeTrackModal();

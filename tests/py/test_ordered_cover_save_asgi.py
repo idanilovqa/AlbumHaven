@@ -116,6 +116,26 @@ def test_authorized_save_uses_server_album_paths_and_never_exposes_private_sourc
     assert api.resolver.calls
 
 
+def test_local_source_named_by_the_cover_reference_boundary_reaches_the_repository_as_a_path(api):
+    # The page sends `candidate_cover_ref`; the boundary resolves it to `candidate_cover_path`.
+    source = str(Path(api.context["track_paths"][0]).parent / "front.jpg")
+    payload = {**BODY, "references": [{"kind": "local", "candidate_cover_path": source}]}
+    status, _ = api.request(payload)
+    assert status == 200
+    save = next(payload for name, payload in api.calls if name == "save")
+    assert save["references"] == [{"kind": "local", "path": source}]
+
+
+@pytest.mark.parametrize("reference", [
+    {"kind": "local", "candidate_cover_path": None},
+    {"kind": "local", "candidate_cover_path": "/x.jpg", "path": "/x.jpg"},
+])
+def test_unresolved_or_mixed_local_source_never_reaches_repository(api, reference):
+    status, _ = api.request({**BODY, "references": [reference]})
+    assert status == 422
+    assert not any(name == "save" for name, _ in api.calls)
+
+
 def test_new_remote_reference_requires_separate_remote_read_authority(api):
     payload = {**BODY, "references": [{"kind": "remote", "candidate_id": "candidate", "candidate_generation": "e2f769fb-83d5-4f29-8a1a-fb319023e3cd"}]}
     status, _ = api.request(payload)
@@ -246,7 +266,10 @@ def test_get_reads_current_revision_and_retains_missing_local_slot_without_remot
     status, body = api.request(method="GET")
     assert status == 200
     assert body["selected_covers_revision"] == 6
-    assert body["selected_covers"][0] == saved["selected_covers"][0]
+    local = saved["selected_covers"][0]
+    # The path leaves as the field the cover reference boundary publishes as a reference.
+    assert body["selected_covers"][0] == {"selection_id": "missing-local", "kind": "local",
+                                          "candidate_cover_path": local["path"]}
     assert body["selected_covers"][1] == {"selection_id": "remote", "kind": "remote"}
     assert "selected_covers_last_request" not in body
     assert not any(name in {"save", "commit", "invalidate"} for name, _ in api.calls)
@@ -257,7 +280,9 @@ def test_get_remote_descriptor_requires_existing_remote_read_grant(reader):
     api.resolver.user = actor("library.covers.lookup", "library.covers.remote.read")
     status, body = api.request(method="GET")
     assert status == 200
-    assert body["selected_covers"] == saved["selected_covers"]
+    local, remote = saved["selected_covers"]
+    assert body["selected_covers"] == [
+        {"selection_id": "missing-local", "kind": "local", "candidate_cover_path": local["path"]}, remote]
 
 
 def test_get_does_not_infer_an_ordered_selection_from_legacy_primary(reader):

@@ -10,7 +10,10 @@ from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from music_app.services.current_actor_asgi import current_actor_from_request
-from music_app.services.musicbrainz_enrichment_postgres import APP_PROBLEM_LABELS
+from music_app.services.musicbrainz_enrichment_postgres import (
+    APP_PROBLEM_LABELS,
+    MusicBrainzEnrichmentPostgresRepository,
+)
 
 
 router = APIRouter(prefix="/api/musicbrainz/artists")
@@ -90,14 +93,33 @@ async def list_artist_status(request: Request):
 @router.get("/{local_artist_id}")
 async def get_artist_problem(local_artist_id: int, request: Request):
     await _require_current_library_owner(request)
-    row = await _call_service(
-        request,
-        "get_artist_problem",
-        local_artist_id=local_artist_id,
-    )
+    service = getattr(request.app.state, "musicbrainz_enrichment_api_service", None)
+    if callable(getattr(service, "get_artist_problem", None)):
+        row = await _call_service(
+            request,
+            "get_artist_problem",
+            local_artist_id=local_artist_id,
+        )
+    else:
+        try:
+            row = await run_in_threadpool(
+                MusicBrainzEnrichmentPostgresRepository(
+                    request.app.state.config
+                ).get_artist_problem,
+                local_artist_id=local_artist_id,
+            )
+        except Exception:
+            logger = getattr(request.app.state, "logger", logging.getLogger(__name__))
+            logger.warning("MusicBrainz artist problem details were unavailable.")
+            raise _unavailable() from None
     if not isinstance(row, Mapping):
         raise _not_found()
-    return {"artist": _project_artist(row, include_candidates=True)}
+    artist = _project_artist(row, include_candidates=True)
+    artist["actions_available"] = all(
+        callable(getattr(service, method_name, None))
+        for method_name in ("enqueue_artist", "validate_manual_artist", "assign_manual_match")
+    )
+    return {"artist": artist}
 
 
 @router.post("/sync")
@@ -212,10 +234,14 @@ def load_problematic_artist_items(request: Request) -> list[dict[str, object]]:
         return []
     service = getattr(request.app.state, "musicbrainz_enrichment_api_service", None)
     list_attention = getattr(service, "list_artist_attention", None)
-    if not callable(list_attention):
-        return []
     try:
-        rows = list_attention(include_gallery_artist=False)
+        rows = (
+            list_attention(include_gallery_artist=False)
+            if callable(list_attention)
+            else MusicBrainzEnrichmentPostgresRepository(
+                request.app.state.config
+            ).list_artist_attention()
+        )
     except Exception:
         logger = getattr(request.app.state, "logger", logging.getLogger(__name__))
         logger.warning("MusicBrainz artist problems were unavailable for Problematic Files.")

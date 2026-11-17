@@ -36,6 +36,7 @@ class GeneratedPreviewRelocationWorker:
         self._wake_requested = threading.Event()
         self._stop_requested = threading.Event()
         self._thread: threading.Thread | None = None
+        self._discovered_operation_id: str | None = None
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -117,8 +118,15 @@ class GeneratedPreviewRelocationWorker:
                 if self._on_state is not None:
                     self._on_state(state)
                 return False
-            if self._discover_inventory is not None:
+            if (
+                self._discover_inventory is not None
+                and self._discovered_operation_id != operation_id
+            ):
                 discovered_count = self._discover_inventory()
+                self._discovered_operation_id = operation_id
+            else:
+                discovered_count = 0
+            if self._discover_inventory is not None:
                 staged_count = self._repository.stage_inventory(operation_id=operation_id)
                 self._logger.info(
                     "Generated preview relocation staged inventory.",

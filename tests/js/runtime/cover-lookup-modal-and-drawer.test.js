@@ -160,10 +160,10 @@ for (const [source, label] of [['apple', 'Apple Music'], ['cover_art_archive', '
 require('node:test')('local Cover Lookup cards retain their loaded preview as the full-size fallback', () => {
   const context = loadHelper({
     escapeHtml: value => String(value ?? ''),
-    buildCoverUrl: (path, options = {}) => `/cover?path=${path}${options.size ? `&size=${options.size}` : ''}`,
+    buildCoverUrl: (ref, options = {}) => `/cover/${ref}${options.size ? `?size=${options.size}` : ''}`,
   });
   const card = context.buildCoverLookupCard({
-    path: 'N:/Music/Dissection/cover.jpg',
+    candidate_cover_ref: 'N:/Music/Dissection/cover.jpg',
     filename: 'cover.jpg',
     cover_revision: 'dissection-cover',
   }, 'local');
@@ -835,23 +835,23 @@ require('node:test')('cover updates preserve unrelated pathless notification art
     key: 'altin-gun::garip::2026',
     album_artist: 'Altın Gün',
     name: 'Garip',
-    cover_path: 'C:/music/Altin Gun/Garip/cover.jpg',
+    cover_ref: 'C:/music/Altin Gun/Garip/cover.jpg',
   };
   const secondUnrelatedAlbum = {
     key: 'susanne-sundfor::revelations::2026',
     album_artist: 'Susanne Sundfør',
     name: 'Revelations of Divine Love',
-    cover_path: 'C:/music/Susanne Sundfor/Revelations/cover.jpg',
+    cover_ref: 'C:/music/Susanne Sundfor/Revelations/cover.jpg',
   };
   const updatedSelectedAlbum = {
     ...selectedAlbum,
-    cover_path: 'C:/music/Black Obelisk/Angels/cover.jpg',
+    cover_ref: 'C:/music/Black Obelisk/Angels/cover.jpg',
   };
   const conflictingLegacyIdAlbum = {
     album_id: 999,
     id: selectedAlbum.id,
     key: 'unrelated::album::2026',
-    cover_path: 'C:/music/Unrelated/cover.jpg',
+    cover_ref: 'C:/music/Unrelated/cover.jpg',
   };
   const context = loadHelper({ persistCoverLookupNotificationTasks: () => {} });
   context.state.coverLookup.modal = { album: selectedAlbum };
@@ -1410,7 +1410,7 @@ require('node:test')('pasted cover updates its notification before the save resp
       filename: 'third-cover.jpg',
     }],
   };
-  context.markAlbumCoverPathsFresh = () => {};
+  context.markAlbumCoverRefsFresh = () => {};
   context.syncCoverLookupAlbumReferences = () => {};
   context.refreshCoverLookupAlbumArtwork = () => {};
   context.clearOptimisticAlbumCovers = () => {};
@@ -1478,7 +1478,7 @@ require('node:test')('pasted cover applies server-actioned notification when ope
       filename: 'new-cover.jpg',
     }],
   };
-  context.markAlbumCoverPathsFresh = () => {};
+  context.markAlbumCoverRefsFresh = () => {};
   context.syncCoverLookupAlbumReferences = () => {};
   context.refreshCoverLookupAlbumArtwork = () => {};
   context.clearOptimisticAlbumCovers = () => {};
@@ -3049,8 +3049,8 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
   Object.assign(context.state.coverLookup.modal, {
     album: { name: 'Large album' },
     taskId: 'completed-task',
-    localCovers: [{ path: 'C:/Music/cover.jpg' }],
-    otherArt: [{ path: 'C:/Music/booklet.jpg' }],
+    localCovers: [{ candidate_cover_ref: 'C:/Music/cover.jpg' }],
+    otherArt: [{ candidate_cover_ref: 'C:/Music/booklet.jpg' }],
     possibleMatches: [{ id: 'remote-cover', url: 'https://images.example/large-cover.jpg' }],
     candidateSnapshot: { search_generation: 'completed-task', candidates: [{ id: 'remote-cover' }] },
   });
@@ -3132,10 +3132,10 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
   assert.equal(context.markTrackModalCoverTransitionPending({
     tracks: [{ path: 'C:/music/Kaipa/01.mp3' }],
   }), true);
-  assert.equal(image.removeCalled, 1);
-  assert.equal(visual.appended, placeholder);
+  assert.equal(image.removeCalled, 0);
+  assert.equal(visual.appended, undefined);
   assert.equal(visual['aria-busy'], 'true');
-  assert.equal(placeholder.className, 'cover-placeholder');
+  assert.equal(placeholder.className, '');
   assert.equal(context.markTrackModalCoverTransitionPending({
     tracks: [{ path: 'C:/music/Other/01.mp3' }],
   }), false);
@@ -3398,32 +3398,32 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
 }
 
 {
-  const activeCoverPath = 'C:/music/Mastodon/Crack The Skye/cover.jpg';
-  const alternateCoverPath = 'C:/music/Mastodon/Crack The Skye/Art/Front.jpg';
+  const activeCoverRef = 'C:/music/Mastodon/Crack The Skye/cover.jpg';
+  const alternateCoverRef = 'C:/music/Mastodon/Crack The Skye/Art/Front.jpg';
   const context = loadHelper({
     document: {
       getElementById: () => ({ hidden: true }),
     },
   });
   context.state.coverLookup.modal = {
-    activeLocalSelectionPath: activeCoverPath,
-    pendingLocalPath: '',
+    activeLocalSelectionRef: activeCoverRef,
+    pendingLocalRef: '',
     pendingPastedImageId: '',
     selectedRemoteId: '',
   };
 
-  context.selectLocalCoverFromLookup(alternateCoverPath);
+  context.selectLocalCoverFromLookup(alternateCoverRef);
 
-  assert.equal(context.state.coverLookup.modal.activeLocalSelectionPath, activeCoverPath);
-  assert.equal(context.state.coverLookup.modal.pendingLocalPath, alternateCoverPath);
+  assert.equal(context.state.coverLookup.modal.activeLocalSelectionRef, activeCoverRef);
+  assert.equal(context.state.coverLookup.modal.pendingLocalRef, alternateCoverRef);
   assert.equal(context.hasPendingLocalCoverSelection(), true);
 }
 
 require('node:test')('remote optimistic selection reuses the selected preview until save completion', () => {
   const album = {
     key: 'artist::album::2001',
-    cover_path: 'C:/music/Remote/original.jpg',
-    tracks: [{ path: 'C:/music/Remote/01.flac', cover_path: 'C:/music/Remote/original.jpg' }],
+    cover_ref: 'C:/music/Remote/original.jpg',
+    tracks: [{ path: 'C:/music/Remote/01.flac', cover_ref: 'C:/music/Remote/original.jpg' }],
   };
   const selectedMatch = {
     id: 'apple-candidate',
@@ -3441,7 +3441,7 @@ require('node:test')('remote optimistic selection reuses the selected preview un
   });
   context.state.coverLookup.optimisticAlbumCovers = {};
   context.state.coverLookup.tasks = [];
-  context.markAlbumCoverPathsFresh = () => {};
+  context.markAlbumCoverRefsFresh = () => {};
   context.syncCoverLookupAlbumReferences = () => {};
   context.refreshCoverLookupAlbumArtwork = (_originalAlbum, updatedAlbums) => {
     refreshedAlbums.push(...updatedAlbums);
@@ -3458,9 +3458,9 @@ require('node:test')('remote optimistic selection reuses the selected preview un
     selectedMatch.thumbnail_url,
     selectedMatch.id,
   );
-  assert.equal(updatedAlbum.cover_path, null);
+  assert.equal(updatedAlbum.cover_ref, null);
   assert.equal(updatedAlbum.remote_cover_url, selectedMatch.url);
-  assert.equal(refreshedAlbums[0].cover_path, null);
+  assert.equal(refreshedAlbums[0].cover_ref, null);
   assert.equal(
     context.state.coverLookup.optimisticAlbumCovers['C:/music/Remote/01.flac'].src,
     expectedPreview,
@@ -3494,7 +3494,7 @@ require('node:test')('remote save publishes the selected preview before server a
     return album;
   };
   context.closeCoverLookupModal = () => {};
-  context.markAlbumCoverPathsFresh = () => {};
+  context.markAlbumCoverRefsFresh = () => {};
   context.syncCoverLookupAlbumReferences = () => {};
   context.refreshCoverLookupAlbumArtwork = () => {};
   context.fetch = () => new Promise((resolve) => { resolveResponse = resolve; });
@@ -3586,7 +3586,7 @@ require('node:test')('remote save closes only after the server accepts the queue
   };
   context.applyOptimisticRemoteCoverSelection = () => {};
   context.closeCoverLookupModal = () => { closeCount += 1; };
-  context.markAlbumCoverPathsFresh = () => {};
+  context.markAlbumCoverRefsFresh = () => {};
   context.syncCoverLookupAlbumReferences = () => {};
   context.refreshCoverLookupAlbumArtwork = () => { refreshCount += 1; };
   context.fetch = () => {
@@ -3664,12 +3664,12 @@ require('node:test')('remote save closes only after the server accepts the queue
 require('node:test')('failed or canceled accepted remote save restores owned artwork state', async () => {
   const album = {
     key: 'artist::album::2001',
-    cover_path: 'C:/music/Remote/original.jpg',
-    tracks: [{ path: 'C:/music/Remote/01.flac', cover_path: 'C:/music/Remote/original.jpg' }],
+    cover_ref: 'C:/music/Remote/original.jpg',
+    tracks: [{ path: 'C:/music/Remote/01.flac', cover_ref: 'C:/music/Remote/original.jpg' }],
   };
   const albumSignature = 'C:/music/Remote/01.flac';
   const previousOptimisticCover = {
-    src: '/cover?path=original.jpg&size=480&revision=stable-prior-revision',
+    src: '/cover/original.jpg?size=480&revision=stable-prior-revision',
   };
   let terminalStatus = 'failed';
   const toastCalls = [];
@@ -3698,7 +3698,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
   };
   context.closeCoverLookupModal = () => {};
   context.clearOptimisticAlbumCovers = () => {};
-  context.markAlbumCoverPathsFresh = () => {};
+  context.markAlbumCoverRefsFresh = () => {};
   context.syncCoverLookupAlbumReferences = () => {};
   context.refreshCoverLookupAlbumArtwork = (_album, updatedAlbums) => {
     restoredAlbums.push(updatedAlbums);
@@ -3854,18 +3854,18 @@ require('node:test')('failed or canceled accepted remote save restores owned art
 {
   const buildCoverUrlCalls = [];
   const context = loadHelper({
-    buildCoverUrl: (coverPath, options) => {
+    buildCoverUrl: (coverRef, options) => {
       const revision = options?.revision;
       const size = options?.size;
-      buildCoverUrlCalls.push({ coverPath, revision, size });
-      return `/cover?path=${encodeURIComponent(coverPath)}${size ? `&size=${size}` : ''}&v=${revision || 'session-fallback'}`;
+      buildCoverUrlCalls.push({ coverRef, revision, size });
+      return `/cover/${encodeURIComponent(coverRef)}?${size ? `size=${size}&` : ''}v=${revision || 'session-fallback'}`;
     },
     buildRemoteCoverSourceBadge: () => '',
     escapeHtml: (value) => String(value || ''),
-    getCoverLookupActiveLocalPath: () => '',
+    getCoverLookupActiveLocalRef: () => '',
   });
   const localCover = {
-    path: 'C:/music/Kaipa/cover.jpg',
+    candidate_cover_ref: 'C:/music/Kaipa/cover.jpg',
     filename: 'cover.jpg',
     cover_revision: 'authoritative-cover-revision',
   };
@@ -3874,12 +3874,12 @@ require('node:test')('failed or canceled accepted remote save restores owned art
 
   assert.deepEqual(buildCoverUrlCalls, [
     {
-      coverPath: localCover.path,
+      coverRef: localCover.candidate_cover_ref,
       revision: localCover.cover_revision,
       size: 480,
     },
     {
-      coverPath: localCover.path,
+      coverRef: localCover.candidate_cover_ref,
       revision: localCover.cover_revision,
       size: undefined,
     },
@@ -3887,12 +3887,12 @@ require('node:test')('failed or canceled accepted remote save restores owned art
 
   buildCoverUrlCalls.length = 0;
   const fallbackHtml = context.buildCoverLookupCard(
-    { path: 'C:/music/Kaipa/alternate.jpg', filename: 'alternate.jpg' },
+    { candidate_cover_ref: 'C:/music/Kaipa/alternate.jpg', filename: 'alternate.jpg' },
     'local',
   );
   assert.deepEqual(buildCoverUrlCalls, [
-    { coverPath: 'C:/music/Kaipa/alternate.jpg', revision: undefined, size: 480 },
-    { coverPath: 'C:/music/Kaipa/alternate.jpg', revision: undefined, size: undefined },
+    { coverRef: 'C:/music/Kaipa/alternate.jpg', revision: undefined, size: 480 },
+    { coverRef: 'C:/music/Kaipa/alternate.jpg', revision: undefined, size: undefined },
   ]);
   assert.match(fallbackHtml, /size=480/);
   assert.match(fallbackHtml, /v=session-fallback/);
@@ -4086,22 +4086,22 @@ require('node:test')('failed or canceled accepted remote save restores owned art
 
 ;(async () => {
   const sourcePath = 'C:/music/Kaipa/Art/Front.jpg';
-  const selectedCoverPath = 'C:/music/Kaipa/cover.jpg';
+  const selectedCoverRef = 'C:/music/Kaipa/cover.jpg';
   const album = {
     key: 'kaipa::kaipa::1975',
     album_artist: 'Kaipa',
     name: 'Kaipa',
     year: 1975,
-    cover_path: 'C:/music/Kaipa/Art/back.jpg',
-    cover_preview_url: '/cover?path=C%3A%2Fmusic%2FKaipa%2FArt%2Fback.jpg&size=480&v=old-revision',
-    tracks: [{ path: 'C:/music/Kaipa/01.mp3', cover_path: 'C:/music/Kaipa/Art/back.jpg' }],
+    cover_ref: 'C:/music/Kaipa/Art/back.jpg',
+    cover_preview_url: '/cover/C%3A%2Fmusic%2FKaipa%2FArt%2Fback.jpg?size=480&v=old-revision',
+    tracks: [{ path: 'C:/music/Kaipa/01.mp3', cover_ref: 'C:/music/Kaipa/Art/back.jpg' }],
   };
   const authoritativeAlbum = {
     ...album,
-    cover_path: selectedCoverPath,
-    cover_preview_url: '/cover?path=C%3A%2Fmusic%2FKaipa%2Fcover.jpg&size=480&v=selected-front-revision',
+    cover_ref: selectedCoverRef,
+    cover_preview_url: '/cover/C%3A%2Fmusic%2FKaipa%2Fcover.jpg?size=480&v=selected-front-revision',
     cover_revision: 'selected-front-revision',
-    tracks: [{ path: 'C:/music/Kaipa/01.mp3', cover_path: selectedCoverPath }],
+    tracks: [{ path: 'C:/music/Kaipa/01.mp3', cover_ref: selectedCoverRef }],
   };
   const fetchCalls = [];
   const refreshedAlbums = [];
@@ -4130,10 +4130,10 @@ require('node:test')('failed or canceled accepted remote save restores owned art
     modal: {
       album,
       taskId: 'kaipa-local-cover-task',
-      pendingLocalPath: sourcePath,
+      pendingLocalRef: sourcePath,
       selectedRemoteId: '',
       localCovers: [{
-        path: sourcePath,
+        candidate_cover_ref: sourcePath,
         cover_revision: 'selected-source-revision',
       }],
     },
@@ -4141,7 +4141,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
     optimisticAlbumCovers: {},
   };
   context.closeCoverLookupModal = () => { closeCalls += 1; };
-  context.markAlbumCoverPathsFresh = () => {};
+  context.markAlbumCoverRefsFresh = () => {};
   context.refreshCoverLookupAlbumArtwork = (_originalAlbum, updatedAlbums, options = {}) => {
     refreshedAlbums.push({
       albums: updatedAlbums,
@@ -4151,8 +4151,8 @@ require('node:test')('failed or canceled accepted remote save restores owned art
       )),
     });
   };
-  context.buildCoverUrl = (coverPath, options = {}) => (
-    `/cover?path=${encodeURIComponent(coverPath)}&size=${options.size || ''}&v=${options.revision || ''}`
+  context.buildCoverUrl = (coverRef, options = {}) => (
+    `/cover/${encodeURIComponent(coverRef)}?size=${options.size || ''}&v=${options.revision || ''}`
   );
   context.preloadCoverLookupAlbumImage = async (updatedAlbum) => {
     preloadedAlbums.push({
@@ -4173,7 +4173,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
       ok: true,
       json: async () => ({
         ok: true,
-        selected_cover_path: selectedCoverPath,
+        selected_cover_ref: selectedCoverRef,
         updated_albums: [authoritativeAlbum],
         updated_album: authoritativeAlbum,
       }),
@@ -4188,15 +4188,15 @@ require('node:test')('failed or canceled accepted remote save restores owned art
 
   assert.equal(fetchCalls.length, 1);
   assert.equal(fetchCalls[0].url, '/utilities/cover-lookup/local-select');
-  assert.equal(context.state.coverLookup.modal.album.cover_path, selectedCoverPath);
+  assert.equal(context.state.coverLookup.modal.album.cover_ref, selectedCoverRef);
   assert.equal(context.state.coverLookup.modal.album.cover_revision, 'selected-front-revision');
   assert.deepEqual(refreshedAlbums.at(-1).albums, [authoritativeAlbum]);
   assert.equal(refreshedAlbums[0].options.updateTrackModal, false);
   assert.deepEqual(
     refreshedAlbums[0].optimisticAlbumCovers['C:/music/Kaipa/01.mp3'],
     {
-      src: '/cover?path=C%3A%2Fmusic%2FKaipa%2FArt%2FFront.jpg&size=480&v=selected-source-revision',
-      coverPath: sourcePath,
+      src: '/cover/C%3A%2Fmusic%2FKaipa%2FArt%2FFront.jpg?size=480&v=selected-source-revision',
+      coverRef: sourcePath,
     },
   );
   assert.equal(preloadedAlbums.length, 1);
@@ -4204,13 +4204,13 @@ require('node:test')('failed or canceled accepted remote save restores owned art
   assert.deepEqual(
     preloadedAlbums[0].optimisticAlbumCovers['C:/music/Kaipa/01.mp3'],
     {
-      src: '/cover?path=C%3A%2Fmusic%2FKaipa%2FArt%2FFront.jpg&size=480&v=selected-source-revision',
-      coverPath: sourcePath,
+      src: '/cover/C%3A%2Fmusic%2FKaipa%2FArt%2FFront.jpg?size=480&v=selected-source-revision',
+      coverRef: sourcePath,
     },
   );
   assert.deepEqual(JSON.parse(fetchCalls[0].options.body), {
     album,
-    source_path: sourcePath,
+    source_cover_ref: sourcePath,
     task_id: 'kaipa-local-cover-task',
   });
 })().catch((error) => {
@@ -4756,9 +4756,9 @@ require('node:test')('failed or canceled accepted remote save restores owned art
     album_artist: 'Kaipa',
     name: 'Kaipa',
     year: 1975,
-    cover_path: 'C:/music/Kaipa/cover.jpg',
+    cover_ref: 'C:/music/Kaipa/cover.jpg',
     cover_revision: 'original-revision',
-    tracks: [{ path: 'C:/music/Kaipa/01.mp3', cover_path: 'C:/music/Kaipa/cover.jpg' }],
+    tracks: [{ path: 'C:/music/Kaipa/01.mp3', cover_ref: 'C:/music/Kaipa/cover.jpg' }],
   };
   const refreshedAlbums = [];
   const context = loadHelper({
@@ -4781,15 +4781,15 @@ require('node:test')('failed or canceled accepted remote save restores owned art
     modal: {
       album,
       taskId: '',
-      pendingLocalPath: sourcePath,
+      pendingLocalRef: sourcePath,
       selectedRemoteId: '',
-      localCovers: [{ path: sourcePath }],
+      localCovers: [{ candidate_cover_ref: sourcePath }],
     },
     tasks: [],
     optimisticAlbumCovers: {},
   };
   context.closeCoverLookupModal = () => {};
-  context.markAlbumCoverPathsFresh = () => {};
+  context.markAlbumCoverRefsFresh = () => {};
   context.syncCoverLookupAlbumReferences = () => {};
   context.refreshCoverLookupAlbumArtwork = (_originalAlbum, updatedAlbums) => {
     refreshedAlbums.push(updatedAlbums);
@@ -4948,7 +4948,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
   });
   context.state.coverLookup.modal = {
     selectedRemoteId: '',
-    pendingLocalPath: '',
+    pendingLocalRef: '',
     pendingPastedImageId: '',
     possibleMatches: [],
   };
@@ -4956,7 +4956,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
   context.applyCoverLookupGalleryPayload({
     remote_cover: null,
     local_covers: [{
-      path: 'C:/music/Artist/Album/cover.jpg',
+      candidate_cover_ref: 'C:/music/Artist/Album/cover.jpg',
       is_active: true,
     }],
     other_art: [],
@@ -4979,7 +4979,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
     '',
     'a downloaded candidate must reopen with canonical local cover active',
   );
-  assert.equal(context.getCoverLookupActiveLocalPath(), 'C:/music/Artist/Album/cover.jpg');
+  assert.equal(context.getCoverLookupActiveLocalRef(), 'C:/music/Artist/Album/cover.jpg');
 }
 
 {
@@ -4991,7 +4991,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
     statusText: '',
     statusTone: 'neutral',
     selectedRemoteId: '',
-    pendingLocalPath: '',
+    pendingLocalRef: '',
     pendingPastedImageId: '',
     possibleMatches: [],
   };
@@ -5024,7 +5024,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
   });
   context.state.coverLookup.modal = {
     selectedRemoteId: '',
-    pendingLocalPath: '',
+    pendingLocalRef: '',
     pendingPastedImageId: '',
     possibleMatches: [],
   };
@@ -5068,7 +5068,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
   });
   context.state.coverLookup.modal = {
     selectedRemoteId: '',
-    pendingLocalPath: '',
+    pendingLocalRef: '',
     pendingPastedImageId: '',
     possibleMatches: [],
   };
@@ -5076,7 +5076,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
   context.applyCoverLookupGalleryPayload({
     remote_cover: null,
     local_covers: [{
-      path: 'C:/music/Flaming Row/The Pure Shine/cover.jpg',
+      candidate_cover_ref: 'C:/music/Flaming Row/The Pure Shine/cover.jpg',
       width: 4518,
       height: 4518,
       is_active: true,
@@ -5105,7 +5105,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
     'a progressive provider candidate must not replace the active local cover selection',
   );
   assert.equal(
-    context.getCoverLookupActiveLocalPath(),
+    context.getCoverLookupActiveLocalRef(),
     'C:/music/Flaming Row/The Pure Shine/cover.jpg',
   );
 
@@ -5137,7 +5137,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
     'the starting local choice must survive refreshed linked metadata for its search generation',
   );
   assert.equal(
-    context.getCoverLookupActiveLocalPath(),
+    context.getCoverLookupActiveLocalRef(),
     'C:/music/Flaming Row/The Pure Shine/cover.jpg',
     'the starting local card must remain visibly active for its search generation',
   );
@@ -5154,19 +5154,19 @@ require('node:test')('failed or canceled accepted remote save restores owned art
       album_artist: 'Neal Morse',
       name: 'One',
       year: 2004,
-      cover_path: activeLocalPath,
+      cover_ref: activeLocalPath,
     },
     selectedRemoteId: '',
-    pendingLocalPath: '',
+    pendingLocalRef: '',
     pendingPastedImageId: '',
-    activeLocalSelectionPath: '',
+    activeLocalSelectionRef: '',
     possibleMatches: [],
   };
 
   context.applyCoverLookupGalleryPayload({
     remote_cover: null,
     local_covers: [{
-      path: activeLocalPath,
+      candidate_cover_ref: activeLocalPath,
       width: 2400,
       height: 2400,
       is_active: false,
@@ -5190,7 +5190,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
   });
 
   assert.equal(
-    context.getCoverLookupActiveLocalPath(),
+    context.getCoverLookupActiveLocalRef(),
     activeLocalPath,
     'the album path identifies the active local cover when gallery metadata does not',
   );
@@ -5221,7 +5221,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
       .filter(Boolean)
       .sort()
       .join('|'),
-    markAlbumCoverPathsFresh: () => {},
+    markAlbumCoverRefsFresh: () => {},
     persistCoverLookupNotificationTasks: () => {},
   });
   context.state.coverLookup = {
@@ -5669,13 +5669,14 @@ require('node:test')('failed or canceled accepted remote save restores owned art
   );
   assert.equal(
     (bodyElement.innerHTML.match(/class="cover-lookup-art-preview-image"[^>]*loading="lazy"/g) || []).length,
-    4,
+    3,
     'provider candidate previews must not eagerly decode every full-resolution result',
   );
-  assert.doesNotMatch(
-    bodyElement.innerHTML,
-    /class="cover-lookup-art-preview-image"[^>]*loading="eager"/,
-  );
+  const eagerPreviews = bodyElement.innerHTML.match(
+    /class="cover-lookup-art-preview-image"[^>]*loading="eager"/g,
+  ) || [];
+  assert.equal(eagerPreviews.length, 1, 'only the leading provider preview loads eagerly');
+  assert.match(eagerPreviews[0], /discogs-front\.jpg/);
   assert.doesNotMatch(bodyElement.innerHTML, />OTHER COVER ART</);
 }
 
@@ -6044,7 +6045,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
 {
   const context = loadHelper({
     escapeHtml: (value) => String(value || ''),
-    getCoverLookupActiveLocalPath: () => '',
+    getCoverLookupActiveLocalRef: () => '',
   });
   const savedCover = { id: 'saved-cover', url: 'https://covers.example/saved.jpg' };
   const stagedCover = { id: 'staged-cover', filename: 'staged.png', object_url: 'blob:staged-cover' };
@@ -6464,7 +6465,7 @@ require('node:test')('reopening Cover Lookup renders its cached gallery before r
   });
   context.cacheCoverLookupGalleryPayload(album, {
     ok: true,
-    local_covers: [{ path: 'N:/Music/Dissection/cover.jpg' }, { path: 'N:/Music/Dissection/cover-existing-1.jpg' }],
+    local_covers: [{ candidate_cover_ref: 'N:/Music/Dissection/cover.jpg' }, { candidate_cover_ref: 'N:/Music/Dissection/cover-existing-1.jpg' }],
     other_art: [],
   });
   context.renderCoverLookupModal = () => {};
@@ -6500,7 +6501,7 @@ require('node:test')('reopening Cover Lookup from a compact notification reuses 
   });
   context.cacheCoverLookupGalleryPayload(fullAlbum, {
     ok: true,
-    local_covers: [{ path: 'N:/Music/Mastodon/Crack the Skye/cover.jpg' }],
+    local_covers: [{ candidate_cover_ref: 'N:/Music/Mastodon/Crack the Skye/cover.jpg' }],
     other_art: [],
   });
   context.renderCoverLookupModal = () => {};
@@ -6569,11 +6570,11 @@ require('node:test')('actioned terminal notifications render source-neutral Art 
   const modal = context.state.coverLookup.modal;
   modal.possibleMatches = candidates;
   modal.selectedRemoteId = 'provider';
-  modal.pendingLocalPath = '';
+  modal.pendingLocalRef = '';
   context.selectRemoteCoverFromLookup('manual');
   assert.equal(modal.selectedRemoteId, 'provider', 'TV must reject programmatic manual candidate selection');
   context.selectLocalCoverFromLookup('private-cover.jpg');
-  assert.equal(modal.pendingLocalPath, '', 'TV must reject programmatic local selection');
+  assert.equal(modal.pendingLocalRef, '', 'TV must reject programmatic local selection');
 }
 
 
@@ -6581,7 +6582,7 @@ function savedSourceRevisionContext({ albumRevision = 'saved-revision', saving =
   const context = loadHelper();
   vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'modal-and-overlay-helpers.js'), 'utf8'), context);
   context.state.coverRefreshTokens = { '/owned/Art/Front.jpg': sourceToken };
-  context.state.coverLookup.modal.album = { cover_path: '/owned/cover.jpg', cover_revision: albumRevision };
+  context.state.coverLookup.modal.album = { cover_ref: '/owned/cover.jpg', cover_revision: albumRevision };
   context.state.coverLookup.modal.saving = saving;
   return context;
 }
@@ -6604,26 +6605,26 @@ require('node:test')('every real local file is a choice on phone and desktop, by
   const modal = context.state.coverLookup.modal;
   modal.album = { name: 'Owned album' };
   const covers = [
-    { path: '/owned/cover.jpg', is_active: true, cover_revision: 'saved' },
-    { path: '/owned/Art/Front.jpg', cover_revision: 'saved' },
-    { path: '/owned/alternate.jpg' },
+    { candidate_cover_ref: '/owned/cover.jpg', is_active: true, cover_revision: 'saved' },
+    { candidate_cover_ref: '/owned/Art/Front.jpg', cover_revision: 'saved' },
+    { candidate_cover_ref: '/owned/alternate.jpg' },
   ];
-  context.applyCoverLookupGalleryPayload({ active_cover_path: '/owned/cover.jpg',
-    selected_source_path: '/owned/Art/Front.jpg', local_covers: covers });
+  context.applyCoverLookupGalleryPayload({ active_cover_ref: '/owned/cover.jpg',
+    selected_source_cover_ref: '/owned/Art/Front.jpg', local_covers: covers });
   const observed = [];
-  context.buildCoverLookupCard = item => { observed.push(item.path); return item.path; };
+  context.buildCoverLookupCard = item => { observed.push(item.candidate_cover_ref); return item.candidate_cover_ref; };
   function render() { observed.length = 0; context.renderCoverLookupModal(); return [...observed]; }
-  assert.deepEqual(render(), covers.map(item => item.path));
+  assert.deepEqual(render(), covers.map(item => item.candidate_cover_ref));
   assert.match(body.innerHTML, /LOCAL · 3 images/);
   compact = false;
-  assert.deepEqual(render(), covers.map(item => item.path));
+  assert.deepEqual(render(), covers.map(item => item.candidate_cover_ref));
   assert.match(body.innerHTML, /LOCAL · 3 images/);
 });
 function savedSourceGallery(revision = 'saved-revision') {
-  return { active_cover_path: '/owned/cover.jpg', selected_source_path: '/owned/Art/Front.jpg',
+  return { active_cover_ref: '/owned/cover.jpg', selected_source_cover_ref: '/owned/Art/Front.jpg',
     local_covers: [
-      { path: '/owned/cover.jpg', is_active: true, cover_revision: revision },
-      { path: '/owned/Art/Front.jpg', is_active: false, cover_revision: revision },
+      { candidate_cover_ref: '/owned/cover.jpg', is_active: true, cover_revision: revision },
+      { candidate_cover_ref: '/owned/Art/Front.jpg', is_active: false, cover_revision: revision },
     ] };
 }
 
@@ -6650,7 +6651,7 @@ for (const [label, values] of [
 
 require('node:test')('publishing album artwork advances the cover mutation revision', () => {
   const original = { key: 'artist::album', tracks: [{ path: '/album/01.flac' }] };
-  const updated = { ...original, cover_path: '/album/cover.jpg' };
+  const updated = { ...original, cover_ref: '/album/cover.jpg' };
   const context = loadHelper({
     state: {
       ui: {},
@@ -6997,9 +6998,9 @@ require('node:test')('UUID generation formatting retains a progressive remote ov
     remoteSelectionOverrideCandidateId: 'user-choice',
     remoteSelectionOverrideUrl: 'https://images.example/user-choice.jpg',
     selectedRemoteId: 'user-choice',
-    pendingLocalPath: '',
+    pendingLocalRef: '',
     pendingPastedImageId: '',
-    activeLocalSelectionPath: '',
+    activeLocalSelectionRef: '',
     localCovers: [],
   };
 
@@ -7109,6 +7110,107 @@ require('node:test')('only the first service cover preview receives eager browse
 
   assert.equal((bodyElement.innerHTML.match(/loading="eager" fetchpriority="high"/g) || []).length, 1);
   assert.equal((bodyElement.innerHTML.match(/loading="lazy" fetchpriority="low"/g) || []).length, 3);
+});
+
+require('node:test')('the leading remote card loads its preview first when another provider renders before services', () => {
+  const context = loadHelper({ escapeHtml: value => String(value ?? '') });
+  const markup = context.buildCoverLookupPossibleMatchesMarkup([
+    {
+      id: 'caa-front',
+      source: 'cover_art_archive',
+      lookup_group: 'cover_art_archive',
+      thumbnail_url: 'https://images.example/caa-front.jpg',
+    },
+    {
+      id: 'apple-cover',
+      source: 'apple',
+      thumbnail_url: 'https://images.example/apple-cover.jpg',
+    },
+  ]);
+  const images = markup.match(/<img class="cover-lookup-art-preview-image"[^>]*>/g) || [];
+
+  assert.equal(images.length, 2);
+  assert.match(images[0], /\ssrc="\/utilities\/cover-lookup\/remote-image\?url=https%3A%2F%2Fimages\.example%2Fcaa-front\.jpg/);
+  assert.match(images[0], /loading="eager" fetchpriority="high"/);
+  assert.doesNotMatch(images[0], /data-cover-lookup-deferred-src/);
+  assert.match(images[1], /data-cover-lookup-deferred-src=/);
+  assert.doesNotMatch(images[1], /\ssrc=/);
+});
+
+require('node:test')('a re-render does not keep a still-deferred preview in place of a loading one', () => {
+  const imageWith = (attributes, state = {}) => ({
+    ...state,
+    hasAttribute: name => Object.hasOwn(attributes, name),
+    getAttribute: name => attributes[name] ?? null,
+    replaceWith(value) { this.replacedWith = value; },
+  });
+  const retainedImage = imageWith({ 'data-cover-lookup-deferred-src': 'leading.jpg' });
+  const incomingImage = imageWith({ src: 'leading.jpg' });
+  const card = (image) => ({
+    attributes: [],
+    childNodes: [image],
+    getAttribute: name => (name === 'data-cover-lookup-item-key' ? 'remote:leading' : ''),
+    querySelector: () => image,
+    replaceChildren(...children) { this.children = children; },
+    replaceWith(value) { this.replacedWith = value; },
+  });
+  const retainedCard = card(retainedImage);
+  const incomingCard = card(incomingImage);
+  let rendered = false;
+  const body = { querySelectorAll: () => (rendered ? [incomingCard] : [retainedCard]) };
+  Object.defineProperty(body, 'innerHTML', { set() { rendered = true; } });
+  const context = loadHelper();
+
+  context.replaceCoverLookupModalMarkup(body, '<div>gallery results</div>');
+
+  assert.equal(incomingImage.replacedWith, undefined);
+  assert.deepEqual(retainedCard.children, [incomingImage]);
+  assert.strictEqual(incomingCard.replacedWith, retainedCard);
+
+  const decodedImage = imageWith({ src: 'decoded.jpg' }, { complete: true, naturalWidth: 100 });
+  const decodedIncomingImage = imageWith({ src: 'decoded.jpg' });
+  const decodedRetainedCard = card(decodedImage);
+  const decodedIncomingCard = card(decodedIncomingImage);
+  let decodedRendered = false;
+  const decodedBody = {
+    querySelectorAll: () => (decodedRendered ? [decodedIncomingCard] : [decodedRetainedCard]),
+  };
+  Object.defineProperty(decodedBody, 'innerHTML', { set() { decodedRendered = true; } });
+
+  context.replaceCoverLookupModalMarkup(decodedBody, '<div>gallery results</div>');
+
+  assert.strictEqual(decodedIncomingImage.replacedWith, decodedImage);
+});
+
+require('node:test')('a re-render replaces a failed preview instead of retaining its broken image state', () => {
+  const imageWith = (attributes, state = {}) => ({
+    ...state,
+    hasAttribute: name => Object.hasOwn(attributes, name),
+    getAttribute: name => attributes[name] ?? null,
+    replaceWith(value) { this.replacedWith = value; },
+  });
+  const retainedImage = imageWith({ src: 'leading.jpg' }, { complete: true, naturalWidth: 0 });
+  const incomingImage = imageWith({ src: 'leading.jpg' });
+  const card = (image) => ({
+    attributes: [],
+    childNodes: [image],
+    getAttribute: name => (name === 'data-cover-lookup-item-key' ? 'remote:leading' : ''),
+    querySelector: () => image,
+    replaceChildren(...children) { this.children = children; },
+    replaceWith(value) { this.replacedWith = value; },
+  });
+  const retainedCard = card(retainedImage);
+  const incomingCard = card(incomingImage);
+  let rendered = false;
+  const body = { querySelectorAll: () => (rendered ? [incomingCard] : [retainedCard]) };
+  Object.defineProperty(body, 'innerHTML', { set() { rendered = true; } });
+  const context = loadHelper();
+
+  context.replaceCoverLookupModalMarkup(body, '<div>gallery results</div>');
+
+  assert.equal(incomingImage.replacedWith, undefined);
+  assert.deepEqual(retainedCard.children, [incomingImage]);
+  assert.strictEqual(incomingCard.replacedWith, retainedCard);
 });
 
 require('node:test')('progressive provider rendering appends without moving existing cards', () => {

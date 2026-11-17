@@ -337,6 +337,7 @@ function createEngineHarness(options = {}) {
     handleStreamingPlaybackPosition: options.handleStreamingPlaybackPosition,
     handleStreamingPlaybackEnded: options.handleStreamingPlaybackEnded,
     handleStreamingPlaybackWaveformReady: options.handleStreamingPlaybackWaveformReady,
+    ensureStreamingDecoders: options.ensureStreamingDecoders,
     updatePlayerUi: options.updatePlayerUi,
     cancelWaveformPeakLoads: options.cancelWaveformPeakLoads,
     probeCachedWaveformPeaks: options.probeCachedWaveformPeaks,
@@ -389,6 +390,23 @@ function createEngineHarness(options = {}) {
     },
   };
 }
+
+test('first playback does not wait for background decoder verification', async () => {
+  let finishDecoderVerification;
+  const decoderVerification = new Promise((resolve) => {
+    finishDecoderVerification = resolve;
+  });
+  const harness = createEngineHarness({
+    ensureStreamingDecoders: () => decoderVerification,
+  });
+
+  const start = harness.api.start(makeTrack());
+  await harness.settle();
+
+  assert.equal(harness.sent('open').length, 1);
+  finishDecoderVerification([]);
+  await start;
+});
 
 test('accepted rendered PCM credits each captured session before queued promotion and excludes stale wire messages', async () => {
   const boundaries=[];
@@ -2994,6 +3012,38 @@ test('fresh playback keeps queued-next decoding behind one buffered second of th
     generation: current.generation,
     active: true,
   }]);
+});
+
+test('a queued successor tells the worklet whether it is the next track of the same album', async () => {
+  const harness = createEngineHarness();
+  const currentTrack = makeTrack('album-01.flac');
+  const queuedTrack = makeTrack('album-02.flac');
+  await harness.api.start(currentTrack);
+  const current = harness.sent('open')[0];
+  acceptMetadata(harness, current);
+  receivePcmAndAssertEnqueue(harness, {
+    generation: current.generation,
+    streamId: current.streamId,
+    samples: new Array(48_000 * 2).fill(0.25),
+  });
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame', generation: current.generation, streamId: current.streamId,
+    renderedFrame: 0, contextTime: 12.5,
+  });
+
+  await harness.api.continuity(queuedTrack, { kind: 'queued-next', consecutiveAlbumBoundary: true });
+  const prepared = harness.engine.roles.continuity;
+  await harness.api.continuity(queuedTrack, { kind: 'queued-next', consecutiveAlbumBoundary: false });
+
+  assert.equal(harness.sent('open').length, 2, 'a changed qualification keeps the prepared decoder');
+  assert.strictEqual(harness.engine.roles.continuity, prepared);
+  assert.equal(prepared.continuityOptions.consecutiveAlbumBoundary, false);
+  assert.deepEqual(harness.portMessages('expect-continuity').map(({ active, consecutiveAlbumBoundary }) => ({
+    active, consecutiveAlbumBoundary,
+  })), [
+    { active: true, consecutiveAlbumBoundary: true },
+    { active: true, consecutiveAlbumBoundary: false },
+  ]);
 });
 
 test('zero-start playback also keeps queued-next decoding behind the audible buffer', async () => {
@@ -6708,4 +6758,41 @@ test('a kept track starts mid-track from its seek table', async () => {
   assert.equal(harness.sent('open').length, 0);
   assert.equal(decoders.at(-1).inputs[0][0], 124_200 % 251);
   assert.equal(decoders.at(-1).inputs[0].length, 173_700 - 124_200);
+});
+
+test('a successor prepared ahead is kept at the local audible boundary', async () => {
+  const harness = encodedHarness();
+  const kept = withTrackCache(harness);
+  await harness.api.start(makeTrack('01.mp3'));
+  const current = harness.sent('open')[0];
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame', generation: current.generation, streamId: current.streamId,
+    renderedFrame: 0, contextTime: 1,
+  });
+  harness.sockets[0].receive({
+    type: 'eos', generation: current.generation, streamId: current.streamId, role: 'current',
+    emittedFrames: 10_000, authoritativeTotalFrames: 10_000,
+  });
+  await harness.api.continuity(makeTrack('02.mp3'));
+  const continuity = harness.engine.roles.continuity;
+  const wire = {
+    track: makeTrack('02.mp3'), quality: 'original', codec: 'mp3', streamStart: 0, serverless: false,
+    initialSkip: 0, initialTotal: 10_000, table: null, bytes: new Uint8Array(8), size: 8,
+  };
+  const eos = { authoritativeTotalFrames: 10_000 };
+  continuity.encoded = { wire, eos };
+
+  harness.context.keepStreamingWire(wire, eos, 'continuity');
+  assert.deepEqual(kept, [], 'a song only fetched ahead is not kept');
+
+  harness.nodes[0].port.dispatch({
+    type: 'boundary', generation: current.generation,
+    outgoingStreamId: current.streamId, incomingStreamId: continuity.streamId,
+    renderedFrame: 10_000, timelineFrame: 0, capture: {},
+  });
+  assert.deepEqual(kept.map(({ key }) => key), [`${makeTrack('02.mp3').path}|original`]);
+  harness.sockets[0].receive({
+    type: 'promoted', generation: current.generation, streamId: continuity.streamId, role: 'current',
+  });
+  assert.equal(kept.length, 1, 'it is kept once');
 });

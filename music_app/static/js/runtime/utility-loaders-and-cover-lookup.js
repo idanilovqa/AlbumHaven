@@ -84,7 +84,8 @@ async function loadProblematicFiles(force = false, options = {}) {
         initialDetailKey = String(initialDetail?.key || '').trim();
         const selectedKey = String(state.utility.selectedProblematicKey || '');
         const selectedDetail = preserveSelectedDetail
-          ? state.utility.problematicFiles.find(item => item.key === selectedKey && item.detail_loaded === true)
+          ? state.utility.problematicFiles.find(item => item.key === selectedKey
+            && (item.detail_loaded === true || item.musicbrainz_detail))
           : null;
         const selectedSummary = selectedDetail && selectedKey !== initialDetailKey
           ? summaryItems.find(item => item.key === selectedKey) : null;
@@ -108,7 +109,7 @@ async function loadProblematicFiles(force = false, options = {}) {
         state.utility.libraryWatchHealthProblems = operationalItems;
         state.utility.detailLoadPromises = selectedPendingDetail
           ? { [selectedKey]: selectedPendingDetail } : {};
-        previousSummaryItems = summaryItems;
+        previousSummaryItems = summaryItems.map(item => ({ ...item }));
       state.utility.loaded = true;
       state.utility.problematicLoadError = '';
         stateCommitMs += roundProblematicUtilityMs(getProblematicUtilityNow() - stateCommitStartedAt);
@@ -545,7 +546,7 @@ async function fetchCoverForAlbum(album, options = {}) {
       ? data.updated_albums
       : [data.updated_album].filter(Boolean);
     if (Number(data.downloaded_count || 0) > 0) {
-      markAlbumCoverPathsFresh(updatedAlbums);
+      markAlbumCoverRefsFresh(updatedAlbums);
     }
     applyUpdatedAlbumsToCurrentView(updatedAlbums, { originalAlbum: album, preserveScroll: true, preserveGrouping: true });
     updateTrackModalIfStillShowingAlbum(album, updatedAlbums);
@@ -2395,7 +2396,7 @@ function buildOptimisticUpdatedAlbumsFromEdits(album, updates) {
         key: canonicalKeyParts.join('::'),
         name: albumName,
         album_artist: albumArtist,
-        cover_path: track?.cover_path || album?.cover_path || coverSourceAlbum?.cover_path || null,
+        cover_ref: track?.cover_ref || album?.cover_ref || coverSourceAlbum?.cover_ref || null,
         cover_preview_url: track?.cover_preview_url || album?.cover_preview_url || coverSourceAlbum?.cover_preview_url || null,
         remote_cover_url: track?.remote_cover_url || album?.remote_cover_url || coverSourceAlbum?.remote_cover_url || null,
         remote_cover_thumbnail_url: track?.remote_cover_thumbnail_url || album?.remote_cover_thumbnail_url || coverSourceAlbum?.remote_cover_thumbnail_url || null,
@@ -2429,7 +2430,7 @@ function buildOptimisticUpdatedAlbumsFromEdits(album, updates) {
       bucket.track_rows.push(deepCloneJson(sourceTrackRow));
     }
     bucket.total_duration_seconds += Number(track?.duration_seconds || 0);
-    if (!bucket.cover_path && track?.cover_path) bucket.cover_path = track.cover_path;
+    if (!bucket.cover_ref && track?.cover_ref) bucket.cover_ref = track.cover_ref;
     if (!bucket.remote_cover_url && track?.remote_cover_url) {
       bucket.remote_cover_url = track.remote_cover_url;
       bucket.remote_cover_thumbnail_url = track?.remote_cover_thumbnail_url || track.remote_cover_url;
@@ -2610,12 +2611,12 @@ function renderTagEditorArtwork(selectedPaths) {
     ? String(state.tagEditor.anchorPath || '')
     : (selectedPaths[0] || '');
   const track = (state.tagEditor.tracks || []).find((item) => String(item.path || '') === focusedPath);
-  const coverPath = track?.cover_path || state.tagEditor.album?.cover_path || '';
+  const coverRef = track?.cover_ref || state.tagEditor.album?.cover_ref || '';
   const label = getTagEditorTrackDisplayName(track) || 'selected track';
   const separatorIndex = Math.max(focusedPath.lastIndexOf('/'), focusedPath.lastIndexOf('\\'));
   const folderPath = separatorIndex > 0 ? focusedPath.slice(0, separatorIndex) : '';
-  const artwork = coverPath
-    ? `<img src="/cover?path=${encodeURIComponent(coverPath)}" alt="Artwork for ${escapeHtml(label)}">`
+  const artwork = coverRef
+    ? `<img src="/cover/${encodeURIComponent(coverRef)}" alt="Artwork for ${escapeHtml(label)}">`
     : `<div class="tag-editor-artwork-placeholder" role="img" aria-label="No album artwork">${buildMissingAlbumMarkHtml()}</div>`;
   els.artwork.innerHTML = `${artwork}<div class="tag-editor-folder-path" title="${escapeHtml(folderPath)}">${escapeHtml(folderPath)}</div>`;
 }

@@ -32,6 +32,7 @@ class BridgeControllerTest {
     private class FakeHost : BridgeHost {
         var connected: Int? = null
         var bridgeConnections = 0
+        val foregroundReady = mutableListOf<Long>()
         val incompatible = mutableListOf<IntRange>()
         var selectedSlot: Int? = null
         var nextSelectResult = true
@@ -48,6 +49,9 @@ class BridgeControllerTest {
         }
         override fun onBridgeConnected() {
             bridgeConnections++
+        }
+        override fun onForegroundReady(token: Long) {
+            foregroundReady += token
         }
     }
 
@@ -66,6 +70,13 @@ class BridgeControllerTest {
         override fun install() = applies.also { calls += "install" }
     }
 
+    private class FakeBuilds : BuildChoicePort {
+        override var summary: JSONObject = JSONObject().put("installedVersionCode", 1).put("count", 0).put("single", JSONObject.NULL)
+        val chosenWith = mutableListOf<IntRange>()
+        var applies = true
+        override fun choose(webProtocols: IntRange) = applies.also { chosenWith += webProtocols }
+    }
+
     private class FakeCopies : AppCopyPort {
         val reports = mutableListOf<Boolean>()
         override var forgetPending = false
@@ -75,6 +86,7 @@ class BridgeControllerTest {
     private val copies = FakeCopies()
     private val host = FakeHost()
     private val updates = FakeUpdates()
+    private val builds = FakeBuilds()
     private val playback = ControllerHarness()
     private val attachments = mutableListOf<Boolean>()
     private val savedFiles = mutableListOf<String>()
@@ -87,10 +99,11 @@ class BridgeControllerTest {
         updates: UpdatePort? = this.updates,
         files: FileSaves? = this.files,
         copies: AppCopyPort? = this.copies,
+        builds: BuildChoicePort? = this.builds.takeIf { channel == ShellChannel.SANDBOX },
     ) =
         BridgeController(
             ShellIdentity(id, channel, "0.9.50", 1), host, ControllerPlaybackPort({ playback.controller }, attachment = attachments::add),
-            updates, files, copies,
+            updates, files, copies, builds,
         )
 
     private fun send(
@@ -323,6 +336,21 @@ class BridgeControllerTest {
     }
 
     @Test
+    fun foregroundReadinessAcceptsOnlyOnePositiveIntegerWithoutTouchingPlayback() {
+        send(sandbox, handshake())
+        val before = playback.controller.snapshot
+
+        assertTrue(ok(send(sandbox, command("shell.foregroundReady", """{"token":7}"""))))
+        assertEquals(listOf(7L), host.foregroundReady)
+        assertEquals(before, playback.controller.snapshot)
+
+        for (payload in listOf("{}", """{"token":0}""", """{"token":-1}""", """{"token":"7"}""", """{"token":7,"extra":true}""")) {
+            assertEquals("invalid_payload", errorCode(send(sandbox, command("shell.foregroundReady", payload))))
+        }
+        assertEquals(listOf(7L), host.foregroundReady)
+    }
+
+    @Test
     fun invalidPlaybackPayloadsAreRejected() {
         send(sandbox, handshake())
         val item = """{"playbackRef":"opaque-ref","title":"T","artist":"A","album":"B","artworkUrl":null,"durationMs":1000,"trackNumber":"1","listenKey":"lk1-0123abcd","queueGroup":0}"""
@@ -511,6 +539,52 @@ class BridgeControllerTest {
         sandbox.reset()
         sandbox.emit(state)
         assertEquals(2, sent.size)
+    }
+
+    @Test
+    fun theSandboxBuildPickerIsAdvertisedAndChosenWithTheSiteBridgeRange() {
+        val builds = FakeBuilds()
+        val picker = controller(ShellChannel.SANDBOX, "org.albumhaven.app.sandbox", builds = builds)
+        assertEquals("handshake_required", errorCode(send(picker, command("updates.choose"))))
+        val payload = send(picker, handshake(1, 2))!!.getJSONObject("payload")
+        val names = payload.getJSONArray("capabilities").let { array -> (0 until array.length()).map(array::getString) }
+        val advertised = fixture.getJSONObject("capabilities").getJSONArray("sandbox").let { array -> (0 until array.length()).map(array::getString) }
+        assertEquals(advertised, names)
+        assertEquals(0, payload.getJSONObject("builds").getInt("count"))
+
+        assertTrue(ok(send(picker, command("updates.choose"))))
+        assertEquals(listOf(1..2), builds.chosenWith)
+        assertEquals("invalid_payload", errorCode(send(picker, command("updates.choose", """{"sandbox":2}"""))))
+        builds.applies = false
+        assertEquals("update_unavailable", errorCode(send(picker, command("updates.choose"))))
+    }
+
+    @Test
+    fun buildEventsGoOnlyToTheNegotiatedDocument() {
+        val builds = FakeBuilds()
+        val picker = controller(ShellChannel.SANDBOX, "org.albumhaven.app.sandbox", builds = builds)
+        val sent = mutableListOf<JSONObject>()
+        picker.emitBuilds()
+        picker.handle(handshake(), ORIGIN, true) { sent += JSONObject(it) }
+        builds.summary = JSONObject().put("installedVersionCode", 1).put("count", 3).put("single", JSONObject.NULL)
+        picker.emitBuilds()
+        assertEquals(2, sent.size)
+        assertEquals("updates.builds", sent.last().getString("name"))
+        assertEquals(3, sent.last().getJSONObject("payload").getInt("count"))
+    }
+
+    @Test
+    fun withoutTheBuildPickerOrUpdatesNoChoiceIsOffered() {
+        for (plain in listOf(
+            controller(ShellChannel.SANDBOX, "org.albumhaven.app.sandbox", builds = null),
+            controller(ShellChannel.SANDBOX, "org.albumhaven.app.sandbox", updates = null),
+        )) {
+            val payload = send(plain, handshake())!!.getJSONObject("payload")
+            val names = payload.getJSONArray("capabilities").let { array -> (0 until array.length()).map(array::getString) }
+            assertFalse(names.contains("updates.choose.v1"))
+            assertFalse(payload.has("builds"))
+            assertEquals("unsupported_command", errorCode(send(plain, command("updates.choose"))))
+        }
     }
 
     private fun errorCode(reply: JSONObject?): String =

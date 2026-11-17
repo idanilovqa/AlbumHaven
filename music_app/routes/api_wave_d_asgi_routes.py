@@ -1425,6 +1425,13 @@ async def albums_selected_covers_read(request: Request, album_ref: str) -> JSONR
         raise
     except Exception:
         return JSONResponse({"ok": False, "error": "Cover selection is temporarily unavailable."}, status_code=503)
+    # A local source leaves as `candidate_cover_path`, which the cover reference boundary
+    # publishes as `candidate_cover_ref`; the client never receives the path itself.
+    references = [
+        {**{key: value for key, value in item.items() if key != "path"}, "candidate_cover_path": item["path"]}
+        if item.get("kind") == "local" and item.get("path") else item
+        for item in references
+    ]
     return JSONResponse({
         "ok": True, "album_ref": str(album_id), "selected_covers": references,
         "selected_covers_revision": selection.get("selected_covers_revision", 0),
@@ -1445,6 +1452,15 @@ async def albums_selected_covers_save(request: Request, album_ref: str) -> JSONR
     payload = await _json_payload(request)
     if not isinstance(payload, dict) or set(payload) != {"expected_revision", "mutation_id", "references"}:
         return JSONResponse({"ok": False, "error": "A revision, mutation ID and ordered references are required."}, status_code=422)
+    # A local source arrives as the `candidate_cover_ref` the lookup published; the cover reference
+    # boundary has already resolved it to `candidate_cover_path` (null when it names no visible file).
+    if isinstance(payload["references"], list):
+        payload["references"] = [
+            {"kind": "local", "path": item["candidate_cover_path"]}
+            if isinstance(item, dict) and item.get("kind") == "local" and set(item) == {"kind", "candidate_cover_path"}
+            else item
+            for item in payload["references"]
+        ]
     try:
         validate_save_request(expected_album_id=album_id, **payload)
     except ValueError:

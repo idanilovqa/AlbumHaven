@@ -912,11 +912,6 @@ def test_active_scan_preview_real_view_build_isolates_and_rebuilds_casefold_rela
 
     monkeypatch.setattr(view_payloads_module, "load_manual_version_links", lambda *_args: {})
     monkeypatch.setattr(view_payloads_module, "load_ignored_version_keys", lambda *_args: set())
-    monkeypatch.setattr(
-        view_payloads_module,
-        "get_primary_music_root",
-        lambda *_args, **_kwargs: app.config["MUSIC_DIR"],
-    )
 
     def album(key, artist, name):
         return SimpleNamespace(

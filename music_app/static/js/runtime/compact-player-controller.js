@@ -374,8 +374,8 @@ function syncCompactPlayerUi(snapshot = {}) {
   }
   scheduleCompactPlayerMetadataRowRefresh(els);
   if (els.cover) {
-    els.cover.style.backgroundImage = track?.coverPath
-      ? `url("/cover?path=${encodeURIComponent(track.coverPath)}")`
+    els.cover.style.backgroundImage = track?.coverRef
+      ? `url("/cover/${encodeURIComponent(track.coverRef)}")`
       : '';
     els.cover.classList.toggle('is-idle-placeholder', !track);
     els.cover.disabled = !track && !['docked', 'rail_artbox'].includes(compactPlayerPresentation);

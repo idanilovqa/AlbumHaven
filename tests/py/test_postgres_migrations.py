@@ -465,14 +465,10 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
     migration_numbers = [int(name[:4]) for name in migration_names]
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
-    # Numbers stay contiguous, except migrations reserved past numbers that
-    # unmerged branches and the production ledger already use.
-    reserved = {112, 116, 121, 171, 172, 173, 174, 175, 176, 177, 179, 180, 181}
-    contiguous = [number for number in migration_numbers if number not in reserved]
-    assert contiguous == list(range(1, len(contiguous) + 1))
+    # Owner rule (2026-11-10): numbers may be applied out of order and may leave gaps,
+    # but no two migrations ever share a number.
     assert len(set(migration_numbers)) == len(migration_numbers)
-    assert migration_names[-80:] == [
-        "0041_create_local_album_cover_candidate_snapshots.sql",
+    assert migration_names[-86:] == [
         "0042_track_distinct_cover_improvement_alerts.sql",
         "0043_create_local_track_waveform_peaks.sql",
         "0044_create_tag_edit_intents.sql",
@@ -549,9 +545,16 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0175_add_musicbrainz_match_album_evidence.sql",
         "0176_create_album_disc_ratings.sql",
         "0177_create_local_album_artist_identities.sql",
+        "0178_add_musicbrainz_associated_artists.sql",
         "0179_add_ordered_cover_metadata_constraint.sql",
         "0180_add_confirmed_copy_retirement.sql",
         "0181_add_cue_virtual_tracks.sql",
+        "0182_create_custom_collection_artwork.sql",
+        "0183_add_custom_collection_name_index.sql",
+        "0184_allow_empty_ordered_cover_selection.sql",
+        "0200_create_cover_references.sql",
+        "0201_backfill_cover_references.sql",
+        "0210_create_schema_migration_attestations.sql",
     ]
 
 
@@ -3386,4 +3389,38 @@ def test_text_corrections_migration_never_rewrites_local_track_files():
     assert "create table if not exists library.local_track_file_text_corrections" in sql
     assert "after insert or update of metadata on library.local_track_files" in sql
 
+SCHEMA_MIGRATION_ATTESTATIONS_MIGRATION = (
+    MIGRATIONS_DIR / "0210_create_schema_migration_attestations.sql"
+)
+
+
+def test_schema_migration_attestations_are_append_only_and_owner_written():
+    sql = " ".join(SCHEMA_MIGRATION_ATTESTATIONS_MIGRATION.read_text(encoding="utf-8").lower().split())
+
+    assert "create table if not exists ops.schema_migration_attestations" in sql
+    # One attestation per (name, repository checksum, observed ledger checksum); an absent
+    # ledger name is a null checksum and still counts once.
+    assert (
+        "on ops.schema_migration_attestations (migration_name, repository_checksum, ledger_checksum) "
+        "nulls not distinct" in sql
+    )
+    for disposition in (
+        "'contract-present'", "'contract-present-with-extras'", "'superseded-by-unmerged'",
+        "'not-applied'", "'historical-ledger-row'",
+    ):
+        assert disposition in sql
+    assert "evidence_manifest_sha256 ~ '^[0-9a-f]{64}$'" in sql
+    assert "approved_at timestamptz not null" in sql
+    # Append-only: row changes and truncation are rejected, and the privileges are gone.
+    assert "before update or delete on ops.schema_migration_attestations for each row" in sql
+    assert "before truncate on ops.schema_migration_attestations for each statement" in sql
+    assert "revoke update, delete, truncate on table ops.schema_migration_attestations from current_user" in sql
+    assert "revoke all on table ops.schema_migration_attestations from album_haven_app" in sql
+    assert "grant select on table ops.schema_migration_attestations to album_haven_readonly" in sql
+    # Rows are written per database by the reconciliation tooling, never by the migration.
+    assert "insert into ops.schema_migration_attestations" not in sql
+    # The historical ledger itself is never rewritten.
+    for statement in ("update ops.schema_migrations", "delete from ops.schema_migrations",
+                      "insert into ops.schema_migrations", "truncate ops.schema_migrations"):
+        assert statement not in sql
 

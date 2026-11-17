@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import http.client
 import json
+import re
 import socket
 import ssl
 import threading
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from contextlib import nullcontext
 from urllib.parse import urlparse
 
@@ -295,6 +297,60 @@ def get_json(
                 return failed({"status": type(exc).__name__, "cache_hit": False, "attempt": attempt})
 
     return failed({"status": "exhausted", "cache_hit": False})
+
+
+def count_until(chunks: Iterable[bytes], pattern: re.Pattern[bytes], stop_at: int) -> tuple[int, bool]:
+    """Count ``pattern`` across a streamed body, reading no further once ``stop_at`` matches
+    are seen. A match split across two chunks counts once. Returns (count, stopped early)."""
+    count, tail = 0, b""
+    for chunk in chunks:
+        data = tail + chunk
+        count += sum(1 for match in pattern.finditer(data) if match.end() > len(tail))
+        if count >= stop_at:
+            return stop_at, True
+        tail = data[-128:]
+    return count, False
+
+
+def count_json_matches(
+    url: str,
+    user_agent: str,
+    *,
+    pattern: re.Pattern[bytes],
+    stop_at: int,
+    timeout: float = 30.0,
+    chunk_size: int = 64 * 1024,
+) -> tuple[int | None, dict[str, object]]:
+    """How many times ``pattern`` occurs in a MusicBrainz response, counted while it streams
+    and closed as soon as ``stop_at`` is reached, so a huge payload is neither downloaded in
+    full nor parsed nor kept in the URL cache. One attempt: the caller retries later."""
+    throttled = not _is_loopback_url(url)
+    with _REQUEST_LOCK if throttled else nullcontext():
+        blocked, retry_after_seconds, blocked_reason = _blocked_state() if throttled else (False, 0.0, "")
+        if blocked:
+            return None, {"status": "blocked", "retry_after_seconds": round(retry_after_seconds, 2),
+                          "blocked_reason": blocked_reason}
+        if throttled:
+            _wait_for_slot()
+        request = urllib.request.Request(url, headers={"User-Agent": user_agent, "Accept": "application/json"})
+        try:
+            with urllib.request.urlopen(request, timeout=float(timeout or 30.0)) as response:
+                count, stopped = count_until(iter(lambda: response.read(chunk_size), b""), pattern, stop_at)
+            return count, {"status": "network", "http_status": 200, "stopped_early": stopped}
+        except urllib.error.HTTPError as exc:
+            status_code = int(getattr(exc, "code", 0) or 0)
+            block_reason = _block_reason_from_http_error(status_code, b"")
+            if throttled and block_reason:
+                _set_block(block_reason)
+            return None, {"status": f"http_{status_code}", "http_status": status_code}
+        except (OSError, http.client.HTTPException) as exc:
+            # URLError, TLS errors, timeouts, a reset or a truncated body mid-stream.
+            reason = getattr(exc, "reason", exc)
+            return None, {"status": "timeout" if isinstance(reason, (TimeoutError, socket.timeout))
+                          else "connection_error"}
+        finally:
+            if throttled:
+                _mark_request_complete()
 
 
 def default_user_agent(app_name: str, app_version: str, contact_email: str) -> str:

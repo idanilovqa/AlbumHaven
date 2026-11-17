@@ -11,7 +11,7 @@ from psycopg.types.json import Jsonb
 
 from music_app.services.library_roots import library_category_slugs
 
-BUILDER_VERSION = "root-gallery-v4"
+BUILDER_VERSION = "root-gallery-v5"
 _LOGGER = logging.getLogger(__name__)
 _PENDING = {}
 _PENDING_LOCK = Lock()

@@ -762,6 +762,29 @@ class MusicBrainzEnrichmentPostgresRepository:
                 names[str(row["local_artist_name"])] = romanized
         return names
 
+    def list_split_artist_qualifiers(self) -> dict[str, str]:
+        """Each group label of a name MusicBrainz splits per album (D2 S2) and its qualifier,
+        {"Amarok (Poland)": "Poland"}, so the tree and gallery dim the qualifier. Display only."""
+        with self._connect(self._database_url) as connection:
+            rows = connection.execute(_active_library_cte() + """
+                select distinct artists.name as local_artist_name, artist_groups.group_label
+                from active_library
+                join library.local_artist_musicbrainz_matches split_match
+                  on split_match.library_id = active_library.library_id and split_match.state = 'per_album'
+                join library.local_artists artists
+                  on artists.library_id = split_match.library_id and artists.id = split_match.local_artist_id
+                join library.local_album_artist_groups artist_groups
+                  on artist_groups.library_id = split_match.library_id
+                 and artist_groups.local_artist_id = split_match.local_artist_id
+                where starts_with(artist_groups.group_key, 'musicbrainz:')
+                """).fetchall()
+        qualifiers = {}
+        for row in map(_row_mapping, rows):
+            name, label = str(row["local_artist_name"]), str(row["group_label"])
+            if label.startswith(f"{name} (") and label.endswith(")"):
+                qualifiers[label] = label[len(name) + 2:-1]
+        return qualifiers
+
     def list_accepted_artist_mbids(self) -> list[str]:
         """MBIDs of artists matched automatically or assigned by the owner."""
         with self._connect(self._database_url) as connection:

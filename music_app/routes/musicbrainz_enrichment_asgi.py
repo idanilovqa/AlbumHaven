@@ -94,16 +94,22 @@ async def list_artist_status(request: Request):
 
 @router.get("/romanized-names")
 async def list_romanized_artist_names(request: Request):
-    """Original-script artist names and their Latin forms for the tree and gallery (J3).
-    Display only; a failure shows the names alone."""
+    """Original-script artist names and their Latin forms for the tree and gallery (J3),
+    plus the split same-name groups' qualifiers ("Amarok (Poland)": "Poland", D2 S2), which
+    are dimmed the same way. Display only; a failure shows the names alone."""
+    names = await _display_names(request, "list_romanized_artist_names", "Romanized artist names")
+    split_artists = await _display_names(request, "list_split_artist_qualifiers", "Split artist qualifiers")
+    return {"names": names, **({"split_artists": split_artists} if split_artists else {})}
+
+
+async def _display_names(request: Request, method_name: str, label: str) -> dict[str, str]:
     try:
-        names = await run_in_threadpool(
-            MusicBrainzEnrichmentPostgresRepository(request.app.state.config).list_romanized_artist_names)
+        return await run_in_threadpool(
+            getattr(MusicBrainzEnrichmentPostgresRepository(request.app.state.config), method_name))
     except Exception:
         logger = getattr(request.app.state, "logger", logging.getLogger(__name__))
-        logger.warning("Romanized artist names were unavailable.")
-        names = {}
-    return {"names": names}
+        logger.warning("%s were unavailable.", label)
+        return {}
 
 
 @router.get("/{local_artist_id}")

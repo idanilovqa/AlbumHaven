@@ -663,6 +663,56 @@ def test_everyone_who_browses_reads_the_romanized_artist_names(monkeypatch):
     assert (status, payload) == (200, {"names": {"天門": "Tenmon", "久石 譲": "Joe Hisaishi"}})
 
 
+def test_split_same_name_qualifiers_ride_along_only_when_a_name_is_split(monkeypatch):
+    """D2 item 3: the client dims "(Poland)" in "Amarok (Poland)"; nothing is added otherwise."""
+    class Split:
+        def __init__(self, qualifiers):
+            self.qualifiers = qualifiers
+
+        def list_romanized_artist_names(self):
+            return {"天門": "Tenmon"}
+
+        def list_split_artist_qualifiers(self):
+            return self.qualifiers
+
+    app = app_for(actor_with("library.browse.read", owner=False), None)
+    monkeypatch.setattr(route_api(), "MusicBrainzEnrichmentPostgresRepository",
+                        lambda config: Split({"Amarok (Poland)": "Poland"}))
+    assert request(app, "GET", "/api/musicbrainz/artists/romanized-names") == (
+        200, {"names": {"天門": "Tenmon"}, "split_artists": {"Amarok (Poland)": "Poland"}})
+    monkeypatch.setattr(route_api(), "MusicBrainzEnrichmentPostgresRepository", lambda config: Split({}))
+    assert request(app, "GET", "/api/musicbrainz/artists/romanized-names") == (200, {"names": {"天門": "Tenmon"}})
+
+
+def test_the_split_qualifiers_are_read_from_the_view_for_per_album_artists_only():
+    from music_app.services.musicbrainz_enrichment_postgres import MusicBrainzEnrichmentPostgresRepository
+
+    seen = []
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def execute(self, sql, params=None):
+            seen.append(" ".join(sql.lower().split()))
+            return self
+
+        def fetchall(self):
+            return [{"local_artist_name": "Amarok", "group_label": "Amarok (Poland)"},
+                    {"local_artist_name": "Alice Cooper", "group_label": "Alice Cooper (US band, 1964-1975)"},
+                    {"local_artist_name": "Renamed", "group_label": "Other (Spain)"}]
+
+    repository = MusicBrainzEnrichmentPostgresRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://unused"}, connect=lambda _url: Connection())
+    assert repository.list_split_artist_qualifiers() == {
+        "Amarok (Poland)": "Poland", "Alice Cooper (US band, 1964-1975)": "US band, 1964-1975"}
+    assert "split_match.state = 'per_album'" in seen[0]
+    assert "starts_with(artist_groups.group_key, 'musicbrainz:')" in seen[0]
+
+
 def test_romanized_artist_names_fail_safely_to_none(monkeypatch):
     class Broken:
         def list_romanized_artist_names(self):

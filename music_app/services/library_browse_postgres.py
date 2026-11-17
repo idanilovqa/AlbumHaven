@@ -2307,6 +2307,18 @@ class PostgresLibraryBrowseRepository:
                     alias_to_canonical=alias_to_canonical,
                 )
                 exact_artist_key = local_inventory_identity_key(exact_artist_match)
+                # A name MusicBrainz splits per album may keep no albums of its own
+                # (every Amarok album proven): its first split group stands in for it.
+                if not any(
+                    local_inventory_identity_key(str(group.get("artist") or "")) == exact_artist_key
+                    for group in sidebar_artist_groups
+                ):
+                    exact_artist_match = next((
+                        str(group.get("artist") or "")
+                        for group in sidebar_artist_groups
+                        if exact_artist_key in _split_label_base_keys(group.get("artist"))
+                    ), exact_artist_match)
+                    exact_artist_key = local_inventory_identity_key(exact_artist_match)
                 selected_artist_preview_rows = [
                     row
                     for row in canonical_search_rows
@@ -3302,16 +3314,14 @@ class PostgresLibraryBrowseRepository:
         *,
         connection: Any | None = None,
     ) -> list[object]:
-        params = {
-            "artist_keys": [local_inventory_identity_key(artist) for artist in selected_artists],
-            **_root_sidebar_params(view_state),
-        }
+        artist_keys, requested_keys, added_keys = _selected_artist_query_keys(selected_artists)
+        params = {"artist_keys": artist_keys, **_root_sidebar_params(view_state)}
         if connection is not None:
-            cursor = connection.execute(_selected_artist_sql(), params)
-            return list(cursor.fetchall())
-        with self._connect_to_database() as owned_connection:
-            cursor = owned_connection.execute(_selected_artist_sql(), params)
-            return list(cursor.fetchall())
+            rows = list(connection.execute(_selected_artist_sql(), params).fetchall())
+        else:
+            with self._connect_to_database() as owned_connection:
+                rows = list(owned_connection.execute(_selected_artist_sql(), params).fetchall())
+        return _selected_split_group_rows(rows, requested_keys, added_keys)
 
     def _load_selected_artist_preview_rows(
         self,
@@ -3320,30 +3330,19 @@ class PostgresLibraryBrowseRepository:
         *,
         album_limit: int | None = None,
         balance_across_artists: bool = False,
+        keep_split_groups: bool = False,
         connection: Any | None = None,
     ) -> list[object]:
-        params = {
-            "artist_keys": [local_inventory_identity_key(artist) for artist in selected_artists],
-            **_root_sidebar_params(view_state),
-        }
+        artist_keys, requested_keys, added_keys = _selected_artist_query_keys(selected_artists)
+        params = {"artist_keys": artist_keys, **_root_sidebar_params(view_state)}
+        sql = _selected_artist_preview_sql(album_limit, balance_across_artists=balance_across_artists)
         if connection is not None:
-            cursor = connection.execute(
-                _selected_artist_preview_sql(
-                    album_limit,
-                    balance_across_artists=balance_across_artists,
-                ),
-                params,
-            )
-            return list(cursor.fetchall())
-        with self._connect_to_database() as owned_connection:
-            cursor = owned_connection.execute(
-                _selected_artist_preview_sql(
-                    album_limit,
-                    balance_across_artists=balance_across_artists,
-                ),
-                params,
-            )
-            return list(cursor.fetchall())
+            rows = list(connection.execute(sql, params).fetchall())
+        else:
+            with self._connect_to_database() as owned_connection:
+                rows = list(owned_connection.execute(sql, params).fetchall())
+        # Local names from the tree's start (not its labels) keep every group of a split name.
+        return rows if keep_split_groups else _selected_split_group_rows(rows, requested_keys, added_keys)
 
     def _load_artist_preview_rows(
         self,
@@ -3356,17 +3355,19 @@ class PostgresLibraryBrowseRepository:
         normalized_artists = [str(artist or "").strip() for artist in artists if str(artist or "").strip()]
         if not normalized_artists:
             return []
+        artist_keys, requested_keys, added_keys = _selected_artist_query_keys(normalized_artists)
         params = {
             "artist_names": normalized_artists,
-            "artist_keys": [local_inventory_identity_key(artist) for artist in normalized_artists],
+            "artist_keys": artist_keys,
             **_root_sidebar_params(view_state),
         }
         if connection is not None:
-            cursor = connection.execute(_artist_preview_rows_sql(family_only=family_only), params)
-            return list(cursor.fetchall())
-        with self._connect_to_database() as owned_connection:
-            cursor = owned_connection.execute(_artist_preview_rows_sql(family_only=family_only), params)
-            return list(cursor.fetchall())
+            rows = list(connection.execute(_artist_preview_rows_sql(family_only=family_only), params).fetchall())
+        else:
+            with self._connect_to_database() as owned_connection:
+                rows = list(owned_connection.execute(
+                    _artist_preview_rows_sql(family_only=family_only), params).fetchall())
+        return _selected_split_group_rows(rows, requested_keys, added_keys)
 
     def _load_album_detail_rows(
         self,
@@ -3475,6 +3476,7 @@ class PostgresLibraryBrowseRepository:
                 view_state,
                 album_limit=_SEARCH_PREVIEW_ALBUM_LIMIT,
                 balance_across_artists=True,
+                keep_split_groups=True,
                 connection=active_connection,
             )
 
@@ -6875,6 +6877,50 @@ def _row_artist_identity(row_payload: Mapping[str, object]) -> str:
     return f"name:{dedupe_key}" if dedupe_key else ""
 
 
+def _split_label_base_keys(artist: object) -> list[str]:
+    """Identity keys of every local name a split group label ("Amarok (Poland)",
+    "Alice Cooper (US band, 1964-1975)") may have been made from; none for other names."""
+    text = str(artist or "").strip()
+    if not text.endswith(")"):
+        return []
+    return [
+        local_inventory_identity_key(text[:index])
+        for index in range(1, len(text))
+        if text.startswith(" (", index)
+    ]
+
+
+def _selected_artist_query_keys(artists: list[str]) -> tuple[list[str], set[str], set[str]]:
+    """The artist keys a selection query matches, the requested keys, and the local names
+    added for split labels: a split group is addressed by its label, so its local name
+    is loaded too and ``_selected_split_group_rows`` keeps only the label's albums."""
+    requested = [local_inventory_identity_key(artist) for artist in artists]
+    added = [
+        key
+        for artist in artists
+        for key in _split_label_base_keys(artist)
+        if key not in requested
+    ]
+    return requested + list(dict.fromkeys(added)), set(requested), set(added)
+
+
+def _selected_split_group_rows(
+    rows: list[object], requested_keys: set[str], added_keys: set[str],
+) -> list[object]:
+    """A split album answers only to its group label; its name's undecided albums only to
+    the plain name, so "Amarok", "Amarok (Poland)" and "Amarok (Spain)" stay apart.
+    Rows of every artist MusicBrainz does not split pass unchanged. The trade-off of
+    addressing groups by label: an old ``artist=Amarok`` link (or a label that a later
+    match renames) falls back like a link to a renamed artist, showing only what that
+    name still holds."""
+    def wanted(payload: Mapping[str, object]) -> bool:
+        if payload.get("artist_group_label"):
+            return local_inventory_identity_key(payload.get("artist_name")) in requested_keys
+        return not added_keys or local_inventory_identity_key(payload.get("artist_name")) not in added_keys
+
+    return [row for row in rows if wanted(_row_mapping(row))]
+
+
 def _normalized_artist_aliases(alias_to_canonical: Mapping[str, object]) -> dict[str, object]:
     normalized: dict[str, object] = {}
     for alias, canonical in alias_to_canonical.items():
@@ -8261,13 +8307,23 @@ def _album_musicbrainz_artist(connection: Any, album_id: object) -> dict[str, ob
     rows = connection.execute(
         """
         select identity.artist_mbid::text as mbid, artist.canonical_name, artist.disambiguation,
-               identity.tag_differs, artist_match.state = 'per_album' as split
+               identity.tag_differs, artist_match.state = 'per_album' as split, artist_group.group_label
         from library.local_albums album
         join library.local_album_artist_identities identity
           on identity.library_id = album.library_id and identity.album_key = album.album_key
         join integration.musicbrainz_artists artist on artist.mbid = identity.artist_mbid
         left join library.local_artist_musicbrainz_matches artist_match
           on artist_match.library_id = album.library_id and artist_match.local_artist_id = album.artist_id
+        -- The split name's group this album belongs to: "Amarok (Poland)" (D2 S2).
+        left join lateral (
+          select artist_groups.group_label
+          from library.local_album_artist_groups artist_groups
+          where artist_match.state = 'per_album'
+            and artist_groups.library_id = album.library_id
+            and artist_groups.local_artist_id = album.artist_id
+            and artist_groups.album_key = album.album_key
+            and starts_with(artist_groups.group_key, 'musicbrainz:')
+        ) artist_group on true
         where album.id = %(album_id)s
         """,
         {"album_id": album_id},
@@ -8275,9 +8331,13 @@ def _album_musicbrainz_artist(connection: Any, album_id: object) -> dict[str, ob
     row = _row_mapping(rows[0]) if rows else {}
     if not row.get("mbid"):
         return None
-    return {"artist_mbid": row["mbid"], "musicbrainz_url": f"https://musicbrainz.org/artist/{row['mbid']}",
-            "canonical_name": row.get("canonical_name"), "disambiguation": row.get("disambiguation") or None,
-            "tag_differs": bool(row.get("tag_differs")), "split": bool(row.get("split"))}
+    projection = {
+        "artist_mbid": row["mbid"], "musicbrainz_url": f"https://musicbrainz.org/artist/{row['mbid']}",
+        "canonical_name": row.get("canonical_name"), "disambiguation": row.get("disambiguation") or None,
+        "tag_differs": bool(row.get("tag_differs")), "split": bool(row.get("split"))}
+    if row.get("group_label"):
+        projection["group_label"] = row["group_label"]
+    return projection
 
 
 def _album_musicbrainz_release(connection: Any, album_id: object, tracks: list[object]) -> dict[str, object] | None:
@@ -9036,8 +9096,9 @@ def _root_gallery_membership_sql(*, candidate_albums_only: bool = False) -> str:
             on library.libraries.owner_account_id = app.bootstrap_owners.account_id
            and library.libraries.name = 'Local Library' and library.libraries.library_kind = 'local'
           where app.bootstrap_owners.owner_key = 'local-bootstrap-owner' limit 1
-        ), {candidate_albums} {eligible_tracks}
-        select distinct artist.id as artist_id, artist.name as artist_name,
+        ), {_split_album_groups_cte_sql()}, {candidate_albums} {eligible_tracks}
+        select distinct artist.id as artist_id,
+          coalesce(artist_group.group_label, artist.name) as artist_name,
           artist.sort_name as artist_sort_name, featured.featured_kind,
           album.id as album_id, album.album_key,
           album.title as album_title, album.release_year as album_release_year
@@ -9047,6 +9108,7 @@ def _root_gallery_membership_sql(*, candidate_albums_only: bool = False) -> str:
           on featured.library_id = artist.library_id and featured.artist_id = artist.id
         join library.local_albums album on album.id = featured.album_id
           and album.library_id = artist.library_id
+        {_split_album_group_join_sql(album_id="album.id", artist_id="artist.id")}
         where ({_visible_album_clause("album")}) and exists (
           select 1 from eligible_album_tracks eligible
           where eligible.library_id = album.library_id and eligible.album_id = album.id
@@ -9054,9 +9116,40 @@ def _root_gallery_membership_sql(*, candidate_albums_only: bool = False) -> str:
     """
 
 
+def _split_album_groups_cte_sql() -> str:
+    """Same-name artists MusicBrainz splits per album (D2 S2, "Amarok (Poland)"): each proven
+    album's group from the 0192 view. Only ``per_album`` artists are read, so every other
+    artist pays one probe of this small set and keeps its name."""
+    return """
+        split_album_groups as materialized (
+          select artist_groups.local_album_id as album_id,
+                 artist_groups.local_artist_id as artist_id,
+                 artist_groups.group_label,
+                 artist_groups.artist_mbid
+          from library.local_artist_musicbrainz_matches split_match
+          join library.local_album_artist_groups artist_groups
+            on artist_groups.library_id = split_match.library_id
+           and artist_groups.local_artist_id = split_match.local_artist_id
+          where split_match.state = 'per_album'
+            and split_match.library_id = (select library_id from bootstrap_context)
+            and starts_with(artist_groups.group_key, 'musicbrainz:')
+        )
+    """.strip()
+
+
+def _split_album_group_join_sql(*, album_id: str, artist_id: str) -> str:
+    """``artist_group``: the album's split group when ``artist_id`` owns it, else nulls;
+    the row's artist name is then ``coalesce(artist_group.group_label, <name>)``."""
+    return f"""
+        left join split_album_groups artist_group
+          on artist_group.album_id = {album_id}
+         and artist_group.artist_id = {artist_id}
+    """.strip()
+
+
 def _artist_musicbrainz_projection_columns_sql() -> str:
     return """
-          artist_match.artist_mbid::text as artist_mbid,
+          coalesce(artist_match.artist_mbid, artist_group.artist_mbid)::text as artist_mbid,
           musicbrainz_artist.canonical_name as artist_canonical_name,
           musicbrainz_artist.preferred_native_name as artist_native_name,
           musicbrainz_artist.discogs_artist_id as artist_discogs_artist_id,
@@ -9072,28 +9165,33 @@ def _artist_musicbrainz_projection_joins_sql(
     *,
     library_id: str,
     artist_id: str,
+    album_id: str,
 ) -> str:
+    # A split name's proven album takes its own MusicBrainz artist; the query defines
+    # split_album_groups (_split_album_groups_cte_sql).
+    artist_mbid = "coalesce(artist_match.artist_mbid, artist_group.artist_mbid)"
     return f"""
+        {_split_album_group_join_sql(album_id=album_id, artist_id=artist_id)}
         left join library.local_artist_musicbrainz_matches artist_match
           on artist_match.library_id = {library_id}
          and artist_match.local_artist_id = {artist_id}
          and artist_match.state = 'matched'
          and artist_match.artist_mbid is not null
         left join integration.musicbrainz_artists musicbrainz_artist
-          on musicbrainz_artist.mbid = artist_match.artist_mbid
+          on musicbrainz_artist.mbid = {artist_mbid}
         left join lateral (
           select
             (array_agg(countries.country_code order by countries.country_code))[1] as country_code,
             (array_agg(countries.country_name order by countries.country_code))[1] as country_name
           from integration.musicbrainz_artist_countries countries
-          where countries.artist_mbid = artist_match.artist_mbid
+          where countries.artist_mbid = {artist_mbid}
         ) artist_country on true
         left join lateral (
           select array_agg(
             display_genres.tag_name order by display_genres.display_rank
           ) as names
           from integration.musicbrainz_artist_display_genres display_genres
-          where display_genres.artist_mbid = artist_match.artist_mbid
+          where display_genres.artist_mbid = {artist_mbid}
             and display_genres.display_rank <= 3
         ) artist_genres on true
         left join library.local_artist_musicbrainz_matches split_match
@@ -9115,8 +9213,10 @@ def _artist_musicbrainz_projection_joins_sql(
              and identity.album_key = identity_album.album_key
             join integration.musicbrainz_artists identity_artist
               on identity_artist.mbid = identity.artist_mbid
-            -- The first test depends only on the outer row: other artists skip the scan.
+            -- The first tests depend only on the outer row: other artists, and a split
+            -- name's proven albums (their own artist above), skip the scan.
             where split_match.local_artist_id is not null
+              and artist_group.artist_mbid is null
               and identity_album.library_id = {library_id}
               and identity_album.artist_id = {artist_id}
             group by 1, 2, 3
@@ -9177,11 +9277,12 @@ def _root_sidebar_sql() -> str:
           where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
           limit 1
         ),
+        {_split_album_groups_cte_sql()},
         {_eligible_album_tracks_cte_sql()},
         artist_album_rows as (
           select distinct
             library.local_artists.id as artist_id,
-            library.local_artists.name as artist_name,
+            coalesce(artist_group.group_label, library.local_artists.name) as artist_name,
             coalesce(nullif(library.local_artists.sort_name, ''), library.local_artists.name) as sort_name,
             library.local_albums.id as album_id
           from library.local_artists
@@ -9196,18 +9297,23 @@ def _root_sidebar_sql() -> str:
           join eligible_album_tracks
             on eligible_album_tracks.library_id = library.local_albums.library_id
            and eligible_album_tracks.album_id = library.local_albums.id
+          {_split_album_group_join_sql(
+              album_id="library.local_albums.id",
+              artist_id="library.local_artists.id",
+          )}
         )
         select
           artist_id,
-          min(artist_name) as artist_name,
+          artist_name,
           min(sort_name) as sort_name,
           array_agg(distinct album_id order by album_id) as album_ids,
           count(distinct album_id)::integer as album_count
         from artist_album_rows
-        group by artist_id
+        -- A split name gives one row per proven group and one for its undecided albums.
+        group by artist_id, artist_name
         order by
-          coalesce(min(nullif(sort_name, '')), min(artist_name)),
-          min(artist_name);
+          coalesce(min(nullif(sort_name, '')), artist_name),
+          artist_name;
     """
 
 
@@ -9234,6 +9340,7 @@ def _selected_artist_sql() -> str:
             on bootstrap_context.library_id = library.local_artists.library_id
           where library.local_artists.artist_key = any(%(artist_keys)s::text[])
         ),
+        {_split_album_groups_cte_sql()},
         selected_artist_albums as (
           select distinct
             target_artists.id as artist_id,
@@ -9258,7 +9365,8 @@ def _selected_artist_sql() -> str:
         )
         select
           selected_artist_albums.artist_id,
-          selected_artist_albums.artist_name,
+          coalesce(artist_group.group_label, selected_artist_albums.artist_name) as artist_name,
+          artist_group.group_label as artist_group_label,
           selected_artist_albums.artist_sort_name,
           selected_artist_albums.featured_kind,
           selected_artist_albums.album_id,
@@ -9268,15 +9376,7 @@ def _selected_artist_sql() -> str:
           selected_artist_albums.album_cover_path,
           selected_artist_albums.album_metadata,
           selected_artist_albums.album_genre,
-          artist_match.artist_mbid::text as artist_mbid,
-          musicbrainz_artist.canonical_name as artist_canonical_name,
-          musicbrainz_artist.preferred_native_name as artist_native_name,
-          musicbrainz_artist.discogs_artist_id as artist_discogs_artist_id,
-          artist_match.credit_name as artist_credit_name,
-          artist_identities.identities as artist_identities,
-          coalesce(artist_country.country_name, artist_country.country_code)
-            as artist_country,
-          coalesce(artist_genres.names, array[]::text[]) as artist_genres,
+          {_artist_musicbrainz_projection_columns_sql()}
           library.local_tracks.id as track_id,
           library.local_tracks.track_key,
           library.local_tracks.title as track_title,
@@ -9297,6 +9397,7 @@ def _selected_artist_sql() -> str:
         {_artist_musicbrainz_projection_joins_sql(
             library_id="selected_artist_albums.library_id",
             artist_id="selected_artist_albums.artist_id",
+            album_id="selected_artist_albums.album_id",
         )}
         join library.local_tracks
           on library.local_tracks.library_id = selected_artist_albums.library_id
@@ -9346,6 +9447,7 @@ def _album_detail_sql() -> str:
           where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
           limit 1
         ),
+        __SPLIT_ALBUM_GROUPS__,
         legacy_scrobble_counts as (
           select
             integration.listen_history.track_key,
@@ -9536,6 +9638,9 @@ def _album_detail_sql() -> str:
           library.local_tracks.track_key;
     """
     return query.replace(
+        "__SPLIT_ALBUM_GROUPS__",
+        _split_album_groups_cte_sql(),
+    ).replace(
         "__ARTIST_MUSICBRAINZ_COLUMNS__",
         _artist_musicbrainz_projection_columns_sql(),
     ).replace(
@@ -9543,6 +9648,7 @@ def _album_detail_sql() -> str:
         _artist_musicbrainz_projection_joins_sql(
             library_id="library.local_artists.library_id",
             artist_id="library.local_artists.id",
+            album_id="library.local_albums.id",
         ),
     )
 
@@ -9559,6 +9665,7 @@ def _root_album_browse_sql() -> str:
           where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
           limit 1
         ),
+        {_split_album_groups_cte_sql()},
         {_eligible_album_tracks_cte_sql()},
         album_rows as (
           select distinct
@@ -9601,7 +9708,7 @@ def _root_album_browse_sql() -> str:
         )
         select
           album_rows.artist_id,
-          album_rows.artist_name,
+          coalesce(artist_group.group_label, album_rows.artist_name) as artist_name,
           album_rows.artist_sort_name,
           album_rows.featured_kind,
           album_rows.album_id,
@@ -9632,13 +9739,14 @@ def _root_album_browse_sql() -> str:
         {_artist_musicbrainz_projection_joins_sql(
             library_id="album_rows.library_id",
             artist_id="album_rows.artist_id",
+            album_id="album_rows.album_id",
         )}
         order by
           coalesce(
             nullif(album_rows.artist_sort_name, ''),
             album_rows.artist_name
           ),
-          album_rows.artist_name,
+          coalesce(artist_group.group_label, album_rows.artist_name),
           album_rows.album_release_year nulls last,
           album_rows.album_title,
           album_rows.album_key;
@@ -9708,6 +9816,7 @@ def _root_startup_payload_sql(artist_limit: int, *, artist_offset: int = 0) -> s
           where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
           limit 1
         ),
+        {_split_album_groups_cte_sql()},
         track_override_defaults as materialized (
           select distinct on (
             library.exception_overrides.library_id,
@@ -9761,12 +9870,14 @@ def _root_startup_payload_sql(artist_limit: int, *, artist_offset: int = 0) -> s
           select distinct
             library.local_artists.id as artist_id,
             library.local_artists.library_id,
-            library.local_artists.name as artist_name,
+            coalesce(artist_group.group_label, library.local_artists.name) as artist_name,
+            artist_group.group_label as artist_group_label,
             coalesce(
               nullif(library.local_artists.sort_name, ''),
               library.local_artists.name
             ) as sort_name,
             coalesce(
+              artist_group.group_label,
               nullif(
                 %(alias_to_canonical)s::jsonb ->> library.local_artists.name,
                 ''
@@ -9786,11 +9897,15 @@ def _root_startup_payload_sql(artist_limit: int, *, artist_offset: int = 0) -> s
           join eligible_album_ids
             on eligible_album_ids.library_id = library.local_albums.library_id
            and eligible_album_ids.album_id = library.local_albums.id
+          {_split_album_group_join_sql(
+              album_id="library.local_albums.id",
+              artist_id="library.local_artists.id",
+          )}
         ),
         root_sidebar_rows as (
           select
             artist_album_rows.artist_id,
-            min(artist_album_rows.artist_name) as artist_name,
+            artist_album_rows.artist_name,
             min(artist_album_rows.sort_name) as sort_name,
             array_agg(
               distinct artist_album_rows.album_id
@@ -9798,13 +9913,14 @@ def _root_startup_payload_sql(artist_limit: int, *, artist_offset: int = 0) -> s
             ) as album_ids,
             count(distinct artist_album_rows.album_id)::integer as album_count
           from artist_album_rows
-          group by artist_album_rows.artist_id
+          group by artist_album_rows.artist_id, artist_album_rows.artist_name
         ),
         visible_artists as (
           select distinct
             artist_album_rows.artist_id,
             artist_album_rows.library_id,
             artist_album_rows.artist_name,
+            artist_album_rows.artist_group_label,
             artist_album_rows.sort_name as artist_sort_name,
             artist_album_rows.canonical_artist_name
           from artist_album_rows
@@ -9864,6 +9980,12 @@ def _root_startup_payload_sql(artist_limit: int, *, artist_offset: int = 0) -> s
           join library.local_albums
             on library.local_albums.id = library.local_album_featured_artists.album_id
            and ({_visible_album_clause("library.local_albums")})
+          {_split_album_group_join_sql(
+              album_id="library.local_albums.id",
+              artist_id="preview_artists.artist_id",
+          )}
+          -- Each split group (and its name's undecided albums) keeps only its own albums.
+          where artist_group.group_label is not distinct from preview_artists.artist_group_label
         ),
         preview_eligible_album_tracks as materialized (
           select
@@ -9940,6 +10062,7 @@ def _root_startup_payload_sql(artist_limit: int, *, artist_offset: int = 0) -> s
           {_artist_musicbrainz_projection_joins_sql(
               library_id="matched_album_rows.library_id",
               artist_id="matched_album_rows.artist_id",
+              album_id="matched_album_rows.album_id",
           )}
           join track_rollups
             on track_rollups.album_id = matched_album_rows.album_id
@@ -10231,6 +10354,7 @@ def _selected_artist_preview_sql(
             on bootstrap_context.library_id = library.local_artists.library_id
           where library.local_artists.artist_key = any(%(artist_keys)s::text[])
         ),
+        {_split_album_groups_cte_sql()},
         preview_candidate_album_ids as materialized (
           select distinct
             library.local_albums.library_id,
@@ -10329,7 +10453,8 @@ def _selected_artist_preview_sql(
         )
         select
           matched_album_rows.artist_id,
-          matched_album_rows.artist_name,
+          coalesce(artist_group.group_label, matched_album_rows.artist_name) as artist_name,
+          artist_group.group_label as artist_group_label,
           matched_album_rows.artist_sort_name,
           matched_album_rows.featured_kind,
           matched_album_rows.album_id,
@@ -10346,6 +10471,7 @@ def _selected_artist_preview_sql(
         {_artist_musicbrainz_projection_joins_sql(
             library_id="matched_album_rows.library_id",
             artist_id="matched_album_rows.artist_id",
+            album_id="matched_album_rows.album_id",
         )}
         left join track_rollups
           on track_rollups.album_id = matched_album_rows.album_id
@@ -10383,6 +10509,7 @@ def _artist_preview_rows_sql(*, family_only: bool = False) -> str:
             on bootstrap_context.library_id = library.local_artists.library_id
           where library.local_artists.artist_key = any(%(artist_keys)s::text[])
         ),
+        {_split_album_groups_cte_sql()},
         search_candidate_album_ids as materialized (
           select distinct
             library.local_albums.library_id,
@@ -10437,7 +10564,8 @@ def _artist_preview_rows_sql(*, family_only: bool = False) -> str:
         )
         select
           matched_album_rows.artist_id,
-          matched_album_rows.artist_name,
+          coalesce(artist_group.group_label, matched_album_rows.artist_name) as artist_name,
+          artist_group.group_label as artist_group_label,
           matched_album_rows.artist_sort_name,
           matched_album_rows.featured_kind,
           matched_album_rows.album_id,
@@ -10454,6 +10582,7 @@ def _artist_preview_rows_sql(*, family_only: bool = False) -> str:
         {_artist_musicbrainz_projection_joins_sql(
             library_id="matched_album_rows.library_id",
             artist_id="matched_album_rows.artist_id",
+            album_id="matched_album_rows.album_id",
         )}
         left join track_rollups
           on track_rollups.album_id = matched_album_rows.album_id
@@ -10582,6 +10711,7 @@ def _search_preview_sql(
           where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
           limit 1
         ),
+        {_split_album_groups_cte_sql()},
         -- The tag and corrected titles are planned alone: inside a union with the series arm
         -- Postgres stops combining their trigram indexes and walks every album.
         album_tag_title_matches as materialized (
@@ -10866,10 +10996,10 @@ def _search_preview_sql(
               jsonb_agg(
                 jsonb_build_object(
                    'artist_id', credited_artists.id,
-                   'artist_name', credited_artists.name,
+                   'artist_name', coalesce(artist_group.group_label, credited_artists.name),
                    'artist_sort_name', credited_artists.sort_name,
                    'featured_kind', library.local_album_featured_artists.featured_kind,
-                   'artist_mbid', artist_match.artist_mbid::text,
+                   'artist_mbid', coalesce(artist_match.artist_mbid, artist_group.artist_mbid)::text,
                    'artist_canonical_name', musicbrainz_artist.canonical_name,
                    'artist_native_name', musicbrainz_artist.preferred_native_name,
                    'artist_discogs_artist_id', musicbrainz_artist.discogs_artist_id,
@@ -10914,6 +11044,7 @@ def _search_preview_sql(
              {_artist_musicbrainz_projection_joins_sql(
                  library_id="credited_artists.library_id",
                  artist_id="credited_artists.id",
+                 album_id="library.local_albums.id",
              )}
              where library.local_album_featured_artists.library_id = library.local_albums.library_id
               and library.local_album_featured_artists.album_id = library.local_albums.id
@@ -11003,7 +11134,7 @@ def _search_preview_sql(
             select
               'active'::text as search_partition,
               matched_album_rows.artist_id,
-              matched_album_rows.display_artist as artist_name,
+              coalesce(artist_group.group_label, matched_album_rows.display_artist) as artist_name,
               matched_album_rows.artist_sort_name,
               matched_album_rows.album_id,
               matched_album_rows.album_key,
@@ -11030,6 +11161,7 @@ def _search_preview_sql(
              {_artist_musicbrainz_projection_joins_sql(
                  library_id="matched_album_rows.library_id",
                  artist_id="matched_album_rows.artist_id",
+                 album_id="matched_album_rows.album_id",
              )}
              left join track_rollups
               on track_rollups.album_id = matched_album_rows.album_id

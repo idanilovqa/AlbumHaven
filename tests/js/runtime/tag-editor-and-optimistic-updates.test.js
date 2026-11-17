@@ -1237,7 +1237,7 @@ for (const scenario of [
   });
 }
 
-test('Album Details displays the physical track number, then filename number, before row position', () => {
+test('Album Details displays the tagged track number, then filename number, else no number (owner, 11-17)', () => {
   const context = loadHelper([]);
   const getDisplayNumber = context.getAlbumTrackDisplayNumber;
 
@@ -1256,7 +1256,8 @@ test('Album Details displays the physical track number, then filename number, be
         track_number: null,
       }, 8),
     ],
-    [7, 3, 9],
+    // A track with neither shows no number: a row position duplicated real numbers after a split (BUGFIX-16).
+    [7, 3, ''],
   );
 });
 

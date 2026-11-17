@@ -23742,7 +23742,7 @@ function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
       'track-playing': track.isPlaying ? 'true' : '',
     },
     cells: {
-      number: { content: `<span class="album-track-table__number-play"><span class="album-track-table__number">${escapeHtml(track.trackNumber || track.track_number || index + 1)}</span>${buildAlbumTrackPlayButtonHtml(track)}</span>` },
+      number: { content: `<span class="album-track-table__number-play"><span class="album-track-table__number">${escapeHtml('trackNumber' in track ? track.trackNumber : (track.track_number || index + 1))}</span>${buildAlbumTrackPlayButtonHtml(track)}</span>` },
       title: { content: titleHtml },
       path: { content: `<span class="album-track-table__path" title="${escapeHtml(displayPath)}">${escapeHtml(displayPath)}</span>` },
       problem: { content: problemHtml },
@@ -40862,7 +40862,8 @@ function getAlbumTrackDisplayNumber(track, index) {
   const filenameTrackNumber = getPositiveAlbumTrackSortNumber(filenameMatch?.[1]);
   if (filenameTrackNumber !== null) return filenameTrackNumber;
 
-  return index + 1;
+  // Owner (11-17): no number rather than the row position, which duplicated real numbers after a split.
+  return '';
 }
 
 // A disc marker in the file's folder name: "CD1", "cd2 (bonus)", "Disc 2", "Adam & Eve CD2".

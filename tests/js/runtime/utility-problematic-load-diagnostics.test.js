@@ -440,6 +440,12 @@ test('a Settings-intent prefetch does not page before the opened tab reads the c
     getUtilityModalElements() { return { overlay }; },
     // Run deferred work, as the browser would, so a scheduled Artist page is not hidden.
     scheduleBrowserTimeout(callback) { setImmediate(callback); return 1; },
+    // Every open paint reaches the end of a short list, as the virtual list's onNearEnd does.
+    renderUtilityModalContent() {
+      if (overlay.hidden) return;
+      void context.loadNextProblematicFilesPage();
+      void context.loadNextProblematicArtistPage();
+    },
     async fetch(url) {
       requested.push(String(url));
       const bounded = String(url).includes('limit=50');
@@ -450,10 +456,9 @@ test('a Settings-intent prefetch does not page before the opened tab reads the c
   context.prefetchProblematicFilesForSettingsIntent();
   await context.state.utility.loadPromise;
   await new Promise((resolve) => setImmediate(resolve));
-  // The modal opens after the bounded page arrived; its first render reaches the list end.
+  // The modal opens after the bounded page arrived; its paints reach the list end.
   overlay.hidden = false;
-  await context.loadNextProblematicFilesPage();
-  await context.loadNextProblematicArtistPage();
+  context.renderUtilityModalContent();
   await context.loadActiveUtilityTab(true);
   await new Promise((resolve) => setImmediate(resolve));
 

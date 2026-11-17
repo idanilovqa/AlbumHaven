@@ -348,21 +348,29 @@ def resolve_configured_media_path(
     return unique_matches[0]
 
 
-def relative_parts_within_roots(config: dict[str, object], raw_path: str) -> tuple[dict[str, object], tuple[str, ...]] | None:
-    resolved = resolve_configured_media_path(config, raw_path)
+def relative_parts_within_roots(
+    config: dict[str, object],
+    raw_path: str,
+    *,
+    roots: list[dict[str, object]] | None = None,
+) -> tuple[dict[str, object], tuple[str, ...]] | None:
+    """Pass `roots` from one `get_library_roots` call when resolving many paths."""
+    roots = get_library_roots(config) if roots is None else roots
+    root_paths = [Path(str(root["path"])).resolve(strict=False) for root in roots]
+    resolved = resolve_configured_media_path(config, raw_path, configured_root_paths=root_paths)
     if resolved is None:
         return None
-    for root in get_library_roots(config):
-        root_path = Path(str(root["path"])).resolve(strict=False)
+    for root, root_path in zip(roots, root_paths):
         try:
             rel_parts = resolved.relative_to(root_path).parts
-        except Exception:
+        except ValueError:
             continue
         return root, rel_parts
     return None
 
 
 def resolve_album_open_directories(config: dict[str, object], album_payload: dict[str, object]) -> list[Path]:
+    root_paths = iter_library_root_paths(config)
     preview_directories = album_payload.get("open_directory_paths") if isinstance(album_payload, dict) else None
     if isinstance(preview_directories, list):
         resolved_preview_dirs: list[Path] = []
@@ -372,6 +380,7 @@ def resolve_album_open_directories(config: dict[str, object], album_payload: dic
                 config,
                 str(raw_directory or ""),
                 require_file=False,
+                configured_root_paths=root_paths,
             )
             if resolved_directory is None:
                 continue
@@ -394,7 +403,11 @@ def resolve_album_open_directories(config: dict[str, object], album_payload: dic
     for track in tracks:
         if not isinstance(track, dict):
             continue
-        resolved_track = resolve_configured_media_path(config, str(track.get("path") or ""))
+        resolved_track = resolve_configured_media_path(
+            config,
+            str(track.get("path") or ""),
+            configured_root_paths=root_paths,
+        )
         if resolved_track is None:
             continue
 

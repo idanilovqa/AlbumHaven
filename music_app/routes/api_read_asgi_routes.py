@@ -969,7 +969,7 @@ def _query_requires_file_backed_search_semantics(query: str) -> bool:
 
 
 @router.get("/home-data")
-async def home_data(request: Request) -> JSONResponse:
+def home_data(request: Request) -> JSONResponse:
     _hydrate_cached_library_for_asgi(request)
     request_started_at = time.perf_counter()
     library_state = _library_state(request)
@@ -996,10 +996,7 @@ async def home_data(request: Request) -> JSONResponse:
                 if omit_sidebar
                 else repository.build_root_sidebar_payload
             )
-            root_sidebar_payload = await run_in_threadpool(
-                payload_builder,
-                query_params=request.query_params,
-            )
+            root_sidebar_payload = payload_builder(query_params=request.query_params)
             authoritative_fields = [
                 "artist_count",
                 "album_count",
@@ -1167,11 +1164,11 @@ async def album_details(request: Request) -> JSONResponse:
         _project_missing_album_actions_for_request(request, payload)
         return JSONResponse({"ok": True, "album": payload})
 
-    _hydrate_cached_library_for_asgi(request)
-    payload = build_album_detail_payload(
+    payload = await run_in_threadpool(
+        _build_runtime_album_detail_payload,
+        request,
         album_key,
         client_surface_class=client_surface_class,
-        config=_app_config(request),
         library_state=browse_state,
     )
     if payload is None:
@@ -1180,6 +1177,22 @@ async def album_details(request: Request) -> JSONResponse:
         _apply_transient_scan_album_rating_overlays(request, [payload])
     _project_missing_album_actions_for_request(request, payload)
     return JSONResponse({"ok": True, "album": payload})
+
+
+def _build_runtime_album_detail_payload(
+    request: Request,
+    album_key: str,
+    *,
+    client_surface_class: str,
+    library_state: dict[str, object],
+) -> dict[str, object] | None:
+    _hydrate_cached_library_for_asgi(request)
+    return build_album_detail_payload(
+        album_key,
+        client_surface_class=client_surface_class,
+        config=_app_config(request),
+        library_state=library_state,
+    )
 
 
 def _should_use_postgres_album_detail_path(

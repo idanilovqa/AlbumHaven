@@ -21,6 +21,11 @@ def app(tmp_path, monkeypatch):
     return runtime_app_from_asgi_app(create_test_asgi_app(tmp_path, monkeypatch))
 
 
+def _assert_off_event_loop() -> None:
+    with pytest.raises(RuntimeError):
+        asyncio.get_running_loop()
+
+
 def _make_asgi_app():
     from music_app import create_asgi_app
 
@@ -1406,17 +1411,6 @@ def test_asgi_home_data_uses_postgres_root_sidebar_as_authoritative_state(app, a
     from music_app.routes import api_read_asgi_routes as asgi_read_routes
 
     repository_calls: list[dict[str, object]] = []
-    threadpool_calls: list[tuple[object, tuple[object, ...], dict[str, object]]] = []
-    threadpool_active = False
-
-    async def fake_run_in_threadpool(function, *args, **kwargs):
-        nonlocal threadpool_active
-        threadpool_calls.append((function, args, kwargs))
-        threadpool_active = True
-        try:
-            return function(*args, **kwargs)
-        finally:
-            threadpool_active = False
 
     def fake_build_home_payload(**_kwargs) -> dict[str, object]:
         return {
@@ -1435,7 +1429,7 @@ def test_asgi_home_data_uses_postgres_root_sidebar_as_authoritative_state(app, a
             assert config is app.config
 
         def build_root_sidebar_payload(self, *, query_params=None):
-            assert threadpool_active is True
+            _assert_off_event_loop()
             repository_calls.append(
                 {
                     "gallery_display": query_params.get("gallery_display"),
@@ -1457,12 +1451,6 @@ def test_asgi_home_data_uses_postgres_root_sidebar_as_authoritative_state(app, a
     monkeypatch.setattr(asgi_read_routes, "_hydrate_cached_library_for_asgi", lambda _request: None)
     monkeypatch.setattr(asgi_read_routes, "build_home_payload", fake_build_home_payload)
     monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FakePostgresSidebarRepository)
-    monkeypatch.setattr(
-        asgi_read_routes,
-        "run_in_threadpool",
-        fake_run_in_threadpool,
-        raising=False,
-    )
     monkeypatch.setattr(
         asgi_read_routes,
         "select_runtime_persistence_adapter",
@@ -1501,11 +1489,6 @@ def test_asgi_home_data_uses_postgres_root_sidebar_as_authoritative_state(app, a
             "categories": ["main_library", "new_arrivals"],
         }
     ]
-    assert len(threadpool_calls) == 1
-    threadpool_function, threadpool_args, threadpool_kwargs = threadpool_calls[0]
-    assert threadpool_function.__name__ == "build_root_sidebar_payload"
-    assert threadpool_args == ()
-    assert threadpool_kwargs["query_params"].get("gallery_display") == "covers"
 
 
 def test_asgi_home_data_omit_sidebar_keeps_postgres_counts_without_readding_sidebar(
@@ -1516,11 +1499,6 @@ def test_asgi_home_data_omit_sidebar_keeps_postgres_counts_without_readding_side
     from music_app.routes import api_read_asgi_routes as asgi_read_routes
 
     repository_queries: list[dict[str, object]] = []
-    threadpool_functions: list[str] = []
-
-    async def fake_run_in_threadpool(function, *args, **kwargs):
-        threadpool_functions.append(function.__name__)
-        return function(*args, **kwargs)
 
     def fake_build_home_payload(**kwargs) -> dict[str, object]:
         assert kwargs["query_args"].get("omit_sidebar") == "1"
@@ -1539,6 +1517,7 @@ def test_asgi_home_data_omit_sidebar_keeps_postgres_counts_without_readding_side
             raise AssertionError("omit_sidebar must not build the full Postgres sidebar payload")
 
         def build_root_counts_payload(self, *, query_params=None):
+            _assert_off_event_loop()
             repository_queries.append(
                 {
                     "omit_sidebar": query_params.get("omit_sidebar"),
@@ -1555,12 +1534,6 @@ def test_asgi_home_data_omit_sidebar_keeps_postgres_counts_without_readding_side
     monkeypatch.setattr(asgi_read_routes, "_hydrate_cached_library_for_asgi", lambda _request: None)
     monkeypatch.setattr(asgi_read_routes, "build_home_payload", fake_build_home_payload)
     monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FakePostgresSidebarRepository)
-    monkeypatch.setattr(
-        asgi_read_routes,
-        "run_in_threadpool",
-        fake_run_in_threadpool,
-        raising=False,
-    )
     monkeypatch.setattr(
         asgi_read_routes,
         "select_runtime_persistence_adapter",
@@ -1596,7 +1569,6 @@ def test_asgi_home_data_omit_sidebar_keeps_postgres_counts_without_readding_side
             "categories": ["main_library", "new_arrivals"],
         }
     ]
-    assert threadpool_functions == ["build_root_counts_payload"]
 
 
 def test_asgi_home_data_preserves_transient_sidebar_while_scan_is_active(app, asgi_app, monkeypatch):
@@ -5724,3 +5696,62 @@ def test_asgi_gallery_pending_projection_returns_retryable_response(app, asgi_ap
     assert _decode_json(body)["code"] == "gallery_projection_pending"
     assert headers["retry-after"] == "1"
     assert headers["cache-control"] == "no-store"
+
+
+@pytest.mark.parametrize(
+    ("path", "query", "builder_name"),
+    [
+        ("/home-data", None, "build_home_payload"),
+        ("/album-details", {"album_key": "non-album::Synthetic Artist"}, "build_album_detail_payload"),
+    ],
+)
+def test_asgi_runtime_payload_builds_keep_health_responsive(app, asgi_app, monkeypatch, path, query, builder_name):
+    from music_app.routes import api_read_asgi_routes as asgi_read_routes
+    from tests.py.asgi_testing import run_asgi_request_async
+
+    entered = Event()
+    release = Event()
+    finished = Event()
+    hydrated = Event()
+
+    def hydrate_off_loop(_library_state, _config, **_kwargs):
+        _assert_off_event_loop()
+        hydrated.set()
+        return False
+
+    def blocked_builder(*_args, **_kwargs):
+        _assert_off_event_loop()
+        entered.set()
+        try:
+            release.wait(timeout=3)
+            return {"kind": "home", "key": "non-album::Synthetic Artist"}
+        finally:
+            finished.set()
+
+    asgi_app.state.library_state = {**app.library_state, "albums": [], "scan_in_progress": False}
+    monkeypatch.setattr(asgi_read_routes, "hydrate_library_state_for_config", hydrate_off_loop)
+    monkeypatch.setattr(asgi_read_routes, builder_name, blocked_builder)
+    monkeypatch.setattr(
+        asgi_read_routes,
+        "select_runtime_persistence_adapter",
+        lambda seam_id, _config: SimpleNamespace(seam_id=seam_id, effective_backend="memory"),
+    )
+
+    async def exercise():
+        request_task = asyncio.create_task(run_asgi_request_async(asgi_app, "GET", path, query=query))
+        try:
+            assert await asyncio.to_thread(entered.wait, 3), "Payload build did not start"
+            status, _headers, _body = await asyncio.wait_for(
+                run_asgi_request_async(asgi_app, "GET", "/health"), timeout=1,
+            )
+            assert status == 200
+            assert not finished.is_set(), "Health could not respond until the payload build finished"
+        finally:
+            release.set()
+            response = await asyncio.wait_for(request_task, timeout=5)
+        return response
+
+    status, _headers, _body = asyncio.run(exercise())
+
+    assert status == 200
+    assert hydrated.is_set()

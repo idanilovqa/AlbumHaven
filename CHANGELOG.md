@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.18 - 2026-11-17
+
+- The server no longer freezes while it builds the library home view (`/home-data`, opened by the phone layout's library home and by the Android app). It read the library root settings from the database twice for every loose or non-album track; it now reads them once per build, and the home, News and file-backed album-detail payloads are built off the server's event loop, so other requests keep being answered meanwhile.
+
 ## 0.11.17 - 2026-11-17
 
 - Cover previews kept in app data no longer restart the preview relocation worker. Before, every such preview started a full relocation pass that rescanned all previews and copied the preview into the album folder, which slowed gallery loading and artist jumps.

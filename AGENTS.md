@@ -64,6 +64,31 @@ operate, or contribute to the application.
   the absence of clipped leading content after layout settles.
 - Report security problems through the process in `SECURITY.md`.
 
+## Where the mandatory regression gates run
+
+- Run the search, HTML reload, Edit Tags, Problematic Files, and
+  bounded-interaction gates on GitHub-hosted runners, not on the owner's
+  machine. The bounded-interaction gate joins once
+  `npm run test:bounded-interactions` is on the tested ref. Push the exact
+  commit, then start
+  `gh workflow run heavy-gates.yml --ref main -f ref=<commit-sha> -f gates=<gates>`
+  with a comma-separated gate list. Wait with `gh run watch`; read failures
+  with `gh run view --log-failed`, the job summary timing table, and the
+  `heavy-gate-<gate>` artifact. Locally, `scripts/run-regression-gate.ps1
+  -Gate <gate>` runs the same stages.
+- A hosted run satisfies a gate only when that gate's job succeeded on the
+  commit being handed off. It uses isolated PostgreSQL 17, released synthetic
+  fixtures, and the `local` timing contract. It is not the pull-request
+  pipeline: it never records review coverage or authorizes merge or
+  publication.
+- Run locally, under the machine-wide heavy-job lock, only checks that need
+  the owner's real library or real MP3 media and full-size-library
+  measurements. Do not take the heavy-job lock for a gate the hosted workflow
+  covers.
+- Hosted runs keep every budget, grace band, and hard ceiling. Do not switch
+  timing contracts, relax budgets, or rerun until green; diagnose a hosted
+  performance failure exactly like a local one.
+
 ## Mandatory search regression gate
 
 - Immediately run `npm run test:search-regressions` after changing search
@@ -231,6 +256,8 @@ The intended behavior is basically: worker still running → keep waiting
   250 or more lines, a binary functional change, an unavailable baseline, or
   `ci:full-review` uses whole-PR review.
 - Reproduce and verify failing cases locally, then push directly to the complete review-first CI pipeline. Use focused hosted tests only for unusually difficult failures or CI-specific infrastructure diagnosis; state the reason and return to full CI as soon as the focused failure is fixed. Keep native area tags and focused-selection tooling available. A focused result never authorizes merge or publication.
+  The Heavy Regression Gates workflow in "Where the mandatory regression gates
+  run" is the normal way to run those gates and is not this focused exception.
   If the focused exception is needed, follow the authenticated PR-head promotion procedure in the private E2E investigation workflow. Never use `workflow_dispatch` for hosted reviews or assume a `GITHUB_TOKEN` label write emits a new workflow event.
 - Only a successful full pipeline may record review coverage, authorize merge,
   or authorize publication. Focused verification never weakens or replaces an

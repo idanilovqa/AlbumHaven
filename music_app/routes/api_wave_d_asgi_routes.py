@@ -238,6 +238,14 @@ def _resolve_distributed_album_context(
     )
 
 
+def _resolve_cover_album_context(
+    config: Mapping[str, object],
+    album: Mapping[str, object],
+) -> CoverAlbumContext | None:
+    # Owner (11-16): an album whose tracks sit in part folders ("Часть 1".."Часть 4") is still one album.
+    return resolve_album_context(config, album) or _resolve_distributed_album_context(config, album)
+
+
 async def _resolve_album_payload_context(
     config: Mapping[str, object],
     album: Mapping[str, object],
@@ -255,9 +263,9 @@ async def _resolve_album_payload_context(
             paths = _album_track_paths(normalized_album)
             root = await run_in_threadpool(inventory.repository.root_for_tracks, paths)
             return CoverAlbumContext(root, paths) if paths else None
-        return resolve_album_context(config, normalized_album) or (
-            _resolve_distributed_album_context(config, normalized_album) if distributed else None
-        )
+        if distributed:
+            return _resolve_cover_album_context(config, normalized_album)
+        return resolve_album_context(config, normalized_album)
 
     repository = AlbumCoverCandidateSnapshotRepository(config)
     fallback_paths = {
@@ -1040,7 +1048,7 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
         _album_track_paths(album)
         or _cover_lookup_task_track_paths(task_payload)
     )
-    album_context = resolve_album_context(config, queued_album)
+    album_context = _resolve_cover_album_context(config, queued_album)
     if task_payload:
         queued_album, album_context = await _resolve_album_payload_context(
             config,
@@ -1108,7 +1116,7 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
             return current_album, current_track_paths
         prepared_album = current_album
         try:
-            album_context = resolve_album_context(config, prepared_album)
+            album_context = _resolve_cover_album_context(config, prepared_album)
             album_id = _album_id(prepared_album)
             repository = PostgresLibraryBrowseRepository(config)
             if album_id is not None:
@@ -1124,7 +1132,7 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
                 )
                 if refreshed_album is not None:
                     prepared_album = _album_with_context_tracks(refreshed_album)
-                    album_context = resolve_album_context(config, prepared_album)
+                    album_context = _resolve_cover_album_context(config, prepared_album)
                 elif destination_album_id > 0:
                     album_context = None
             if album_context is None and current_track_paths:
@@ -1133,7 +1141,7 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
                 )
                 for refreshed_album in current_albums:
                     candidate = _album_with_context_tracks(refreshed_album)
-                    candidate_context = resolve_album_context(config, candidate)
+                    candidate_context = _resolve_cover_album_context(config, candidate)
                     if (
                         candidate_context is not None
                         and current_track_paths <= candidate_context.track_paths

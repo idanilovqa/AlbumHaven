@@ -3237,12 +3237,20 @@ async function loadCoverLookupTasksForPolling(options = {}) {
   }
 }
 
+function hasActiveCoverLookupWork() {
+  const active = (status) => ['pending', 'running'].includes(String(status || ''));
+  return (state.coverLookup.tasks || []).some((task) => active(task?.status))
+    || Number(state.coverLookup.notificationCounts?.active_count || 0) > 0
+    || active(state.coverLookup.modal?.candidateSnapshot?.status);
+}
+
 function ensureCoverLookupPolling() {
   if (state.coverLookup.pollingTimer) return;
   state.coverLookup.pollingTimer = window.setInterval(async () => {
     if (coverLookupPollInFlight) return;
     const modalOpen = !document.getElementById('cover-lookup-modal')?.hidden;
-    if (!modalOpen) {
+    // Owner (11-16): only running work needs the fast poll; back-to-back polls slowed every open lookup.
+    if (!modalOpen || !hasActiveCoverLookupWork()) {
       coverLookupBackgroundPollTicks += 1;
       if (coverLookupBackgroundPollTicks < 25) return;
       coverLookupBackgroundPollTicks = 0;

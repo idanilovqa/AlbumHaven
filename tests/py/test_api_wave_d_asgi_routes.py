@@ -5858,3 +5858,62 @@ def test_asgi_cover_saves_persist_off_the_event_loop(app, monkeypatch):
             pass
     assert len(persistence_threads) == 2
     assert loop_thread not in persistence_threads
+
+
+def test_cover_lookup_start_prepares_album_split_across_part_folders(app, monkeypatch):
+    # Owner (11-16): Последнее Испытание keeps its tracks in "Часть 1".."Часть 4"; its lookup failed with
+    # "Album does not contain any tracks" because preparing it only accepted a single track folder.
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+
+    album_folder = (app.config["MUSIC_DIR"] / "Artist" / "2009 - Album").resolve()
+    track_paths = [(album_folder / f"Часть {part}" / f"0{part}.mp3").resolve() for part in (1, 2)]
+    for track_path in track_paths:
+        track_path.parent.mkdir(parents=True, exist_ok=True)
+        track_path.write_bytes(b"track")
+    album = {
+        **_album_payload(track_paths[0]),
+        "album_id": 5001,
+        "key": "artist::album",
+        "tracks": [{"path": str(path)} for path in track_paths],
+    }
+    queued = []
+
+    class Reservation:
+        def release(self):
+            pass
+
+    class Repository:
+        def __init__(self, _config):
+            pass
+
+        def build_album_detail_payload_by_id(self, album_id, *, client_surface_class=None):
+            assert album_id == 5001
+            return album
+
+    def queue_lookup(queued_album, queued_paths, _manual_urls, **kwargs):
+        queued.append((queued_album, queued_paths, kwargs.get("prepare")))
+        return "task-1"
+
+    monkeypatch.setattr(
+        asgi_routes,
+        "acquire_structural_tag_edit_reservation",
+        lambda _keys, *, cancel_event=None: Reservation(),
+    )
+    monkeypatch.setattr(asgi_routes, "PostgresLibraryBrowseRepository", Repository)
+    monkeypatch.setattr(asgi_routes, "latest_structural_tag_edit_destination", lambda *_a, **_k: None)
+    monkeypatch.setattr(asgi_routes, "queue_cover_lookup_task", queue_lookup)
+    monkeypatch.setattr(asgi_routes, "cover_lookup_result", lambda task_id: {"id": task_id, "status": "queued"})
+    monkeypatch.setattr(asgi_routes, "serialize_cover_lookup_task_payload", lambda payload: payload)
+    monkeypatch.setattr(asgi_routes, "log_app_event", lambda *_args, **_kwargs: None)
+
+    status, _headers, body = _run_asgi_request(
+        _make_wave_d_app(app),
+        "POST",
+        "/utilities/cover-lookup/start",
+        json_body={"album": album, "manual_urls": []},
+    )
+
+    assert status == 200, body
+    prepared_album, prepared_paths = queued[0][2](queued[0][0], queued[0][1], Event())
+    assert prepared_paths == {str(path) for path in track_paths}
+    assert prepared_album["album_id"] == 5001

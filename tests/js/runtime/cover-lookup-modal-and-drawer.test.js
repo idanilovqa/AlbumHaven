@@ -9520,3 +9520,54 @@ require('node:test')('UI-14: art held by the second artbox is dimmed with the ho
 });
 
 
+
+;(async () => {
+  // Owner (11-16): an open Cover Look Up with nothing running must not poll the task list back to back; the poll
+  // slowed every gallery answer. Idle, it keeps the background cadence; a running lookup still polls at once.
+  const intervalCalls = [];
+  const requestUrls = [];
+  const context = loadHelper({
+    window: {
+      setInterval(callback, delay) {
+        intervalCalls.push({ callback, delay });
+        return intervalCalls.length;
+      },
+      clearInterval() {},
+    },
+    document: {
+      getElementById: (id) => (id === 'cover-lookup-modal' ? { hidden: false } : null),
+    },
+    fetch: async (url) => {
+      requestUrls.push(url);
+      return { ok: true, json: async () => ({ ok: true, tasks: [], total_count: 3, active_count: 0, finished_count: 3 }) };
+    },
+    mergeCoverLookupTasksWithNotifications: (tasks) => tasks,
+    showToast: () => {},
+  });
+  context.renderCoverLookupModal = () => {};
+  context.renderCoverLookupDrawer = () => {};
+  context.applyCoverLookupTaskUpdates = () => {};
+  context.stopCoverLookupPollingIfIdle = () => {};
+  context.state.coverLookup.modal = {
+    album: { id: 45, tracks: [{ path: 'C:/music/idle.flac' }] },
+    taskId: 'finished-task',
+    candidateSnapshot: { status: 'completed', search_generation: 'finished-task' },
+    possibleMatches: [],
+    selectedRemoteId: '',
+  };
+  context.state.coverLookup.tasks = [{ id: 'finished-task', status: 'completed' }];
+  const taskPolls = () => requestUrls.filter((url) => url.startsWith('/utilities/cover-lookup/tasks?') && url.includes('active_only=true')).length;
+
+  context.ensureCoverLookupPolling();
+  for (let tick = 0; tick < 24; tick += 1) await intervalCalls[0].callback();
+  assert.equal(taskPolls(), 0, 'an idle open lookup waits for the background cadence');
+  await intervalCalls[0].callback();
+  assert.equal(taskPolls(), 1, 'the background cadence still notices new notifications');
+
+  context.state.coverLookup.tasks = [{ id: 'finished-task', status: 'running' }];
+  await intervalCalls[0].callback();
+  assert.equal(taskPolls(), 2, 'a running lookup polls on the next tick');
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

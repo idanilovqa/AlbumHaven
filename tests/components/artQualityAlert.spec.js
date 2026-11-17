@@ -89,3 +89,35 @@ test('an expanded SmallAlert shows its whole message, wrapping instead of cuttin
   expect(fit.clipped).toBe(false);
   expect(fit.right).toBeLessThanOrEqual(fit.viewport);
 });
+
+test('a SmallAlert expands only horizontally: its height never grows past its final size (owner, 11-16)', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.setContent('<!doctype html><html><body style="margin:0;padding:16px;background:#101a29;color:#eef3fa"><div id="host" style="display:flex;flex-direction:column;align-items:flex-start;gap:16px"></div></body></html>');
+  await page.addStyleTag({ path: path.join(staticRoot, 'css', 'runtime/alert-components.css') });
+  await page.addScriptTag({ content: "function escapeHtml(v){return String(v ?? '').replaceAll('\"','&quot;');}" });
+  await page.addScriptTag({ path: path.join(staticRoot, 'js/runtime', 'alert-components.js') });
+  await page.evaluate(() => {
+    const host = document.getElementById('host');
+    host.insertAdjacentHTML('beforeend', buildSmallAlertHtml({ severity: 'error', focusable: true, className: 'short-alert', message: 'Album does not contain any tracks' }));
+    host.insertAdjacentHTML('beforeend', buildSmallAlertHtml({ severity: 'warning', focusable: true, className: 'long-alert',
+      message: 'Some of these covers could not be listed because a folder is busy; the list refreshes on its own.' }));
+  });
+  for (const [selector, lines] of [['.short-alert', 1], ['.long-alert', 2]]) {
+    const heights = await page.locator(selector).evaluate(async (node) => {
+      const samples = [];
+      node.focus();
+      const started = performance.now();
+      while (performance.now() - started < 400) {
+        samples.push(node.getBoundingClientRect().height);
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+      }
+      return samples;
+    });
+    const final = heights.at(-1);
+    expect(Math.max(...heights), `${selector} heights ${heights.join(',')}`).toBeLessThanOrEqual(final + 0.5);
+    if (lines === 1) expect(final).toBeCloseTo(30, 0);
+    else expect(final).toBeGreaterThan(30);
+    const widths = await page.locator(selector).evaluate((node) => node.getBoundingClientRect().width);
+    expect(widths).toBeGreaterThan(150);
+  }
+});

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -222,8 +223,6 @@ class _CountingClient:
 
 
 def test_one_series_count_serves_every_album_and_a_failure_rests_the_rest():
-    from datetime import datetime, timezone
-
     from music_app.services.musicbrainz_release_identity import MusicBrainzAlbumReleaseProcessor
 
     # However many albums share these series, the repository names each due series once.
@@ -274,3 +273,62 @@ def test_a_list_or_chart_name_is_featured_in(name):
     "Vinyl Classics", "Red Hot Chili Peppers Archive"])
 def test_a_band_series_or_a_lookalike_word_is_not(name):
     assert not _list_name_pattern().search(name)
+
+
+# The owner's kind (owner 2026-11-17, 5B): Series, Featured In or the MusicBrainz default ------
+
+MARKED_AT = datetime(2026, 11, 17, tzinfo=timezone.utc)
+
+
+class _OwnerKindConnection:
+    def __init__(self, row):
+        self.row, self.calls = row, []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+    def execute(self, sql, params):
+        self.calls.append((sql, params))
+        return self
+
+    def fetchone(self):
+        return self.row
+
+
+def _owner_kind_repository(row):
+    from music_app.services.musicbrainz_release_identity_postgres import MusicBrainzReleaseIdentityPostgresRepository
+
+    connection = _OwnerKindConnection(row)
+    return MusicBrainzReleaseIdentityPostgresRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://isolated"}, connect=lambda _url: connection), connection
+
+
+@pytest.mark.parametrize("owner_kind", ["series", "featured_in", None])
+def test_the_owners_kind_is_written_and_a_hidden_series_is_left_alone(owner_kind):
+    row = {"mbid": COLOSSUS, "kind": owner_kind or "series", "owner_kind": owner_kind}
+    repository, connection = _owner_kind_repository(row)
+
+    assert repository.set_series_owner_kind(mbid=COLOSSUS, owner_kind=owner_kind,
+                                            observed_at=MARKED_AT) == row
+    [(sql, params)] = connection.calls
+    assert re.search(r"set owner_kind = %\(owner_kind\)s", sql)
+    assert "coalesce(owner_kind, computed_kind) <> 'hidden'" in sql
+    assert (params["mbid"], params["owner_kind"]) == (COLOSSUS, owner_kind)
+
+
+def test_an_unknown_or_hidden_series_is_none():
+    repository, _connection = _owner_kind_repository(None)
+    assert repository.set_series_owner_kind(mbid=COLOSSUS, owner_kind="series",
+                                            observed_at=MARKED_AT) is None
+
+
+@pytest.mark.parametrize("owner_kind", ["hidden", "Featured In", ""])
+def test_hidden_or_any_other_kind_is_never_written(owner_kind):
+    repository, connection = _owner_kind_repository(None)
+    with pytest.raises(ValueError):
+        repository.set_series_owner_kind(mbid=COLOSSUS, owner_kind=owner_kind,
+                                         observed_at=MARKED_AT)
+    assert connection.calls == []

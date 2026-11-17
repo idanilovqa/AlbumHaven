@@ -100,6 +100,7 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/api/musicbrainz/corrections/albums/{action}"): "library.metadata_matches.review",
     ("POST", "/api/musicbrainz/corrections/kinds/{kind}/approve"): "library.metadata_matches.review",
     ("PUT", "/api/musicbrainz/corrections/settings"): "library.metadata_matches.review",
+    ("PUT", "/api/musicbrainz/series/{mbid}/kind"): "library.metadata_matches.review",
     ("GET", "/utilities/rules"): "library.rules.read",
     ("GET", "/utilities/log-history"): "library.logs.read",
     ("POST", "/utilities/log-history/export"): "library.logs.export",

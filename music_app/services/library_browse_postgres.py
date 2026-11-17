@@ -2061,10 +2061,12 @@ class PostgresLibraryBrowseRepository:
         grouped: dict[str, list[Mapping[str, object]]] = {}
         for row in rows:
             grouped.setdefault(str(row["series_mbid"]), []).append(row)
-        # Provisional (owner 2026-11-15, until mockup batch 2 settles the grouping): the tree
-        # lists real series and Featured In together, by name.
+        # The tree groups them by kind (owner 2026-11-17, 4B); the owner's own choice, if any,
+        # lets its menu offer the MusicBrainz default back (5B).
         sidebar = [{"mbid": mbid, "name": series_rows[0]["series_name"],
-                    "count": len({row["album_id"] for row in series_rows})}
+                    "count": len({row["album_id"] for row in series_rows}),
+                    "kind": _series_projection(series_rows[0])["kind"],
+                    "owner_kind": series_rows[0]["series_owner_kind"]}
                    for mbid, series_rows in grouped.items()]
         artist_groups = []
         for mbid, series_rows in grouped.items():
@@ -8458,7 +8460,8 @@ def _series_album_rows_sql() -> str:
           group by eligible_album_tracks.album_id
         )
         select series.mbid::text as series_mbid, series.name as series_name, series.series_type,
-               coalesce(series.owner_kind, series.computed_kind) as series_kind, artists.id as artist_id, artists.name as artist_name, artists.sort_name as artist_sort_name,
+               coalesce(series.owner_kind, series.computed_kind) as series_kind, series.owner_kind as series_owner_kind,
+               artists.id as artist_id, artists.name as artist_name, artists.sort_name as artist_sort_name,
                'owner' as featured_kind, albums.id as album_id, albums.album_key, albums.title as album_title,
                albums.release_year as album_release_year, albums.cover_path as album_cover_path,
                albums.metadata as album_metadata, track_rollups.track_count, track_rollups.total_duration_seconds

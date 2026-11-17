@@ -1131,6 +1131,8 @@ async def album_details(request: Request) -> JSONResponse:
                 client_surface_class=client_surface_class,
             )
         if payload is None:
+            # Only a notification for a previous identity asks which split release it meant;
+            # a gallery open still follows a single successor but never gets the chooser.
             if lineage is None:
                 try:
                     lineage = await run_in_threadpool(
@@ -1140,16 +1142,6 @@ async def album_details(request: Request) -> JSONResponse:
                     )
                 except (RuntimeError, OSError):
                     lineage = {"status": "unresolved", "album": None, "choices": []}
-                if lineage["status"] == "split":
-                    return JSONResponse(
-                        {
-                            "ok": False,
-                            "error": "This album was split—choose the current release",
-                            "resolution_kind": "album_split",
-                            "current_releases": lineage["choices"],
-                        },
-                        status_code=409,
-                    )
             current_album = lineage.get("album")
             if isinstance(current_album, Mapping):
                 payload = await run_in_threadpool(

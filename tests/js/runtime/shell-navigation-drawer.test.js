@@ -460,10 +460,8 @@ test('library navigation delegates modes and routes Loose Tracks without per-row
   })), true);
   assert.deepEqual(JSON.parse(JSON.stringify(calls)), [
     ['mode', 'custom-collections'],
-    ['selection', null, 'Night'],
     ['loose-tracks', { collectionName: 'Night' }],
     ['close', { restoreFocus: false }],
-    ['selection', null, 'all-loose-tracks'],
     ['loose-tracks', { collectionName: '' }],
     ['close', { restoreFocus: false }],
   ]);

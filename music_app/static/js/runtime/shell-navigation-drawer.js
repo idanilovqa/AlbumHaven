@@ -220,11 +220,6 @@ function handleLibraryNavigationClick(event) {
   if (!collectionButton && !allLooseTracksButton) return false;
   event.preventDefault();
   const collectionName = String(collectionButton?.getAttribute('data-open-custom-collection') || '').trim();
-  const selectionKey = collectionName || 'all-loose-tracks';
-  window.NavigationTree?.setSelection?.(
-    document.getElementById('sidebar-list'),
-    selectionKey,
-  );
   openLooseTracksPage({ collectionName });
   if (isArtistsDrawerMobileViewport()) closeArtistsDrawer({ restoreFocus: false });
   return true;

@@ -2797,6 +2797,32 @@ test('closing Loose Tracks clears its Custom Collections selection', () => {
   assert.equal(overlayHiddenWhenSynced, true);
 });
 
+test('opening Loose Tracks by any route selects its Custom Collections row', () => {
+  // Owner 2026-11-16: after Back then Forward the collection page was open with nothing selected.
+  const { context } = loadHelper();
+  const overlay = new FakeElement('non-album-modal');
+  overlay.hidden = true;
+  overlay.addEventListener = () => {};
+  for (const element of [new FakeElement('shell-main-surface'), overlay,
+    new FakeElement('non-album-modal-header'), new FakeElement('non-album-modal-table')]) {
+    context.document.body.appendChild(element);
+  }
+  context.document.querySelectorAll = () => [];
+  context.document.addEventListener = () => {};
+  context.document.removeEventListener = () => {};
+  context.buildLooseTracksPageHeaderHtml = () => '';
+  context.buildLooseTracksHeaderActionsHtml = () => '';
+  context.URL = URL;
+  let visibleWhenSynced = null;
+  context.syncCustomCollectionNavigationSelection = () => {
+    visibleWhenSynced = !overlay.hidden && context.state.ui.nonAlbumCollectionName;
+  };
+
+  context.openNonAlbumModal({ libraryWide: true, collectionName: 'Night' });
+
+  assert.equal(visibleWhenSynced, 'Night');
+});
+
 for (const mobile of [false, true]) {
   test(`${mobile ? 'phone' : 'desktop'}: the logo closes Loose Tracks in place`, () => {
     // Owner 2026-11-15: the logo selected All artists but left Loose Tracks on screen.

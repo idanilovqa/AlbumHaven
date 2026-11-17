@@ -1035,6 +1035,8 @@ function openNonAlbumModal(options = {}) {
   const enhancementRevision = String((Number(els.table.dataset.enhancementRevision) || 0) + 1);
   els.table.dataset.enhancementRevision = enhancementRevision;
   els.overlay.hidden = false;
+  // Every open path (tree click, Back/Forward, direct load) selects its tree row, as closing clears it.
+  if (typeof syncCustomCollectionNavigationSelection === 'function') syncCustomCollectionNavigationSelection();
   if (!page && !els.overlay.classList.contains('is-mobile-page')) {
     document.body.classList.add('modal-open');
   }

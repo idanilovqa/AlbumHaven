@@ -11664,11 +11664,6 @@ function handleLibraryNavigationClick(event) {
   if (!collectionButton && !allLooseTracksButton) return false;
   event.preventDefault();
   const collectionName = String(collectionButton?.getAttribute('data-open-custom-collection') || '').trim();
-  const selectionKey = collectionName || 'all-loose-tracks';
-  window.NavigationTree?.setSelection?.(
-    document.getElementById('sidebar-list'),
-    selectionKey,
-  );
   openLooseTracksPage({ collectionName });
   if (isArtistsDrawerMobileViewport()) closeArtistsDrawer({ restoreFocus: false });
   return true;
@@ -15645,6 +15640,8 @@ function openNonAlbumModal(options = {}) {
   const enhancementRevision = String((Number(els.table.dataset.enhancementRevision) || 0) + 1);
   els.table.dataset.enhancementRevision = enhancementRevision;
   els.overlay.hidden = false;
+  // Every open path (tree click, Back/Forward, direct load) selects its tree row, as closing clears it.
+  if (typeof syncCustomCollectionNavigationSelection === 'function') syncCustomCollectionNavigationSelection();
   if (!page && !els.overlay.classList.contains('is-mobile-page')) {
     document.body.classList.add('modal-open');
   }

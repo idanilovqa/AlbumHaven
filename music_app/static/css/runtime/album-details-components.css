@@ -12,6 +12,8 @@
 .album-details-header__tags { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 0.74rem; }
 .album-details-header__release-type,
 .album-details-header__tag { --album-details-tag-accent: var(--appearance-player-accent, #55c7ff); display: inline-flex; align-items: center; min-height: 24px; padding: 2px 8px; border: 1px solid color-mix(in srgb, var(--album-details-tag-accent) 42%, transparent); border-radius: 999px; color: var(--album-details-tag-accent); font-weight: 750; }
+/* The artist's romanized name: desktop shows only its hover text; phones show this line (J3). */
+.album-details-header .album-details-header__romanized { display: none; color: var(--muted); }
 .album-details-header__tag--missing { --album-details-tag-accent: var(--appearance-error, #ef5350); }
 .album-details-source-markers { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; }
 .album-details-cover-source-markers { justify-content: flex-start; min-height: 24px; margin: 8px 0 0; }

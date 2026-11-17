@@ -146,3 +146,40 @@ test('hover year omits unknown values and safely renders supplied release years'
   assert.doesNotMatch(cards, /gallery-card__hover-year|gallery-card__year-frame|data-gallery-release-year/);
   assert.match(cards, /<span data-gallery-metadata-text>2005<\/span><\/div>/);
 });
+
+test('GalleryCardInfo shows the MusicBrainz genre pill beside artist and year (approved A2)', () => {
+  const context = loadGalleryCard();
+  const withGenre = context.buildGalleryCardInfoHtml({ title: 'Angels Cry', artist: 'Angra', year: '1993', trackCount: 10, genre: 'power metal' });
+  assert.match(withGenre,
+    /<div class="album-meta-row"><div class="album-subtitle"><span data-gallery-metadata-text>Angra · 1993<\/span><\/div><span class="ui-metadata-pill ui-metadata-pill--genre">power metal<\/span><\/div>/);
+  const escaped = context.buildGalleryCardInfoHtml({ title: 'X', artist: 'Y', genre: '<b>' });
+  assert.match(escaped, /ui-metadata-pill--genre">&lt;b&gt;</);
+  const without = context.buildGalleryCardInfoHtml({ title: 'Angels Cry', artist: 'Angra', year: '1993', trackCount: 10 });
+  assert.doesNotMatch(without, /ui-metadata-pill/);
+});
+
+test('album cards pass the payload genre and re-render when it changes', () => {
+  const source = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'virtual-artist-grid.js'), 'utf8');
+  assert.match(source, /genre: album\?\.musicbrainz_genre/);
+  assert.match(source, /String\(album\?\.musicbrainz_genre \|\| ''\)/);
+});
+
+test('a card of an original-script artist carries the romanized name as hover text on desktop and a line on phones (J3)', () => {
+  const context = loadGalleryCard();
+  const html = context.buildGalleryCardInfoHtml({ title: 'Hoshi no Koe', artist: '天門', year: '2002', trackCount: 12, artistRomanized: 'Tenmon' });
+  assert.match(html, /<div class="album-subtitle" title="Tenmon"><span data-gallery-metadata-text>天門 · 2002<\/span><\/div>/);
+  assert.match(html, /<\/div><div class="album-subtitle gallery-card__romanized">\(Tenmon\)<\/div><\/div>/, 'inside the meta row, under artist and year');
+  const plain = context.buildGalleryCardInfoHtml({ title: 'Angels Cry', artist: 'Angra', year: '1993', trackCount: 10 });
+  assert.doesNotMatch(plain, /title=|gallery-card__romanized/);
+  const css = (file) => fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'css', file), 'utf8');
+  assert.match(css('gallery-main.css'), /\.gallery-card__romanized \{ display: none; \}/, 'desktop shows only the hover text');
+  const phone = css('mobile-layout.css');
+  const phoneBlock = phone.slice(phone.indexOf('@media (max-width: 900px)'));
+  assert.match(phoneBlock, /\.album-card \.gallery-card__romanized \{ display: block;/);
+});
+
+test('album cards pass the romanized artist name and re-render when it arrives (J3)', () => {
+  const source = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'virtual-artist-grid.js'), 'utf8');
+  assert.match(source, /artistRomanized: galleryRomanizedArtistName\(album\.album_artist\)/);
+  assert.match(source, /galleryRomanizedArtistName\(album\?\.album_artist\),/);
+});

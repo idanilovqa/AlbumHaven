@@ -234,3 +234,51 @@ def test_a_matched_artist_projects_no_other_musicbrainz_artist():
 
     assert projection["artist_mbid"] == _stored_artist_row()["artist_mbid"]
     assert "associated" not in projection and "identities" not in projection
+
+
+@pytest.mark.parametrize("query_factory", [
+    "_root_album_browse_sql", "_selected_artist_sql", "_root_gallery_page_rows_sql",
+    "_artist_preview_rows_sql", "_search_preview_sql", "_selected_artist_preview_sql",
+])
+def test_gallery_queries_select_the_card_genre_once_per_album_row(query_factory):
+    """A2 (owner 2026-11-15): the release group's genre, else the album artist's, by key lookups."""
+    import inspect
+
+    from music_app.services import library_browse_postgres as browse
+
+    factory = getattr(browse, query_factory)
+    required = [name for name, parameter in inspect.signature(factory).parameters.items()
+                if parameter.default is inspect.Parameter.empty and parameter.kind is not parameter.VAR_KEYWORD]
+    sql = _normalized(factory(*([10] * len(required))) if required else factory())
+
+    assert sql.count("as album_genre") == (2 if query_factory == "_search_preview_sql" else 1)
+    assert "release_group.genres -> 0 ->> 'name'" in sql
+    assert "genre_decision.album_key = genre_album.album_key" in sql
+    assert "display_genres.display_rank = 1" in sql
+    assert "genre_match.local_artist_id = genre_album.artist_id" in sql
+
+
+def test_root_startup_rows_carry_the_card_genre():
+    from music_app.services import library_browse_postgres as browse
+
+    assert _normalized(browse._root_startup_payload_sql(10)).count("as album_genre") == 1
+
+
+def test_album_payloads_carry_the_card_genre_only_when_there_is_one():
+    from music_app.services import library_browse_postgres as browse
+
+    genre_row = {**_stored_artist_row(), "album_genre": "heavy metal"}
+    for build in (
+        lambda rows: browse._root_album_browse_album_payloads(rows, "Кипелов"),
+        lambda rows: browse._selected_artist_album_payloads(rows, "Кипелов"),
+    ):
+        assert build([genre_row])[0]["musicbrainz_genre"] == "heavy metal"
+        assert "musicbrainz_genre" not in build([_stored_artist_row()])[0]
+        assert "musicbrainz_genre" not in build([{**genre_row, "album_genre": None}])[0]
+
+
+def test_the_startup_album_preview_keeps_the_card_genre():
+    from music_app.services.startup_bootstrap import _build_initial_album_preview
+
+    assert _build_initial_album_preview({"key": "a", "musicbrainz_genre": "power metal"})["musicbrainz_genre"] == "power metal"
+    assert "musicbrainz_genre" not in _build_initial_album_preview({"key": "a"})

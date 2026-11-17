@@ -144,3 +144,23 @@ def test_an_artist_whose_fallback_used_up_its_retries_rests_a_week(monkeypatch):
     assert repository.enqueue(reason="test", observed_at=NOW + timedelta(hours=1)) == 0
     # The negative: after a week it is tried again.
     assert repository.enqueue(reason="test", observed_at=NOW + timedelta(days=8)) == 1
+
+
+def test_problematic_files_attention_says_musicbrainz_has_no_info_for_a_flagged_artist_only(monkeypatch):
+    from music_app.services.musicbrainz_enrichment_postgres import MusicBrainzEnrichmentPostgresRepository
+
+    setup_url, repository, ids, _albums = _seed(monkeypatch)
+    assert _run(monkeypatch, repository, lambda context: _found(context, hints=[])).process_next(
+        worker_id="w")["state"] == "succeeded"
+    with isolatedPostgres._connect(setup_url) as connection:
+        for artist_id in ids.values():  # Both artists need attention; only 3 Crows is flagged.
+            connection.execute(
+                "insert into ops.metadata_enrichment_jobs (library_id, local_artist_id, target_kind, job_kind, reason,"
+                " state, next_attempt_at, created_at, updated_at) select library_id, id, 'artist', %s, 'test',"
+                " 'queued', %s, %s, %s from library.local_artists where id = %s",
+                (ARTIST_JOB_KIND, NOW, NOW, NOW, artist_id))
+    attention = MusicBrainzEnrichmentPostgresRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": setup_url}, connect=lambda _url: isolatedPostgres._connect(setup_url),
+    ).list_artist_attention()
+    assert {row["local_artist_name"]: row["musicbrainz_has_no_info"] for row in attention} == {
+        "3 Crows": True, "Angra": False}

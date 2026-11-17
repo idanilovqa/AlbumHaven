@@ -280,3 +280,10 @@ test('retained navigation metadata keeps subtitle and year structure through upd
   tree.updateItem(row, {});
   assert.equal(meta.children.length, 0);
 });
+
+test('an artist row shows its secondary label dimmed after the escaped label (approved J3)', () => {
+  const tree = harness();
+  const html = tree.renderItem({ label: '天門', secondaryLabel: '(Tenmon <b>)', key: 'artist:天門', count: 5 });
+  assert.match(html, /<span class="navigation-tree-label artist-name-label">天門 <span class="navigation-tree-label-secondary">\(Tenmon &lt;b&gt;\)<\/span><\/span>/);
+  assert.doesNotMatch(tree.renderItem({ label: 'Angra', key: 'artist:Angra' }), /navigation-tree-label-secondary/);
+});

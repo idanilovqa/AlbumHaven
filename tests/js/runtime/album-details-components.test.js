@@ -413,3 +413,68 @@ test('Album Details callers use presentation-only title and year values', () => 
   assert.match(mobileSource, /title:\s*album\.display_name\s*\|\|\s*album\.name/);
   assert.match(mobileSource, /album\.display_year\s*\|\|\s*album\.year/);
 });
+
+test('album details show the MusicBrainz release type, else the local tag', () => {
+  const context = loadComponents();
+  assert.equal(context.albumDetailsReleaseType({ release_type: 'ALBUM', musicbrainz_release: { type_label: 'Live' } }), 'Live');
+  assert.equal(context.albumDetailsReleaseType({ release_type: 'EP', musicbrainz_release: { type_label: null } }), 'EP');
+  assert.equal(context.albumDetailsReleaseType({ release_type: 'EP' }), 'EP');
+  assert.equal(context.albumDetailsReleaseType({}), 'ALBUM');
+  const tagEditorSource = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'tag-editor-and-optimistic-updates.js'), 'utf8');
+  assert.match(tagEditorSource, /releaseType:\s*albumDetailsReleaseType\(album\)/);
+});
+
+test('gallery artist headers show the romanized name in parentheses beside the name, outside it (J3)', () => {
+  const context = loadComponents();
+  context.romanizedArtistLabel = (name) => (name === '天門' ? '(Tenmon)' : '');
+  const bar = context.buildGalleryBarHtml({ contextKind: 'artist', artist: '天門', albumCount: 5 });
+  assert.match(bar, /<span data-gallery-context-name>天門<\/span><span class="gallery-artist-romanized" data-gallery-context-romanized>\(Tenmon\)<\/span><button class="gallery-info-button"/);
+  assert.match(context.buildFamilyArtistHeaderHtml({ artist: '天門', albumCount: 5 }),
+    /<h2 class="artist-name">天門 <span class="gallery-artist-romanized">\(Tenmon\)<\/span><\/h2>/);
+  assert.match(context.buildGalleryBarHtml({ contextKind: 'artist', artist: 'Angra', albumCount: 16 }),
+    /<span class="gallery-artist-romanized" data-gallery-context-romanized hidden><\/span>/);
+  assert.doesNotMatch(context.buildFamilyArtistHeaderHtml({ artist: 'Angra', albumCount: 16 }), /romanized/);
+});
+
+test('romanized names load once per ten minutes and redraw the tree and gallery only on change (J3)', async () => {
+  const context = loadComponents();
+  const calls = [];
+  let names = { '天門': 'Tenmon' };
+  context.fetch = async (url) => { calls.push(url); return { ok: true, json: async () => ({ names }) }; };
+  context.setRomanizedArtistNames = (value) => calls.push(['set', value]);
+  context.renderSidebar = () => calls.push('sidebar');
+  context.updateGalleryMainChrome = () => calls.push('chrome');
+  assert.equal(await context.refreshRomanizedArtistNames(), true);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), ['/api/musicbrainz/artists/romanized-names', ['set', { '天門': 'Tenmon' }], 'sidebar', 'chrome']);
+  assert.equal(await context.refreshRomanizedArtistNames(), false, 'not asked again within ten minutes');
+  assert.equal(calls.length, 4);
+  context.Date = { now: () => Date.now() + 600001 };
+  names = { '天門': 'Tenmon' };
+  assert.equal(await context.refreshRomanizedArtistNames(), false, 'unchanged names redraw nothing');
+  assert.equal(calls.length, 5);
+});
+
+test('album details carry the romanized artist name as hover text on desktop and a line on phones (J3)', () => {
+  const context = loadComponents();
+  for (const layout of ['classic_bar', 'stacked_bar', 'editorial_canvas']) {
+    const html = context.buildAlbumDetailsHeaderHtml({ layout, artist: '天門', album: 'Hoshi no Koe', year: '2002', artistRomanized: 'Tenmon' });
+    assert.match(html, /<span title="Tenmon">天門<\/span>/, layout);
+    assert.equal((html.match(/class="album-details-header__romanized">\(Tenmon\)</g) || []).length, 1, layout);
+  }
+  const copy = context.buildAlbumDetailsHeaderHtml({ variant: 'copy', title: 'Hoshi no Koe', eyebrow: '天門', eyebrowRomanized: 'Tenmon' });
+  assert.match(copy, /album-details-header__eyebrow">天門<\/div><div class="album-details-header__romanized">\(Tenmon\)<\/div>/);
+  const plain = context.buildAlbumDetailsHeaderHtml({ layout: 'classic_bar', artist: 'Angra', album: 'Angels Cry' });
+  assert.doesNotMatch(plain, /title=|album-details-header__romanized/);
+  context.romanizedArtistName = (name) => (name === '天門' ? 'Tenmon' : '');
+  assert.equal(context.albumDetailsRomanizedArtist({ album_artist: '天門' }), 'Tenmon');
+  assert.equal(context.albumDetailsRomanizedArtist({ album_artist: 'Кипелов' }), '');
+  const css = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'album-details-components.css'), 'utf8');
+  assert.match(css, /\.album-details-header__romanized \{ display: none;/);
+  const phone = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'css', 'mobile-layout.css'), 'utf8');
+  assert.match(phone.slice(phone.indexOf('@media (max-width: 900px)')), /\.album-details-header__romanized \{ display: block;/);
+  const callers = ['tag-editor-and-optimistic-updates.js', 'album-details-components.js'].map((file) => fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', file), 'utf8')).join('\n');
+  assert.match(callers, /artistRomanized: albumDetailsRomanizedArtist\(album\)/);
+  assert.match(callers, /eyebrowRomanized: albumDetailsRomanizedArtist\(album\)/);
+});

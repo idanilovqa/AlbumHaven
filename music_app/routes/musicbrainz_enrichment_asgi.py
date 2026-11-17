@@ -12,6 +12,7 @@ from starlette.concurrency import run_in_threadpool
 from music_app.services.current_actor_asgi import current_actor_from_request
 from music_app.services.musicbrainz_enrichment_postgres import (
     APP_PROBLEM_LABELS,
+    MUSICBRAINZ_HAS_NO_INFO_LABEL,
     MusicBrainzEnrichmentPostgresRepository,
 )
 
@@ -88,6 +89,20 @@ async def list_artist_status(request: Request):
         }
         for row in rows if isinstance(row, Mapping)
     ]}
+
+
+@router.get("/romanized-names")
+async def list_romanized_artist_names(request: Request):
+    """Original-script artist names and their Latin forms for the tree and gallery (J3).
+    Display only; a failure shows the names alone."""
+    try:
+        names = await run_in_threadpool(
+            MusicBrainzEnrichmentPostgresRepository(request.app.state.config).list_romanized_artist_names)
+    except Exception:
+        logger = getattr(request.app.state, "logger", logging.getLogger(__name__))
+        logger.warning("Romanized artist names were unavailable.")
+        names = {}
+    return {"names": names}
 
 
 @router.get("/{local_artist_id}")
@@ -283,7 +298,8 @@ def _problematic_artist_item(row: Mapping[str, object]) -> dict[str, object]:
         "musicbrainz_occurrence_id": str(row["problem_occurrence_id"]),
         "name": name,
         "album_artist": name,
-        "problem_reasons": [str(row["unresolved_reason"])],
+        "problem_reasons": [str(row["unresolved_reason"]),
+                            *([MUSICBRAINZ_HAS_NO_INFO_LABEL] if row.get("musicbrainz_has_no_info") else [])],
         "local_album_count": row.get("local_album_count"),
         # A summary row like every other; its detail comes from the MusicBrainz API.
         "detail_loaded": False,

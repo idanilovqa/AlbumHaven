@@ -223,6 +223,9 @@ def test_album_details_name_the_last_main_disc_only_when_musicbrainz_decided(mon
         release = _album_musicbrainz_release(connection, albums["cry"], three_discs)
         assert (release["state"], release["release_mbid"], release["last_main_disc_number"]) == ("release", RELEASE, 2)
         assert release["track_artists"][0]["artist"] == "Angra"
+        assert release["type_label"] == "Album"
+        connection.execute("update integration.musicbrainz_release_groups set secondary_types = '{Live}'")
+        assert _album_musicbrainz_release(connection, albums["cry"], three_discs)["type_label"] == "Live"
         # Every local disc is main: nothing to split.
         assert _album_musicbrainz_release(connection, albums["cry"], three_discs[:2])["last_main_disc_number"] is None
         # Unresolved and undecided albums keep the local guess.

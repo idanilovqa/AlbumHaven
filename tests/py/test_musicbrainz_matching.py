@@ -447,3 +447,47 @@ def test_titles_sharing_only_generic_words_never_agree_partially():
     """Jay-Z: "The Grey Album" (a mash-up of The Black Album's songs) is not that album."""
     assert title_agreement("The Grey Album", "The Black Album (Pete Rock Remix)") is None
     assert title_agreement("Keys to the Paradise", "Keys to the Palace") == "partial"
+
+
+# J3 (owner 2026-11-15): romanized artist names shown in parentheses beside original-script names.
+def _artist(canonical, sort_name=None, aliases=()):
+    return {"canonical_name": canonical, "sort_name": sort_name or canonical, "aliases": list(aliases)}
+
+
+def test_a_primary_latin_alias_romanizes_a_japanese_name_english_first():
+    from music_app.services.musicbrainz_matching import romanized_name
+    artist = _artist("久石譲", "Hisaishi, Joe", [
+        {"name": "Hisaishi Jō", "locale": "ja-latn", "primary": True},
+        {"name": "Joe Hisaishi", "locale": "en", "primary": True},
+        {"name": "ひさいし じょう", "locale": "ja", "primary": False},
+    ])
+    assert romanized_name("久石 譲", artist) == "Joe Hisaishi"
+
+
+def test_a_latin_canonical_name_romanizes_when_no_alias_does():
+    from music_app.services.musicbrainz_matching import romanized_name
+    assert romanized_name("잠비나이", _artist("Jambinai", aliases=[{"name": "잠비나이", "locale": "ko", "primary": True}])) == "Jambinai"
+
+
+def test_a_latin_sort_name_romanizes_last_and_reads_first_name_first():
+    from music_app.services.musicbrainz_matching import romanized_name
+    assert romanized_name("天門", _artist("天門", "Tenmon")) == "Tenmon"
+    assert romanized_name("平沢進", _artist("平沢進", "Hirasawa, Susumu")) == "Susumu Hirasawa"
+
+
+def test_search_hints_never_romanize():
+    from music_app.services.musicbrainz_matching import romanized_name
+    hint = {"name": "Tenmonn", "locale": None, "primary": False, "kind": "Search hint"}
+    assert romanized_name("天門", _artist("天門", "天門", [hint])) is None
+
+
+def test_latin_and_cyrillic_names_get_no_romanized_name():
+    from music_app.services.musicbrainz_matching import romanized_name
+    assert romanized_name("Angra", _artist("Angra")) is None
+    # Cyrillic names get the hover form only (J1, redesigned), never the parentheses.
+    assert romanized_name("Кипелов", _artist("Кипелов", "Kipelov")) is None
+    # Nothing Latin to show.
+    assert romanized_name("天門", _artist("天門", "天門")) is None
+    assert romanized_name("天門", None) is None
+    # The name already carries its Latin form.
+    assert romanized_name("ナイトメア Nightmare", _artist("ナイトメア", aliases=[{"name": "Nightmare", "locale": "en", "primary": True}])) is None

@@ -1199,3 +1199,18 @@ test('notification card status labels stay on one line', () => {
   assert.match(rule, /overflow:\s*hidden/);
   assert.match(rule, /text-overflow:\s*ellipsis/);
 });
+
+test('the phone album page header shows the romanized artist name on its own line (J3)', () => {
+  const context = load('mobile-navigation.js', {
+    getAlbumRequestKey: (album) => album.key,
+    albumDetailsRomanizedArtist: (album) => (album.album_artist === '天門' ? 'Tenmon' : ''),
+  });
+  const album = { key: 'a', name: 'Hoshi no Koe', album_artist: '天門', year: 2002 };
+  assert.equal(context.mobilePageDescriptor('album', album).romanized, 'Tenmon');
+  assert.equal(context.mobilePageDescriptor('album', { ...album, album_artist: 'Angra' }).romanized, '');
+  assert.equal(context.mobilePageDescriptor('cover-lookup', album).romanized, '');
+  const source = fs.readFileSync(path.join(runtime, 'mobile-navigation.js'), 'utf8');
+  assert.match(source, /romanized\.className = 'mobile-page-romanized'; romanized\.textContent = `\(\$\{active\.romanized\}\)`/);
+  const css = fs.readFileSync(path.join(runtime, '../../css/mobile-layout.css'), 'utf8');
+  assert.match(css, /\.mobile-page-romanized \{ display: block; color: var\(--muted\); \}/);
+});

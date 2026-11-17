@@ -138,6 +138,9 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   .album-card[data-gallery-display="cards"] .album-title { font-size: 12px; line-height: 1.3; margin: 0; }
   .album-card[data-gallery-display="cards"] .album-meta-row { font-size: 10px; gap: 3px; }
   .album-card[data-gallery-display="cards"] .album-subtitle { font-size: 10px; margin: 0; }
+  /* J3: the romanized artist name on its own line under artist and year, and in album details. */
+  .album-card .gallery-card__romanized { display: block; grid-column: 1 / -1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .album-details-header .album-details-header__romanized { display: block; }
   .album-card[data-gallery-display="cards"] :is(.album-subtitle, .album-title-button) { white-space: nowrap; overflow-wrap: normal; }
   .album-card[data-gallery-display="cards"] .chip-row { font-size: 10px; gap: 4px; margin-top: 5px; flex-wrap: wrap; }
   .album-card .gallery-card__status-group {
@@ -667,6 +670,9 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
 #utility-modal.is-mobile-page .utility-modal-body { overflow: visible; }
 #utility-modal.is-mobile-page .utility-detail { overflow: visible; }
 .mobile-loop-count { display: block; }
+.mobile-page-romanized { display: block; color: var(--muted); }
+/* Stacked and Editorial show it in the body identity instead; their pinned bar keeps its two lines. */
+.mobile-page-header[data-inline-album-layout="true"] .mobile-page-romanized { display: none; }
 #utility-modal[data-active-tab="integrations"] .confirm-modal-actions { gap: 10px; }
 [data-reload-library-settings] { margin-right: auto; }
 .library-settings-root-row { gap: 10px; }

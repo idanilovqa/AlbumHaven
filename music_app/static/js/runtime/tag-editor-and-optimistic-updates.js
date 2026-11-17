@@ -1957,9 +1957,10 @@ function renderTrackModalRelease(album) {
     els.header.innerHTML = buildAlbumDetailsHeaderHtml({
       layout: albumDetailsLayout,
       artist: albumDisplayArtist(album),
+      artistRomanized: albumDetailsRomanizedArtist(album),
       album: album.display_name || album.name || 'Album',
       year: album.display_year || album.year || '',
-      releaseType: album.release_type || 'ALBUM',
+      releaseType: albumDetailsReleaseType(album),
       tags: [hasVersionTabs ? '' : album.edition || '', albumTaggedArtistNote(album), albumMissing ? 'Missing' : ''].filter(Boolean),
       poorArtQuality: album.poor_art_quality === true,
       actionsHtml: buildAlbumDetailsHeaderActionsHtml({ missing: albumMissing }),

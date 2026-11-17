@@ -346,3 +346,54 @@ def test_scale_pair_uses_the_checked_in_registry_by_default():
             budgets=contract["budgets"],
             growth=(contract["growth"]["metric"], contract["growth"]["largeMinusSmallMax"]),
         )
+
+
+def test_a_budget_failure_names_the_threads_that_did_the_counted_work(tmp_path, monkeypatch):
+    import threading
+
+    from tests.py.filesystem_operation_counting import count_filesystem_and_media
+
+    target = tmp_path / "file.txt"
+    target.write_text("x")
+
+    def run(size: int) -> OperationCounts:
+        counts = OperationCounts()
+        with count_filesystem_and_media(monkeypatch, counts):
+            target.stat()
+            if size > 1:
+                worker = threading.Thread(target=target.stat, name="leftover-render")
+                worker.start()
+                worker.join()
+        return counts
+
+    with pytest.raises(AssertionError, match=r"stat_calls=2 at cardinality 2 \(large\) exceeds budget 1 \(by thread: MainThread=1, leftover-render=1\)"):
+        _self_registered_pair(interaction_id="py:routes/example.py#thread_breakdown", small=1, large=2, run=run, budgets={"stat_calls": 1})
+
+
+def test_counting_drains_work_left_on_the_cover_render_executors_first(tmp_path, monkeypatch):
+    """Work an earlier request queued on the cover preview executors finishes
+    before the window opens, so it is never counted against the next interaction."""
+    import threading
+
+    from music_app.services import covers
+    from tests.py.filesystem_operation_counting import count_filesystem_and_media
+
+    target = tmp_path / "cover.jpg"
+    target.write_bytes(b"x")
+    release = threading.Event()
+    started = threading.Event()
+
+    def leftover_render():
+        started.set()
+        release.wait(5)
+        target.stat()
+
+    covers._COVER_VARIANT_PREWARM_EXECUTOR.submit(leftover_render)
+    assert started.wait(5)
+    threading.Timer(0.2, release.set).start()
+    counts = OperationCounts()
+    with count_filesystem_and_media(monkeypatch, counts):
+        # Long enough for the leftover render to land here, were it not drained.
+        release.wait(5)
+        threading.Event().wait(0.3)
+    assert counts.stat_calls == 0

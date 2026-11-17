@@ -11,7 +11,9 @@ import builtins
 import contextlib
 import functools
 import os
+import sys
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from tests.py.bounded_interactions import OperationCounts
@@ -29,12 +31,61 @@ class _Depth(threading.local):
     value = 0
 
 
+# Module-level executors that keep running after the request that queued their
+# work: cover preview renders, and the admission step that queues them. The
+# patches below are process-wide, so work an earlier test left on them would be
+# counted against the interaction being measured.
+_BACKGROUND_EXECUTORS = (
+    ("music_app.services.covers", (
+        "_COVER_VARIANT_ADMISSION_EXECUTOR",
+        "_COVER_VARIANT_PREWARM_EXECUTOR",
+        "_COVER_VARIANT_INTERACTIVE_EXECUTOR",
+        "_COVER_VARIANT_FOREGROUND_EXECUTOR",
+    )),
+)
+
+
+def _quiesce(executor, timeout: float) -> None:
+    """Returns once every task queued on `executor` before the call has finished:
+    one barrier task per worker can only all start after the earlier tasks end."""
+    workers = int(getattr(executor, "_max_workers", 1) or 1)
+    barrier = threading.Barrier(workers + 1)
+    futures = [executor.submit(barrier.wait, timeout) for _ in range(workers)]
+    barrier.wait(timeout)
+    for future in futures:
+        future.result(timeout)
+
+
+def quiesce_background_executors(timeout: float = 30.0) -> None:
+    """Drains the app's module-level background executors that are loaded. An
+    admission step may queue renders, so the executors are drained in order,
+    twice."""
+    for _round in range(2):
+        for module_name, names in _BACKGROUND_EXECUTORS:
+            module = sys.modules.get(module_name)
+            for name in names if module is not None else ():
+                executor = getattr(module, name)
+                # A test may stand in its own recorder for an executor; only a
+                # real pool has work of its own to drain.
+                if isinstance(executor, ThreadPoolExecutor):
+                    _quiesce(executor, timeout)
+
+
+def _record_thread(counts: OperationCounts, metric: str) -> None:
+    """Which thread did each counted operation, for a budget failure's report."""
+    by_thread = counts.__dict__.setdefault("by_thread", {})
+    per_metric = by_thread.setdefault(metric, {})
+    name = threading.current_thread().name
+    per_metric[name] = per_metric.get(name, 0) + 1
+
+
 def _counted(function, counts: OperationCounts, metric: str, depth: _Depth, *, generator: bool = False):
     if generator:
         @functools.wraps(function)
         def iterate(*args, **kwargs):
             if depth.value == 0:
                 counts.count(metric)
+                _record_thread(counts, metric)
             iterator = function(*args, **kwargs)
             while True:
                 # Only the enumeration's own steps are nested; work the caller
@@ -53,6 +104,7 @@ def _counted(function, counts: OperationCounts, metric: str, depth: _Depth, *, g
     def call(*args, **kwargs):
         if depth.value == 0:
             counts.count(metric)
+            _record_thread(counts, metric)
         depth.value += 1
         try:
             return function(*args, **kwargs)
@@ -66,8 +118,11 @@ def count_filesystem_and_media(monkeypatch, counts: OperationCounts, *, media_mo
     """Counts enumerations, stats, path resolutions, opens and media parses while active.
 
     ``media_modules`` are modules whose module-level ``MutagenFile`` or PIL
-    ``Image.open`` binding the interaction uses.
+    ``Image.open`` binding the interaction uses. Background work earlier tests
+    left on the app's module-level executors is drained first, and each
+    counted operation records its thread (``counts.by_thread``).
     """
+    quiesce_background_executors()
     depth = _Depth()
     with monkeypatch.context() as patch:
         for owner, name in _ENUMERATIONS:

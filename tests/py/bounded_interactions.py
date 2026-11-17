@@ -186,7 +186,11 @@ def _check_budgets(interaction_id: str, label: str, size: int, counts: Operation
         if metric not in values:
             violations.append(f"{interaction_id}: unknown budget metric {metric}")
         elif values[metric] > budget:
-            violations.append(f"{interaction_id}: {metric}={values[metric]} at cardinality {size} ({label}) exceeds budget {budget}")
+            threads = getattr(counts, "by_thread", {}).get(metric)
+            breakdown = f" (by thread: {', '.join(f'{name}={count}' for name, count in sorted(threads.items()))})" if threads else ""
+            violations.append(
+                f"{interaction_id}: {metric}={values[metric]} at cardinality {size} ({label}) exceeds budget {budget}{breakdown}"
+            )
     return violations
 
 

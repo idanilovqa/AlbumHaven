@@ -679,7 +679,7 @@ class PostgresScanCacheAdapter:
         })
         if missing_paths:
             with self._connect_to_database() as connection:
-                connection.execute("""
+                connection.execute(r"""
                     /* cue_mark_missing_sources */
                     update library.cue_programs program
                        set source_status = 'offline',

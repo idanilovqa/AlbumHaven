@@ -320,6 +320,9 @@ def test_reconcile_cue_sources_marks_missing_source_offline(monkeypatch, tmp_pat
             cursor = super().execute(sql, params)
             if "cue_mark_missing_sources" in _normalized_sql(sql):
                 assert "starts_with(" in _normalized_sql(sql)
+                # SQL E'\\' is one backslash; E'\' escapes its closing quote (a syntax error).
+                assert r"E'\'" not in sql
+                assert r"E'\\'" in sql
                 assert params == {
                     "root_id": "main",
                     "missing_paths": [str(missing.resolve(strict=False))],

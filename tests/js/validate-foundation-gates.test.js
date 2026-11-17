@@ -8,6 +8,7 @@ const workflowPath = path.join(repoRoot, '.github', 'workflows', 'pr-gates.yml')
 const requirementsPath = path.join(repoRoot, 'requirements.txt');
 const packagePath = path.join(repoRoot, 'package.json');
 const allowedSkipsPath = path.join(repoRoot, 'tests', 'ci', 'pytest-allowed-skips.json');
+const testDataMatrixPath = path.join(repoRoot, 'tests', 'ci', 'test-data-matrix.json');
 const validatorPath = path.join(repoRoot, 'scripts', 'ci', 'validate-foundation-gates.cjs');
 
 function recursivelyDiscoverNodeTests(directory) {
@@ -134,7 +135,14 @@ test('foundation validator enforces the approved portable and Windows gate contr
     '  [chromium] › loopRangeControls.spec.js:68:1 › second component case',
     'Total: 2 tests in 2 files',
   ].join('\n')).length, 2);
-  assert.equal(validator.discoverComponentCases(repoRoot).length, 252);
+  const matrix = JSON.parse(fs.readFileSync(testDataMatrixPath, 'utf8'));
+  const componentCases = validator.discoverComponentCases(repoRoot);
+  assert.deepEqual(validator.validateComponentDiscovery(componentCases, matrix), []);
+  const missingEntry = matrix.findIndex((entry) => entry.config === 'playwright.component.config.js');
+  assert.deepEqual(
+    validator.validateComponentDiscovery(componentCases, matrix.toSpliced(missingEntry, 1)),
+    [`component discovery found ${componentCases.length} cases but tests/ci/test-data-matrix.json owns ${componentCases.length - 1}`],
+  );
 
   assert.deepEqual(
     validator.validatePytestCollection(

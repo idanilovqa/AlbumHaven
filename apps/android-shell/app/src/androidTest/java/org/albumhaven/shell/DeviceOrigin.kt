@@ -157,6 +157,17 @@ class DeviceOrigin(private val ahpc: FakeAhpcServer? = null, private val pages: 
         /** `-PalbumHavenDevOrigin=http://127.0.0.1:18765`, the debug build's origin in CI. */
         const val DEV_PORT = 18765
 
+        /** A library page that handshakes over the bridge and titles itself `replied` once answered, or `tapped`. */
+        const val LIBRARY_PAGE = """<!doctype html><title>Library</title><body style="background:#2a6;min-height:100vh">Library
+<script>
+AlbumHavenBridge.onmessage = () => { document.title = 'replied'; };
+addEventListener('click', () => { document.title = 'tapped'; });
+AlbumHavenBridge.postMessage(JSON.stringify({
+  protocol: 1, id: '6f0e2a5c-4c1f-4a3e-9f17-2b8f4f1f7a11', type: 'command',
+  name: 'bridge.handshake', payload: { protocolMin: 1, protocolMax: 1 },
+}));
+</script>"""
+
         fun json(body: String): MockResponse =
             MockResponse.Builder().code(200).addHeader("Content-Type", "application/json").body(body).build()
 

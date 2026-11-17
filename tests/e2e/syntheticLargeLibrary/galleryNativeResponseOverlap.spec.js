@@ -99,6 +99,19 @@ async function readLatestDiagnosticSequence(galleryActions) {
   );
 }
 
+// Response headers are not the commit: the body, parse and merge can land after
+// the 96 ms settle window, when merging immediately is correct. A gesture that
+// must overlap the merge stays alive until production has deferred the update.
+function deferredUpdateBoundary(galleryActions, afterSequence, responseAt) {
+  return responseAt.then(async (epoch) => {
+    const deadline = Date.now() + RESPONSE_BOUNDARY_TIMEOUT_MS;
+    while (Date.now() < deadline && !(await readDeferredGroupUpdate(galleryActions, afterSequence))) {
+      await new Promise(resolve => setTimeout(resolve, 8));
+    }
+    return epoch;
+  });
+}
+
 async function waitForDeferredGroupUpdate(galleryActions, afterSequence) {
   let deferredEvent = null;
   await expect.poll(async () => {
@@ -276,7 +289,7 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () 
         responsePromise,
         responseBoundary.responseAt,
       ]);
-        expect(response.ok()).toBe(true);
+        expect(response.ok(), `${response.status()} ${response.url()}`).toBe(true);
         const deferredEvent = await waitForDeferredGroupUpdate(
           galleryActions,
           diagnosticSequenceBeforeInput,
@@ -382,6 +395,10 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () 
         () => readLoadedAlbumCount(page),
         { intervals: [100, 250, 500], timeout: 60_000 },
       ).toBe(loadedBefore + 1);
+      // The rendered album does not mean the watcher's refreshes are done: a
+      // later one could be taken for the response under test (it then predates
+      // the input). Wait for the app's own settled-query signal first.
+      await searchToolbarActions.waitForQuery(FULL_REFRESH_SEARCH_QUERY);
       responseBoundary = await observeResponseBoundary(
         cdp,
         candidateUrl => isFullSearchRefreshUrl(candidateUrl, FULL_REFRESH_SEARCH_QUERY),
@@ -399,7 +416,8 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () 
         `Watcher First Signal ${Date.now()}`,
       );
       activeInput = keepWheelActiveUntilResponseBoundary(
-        ui, page, responseBoundary.responseAt,
+        ui, page,
+        deferredUpdateBoundary(galleryActions, diagnosticSequenceBeforeInput, responseBoundary.responseAt),
         distance => { commandedDistance += distance; },
       );
       const [responseResult, fixtureResult, boundaryResult] = await Promise.allSettled([
@@ -432,7 +450,7 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () 
         expect(response, 'native wheel sequence must overlap a full search refresh response').not.toBeNull();
         expect(deferredEvent, 'full refresh must reach the production deferred group-update path').not.toBeNull();
         expect(deferredEvent.touchGestureActive).toBe(false);
-        expect(response.ok()).toBe(true);
+        expect(response.ok(), `${response.status()} ${response.url()}`).toBe(true);
         expect(watcherFixture.tracks).toHaveLength(2);
         const responseUrl = new URL(response.url());
         expect(responseUrl.searchParams.has('gallery_cursor')).toBe(false);
@@ -524,9 +542,13 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () 
       let inputEndedAt;
     let activeInput;
       try {
-      const responseOverlap = page.waitForResponse(isRootContinuation, {
-        timeout: RESPONSE_BOUNDARY_TIMEOUT_MS,
-      });
+      // A preceding watcher mutation can republish the gallery projection mid-test:
+      // the client recovers from a 503 "being prepared" or a 409 stale cursor and
+      // the merge under test comes from the first successful continuation.
+      const responseOverlap = page.waitForResponse(
+        candidate => isRootContinuation(candidate) && candidate.ok(),
+        { timeout: RESPONSE_BOUNDARY_TIMEOUT_MS },
+      );
         const geometry = await ui.readContinuationGeometry();
         let distanceToThreshold = Math.max(
           1,
@@ -539,7 +561,8 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () 
           distanceToThreshold -= wheelDelta;
         }
       activeInput = keepWheelActiveUntilResponseBoundary(
-        ui, page, responseBoundary.responseAt,
+        ui, page,
+        deferredUpdateBoundary(galleryActions, diagnosticSequenceBeforeInput, responseBoundary.responseAt),
         distance => { commandedDistance += distance; },
       );
       [response, responseAt] = await Promise.all([
@@ -554,7 +577,7 @@ test.describe('FTC-GALLERY-NAV-035 synthetic-large native response overlap', () 
         expect(response, 'native wheel sequence must overlap a real continuation response').not.toBeNull();
         expect(deferredEvent, 'real continuation must reach the production deferred group-update path').not.toBeNull();
         expect(deferredEvent.touchGestureActive).toBe(false);
-        expect(response.ok()).toBe(true);
+        expect(response.ok(), `${response.status()} ${response.url()}`).toBe(true);
         expect(responseAt).toBeGreaterThanOrEqual(inputStartedAt);
         expect(responseAt).toBeLessThanOrEqual(inputEndedAt);
         expect(Number(deferredEvent.epoch)).toBeGreaterThanOrEqual(responseAt);

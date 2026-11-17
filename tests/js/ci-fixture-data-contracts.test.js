@@ -521,7 +521,7 @@ test('matrix validation accepts isolated database-only mutation ownership', () =
   assert.deepEqual(errors, []);
 });
 
-test('functional shard contract owns all 165 browser-functional cases exactly once', () => {
+test('functional shard contract owns every browser-functional case exactly once', () => {
   const matrix = readJson(testDataMatrixPath);
   const expectedCases = new Set(
     matrix
@@ -537,14 +537,13 @@ test('functional shard contract owns all 165 browser-functional cases exactly on
   const contract = readJson(functionalShardsPath);
   const errors = validateFunctionalShards(contract, expectedCases);
 
-  assert.equal(expectedCases.size, 165);
   assert.deepEqual(errors, []);
   assert.equal(contract.shards.length, 8);
   assert.equal(contract.shards.every((shard) => shard.invocations.length > 0), true);
   assert.equal(contract.workersPerInvocation, 1);
 });
 
-test('performance target contract owns all 61 performance cases across 29 targets', () => {
+test('performance target contract owns every performance case across the approved targets', () => {
   const matrix = readJson(testDataMatrixPath);
   const expectedCases = new Set(
     matrix
@@ -589,10 +588,8 @@ test('performance target contract owns all 61 performance cases across 29 target
   const contract = readJson(performanceTargetsPath);
   const errors = validatePerformanceTargets(contract, expectedCases, expectedNames);
 
-  assert.equal(expectedCases.size, 61);
   assert.deepEqual(errors, []);
-  assert.equal(contract.targets.length, 29);
-  assert.equal(contract.targets.filter((target) => target.defaultMember).length, 29);
+  assert.equal(contract.targets.every((target) => target.defaultMember), true);
   assert.equal(
     contract.targets
       .filter((target) => target.calibrationState !== 'approved')
@@ -752,18 +749,18 @@ test('idle-memory fixture uses the owner-approved shared local and CI limits', (
 
 test('read-only inventory command reports complete discovery and ownership totals', () => {
   const inventory = discoverInventory();
+  const categoryByConfig = new Map(inventory.surfaces.map((surface) => [surface.config, surface.category]));
+  const matrixCategories = { browserFunctional: 0, mobile: 0, component: 0, performance: 0, total: 0 };
+  for (const entry of readJson(testDataMatrixPath)) {
+    matrixCategories[categoryByConfig.get(entry.config)] += 1;
+    matrixCategories.total += 1;
+  }
 
-  assert.equal(inventory.configuredSurfaces, 12);
-  assert.deepEqual(inventory.categories, {
-    browserFunctional: 165,
-    component: 252,
-    mobile: 77,
-    performance: 61,
-    total: 555,
-  });
+  assert.equal(inventory.configuredSurfaces, configuredPlaywrightSurfaces.length);
+  assert.deepEqual(inventory.categories, matrixCategories);
   assert.deepEqual(inventory.ownership, {
-    testDataMatrix: 555,
-    functionalShards: 165,
-    performanceTargets: 61,
+    testDataMatrix: matrixCategories.total,
+    functionalShards: matrixCategories.browserFunctional,
+    performanceTargets: matrixCategories.performance,
   });
 });

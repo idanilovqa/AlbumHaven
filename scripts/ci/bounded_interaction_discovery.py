@@ -938,15 +938,37 @@ class LibraryStateEvidence:
         return hazards
 
 
+def _local_callable_bindings(definition: Definition, name: str) -> list[ast.AST]:
+    """The callables a local name is bound to, when every binding in the
+    definition names one (`respond = _cover_response`), else none: a local
+    bound to a call result or a parameter is not followed."""
+    values = [
+        node.value for node in _own_nodes(definition)
+        if isinstance(node, ast.Assign) and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name) and node.targets[0].id == name
+    ]
+    if not values or not all(isinstance(value, (ast.Name, ast.Attribute)) for value in values):
+        return []
+    return values
+
+
 def _resolver(definition: Definition, index: Index):
     nested = _facts(definition).nested
 
-    def resolve(target: ast.AST | None) -> list[Definition]:
+    def resolve(target: ast.AST | None, seen: frozenset[str] = frozenset()) -> list[Definition]:
         if target is None:
             return []
         if isinstance(target, ast.Name) and target.id in nested:
             return [nested[target.id]]
-        return index.resolve(target, definition)
+        found = index.resolve(target, definition)
+        if found or not isinstance(target, ast.Name) or target.id in seen:
+            return found
+        # A local alias of one or more functions (`respond = _legacy_cover_response`).
+        return [
+            item
+            for value in _local_callable_bindings(definition, target.id)
+            for item in resolve(value, seen | {target.id})
+        ]
 
     return resolve
 

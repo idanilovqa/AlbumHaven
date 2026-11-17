@@ -11116,6 +11116,80 @@
       "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
+      "id": "py:routes/web_asgi.py#_legacy_cover_response",
+      "action": "Serve one named legacy /cover?path= image variant on the cover executor",
+      "entrypoints": [
+        "py:music_app/routes/web_asgi.py#_legacy_cover_response:background:executor"
+      ],
+      "owners": [
+        "music_app/routes/web_asgi.py",
+        "music_app/services/cover_references.py",
+        "music_app/services/covers.py",
+        "music_app/services/library_roots.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "constant",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "filesystem_enumerations": 0,
+        "stat_calls": 14,
+        "open_calls": 2,
+        "media_parses": 0,
+        "sql_statements": 1
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_media_path_bounded_contracts.py::test_cover_route_contract_probes_only_the_requested_cover_previews_at_production_library_size",
+      "testIdentity": "test_cover_route_contract_probes_only_the_requested_cover_previews_at_production_library_size",
+      "rollback": "Revert the contract test commit; no product code changed for this interaction."
+    },
+    {
+      "id": "py:routes/web_asgi.py#_referenced_cover_response",
+      "action": "Resolve one cover reference and serve its image variant on the cover executor",
+      "entrypoints": [
+        "py:music_app/routes/web_asgi.py#_referenced_cover_response:background:executor"
+      ],
+      "owners": [
+        "music_app/routes/web_asgi.py",
+        "music_app/services/cover_references.py",
+        "music_app/services/covers.py",
+        "music_app/services/library_roots.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "constant",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "filesystem_enumerations": 0,
+        "stat_calls": 14,
+        "open_calls": 2,
+        "media_parses": 0,
+        "sql_statements": 1
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_media_path_bounded_contracts.py::test_cover_route_contract_probes_only_the_requested_cover_previews_at_production_library_size",
+      "testIdentity": "test_cover_route_contract_probes_only_the_requested_cover_previews_at_production_library_size",
+      "rollback": "Revert the contract test commit; no product code changed for this interaction."
+    },
+    {
       "id": "py:routes/web_asgi.py#app_copy_account_route",
       "action": "Serve GET /app-copy/account",
       "entrypoints": [
@@ -11224,6 +11298,44 @@
       ],
       "rules": [
         "BI-04",
+        "BI-13"
+      ],
+      "workClass": "page",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "filesystem_enumerations": 0,
+        "stat_calls": 14,
+        "open_calls": 2,
+        "media_parses": 0,
+        "sql_statements": 1
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_media_path_bounded_contracts.py::test_cover_route_contract_probes_only_the_requested_cover_previews_at_production_library_size",
+      "testIdentity": "test_cover_route_contract_probes_only_the_requested_cover_previews_at_production_library_size",
+      "rollback": "Revert the contract test commit; no product code changed for this interaction."
+    },
+    {
+      "id": "py:routes/web_asgi.py#cover_by_reference",
+      "action": "Serve GET /cover/{reference}: one referenced cover image or preview variant",
+      "entrypoints": [
+        "py:music_app/routes/web_asgi.py#cover_by_reference:route:GET /cover/{reference}"
+      ],
+      "owners": [
+        "music_app/routes/web_asgi.py",
+        "music_app/services/cover_references.py",
+        "music_app/services/covers.py",
+        "music_app/services/library_roots.py"
+      ],
+      "rules": [
+        "BI-04",
+        "BI-08",
         "BI-13"
       ],
       "workClass": "page",
@@ -11813,6 +11925,70 @@
       ],
       "owners": [
         "music_app/services/cover_provider_musicbrainz_caa.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/cover_provider_registry.py#CoverLookupProviderRegistry.search_artist_website_matches",
+      "action": "Search the artist website for one album's cover candidates",
+      "entrypoints": [
+        "py:music_app/services/cover_provider_registry.py#CoverLookupProviderRegistry.search_artist_website_matches:background:executor"
+      ],
+      "owners": [
+        "music_app/services/cover_provider_registry.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/cover_provider_registry.py#CoverLookupProviderRegistry.search_bandcamp_matches",
+      "action": "Search Bandcamp for one album's cover candidates",
+      "entrypoints": [
+        "py:music_app/services/cover_provider_registry.py#CoverLookupProviderRegistry.search_bandcamp_matches:background:executor"
+      ],
+      "owners": [
+        "music_app/services/cover_provider_registry.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/cover_provider_registry.py#CoverLookupProviderRegistry.search_discogs_and_cover_art_archive_matches",
+      "action": "Search Discogs and the Cover Art Archive for one album's cover candidates",
+      "entrypoints": [
+        "py:music_app/services/cover_provider_registry.py#CoverLookupProviderRegistry.search_discogs_and_cover_art_archive_matches:background:executor"
+      ],
+      "owners": [
+        "music_app/services/cover_provider_registry.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/cover_provider_registry.py#CoverLookupProviderRegistry.search_music_service_matches",
+      "action": "Search the music services for one album's cover candidates",
+      "entrypoints": [
+        "py:music_app/services/cover_provider_registry.py#CoverLookupProviderRegistry.search_music_service_matches:background:executor"
+      ],
+      "owners": [
+        "music_app/services/cover_provider_registry.py"
       ],
       "rules": [
         "BI-07",

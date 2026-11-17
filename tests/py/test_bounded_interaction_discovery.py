@@ -287,6 +287,42 @@ def start(pool, loop, config):
     ]
 
 
+def test_a_local_alias_of_functions_is_followed_to_every_function_it_names(tmp_path: Path):
+    """`respond = _legacy; if x: respond = _modern` hands either function to the
+    executor; a local bound to a call result or a parameter is not an alias."""
+    _write(tmp_path, "music_app/routes/covers.py", """
+import asyncio
+
+def _legacy(path):
+    return path.stat()
+
+def _modern(path):
+    return path.stat()
+
+def _built(path):
+    return path
+
+def make(path):
+    return _built
+
+@router.get("/cover")
+async def cover(path, loop_id, run):
+    respond = _legacy
+    if loop_id:
+        respond = _modern
+    built = make(path)
+    await asyncio.get_running_loop().run_in_executor(None, built, path)
+    await asyncio.get_running_loop().run_in_executor(None, run, path)
+    return await asyncio.get_running_loop().run_in_executor(None, respond, path)
+""")
+    keys = sorted(item["key"].split("#")[1] for item in discovery.discover_python_entrypoints(tmp_path))
+    assert keys == [
+        "_legacy:background:executor",
+        "_modern:background:executor",
+        "cover:route:GET /cover",
+    ]
+
+
 def test_awaited_executor_work_is_followed_synchronously(tmp_path: Path):
     _write(tmp_path, "music_app/services/relations.py", "def build_relation_views(albums):\n    return albums\n")
     _write(tmp_path, "music_app/routes/read.py", """

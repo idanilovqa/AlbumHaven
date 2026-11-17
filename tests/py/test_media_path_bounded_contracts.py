@@ -16,7 +16,7 @@ import pytest
 
 from music_app.services import library_roots as library_roots_module
 from music_app.services.library_roots import normalize_library_root_settings
-from tests.py.asgi_testing import create_test_asgi_app, run_asgi_request
+from tests.py.asgi_testing import cover_reference_url, create_test_asgi_app, run_asgi_request
 from tests.py.bounded_interactions import OperationCounts, measure_scale_pair
 from tests.py.filesystem_operation_counting import count_filesystem_and_media
 
@@ -129,9 +129,15 @@ def test_waveform_route_contract_probes_only_the_requested_file_at_production_li
     )
 
 
-@pytest.mark.parametrize("interaction_id", ["py:routes/web_asgi.py#cover", "py:routes/web_asgi.py#_cover_response"])
+@pytest.mark.parametrize(("interaction_id", "by_reference"), [
+    ("py:routes/web_asgi.py#cover", False),
+    ("py:routes/web_asgi.py#_cover_response", False),
+    ("py:routes/web_asgi.py#_legacy_cover_response", False),
+    ("py:routes/web_asgi.py#cover_by_reference", True),
+    ("py:routes/web_asgi.py#_referenced_cover_response", True),
+])
 def test_cover_route_contract_probes_only_the_requested_cover_previews_at_production_library_size(
-    asgi_app, tmp_path, monkeypatch, interaction_id,
+    asgi_app, tmp_path, monkeypatch, interaction_id, by_reference,
 ):
     from PIL import Image
 
@@ -142,13 +148,19 @@ def test_cover_route_contract_probes_only_the_requested_cover_previews_at_produc
         Image.new("RGB", (1200, 1200), "teal").save(cover, format="JPEG")
         for index in range(album_count):
             (music_dir / f"Artist {index:04d}" / "Album" / "cover.jpg").write_bytes(b"sibling cover")
+        # Every sibling is named too, so the store holds a library-sized set of references.
+        for index in range(album_count):
+            cover_reference_url(asgi_app, music_dir / f"Artist {index:04d}" / "Album" / "cover.jpg")
+        reference_url = cover_reference_url(asgi_app, cover)
 
         def request_previews() -> int:
             # A revisioned gallery preview, then an unrevisioned lookup preview.
             for query in ({"v": "a" * 64}, {}):
-                status, _headers, body = run_asgi_request(
-                    asgi_app, "GET", "/cover", query={"path": str(cover), "size": "480", **query},
-                )
+                if by_reference:
+                    target, params = reference_url, {"size": "480", **query}
+                else:
+                    target, params = "/cover", {"path": str(cover), "size": "480", **query}
+                status, _headers, body = run_asgi_request(asgi_app, "GET", target, query=params)
                 assert status == 200
                 assert Image.open(BytesIO(body)).size == (480, 480)
             return status

@@ -2330,3 +2330,16 @@ test('UI-5: a server still reporting the split never opens the chooser over an o
   assert.equal(choosers.length, 0, 'the merge the page already made wins over the server lagging behind');
   assert.equal(timers.length, 1, 'the gallery is asked again until the server has the merge');
 });
+
+
+test('BUGFIX-19: the selected cover shows its picture in the first loading card; the rest stay placeholders', () => {
+  const escapeHtml = (value) => String(value).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  const context = { window: {}, URLSearchParams, console, ButtonComponent, HTMLButtonElement: class {}, escapeHtml, document: { body: { classList: { add() {} } }, getElementById: () => null }, state: { coverLookup: { tasks: [], modal: {} } } };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  const markup = context.buildCoverLookupGalleryLoadingCards('local', 3, '/cover?path=a&size=480');
+  const cards = markup.split('cover-lookup-art-card-shell is-loading').slice(1);
+  assert.equal(cards.length, 3);
+  assert.match(cards[0], /<img class="cover-lookup-art-preview-image" src="\/cover\?path=a&amp;size=480"/);
+  assert.ok(cards.slice(1).every((card) => !card.includes('<img')));
+});

@@ -38000,11 +38000,18 @@ function formatCoverLookupImageCount(count) {
   return `${safeCount} ${safeCount === 1 ? 'image' : 'images'}`;
 }
 
-function buildCoverLookupGalleryLoadingCards(section, count) {
-  return Array.from({ length: Math.max(0, Number(count || 0) || 0) }, () => `
+// BUGFIX-19 (owner): the album's selected cover is known before the folder listing, so its card shows
+// that picture at once while the rest are still placeholders.
+function buildCoverLookupSelectedCoverPreviewUrl(album) {
+  const coverPath = String(album?.cover_path || '').trim();
+  return coverPath ? buildCoverUrl(coverPath, { size: 480, revision: album?.cover_revision }) : '';
+}
+
+function buildCoverLookupGalleryLoadingCards(section, count, firstPreviewUrl = '') {
+  return Array.from({ length: Math.max(0, Number(count || 0) || 0) }, (_, index) => `
     <div class="cover-lookup-art-card-shell is-loading" data-cover-lookup-loading-section="${section}" aria-hidden="true">
       <div class="cover-lookup-art-card">
-        <span class="cover-lookup-art-preview"></span>
+        <span class="cover-lookup-art-preview">${index === 0 && firstPreviewUrl ? `<img class="cover-lookup-art-preview-image" src="${escapeHtml(firstPreviewUrl)}" alt="" decoding="async">` : ''}</span>
         <span class="cover-lookup-task-loading-line is-title"></span>
         <span class="cover-lookup-task-loading-line"></span>
       </div>
@@ -38033,6 +38040,7 @@ function buildCoverLookupGalleryLoadingMarkup(modalState) {
         ${cards}${buildCoverLookupGalleryLoadingCards(
           key,
           count - (key === 'remote' ? cachedRemoteCandidates.length : 0),
+          key === 'local' ? buildCoverLookupSelectedCoverPreviewUrl(album) : '',
         )}
       </div>
     </section>
@@ -38146,7 +38154,7 @@ function renderCoverLookupModal() {
         <h4 class="cover-lookup-section-title">LOCAL${localInventoryUnknown && !localCovers.length ? '' : ` · ${formatCoverLookupImageCount(localCovers.length)}`}</h4>
         ${galleryErrorMarkup}
       </div>
-      <div class="cover-lookup-gallery${!localCovers.length && localInventoryUnknown && expectedLocalCount ? ' cover-lookup-gallery-loading' : ''}">${localCovers.length ? localCovers.map((item) => buildCoverLookupCard(item, 'local')).join('') : localInventoryUnknown && expectedLocalCount ? buildCoverLookupGalleryLoadingCards('local', expectedLocalCount) : `<div class="cover-lookup-empty">${localInventoryUnknown ? 'Local cover art is not listed yet.' : 'No local cover art found in this album folder.'}</div>`}</div>
+      <div class="cover-lookup-gallery${!localCovers.length && localInventoryUnknown && expectedLocalCount ? ' cover-lookup-gallery-loading' : ''}">${localCovers.length ? localCovers.map((item) => buildCoverLookupCard(item, 'local')).join('') : localInventoryUnknown && expectedLocalCount ? buildCoverLookupGalleryLoadingCards('local', expectedLocalCount, buildCoverLookupSelectedCoverPreviewUrl(modalState.album)) : `<div class="cover-lookup-empty">${localInventoryUnknown ? 'Local cover art is not listed yet.' : 'No local cover art found in this album folder.'}</div>`}</div>
       ${pastedImages.length || manualPendingCount ? `<div class="cover-lookup-subsection-title">PASTED IMAGES</div><div class="cover-lookup-gallery${manualPendingCount ? ' cover-lookup-gallery-loading' : ''}">${pastedImages.map((item) => buildCoverLookupCard(item, 'pasted')).join('')}${buildCoverLookupGalleryLoadingCards('pasted', manualPendingCount)}</div>` : ''}
       ${otherArt.length ? `<div class="cover-lookup-subsection-title">Other art</div><div class="cover-lookup-gallery">${otherArt.map((item) => buildCoverLookupCard(item, 'local')).join('')}</div>` : ''}
     </section>

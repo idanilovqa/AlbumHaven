@@ -788,11 +788,14 @@ def create_asgi_app():
                 changed_paths.extend((move.source, move.destination))
                 if move.is_directory:
                     changed_subtrees.extend((move.source, move.destination))
-            image_extensions = set(runtime.config.get("IMAGE_EXTENSIONS") or ())
+            from music_app.services.local_cover_inventory import watch_request_relocates_tracks
+
             _app.state.local_cover_inventory.invalidate_paths(
                 changed_paths,
                 subtree_paths=changed_subtrees,
-                context_changed=bool(changed_subtrees) or any(Path(path).suffix.lower() not in image_extensions for path in changed_paths),
+                context_changed=watch_request_relocates_tracks(
+                    request, set(runtime.config.get("IMAGE_EXTENSIONS") or ()),
+                ),
             )
             root_healthy = all(
                 runtime.library_watch_health_service

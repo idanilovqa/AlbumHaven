@@ -2216,6 +2216,48 @@ test('UI-5: merging a split release back with only its moved tracks known opens 
 });
 
 
+test('UI-5: a split opens the chooser from a notification the server listed without track paths', async () => {
+  const trackPath = (n) => `N:/Music/DDT/Remixes/${String(n).padStart(2, '0')}.flac`;
+  const all = Array.from({ length: 11 }, (_, index) => ({ path: trackPath(index + 1) }));
+  // The Edit Tags album knows every track; the server's task list drops tracks and spells the key without the year.
+  const original = { album_id: 40, key: 'ддт::ремиксы::year::2000', name: 'Ремиксы', album_artist: 'ДДТ', year: 2000, tracks: all };
+  const listed = { album_id: 40, key: 'ддт::ремиксы', name: 'Ремиксы', album_artist: 'ДДТ', year: 2000 };
+  const remixes = { key: 'ддт::ремиксы::year::2000', name: 'Ремиксы', album_artist: 'ДДТ', year: 2000, tracks: all.slice(5) };
+  const remixes2 = { key: 'ддт::ремиксы2', name: 'Ремиксы2', album_artist: 'ДДТ', year: 2000, tracks: all.slice(0, 5) };
+  const overlay = { hidden: true, classList: { toggle() {} }, toggleAttribute() {}, removeAttribute() {} };
+  const context = {
+    window: {}, URLSearchParams, console, ButtonComponent, HTMLButtonElement: class {},
+    state: { coverLookup: { tasks: [{ id: 't1', album_payload: { ...listed } }], modal: { pastedImages: [] } } },
+    getAlbumTrackPaths: album => new Set((album?.tracks || []).map(item => item.path)),
+    mergeCoverLookupTasksWithNotifications: tasks => tasks,
+    document: { body: { classList: { add() {} } }, getElementById: id => (id === 'cover-lookup-modal' ? overlay : null) },
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  const choosers = [];
+  context.presentCoverLookupSplitChoice = async current => choosers.push(current);
+  context.renderCoverLookupModal = () => {};
+  context.refreshCoverLookupGallery = async () => {};
+  context.ensureCoverLookupPolling = () => {};
+
+  context.recordCoverLookupOptimisticSplit(original, [remixes, remixes2]);
+  await context.openCoverLookupModal(context.state.coverLookup.tasks[0].album_payload, { taskId: 't1' });
+  assert.equal(choosers.length, 1, 'right after the split the notification opens the chooser');
+  assert.equal(choosers[0].length, 2);
+
+  // A later poll returns the same compact task; it must stay split.
+  context.state.coverLookup.tasks = context.reconcileCoverLookupOptimisticIdentityTasks([{ id: 't1', album_payload: { ...listed } }]);
+  await context.openCoverLookupModal(context.state.coverLookup.tasks[0].album_payload, { taskId: 't1' });
+  assert.equal(choosers.length, 2, 'after a task poll the notification still opens the chooser');
+
+  // Merging back from the compact card opens the merged album, never the chooser.
+  context.recordCoverLookupOptimisticSplit(remixes2, [{ key: 'ддт::ремиксы', name: 'Ремиксы', album_artist: 'ДДТ', year: 2000, tracks: all.slice(0, 5) }]);
+  await context.openCoverLookupModal(context.state.coverLookup.tasks[0].album_payload, { taskId: 't1' });
+  assert.equal(choosers.length, 2, 'after merging back no split chooser opens');
+  assert.equal(context.state.coverLookup.tasks[0].album, 'Ремиксы');
+});
+
+
 test('UI-5: a server still reporting the split never opens the chooser over an optimistic merge', async () => {
   const trackPath = (n) => `N:/Music/DDT/Remixes/${String(n).padStart(2, '0')}.flac`;
   const all = Array.from({ length: 11 }, (_, index) => ({ path: trackPath(index + 1) }));

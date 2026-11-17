@@ -39323,7 +39323,7 @@ function reconcileCoverLookupOptimisticIdentityTasks(tasks) {
       || Array.from(coverLookupOptimisticIdentityByTrackSignature.values()).find((candidate) => (
         candidate?.originalAlbum
         && (
-          findCoverLookupAlbumReplacement(task?.album_payload, [candidate.originalAlbum])
+          coverLookupTaskShowsAlbum(task, candidate.originalAlbum)
           || findCoverLookupAlbumReplacement(task?.album_payload, candidate.priorReleases || [])
         )
       ));
@@ -39366,6 +39366,19 @@ function sameCoverLookupAlbumIdentity(left, right) {
     && norm(left?.name) === norm(right?.name)
     && norm(left?.album_artist) === norm(right?.album_artist)
     && (!left?.year || !right?.year || String(left.year) === String(right.year));
+}
+
+// UI-5 (owner): the server lists tasks without track paths and may spell the key without the year,
+// so a task without paths is the album when its id, or else its name, artist and year, match.
+function coverLookupTaskShowsAlbum(task, album, albumPaths = getAlbumTrackPaths(album)) {
+  const taskPaths = getAlbumTrackPaths(task?.album_payload);
+  if (taskPaths.size) {
+    return taskPaths.size === albumPaths.size && Array.from(taskPaths).every((path) => albumPaths.has(path));
+  }
+  const taskAlbumId = Number(task?.album_payload?.album_id);
+  const albumId = Number(album?.album_id);
+  if (taskAlbumId > 0 && albumId > 0) return taskAlbumId === albumId;
+  return sameCoverLookupAlbumIdentity(task?.album_payload, album);
 }
 
 function hasPendingCoverLookupMerge(album) {
@@ -39471,11 +39484,7 @@ function recordCoverLookupOptimisticSplit(originalAlbum, updatedAlbums) {
   const nextTasks = (state.coverLookup.tasks || []).map((task) => {
     const taskPaths = getAlbumTrackPaths(task?.album_payload);
     const taskId = String(task?.id || '');
-    if (isSplit && (
-      task?.id
-      && taskPaths.size === originalPaths.size
-      && Array.from(taskPaths).every((path) => originalPaths.has(path))
-    )) {
+    if (isSplit && task?.id && coverLookupTaskShowsAlbum(task, originalAlbum, originalPaths)) {
       coverLookupSplitReleasesByTask.set(taskId, releases);
       taskIds.push(taskId);
       return task;

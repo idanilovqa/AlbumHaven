@@ -715,10 +715,11 @@ function buildCustomCollectionArtworkMarkup(collectionName, artwork = null) {
   const name = String(collectionName || '').trim();
   const label = `${name || 'Custom collection'} artwork`;
   if (String(artwork?.image_url || '').trim()) {
+    // Owner 2026-11-17: a collection's cover opens full size in the same lightbox as an album cover.
     return buildAlbumArtboxHtml({
       state: 'ready',
       label,
-      coverHtml: `<img src="${escapeHtml(artwork.image_url)}" alt="${escapeHtml(label)}">`,
+      coverHtml: `<button class="track-modal-cover-button" type="button" data-open-lightbox="1" data-cover-src="${escapeHtml(artwork.image_url)}" data-cover-alt="${escapeHtml(label)}" aria-label="${escapeHtml(`Enlarge ${label}`)}"><img src="${escapeHtml(artwork.image_url)}" alt="${escapeHtml(label)}"></button>`,
       overlayHtml: ButtonComponent.renderActionButton({
         ariaLabel: `Edit ${label}`,
         title: `Edit ${label}`,

@@ -70,7 +70,12 @@ test('folding Artist Tree reclaims layout width and preserves the persistent pla
     return box.x + (box.width / 2);
   });
   const player = await page.locator('#global-player').elementHandle();
-  await page.evaluate(() => toggleArtistTreeFold());
+  // Owner 2026-11-17: the logo must not move while the tree folds (it used to ride the shrinking column).
+  const foldingBrandX = await page.evaluate(() => {
+    toggleArtistTreeFold();
+    return document.querySelector('.app-bar-brand-mark').getBoundingClientRect().x;
+  });
+  expect(foldingBrandX).toBeCloseTo(expandedBrandX, 5);
   await expect.poll(async () => Math.round((await page.locator('#shell-main-surface').boundingBox()).x)).toBe(64);
   await expect.poll(() => page.evaluate(() => window.__artistTreeSettlementWidths.length)).toBe(1);
   const after = await page.locator('#shell-main-surface').boundingBox();

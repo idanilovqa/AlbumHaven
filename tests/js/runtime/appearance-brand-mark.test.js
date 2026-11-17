@@ -26,8 +26,11 @@ test('light palettes give the detailed mark an explicit contrasting treatment', 
   assert.match(appChromeCss, /\.app-bar-brand-mark\s*\{[^}]*--app-bar-brand-ink:\s*var\(--appearance-ink,/s);
 });
 
-test('folded Artist Tree aligns the brand mark with the compact navigation centerline', () => {
-  assert.match(appChromeCss, /\.shell-layout\.is-artist-tree-folded\s+\.app-bar-brand\s*\{[^}]*margin-left:\s*0/s);
+test('the brand mark keeps one place whether the Artist Tree is folded or folding', () => {
+  // 4px in from the left is where the 56px brand is centred in the folded 64px column; a folded-only
+  // rule made it ride the shrinking column (owner 2026-11-17).
+  assert.match(appChromeCss, /\.app-bar-brand\s*\{[^}]*width:\s*56px;[^}]*margin-left:\s*4px;/s);
+  assert.doesNotMatch(appChromeCss, /is-artist-tree-folded\s+\.app-bar-brand/);
 });
 
 test('expanded Artist Tree aligns its back button and title on one centerline', () => {

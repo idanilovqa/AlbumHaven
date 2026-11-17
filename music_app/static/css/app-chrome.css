@@ -164,9 +164,10 @@
 .shell-navigation-rail { height: 100%; padding: var(--app-page-header-top) 14px 0; overflow: hidden; }
 .shell-navigation-rail-header { min-height: 54px; }
 @media (min-width: 901px) {
-  /* The 22px gap to the tree belongs to the header, not the heading, so the Collapse button and "Artists"
-     share one centre line (owner 2026-11-16) and "Artists" keeps the Gallery title's line. */
-  .shell-navigation-rail-header { height: 54px; padding-bottom: 22px; }
+  /* The gap to the tree belongs to the header, not the heading, so the Collapse button and "Artists"
+     share one centre line (owner 2026-11-16) and "Artists" keeps the Gallery title's line.
+     12px, down from 22px: the owner found the space under the header dead (2026-11-17). */
+  .shell-navigation-rail-header { height: 44px; min-height: 44px; padding-bottom: 12px; }
 }
 .settings-host .settings-nav { overflow-y: auto; }
 .shell-navigation-rail.is-transitioning { overflow-y: hidden; }

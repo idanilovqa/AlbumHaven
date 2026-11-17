@@ -2865,6 +2865,8 @@ test('collections with artwork open in their final layout: artwork is known befo
   const loading = context.buildCustomCollectionDetailMarkup([], 'Night', context.state.ui.customCollectionArtworkByName.Night,
     { tracksHtml: '<div class="loading-table"></div>' });
   assert.match(loading, /custom-collection-detail__art track-modal-cover">[^]*<img/);
+  // Owner 2026-11-17: the collection cover opens full size in the album-cover lightbox; Edit stays separate.
+  assert.match(loading, /<button class="track-modal-cover-button" type="button" data-open-lightbox="1" data-cover-src="\/api\/custom-collections\/artwork\/image\?collection_name=Night&(amp;)?revision=1"[^>]*><img [^>]*><\/button><span class="album-artbox__overlay">/);
   assert.match(loading, /custom-collection-detail__tracks track-modal-main"><div class="loading-table"><\/div>/);
   assert.match(context.buildCustomCollectionHeaderArtworkMarkup('Night', context.state.ui.customCollectionArtworkByName.Night), /hidden/);
 });

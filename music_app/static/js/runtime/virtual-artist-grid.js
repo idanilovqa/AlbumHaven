@@ -1364,6 +1364,9 @@ class VirtualArtistGrid {
       if (this.artistSectionByName.get(artist) === section) this.artistSectionByName.delete(artist);
       this.totalHeight -= section.height;
     }
+    // Drop the replaced sections' recorded shifts: their replacements are laid
+    // out afresh and must not move the sections appended after them.
+    this._sectionShifts.resize(firstReplaced);
     this._sectionShifts.resize(firstReplaced + groups.length);
     // Appended sections are unshifted, so every one stores its true top less
     // the shifts recorded before it.

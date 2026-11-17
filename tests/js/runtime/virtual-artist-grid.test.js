@@ -7205,6 +7205,22 @@ test('a superseded root gallery continuation neither appends nor repaints', asyn
   assert.equal(virtualGrid.lastKey, lastKey, 'nothing was rendered');
 });
 
+test('a root gallery continuation drops the measured shift of the artist it replaces', async () => {
+  const gallery = loadCountedRootContinuation(40);
+  const { context, prepareNextPage, virtualGrid } = gallery;
+  const last = virtualGrid.sections[virtualGrid.sections.length - 1];
+  last.blockHeights = last.blockHeights.map(height => height + 77);
+  last.measuredBlockKeys = last.blockMeasureKeys.slice();
+  virtualGrid.reflowMeasuredSection(last);
+  prepareNextPage();
+  assert.equal(await context.loadNextRootGalleryPage(), true);
+  const sections = Array.from(virtualGrid.sections);
+  sections.slice(1).forEach((section, index) => {
+    assert.equal(section.top, sections[index].bottom, `${section.sectionKey} starts where the previous section ends`);
+  });
+  assert.equal(virtualGrid.totalHeight, sections.at(-1).bottom, 'the total height ends at the last section');
+});
+
 test('a root gallery continuation during a held touch defers its append until the touch settles', async () => {
   const gallery = loadCountedRootContinuation(40);
   const { context, prepareNextPage, virtualGrid } = gallery;

@@ -352,6 +352,8 @@ const state = {
     anchorPath: '',
     dragSelecting: false,
     dragAnchorPath: '',
+    dragBasePaths: null,
+    dragMoved: false,
     values: {},
   },
   coverLookup: {

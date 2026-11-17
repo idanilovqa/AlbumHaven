@@ -1447,11 +1447,17 @@ function handleUtilityBootstrapMouseDown(event) {
   if (!trackButton || event.button !== 0) return;
   event.preventDefault();
   const path = trackButton.getAttribute('data-tag-editor-track') || '';
+  const plain = !event.shiftKey && !event.ctrlKey && !event.metaKey;
+  const selectedPaths = getSelectedTagEditorPaths(state.tagEditor.tracks || []);
+  // Owner 2026-11-16, as in the shared track table: a drag that starts on a selected track deselects
+  // the tracks it passes; a click without a drag still selects only that track (resolved on mouseup).
+  const removing = plain && selectedPaths.length > 1 && selectedPaths.includes(path);
+  state.tagEditor.dragSelecting = plain;
+  state.tagEditor.dragAnchorPath = plain ? path : '';
+  state.tagEditor.dragBasePaths = removing ? selectedPaths : null;
+  state.tagEditor.dragMoved = false;
+  if (removing) return;
   selectTagEditorTrack(path, event);
-  if (!event.shiftKey && !event.ctrlKey && !event.metaKey) {
-    state.tagEditor.dragSelecting = true;
-    state.tagEditor.dragAnchorPath = path;
-  }
   renderTagEditor({ preserveTrackList: true });
   syncTagEditorAutoNumberControls();
 }
@@ -1634,8 +1640,13 @@ function handleUtilityBootstrapMouseOver(event) {
   const trackButton = event.target.closest('[data-tag-editor-track]');
   if (!trackButton) return false;
   const path = trackButton.getAttribute('data-tag-editor-track') || '';
+  state.tagEditor.dragMoved ||= path !== state.tagEditor.dragAnchorPath;
   const rangePaths = getTagEditorRangePaths(state.tagEditor.dragAnchorPath, path);
-  setTagEditorSelectedPaths(rangePaths, state.tagEditor.dragAnchorPath);
+  const basePaths = state.tagEditor.dragBasePaths;
+  setTagEditorSelectedPaths(
+    basePaths ? basePaths.filter((selectedPath) => !rangePaths.includes(selectedPath)) : rangePaths,
+    state.tagEditor.dragAnchorPath,
+  );
   renderTagEditor({ preserveTrackList: true });
   syncTagEditorAutoNumberControls();
   return true;
@@ -1697,8 +1708,18 @@ function handleUtilityBootstrapMouseUp(event) {
       state.utility.problemExclusionClearOnClick = false;
     }, 0);
   }
+  const pressedSelectedPath = state.tagEditor.dragBasePaths && !state.tagEditor.dragMoved
+    ? state.tagEditor.dragAnchorPath
+    : '';
   state.tagEditor.dragSelecting = false;
   state.tagEditor.dragAnchorPath = '';
+  state.tagEditor.dragBasePaths = null;
+  state.tagEditor.dragMoved = false;
+  if (pressedSelectedPath) {
+    selectTagEditorTrack(pressedSelectedPath);
+    renderTagEditor({ preserveTrackList: true });
+    syncTagEditorAutoNumberControls();
+  }
 }
 
 function toggleUtilityLoopGroupCollapse(groupKey) {

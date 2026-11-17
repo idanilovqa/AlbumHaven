@@ -415,6 +415,8 @@ function openTagEditor(album, options = {}) {
     anchorPath: getTagEditorTrackIdentity(tracks[0]),
     dragSelecting: false,
     dragAnchorPath: '',
+    dragBasePaths: null,
+    dragMoved: false,
     reorder: null,
     values,
     sessionMutationClaim: claimTagEditViewMutation(album),

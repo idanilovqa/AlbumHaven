@@ -402,3 +402,45 @@ test('unchanged repair-choice mouseover does not rerender or detach tags and mou
   assert.equal(context.state.tagEditor.dragSelecting, false);
   assert.equal(context.state.tagEditor.dragAnchorPath, '');
 });
+
+test('Edit Tags: dragging over selected tracks deselects them, while a click selects only that track', () => {
+  // Owner 2026-11-16: a second drag over selected tracks reselected them instead of deselecting.
+  const order = ['01', '02', '03', '04', '05'];
+  const trackButton = (path) => ({
+    matches: ['[data-tag-editor-track]'],
+    getAttribute: (name) => (name === 'data-tag-editor-track' ? path : ''),
+  });
+  const setup = (selected) => {
+    const context = createRuntimeContext();
+    context.state.tagEditor.tracks = order.map((path) => ({ path }));
+    context.state.tagEditor.selectedPaths = [...selected];
+    context.getSelectedTagEditorPaths = () => [...context.state.tagEditor.selectedPaths];
+    context.getTagEditorRangePaths = (from, to) => {
+      const [a, b] = [order.indexOf(from), order.indexOf(to)].sort((x, y) => x - y);
+      return order.slice(a, b + 1);
+    };
+    context.setTagEditorSelectedPaths = (paths) => { context.state.tagEditor.selectedPaths = [...paths]; };
+    context.selectTagEditorTrack = (path) => { context.state.tagEditor.selectedPaths = [path]; };
+    context.renderTagEditor = () => {};
+    context.syncTagEditorAutoNumberControls = () => {};
+    return context;
+  };
+
+  const drag = setup(['01', '02', '03', '04']);
+  drag.handleUtilityBootstrapMouseDown(createClosestEvent(trackButton('02')));
+  assert.deepEqual(drag.state.tagEditor.selectedPaths, ['01', '02', '03', '04'], 'pressing a selected track keeps the selection');
+  drag.handleUtilityBootstrapMouseOver(createClosestEvent(trackButton('03')));
+  drag.handleUtilityBootstrapMouseUp(createClosestEvent(trackButton('03')));
+  assert.deepEqual(drag.state.tagEditor.selectedPaths, ['01', '04']);
+
+  const click = setup(['01', '02', '03']);
+  click.handleUtilityBootstrapMouseDown(createClosestEvent(trackButton('02')));
+  click.handleUtilityBootstrapMouseUp(createClosestEvent(trackButton('02')));
+  assert.deepEqual(click.state.tagEditor.selectedPaths, ['02']);
+
+  const fresh = setup(['01']);
+  fresh.handleUtilityBootstrapMouseDown(createClosestEvent(trackButton('03')));
+  fresh.handleUtilityBootstrapMouseOver(createClosestEvent(trackButton('05')));
+  fresh.handleUtilityBootstrapMouseUp(createClosestEvent(trackButton('05')));
+  assert.deepEqual(fresh.state.tagEditor.selectedPaths, ['03', '04', '05'], 'a drag from an unselected track still selects its range');
+});

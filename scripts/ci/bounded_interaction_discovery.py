@@ -14,7 +14,7 @@ or database work done per item of a loop over the whole library state
 rejects in any background entry narrower than background-batch.
 
 Calls are followed through local function aliases, sibling closures, lambdas
-and nested functions a callee runs through its parameter, and a local guard
+and functions a callee runs through its parameter, and a local guard
 lambda (`run_guard or (lambda action: action())`). Library-state evidence
 reaches closures and `**kwargs` forwarding, and a collection parameter counts
 only where the followed call passes a collection for it.
@@ -739,9 +739,15 @@ def _path_valued(node: ast.AST) -> bool:
     return False
 
 
+# In-memory streams: `Image.open(io.BytesIO(raw))` decodes bytes already read.
+MEMORY_STREAMS = frozenset({"BytesIO", "StringIO"})
+
+
 def _filesystem_operation(node: ast.Call) -> str | None:
     base, name = _call_name(node)
     attribute = isinstance(node.func, ast.Attribute)
+    if name == "open" and node.args and isinstance(node.args[0], ast.Call) and _call_name(node.args[0])[1] in MEMORY_STREAMS:
+        return None
     if (base, name) in ENUMERATION_CALLS:
         return ENUMERATION_CALLS[(base, name)]
     if attribute and name in ENUMERATION_METHODS and base not in {"glob", "fnmatch", "re"}:
@@ -1199,10 +1205,12 @@ def _invoked_arguments(node: ast.Call, targets: list[Definition], definition: De
 
 def _callees(definition: Definition, index: Index) -> list[tuple[Definition, bool, int, ast.Call]]:
     """What each call runs, with whether it runs per loop item, its line and
-    the call. A lambda or a nested function the call itself runs (see
-    `_invoked_arguments`) is followed too: `_post_commit_value(..., lambda:
-    guard(refresh_runtime_state), ...)` runs `refresh_runtime_state` here. A
-    module function passed as a callable argument is not followed yet."""
+    the call. A callable the call itself runs (see `_invoked_arguments`) is
+    followed too: a lambda through its body (`_post_commit_value(..., lambda:
+    guard(refresh_runtime_state), ...)` runs `refresh_runtime_state` here), and
+    a nested or module function passed by name (`expand(url,
+    log_event=log_app_event)` runs `log_app_event` wherever `expand` calls
+    `log_event`)."""
     found = []
     resolve = _resolver(definition, index)
     pending = deque(_facts(definition).calls)
@@ -1225,8 +1233,8 @@ def _callees(definition: Definition, index: Index) -> list[tuple[Definition, boo
         for argument in _invoked_arguments(node, targets, definition):
             if isinstance(argument, ast.Lambda):
                 pending.extend((call, in_loop) for call in _lambda_calls(argument))
-            elif isinstance(argument, ast.Name) and argument.id in _visible_nested(definition):
-                found.extend((target, in_loop, node.lineno, node) for target in resolve(argument))
+            else:
+                found.extend((target, in_loop, node.lineno, node) for target in resolve(_callable_target(argument)))
     return found
 
 

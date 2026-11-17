@@ -632,6 +632,23 @@ const DEFECTS = [
     ]],
     expected: /^rejected BI-04 library-state-scan-io:file_cache \(Path\.resolve@music_app\/services\/save_tasks\.py:\d+\) at music_app\/services\/save_tasks\.py:\d+ from py:music_app\/services\/save_tasks\.py#finalize_structural_tag_edit_save_task:background:executor via .*refresh_runtime_state > _structurally_inherited_cover_entries.* \(work class affected-set cannot do per-item I\/O over the whole library state\)$/,
   },
+  {
+    // A pasted album link expands through provider helpers that log per URL
+    // and per probe. Handing them the history-writing app logger makes every
+    // logged event open its own log-history connection: one request, N
+    // connections. The logger arrives as a plain function argument.
+    id: 'BI-05 a history-writing logger passed as an argument to per-URL provider helpers',
+    language: 'py',
+    file: 'music_app/services/cover_manual_links.py',
+    anchor: '                extract_album_page_metadata=cover_provider_fallback_web.extract_genius_album_page_metadata,\n'
+      + '                log_event=cover_provider_runtime.log_provider_event,\n',
+    replacement: '                extract_album_page_metadata=cover_provider_fallback_web.extract_genius_album_page_metadata,\n'
+      + '                log_event=_seeded_log_history_event,\n',
+    prelude: 'from music_app.services.log_history import append_log_history as _seeded_append_log_history\n\n\n'
+      + 'def _seeded_log_history_event(config, logger, action, **fields):\n'
+      + '    _seeded_append_log_history(config, {"action": action, **fields})\n',
+    expected: /^rejected BI-05 database-connect-per-item:\S+log_history_postgres\.py:\d+ at music_app\/services\/cover_manual_links\.py:\d+ from py:music_app\/routes\/api_wave_d_asgi_routes\.py#utilities_cover_lookup_add_remote:route:POST \/utilities\/cover-lookup\/add-remote via .*_seeded_log_history_event > /,
+  },
 ];
 
 function seededOverrides() {

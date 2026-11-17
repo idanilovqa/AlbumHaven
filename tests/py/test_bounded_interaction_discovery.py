@@ -1081,3 +1081,63 @@ def refresh_dismissals(store):
     analysis = discovery.analyze_python_repository(tmp_path)
     reached = sorted(hazard["entrypoint"].split("#")[1] for hazard in analysis["hazards"])
     assert "refresh_preview:refresh:name" not in " ".join(reached)
+
+
+def test_a_function_passed_by_name_is_followed_only_where_the_callee_calls_it(tmp_path: Path):
+    """`expand(url, log_event=write_history)` runs `write_history` once per
+    URL, because `expand` calls its `log_event`; a callee that only stores or
+    hands the function to an executor does not run it."""
+    _write(tmp_path, "music_app/services/history.py", """
+import psycopg
+
+def write_history(action):
+    with psycopg.connect("postgresql://") as connection:
+        connection.execute("insert into history values (%s)", (action,))
+
+def log_only(action):
+    return action
+""")
+    _write(tmp_path, "music_app/routes/links.py", """
+from music_app.services.history import log_only, write_history
+
+def expand(url, *, log_event):
+    log_event(url)
+    return [url]
+
+def remember(url, *, log_event):
+    HANDLERS.append(log_event)
+    POOL.submit(log_event, url)
+    return [url]
+
+@router.post("/history-per-url")
+def history_per_url(urls):
+    return [expand(url, log_event=write_history) for url in urls]
+
+@router.post("/log-per-url")
+def log_per_url(urls):
+    return [expand(url, log_event=log_only) for url in urls]
+
+@router.post("/stored-per-url")
+def stored_per_url(urls):
+    return [remember(url, log_event=write_history) for url in urls]
+""")
+    [hazard] = _hazards(tmp_path, "BI-05")
+    assert hazard["entrypoint"].endswith("#history_per_url:route:POST /history-per-url")
+    assert hazard["reject"] is True
+    # Attributed to the call that hands it over, where the loop is.
+    assert hazard["via"] == ["write_history"]
+
+
+def test_opening_an_in_memory_stream_is_not_filesystem_work(tmp_path: Path):
+    _write(tmp_path, "music_app/routes/images.py", """
+import io
+from PIL import Image
+
+@router.post("/decode")
+def decode(blobs, paths):
+    decoded = [Image.open(io.BytesIO(blob)) for blob in blobs]
+    files = [Image.open(path) for path in paths]
+    return decoded, files
+""")
+    probes = [hazard["line"] for hazard in _hazards(tmp_path, "BI-06")]
+    assert probes == [8]

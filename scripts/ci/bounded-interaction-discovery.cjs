@@ -29,8 +29,9 @@ const OBSERVERS = new Set(['MutationObserver', 'ResizeObserver', 'IntersectionOb
 const MAX_RESOLUTION_DEPTH = 8;
 const GLOBAL_OBJECTS = new Set(['window', 'globalThis', 'global', 'self']);
 const ITERATION_METHODS = new Set([
-  'forEach', 'map', 'filter', 'reduce', 'sort', 'find', 'findIndex', 'findLast', 'some', 'every', 'flatMap',
-  'includes', 'indexOf', 'join', 'slice',
+  'forEach', 'map', 'filter', 'reduce', 'reduceRight', 'sort', 'find', 'findIndex', 'findLast', 'findLastIndex', 'some',
+  'every', 'flat', 'flatMap', 'includes', 'indexOf', 'lastIndexOf', 'join', 'slice', 'concat', 'toSorted', 'toReversed',
+  'toSpliced',
 ]);
 const LOOP_BOUND_OPERATORS = new Set(['<', '<=', '>', '>=', '!==', '!=']);
 const DOM_COLLECTION_QUERIES = new Set(['querySelectorAll', 'getElementsByClassName', 'getElementsByTagName', 'getElementsByName']);
@@ -915,6 +916,77 @@ function isSharedLengthBound(test, analysis) {
   return [test.left, test.right].some(side => memberProperty(side) === 'length' && isSharedCollection(side.object, analysis));
 }
 
+// True when an expression reads a shared collection's `.length`.
+function readsSharedLength(node, analysis) {
+  let found = false;
+  walkAst(node, (child) => {
+    if (found) return false;
+    if (memberProperty(child) === 'length' && isSharedCollection(child.object, analysis)) found = true;
+    return undefined;
+  });
+  return found;
+}
+
+// The names a loop test compares or steps: `i` in `i >= 0`, `i--`, or a bare `i`.
+function loopCounters(test) {
+  if (test?.type === 'LogicalExpression') return [...loopCounters(test.left), ...loopCounters(test.right)];
+  if (test?.type === 'Identifier') return [test.name];
+  if (test?.type === 'UpdateExpression' && test.argument.type === 'Identifier') return [test.argument.name];
+  if (test?.type === 'BinaryExpression' && LOOP_BOUND_OPERATORS.has(test.operator)) {
+    return [test.left, test.right].filter(side => side.type === 'Identifier').map(side => side.name);
+  }
+  return [];
+}
+
+// Names a function assigns a value that reads a shared `.length`.
+function sharedLengthStarts(fnNode, analysis) {
+  const names = new Set();
+  walkAst(fnNode.body || fnNode, (node) => {
+    const [target, value] = node.type === 'VariableDeclarator' ? [node.id, node.init]
+      : node.type === 'AssignmentExpression' ? [node.left, node.right] : [];
+    if (target?.type === 'Identifier' && value && readsSharedLength(value, analysis)) names.add(target.name);
+  });
+  return names;
+}
+
+// The direction (`up`, `down`) each counter a loop steps by `++`, `--`, `+=`,
+// or `-=` moves in. A binary search's `high = middle - 1` is not a step.
+function steppedCounters(loop) {
+  const steps = new Map();
+  walkAst(loop, (node) => {
+    const [target, direction] = node.type === 'UpdateExpression' ? [node.argument, node.operator === '++' ? 'up' : 'down']
+      : node.type === 'AssignmentExpression' && ['+=', '-='].includes(node.operator) ? [node.left, node.operator === '+=' ? 'up' : 'down']
+        : [];
+    if (target?.type === 'Identifier') steps.set(target.name, direction);
+  });
+  return steps;
+}
+
+// A loop walking a shared collection through a counter that holds its length:
+// one that starts at the length and counts down
+// (`for (let i = rows.length - 1; i >= 0; i--)`, `let i = rows.length; while (i--)`),
+// or a counter stepping up to a fixed copy of the length
+// (`const n = rows.length; for (let i = 0; i < n; i++)`).
+function walksSharedLengthCounter(loop, lengthStarts) {
+  const counters = loopCounters(loop.test);
+  const steps = steppedCounters(loop);
+  return counters.some(name => lengthStarts.has(name) && (
+    steps.get(name) === 'down'
+    || (!steps.has(name) && counters.some(other => steps.get(other) === 'up'))
+  ));
+}
+
+// `Array.prototype.forEach.call(rows, ...)` and `[].map.apply(rows, ...)`: the
+// borrowed iteration method, or ''.
+function borrowedIterationMethod(call) {
+  const callee = call.callee;
+  if (callee.type !== 'MemberExpression' || !['call', 'apply'].includes(memberProperty(callee))) return '';
+  const method = memberProperty(callee.object);
+  const owner = callee.object.object;
+  const isArrayPrototype = memberProperty(owner) === 'prototype' && owner.object?.name === 'Array';
+  return ITERATION_METHODS.has(method) && (isArrayPrototype || owner?.type === 'ArrayExpression') ? method : '';
+}
+
 // Direct hazards inside one function body (nested inline callbacks included,
 // because they run on the same event).
 const hazardCache = new WeakMap();
@@ -930,6 +1002,9 @@ function computeFunctionHazards(fnNode, file, index) {
   // Spreading or enumerating the keys of a fixed-shape object is bounded.
   const sharedKeys = node => shared(node) && !analysis.shapeOf(node);
   const objectSpreads = new Set();
+  const lengthStarts = sharedLengthStarts(fnNode, analysis);
+  const walksSharedLength = loop => isSharedLengthBound(loop.test, analysis)
+    || walksSharedLengthCounter(loop, lengthStarts);
   const hazards = [];
   walkAst(fnNode.body || fnNode, (node) => {
     if (node.type === 'ObjectExpression') node.properties.forEach(property => property.type === 'SpreadElement' && objectSpreads.add(property));
@@ -937,8 +1012,11 @@ function computeFunctionHazards(fnNode, file, index) {
       const name = calleeName(node);
       const callee = node.callee;
       const at = callee.type === 'MemberExpression' ? callee.property : callee;
+      const borrowed = borrowedIterationMethod(node);
       if (DOM_COLLECTION_QUERIES.has(name)) hazards.push(hazardAt('BI-01', name, at, file));
-      else if (ITERATION_METHODS.has(name) && callee.type === 'MemberExpression' && shared(callee.object)) {
+      else if (borrowed && node.arguments[0] && shared(node.arguments[0])) {
+        hazards.push(hazardAt('BI-01', `Array.prototype.${borrowed}`, at, file));
+      } else if (ITERATION_METHODS.has(name) && callee.type === 'MemberExpression' && shared(callee.object)) {
         hazards.push(hazardAt('BI-01', name, at, file));
       } else if (name === 'from' && callee.object?.name === 'Array' && node.arguments[0] && shared(node.arguments[0])) {
         hazards.push(hazardAt('BI-01', 'Array.from', at, file));
@@ -958,7 +1036,7 @@ function computeFunctionHazards(fnNode, file, index) {
       hazards.push(hazardAt('BI-01', `new ${node.callee.name}`, node, file));
     } else if ((node.type === 'ForOfStatement' && shared(node.right)) || (node.type === 'ForInStatement' && sharedKeys(node.right))) {
       hazards.push(hazardAt('BI-01', node.type === 'ForOfStatement' ? 'for-of' : 'for-in', node, file));
-    } else if (['ForStatement', 'WhileStatement', 'DoWhileStatement'].includes(node.type) && isSharedLengthBound(node.test, analysis)) {
+    } else if (['ForStatement', 'WhileStatement', 'DoWhileStatement'].includes(node.type) && walksSharedLength(node)) {
       hazards.push(hazardAt('BI-01', 'indexed-loop', node, file));
     } else if (node.type === 'SpreadElement' && (objectSpreads.has(node) ? sharedKeys(node.argument) : shared(node.argument))) {
       hazards.push(hazardAt('BI-01', 'spread', node, file));

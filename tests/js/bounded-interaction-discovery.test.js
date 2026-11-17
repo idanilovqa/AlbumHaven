@@ -473,6 +473,55 @@ test('lookups and indexed loops over owned collections and primitives are not ha
   `, FILE), []);
 });
 
+test('reverse and count-down loops, copying methods, and borrowed array methods over shared collections are hazards', () => {
+  const hazards = findJavaScriptHazards(`
+    // One report per operation and handler, so each loop has its own handler.
+    root.addEventListener('scroll', () => {
+      for (let index = state.rows.length - 1; index >= 0; index -= 1) state.rows[index].seen = true;
+    });
+    root.addEventListener('wheel', () => {
+      let remaining = state.rows.length;
+      while (remaining--) state.rows[remaining].seen = true;
+    });
+    root.addEventListener('pointermove', () => {
+      const total = state.rows.length;
+      for (let index = 0; index < total; index += 1) state.rows[index].seen = true;
+    });
+    root.addEventListener('scroll', () => {
+      state.rows.reduceRight((sum, row) => sum + row.size, 0);
+      state.rows.findLastIndex(Boolean);
+      state.rows.lastIndexOf(null);
+      state.rows.toSorted();
+      state.rows.toReversed();
+      state.rows.toSpliced(0, 1);
+      state.rows.flat();
+      state.rows.concat([]);
+      Array.prototype.forEach.call(state.rows, row => row.step());
+      [].map.apply(state.rows, [row => row.id]);
+    });
+  `, FILE);
+  assert.deepEqual(hazards.map(hazard => hazard.operation), [
+    'indexed-loop', 'indexed-loop', 'indexed-loop', 'reduceRight', 'findLastIndex', 'lastIndexOf', 'toSorted', 'toReversed',
+    'toSpliced', 'flat', 'concat', 'Array.prototype.forEach', 'Array.prototype.map',
+  ]);
+});
+
+test('a binary search or a loop that only starts at a shared length does not walk the collection', () => {
+  assert.deepEqual(findJavaScriptHazards(`
+    root.addEventListener('scroll', (event) => {
+      for (let low = 0, high = state.rows.length - 1; low <= high;) {
+        const middle = (low + high) >> 1;
+        if (state.rows[middle].top < event.y) low = middle + 1; else high = middle - 1;
+      }
+      const owned = [1, 2];
+      for (let index = state.seen.length; index < owned.length; index += 1) owned[index] = 0;
+      Array.prototype.forEach.call(owned, item => item);
+      let countdown = owned.length;
+      while (countdown--) owned[countdown] = 0;
+    });
+  `, FILE), []);
+});
+
 test('string-typed bindings are not collections, however they are reassigned or passed on', () => {
   assert.deepEqual(findJavaScriptHazards(`
     root.addEventListener('scroll', (event) => {

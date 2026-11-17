@@ -15,15 +15,15 @@ def _lock_host(connection, library_id, media_host_library_id):
 
 
 def load_scoped_roots(store, *, library_id, media_host_library_id):
-    from music_app.services.library_roots import normalize_persisted_library_root_settings, empty_library_root_settings
+    from music_app.services.library_roots import read_persisted_library_root_settings, empty_library_root_settings
     with store._connect_to_database() as connection:
         _lock_host(connection, library_id, media_host_library_id)
         row = connection.execute("select settings_payload from library.library_root_settings where library_id=%s", (library_id,)).fetchone()
-    return normalize_persisted_library_root_settings(row["settings_payload"]) if row else empty_library_root_settings()
+    return read_persisted_library_root_settings(row["settings_payload"]) if row else empty_library_root_settings()
 
 
 def save_scoped_roots(store, payload, *, library_id, media_host_library_id):
-    from music_app.services.library_roots import normalize_persisted_library_root_settings
+    from music_app.services.library_roots import normalize_persisted_library_root_settings, read_persisted_library_root_settings
     normalized = normalize_persisted_library_root_settings(payload)
     roots = _library_root_rows_from_settings(normalized)
     if not normalized["main_library_roots"]:
@@ -32,7 +32,7 @@ def save_scoped_roots(store, payload, *, library_id, media_host_library_id):
     with store._connect_to_database() as connection:
         _lock_host(connection, library_id, media_host_library_id)
         prior = connection.execute("select settings_payload from library.library_root_settings where library_id=%s for update", (library_id,)).fetchone()
-        previous = normalize_persisted_library_root_settings(prior["settings_payload"]) if prior else {}
+        previous = read_persisted_library_root_settings(prior["settings_payload"]) if prior else {}
         old = {(category, row["id"], row["path"]) for category in ("main_library_roots", "hoarding_library_roots", "new_arrivals_roots") for row in previous.get(category, [])}
         for category in ("main_library_roots", "hoarding_library_roots", "new_arrivals_roots"):
             for root in normalized[category]:

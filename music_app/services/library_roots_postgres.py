@@ -43,7 +43,7 @@ class PostgresLibraryRootSettingsStore:
     def load_settings(self, *, connection: Any | None = None) -> dict[str, object]:
         from music_app.services.library_roots import (
             empty_library_root_settings,
-            normalize_persisted_library_root_settings,
+            read_persisted_library_root_settings,
         )
 
         if connection is None:
@@ -58,7 +58,7 @@ class PostgresLibraryRootSettingsStore:
         row_mapping = _row_mapping(row)
         if "settings_payload" not in row_mapping:
             raise ValueError("Postgres library root settings row is missing settings_payload.")
-        return normalize_persisted_library_root_settings(row_mapping["settings_payload"])
+        return read_persisted_library_root_settings(row_mapping["settings_payload"])
 
     def save_settings(self, raw_payload: object) -> dict[str, object]:
         from music_app.services.library_roots import normalize_persisted_library_root_settings

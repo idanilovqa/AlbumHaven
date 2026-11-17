@@ -428,6 +428,37 @@ def test_persisted_library_root_normalizer_accepts_an_explicit_main_root(tmp_pat
     assert normalized["main_library_roots"][0]["id"] == "main"
 
 
+def test_saving_root_settings_resolves_paths_and_reading_them_never_resolves(tmp_path, monkeypatch):
+    main_spelling = tmp_path / "Main" / ".." / "Main"
+    hoard_spelling = tmp_path / "Hoard" / "." / ""
+    main_root, hoard_root = (tmp_path / "Main").resolve(), (tmp_path / "Hoard").resolve()
+
+    saved = library_roots.normalize_persisted_library_root_settings({
+        "main_library_roots": [{"id": "main-1", "path": str(main_spelling)}],
+        "hoarding_library_roots": [str(hoard_spelling)],
+        "move_policy": {
+            "preferred_main_write_root": "main-1",
+            "move_new_arrivals_to": str(hoard_spelling),
+        },
+    })
+
+    assert [root["path"] for root in saved["main_library_roots"]] == [str(main_root)]
+    assert [root["path"] for root in saved["hoarding_library_roots"]] == [str(hoard_root)]
+    assert saved["move_policy"] == {
+        "preferred_main_write_root": "main-1",
+        "move_new_arrivals_to": "hoarding_library_roots-1",
+    }
+
+    def no_filesystem(*_args, **_kwargs):
+        raise AssertionError("reading stored root settings must not resolve paths")
+
+    monkeypatch.setattr(Path, "resolve", no_filesystem)
+    monkeypatch.setattr(library_roots.os.path, "realpath", no_filesystem)
+    read = library_roots.read_persisted_library_root_settings(saved)
+    assert read == saved
+    assert library_roots._root_paths_from_settings(read) == (main_root, hoard_root)
+
+
 def test_resolve_candidate_under_root_skips_permission_denied_paths(monkeypatch):
     root = Path(r"X:\SyntheticMusic")
     candidate = Path(r"X:\SyntheticMusic\Blocked\track.mp3")

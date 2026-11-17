@@ -37,10 +37,11 @@ _CONFIGURED_ROOT_PATHS_SNAPSHOT_LOCK = RLock()
 
 
 def _root_paths_from_settings(settings: object) -> tuple[Path, ...]:
+    """Validated settings hold resolved root paths (a save resolves them)."""
     if not isinstance(settings, dict):
         return ()
     return tuple(
-        Path(str(root["path"])).resolve(strict=False)
+        Path(str(root["path"]))
         for category_key in _ROOT_KEYS
         for root in list(settings.get(category_key) or [])
         if isinstance(root, dict) and str(root.get("path") or "").strip()
@@ -121,16 +122,68 @@ def configured_library_root_paths_snapshot(
 def normalize_library_root_settings(raw_payload: object, *, fallback_main_root: Path) -> dict[str, object]:
     payload = raw_payload if isinstance(raw_payload, dict) else {}
 
-    return _normalize_library_root_settings_payload(payload, fallback_main_root=fallback_main_root)
+    return _normalize_library_root_settings_payload(
+        _with_resolved_paths(payload),
+        fallback_main_root=fallback_main_root,
+    )
 
 
 def normalize_persisted_library_root_settings(raw_payload: object) -> dict[str, object]:
+    """Validates settings about to be saved, resolving their paths once."""
+    if not isinstance(raw_payload, dict):
+        raise ValueError("Persisted library root settings must be a JSON object.")
+    return read_persisted_library_root_settings(_with_resolved_paths(raw_payload))
+
+
+def read_persisted_library_root_settings(raw_payload: object) -> dict[str, object]:
+    """Validates stored settings. Their save resolved every path, so reading
+    them never asks the filesystem (a root may be on a slow network drive)."""
     if not isinstance(raw_payload, dict):
         raise ValueError("Persisted library root settings must be a JSON object.")
     normalized = _normalize_library_root_settings_payload(raw_payload, fallback_main_root=None)
     if not normalized[_MAIN_ROOTS_KEY]:
         raise ValueError("At least one Main Library root is required.")
     return normalized
+
+
+def _resolved_path(value: str) -> Path:
+    return Path(value).expanduser().resolve(strict=False)
+
+
+def _with_resolved_paths(payload: dict[str, object]) -> dict[str, object]:
+    """The payload with each root path, and each move-policy reference that
+    names a path rather than a root id, resolved."""
+    resolved = dict(payload)
+    root_ids: set[str] = set()
+    for category in _ROOT_KEYS:
+        entries = payload.get(category)
+        if not isinstance(entries, list):
+            continue
+        resolved_entries: list[object] = []
+        for index, raw_entry in enumerate(entries, start=1):
+            entry = {"path": raw_entry} if isinstance(raw_entry, str) else raw_entry
+            if isinstance(entry, dict):
+                root_ids.add(_root_entry_id(entry, category=category, index=index))
+                path_value = str(entry.get("path") or "").strip()
+                if path_value:
+                    entry = {**entry, "path": str(_resolved_path(path_value))}
+            resolved_entries.append(entry)
+        resolved[category] = resolved_entries
+    policy = payload.get("move_policy")
+    if isinstance(policy, dict):
+        resolved["move_policy"] = {
+            field: (
+                str(_resolved_path(value.strip()))
+                if isinstance(value, str) and value.strip() and value.strip() not in root_ids
+                else value
+            )
+            for field, value in policy.items()
+        }
+    return resolved
+
+
+def _root_entry_id(entry: dict[str, object], *, category: str, index: int) -> str:
+    return str(entry.get("id") or f"{category}-{index}").strip()
 
 
 def empty_library_root_settings() -> dict[str, object]:
@@ -184,7 +237,7 @@ def get_primary_music_root(config: dict[str, object]) -> Path:
     if not isinstance(main_roots, list) or not main_roots:
         raise ValueError("Library root settings are not initialized.")
     root = main_roots[0]
-    return Path(str(root["path"])).resolve(strict=False)
+    return Path(str(root["path"]))
 
 
 def get_library_roots(config: dict[str, object]) -> list[dict[str, object]]:
@@ -458,10 +511,7 @@ def resolve_album_open_directories(config: dict[str, object], album_payload: dic
 
 
 def iter_library_root_paths(config: dict[str, object]) -> list[Path]:
-    return [
-        Path(str(root["path"])).resolve(strict=False)
-        for root in get_library_roots(config)
-    ]
+    return [Path(str(root["path"])) for root in get_library_roots(config)]
 
 
 def root_definition_for_path(roots: list[dict[str, object]], path: Path | str) -> dict[str, object] | None:
@@ -469,7 +519,7 @@ def root_definition_for_path(roots: list[dict[str, object]], path: Path | str) -
     for root in roots:
         if not isinstance(root, dict):
             continue
-        root_path = Path(str(root.get("path") or "")).resolve(strict=False)
+        root_path = Path(str(root.get("path") or ""))
         try:
             candidate.relative_to(root_path)
         except Exception:
@@ -491,8 +541,8 @@ def _normalize_root_entries(raw_entries: object, *, category: str) -> list[dict[
         path_value = str(raw_entry.get("path") or "").strip()
         if not path_value:
             raise ValueError(f"{category} entry {index} is missing a path.")
-        root_path = Path(path_value).expanduser().resolve(strict=False)
-        root_id = str(raw_entry.get("id") or f"{category}-{index}").strip()
+        root_path = Path(path_value).expanduser()
+        root_id = _root_entry_id(raw_entry, category=category, index=index)
         if not root_id:
             raise ValueError(f"{category} entry {index} is missing an id.")
         if root_id in seen_ids:
@@ -544,13 +594,13 @@ def _normalize_root_reference(reference: str, *, allowed_roots: list[dict[str, o
         raise ValueError(f"{field_name} cannot be empty.")
     allowed_ids = {str(root.get("id") or "").strip() for root in allowed_roots}
     allowed_paths = {
-        _path_key(Path(str(root.get("path") or "")).resolve(strict=False)): str(root.get("id") or "").strip()
+        _path_key(Path(str(root.get("path") or ""))): str(root.get("id") or "").strip()
         for root in allowed_roots
     }
     if normalized_reference in allowed_ids:
         return normalized_reference
 
-    normalized_path_key = _path_key(Path(normalized_reference).expanduser().resolve(strict=False))
+    normalized_path_key = _path_key(Path(normalized_reference).expanduser())
     if normalized_path_key in allowed_paths:
         return allowed_paths[normalized_path_key]
 
@@ -559,7 +609,7 @@ def _normalize_root_reference(reference: str, *, allowed_roots: list[dict[str, o
 
 def _validate_root_overlap(roots: list[dict[str, object]]) -> None:
     resolved_roots = [
-        (str(root.get("id") or ""), Path(str(root.get("path") or "")).resolve(strict=False))
+        (str(root.get("id") or ""), Path(str(root.get("path") or "")))
         for root in roots
     ]
     if not resolved_roots:
@@ -636,7 +686,8 @@ def _paths_overlap(left: Path, right: Path) -> bool:
 
 
 def _path_key(path: Path) -> str:
-    return os.path.normcase(str(path.resolve(strict=False)))
+    """Compares paths already resolved (settings roots, resolved media paths)."""
+    return os.path.normcase(str(path))
 
 
 _DISC_FOLDER_NAMES = ("cd", "disc", "disk")

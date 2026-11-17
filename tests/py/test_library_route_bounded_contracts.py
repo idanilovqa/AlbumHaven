@@ -445,7 +445,11 @@ class _CountingFileCache(dict):
             yield path
 
     def keys(self):
-        return list(iter(self))
+        # A view, as on a dict: walking it is counted, a membership test or a
+        # subset check against a few entries is not.
+        from collections.abc import KeysView
+
+        return KeysView(self)
 
     def items(self):
         return [(path, self[path]) for path in self]
@@ -1232,3 +1236,94 @@ def test_problematic_files_summary_contract_builds_once_per_library_publication_
         return counts
 
     measure_scale_pair(run=run, **_registered(interaction_id))
+
+
+def test_structural_save_finalize_contract_resolves_only_the_edited_albums_at_production_track_count(
+    library_app, tmp_path, monkeypatch,
+):
+    """Owner incident (sandbox2, 11-17): after a 4-file structural save the
+    finalizer resolved the cover path of every cached file (~163k, on a network
+    share) and the save took minutes. The real finalizer moves one track of a
+    12-track album to a new album among unrelated cached files that each have a
+    cover; it must probe the filesystem, resolve cover paths, walk the cache and
+    rebuild albums the same number of times however many unrelated files there
+    are. Only the Postgres commit is a stand-in."""
+    from music_app.services import edit_state
+    from music_app.services.library_album_index import library_album_index
+    from music_app.services.save_tasks import (
+        create_save_task,
+        finalize_structural_tag_edit_save_task,
+        save_task_result,
+    )
+
+    real_builder = edit_state.build_albums_from_file_cache
+    builder_counts: list[OperationCounts] = []
+
+    def counted_builder(*args, **kwargs):
+        builder_counts[-1].builder_calls += 1
+        return real_builder(*args, **kwargs)
+
+    monkeypatch.setattr(edit_state, "build_albums_from_file_cache", counted_builder)
+
+    def run(track_count: int) -> OperationCounts:
+        album_paths, counts = _repairable_library(library_app, tmp_path / f"finalize-{track_count}", track_count)
+        builder_counts.append(counts)
+        state = library_app.state.library_state
+        file_cache = state["file_cache"]
+        moved, sibling = album_paths[0], album_paths[1]
+        cover = str(Path(moved).parent / "cover.jpg")
+        for path in dict.keys(file_cache):
+            entry = dict.__getitem__(file_cache, path)
+            entry["cover_path"] = cover if path in album_paths else str(Path(path).parent / "cover.jpg")
+        previous = {moved: dict(dict.__getitem__(file_cache, moved))}
+        updated = {moved: {**previous[moved], "album": "Tender Buttons (Demos)"}}
+        commits: list[set[str]] = []
+
+        def persist_structural_tag_edit(*, changed_paths, **_options):
+            counts.sql_statements += 1
+            commits.append(set(changed_paths))
+            return {
+                "inventory_mutation_revision": 1, "destination_album_id": 2,
+                "destination_album_key": "broadcast::tender buttons (demos)",
+                "destination_artist_name": "Broadcast", "cover_inherited_from_structural_edit": True,
+                "relation_views": {}, "relations_last_built": 1.0,
+            }
+
+        task_id = create_save_task("edit_tags")
+        with count_filesystem_and_media(monkeypatch, counts):
+            finalize_structural_tag_edit_save_task(
+                task_id,
+                config=library_app.state.config,
+                logger=library_app.state.logger,
+                get_state=lambda: state,
+                rebuild_affected_albums_in_state=edit_state.rebuild_affected_albums_in_state,
+                persist_structural_tag_edit=persist_structural_tag_edit,
+                append_log_history=lambda _config, _entry: None,
+                log_app_event=lambda *_args, **_kwargs: None,
+                find_albums_by_track_paths=lambda _paths: [],
+                find_problematic_album_by_track_paths=lambda _paths: None,
+                updated_file_cache=updated,
+                previous_file_cache=previous,
+                changed_paths={moved},
+                requested_track_paths={moved},
+                separate_release_keys=set(),
+                changed_field_names={"album"},
+                structural_edit_fields={"album", "album_artist"},
+                log_entry={"action": "Edit tags"},
+            )
+        result = save_task_result(task_id)
+        assert result["status"] == "completed" and not result.get("warnings"), result.get("warnings")
+        assert commits == [{moved}]
+        # Published: the moved track joined its new album, which inherits the
+        # source cover, and the source album kept its other eleven tracks.
+        live = state["file_cache"]
+        assert dict.__getitem__(live, moved)["album"] == "Tender Buttons (Demos)"
+        assert dict.__getitem__(live, moved)["cover_inherited_from_structural_edit"] is True
+        assert dict.__getitem__(live, sibling)["cover_inherited_from_structural_edit"] is True
+        index = library_album_index(state)
+        assert [album.key for album in index.albums_with_any_track({moved})] == ["broadcast::tender buttons (demos)"]
+        (source,) = index.albums_with_any_track({sibling})
+        assert source.key == "broadcast::tender buttons" and len(source.tracks) == 11
+        return counts
+
+    measure_scale_pair(run=run, **_registered("py:services/save_tasks.py#finalize_structural_tag_edit_save_task"))

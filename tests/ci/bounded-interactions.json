@@ -13551,19 +13551,45 @@
     },
     {
       "id": "py:services/save_tasks.py#finalize_structural_tag_edit_save_task",
-      "action": "Finalize a structural tag edit save task and rebuild the affected albums",
+      "action": "Finalize a structural tag edit save task: commit, merge the edited entries, mark the edited albums' inherited cover and rebuild only the affected albums",
       "entrypoints": [
         "py:music_app/services/save_tasks.py#finalize_structural_tag_edit_save_task:background:executor"
       ],
       "owners": [
+        "music_app/services/edit_state.py",
+        "music_app/services/library_album_index.py",
         "music_app/services/save_tasks.py"
       ],
       "rules": [
+        "BI-04",
+        "BI-06",
         "BI-07",
         "BI-08"
       ],
       "workClass": "affected-set",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 60,
+        "production": 5012
+      },
+      "budgets": {
+        "filesystem_enumerations": 0,
+        "stat_calls": 0,
+        "path_resolves": 1,
+        "open_calls": 0,
+        "media_parses": 0,
+        "membership_rows": 0,
+        "candidate_rows": 0,
+        "builder_calls": 1,
+        "sql_statements": 1
+      },
+      "growth": {
+        "metric": "path_resolves",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_library_route_bounded_contracts.py::test_structural_save_finalize_contract_resolves_only_the_edited_albums_at_production_track_count",
+      "testIdentity": "test_structural_save_finalize_contract_resolves_only_the_edited_albums_at_production_track_count",
+      "rollback": "Revert the cherry-picked 0211ed0bf and the contract commit; that restores one cover-path resolve per candidate track."
     },
     {
       "id": "py:services/scan_cache_persistence.py#_execute_semantic_local_album_reconciliation",

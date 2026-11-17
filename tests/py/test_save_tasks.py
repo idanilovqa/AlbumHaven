@@ -2474,3 +2474,37 @@ def test_merging_committed_entries_never_changes_the_live_cache_keys_under_a_rea
     assert list(reader) == [("b.mp3", {"path": "b.mp3"})]
     assert sorted(added) == ["a.mp3", "b.mp3", "c.mp3"] and "c.mp3" not in live_file_cache
     assert "_view_payload_non_album_candidate_cache" not in library_state
+
+
+def test_structural_cover_inheritance_touches_the_filesystem_only_for_the_edited_albums(monkeypatch, tmp_path):
+    # Owner (11-17): a 4-file save took 2-3 minutes because every one of ~163k library files had its cover
+    # path resolved on the (network) filesystem. Only files of the edited albums may be resolved.
+    import pathlib
+    from music_app.services import save_tasks as save_tasks_module
+
+    cover = str(tmp_path / "Artist" / "Source" / "cover.jpg")
+    selected = str(tmp_path / "Artist" / "Source" / "01.mp3")
+    previous = {selected: {"path": selected, "album_artist": "Artist", "album": "Source", "cover_path": cover}}
+    updated = {selected: {**previous[selected], "album": "Destination"}}
+    cache = {selected: dict(updated[selected])}
+    for index in range(5000):
+        path = str(tmp_path / "Other" / f"Album {index}" / "01.mp3")
+        cache[path] = {"path": path, "album_artist": "Other", "album": f"Album {index}",
+                       "cover_path": str(tmp_path / "Other" / f"Album {index}" / "cover.jpg")}
+    resolved = []
+    real_resolve = pathlib.Path.resolve
+
+    def counting_resolve(self, *args, **kwargs):
+        resolved.append(str(self))
+        return real_resolve(self, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "resolve", counting_resolve)
+
+    # Even when every cached file is a candidate, only the edited album's files are resolved.
+    marked = save_tasks_module._structurally_inherited_cover_entries(
+        file_cache=cache, candidate_paths=list(cache), previous_file_entries=previous,
+        updated_file_entries=updated, changed_paths={selected},
+    )
+
+    assert marked[selected]["cover_inherited_from_structural_edit"] is True
+    assert len(resolved) <= 4, f"resolved {len(resolved)} cover paths"

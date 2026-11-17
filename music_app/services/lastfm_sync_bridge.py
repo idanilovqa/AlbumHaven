@@ -19,10 +19,8 @@ from music_app.services.lastfm_listen_sync import (
     build_lastfm_sync_problem,
     build_playback_complete_entry,
     build_scrobble_result_updates,
-    clear_pending_scrobble,
     load_lastfm_sync_state,
     playback_scrobble_threshold_seconds,
-    record_pending_scrobble,
 )
 
 JsonDict = dict[str, object]
@@ -163,175 +161,82 @@ def record_playback_session_complete(
     persisted_entry: JsonDict | None = None,
 ) -> tuple[JsonDict, int]:
     """``persisted_entry`` is the prepared measured entry a caller already committed; its stored
-    row is reloaded under the provider guard instead of being appended again."""
-    if payload.get("measurement_version") is not None:
-        entry = persisted_entry if persisted_entry is not None else prepare_measured_playback_completion(
-            payload,
-            user_timezone=user_timezone,
-            account_id=account_id,
-            library_id=library_id,
-            is_meaningful_listen_session=is_meaningful_listen_session,
-        )
-        if entry is None:
-            return {"ok": True, "entry": None, "scrobbled": False, "scrobble_error": "", "ignored": True}, 200
-        with measured_provider_guard(config, account_id=account_id, library_id=library_id,
-                                     device_id=entry["device_id"], session_id=entry["session_id"]) as provider_connection:
-            provider_attempted = False
-            error = _CREDENTIAL_UNAVAILABLE if entry["scrobble_eligible"] else ""
-            if persisted_entry is not None:
-                stored = load_measured(
-                    provider_connection,
-                    account_id=account_id,
-                    library_id=library_id,
-                    device_id=entry["device_id"],
-                    session_id=entry["session_id"],
-                )
-            else:
-                stored = append_listen_history_entry(
-                    config,
-                    _seed_measured_playback_completion(entry),
-                    account_id=account_id,
-                    library_id=library_id,
-                )
-            scrobbled = bool(stored.get("scrobbled"))
-            if scrobbled:
-                error = ""
-            elif stored.get("scrobble_submission_state") in ("attempting", "sent", "uncertain"):
-                error = str(stored.get("scrobble_error") or "Previous Last.fm submission outcome is uncertain")
-            elif entry["scrobble_eligible"] and lastfm_session is not None:
-                retryable = False
-                reauthentication_required = False
-                submission_state = "uncertain"
-                stored = update_listen_history_entry(
-                    config, stored["id"], attempting_updates(datetime.now(timezone.utc)),
-                    account_id=account_id, library_id=library_id,
-                ) or stored
-                try:
-                    normalized_payload = normalize_playback_track_payload(payload)
-                    provider_attempted = True
-                    submission = scrobble_track(config, normalized_payload, session=lastfm_session)
-                    scrobbled = submission is None or bool(getattr(submission, "succeeded", False))
-                    error = "" if scrobbled else str(getattr(submission, "message", "Last.fm did not accept this listen"))
-                    sent = submission is None or bool(getattr(submission, "sent", False))
-                    submission_state = "accepted" if scrobbled else "sent" if sent else "not_sent"
-                    retryable = not sent
-                except LastfmError as exc:
-                    error = str(exc)
-                    reauthentication_required = exc.reauthentication_required
-                    retryable, submission_state = failed_batch_disposition(exc)
-                stored = update_listen_history_entry(config, stored["id"], scrobble_attempt_updates(
-                    stored, attempted_at=datetime.now(timezone.utc), error=error, retryable=retryable,
-                    reauthentication_required=reauthentication_required, submission_state=submission_state,
-                ), account_id=account_id, library_id=library_id) or stored
-                log_lastfm_scrobble_event(
-                    "Last.fm scrobble succeeded" if scrobbled else "Last.fm scrobble failed",
-                    level="info" if scrobbled else "warning", payload=payload, error=error,
-                )
-            if entry["scrobble_eligible"] and not scrobbled:
-                wake_lastfm_retry()
-            public = {key: value for key, value in stored.items() if key not in ("path", "track_ref")}
-            return {
-                "ok": True,
-                "entry": public,
-                "scrobbled": scrobbled,
-                "scrobble_error": error,
-                "scrobble_attempted": provider_attempted,
-            }, 200
-    entry = build_playback_complete_entry({
-        **payload,
-        "user_timezone": user_timezone,
-    })
-    if not is_meaningful_listen_session(entry):
-        return ({
-            "ok": True,
-            "entry": None,
-            "scrobbled": False,
-            "scrobble_error": "",
-            "ignored": True,
-        }, 200)
-
-    stored_entry = append_listen_history_entry(config, entry)
-    scrobbled = bool(payload.get("scrobbled"))
-    scrobble_error = ""
-    scrobble_retryable = False
-    reauthentication_required = False
-    submission: object | None = None
-
-    if entry["scrobble_eligible"] and not scrobbled:
-        try:
-            submission = scrobble_track(config, normalize_playback_track_payload(payload))
-            scrobbled = submission is None or bool(getattr(submission, "succeeded", False))
-            if not scrobbled:
-                scrobble_error = str(getattr(submission, "message", "") or "Last.fm scrobble was not accepted.")
-                scrobble_retryable = not bool(getattr(submission, "sent", False))
-        except LastfmError as exc:
-            scrobble_error = str(exc)
-            scrobble_retryable = bool(exc.retryable or exc.reauthentication_required)
-            reauthentication_required = exc.reauthentication_required
-            log_lastfm_scrobble_event(
-                "Last.fm scrobble queued",
-                level="warning",
-                payload=payload,
-                error=scrobble_error,
-                retry_count=1,
-            )
-
-    if entry["scrobble_eligible"] and scrobbled:
-        log_lastfm_scrobble_event(
-            "Last.fm scrobble succeeded",
-            level="info",
-            payload=payload,
-            retry_count=1,
-        )
-
-    submission_sent = bool(submission is None or getattr(submission, "sent", False))
-    attempted_at = datetime.now(timezone.utc).isoformat() if entry["scrobble_eligible"] and submission_sent else ""
-    retry_count = 1 if entry["scrobble_eligible"] and submission_sent else 0
-    scrobble_updates = build_scrobble_result_updates(
-        scrobbled=scrobbled,
-        scrobble_error=scrobble_error,
-        attempted_at=attempted_at,
-        retry_count=retry_count,
+    row is reloaded under the provider guard instead of being appended again. Only a measured
+    listen is accepted; every route checks its measurement first."""
+    if payload.get("measurement_version") is None:
+        raise MeasuredListenError("Listen completion must be measured")
+    entry = persisted_entry if persisted_entry is not None else prepare_measured_playback_completion(
+        payload,
+        user_timezone=user_timezone,
+        account_id=account_id,
+        library_id=library_id,
+        is_meaningful_listen_session=is_meaningful_listen_session,
     )
-    if entry["scrobble_eligible"] and not scrobbled:
-        scrobble_updates.update(
-            {
-                "scrobble_retryable": scrobble_retryable,
-                "scrobble_reauthentication_required": reauthentication_required,
-                "sync_problem": _scrobble_sync_problem(
-                    scrobble_error, retryable=scrobble_retryable,
-                    reauthentication_required=reauthentication_required,
-                ),
-            }
-        )
-    stored_entry = update_listen_history_entry(
-        config,
-        str(stored_entry.get("id") or ""),
-        scrobble_updates,
-    ) or stored_entry
-    listen_id = str(stored_entry.get("id") or "")
-
-    if entry["scrobble_eligible"] and scrobbled:
-        clear_pending_scrobble(config, listen_id=listen_id)
-    elif entry["scrobble_eligible"] and scrobble_error and scrobble_retryable:
-        record_pending_scrobble(
-            config,
-            listen_id=listen_id,
-            entry=stored_entry,
-            retry_count=retry_count,
-            error=scrobble_error,
-        )
-    elif entry["scrobble_eligible"] and scrobble_error:
-        clear_pending_scrobble(config, listen_id=listen_id)
-    if entry["scrobble_eligible"] and not scrobbled:
-        wake_lastfm_retry()
-
-    return ({
-        "ok": True,
-        "entry": stored_entry,
-        "scrobbled": scrobbled,
-        "scrobble_error": scrobble_error,
-    }, 200)
+    if entry is None:
+        return {"ok": True, "entry": None, "scrobbled": False, "scrobble_error": "", "ignored": True}, 200
+    with measured_provider_guard(config, account_id=account_id, library_id=library_id,
+                                 device_id=entry["device_id"], session_id=entry["session_id"]) as provider_connection:
+        provider_attempted = False
+        error = _CREDENTIAL_UNAVAILABLE if entry["scrobble_eligible"] else ""
+        if persisted_entry is not None:
+            stored = load_measured(
+                provider_connection,
+                account_id=account_id,
+                library_id=library_id,
+                device_id=entry["device_id"],
+                session_id=entry["session_id"],
+            )
+        else:
+            stored = append_listen_history_entry(
+                config,
+                _seed_measured_playback_completion(entry),
+                account_id=account_id,
+                library_id=library_id,
+            )
+        scrobbled = bool(stored.get("scrobbled"))
+        if scrobbled:
+            error = ""
+        elif stored.get("scrobble_submission_state") in ("attempting", "sent", "uncertain"):
+            error = str(stored.get("scrobble_error") or "Previous Last.fm submission outcome is uncertain")
+        elif entry["scrobble_eligible"] and lastfm_session is not None:
+            retryable = False
+            reauthentication_required = False
+            submission_state = "uncertain"
+            stored = update_listen_history_entry(
+                config, stored["id"], attempting_updates(datetime.now(timezone.utc)),
+                account_id=account_id, library_id=library_id,
+            ) or stored
+            try:
+                normalized_payload = normalize_playback_track_payload(payload)
+                provider_attempted = True
+                submission = scrobble_track(config, normalized_payload, session=lastfm_session)
+                scrobbled = submission is None or bool(getattr(submission, "succeeded", False))
+                error = "" if scrobbled else str(getattr(submission, "message", "Last.fm did not accept this listen"))
+                sent = submission is None or bool(getattr(submission, "sent", False))
+                submission_state = "accepted" if scrobbled else "sent" if sent else "not_sent"
+                retryable = not sent
+            except LastfmError as exc:
+                error = str(exc)
+                reauthentication_required = exc.reauthentication_required
+                retryable, submission_state = failed_batch_disposition(exc)
+            stored = update_listen_history_entry(config, stored["id"], scrobble_attempt_updates(
+                stored, attempted_at=datetime.now(timezone.utc), error=error, retryable=retryable,
+                reauthentication_required=reauthentication_required, submission_state=submission_state,
+            ), account_id=account_id, library_id=library_id) or stored
+            log_lastfm_scrobble_event(
+                "Last.fm scrobble succeeded" if scrobbled else "Last.fm scrobble failed",
+                level="info" if scrobbled else "warning", payload=payload, error=error,
+            )
+        if entry["scrobble_eligible"] and not scrobbled:
+            wake_lastfm_retry()
+        public = {key: value for key, value in stored.items() if key not in ("path", "track_ref")}
+        return {
+            "ok": True,
+            "entry": public,
+            "scrobbled": scrobbled,
+            "scrobble_error": error,
+            "scrobble_attempted": provider_attempted,
+        }, 200
 
 
 def wake_lastfm_retry() -> None:

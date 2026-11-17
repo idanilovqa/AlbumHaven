@@ -147,27 +147,6 @@ def build_scrobble_result_updates(
     }
 
 
-def record_pending_scrobble(
-    config: dict[str, object],
-    *,
-    listen_id: str,
-    entry: dict[str, object],
-    retry_count: int,
-    error: str,
-) -> None:
-    normalized_listen_id = str(listen_id or "").strip()
-    if normalized_listen_id:
-        record_retry_results(config, pending_changes={normalized_listen_id: {
-            **entry, "scrobble_retry_count": retry_count, "scrobble_error": error,
-        }}, summary=None)
-
-
-def clear_pending_scrobble(config: dict[str, object], *, listen_id: str) -> None:
-    normalized_listen_id = str(listen_id or "").strip()
-    if normalized_listen_id:
-        record_retry_results(config, pending_changes={normalized_listen_id: None}, summary=None)
-
-
 def record_retry_results(
     config: dict[str, object],
     *,

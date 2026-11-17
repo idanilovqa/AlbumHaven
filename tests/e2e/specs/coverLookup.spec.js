@@ -1296,6 +1296,11 @@ test('FTC-COVERS-039 stale split identity stays open and chooses an exact curren
     expect(await staleSession.galleryActions.selectAlbumDetailsByIdentity(sourceIdentity))
       .toEqual(sourceIdentity);
     await staleSession.trackModalActions.waitForLoadedSummary();
+    const staleUrl = staleSession.page.url();
+    const staleNavigations = [];
+    staleSession.page.on('framenavigated', (frame) => {
+      if (frame === staleSession.page.mainFrame()) staleNavigations.push(frame.url());
+    });
 
     await tagEditorActions.openForAlbum({
       album: SPLIT_FIXTURE.album,
@@ -1311,14 +1316,30 @@ test('FTC-COVERS-039 stale split identity stays open and chooses an exact curren
     splitApplied = true;
     await trackModalActions.closeIfOpen();
 
-    await staleSession.trackModalActions.waitForIdentitySplitChoices([
-      SPLIT_FIXTURE.album,
-      SPLIT_FIXTURE.splitAlbum,
-    ]);
-    const splitSummary = await staleSession.trackModalActions.chooseCurrentRelease(
+    // Album Details opened from a gallery card never asks: it keeps the exact source
+    // release, and the gallery shows the split release as its own card.
+    await expect.poll(
+      async () => (await staleSession.trackModalActions.readTrackTitles()).length,
+      { timeout: 60_000 },
+    ).toBe(16 - SPLIT_FIXTURE.filenames.length);
+    await expect(staleSession.trackModalActions.trackModal.title).toContainText(SPLIT_FIXTURE.album);
+    await expect(staleSession.trackModalActions.trackModal.title).not.toContainText(SPLIT_FIXTURE.splitAlbum);
+    await expect(staleSession.trackModalActions.trackModal.splitChooser).toHaveCount(0);
+    await staleSession.trackModalActions.closeIfOpen();
+    // The gallery behind the modal picked up the split release by itself.
+    await staleSession.galleryActions.waitForAlbumVisibleUnderHeading(
+      SPLIT_FIXTURE.artist,
       SPLIT_FIXTURE.splitAlbum,
     );
+    expect(staleSession.page.url()).toBe(staleUrl);
+    expect(staleNavigations).toEqual([]);
+    await staleSession.galleryActions.selectAlbumDetailsByIdentity({
+      ...sourceIdentity,
+      album: SPLIT_FIXTURE.splitAlbum,
+    });
+    const splitSummary = await staleSession.trackModalActions.waitForInteractiveSummary();
     expect(splitSummary.title).toContain(SPLIT_FIXTURE.splitAlbum);
+    expect(splitSummary.trackRows).toBe(SPLIT_FIXTURE.filenames.length);
     await staleSession.trackModalActions.closeIfOpen();
 
     await coverLookupActions.openDrawer();

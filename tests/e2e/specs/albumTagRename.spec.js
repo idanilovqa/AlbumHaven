@@ -64,7 +64,7 @@ const POST_EDIT_DEGRADATION_BUDGET = defineTimingBudget({
   graceMs: POST_EDIT_DEGRADATION_GRACE_MS,
 });
 
-test('FTC-ALBUM-DETAILS-029 stale album references follow merges and require a current release after splits', { tag: '@area:tag-edit' }, async ({
+test('FTC-ALBUM-DETAILS-029 stale album references follow merges and return to the gallery after splits', { tag: '@area:tag-edit' }, async ({
   freshBrowserSession,
   galleryActions,
   stepLogger,
@@ -101,6 +101,31 @@ test('FTC-ALBUM-DETAILS-029 stale album references follow merges and require a c
     await staleCardSession.context.setOffline(true);
   });
 
+  const liveSession = await freshBrowserSession.create();
+  const liveGallery = liveSession.galleryActions.galleryPage;
+  const liveNavigations = [];
+  const recordLiveNavigation = (frame) => {
+    if (frame === liveSession.page.mainFrame()) liveNavigations.push(frame.url());
+  };
+  let liveBefore = null;
+  await stepLogger.step('Keep the source card on screen in a client that never clicks', async () => {
+    await liveSession.galleryActions.goto(ARTIST_VIEW_URL);
+    await liveSession.galleryActions.waitForGalleryReady();
+    await liveSession.galleryActions.waitForAlbumVisibleUnderHeading(
+      FIXTURE_ARTIST,
+      FAILURE_FIXTURE_ALBUM,
+    );
+    liveBefore = {
+      url: liveSession.page.url(),
+      scrollTop: await liveGallery.readScrollTop(),
+      heading: await liveGallery.headingByArtistName(FIXTURE_ARTIST).boundingBox(),
+    };
+    expect(liveBefore.heading).not.toBeNull();
+    liveSession.page.on('framenavigated', recordLiveNavigation);
+  });
+
+  const staleSplitNotice = staleSplitSession.trackModalActions.watchForChangedAlbumNotice();
+  let splitSavedAt = 0;
   await stepLogger.step('Split both tracks into distinct current releases', async () => {
     await galleryActions.goto(ARTIST_VIEW_URL);
     await galleryActions.waitForGalleryReady();
@@ -129,41 +154,65 @@ test('FTC-ALBUM-DETAILS-029 stale album references follow merges and require a c
     await tagEditorActions.selectTrackByFilename(FAILURE_FIXTURE_SECOND_TRACK);
     await tagEditorActions.setAlbumName(LINEAGE_SPLIT_ALBUM_B);
     expect((await tagEditorActions.applyAndWaitForSavedFiles()).save_task_status).toBe('completed');
+    splitSavedAt = Date.now();
     await trackModalActions.closeIfOpen();
     await galleryActions.waitForAlbumHidden(FAILURE_FIXTURE_ALBUM);
   });
 
-  await stepLogger.step('Resolve the stale source card through the visible split selector', async () => {
-    await staleSplitSession.trackModalActions.waitForIdentitySplitChoices([
-      LINEAGE_SPLIT_ALBUM_A,
-      LINEAGE_SPLIT_ALBUM_B,
-    ]);
-    const summary = await staleSplitSession.trackModalActions.chooseCurrentRelease(
-      LINEAGE_SPLIT_ALBUM_A,
-    );
-    expect(summary.title).toBe(albumDetailsTitle(LINEAGE_SPLIT_ALBUM_A));
-    expect(summary.trackRows).toBe(1);
-    await staleSplitSession.trackModalActions.close();
+  await stepLogger.step('Show both split cards in the untouched client without a click or reload', async () => {
+    try {
+      await liveSession.galleryActions.waitForAlbumHidden(FAILURE_FIXTURE_ALBUM);
+      for (const album of [LINEAGE_SPLIT_ALBUM_A, LINEAGE_SPLIT_ALBUM_B]) {
+        await liveSession.galleryActions.waitForAlbumVisibleUnderHeading(FIXTURE_ARTIST, album);
+      }
+      const liveUpdateMs = Date.now() - splitSavedAt;
+      test.info().annotations.push({ type: 'live-split-update-ms', description: String(liveUpdateMs) });
+      expect(liveSession.page.url()).toBe(liveBefore.url);
+      expect(liveNavigations).toEqual([]);
+      await expect.poll(() => liveGallery.readScrollTop()).toBe(liveBefore.scrollTop);
+      const headingAfter = await liveGallery.headingByArtistName(FIXTURE_ARTIST).boundingBox();
+      expect(headingAfter).not.toBeNull();
+      expect(Math.abs(headingAfter.y - liveBefore.heading.y)).toBeLessThanOrEqual(1);
+      await expect(liveSession.trackModalActions.trackModal.dialog).toBeHidden();
+    } finally {
+      liveSession.page.off('framenavigated', recordLiveNavigation);
+    }
   });
 
-  await stepLogger.step('Click the rendered stale card and resolve it to a current release', async () => {
-    await staleCardSession.context.setOffline(false);
-    await staleCardSession.galleryActions.selectAlbumDetailsByIdentity({
-      artist: FIXTURE_ARTIST,
-      album: FAILURE_FIXTURE_ALBUM,
-      year: FIXTURE_YEAR,
+  // Owner rule: a gallery-opened album never offers the split chooser, because the
+  // gallery shows every release the split produced.
+  for (const [label, session, comeOnline, notice] of [
+    ['open source album', staleSplitSession, false, staleSplitNotice],
+    ['rendered stale card', staleCardSession, true, undefined],
+  ]) {
+    await stepLogger.step(`Send the ${label} back to the refreshed gallery`, async () => {
+      const noticeShown = notice || session.trackModalActions.watchForChangedAlbumNotice();
+      if (comeOnline) {
+        await session.context.setOffline(false);
+        await session.galleryActions.selectAlbumDetailsByIdentity({
+          artist: FIXTURE_ARTIST,
+          album: FAILURE_FIXTURE_ALBUM,
+          year: FIXTURE_YEAR,
+        });
+      }
+      await session.trackModalActions.waitForChangedAlbumNotice(noticeShown);
+      await session.galleryActions.waitForAlbumHidden(FAILURE_FIXTURE_ALBUM);
+      for (const album of [LINEAGE_SPLIT_ALBUM_A, LINEAGE_SPLIT_ALBUM_B]) {
+        await session.galleryActions.waitForAlbumVisibleUnderHeading(FIXTURE_ARTIST, album);
+      }
+      await session.galleryActions.selectAlbumDetailsByIdentity({
+        artist: FIXTURE_ARTIST,
+        album: LINEAGE_SPLIT_ALBUM_A,
+        year: FIXTURE_YEAR,
+      });
+      const summary = await session.trackModalActions.waitForInteractiveSummary();
+      expect(summary.title).toBe(albumDetailsTitle(LINEAGE_SPLIT_ALBUM_A));
+      expect(summary.trackRows).toBe(1);
+      expect(await session.trackModalActions.readTrackTitles()).toHaveLength(1);
+      await expect(session.trackModalActions.trackModal.splitChooser).toHaveCount(0);
+      await session.trackModalActions.close();
     });
-    await staleCardSession.trackModalActions.waitForIdentitySplitChoices([
-      LINEAGE_SPLIT_ALBUM_A,
-      LINEAGE_SPLIT_ALBUM_B,
-    ]);
-    const summary = await staleCardSession.trackModalActions.chooseCurrentRelease(
-      LINEAGE_SPLIT_ALBUM_A,
-    );
-    expect(summary.title).toBe(albumDetailsTitle(LINEAGE_SPLIT_ALBUM_A));
-    expect(summary.trackRows).toBe(1);
-    await staleCardSession.trackModalActions.close();
-  });
+  }
 
   const staleMergeSession = await freshBrowserSession.create();
   await stepLogger.step('Keep one split-release card stale before it merges', async () => {
@@ -223,6 +272,34 @@ test('FTC-ALBUM-DETAILS-029 stale album references follow merges and require a c
       year: FIXTURE_YEAR,
     });
     expect((await trackModalActions.waitForInteractiveSummary()).trackRows).toBe(2);
+  });
+
+  const firstPaintSession = await freshBrowserSession.create();
+  await stepLogger.step('Open the exact card from first paint after the save', async () => {
+    // CI saw /view-data answer 503 right after a save, leaving first-paint cards in charge;
+    // they must open their own release by id, never by a key shared by several releases.
+    const requests = firstPaintSession.galleryActions.recordAlbumDetailsRequests();
+    try {
+      // No gallery-ready wait: the click may land before the first /view-data reply.
+      await firstPaintSession.galleryActions.goto(ARTIST_VIEW_URL);
+      await firstPaintSession.galleryActions.waitForAlbumVisibleUnderHeading(
+        FIXTURE_ARTIST,
+        FAILURE_FIXTURE_ALBUM,
+      );
+      await firstPaintSession.galleryActions.selectAlbumDetailsByIdentity({
+        artist: FIXTURE_ARTIST,
+        album: FAILURE_FIXTURE_ALBUM,
+        year: FIXTURE_YEAR,
+      });
+      const summary = await firstPaintSession.trackModalActions.waitForInteractiveSummary();
+      expect(summary.title).toBe(albumDetailsTitle(FAILURE_FIXTURE_ALBUM));
+      expect(summary.trackRows).toBe(2);
+      expect(await firstPaintSession.trackModalActions.readTrackTitles()).toHaveLength(2);
+      await expect(firstPaintSession.trackModalActions.trackModal.splitChooser).toHaveCount(0);
+      requests.expectExactCardOpens();
+    } finally {
+      requests.stop();
+    }
   });
 });
 

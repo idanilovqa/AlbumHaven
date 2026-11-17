@@ -1133,7 +1133,8 @@ async def news_center(request: Request) -> Response:
     config = _app_config(request)
     route_logger = _app_logger(request)
     library_state = _library_state(request)
-    payload = build_news_payload(
+    payload = await run_in_threadpool(
+        build_news_payload,
         query_args=query_args,
         tab=query_args.get("tab"),
         source=query_args.get("source"),

@@ -74,6 +74,7 @@ export class SettingsIntegrations {
     expect(menuBox).not.toBeNull();
     expect(menuBox.width).toBeGreaterThanOrEqual(triggerBox.width - 1);
     expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(this.page.viewportSize().width);
+    // parity-check: allow-read-only-measurement-evaluate -- read whether any rendered choice text is clipped
     const clipped = await menu.getByRole('menuitemradio').evaluateAll((rows) => rows
       .filter((row) => [row, ...row.querySelectorAll('*')].some((node) => node.clientWidth > 0 && node.scrollWidth > node.clientWidth + 1))
       .map((row) => row.textContent.trim()));

@@ -340,6 +340,56 @@ def many(paths):
     ]
 
 
+def test_os_path_probes_and_path_resolution_count_per_item(tmp_path: Path):
+    _write(tmp_path, "music_app/routes/read.py", """
+import os
+from pathlib import Path
+
+@router.get("/real")
+def real(paths):
+    return [os.path.realpath(path) for path in paths]
+
+@router.get("/probed")
+def probed(paths):
+    return [path for path in paths if os.path.isfile(path) and os.path.getsize(path)]
+
+def constructed(path):
+    return Path(path).resolve()
+
+def derived(root, path):
+    return (Path(root) / path).parent.resolve()
+
+def strict(path):
+    return path.resolve(strict=False)
+
+@router.get("/resolved")
+def resolved(paths, root):
+    return [(constructed(path), derived(root, path), strict(path)) for path in paths]
+""")
+    hazards = discovery.analyze_python_repository(tmp_path)["hazards"]
+    assert sorted((item["entrypoint"].split("#")[1], item["operation"], item["function"]) for item in hazards) == [
+        ("probed:route:GET /probed", "os.path.getsize", "probed"),
+        ("probed:route:GET /probed", "os.path.isfile", "probed"),
+        ("real:route:GET /real", "os.path.realpath", "real"),
+        ("resolved:route:GET /resolved", "Path.resolve", "constructed"),
+        ("resolved:route:GET /resolved", "Path.resolve", "derived"),
+        ("resolved:route:GET /resolved", "Path.resolve", "strict"),
+    ]
+
+
+def test_resolve_on_a_receiver_that_is_not_evidently_a_path_is_not_filesystem_work(tmp_path: Path):
+    _write(tmp_path, "music_app/routes/actors.py", """
+import os
+
+@router.get("/actors")
+async def actors(request, tokens):
+    resolver = request.app.state.current_actor_resolver
+    names = [os.path.basename(token) for token in tokens]
+    return [resolver.resolve(token) for token in tokens] + names
+""")
+    assert discovery.analyze_python_repository(tmp_path)["hazards"] == []
+
+
 def test_a_method_name_defined_by_several_classes_follows_every_candidate(tmp_path: Path):
     _write(tmp_path, "music_app/services/indexes.py", """
 import os

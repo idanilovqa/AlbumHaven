@@ -380,6 +380,19 @@ const DEFECTS = [
     expected: /^rejected BI-08 event-loop-blocking:database:\S+ at music_app\/routes\/api_read_asgi_routes\.py:\d+ from py:music_app\/routes\/api_read_asgi_routes\.py#album_note_replies_create_reserved:route:POST \/album-note-replies via LogHistoryPostgresAdapter\.append/,
   },
   {
+    // The incident: Edit Tags built its reservation keys with one
+    // `Path(path).resolve()` per track on the event loop; `resolve` was not
+    // treated as filesystem work, so the 48-request burst stalled the loop.
+    id: 'BI-08 async route resolving each requested path on the event loop',
+    language: 'py',
+    file: 'music_app/routes/api_read_asgi_routes.py',
+    anchor: 'async def album_notes_mutate_reserved(note_ref: str) -> JSONResponse:\n',
+    replacement: 'async def album_notes_mutate_reserved(note_ref: str) -> JSONResponse:\n    _seeded_reservation_keys([note_ref])\n',
+    prelude: 'from pathlib import Path\n\n\ndef _seeded_reservation_keys(track_paths):\n'
+      + '    return {str(Path(path).resolve()) for path in track_paths}\n',
+    expected: /^rejected BI-08 event-loop-blocking:filesystem:Path\.resolve@music_app\/routes\/api_read_asgi_routes\.py:\d+ at music_app\/routes\/api_read_asgi_routes\.py:\d+ from py:music_app\/routes\/api_read_asgi_routes\.py#album_notes_mutate_reserved:route:DELETE \/album-notes\/\{note_ref\} via _seeded_reservation_keys$/,
+  },
+  {
     id: 'BI-05 root settings reloaded through a new connection per requested path',
     language: 'py',
     file: 'music_app/routes/api_wave_c_asgi_routes.py',

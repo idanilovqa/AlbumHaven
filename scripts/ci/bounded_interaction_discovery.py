@@ -57,6 +57,16 @@ PROBE_METHODS = {
     "is_file": "Path.is_file",
     "open": "Path.open",
 }
+# `os.path` functions that ask the filesystem (`realpath` follows links).
+OS_PATH_PROBES = frozenset({
+    "exists", "lexists", "isfile", "isdir", "islink", "getmtime", "getctime", "getatime", "getsize",
+    "realpath", "samefile",
+})
+# `resolve` is a common app method name, so it counts as `Path.resolve` only
+# on a receiver that is evidently a path: a path constructor or a path-valued
+# expression, or with the path-only `strict` keyword.
+PATH_CONSTRUCTORS = frozenset({"Path", "PurePath", "PosixPath", "WindowsPath"})
+PATH_VALUED_METHODS = frozenset({"joinpath", "with_name", "with_suffix", "with_stem", "expanduser", "absolute"})
 MEDIA_CALLS = {"MutagenFile": "mutagen.File"}
 # Blocking families on the ASGI event loop (BI-08), by import-qualified name.
 DATABASE_CONNECTS = frozenset({
@@ -549,6 +559,29 @@ def _blocking_operation(node: ast.Call, module: Module) -> tuple[str, str] | Non
     return None
 
 
+def _is_os_path(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Attribute) and node.attr == "path"
+        and isinstance(node.value, ast.Name) and node.value.id == "os"
+    )
+
+
+def _path_valued(node: ast.AST) -> bool:
+    """Whether an expression evidently evaluates to a `pathlib` path."""
+    if isinstance(node, ast.Call):
+        func = node.func
+        if isinstance(func, ast.Name):
+            return func.id in PATH_CONSTRUCTORS
+        if isinstance(func, ast.Attribute):
+            return func.attr in PATH_CONSTRUCTORS or (func.attr in PATH_VALUED_METHODS and _path_valued(func.value))
+        return False
+    if isinstance(node, ast.Attribute) and node.attr in {"parent", "parents"}:
+        return _path_valued(node.value)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        return _path_valued(node.left)
+    return False
+
+
 def _filesystem_operation(node: ast.Call) -> str | None:
     base, name = _call_name(node)
     attribute = isinstance(node.func, ast.Attribute)
@@ -558,6 +591,12 @@ def _filesystem_operation(node: ast.Call) -> str | None:
         return ENUMERATION_METHODS[name]
     if (base, name) == ("os", "stat"):
         return "os.stat"
+    if attribute and name in OS_PATH_PROBES and _is_os_path(node.func.value):
+        return f"os.path.{name}"
+    if attribute and name == "resolve" and (
+        _path_valued(node.func.value) or any(keyword.arg == "strict" for keyword in node.keywords)
+    ):
+        return "Path.resolve"
     if attribute and name in PROBE_METHODS and base != "os":
         return PROBE_METHODS[name]
     if isinstance(node.func, ast.Name) and name == "open":

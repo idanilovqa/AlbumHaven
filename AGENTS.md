@@ -154,8 +154,11 @@ operate, or contribute to the application.
   a psycopg/psycopg2 connection or `psycopg_pool.ConnectionPool` (repository
   `_connect` helpers are recognised by resolving to that call), DB-API
   `execute`/`fetch*`/`getconn`/`connection` calls in a module that imports a
-  database driver, directory enumeration, path probes, `open`, path
-  reads/writes, media parses, `subprocess`, `time.sleep`, synchronous HTTP
+  database driver, directory enumeration, path probes (including
+  `os.path.exists`/`isfile`/`isdir`/`getsize`/`getmtime`-style probes,
+  `os.path.realpath`, and `Path.resolve` on a receiver evidently a path: a
+  path constructor, a path-valued expression, or a `strict=` call), `open`,
+  path reads/writes, media parses, `subprocess`, `time.sleep`, synchronous HTTP
   (`urllib.request.urlopen`, `requests`, sync `httpx`), PIL `Image.open`, or
   registered library-scale work. Each loop call site is reported with the
   nearest blocking operation and the chain to it. A plain `def` route runs in

@@ -1,10 +1,58 @@
 # Changelog
 
-## 0.11.16 - 2026-11-16
+## 0.11.28 - 2026-11-17
 
 - Instant return in ordinary browsers (HTTPS or localhost): the library loads from the server as before, and a copy of the last view kept in the browser appears instead when the server cannot be reached, fails at its gateway, or has not answered within 1.5 seconds. That view is read-only with the existing Offline notice and updates in place once the server answers. The first visit is kept as soon as the browser's copy starts, so going offline straight after it works too; each save also keeps the scripts and styles of the build it saved, so the copy opens after the server is rebuilt; and an address that was never kept (an artist opened after the last save) opens the last view kept instead of a connection error. Private windows and plain-HTTP addresses other than localhost behave as before.
 - The device copy (Android app and browsers) keeps covers by the server's cover reference, is never shown past the end of the signing-in session, cannot be brought back by a save that finishes after signing out, answers pages before writing the copy, and never breaks a page when storage is full. Copies kept by the previous version are deleted once.
 - `ALBUM_HAVEN_APP_COPY=off` switches the device copy off: pages stop loading it and installed copies delete themselves.
+
+## 0.11.27 - 2026-11-17
+
+- The server sends JavaScript, CSS and other text files gzip-compressed to browsers that accept it, so a first visit downloads about 0.6 MB of scripts and styles instead of about 2.9 MB. Images and audio are sent as before.
+
+## 0.11.26 - 2026-11-17
+
+- The server no longer freezes while it builds the library home view (`/home-data`, opened by the phone layout's library home and by the Android app). It read the library root settings from the database twice for every loose or non-album track; it now reads them once per build, and the home, News and file-backed album-detail payloads are built off the server's event loop, so other requests keep being answered meanwhile.
+
+## 0.11.25 - 2026-11-17
+
+- Opening an album from a gallery card no longer shows the "This album was split" chooser; it appears only from a notification about a split album. If an album opened from the gallery changed elsewhere, the gallery refreshes in place, Album Details closes, and a toast says "This album changed—choose it again in the gallery." An album you just split yourself opens the matching release.
+
+## 0.11.24 - 2026-11-17
+
+- Android app: the library offers once to set Battery to Unrestricted, so battery saving stops closing the app in the background and reloading the library on return; any answer is final.
+
+## 0.11.23 - 2026-11-17
+
+- CI only, no application change: adding or removing a Playwright component test now needs only its entry in `tests/ci/test-data-matrix.json`. The foundation gate compares the component job's discovered cases with the matrix's component entries instead of a hard-coded 229, and the inventory and ownership checks derive their totals from the matrix. A missing or extra test still fails by name.
+
+## 0.11.22 - 2026-11-17
+
+- Playback no longer stalls when the browser's kept-track cache is slow to answer: a track's start waits at most half a second for it and otherwise streams from the server.
+
+## 0.11.21 - 2026-11-17
+
+- Test-only: the gallery overlap tests (FTC-GALLERY-NAV-035) wait for the deferred continuation and the settled query before asserting, so they no longer fail intermittently.
+
+## 0.11.20 - 2026-11-17
+
+- Agents can run the search, Problematic Files, HTML reload, Edit Tags and bounded-interaction regression gates on GitHub-hosted runners with the on-demand Heavy Regression Gates workflow, instead of queueing for the owner's machine. Real-library and full-size-library checks stay local.
+
+## 0.11.19 - 2026-11-17
+
+- Test-only: the album credits test (FTC-ALBUM-DETAILS-006) scrolls the gallery with the mouse wheel before clicking an album after a tag save, so the gallery no longer undoes its scroll and the test no longer fails intermittently.
+
+## 0.11.18 - 2026-11-17
+
+- Test-only: the Transatlantic search heading check (FTC-SEARCH-NAV-028) waits until the gallery has finished loading before it counts artist headings, so it no longer fails intermittently.
+
+## 0.11.17 - 2026-11-17
+
+- Cover previews kept in app data no longer restart the preview relocation worker. Before, every such preview started a full relocation pass that rescanned all previews and copied the preview into the album folder, which slowed gallery loading and artist jumps.
+
+## 0.11.16 - 2026-11-17
+
+- The Android app says "Not enough storage" (Free up space on this phone, then try again) when a full phone stops an update, instead of the generic "Update failed. Try again".
 
 ## 0.11.15 - 2026-11-16
 

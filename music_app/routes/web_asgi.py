@@ -1149,7 +1149,8 @@ async def news_center(request: Request) -> Response:
     config = _app_config(request)
     route_logger = _app_logger(request)
     library_state = _library_state(request)
-    payload = build_news_payload(
+    payload = await run_in_threadpool(
+        build_news_payload,
         query_args=query_args,
         tab=query_args.get("tab"),
         source=query_args.get("source"),
@@ -1483,9 +1484,8 @@ def _cover_response(
             if config.get("SHARED_LIBRARY_BROWSE_ONLY") is not True:
                 source_path = resolved
                 generation_options = {}
-                if inventory_recorder is not None and (
-                    not revision or normalized_revision
-                ):
+                # An unrevisioned preview stays in app data, outside the relocation inventory.
+                if inventory_recorder is not None and normalized_revision:
                     generation_options["on_published"] = inventory_recorder
                 resolved = resolve_cover_display_variant(
                     resolved,

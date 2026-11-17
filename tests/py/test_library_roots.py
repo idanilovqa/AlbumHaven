@@ -513,3 +513,50 @@ def test_absolute_media_path_rejects_resolution_runtime_errors(tmp_path, monkeyp
         str(candidate),
         configured_root_paths=(root,),
     ) is None
+
+
+def _count_root_settings_loads(monkeypatch, root: Path) -> list[object]:
+    loads: list[object] = []
+    settings = {
+        "version": 1,
+        "main_library_roots": [{"id": "main", "path": str(root.resolve()), "layout_mode": "artist"}],
+        "hoarding_library_roots": [],
+        "new_arrivals_roots": [],
+        "move_policy": {},
+    }
+    monkeypatch.setattr(
+        library_roots,
+        "load_library_root_settings",
+        lambda config, **_kwargs: loads.append(config) or settings,
+    )
+    return loads
+
+
+def test_relative_parts_within_given_roots_does_not_reload_root_settings(tmp_path, monkeypatch):
+    track = tmp_path / "Artist" / "Loose" / "Track.flac"
+    track.parent.mkdir(parents=True)
+    track.write_bytes(b"")
+    loads = _count_root_settings_loads(monkeypatch, tmp_path)
+    roots = library_roots.get_library_roots({})
+
+    root, parts = library_roots.relative_parts_within_roots({}, str(track), roots=roots)
+
+    assert root["id"] == "main"
+    assert parts == ("Artist", "Loose", "Track.flac")
+    assert len(loads) == 1
+
+
+def test_album_open_directories_load_root_settings_once_per_album(tmp_path, monkeypatch):
+    album_dir = tmp_path / "Artist" / "Album"
+    album_dir.mkdir(parents=True)
+    tracks = []
+    for number in range(1, 6):
+        track = album_dir / f"{number:02d}.flac"
+        track.write_bytes(b"")
+        tracks.append({"path": str(track)})
+    loads = _count_root_settings_loads(monkeypatch, tmp_path)
+
+    directories = library_roots.resolve_album_open_directories({}, {"name": "Album", "tracks": tracks})
+
+    assert directories == [album_dir.resolve()]
+    assert len(loads) == 1

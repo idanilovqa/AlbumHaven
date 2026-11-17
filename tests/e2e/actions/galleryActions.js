@@ -400,6 +400,33 @@ export class GalleryActions {
     await this.galleryPage.albumCard.detailsButtonByAlbumName(albumName).first().click();
   }
 
+  async clickRevealedAlbumDetailsByAlbumName(albumName) {
+    const button = this.galleryPage.albumCard.detailsButtonByAlbumName(albumName).first();
+    await this.revealInGalleryByWheel(button);
+    await button.click();
+  }
+
+  // After an Edit Tags save the gallery holds its scroll position until the user
+  // scrolls; Playwright's own scroll-into-view is not user input and is undone.
+  async revealInGalleryByWheel(locator, options = {}) {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const [targetBox, galleryBox] = await Promise.all([
+        locator.boundingBox(),
+        this.galleryPage.galleryScroll.boundingBox(),
+      ]);
+      if (!targetBox || !galleryBox) return;
+      const below = targetBox.y + targetBox.height - (galleryBox.y + galleryBox.height);
+      const above = galleryBox.y - targetBox.y;
+      const deltaY = below > 0 ? Math.ceil(below) + 24 : above > 0 ? -(Math.ceil(above) + 24) : 0;
+      if (!deltaY) return;
+      const { scrollTop } = await this.readGalleryScrollState();
+      await this.scrollGalleryBy(deltaY, options);
+      await this.galleryPage.waitForGalleryScrollMovement(scrollTop, Math.sign(deltaY), {
+        timeout: options.timeout || 5000,
+      });
+    }
+  }
+
   async waitForGalleryReady(options = {}) {
     const minimumCards = options.minimumCards === undefined
       ? 1
@@ -645,6 +672,8 @@ export class GalleryActions {
       || new Set(options.expectedArtists).size !== options.expectedArtists.length)) {
       throw new Error('Complete heading inventory requires independent, nonempty unique artist identities');
     }
+    // Inventory scrolling must not start before the virtual grid owns the gallery.
+    await this.galleryPage.waitForVirtualGalleryOwnership({ timeout: options.timeout });
     const occurrencesBySection = new Map();
     const readMountedOccurrences = async () => {
       // parity-check: allow-read-only-measurement-evaluate -- inventory mounted virtual artist sections
@@ -1494,6 +1523,29 @@ export class GalleryActions {
       };
     }, selectors);
     return { ...labels, artistText: (await this.galleryPage.albumCard.readVisibleMetadata(card)).artist };
+  }
+
+  // Album Details requests a gallery card sends; a shared key alone can name several releases,
+  // so each card open must carry its own album id and never ask for the split chooser.
+  recordAlbumDetailsRequests() {
+    const page = this.galleryPage.page;
+    const urls = [];
+    const record = (request) => {
+      const url = new URL(request.url());
+      if (request.method() === 'GET' && url.pathname === '/album-details') urls.push(url);
+    };
+    page.on('request', record);
+    return {
+      stop: () => page.off('request', record),
+      // A card whose view already carries its tracks opens without a request; any request made
+      // must still name the card's own album and never ask for the split chooser.
+      expectExactCardOpens: () => {
+        for (const url of urls) {
+          expect(Number(url.searchParams.get('album_id'))).toBeGreaterThan(0);
+          expect(url.searchParams.has('resolve_lineage')).toBe(false);
+        }
+      },
+    };
   }
 
   async selectAlbumDetailsByIdentity(expected, options = {}) {

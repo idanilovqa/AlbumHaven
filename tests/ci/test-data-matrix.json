@@ -38,7 +38,7 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/albumTagRename.spec.js",
-    "case": "FTC-ALBUM-DETAILS-029 stale album references follow merges and require a current release after splits",
+    "case": "FTC-ALBUM-DETAILS-029 stale album references follow merges and return to the gallery after splits",
     "profile": "functional-core",
     "setupScope": "isolated",
     "stateMode": "owned-mutation",
@@ -9932,6 +9932,21 @@
     "filesystemScenarios": [],
     "expectedContracts": [
       "Update failed. Try again stays pressable and sends updates.download"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/androidUpdateMenu.spec.js",
+    "case": "Not enough storage Free up space on this phone, then try again stays pressable and sends updates.download",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Not enough storage Free up space on this phone, then try again stays pressable and sends updates.download"
     ],
     "ownerApproval": "approved"
   },

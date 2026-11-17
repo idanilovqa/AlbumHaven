@@ -1,8 +1,12 @@
 # Changelog
 
-## 0.11.18 - 2026-11-17
+## 0.11.19 - 2026-11-17
 
 - Agents can run the search, Problematic Files, HTML reload, Edit Tags and bounded-interaction regression gates on GitHub-hosted runners with the on-demand Heavy Regression Gates workflow, instead of queueing for the owner's machine. Real-library and full-size-library checks stay local.
+
+## 0.11.18 - 2026-11-17
+
+- Test-only: the Transatlantic search heading check (FTC-SEARCH-NAV-028) waits until the gallery has finished loading before it counts artist headings, so it no longer fails intermittently.
 
 ## 0.11.17 - 2026-11-17
 

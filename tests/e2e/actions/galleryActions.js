@@ -645,6 +645,8 @@ export class GalleryActions {
       || new Set(options.expectedArtists).size !== options.expectedArtists.length)) {
       throw new Error('Complete heading inventory requires independent, nonempty unique artist identities');
     }
+    // Inventory scrolling must not start before the virtual grid owns the gallery.
+    await this.galleryPage.waitForVirtualGalleryOwnership({ timeout: options.timeout });
     const occurrencesBySection = new Map();
     const readMountedOccurrences = async () => {
       // parity-check: allow-read-only-measurement-evaluate -- inventory mounted virtual artist sections

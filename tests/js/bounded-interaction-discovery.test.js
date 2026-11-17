@@ -506,6 +506,44 @@ test('reverse and count-down loops, copying methods, and borrowed array methods 
   ]);
 });
 
+test('loops stepping by reassignment or bounded by a destructured length, and deep copies, are hazards', () => {
+  const hazards = findJavaScriptHazards(`
+    root.addEventListener('scroll', () => {
+      for (let index = state.rows.length - 1; index >= 0; index = index - 1) state.rows[index].seen = true;
+    });
+    root.addEventListener('wheel', () => {
+      const total = state.rows.length;
+      for (let index = 0; index < total; index = index + 1) state.rows[index].seen = true;
+    });
+    root.addEventListener('pointermove', () => {
+      const { length } = state.rows;
+      for (let index = 0; index < length; index += 1) state.rows[index].seen = true;
+    });
+    root.addEventListener('mousemove', () => {
+      const { length: count } = state.rows;
+      for (let index = 0; index < count; index++) state.rows[index].seen = true;
+    });
+    root.addEventListener('resize', () => {
+      structuredClone(state.rows);
+    });
+  `, FILE);
+  assert.deepEqual(hazards.map(hazard => hazard.operation), [
+    'indexed-loop', 'indexed-loop', 'indexed-loop', 'indexed-loop', 'structuredClone',
+  ]);
+});
+
+test('a reassignment from another name, a destructured other field, and a clone of owned data are not walks', () => {
+  assert.deepEqual(findJavaScriptHazards(`
+    root.addEventListener('scroll', (event) => {
+      const { width } = state.rows;
+      for (let index = 0; index < width; index += 1) event.step(index);
+      let next = 0;
+      for (let index = state.rows.length - 1; index >= 0; index = next - 1) next = index;
+      structuredClone({ x: 1 });
+    });
+  `, FILE), []);
+});
+
 test('a binary search or a loop that only starts at a shared length does not walk the collection', () => {
   assert.deepEqual(findJavaScriptHazards(`
     root.addEventListener('scroll', (event) => {

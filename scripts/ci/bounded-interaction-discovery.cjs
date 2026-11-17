@@ -938,25 +938,39 @@ function loopCounters(test) {
   return [];
 }
 
-// Names a function assigns a value that reads a shared `.length`.
+// Names a function assigns a value that reads a shared `.length`, including a
+// destructured one (`const { length } = rows`, `const { length: n } = rows`).
 function sharedLengthStarts(fnNode, analysis) {
   const names = new Set();
   walkAst(fnNode.body || fnNode, (node) => {
     const [target, value] = node.type === 'VariableDeclarator' ? [node.id, node.init]
       : node.type === 'AssignmentExpression' ? [node.left, node.right] : [];
     if (target?.type === 'Identifier' && value && readsSharedLength(value, analysis)) names.add(target.name);
+    if (target?.type === 'ObjectPattern' && value && isSharedCollection(value, analysis)) {
+      for (const property of target.properties) {
+        const key = property.type === 'Property' && !property.computed ? property.key : null;
+        const keyName = key?.type === 'Identifier' ? key.name : key?.value;
+        if (keyName === 'length' && property.value?.type === 'Identifier') names.add(property.value.name);
+      }
+    }
   });
   return names;
 }
 
 // The direction (`up`, `down`) each counter a loop steps by `++`, `--`, `+=`,
-// or `-=` moves in. A binary search's `high = middle - 1` is not a step.
+// `-=`, or `i = i + …` / `i = i - …` moves in. A binary search's
+// `high = middle - 1` is not a step: it does not start from the counter.
 function steppedCounters(loop) {
   const steps = new Map();
   walkAst(loop, (node) => {
+    const selfStep = node.type === 'AssignmentExpression' && node.operator === '='
+      && node.left.type === 'Identifier' && node.right.type === 'BinaryExpression'
+      && ['+', '-'].includes(node.right.operator)
+      && node.right.left.type === 'Identifier' && node.right.left.name === node.left.name;
     const [target, direction] = node.type === 'UpdateExpression' ? [node.argument, node.operator === '++' ? 'up' : 'down']
       : node.type === 'AssignmentExpression' && ['+=', '-='].includes(node.operator) ? [node.left, node.operator === '+=' ? 'up' : 'down']
-        : [];
+        : selfStep ? [node.left, node.right.operator === '+' ? 'up' : 'down']
+          : [];
     if (target?.type === 'Identifier') steps.set(target.name, direction);
   });
   return steps;
@@ -1020,6 +1034,9 @@ function computeFunctionHazards(fnNode, file, index) {
         hazards.push(hazardAt('BI-01', name, at, file));
       } else if (name === 'from' && callee.object?.name === 'Array' && node.arguments[0] && shared(node.arguments[0])) {
         hazards.push(hazardAt('BI-01', 'Array.from', at, file));
+      } else if (name === 'structuredClone' && callee.type === 'Identifier' && node.arguments[0] && shared(node.arguments[0])) {
+        // A deep copy of a shared collection is as large as the collection.
+        hazards.push(hazardAt('BI-01', 'structuredClone', at, file));
       } else if (OBJECT_ENUMERATION.has(name) && callee.object?.name === 'Object' && node.arguments[0] && sharedKeys(node.arguments[0])) {
         hazards.push(hazardAt('BI-01', `Object.${name}`, at, file));
       } else if ((name === 'stringify' || name === 'parse') && callee.object?.name === 'JSON') {

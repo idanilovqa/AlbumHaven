@@ -101,7 +101,8 @@ function appendRootGalleryPage(artistGroups, galleryPage, renderOptions) {
     appendedGroups: continuation.added,
     galleryPage,
   }));
-  if (!virtualGrid.appendGroups(pageGroups, replacedGroups)) renderArtistGroups(renderOptions);
+  const regroup = () => renderArtistGroups(renderOptions);
+  if (!virtualGrid.appendGroups(pageGroups, replacedGroups, regroup)) regroup();
   else if (typeof document?.querySelector === 'function') appendGalleryMainChromeGroups(chromeWasCurrent, replacedGroups, pageGroups);
   return true;
 }

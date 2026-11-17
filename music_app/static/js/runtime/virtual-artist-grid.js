@@ -433,6 +433,7 @@ class VirtualArtistGrid {
     this._scrollAnchorVisualPhase = 0;
     this._userScrollIntentGeneration = 0;
     this._deferredSetGroups = null;
+    this._deferredAppends = [];
     this._deferredArtistTreeSettlement = false;
     this._artistTreeReflowAnchor = undefined;
     this._deferredResizeOptions = null;
@@ -558,6 +559,7 @@ class VirtualArtistGrid {
     this._touchScrollGestureActive = false;
     this._touchScrollGestureHadScroll = false;
     this._deferredSetGroups = null;
+    this._deferredAppends = [];
     this._deferredArtistTreeSettlement = false;
     this._artistTreeReflowAnchor = undefined;
     this._deferredResizeOptions = null;
@@ -1023,6 +1025,8 @@ class VirtualArtistGrid {
   }
 
   setGroups(primaryGroups, familyGroups, fallbackGroups = null, options = {}, layoutConfig = null) {
+    // The regrouped state already holds every queued continuation page.
+    this._deferredAppends = [];
     const shouldDeferMountedGroupUpdate = (
       Boolean(options.preserveScroll)
       && options.preserveMountedGalleryChildren === true
@@ -1305,8 +1309,36 @@ class VirtualArtistGrid {
   // `groups`. Only those sections are keyed, laid out and indexed; earlier
   // sections keep their geometry, measurements and mounted DOM. Returns false,
   // changing nothing, when the mounted sections cannot take the append, so the
-  // caller regroups instead.
-  appendGroups(groups, replacedGroups = []) {
+  // caller regroups instead. During touch or unsettled scroll input the append
+  // is queued, like a mounted setGroups update, and replays once input settles;
+  // `regroup` then runs if the replay is refused.
+  appendGroups(groups, replacedGroups = [], regroup = null) {
+    if (
+      !this._deferredSetGroups && !this._absoluteScrollRestore
+      && (this._deferredAppends.length || this._touchScrollGestureActive || !this.isScrollSettled)
+    ) {
+      this._deferredAppends.push({ groups, replacedGroups, regroup });
+      this.recordDiagnosticEvent('group-update-deferred', {
+        touchGestureActive: this._touchScrollGestureActive,
+      });
+      return true;
+    }
+    return this.appendGroupsNow(groups, replacedGroups);
+  }
+
+  // Replays queued appends as one new render generation. A refused replay
+  // regroups from the loaded state, which already includes the later pages.
+  replayDeferredAppends(deferredAppends) {
+    this._renderGeneration += 1;
+    this._preserveExistingChildrenGeneration = this._renderGeneration;
+    for (const { groups, replacedGroups, regroup } of deferredAppends) {
+      if (this.appendGroupsNow(groups, replacedGroups)) continue;
+      regroup?.();
+      return;
+    }
+  }
+
+  appendGroupsNow(groups, replacedGroups) {
     const sections = this._sections;
     const firstReplaced = sections.length - replacedGroups.length;
     const last = sections[sections.length - 1];
@@ -1437,7 +1469,7 @@ class VirtualArtistGrid {
   }
 
   hasDeferredMountedGroupUpdate() {
-    return Boolean(this._deferredSetGroups);
+    return Boolean(this._deferredSetGroups || this._deferredAppends.length);
   }
 
   recalculate(options = {}) {
@@ -1736,6 +1768,7 @@ class VirtualArtistGrid {
     if (
       hadScroll
       || this._deferredSetGroups
+      || this._deferredAppends.length
       || this._deferredArtistTreeSettlement
       || this._deferredResizeOptions
     ) {
@@ -1750,6 +1783,7 @@ class VirtualArtistGrid {
       if (this._touchScrollGestureActive) return;
       this.isScrollSettled = true;
       const deferredSetGroups = this._deferredSetGroups;
+      const deferredAppends = this._deferredAppends;
       const deferredArtistTreeSettlement = this._deferredArtistTreeSettlement;
       const deferredResizeOptions = this._deferredResizeOptions;
       const deferredReflowAnchor = deferredArtistTreeSettlement
@@ -1769,6 +1803,10 @@ class VirtualArtistGrid {
           deferredSetGroups.options,
           deferredSetGroups.layoutConfig,
         );
+      }
+      if (deferredAppends.length) {
+        this._deferredAppends = [];
+        this.replayDeferredAppends(deferredAppends);
       }
       if (deferredArtistTreeSettlement) {
         this._artistTreeReflowAnchor = undefined;

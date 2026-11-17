@@ -7204,3 +7204,34 @@ test('a superseded root gallery continuation neither appends nor repaints', asyn
   assert.equal(virtualGrid.sections.length, 40);
   assert.equal(virtualGrid.lastKey, lastKey, 'nothing was rendered');
 });
+
+test('a root gallery continuation during a held touch defers its append until the touch settles', async () => {
+  const gallery = loadCountedRootContinuation(40);
+  const { context, prepareNextPage, virtualGrid } = gallery;
+  const timers = [];
+  context.scheduleBrowserTimeout = (callback) => { timers.push(callback); return timers.length; };
+  context.clearBrowserTimeout = (timerId) => { timers[timerId - 1] = null; };
+  prepareNextPage();
+  virtualGrid._touchScrollGestureActive = true;
+  const sequenceBefore = virtualGrid._diagnosticSequence;
+  const generationBefore = virtualGrid._renderGeneration;
+  assert.equal(await context.loadNextRootGalleryPage(), true);
+  assert.equal(context.state.view.artist_groups.length, 40 + ROOT_PAGE_SIZE - 1, 'the loaded state takes the page');
+  assert.equal(virtualGrid.sections.length, 40, 'the mounted sections wait for the touch');
+  const deferred = virtualGrid.diagnostics.events.filter(event => (
+    event.type === 'group-update-deferred' && event.sequence > sequenceBefore
+  ));
+  assert.equal(deferred.length, 1);
+  assert.equal(deferred[0].touchGestureActive, true);
+  assert.equal(virtualGrid.hasDeferredMountedGroupUpdate(), true);
+
+  virtualGrid.onTouchScrollEnd({ touches: [] });
+  timers.splice(0).forEach(callback => callback?.());
+  assert.equal(virtualGrid.hasDeferredMountedGroupUpdate(), false);
+  assert.ok(virtualGrid._renderGeneration > generationBefore, 'the replay renders as a new generation');
+  assert.deepEqual(
+    Array.from(virtualGrid.sections, section => section.group.artist),
+    Array.from(context.state.view.artist_groups, group => group.artist),
+    'the replayed append follows the loaded groups',
+  );
+});

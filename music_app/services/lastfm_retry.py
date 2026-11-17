@@ -14,10 +14,10 @@ A listen whose submission outcome is unknown (a lost or unclear answer, or a
 crash after its claim) is never sent again blindly. Thirty minutes after its
 submission started, a pass looks it up among the account's scrobbles on Last.fm,
 in batches of up to 50 listens, reading only the hours around their timestamps.
-Listed (the same second and the same artist or track), it is accepted; not
-listed, it returns to the send queue, as often as it takes. Its result is
-stored under the same locks as a submission, and only while the listen is still
-unchanged since it was loaded.
+Listed (the same second and the same artist or track, each scrobble standing for
+one listen), it is accepted; not listed, it returns to the send queue, as often
+as it takes. Its result is stored under the same locks as a submission, and only
+while the listen is still unchanged since it was loaded.
 """
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import logging
+import operator
 import random
 import threading
 import time
@@ -349,12 +350,18 @@ def _verify_batch(
     try:
         for window in _verification_windows(batch):
             found, complete = _listed_scrobbles(config, session, window)
-            for timestamp, item in window:
-                listen = listen_scrobble_identity(item.entry)
-                if any(is_same_scrobble(listen, scrobble) for scrobble in found.get(timestamp, ())):
-                    listed.add(item.row_id)
-                elif not complete:
-                    unread.add(item.row_id)
+            listens = [(item, listen_scrobble_identity(item.entry)) for _timestamp, item in window]
+            # A listed scrobble accounts for one listen only, so two listens in the same second
+            # never both rest on it; exact names are matched before corrected ones.
+            for matches in (operator.eq, is_same_scrobble):
+                for item, listen in listens:
+                    scrobbles = found.get(listen[0], [])
+                    match = next((scrobble for scrobble in scrobbles if matches(listen, scrobble)), None)
+                    if match is not None and item.row_id not in listed:
+                        scrobbles.remove(match)
+                        listed.add(item.row_id)
+            if not complete:
+                unread.update(item.row_id for item, _listen in listens if item.row_id not in listed)
     except LastfmError as error:
         failure = error
     loaded = {item.row_id: item.entry for item in batch}

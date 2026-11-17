@@ -491,6 +491,17 @@ def test_a_listen_last_fm_lists_under_a_corrected_artist_is_accepted(scrobble_le
     assert [entry["scrobble_submission_state"] for entry in ledger.entries()] == ["accepted"]
 
 
+def test_one_listed_scrobble_accounts_for_one_listen_in_its_second(scrobble_ledger):
+    ledger, provider = scrobble_ledger()
+    _add_unverified(ledger, 2, started_at_unix=1_700_000_000)
+    ledger.recent_tracks.lists(ledger.entry(1))
+
+    lastfm_retry.retry_pending_lastfm_scrobbles(_CONFIG)
+
+    # Song 0 is listed under its own names; Song 1, at the same second by the same artist, is not.
+    assert [call.tracks for call in provider.calls] == [["Song 1"]]
+
+
 def test_a_listen_missing_from_last_fm_is_resent_once_through_the_batch(scrobble_ledger, monkeypatch):
     ledger, provider = scrobble_ledger()
     _add_unverified(ledger, 3)

@@ -23,6 +23,8 @@ from music_app.services.musicbrainz_release_identity import MusicBrainzAlbumRele
 from music_app.services.musicbrainz_release_identity_postgres import (
     MusicBrainzReleaseIdentityPostgresRepository,
 )
+from music_app.services.musicbrainz_series_wikipedia import SeriesWikipediaProcessor
+from music_app.services.musicbrainz_series_wikipedia_postgres import SeriesWikipediaPostgresRepository
 
 
 class MusicBrainzEnrichmentWorker:
@@ -140,15 +142,17 @@ class MusicBrainzEnrichmentWorker:
 
 class MusicBrainzEnrichmentChain:
     """Artists first (Delivery 1), then their albums (Delivery 2), then the Discogs fallback
-    for artists MusicBrainz lacks, in one enrichment queue. The owner's manual lookups (S5)
+    for artists MusicBrainz lacks, then the Wikipedia introductions of the library's series,
+    in one enrichment queue. The owner's manual lookups (S5)
     go first: each step starts the due lookup queue and settles finished lookups, manual
     album jobs run before the artist backlog, and manual artist jobs lead it by priority."""
 
     def __init__(self, artist_processor, album_processor, fallback_processor=None, lookups=None,
-                 now: Callable[[], datetime] | None = None) -> None:
+                 now: Callable[[], datetime] | None = None, series_processor=None) -> None:
         self._artists = artist_processor
         self._albums = album_processor
         self._fallback = fallback_processor
+        self._series = series_processor
         self._lookups = lookups
         self._now = now or (lambda: datetime.now(timezone.utc))
 
@@ -164,9 +168,14 @@ class MusicBrainzEnrichmentChain:
                 self._albums.queue_artist(int(result["local_artist_id"]))
             return result
         result = self._albums.process_next(worker_id=worker_id)
-        if result.get("processed") or self._fallback is None:
+        if result.get("processed"):
             return result
-        return self._fallback.process_next(worker_id=worker_id)
+        for idle_step in (self._fallback, self._series):
+            if idle_step is not None:
+                result = idle_step.process_next(worker_id=worker_id)
+                if result.get("processed"):
+                    return result
+        return result
 
 
 def build_musicbrainz_enrichment_worker(*, config: Mapping[str, object]):
@@ -189,6 +198,8 @@ def build_musicbrainz_enrichment_worker(*, config: Mapping[str, object]):
         ),
         _discogs_fallback_processor(config, client, discogs),
         MusicBrainzLookupQueuePostgresRepository(config),
+        series_processor=SeriesWikipediaProcessor(repository=SeriesWikipediaPostgresRepository(config),
+                                                  musicbrainz=client),
     )
     return MusicBrainzEnrichmentWorker(
         processor=processor,

@@ -4353,21 +4353,39 @@ function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
   return html;
 }
 
-// The Series tree (approved mockup 2): the artist tree's own items, "All series" first.
-function buildSeriesSidebarHtml(view = {}) {
-  const renderItem = window.NavigationTree.renderItem;
-  const series = Array.isArray(view.series_sidebar) ? view.series_sidebar : [];
+// The Series tree (approved mockups 2 and 4B): the artist tree's own items in two groups,
+// Series then Featured In, each under a collapsible heading made from the same item and never
+// selected. A separator comes before Featured In where NavigationTree draws one.
+const SERIES_TREE_GROUPS = [['series', 'Series'], ['featured_in', 'Featured In']];
+
+// A Series view brings its own tree; any other gallery shows the one the Series button loaded.
+function resolveSeriesTreeItems(view = state.view) {
+  const items = String(view?.selected_series || '') ? view.series_sidebar : state.ui?.seriesTree;
+  return Array.isArray(items) ? items : [];
+}
+
+function buildSeriesSidebarHtml(view = {}, collapsedGroups = state.ui?.seriesTreeCollapsedGroups || {}) {
+  const tree = window.NavigationTree;
+  const series = resolveSeriesTreeItems(view);
   const selected = String(view.selected_series || '');
+  // The artist tree's own fold arrow, turned to show whether a group is open.
+  const chevron = document.getElementById('artist-tree-fold-button')?.querySelector?.('svg')?.outerHTML || '';
   const browse = { surface_request: 'albums', visible_library_categories: view.visible_library_categories };
-  return renderItem({
-    label: 'All series', href: buildUrl({ ...browse, selected_series: 'all' }), key: 'all-series',
-    count: series.length, selected: selected === 'all',
-    attributes: { 'data-nav': '1', 'data-sidebar-all-series': '1' },
-  }) + series.map((item) => renderItem({
-    label: item.name, href: buildUrl({ ...browse, selected_series: item.mbid }), key: `series:${item.mbid}`,
-    count: item.count, selected: item.mbid === selected,
-    attributes: { 'data-nav': '1', 'data-sidebar-series': item.mbid },
-  })).join('');
+  return SERIES_TREE_GROUPS.reduce((html, [kind, label]) => {
+    const members = series.filter((item) => (item.kind === 'featured_in' ? 'featured_in' : 'series') === kind);
+    if (!members.length) return html;
+    const collapsed = collapsedGroups[kind] === true;
+    const separator = html && typeof tree.renderSeparator === 'function' ? tree.renderSeparator({ label }) : '';
+    return html + separator + tree.renderItem({
+      label, key: `series-group:${kind}`, action: true, variant: 'panel', expanded: !collapsed,
+      className: 'navigation-tree-group-heading', attributes: { 'data-series-tree-group': kind },
+      trailingHtml: chevron && `<span class="navigation-tree-group-heading__chevron">${chevron}</span>`,
+    }) + (collapsed ? '' : members.map((item) => tree.renderItem({
+      label: item.name, href: buildUrl({ ...browse, selected_series: item.mbid }), key: `series:${item.mbid}`,
+      count: item.count, selected: item.mbid === selected,
+      attributes: { 'data-nav': '1', 'data-sidebar-series': item.mbid },
+    })).join(''));
+  }, '');
 }
 
 function buildSidebarStructureSignature(sidebarArtists = [], options = {}) {
@@ -6188,9 +6206,10 @@ function restoreSidebarFocus(sidebarList, focusIdentity) {
 }
 
 
-// The Series tree replaces the artists while the Series view is open (approved mockup 2).
+// The Series tree replaces the artists once the rail chose it (approved mockup 2; owner
+// 2026-11-17: the tree switches, the gallery stays).
 function renderSeriesSidebar(el, view) {
-  const series = typeof showsSeriesTree === 'function' && showsSeriesTree(view);
+  const series = typeof showsSeriesTree === 'function' && showsSeriesTree();
   const heading = document.querySelector('.desktop-artists-heading');
   const label = series ? 'Series' : 'Artists';
   if (heading && heading.textContent !== label) heading.textContent = label;
@@ -7835,8 +7854,10 @@ function openGalleryArtistInfo(anchor) {
   if (overlay) openGalleryMainSurface(`artist:${artist}`, anchor, overlay, 'left');
 }
 
-// A SERIES or FEATURED IN link in album details opens that series' gallery (approved 1B, 4A).
+// A SERIES or FEATURED IN link in album details opens that series' gallery (approved 1B, 4A),
+// in the Series tree.
 function openSeriesGallery(mbid) {
+  state.ui.navigationTree = 'series';
   const navigate = () => fetchAndRender(buildUrl({
     surface_request: 'albums',
     visible_library_categories: state.view?.visible_library_categories || [],
@@ -7851,6 +7872,25 @@ function openSeriesGallery(mbid) {
     }
   }
   navigate();
+}
+
+// The Series tree menu's choice (owner 2026-11-17, 5B): Series, Featured In, or null for the
+// MusicBrainz default. Once saved the tree regroups in place: a Series view reloads (its
+// header names the kind), any other gallery stays and only the tree is read again.
+async function saveSeriesKind(mbid, kind) {
+  try {
+    const response = await fetch(`/api/musicbrainz/series/${encodeURIComponent(mbid)}/kind`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ kind }),
+    });
+    if (!response.ok) throw new Error((await response.json().catch(() => ({})))?.detail || '');
+  } catch (error) {
+    showToast(error?.message || 'The series could not be saved.', 'error', 3200);
+    return false;
+  }
+  return String(state.view?.selected_series || '')
+    ? refreshCurrentViewAfterBackgroundCompletion({ preserveScroll: true })
+    : loadSeriesTree();
 }
 
 function handleGalleryMainClick(event) {
@@ -8001,6 +8041,7 @@ function initGalleryMain() {
   // then opens its series.
   const locationState = typeof parseBrowserUrlState === 'function' ? parseBrowserUrlState(window.location.href) : {};
   if (typeof resolveViewSeries === 'function' && resolveViewSeries(locationState) && !state.view.selected_series) {
+    state.ui.navigationTree = 'series';
     void fetchAndRender(buildUrl(locationState), false);
   }
 }
@@ -11801,23 +11842,36 @@ function scheduleArtistTreeResizeAfterTransition(onSettled = null) {
   cancelPendingArtistTreeResize = cleanup;
 }
 
-// MusicBrainz Delivery 2, S6: the navigation tree lists series while the Series view is
-// open. A phone's drawer keeps its artists (how a phone reaches the Series list is open).
-function showsSeriesTree(view = state.view) {
-  return Boolean(String(view?.selected_series || '').trim()) && !isArtistsDrawerMobileViewport();
+// MusicBrainz Delivery 2, S6: the navigation tree lists series once the rail's Series button
+// (or a series opened from album details) chose it. A phone's drawer keeps its artists (how a
+// phone reaches the Series list is open).
+function showsSeriesTree() {
+  return state.ui.navigationTree === 'series' && !isArtistsDrawerMobileViewport();
 }
 
-// The folded rail's Series button opens the tree on All series; its Artist Tree button
-// brings the artists back. Either unfolds the tree.
+// The folded rail's Series and Artist Tree buttons switch the tree and unfold it; the gallery
+// keeps what it shows and nothing in the tree is newly selected (owner 2026-11-17).
 function openNavigationTree(kind) {
-  if (showsSeriesTree() !== (kind === 'series')) {
-    fetchAndRender(buildUrl({
-      surface_request: 'albums',
-      visible_library_categories: state.view?.visible_library_categories || [],
-      selected_series: kind === 'series' ? 'all' : '',
-    }), true);
-  }
+  state.ui.navigationTree = kind === 'series' ? 'series' : 'artists';
+  if (kind === 'series') void loadSeriesTree();
+  renderSidebar();
+  syncArtistTreeFoldVisibility();
   if (state.ui.artistTreeFolded) toggleArtistTreeFold();
+}
+
+// The Series tree for any gallery; a Series view brings its own.
+async function loadSeriesTree() {
+  const params = new URLSearchParams();
+  (state.view?.visible_library_categories || []).forEach((category) => params.append('category', category));
+  try {
+    const response = await fetch(`/series-tree?${params}`, { headers: { Accept: 'application/json' } });
+    if (!response.ok) return false;
+    state.ui.seriesTree = (await response.json()).series_sidebar || [];
+  } catch (_error) {
+    return false;
+  }
+  if (showsSeriesTree()) renderSidebar();
+  return true;
 }
 
 function toggleArtistTreeFold() {
@@ -12179,6 +12233,7 @@ const GALLERY_DISPLAY_PREFERENCES_STORAGE_KEY = 'albumhaven.galleryDisplayPrefer
 const GALLERY_PLAYBACK_PREFERENCES_STORAGE_KEY = 'albumhaven.galleryPlaybackPreferences.v1';
 const ALBUM_OPEN_MODE_STORAGE_KEY = 'albumhaven.albumOpenMode.v1';
 const SHELL_LAYOUT_PREFERENCES_STORAGE_KEY = 'albumhaven.shellLayoutPreferences.v1';
+const SERIES_TREE_COLLAPSED_GROUPS_STORAGE_KEY = 'albumhaven.seriesTreeCollapsedGroups.v1';
 
 function loadPersistedJsonObject(key) {
   try {
@@ -12341,6 +12396,23 @@ function loadShellLayoutPreferences() {
   );
 }
 
+// The Series tree's collapsed groups (owner 2026-11-17, 4B), kept per account and client
+// like the artist tree's fold.
+function loadSeriesTreeCollapsedGroups() {
+  const saved = loadPersistedJsonObject(SERIES_TREE_COLLAPSED_GROUPS_STORAGE_KEY);
+  return { series: saved.series === true, featured_in: saved.featured_in === true };
+}
+
+function toggleSeriesTreeGroup(kind) {
+  const current = state.ui.seriesTreeCollapsedGroups || {};
+  const groups = { series: current.series === true, featured_in: current.featured_in === true };
+  if (!Object.hasOwn(groups, kind)) return false;
+  groups[kind] = !groups[kind];
+  state.ui.seriesTreeCollapsedGroups = groups;
+  setLocalStorageItem(SERIES_TREE_COLLAPSED_GROUPS_STORAGE_KEY, JSON.stringify(groups));
+  return true;
+}
+
 function loadAlbumOpenMode() {
   return normalizeAlbumOpenMode(getLocalStorageItem(ALBUM_OPEN_MODE_STORAGE_KEY));
 }
@@ -12450,6 +12522,7 @@ function restorePersistedClientPreferences() {
     state.ui = {};
   }
   state.ui.shellLayoutPreferences = loadShellLayoutPreferences();
+  state.ui.seriesTreeCollapsedGroups = loadSeriesTreeCollapsedGroups();
   restorePlayerAppearance();
 }
 
@@ -14584,7 +14657,6 @@ function ensureArtistTreeContextMenu() {
   menu.id = 'artist-tree-context-menu';
   menu.className = 'album-card-context-menu';
   menu.hidden = true;
-  menu.innerHTML = '<button type="button" class="album-card-context-menu-item" data-artist-tree-action="scroll-to-artist">Scroll to this artist</button>';
   document.body.appendChild(menu);
   return menu;
 }
@@ -14594,18 +14666,37 @@ function hideArtistTreeContextMenu() {
   if (!menu) return;
   menu.hidden = true;
   menu.dataset.artist = '';
+  menu.dataset.series = '';
   if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(menu);
 }
 
-function showArtistTreeContextMenu(x, y, artist) {
+// The tree's one context menu, for an artist or (Series tree) a series.
+function openTreeContextMenu(x, y, itemsHtml, { artist = '', series = '' } = {}) {
   const menu = ensureArtistTreeContextMenu();
   menu.style.left = `${x}px`;
   menu.style.top = `${y}px`;
+  menu.innerHTML = itemsHtml;
   menu.dataset.artist = String(artist || '');
+  menu.dataset.series = String(series || '');
   menu.hidden = false;
   if (!state.ui?.artistsDrawerOpen && typeof activateTriggerSurface === 'function') {
     activateTriggerSurface(menu, hideArtistTreeContextMenu);
   }
+}
+
+function showArtistTreeContextMenu(x, y, artist) {
+  openTreeContextMenu(x, y, '<button type="button" class="album-card-context-menu-item" data-artist-tree-action="scroll-to-artist">Scroll to this artist</button>', { artist });
+}
+
+// Right-clicking a series in the Series tree (owner 2026-11-17, 5B): Series or Featured In,
+// its current kind disabled; the MusicBrainz default comes back only after an owner's choice.
+function showSeriesTreeContextMenu(x, y, mbid) {
+  const series = resolveSeriesTreeItems().find((item) => item.mbid === mbid);
+  if (!series) return false;
+  const choice = (kind, label) => `<button type="button" class="album-card-context-menu-item" data-series-tree-kind="${kind}"${series.kind === kind ? ' disabled aria-disabled="true"' : ''}>${label}</button>`;
+  openTreeContextMenu(x, y, choice('series', 'Mark as Series') + choice('featured_in', 'Mark as Featured In')
+    + (series.owner_kind ? choice('', 'Use MusicBrainz default') : ''), { series: mbid });
+  return true;
 }
 
 function ensureVersionPickerModal() {
@@ -49900,6 +49991,24 @@ function handleGalleryBootstrapClick(event) {
     void scrollRootGalleryToArtist(artist);
     return;
   }
+  const seriesKind = event.target.closest('#artist-tree-context-menu [data-series-tree-kind]');
+  if (seriesKind) {
+    event.preventDefault();
+    const mbid = seriesKind.closest('#artist-tree-context-menu').dataset.series || '';
+    hideArtistTreeContextMenu();
+    void saveSeriesKind(mbid, seriesKind.getAttribute('data-series-tree-kind') || null);
+    return;
+  }
+  const seriesGroup = event.target.closest('[data-series-tree-group]');
+  if (seriesGroup) {
+    event.preventDefault();
+    const kind = seriesGroup.getAttribute('data-series-tree-group');
+    if (toggleSeriesTreeGroup(kind)) {
+      renderSidebar();
+      document.querySelector(`[data-series-tree-group="${kind}"]`)?.focus({ preventScroll: true });
+    }
+    return;
+  }
   const removeMissingAlbumButton = event.target.closest('[data-remove-missing-album="1"]');
   if (removeMissingAlbumButton) {
     event.preventDefault();
@@ -54175,6 +54284,12 @@ window.AlbumHavenAppCopy?.onServerAnswer(() => {
 });
 
 document.addEventListener('contextmenu', (event) => {
+  const sidebarSeries = event.target.closest('[data-sidebar-series]');
+  if (sidebarSeries && typeof canReviewMusicBrainzCorrections === 'function' && canReviewMusicBrainzCorrections()
+      && showSeriesTreeContextMenu(event.clientX, event.clientY, sidebarSeries.getAttribute('data-sidebar-series') || '')) {
+    event.preventDefault();
+    return;
+  }
   const sidebarArtist = event.target.closest('[data-sidebar-artist]');
   if (sidebarArtist) {
     event.preventDefault();

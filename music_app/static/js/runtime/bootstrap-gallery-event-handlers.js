@@ -10,6 +10,24 @@ function handleGalleryBootstrapClick(event) {
     void scrollRootGalleryToArtist(artist);
     return;
   }
+  const seriesKind = event.target.closest('#artist-tree-context-menu [data-series-tree-kind]');
+  if (seriesKind) {
+    event.preventDefault();
+    const mbid = seriesKind.closest('#artist-tree-context-menu').dataset.series || '';
+    hideArtistTreeContextMenu();
+    void saveSeriesKind(mbid, seriesKind.getAttribute('data-series-tree-kind') || null);
+    return;
+  }
+  const seriesGroup = event.target.closest('[data-series-tree-group]');
+  if (seriesGroup) {
+    event.preventDefault();
+    const kind = seriesGroup.getAttribute('data-series-tree-group');
+    if (toggleSeriesTreeGroup(kind)) {
+      renderSidebar();
+      document.querySelector(`[data-series-tree-group="${kind}"]`)?.focus({ preventScroll: true });
+    }
+    return;
+  }
   const removeMissingAlbumButton = event.target.closest('[data-remove-missing-album="1"]');
   if (removeMissingAlbumButton) {
     event.preventDefault();

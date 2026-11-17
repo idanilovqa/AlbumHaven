@@ -532,9 +532,10 @@ function restoreSidebarFocus(sidebarList, focusIdentity) {
 }
 
 
-// The Series tree replaces the artists while the Series view is open (approved mockup 2).
+// The Series tree replaces the artists once the rail chose it (approved mockup 2; owner
+// 2026-11-17: the tree switches, the gallery stays).
 function renderSeriesSidebar(el, view) {
-  const series = typeof showsSeriesTree === 'function' && showsSeriesTree(view);
+  const series = typeof showsSeriesTree === 'function' && showsSeriesTree();
   const heading = document.querySelector('.desktop-artists-heading');
   const label = series ? 'Series' : 'Artists';
   if (heading && heading.textContent !== label) heading.textContent = label;

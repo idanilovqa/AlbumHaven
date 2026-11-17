@@ -92,33 +92,156 @@ test('All series reads like the artist gallery: "Series" with its series and alb
   assert.deepEqual({ ...content }, { name: 'Series', inlineTotal: '', metadataHtml: '', summary: '2 series · 5 albums' });
 });
 
-test('2: the Series tree uses the artist tree items: All series, then each series with its count, the open one selected', () => {
-  const html = viewHelpers().buildSeriesSidebarHtml({
-    selected_series: COLOSSUS,
-    series_sidebar: [{ mbid: 'eaf64fe2-2c12-44a6-9210-4b717d107c6e', name: 'COLEZO! TWIN', count: 1 },
-      { mbid: COLOSSUS, name: 'Colossus Projects', count: 10 }],
-  });
-  const items = [...html.matchAll(/<a [^>]*>/g)].map((match) => match[0]);
-  assert.equal(items.length, 3);
-  assert.match(items[0], /data-sidebar-all-series="1"/);
-  assert.match(html, /All series<\/span><span class="navigation-tree-count artist-count">2<\/span>/);
-  assert.doesNotMatch(items[0], /is-selected/);
-  assert.doesNotMatch(items[1], /is-selected/);
-  assert.match(items[2], /class="artist-link active navigation-tree-item is-selected"/);
-  assert.match(items[2], new RegExp(`href="/\\?surface=albums&amp;series=${COLOSSUS}"`));
-  assert.match(items.join(''), /data-nav="1"/);
+const FEATURED = 'd5471f85-4b54-45da-9de7-c9ad9843c4bd';
+const TREE = [
+  { mbid: 'eaf64fe2-2c12-44a6-9210-4b717d107c6e', name: 'COLEZO! TWIN', count: 1, kind: 'series', owner_kind: null },
+  { mbid: FEATURED, name: 'Rolling Stone: The 100 Greatest Metal Albums of All Time', count: 2, kind: 'featured_in', owner_kind: null },
+  { mbid: COLOSSUS, name: 'Colossus Projects', count: 10, kind: 'series', owner_kind: null },
+];
+const treeTags = (html) => [...html.matchAll(/<(?:a|button|div) [^>]*>/g)].map((match) => match[0]);
+const treeLabels = (html) => [...html.matchAll(/artist-name-label">([^<]*)</g)].map((match) => match[1]);
+
+test('2 and 4B: the Series tree uses the artist tree items, each with its count, the open one selected', () => {
+  const html = viewHelpers().buildSeriesSidebarHtml({ selected_series: COLOSSUS, series_sidebar: TREE }, {});
+  const item = treeTags(html).find((tag) => tag.includes(`data-sidebar-series="${COLOSSUS}"`));
+  assert.match(item, /class="artist-link active navigation-tree-item is-selected"/);
+  assert.match(item, new RegExp(`href="/\\?surface=albums&amp;series=${COLOSSUS}"`));
+  assert.match(item, /data-nav="1"/);
+  assert.match(html, /Colossus Projects<\/span><span class="navigation-tree-count artist-count">10<\/span>/);
+  assert.equal(treeTags(html).filter((tag) => tag.includes('is-selected')).length, 1);
+});
+
+test('4B: two groups, Series then Featured In, each under its heading; no "All series" or "All Featured In"', () => {
+  const html = viewHelpers().buildSeriesSidebarHtml({ selected_series: 'all', series_sidebar: TREE }, {});
+  assert.deepEqual(treeLabels(html), ['Series', 'COLEZO! TWIN', 'Colossus Projects', 'Featured In',
+    'Rolling Stone: The 100 Greatest Metal Albums of All Time']);
+  assert.doesNotMatch(html, /All series|All Featured In|data-sidebar-all-series/);
+  assert.equal(treeTags(html).some((tag) => tag.includes('is-selected')), false);
+});
+
+test('4B: a group heading is a collapsible button, never a link, a selection or a count', () => {
+  const html = viewHelpers().buildSeriesSidebarHtml({ selected_series: 'all', series_sidebar: TREE }, {});
+  const headings = treeTags(html).filter((tag) => tag.includes('data-series-tree-group'));
+  assert.equal(headings.length, 2);
+  for (const heading of headings) {
+    assert.match(heading, /^<button [^>]*type="button"/);
+    assert.match(heading, /navigation-tree-group-heading/);
+    assert.match(heading, /aria-expanded="true"/);
+    assert.doesNotMatch(heading, /data-nav="|href=|aria-current|is-selected/);
+  }
+  assert.doesNotMatch(html, /Series<\/span><span class="navigation-tree-count/);
+});
+
+test('4B: a collapsed group keeps its heading and hides its series; the other group stays open', () => {
+  const html = viewHelpers().buildSeriesSidebarHtml({ selected_series: COLOSSUS, series_sidebar: TREE },
+    { series: true, featured_in: false });
+  assert.deepEqual(treeLabels(html), ['Series', 'Featured In', 'Rolling Stone: The 100 Greatest Metal Albums of All Time']);
+  assert.match(html, /aria-expanded="false" data-series-tree-group="series"|data-series-tree-group="series"[^>]*aria-expanded="false"/);
+  assert.match(html, /aria-expanded="true"[^>]*data-series-tree-group="featured_in"|data-series-tree-group="featured_in"[^>]*aria-expanded="true"/);
+});
+
+test("4B: the collapsed groups come from the viewer's saved preference by default", () => {
+  const helpers = viewHelpers();
+  helpers.state.ui = { seriesTree: TREE, seriesTreeCollapsedGroups: { series: false, featured_in: true } };
+  assert.deepEqual(treeLabels(helpers.buildSeriesSidebarHtml({ selected_artist: 'Magma' })),
+    ['Series', 'COLEZO! TWIN', 'Colossus Projects', 'Featured In']);
+});
+
+test('owner 2026-11-17: a Series view brings its own tree; any other gallery shows the loaded one, nothing selected', () => {
+  const helpers = viewHelpers();
+  helpers.state.ui = { seriesTree: TREE.slice(0, 1) };
+  assert.deepEqual(helpers.resolveSeriesTreeItems({ selected_series: COLOSSUS, series_sidebar: TREE }).length, 3);
+  assert.deepEqual(helpers.resolveSeriesTreeItems({ selected_artist: 'Magma', series_sidebar: TREE }).map((item) => item.name),
+    ['COLEZO! TWIN']);
+  const html = helpers.buildSeriesSidebarHtml({ selected_artist: 'Magma' }, {});
+  assert.equal(treeTags(html).some((tag) => /is-selected|aria-current/.test(tag)), false);
+  helpers.state.ui = {};
+  assert.equal(helpers.buildSeriesSidebarHtml({ selected_artist: 'Magma' }, {}), '');
+});
+
+test('owner 2026-11-17: each group heading carries the fold arrow of the artist tree', () => {
+  const helpers = viewHelpers();
+  const arrow = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 6-6 6 6 6"></path></svg>';
+  const getElementById = helpers.document.getElementById;
+  helpers.document.getElementById = (id) => (id === 'artist-tree-fold-button'
+    ? { querySelector: (selector) => (selector === 'svg' ? { outerHTML: arrow } : null) } : getElementById(id));
+  const html = helpers.buildSeriesSidebarHtml({ selected_series: 'all', series_sidebar: TREE }, { featured_in: true });
+  const chevrons = [...html.matchAll(/<span class="navigation-tree-group-heading__chevron">([^]*?)<\/span>/g)];
+  assert.deepEqual(chevrons.map((match) => match[1]), [arrow, arrow]);
+  assert.match(html, /aria-expanded="true"[^>]*>[^]*?navigation-tree-group-heading__chevron/);
+  // Rows never carry it.
+  assert.equal((html.match(/navigation-tree-group-heading__chevron/g) || []).length, 2);
+});
+
+test('4B: the separator comes before Featured In only where NavigationTree draws one', () => {
+  const view = { selected_series: 'all', series_sidebar: TREE };
+  const without = viewHelpers();
+  assert.equal(typeof without.window.NavigationTree.renderSeparator, 'undefined');
+  assert.doesNotMatch(without.buildSeriesSidebarHtml(view, {}), /separator/);
+  const helpers = viewHelpers();
+  const labels = [];
+  helpers.window.NavigationTree.renderSeparator = ({ label }) => { labels.push(label); return '<div role="separator"></div>'; };
+  const html = helpers.buildSeriesSidebarHtml(view, {});
+  assert.deepEqual(labels, ['Featured In']);
+  assert.match(html, /Colossus Projects<\/span>[^]*<div role="separator"><\/div><button[^>]*data-series-tree-group="featured_in"/);
+  // No Series group above it: no separator at the top.
+  labels.length = 0;
+  helpers.buildSeriesSidebarHtml({ series_sidebar: TREE.filter((item) => item.kind === 'featured_in') }, {});
+  assert.deepEqual(labels, []);
+});
+
+test('4B: a group with no series is left out, heading and all', () => {
+  const html = viewHelpers().buildSeriesSidebarHtml({ selected_series: 'all',
+    series_sidebar: TREE.filter((item) => item.kind === 'series') }, {});
+  assert.deepEqual(treeLabels(html), ['Series', 'COLEZO! TWIN', 'Colossus Projects']);
+  assert.equal(viewHelpers().buildSeriesSidebarHtml({ selected_series: 'all', series_sidebar: [] }, {}), '');
 });
 
 test('3A: a Featured In series is a selectable tree item that opens its gallery', () => {
-  const featured = 'd5471f85-4b54-45da-9de7-c9ad9843c4bd';
-  const html = viewHelpers().buildSeriesSidebarHtml({
-    selected_series: featured,
-    series_sidebar: [{ mbid: COLOSSUS, name: 'Colossus Projects', count: 4 },
-      { mbid: featured, name: 'Rolling Stone: The 100 Greatest Metal Albums of All Time', count: 2 }],
-  });
-  const item = [...html.matchAll(/<a [^>]*>/g)].map((match) => match[0]).find((tag) => tag.includes(featured));
+  const html = viewHelpers().buildSeriesSidebarHtml({ selected_series: FEATURED, series_sidebar: TREE }, {});
+  const item = treeTags(html).find((tag) => tag.includes(`data-sidebar-series="${FEATURED}"`));
   assert.match(item, /class="artist-link active navigation-tree-item is-selected"/);
-  assert.match(item, new RegExp(`href="/\\?surface=albums&amp;series=${featured}" data-nav="1"`));
+  assert.match(item, new RegExp(`href="/\\?surface=albums&amp;series=${FEATURED}" data-nav="1"`));
+});
+
+function seriesKindSaver(response) {
+  const context = load(['gallery-main-interactions.js']);
+  const calls = { fetch: [], toasts: [], refreshes: [] };
+  context.fetch = async (url, options) => { calls.fetch.push([url, options]); return response; };
+  context.showToast = (...args) => calls.toasts.push(args);
+  context.refreshCurrentViewAfterBackgroundCompletion = async (options) => { calls.refreshes.push(options); return true; };
+  context.loadSeriesTree = async () => { calls.trees = (calls.trees || 0) + 1; return true; };
+  return { save: context.saveSeriesKind, calls, context };
+}
+
+test('5B: a series kind is saved for that series, then the open view reloads in place to regroup the tree', async () => {
+  const { save, calls, context } = seriesKindSaver({ ok: true, json: async () => ({}) });
+  context.state.view = { selected_series: FEATURED };
+  assert.equal(await save(FEATURED, 'series'), true);
+  const [[url, options]] = calls.fetch;
+  assert.equal(url, `/api/musicbrainz/series/${FEATURED}/kind`);
+  assert.equal(options.method, 'PUT');
+  assert.deepEqual(JSON.parse(options.body), { kind: 'series' });
+  assert.deepEqual(calls.refreshes.map((item) => ({ ...item })), [{ preserveScroll: true }]);
+  assert.deepEqual(calls.toasts, []);
+  await save(FEATURED, null);
+  assert.deepEqual(JSON.parse(calls.fetch[1][1].body), { kind: null });
+  assert.equal(calls.trees, undefined);
+});
+
+test('5B: saved while an artist gallery is open, only the tree is read again; the gallery stays', async () => {
+  const { save, calls, context } = seriesKindSaver({ ok: true, json: async () => ({}) });
+  context.state.view = { selected_artist: 'Magma', selected_series: '' };
+  assert.equal(await save(FEATURED, 'featured_in'), true);
+  assert.equal(calls.trees, 1);
+  assert.deepEqual(calls.refreshes, []);
+});
+
+test('5B: a refused save says why and leaves the tree as it is', async () => {
+  const { save, calls } = seriesKindSaver({ ok: false, json: async () => ({ detail: 'Action not permitted.' }) });
+  assert.equal(await save(FEATURED, 'featured_in'), false);
+  assert.deepEqual(calls.toasts.map((args) => [...args]), [['Action not permitted.', 'error', 3200]]);
+  assert.deepEqual(calls.refreshes, []);
 });
 
 test('the Series view is part of the page and data URLs only without a search or an artist', () => {

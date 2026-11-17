@@ -17,6 +17,12 @@
 button.navigation-tree-item[data-navigation-tree-item="panel"] {
   width: 100%; text-align: left; font: inherit; cursor: pointer;
 }
+/* A collapsible group heading made from the same item (approved D2 4B): dimmed, never selected. */
+button.navigation-tree-item.navigation-tree-group-heading { color: var(--muted); }
+/* Its arrow is the artist tree's fold arrow: down while the group is open, right when folded. */
+.navigation-tree-group-heading__chevron { display: inline-flex; flex: 0 0 auto; align-self: center; }
+.navigation-tree-group-heading__chevron svg { transform: rotate(-90deg); transition: transform 150ms ease; }
+.navigation-tree-group-heading[aria-expanded="false"] .navigation-tree-group-heading__chevron svg { transform: rotate(180deg); }
 .navigation-tree-label { min-width: 0; }
 /* A dimmed second name after the label, e.g. a romanized artist name (approved J3). */
 .navigation-tree-label-secondary { color: var(--muted); }

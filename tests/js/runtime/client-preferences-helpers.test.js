@@ -295,3 +295,24 @@ function loadHelper(overrides = {}) {
     end_behavior: 'continue',
   }), 'continue');
 }
+
+// The Series tree's collapsed groups (D2 4B, owner 2026-11-17): restored per viewer, toggled one
+// group at a time, and always saved whole so the account preference accepts it.
+{
+  const { context, storage } = loadHelper();
+  context.restorePersistedClientPreferences();
+  assert.deepEqual({ ...context.state.ui.seriesTreeCollapsedGroups }, { series: false, featured_in: false });
+
+  assert.equal(context.toggleSeriesTreeGroup('featured_in'), true);
+  assert.deepEqual(JSON.parse(storage.get('albumhaven.seriesTreeCollapsedGroups.v1')), { series: false, featured_in: true });
+  assert.equal(context.toggleSeriesTreeGroup('hidden'), false);
+  assert.equal(context.toggleSeriesTreeGroup('featured_in'), true);
+  assert.deepEqual(JSON.parse(storage.get('albumhaven.seriesTreeCollapsedGroups.v1')), { series: false, featured_in: false });
+
+  storage.set('albumhaven.seriesTreeCollapsedGroups.v1', JSON.stringify({ series: true, featured_in: 'yes', hidden: true }));
+  context.restorePersistedClientPreferences();
+  assert.deepEqual({ ...context.state.ui.seriesTreeCollapsedGroups }, { series: true, featured_in: false });
+  storage.set('albumhaven.seriesTreeCollapsedGroups.v1', '{bad json');
+  context.restorePersistedClientPreferences();
+  assert.deepEqual({ ...context.state.ui.seriesTreeCollapsedGroups }, { series: false, featured_in: false });
+}

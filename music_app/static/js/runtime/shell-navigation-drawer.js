@@ -161,23 +161,36 @@ function scheduleArtistTreeResizeAfterTransition(onSettled = null) {
   cancelPendingArtistTreeResize = cleanup;
 }
 
-// MusicBrainz Delivery 2, S6: the navigation tree lists series while the Series view is
-// open. A phone's drawer keeps its artists (how a phone reaches the Series list is open).
-function showsSeriesTree(view = state.view) {
-  return Boolean(String(view?.selected_series || '').trim()) && !isArtistsDrawerMobileViewport();
+// MusicBrainz Delivery 2, S6: the navigation tree lists series once the rail's Series button
+// (or a series opened from album details) chose it. A phone's drawer keeps its artists (how a
+// phone reaches the Series list is open).
+function showsSeriesTree() {
+  return state.ui.navigationTree === 'series' && !isArtistsDrawerMobileViewport();
 }
 
-// The folded rail's Series button opens the tree on All series; its Artist Tree button
-// brings the artists back. Either unfolds the tree.
+// The folded rail's Series and Artist Tree buttons switch the tree and unfold it; the gallery
+// keeps what it shows and nothing in the tree is newly selected (owner 2026-11-17).
 function openNavigationTree(kind) {
-  if (showsSeriesTree() !== (kind === 'series')) {
-    fetchAndRender(buildUrl({
-      surface_request: 'albums',
-      visible_library_categories: state.view?.visible_library_categories || [],
-      selected_series: kind === 'series' ? 'all' : '',
-    }), true);
-  }
+  state.ui.navigationTree = kind === 'series' ? 'series' : 'artists';
+  if (kind === 'series') void loadSeriesTree();
+  renderSidebar();
+  syncArtistTreeFoldVisibility();
   if (state.ui.artistTreeFolded) toggleArtistTreeFold();
+}
+
+// The Series tree for any gallery; a Series view brings its own.
+async function loadSeriesTree() {
+  const params = new URLSearchParams();
+  (state.view?.visible_library_categories || []).forEach((category) => params.append('category', category));
+  try {
+    const response = await fetch(`/series-tree?${params}`, { headers: { Accept: 'application/json' } });
+    if (!response.ok) return false;
+    state.ui.seriesTree = (await response.json()).series_sidebar || [];
+  } catch (_error) {
+    return false;
+  }
+  if (showsSeriesTree()) renderSidebar();
+  return true;
 }
 
 function toggleArtistTreeFold() {

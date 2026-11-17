@@ -22,6 +22,7 @@ _DEFAULTS = {
     "albumOpenMode": "modal",
     "compactPlayerMode": "expanded",
     "playerAppearance": {"seekbarMode": "default", "waveformFillColor": "#dadde2", "waveformEdgeColor": "#494950"},
+    "seriesTreeCollapsedGroups": {"series": False, "featured_in": False},
 }
 
 
@@ -101,6 +102,11 @@ def normalize_changes(value: object) -> dict[str, object]:
             result[key] = _choice(candidate, ("modal", "page"))
         elif key == "compactPlayerMode":
             result[key] = _choice(candidate, ("compact", "expanded"))
+        elif key == "seriesTreeCollapsedGroups":
+            item = _object(candidate, set(_DEFAULTS[key]))
+            if any(type(setting) is not bool for setting in item.values()):
+                raise ValueError("Invalid series tree preferences.")
+            result[key] = dict(item)
         elif key == "playerAppearance":
             item = _object(candidate, set(_DEFAULTS[key]))
             if any(not isinstance(item[name], str) or not re.fullmatch(r"#[0-9a-fA-F]{6}", item[name])
@@ -142,9 +148,13 @@ class PostgresClientLayoutPreferences:
             ).fetchall()
         for row in rows:
             profile = normalize_profile(row["client_profile"])
-            saved = row["preferences"]
-            if saved:
-                profiles[profile].update(normalize_changes(saved))
+            for family, value in (row["preferences"] or {}).items():
+                # One family at a time: a family this build does not know (saved by a newer
+                # build) or no longer accepts keeps its default instead of failing the load.
+                try:
+                    profiles[profile].update(normalize_changes({family: value}))
+                except ValueError:
+                    continue
         return profiles
 
     def save_changes(self, *, account_id: int, profile: str, changes: object) -> dict[str, object]:

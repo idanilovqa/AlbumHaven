@@ -21,6 +21,9 @@ def test_mobile_defaults_are_independent_from_desktop():
     {'galleryDisplayPreferences': {'defaultGalleryDisplayMode': 'list'}},
     {'gallerySources': {'main_library': True, 'new_arrivals': True, 'hoard': 1}},
     {'combineSimilarArtists': {'Northlight': 'true'}},
+    {'seriesTreeCollapsedGroups': {'series': True}},
+    {'seriesTreeCollapsedGroups': {'series': True, 'featured_in': 1}},
+    {'seriesTreeCollapsedGroups': {'series': True, 'featured_in': False, 'hidden': True}},
     {'playerAppearance': {'seekbarMode': 'waveform', 'waveformFillColor': 'url(bad)', 'waveformEdgeColor': '#ffffff'}},
 ])
 def test_invalid_or_authorization_shaped_changes_are_rejected(changes):
@@ -30,6 +33,10 @@ def test_invalid_or_authorization_shaped_changes_are_rejected(changes):
 
 def test_valid_changes_are_partial_preference_families():
     assert normalize_changes({'mobileGridColumns': 3}) == {'mobileGridColumns': 3}
+    # The Series tree's collapsed groups (owner 2026-11-17, 4B), remembered per account and client.
+    collapsed = {'seriesTreeCollapsedGroups': {'series': False, 'featured_in': True}}
+    assert normalize_changes(collapsed) == collapsed
+    assert default_preferences('web_desktop')['seriesTreeCollapsedGroups'] == {'series': False, 'featured_in': False}
     with pytest.raises(ValueError):
         normalize_profile('other-account')
 
@@ -57,6 +64,17 @@ def test_loading_preferences_requires_and_queries_exact_account():
     assert result['web_desktop']['mobileGridColumns'] == 2
     with pytest.raises(ValueError):
         repository.load_profiles(account_id=None)
+
+
+def test_a_saved_family_this_build_does_not_know_or_accept_keeps_its_default_and_the_rest_load():
+    # A newer build may save a family an older one lacks; one bad family never fails the load.
+    connection = Connection([{'client_profile': 'web_desktop', 'preferences': {
+        'mobileGridColumns': 3, 'aFamilyFromANewerBuild': {'x': True}, 'albumOpenMode': 'sideways'}}])
+    repository = PostgresClientLayoutPreferences({'ALBUM_HAVEN_APP_DATABASE_URL': 'test'}, connect=lambda _: connection)
+    desktop = repository.load_profiles(account_id=17)['web_desktop']
+    assert desktop['mobileGridColumns'] == 3
+    assert desktop['albumOpenMode'] == 'modal'
+    assert 'aFamilyFromANewerBuild' not in desktop
 
 
 def test_recent_albums_query_scopes_account_and_library_and_bounds_work():

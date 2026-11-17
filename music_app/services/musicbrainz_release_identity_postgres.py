@@ -411,6 +411,21 @@ class MusicBrainzReleaseIdentityPostgresRepository(EnrichmentJobQueue):
                 " size_failed_at = null, updated_at = %(observed_at)s where mbid = %(mbid)s::uuid",
                 {"mbid": mbid, "count": max(0, int(member_count)), "observed_at": _aware_utc(observed_at)})
 
+    def set_series_owner_kind(self, *, mbid: str, owner_kind: str | None,
+                              observed_at: datetime) -> dict[str, object] | None:
+        """The owner marks a series as Series or Featured In from the Series tree (owner
+        2026-11-17, 5B); ``None`` returns it to the MusicBrainz default. A hidden series is not
+        in the tree and stays as it is: ``None`` then, as for an unknown series."""
+        if owner_kind not in {"series", "featured_in", None}:
+            raise ValueError("Unknown series kind.")
+        with self._connect(self._database_url) as connection:
+            row = connection.execute(
+                "update integration.musicbrainz_series set owner_kind = %(owner_kind)s, updated_at = %(observed_at)s"
+                " where mbid = %(mbid)s::uuid and coalesce(owner_kind, computed_kind) <> 'hidden'"
+                " returning mbid::text as mbid, coalesce(owner_kind, computed_kind) as kind, owner_kind",
+                {"mbid": mbid, "owner_kind": owner_kind, "observed_at": _aware_utc(observed_at)}).fetchone()
+        return _row_mapping(row) if row else None
+
 
 def _date(value: object) -> str | None:
     text = str(value or "").strip()

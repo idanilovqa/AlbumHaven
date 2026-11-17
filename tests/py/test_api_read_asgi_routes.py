@@ -5754,6 +5754,41 @@ def test_asgi_series_view_reads_the_postgres_series_payload(app, asgi_app, monke
     assert calls == ["all"]
 
 
+def test_asgi_series_tree_lists_the_series_alone_and_never_a_gallery(app, asgi_app, monkeypatch):
+    """Owner 2026-11-17: the rail's Series button switches the tree; the gallery stays."""
+    from music_app.routes import api_read_asgi_routes as asgi_read_routes
+    from music_app.services.private_route_boundary import private_action_for_route
+
+    calls = []
+    tree = [{"mbid": "520f6fcd-251d-46cd-83a9-0bc725d42333", "name": "Colossus Projects", "count": 4,
+             "kind": "series", "owner_kind": None}]
+
+    class FakePostgresBrowseRepository:
+        def __init__(self, config):
+            assert config is app.config
+
+        def build_series_tree(self, *, query_params=None):
+            calls.append(query_params.getlist("category"))
+            return tree
+
+        def build_series_payload(self, **_kwargs):
+            raise AssertionError("The tree never builds a gallery")
+
+    monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FakePostgresBrowseRepository)
+    monkeypatch.setattr(asgi_read_routes, "select_runtime_persistence_adapter", _postgres_selection)
+    assert private_action_for_route("GET", "/series-tree") == "library.browse.read"
+
+    status, headers, body = _run_asgi_request(asgi_app, "GET", "/series-tree", query={"category": "hoard"})
+    assert (status, _decode_json(body)) == (200, {"series_sidebar": tree})
+    assert headers["cache-control"] == "no-store"
+    assert calls == [["hoard"]]
+    status, _headers, _body = _run_asgi_request(asgi_app, "GET", "/series-tree", query={"series": "all"})
+    assert status == 400
+    monkeypatch.setattr(asgi_read_routes, "select_runtime_persistence_adapter",
+                        lambda seam_id, _config: type("Selection", (), {"effective_backend": "file"})())
+    assert _run_asgi_request(asgi_app, "GET", "/series-tree")[0] == 409
+
+
 def test_asgi_series_view_refuses_search_or_artist_parameters_and_file_backed_libraries(
     app, asgi_app, monkeypatch,
 ):

@@ -353,11 +353,11 @@ def test_featured_in_is_in_the_series_tree_and_opens_its_gallery_but_a_hidden_se
     assert (featured["series"]["kind"], featured["series"]["type_label"]) == ("featured_in", "Featured In")
     assert [album["name"] for album in featured["artist_groups"][0]["albums"]] == [
         "Kalevala", "Iliad, A Grand Piano Extravaganza"]
-    # Owner 2026-11-15 (3A): the Series tree lists Featured In too, selectable (provisional
-    # single list until mockup batch 2).
+    # Owner 2026-11-15 (3A): the Series tree lists Featured In too, selectable; 2026-11-17
+    # (4B): the client groups it by its kind.
     every = browse.build_series_payload(query_params={"series": "all"})
     assert {"mbid": METAL_LIST, "name": "Rolling Stone: The 100 Greatest Metal Albums of All Time",
-            "count": 2} in every["series_sidebar"]
+            "count": 2, "kind": "featured_in", "owner_kind": None} in every["series_sidebar"]
     # An owner's "hidden" keeps a series out of the tree and its gallery.
     with isolatedPostgres._connect(setup_url) as connection:
         connection.execute("update integration.musicbrainz_series set owner_kind = 'hidden' where mbid = %s",
@@ -371,6 +371,86 @@ def test_featured_in_is_in_the_series_tree_and_opens_its_gallery_but_a_hidden_se
     # Search matches both kinds by name.
     assert {row["album_title"] for row in browse._load_search_rows("metal albums", VIEW_STATE)} == {
         "Kalevala", "Iliad, A Grand Piano Extravaganza"}
+
+
+def test_the_owner_marks_a_series_from_the_tree_and_the_tree_regroups(monkeypatch):
+    """Owner 2026-11-17 (5B): Series or Featured In from the tree's menu, or the MusicBrainz
+    default back; a hidden series is never changed there."""
+    setup_url, _albums = _seed_library(monkeypatch)
+    repository, browse = _sizing_repository(setup_url), _browse(setup_url)
+
+    def tree():
+        return {item["mbid"]: (item["kind"], item["owner_kind"])
+                for item in browse.build_series_payload(query_params={"series": "all"})["series_sidebar"]}
+
+    assert tree()[METAL_LIST] == ("featured_in", None)
+    # The rail's Series button reads the same tree without a gallery.
+    assert browse.build_series_tree(query_params={}) == browse.build_series_payload(
+        query_params={"series": "all"})["series_sidebar"]
+    assert repository.set_series_owner_kind(mbid=METAL_LIST, owner_kind="series", observed_at=NOW) == {
+        "mbid": METAL_LIST, "kind": "series", "owner_kind": "series"}
+    assert tree()[METAL_LIST] == ("series", "series")
+    assert browse.build_series_payload(query_params={"series": METAL_LIST})["series"]["kind"] == "series"
+    repository.set_series_owner_kind(mbid=COLOSSUS, owner_kind="featured_in", observed_at=NOW)
+    assert tree()[COLOSSUS] == ("featured_in", "featured_in")
+    # The MusicBrainz default comes back.
+    assert repository.set_series_owner_kind(mbid=METAL_LIST, owner_kind=None, observed_at=NOW)["kind"] == "featured_in"
+    assert tree()[METAL_LIST] == ("featured_in", None)
+    # Unknown or hidden: nothing changes.
+    assert repository.set_series_owner_kind(mbid="00000000-0000-4000-8000-0000000000ff", owner_kind="series",
+                                            observed_at=NOW) is None
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute("update integration.musicbrainz_series set owner_kind = 'hidden' where mbid = %s",
+                           (COLEZO,))
+    assert repository.set_series_owner_kind(mbid=COLEZO, owner_kind="series", observed_at=NOW) is None
+    with isolatedPostgres._connect(setup_url) as connection:
+        assert connection.execute("select owner_kind from integration.musicbrainz_series where mbid = %s",
+                                  (COLEZO,)).fetchone()["owner_kind"] == "hidden"
+
+
+def test_a_series_wikipedia_introduction_is_looked_up_for_library_series_only_and_shown_only_when_stored(
+        monkeypatch):
+    """Owner 2026-11-17: a series' information comes only from Wikipedia; nothing without a
+    link. Looked up once, again after 90 days; a failure rests a day, then backs off."""
+    from music_app.services.musicbrainz_series_wikipedia import REFRESH_AFTER
+    from music_app.services.musicbrainz_series_wikipedia_postgres import SeriesWikipediaPostgresRepository
+
+    setup_url, _albums = _seed_library(monkeypatch)
+    with isolatedPostgres._connect(setup_url) as connection:
+        # A series no album of the library is part of is never looked up.
+        connection.execute("insert into integration.musicbrainz_series (mbid, name, series_type, refreshed_at)"
+                           " values ('00000000-0000-4000-8000-0000000002ff', 'Elsewhere', 'Release group series', %s)",
+                           (NOW,))
+    repository = SeriesWikipediaPostgresRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": setup_url}, connect=lambda _url: isolatedPostgres._connect(setup_url))
+    browse = _browse(setup_url)
+
+    def due(at):
+        return set(repository.due_series(limit=10, now=at, refresh_after=REFRESH_AFTER))
+
+    assert due(NOW) == {COLOSSUS, COLEZO, METAL_LIST}
+    found = {"language": "en", "title": "Metal", "url": "https://en.wikipedia.org/wiki/Metal", "extract": "A list."}
+    repository.store(mbid=METAL_LIST, found=found, observed_at=NOW)
+    repository.store(mbid=COLOSSUS, found=False, observed_at=NOW)
+    repository.store(mbid=COLEZO, found=None, observed_at=NOW)
+    assert due(NOW) == set()
+    # Only a stored introduction is shown; a series without one has no "wikipedia" at all.
+    assert browse.build_series_payload(query_params={"series": METAL_LIST})["series"]["wikipedia"] == {
+        "extract": "A list.", "url": "https://en.wikipedia.org/wiki/Metal"}
+    assert "wikipedia" not in browse.build_series_payload(query_params={"series": COLOSSUS})["series"]
+    # The failure rests a day, then two after a second failure; the stored article survives one.
+    assert due(NOW + timedelta(hours=23)) == set()
+    assert due(NOW + timedelta(days=1)) == {COLEZO}
+    repository.store(mbid=COLEZO, found=None, observed_at=NOW + timedelta(days=1))
+    assert due(NOW + timedelta(days=2)) == set()
+    assert due(NOW + timedelta(days=3)) == {COLEZO}
+    repository.store(mbid=METAL_LIST, found=None, observed_at=NOW + timedelta(days=3))
+    assert browse.build_series_payload(query_params={"series": METAL_LIST})["series"]["wikipedia"]["extract"] == "A list."
+    # Answers are asked again after 90 days; a link that is gone removes its article.
+    assert METAL_LIST not in due(NOW + timedelta(days=89))
+    assert COLOSSUS in due(NOW + timedelta(days=91))
+    repository.store(mbid=METAL_LIST, found=False, observed_at=NOW + timedelta(days=91))
+    assert "wikipedia" not in browse.build_series_payload(query_params={"series": METAL_LIST})["series"]
 
 
 # Series size: counted once per 30 days, only when type and name leave it undecided ----------

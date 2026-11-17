@@ -193,7 +193,8 @@
 .shell-navigation-compact[hidden],
 #artist-tree-expanded[hidden] { display: none; }
 .shell-navigation-compact-action svg,
-.shell-navigation-rail-toggle svg {
+.shell-navigation-rail-toggle svg,
+.navigation-tree-group-heading__chevron svg {
   width: 18px;
   height: 18px;
   fill: none;

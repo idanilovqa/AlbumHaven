@@ -2456,3 +2456,21 @@ def test_merging_committed_entries_never_replaces_a_broken_live_file_cache(live_
         save_tasks_module._merge_file_cache_entries(library_state, {"track.mp3": {"path": "track.mp3"}})
 
     assert library_state == {"file_cache": live_file_cache}
+
+
+def test_merging_committed_entries_never_changes_the_live_cache_keys_under_a_reader():
+    live_file_cache = {"a.mp3": {"path": "a.mp3", "album": "Old"}, "b.mp3": {"path": "b.mp3"}}
+    library_state = {"file_cache": live_file_cache, "_view_payload_non_album_candidate_cache": object()}
+    reader = iter(live_file_cache.items())
+    next(reader)
+
+    replaced = save_tasks_module._merge_file_cache_entries(
+        library_state, {"a.mp3": {"path": "a.mp3", "album": "New"}})
+    added = save_tasks_module._merge_file_cache_entries(library_state, {"c.mp3": {"path": "c.mp3"}})
+
+    # A replaced entry is merged in place; a new track republishes a copy, so the reader finishes.
+    assert replaced is live_file_cache and live_file_cache["a.mp3"]["album"] == "New"
+    assert added is library_state["file_cache"] is not live_file_cache
+    assert list(reader) == [("b.mp3", {"path": "b.mp3"})]
+    assert sorted(added) == ["a.mp3", "b.mp3", "c.mp3"] and "c.mp3" not in live_file_cache
+    assert "_view_payload_non_album_candidate_cache" not in library_state

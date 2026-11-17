@@ -327,13 +327,20 @@ def _merge_file_cache_entries(
     library_state: dict[str, object],
     entries: dict[str, JsonDict],
 ) -> dict[str, JsonDict]:
-    """Merge committed entries into the live file cache in place, under the
-    caller's state-mutation guard, instead of republishing a copy of it."""
+    """Merge committed entries into the live file cache, under the caller's
+    state-mutation guard, and return the live cache.
+
+    Readers on other threads iterate the cache without that guard, so its keys
+    never change in place: entries that only replace existing tracks are merged
+    in place, and any new track republishes a merged copy."""
     file_cache = library_state.get("file_cache")
     if not isinstance(file_cache, dict):
         # Replacing it would silently drop every other track's entry.
         raise TypeError("The live library file cache is not a mapping; refusing to replace it.")
-    file_cache.update(entries)
+    if entries.keys() <= file_cache.keys():
+        file_cache.update(entries)
+    else:
+        file_cache = library_state["file_cache"] = {**file_cache, **entries}
     # Non-album candidates are cached under the cache's identity, which an
     # in-place merge keeps.
     library_state.pop("_view_payload_non_album_candidate_cache", None)
@@ -1012,7 +1019,7 @@ def finalize_structural_tag_edit_save_task(
                 ),
             )
             if persistence_result.get("cover_inherited_from_structural_edit") is True:
-                _merge_file_cache_entries(
+                current_file_cache = _merge_file_cache_entries(
                     st,
                     _structurally_inherited_cover_entries(
                         file_cache=current_file_cache,

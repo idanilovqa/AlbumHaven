@@ -4071,6 +4071,7 @@
       "expanded-compact-playback-continuity",
       "expanded-seekbar-mode-geometry",
       "loop-forced-waveform-geometry",
+      "waveform-waits-out-busy-builder",
       "floating-click-drag-clamp",
       "docked-footer-controls",
       "appearance-style-persistence",

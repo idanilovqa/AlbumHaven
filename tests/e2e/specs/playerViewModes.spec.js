@@ -172,6 +172,33 @@ test(`${CASE_ID} switches expanded, docked, and floating player views without sh
     expect(playbackAfterGeometry.paused).toBe(playbackBeforeGeometry.paused);
   });
 
+  await stepLogger.step('Show the next track waveform after another track holds the waveform builder for 6 s', async () => {
+    // The server builds one waveform at a time and answers 429 meanwhile; the old player gave up after 1.55 s.
+    let busyUntil = 0;
+    let busyAnswers = 0;
+    const isWaveformBuild = url => url.pathname === '/playback/waveform' && url.searchParams.get('cachedOnly') !== '1';
+    const holdBuilder = async (route) => {
+      busyUntil ||= Date.now() + 6000;
+      if (Date.now() >= busyUntil) return route.continue();
+      busyAnswers += 1;
+      return route.fulfill({ status: 429, contentType: 'application/json', body: '{"error":"waveform peak job already active"}' });
+    };
+    await page.route(isWaveformBuild, holdBuilder);
+    try {
+      await galleryActions.selectAlbumDetailsByIdentity(ALBUM);
+      await trackModalActions.waitForLoadedSummary();
+      const nextTrack = await trackModalActions.playTrackAt(1);
+      expect(nextTrack.path).not.toBe(selectedTrack.path);
+      await globalPlayerActions.waitForCurrentTrack({ path: nextTrack.path, trackTitle: nextTrack.title });
+      await trackModalActions.close();
+      await globalPlayerActions.expectExpandedGeometry('waveform');
+      await globalPlayerActions.waitForRenderedWaveform({ path: nextTrack.path, timeout: 20000 });
+      expect(busyAnswers).toBeGreaterThan(5);
+    } finally {
+      await page.unroute(isWaveformBuild, holdBuilder);
+    }
+  });
+
   await stepLogger.step('Force waveform geometry during loop editing and restore regular geometry on cancel', async () => {
     await settingsModalAppBarActions.openSettings();
     await utilityTabBarActions.openTab('appearance');

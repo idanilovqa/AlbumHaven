@@ -17038,6 +17038,9 @@ function attachModalEvents() {
 const PLAYER_WAVEFORM_PEAK_COUNT = 280;
 const PLAYER_WAVEFORM_DETAIL_PEAK_COUNT = 720;
 const PLAYER_WAVEFORM_BUSY_RETRY_DELAYS_MS = Object.freeze([50, 100, 200, 400, 800]);
+// The server builds one waveform at a time, so player peaks keep waiting out another build
+// at this pace for as long as their playback generation lasts.
+const PLAYER_WAVEFORM_BUSY_RETRY_MAX_DELAY_MS = 2000;
 const playerWaveformPeakCache = new Map();
 const playerWaveformPeakProbes = new Map();
 const savedLoopWaveformPeakCache = new Map();
@@ -17214,9 +17217,10 @@ async function loadWaveformPeaks(path, sampleCount = PLAYER_WAVEFORM_PEAK_COUNT,
       const query = new URLSearchParams({ path: rawPath, bins: String(sampleCount) });
       for (let attempt = 0; ; attempt += 1) {
         const response = await fetch(`/playback/waveform?${query}`, { signal: controller.signal });
-        if (response.status === 429 && attempt < PLAYER_WAVEFORM_BUSY_RETRY_DELAYS_MS.length) {
+        if (response.status === 429) {
           await new Promise((resolve) => {
-            setTimeout(resolve, PLAYER_WAVEFORM_BUSY_RETRY_DELAYS_MS[attempt]);
+            setTimeout(resolve, PLAYER_WAVEFORM_BUSY_RETRY_DELAYS_MS[attempt]
+              ?? PLAYER_WAVEFORM_BUSY_RETRY_MAX_DELAY_MS);
           });
           if (controller.signal.aborted || state.player.streaming.generation !== generation) return null;
           continue;

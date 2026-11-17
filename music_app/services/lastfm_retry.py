@@ -181,7 +181,9 @@ def retry_pending_lastfm_scrobbles(
     library_ids: frozenset[int] | None = None,
     bypass_backoff: bool = False,
 ) -> LastfmRetryPass:
-    """Sends the pending scrobbles in scope, in batches of up to 50 per account."""
+    """Sends the pending scrobbles in scope, in batches of up to 50 per account.
+
+    A failing Last.fm stops the pass; an account it asks to reconnect only stops that account's batches."""
     result = LastfmRetryPass(summary={
         "pending_before": 0, "attempted": 0, "succeeded": 0, "failed": 0, "pending_after": 0,
     })
@@ -206,26 +208,34 @@ def retry_pending_lastfm_scrobbles(
                 pending = [item for item in pending if item.account_id in sessions]
                 summary["pending_before"] = summary["pending_after"] = len(pending)
                 now = datetime.now(timezone.utc)
-                latest = {item.row_id: item.entry for item in pending}
+                latest = {item.row_id: item for item in pending}
+                # Accounts Last.fm asked to reconnect: their other listens wait for the reconnection.
+                revoked: set[int] = set()
                 for batch in _account_batches(pending, now=now, reauthenticated=reauthenticated,
                                               bypass_backoff=bypass_backoff):
-                    stored, failure = _submit_batch(
+                    if batch[0].account_id in revoked:
+                        continue
+                    stored, retry_in, error = _submit_batch(
                         config, connection, batch, session=sessions[batch[0].account_id],
                         reauthenticated=reauthenticated, bypass_backoff=bypass_backoff,
                     )
                     for before, after, attempted in stored:
-                        latest[after.row_id] = after.entry
+                        latest[after.row_id] = after
                         _count_result(summary, scope_summaries, before, after, attempted=attempted)
                         if after.entry.get("measurement_version") != MEASURED_VERSION:
                             pending_changes[str(after.entry["id"])] = (
                                 after.entry if is_pending_scrobble_entry(after.entry) else None
                             )
-                    if failure is not None:
+                    if error is not None and error.reauthentication_required:
+                        revoked.add(batch[0].account_id)
+                    elif error is not None:
                         # The provider is failing: later batches wait for the same backoff.
-                        result.retry_in_seconds = failure
+                        result.retry_in_seconds = retry_in
                         break
                 else:
-                    result.retry_in_seconds = _seconds_until_next_due(latest.values(), now=now)
+                    result.retry_in_seconds = _seconds_until_next_due(
+                        (item.entry for item in latest.values() if item.account_id not in revoked), now=now,
+                    )
             if pending_changes or (account_id is None and summary["attempted"]):
                 record_retry_results(
                     config,
@@ -273,10 +283,10 @@ def _submit_batch(
     session: LastfmSession,
     reauthenticated: bool,
     bypass_backoff: bool,
-) -> tuple[list[tuple[PendingListenEntry, PendingListenEntry, bool]], int | None]:
+) -> tuple[list[tuple[PendingListenEntry, PendingListenEntry, bool]], int | None, LastfmError | None]:
     """Claims, sends, and stores one batch. Returns each listen's entry before and
-    after and whether it was sent, and the backoff in seconds when the Last.fm
-    call as a whole failed."""
+    after and whether it was sent, and, when the Last.fm call as a whole failed,
+    the backoff in seconds and the error."""
     now = datetime.now(timezone.utc)
     stored: list[tuple[PendingListenEntry, PendingListenEntry, bool]] = []
     sending: list[tuple[PendingListenEntry, dict[str, object]]] = []
@@ -297,8 +307,8 @@ def _submit_batch(
                 claimed.append(replace(item, entry={**item.entry, **ATTEMPTING_UPDATES}))
         write_listen_entries(connection, claimed)
     if not sending:
-        return stored, None
-    retry_in = None
+        return stored, None, None
+    retry_in = failure = None
     try:
         outcomes = scrobble_tracks(config, [payload for _item, payload in sending], session=session)
         results = [
@@ -309,6 +319,7 @@ def _submit_batch(
             for (item, _payload), outcome in zip(sending, outcomes)
         ]
     except LastfmError as error:
+        failure = error
         results = []
         for item, _payload in sending:
             retryable, state = failed_batch_disposition(error)
@@ -322,7 +333,7 @@ def _submit_batch(
     with connection.transaction():
         write_listen_entries(connection, sent)
     stored.extend((before, after, True) for (before, _payload), after in zip(sending, sent))
-    return stored, retry_in
+    return stored, retry_in, failure
 
 
 def _count_result(

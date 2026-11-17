@@ -247,6 +247,31 @@ def test_a_failing_provider_stops_the_pass_so_later_batches_keep_their_attempts(
     assert sum(entry.get("scrobble_retry_count", 0) for entry in ledger.entries()) == 50
 
 
+def test_a_revoked_account_does_not_hold_up_other_accounts_listens(scrobble_ledger):
+    other_account = ACCOUNT_ID + 1
+    ledger, provider = scrobble_ledger()
+    ledger.sessions[other_account] = "other-session"
+    ledger.add_pending(60)
+    ledger.add_pending(2, account_id=other_account, start=100)
+    provider.answer = lambda payloads: (
+        LastfmError("Invalid session key (Last.fm error 9)", code=9, reauthentication_required=True)
+        if provider.calls[-1].session_key == "fixture-session"
+        else FakeLastfm(ledger).answer(payloads)
+    )
+
+    result = lastfm_retry.retry_pending_lastfm_scrobbles(_CONFIG, bypass_backoff=True)
+
+    # The revoked account's first batch fails; its second waits for the reconnection.
+    assert [(call.session_key, len(call.tracks)) for call in provider.calls] == [
+        ("fixture-session", 50), ("other-session", 2)]
+    revoked = [entry for entry in ledger.entries() if int(entry["title"].split()[1]) < 100]
+    assert sum(bool(entry.get("scrobble_reauthentication_required")) for entry in revoked) == 50
+    assert all(entry["scrobbled"] for entry in ledger.entries() if int(entry["title"].split()[1]) >= 100)
+    assert result.summary["succeeded"] == 2
+    # Nothing else is due until the account reconnects.
+    assert result.retry_in_seconds is None
+
+
 def test_permanent_rejection_marks_the_batch_without_resending(scrobble_ledger):
     ledger, provider = scrobble_ledger(answer=lambda _payloads: LastfmError("Invalid parameters (Last.fm error 6)", code=6))
     ledger.add_pending(2)

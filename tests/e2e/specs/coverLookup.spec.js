@@ -793,8 +793,8 @@ test('FTC-COVERS-036 notification cards keep independent album identity after co
     for (const [index, { taskId, identity }] of notifications.entries()) {
       expect(before[taskId]).toMatchObject({
         taskId,
-        title: identity.album,
-        byline: [identity.artist, identity.year].filter(Boolean).join(' · '),
+        title: 'Cover lookups',
+        byline: [identity.album, identity.artist, identity.year].filter(Boolean).join(' · '),
       });
       const taskScrollTop = await coverLookupActions.openTaskById(taskId);
       await coverLookupActions.waitForModalReady();

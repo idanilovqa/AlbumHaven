@@ -1273,9 +1273,9 @@ export class CoverLookupActions {
   }
 
   async expectTaskIdentity(taskTitle, identity) {
-    await expect(this.coverLookup.taskTitleByTitle(taskTitle)).toHaveText(identity.album);
+    await expect(this.coverLookup.taskTitleByTitle(taskTitle)).toHaveText('Cover lookups');
     await expect(this.coverLookup.taskBylineByTitle(taskTitle)).toHaveText(
-      [identity.artist, identity.year].filter(Boolean).join(' · '),
+      [identity.album, identity.artist, identity.year].filter(Boolean).join(' · '),
     );
   }
 

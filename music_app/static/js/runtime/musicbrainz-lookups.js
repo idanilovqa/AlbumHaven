@@ -2,7 +2,6 @@
 // Files queue or search one artist or album; each batch is one "MusicBrainz lookup" card in
 // the notification drawer (the cover-lookup card component), and opening it shows the
 // results popup.
-const MUSICBRAINZ_LOOKUP_TITLE = 'MusicBrainz lookup';
 const MUSICBRAINZ_LOOKUP_REFRESH_MS = { running: 10000, queued: 60000, idle: 300000 };
 const musicBrainzLookups = { batches: [], queuedCount: 0, signature: '', loadedAt: 0, promise: null };
 
@@ -108,7 +107,7 @@ function runAlbumMenuMusicBrainzAction(action, album) {
   return true;
 }
 
-// Notification card (H1): the shared card, titled by its kind.
+// Notification card (H1): the shared card; its kind is its title.
 function buildMusicBrainzLookupCardHtml(batch) {
   const total = Math.max(0, Number(batch.total || 0));
   const matched = Math.max(0, Number(batch.matched || 0));
@@ -128,11 +127,11 @@ function buildMusicBrainzLookupCardHtml(batch) {
     status: running ? 'running' : 'completed', created_at: batch.started_at, finished_at: batch.finished_at,
   });
   return buildNotificationTaskCardHtml({
+    kind: 'musicbrainz',
     stateClass,
     openAttributes: `data-open-musicbrainz-lookup-batch="${escapeHtml(batch.batch_id)}"`,
-    openLabel: `Open ${MUSICBRAINZ_LOOKUP_TITLE} results: ${byline}`,
+    openLabel: `Open ${NOTIFICATION_CARD_TITLES.musicbrainz} results: ${byline}`,
     coverHtml: '<span class="cover-lookup-task-cover is-placeholder" aria-hidden="true"></span>',
-    title: MUSICBRAINZ_LOOKUP_TITLE,
     byline,
     statusLabel,
     elapsedHtml: elapsed ? `<span class="cover-lookup-task-elapsed ${running ? 'is-active' : stateClass}">${escapeHtml(elapsed)}</span>` : '',

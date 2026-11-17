@@ -35018,11 +35018,12 @@ function renderCoverLookupDrawer({
       ? `<img class="cover-lookup-task-cover" src="${escapeHtml(coverUrl)}" alt="" loading="lazy" decoding="async">`
       : '<span class="cover-lookup-task-cover is-placeholder" aria-hidden="true"></span>';
     return buildNotificationTaskCardHtml({
+      kind: 'cover',
       stateClass: taskStateClass,
       openAttributes: `data-open-cover-lookup-task="${escapeHtml(task.id || '')}"`,
       openLabel,
       coverHtml: coverMarkup,
-      title: albumTitle,
+      subject: albumTitle,
       byline: albumByline,
       statusLabel,
       elapsedHtml: `<span class="cover-lookup-task-elapsed ${elapsedStateClass}" data-cover-lookup-task-elapsed="${escapeHtml(task.id || '')}" ${elapsedLabel ? '' : 'hidden'}>${escapeHtml(elapsedLabel)}</span>`,
@@ -35075,18 +35076,23 @@ function renderCoverLookupDrawer({
   syncCoverLookupElapsedTimer();
 }
 
-// One notification card for every kind (cover lookups, MusicBrainz lookups): only its
-// content and open action differ.
+// One notification card for every kind: its kind is its title (owner, 2026-11-16), and the
+// second line names what it is about (the album) before the rest of its byline.
+const NOTIFICATION_CARD_TITLES = { cover: 'Cover lookups', musicbrainz: 'MusicBrainz lookup' };
+
 function buildNotificationTaskCardHtml({
-  stateClass, openAttributes, openLabel, coverHtml, title, byline, statusLabel, elapsedHtml, actionsHtml, progress,
+  kind, stateClass, openAttributes, openLabel, coverHtml, subject = '', byline = '', statusLabel, elapsedHtml,
+  actionsHtml, progress,
 }) {
+  const title = NOTIFICATION_CARD_TITLES[kind];
+  const secondLine = [subject, byline].filter(Boolean).join(' · ');
   return `
       <div class="cover-lookup-task-card ${stateClass}">
         <div class="cover-lookup-task-open" role="button" tabindex="0" aria-label="${escapeHtml(openLabel)}" ${openAttributes}>
           ${coverHtml}
           <span class="cover-lookup-task-copy">
             <span class="cover-lookup-task-title">${escapeHtml(title)}</span>
-            <span class="cover-lookup-task-byline">${escapeHtml(byline)}</span>
+            <span class="cover-lookup-task-byline">${escapeHtml(secondLine)}</span>
             <span class="cover-lookup-task-meta">
               <span class="cover-lookup-task-status-label ${stateClass}">${escapeHtml(statusLabel)}</span>
               ${elapsedHtml}
@@ -37130,7 +37136,6 @@ async function saveCoverFromLookup() {
 // Files queue or search one artist or album; each batch is one "MusicBrainz lookup" card in
 // the notification drawer (the cover-lookup card component), and opening it shows the
 // results popup.
-const MUSICBRAINZ_LOOKUP_TITLE = 'MusicBrainz lookup';
 const MUSICBRAINZ_LOOKUP_REFRESH_MS = { running: 10000, queued: 60000, idle: 300000 };
 const musicBrainzLookups = { batches: [], queuedCount: 0, signature: '', loadedAt: 0, promise: null };
 
@@ -37236,7 +37241,7 @@ function runAlbumMenuMusicBrainzAction(action, album) {
   return true;
 }
 
-// Notification card (H1): the shared card, titled by its kind.
+// Notification card (H1): the shared card; its kind is its title.
 function buildMusicBrainzLookupCardHtml(batch) {
   const total = Math.max(0, Number(batch.total || 0));
   const matched = Math.max(0, Number(batch.matched || 0));
@@ -37256,11 +37261,11 @@ function buildMusicBrainzLookupCardHtml(batch) {
     status: running ? 'running' : 'completed', created_at: batch.started_at, finished_at: batch.finished_at,
   });
   return buildNotificationTaskCardHtml({
+    kind: 'musicbrainz',
     stateClass,
     openAttributes: `data-open-musicbrainz-lookup-batch="${escapeHtml(batch.batch_id)}"`,
-    openLabel: `Open ${MUSICBRAINZ_LOOKUP_TITLE} results: ${byline}`,
+    openLabel: `Open ${NOTIFICATION_CARD_TITLES.musicbrainz} results: ${byline}`,
     coverHtml: '<span class="cover-lookup-task-cover is-placeholder" aria-hidden="true"></span>',
-    title: MUSICBRAINZ_LOOKUP_TITLE,
     byline,
     statusLabel,
     elapsedHtml: elapsed ? `<span class="cover-lookup-task-elapsed ${running ? 'is-active' : stateClass}">${escapeHtml(elapsed)}</span>` : '',

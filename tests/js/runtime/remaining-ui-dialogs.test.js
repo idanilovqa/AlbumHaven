@@ -118,7 +118,7 @@ test('cover lookup notifications use self-contained cards, state labels, and sha
  assert.ok(markup.indexOf("id='cover-lookup-drawer-clear'") < markup.indexOf('data-close-cover-lookup-drawer'));
   // One card component for every notification kind; the cover lookup passes its state.
   assert.match(drawer, /cover-lookup-task-card \$\{stateClass\}/);
-  assert.match(drawer, /buildNotificationTaskCardHtml\(\{\s*stateClass: taskStateClass,/);
+  assert.match(drawer, /buildNotificationTaskCardHtml\(\{\s*kind: 'cover',\s*stateClass: taskStateClass,[^]*?subject: albumTitle,\s*byline: albumByline,/);
   assert.doesNotMatch(drawer, /cover-lookup-task-card navigation-tree-item/);
   assert.match(drawer, /taskStateClass = artChosen[^]*'is-completed'[^]*status === 'failed'[^]*'is-failed'[^]*'is-running'[^]*'is-completed'/s);
   assert.match(drawer, /cover-lookup-task-status-label \$\{stateClass\}/);

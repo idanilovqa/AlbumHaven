@@ -13,7 +13,7 @@ const stylesheets = [...['css/appearance-backgrounds.css', 'css/button-component
   .map((match) => path.join(root, 'music_app', 'static', match[1] || match[2]))
   .filter((file) => fs.existsSync(file));
 const drawerRuntime = read('music_app/static/js/runtime/cover-lookup-modal-and-drawer.js');
-const cardStart = drawerRuntime.indexOf('function buildNotificationTaskCardHtml(');
+const cardStart = drawerRuntime.indexOf('const NOTIFICATION_CARD_TITLES');
 const cardBuilder = drawerRuntime.slice(cardStart, drawerRuntime.indexOf('\n}\n', cardStart) + 3);
 const MBID = '6f3c2a1e-1111-4222-8333-444455556b51';
 
@@ -149,8 +149,9 @@ test('H1: a MusicBrainz lookup batch is the same card as a cover lookup, titled 
       batch_id: 4, started_at: '2026-11-16T10:00:00Z', finished_at: '2026-11-16T10:04:12Z',
       total: 15, matched: 12, not_matched: 3, albums: 15, artists: 0,
     }) + buildNotificationTaskCardHtml({
-      stateClass: 'is-completed', openAttributes: 'data-open-cover-lookup-task="t1"', openLabel: 'Open Cover Look Up: Drones',
-      coverHtml: '<span class="cover-lookup-task-cover is-placeholder" aria-hidden="true"></span>', title: 'Drones',
+      kind: 'cover', stateClass: 'is-completed', openAttributes: 'data-open-cover-lookup-task="t1"',
+      openLabel: 'Open Cover Look Up: Drones',
+      coverHtml: '<span class="cover-lookup-task-cover is-placeholder" aria-hidden="true"></span>', subject: 'Drones',
       byline: 'Muse · 2015', statusLabel: 'Art chosen', elapsedHtml: '', actionsHtml: '', progress: 100,
     });
   });
@@ -159,6 +160,8 @@ test('H1: a MusicBrainz lookup batch is the same card as a cover lookup, titled 
   await expect(cards.nth(0).locator('.cover-lookup-task-byline')).toHaveText('12 releases matched, 3 not matched');
   await expect(cards.nth(0).locator('.cover-lookup-task-status-label')).toHaveText('15 looked up');
   await expect(cards.nth(0).getByRole('button', { name: 'Delete notification' })).toBeVisible();
+  await expect(cards.nth(1).locator('.cover-lookup-task-title')).toHaveText('Cover lookups');
+  await expect(cards.nth(1).locator('.cover-lookup-task-byline')).toHaveText('Drones · Muse · 2015');
   const [lookup, cover] = await cards.evaluateAll((nodes) => nodes.map((node) => {
     const box = node.getBoundingClientRect();
     return [box.width, box.height, getComputedStyle(node.querySelector('.cover-lookup-task-progress span')).backgroundColor];

@@ -56,7 +56,7 @@ function loadContext({ allowed = true, responses = {} } = {}) {
   }
   // The shared card lives with the cover-lookup drawer; load only its card builder.
   const drawer = read('music_app/static/js/runtime/cover-lookup-modal-and-drawer.js');
-  const start = drawer.indexOf('function buildNotificationTaskCardHtml(');
+  const start = drawer.indexOf('const NOTIFICATION_CARD_TITLES');
   vm.runInContext(drawer.slice(start, drawer.indexOf('\n}\n', start) + 3), context);
   return { context, requests, toasts, renders };
 }
@@ -161,14 +161,19 @@ test('one batch is one card, titled by its kind, with matched and not matched co
   assert.match(single, />MBID: Not found</);
 });
 
-test('the cover lookup card keeps its own title and actions through the shared card', () => {
+test('a cover lookup card is titled Cover lookups and names its album first on the second line', () => {
   const { context } = loadContext();
   const html = context.buildNotificationTaskCardHtml({
-    stateClass: 'is-completed', openAttributes: 'data-open-cover-lookup-task="t1"', openLabel: 'Open Cover Look Up: Drones',
-    coverHtml: '<img>', title: 'Drones', byline: 'Muse · 2015', statusLabel: 'Art chosen', elapsedHtml: '',
-    actionsHtml: '<button data-clear-cover-lookup-task="t1"></button>', progress: 100,
+    kind: 'cover', stateClass: 'is-completed', openAttributes: 'data-open-cover-lookup-task="t1"',
+    openLabel: 'Open Cover Look Up: Drones', coverHtml: '<img>', subject: 'Drones', byline: 'Muse · 2015',
+    statusLabel: 'Art chosen', elapsedHtml: '', actionsHtml: '<button data-clear-cover-lookup-task="t1"></button>',
+    progress: 100,
   });
-  assert.match(html, /cover-lookup-task-title">Drones</);
+  assert.match(html, /cover-lookup-task-title">Cover lookups</);
+  assert.match(html, /cover-lookup-task-byline">Drones · Muse · 2015</);
+  // An album with no artist or year line still names the album alone.
+  assert.match(context.buildNotificationTaskCardHtml({ kind: 'cover', subject: 'Drones', progress: 0 }),
+    /cover-lookup-task-byline">Drones</);
   assert.match(html, /data-open-cover-lookup-task="t1"/);
   assert.match(html, /cover-lookup-task-actions"><button data-clear-cover-lookup-task="t1">/);
 });
@@ -277,5 +282,5 @@ test('the notification panel is headed Notifications whatever cards it holds; ea
   const drawer = read('music_app/static/js/runtime/cover-lookup-modal-and-drawer.js');
   assert.match(markup, /<h3 class="cover-lookup-drawer-title">Notifications<\/h3>/);
   assert.doesNotMatch(drawer, /cover-lookup-drawer-title/, 'nothing renames the panel by its cards');
-  assert.match(read('music_app/static/js/runtime/musicbrainz-lookups.js'), /const MUSICBRAINZ_LOOKUP_TITLE = 'MusicBrainz lookup';/);
+  assert.match(drawer, /const NOTIFICATION_CARD_TITLES = \{ cover: 'Cover lookups', musicbrainz: 'MusicBrainz lookup' \};/);
 });

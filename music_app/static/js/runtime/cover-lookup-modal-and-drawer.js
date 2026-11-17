@@ -1987,11 +1987,12 @@ function renderCoverLookupDrawer({
       ? `<img class="cover-lookup-task-cover" src="${escapeHtml(coverUrl)}" alt="" loading="lazy" decoding="async">`
       : '<span class="cover-lookup-task-cover is-placeholder" aria-hidden="true"></span>';
     return buildNotificationTaskCardHtml({
+      kind: 'cover',
       stateClass: taskStateClass,
       openAttributes: `data-open-cover-lookup-task="${escapeHtml(task.id || '')}"`,
       openLabel,
       coverHtml: coverMarkup,
-      title: albumTitle,
+      subject: albumTitle,
       byline: albumByline,
       statusLabel,
       elapsedHtml: `<span class="cover-lookup-task-elapsed ${elapsedStateClass}" data-cover-lookup-task-elapsed="${escapeHtml(task.id || '')}" ${elapsedLabel ? '' : 'hidden'}>${escapeHtml(elapsedLabel)}</span>`,
@@ -2044,18 +2045,23 @@ function renderCoverLookupDrawer({
   syncCoverLookupElapsedTimer();
 }
 
-// One notification card for every kind (cover lookups, MusicBrainz lookups): only its
-// content and open action differ.
+// One notification card for every kind: its kind is its title (owner, 2026-11-16), and the
+// second line names what it is about (the album) before the rest of its byline.
+const NOTIFICATION_CARD_TITLES = { cover: 'Cover lookups', musicbrainz: 'MusicBrainz lookup' };
+
 function buildNotificationTaskCardHtml({
-  stateClass, openAttributes, openLabel, coverHtml, title, byline, statusLabel, elapsedHtml, actionsHtml, progress,
+  kind, stateClass, openAttributes, openLabel, coverHtml, subject = '', byline = '', statusLabel, elapsedHtml,
+  actionsHtml, progress,
 }) {
+  const title = NOTIFICATION_CARD_TITLES[kind];
+  const secondLine = [subject, byline].filter(Boolean).join(' · ');
   return `
       <div class="cover-lookup-task-card ${stateClass}">
         <div class="cover-lookup-task-open" role="button" tabindex="0" aria-label="${escapeHtml(openLabel)}" ${openAttributes}>
           ${coverHtml}
           <span class="cover-lookup-task-copy">
             <span class="cover-lookup-task-title">${escapeHtml(title)}</span>
-            <span class="cover-lookup-task-byline">${escapeHtml(byline)}</span>
+            <span class="cover-lookup-task-byline">${escapeHtml(secondLine)}</span>
             <span class="cover-lookup-task-meta">
               <span class="cover-lookup-task-status-label ${stateClass}">${escapeHtml(statusLabel)}</span>
               ${elapsedHtml}

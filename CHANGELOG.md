@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.24 - 2026-11-17
+
+- Android app: the library offers once to set Battery to Unrestricted, so battery saving stops closing the app in the background and reloading the library on return; any answer is final.
+
 ## 0.11.23 - 2026-11-17
 
 - CI only, no application change: adding or removing a Playwright component test now needs only its entry in `tests/ci/test-data-matrix.json`. The foundation gate compares the component job's discovered cases with the matrix's component entries instead of a hard-coded 229, and the inventory and ownership checks derive their totals from the matrix. A missing or extra test still fails by name.

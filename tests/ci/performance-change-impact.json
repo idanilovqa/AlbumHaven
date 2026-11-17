@@ -54,6 +54,7 @@
     "music_app/services/cover_state.py",
     "music_app/services/move_executor.py",
     "music_app/services/save_tasks.py",
+    "music_app/services/edit_state.py",
     "music_app/services/state.py",
     "music_app/static/js/runtime/utility-loaders-and-cover-lookup.js",
     "music_app/static/js/runtime/problematic-files-virtual-list.js",
@@ -293,6 +294,14 @@
         "artist-tree-scroll-navigation",
         "gallery-artwork-diversity"
       ]
+    },
+    {
+      "paths": [
+        "music_app/services/save_tasks.py",
+        "music_app/services/edit_state.py",
+        "music_app/services/edit_workflows.py"
+      ],
+      "targets": ["edit-tags-post-edit"]
     }
   ]
 }

@@ -925,7 +925,7 @@ def _run_cover_jobs(
                     level="warning", reason="recovered_cover_selection_conflict",
                 )
 
-        clearing_paths: list[str] = []
+        clearing = False
         for track_path in job.get("track_paths") or []:
             if recovering_selection or retained_selection or selection_changed:
                 continue
@@ -967,12 +967,11 @@ def _run_cover_jobs(
                     )
                 )
             if local_cover_changed:
-                previous_selection = _cover_selection_values(entry)
                 if not downloaded and not cover_path:
-                    # Cleared below for this album alone, once Postgres commits;
-                    # until then the change stays private.
-                    entry = dict(entry)
-                    clearing_paths.append(str(track_path))
+                    # Cleared below for this album alone, once Postgres commits.
+                    clearing = True
+                    continue
+                previous_selection = _cover_selection_values(entry)
                 entry["cover_path"] = cover_value
                 entry["remote_cover_url"] = None
                 entry["remote_cover_thumbnail_url"] = None
@@ -993,9 +992,7 @@ def _run_cover_jobs(
                 )
                 changed = True
 
-        if clearing_paths:
-            for path in clearing_paths:
-                runtime_cover_updates.pop(path, None)
+        if clearing:
             clear_album_cover_selection(job)
 
         record_job_outcome(index, job, cover_path, downloaded, detail)

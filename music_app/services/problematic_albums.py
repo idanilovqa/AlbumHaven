@@ -8,7 +8,7 @@ from time import perf_counter
 from music_app.routes.api_problematic_albums import build_problematic_albums_payload as build_problematic_albums_read_payload
 from music_app.routes.api_problematic_albums import build_problematic_album_detail_payload as build_problematic_album_detail_read_payload
 from music_app.services.ignored_repairs import load_ignored_repair_keys
-from music_app.services.library import album_to_dict, get_album_duplicate_sources
+from music_app.services.library import album_detail_to_dict, get_album_duplicate_sources
 from music_app.services.runtime_shutdown import create_daemon_executor
 from music_app.services.separate_releases import load_separate_release_keys
 
@@ -196,7 +196,7 @@ def build_problematic_albums_payload(
         build_encoding_repair_preview=build_encoding_repair_preview,
         collect_track_problem_rows=collect_track_problem_rows,
         separate_release_candidate=separate_release_candidate,
-        album_to_dict=lambda album: album_to_dict(album, config=cfg),
+        album_to_dict=lambda album: album_detail_to_dict(album, config=cfg),
         get_album_duplicate_sources=get_album_duplicate_sources,
         image_dimensions=image_dimensions,
         poor_art_min_edge=_POOR_ART_MIN_EDGE,
@@ -252,7 +252,7 @@ def build_problematic_album_detail_payload(
         build_encoding_repair_preview=build_encoding_repair_preview,
         collect_track_problem_rows=collect_track_problem_rows,
         separate_release_candidate=separate_release_candidate,
-        album_to_dict=lambda album: album_to_dict(album, config=cfg),
+        album_to_dict=lambda album: album_detail_to_dict(album, config=cfg),
         get_album_duplicate_sources=get_album_duplicate_sources,
         image_dimensions=image_dimensions,
         poor_art_min_edge=_POOR_ART_MIN_EDGE,
@@ -292,7 +292,7 @@ def find_problematic_album_by_track_paths(
         load_ignored_repair_keys=load_ignored_repair_keys,
         load_separate_release_keys=load_separate_release_keys,
         text_problem_reason=lambda label, value: text_problem_reason(label, value, detect_encoding=True),
-        album_to_dict=lambda album: album_to_dict(album, config=config),
+        album_to_dict=lambda album: album_detail_to_dict(album, config=config),
         get_album_duplicate_sources=get_album_duplicate_sources,
         poor_art_min_edge=_POOR_ART_MIN_EDGE,
         track_paths=track_paths,

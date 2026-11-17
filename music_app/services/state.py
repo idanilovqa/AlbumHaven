@@ -803,8 +803,8 @@ def hydrate_library_state_for_config(
             ).load_ignored_repair_keys,
             album_to_dict=lambda album: __import__(
                 "music_app.services.library",
-                fromlist=["album_to_dict"],
-            ).album_to_dict(album, config=config),
+                fromlist=["album_detail_to_dict"],
+            ).album_detail_to_dict(album, config=config),
         )
     with _CACHE_LOCK:
         return _call_hydrate_library_state_from_disk(
@@ -1182,8 +1182,8 @@ def _queue_utility_rules_prewarm_for_state(library_state, config, logger) -> Non
         ).load_ignored_repair_keys,
         album_to_dict=lambda album: __import__(
             "music_app.services.library",
-            fromlist=["album_to_dict"],
-        ).album_to_dict(album, config=config),
+            fromlist=["album_detail_to_dict"],
+        ).album_detail_to_dict(album, config=config),
     )
 
 

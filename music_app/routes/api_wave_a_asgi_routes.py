@@ -50,7 +50,7 @@ from music_app.services.exception_overrides import (
 )
 from music_app.services.ignored_repairs import load_ignored_repair_keys, save_ignored_repair_keys
 from music_app.services.ignored_versions import load_ignored_version_keys, save_ignored_version_keys
-from music_app.services.library import _album_key, album_to_dict
+from music_app.services.library import _album_key, album_detail_to_dict, album_to_dict
 from music_app.services.library_album_index import library_album_index, publish_library_albums
 from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 from music_app.services.missing_album_removal_postgres import (
@@ -324,7 +324,7 @@ def _authoritative_tag_editor_track_paths(
         authoritative_albums = [
             dict(candidate)
             if isinstance(candidate, Mapping)
-            else album_to_dict(candidate, config=_app_config(request))
+            else album_detail_to_dict(candidate, config=_app_config(request))
             for candidate in list(_library_state(request).get("albums", []) or [])
         ]
         candidates = []
@@ -836,7 +836,7 @@ def _asgi_albums_by_track_paths_finder(request: Request):
 
     def find_albums(track_paths: TrackPathSet) -> list[JsonDict]:
         return [
-            album_to_dict(album, config=config)
+            album_detail_to_dict(album, config=config)
             for album in library_album_index(library_state).albums_with_any_track(track_paths)
         ]
 

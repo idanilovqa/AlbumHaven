@@ -451,7 +451,6 @@ export class TagEditorActions {
       'Album Type',
       'Album Rating',
       'Exception',
-      'Custom Collection name',
     ]);
     await expect(this.tagEditor.footer).toContainText(
       /^\s*Start at\s*Auto-number\s*Cancel\s*Apply\s*$/u,

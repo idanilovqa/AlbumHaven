@@ -3434,7 +3434,7 @@ def test_automatic_cover_commit_blocks_generation_invalidation_until_committed(
     )
     monkeypatch.setattr(
         cover_refresh_execution,
-        "log_app_event",
+        "log_job_event",
         lambda *_args, **_kwargs: None,
     )
 
@@ -3585,7 +3585,7 @@ def test_recovered_cover_persistence_failure_leaves_memory_unchanged(recovered_c
         cover_refresh_execution, "persist_cover_selection_for_tracks_for_config", fail_persistence,
     )
     monkeypatch.setattr(
-        cover_refresh_execution, "log_app_event",
+        cover_refresh_execution, "log_job_event",
         lambda _config, _logger, action, **fields: events.append((action, fields)),
     )
     with pytest.raises(RuntimeError, match="isolated recovery commit failed") as raised:
@@ -3660,7 +3660,7 @@ def test_run_cover_jobs_logs_fast_terminal_outcome(recovered_cover_case, monkeyp
         {"reason": reason, "elapsed_ms": 2.5, "resolver_trace": trace},
     ))
     monkeypatch.setattr(cover_refresh_execution, "_recover_existing_cover_selection", lambda **_kwargs: (False, False))
-    monkeypatch.setattr(cover_refresh_execution, "log_app_event", lambda _config, _logger, action, **fields: events.append((action, fields)))
+    monkeypatch.setattr(cover_refresh_execution, "log_job_event", lambda _config, _logger, action, **fields: events.append((action, fields)))
 
     result = cover_refresh_execution.run_cover_jobs(**case.kwargs)
 
@@ -3699,7 +3699,7 @@ def test_cover_completed_results_follow_completion_not_queue_order(recovered_cov
                 release_first.set()
 
     monkeypatch.setattr(cover_refresh_execution, "execute_cover_job", execute)
-    monkeypatch.setattr(cover_refresh_execution, "log_app_event", record_event)
+    monkeypatch.setattr(cover_refresh_execution, "log_job_event", record_event)
     result = cover_refresh_execution.run_cover_jobs(**case.kwargs)
 
     assert completed == [("Second", 1), ("Recovered", 2)]
@@ -3814,7 +3814,7 @@ def test_cover_jobs_share_quota_state_and_never_queue_spotify_retries(recovered_
         trace = [{"resolver": "_search_spotify", "status": "failed", "reason": "spotify_quota_exceeded"}] if first else []
         return None, False, {"reason": "remote_search_failed" if first else "remote_search_returned_no_candidate", "resolver_trace": trace}
     monkeypatch.setattr(cover_refresh_execution, "execute_cover_job", execute)
-    monkeypatch.setattr(cover_refresh_execution, "log_app_event", lambda _config, _logger, action, **fields: outcomes.append(fields) if action == "Cover fetch outcome" else None)
+    monkeypatch.setattr(cover_refresh_execution, "log_job_event", lambda _config, _logger, action, **fields: outcomes.append(fields) if action == "Cover fetch outcome" else None)
     result = cover_refresh_execution.run_cover_jobs(**case.kwargs)
     assert len(contexts) == 2 and contexts[0] is contexts[1]
     assert case.state["covers_completed"] == 2
@@ -4018,7 +4018,7 @@ def test_recovered_cover_planned_folder_requires_album_identity_agreement(
 
     monkeypatch.setattr(cover_refresh_execution, "execute_cover_job", execute)
     monkeypatch.setattr(cover_refresh_execution, "persist_cover_selection_for_tracks_for_config", persist)
-    monkeypatch.setattr(cover_refresh_execution, "log_app_event", lambda _config, _logger, action, **fields: events.append((action, fields)))
+    monkeypatch.setattr(cover_refresh_execution, "log_job_event", lambda _config, _logger, action, **fields: events.append((action, fields)))
     result = cover_refresh_execution.run_cover_jobs(**case.kwargs)
 
     assert processed == ([next_folder] if mixed else [case.cover.parent, next_folder])
@@ -4120,7 +4120,7 @@ def test_recovered_cover_heterogeneous_baseline_reports_conflict(recovered_cover
     baseline = {path: dict(entry) for path, entry in case.entries.items()}
     events = []
     monkeypatch.setattr(cover_refresh_execution, "persist_cover_selection_for_tracks_for_config", lambda *_args, **_kwargs: pytest.fail("Heterogeneous selection must not persist"))
-    monkeypatch.setattr(cover_refresh_execution, "log_app_event", lambda _config, _logger, action, **kwargs: events.append({"action": action, **kwargs}))
+    monkeypatch.setattr(cover_refresh_execution, "log_job_event", lambda _config, _logger, action, **kwargs: events.append({"action": action, **kwargs}))
     result = cover_refresh_execution.run_cover_jobs(**case.kwargs)
     assert result["changed"] is False
     assert case.entries == baseline
@@ -4619,7 +4619,7 @@ def test_run_cover_jobs_stops_authority_writes_when_progress_is_superseded(
     )
     monkeypatch.setattr(
         cover_refresh_execution,
-        "log_app_event",
+        "log_job_event",
         lambda *_args, **_kwargs: None,
     )
 
@@ -4767,7 +4767,7 @@ def test_run_cover_jobs_serializes_authority_writes_with_progress_ownership(
     )
     monkeypatch.setattr(
         cover_refresh_execution,
-        "log_app_event",
+        "log_job_event",
         lambda *_args, **_kwargs: None,
     )
 
@@ -5008,9 +5008,11 @@ def test_run_cover_jobs_resolves_album_id_from_tracks_before_publishing_candidat
         def __init__(self, _config):
             return None
 
-        def resolve_album_id_for_track_paths(self, track_paths):
-            events.append(("resolve", tuple(track_paths)))
-            return 303
+        def resolve_album_ids_for_track_path_sets(self, track_path_sets):
+            # The jobs without an album id are resolved together, in one call.
+            for track_paths in track_path_sets:
+                events.append(("resolve", tuple(sorted(track_paths))))
+            return [303 for _ in track_path_sets]
 
     class Publisher:
         def __init__(self, _repository, *, album_id, **_kwargs):
@@ -5089,7 +5091,7 @@ def provider_outcome_request(recovered_cover_case, monkeypatch):
     outcomes = []
     cache_saves = []
     monkeypatch.setattr(
-        cover_refresh_execution, "log_app_event",
+        cover_refresh_execution, "log_job_event",
         lambda _config, _logger, message, **event: outcomes.append(event)
         if message == "Cover fetch outcome" else None,
     )

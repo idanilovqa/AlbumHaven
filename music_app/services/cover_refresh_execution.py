@@ -8,7 +8,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import nullcontext
 from pathlib import Path
 
-from music_app.services.app_logging import flush_log_handlers, flush_log_handlers_debounced, log_app_event
+from music_app.services.app_logging import flush_log_handlers, flush_log_handlers_debounced
+# Cover jobs log per job and per candidate: application log only, never a
+# log-history write (one database connection each).
+from music_app.services.app_logging import log_app_message_event as log_job_event
 from music_app.services.album_cover_candidate_publisher import AlbumCoverCandidatePublisher
 from music_app.services.album_cover_candidate_snapshots_postgres import (
     AlbumCoverCandidateSnapshotRepository,
@@ -495,6 +498,25 @@ def run_cover_jobs(
             and type(entry.get("album_id")) is int and entry["album_id"] > 0
         }) > 1
     }
+    # Jobs without a known album id are resolved together, over one connection,
+    # not with one query per job.
+    unresolved_jobs = [
+        job for job in jobs
+        if id(job) not in mixed_folder_jobs
+        and not (isinstance(job.get("album_id"), int) and job["album_id"] > 0)
+    ]
+    resolved_album_ids: dict[int, int | None] = {}
+    if unresolved_jobs:
+        try:
+            resolved_album_ids = dict(zip(
+                map(id, unresolved_jobs),
+                AlbumCoverCandidateSnapshotRepository(config).resolve_album_ids_for_track_path_sets([
+                    {str(track_path) for track_path in (job.get("track_paths") or []) if str(track_path).strip()}
+                    for job in unresolved_jobs
+                ]),
+            ))
+        except Exception as exc:
+            logger.warning("Automatic candidate snapshot album lookup failed error=%r", exc)
     for job in jobs:
         if id(job) in mixed_folder_jobs:
             continue
@@ -502,13 +524,7 @@ def run_cover_jobs(
         try:
             repository = AlbumCoverCandidateSnapshotRepository(config)
             if not isinstance(album_id, int) or album_id <= 0:
-                album_id = repository.resolve_album_id_for_track_paths(
-                    track_paths=[
-                        str(track_path)
-                        for track_path in (job.get("track_paths") or [])
-                        if str(track_path).strip()
-                    ]
-                )
+                album_id = resolved_album_ids.get(id(job))
             if not isinstance(album_id, int) or album_id <= 0:
                 continue
             publisher = AlbumCoverCandidatePublisher(
@@ -675,7 +691,7 @@ def run_cover_jobs(
                 library_state["covers_processed"] = max(
                     int(library_state.get("covers_processed") or 0), index,
                 )
-        log_app_event(
+        log_job_event(
             config, logger if callable(getattr(logger, "log", None)) else _LOGGER,
             "Cover fetch outcome", level="info",
             album_id=job.get("album_id"), artist=str(job.get("artist") or ""),
@@ -748,7 +764,7 @@ def run_cover_jobs(
         reason = str(detail.get("reason") or "")
         if not downloaded and not has_cover and reason != "remote_provider_group_disabled":
             if reason in miss_reasons and callable(getattr(logger, "log", None)):
-                log_app_event(
+                log_job_event(
                     config,
                     logger,
                     "Cover art update failed",
@@ -767,7 +783,7 @@ def run_cover_jobs(
             elapsed_ms >= _SLOW_COVER_FETCH_LOG_THRESHOLD_MS
             and callable(getattr(logger, "log", None))
         ):
-            log_app_event(
+            log_job_event(
                 config,
                 logger,
                 "Cover fetch slow",
@@ -797,7 +813,7 @@ def run_cover_jobs(
                 origin = exc.__traceback__
                 while origin.tb_next is not None:
                     origin = origin.tb_next
-                log_app_event(
+                log_job_event(
                     config, logger if callable(getattr(logger, "log", None)) else _LOGGER,
                     "Cover selection recovery failed", level="error",
                     stage="recover_existing_cover_selection",
@@ -815,7 +831,7 @@ def run_cover_jobs(
             if conflict:
                 detail["recovery_conflict"] = True
                 detail["reason"] = "recovered_cover_selection_conflict"
-                log_app_event(
+                log_job_event(
                     config, logger if callable(getattr(logger, "log", None)) else _LOGGER,
                     "Existing cover metadata recovery skipped because selection could not be verified",
                     level="warning", reason="recovered_cover_selection_conflict",

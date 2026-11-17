@@ -1,8 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.11.28 - 2026-11-17
 
 - Android: the app keeps playing through a network outage of any length. Losing Wi-Fi no longer stops playback at once with "Playback unavailable": the received audio plays on, reconnects retry with a growing delay of up to 5 seconds, and when the network returns the rest of the song continues from exactly where it was. Pausing while offline keeps the received audio, and Play while still offline plays it on while the app keeps asking the server for playback every 2 seconds, instead of failing with "Playback ownership is unavailable". Only another device taking over playback stops it. Offline, a seek into the audio already received plays there at once, playing or paused; a seek past it puts the head where it was placed, makes no sound and does not advance (Play keeps it there), and when the network is back it plays from there. A paused seek offline no longer unloads the song. The server now renews a claim past its 30-second lease for the device that held it, until another device claims playback, so a phone that played on offline keeps playing when it reconnects.
+
+## 0.11.26 - 2026-11-17
+
+- The server no longer freezes while it builds the library home view (`/home-data`, opened by the phone layout's library home and by the Android app). It read the library root settings from the database twice for every loose or non-album track; it now reads them once per build, and the home, News and file-backed album-detail payloads are built off the server's event loop, so other requests keep being answered meanwhile.
 
 ## 0.11.25 - 2026-11-17
 

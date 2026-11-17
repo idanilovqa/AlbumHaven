@@ -32246,7 +32246,8 @@ async function loadProblematicFiles(force = false, options = {}) {
   state.utility.loading = true;
   state.utility.problematicFilesComplete = false;
   state.utility.problematicArtistItems = [];
-  state.utility.problematicArtistHasMore = true;
+  // The complete list carries every Artist problem, so the paint before it must not page Artists.
+  state.utility.problematicArtistHasMore = options.completeOnly !== true;
   state.utility.problematicArtistNextCursor = '';
   const requestToken = Number(state.utility.problematicSummaryRequestToken || 0) + 1;
   state.utility.problematicSummaryRequestToken = requestToken;

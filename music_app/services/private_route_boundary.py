@@ -93,6 +93,7 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/api/musicbrainz/lookups/batches/{batch_id}/dismiss"): "catalogue.enrichment.request",
     ("DELETE", "/api/musicbrainz/lookups/{request_id}"): "catalogue.enrichment.request",
     ("GET", "/api/musicbrainz/corrections"): "library.problems.read",
+    ("GET", "/api/musicbrainz/corrections/albums"): "library.problems.read",
     ("GET", "/api/musicbrainz/corrections/queue"): "library.problems.read",
     ("POST", "/api/musicbrainz/corrections/queue"): "library.metadata_matches.review",
     ("DELETE", "/api/musicbrainz/corrections/queue/{entry_id}"): "library.metadata_matches.review",

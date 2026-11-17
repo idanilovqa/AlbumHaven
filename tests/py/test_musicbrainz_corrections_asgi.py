@@ -1,6 +1,7 @@
 """Routes and Problematic Files rows for MusicBrainz data corrections (Delivery 2, S4)."""
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -8,7 +9,6 @@ from types import SimpleNamespace
 import pytest
 
 from music_app.routes.musicbrainz_corrections_asgi import (
-    load_problematic_correction_items,
     project_correction_into_problematic_detail,
     project_correction_problems_into_problematic_files,
 )
@@ -21,6 +21,7 @@ from tests.py.test_musicbrainz_lookup_asgi import request
 RELEASE = "6f3c2a1e-0000-4000-8000-0000000c0de1"
 NOW = datetime(2026, 11, 16, 10, 20, tzinfo=timezone.utc)
 ROUTES = [
+    ("/api/musicbrainz/corrections/albums", "GET", "library.problems.read"),
     ("/api/musicbrainz/corrections", "GET", "library.problems.read"),
     ("/api/musicbrainz/corrections/queue", "GET", "library.problems.read"),
     ("/api/musicbrainz/corrections/queue", "POST", "library.metadata_matches.review"),
@@ -41,12 +42,14 @@ class Corrections:
         self.fail = fail
         self.calls = []
 
-    def list_correction_summaries(self):
-        self.calls.append(("list_correction_summaries", {}))
+    def list_correction_summaries(self, *, album_keys=None, offset=0, limit=None):
+        self.calls.append(("list_correction_summaries", {"album_keys": album_keys, "offset": offset, "limit": limit}))
         if self.fail:
             raise RuntimeError("database unavailable")
-        return [{**{key: value for key, value in album.items() if key not in {"corrections", "track_count", "file_types"}},
-                 "correction_count": len(album["corrections"])} for album in self.albums]
+        rows = [{**{key: value for key, value in album.items() if key not in {"corrections", "track_count", "file_types"}},
+                 "correction_count": len(album["corrections"])} for album in self.albums
+                if album_keys is None or album["album_key"] in album_keys]
+        return {"items": rows[offset:None if limit is None else offset + limit], "total": len(self.albums)}
 
     def get_correction(self, *, album_key):
         self.calls.append(("get_correction", {"album_key": album_key}))
@@ -99,6 +102,7 @@ def test_routes_are_registered_with_the_musicbrainz_owner_capabilities():
 
 
 @pytest.mark.parametrize("method,path,body", [
+    ("GET", "/api/musicbrainz/corrections/albums", None),
     ("GET", "/api/musicbrainz/corrections?album_key=wurdah", None),
     ("GET", "/api/musicbrainz/corrections/queue", None),
     ("POST", "/api/musicbrainz/corrections/queue", {"album_key": "wurdah"}),
@@ -219,43 +223,56 @@ def test_one_album_correction_is_compared_when_opened():
     assert request(app(corrections=corrections), "GET", "/api/musicbrainz/corrections?album_key=none")[0] == 404
 
 
-def test_the_list_reads_stored_counts_and_never_compares():
-    corrections = Corrections()
-    payload = {"items": [{"key": "a", "name": "A"}], "count": 1}
+SECRET = {**ALBUM, "album_key": "secret", "album_title": "The Secret", "artist_name": "The Alan Parsons Project"}
+
+
+def _page():
+    return {"items": [{"key": "wurdah::year::1974", "name": "Wurdah Ïtah", "problem_reasons": ["Missing year"],
+                       "detail_loaded": False},
+                      {"key": "musicbrainz-artist:7", "entity_kind": "artist", "name": "Axxis"}], "count": 2,
+            "initial_detail": {"key": "wurdah::year::1974", "problem_reasons": ["Missing year"]}}
+
+
+def test_listed_albums_gain_the_label_from_stored_counts_only():
+    corrections = Corrections([ALBUM, SECRET])
+    payload = _page()
 
     project_correction_problems_into_problematic_files(_pf_request(corrections), payload)
 
-    assert corrections.calls == [("list_correction_summaries", {})]
-
-
-def test_the_bounded_first_page_labels_listed_albums_but_adds_no_rows():
-    payload = {"items": [{"key": "wurdah", "name": "Wurdah Ïtah", "problem_reasons": []}], "count": 1,
-               "complete": False}
-    secret = {**ALBUM, "album_key": "secret", "album_title": "The Secret"}
-
-    project_correction_problems_into_problematic_files(_pf_request(Corrections([ALBUM, secret])), payload)
-
-    assert [item["key"] for item in payload["items"]] == ["wurdah"]
-    assert payload["items"][0]["problem_reasons"] == ["Data Correction Needed"]
-
-
-def test_a_listed_album_gains_the_label_and_another_album_is_added_by_name():
-    secret = {**ALBUM, "album_key": "secret", "album_title": "The Secret", "artist_name": "The Alan Parsons Project"}
-    payload = {"items": [{"key": "wurdah::year::1974", "name": "Wurdah Ïtah", "problem_reasons": ["Missing year"],
-                          "detail_loaded": False},
-                         {"key": "musicbrainz-artist:7", "entity_kind": "artist", "name": "Axxis"}], "count": 2,
-               "initial_detail": {"key": "wurdah::year::1974", "problem_reasons": ["Missing year"]}}
-
-    project_correction_problems_into_problematic_files(_pf_request(Corrections([ALBUM, secret])), payload)
-
-    assert [item["key"] for item in payload["items"]] == [
-        "musicbrainz-artist:7", "musicbrainz-correction:secret", "wurdah::year::1974"]
-    _artist, added, listed = payload["items"]
+    assert corrections.calls == [("list_correction_summaries", {"album_keys": ["wurdah", "wurdah"], "offset": 0,
+                                                                 "limit": None})]
+    listed = payload["items"][0]
     assert listed["problem_reasons"] == ["Missing year", "Data Correction Needed"]
     assert listed["musicbrainz_correction"] == {"album_key": "wurdah", "release_mbid": RELEASE, "queued_at": None,
                                                 "correction_count": 1}
     assert payload["initial_detail"]["problem_reasons"] == ["Missing year", "Data Correction Needed"]
-    assert added == {
+    assert payload["musicbrainz_correction_album_count"] == 2
+
+
+def test_correction_only_albums_never_enlarge_the_complete_list():
+    without = _page()
+    project_correction_problems_into_problematic_files(_pf_request(Corrections([])), without)
+    many = [{**ALBUM, "album_key": f"album-{number}", "album_title": f"Album {number}"} for number in range(5000)]
+    payload = _page()
+
+    project_correction_problems_into_problematic_files(_pf_request(Corrections([ALBUM, *many])), payload)
+
+    assert len(payload["items"]) == len(without["items"]) == payload["count"] == 2
+    # Only the label, its count and the total grow the response, by a fixed amount.
+    growth = len(json.dumps(payload)) - len(json.dumps(without))
+    assert 0 < growth < 400
+
+
+def test_correction_only_albums_come_in_pages():
+    corrections = Corrections([ALBUM, SECRET])
+
+    status, first = request(app(corrections=corrections), "GET", "/api/musicbrainz/corrections/albums?offset=0&limit=1")
+    _status, second = request(app(corrections=corrections), "GET", "/api/musicbrainz/corrections/albums?offset=1&limit=1")
+
+    assert status == 200
+    assert [item["key"] for item in first["items"]] == ["musicbrainz-correction:wurdah"]
+    assert (first["total"], first["next_offset"], second["next_offset"]) == (2, 1, None)
+    assert second["items"][0] == {
         "key": "musicbrainz-correction:secret", "entity_kind": "musicbrainz_correction", "name": "The Secret",
         "album_artist": "The Alan Parsons Project", "year": 1974, "cover_path": "covers/wurdah.jpg",
         "problem_reasons": ["Data Correction Needed"],
@@ -263,7 +280,11 @@ def test_a_listed_album_gains_the_label_and_another_album_is_added_by_name():
                                    "correction_count": 1},
         "detail_loaded": False,
     }
-    assert payload["count"] == 3
+
+
+@pytest.mark.parametrize("query", ["offset=-1", "limit=0", "limit=201"])
+def test_pages_are_bounded(query):
+    assert request(app(), "GET", f"/api/musicbrainz/corrections/albums?{query}")[0] == 400
 
 
 def test_a_loaded_detail_keeps_its_label_and_correction():
@@ -281,6 +302,5 @@ def test_non_owners_and_failures_leave_problematic_files_unchanged():
     payload = {"items": [{"key": "a", "name": "A"}], "count": 1}
 
     for request_ in (_pf_request(Corrections(), owner=False), _pf_request(Corrections(fail=True))):
-        assert load_problematic_correction_items(request_) == []
         project_correction_problems_into_problematic_files(request_, payload)
         assert payload == {"items": [{"key": "a", "name": "A"}], "count": 1}

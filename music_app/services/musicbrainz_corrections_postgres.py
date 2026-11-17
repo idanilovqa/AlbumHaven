@@ -189,7 +189,16 @@ _SUMMARIES_SQL = _active_library_cte() + """
     left join ops.musicbrainz_correction_queue queue
       on queue.library_id = stored.library_id and queue.album_key = stored.album_key
     where stored.correction_count > 0
-    order by lower(albums.title), stored.album_key;
+      and (%(album_keys)s::text[] is null or stored.album_key = any(%(album_keys)s::text[]))
+    order by lower(albums.title), stored.album_key
+    offset %(offset)s limit %(limit)s;
+"""
+
+_SUMMARY_COUNT_SQL = _active_library_cte() + """
+    select count(*)::integer as total
+    from library.local_album_musicbrainz_corrections stored
+    join active_library on active_library.library_id = stored.library_id
+    where stored.correction_count > 0;
 """
 
 _QUEUE_SQL = _active_library_cte() + """
@@ -269,10 +278,17 @@ class MusicBrainzCorrectionsPostgresRepository:
                 _DIFFERENCES_SQL, {"album_key": None if album_key is None else str(album_key),
                                    "album_ids": None}).fetchall()]
 
-    def list_summaries(self) -> list[dict[str, object]]:
-        """The stored albums needing a correction, with how many changes each proposes."""
+    def list_summaries(self, *, album_keys: Iterable[str] | None = None, offset: int = 0,
+                       limit: int | None = None) -> dict[str, object]:
+        """The stored albums needing a correction (those of ``album_keys``, or a page in title
+        order), with how many changes each proposes, and how many albums need one in all."""
+        params = {"album_keys": None if album_keys is None else sorted({str(key) for key in album_keys}),
+                  "offset": max(0, int(offset)), "limit": None if limit is None else max(1, int(limit))}
         with self._connect(self._database_url) as connection:
-            return [_row_mapping(row) for row in connection.execute(_SUMMARIES_SQL).fetchall()]
+            rows = [] if params["album_keys"] == [] else [
+                _row_mapping(row) for row in connection.execute(_SUMMARIES_SQL, params).fetchall()]
+            total = int(_row_mapping(connection.execute(_SUMMARY_COUNT_SQL).fetchone()).get("total") or 0)
+        return {"items": rows, "total": total}
 
     def refresh(self, *, album_ids: Iterable[int] | None = None, observed_at: datetime | None = None) -> int:
         """Recompare the albums (all, or ``album_ids``) whose signature moved and store how

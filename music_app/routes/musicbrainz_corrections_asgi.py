@@ -27,6 +27,7 @@ from music_app.services.musicbrainz_corrections import (
 router = APIRouter(prefix="/api/musicbrainz/corrections")
 
 _UNAVAILABLE = "MusicBrainz corrections are unavailable."
+_PAGE_LIMIT = 200
 _QUEUE_FIELDS = ("entry_id", "album_key", "album_title", "artist_name", "year", "cover_path", "release_mbid",
                  "corrections", "queued_at")
 _CORRECTION_FIELDS = ("field", "label", "current", "proposed", "tracks")
@@ -43,6 +44,22 @@ async def get_album_correction(album_key: str, request: Request):
         raise HTTPException(404, "This album has no data correction.")
     return {"correction": {**_correction_payload(album), "track_count": album.get("track_count"),
                            "file_types": list(album.get("file_types") or [])}}
+
+
+@router.get("/albums")
+async def list_correction_albums(request: Request, offset: int = 0, limit: int = 100):
+    """A page of Problematic Files rows for albums needing a correction, in title order,
+    for the "Data Correction Needed" filter."""
+    await _require_current_library_owner(request)
+    if offset < 0 or not 1 <= limit <= _PAGE_LIMIT:
+        raise HTTPException(400, "Invalid page.")
+    result = await _call(request, "list_correction_summaries", offset=offset, limit=limit)
+    if not isinstance(result, Mapping):
+        raise _unavailable()
+    items = [_problematic_correction_item(row) for row in result.get("items") or () if isinstance(row, Mapping)]
+    total = int(result.get("total") or 0)
+    return {"items": items, "total": total,
+            "next_offset": offset + len(items) if items and offset + len(items) < total else None}
 
 
 @router.get("/queue")
@@ -98,45 +115,29 @@ async def save_correction_settings(request: Request):
                          "next_run_at": settings.get("next_run_at")}}
 
 
-def load_problematic_correction_items(request: Request) -> list[dict[str, object]]:
-    """The primary owner's albums needing a data correction, as Problematic Files rows, from
-    the stored counts (no comparison runs here). Owner-only, so never cached with the
-    library-wide projection. A failure yields no rows."""
-    if not _is_current_library_owner(getattr(request.state, "current_actor", None)):
-        return []
+def project_correction_problems_into_problematic_files(request: Request, payload: object) -> object:
+    """Albums already listed gain the label from the stored counts, and the payload says how
+    many albums need a correction in all (the filter offers it). Albums listed only for a
+    correction are never part of this response: GET /api/musicbrainz/corrections/albums
+    pages them when the filter asks. Owner-only; a failure leaves the payload unchanged."""
+    if not isinstance(payload, dict) or not isinstance(payload.get("items"), list) \
+            or not _is_current_library_owner(getattr(request.state, "current_actor", None)):
+        return payload
+    initial_detail = payload.get("initial_detail")
+    albums = [item for item in [*payload["items"], *([initial_detail] if isinstance(initial_detail, dict) else [])]
+              if item.get("entity_kind") is None]
     try:
-        albums = _service(request).list_correction_summaries()
+        summaries = _service(request).list_correction_summaries(
+            album_keys=[_album_key(item.get("key")) for item in albums])
     except Exception:
         _logger(request).warning("MusicBrainz data corrections were unavailable for Problematic Files.")
-        return []
-    return [_problematic_correction_item(album) for album in albums if isinstance(album, Mapping)]
-
-
-def project_correction_problems_into_problematic_files(
-    request: Request,
-    payload: object,
-    correction_items: list[dict[str, object]] | None = None,
-) -> object:
-    """An album already listed gains the label; any other album needing a correction is
-    added as a row of its own, by name, to the complete list only (the bounded first page
-    stays bounded)."""
-    if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
         return payload
-    if correction_items is None:
-        correction_items = load_problematic_correction_items(request)
-    by_key = {item["musicbrainz_correction"]["album_key"]: item for item in correction_items}
-    initial_detail = payload.get("initial_detail")
-    for item in [*payload["items"], *([initial_detail] if isinstance(initial_detail, dict) else [])]:
-        flagged = by_key.get(_album_key(item.get("key")))
-        if flagged is not None and item.get("entity_kind") is None:
-            _label(item, flagged["musicbrainz_correction"])
-    if payload.get("complete") is False:
-        return payload
-    listed = {_album_key(item.get("key")) for item in payload["items"] if item.get("entity_kind") is None}
-    added = [item for key, item in by_key.items() if key not in listed]
-    if added:
-        payload["items"] = sorted([*payload["items"], *added], key=lambda item: str(item.get("name") or "").lower())
-        payload["count"] = len(payload["items"])
+    by_key = {str(row["album_key"]): row for row in summaries.get("items") or () if isinstance(row, Mapping)}
+    for item in albums:
+        summary = by_key.get(_album_key(item.get("key")))
+        if summary is not None:
+            _label(item, _correction_payload(summary))
+    payload["musicbrainz_correction_album_count"] = int(summaries.get("total") or 0)
     return payload
 
 

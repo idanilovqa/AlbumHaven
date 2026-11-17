@@ -15,10 +15,64 @@ function isMusicBrainzCorrectionProblem(item) {
   return item?.entity_kind === 'musicbrainz_correction';
 }
 
-function isMusicBrainzCorrectionRowShown(item, selectedFilters = state.utility.selectedProblemFilters || []) {
+function musicBrainzCorrectionRowsWanted(selectedFilters = state.utility.selectedProblemFilters || []) {
   const normalize = typeof normalizeProblemFilterReason === 'function' ? normalizeProblemFilterReason : (reason) => reason;
-  return MUSICBRAINZ_CORRECTION_ROWS_SHOWN_BY_DEFAULT || !isMusicBrainzCorrectionProblem(item)
+  return MUSICBRAINZ_CORRECTION_ROWS_SHOWN_BY_DEFAULT
     || selectedFilters.some((reason) => normalize(reason) === normalize(MUSICBRAINZ_DATA_CORRECTION_LABEL));
+}
+
+function isMusicBrainzCorrectionRowShown(item, selectedFilters = state.utility.selectedProblemFilters || []) {
+  return !isMusicBrainzCorrectionProblem(item) || musicBrainzCorrectionRowsWanted(selectedFilters);
+}
+
+// Albums listed only for a correction are not in the Problematic Files response; they come
+// in pages from /api/musicbrainz/corrections/albums once they are wanted, the next page as
+// the list scrolls near its end. A reloaded list (without them) starts again from page 1.
+const MUSICBRAINZ_CORRECTION_PAGE_SIZE = 100;
+const MUSICBRAINZ_CORRECTION_PAGE_AHEAD = 20;
+const musicBrainzCorrectionPages = { keys: new Set(), nextOffset: 0, loading: null };
+
+function syncMusicBrainzCorrectionRows() {
+  const pages = musicBrainzCorrectionPages;
+  const items = state.utility.problematicFiles || [];
+  if (pages.keys.size && !pages.loading && !items.some((item) => pages.keys.has(item?.key))) {
+    pages.keys = new Set();
+    pages.nextOffset = 0;
+  }
+  if (pages.nextOffset === 0 && !pages.keys.size) void loadNextMusicBrainzCorrectionPage();
+}
+
+function loadMoreMusicBrainzCorrectionRows(renderedEnd, count) {
+  if (renderedEnd >= count - MUSICBRAINZ_CORRECTION_PAGE_AHEAD) void loadNextMusicBrainzCorrectionPage();
+}
+
+function loadNextMusicBrainzCorrectionPage() {
+  const pages = musicBrainzCorrectionPages;
+  if (pages.loading || pages.nextOffset === null || !musicBrainzCorrectionRowsWanted()
+      || !(Number(state.utility.musicBrainzCorrectionAlbumCount) > 0)) {
+    return pages.loading || Promise.resolve(false);
+  }
+  const offset = pages.nextOffset;
+  pages.loading = fetch(`/api/musicbrainz/corrections/albums?offset=${offset}&limit=${MUSICBRAINZ_CORRECTION_PAGE_SIZE}`,
+    { headers: { Accept: 'application/json' } })
+    .then(async (response) => {
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !Array.isArray(payload.items)) return false;
+      const items = state.utility.problematicFiles || [];
+      // An album already listed keeps its own row, labelled.
+      const listed = new Set(items.map((item) => item?.musicbrainz_correction?.album_key || '').filter(Boolean));
+      const rows = payload.items.filter((row) => !listed.has(row.musicbrainz_correction?.album_key));
+      rows.forEach((row) => pages.keys.add(row.key));
+      pages.nextOffset = payload.next_offset ?? null;
+      state.utility.problematicFiles = [...items, ...rows];
+      return true;
+    })
+    .catch(() => false)
+    .finally(() => {
+      pages.loading = null;
+      if (state.utility.activeTab === 'problematic-files') renderProblematicFiles({ preserveProblematicTree: true });
+    });
+  return pages.loading;
 }
 
 function canReviewMusicBrainzCorrections() {

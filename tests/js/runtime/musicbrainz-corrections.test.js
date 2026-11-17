@@ -355,3 +355,82 @@ test('a correction that cannot load says so', async () => {
 
   assert.match(context.buildMusicBrainzCorrectionProblemDetail(item), /Unable to load this data correction/);
 });
+
+function pageOf(offset, count, total) {
+  const items = Array.from({ length: count }, (_, index) => correctionItem({
+    key: `musicbrainz-correction:a${offset + index}`, name: `Album ${offset + index}`,
+    musicbrainz_correction: { album_key: `a${offset + index}`, correction_count: 1, queued_at: null } }));
+  return { status: 200, body: { items, total, next_offset: offset + count < total ? offset + count : null } };
+}
+
+function pagingContext() {
+  const listed = { key: 'a1', name: 'Album 1', problem_reasons: ['Missing year', 'Data Correction Needed'],
+    musicbrainz_correction: { album_key: 'a1', correction_count: 1 } };
+  const f = loadContext({ items: [listed], responses: {
+    'GET /api/musicbrainz/corrections/albums?offset=0&limit=100': pageOf(0, 100, 250),
+    'GET /api/musicbrainz/corrections/albums?offset=100&limit=100': pageOf(100, 100, 250) } });
+  f.context.state.utility.musicBrainzCorrectionAlbumCount = 250;
+  f.context.state.utility.selectedProblemFilters = [];
+  return f;
+}
+
+test('correction-only albums are not fetched until the Data Correction Needed filter is chosen', async () => {
+  const { context, requests } = pagingContext();
+
+  context.syncMusicBrainzCorrectionRows();
+  await vm.runInContext('musicBrainzCorrectionPages.loading', context);
+  assert.deepEqual(requests, []);
+  assert.ok(context.getProblemReasonTypes().includes(context.normalizeProblemFilterReason('Data Correction Needed')),
+    'the filter is offered from the count alone');
+});
+
+test('choosing the filter fetches page 1 only, and an already listed album keeps its own row', async () => {
+  const { context, requests } = pagingContext();
+  context.state.utility.selectedProblemFilters = ['Data Correction Needed'];
+
+  context.syncMusicBrainzCorrectionRows();
+  context.syncMusicBrainzCorrectionRows();
+  await vm.runInContext('musicBrainzCorrectionPages.loading', context);
+
+  assert.deepEqual(requests.map(([, url]) => url), ['/api/musicbrainz/corrections/albums?offset=0&limit=100']);
+  const keys = context.state.utility.problematicFiles.map((item) => item.key);
+  assert.equal(keys.length, 100, 'album a1 is listed already: 99 new rows beside it');
+  assert.equal(keys.filter((key) => key.endsWith(':a1')).length, 0);
+});
+
+test('scrolling near the end fetches the next page, and not before', async () => {
+  const { context, requests } = pagingContext();
+  context.state.utility.selectedProblemFilters = ['Data Correction Needed'];
+  context.syncMusicBrainzCorrectionRows();
+  await vm.runInContext('musicBrainzCorrectionPages.loading', context);
+
+  context.loadMoreMusicBrainzCorrectionRows(40, 100);
+  await vm.runInContext('musicBrainzCorrectionPages.loading', context);
+  assert.equal(requests.length, 1);
+
+  context.loadMoreMusicBrainzCorrectionRows(85, 100);
+  await vm.runInContext('musicBrainzCorrectionPages.loading', context);
+  assert.deepEqual(requests.map(([, url]) => url).at(-1), '/api/musicbrainz/corrections/albums?offset=100&limit=100');
+  assert.equal(context.state.utility.problematicFiles.length, 200);
+});
+
+test('a reloaded list without the paged rows starts again from page 1', async () => {
+  const { context, requests } = pagingContext();
+  context.state.utility.selectedProblemFilters = ['Data Correction Needed'];
+  context.syncMusicBrainzCorrectionRows();
+  await vm.runInContext('musicBrainzCorrectionPages.loading', context);
+
+  context.state.utility.problematicFiles = [{ key: 'b', name: 'B', problem_reasons: [] }];
+  context.syncMusicBrainzCorrectionRows();
+  await vm.runInContext('musicBrainzCorrectionPages.loading', context);
+
+  assert.deepEqual(requests.map(([, url]) => url), [
+    '/api/musicbrainz/corrections/albums?offset=0&limit=100', '/api/musicbrainz/corrections/albums?offset=0&limit=100']);
+});
+
+test('the virtual list reports each rendered range so the next page can follow', () => {
+  const source = read('music_app/static/js/runtime/problematic-files-virtual-list.js');
+  assert.match(source, /if \(typeof onRangeRendered === 'function'\) onRangeRendered\(range\.end, items\.length\);/);
+  assert.match(read('music_app/static/js/runtime/utility-renderers-and-actions.js'),
+    /onRangeRendered: \(end, count\) => \{\s+if \(typeof loadMoreMusicBrainzCorrectionRows === 'function'\) loadMoreMusicBrainzCorrectionRows\(end, count\);/);
+});

@@ -23,6 +23,8 @@
     renderRow,
     rowStride = DEFAULT_ROW_STRIDE,
     overscan = DEFAULT_OVERSCAN,
+    // Called after each render with the rendered end and the row count (paging ahead).
+    onRangeRendered = null,
   }) {
     if (!list || typeof renderRow !== 'function') {
       throw new TypeError('Problematic Files virtualization requires a list and row renderer.');
@@ -110,6 +112,7 @@
       for (const [key, value] of Object.entries(metadata)) {
         if (list.dataset[key] !== value) list.dataset[key] = value;
       }
+      if (typeof onRangeRendered === 'function') onRangeRendered(range.end, items.length);
     };
 
     const schedule = () => {

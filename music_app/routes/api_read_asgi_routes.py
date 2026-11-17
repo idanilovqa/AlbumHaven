@@ -55,7 +55,6 @@ from music_app.routes.musicbrainz_enrichment_asgi import (
     project_artist_problems_into_problematic_files,
 )
 from music_app.routes.musicbrainz_corrections_asgi import (
-    load_problematic_correction_items,
     project_correction_into_problematic_detail,
     project_correction_problems_into_problematic_files,
 )
@@ -1277,17 +1276,16 @@ def utilities_problematic_files(
 ) -> JSONResponse:
     if _is_postgres_utility_projection_request(request):
         repository = PostgresLibraryBrowseRepository(_app_config(request))
-        # The owner's Artist and data correction rows load beside the page, adding no readiness time.
-        with ThreadPoolExecutor(max_workers=2) as pool:
+        # The owner's Artist rows load beside the page, adding no readiness time.
+        with ThreadPoolExecutor(max_workers=1) as pool:
             artist_items = pool.submit(load_problematic_artist_items, request)
-            correction_items = pool.submit(load_problematic_correction_items, request)
             payload = (
                 repository.build_problematic_files_page(limit=limit)
                 if limit is not None
                 else repository.build_problematic_files_payload()
             )
             _project_missing_album_actions_for_request(request, payload)
-            project_correction_problems_into_problematic_files(request, payload, correction_items.result())
+            project_correction_problems_into_problematic_files(request, payload)
             project_artist_problems_into_problematic_files(request, payload, artist_items.result())
         return JSONResponse(_attach_library_watch_health(request, payload))
     _hydrate_cached_library_for_asgi(request)

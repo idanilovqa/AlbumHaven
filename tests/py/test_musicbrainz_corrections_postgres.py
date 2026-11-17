@@ -109,7 +109,8 @@ def test_add_to_queue_keeps_the_snapshot_and_remove_drops_it(monkeypatch):
     assert (entry["album_title"], entry["artist_name"], entry["release_mbid"]) == ("Angels Cry", "Angra", RELEASE)
     assert [item["label"] for item in entry["corrections"]] == ["Artist (1 track)", "Track 2 title"]
     repository.refresh(observed_at=NOW)
-    assert {row["album_key"]: row["queued_at"] for row in service.list_correction_summaries()}["rel-cry"] == NOW
+    assert {row["album_key"]: row["queued_at"]
+            for row in service.list_correction_summaries()["items"]}["rel-cry"] == NOW
     assert service.queue_correction(album_key="rel-else", actor_account_id=None) is None
     with isolatedPostgres._connect(setup_url) as connection:
         tracks = connection.execute("select title from library.local_tracks where track_key like 'rel-cry-%%'"
@@ -181,8 +182,10 @@ def test_stored_counts_follow_decisions_and_tag_changes_and_only_changed_albums_
     setup_url, repository, _ids = _corrections(monkeypatch)
 
     assert repository.refresh(observed_at=NOW) == 2
-    assert {row["album_key"]: row["correction_count"] for row in repository.list_summaries()} == {
+    assert {row["album_key"]: row["correction_count"] for row in repository.list_summaries()["items"]} == {
         "rel-cry": 2, "rel-holy": 1}
+    page = repository.list_summaries(offset=1, limit=1)
+    assert ([row["album_key"] for row in page["items"]], page["total"]) == (["rel-holy"], 2)
     # Nothing changed: nothing is compared again.
     assert repository.refresh(observed_at=NOW) == 0
 
@@ -191,7 +194,7 @@ def test_stored_counts_follow_decisions_and_tag_changes_and_only_changed_albums_
         connection.execute("update library.local_tracks set title = 'Carry On' where track_key = 'rel-cry-2'")
         connection.execute("update library.local_albums set title = 'Holy Land Box' where album_key = 'rel-holy'")
     assert repository.refresh(observed_at=NOW) == 2
-    assert {row["album_key"]: row["correction_count"] for row in repository.list_summaries()} == {"rel-cry": 1}
+    assert {row["album_key"]: row["correction_count"] for row in repository.list_summaries()["items"]} == {"rel-cry": 1}
 
     with isolatedPostgres._connect(setup_url) as connection:
         connection.execute("update library.local_album_musicbrainz_releases set state = 'release_group',"
@@ -205,7 +208,7 @@ def test_stored_counts_follow_decisions_and_tag_changes_and_only_changed_albums_
 def test_opening_the_problematic_files_list_never_runs_the_comparison(monkeypatch):
     from types import SimpleNamespace
 
-    from music_app.routes.musicbrainz_corrections_asgi import load_problematic_correction_items
+    from music_app.routes.musicbrainz_corrections_asgi import project_correction_problems_into_problematic_files
 
     setup_url, repository, _ids = _corrections(monkeypatch)
     repository.refresh(observed_at=NOW)
@@ -234,9 +237,13 @@ def test_opening_the_problematic_files_list_never_runs_the_comparison(monkeypatc
     request = SimpleNamespace(state=SimpleNamespace(current_actor=actor), app=SimpleNamespace(state=SimpleNamespace(
         musicbrainz_correction_service=MusicBrainzCorrectionService(recording), config={})))
 
-    items = load_problematic_correction_items(request)
+    payload = {"items": [{"key": "rel-cry", "name": "Angels Cry", "problem_reasons": []},
+                         {"key": "rel-none", "name": "Nothing", "problem_reasons": []}], "count": 2}
 
-    assert {item["musicbrainz_correction"]["album_key"]: item["musicbrainz_correction"]["correction_count"]
-            for item in items} == {"rel-cry": 2, "rel-holy": 1}
-    assert len(statements) == 1
-    assert "remote_tracks" not in statements[0] and "jsonb_array_elements" not in statements[0]
+    project_correction_problems_into_problematic_files(request, payload)
+
+    assert [item["problem_reasons"] for item in payload["items"]] == [["Data Correction Needed"], []]
+    assert (payload["count"], payload["musicbrainz_correction_album_count"]) == (2, 2)
+    # Two reads of stored rows (the listed albums' counts, the total); no comparison.
+    assert len(statements) == 2
+    assert not any("remote_tracks" in sql or "jsonb_array_elements" in sql for sql in statements)

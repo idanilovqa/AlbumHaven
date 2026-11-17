@@ -87,9 +87,11 @@ class MusicBrainzCorrectionService:
         self._repository = repository
         self._now = now or (lambda: datetime.now(timezone.utc))
 
-    def list_correction_summaries(self) -> list[dict[str, object]]:
-        """Problematic Files' rows: the stored counts, no comparison."""
-        return self._repository.list_summaries()
+    def list_correction_summaries(self, *, album_keys=None, offset: int = 0,
+                                  limit: int | None = None) -> dict[str, object]:
+        """Stored counts for Problematic Files (no comparison): the listed albums' labels, or
+        a page of the albums needing a correction, with the total."""
+        return self._repository.list_summaries(album_keys=album_keys, offset=offset, limit=limit)
 
     def get_correction(self, *, album_key: str) -> dict[str, object] | None:
         """One album's full correction, compared now (album detail)."""

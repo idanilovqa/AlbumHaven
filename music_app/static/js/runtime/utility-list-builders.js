@@ -2985,6 +2985,10 @@ function getProblemReasonTypes() {
       if (reason) reasons.add(reason);
     });
   });
+  // Albums needing a MusicBrainz correction load only through this filter.
+  if (Number(state.utility.musicBrainzCorrectionAlbumCount) > 0 && typeof MUSICBRAINZ_DATA_CORRECTION_LABEL === 'string') {
+    reasons.add(normalizeProblemFilterReason(MUSICBRAINZ_DATA_CORRECTION_LABEL));
+  }
   return Array.from(reasons).sort((a, b) => a.localeCompare(b));
 }
 

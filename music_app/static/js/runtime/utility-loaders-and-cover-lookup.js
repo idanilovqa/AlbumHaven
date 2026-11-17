@@ -107,6 +107,7 @@ async function loadProblematicFiles(force = false, options = {}) {
           return item === selectedSummary && (!continuation || unchangedSelection) ? selectedDetail : item;
         });
         state.utility.libraryWatchHealthProblems = operationalItems;
+        state.utility.musicBrainzCorrectionAlbumCount = Number(data.musicbrainz_correction_album_count || 0);
         state.utility.detailLoadPromises = selectedPendingDetail
           ? { [selectedKey]: selectedPendingDetail } : {};
         previousSummaryItems = summaryItems.map(item => ({ ...item }));

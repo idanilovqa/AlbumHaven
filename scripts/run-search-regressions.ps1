@@ -104,7 +104,8 @@ foreach ($searchShard in @('gallery-search-visual-1', 'gallery-search-visual-2')
     Invoke-Checked {
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $functionalRunner `
             -Shard $searchShard -PythonPath $PythonPath `
-            -FixtureDistribution $fixtureDistributionRoot
+            -FixtureDistribution $fixtureDistributionRoot `
+            -PostgresMajor $PostgresMajor -Pgbin $Pgbin
     } "Search functional E2E shard $searchShard"
 }
 

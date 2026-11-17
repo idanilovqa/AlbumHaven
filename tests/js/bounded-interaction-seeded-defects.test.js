@@ -637,9 +637,9 @@ const DEFECTS = [
     expected: /^py:routes\/api_wave_c_asgi_routes\.py#discovery_lookup_detail: \d+ reachable hazard\(s\) need a runtime contract \(.*library-state-scan:file_cache at music_app\/routes\/api_wave_c_asgi_routes\.py:\d+/,
   },
   {
-    // Owner incident (sandbox2, 11-17): after a structural tag save the
-    // finalizer resolved the cover path of every cached file (~163k, mostly on
-    // a network share), through `_post_commit_value(..., lambda:
+    // A structural tag save's finalizer that resolves the cover path of every
+    // cached file (on a network share, minutes per save), reached through
+    // `_post_commit_value(..., lambda:
     // state_guard(refresh_runtime_state))`, a getter passed through
     // `**kwargs`, and a sibling closure. The pre-0211ed0bf shape: the whole
     // live file cache is the candidate set and every entry is resolved.

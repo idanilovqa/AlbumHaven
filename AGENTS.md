@@ -86,8 +86,8 @@ operate, or contribute to the application.
   `tests/py/bounded_interactions.py`). The contract measures under the entry's
   registered id, or each id in its `measures` list, and the entry's
   `testIdentity` must name the real test that measured it; a helper-level test
-  never proves a route or worker it does not drive. Interactive work never
-  declares `library-size`. There are no allowlists, waivers, or baselines.
+  never proves a route or worker it does not drive. There are no allowlists,
+  waivers, or baselines.
 - Any entry also fails for an unregistered or stale entrypoint, a listener
   whose event name does not resolve, a request target outside
   `requestOwnership.allowed` or inside `forbidden`, a dynamic request target

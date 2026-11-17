@@ -1257,9 +1257,9 @@ def test_problematic_files_summary_contract_builds_once_per_library_publication_
 def test_structural_save_finalize_contract_resolves_only_the_edited_albums_at_production_track_count(
     library_app, tmp_path, monkeypatch,
 ):
-    """Owner incident (sandbox2, 11-17): after a 4-file structural save the
-    finalizer resolved the cover path of every cached file (~163k, on a network
-    share) and the save took minutes. The real finalizer moves one track of a
+    """A structural save's finalizer marks the edited albums' inherited cover;
+    resolving a cover path asks the (possibly network) filesystem, so it must
+    resolve only the edited albums' covers. The real finalizer moves one track of a
     12-track album to a new album among unrelated cached files that each have a
     cover; it must probe the filesystem, resolve cover paths, walk the cache and
     rebuild albums the same number of times however many unrelated files there

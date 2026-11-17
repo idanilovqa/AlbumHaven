@@ -380,8 +380,8 @@ def _structurally_inherited_cover_entries(
         if album_identity(entry := entries.get(path)) is not None
     }
     inherited_albums = {identity[:2] for identity in inherited_identities}
-    # Owner (11-17): resolving every library file's cover path on the (network) filesystem made a
-    # 4-file save take minutes. Only files of the edited albums can match, so only they are resolved.
+    # Resolving a cover path asks the filesystem (often a network drive) once per path component.
+    # Only files of the edited albums can match, so only they are resolved, once per distinct path.
     return {
         path: {**entry, "cover_inherited_from_structural_edit": True}
         for path in candidate_paths

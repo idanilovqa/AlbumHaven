@@ -2477,8 +2477,8 @@ def test_merging_committed_entries_never_changes_the_live_cache_keys_under_a_rea
 
 
 def test_structural_cover_inheritance_touches_the_filesystem_only_for_the_edited_albums(monkeypatch, tmp_path):
-    # Owner (11-17): a 4-file save took 2-3 minutes because every one of ~163k library files had its cover
-    # path resolved on the (network) filesystem. Only files of the edited albums may be resolved.
+    # Resolving a cover path asks the (possibly network) filesystem, so a structural save resolves only
+    # the edited albums' cover paths, however many other files the library cache holds.
     import pathlib
     from music_app.services import save_tasks as save_tasks_module
 

@@ -87,9 +87,11 @@ async def browse_artwork_response(request) -> Response | None:
         actor = getattr(request.state, "current_actor", None)
         if not await run_in_threadpool(legacy_cover_path_is_named, store, actor, raw_path):
             raise HTTPException(status_code=404, detail="Artwork not found.")
-    # The cached root snapshot: no root-settings reload per artwork request.
-    root_paths = await run_in_threadpool(configured_library_root_paths_snapshot, config)
-    resolved = await run_in_threadpool(resolve_media_path_within_roots, raw_path, root_paths)
+    def resolve() -> Path | None:
+        # The cached root snapshot: no root-settings reload per artwork request.
+        return resolve_media_path_within_roots(raw_path, configured_library_root_paths_snapshot(config))
+
+    resolved = await run_in_threadpool(resolve)
     if resolved is None:
         raise HTTPException(status_code=404, detail="Artwork not found.")
     return await run_in_threadpool(render_browse_artwork, resolved)

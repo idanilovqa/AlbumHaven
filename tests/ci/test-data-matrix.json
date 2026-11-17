@@ -9938,6 +9938,21 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/androidUpdateMenu.spec.js",
+    "case": "Not enough storage Free up space on this phone, then try again stays pressable and sends updates.download",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Not enough storage Free up space on this phone, then try again stays pressable and sends updates.download"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/appCopy.spec.js",
     "case": "app copy service worker › IAR-001: once kept, a start shows the copy at once without asking the server for the page",
     "profile": null,

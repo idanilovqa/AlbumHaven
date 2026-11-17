@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.16 - 2026-11-17
+
+- The Android app says "Not enough storage" (Free up space on this phone, then try again) when a full phone stops an update, instead of the generic "Update failed. Try again".
+
 ## 0.11.15 - 2026-11-16
 
 - Settings choice lists (the Android app's sandbox server picker and Library settings' path choices) are at least as wide as their button and grow to fit their longest choice, up to the screen width, so no choice such as "sandbox10" is cut off.

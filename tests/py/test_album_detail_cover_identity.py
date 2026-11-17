@@ -607,6 +607,25 @@ def test_cover_lookup_split_rejects_an_album_with_unrelated_paths(monkeypatch):
     assert response is None
 
 
+def test_cover_lookup_split_chooser_needs_a_lookup_notification():
+    """Without a task (an Album Details open) the gallery shows both releases instead."""
+    from music_app.routes import api_wave_d_asgi_routes as cover_routes
+
+    choices = [
+        {"album_id": 41, "album_key": "artist::left", "name": "Left"},
+        {"album_id": 42, "album_key": "artist::right", "name": "Right"},
+    ]
+
+    assert asyncio.run(
+        cover_routes._cover_lookup_album_split_response({}, set(), choices)
+    ) is None
+    payload, status = asyncio.run(
+        cover_routes._cover_lookup_album_split_response({}, {"old/01.flac"}, choices)
+    )
+    assert status == 409
+    assert [release["album_id"] for release in payload["current_releases"]] == [41, 42]
+
+
 def test_cover_lookup_task_identity_accepts_renamed_paths_for_same_album_id():
     from music_app.routes import api_wave_d_asgi_routes as cover_routes
 

@@ -3876,10 +3876,20 @@ def test_asgi_album_details_uses_valid_key_when_numeric_id_is_stale(
     ]
 
 
-def test_asgi_album_details_returns_current_release_choices_for_a_stale_split(
+@pytest.mark.parametrize(
+    "query",
+    [
+        {"album_key": "artist::old", "album_id": "17"},
+        {"album_key": "artist::old"},
+    ],
+    ids=["card-with-id", "key-only"],
+)
+def test_asgi_album_details_never_offers_the_split_chooser_without_lineage_request(
     asgi_app,
     monkeypatch,
+    query,
 ):
+    """Gallery opens show both split results as cards, so only a notification asks."""
     from music_app.routes import api_read_asgi_routes as asgi_read_routes
 
     async def fake_run_in_threadpool(function, *args, **kwargs):
@@ -3946,16 +3956,11 @@ def test_asgi_album_details_returns_current_release_choices_for_a_stale_split(
         asgi_app,
         "GET",
         "/album-details",
-        query={"album_key": "artist::old", "album_id": "17"},
+        query=query,
     )
 
-    assert status == 409
-    assert _decode_json(body) == {
-        "ok": False,
-        "error": "This album was split—choose the current release",
-        "resolution_kind": "album_split",
-        "current_releases": choices,
-    }
+    assert status == 404
+    assert _decode_json(body) == {"ok": False, "error": "Album not found"}
 
 
 def test_asgi_album_details_uses_transient_runtime_album_during_active_scan(

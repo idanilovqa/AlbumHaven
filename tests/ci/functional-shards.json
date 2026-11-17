@@ -905,7 +905,7 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/albumTagRename.spec.js",
-              "case": "FTC-ALBUM-DETAILS-029 stale album references follow merges and require a current release after splits",
+              "case": "FTC-ALBUM-DETAILS-029 stale album references follow merges and return to the gallery after splits",
               "area": "tag-edit"
             },
             {

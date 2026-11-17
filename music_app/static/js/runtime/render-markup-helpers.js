@@ -193,6 +193,8 @@ function buildSeriesSidebarHtml(view = {}, collapsedGroups = state.ui?.seriesTre
   const tree = window.NavigationTree;
   const series = Array.isArray(view.series_sidebar) ? view.series_sidebar : [];
   const selected = String(view.selected_series || '');
+  // The artist tree's own fold arrow, turned to show whether a group is open.
+  const chevron = document.getElementById('artist-tree-fold-button')?.querySelector?.('svg')?.outerHTML || '';
   const browse = { surface_request: 'albums', visible_library_categories: view.visible_library_categories };
   return SERIES_TREE_GROUPS.reduce((html, [kind, label]) => {
     const members = series.filter((item) => (item.kind === 'featured_in' ? 'featured_in' : 'series') === kind);
@@ -202,6 +204,7 @@ function buildSeriesSidebarHtml(view = {}, collapsedGroups = state.ui?.seriesTre
     return html + separator + tree.renderItem({
       label, key: `series-group:${kind}`, action: true, variant: 'panel', expanded: !collapsed,
       className: 'navigation-tree-group-heading', attributes: { 'data-series-tree-group': kind },
+      trailingHtml: chevron && `<span class="navigation-tree-group-heading__chevron">${chevron}</span>`,
     }) + (collapsed ? '' : members.map((item) => tree.renderItem({
       label: item.name, href: buildUrl({ ...browse, selected_series: item.mbid }), key: `series:${item.mbid}`,
       count: item.count, selected: item.mbid === selected,

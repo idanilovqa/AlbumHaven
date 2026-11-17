@@ -147,6 +147,20 @@ test("4B: the collapsed groups come from the viewer's saved preference by defaul
     ['Series', 'COLEZO! TWIN', 'Colossus Projects', 'Featured In']);
 });
 
+test('owner 2026-11-17: each group heading carries the fold arrow of the artist tree', () => {
+  const helpers = viewHelpers();
+  const arrow = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 6-6 6 6 6"></path></svg>';
+  const getElementById = helpers.document.getElementById;
+  helpers.document.getElementById = (id) => (id === 'artist-tree-fold-button'
+    ? { querySelector: (selector) => (selector === 'svg' ? { outerHTML: arrow } : null) } : getElementById(id));
+  const html = helpers.buildSeriesSidebarHtml({ selected_series: 'all', series_sidebar: TREE }, { featured_in: true });
+  const chevrons = [...html.matchAll(/<span class="navigation-tree-group-heading__chevron">([^]*?)<\/span>/g)];
+  assert.deepEqual(chevrons.map((match) => match[1]), [arrow, arrow]);
+  assert.match(html, /aria-expanded="true"[^>]*>[^]*?navigation-tree-group-heading__chevron/);
+  // Rows never carry it.
+  assert.equal((html.match(/navigation-tree-group-heading__chevron/g) || []).length, 2);
+});
+
 test('4B: the separator comes before Featured In only where NavigationTree draws one', () => {
   const view = { selected_series: 'all', series_sidebar: TREE };
   const without = viewHelpers();

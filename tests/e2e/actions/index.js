@@ -16,6 +16,7 @@ export { UtilityAppearanceActions } from './utilityAppearanceActions.js';
 export { UtilityIntegrationsActions } from './utilityIntegrationsActions.js';
 export { UtilityLogHistoryActions } from './utilityLogHistoryActions.js';
 export { UtilityLoopsActions } from './utilityLoopsActions.js';
+export { UtilityEditsQueueActions } from './utilityEditsQueueActions.js';
 export { UtilityProblematicFilesActions } from './utilityProblematicFilesActions.js';
 export { UtilityRulesActions } from './utilityRulesActions.js';
 export { UtilityTabBarActions } from './utilityTabBarActions.js';

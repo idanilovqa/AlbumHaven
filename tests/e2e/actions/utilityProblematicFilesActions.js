@@ -776,6 +776,11 @@ export class UtilityProblematicFilesActions {
     return this.utilityProblematicFilesTab.excludeProblemButton.isEnabled();
   }
 
+  async waitForMusicBrainzCorrectionRows(options = {}) {
+    await this.utilityProblematicFilesTab.musicBrainzCorrectionListItems.first()
+      .waitFor({ state: 'visible', timeout: options.timeout || 60000 });
+  }
+
   async expectMusicBrainzHasNoInfo({ key, title }) {
     // An album listed only for this has no detail to load (its detail is built from the row).
     await this.utilityProblematicFilesTab.listItemByKey(key).click();

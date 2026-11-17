@@ -22,6 +22,7 @@ export { UtilityLoopsTab } from './utilityLoopsTab.js';
 export { UtilityLoopTree } from './utilityLoopTree.js';
 export { UtilityMainBody } from './utilityMainBody.js';
 export { UtilityProblematicFilesTab } from './utilityProblematicFilesTab.js';
+export { UtilityEditsQueueTab } from './utilityEditsQueueTab.js';
 export { UtilityRulesTab } from './utilityRulesTab.js';
 export { UtilitySearchSection } from './utilitySearchSection.js';
 export { UtilitySidebarSection } from './utilitySidebarSection.js';

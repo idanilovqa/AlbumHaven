@@ -18,7 +18,7 @@
 .gallery-bar__artist-genres { display: flex; min-width: 0; overflow: hidden; }
 .gallery-bar__artist-genre { display: inline-flex; flex: 0 0 auto; align-items: center; min-width: 0; overflow: hidden; }
 .gallery-bar__artist-genre::before { content: "\2022"; flex: 0 0 auto; margin: 0 6px; font-size: 1.25em; line-height: 0; vertical-align: -.08em; }
-.gallery-bar__summary[hidden], .gallery-bar__artist-metadata[hidden] { display: none; }
+.gallery-bar__summary[hidden], .gallery-bar__artist-metadata[hidden], .gallery-bar__artist-genre[hidden] { display: none; }
 .gallery-bar__actions { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; --gallery-toolbar-button-background: var(--appearance-main-surface, var(--panel)); }
 .gallery-bar__actions:empty { display: none; }
 .gallery-bar__actions :is(.gallery-view-cluster, .gallery-view-choice) { background: var(--gallery-toolbar-button-background); }

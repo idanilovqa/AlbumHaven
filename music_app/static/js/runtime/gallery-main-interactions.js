@@ -1376,6 +1376,14 @@ function createGalleryFamilyPaintController(toggle) {
 // Measure only when visible title content or window width changes, never on every scroll frame.
 function syncGalleryBarNameFit(bar, name) {
   if (!bar?.classList || !name) return;
+  // A header painted before it is laid out (width 0) measures again once it has its size.
+  if (!bar.galleryNameFitObserver && typeof ResizeObserver === 'function') {
+    bar.galleryNameFitObserver = new ResizeObserver(() => {
+      const currentName = bar.querySelector?.('[data-gallery-context-name]');
+      if (currentName) syncGalleryBarNameFit(bar, currentName);
+    });
+    bar.galleryNameFitObserver.observe(bar);
+  }
   const contextKind = String(bar.dataset.galleryContextKind || '');
   const metadata = bar.querySelector?.('[data-gallery-context-metadata]')?.textContent || '';
   const summary = bar.querySelector?.('[data-gallery-context-summary]')?.textContent || '';
@@ -1388,16 +1396,19 @@ function syncGalleryBarNameFit(bar, name) {
     if (name.scrollWidth > name.clientWidth + 1) bar.classList.add('is-controls-below');
     const genrePills = Array.from(bar.querySelectorAll?.('.gallery-bar__artist-genre') || []);
     genrePills.forEach((pill) => { pill.hidden = false; });
-    if (Number(window.innerWidth) > 900) {
-      const genreContainer = bar.querySelector?.('.gallery-bar__summary .gallery-bar__artist-genres');
-      const desktopGenrePills = Array.from(genreContainer?.querySelectorAll?.('.gallery-bar__artist-genre') || []);
-      const right = genreContainer?.getBoundingClientRect?.().right;
-      if (Number.isFinite(right)) {
-        desktopGenrePills.forEach((pill) => {
-          if (pill.getBoundingClientRect().right > right + 1) pill.hidden = true;
-        });
-      }
-    }
+    // Owner (MOBILE-SETTINGS-HEADER 6): on every width a genre that does not fit before the line's end
+    // is dropped whole, with every genre ranked after it; none is ever cut.
+    [
+      bar.querySelector?.('.gallery-bar__summary .gallery-bar__artist-genres'),
+      bar.querySelector?.('[data-gallery-context-mobile-summary]'),
+    ].filter((container) => container?.getClientRects?.().length).forEach((container) => {
+      const right = container.getBoundingClientRect().right;
+      let overflowed = false;
+      container.querySelectorAll('.gallery-bar__artist-genre').forEach((pill) => {
+        overflowed = overflowed || pill.getBoundingClientRect().right > right + 1;
+        pill.hidden = overflowed;
+      });
+    });
     return;
   }
   if (Number(window.innerWidth) > 900) return;

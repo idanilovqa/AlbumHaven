@@ -643,11 +643,14 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   [data-gallery-bar-layout="mobile-primary"] > :is(.mobile-page-cover, .mobile-loop-page-cover) {
     grid-column: art; grid-row: 1 / span 2; margin-inline-end: 8px;
   }
+  /* Owner (MOBILE-SETTINGS-HEADER 4): the i sits right after the name; its 40px hit area overlaps the gaps. */
   [data-gallery-bar-layout="mobile-primary"] .gallery-bar__title .gallery-info-button {
-    margin-block: -8px;
+    margin-block: -8px; margin-inline: -12px -8px;
   }
+  .family-artist-header > .gallery-info-button { margin-inline-start: -8px; }
+  /* Owner (MOBILE-SETTINGS-HEADER 2): the subtext sits right under the title, as on the Gallery header. */
   [data-gallery-bar-layout="mobile-primary"] .gallery-bar__summary {
-    grid-column: text; grid-row: 2; align-self: start; min-width: 0; margin: 0;
+    grid-column: text; grid-row: 2; align-self: start; min-width: 0; margin: -4px 0 0;
   }
   [data-gallery-bar-layout="mobile-primary"] .gallery-bar__context > .album-details-cover-source-markers {
     grid-column: text / end; grid-row: 3;
@@ -662,13 +665,15 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
 [data-gallery-bar-instance="gallery"][data-gallery-bar-layout="mobile-primary"].is-controls-below .gallery-bar__title { grid-column: text / end; }
   /* Owner (11-09): the 40px buttons sit on the 24px title line without making it taller, so the count follows the
      title as closely as on web. */
-  [data-gallery-bar-instance="gallery"][data-gallery-bar-layout="mobile-primary"]:not(.is-name-wrapping):not(.is-controls-below) > .gallery-bar__actions { grid-row: 1; margin-block: -8px; }
+  /* Owner (MOBILE-SETTINGS-HEADER 3): the buttons' top edge stays inside the header surface. */
+  [data-gallery-bar-instance="gallery"][data-gallery-bar-layout="mobile-primary"]:not(.is-name-wrapping):not(.is-controls-below) > .gallery-bar__actions { grid-row: 1; margin-block: -4px -12px; }
   [data-gallery-bar-instance="gallery"][data-gallery-bar-layout="mobile-primary"].is-name-wrapping .gallery-bar__title > [data-gallery-context-name] { white-space: normal; overflow: visible; overflow-wrap: anywhere; }
   [data-gallery-bar-instance="gallery"][data-gallery-context-kind="artist"] { grid-template-rows: 24px auto; }
   [data-gallery-bar-instance="gallery"][data-gallery-context-kind="artist"] .gallery-bar__artist-metadata { display: none; }
   [data-gallery-bar-instance="gallery"][data-gallery-context-kind="artist"] .gallery-bar__artist-mobile-summary {
-    display: flex; grid-column: text / end; grid-row: 2; align-items: center; flex-wrap: wrap; gap: 4px 6px; min-width: 0;
-    max-height: 50px; padding-top: 6px; color: var(--muted); font-size: 12px; line-height: 20px; overflow: hidden;
+    /* Owner (MOBILE-SETTINGS-HEADER 2, 6, 7): one line close under the name; genres that do not fit are dropped. */
+    display: flex; grid-column: text / end; grid-row: 2; align-items: center; flex-wrap: nowrap; gap: 6px; min-width: 0;
+    margin-top: -4px; color: var(--muted); font-size: 12px; line-height: 20px; white-space: nowrap; overflow: hidden;
   }
   [data-gallery-bar-instance="gallery"][data-gallery-context-kind="artist"] .gallery-bar__artist-mobile-summary .gallery-bar__artist-genres { display: contents; }
   [data-gallery-bar-instance="gallery"][data-gallery-context-kind="artist"] .gallery-bar__summary { display: none; }

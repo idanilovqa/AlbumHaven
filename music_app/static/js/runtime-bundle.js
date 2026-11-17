@@ -54677,6 +54677,8 @@ function handleGalleryBootstrapPopState(options = {}) {
 
 /* Responsive shell navigation. Existing components retain their data and event owners. */
 const mobilePageState = { pages: [], originals: new Map(), restoring: false, cleaning: false, initialized: false, searchOpen: false };
+// The server's tab title, before any page renames the tab; restored whenever no page is open.
+const albumHavenBaseDocumentTitle = typeof document === 'undefined' ? '' : String(document.title || '');
 const mobileLiveGalleryParents = new WeakMap();
 const MOBILE_PAGE_KINDS = Object.freeze({ album: 'track-modal', utilities: 'utility-modal', 'cover-lookup': 'cover-lookup-modal', 'non-album': 'non-album-modal' });
 
@@ -54723,6 +54725,9 @@ function syncMobilePageShell() {
     summary.textContent = active.subtitle;
     if (active.loopCount) { const count = document.createElement('span'); count.className = 'mobile-loop-count'; count.textContent = active.loopCount; summary.appendChild(count); }
     document.title = `${active.title} — Album Haven`;
+  } else if (albumHavenBaseDocumentTitle) {
+    // Owner 2026-11-17: the tab kept a closed page's title (an album or a collection) after navigating away.
+    document.title = albumHavenBaseDocumentTitle;
   }
   document.getElementById('mobile-settings-actions').hidden = active?.kind !== 'utilities';
   document.getElementById('mobile-settings-button').hidden = active?.kind !== 'utilities';

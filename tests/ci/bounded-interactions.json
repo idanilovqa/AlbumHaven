@@ -11838,6 +11838,39 @@
       "proof": "static"
     },
     {
+      "id": "py:services/cover_reference_boundary.py#CoverReferenceBoundary.__call__",
+      "action": "Rewrite cover paths to references in each JSON/HTML response and references to paths in each JSON request body, one batched store call each",
+      "entrypoints": [
+        "py:music_app/services/cover_reference_boundary.py#CoverReferenceBoundary.__call__:middleware:MIDDLEWARE asgi"
+      ],
+      "owners": [
+        "music_app/services/cover_reference_boundary.py",
+        "music_app/services/cover_references.py"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-08"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/cover_reference_boundary.py#publish_cover_references",
+      "action": "Name every cover path in one response body with a single batched store call (called per response by the boundary, not a background job)",
+      "entrypoints": [
+        "py:music_app/services/cover_reference_boundary.py#publish_cover_references:publisher:name"
+      ],
+      "owners": [
+        "music_app/services/cover_reference_boundary.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "py:services/cover_refresh_execution.py#execute_cover_job",
       "action": "Execute one album's cover refresh job",
       "entrypoints": [

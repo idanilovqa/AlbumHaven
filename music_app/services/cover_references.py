@@ -80,12 +80,32 @@ class CoverReferenceStore:
         return (row["private_path"], row["kind"]) if int(row["library_id"]) == library_id else None
 
     def paths_for(self, library_id: int, references: Iterable[str]) -> dict[str, str]:
-        """`{reference: path}` for those of this library; unknown or foreign ones are left out."""
-        resolved = {}
-        for reference in set(references):
-            hit = self.resolve(library_id, reference)
-            if hit is not None:
-                resolved[reference] = hit[0]
+        """`{reference: path}` for those of this library; unknown or foreign ones are left out.
+        Cache misses are read in one query, so a request body costs one connection at most."""
+        resolved: dict[str, str] = {}
+        missing: list[str] = []
+        with self._lock:
+            for reference in set(references):
+                if not REFERENCE_PATTERN.fullmatch(reference or ""):
+                    continue
+                hit = self._by_reference.get(reference)
+                if hit is None:
+                    missing.append(reference)
+                    continue
+                self._by_reference.move_to_end(reference)
+                if hit[0] == library_id:
+                    resolved[reference] = hit[1]
+        if missing:
+            with self._connect(self._database_url, workload=_WORKLOAD) as connection:
+                rows = connection.execute(
+                    """select library_id, private_path, kind, reference from library.cover_references
+                       where reference = any(%s::text[])""",
+                    (missing,),
+                ).fetchall()
+            for row in rows:
+                self._remember(int(row["library_id"]), row["private_path"], row["reference"], row["kind"])
+                if int(row["library_id"]) == library_id:
+                    resolved[row["reference"]] = row["private_path"]
         return resolved
 
     def _load_or_register(self, library_id: int, wanted: Mapping[str, str]) -> list[tuple[str, str, str]]:

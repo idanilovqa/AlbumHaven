@@ -191,11 +191,14 @@ class PlaybackClaimOwner(
         unreadGrant.getAndSet(null)?.let { token -> io.execute { giveBack(token) } }
     }
 
-    /** A request that cannot even be built, such as one refused by OkHttp, is as unanswered as a lost one. */
+    /**
+     * A request that cannot even be built, such as one whose cookie OkHttp refuses, is refused: unlike
+     * a lost one, sending it again cannot help.
+     */
     private inline fun call(request: () -> ClaimResponse): ClaimResponse = try {
         request()
     } catch (_: RuntimeException) {
-        ClaimResponse.Unreachable
+        ClaimResponse.Rejected(0)
     }
 
     private fun giveBack(token: String): Boolean = try {

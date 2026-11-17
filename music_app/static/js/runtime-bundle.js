@@ -54693,6 +54693,15 @@ function presentMobilePage(descriptor) {
       view: state.view, groups: state.view?.artist_groups, revision: state.status.inventory_mutation_revision,
     });
   }
+  // Registered before the same-page check: a history-only desktop page reaching phone width
+  // must still move its surface into the outlet.
+  if (!historyOnly && !mobilePageState.originals.has(descriptor.kind)) {
+    const placeholder = document.createComment(`Original ${descriptor.kind} surface`);
+    element.before(placeholder);
+    const dialog = element.querySelector('[role="dialog"]') || element;
+    mobilePageState.originals.set(descriptor.kind, { placeholder, dialog, role: dialog.getAttribute('role'),
+      modal: dialog.getAttribute('aria-modal'), label: dialog.getAttribute('aria-label'), returnFocus: document.activeElement });
+  }
   if (active?.kind === descriptor.kind && active.albumKey === descriptor.albumKey) {
     // Loose Tracks pages share one surface; each collection is still its own route.
     const routeChanged = active.kind === 'non-album'
@@ -54703,13 +54712,6 @@ function presentMobilePage(descriptor) {
     return true;
   }
   if (!historyOnly) delete outlet.dataset.pageInteracted;
-  if (!historyOnly && !mobilePageState.originals.has(descriptor.kind)) {
-    const placeholder = document.createComment(`Original ${descriptor.kind} surface`);
-    element.before(placeholder);
-    const dialog = element.querySelector('[role="dialog"]') || element;
-    mobilePageState.originals.set(descriptor.kind, { placeholder, dialog, role: dialog.getAttribute('role'),
-      modal: dialog.getAttribute('aria-modal'), label: dialog.getAttribute('aria-label'), returnFocus: document.activeElement });
-  }
   // A changed album reuses one component; older history entries retain its key for Back/Forward.
   const previousIndex = mobilePageState.pages.findIndex(page => page.kind === descriptor.kind);
   if (previousIndex >= 0) {
@@ -55069,7 +55071,11 @@ function promoteVisibleMobileDialogs() {
     }
     const album = kind === 'album' ? getCurrentTrackModalAlbum()
       : kind === 'cover-lookup' ? state.coverLookup.modal.album : null;
-    presentMobilePage(mobilePageDescriptor(kind, album));
+    // A desktop Loose Tracks page already has a history-only route; promotion keeps it.
+    const route = kind === 'non-album' ? mobilePageState.pages.find(page => page.kind === kind) : null;
+    presentMobilePage(route
+      ? { ...mobilePageDescriptor(kind, album, route), title: route.title, subtitle: route.subtitle }
+      : mobilePageDescriptor(kind, album));
     if (kind === 'utilities') renderUtilityModalContent();
   }
 }

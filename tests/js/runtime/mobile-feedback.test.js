@@ -938,6 +938,53 @@ test('Loose Tracks remains a page while its mobile presentation round-trips thro
   }
 });
 
+test('Loose Tracks opened at desktop width moves into the page outlet with its route when narrowed to a phone', () => {
+  function node(attributes = {}) {
+    const classes = new Set();
+    return { hidden: false, inert: false, dataset: {}, slot: 'desktop', attributes: { ...attributes },
+      classList: { contains: name => classes.has(name), add: name => classes.add(name), remove: name => classes.delete(name),
+        toggle(name, on) { if (on) classes.add(name); else classes.delete(name); } },
+      getAttribute(name) { return Object.hasOwn(this.attributes, name) ? this.attributes[name] : null; },
+      setAttribute(name, value) { this.attributes[name] = value; }, removeAttribute(name) { delete this.attributes[name]; },
+      getClientRects() { return this.hidden ? [] : [{}]; }, querySelector: () => null, before() {},
+    };
+  }
+  const ids = ['shell-main-surface', 'mobile-page-header', 'mobile-page-outlet', 'mobile-back-button',
+    'mobile-page-library-button', 'mobile-library-button', 'mobile-page-title', 'mobile-page-summary',
+    'mobile-settings-actions', 'mobile-settings-button', 'track-modal', 'utility-modal', 'cover-lookup-modal'];
+  const nodes = Object.fromEntries(ids.map(id => [id, node()]));
+  for (const id of ['track-modal', 'utility-modal', 'cover-lookup-modal']) nodes[id].hidden = true;
+  const looseTracks = nodes['non-album-modal'] = node({ role: 'region', 'aria-label': 'Loose Tracks' });
+  nodes['mobile-page-outlet'].appendChild = surface => { surface.slot = 'mobile'; };
+  const historyWrites = [];
+  const context = load('mobile-navigation.js', {
+    document: { body: node(), activeElement: null, getElementById: id => nodes[id], querySelectorAll: () => [],
+      createComment: () => ({ before(element) { element.slot = 'desktop'; } }) },
+    window: { innerWidth: 1440, history: { state: {} } },
+    state: { coverLookup: { modal: {} }, utility: {}, view: {}, status: {} },
+  });
+  context.syncMobileAlbumHeader = context.syncMobileLoopHeader = () => {};
+  context.writeMobilePageHistory = mode => historyWrites.push(mode);
+  // Opening a collection from the desktop tree records a history-only page; the surface stays in place.
+  vm.runInContext(`mobilePageState.pages.push({ kind: 'non-album', albumKey: '', title: 'Road trip', subtitle: '3 tracks',
+    libraryWide: true, collectionName: 'Road trip', navigationSource: 'library-tree', parentViewUrl: '/' });`, context);
+  assert.equal(vm.runInContext("mobilePageState.originals.has('non-album')", context), false);
+
+  context.window.innerWidth = 390;
+  context.promoteVisibleMobileDialogs();
+
+  assert.equal(looseTracks.slot, 'mobile');
+  assert.equal(looseTracks.classList.contains('is-mobile-page'), true);
+  assert.equal(looseTracks.hidden, false);
+  assert.equal(nodes['mobile-page-title'].textContent, 'Road trip');
+  const page = vm.runInContext('mobilePageState.pages.at(-1)', context);
+  assert.equal(vm.runInContext('mobilePageState.pages.length', context), 1);
+  assert.equal(page.libraryWide, true);
+  assert.equal(page.collectionName, 'Road trip');
+  assert.equal(page.navigationSource, 'library-tree');
+  assert.deepEqual(historyWrites, []);
+});
+
 test('canonical mobile parent route distinguishes root Gallery, Home and explicit All Artists through history', () => {
   const context = load('mobile-navigation.js');
   vm.runInContext(fs.readFileSync(path.join(runtime, 'view-state-helpers.js'), 'utf8'), context);
@@ -1198,6 +1245,8 @@ test('nested mobile presentation inherits the root canonical route without creat
   context.syncMobilePageShell = () => {};
   context.writeMobilePageHistory = () => { throw new Error('Same page presentation must not push history'); };
   vm.runInContext("mobilePageState.pages.push({kind:'album',albumKey:'one',parentViewUrl:'/?surface=albums'}, {kind:'cover-lookup',albumKey:'one'});", context);
+  // Already presented on mobile, so its original surface is registered.
+  vm.runInContext("mobilePageState.originals.set('cover-lookup', {});", context);
   assert.equal(context.presentMobilePage({ kind: 'cover-lookup', albumKey: 'one' }), true);
   assert.equal(vm.runInContext('mobilePageState.pages[1].parentViewUrl', context), '/?surface=albums');
 });

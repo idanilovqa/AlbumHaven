@@ -519,6 +519,13 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/looseTracksHomeNavigation.spec.js",
+              "case": "FTC-NON-ALBUM-018 ends Loose Tracks range selection after release outside the table",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/looseTracksHomeNavigation.spec.js",
               "case": "FTC-NON-ALBUM-019 direct Custom Collection URL repaints its tree after deferred projection hydration",
               "area": "gallery-search"
             },

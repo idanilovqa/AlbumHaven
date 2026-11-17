@@ -10554,5 +10554,103 @@
     },
     "globalMutationReason": "The case changes the server-wide generated-preview policy and files only in its isolated database, app process, and owned media copy, then verifies reverse relocation and cleans that owned state during teardown.",
     "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/looseTracksHomeNavigation.spec.js",
+    "case": "FTC-NON-ALBUM-017 returns from Loose Tracks through bounded Home navigation",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [
+      "non-album:custom-collections"
+    ],
+    "filesystemScenarios": [
+      "media:functional-core"
+    ],
+    "expectedContracts": [
+      "phone-loose-tracks-home-return",
+      "bounded-home-navigation"
+    ],
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/looseTracksHomeNavigation.spec.js",
+    "case": "FTC-NON-ALBUM-019 direct Custom Collection URL repaints its tree after deferred projection hydration",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [
+      "non-album:custom-collections"
+    ],
+    "filesystemScenarios": [
+      "media:functional-core"
+    ],
+    "expectedContracts": [
+      "direct-collection-url-tree-repaint",
+      "deferred-projection-hydration"
+    ],
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/looseTracksHomeNavigation.spec.js",
+    "case": "FTC-GALLERY-NAV-032 hides the expanded view rail after inactivity and restores it only from the left edge",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [
+      "non-album:custom-collections"
+    ],
+    "filesystemScenarios": [
+      "media:functional-core"
+    ],
+    "expectedContracts": [
+      "inactive-view-rail-hides",
+      "left-edge-rail-restore"
+    ],
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/looseTracksHomeNavigation.spec.js",
+    "case": "FTC-GALLERY-NAV-038 keeps the hidden view rail closed at the left edge while a modal covers the gallery",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [
+      "non-album:custom-collections"
+    ],
+    "filesystemScenarios": [
+      "media:functional-core"
+    ],
+    "expectedContracts": [
+      "modal-blocks-left-edge-rail"
+    ],
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/looseTracksHomeNavigation.spec.js",
+    "case": "FTC-NON-ALBUM-018 ends Loose Tracks range selection after release outside the table",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [
+      "non-album:custom-collections"
+    ],
+    "filesystemScenarios": [
+      "media:functional-core"
+    ],
+    "expectedContracts": [
+      "loose-tracks-range-selection-release"
+    ],
+    "ownerApproval": "pending"
   }
 ]

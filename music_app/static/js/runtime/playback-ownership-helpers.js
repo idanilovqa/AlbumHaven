@@ -128,6 +128,7 @@ function losePlaybackOwnership(reason = 'ownership-lost', updateUi = true) {
   const ownership = getPlaybackOwnershipState();
   ownership.requestVersion = (ownership.requestVersion || 0) + 1;
   ownership.activeClaim = null;
+  ownership.unansweredRelease = null;
   if (ownership.expiryTimer) clearTimeout(ownership.expiryTimer);
   ownership.lockStatus = 'locked';
   ownership.blockedReason = 'playback_unavailable';
@@ -264,6 +265,19 @@ async function requestPlaybackClaim(payload, timeoutMs) {
   return { ...await playbackOwnershipRequest('PUT', '/playback/state', payload, timeoutMs), sentAt };
 }
 
+// A token whose give-back went unanswered is refused once that give-back did arrive after all; only
+// an anonymous acquire then says whether another client holds playback.
+async function requestOfferedPlaybackClaim(claim, track) {
+  const payload = { protocol: 1, clientId: getPlaybackOwnershipTabId(), clientSurface: 'private_web',
+    state: 'playing', track };
+  try {
+    return await requestPlaybackClaim({ ...payload, claimToken: claim?.claimToken || null });
+  } catch (error) {
+    if (!claim?.releaseUnanswered || error?.unanswered) throw error;
+    return requestPlaybackClaim({ ...payload, claimToken: null });
+  }
+}
+
 function acceptPlaybackClaim(result, prepared) {
   if (result.protocol !== 1 || !result.claimToken || !Number.isFinite(Date.parse(result.expiresAt))
       || !(Number.isFinite(result.leaseMs) && result.leaseMs > 0)) {
@@ -275,6 +289,7 @@ function acceptPlaybackClaim(result, prepared) {
   const leaseDeadline = result.sentAt + result.leaseMs;
   const claim = { ...prepared, claimToken: result.claimToken, leaseDeadline, scrobblingAvailable };
   ownership.activeClaim = claim;
+  ownership.unansweredRelease = null;
   clearBlockedPlaybackState();
   if (ownership.expiryTimer) clearTimeout(ownership.expiryTimer);
   ownership.expiryTimer = setTimeout(() => expirePlaybackClaim(claim),
@@ -326,9 +341,7 @@ async function refreshPlaybackOwnershipClaim(track = null) {
     try {
       const prepared = await playbackOwnershipTrack(track || state.player.current, claim);
       if (version !== (ownership.requestVersion || 0)) return false;
-      const result = await requestPlaybackClaim({ protocol: 1,
-        clientId: getPlaybackOwnershipTabId(), clientSurface: 'private_web', claimToken: claim.claimToken,
-        state: 'playing', track: prepared.track });
+      const result = await requestOfferedPlaybackClaim(claim, prepared.track);
       if (ownership.activeClaim !== claim || version !== (ownership.requestVersion || 0)) return false;
       acceptPlaybackClaim(result, prepared);
       return true;
@@ -374,7 +387,7 @@ async function claimPlaybackOwnership(track, options = {}) {
     const handshake = playingEngineHandshake();
     if (handshake) await handshake;
     if (version !== ownership.requestVersion) return false;
-    const claim = ownership.activeClaim;
+    const claim = ownership.activeClaim || ownership.unansweredRelease;
     // An engine that holds its own claim acquires, heartbeats and releases it before any output.
     if (playingEngine()?.holdsOwnClaim) return true;
     try {
@@ -383,9 +396,7 @@ async function claimPlaybackOwnership(track, options = {}) {
       if (version !== ownership.requestVersion) return false;
       const result = handoff
         ? await acquirePlaybackOwnershipHandoff(prepared, handoff)
-        : await requestPlaybackClaim({ protocol: 1,
-          clientId: getPlaybackOwnershipTabId(), clientSurface: 'private_web',
-          claimToken: claim?.claimToken || null, state: 'playing', track: prepared.track });
+        : await requestOfferedPlaybackClaim(claim, prepared.track);
       if (version !== ownership.requestVersion) {
         if (!claim) await deletePlaybackClaim(result).catch(() => {});
         return false;
@@ -394,6 +405,11 @@ async function claimPlaybackOwnership(track, options = {}) {
       return true;
     } catch (error) {
       if (version === ownership.requestVersion) {
+        // A claim given back with no answer is this client's again: the server may still hold it.
+        if (claim?.releaseUnanswered && !ownership.activeClaim && error?.unanswered) {
+          ownership.activeClaim = claim;
+          ownership.unansweredRelease = null;
+        }
         if (claim && ownership.activeClaim === claim && keepUnansweredPlaybackClaim(claim, error)) return true;
         losePlaybackOwnership();
         await handlePlaybackOwnershipEvent();
@@ -423,7 +439,9 @@ async function releasePlaybackOwnership() {
     ownership.activeClaim = null;
     if (ownership.expiryTimer) clearTimeout(ownership.expiryTimer);
     clearBlockedPlaybackState();
-    await deletePlaybackClaim(claim).catch(() => {});
+    const unanswered = await deletePlaybackClaim(claim).then(() => false, error => Boolean(error?.unanswered));
+    // Its lease may still run there, as when a pause goes offline: the next play offers its token.
+    if (unanswered && claim && !ownership.activeClaim) ownership.unansweredRelease = { ...claim, releaseUnanswered: true };
     announcePlaybackOwnership();
     return Boolean(claim);
   })();

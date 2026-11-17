@@ -777,8 +777,10 @@ export class UtilityProblematicFilesActions {
   }
 
   async expectMusicBrainzHasNoInfo({ key, title }) {
+    // An album listed only for this has no detail to load (its detail is built from the row).
     await this.utilityProblematicFilesTab.listItemByKey(key).click();
-    await this.waitForSelectedDetailSelection({ expectedKey: key, expectedTitle: title });
+    await expect(this.utilityProblematicFilesTab.listItemByKey(key)).toHaveClass(/is-active/, { timeout: 60000 });
+    await expect(this.utilityProblematicFilesTab.detailTitle).toHaveText(title, { timeout: 60000 });
     await expect(this.utilityProblematicFilesTab.detailMusicBrainzHasNoInfoLabel).toBeVisible({ timeout: 60000 });
   }
 

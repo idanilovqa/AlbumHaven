@@ -142,9 +142,21 @@ test('4B: a collapsed group keeps its heading and hides its series; the other gr
 
 test("4B: the collapsed groups come from the viewer's saved preference by default", () => {
   const helpers = viewHelpers();
-  helpers.state.ui = { seriesTreeCollapsedGroups: { series: false, featured_in: true } };
-  assert.deepEqual(treeLabels(helpers.buildSeriesSidebarHtml({ series_sidebar: TREE })),
+  helpers.state.ui = { seriesTree: TREE, seriesTreeCollapsedGroups: { series: false, featured_in: true } };
+  assert.deepEqual(treeLabels(helpers.buildSeriesSidebarHtml({ selected_artist: 'Magma' })),
     ['Series', 'COLEZO! TWIN', 'Colossus Projects', 'Featured In']);
+});
+
+test('owner 2026-11-17: a Series view brings its own tree; any other gallery shows the loaded one, nothing selected', () => {
+  const helpers = viewHelpers();
+  helpers.state.ui = { seriesTree: TREE.slice(0, 1) };
+  assert.deepEqual(helpers.resolveSeriesTreeItems({ selected_series: COLOSSUS, series_sidebar: TREE }).length, 3);
+  assert.deepEqual(helpers.resolveSeriesTreeItems({ selected_artist: 'Magma', series_sidebar: TREE }).map((item) => item.name),
+    ['COLEZO! TWIN']);
+  const html = helpers.buildSeriesSidebarHtml({ selected_artist: 'Magma' }, {});
+  assert.equal(treeTags(html).some((tag) => /is-selected|aria-current/.test(tag)), false);
+  helpers.state.ui = {};
+  assert.equal(helpers.buildSeriesSidebarHtml({ selected_artist: 'Magma' }, {}), '');
 });
 
 test('owner 2026-11-17: each group heading carries the fold arrow of the artist tree', () => {
@@ -179,9 +191,10 @@ test('4B: the separator comes before Featured In only where NavigationTree draws
 });
 
 test('4B: a group with no series is left out, heading and all', () => {
-  const html = viewHelpers().buildSeriesSidebarHtml({ series_sidebar: TREE.filter((item) => item.kind === 'series') }, {});
+  const html = viewHelpers().buildSeriesSidebarHtml({ selected_series: 'all',
+    series_sidebar: TREE.filter((item) => item.kind === 'series') }, {});
   assert.deepEqual(treeLabels(html), ['Series', 'COLEZO! TWIN', 'Colossus Projects']);
-  assert.equal(viewHelpers().buildSeriesSidebarHtml({ series_sidebar: [] }, {}), '');
+  assert.equal(viewHelpers().buildSeriesSidebarHtml({ selected_series: 'all', series_sidebar: [] }, {}), '');
 });
 
 test('3A: a Featured In series is a selectable tree item that opens its gallery', () => {
@@ -197,11 +210,13 @@ function seriesKindSaver(response) {
   context.fetch = async (url, options) => { calls.fetch.push([url, options]); return response; };
   context.showToast = (...args) => calls.toasts.push(args);
   context.refreshCurrentViewAfterBackgroundCompletion = async (options) => { calls.refreshes.push(options); return true; };
-  return { save: context.saveSeriesKind, calls };
+  context.loadSeriesTree = async () => { calls.trees = (calls.trees || 0) + 1; return true; };
+  return { save: context.saveSeriesKind, calls, context };
 }
 
 test('5B: a series kind is saved for that series, then the open view reloads in place to regroup the tree', async () => {
-  const { save, calls } = seriesKindSaver({ ok: true, json: async () => ({}) });
+  const { save, calls, context } = seriesKindSaver({ ok: true, json: async () => ({}) });
+  context.state.view = { selected_series: FEATURED };
   assert.equal(await save(FEATURED, 'series'), true);
   const [[url, options]] = calls.fetch;
   assert.equal(url, `/api/musicbrainz/series/${FEATURED}/kind`);
@@ -211,6 +226,15 @@ test('5B: a series kind is saved for that series, then the open view reloads in 
   assert.deepEqual(calls.toasts, []);
   await save(FEATURED, null);
   assert.deepEqual(JSON.parse(calls.fetch[1][1].body), { kind: null });
+  assert.equal(calls.trees, undefined);
+});
+
+test('5B: saved while an artist gallery is open, only the tree is read again; the gallery stays', async () => {
+  const { save, calls, context } = seriesKindSaver({ ok: true, json: async () => ({}) });
+  context.state.view = { selected_artist: 'Magma', selected_series: '' };
+  assert.equal(await save(FEATURED, 'featured_in'), true);
+  assert.equal(calls.trees, 1);
+  assert.deepEqual(calls.refreshes, []);
 });
 
 test('5B: a refused save says why and leaves the tree as it is', async () => {

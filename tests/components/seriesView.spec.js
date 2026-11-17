@@ -194,3 +194,60 @@ test('5B: a series menu offers Mark as Series and Mark as Featured In, the curre
   await expect(menu.getByRole('button')).toHaveText(['Mark as Series', 'Mark as Featured In', 'Use MusicBrainz default']);
   await expect(menu.getByRole('button', { name: 'Mark as Featured In', exact: true })).toBeDisabled();
 });
+
+test('owner 2026-11-17: the Series button switches only the tree; the gallery header, URL and history stay and no row is selected', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const template = fs.readFileSync(path.join(repoRoot, 'music_app/templates/components/navigation-tree-item.html'), 'utf8');
+  const index = fs.readFileSync(path.join(repoRoot, 'music_app/templates/index.html'), 'utf8');
+  const foldArrow = index.slice(index.indexOf("id='artist-tree-fold-button'")).match(/<svg[\s\S]*?<\/svg>/)[0];
+  await page.setContent(`<div id="app-shell"><aside id="shell-navigation-rail" class="sidebar shell-navigation-rail" style="width:240px">
+      <div id="artist-tree-expanded"><button id="artist-tree-fold-button" class="action-button shell-navigation-rail-toggle" aria-label="Collapse Artist Tree">${foldArrow}</button>
+      <h2 class="desktop-artists-heading">Artists</h2>
+      <div id="sidebar-list" class="artist-list navigation-tree"></div></div>
+      <nav id="shell-navigation-compact" hidden><button id="artist-tree-navigation-button"></button></nav></aside>
+    <main><div data-gallery-bar-instance="gallery"><h1 class="gallery-bar__name">Magma</h1></div></main></div>
+    <script id="navigation-tree-item-template" type="text/plain">${template}</script>`);
+  await page.addScriptTag({ content: `window.escapeHtml = (v) => String(v ?? "").replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\\"":"&quot;"}[c]));
+    window.state = { view: { selected_artist: 'Magma', selected_series: '', visible_library_categories: ['main_library'] },
+      ui: { artistTreeFolded: false, shellLayoutPreferences: {} } };` });
+  await page.addScriptTag({ path: path.join(staticRoot, 'js/navigation-tree.js') });
+  for (const file of ['view-state-helpers.js', 'browser-navigation-helpers.js', 'view-value-helpers.js', 'markup-format-helpers.js',
+    'render-markup-helpers.js', 'shell-navigation-drawer.js']) {
+    await page.addScriptTag({ path: path.join(staticRoot, 'js/runtime', file) });
+  }
+  for (const css of ['css/runtime/base-layout.css', 'css/navigation-tree.css', 'css/app-chrome.css']) {
+    await page.addStyleTag({ path: path.join(staticRoot, css) });
+  }
+  // The artist tree as the runtime draws it; the Series tree from the real builder.
+  await page.evaluate((tree) => {
+    window.__fetched = [];
+    window.fetch = async (url) => { window.__fetched.push(String(url)); return { ok: true, json: async () => ({ series_sidebar: tree }) }; };
+  }, TREE);
+  await page.addScriptTag({ content: `window.fetchAndRender = () => { window.__navigated = true; };
+    window.renderSidebar = () => { document.getElementById('sidebar-list').innerHTML = showsSeriesTree()
+      ? buildSeriesSidebarHtml(state.view)
+      : NavigationTree.renderItem({ label: 'Magma', key: 'artist:Magma', selected: state.view.selected_artist === 'Magma',
+          attributes: { 'data-sidebar-artist': 'Magma', 'data-nav': '1' } }); };
+    renderSidebar();` });
+  const before = await page.evaluate(() => ({ href: location.href, length: history.length }));
+  const header = page.locator('[data-gallery-bar-instance="gallery"] .gallery-bar__name');
+
+  await page.evaluate(() => openNavigationTree('series'));
+  const list = page.locator('#sidebar-list');
+  await expect(list.locator('.artist-name-label')).toHaveText(['Series', 'Colossus project', 'Dream Theater Official Bootlegs',
+    'Featured In', '1001 Albums You Must Hear Before You Die', 'Pitchfork: 10/10']);
+  await expect(header).toHaveText('Magma');
+  await expect(list.locator('[aria-current], .is-selected')).toHaveCount(0);
+  // Each heading carries the artist tree's fold arrow, pointing down while its group is open.
+  const arrows = list.locator('.navigation-tree-group-heading__chevron svg');
+  await expect(arrows).toHaveCount(2);
+  expect(await arrows.first().evaluate((svg) => getComputedStyle(svg).transform)).not.toBe('none');
+
+  await page.evaluate(() => openNavigationTree('artists'));
+  await expect(list.locator('.artist-name-label')).toHaveText(['Magma']);
+  await expect(header).toHaveText('Magma');
+  expect(await page.evaluate(() => ({ href: location.href, length: history.length }))).toEqual(before);
+  expect(await page.evaluate(() => window.__navigated === true)).toBe(false);
+  // Only the tree was read; never a gallery.
+  expect(await page.evaluate(() => window.__fetched)).toEqual(['/series-tree?category=main_library']);
+});

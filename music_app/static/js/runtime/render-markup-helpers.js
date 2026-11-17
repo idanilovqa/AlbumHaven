@@ -189,9 +189,15 @@ function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
 // selected. A separator comes before Featured In where NavigationTree draws one.
 const SERIES_TREE_GROUPS = [['series', 'Series'], ['featured_in', 'Featured In']];
 
+// A Series view brings its own tree; any other gallery shows the one the Series button loaded.
+function resolveSeriesTreeItems(view = state.view) {
+  const items = String(view?.selected_series || '') ? view.series_sidebar : state.ui?.seriesTree;
+  return Array.isArray(items) ? items : [];
+}
+
 function buildSeriesSidebarHtml(view = {}, collapsedGroups = state.ui?.seriesTreeCollapsedGroups || {}) {
   const tree = window.NavigationTree;
-  const series = Array.isArray(view.series_sidebar) ? view.series_sidebar : [];
+  const series = resolveSeriesTreeItems(view);
   const selected = String(view.selected_series || '');
   // The artist tree's own fold arrow, turned to show whether a group is open.
   const chevron = document.getElementById('artist-tree-fold-button')?.querySelector?.('svg')?.outerHTML || '';

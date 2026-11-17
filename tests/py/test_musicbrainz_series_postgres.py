@@ -384,6 +384,9 @@ def test_the_owner_marks_a_series_from_the_tree_and_the_tree_regroups(monkeypatc
                 for item in browse.build_series_payload(query_params={"series": "all"})["series_sidebar"]}
 
     assert tree()[METAL_LIST] == ("featured_in", None)
+    # The rail's Series button reads the same tree without a gallery.
+    assert browse.build_series_tree(query_params={}) == browse.build_series_payload(
+        query_params={"series": "all"})["series_sidebar"]
     assert repository.set_series_owner_kind(mbid=METAL_LIST, owner_kind="series", observed_at=NOW) == {
         "mbid": METAL_LIST, "kind": "series", "owner_kind": "series"}
     assert tree()[METAL_LIST] == ("series", "series")

@@ -1863,7 +1863,7 @@ const SERIES_TREE = [
 
 test('5B: a series menu offers Series and Featured In, its current kind disabled, and no Hidden', () => {
   const { context } = loadHelper();
-  context.state.view = { series_sidebar: SERIES_TREE };
+  context.resolveSeriesTreeItems = () => SERIES_TREE;
   assert.equal(context.showSeriesTreeContextMenu(18, 36, 'colossus'), true);
   const menu = context.document.getElementById('artist-tree-context-menu');
   assert.equal(menu.dataset.series, 'colossus');
@@ -1876,7 +1876,7 @@ test('5B: a series menu offers Series and Featured In, its current kind disabled
 
 test('5B: the MusicBrainz default is offered only once the owner has chosen a kind', () => {
   const { context } = loadHelper();
-  context.state.view = { series_sidebar: SERIES_TREE };
+  context.resolveSeriesTreeItems = () => SERIES_TREE;
   context.showSeriesTreeContextMenu(18, 36, 'pitchfork');
   const menu = context.document.getElementById('artist-tree-context-menu');
   assert.match(menu.innerHTML, /data-series-tree-kind="">Use MusicBrainz default</);
@@ -1888,7 +1888,7 @@ test('5B: the MusicBrainz default is offered only once the owner has chosen a ki
 
 test('5B: a series not in the tree opens no menu', () => {
   const { context } = loadHelper();
-  context.state.view = { series_sidebar: SERIES_TREE };
+  context.resolveSeriesTreeItems = () => SERIES_TREE;
   assert.equal(context.showSeriesTreeContextMenu(18, 36, 'unknown'), false);
   assert.equal(context.document.getElementById('artist-tree-context-menu'), null);
 });

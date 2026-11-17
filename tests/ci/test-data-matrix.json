@@ -9491,6 +9491,21 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/seriesView.spec.js",
+    "case": "owner 2026-11-17: the Series button switches only the tree; the gallery header, URL and history stay and no row is selected",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "musicbrainz-series-tree-switch"
+    ],
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/musicbrainzLookups.spec.js",
     "case": "F1: the album menu ends after its longest item, every item on its own row, in full MusicBrainz wording",
     "profile": null,

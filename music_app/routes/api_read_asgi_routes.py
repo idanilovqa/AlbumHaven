@@ -776,6 +776,19 @@ def _series_view_response(request: Request, inventory_mutation_revision: int) ->
     return JSONResponse(payload)
 
 
+@router.get("/series-tree")
+def series_tree(request: Request) -> JSONResponse:
+    """The Series tree alone, for the rail's Series button: the tree switches while the
+    gallery keeps what it shows (owner 2026-11-17)."""
+    if set(request.query_params.keys()) - {"category"}:
+        return JSONResponse({"ok": False, "error": "Invalid series tree parameters."}, status_code=400)
+    selection = select_runtime_persistence_adapter("library_browse", _app_config(request))
+    if selection.effective_backend != PERSISTENCE_BACKEND_POSTGRES:
+        return JSONResponse({"ok": False, "error": "Series need the PostgreSQL library."}, status_code=409)
+    return JSONResponse({"series_sidebar": PostgresLibraryBrowseRepository(_app_config(request)).build_series_tree(
+        query_params=request.query_params)}, headers={"Cache-Control": "no-store"})
+
+
 def _is_postgres_root_sidebar_request(request: Request) -> bool:
     allowed_root_sidebar_params = {
         "gallery_offset",

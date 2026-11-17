@@ -2066,16 +2066,7 @@ class PostgresLibraryBrowseRepository:
                              "select series_mbid::text as series_mbid, extract, url"
                              " from integration.musicbrainz_series_wikipedia where series_mbid = any(%(mbids)s::uuid[])",
                              {"mbids": shown}).fetchall())} if shown else {}
-        grouped: dict[str, list[Mapping[str, object]]] = {}
-        for row in rows:
-            grouped.setdefault(str(row["series_mbid"]), []).append(row)
-        # The tree groups them by kind (owner 2026-11-17, 4B); the owner's own choice, if any,
-        # lets its menu offer the MusicBrainz default back (5B).
-        sidebar = [{"mbid": mbid, "name": series_rows[0]["series_name"],
-                    "count": len({row["album_id"] for row in series_rows}),
-                    "kind": _series_projection(series_rows[0])["kind"],
-                    "owner_kind": series_rows[0]["series_owner_kind"]}
-                   for mbid, series_rows in grouped.items()]
+        grouped = _group_series_rows(rows)
         artist_groups = []
         for mbid, series_rows in grouped.items():
             if series_mbid is not None and mbid != series_mbid:
@@ -2096,12 +2087,20 @@ class PostgresLibraryBrowseRepository:
             "all_artists_active": False,
             "selected_series": "all" if series_mbid is None else series_mbid,
             "series": artist_groups[0]["series"] if series_mbid and artist_groups else None,
-            "series_sidebar": sidebar,
+            "series_sidebar": _series_tree(grouped),
             "artist_groups": artist_groups,
             "primary_artist_groups": [],
             "family_artist_groups": [],
             "album_count": sum(len(group["albums"]) for group in artist_groups),
         }
+
+    def build_series_tree(self, *, query_params: Mapping[str, object] | None = None) -> list[dict[str, object]]:
+        """The Series tree alone, counted like the Series view, for the rail's Series button:
+        the tree switches without opening a gallery (owner 2026-11-17)."""
+        with self._connect_to_database() as connection:
+            rows = [_row_mapping(row) for row in connection.execute(
+                _series_album_rows_sql(), _root_sidebar_params(_root_sidebar_view_state(query_params or {}))).fetchall()]
+        return _series_tree(_group_series_rows(rows))
 
     def build_search_payload(
         self,
@@ -8379,6 +8378,24 @@ def _series_projection(row: Mapping[str, object]) -> dict[str, object]:
             "type_label": "Featured In" if kind == "featured_in"
             else _SERIES_TYPE_LABELS.get(series_type, series_type or "Series"),
             "musicbrainz_url": f"https://musicbrainz.org/series/{row['series_mbid']}"}
+
+
+def _group_series_rows(rows: list[Mapping[str, object]]) -> dict[str, list[Mapping[str, object]]]:
+    grouped: dict[str, list[Mapping[str, object]]] = {}
+    for row in rows:
+        grouped.setdefault(str(row["series_mbid"]), []).append(row)
+    return grouped
+
+
+def _series_tree(grouped: Mapping[str, list[Mapping[str, object]]]) -> list[dict[str, object]]:
+    """Each series with its album count and kind, by name; the client groups them by kind
+    (owner 2026-11-17, 4B), and the owner's own choice, if any, lets its menu offer the
+    MusicBrainz default back (5B)."""
+    return [{"mbid": mbid, "name": series_rows[0]["series_name"],
+             "count": len({row["album_id"] for row in series_rows}),
+             "kind": _series_projection(series_rows[0])["kind"],
+             "owner_kind": series_rows[0]["series_owner_kind"]}
+            for mbid, series_rows in grouped.items()]
 
 
 def _album_musicbrainz_series(connection: Any, album_id: object) -> list[dict[str, object]]:

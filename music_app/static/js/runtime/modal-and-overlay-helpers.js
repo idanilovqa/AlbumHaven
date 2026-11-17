@@ -92,7 +92,7 @@ function showArtistTreeContextMenu(x, y, artist) {
 // Right-clicking a series in the Series tree (owner 2026-11-17, 5B): Series or Featured In,
 // its current kind disabled; the MusicBrainz default comes back only after an owner's choice.
 function showSeriesTreeContextMenu(x, y, mbid) {
-  const series = (state.view?.series_sidebar || []).find((item) => item.mbid === mbid);
+  const series = resolveSeriesTreeItems().find((item) => item.mbid === mbid);
   if (!series) return false;
   const choice = (kind, label) => `<button type="button" class="album-card-context-menu-item" data-series-tree-kind="${kind}"${series.kind === kind ? ' disabled aria-disabled="true"' : ''}>${label}</button>`;
   openTreeContextMenu(x, y, choice('series', 'Mark as Series') + choice('featured_in', 'Mark as Featured In')

@@ -889,8 +889,10 @@ function openGalleryArtistInfo(anchor) {
   if (overlay) openGalleryMainSurface(`artist:${artist}`, anchor, overlay, 'left');
 }
 
-// A SERIES or FEATURED IN link in album details opens that series' gallery (approved 1B, 4A).
+// A SERIES or FEATURED IN link in album details opens that series' gallery (approved 1B, 4A),
+// in the Series tree.
 function openSeriesGallery(mbid) {
+  state.ui.navigationTree = 'series';
   const navigate = () => fetchAndRender(buildUrl({
     surface_request: 'albums',
     visible_library_categories: state.view?.visible_library_categories || [],
@@ -908,7 +910,8 @@ function openSeriesGallery(mbid) {
 }
 
 // The Series tree menu's choice (owner 2026-11-17, 5B): Series, Featured In, or null for the
-// MusicBrainz default. Once saved, the open view reloads in place and the tree regroups.
+// MusicBrainz default. Once saved the tree regroups in place: a Series view reloads (its
+// header names the kind), any other gallery stays and only the tree is read again.
 async function saveSeriesKind(mbid, kind) {
   try {
     const response = await fetch(`/api/musicbrainz/series/${encodeURIComponent(mbid)}/kind`, {
@@ -920,7 +923,9 @@ async function saveSeriesKind(mbid, kind) {
     showToast(error?.message || 'The series could not be saved.', 'error', 3200);
     return false;
   }
-  return refreshCurrentViewAfterBackgroundCompletion({ preserveScroll: true });
+  return String(state.view?.selected_series || '')
+    ? refreshCurrentViewAfterBackgroundCompletion({ preserveScroll: true })
+    : loadSeriesTree();
 }
 
 function handleGalleryMainClick(event) {
@@ -1071,6 +1076,7 @@ function initGalleryMain() {
   // then opens its series.
   const locationState = typeof parseBrowserUrlState === 'function' ? parseBrowserUrlState(window.location.href) : {};
   if (typeof resolveViewSeries === 'function' && resolveViewSeries(locationState) && !state.view.selected_series) {
+    state.ui.navigationTree = 'series';
     void fetchAndRender(buildUrl(locationState), false);
   }
 }

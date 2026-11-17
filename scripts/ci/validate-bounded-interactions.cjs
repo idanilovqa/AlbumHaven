@@ -10,7 +10,8 @@
 // hazards (direct broad work in a high-frequency handler, a dedicated surface
 // routed through a generic endpoint, direct filesystem enumeration in a route,
 // a route reaching a registered library-scale operation, blocking I/O on the
-// ASGI event loop, or a database connection opened per loop item in a route)
+// ASGI event loop, a database connection opened per loop item in a route, or
+// per-item I/O over the whole library state outside background-batch work)
 // fail regardless of registration. There is no exemption mechanism.
 
 const fs = require('node:fs');
@@ -216,6 +217,12 @@ function validateSchema(registry, { fileExists, readFile }) {
   return errors;
 }
 
+function rejection(hazard) {
+  const via = hazard.via?.length ? ` via ${hazard.via.join(' > ')}` : '';
+  const witness = hazard.witness ? ` (${hazard.witness})` : '';
+  return `rejected ${hazard.rule} ${hazard.operation}${witness} at ${hazard.path}:${hazard.line} from ${hazard.entrypoint}${via}`;
+}
+
 function validateInventory(registry, discovery) {
   const errors = [];
   const discovered = new Map(discovery.entrypoints.map(item => [item.key, item]));
@@ -236,8 +243,20 @@ function validateInventory(registry, discovery) {
         + 'make it a literal, a const, a constant list, or an object literal\'s keys so the listener can be registered');
       continue;
     }
-    const via = hazard.via?.length ? ` via ${hazard.via.join(' > ')}` : '';
-    errors.push(`rejected ${hazard.rule} ${hazard.operation} at ${hazard.path}:${hazard.line} from ${hazard.entrypoint}${via}`);
+    errors.push(rejection(hazard));
+  }
+  // Per-item filesystem, media or database work inside a scan of the whole
+  // library state is library-sized I/O. In background work (a save task's
+  // finalize, a watcher, a reconciler) only background-batch entries, library-wide
+  // maintenance proven by their own contract, may do it; an affected-set or
+  // narrower entry must first bound the scan by what it affects. A route or
+  // middleware reaching it needs a contract like any reachable hazard.
+  for (const hazard of discovery.hazards.filter(item => item.scanIo && !item.reject)) {
+    const entry = registeredBy.get(hazard.entrypoint);
+    const kind = discovered.get(hazard.entrypoint)?.kind;
+    if (entry && !['route', 'middleware'].includes(kind) && entry.workClass !== 'background-batch') {
+      errors.push(`${rejection(hazard)} (work class ${entry.workClass} cannot do per-item I/O over the whole library state)`);
+    }
   }
   // Only hot-path hazards demand a contract. JavaScript discovery marks
   // hazards of one-shot events, one-shot timeouts, and request owners

@@ -7,8 +7,17 @@ work reached through helpers is reported so the registry can demand a runtime
 contract; any interactive path that reaches a registered library-scale
 operation is rejected at any depth; an `async def` route, websocket or
 middleware whose event-loop call chain reaches blocking I/O is rejected
-(BI-08); and a database connection opened per loop item is rejected in an
-interactive path and needs a contract elsewhere (BI-05).
+(BI-08); a database connection opened per loop item is rejected in an
+interactive path and needs a contract elsewhere (BI-05); and filesystem, media
+or database work done per item of a loop over the whole library state
+(`library-state-scan-io`, BI-04) is reported at the loop, which the validator
+rejects in any background entry narrower than background-batch.
+
+Calls are followed through local function aliases, sibling closures, lambdas
+and nested functions a callee runs through its parameter, and a local guard
+lambda (`run_guard or (lambda action: action())`). Library-state evidence
+reaches closures and `**kwargs` forwarding, and a collection parameter counts
+only where the followed call passes a collection for it.
 
 The traversal is exhaustive: every (function, looped) pair reachable from an
 entrypoint is analyzed once, so no call chain is left unexamined and no depth
@@ -375,6 +384,41 @@ class Index:
             return next(iter(local_types)) if len(local_types) == 1 else None
         return self._type_ref(value, owner.module)
 
+    def _external_import(self, module: Module, name: str, depth: int = 0) -> bool:
+        """Whether a name a module imports comes from a third-party package,
+        through app re-exports (`from music_app.services.covers import Image`)."""
+        imported = module.imports.get(name)
+        if imported is None or depth > 8:
+            return False
+        source, attribute = imported
+        if source.split(".")[0] != "music_app":
+            return bool(source)
+        origin = self.modules.get(source)
+        if origin is None or attribute is None or attribute in origin.functions or attribute in origin.methods:
+            return False
+        return self._external_import(origin, attribute, depth + 1)
+
+    def built_by_library(self, value: ast.AST, module: Module, owner: Definition) -> bool:
+        """A local receiver every binding of which is a call into a third-party
+        import (`img = Image.open(...)`): its methods are that library's
+        (`img.load()`), never an app method that happens to share the name."""
+        if not isinstance(value, ast.Name):
+            return False
+        bound = [
+            node.value for node in _own_nodes(owner)
+            if isinstance(node, ast.Assign) and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name) and node.targets[0].id == value.id
+        ]
+        if not bound:
+            return False
+        for item in bound:
+            func = item.func if isinstance(item, ast.Call) else None
+            while isinstance(func, ast.Attribute):
+                func = func.value
+            if not isinstance(func, ast.Name) or not self._external_import(module, func.id):
+                return False
+        return True
+
     def resolve(self, call_target: ast.AST, owner: Definition) -> list[Definition]:
         """Definitions a call may run. A call of an app class runs its
         `__init__`; a module-level alias runs the function it names, and an
@@ -416,7 +460,7 @@ class Index:
             receiver = self.receiver_class(value, owner)
             if receiver is not None and (method := self.class_method(receiver, attr)):
                 return [method]
-            if attr in CONTAINER_METHODS:
+            if attr in CONTAINER_METHODS or self.built_by_library(value, module, owner):
                 return []
             candidates = self.methods_by_name.get(attr, [])
             return [] if len(candidates) > 1 and attr in PROTOCOL_METHODS else candidates
@@ -465,6 +509,8 @@ class BodyFacts:
 
 
 _FACTS: dict[int, BodyFacts] = {}
+# The definition each nested function is defined in.
+_PARENTS: dict[int, Definition] = {}
 
 
 def _facts(definition: Definition) -> BodyFacts:
@@ -510,6 +556,7 @@ def _facts(definition: Definition) -> BodyFacts:
                 definition.module,
                 definition.class_name,
             )
+            _PARENTS[id(node)] = definition
         if isinstance(node, NESTED_SCOPES):
             continue
         if isinstance(node, (ast.Return, ast.Raise)):
@@ -825,7 +872,12 @@ class LibraryStateEvidence:
         self.state_params: dict[int, set[str]] = {}
         self.getter_params: dict[int, set[str]] = {}
         self.collection_params: dict[int, dict[str, str]] = {}
+        self._caller_views: dict[tuple[int, frozenset[str] | None], tuple[object, dict[str, str]]] = {}
         definitions = list(_all_definitions(modules)) if collections else []
+        # A nested function reads its enclosing function's parameters and locals.
+        self.parents: dict[int, Definition] = {
+            id(nested.node): item for item in definitions for nested in _facts(item).nested.values()
+        }
         returns = {id(item.node): [node.value for node in _own_nodes(item) if isinstance(node, ast.Return) and node.value is not None] for item in definitions}
         changed = True
         while changed:
@@ -839,10 +891,7 @@ class LibraryStateEvidence:
                 aliases = self.aliases(definition, is_state)
                 for node, _ in _facts(definition).calls:
                     for target in resolve(node.func):
-                        for parameter in _parameter_names(target):
-                            argument = _argument_for(node, target, parameter)
-                            if argument is None:
-                                continue
+                        for parameter, argument in _bound_arguments(node, target):
                             if is_state(argument):
                                 changed |= self._add(self.state_params, target, parameter)
                             elif self._is_getter(argument, definition, is_state):
@@ -852,6 +901,51 @@ class LibraryStateEvidence:
                                 if parameter not in known:
                                     known[parameter] = collection
                                     changed = True
+                        changed |= self._forward_keywords(node, definition, target)
+
+    def _forward_keywords(self, node: ast.Call, definition: Definition, target: Definition) -> bool:
+        """`target(**kwargs)` inside a definition that collected `**kwargs`
+        passes on what its callers put there (`get_state=lambda: ...` given to
+        a queueing helper reaches the finalizer it calls)."""
+        kwarg = definition.node.args.kwarg
+        if kwarg is None or not any(item.arg is None and isinstance(item.value, ast.Name) and item.value.id == kwarg.arg for item in node.keywords):
+            return False
+        names = set(_parameter_names(target))
+        explicit = {item.arg for item in node.keywords if item.arg is not None}
+        changed = False
+        for facts in (self.state_params, self.getter_params):
+            for name in list(facts.get(id(definition.node), ())):
+                key = name.removeprefix("**")
+                if name.startswith("**") and key not in explicit:
+                    parameter = key if key in names else f"**{key}" if target.node.args.kwarg else None
+                    if parameter is not None:
+                        changed |= self._add(facts, target, parameter)
+        for name, collection in list(self.collection_params.get(id(definition.node), {}).items()):
+            key = name.removeprefix("**")
+            if name.startswith("**") and key not in explicit:
+                parameter = key if key in names else f"**{key}" if target.node.args.kwarg else None
+                known = self.collection_params.setdefault(id(target.node), {})
+                if parameter is not None and parameter not in known:
+                    known[parameter] = collection
+                    changed = True
+        return changed
+
+    def _enclosing(self, definition: Definition):
+        """The functions a nested definition closes over, innermost first."""
+        parent = self.parents.get(id(definition.node))
+        while parent is not None:
+            yield parent
+            parent = self.parents.get(id(parent.node))
+
+    def _closure_facts(self, facts: dict[int, set[str]], definition: Definition) -> set[str]:
+        """The names a definition sees with a fact: its own parameters, and
+        those of the functions it closes over that it does not shadow."""
+        own = set(_parameter_names(definition))
+        found = set(facts.get(id(definition.node), set()))
+        for parent in self._enclosing(definition):
+            found |= {name for name in facts.get(id(parent.node), set()) if name not in own}
+            own |= set(_parameter_names(parent))
+        return found
 
     @staticmethod
     def _add(facts: dict[int, set[str]], target: Definition, parameter: str) -> bool:
@@ -863,7 +957,7 @@ class LibraryStateEvidence:
 
     def _calls_getter(self, node: ast.Call, definition: Definition) -> bool:
         func = node.func
-        if isinstance(func, ast.Name) and func.id in self.getter_params.get(id(definition.node), set()):
+        if isinstance(func, ast.Name) and func.id in self._closure_facts(self.getter_params, definition):
             return True
         return any(id(target.node) in self.getters for target in _resolver(definition, self.index)(func))
 
@@ -871,7 +965,7 @@ class LibraryStateEvidence:
         """`is_state(expr)` for expressions inside `definition`."""
         # A `library_state` parameter or local keeps counting as evidence
         # where its callers cannot be resolved.
-        names = self.state_params.get(id(definition.node), set()) | ({"library_state"} & set(_parameter_names(definition)))
+        names = self._closure_facts(self.state_params, definition) | ({"library_state"} & set(_parameter_names(definition)))
 
         def is_state(node: ast.AST) -> bool:
             if isinstance(node, ast.Name):
@@ -893,14 +987,25 @@ class LibraryStateEvidence:
     def _is_getter(self, node: ast.AST, definition: Definition, is_state) -> bool:
         if isinstance(node, ast.Lambda):
             return is_state(node.body)
-        if isinstance(node, ast.Name) and node.id in self.getter_params.get(id(definition.node), set()):
+        if isinstance(node, ast.Name) and node.id in self._closure_facts(self.getter_params, definition):
             return True
         return isinstance(node, (ast.Name, ast.Attribute)) and any(
             id(target.node) in self.getters for target in _resolver(definition, self.index)(node)
         )
 
-    def aliases(self, definition: Definition, is_state) -> dict[str, str]:
-        aliases = dict(self.collection_params.get(id(definition.node), {}))
+    def aliases(self, definition: Definition, is_state, bound: frozenset[str] | None = None) -> dict[str, str]:
+        """Names that hold a library-state collection. `bound`, when known, is
+        the parameters the call being followed passed a collection for: another
+        caller passing the whole file cache to the same parameter does not make
+        this call's argument one."""
+        own = set(_parameter_names(definition))
+        aliases = {}
+        for parent in reversed(list(self._enclosing(definition))):
+            aliases.update({name: collection for name, collection in self.collection_params.get(id(parent.node), {}).items() if name not in own})
+        aliases.update({
+            name: collection for name, collection in self.collection_params.get(id(definition.node), {}).items()
+            if bound is None or name in bound
+        })
         for node in ast.walk(definition.node):
             if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
                 collection = _library_collection(node.value, is_state, {}, self.collections)
@@ -908,11 +1013,11 @@ class LibraryStateEvidence:
                     aliases[node.targets[0].id] = collection
         return aliases
 
-    def scans(self, definition: Definition) -> list[dict[str, object]]:
+    def scans(self, definition: Definition, bound: frozenset[str] | None = None) -> list[dict[str, object]]:
         if not self.collections:
             return []
         is_state = self._state_predicate(definition)
-        aliases = self.aliases(definition, is_state)
+        aliases = self.aliases(definition, is_state, bound)
         hazards = []
         seen = set()
         for item in ast.walk(definition.node):
@@ -937,6 +1042,74 @@ class LibraryStateEvidence:
                     })
         return hazards
 
+    def bound_collections(self, caller: Definition, caller_bound: frozenset[str] | None, call: ast.Call, callee: Definition) -> frozenset[str] | None:
+        """The callee parameters this call passes a library-state collection
+        for, or None when the call does not bind the callee's parameters
+        directly (a dispatch, a lambda or a callable argument)."""
+        if not self.collections or not any(target.node is callee.node for target in _resolver(caller, self.index)(call.func)):
+            return None
+        key = (id(caller.node), caller_bound)
+        if key not in self._caller_views:
+            is_state = self._state_predicate(caller)
+            self._caller_views[key] = (is_state, self.aliases(caller, is_state, caller_bound))
+        is_state, aliases = self._caller_views[key]
+        return frozenset(
+            parameter for parameter, argument in _bound_arguments(call, callee)
+            if _library_collection(argument, is_state, aliases, self.collections)
+        )
+
+    def scan_calls(self, definition: Definition, bound: frozenset[str] | None = None) -> dict[int, tuple[str, int]]:
+        """Calls made once per item of a loop or comprehension over a library
+        state collection in this definition: {id(call): (collection, loop line)}."""
+        if not self.collections:
+            return {}
+        is_state = self._state_predicate(definition)
+        aliases = self.aliases(definition, is_state, bound)
+        found: dict[int, tuple[str, int]] = {}
+        for item in _own_nodes(definition):
+            if isinstance(item, (ast.For, ast.AsyncFor)):
+                sources, bodies = [item.iter], [item.body]
+            elif isinstance(item, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+                sources = [item.generators[0].iter]
+                bodies = [
+                    *([item.key, item.value] if isinstance(item, ast.DictComp) else [item.elt]),
+                    *(condition for generator in item.generators for condition in generator.ifs),
+                    *(generator.iter for generator in item.generators[1:]),
+                ]
+            else:
+                continue
+            collection = _library_collection(sources[0], is_state, aliases, self.collections)
+            if not collection:
+                continue
+            # A block that leaves the function (`return`, `raise`) or ends the
+            # scan (`break` outside a nested loop) runs at most once per scan.
+            pending = [(body, False) for body in bodies]
+            while pending:
+                node, nested_loop = pending.pop()
+                if isinstance(node, list):
+                    last = node[-1] if node else None
+                    if isinstance(last, (ast.Return, ast.Raise)) or (isinstance(last, ast.Break) and not nested_loop):
+                        continue
+                    pending.extend((child, nested_loop) for child in node)
+                    continue
+                if isinstance(node, (*NESTED_SCOPES, ast.Lambda)):
+                    continue
+                if isinstance(node, ast.Call):
+                    found.setdefault(id(node), (collection, sources[0].lineno))
+                inner = nested_loop or isinstance(node, LOOP_NODES)
+                for name in node._fields:
+                    value = getattr(node, name, None)
+                    if isinstance(value, list):
+                        pending.append(([child for child in value if isinstance(child, ast.AST)], inner))
+                    elif isinstance(value, ast.AST):
+                        pending.append((value, inner))
+        return found
+
+
+# Per-item work that turns a scan of the whole library state into library-sized
+# I/O: a filesystem or media probe, or a database call, for every cached item.
+SCAN_IO_FAMILIES = frozenset({"filesystem", "media", "database"})
+
 
 def _local_callable_bindings(definition: Definition, name: str) -> list[ast.AST]:
     """The callables a local name is bound to, when every binding in the
@@ -952,8 +1125,21 @@ def _local_callable_bindings(definition: Definition, name: str) -> list[ast.AST]
     return values
 
 
+def _visible_nested(definition: Definition) -> dict[str, Definition]:
+    """Nested functions a definition can call by name: its own, then those of
+    the functions it is nested in (a sibling closure such as `resolved_cover`
+    called from `cover_identity`), innermost first."""
+    visible: dict[str, Definition] = {}
+    current: Definition | None = definition
+    while current is not None:
+        for name, nested in _facts(current).nested.items():
+            visible.setdefault(name, nested)
+        current = _PARENTS.get(id(current.node))
+    return visible
+
+
 def _resolver(definition: Definition, index: Index):
-    nested = _facts(definition).nested
+    nested = _visible_nested(definition)
 
     def resolve(target: ast.AST | None, seen: frozenset[str] = frozenset()) -> list[Definition]:
         if target is None:
@@ -973,11 +1159,61 @@ def _resolver(definition: Definition, index: Index):
     return resolve
 
 
-def _callees(definition: Definition, index: Index) -> list[tuple[Definition, bool, int]]:
+def _lambda_calls(node: ast.Lambda) -> list[ast.Call]:
+    """The calls a lambda's body makes when it runs (not those of a nested lambda)."""
+    found = []
+    pending = [node.body]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, ast.Lambda):
+            continue
+        if isinstance(item, ast.Call):
+            found.append(item)
+        pending.extend(ast.iter_child_nodes(item))
+    return found
+
+
+def _invoked_arguments(node: ast.Call, targets: list[Definition], definition: Definition) -> list[ast.AST]:
+    """Callable arguments a call runs before it returns: one passed for a
+    parameter the callee calls (`_post_commit_value(warnings, stage, callback)`
+    calling `callback()`), or one passed to a local bound to a lambda that
+    calls its own parameter (`guard = run_guard or (lambda action: action())`)."""
+    arguments = []
+    for target in targets:
+        for parameter in _called_parameters(target):
+            argument = _argument_for(node, target, parameter)
+            if argument is not None:
+                arguments.append(argument)
+    if not targets and isinstance(node.func, ast.Name):
+        for assignment in _own_nodes(definition):
+            if not (isinstance(assignment, ast.Assign) and len(assignment.targets) == 1
+                    and isinstance(assignment.targets[0], ast.Name) and assignment.targets[0].id == node.func.id):
+                continue
+            for guard in (item for item in ast.walk(assignment.value) if isinstance(item, ast.Lambda)):
+                called = {call.func.id for call in _lambda_calls(guard) if isinstance(call.func, ast.Name)}
+                for position, parameter in enumerate(guard.args.args):
+                    if parameter.arg in called and position < len(node.args):
+                        arguments.append(node.args[position])
+    return arguments
+
+
+def _callees(definition: Definition, index: Index) -> list[tuple[Definition, bool, int, ast.Call]]:
+    """What each call runs, with whether it runs per loop item, its line and
+    the call. A lambda or a nested function the call itself runs (see
+    `_invoked_arguments`) is followed too: `_post_commit_value(..., lambda:
+    guard(refresh_runtime_state), ...)` runs `refresh_runtime_state` here. A
+    module function passed as a callable argument is not followed yet."""
     found = []
     resolve = _resolver(definition, index)
-    for node, in_loop in _facts(definition).calls:
-        found.extend((target, in_loop, node.lineno) for target in resolve(node.func))
+    pending = deque(_facts(definition).calls)
+    seen: set[int] = set()
+    while pending:
+        node, in_loop = pending.popleft()
+        if id(node) in seen:
+            continue
+        seen.add(id(node))
+        targets = resolve(node.func)
+        found.extend((target, in_loop, node.lineno, node) for target in targets)
         _, name = _call_name(node)
         position = SYNCHRONOUS_DISPATCH.get(name)
         dispatched = node.args[position] if position is not None and len(node.args) > position else None
@@ -985,7 +1221,12 @@ def _callees(definition: Definition, index: Index) -> list[tuple[Definition, boo
         if submit is not None and submit.args:
             dispatched = submit.args[0]
         if dispatched is not None:
-            found.extend((target, in_loop, node.lineno) for target in resolve(_callable_target(dispatched)))
+            found.extend((target, in_loop, node.lineno, node) for target in resolve(_callable_target(dispatched)))
+        for argument in _invoked_arguments(node, targets, definition):
+            if isinstance(argument, ast.Lambda):
+                pending.extend((call, in_loop) for call in _lambda_calls(argument))
+            elif isinstance(argument, ast.Name) and argument.id in _visible_nested(definition):
+                found.extend((target, in_loop, node.lineno, node) for target in resolve(argument))
     return found
 
 
@@ -1164,6 +1405,16 @@ def _argument_for(node: ast.Call, definition: Definition, parameter: str) -> ast
     return None
 
 
+def _bound_arguments(node: ast.Call, definition: Definition) -> list[tuple[str, ast.AST]]:
+    """(parameter, argument) for each argument a call binds; a keyword the
+    definition does not name lands in its `**kwargs` as `**<keyword>`."""
+    names = _parameter_names(definition)
+    bound = [(name, argument) for name in names if (argument := _argument_for(node, definition, name)) is not None]
+    if definition.node.args.kwarg is not None:
+        bound.extend((f"**{item.arg}", item.value) for item in node.keywords if item.arg is not None and item.arg not in names)
+    return bound
+
+
 def _launcher_parameters(modules: list[Module], index: Index) -> dict[int, dict[str, str]]:
     """Helpers that launch one of their own parameters in the background
     (`_queue(config, key, action)` submitting `action` to an executor), to a
@@ -1338,6 +1589,7 @@ def analyze_python_repository(
 ) -> dict[str, list[dict[str, object]]]:
     _FACTS.clear()
     _OWN_NODES.clear()
+    _PARENTS.clear()
     modules = load_modules(root, overrides)
     index = Index(modules)
     library_scale = set(library_scale_operations)
@@ -1345,24 +1597,30 @@ def analyze_python_repository(
     entrypoints: list[dict[str, object]] = []
     hazards: list[dict[str, object]] = []
     hazard_cache: dict[tuple[int, bool], list[dict[str, object]]] = {}
-    callee_cache: dict[int, list[tuple[Definition, bool]]] = {}
+    callee_cache: dict[int, list[tuple[Definition, bool, int, ast.Call]]] = {}
+    scan_cache: dict[tuple[int, frozenset[str] | None], dict[int, tuple[str, int]]] = {}
     event_loop = EventLoopAnalysis(index, library_scale)
     library_state = LibraryStateEvidence(modules, index, collections)
     for entry, definition in _all_entrypoints(modules, index):
         entrypoints.append(entry)
         interactive = entry["kind"] in {"route", "middleware"}
         hazards.extend(event_loop.hazards(entry, definition))
-        queue = deque([(definition, [], None)])
+        queue = deque([(definition, [], None, None, None)])
         seen = set()
         while queue:
             # `loop` is the call site (path, line, function), inside a loop
             # body, through which the current definition runs once per item
-            # (None outside any loop).
-            current, via, loop = queue.popleft()
+            # (None outside any loop). `scan` is the loop over a library-state
+            # collection, (collection, path, line, function), that runs it
+            # once per cached item.
+            # `bound` is the parameters the followed call passed a library-state
+            # collection for (None when that is not known).
+            current, via, loop, scan, bound = queue.popleft()
             looped = loop is not None
-            if (id(current.node), looped) in seen:
+            visit = (id(current.node), looped, scan is not None, bound)
+            if visit in seen:
                 continue
-            seen.add((id(current.node), looped))
+            seen.add(visit)
             depth = "direct" if not via else "indirect"
             # A route never reaches library-scale work; a background entrypoint
             # may, but only under a contract proving its batching, coalescing,
@@ -1380,11 +1638,11 @@ def analyze_python_repository(
                     "reject": interactive,
                 })
                 continue
-            cache_key = (id(current.node), looped)
+            cache_key = (id(current.node), looped, bound)
             if cache_key not in hazard_cache:
                 hazard_cache[cache_key] = [
                     *_direct_hazards(current, looped, index.modules[current.module]),
-                    *library_state.scans(current),
+                    *library_state.scans(current, bound),
                 ]
             for hazard in hazard_cache[cache_key]:
                 record = {key: value for key, value in hazard.items() if key not in {"enumeration", "per_item_connect"}}
@@ -1408,11 +1666,45 @@ def analyze_python_repository(
                     "via": via,
                     "reject": interactive and rejected,
                 })
+            if (id(current.node), bound) not in scan_cache:
+                scan_cache[(id(current.node), bound)] = library_state.scan_calls(current, bound)
+            scanned = scan_cache[(id(current.node), bound)]
+
+            def scan_of(call: ast.Call):
+                local = scanned.get(id(call))
+                return scan or (local and (local[0], current.path, local[1], current.qualname))
+
+            # Per-item I/O inside a scan of the whole library state: library-sized
+            # I/O on one interaction. Reported at the scan, the place to bound;
+            # the validator rejects it for a background entry whose registered
+            # work class is narrower than background-batch, and a route needs a
+            # contract for it like for any reachable hazard.
+            module = index.modules[current.module]
+            for node, _ in _facts(current).calls:
+                site = scan_of(node)
+                io = site and _blocking_operation(node, module, current)
+                if io and io[0] in SCAN_IO_FAMILIES:
+                    collection, scan_path, scan_line, scan_function = site
+                    hazards.append({
+                        "rule": "BI-04",
+                        "operation": f"library-state-scan-io:{collection}",
+                        "witness": f"{io[1]}@{current.path}:{node.lineno}",
+                        "path": scan_path,
+                        "function": scan_function,
+                        "line": scan_line,
+                        "entrypoint": entry["key"],
+                        "depth": depth,
+                        "via": via,
+                        "scanIo": True,
+                        # Judged by the validator against the entry's work class.
+                        "reject": False,
+                    })
             if id(current.node) not in callee_cache:
                 callee_cache[id(current.node)] = _callees(current, index)
-            for callee, call_in_loop, line in callee_cache[id(current.node)]:
+            for callee, call_in_loop, line, call in callee_cache[id(current.node)]:
                 callee_loop = loop or ((current.path, line, current.qualname) if call_in_loop else None)
-                queue.append((callee, [*via, callee.qualname], callee_loop))
+                callee_bound = library_state.bound_collections(current, bound, call, callee)
+                queue.append((callee, [*via, callee.qualname], callee_loop, scan_of(call), callee_bound))
     unique: dict[str, dict[str, object]] = {}
     for hazard in hazards:
         site = f"{hazard['path']}#{hazard['function']}"

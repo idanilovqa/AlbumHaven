@@ -604,6 +604,34 @@ const DEFECTS = [
       + '    return {path: dict(entry) for path, entry in source.items()}\n',
     expected: /^py:routes\/api_wave_c_asgi_routes\.py#discovery_lookup_detail: \d+ reachable hazard\(s\) need a runtime contract \(.*library-state-scan:file_cache at music_app\/routes\/api_wave_c_asgi_routes\.py:\d+/,
   },
+  {
+    // Owner incident (sandbox2, 11-17): after a structural tag save the
+    // finalizer resolved the cover path of every cached file (~163k, mostly on
+    // a network share), through `_post_commit_value(..., lambda:
+    // state_guard(refresh_runtime_state))`, a getter passed through
+    // `**kwargs`, and a sibling closure. The pre-0211ed0bf shape: the whole
+    // live file cache is the candidate set and every entry is resolved.
+    id: 'BI-04 a structural save finalizer resolving every cached file cover path',
+    language: 'py',
+    file: 'music_app/services/save_tasks.py',
+    anchor: '                        candidate_paths=affected_album_track_paths(\n'
+      + '                            st,\n'
+      + '                            previous_file_cache,\n'
+      + '                            current_file_cache,\n'
+      + '                            changed_paths,\n'
+      + '                            current_separate_release_keys,\n'
+      + '                        ),\n',
+    replacement: '                        candidate_paths=st.get("file_cache", {}) or {},\n',
+    also: [[
+      '        for path in candidate_paths\n'
+        + '        if album_identity(entry := file_cache.get(path)) in inherited_albums\n'
+        + '        and cover_identity(entry) in inherited_identities\n',
+      '        for path in candidate_paths\n'
+        + '        if album_identity(entry := file_cache.get(path)) is not None\n'
+        + '        and cover_identity(entry) in inherited_identities\n',
+    ]],
+    expected: /^rejected BI-04 library-state-scan-io:file_cache \(Path\.resolve@music_app\/services\/save_tasks\.py:\d+\) at music_app\/services\/save_tasks\.py:\d+ from py:music_app\/services\/save_tasks\.py#finalize_structural_tag_edit_save_task:background:executor via .*refresh_runtime_state > _structurally_inherited_cover_entries.* \(work class affected-set cannot do per-item I\/O over the whole library state\)$/,
+  },
 ];
 
 function seededOverrides() {
@@ -612,6 +640,7 @@ function seededOverrides() {
   for (const defect of DEFECTS) {
     const overrides = defect.language === 'js' ? js : py;
     inject(overrides, defect.file, defect.anchor, defect.replacement);
+    for (const [anchor, replacement] of defect.also || []) inject(overrides, defect.file, anchor, replacement);
     if (defect.prelude) inject(overrides, defect.file, 'from __future__ import annotations\n', `from __future__ import annotations\n${defect.prelude}`);
   }
   return { jsOverrides: js, pyOverrides: py };

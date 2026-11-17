@@ -104,6 +104,60 @@ def test_track_route_contract_probes_only_the_requested_file_at_production_libra
     )
 
 
+def test_loop_create_route_contract_resolves_only_the_posted_source_at_production_library_size(
+    asgi_app, tmp_path, monkeypatch,
+):
+    """POST /loops/create resolves the posted source file against the library
+    roots (each a bounded set of probes) and reads its cache entry by path. The
+    saved-loop store, ffmpeg cut and duration probe are doubles; root settings,
+    path resolution and filesystem probes are real."""
+    from music_app.routes import api_wave_b_asgi_routes as loop_routes
+    from music_app.services.saved_loops_postgres import SavedLoopsPostgresAdapter
+
+    def statement(result):
+        # Each saved-loop store call is one Postgres statement.
+        def call(*_args, **_kwargs):
+            if _CountingRootSettingsStore.counts is not None:
+                _CountingRootSettingsStore.counts.count("sql_statements")
+            return result(*_args) if callable(result) else result
+        return call
+
+    monkeypatch.setattr(SavedLoopsPostgresAdapter, "resolve_scoped_source", statement((11, None)))
+    monkeypatch.setattr(SavedLoopsPostgresAdapter, "get_scoped_track_cover", statement(""))
+    monkeypatch.setattr(loop_routes, "add_loop", statement(lambda config, item: item))
+    monkeypatch.setattr(loop_routes, "load_loops", statement([]))
+    monkeypatch.setattr(loop_routes, "probe_loop_source_duration", lambda path: 100)
+    monkeypatch.setattr(loop_routes, "create_loop_file", lambda config, source, start, end, loop_id, **scope: tmp_path / f"{loop_id}.mp3")
+    monkeypatch.setattr(loop_routes, "log_app_event", lambda *args, **kwargs: None)
+
+    def run(album_count: int) -> OperationCounts:
+        music_dir = tmp_path / f"library-{album_count}"
+        _use_library(asgi_app, music_dir)
+        track = _seed_library(music_dir, album_count)[0]
+        asgi_app.state.library_state["file_cache"] = {
+            str(path): {"path": str(path), "artist": "Artist", "title": path.stem, "album": "Album"}
+            for path in [track, *(music_dir / f"Artist {index:04d}" / "Album" / "01.mp3" for index in range(album_count))]
+        }
+
+        def create() -> int:
+            status, _headers, body = run_asgi_request(asgi_app, "POST", "/loops/create", json_body={
+                "name": "Chorus", "source_path": str(track), "start_seconds": 1.5, "end_seconds": 4.5,
+            })
+            assert status == 200, body
+            return status
+
+        return _measure_request(monkeypatch, create)
+
+    measure_scale_pair(
+        interaction_id="py:routes/api_wave_b_asgi_routes.py#create_saved_loop",
+        small=20,
+        large=1_000,
+        run=run,
+        budgets={"filesystem_enumerations": 0, "stat_calls": 4, "path_resolves": 1, "open_calls": 0, "media_parses": 0, "sql_statements": 5},
+        growth=("stat_calls", 0),
+    )
+
+
 def test_waveform_route_contract_probes_only_the_requested_file_at_production_library_size(
     asgi_app, tmp_path, monkeypatch,
 ):

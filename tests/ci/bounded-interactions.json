@@ -9375,19 +9375,41 @@
     },
     {
       "id": "py:routes/api_wave_b_asgi_routes.py#create_saved_loop",
-      "action": "Serve POST /loops/create",
+      "action": "Create one saved loop from the posted source file: resolve it against the library roots and read its cache entry by path",
       "entrypoints": [
         "py:music_app/routes/api_wave_b_asgi_routes.py#create_saved_loop:route:POST /loops/create"
       ],
       "owners": [
-        "music_app/routes/api_wave_b_asgi_routes.py"
+        "music_app/routes/api_loop_helpers.py",
+        "music_app/routes/api_wave_b_asgi_routes.py",
+        "music_app/services/library_roots.py"
       ],
       "rules": [
         "BI-04",
+        "BI-06",
         "BI-14"
       ],
       "workClass": "affected-set",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "filesystem_enumerations": 0,
+        "stat_calls": 4,
+        "path_resolves": 1,
+        "open_calls": 0,
+        "media_parses": 0,
+        "sql_statements": 5
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_media_path_bounded_contracts.py::test_loop_create_route_contract_resolves_only_the_posted_source_at_production_library_size",
+      "testIdentity": "test_loop_create_route_contract_resolves_only_the_posted_source_at_production_library_size",
+      "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
       "id": "py:routes/api_wave_b_asgi_routes.py#delete_saved_loop",
@@ -12650,6 +12672,22 @@
       "command": "python -m pytest tests/py/test_cover_worker_bounded_contracts.py::test_background_cover_admission_drain_contract_handles_only_the_capacity_at_production_queue_size",
       "testIdentity": "test_background_cover_admission_drain_contract_handles_only_the_capacity_at_production_queue_size",
       "rollback": "Revert the contract test commit; no product code changed for this interaction."
+    },
+    {
+      "id": "py:services/covers.py#_queue_cover_variant_generation.<locals>._run_work",
+      "action": "Build one queued cover preview variant on its priority executor (one source image, one variant)",
+      "entrypoints": [
+        "py:music_app/services/covers.py#_queue_cover_variant_generation.<locals>._run_work:background:executor"
+      ],
+      "owners": [
+        "music_app/services/covers.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "constant",
+      "proof": "static"
     },
     {
       "id": "py:services/covers.py#needs_remote_cover_refresh",

@@ -96,8 +96,10 @@ operate, or contribute to the application.
 - Rejected outright: direct broad work in a high-frequency JavaScript handler;
   a route reaching registered library-scale work or enumerating a directory
   directly; event-loop blocking (BI-08) in an `async def` route, websocket, or
-  middleware; and a database connection opened per loop item (BI-05) in a
-  route or middleware. Fix BI-08 by making a route that awaits nothing a plain
+  middleware; a database connection opened per loop item (BI-05) in a
+  route or middleware; and filesystem, media or database work per item of a
+  loop over the whole library state (`library-state-scan-io`) in a save,
+  finalize, watcher or reconciler entry narrower than `background-batch`. Fix BI-08 by making a route that awaits nothing a plain
   `def`, or by handing the blocking part to `run_in_threadpool` after
   authorization. Fix BI-05 at the owning boundary: load once and pass the
   snapshot down, or write a batch in one transaction; do not add a

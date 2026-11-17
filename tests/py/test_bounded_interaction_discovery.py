@@ -956,3 +956,128 @@ def repair(request):
         ("rebuild", "library-state-scan:albums"),
         ("reindex", "library-state-scan:file_cache"),
     ]
+
+
+# The structural tag save finalizer that resolved every cached file's cover
+# path (owner incident, sandbox2, 11-17), reduced to its call shape: the state
+# getter arrives through a queueing helper's `**kwargs`, the refresh is a
+# closure run through `_post_commit_value(..., lambda: guard(refresh), ...)`
+# and an optional mutation guard, and the per-file probe sits in a sibling
+# closure of the scan.
+_FINALIZE_SHAPE = """
+import os
+from pathlib import Path
+
+def _library_state(request):
+    return request.app.state.library_state
+
+def _post_commit_value(warnings, stage, callback, default):
+    try:
+        return callback()
+    except Exception:
+        return default
+
+def _mark(*, file_cache, changed_paths):
+    def resolved(cover):
+        return os.path.normcase(str(Path(cover).resolve(strict=False)))
+
+    def identity(entry):
+        return resolved(entry["cover_path"])
+
+    wanted = {identity(file_cache[path]) for path in changed_paths}
+    return {path: entry for path, entry in SCANNED if identity(entry) in wanted}
+
+def finalize(task_id, *, get_state, changed_paths, run_state_mutation=None):
+    def refresh_runtime_state():
+        st = get_state()
+        st["marked"] = _mark(file_cache=st["file_cache"], changed_paths=changed_paths)
+
+    guard = run_state_mutation or (lambda action: action())
+    _post_commit_value([], "Runtime state refresh", lambda: guard(refresh_runtime_state), None)
+
+def queue_finalize(*, wait_for_completion=False, **kwargs):
+    if wait_for_completion:
+        finalize(**kwargs)
+        return
+    EXECUTOR.submit(finalize, **kwargs)
+
+def save(request, changed_paths):
+    queue_finalize(wait_for_completion=True, get_state=lambda: _library_state(request), changed_paths=changed_paths)
+"""
+
+
+def _finalize_hazards(tmp_path: Path, scanned: str) -> list[tuple[str, str, str]]:
+    _write(tmp_path, "music_app/services/save_tasks.py", _FINALIZE_SHAPE.replace("SCANNED", scanned))
+    analysis = discovery.analyze_python_repository(tmp_path, library_state_collections=["albums", "file_cache"])
+    return sorted(
+        (hazard["operation"], hazard.get("witness", ""), hazard["function"])
+        for hazard in analysis["hazards"]
+        if hazard["entrypoint"].endswith("#finalize:background:executor") and hazard["rule"] in {"BI-04", "BI-06"}
+    )
+
+
+def test_a_save_finalizer_resolving_every_cached_file_is_a_library_state_scan_with_per_item_io(tmp_path: Path):
+    hazards = _finalize_hazards(tmp_path, "file_cache.items()")
+    assert (
+        "library-state-scan-io:file_cache",
+        "Path.resolve@music_app/services/save_tasks.py:16",
+        "_mark",
+    ) in hazards
+    assert ("library-state-scan:file_cache", "", "_mark") in hazards
+
+
+def test_a_save_finalizer_bounded_by_the_edited_albums_has_no_library_state_scan(tmp_path: Path):
+    # The same closure chain over the affected candidates only: the per-item
+    # probe remains (a contract counts it) but nothing scans the library state.
+    hazards = _finalize_hazards(tmp_path, "((path, file_cache[path]) for path in changed_paths)")
+    assert not [hazard for hazard in hazards if hazard[0].startswith("library-state-scan")]
+    assert ("Path.resolve", "", "_mark.<locals>.resolved") in hazards
+
+
+def test_a_collection_parameter_scans_only_where_the_call_passes_the_collection(tmp_path: Path):
+    _write(tmp_path, "music_app/services/membership.py", """
+def rejected(entries):
+    return [entry for entry in entries if entry]
+
+def library_wide(library_state):
+    return rejected(library_state["file_cache"].values())
+
+def from_rows(rows):
+    return rejected([row for row in rows])
+
+def refresh_rows(rows):
+    return from_rows(rows)
+
+def refresh_library(library_state):
+    return library_wide(library_state)
+""")
+    analysis = discovery.analyze_python_repository(tmp_path, library_state_collections=["file_cache"])
+    scans = sorted(
+        (hazard["entrypoint"].split("#")[1], hazard["function"])
+        for hazard in analysis["hazards"] if hazard["operation"].startswith("library-state-scan")
+    )
+    assert scans == [("refresh_library:refresh:name", "rejected")]
+
+
+def test_a_receiver_built_by_a_third_party_call_is_not_an_app_method(tmp_path: Path):
+    _write(tmp_path, "music_app/services/images.py", """
+from PIL import Image
+
+def decode(raw):
+    img = Image.open(raw)
+    img.load()
+    return img
+
+class Dismissals:
+    def load(self):
+        return self.path.stat()
+
+def refresh_preview(raw):
+    return decode(raw)
+
+def refresh_dismissals(store):
+    return store.load()
+""")
+    analysis = discovery.analyze_python_repository(tmp_path)
+    reached = sorted(hazard["entrypoint"].split("#")[1] for hazard in analysis["hazards"])
+    assert "refresh_preview:refresh:name" not in " ".join(reached)

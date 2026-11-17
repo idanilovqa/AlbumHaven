@@ -9401,7 +9401,7 @@
     "expectedContracts": [
       "musicbrainz-series-album-details-block"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.component.config.js",

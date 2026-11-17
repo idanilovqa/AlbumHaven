@@ -1,0 +1,227 @@
+name: Heavy Regression Gates
+
+# On-demand hosted run of the mandatory regression gates in AGENTS.md, so agents do not
+# need the owner's machine-wide heavy-job lock. Each gate runs scripts/run-regression-gate.ps1
+# on its own windows-2025 runner with an isolated PostgreSQL 17 database and released
+# synthetic fixtures. Real-library (real MP3) and full-size-library checks stay local.
+#
+#   gh workflow run heavy-gates.yml --ref main -f ref=<commit-sha> -f gates=search,problematic-files
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag, or commit to test; it must contain scripts/run-regression-gate.ps1
+        required: true
+        type: string
+      gates:
+        description: "Comma-separated gates: search, problematic-files, html-reload, edit-tags, bounded-interactions"
+        required: true
+        default: search
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  ALBUM_HAVEN_EXPECTED_FFMPEG_VERSION: 7.1-essentials_build-www.gyan.dev
+
+concurrency:
+  group: heavy-gates-${{ inputs.ref }}-${{ inputs.gates }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Plan gates
+    runs-on: ubuntu-latest
+    outputs:
+      gates_json: ${{ steps.plan.outputs.gates_json }}
+    steps:
+      - name: Validate gate selection
+        id: plan
+        env:
+          GATES: ${{ inputs.gates }}
+        run: |
+          node -e '
+            const allowed = ["search", "problematic-files", "html-reload", "edit-tags", "bounded-interactions"];
+            const gates = [...new Set(process.env.GATES.split(",").map((gate) => gate.trim()).filter(Boolean))];
+            const unknown = gates.filter((gate) => !allowed.includes(gate));
+            if (gates.length === 0 || unknown.length > 0) {
+              console.error(`Unknown or empty gate selection: ${unknown.join(", ") || "(none)"}. Allowed: ${allowed.join(", ")}`);
+              process.exit(1);
+            }
+            require("node:fs").appendFileSync(process.env.GITHUB_OUTPUT, `gates_json=${JSON.stringify(gates)}\n`);
+          '
+
+  gate:
+    name: "Gate: ${{ matrix.gate }}"
+    needs: plan
+    runs-on: windows-2025
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        gate: ${{ fromJSON(needs.plan.outputs.gates_json) }}
+    steps:
+      - name: Checkout tested ref
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - name: Checkout trusted fixture scripts
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          path: .trusted-ci
+          sparse-checkout: |
+            scripts/ci/fetch-test-fixtures.ps1
+            scripts/run-regression-gate.ps1
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      # Like PR Gates, fetch fixtures with trusted scripts before any tested-ref code runs.
+      - name: Fetch released fixture profiles
+        env:
+          ALBUM_HAVEN_FIXTURES_TOKEN: ${{ secrets.ALBUM_HAVEN_FIXTURES_TOKEN }}
+        run: |
+          $distribution = Join-Path "${{ runner.temp }}" "album-haven-fixture-distribution"
+          New-Item -ItemType Directory -Force -Path (Join-Path $distribution "profiles") | Out-Null
+          foreach ($profile in @(.\.trusted-ci\scripts\run-regression-gate.ps1 -Gate "${{ matrix.gate }}" -ListFixtureProfiles)) {
+            $exports = Join-Path "${{ runner.temp }}" "fixture-$profile.env"
+            & ".trusted-ci\scripts\ci\fetch-test-fixtures.ps1" `
+              -Release fixtures-v1.0.30 `
+              -Profile $profile `
+              -ManifestSha256 0CBF9D17930C0347B40415A5B367DEBD93EC5CA7D8439CFAB7060A7E0BB13752 `
+              -GithubEnv $exports
+            $prefix = "ALBUM_HAVEN_FIXTURE_ROOT="
+            $root = @(Get-Content -LiteralPath $exports | Where-Object { $_.StartsWith($prefix) })[-1].Substring($prefix.Length)
+            Move-Item -LiteralPath $root -Destination (Join-Path $distribution "profiles\$profile")
+            $manifest = Join-Path $distribution "manifest.json"
+            if (-not (Test-Path -LiteralPath $manifest)) {
+              Copy-Item -LiteralPath (Join-Path $distribution "profiles\$profile\manifest.json") -Destination $manifest
+            }
+          }
+          "ALBUM_HAVEN_FIXTURE_DISTRIBUTION=$distribution" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Require the shared gate runner
+        env:
+          TESTED_REF: ${{ inputs.ref }}
+        run: |
+          if (-not (Test-Path -LiteralPath scripts\run-regression-gate.ps1 -PathType Leaf)) {
+            throw "$env:TESTED_REF has no scripts/run-regression-gate.ps1; merge or rebase onto main first."
+          }
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Set up pinned Chrome for Testing
+        id: setup_chrome
+        uses: browser-actions/setup-chrome@v2
+        with:
+          chrome-version: "151.0.7922.138"
+
+      - name: Expand Windows IPv4 dynamic port range
+        run: netsh interface ipv4 set dynamicport tcp start=10000 num=55535
+
+
+      # The same two isolated databases as the PR Gates Python job: one for destructive
+      # contracts, one pristine database for persistent contracts.
+      - name: Provision isolated PostgreSQL for destructive Python contracts
+        run: |
+          .\scripts\ci\bootstrap-windows-postgres.ps1 `
+            -Mode Provision `
+            -ExpectedMajorVersion 17 `
+            -Pgbin $env:PGBIN `
+            -HostName 127.0.0.1 `
+            -DatabaseSuffix "hg_${{ github.run_id }}_${{ github.run_attempt }}_${{ strategy.job-index }}" `
+            -StatePath "${{ runner.temp }}\album-haven-gate-postgres.state.json" `
+            -AppPrivilegeMode Inherited `
+            -SkipFixtureLoad
+
+      - name: Capture destructive Python database contracts
+        run: |
+          "PYTEST_DESTRUCTIVE_SETUP_DATABASE_URL=$env:DATABASE_MIGRATOR_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "PYTEST_DESTRUCTIVE_DATABASE_URL=$env:DATABASE_APP_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "PYTEST_DESTRUCTIVE_PGPASSFILE=$env:PGPASSFILE" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Provision pristine PostgreSQL for persistent Python contracts
+        run: |
+          .\scripts\ci\bootstrap-windows-postgres.ps1 `
+            -Mode Provision `
+            -ExpectedMajorVersion 17 `
+            -Pgbin $env:PGBIN `
+            -HostName 127.0.0.1 `
+            -DatabaseSuffix "hg_contract_${{ github.run_id }}_${{ github.run_attempt }}_${{ strategy.job-index }}" `
+            -StatePath "${{ runner.temp }}\album-haven-gate-contract-postgres.state.json" `
+            -AppPrivilegeMode Inherited `
+            -SkipFixtureLoad
+
+      - name: Export isolated Python database contracts
+        run: |
+          $combinedPgpass = "${{ runner.temp }}\album-haven-gate-combined.pgpass"
+          $pgpassLines = @(
+            (Get-Content -LiteralPath $env:PYTEST_DESTRUCTIVE_PGPASSFILE)
+            (Get-Content -LiteralPath $env:PGPASSFILE)
+          )
+          [IO.File]::WriteAllLines($combinedPgpass, $pgpassLines, [Text.UTF8Encoding]::new($false))
+          "PGPASSFILE=$combinedPgpass" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL=$env:PYTEST_DESTRUCTIVE_SETUP_DATABASE_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ALBUM_HAVEN_FAKE_E2E_DATABASE_URL=$env:PYTEST_DESTRUCTIVE_DATABASE_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ALBUM_HAVEN_SCAN_PERFORMANCE_SETUP_DATABASE_URL=$env:PYTEST_DESTRUCTIVE_SETUP_DATABASE_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ALBUM_HAVEN_SCAN_PERFORMANCE_DATABASE_URL=$env:PYTEST_DESTRUCTIVE_DATABASE_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ALBUM_HAVEN_POSTGRES_CONTRACT_DATABASE_URL=$env:DATABASE_APP_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ALBUM_HAVEN_APPEARANCE_VERIFY_SETUP_DATABASE_URL=$env:DATABASE_MIGRATOR_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ALBUM_HAVEN_APPEARANCE_VERIFY_DATABASE_URL=$env:DATABASE_APP_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Run ${{ matrix.gate }} gate
+        env:
+          PLAYWRIGHT_CHROME_EXECUTABLE: ${{ steps.setup_chrome.outputs.chrome-path }}
+          # Password of the runner image's disposable PostgreSQL service, not a project credential.
+          POSTGRESQL_ADMIN_PASSWORD: root
+        run: |
+          $env:PGPASSWORD = $null
+          $env:PLAYWRIGHT_PYTHON = Join-Path $env:pythonLocation "python.exe"
+          .\scripts\run-regression-gate.ps1 -Gate "${{ matrix.gate }}" -PostgresMajor 17
+
+      - name: Summarize measured timings
+        if: ${{ always() }}
+        run: |
+          if (Test-Path -LiteralPath test-results\playwright-performance-targets) {
+            "## ${{ matrix.gate }} gate timings (local contract)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            node scripts/ci/summarize-gate-timings.cjs `
+              --root=test-results/playwright-performance-targets `
+              --json=test-results/playwright-performance-targets/gate-timings.json `
+              --markdown=$env:GITHUB_STEP_SUMMARY
+          }
+
+      # No teardown: the runner VM and its PostgreSQL service are discarded after the job.
+      - name: Upload gate results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: heavy-gate-${{ matrix.gate }}-${{ github.run_attempt }}
+          path: |
+            test-results/playwright-performance-targets
+            test-results/playwright-artifacts
+            test-results/regression-gates
+          if-no-files-found: ignore
+          retention-days: 14

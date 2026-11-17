@@ -64,6 +64,20 @@ test('AlbumTrackTable composes CompactDataTable compact rows and preserves playb
   assert.match(html, /class="album-track-table__total"/);
 });
 
+test('a title in another script shows its Latin form after a dot, dimmed; a title without one shows none (1A)', () => {
+  const context = loadTrackTable();
+  const title = (track) => context.buildAlbumTrackTableRow(track).cells.title.content;
+
+  assert.equal(title({ path: 'a.flac', title: '桜花抄', titleTransliteration: 'Oukashou', secondaryArtist: '天門' }),
+    '<span class="album-track-table__title">桜花抄<span class="album-track-table__transliteration">'
+    + '<span aria-hidden="true">•</span>Oukashou</span><span class="album-track-table__secondary">天門</span></span>');
+  assert.equal(title({ path: 'b.flac', title: 'Kiss', titleTransliteration: '  ' }),
+    '<span class="album-track-table__title">Kiss</span>');
+  assert.match(title({ path: 'c.flac', title: 'x', titleTransliteration: '<b>' }), /•<\/span>&lt;b&gt;<\/span>/);
+  const css = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'album-track-table.css'), 'utf8');
+  assert.match(css, /\.album-track-table__transliteration\s*\{\s*color:\s*var\(--appearance-muted, var\(--muted\)\);\s*\}/);
+});
+
 test('AlbumTrackTable reserves a headerless problem column immediately before Length', () => {
   const context = loadTrackTable();
   const html = context.buildAlbumTrackTableHtml({

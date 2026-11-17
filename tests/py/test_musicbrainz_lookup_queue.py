@@ -74,6 +74,9 @@ class Repository:
         self.enqueued += 1
         return 0
 
+    def claim_transliteration(self, **_kwargs):
+        return None
+
 
 def test_a_manual_only_album_claim_never_sweeps_the_library():
     repository = Repository()

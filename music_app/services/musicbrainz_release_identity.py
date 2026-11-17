@@ -43,6 +43,7 @@ from music_app.services.musicbrainz_enrichment import (
 )
 from music_app.services.musicbrainz_discogs_fallback import search_certain_release
 from music_app.services.musicbrainz_track_order import pair_tracks, same_track_title
+from music_app.services.track_transliteration import needs_transliteration, transliteration_media
 from music_app.services.tracklist_sections import (
     discogs_sections,
     local_discs,
@@ -443,7 +444,8 @@ class MusicBrainzAlbumReleaseProcessor:
                 job = self._repository.claim_due_job(worker_id=worker_id, now=observed_at,
                                                      lease_duration=self._lease_duration)
         if not job:
-            return self._retry_discogs_sections(observed_at)
+            retried = self._retry_discogs_sections(observed_at)
+            return retried if retried["processed"] else self._store_transliteration(observed_at)
         job_id = int(job["id"])
         outcomes = []
         for context in self._repository.load_context(job_id=job_id, worker_id=worker_id):
@@ -520,6 +522,30 @@ class MusicBrainzAlbumReleaseProcessor:
         self._repository.store_section_retry(
             row=due, track_sections=sections, observed_at=observed_at,
             retry_at=None if sections is not None else section_retry_at(due["first_failed_at"], observed_at))
+        return {"processed": True, "state": "succeeded"}
+
+    def _store_transliteration(self, observed_at) -> dict[str, object]:
+        """One certain release whose Latin tracklist is due (S7, owner 2026-11-17): its
+        "transl-tracklisting" link, then the linked pseudo-release's tracklist, each asked
+        once per release and reused for 30 days. A release none of whose local titles needs
+        a Latin form is stored as having none without asking. A failed ask stores nothing:
+        the release rests a day and this pass ends."""
+        due = self._repository.claim_transliteration(now=observed_at)
+        if not due:
+            return {"processed": False, "state": "idle"}
+        transliteration_mbid, media = None, []
+        if any(needs_transliteration(title) for title in due.get("titles") or []):
+            linked = self._client.lookup_release_transliteration(due["release_mbid"])
+            if linked.get("classification") != "complete":
+                return {"processed": False, "state": "idle"}
+            transliteration_mbid = linked.get("transliteration_mbid")
+            if transliteration_mbid:
+                found = self._client.lookup_release_tracklist(transliteration_mbid)
+                if found.get("classification") != "complete":
+                    return {"processed": False, "state": "idle"}
+                media = transliteration_media(found["release"])
+        self._repository.store_transliteration(release_mbid=due["release_mbid"], transliteration_mbid=transliteration_mbid,
+                                               media=media, observed_at=observed_at)
         return {"processed": True, "state": "succeeded"}
 
     def _size_new_series(self, observed_at) -> None:

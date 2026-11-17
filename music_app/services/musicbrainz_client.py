@@ -310,6 +310,32 @@ def _series_parts(relations: object) -> list[JsonDict]:
     return list(parts.values())
 
 
+def latin_transliteration_id(release: object) -> str | None:
+    """The pseudo-release a release links to by "transl-tracklisting" whose tracklist is in
+    Latin script (S7). A translation is not a transliteration: one its disambiguation calls a
+    translation ("English translation"), or in another language than the release, never
+    counts. Of several left, one called a transliteration first, then the lowest MBID."""
+    if not isinstance(release, dict):
+        return None
+    representation = release.get("text-representation")
+    language = _text(representation.get("language")) if isinstance(representation, dict) else ""
+    found = []
+    for relation in release.get("relations") or []:
+        if not isinstance(relation, dict) or relation.get("type") != "transl-tracklisting" \
+                or relation.get("direction") != "forward" or not isinstance(relation.get("release"), dict):
+            continue
+        target = relation["release"]
+        mbid = _valid_mbid(target.get("id"))
+        script = target.get("text-representation") if isinstance(target.get("text-representation"), dict) else {}
+        note = _text(target.get("disambiguation")).casefold()
+        other = _text(script.get("language"))
+        if not mbid or script.get("script") != "Latn" or "translation" in note.replace("transliteration", "") \
+                or (language and other and other != language):
+            continue
+        found.append(("transliteration" not in note, mbid))
+    return min(found)[1] if found else None
+
+
 def _candidate(payload: object) -> JsonDict | None:
     if not isinstance(payload, dict) or "title" in payload:
         return None
@@ -712,6 +738,17 @@ class MusicBrainzClient:
             return {"classification": _transport_classification(transport), "transport": transport}
         return {"classification": "complete",
                 "discogs_release_id": discogs_link_id(payload.get("relations"), "release")}
+
+    def lookup_release_transliteration(self, release_mbid: object) -> JsonDict:
+        """The Latin pseudo-release holding a release's transliterated tracklist (S7), or None."""
+        normalized = _valid_mbid(release_mbid)
+        if not normalized:
+            return {"classification": "invalid_request"}
+        query = urllib.parse.urlencode({"inc": "release-rels", "fmt": "json"})
+        payload, transport = self.get_json(f"{self.base_url}/release/{normalized}?{query}", self.user_agent)
+        if not isinstance(payload, dict):
+            return {"classification": _transport_classification(transport), "transport": transport}
+        return {"classification": "complete", "transliteration_mbid": latin_transliteration_id(payload)}
 
     def search_artists(self, name: object, *, phrase: bool = True, max_pages: int | None = None) -> JsonDict:
         """Search by exact phrase, or with ``phrase=False`` by escaped plain terms.

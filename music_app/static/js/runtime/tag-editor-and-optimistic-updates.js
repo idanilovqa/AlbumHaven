@@ -2352,6 +2352,9 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
         originalDuration: duration,
         trackNumber: trackValue,
         secondaryArtist,
+        // The tag title's Latin form (S7); none beside a corrected title it was not made for.
+        titleTransliteration: displayTitle === String(trackRow?.title || '').trim()
+          ? String(trackRow?.title_transliteration || '').trim() : '',
         // The matched release's sub-section heading (S8); never a tag.
         section: String(trackRow?.section || '').trim(),
         isCurrent: Boolean(isCurrentTrack),

@@ -103,6 +103,7 @@ const expectedRuntimeOrder = [
   'tag-editor-reorder.js',
   'utility-loaders-and-cover-lookup.js',
   'cover-lookup-modal-and-drawer.js',
+  'musicbrainz-lookups.js',
   'tag-editor-and-optimistic-updates.js',
   'player-state-persistence-helpers.js',
   'player-listen-session-helpers.js',

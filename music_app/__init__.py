@@ -257,6 +257,7 @@ def _configure_asgi_app(app, runtime) -> None:
     from music_app.routes.client_layout_asgi import router as client_layout_asgi_router
     from music_app.routes.selection_accent_asgi import router as selection_accent_asgi_router
     from music_app.routes.musicbrainz_enrichment_asgi import (
+        lookup_router as musicbrainz_lookup_asgi_router,
         router as musicbrainz_enrichment_asgi_router,
     )
     from music_app.routes.api_wave_a_asgi_routes import router as api_wave_a_asgi_router
@@ -381,6 +382,7 @@ def _configure_asgi_app(app, runtime) -> None:
     app.include_router(client_layout_asgi_router)
     app.include_router(selection_accent_asgi_router)
     app.include_router(musicbrainz_enrichment_asgi_router)
+    app.include_router(musicbrainz_lookup_asgi_router)
     app.include_router(admin_asgi_router)
     app.include_router(web_asgi_router)
     app.include_router(api_read_asgi_router)

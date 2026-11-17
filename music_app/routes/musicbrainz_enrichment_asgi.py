@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Mapping
 from uuid import UUID, uuid4
 
@@ -289,6 +290,84 @@ def project_artist_problems_into_problematic_files(
     return payload
 
 
+def load_problematic_album_items(request: Request, *, album_key: str | None = None) -> list[dict[str, object]]:
+    """The primary owner's albums MusicBrainz has no info on, as Problematic Files rows
+    (S5), owner-only like the artist rows. A failure yields no rows."""
+    if not _is_current_library_owner(getattr(request.state, "current_actor", None)):
+        return []
+    service = getattr(request.app.state, "musicbrainz_enrichment_api_service", None)
+    list_attention = getattr(service, "list_album_attention", None)
+    try:
+        rows = (list_attention if callable(list_attention) else MusicBrainzEnrichmentPostgresRepository(
+            request.app.state.config).list_album_attention)(album_key=album_key)
+    except Exception:
+        logger = getattr(request.app.state, "logger", logging.getLogger(__name__))
+        logger.warning("MusicBrainz album problems were unavailable for Problematic Files.")
+        return []
+    return [_problematic_album_item(row) for row in rows if isinstance(row, Mapping) and row.get("album_key")]
+
+
+def project_album_problems_into_problematic_files(
+    request: Request,
+    payload: object,
+    album_items: list[dict[str, object]] | None = None,
+) -> object:
+    """An album already listed gains the "MusicBrainz has no info" label and its lookups;
+    any other flagged album is added as a row of its own, by name."""
+    if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+        return payload
+    if album_items is None:
+        album_items = load_problematic_album_items(request)
+    by_key = {item["musicbrainz_album_key"]: item for item in album_items}
+    for item in payload["items"]:
+        flagged = by_key.pop(_problematic_album_key(item.get("key")), None)
+        if flagged is not None:
+            _label_flagged_album(item, flagged["musicbrainz_album_key"])
+    if by_key:
+        payload["items"] = sorted([*payload["items"], *by_key.values()],
+                                  key=lambda item: str(item.get("name") or "").lower())
+        payload["count"] = len(payload["items"])
+    return payload
+
+
+def project_album_problem_into_problematic_detail(request: Request, payload: object) -> object:
+    """A loaded album detail keeps the label its summary row carried."""
+    if isinstance(payload, dict) and payload.get("key"):
+        album_key = _problematic_album_key(payload["key"])
+        if load_problematic_album_items(request, album_key=album_key):
+            _label_flagged_album(payload, album_key)
+    return payload
+
+
+def _problematic_album_key(key: object) -> str:
+    # Problematic Files keys a separate release by its year.
+    return re.sub(r"::year::\d{4}$", "", str(key or ""))
+
+
+def _label_flagged_album(item: dict[str, object], album_key: str) -> None:
+    reasons = list(item.get("problem_reasons") or [])
+    if MUSICBRAINZ_HAS_NO_INFO_LABEL not in reasons:
+        item["problem_reasons"] = [*reasons, MUSICBRAINZ_HAS_NO_INFO_LABEL]
+    item["musicbrainz_album_key"] = album_key
+
+
+def _problematic_album_item(row: Mapping[str, object]) -> dict[str, object]:
+    album_key = str(row["album_key"])
+    return {
+        "key": f"musicbrainz-album:{album_key}",
+        "entity_kind": "musicbrainz_album",
+        "musicbrainz_album_key": album_key,
+        "local_artist_id": row.get("local_artist_id"),
+        "name": str(row.get("album_title") or "").strip() or "Unknown Album",
+        "album_artist": str(row.get("artist_name") or "").strip() or "Unknown Artist",
+        "year": row.get("year"),
+        "cover_path": row.get("cover_path") or None,
+        "problem_reasons": [MUSICBRAINZ_HAS_NO_INFO_LABEL],
+        # A summary row like every other; its detail is the row itself.
+        "detail_loaded": False,
+    }
+
+
 def _problematic_artist_item(row: Mapping[str, object]) -> dict[str, object]:
     name = str(row.get("local_artist_name") or "").strip() or "Unknown Artist"
     return {
@@ -378,3 +457,104 @@ def _not_found() -> HTTPException:
 
 def _unavailable() -> HTTPException:
     return HTTPException(503, _UNAVAILABLE)
+
+
+# The owner's manual MusicBrainz lookups (Delivery 2, S5): queue or search one artist or
+# album, list the waiting queue and the batch notification cards, open and dismiss a batch.
+lookup_router = APIRouter(prefix="/api/musicbrainz/lookups")
+
+_LOOKUP_TARGET_KINDS = {"artist", "album"}
+_LOOKUP_MODES = {"queue", "search"}
+_QUEUED_FIELDS = (
+    "request_id", "target_kind", "local_artist_id", "artist_name", "album_key", "album_title", "year",
+    "requested_at",
+)
+_BATCH_FIELDS = (
+    "batch_id", "started_at", "finished_at", "total", "matched", "not_matched", "artists", "albums",
+    "single_title", "single_artist_name", "single_target_kind", "single_outcome", "single_problem_label",
+)
+_BATCH_ITEM_FIELDS = (
+    "request_id", "target_kind", "local_artist_id", "artist_name", "album_key", "album_title", "year", "state",
+    "outcome", "result_mbid", "result_entity", "problem_label", "problem_occurrence_id",
+)
+_TARGET_FIELDS = ("album_key", "local_artist_id", "artist_name", "artist_has_mbid", "album_has_mbid")
+
+
+@lookup_router.post("")
+async def request_lookup(request: Request):
+    actor = await _require_current_library_owner(request)
+    body = await _request_object(request)
+    target = _lookup_target(body)
+    if target is None:
+        raise HTTPException(400, "Invalid MusicBrainz lookup request.")
+    result = await _call_service(request, "request_lookup", actor_account_id=actor.account_id, **target)
+    if not isinstance(result, Mapping):
+        raise HTTPException(404, "Artist or album was not found.")
+    return JSONResponse(
+        {field: result.get(field) for field in ("request_id", "state", "batch_id")}, status_code=202)
+
+
+@lookup_router.get("")
+async def list_lookups(request: Request):
+    await _require_current_library_owner(request)
+    result = await _call_service(request, "list_lookups")
+    if not isinstance(result, Mapping):
+        raise _unavailable()
+    return {
+        "queued": [_fields(row, _QUEUED_FIELDS) for row in result.get("queued") or ()],
+        "queue_starts_at": result.get("queue_starts_at"),
+        "batches": [_fields(row, _BATCH_FIELDS) for row in result.get("batches") or ()],
+    }
+
+
+@lookup_router.get("/target")
+async def lookup_target(album_key: str, request: Request):
+    await _require_current_library_owner(request)
+    row = await _call_service(request, "lookup_target", album_key=album_key)
+    if not isinstance(row, Mapping):
+        raise HTTPException(404, "Album was not found.")
+    return {"target": _fields(row, _TARGET_FIELDS)}
+
+
+@lookup_router.get("/batches/{batch_id}")
+async def get_lookup_batch(batch_id: int, request: Request):
+    await _require_current_library_owner(request)
+    batch = await _call_service(request, "get_lookup_batch", batch_id=batch_id)
+    if not isinstance(batch, Mapping):
+        raise HTTPException(404, "Lookup was not found.")
+    return {"batch": {**_fields(batch, _BATCH_FIELDS),
+                      "items": [_fields(item, _BATCH_ITEM_FIELDS) for item in batch.get("items") or ()]}}
+
+
+@lookup_router.post("/batches/{batch_id}/dismiss")
+async def dismiss_lookup_batch(batch_id: int, request: Request):
+    await _require_current_library_owner(request)
+    if await _request_object(request) != {}:
+        raise HTTPException(400, "Invalid MusicBrainz lookup request.")
+    result = await _call_service(request, "dismiss_lookup_batch", batch_id=batch_id)
+    if not isinstance(result, Mapping) or result.get("dismissed") is not True:
+        raise HTTPException(404, "Lookup was not found.")
+    return {"dismissed": True}
+
+
+def _lookup_target(body: object) -> dict[str, object] | None:
+    """Exactly one artist (by id or by one of its albums) or one album (by key)."""
+    if not isinstance(body, Mapping):
+        return None
+    target_kind, mode = body.get("target_kind"), body.get("mode")
+    named = set(body) - {"target_kind", "mode"}
+    if target_kind not in _LOOKUP_TARGET_KINDS or mode not in _LOOKUP_MODES or len(named) != 1:
+        return None
+    (name,) = named
+    value = body[name]
+    if name == "album_key" and isinstance(value, str) and 0 < len(value.strip()) <= 1024:
+        return {"target_kind": target_kind, "mode": mode, "album_key": value}
+    if (name == "local_artist_id" and target_kind == "artist" and isinstance(value, int)
+            and not isinstance(value, bool) and value > 0):
+        return {"target_kind": target_kind, "mode": mode, "local_artist_id": value}
+    return None
+
+
+def _fields(row: object, fields: tuple[str, ...]) -> dict[str, object]:
+    source = row if isinstance(row, Mapping) else {}
+    return {field: source.get(field) for field in fields}

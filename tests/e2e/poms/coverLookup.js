@@ -205,6 +205,11 @@ export class CoverLookup extends BasePage {
     return '.cover-lookup-task-title';
   }
 
+  // Every cover card is titled "Cover lookups"; its second line names the album first.
+  get taskBylineWithinCardSelector() {
+    return '.cover-lookup-task-byline';
+  }
+
   get taskStatusWithinCardSelector() {
     return '.cover-lookup-task-status-label';
   }
@@ -599,9 +604,10 @@ export class CoverLookup extends BasePage {
     }
   }
 
-  taskCardByTitle(taskTitle) {
+  // A cover card by its album, which its second line names first.
+  taskCardByTitle(albumTitle) {
     return this.page.locator(this.taskCardSelector).filter({
-      has: this.page.locator(this.taskTitleWithinCardSelector).filter({ hasText: taskTitle }),
+      has: this.page.locator(this.taskBylineWithinCardSelector).filter({ hasText: albumTitle }),
     }).first();
   }
 
@@ -702,7 +708,7 @@ export class CoverLookup extends BasePage {
   }
 
   taskBylineByTitle(taskTitle) {
-    return this.taskCardByTitle(taskTitle).locator('.cover-lookup-task-byline');
+    return this.taskCardByTitle(taskTitle).locator(this.taskBylineWithinCardSelector);
   }
 
   taskTitleByTitle(taskTitle) {

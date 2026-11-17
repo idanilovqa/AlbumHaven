@@ -51,7 +51,10 @@ from music_app.services.library_watch_health import LibraryWatchHealthService
 from music_app.services.library_warning_dismissals import PostgresLibraryWarningDismissals, warning_token
 from music_app.routes.bounded_json import read_bounded_json_object, JSONBodyTooLarge
 from music_app.routes.musicbrainz_enrichment_asgi import (
+    load_problematic_album_items,
     load_problematic_artist_items,
+    project_album_problem_into_problematic_detail,
+    project_album_problems_into_problematic_files,
     project_artist_problems_into_problematic_files,
 )
 from music_app.services.policy_asgi import allowed_actions_for_request
@@ -1272,15 +1275,17 @@ def utilities_problematic_files(
 ) -> JSONResponse:
     if _is_postgres_utility_projection_request(request):
         repository = PostgresLibraryBrowseRepository(_app_config(request))
-        # The owner's Artist rows load beside the page, adding no readiness time.
-        with ThreadPoolExecutor(max_workers=1) as pool:
+        # The owner's MusicBrainz artist and album rows load beside the page, adding no readiness time.
+        with ThreadPoolExecutor(max_workers=2) as pool:
             artist_items = pool.submit(load_problematic_artist_items, request)
+            album_items = pool.submit(load_problematic_album_items, request)
             payload = (
                 repository.build_problematic_files_page(limit=limit)
                 if limit is not None
                 else repository.build_problematic_files_payload()
             )
             _project_missing_album_actions_for_request(request, payload)
+            project_album_problems_into_problematic_files(request, payload, album_items.result())
             project_artist_problems_into_problematic_files(request, payload, artist_items.result())
         return JSONResponse(_attach_library_watch_health(request, payload))
     _hydrate_cached_library_for_asgi(request)
@@ -1306,6 +1311,7 @@ def utilities_problematic_file_detail_query(request: Request) -> JSONResponse:
                 status_code=404,
             )
         _project_missing_album_actions_for_request(request, payload)
+        project_album_problem_into_problematic_detail(request, payload)
         return JSONResponse(payload)
     _hydrate_cached_library_for_asgi(request)
     payload = build_problematic_album_detail_payload(
@@ -1333,6 +1339,7 @@ def utilities_problematic_file_detail(request: Request, album_key: str) -> JSONR
                 status_code=404,
             )
         _project_missing_album_actions_for_request(request, payload)
+        project_album_problem_into_problematic_detail(request, payload)
         return JSONResponse(payload)
     _hydrate_cached_library_for_asgi(request)
     payload = build_problematic_album_detail_payload(

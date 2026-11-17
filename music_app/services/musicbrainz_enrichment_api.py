@@ -8,6 +8,7 @@ from music_app.services.musicbrainz_enrichment import MusicBrainzEnrichmentSched
 from music_app.services.musicbrainz_enrichment_postgres import (
     MusicBrainzEnrichmentPostgresRepository,
 )
+from music_app.services.musicbrainz_lookup_queue_postgres import MusicBrainzLookupQueuePostgresRepository
 
 
 class MusicBrainzProviderUnavailable(RuntimeError):
@@ -28,9 +29,11 @@ class MusicBrainzEnrichmentApiService:
         *,
         gallery_artist_names: Callable[[list[str]], Mapping[str, str]] | None = None,
         now: Callable[[], datetime] | None = None,
+        lookups=None,
     ) -> None:
         self._repository = repository
         self._client = client
+        self._lookups = lookups
         self._gallery_artist_names = gallery_artist_names
         self._now = now or (lambda: datetime.now(timezone.utc))
         self._scheduler = MusicBrainzEnrichmentScheduler(repository, now=self._now)
@@ -57,11 +60,36 @@ class MusicBrainzEnrichmentApiService:
             row["gallery_artist"] = canonical.get(name) or name
         return rows
 
+    def list_album_attention(self, *, album_key: str | None = None) -> list[dict[str, object]]:
+        return self._repository.list_album_attention(album_key=album_key)
+
     def get_artist_problem(self, *, local_artist_id: int) -> dict[str, object] | None:
         return self._repository.get_artist_problem(local_artist_id=local_artist_id)
 
     def enqueue_eligible_artists(self, *, reason: str) -> dict[str, int]:
-        return self._repository.enqueue_eligible_artists(reason=reason, observed_at=self._now())
+        observed_at = self._now()
+        if self._lookups is not None:
+            # The owner's queued lookups go first: they start now, at manual priority.
+            self._lookups.start_queued(observed_at=observed_at, due_only=False)
+        return self._repository.enqueue_eligible_artists(reason=reason, observed_at=observed_at)
+
+    def request_lookup(self, *, target_kind: str, mode: str, actor_account_id: int,
+                       local_artist_id: int | None = None, album_key: str | None = None) -> dict[str, object] | None:
+        return self._lookups.request(target_kind=target_kind, mode=mode, actor_account_id=actor_account_id,
+                                     local_artist_id=local_artist_id, album_key=album_key,
+                                     observed_at=self._now())
+
+    def list_lookups(self) -> dict[str, object]:
+        return self._lookups.list_lookups()
+
+    def get_lookup_batch(self, *, batch_id: int) -> dict[str, object] | None:
+        return self._lookups.get_batch(batch_id=batch_id)
+
+    def lookup_target(self, *, album_key: str) -> dict[str, object] | None:
+        return self._lookups.target_status(album_key=album_key)
+
+    def dismiss_lookup_batch(self, *, batch_id: int) -> dict[str, bool]:
+        return {"dismissed": self._lookups.dismiss_batch(batch_id=batch_id, observed_at=self._now())}
 
     def enqueue_artist(self, *, local_artist_id: int, reason: str) -> dict[str, bool]:
         return self._scheduler.schedule(reason, local_artist_id=local_artist_id)
@@ -132,4 +160,5 @@ def build_musicbrainz_enrichment_api_service(config: Mapping[str, object]) -> Mu
             user_agent=str(config.get("MUSICBRAINZ_USER_AGENT") or "Album Haven"),
         ),
         gallery_artist_names=PostgresLibraryBrowseRepository(config).canonical_gallery_artist_names,
+        lookups=MusicBrainzLookupQueuePostgresRepository(config),
     )

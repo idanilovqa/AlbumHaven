@@ -294,8 +294,9 @@
 .utility-list-item[draggable="true"] {
   user-select: text;
 }
-/* Wide is an additive NavigationTree presentation, with the same shared identity. */
-#utility-modal .navigation-tree-item--wide {
+/* Wide is an additive NavigationTree presentation, with the same shared identity: the
+   Problematic Files list and the MusicBrainz lookup results use the same rows. */
+:is(#utility-modal, #musicbrainz-lookup-results-modal) .navigation-tree-item--wide {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -311,12 +312,12 @@
   color: var(--text);
   transition: background-color 150ms ease, border-color 150ms ease;
 }
-#utility-modal .navigation-tree-item--wide .navigation-tree-label { flex: 1; width: auto; text-align: left; }
-#utility-modal .navigation-tree-item--wide .utility-list-item-title { font-size: 0.88rem; font-weight: 500; overflow-wrap: anywhere; }
-#utility-modal .navigation-tree-item--wide .utility-list-item-meta { font-size: 0.75rem; font-weight: 400; overflow-wrap: anywhere; }
-#utility-modal .navigation-tree-item--wide:is(:hover, .is-selected) { border-color: var(--border); background: var(--appearance-item-hover, var(--panel-2)); }
-#utility-modal .navigation-tree-item--wide.is-selected { background: var(--selection-body-background, var(--panel-2)); }
-#utility-modal .navigation-tree-item--wide:focus-visible { outline: 2px solid var(--muted); outline-offset: -2px; }
+:is(#utility-modal, #musicbrainz-lookup-results-modal) .navigation-tree-item--wide .navigation-tree-label { flex: 1; width: auto; text-align: left; }
+:is(#utility-modal, #musicbrainz-lookup-results-modal) .navigation-tree-item--wide .utility-list-item-title { font-size: 0.88rem; font-weight: 500; overflow-wrap: anywhere; }
+:is(#utility-modal, #musicbrainz-lookup-results-modal) .navigation-tree-item--wide .utility-list-item-meta { font-size: 0.75rem; font-weight: 400; overflow-wrap: anywhere; }
+:is(#utility-modal, #musicbrainz-lookup-results-modal) .navigation-tree-item--wide:is(:hover, .is-selected) { border-color: var(--border); background: var(--appearance-item-hover, var(--panel-2)); }
+:is(#utility-modal, #musicbrainz-lookup-results-modal) .navigation-tree-item--wide.is-selected { background: var(--selection-body-background, var(--panel-2)); }
+:is(#utility-modal, #musicbrainz-lookup-results-modal) .navigation-tree-item--wide:focus-visible { outline: 2px solid var(--muted); outline-offset: -2px; }
 .problematic-virtual-spacer {
   flex: 0 0 auto;
   min-width: 0;
@@ -438,7 +439,7 @@
   flex: 0 0 auto;
   white-space: nowrap;
 }
-#utility-modal[data-active-tab="problematic-files"] .utility-list-item-year::before {
+:is(#utility-modal[data-active-tab="problematic-files"], #musicbrainz-lookup-results-modal) .utility-list-item-year::before {
   content: "\2022";
   margin-right: 4px;
   font-weight: 900;

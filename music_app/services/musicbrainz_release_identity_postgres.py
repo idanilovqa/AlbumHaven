@@ -60,15 +60,20 @@ class EnrichmentJobQueue:
             raise RuntimeError("Database configuration is required for MusicBrainz enrichment.")
         self._connect = connect or _connect
 
-    def claim_due_job(self, *, worker_id: str, now: datetime, lease_duration: timedelta) -> dict[str, object] | None:
+    def claim_due_job(self, *, worker_id: str, now: datetime, lease_duration: timedelta,
+                      min_priority: int | None = None) -> dict[str, object] | None:
+        """The next due job, highest priority first; ``min_priority`` claims only jobs at or
+        above it (the owner's manual lookups)."""
         claimed_at = _aware_utc(now)
         params = {"worker_id": _bounded_text(worker_id, 128, required=True), "now": claimed_at,
-                  "lease_expires_at": claimed_at + lease_duration, "job_kind": self.job_kind}
+                  "lease_expires_at": claimed_at + lease_duration, "job_kind": self.job_kind,
+                  "min_priority": min_priority}
         sql = _active_library_cte() + """
             , due_job as (
               select jobs.id from ops.metadata_enrichment_jobs jobs
               join active_library on active_library.library_id = jobs.library_id
               where jobs.job_kind = %(job_kind)s
+                and (%(min_priority)s::integer is null or jobs.priority >= %(min_priority)s::integer)
                 and ((jobs.state in ('queued', 'retry_wait') and jobs.next_attempt_at <= %(now)s)
                      or (jobs.state = 'leased' and jobs.lease_expires_at <= %(now)s))
               order by jobs.priority desc, jobs.next_attempt_at, jobs.id
@@ -396,6 +401,23 @@ _REPLACE_ALBUMS = _active_library_cte() + """
           signals = excluded.signals, matcher_version = excluded.matcher_version,
           observed_at = excluded.observed_at, updated_at = excluded.updated_at
       where library.local_album_musicbrainz_releases.decision_source <> 'manual'
+      returning library_id, album_key, release_group_mbid, diagnostic
+    ), flagged as (
+      -- "MusicBrainz has no info" (S5): no release of the artist has this album's title. An
+      -- owner's manual decision is never stored here, so it never raises a flag.
+      insert into library.musicbrainz_contribution_flags (
+        library_id, target_kind, album_key, source, reason, created_at, updated_at)
+      select library_id, 'album', album_key, 'automatic', 'missing_from_musicbrainz',
+             %(observed_at)s, %(observed_at)s
+      from stored where release_group_mbid is null and diagnostic = 'no_title_match'
+      on conflict (library_id, album_key, source) where target_kind = 'album' do nothing
+      returning 1
+    ), cleared as (
+      -- Cleared once the album resolves; the owner's own flags (source manual) stay.
+      delete from library.musicbrainz_contribution_flags flags using stored
+      where flags.library_id = stored.library_id and flags.album_key = stored.album_key
+        and flags.target_kind = 'album' and flags.source = 'automatic'
+        and stored.release_group_mbid is not null
       returning 1
     )
     select count(*)::integer as stored from stored;

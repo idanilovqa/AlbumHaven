@@ -753,13 +753,13 @@ test('read-only inventory command reports complete discovery and ownership total
   assert.equal(inventory.configuredSurfaces, 12);
   assert.deepEqual(inventory.categories, {
     browserFunctional: 165,
-    component: 233,
+    component: 238,
     mobile: 77,
     performance: 60,
-    total: 535,
+    total: 540,
   });
   assert.deepEqual(inventory.ownership, {
-    testDataMatrix: 535,
+    testDataMatrix: 540,
     functionalShards: 165,
     performanceTargets: 60,
   });

@@ -4,6 +4,7 @@ import asyncio
 import logging
 import uuid
 from collections.abc import Callable, Mapping
+from datetime import datetime, timezone
 
 from music_app.services.musicbrainz_client import MusicBrainzClient
 from music_app.services.musicbrainz_enrichment import (
@@ -14,6 +15,10 @@ from music_app.services.musicbrainz_enrichment_postgres import (
     MusicBrainzEnrichmentPostgresRepository,
 )
 from music_app.services.musicbrainz_http import _set_block
+from music_app.services.musicbrainz_lookup_queue_postgres import (
+    MANUAL_LOOKUP_PRIORITY,
+    MusicBrainzLookupQueuePostgresRepository,
+)
 from music_app.services.musicbrainz_release_identity import MusicBrainzAlbumReleaseProcessor
 from music_app.services.musicbrainz_release_identity_postgres import (
     MusicBrainzReleaseIdentityPostgresRepository,
@@ -135,14 +140,24 @@ class MusicBrainzEnrichmentWorker:
 
 class MusicBrainzEnrichmentChain:
     """Artists first (Delivery 1), then their albums (Delivery 2), then the Discogs fallback
-    for artists MusicBrainz lacks, in one enrichment queue."""
+    for artists MusicBrainz lacks, in one enrichment queue. The owner's manual lookups (S5)
+    go first: each step starts the due lookup queue and settles finished lookups, manual
+    album jobs run before the artist backlog, and manual artist jobs lead it by priority."""
 
-    def __init__(self, artist_processor, album_processor, fallback_processor=None) -> None:
+    def __init__(self, artist_processor, album_processor, fallback_processor=None, lookups=None,
+                 now: Callable[[], datetime] | None = None) -> None:
         self._artists = artist_processor
         self._albums = album_processor
         self._fallback = fallback_processor
+        self._lookups = lookups
+        self._now = now or (lambda: datetime.now(timezone.utc))
 
     def process_next(self, *, worker_id: str) -> dict[str, object]:
+        if self._lookups is not None:
+            self._lookups.advance(observed_at=self._now())
+            result = self._albums.process_next(worker_id=worker_id, min_priority=MANUAL_LOOKUP_PRIORITY)
+            if result.get("processed"):
+                return result
         result = self._artists.process_next(worker_id=worker_id)
         if result.get("processed"):
             if result.get("state") == "succeeded" and result.get("local_artist_id"):
@@ -171,6 +186,7 @@ def build_musicbrainz_enrichment_worker(*, config: Mapping[str, object]):
             client=client,
         ),
         _discogs_fallback_processor(config, client),
+        MusicBrainzLookupQueuePostgresRepository(config),
     )
     return MusicBrainzEnrichmentWorker(
         processor=processor,

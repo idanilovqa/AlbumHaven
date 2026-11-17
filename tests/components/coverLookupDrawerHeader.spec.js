@@ -22,7 +22,7 @@ test('cover lookup drawer actions align complete title subtitle block', async ({
     <aside class="cover-lookup-drawer is-open">
       <div class="cover-lookup-drawer-header">
         <div>
-          <h3 class="cover-lookup-drawer-title">Cover lookups</h3>
+          <h3 class="cover-lookup-drawer-title">Notifications</h3>
           <div class="cover-lookup-drawer-subtitle">No activity</div>
         </div>
         <div class="cover-lookup-drawer-actions">

@@ -32,6 +32,9 @@ class OperationCounts:
     membership_rows: int = 0
     filesystem_enumerations: int = 0
     stat_calls: int = 0
+    # `Path.resolve` and `os.path.realpath`: each can ask the filesystem once
+    # per path component (slow on a network drive).
+    path_resolves: int = 0
     open_calls: int = 0
     media_parses: int = 0
     queue_claims: int = 0

@@ -12816,7 +12816,7 @@
     },
     {
       "id": "py:services/library_watch_suppression.py#suppress_library_watch_events",
-      "action": "Run watcher suppress_library_watch_events",
+      "action": "Suppress watcher events for the paths an app-owned write touches",
       "entrypoints": [
         "py:music_app/services/library_watch_suppression.py#suppress_library_watch_events:watcher:name"
       ],
@@ -12828,7 +12828,24 @@
         "BI-14"
       ],
       "workClass": "affected-set",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 160000
+      },
+      "budgets": {
+        "path_resolves": 2,
+        "stat_calls": 0,
+        "filesystem_enumerations": 0,
+        "open_calls": 0
+      },
+      "growth": {
+        "metric": "path_resolves",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_library_watch_suppression.py::test_suppression_contract_resolves_only_the_written_paths_however_many_are_suppressed",
+      "testIdentity": "test_suppression_contract_resolves_only_the_written_paths_however_many_are_suppressed",
+      "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
       "id": "py:services/metadata.py#read_metadata_for_file",

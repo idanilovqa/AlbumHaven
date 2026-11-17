@@ -21,6 +21,7 @@ _ENUMERATIONS = (
     (os, "scandir"), (os, "listdir"), (os, "walk"),
 )
 _STATS = ((Path, "stat"), (Path, "lstat"), (os, "stat"), (os, "lstat"))
+_RESOLVES = ((Path, "resolve"), (os.path, "realpath"))
 _OPENS = ((Path, "open"), (builtins, "open"), (os, "open"))
 
 
@@ -62,7 +63,7 @@ def _counted(function, counts: OperationCounts, metric: str, depth: _Depth, *, g
 
 @contextlib.contextmanager
 def count_filesystem_and_media(monkeypatch, counts: OperationCounts, *, media_modules=()):
-    """Counts enumerations, stats, opens and media parses while active.
+    """Counts enumerations, stats, path resolutions, opens and media parses while active.
 
     ``media_modules`` are modules whose module-level ``MutagenFile`` or PIL
     ``Image.open`` binding the interaction uses.
@@ -75,6 +76,8 @@ def count_filesystem_and_media(monkeypatch, counts: OperationCounts, *, media_mo
             patch.setattr(owner, name, _counted(original, counts, "filesystem_enumerations", depth, generator=generator))
         for owner, name in _STATS:
             patch.setattr(owner, name, _counted(getattr(owner, name), counts, "stat_calls", depth))
+        for owner, name in _RESOLVES:
+            patch.setattr(owner, name, _counted(getattr(owner, name), counts, "path_resolves", depth))
         for owner, name in _OPENS:
             patch.setattr(owner, name, _counted(getattr(owner, name), counts, "open_calls", depth))
         for module in media_modules:

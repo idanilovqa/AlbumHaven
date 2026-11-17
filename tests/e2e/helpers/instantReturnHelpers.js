@@ -4,7 +4,7 @@ import { expect } from '../support/baseFixtures.js';
 
 export const LIBRARY_PATH = '/?surface=albums';
 
-async function workerReady(page) {
+export async function workerReady(page) {
   // parity-check: allow-read-only-measurement-evaluate: reads which worker controls the origin.
   const scriptURL = await page.evaluate(async () => (await navigator.serviceWorker.ready).active.scriptURL);
   expect(scriptURL).toMatch(/\/app-copy-worker\.js\?mode=web$/);

@@ -3,8 +3,9 @@
 // Inside the Android app it registers the worker only when the shell offers `app.copy.v1` (the
 // runtime's bridge client calls adoptShell after its handshake), and saves the view whenever the app
 // leaves the screen. In a browser over HTTPS or localhost it registers the server-first worker once
-// the page has loaded, and saves the view when a tab is hidden only if it changed or ten minutes
-// passed, since every save makes the server render the page.
+// the page has loaded, saves a page it did not load once the worker runs, and saves the view when a
+// tab is hidden only if it changed or ten minutes passed, since every save makes the server render
+// the page.
 //
 // A page the worker answered from its copy is marked `content="cache"`. It asks the server which
 // account is signed in: another account, or none, deletes the copy and loads the page again; no
@@ -137,8 +138,13 @@
 
     function startInBrowser() {
       if (capabilities()?.isAndroidShell?.() || !window.isSecureContext || !navigator.serviceWorker) return false;
+      // A page the worker did not load (the first visit) is saved as soon as the worker runs, so the
+      // copy exists even if the connection goes before the tab is ever hidden.
       window.addEventListener('load', () => {
-        void navigator.serviceWorker.register(WEB_WORKER_URL, { scope: '/', updateViaCache: 'none' }).catch(() => {});
+        void navigator.serviceWorker.register(WEB_WORKER_URL, { scope: '/', updateViaCache: 'none' })
+          .then(() => navigator.serviceWorker.ready)
+          .then(saveInBrowser)
+          .catch(() => {});
       });
       return true;
     }

@@ -27,12 +27,16 @@
   const META_PATH = '/__app-copy__/meta';
   const MAX_COPY_AGE_MS = 7 * 24 * 60 * 60 * 1000;
   const SERVER_WAIT_MS = 1500;
+  // What the wait resolves to when the server has not answered in time.
+  const SLOW = Symbol('slow');
   const MAX_PAGES = 4;
   const MAX_COVER_BYTES = 200 * 1024 * 1024;
   const KEPT_COVER_PREFIX = '/__album-haven-cover/';
   const MAX_COVER_FILLS = 120;
   // A referenced cover URL as an attribute (`&amp;`) or in the bootstrap JSON (`&`).
   const COVER_URL = /\/cover\/[A-Za-z0-9_-]{22}(?=[?"'\s<>&\\]|$)[^"'\s<>]*/g;
+  // A versioned asset the page loads, as a relative or absolute URL.
+  const VERSIONED_ASSET_URL = /(?:https?:\/\/[^/"'\s<>]+)?\/static\/[^"'\s<>?]+\?v=[^"'\s<>&]+/g;
   const PATH_FIELDS = /("(?:cover_path|music_dir)":\s*)"(?:[^"\\]|\\.)*"/g;
   const PATH_ATTRIBUTES = /(data-cover-path=)"[^"]*"/g;
   // A cover named by its file path; the server stopped sending these, and a page with one is not kept.
@@ -48,6 +52,7 @@
   ];
 
   const noStore = response => /(?:^|,)\s*no-store\b/i.test(response.headers.get('Cache-Control') || '');
+  const immutable = response => /\bimmutable\b/i.test(response.headers.get('Cache-Control') || '');
   const isAppPage = url => url.pathname === '/';
   const pageKey = url => `${url.pathname}${url.search}`;
   const quietly = promise => promise.catch(() => {});
@@ -61,6 +66,9 @@
     let coverIndex = null;
     // Covers named by kept pages, by key, to fetch once while online. Held in memory only.
     const unseenCovers = new Map();
+    // Versioned assets kept pages load, to fetch once while online: a page kept by a save may be of
+    // a build no page has run here yet. Held in memory only.
+    const unseenAssets = new Set();
     // Every change to the copy runs alone, in order, so tabs saving at once cannot lose a page.
     let queue = Promise.resolve();
     const exclusive = (task) => {
@@ -86,6 +94,7 @@
     async function deleteCopies() {
       coverIndex = null;
       unseenCovers.clear();
+      unseenAssets.clear();
       const names = (await caches.keys()).filter(key => key.startsWith(COPY_FAMILY));
       await Promise.all(names.map(name => caches.delete(name)));
     }
@@ -106,6 +115,10 @@
       for (const [raw] of html.matchAll(COVER_URL)) {
         const url = new URL(raw.replaceAll('\\u0026', '&').replaceAll('&amp;', '&'), origin);
         unseenCovers.set(coverKey(url), url.href);
+      }
+      for (const [raw] of html.matchAll(VERSIONED_ASSET_URL)) {
+        const url = new URL(raw.replaceAll('&amp;', '&'), origin);
+        if (url.origin === origin) unseenAssets.add(url.href);
       }
       return html.replace(PATH_FIELDS, '$1""').replace(PATH_ATTRIBUTES, '$1""');
     }
@@ -144,6 +157,7 @@
     }
 
     // [page.running]: the page is the one starting now, so its version's assets stay while it runs.
+    // [page.beside]: Home kept beside the saved view, which stays the last view.
     async function keepPage(url, response, page, fetchedIn) {
       const text = await response.text();
       if (PATH_COVER_URL.test(text)) return;
@@ -166,6 +180,7 @@
         const expiresAt = Number(response.headers.get(EXPIRES_HEADER)) || undefined;
         meta.pages[key] = { savedAt: now(), version, expiresAt };
         if (page.running) meta.served = version;
+        if (!page.beside) meta.last = key;
         const others = Object.keys(meta.pages).filter(other => other !== '/')
           .sort((a, b) => meta.pages[a].savedAt - meta.pages[b].savedAt);
         const overflow = Object.keys(meta.pages).length - MAX_PAGES;
@@ -217,6 +232,20 @@
       return copy;
     }
 
+    // With the server unreachable, an address never kept (an artist opened after the last save) is
+    // sent to the last view kept, or Home, rather than failing like a page without a copy.
+    async function lastView(url) {
+      const target = await accountCache();
+      if (!target) return null;
+      const meta = await readMeta(target.cache);
+      for (const key of [meta.last, '/']) {
+        if (!key || key === pageKey(url) || !isFresh(meta.pages[key])) continue;
+        const href = new URL(key, origin).href;
+        if (await target.cache.match(href)) return Response.redirect(href, 302);
+      }
+      return null;
+    }
+
     // A browser asks the server first and falls back to the copy; the late server page still
     // updates the copy, but no longer as the running version.
     async function serverFirst(url, event) {
@@ -225,11 +254,12 @@
       quietly(network);
       const target = await accountCache();
       if (!target) return network;
-      const waited = new Promise((resolve) => { setTimeout(() => resolve(null), SERVER_WAIT_MS); });
+      const waited = new Promise((resolve) => { setTimeout(() => resolve(SLOW), SERVER_WAIT_MS); });
       const answer = await Promise.race([network.catch(() => null), waited]);
-      if (answer && answer.status < 500) return answer;
+      if (answer && answer !== SLOW && answer.status < 500) return answer;
       page.running = false;
-      const copy = await freshCopy(url);
+      // A slow server still answers the address asked for, so only its own copy stands in.
+      const copy = (await freshCopy(url)) || (answer === SLOW ? null : await lastView(url));
       if (copy) return copy;
       page.running = true;
       return network;
@@ -241,10 +271,18 @@
       return (await freshCopy(url)) || fetchPage(url, { running: true }, event);
     }
 
-    // Keeps [response] for [request] after the answer, unless signing out came first.
+    // Stores [response] for [request] unless signing out came after [fetchedIn]. The body is read
+    // before its turn to write, so a download cut off by going offline never blocks the copy (and
+    // an offline page waiting on it).
+    async function storeAsset(cache, request, response, fetchedIn) {
+      const kept = new Response(await response.arrayBuffer(), { headers: response.headers });
+      await exclusive(() => (fetchedIn === generation ? cache.put(request, kept) : undefined));
+    }
+
+    // Keeps [response] for [request] after the answer.
     function keepAsset(event, cache, request, response) {
       const fetchedIn = generation;
-      later(event, () => exclusive(() => (fetchedIn === generation ? cache.put(request, response) : undefined)));
+      later(event, () => storeAsset(cache, request, response, fetchedIn));
     }
 
     // A version names exactly one build of an asset: kept once the server marks it immutable.
@@ -253,7 +291,7 @@
       const kept = target ? await target.cache.match(request) : null;
       if (kept) return kept;
       const response = await fetch(request);
-      if (target && response.status === 200 && /\bimmutable\b/i.test(response.headers.get('Cache-Control') || '')) {
+      if (target && response.status === 200 && immutable(response)) {
         keepAsset(event, target.cache, request, response.clone());
       }
       return response;
@@ -345,6 +383,20 @@
       return response;
     }
 
+    // The kept pages' versioned assets not yet kept, fetched once while online; only the build the
+    // server marks immutable is kept.
+    async function fillAssets() {
+      const target = await accountCache();
+      if (!target) return;
+      for (const href of Array.from(unseenAssets)) {
+        unseenAssets.delete(href);
+        if (await target.cache.match(href)) continue;
+        const fetchedIn = generation;
+        const response = await fetch(new Request(href, { credentials: 'same-origin' }));
+        if (response.status === 200 && immutable(response)) await storeAsset(target.cache, href, response, fetchedIn);
+      }
+    }
+
     // The kept pages' covers not yet kept, fetched once while online, top of the page first.
     async function fillCovers() {
       const target = await accountCache();
@@ -391,10 +443,11 @@
             // A full restart opens Home, so "a copy exists" must cover it too.
             const target = await accountCache();
             if (target && pageKey(url) !== '/' && !isFresh((await readMeta(target.cache)).pages['/'])) {
-              const home = { running: false };
+              const home = { running: false, beside: true };
               await fetchPage(new URL('/', origin), home);
               await home.kept;
             }
+            await fillAssets();
             await fillCovers();
           } catch (_error) {
             // Offline: the copy kept before stays as it is.

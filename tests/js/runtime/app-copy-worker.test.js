@@ -746,3 +746,201 @@ test('in a browser without a copy, a page that cannot load fails as today', asyn
 
   await assert.rejects(handle(navigation('/')), TypeError);
 });
+
+// ---- Owner D2 retest: the copy opens offline after a first visit and across server builds ----
+
+const immutable = body => new Response(body, { headers: { 'Cache-Control': 'public, max-age=31536000, immutable' } });
+const pageWithAssets = version => page('acct-a', {
+  version,
+  body: `<link rel="stylesheet" href="${ORIGIN}/static/css/base.css?v=${version}"><script src="/static/app.js?v=${version}" defer></script>`,
+});
+
+test('IAR-W09: saving keeps the versioned assets the kept page loads, also for a build no page has run yet', async () => {
+  let online = true;
+  let version = 'v1';
+  const { calls, handle, worker } = setup({
+    mode: 'web',
+    respond: (request) => {
+      if (!online) return new TypeError('Failed to fetch');
+      return new URL(request.url).pathname === '/' ? pageWithAssets(version) : immutable(request.url);
+    },
+  });
+  // The first visit was not loaded through the worker, so only the save keeps anything.
+  await worker.message({ type: 'save', url: `${ORIGIN}/` });
+  // The server is rebuilt; the next save keeps the new build's page and its assets.
+  version = 'v2';
+  await worker.message({ type: 'save', url: `${ORIGIN}/` });
+  await worker.message({ type: 'save', url: `${ORIGIN}/` });
+  online = false;
+
+  const offline = await handle(navigation('/'));
+  assert.match(await offline.text(), /content="cache"[\s\S]*app\.js\?v=v2/);
+  for (const asset of ['/static/app.js?v=v2', '/static/css/base.css?v=v2']) {
+    assert.equal(await (await handle(resource(asset))).text(), `${ORIGIN}${asset}`);
+  }
+  // Each asset was fetched once, though the page was saved twice.
+  assert.equal(calls.filter(request => new URL(request.url).pathname === '/static/app.js').length, 2);
+});
+
+test('IAR-W09: assets the server did not mark immutable for this build are not kept by a save', async () => {
+  const { caches, worker } = setup({
+    mode: 'web',
+    respond: request => (new URL(request.url).pathname === '/' ? pageWithAssets('v1') : new Response('stale', { headers: { 'Cache-Control': 'no-store' } })),
+  });
+
+  await worker.message({ type: 'save', url: `${ORIGIN}/` });
+
+  const kept = [...caches.stores.get(`${CACHE_PREFIX}acct-a`).entries.keys()].filter(url => url.includes('/static/'));
+  assert.deepEqual(kept, []);
+});
+
+test('IAR-W10: in a browser, offline, an address never kept opens the last view kept', async () => {
+  let online = true;
+  const { handle, worker } = setup({ mode: 'web', respond: () => (online ? page('acct-a') : new TypeError('Failed to fetch')) });
+  await worker.message({ type: 'save', url: `${ORIGIN}/?artist=Broadcast` });
+  online = false;
+
+  const response = await handle(navigation('/?artist=Mono'));
+
+  assert.equal(response.status, 302);
+  assert.equal(response.headers.get('Location'), `${ORIGIN}/?artist=Broadcast`);
+  assert.match(await (await handle(navigation('/?artist=Broadcast'))).text(), /content="cache"/);
+});
+
+test('IAR-W10: the last view is the page last kept by a navigation or save, not Home kept beside it', async () => {
+  let online = true;
+  const { handle, worker, advance } = setup({ mode: 'web', respond: () => (online ? page('acct-a') : new TypeError('Failed to fetch')) });
+  await handle(navigation('/?artist=Broadcast'));
+  advance(1000);
+  await worker.message({ type: 'save', url: `${ORIGIN}/?artist=Mono` });
+  online = false;
+
+  const response = await handle(navigation('/?artist=Unseen'));
+
+  assert.equal(response.headers.get('Location'), `${ORIGIN}/?artist=Mono`);
+});
+
+test('IAR-W10: a last view past its age is not opened; the navigation fails as today', async () => {
+  let online = true;
+  const { handle, worker, advance } = setup({ mode: 'web', respond: () => (online ? page('acct-a') : new TypeError('Failed to fetch')) });
+  await worker.message({ type: 'save', url: `${ORIGIN}/?artist=Broadcast` });
+  advance(MAX_COPY_AGE_MS + 1);
+  online = false;
+
+  await assert.rejects(handle(navigation('/?artist=Mono')), TypeError);
+});
+
+test('the Android app still opens only the copy of the page asked for', async () => {
+  let online = true;
+  const { handle, worker } = setup({ respond: () => (online ? page('acct-a') : new TypeError('Failed to fetch')) });
+  await worker.message({ type: 'save', url: `${ORIGIN}/?artist=Broadcast` });
+  online = false;
+
+  await assert.rejects(handle(navigation('/?artist=Mono')), TypeError);
+});
+
+test('IAR-W10: a slow server still answers an address never kept; the last view does not replace it', async () => {
+  let answer = null;
+  const { timers, worker, event } = setup({
+    mode: 'web',
+    respond: () => (answer ? new Promise((resolve) => { answer = resolve; }) : page('acct-a', { body: 'Broadcast' })),
+  });
+  await worker.message({ type: 'save', url: `${ORIGIN}/?artist=Broadcast` });
+  answer = true;
+
+  const responding = worker.handle('page', navigation('/?artist=Mono'), event);
+  await new Promise(resolve => setImmediate(resolve));
+  timers.at(-1).callback();
+  answer(page('acct-a', { body: 'Mono' }));
+  const response = await responding;
+
+  assert.equal(response.status, 200);
+  assert.match(await response.text(), /content="network"[\s\S]*Mono/);
+});
+
+test('IAR-W10: a last view whose page is gone from storage is not opened, so navigations never loop', async () => {
+  let online = true;
+  const { caches, handle, worker } = setup({ mode: 'web', respond: () => (online ? page('acct-a') : new TypeError('Failed to fetch')) });
+  await worker.message({ type: 'save', url: `${ORIGIN}/?artist=Broadcast` });
+  const cache = caches.stores.get(`${CACHE_PREFIX}acct-a`);
+  cache.entries.delete(`${ORIGIN}/?artist=Broadcast`);
+  cache.entries.delete(`${ORIGIN}/`);
+  online = false;
+
+  await assert.rejects(handle(navigation('/?artist=Mono')), TypeError);
+});
+
+test('IAR-W09: going offline while a save is still keeping assets never holds up the offline page', async () => {
+  // Like the browser's Cache Storage, this store reads a response's body before keeping it.
+  const caches = fakeCaches();
+  const open = caches.open.bind(caches);
+  caches.open = async (name) => {
+    const cache = await open(name);
+    if (!cache.readsBodies) {
+      const put = cache.put.bind(cache);
+      cache.put = async (request, response) => put(request, new Response(await response.arrayBuffer(), { headers: response.headers }));
+      cache.readsBodies = true;
+    }
+    return cache;
+  };
+  let online = true;
+  const { worker, handle } = setup({
+    mode: 'web',
+    caches,
+    respond: (request) => {
+      if (!online) return new TypeError('Failed to fetch');
+      if (new URL(request.url).pathname === '/') return pageWithAssets('v1');
+      // The connection goes while this asset's body is still arriving.
+      return new Response(new ReadableStream({ start() {} }), { headers: { 'Cache-Control': 'public, max-age=31536000, immutable' } });
+    },
+  });
+  void worker.message({ type: 'save', url: `${ORIGIN}/` });
+  for (let tick = 0; tick < 20; tick += 1) await new Promise(resolve => setImmediate(resolve));
+  online = false;
+
+  const response = await Promise.race([
+    handle(navigation('/')),
+    new Promise((_, reject) => { setTimeout(() => reject(new Error('the offline page waited for the save')), 500); }),
+  ]);
+
+  assert.match(await response.text(), /content="cache"/);
+});
+
+test('after a save of a new server build, an asset download cut off by going offline never holds up the offline page', async () => {
+  const caches = fakeCaches();
+  const open = caches.open.bind(caches);
+  caches.open = async (name) => {
+    const cache = await open(name);
+    if (!cache.readsBodies) {
+      const put = cache.put.bind(cache);
+      cache.put = async (request, response) => put(request, new Response(await response.arrayBuffer(), { headers: response.headers }));
+      cache.readsBodies = true;
+    }
+    return cache;
+  };
+  let online = true;
+  let version = 'v1';
+  const { worker, event, handle } = setup({
+    mode: 'web',
+    caches,
+    respond: (request) => {
+      if (!online) return new TypeError('Failed to fetch');
+      if (new URL(request.url).pathname === '/') return page('acct-a', { version });
+      return new Response(new ReadableStream({ start() {} }), { headers: { 'Cache-Control': 'public, max-age=31536000, immutable' } });
+    },
+  });
+  await handle(navigation('/'));
+  // The server is rebuilt and the tab is hidden: the copy now holds v2 while v1 still runs.
+  version = 'v2';
+  await worker.message({ type: 'save', url: `${ORIGIN}/` });
+  void worker.handle('versioned-asset', resource('/static/app.js?v=v1'), event);
+  for (let tick = 0; tick < 20; tick += 1) await new Promise(resolve => setImmediate(resolve));
+  online = false;
+
+  const response = await Promise.race([
+    worker.handle('page', navigation('/'), event),
+    new Promise((_, reject) => { setTimeout(() => reject(new Error('the offline page waited for the download')), 500); }),
+  ]);
+
+  assert.match(await response.text(), /content="cache"/);
+});

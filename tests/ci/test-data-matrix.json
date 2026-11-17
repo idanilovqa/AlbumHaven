@@ -10213,6 +10213,38 @@
   {
     "config": "playwright.config.js",
     "project": "functional",
+    "test": "tests/e2e/specs/instantReturnBrowser.spec.js",
+    "case": "FTC-IAR-W09 after the first visit, a new tab opened offline shows the saved library, never a connection error",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "browser-copy-first-visit-offline-new-tab"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/instantReturnBrowser.spec.js",
+    "case": "FTC-IAR-W10 an offline reload of an artist opened after the last save shows the last saved view",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "browser-copy-offline-reload-unsaved-view"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
     "test": "tests/e2e/specs/instantReturnSignOut.spec.js",
     "case": "FTC-IAR-W02 signing out deletes the copy; the next start is the sign-in page, never the library",
     "profile": "functional-core",

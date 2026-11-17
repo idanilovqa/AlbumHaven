@@ -50,6 +50,8 @@ function setup({
         controller: controlled ? {} : null,
         async register(url, options) { env.registered.push({ url, options }); return registration; },
         async getRegistration() { return env.registered.length || env.hadRegistration ? registration : undefined; },
+        // Settles once a worker runs, which in these tests is as soon as one is registered.
+        get ready() { return env.registered.length ? Promise.resolve(registration) : new Promise(() => {}); },
       },
     } : {},
     location,
@@ -287,4 +289,20 @@ test('the Android app shows its copy without the notice while the server answers
 
   assert.equal(client.isReadOnly(), false);
   assert.equal(notice.hidden, true);
+});
+
+test('IAR-W09: in a browser, a page the worker did not load is saved as soon as the worker runs, without being hidden', async () => {
+  const { listeners, posted, settle } = setup({ androidShell: false, marker: 'network' });
+  listeners.get('window:load')();
+  await settle();
+
+  assert.deepEqual(posted.filter(message => message.type === 'save'), [{ type: 'save', url: 'https://sandbox9.albumhaven.org/?artist=Broadcast' }]);
+});
+
+test('IAR-W09: a page the worker already kept is not saved again when the worker runs', async () => {
+  const { listeners, posted, settle } = setup({ androidShell: false, marker: 'network', controlled: true });
+  listeners.get('window:load')();
+  await settle();
+
+  assert.deepEqual(posted.filter(message => message.type === 'save'), []);
 });

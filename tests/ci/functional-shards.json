@@ -553,6 +553,20 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/instantReturnBrowser.spec.js",
+              "case": "FTC-IAR-W09 after the first visit, a new tab opened offline shows the saved library, never a connection error",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/instantReturnBrowser.spec.js",
+              "case": "FTC-IAR-W10 an offline reload of an artist opened after the last save shows the last saved view",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/instantReturnSignOut.spec.js",
               "case": "FTC-IAR-W02 signing out deletes the copy; the next start is the sign-in page, never the library",
               "area": "gallery-search"

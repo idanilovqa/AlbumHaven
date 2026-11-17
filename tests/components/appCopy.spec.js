@@ -183,9 +183,10 @@ test.describe('app copy service worker', () => {
     await page.goto(`${server.origin}/`);
     await expect.poll(() => page.evaluate(async () => (await navigator.serviceWorker.getRegistration('/'))?.active?.scriptURL || ''))
       .toMatch(/\/app-copy-worker\.js\?mode=web$/);
-    await page.reload();
-    await expect(renderHeading(page)).toHaveText('Render 2');
+    // The first visit is kept once the worker runs (one more server render), without a reload or
+    // leaving the tab.
     await expect.poll(() => copyCount(page)).toBe(1);
+    expect(server.renders).toBe(2);
 
     // A quick server still answers every start.
     await page.reload();

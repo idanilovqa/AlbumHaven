@@ -237,6 +237,11 @@ def sanitize_hydrated_file_cache(
             directory_file_cache,
             record_file_error,
         ):
+            if cover_value or entry.get("remote_cover_url") or entry.get("cover_selection_origin"):
+                # A recorded cover choice, whatever its origin, outlives its
+                # missing file (a deleted image or an offline share): it stays
+                # as saved, dimensions included, and the placeholder shows.
+                continue
             cover = _cached_cover_for_folder(track_path.parent, image_extensions, folder_cover_cache)
             repaired_cover = str(cover) if cover else None
             if entry.get("cover_path") != repaired_cover:

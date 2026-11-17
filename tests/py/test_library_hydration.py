@@ -119,6 +119,35 @@ def test_sanitize_hydrated_file_cache_filters_missing_files_and_applies_repairs(
     }
 
 
+@pytest.mark.parametrize("choice", [
+    {"cover_selection_origin": "automatic", "cover_revision": "old-revision"},
+    {"cover_selection_origin": "user", "cover_revision": "old-revision", "cover_selection_provenance": "explicit"},
+    {"cover_selection_origin": None},
+    {"cover_path": None, "cover_selection_origin": "user", "remote_cover_url": "https://covers.example/1.jpg"},
+])
+def test_sanitize_hydrated_file_cache_keeps_a_recorded_cover_choice_whose_file_is_missing(tmp_path: Path, choice):
+    """Option 3: a present track whose recorded cover file is gone keeps that
+    choice, whatever its origin, dimensions included, and is not reported as
+    changed, so the saved snapshot persists nothing new for it. A cover beside
+    the track is not adopted in its place; the placeholder shows."""
+    album_root = tmp_path / "Artist" / "Album"
+    album_root.mkdir(parents=True)
+    track_path = album_root / "song.mp3"
+    track_path.write_bytes(b"track")
+    (album_root / "cover.jpg").write_bytes(b"cover")
+    entry = {
+        "path": str(track_path), "album": "Album", "album_artist": "Artist", "artist": "Artist",
+        "title": "Song", "cover_path": str(album_root / "chosen.jpg"),
+        "local_cover_width": 1600, "local_cover_height": 1600, **choice,
+    }
+    saved = dict(entry)
+
+    sanitized, changed = sanitize_hydrated_file_cache({str(track_path): entry}, {}, {".jpg"})
+
+    assert sanitized[str(track_path)] == saved
+    assert changed == {}
+
+
 def test_sanitize_hydrated_file_cache_reports_directory_read_failure(
     tmp_path: Path,
     monkeypatch,

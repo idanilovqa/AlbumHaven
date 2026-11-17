@@ -85,6 +85,47 @@ def test_contaminated_inherited_cover_is_repaired_but_explicit_user_choice_is_pr
         assert album.cover_selection_repair_previous["cover_path"] == str(unrelated)
 
 
+@pytest.mark.parametrize("unreadable", ["album_root", "disc_folder"])
+def test_contaminated_cover_is_left_unchanged_when_an_album_folder_cannot_be_listed(tmp_path, monkeypatch, unreadable):
+    """A dropped drive or share proves nothing about an album's cover: when
+    any folder the repair must list cannot be read, the album and its
+    tracks keep their cover exactly as it is."""
+    from music_app.services.album_local_cover_integrity import apply_scoped_local_cover
+
+    album_root = tmp_path / "Artist" / "Real Album"
+    random_root = tmp_path / "Random songs"
+    (album_root / "CD1").mkdir(parents=True)
+    random_root.mkdir()
+    Image.new("RGB", (1600, 1600), "red").save(album_root / "cover.png")
+    unrelated = random_root / "cover.png"
+    Image.new("RGB", (200, 200), "blue").save(unrelated)
+    unreadable_folder = album_root if unreadable == "album_root" else album_root / "CD1"
+    real_iterdir = Path.iterdir
+
+    def iterdir(self):
+        if self == unreadable_folder:
+            raise OSError("The network path was not found")
+        return real_iterdir(self)
+
+    monkeypatch.setattr(Path, "iterdir", iterdir)
+    legitimate = str(album_root / "CD1" / "1.mp3")
+    rejected = str(random_root / "copied-song.mp3")
+    track = SimpleNamespace(path=Path(legitimate), cover_path=unrelated, cover_revision="old-revision",
+        local_cover_width=200, local_cover_height=200)
+    album = SimpleNamespace(tracks=[track], cover_path=unrelated, local_cover_width=200,
+        local_cover_height=200, cover_selection_origin="automatic", cover_revision="old-revision",
+        cover_selection_provenance=None, remote_cover_url=None)
+    cache = {legitimate: {"album": "Real Album", "album_artist": "Artist", "cover_path": str(unrelated)},
+        rejected: {"album": "Real Album", "album_artist": "Artist", "cover_path": str(unrelated)}}
+
+    apply_scoped_local_cover(album, cache, {rejected})
+
+    assert (album.cover_path, album.cover_revision, album.cover_selection_origin) == (unrelated, "old-revision", "automatic")
+    assert (album.local_cover_width, album.local_cover_height) == (200, 200)
+    assert not hasattr(album, "cover_selection_repair_previous")
+    assert (track.cover_path, track.cover_revision, track.local_cover_width) == (unrelated, "old-revision", 200)
+
+
 @pytest.mark.parametrize("origin", ["automatic", "user"])
 @pytest.mark.parametrize("selected", ["local", "unknown", "missing"])
 def test_uncontaminated_album_rebuild_does_not_inspect_cover_files(tmp_path, monkeypatch, origin, selected):

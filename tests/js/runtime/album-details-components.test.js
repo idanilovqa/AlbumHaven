@@ -603,9 +603,11 @@ test('cover arrows never flash a ring when the cursor leaves them', () => {
   // Owner 2026-11-16: "after I click if I move the mouse away from the arrow the white circle around arrow
   // flashes". The hover-only `outline: none` reset the outline colour to white, which faded out on leave.
   const css = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'css', 'runtime', 'track-modal-and-lightbox.css'), 'utf8');
-  const rule = css.match(/\.album-details-cover-stack \.album-details-cover-nav\.action-button--bare \{([^}]*)\}/)?.[1] || '';
+  // One block covers the arrows at rest and on hover/press, so hover never resets the outline on its own
+  // and out-ranks the shared bare-button hover fill (owner 2026-11-17: no hover circle).
+  const rule = css.match(/\.album-details-cover-stack \.album-details-cover-nav\.action-button--bare,\s*[^{]*\.album-details-cover-nav\.action-button--bare:is\(:hover, :active\):not\(:disabled\):not\(\[aria-disabled='true'\]\) \{([^}]*)\}/)?.[1] || '';
+  assert.match(rule, /background: transparent !important;/);
   assert.match(rule, /outline: none !important;/);
   assert.match(rule, /outline-color: transparent !important;/);
   assert.match(rule, /transition: none;/);
-  assert.doesNotMatch(css, /\.album-details-cover-nav\.action-button--bare:is\(:hover/);
 });

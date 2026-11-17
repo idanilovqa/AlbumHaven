@@ -285,7 +285,10 @@
 /* The arrows have no frame in any state. `outline: none` on hover reset the outline colour to white, and when
    the cursor left the arrow the shared button faded it back to transparent: a white ring flashed (owner
    2026-11-16). The outline stays transparent and nothing fades; focus shows on the icon's glow instead. */
-:root .track-modal-dialog .album-details-cover-stack .album-details-cover-nav.action-button--bare {
+/* The hover/press selector out-ranks the shared bare-button hover fill, which is !important too: the arrows
+   had grown a dark hover circle (owner 2026-11-17: "I asked not to do that"). */
+:root .track-modal-dialog .album-details-cover-stack .album-details-cover-nav.action-button--bare,
+:root .track-modal-dialog .album-details-cover-stack .album-details-cover-nav.action-button--bare:is(:hover, :active):not(:disabled):not([aria-disabled='true']) {
   border-color: transparent !important;
   outline: none !important;
   outline-color: transparent !important;

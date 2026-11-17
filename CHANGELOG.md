@@ -4,6 +4,10 @@
 
 - The server no longer freezes while it builds the library home view (`/home-data`, opened by the phone layout's library home and by the Android app). It read the library root settings from the database twice for every loose or non-album track; it now reads them once per build, and the home, News and file-backed album-detail payloads are built off the server's event loop, so other requests keep being answered meanwhile.
 
+## 0.11.21 - 2026-11-17
+
+- Test-only: the gallery overlap tests (FTC-GALLERY-NAV-035) wait for the deferred continuation and the settled query before asserting, so they no longer fail intermittently.
+
 ## 0.11.20 - 2026-11-17
 
 - Agents can run the search, Problematic Files, HTML reload, Edit Tags and bounded-interaction regression gates on GitHub-hosted runners with the on-demand Heavy Regression Gates workflow, instead of queueing for the owner's machine. Real-library and full-size-library checks stay local.

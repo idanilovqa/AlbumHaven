@@ -306,7 +306,7 @@ test('FTC-MBID-003 an Unconfirmed match and its filter are in the first Problema
       await openArtist({ galleryActions, searchToolbarActions }, UNCONFIRMED);
       await expect.poll(() => galleryActions.readArtistContextMetadata(), { timeout: 60000 }).toEqual({
         countries: ['Finland'],
-        genres: ['Genre unavailable'],
+        genres: [], // No genre shows no pill or text (owner 2026-11-16).
       });
     });
 
@@ -328,7 +328,7 @@ test('FTC-MBID-003 an Unconfirmed match and its filter are in the first Problema
       await openArtist({ galleryActions, searchToolbarActions }, CREDITED);
       await expect.poll(() => galleryActions.readArtistContextMetadata(), { timeout: 60000 }).toEqual({
         countries: ['United States'],
-        genres: ['Genre unavailable'],
+        genres: [], // No genre shows no pill or text (owner 2026-11-16).
       });
     });
 
@@ -399,7 +399,7 @@ test('FTC-MBID-003 an Unconfirmed match and its filter are in the first Problema
       await openArtist({ galleryActions, searchToolbarActions }, LEAD);
       await expect.poll(() => galleryActions.readArtistContextMetadata(), { timeout: 60000 }).toEqual({
         countries: ['United Kingdom'],
-        genres: ['Genre unavailable'],
+        genres: [], // No genre shows no pill or text (owner 2026-11-16).
       });
     });
 
@@ -418,7 +418,7 @@ test('FTC-MBID-003 an Unconfirmed match and its filter are in the first Problema
         expect.objectContaining({
           heading: CONFLICT_ASSIGN,
           countries: ['Finland'],
-          genres: ['Genre unavailable'],
+          genres: [], // No genre shows no pill or text (owner 2026-11-16).
           links: expect.arrayContaining([
             `https://musicbrainz.org/artist/${MBID.conflictAssign}`,
           ]),

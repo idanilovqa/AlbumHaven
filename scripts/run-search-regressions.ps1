@@ -7,6 +7,7 @@ param(
     [string]$Pgbin = $env:PGBIN,
     [string]$ChromeExecutable = $env:PLAYWRIGHT_CHROME_EXECUTABLE,
     [ValidateSet('17', '18')][string]$PostgresMajor = '18',
+    [ValidateRange(1, 65535)][int]$PostgresPort = 5432,
     [ValidateRange(1025, 65000)][int]$PerformanceBasePort = 4710
 )
 
@@ -104,7 +105,8 @@ foreach ($searchShard in @('gallery-search-visual-1', 'gallery-search-visual-2')
     Invoke-Checked {
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $functionalRunner `
             -Shard $searchShard -PythonPath $PythonPath `
-            -FixtureDistribution $fixtureDistributionRoot
+            -FixtureDistribution $fixtureDistributionRoot -PostgresPort $PostgresPort `
+            -PostgresMajor $PostgresMajor -Pgbin $Pgbin
     } "Search functional E2E shard $searchShard"
 }
 
@@ -118,6 +120,7 @@ try {
             -BasePort $PerformanceBasePort `
             -DatabaseSuffixBase "searchreg_$PID" `
             -ExpectedPostgresMajor $PostgresMajor `
+            -PostgresPort $PostgresPort `
             -Pgbin $Pgbin `
             -RepositoryRoot $repositoryRoot `
             -RunnerTemp $performanceTemp `

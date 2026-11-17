@@ -142,7 +142,8 @@ def _complete(albums: list[dict[str, object]], results: list[dict[str, object]],
         if not release:
             continue
         release = _choose_edition(album, result, release, mirror, releases)
-        result["track_artists"] = display_track_artists(album.get("tracks") or [], release)
+        result["track_artists"] = display_track_artists(album.get("tracks") or [], release,
+                                                        pairing=result["edition"]["track_pairing"])
         discs = local_discs(album.get("tracks") or [])
         result["track_sections"] = musicbrainz_sections(discs, release)
         original, fewest_discs = None, None
@@ -361,20 +362,30 @@ def release_type_label(primary_type: object, secondary_types: object) -> str | N
     return " • ".join(part for part in parts if part) or None
 
 
-def display_track_artists(local_tracks: list[dict[str, object]], release: dict[str, object]) -> list[dict[str, object]]:
+def display_track_artists(local_tracks: list[dict[str, object]], release: dict[str, object], *,
+                          pairing: list[dict[str, object]] | None = None) -> list[dict[str, object]]:
     """Track artists to show instead of unreadable tags, from the certainly matched release.
 
-    A local track takes the release track at its own disc and position, only when the
-    titles agree; readable local artists are never replaced. Display only: tags change
-    through an approved correction (Delivery 3)."""
+    A reordered album's local track takes the release track its stored ``pairing`` names
+    (owner 2026-11-16); without a pairing, the release track at its own disc and position,
+    only when the titles agree. Readable local artists are never replaced. Display only:
+    tags change through an approved correction."""
     by_position = {(int(medium.get("position") or 1), int(track.get("position") or 0)): track
                    for medium in release.get("media") or [] for track in medium.get("tracks") or []}
+    paired = {(int(item["disc_number"]), int(item["track_number"])): (item["release_disc"], item["release_position"])
+              for item in pairing or []}
     shown = []
     for track in local_tracks:
         if not _LOST_TEXT.match(str(track.get("artist") or "")):
             continue
-        remote = by_position.get((int(track.get("disc_number") or 1), int(track.get("track_number") or 0)))
-        if not remote or not same_track_title(track.get("title"), remote.get("title")):
+        local = (int(track.get("disc_number") or 1), int(track.get("track_number") or 0))
+        if paired:
+            remote = by_position.get(paired.get(local))
+        else:
+            remote = by_position.get(local)
+            if remote and not same_track_title(track.get("title"), remote.get("title")):
+                continue
+        if not remote:
             continue
         text = credit_text(remote.get("artist_credit") or [])
         if text:

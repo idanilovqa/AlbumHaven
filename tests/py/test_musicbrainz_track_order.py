@@ -186,3 +186,52 @@ def test_the_edition_browse_counts_audio_tracks_only():
 
     client = MusicBrainzClient(base_url="http://127.0.0.1:5050/ws/2", user_agent="Test", get_json=get_json)
     assert client.release_group_editions(GROUP)["releases"] == [{"id": EXACT, "date": "2004-05-03", "track_count": 12}]
+
+
+# Track artists where the tag lost them -------------------------------------------------
+
+def _credited(release):
+    for track in release["media"][0]["tracks"]:
+        track["artist_credit"] = [{"name": f"Singer of {track['title']}", "artist_mbid": GROUP, "join_phrase": ""}]
+    return release
+
+
+def _lost(local):
+    return [{**track, "artist": "??"} for track in local]
+
+
+def test_a_reordered_album_takes_track_artists_through_its_stored_pairing():
+    from music_app.services.musicbrainz_release_identity import display_track_artists
+
+    release = _credited(_release(CHOSEN, SWAPPED))
+    pairing = pair_tracks(_local(), release)["pairing"]
+    shown = {item["track_number"]: item["artist"]
+             for item in display_track_artists(_lost(_local()), release, pairing=pairing)}
+    assert (shown[11], shown[12]) == ("Singer of The Mirror", "Singer of Only for the Night")
+
+
+def test_a_paired_track_whose_title_differs_still_takes_its_partners_artist():
+    from music_app.services.musicbrainz_release_identity import display_track_artists
+
+    local = _lost(_local(titles=TITLES[:10] + ["Track 11", "Only for the Night"]))
+    release = _credited(_release(CHOSEN, SWAPPED))
+    pairing = pair_tracks(local, release)["pairing"]
+    shown = {item["track_number"]: item["artist"] for item in display_track_artists(local, release, pairing=pairing)}
+    assert shown[11] == "Singer of The Mirror"
+
+
+def test_without_a_pairing_only_a_same_position_track_with_an_agreeing_title_is_used():
+    from music_app.services.musicbrainz_release_identity import display_track_artists
+
+    release = _credited(_release(CHOSEN, SWAPPED))
+    shown = {item["track_number"]: item["artist"] for item in display_track_artists(_lost(_local()), release)}
+    # Positions 11 and 12 hold the other title: no credit rather than the wrong one.
+    assert 11 not in shown and 12 not in shown
+    assert shown[1] == "Singer of The Book of Heavy Metal"
+
+
+def test_the_edition_choice_hands_its_pairing_to_the_track_artists():
+    release = _credited(_release(CHOSEN, SWAPPED))
+    result, _calls, _releases = _decide(_lost(_local()), release, [_edition(CHOSEN)], {})
+    shown = {item["track_number"]: item["artist"] for item in result["track_artists"]}
+    assert shown[11] == "Singer of The Mirror"

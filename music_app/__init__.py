@@ -14,6 +14,7 @@ from music_app.services.app_copy import APP_COPY_HEADER
 
 
 _POSTGRES_RELATION_WARMUP_DELAY_SECONDS = 5.0
+_TEMP_REQUESTS: list = []  # TEMP-DIAG (not for merge)
 
 
 class _BoundedExecutorAdmission:
@@ -345,6 +346,15 @@ def _configure_asgi_app(app, runtime) -> None:
 
     @app.middleware("http")
     async def require_runtime_javascript_revalidation(request, call_next):
+        import time as _temp_time  # TEMP-DIAG (not for merge)
+        _temp_entry = [request.url.path[:60], int(_temp_time.time() * 1000), None, threading.get_ident()]
+        _TEMP_REQUESTS.append(_temp_entry)
+        try:
+            return await _temp_inner(request, call_next)
+        finally:
+            _temp_entry[2] = int(_temp_time.time() * 1000)
+
+    async def _temp_inner(request, call_next):  # TEMP-DIAG body of the original middleware
         if (
             not request.url.path.startswith("/static/")
             and request.url.path != "/status"
@@ -853,6 +863,38 @@ def create_asgi_app():
         except BaseException:
             await shutdown_resources()
             raise
+        def _temp_sample() -> None:  # TEMP-DIAG (not for merge): logs where slow early requests wait
+            import collections, json as _json, os as _os, sys as _sys, time as _time
+            started = _time.time()
+            me = threading.get_ident()
+            samples = []
+            while _time.time() - started < 15.0:
+                names = {t.ident: t.name for t in threading.enumerate()}
+                row = []
+                for ident, frame in _sys._current_frames().items():
+                    if ident == me:
+                        continue
+                    chain = []
+                    f = frame
+                    while f is not None and len(chain) < 30:
+                        chain.append(f"{_os.path.basename(f.f_code.co_filename)}:{f.f_code.co_name}")
+                        f = f.f_back
+                    name = names.get(ident, str(ident))
+                    if "queue.py:get" in " ".join(chain[:3]) or chain[0].startswith(("windows_events.py", "selectors.py:_select")) and name == "MainThread":
+                        continue
+                    app_chain = " < ".join([c for c in chain if not c.startswith(("threading.py", "_asyncio.py", "thread.py", "contextlib.py", "<frozen"))][:5])
+                    row.append((name.split("_")[0], app_chain))
+                samples.append((int(_time.time() * 1000), row))
+                _time.sleep(0.01)
+            for path, begin, end, _ident in list(_TEMP_REQUESTS):
+                if end is None or end - begin < 300 or begin > started * 1000 + 15000:
+                    continue
+                counter = collections.Counter()
+                for at, row in samples:
+                    if begin <= at <= end:
+                        counter.update(f"{n} | {c}" for n, c in row if n not in ("Thread-2",))
+                runtime.logger.info("TEMP-DIAG slow-request %s", _json.dumps({"path": path, "ms": end - begin, "start_since_boot": begin - int(started * 1000), "top": counter.most_common(14)}))
+        threading.Thread(target=_temp_sample, name="temp-sampler", daemon=True).start()
         try:
             yield
         finally:

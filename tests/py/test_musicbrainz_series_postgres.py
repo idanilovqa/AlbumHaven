@@ -5,7 +5,7 @@ read it. Each test owns a freshly migrated isolated database (schemas dropped an
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from music_app.services.musicbrainz_release_identity import MusicBrainzAlbumReleaseProcessor
 from music_app.services.musicbrainz_release_identity_postgres import MusicBrainzReleaseIdentityPostgresRepository
@@ -371,3 +371,66 @@ def test_featured_in_is_in_the_series_tree_and_opens_its_gallery_but_a_hidden_se
     # Search matches both kinds by name.
     assert {row["album_title"] for row in browse._load_search_rows("metal albums", VIEW_STATE)} == {
         "Kalevala", "Iliad, A Grand Piano Extravaganza"}
+
+
+# Series size: counted once per 30 days, only when type and name leave it undecided ----------
+
+def _sizing_repository(setup_url):
+    return MusicBrainzReleaseIdentityPostgresRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": setup_url}, connect=lambda _url: isolatedPostgres._connect(setup_url))
+
+
+def test_only_undecided_series_are_counted_and_a_count_is_reused_for_thirty_days(monkeypatch):
+    setup_url, _library = _database(monkeypatch)
+    _kinds(setup_url, [("Colossus Projects", "Release group series", None),
+                       ("Grammy Award: Album of the Year nominees", "Release group award", None),
+                       ("1001 Albums You Must Hear Before You Die", "Release group series", None),
+                       ("Apple Digital Masters", "Release series", None)])
+    repository = _sizing_repository(setup_url)
+    real, _award, _list, apple = (f"00000000-0000-4000-8000-{index:012d}" for index in range(4))
+    # The award and the list are Featured In by type and name: never counted.
+    assert set(repository.unsized_series(limit=10, now=NOW)) == {real, apple}
+
+    repository.store_series_size(mbid=real, member_count=22, observed_at=NOW)
+    repository.store_series_size(mbid=apple, member_count=50, observed_at=NOW)
+    # Counted: not again for 30 days; the list counted to the cutoff is Featured In for good.
+    assert repository.unsized_series(limit=10, now=NOW + timedelta(days=29)) == []
+    assert repository.unsized_series(limit=10, now=NOW + timedelta(days=31)) == [real]
+    with isolatedPostgres._connect(setup_url) as connection:
+        kinds = {row["mbid"]: (row["member_count"], row["computed_kind"]) for row in connection.execute(
+            "select mbid::text, member_count, computed_kind from integration.musicbrainz_series").fetchall()}
+    assert (kinds[real], kinds[apple]) == ((22, "series"), (50, "featured_in"))
+
+    repository.store_series_size(mbid=real, member_count=23, observed_at=NOW + timedelta(days=31))
+    assert repository.unsized_series(limit=10, now=NOW + timedelta(days=32)) == []
+
+
+def test_a_failed_count_rests_a_day_and_an_owners_kind_is_never_counted(monkeypatch):
+    setup_url, _library = _database(monkeypatch)
+    _kinds(setup_url, [("Colossus Projects", "Release group series", None),
+                       ("Halo", "Release group series", None)])
+    repository = _sizing_repository(setup_url)
+    real, halo = (f"00000000-0000-4000-8000-{index:012d}" for index in range(2))
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute("update integration.musicbrainz_series set owner_kind = 'series' where mbid = %s", (halo,))
+    assert repository.unsized_series(limit=10, now=NOW) == [real]
+    repository.store_series_size(mbid=real, member_count=None, observed_at=NOW)
+    assert repository.unsized_series(limit=10, now=NOW + timedelta(hours=23)) == []
+    assert repository.unsized_series(limit=10, now=NOW + timedelta(hours=25)) == [real]
+
+
+def test_one_job_counts_each_new_series_once_however_many_albums_share_it(monkeypatch):
+    setup_url, _library = _database(monkeypatch)
+    _kinds(setup_url, [("Colossus Projects", "Release group series", None)])
+    asked = []
+
+    class Client:
+        def lookup_series(self, mbid):
+            asked.append(mbid)
+            return {"classification": "complete", "series": {"id": mbid, "member_count": 22}}
+
+    processor = MusicBrainzAlbumReleaseProcessor(repository=_sizing_repository(setup_url), client=Client(),
+                                                 now=lambda: NOW)
+    for _job in range(5):
+        processor._size_new_series(NOW)
+    assert asked == ["00000000-0000-4000-8000-000000000000"]

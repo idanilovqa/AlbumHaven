@@ -137,22 +137,24 @@ def _complete(albums: list[dict[str, object]], results: list[dict[str, object]],
                                       "budget_exhausted"))
         elif result.get("release_mbid") and result["release_mbid"] not in releases:
             result.update(state="release_group", release_mbid=None)
+    # Albums of one release group share its answers: each lookup is asked once per resolve.
+    asked: dict[tuple[str, str], object] = {}
     for album, result in zip(albums, results):
         release = releases.get(result.get("release_mbid") or "")
         if not release:
             continue
-        release = _choose_edition(album, result, release, mirror, releases)
+        release = _choose_edition(album, result, release, mirror, releases, asked)
         result["track_artists"] = display_track_artists(album.get("tracks") or [], release,
                                                         pairing=result["edition"]["track_pairing"])
         discs = local_discs(album.get("tracks") or [])
         result["track_sections"] = musicbrainz_sections(discs, release)
         original, fewest_discs = None, None
         if len(discs) > 1 and not result.get("disc_position"):
-            found = mirror.call("original_release_id", result["release_group_mbid"])
+            found = _ask_once(asked, mirror, "original_release_id", result["release_group_mbid"])
             fewest_discs = (found or {}).get("fewest_discs")
             original_id = (found or {}).get("release_id")
             if original_id and original_id not in releases:
-                looked_up = mirror.call("lookup_release_tracklist", original_id)
+                looked_up = _ask_once(asked, mirror, "lookup_release_tracklist", original_id)
                 if looked_up and looked_up.get("release"):
                     releases[original_id] = looked_up["release"]
             original = releases.get(original_id or "")
@@ -170,8 +172,20 @@ def _edition_rank(paired: dict[str, object]) -> tuple[bool, bool, int]:
     return paired["quality"] == "order_exact", paired["quality"] != "ambiguous", paired["aligned"]
 
 
+def _ask_once(asked: dict[tuple[str, str], object], mirror: _Mirror, method: str, mbid: str):
+    """One mirror answer per (lookup, MBID) within a resolve; a lookup the budget skipped
+    (None) is asked again by the next album."""
+    if (method, mbid) not in asked:
+        found = mirror.call(method, mbid)
+        if found is None:
+            return None
+        asked[(method, mbid)] = found
+    return asked[(method, mbid)]
+
+
 def _choose_edition(album: dict[str, object], result: dict[str, object], release: dict[str, object],
-                    mirror: _Mirror, releases: dict[str, dict[str, object]]) -> dict[str, object]:
+                    mirror: _Mirror, releases: dict[str, dict[str, object]],
+                    asked: dict[tuple[str, str], object]) -> dict[str, object]:
     """The edition whose track order best matches the local files (owner 2026-11-16): the
     certainly matched release unless another release of its group is certain too and keeps
     the local order better; then the existing choice. Only same-length editions' tracklists
@@ -182,12 +196,12 @@ def _choose_edition(album: dict[str, object], result: dict[str, object], release
     medium = next((part for part in release.get("media") or [] if int(part.get("position") or 0) == disc), None)
     best_release, best = release, pair_tracks(tracks, {"media": [medium]} if medium else release)
     if best["quality"] != "order_exact" and not disc:
-        listing = mirror.call("release_group_editions", result["release_group_mbid"]) or {}
+        listing = _ask_once(asked, mirror, "release_group_editions", result["release_group_mbid"]) or {}
         editions = sorted((edition for edition in listing.get("releases") or []
                            if edition["id"] != release["id"] and abs(edition["track_count"] - len(tracks)) <= 1),
                           key=lambda edition: (abs(edition["track_count"] - len(tracks)), edition["date"] or "9999"))
         for edition in editions[:_MAX_EDITIONS]:
-            found = mirror.call("lookup_release_tracklist", edition["id"])
+            found = _ask_once(asked, mirror, "lookup_release_tracklist", edition["id"])
             if found is None:
                 break
             candidate = found.get("release")
@@ -510,11 +524,14 @@ class MusicBrainzAlbumReleaseProcessor:
 
     def _size_new_series(self, observed_at) -> None:
         """A list or an award names far more albums than a real album series (owner
-        2026-11-15; about 50 or more is "Featured In"): each newly stored series is sized
-        once. A failed lookup is retried after the next job."""
-        for mbid in self._repository.unsized_series(limit=_SERIES_SIZED_PER_JOB):
+        2026-11-15; 50 or more is "Featured In"). A series its type and name leave undecided
+        is counted at most once per 30 days, up to the cutoff, however many albums share it;
+        a failed count waits a day. An album's own series never needs this lookup."""
+        for mbid in self._repository.unsized_series(limit=_SERIES_SIZED_PER_JOB, now=observed_at):
             found = self._client.lookup_series(mbid)
-            if found.get("classification") != "complete":
+            complete = found.get("classification") == "complete"
+            self._repository.store_series_size(
+                mbid=mbid, member_count=found["series"]["member_count"] if complete else None,
+                observed_at=observed_at)
+            if not complete:
                 return
-            self._repository.store_series_size(mbid=mbid, member_count=found["series"]["member_count"],
-                                               observed_at=observed_at)

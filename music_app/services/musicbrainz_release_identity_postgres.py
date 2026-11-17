@@ -310,20 +310,33 @@ class MusicBrainzReleaseIdentityPostgresRepository(EnrichmentJobQueue):
                  "observed_at": _aware_utc(observed_at), "retry_at": _aware_utc(retry_at) if retry_at else None,
                  "library_id": row["library_id"], "album_key": row["album_key"], "release_mbid": row["release_mbid"]})
 
-    def unsized_series(self, *, limit: int) -> list[str]:
-        """Series stored without their size yet, oldest first."""
+    def unsized_series(self, *, limit: int, now: datetime) -> list[str]:
+        """Series whose size can still decide their kind, never counted or last counted more
+        than 30 days ago, and not failed in the last day; never counted first. A series its
+        type or name already makes Featured In, one at the cutoff (a list only grows) and one
+        the owner has classified are never counted."""
         with self._connect(self._database_url) as connection:
             return [str(_row_mapping(row)["mbid"]) for row in connection.execute(
-                "select mbid::text from integration.musicbrainz_series where member_count is null"
-                " order by created_at, mbid limit %(limit)s", {"limit": max(1, int(limit))}).fetchall()]
+                "select mbid::text from integration.musicbrainz_series"
+                " where owner_kind is null and computed_kind = 'series'"
+                "   and (size_checked_at is null or size_checked_at < %(now)s - interval '" + _STALE_AFTER + "')"
+                "   and (size_failed_at is null or size_failed_at < %(now)s - interval '1 day')"
+                " order by size_checked_at nulls first, created_at, mbid limit %(limit)s",
+                {"limit": max(1, int(limit)), "now": _aware_utc(now)}).fetchall()]
 
-    def store_series_size(self, *, mbid: str, member_count: int, observed_at: datetime) -> None:
-        """How many release groups and releases MusicBrainz lists in the series; the computed
-        kind follows. An owner's choice of kind is untouched."""
+    def store_series_size(self, *, mbid: str, member_count: int | None, observed_at: datetime) -> None:
+        """How many release groups and releases MusicBrainz lists in the series, counted up to
+        the cutoff, and when; the computed kind follows. ``None``: the count failed, so the
+        series waits a day. An owner's choice of kind is untouched."""
         with self._connect(self._database_url) as connection:
+            if member_count is None:
+                connection.execute(
+                    "update integration.musicbrainz_series set size_failed_at = %(observed_at)s"
+                    " where mbid = %(mbid)s::uuid", {"mbid": mbid, "observed_at": _aware_utc(observed_at)})
+                return
             connection.execute(
-                "update integration.musicbrainz_series set member_count = %(count)s, updated_at = %(observed_at)s"
-                " where mbid = %(mbid)s::uuid",
+                "update integration.musicbrainz_series set member_count = %(count)s, size_checked_at = %(observed_at)s,"
+                " size_failed_at = null, updated_at = %(observed_at)s where mbid = %(mbid)s::uuid",
                 {"mbid": mbid, "count": max(0, int(member_count)), "observed_at": _aware_utc(observed_at)})
 
 

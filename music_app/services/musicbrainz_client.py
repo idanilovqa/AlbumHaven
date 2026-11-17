@@ -7,6 +7,7 @@ import uuid
 from collections.abc import Callable
 from functools import partial
 
+from music_app.services.musicbrainz_http import count_json_matches
 from music_app.services.musicbrainz_http import get_json as _shared_get_json
 
 # Identity enrichment never remembers failures: a direct-entity 404 after a
@@ -281,6 +282,13 @@ def _artist_credit(value: object) -> list[JsonDict]:
     ] if isinstance(value, list) else []
 
 
+# A series of this many members or more is "Featured In" (owner 2026-11-15): the exact
+# size beyond it never matters, so a series is counted only up to it.
+SERIES_SIZE_CUTOFF = 50
+# Each release group or release a series lists, as its lookup writes the relationship.
+_SERIES_MEMBER = re.compile(rb'"target-type"\s*:\s*"release(?:_group)?"')
+
+
 def _series_parts(relations: object) -> list[JsonDict]:
     """The MusicBrainz series a release or release group is "part of", with its number when
     MusicBrainz gives one ("Colossus Projects", "Release group series", number "18")."""
@@ -338,6 +346,7 @@ class MusicBrainzClient:
         base_url: str = _DEFAULT_BASE_URL,
         user_agent: str,
         get_json: Callable[..., tuple[dict | None, JsonDict]] = default_get_json,
+        count_matches: Callable[..., tuple[int | None, JsonDict]] = count_json_matches,
         search_page_size: int = 25,
         max_search_pages: int = 4,
         max_candidates: int = 25,
@@ -345,6 +354,7 @@ class MusicBrainzClient:
         self.base_url = (_text(base_url) or _DEFAULT_BASE_URL).rstrip("/")
         self.user_agent = _text(user_agent)
         self.get_json = get_json
+        self.count_matches = count_matches
         self.search_page_size = max(1, min(_integer(search_page_size, 25), 100))
         self.max_search_pages = max(1, _integer(max_search_pages, 4))
         self.max_candidates = max(1, _integer(max_candidates, 25))
@@ -617,20 +627,22 @@ class MusicBrainzClient:
         }}
 
     def lookup_series(self, series_mbid: object) -> JsonDict:
-        """A series' type and how many release groups and releases MusicBrainz lists in it:
-        a list or an award names far more albums than a real album series."""
+        """How many release groups and releases MusicBrainz lists in a series, counted up to
+        SERIES_SIZE_CUTOFF: a list or an award names far more albums than a real series.
+
+        The web service has no count and no paged browse for a series' members; its lookup
+        returns every one in a single payload (30 MB for the largest lists). So the response
+        is counted while it streams and closed at the cutoff, never parsed or cached. An
+        album's own series and number come from its release and release group lookups."""
         normalized = _valid_mbid(series_mbid)
         if not normalized:
             return {"classification": "invalid_request"}
         query = urllib.parse.urlencode({"inc": "release-group-rels release-rels", "fmt": "json"})
-        payload, transport = self.get_json(f"{self.base_url}/series/{normalized}?{query}", self.user_agent)
-        if not isinstance(payload, dict):
+        count, transport = self.count_matches(f"{self.base_url}/series/{normalized}?{query}", self.user_agent,
+                                              pattern=_SERIES_MEMBER, stop_at=SERIES_SIZE_CUTOFF)
+        if count is None:
             return {"classification": _transport_classification(transport), "transport": transport}
-        return {"classification": "complete", "series": {
-            "id": normalized, "name": _text(payload.get("name")), "type": _text(payload.get("type")) or None,
-            "member_count": sum(1 for relation in payload.get("relations") or [] if isinstance(relation, dict)
-                                and relation.get("target-type") in {"release_group", "release"}),
-        }}
+        return {"classification": "complete", "series": {"id": normalized, "member_count": count}}
 
     def original_release_id(self, release_group_mbid: object) -> JsonDict:
         """The release group's original release: the earliest dated official release

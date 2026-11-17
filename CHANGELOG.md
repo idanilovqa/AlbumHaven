@@ -1,8 +1,16 @@
 # Changelog
 
-## 0.11.18 - 2026-11-17
+## 0.11.23 - 2026-11-17
 
 - The server no longer freezes while it builds the library home view (`/home-data`, opened by the phone layout's library home and by the Android app). It read the library root settings from the database twice for every loose or non-album track; it now reads them once per build, and the home, News and file-backed album-detail payloads are built off the server's event loop, so other requests keep being answered meanwhile.
+
+## 0.11.19 - 2026-11-17
+
+- Test-only: the album credits test (FTC-ALBUM-DETAILS-006) scrolls the gallery with the mouse wheel before clicking an album after a tag save, so the gallery no longer undoes its scroll and the test no longer fails intermittently.
+
+## 0.11.18 - 2026-11-17
+
+- Test-only: the Transatlantic search heading check (FTC-SEARCH-NAV-028) waits until the gallery has finished loading before it counts artist headings, so it no longer fails intermittently.
 
 ## 0.11.17 - 2026-11-17
 

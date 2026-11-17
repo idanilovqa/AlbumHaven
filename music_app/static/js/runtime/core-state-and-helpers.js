@@ -550,7 +550,15 @@ function renderSidebar() {
   const el = document.getElementById('sidebar-list');
   const v = state.view;
   if (!el) return;
-  if (state.ui.libraryNavigationMode === 'custom-collections') return;
+  // The Custom Collections button's search dot and tree follow the current search (owner 2026-11-17).
+  if (typeof syncCustomCollectionSearchIndicator === 'function') void syncCustomCollectionSearchIndicator();
+  if (state.ui.libraryNavigationMode === 'custom-collections') {
+    if (typeof customCollectionCatalogUrl === 'function' && typeof setLibraryNavigationMode === 'function'
+        && el.dataset.customCollectionsSearch !== customCollectionCatalogUrl().search) {
+      void setLibraryNavigationMode('custom-collections');
+    }
+    return;
+  }
   const sidebarOverride = Array.isArray(state.gallery.sidebarArtistsOverride) ? state.gallery.sidebarArtistsOverride : null;
   const sidebarShowAllArtistsOverride = Object.prototype.hasOwnProperty.call(state.gallery, 'sidebarShowAllArtistsOverride')
     ? state.gallery.sidebarShowAllArtistsOverride

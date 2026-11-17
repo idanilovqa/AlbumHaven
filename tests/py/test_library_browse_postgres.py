@@ -19048,6 +19048,41 @@ def test_searched_library_loose_tracks_filter_the_stored_list_by_the_search_rule
     assert _filter_loose_tracks_by_query(tracks, "zzz-no-match") == []
 
 
+def test_searched_custom_collection_tree_counts_only_matching_tracks(monkeypatch):
+    # Owner 2026-11-17: a search narrows the Custom Collections tree to collections with a matching track,
+    # counted with the same rule as the searched collection table, without the plain grouped query.
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    tracks = [
+        {"path": "D:/Loose/a.mp3", "title": "Night Drive", "exception_type": "Custom Collection",
+         "custom_collection_name": "Car"},
+        {"path": "D:/Loose/b.mp3", "title": "Morning", "exception_type": "Custom Collection",
+         "custom_collection_name": "Car"},
+        {"path": "D:/Loose/c.mp3", "title": "Night Song", "exception_type": "Custom Collection",
+         "custom_collection_name": "Home"},
+        {"path": "D:/Loose/d.mp3", "title": "Night Talk", "exception_type": "Interview"},
+    ]
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def execute(self, *_args):
+            raise AssertionError("a search must not run the plain catalog query")
+
+    repository = PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://unused"})
+    monkeypatch.setattr(repository, "_connect_to_database", lambda: Connection())
+    monkeypatch.setattr(repository, "_load_non_album_track_snapshot", lambda _connection: tracks)
+
+    payload = repository.build_custom_collection_catalog_payload(query_params={"q": "night"})
+
+    assert payload["custom_collections"] == [{"name": "Car", "count": 1}, {"name": "Home", "count": 1}]
+    assert payload["loose_tracks_count"] == 3
+
+
 def test_album_musicbrainz_artist_carries_known_discogs_artist_page() -> None:
     from music_app.services import library_browse_postgres as browse
 

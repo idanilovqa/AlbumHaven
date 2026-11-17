@@ -764,6 +764,14 @@ def test_live_custom_collection_catalog_matches_loose_tracks_without_building_th
     assert main_only["loose_tracks_count"] == len(repository.build_library_loose_tracks_payload(
         query_params={"category": ["main_library"]})["library_non_album_tracks"])
 
+    # Owner 2026-11-17: a search narrows the tree to collections with a matching track, counted exactly as the
+    # searched collection table filters them; the All Loose Tracks row counts every matching loose track.
+    for query, expected in (("tagged", [("Tagged Hoard", 1)]), ("женя", [("Женя машина", 3)]), ("nomatchxyz", [])):
+        searched = repository.build_custom_collection_catalog_payload(query_params={**everything, "q": query})
+        assert [(row["name"], row["count"]) for row in searched["custom_collections"]] == expected
+        assert searched["loose_tracks_count"] == len(repository.build_library_loose_tracks_payload(
+            query_params={**everything, "q": query})["library_non_album_tracks"])
+
 
 def test_live_nul_in_one_files_tags_does_not_block_its_root(watcher_repair_inventory):
     from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler

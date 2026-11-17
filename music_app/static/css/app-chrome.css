@@ -236,6 +236,20 @@
 #artist-tree-expanded { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .library-navigation-body { display: grid; flex: 1 1 auto; grid-template-columns: 51px minmax(0, 1fr); gap: 8px; min-height: 0; overflow: hidden; transition: grid-template-columns var(--compact-motion-duration) var(--compact-motion-easing), gap var(--compact-motion-duration) var(--compact-motion-easing); }
 .library-navigation-mode-rail { display: flex; min-width: 0; flex-direction: column; align-items: center; gap: 8px; overflow: hidden; padding-right: 8px; border-right: 1px solid color-mix(in srgb, var(--app-muted) 24%, transparent); transition: opacity var(--compact-motion-duration) var(--compact-motion-easing), visibility 0s; }
+/* Owner 2026-11-17: a blue dot over the Custom Collections button while the search matches a loose track. */
+:root :is(.library-navigation-mode-action, .shell-navigation-compact-action)[data-search-results='true'] { position: relative; }
+:root :is(.library-navigation-mode-action, .shell-navigation-compact-action)[data-search-results='true']::after {
+  content: '';
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--appearance-accent, #72baff);
+  box-shadow: 0 0 0 2px var(--app-chrome);
+  pointer-events: none;
+}
 :root .library-navigation-mode-action,
 :root .shell-navigation-compact-action { width: 40px; height: 40px; min-width: 40px; min-height: 40px; flex-basis: 40px; padding: 0; }
 .library-navigation-mode-action svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }

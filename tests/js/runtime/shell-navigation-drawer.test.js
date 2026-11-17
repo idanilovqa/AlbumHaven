@@ -280,6 +280,49 @@ test('custom collections tree loads its bounded catalog, not Loose Tracks, and i
   assert.equal(artistList.dataset.sidebarStructureSignature, undefined);
 });
 
+test('a search narrows the collections tree and dots the Custom Collections button', async () => {
+  // Owner 2026-11-17: searching also searches Custom Collections: a blue dot on the button, only matching
+  // collections in the tree, and their tables filtered to the matches.
+  const { context, artistList } = loadHelper();
+  stubCollectionTree(context);
+  const buttons = [{ attributes: new Map() }, { attributes: new Map() }].map((button) => Object.assign(button, {
+    setAttribute(name, value) { this.attributes.set(name, value); },
+    removeAttribute(name) { this.attributes.delete(name); },
+  }));
+  context.document.querySelectorAll = selector => (
+    selector === '[data-library-navigation-mode="custom-collections"]' ? buttons : []
+  );
+  const requests = [];
+  context.URL = URL;
+  context.fetch = (path) => {
+    requests.push(path);
+    const matches = path.includes('q=night');
+    return Promise.resolve({ ok: true, status: 200, json: async () => ({
+      custom_collections: matches ? [{ name: 'Night', count: 1 }] : [],
+      loose_tracks_count: matches ? 3 : 0,
+    }) });
+  };
+  context.escapeHtml = value => String(value);
+  context.state.view.query = 'night';
+
+  await context.syncCustomCollectionSearchIndicator();
+  assert.equal(requests.at(-1), '/library/custom-collections?q=night');
+  assert.deepEqual(buttons.map(button => button.attributes.get('data-search-results')), ['true', 'true']);
+  await context.setLibraryNavigationMode('custom-collections');
+  assert.match(artistList.innerHTML, /<button data-open-custom-collection="Night">Night:1<\/button>$/);
+  assert.equal(artistList.dataset.customCollectionsSearch, '?q=night');
+
+  context.state.view.query = 'nothing';
+  await context.syncCustomCollectionSearchIndicator();
+  assert.deepEqual(buttons.map(button => button.attributes.has('data-search-results')), [false, false]);
+  await context.setLibraryNavigationMode('custom-collections');
+  assert.match(artistList.innerHTML, /No collection matches “nothing”\./);
+
+  context.state.view.query = '';
+  await context.syncCustomCollectionSearchIndicator();
+  assert.deepEqual(buttons.map(button => button.attributes.has('data-search-results')), [false, false]);
+});
+
 test('reopening custom collections paints the cached catalog at once and refreshes it in place', async () => {
   const { context, artistList } = loadHelper();
   stubCollectionTree(context);

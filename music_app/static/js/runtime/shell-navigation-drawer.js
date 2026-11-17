@@ -93,9 +93,33 @@ let customCollectionCatalog = { key: null, collections: null, request: null };
 
 function customCollectionCatalogUrl(view = state.view || {}) {
   const url = new URL('/library/custom-collections', 'http://localhost');
+  // A search narrows the tree to collections with a matching track (owner 2026-11-17).
+  const query = String(view.query || '').trim();
+  if (query) url.searchParams.set('q', query);
   (view.visible_library_categories || []).forEach((category) => url.searchParams.append('category', category));
   if (view.gallery_scope) url.searchParams.set('gallery_scope', view.gallery_scope);
   return url;
+}
+
+// Owner 2026-11-17: a blue dot on the Custom Collections button while the search matches any loose track.
+// The catalog is cached per search, so redraws reuse it.
+async function syncCustomCollectionSearchIndicator() {
+  const query = String(state.view?.query || '').trim();
+  const mark = (matches) => document.querySelectorAll?.('[data-library-navigation-mode="custom-collections"]')
+    .forEach((button) => {
+      if (matches) button.setAttribute('data-search-results', 'true');
+      else button.removeAttribute('data-search-results');
+    });
+  if (!query) {
+    mark(false);
+    return;
+  }
+  try {
+    await loadCustomCollectionCatalog();
+  } catch {
+    return;
+  }
+  if (String(state.view?.query || '').trim() === query) mark(Number(state.ui?.libraryLooseTracksCount) > 0);
 }
 
 function loadCustomCollectionCatalog() {
@@ -150,6 +174,8 @@ function renderCustomCollectionNavigation(collections, { failure = '' } = {}) {
   const activeCollectionName = pageOpen ? String(state.ui?.nonAlbumCollectionName || '').trim() : '';
   const allLooseTracksSelected = pageOpen && !activeCollectionName;
   list.dataset.navigationTree = 'custom-collections';
+  // Which search this tree shows, so a new search or a cleared one redraws it.
+  list.dataset.customCollectionsSearch = collections === null ? '' : customCollectionCatalogUrl().search;
   list.dataset.sidebarVirtualized = 'false';
   delete list.dataset.sidebarStructureSignature;
   const allLooseTracks = window.NavigationTree.renderItem({
@@ -161,10 +187,13 @@ function renderCustomCollectionNavigation(collections, { failure = '' } = {}) {
     selected: allLooseTracksSelected,
     attributes: { 'data-open-loose-tracks': '1' },
   });
+  const query = String(state.view?.query || '').trim();
   const collectionRows = failure
     ? `<p class="utility-empty-state compact">${escapeHtml(failure)}</p>`
     : collections === null
       ? window.NavigationTree.renderSkeleton({ count: 3 })
+      : !collections.length && query
+        ? `<p class="utility-empty-state compact">No collection matches “${escapeHtml(query)}”.</p>`
       : collections.map(({ name, count }) => window.NavigationTree.renderItem({
         action: true,
         variant: 'panel',

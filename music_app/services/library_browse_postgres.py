@@ -512,6 +512,11 @@ class PostgresLibraryBrowseRepository:
         waits for the Loose Tracks snapshot and ignores the Artist tree selection.
         """
         categories = list(_root_sidebar_view_state(query_params).get("visible_library_categories") or [])
+        query = str((query_params or {}).get("q") or "").strip()
+        if query:
+            searched = self._searched_custom_collection_catalog(categories, query)
+            if searched is not None:
+                return searched
         with self._connect_to_database() as connection:
             # A few hundred rows: parallel worker startup would cost more than the query.
             connection.execute("set local max_parallel_workers_per_gather = 0")
@@ -543,6 +548,30 @@ class PostgresLibraryBrowseRepository:
         return {
             "custom_collections": [{"name": name, "count": count} for name, count in sorted(counts.items())],
             "loose_tracks_count": loose_tracks_count,
+        }
+
+    def _searched_custom_collection_catalog(
+        self, categories: list[str], query: str,
+    ) -> dict[str, object] | None:
+        """A search's tree (owner 2026-11-17): only collections with a matching track, counted from the
+        stored Loose Tracks list with the same rule the searched collection table uses, so the tree's
+        numbers always match the table. None when that list is not stored yet: the plain catalog shows."""
+        with self._connect_to_database() as connection:
+            tracks = self._load_non_album_track_snapshot(connection)
+        if tracks is None:
+            return None
+        tracks = _filter_loose_tracks_by_query(
+            _filter_non_album_snapshot_tracks(tracks, visible_library_categories=categories), query,
+        )
+        counts: dict[str, int] = {}
+        for track in tracks:
+            name = str(track.get("custom_collection_name") or "").strip()
+            if name and normalize_exception_value(track.get("exception_type")) == "Custom Collection":
+                counts[name] = counts.get(name, 0) + 1
+        return {
+            "custom_collections": [{"name": name, "count": count} for name, count in sorted(counts.items())],
+            "loose_tracks_count": len(tracks),
+            "query": query,
         }
 
     def build_library_loose_tracks_payload(

@@ -1141,3 +1141,177 @@ def decode(blobs, paths):
 """)
     probes = [hazard["line"] for hazard in _hazards(tmp_path, "BI-06")]
     assert probes == [8]
+
+
+def _event_loop_operations(tmp_path: Path) -> dict[str, list[str]]:
+    analysis = discovery.analyze_python_repository(tmp_path)
+    found: dict[str, list[str]] = {}
+    for hazard in analysis["hazards"]:
+        if hazard["rule"] == "BI-08":
+            route = hazard["entrypoint"].split("#")[1].split(":")[0]
+            found.setdefault(route, []).append(hazard["operation"].split(":")[2].split("@")[0])
+    return found
+
+
+def test_sql_on_pooled_or_with_bound_connections_blocks_the_event_loop(tmp_path: Path):
+    _write(tmp_path, "music_app/services/postgres_connections.py", """
+import contextlib
+
+@contextlib.contextmanager
+def pooled_connection(url, *, workload):
+    yield None
+""")
+    _write(tmp_path, "music_app/services/store.py", """
+from music_app.services.postgres_connections import pooled_connection
+
+class Store:
+    def __init__(self, url, connect=pooled_connection):
+        self._connect = connect
+        self._url = url
+
+    def named(self, path):
+        with self._connect(self._url, workload="store") as connection:
+            return connection.execute("select 1").fetchone()
+""")
+    _write(tmp_path, "music_app/services/other.py", """
+class Shell:
+    def execute(self, command):
+        return command
+
+class Script:
+    def execute(self, command):
+        return command
+""")
+    _write(tmp_path, "music_app/routes/read.py", """
+from music_app.services.store import Store
+
+@router.get("/store")
+async def store_route(request):
+    return Store("url").named("p")
+
+@router.get("/pool")
+async def pool_route(request):
+    with request.app.state.pool.connection() as connection:
+        connection.execute("select 1")
+
+@router.get("/executed")
+async def executed_route(request, connection):
+    return CONNECTION.execute("select 1").fetchone()
+
+@router.get("/shell")
+async def shell_route(request, shell):
+    return shell.execute("ls")
+""")
+    found = _event_loop_operations(tmp_path)
+    # The witness is the first statement call, `execute` or the `fetchone` on its result.
+    assert found["store_route"][0] in {"db.execute", "db.fetchone"}
+    assert found["pool_route"] == ["db.execute"]
+    assert found["executed_route"] == ["db.fetchone"]
+    assert "shell_route" not in found
+
+
+def test_a_callable_passed_through_helpers_is_followed_to_a_fixpoint(tmp_path: Path):
+    _write(tmp_path, "music_app/routes/read.py", """
+import time
+
+def inner(action):
+    return action()
+
+def outer(action):
+    return inner(action)
+
+def outermost(action):
+    return outer(action)
+
+def keeps(action):
+    return [action]
+
+def block():
+    time.sleep(1)
+
+@router.get("/two")
+async def two(request):
+    outermost(block)
+
+@router.get("/kept")
+async def kept(request):
+    keeps(block)
+
+@router.get("/table")
+async def table(request):
+    handlers = {"go": block}
+    handlers["go"]()
+""")
+    found = _event_loop_operations(tmp_path)
+    assert found["two"] == ["time.sleep"]
+    assert found["table"] == ["time.sleep"]
+    assert "kept" not in found
+
+
+def test_thread_locks_held_across_io_and_future_waits_block_the_event_loop(tmp_path: Path):
+    _write(tmp_path, "music_app/services/retry.py", """
+import threading
+import urllib.request
+
+RETRY_LOCK = threading.Lock()
+BOOKKEEPING_LOCK = threading.Lock()
+
+def send_pending(url):
+    with RETRY_LOCK:
+        return urllib.request.urlopen(url)
+
+def note(state):
+    with BOOKKEEPING_LOCK:
+        state["seen"] = True
+""")
+    _write(tmp_path, "music_app/routes/read.py", """
+import asyncio
+import concurrent.futures
+import threading
+from concurrent.futures import as_completed
+from music_app.services.retry import BOOKKEEPING_LOCK, RETRY_LOCK
+
+LOCAL = threading.RLock()
+
+def refresh(path):
+    with LOCAL:
+        return open(path).read()
+
+@router.get("/imported-lock")
+async def imported_lock(request):
+    with RETRY_LOCK:
+        return 1
+
+@router.get("/acquire")
+async def acquire(request):
+    LOCAL.acquire()
+
+@router.get("/try-acquire")
+async def try_acquire(request):
+    return LOCAL.acquire(blocking=False)
+
+@router.get("/wait")
+async def wait(request, futures):
+    concurrent.futures.wait(futures)
+
+@router.get("/completed")
+async def completed(request, futures):
+    return list(as_completed(futures))
+
+@router.get("/bookkeeping")
+async def bookkeeping(request):
+    with BOOKKEEPING_LOCK:
+        return 1
+
+@router.get("/async-lock")
+async def async_lock(request):
+    async with asyncio.Lock():
+        return 1
+""")
+    found = _event_loop_operations(tmp_path)
+    assert found["imported_lock"] == ["Lock.acquire"]
+    assert found["acquire"] == ["RLock.acquire"]
+    assert found["wait"] == ["concurrent.futures.wait"]
+    assert found["completed"] == ["concurrent.futures.as_completed"]
+    # Only a lock some holder keeps across I/O can make the loop wait on it.
+    assert "try_acquire" not in found and "async_lock" not in found and "bookkeeping" not in found

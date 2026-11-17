@@ -681,6 +681,74 @@ const DEFECTS = [
       + '    _seeded_append_log_history(config, {"action": action, **fields})\n',
     expected: /^rejected BI-05 database-connect-per-item:\S+log_history_postgres\.py:\d+ at music_app\/services\/cover_manual_links\.py:\d+ from py:music_app\/routes\/api_wave_d_asgi_routes\.py#utilities_cover_lookup_add_remote:route:POST \/utilities\/cover-lookup\/add-remote via .*_seeded_log_history_event > /,
   },
+  {
+    // A store whose methods open a pooled connection (`with self._connect(...)
+    // as connection: connection.execute(...)`), called on the event loop. The
+    // store's module imports no database driver, and another app class also
+    // defines `execute`, so the evidence is the pooled-connection import and
+    // the `with` binding, not the method name.
+    id: 'BI-08 a pooled-connection store queried on the event loop',
+    language: 'py',
+    file: 'music_app/routes/api_read_asgi_routes.py',
+    anchor: 'async def people_read_reserved(request: Request, person_ref: str) -> JSONResponse:\n',
+    replacement: 'async def people_read_reserved(request: Request, person_ref: str) -> JSONResponse:\n'
+      + '    request.app.state.cover_reference_store.is_named_cover(1, person_ref)\n',
+    expected: /^rejected BI-08 event-loop-blocking:database:db\.(execute|fetchone)@music_app\/services\/cover_references\.py:\d+ at music_app\/routes\/api_read_asgi_routes\.py:\d+ from py:music_app\/routes\/api_read_asgi_routes\.py#people_read_reserved:route:GET \/people\/\{person_ref\} via CoverReferenceStore\.is_named_cover$/,
+  },
+  {
+    id: 'BI-08 a statement on a pool connection bound by a with block on the event loop',
+    language: 'py',
+    file: 'music_app/routes/api_read_asgi_routes.py',
+    anchor: 'async def soundtracks_read_reserved(request: Request, soundtrack_ref: str) -> JSONResponse:\n',
+    replacement: 'async def soundtracks_read_reserved(request: Request, soundtrack_ref: str) -> JSONResponse:\n'
+      + '    with request.app.state.pool.connection() as connection:\n'
+      + '        connection.execute("select 1")\n',
+    expected: /^rejected BI-08 event-loop-blocking:database:db\.execute@music_app\/routes\/api_read_asgi_routes\.py:\d+ at music_app\/routes\/api_read_asgi_routes\.py:\d+ from py:music_app\/routes\/api_read_asgi_routes\.py#soundtracks_read_reserved:route:GET \/soundtracks\/\{soundtrack_ref\}$/,
+  },
+  {
+    // A save finalizer's cache merge that runs one statement per cached file.
+    id: 'BI-04 a save finalizer running one statement per cached file',
+    language: 'py',
+    file: 'music_app/services/save_tasks.py',
+    anchor: '    file_cache = library_state.get("file_cache")\n    if not isinstance(file_cache, dict):\n',
+    replacement: '    with library_state["pool"].connection() as connection:\n'
+      + '        for path in library_state["file_cache"]:\n'
+      + '            connection.execute("select %s", (path,))\n'
+      + '    file_cache = library_state.get("file_cache")\n    if not isinstance(file_cache, dict):\n',
+    expected: /^rejected BI-04 library-state-scan-io:file_cache \(db\.execute@music_app\/services\/save_tasks\.py:\d+\) at music_app\/services\/save_tasks\.py:\d+ from py:music_app\/services\/save_tasks\.py#finalize_structural_tag_edit_save_task:background:executor via .* \(work class affected-set cannot do per-item I\/O over the whole library state\)$/,
+  },
+  {
+    // A blocking callable handed through an intermediate helper before it runs.
+    id: 'BI-08 a blocking function passed through a helper that hands it to another',
+    language: 'py',
+    file: 'music_app/routes/api_read_asgi_routes.py',
+    anchor: 'async def works_read_reserved(work_ref: str) -> JSONResponse:\n',
+    replacement: 'async def works_read_reserved(work_ref: str) -> JSONResponse:\n    _seeded_outer(_seeded_block)\n',
+    prelude: 'import time as _seeded_time\n\n\ndef _seeded_inner(action):\n    return action()\n\n\n'
+      + 'def _seeded_outer(action):\n    return _seeded_inner(action)\n\n\ndef _seeded_block():\n    _seeded_time.sleep(1)\n',
+    expected: /^rejected BI-08 event-loop-blocking:sleep:time\.sleep@music_app\/routes\/api_read_asgi_routes\.py:\d+ at music_app\/routes\/api_read_asgi_routes\.py:\d+ from py:music_app\/routes\/api_read_asgi_routes\.py#works_read_reserved:route:GET \/works\/\{work_ref\} via _seeded_block$/,
+  },
+  {
+    // The Last.fm retry worker holds this lock across provider calls.
+    id: 'BI-08 a thread lock taken on the event loop',
+    language: 'py',
+    file: 'music_app/routes/api_read_asgi_routes.py',
+    anchor: 'async def album_opinions_crowd_read_reserved(album_ref: str) -> JSONResponse:\n',
+    replacement: 'async def album_opinions_crowd_read_reserved(album_ref: str) -> JSONResponse:\n'
+      + '    with _seeded_retry_lock:\n        pass\n',
+    prelude: 'from music_app.services.lastfm_retry import _RETRY_LOCK as _seeded_retry_lock\n',
+    expected: /^rejected BI-08 event-loop-blocking:wait:Lock\.acquire@music_app\/routes\/api_read_asgi_routes\.py:\d+ at music_app\/routes\/api_read_asgi_routes\.py:\d+ from py:music_app\/routes\/api_read_asgi_routes\.py#album_opinions_crowd_read_reserved:route:GET \/album-opinions\/\{album_ref\}\/crowd$/,
+  },
+  {
+    id: 'BI-08 waiting for executor futures on the event loop',
+    language: 'py',
+    file: 'music_app/routes/api_read_asgi_routes.py',
+    anchor: 'async def album_notes_mutate_reserved(note_ref: str) -> JSONResponse:\n',
+    replacement: 'async def album_notes_mutate_reserved(note_ref: str) -> JSONResponse:\n'
+      + '    _seeded_futures.wait([_seeded_futures.ThreadPoolExecutor().submit(len, note_ref)])\n',
+    prelude: 'import concurrent.futures as _seeded_futures\n',
+    expected: /^rejected BI-08 event-loop-blocking:wait:concurrent\.futures\.wait@music_app\/routes\/api_read_asgi_routes\.py:\d+ at music_app\/routes\/api_read_asgi_routes\.py:\d+ from py:music_app\/routes\/api_read_asgi_routes\.py#album_notes_mutate_reserved:route:(PATCH|DELETE) \/album-notes\/\{note_ref\}$/,
+  },
 ];
 
 function seededOverrides() {

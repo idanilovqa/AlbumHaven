@@ -89,11 +89,22 @@ BLOCKING_CALLS = {
     **{f"{client}.{verb}": "http" for client in ("requests", "httpx") for verb in ("get", "post", "put", "patch", "delete", "head", "request", "stream")},
     "httpx.Client": "http",
     "PIL.Image.open": "image",
+    # Waiting for executor futures blocks until another thread finishes.
+    "concurrent.futures.wait": "wait",
+    "concurrent.futures.as_completed": "wait",
 }
-# DB-API calls on a connection, cursor or pool, counted in modules that import
-# a database driver: the import is the evidence the receiver is one.
+# DB-API calls on a connection, cursor or pool. They count where there is
+# evidence the receiver is one: the module imports a database driver or the
+# app's pooled-connection module, the receiver was bound by
+# `with <connection factory>(...) as name`, or the call reads the result of an
+# `execute` (`connection.execute(...).fetchone()`).
 DATABASE_METHODS = frozenset({"execute", "executemany", "fetchone", "fetchall", "fetchmany", "getconn", "connection"})
 DATABASE_DRIVERS = ("psycopg", "psycopg2", "psycopg_pool")
+POOLED_CONNECTION_MODULE = "music_app.services.postgres_connections"
+# Methods that open, lease or wrap a connection: `with store._connect(url) as
+# connection`, `with pool.connection() as connection`, `with connection.cursor() as cursor`.
+CONNECTION_FACTORY_METHODS = frozenset({"connection", "_connect", "_connect_to_database", "getconn", "cursor"})
+FETCH_METHODS = frozenset({"fetchone", "fetchall", "fetchmany"})
 # Filesystem changes, by import-qualified name and as `pathlib` methods.
 FILESYSTEM_MUTATORS = frozenset({
     *(f"os.{name}" for name in ("remove", "unlink", "rename", "renames", "replace", "makedirs", "mkdir", "rmdir", "removedirs")),
@@ -111,7 +122,10 @@ PATH_ONLY_WRITE_METHODS = {"rename": "Path.rename", "replace": "Path.replace"}
 FUTURE = "concurrent.futures.Future"
 BLOCKING_WAITS = {
     "threading.Event": {"wait"},
-    "threading.Condition": {"wait", "wait_for"},
+    "threading.Condition": {"wait", "wait_for", "acquire"},
+    # A thread lock waits for whichever thread holds it, which may be doing
+    # network or database work (`with _RETRY_LOCK:` around Last.fm calls).
+    **{f"threading.{kind}": {"acquire"} for kind in ("Lock", "RLock", "Semaphore", "BoundedSemaphore")},
     "threading.Barrier": {"wait"},
     "threading.Thread": {"join"},
     "threading.Timer": {"join"},
@@ -172,6 +186,9 @@ class Module:
     # Every value assigned to a module-level name: aliases (`_ALIAS = run`),
     # dispatch tables (`_HANDLERS = {"a": run}`), and shared instances.
     assignments: dict[str, list[ast.AST]] = field(default_factory=dict)
+    # The annotation of each module-level name declared with one
+    # (`_WAKE: threading.Event | None = None`).
+    annotations: dict[str, ast.AST] = field(default_factory=dict)
 
 
 def _relative(path: Path, root: Path) -> str:
@@ -229,6 +246,8 @@ def _load_module(path: Path, relative: str, overrides: dict[str, str]) -> Module
             for target in _binding_targets(node):
                 if isinstance(target, ast.Name):
                     module.assignments.setdefault(target.id, []).append(node.value)
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            module.annotations[node.target.id] = node.annotation
     # Function-local imports are merged into module scope: resolution only needs
     # to know which module a name came from, and local imports never shadow it.
     for node in _iter_statements(tree.body):
@@ -419,7 +438,7 @@ class Index:
                 return False
         return True
 
-    def resolve(self, call_target: ast.AST, owner: Definition) -> list[Definition]:
+    def resolve(self, call_target: ast.AST, owner: Definition, call: ast.Call | None = None) -> list[Definition]:
         """Definitions a call may run. A call of an app class runs its
         `__init__`; a module-level alias runs the function it names, and an
         entry of a module-level dispatch table (`_HANDLERS[key](...)`) any of
@@ -433,7 +452,13 @@ class Index:
             found = self.module_function(module.name, call_target.id)
             return [found] if found else self.constructor(self.class_ref(module.name, call_target.id))
         if isinstance(call_target, ast.Subscript) and isinstance(call_target.value, ast.Name):
-            tables = module.assignments.get(call_target.value.id, [])
+            # A dispatch table the function builds (`handlers = {"go": run}`)
+            # or a module-level one.
+            tables = [
+                node.value for node in _own_nodes(owner)
+                if isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name) and node.targets[0].id == call_target.value.id
+            ] or module.assignments.get(call_target.value.id, [])
             if len(tables) == 1 and isinstance(tables[0], ast.Dict):
                 return [found for value in tables[0].values for found in self.resolve(_callable_target(value), owner)]
             return []
@@ -460,10 +485,18 @@ class Index:
             receiver = self.receiver_class(value, owner)
             if receiver is not None and (method := self.class_method(receiver, attr)):
                 return [method]
-            if attr in CONTAINER_METHODS or self.built_by_library(value, module, owner):
+            if attr in CONTAINER_METHODS or self.built_by_library(value, module, owner) or _library_constructed(value, module, owner):
+                return []
+            # A DB-API call on a connection or cursor is database work, not
+            # an app method that happens to share the name.
+            if attr in DATABASE_METHODS and (_imports_database_access(module) or _connection_receiver(value, module, owner)):
                 return []
             candidates = self.methods_by_name.get(attr, [])
-            return [] if len(candidates) > 1 and attr in PROTOCOL_METHODS else candidates
+            if len(candidates) > 1 and attr in PROTOCOL_METHODS:
+                return []
+            # A method the call's arguments cannot bind (`event.set()` against
+            # `Cache.set(self, key, value)`) is not what it runs.
+            return [candidate for candidate in candidates if call is None or _accepts_call(candidate, call)]
         return []
 
 
@@ -509,6 +542,17 @@ class BodyFacts:
 
 
 _FACTS: dict[int, BodyFacts] = {}
+# Every loaded module by name, for evidence that lives in another module.
+_MODULES: dict[str, "Module"] = {}
+# Parameters each definition calls, directly or through the helpers it passes them to.
+_CALLED_PARAMETERS: dict[int, set[str]] = {}
+# Thread locks some code holds across blocking work, with that work as witness.
+_LOCKS_HELD_ACROSS_IO: dict[tuple[str, ...], str] = {}
+
+
+def _module_scope(module: "Module") -> "Definition":
+    """A definition with no body of its own, for module-level lookups."""
+    return Definition(module.path, "", ast.Module(body=[], type_ignores=[]), module.name)
 # The definition each nested function is defined in.
 _PARENTS: dict[int, Definition] = {}
 
@@ -652,6 +696,90 @@ def _imports_database_driver(module: Module) -> bool:
     return any(source.split(".")[0] in DATABASE_DRIVERS for source, _ in module.imports.values())
 
 
+def _imports_database_access(module: Module) -> bool:
+    """A database driver or the app's pooled-connection module is imported."""
+    return _imports_database_driver(module) or any(
+        source == POOLED_CONNECTION_MODULE or source.startswith(f"{POOLED_CONNECTION_MODULE}.")
+        for source, _ in module.imports.values()
+    )
+
+
+def _opens_connection(call: ast.AST, module: Module) -> bool:
+    if not isinstance(call, ast.Call):
+        return False
+    name = _qualified_name(call.func, module)
+    if name in DATABASE_CONNECTS or name.startswith(f"{POOLED_CONNECTION_MODULE}."):
+        return True
+    return isinstance(call.func, ast.Attribute) and call.func.attr in CONNECTION_FACTORY_METHODS
+
+
+def _connection_receiver(value: ast.AST, module: Module, owner: Definition) -> bool:
+    """A name the definition bound with `with <connection factory>(...) as name`."""
+    if not isinstance(value, ast.Name):
+        return False
+    return any(
+        isinstance(item.optional_vars, ast.Name) and item.optional_vars.id == value.id
+        and _opens_connection(item.context_expr, module)
+        for node in _own_nodes(owner) if isinstance(node, (ast.With, ast.AsyncWith))
+        for item in node.items
+    )
+
+
+def _database_call(node: ast.Call, module: Module, owner: Definition) -> bool:
+    """A DB-API call on evidence that its receiver is a connection or cursor."""
+    if not isinstance(node.func, ast.Attribute) or node.func.attr not in DATABASE_METHODS:
+        return False
+    receiver = node.func.value
+    executed = (
+        node.func.attr in FETCH_METHODS and isinstance(receiver, ast.Call)
+        and isinstance(receiver.func, ast.Attribute) and receiver.func.attr == "execute"
+    )
+    return executed or _imports_database_access(module) or _connection_receiver(receiver, module, owner)
+
+
+def _lock_key(value: ast.AST, module: Module, owner: Definition) -> tuple[str, ...] | None:
+    """Which thread lock an expression names: a module-level lock (followed
+    through app imports) or a `self` attribute of the owner's class."""
+    if isinstance(value, ast.Name):
+        imported = module.imports.get(value.id)
+        if imported and imported[1] and imported[0] in _MODULES and value.id not in module.assignments:
+            return (imported[0], imported[1])
+        return (module.name, value.id)
+    if isinstance(value, ast.Attribute) and isinstance(value.value, ast.Name) and value.value.id == "self" and owner.class_name:
+        return (module.name, owner.class_name, value.attr)
+    return None
+
+
+def _thread_lock(value: ast.AST, module: Module, owner: Definition) -> tuple[str, tuple[str, ...] | None]:
+    """(lock kind, lock key) when `value` is evidently a thread lock, else ("", None)."""
+    kind = _receiver_constructor(value, module, owner)
+    if kind.startswith("threading.") and "acquire" in BLOCKING_WAITS.get(kind, ()):
+        return kind, _lock_key(value, module, owner)
+    return "", None
+
+
+def _lock_blocks(definition: Definition, module: Module):
+    """`with lock:` statements on a thread lock: (statement, kind, key)."""
+    for node in _own_nodes(definition):
+        if isinstance(node, ast.With):
+            for item in node.items:
+                kind, key = _thread_lock(item.context_expr, module, definition)
+                if kind:
+                    yield node, kind, key
+
+
+def _lock_waits(definition: Definition, module: Module) -> list[tuple[str, int]]:
+    """`with lock:` blocks in the definition on a thread lock that some holder
+    keeps across blocking work (`_LOCKS_HELD_ACROSS_IO`), as (operation, line).
+    A lock held only around in-memory bookkeeping is released at once."""
+    found = [
+        (f"{kind.rsplit('.', 1)[1]}.acquire", node.lineno)
+        for node, kind, key in _lock_blocks(definition, module)
+        if key in _LOCKS_HELD_ACROSS_IO
+    ]
+    return sorted(found, key=lambda item: item[1])
+
+
 def _database_connect(node: ast.Call, module: Module) -> str | None:
     """A new database connection or pool: the psycopg call that opens it."""
     name = _qualified_name(node.func, module)
@@ -677,22 +805,29 @@ def _blocking_operation(node: ast.Call, module: Module, owner: Definition) -> tu
             _path_valued(receiver) or _receiver_constructor(receiver, module, owner).startswith("pathlib.")
         ):
             return "filesystem", PATH_ONLY_WRITE_METHODS[attr]
-        if attr in DATABASE_METHODS and _imports_database_driver(module):
+        if _database_call(node, module, owner):
             return "database", f"db.{attr}"
         if attr in WAIT_METHODS and not _non_blocking_get(node):
             kind = _receiver_constructor(receiver, module, owner)
-            if attr in BLOCKING_WAITS.get(kind, ()):
+            lock_acquire = attr == "acquire" and kind.startswith("threading.")
+            if attr in BLOCKING_WAITS.get(kind, ()) and (
+                not lock_acquire or _lock_key(receiver, module, owner) in _LOCKS_HELD_ACROSS_IO
+            ):
                 return "wait", f"{kind.rsplit('.', 1)[1]}.{attr}"
     return None
 
 
 def _non_blocking_get(node: ast.Call) -> bool:
-    """`queue.get(False)` or `queue.get(block=False)` returns at once."""
-    block = next((keyword.value for keyword in node.keywords if keyword.arg == "block"), node.args[0] if node.args else None)
-    return node.func.attr == "get" and isinstance(block, ast.Constant) and block.value is False
+    """`queue.get(False)`, `queue.get(block=False)` and `lock.acquire(False)`
+    (or `blocking=False`) return at once."""
+    keyword_name = {"get": "block", "acquire": "blocking"}.get(node.func.attr)
+    if keyword_name is None:
+        return False
+    block = next((keyword.value for keyword in node.keywords if keyword.arg == keyword_name), node.args[0] if node.args else None)
+    return isinstance(block, ast.Constant) and block.value is False
 
 
-def _receiver_constructor(value: ast.AST, module: Module, owner: Definition) -> str:
+def _receiver_constructor(value: ast.AST, module: Module, owner: Definition, _seen: frozenset[str] = frozenset()) -> str:
     """The import-qualified constructor that built a receiver, or "": a call,
     or a local, module-level name, or `self` attribute every assignment of
     which is a call of that one constructor. `submit(...)` and
@@ -708,12 +843,51 @@ def _receiver_constructor(value: ast.AST, module: Module, owner: Definition) -> 
             if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None
             and any(isinstance(target, ast.Name) and target.id == value.id for target in _binding_targets(node))
         ] or module.assignments.get(value.id, [])
+        imported = module.imports.get(value.id)
+        source = _MODULES.get(imported[0]) if not bound and imported and imported[1] else None
+        if source is not None and source is not module:
+            # A module-level instance another app module defines
+            # (`from music_app.services.lastfm_retry import _RETRY_LOCK`).
+            return _receiver_constructor(ast.Name(id=imported[1]), source, _module_scope(source))
     elif isinstance(value, ast.Attribute) and isinstance(value.value, ast.Name) and value.value.id == "self":
         bound = module.attribute_values.get(owner.class_name, {}).get(value.attr, [])
     else:
         return ""
-    kinds = {_receiver_constructor(item, module, owner) if isinstance(item, ast.Call) else "" for item in bound}
+    # `None` placeholders say nothing about what the name holds once set.
+    # A local bound from another local (`event = threading.Event(); _WAKE = event`) is followed.
+    seen = _seen | ({value.id} if isinstance(value, ast.Name) else set())
+    kinds = {
+        _receiver_constructor(item, module, owner) if isinstance(item, ast.Call)
+        else _receiver_constructor(item, module, owner, seen) if isinstance(item, ast.Name) and item.id not in seen
+        else ""
+        for item in bound if not (isinstance(item, ast.Constant) and item.value is None)
+    }
+    if len(kinds) == 1 and "" not in kinds:
+        return next(iter(kinds))
+    annotated = _annotated_kind(module.annotations.get(value.id), module) if isinstance(value, ast.Name) else ""
+    if annotated and not kinds - {annotated}:
+        return annotated
     return next(iter(kinds)) if len(kinds) == 1 else ""
+
+
+def _annotated_kind(annotation: ast.AST | None, module: Module) -> str:
+    """The one import-qualified type an annotation names, through `X | None`
+    and `Optional[X]`, or ""."""
+    if isinstance(annotation, ast.BinOp) and isinstance(annotation.op, ast.BitOr):
+        sides = [side for side in (annotation.left, annotation.right) if not (isinstance(side, ast.Constant) and side.value is None)]
+        return _annotated_kind(sides[0], module) if len(sides) == 1 else ""
+    if isinstance(annotation, ast.Subscript) and _qualified_name(annotation.value, module) in {"typing.Optional", "Optional"}:
+        return _annotated_kind(annotation.slice, module)
+    if isinstance(annotation, (ast.Name, ast.Attribute)):
+        return _qualified_name(annotation, module)
+    return ""
+
+
+def _library_constructed(value: ast.AST, module: Module, owner: Definition) -> bool:
+    """A receiver evidently built by a stdlib or third-party constructor
+    (`threading.Event()`, `queue.Queue()`): its methods are that library's."""
+    kind = _receiver_constructor(value, module, owner)
+    return "." in kind and kind.split(".")[0] != "music_app"
 
 
 def _is_os_path(node: ast.AST) -> bool:
@@ -896,7 +1070,7 @@ class LibraryStateEvidence:
                 resolve = _resolver(definition, index)
                 aliases = self.aliases(definition, is_state)
                 for node, _ in _facts(definition).calls:
-                    for target in resolve(node.func):
+                    for target in resolve(node.func, call=node):
                         for parameter, argument in _bound_arguments(node, target):
                             if is_state(argument):
                                 changed |= self._add(self.state_params, target, parameter)
@@ -1131,6 +1305,29 @@ def _local_callable_bindings(definition: Definition, name: str) -> list[ast.AST]
     return values
 
 
+def _accepts_call(method: Definition, call: ast.Call) -> bool:
+    """Whether a method call's arguments can bind the method's parameters
+    (its receiver excluded): no required parameter left unfilled and no
+    surplus positional argument. Unpacked arguments may fill anything."""
+    if any(isinstance(arg, ast.Starred) for arg in call.args) or any(keyword.arg is None for keyword in call.keywords):
+        return True
+    arguments = method.node.args
+    positional = [*arguments.posonlyargs, *arguments.args]
+    if positional and positional[0].arg in {"self", "cls"}:
+        positional = positional[1:]
+    if len(call.args) > len(positional) and arguments.vararg is None:
+        return False
+    named = {keyword.arg for keyword in call.keywords}
+    required = positional[: len(positional) - len(arguments.defaults)]
+    if any(parameter.arg not in named for parameter in required[len(call.args):]):
+        return False
+    return all(
+        parameter.arg in named
+        for parameter, default in zip(arguments.kwonlyargs, arguments.kw_defaults)
+        if default is None
+    )
+
+
 def _visible_nested(definition: Definition) -> dict[str, Definition]:
     """Nested functions a definition can call by name: its own, then those of
     the functions it is nested in (a sibling closure such as `resolved_cover`
@@ -1147,12 +1344,12 @@ def _visible_nested(definition: Definition) -> dict[str, Definition]:
 def _resolver(definition: Definition, index: Index):
     nested = _visible_nested(definition)
 
-    def resolve(target: ast.AST | None, seen: frozenset[str] = frozenset()) -> list[Definition]:
+    def resolve(target: ast.AST | None, seen: frozenset[str] = frozenset(), call: ast.Call | None = None) -> list[Definition]:
         if target is None:
             return []
         if isinstance(target, ast.Name) and target.id in nested:
             return [nested[target.id]]
-        found = index.resolve(target, definition)
+        found = index.resolve(target, definition, call)
         if found or not isinstance(target, ast.Name) or target.id in seen:
             return found
         # A local alias of one or more functions (`respond = _legacy_cover_response`).
@@ -1220,7 +1417,7 @@ def _callees(definition: Definition, index: Index) -> list[tuple[Definition, boo
         if id(node) in seen:
             continue
         seen.add(id(node))
-        targets = resolve(node.func)
+        targets = resolve(node.func, call=node)
         found.extend((target, in_loop, node.lineno, node) for target in targets)
         _, name = _call_name(node)
         position = SYNCHRONOUS_DISPATCH.get(name)
@@ -1260,7 +1457,7 @@ def _loop_calls(definition: Definition, index: Index) -> list[tuple[ast.Call, li
     for node in calls:
         if id(node) in offloaded:
             continue
-        targets = resolve(node.func)
+        targets = resolve(node.func, call=node)
         # A callable argument the callee calls through its parameter
         # (`revert(config, load_keys=load_ignored_keys)`) runs here too.
         for target in list(targets):
@@ -1273,9 +1470,37 @@ def _loop_calls(definition: Definition, index: Index) -> list[tuple[ast.Call, li
     return found
 
 
-def _called_parameters(definition: Definition) -> set[str]:
+def _directly_called_parameters(definition: Definition) -> set[str]:
     parameters = set(_parameter_names(definition))
     return {node.func.id for node, _ in _facts(definition).calls if isinstance(node.func, ast.Name) and node.func.id in parameters}
+
+
+def _called_parameters(definition: Definition) -> set[str]:
+    """Parameters the definition calls, itself or through a helper it passes
+    them to (`outer(action)` handing `action` to `inner`, which calls it)."""
+    found = _CALLED_PARAMETERS.get(id(definition.node))
+    return found if found is not None else _directly_called_parameters(definition)
+
+
+def _compute_called_parameters(modules: list[Module], index: Index) -> None:
+    """`_called_parameters` for every definition, to a fixpoint."""
+    definitions = list(_all_definitions(modules))
+    called = {id(definition.node): _directly_called_parameters(definition) for definition in definitions}
+    changed = True
+    while changed:
+        changed = False
+        for definition in definitions:
+            parameters = set(_parameter_names(definition))
+            own = called[id(definition.node)]
+            resolve = _resolver(definition, index)
+            for node, _ in _facts(definition).calls:
+                for target in resolve(node.func, call=node):
+                    for parameter in called.get(id(target.node), ()):
+                        argument = _argument_for(node, target, parameter)
+                        if isinstance(argument, ast.Name) and argument.id in parameters and argument.id not in own:
+                            own.add(argument.id)
+                            changed = True
+    _CALLED_PARAMETERS.update(called)
 
 
 def _awaited_call_ids(definition: Definition) -> set[int]:
@@ -1314,11 +1539,12 @@ class EventLoopAnalysis:
         if definition.key in self.library_scale:
             return "library-scale", definition.key, definition.node.lineno
         module = self.index.modules[definition.module]
-        for node, _ in _facts(definition).calls:
-            found = _blocking_operation(node, module, definition)
-            if found is not None:
-                return (*found, node.lineno)
-        return None
+        blocking = [
+            (*found, node.lineno) for node, _ in _facts(definition).calls
+            if (found := _blocking_operation(node, module, definition)) is not None
+        ]
+        blocking += [("wait", operation, line) for operation, line in _lock_waits(definition, module)]
+        return min(blocking, key=lambda item: item[2]) if blocking else None
 
     def witness(self, start: Definition) -> tuple[str, str, str, int, list[str]] | None:
         """The nearest blocking operation a synchronous call of `start` runs:
@@ -1343,6 +1569,52 @@ class EventLoopAnalysis:
         self._witnesses[id(start.node)] = found
         return found
 
+    def find_locks_held_across_io(self, modules: list[Module]) -> None:
+        """Records each thread lock some `with lock:` body holds across
+        blocking work (I/O, or taking another such lock; not waiting on an
+        event or condition, which releases nothing it holds): taking that
+        lock may wait for the whole I/O. Repeated until no new lock is found,
+        since holding one such lock while taking another holds across it too."""
+        definitions = list(_all_definitions(modules))
+        while True:
+            self._witnesses.clear()
+            found = False
+            for definition in definitions:
+                module = self.index.modules[definition.module]
+                resolve = _resolver(definition, self.index)
+                for statement, _kind, key in _lock_blocks(definition, module):
+                    if key is None or key in _LOCKS_HELD_ACROSS_IO:
+                        continue
+                    witness = self._held_work(statement, definition, module, resolve)
+                    if witness is not None:
+                        _LOCKS_HELD_ACROSS_IO[key] = witness
+                        found = True
+            if not found:
+                self._witnesses.clear()
+                return
+
+    def _held_work(self, statement: ast.With, definition: Definition, module: Module, resolve) -> str | None:
+        calls = []
+        pending = list(statement.body)
+        while pending:
+            node = pending.pop()
+            if isinstance(node, (*NESTED_SCOPES, ast.Lambda)):
+                continue
+            if isinstance(node, ast.Call):
+                calls.append(node)
+            pending.extend(ast.iter_child_nodes(node))
+        for node in sorted(calls, key=lambda item: (item.lineno, item.col_offset)):
+            direct = _blocking_operation(node, module, definition)
+            if direct is not None and (direct[0] != "wait" or direct[1].endswith(".acquire")):
+                return f"{direct[1]}@{definition.path}:{node.lineno}"
+            for target in resolve(node.func, call=node):
+                if isinstance(target.node, ast.AsyncFunctionDef):
+                    continue
+                witness = self.witness(target)
+                if witness is not None and (witness[0] != "wait" or witness[1].endswith(".acquire")):
+                    return f"{witness[1]}@{witness[2]}:{witness[3]}"
+        return None
+
     def hazards(self, entry: dict[str, object], root: Definition) -> list[dict[str, object]]:
         if not isinstance(root.node, ast.AsyncFunctionDef):
             return []
@@ -1353,6 +1625,19 @@ class EventLoopAnalysis:
             current, via = queue.popleft()
             awaited = _awaited_call_ids(current)
             module = self.index.modules[current.module]
+            # `with lock:` on a thread lock waits on the loop thread itself.
+            for operation, line in _lock_waits(current, module):
+                found.append({
+                    "rule": "BI-08",
+                    "operation": f"event-loop-blocking:wait:{operation}@{current.path}:{line}",
+                    "path": current.path,
+                    "function": current.qualname,
+                    "line": line,
+                    "entrypoint": entry["key"],
+                    "depth": "indirect" if via else "direct",
+                    "via": list(via),
+                    "reject": True,
+                })
             for node, targets in _loop_calls(current, self.index):
                 blocking = []
                 if id(node) not in awaited and (direct := _blocking_operation(node, module, current)) is not None:
@@ -1443,7 +1728,7 @@ def _launcher_parameters(modules: list[Module], index: Index) -> dict[int, dict[
                 launched = None if id(node) in awaited else _launched_callable(node)
                 if launched is not None:
                     handed.append(launched)
-                for callee in resolve(node.func):
+                for callee in resolve(node.func, call=node):
                     for parameter, trigger in launchers.get(id(callee.node), {}).items():
                         argument = _argument_for(node, callee, parameter)
                         if argument is not None:
@@ -1469,7 +1754,7 @@ def _launched_entrypoints(module: Module, index: Index, launchers: dict[int, dic
         for node, _ in facts.calls:
             launched = None if id(node) in awaited else _launched_callable(node)
             handed = [launched] if launched is not None else []
-            for callee in resolve(node.func):
+            for callee in resolve(node.func, call=node):
                 for parameter, trigger in launchers.get(id(callee.node), {}).items():
                     argument = _argument_for(node, callee, parameter)
                     if argument is not None:
@@ -1598,8 +1883,13 @@ def analyze_python_repository(
     _FACTS.clear()
     _OWN_NODES.clear()
     _PARENTS.clear()
+    _MODULES.clear()
+    _CALLED_PARAMETERS.clear()
+    _LOCKS_HELD_ACROSS_IO.clear()
     modules = load_modules(root, overrides)
     index = Index(modules)
+    _MODULES.update(index.modules)
+    _compute_called_parameters(modules, index)
     library_scale = set(library_scale_operations)
     collections = set(library_state_collections)
     entrypoints: list[dict[str, object]] = []
@@ -1608,6 +1898,7 @@ def analyze_python_repository(
     callee_cache: dict[int, list[tuple[Definition, bool, int, ast.Call]]] = {}
     scan_cache: dict[tuple[int, frozenset[str] | None], dict[int, tuple[str, int]]] = {}
     event_loop = EventLoopAnalysis(index, library_scale)
+    event_loop.find_locks_held_across_io(modules)
     library_state = LibraryStateEvidence(modules, index, collections)
     for entry, definition in _all_entrypoints(modules, index):
         entrypoints.append(entry)

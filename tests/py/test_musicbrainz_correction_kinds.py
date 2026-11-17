@@ -109,3 +109,29 @@ def test_without_a_stored_pairing_tracks_pair_by_position_only_where_titles_agre
     result = compare_album(_album(["carry on", "The Mirror"], ["Carry On", "Only for the Night"], pairing=None))
 
     assert [(row["track_number"], row["kind"]) for row in result["rows"]] == [(1, "case")]
+
+
+# Classical albums (owner 2026-11-17, batch 2 case 7): "Composer first if Music Brainz shows
+# composer first", with the same review rules as any album; no special composer handling.
+DVORAK_CREDIT = [{"name": "Antonín Dvořák", "join_phrase": "; "}, {"name": "Inna Poroshina"}]
+
+
+def _classical(local_artist):
+    return {"title": "Piano Works", "artist_name": local_artist, "release_title": "Piano Works",
+            "release_credit": "Antonín Dvořák; Inna Poroshina", "pairing": ORDER_EXACT,
+            "media": [{"position": 1, "tracks": [{"position": 1, "title": "Humoresque",
+                                                  "artist_credit": DVORAK_CREDIT}]}],
+            "tracks": [{"disc_number": 1, "track_number": 1, "title": "Humoresque", "artist": local_artist}]}
+
+
+@pytest.mark.parametrize("local_artist", ["Inna Poroshina", "Inna Poroshina; Antonín Dvořák"])
+def test_a_composer_first_credit_is_proposed_as_musicbrainz_orders_it_and_waits_for_the_owner(local_artist):
+    rows = compare_album(_classical(local_artist))["rows"]
+    assert {(row["field"], row["proposed_value"], row["kind"], row["mode"]) for row in rows} == {
+        ("album_artist", "Antonín Dvořák; Inna Poroshina", "album_artist_joined", "review"),
+        ("artist", "Antonín Dvořák; Inna Poroshina", "track_artist_joined", "review"),
+    }
+
+
+def test_a_classical_album_already_credited_as_musicbrainz_does_has_no_correction():
+    assert compare_album(_classical("Antonín Dvořák; Inna Poroshina"))["rows"] == []

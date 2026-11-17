@@ -96,7 +96,9 @@ test('collection Cover Lookup renders one unlabeled local gallery and only the s
 
   context.renderCoverLookupModal();
 
-  assert.match(elements['cover-lookup-modal-subtitle'].innerHTML, /Night/);
+  // Owner 2026-11-17: "Женя машинаCustom collection" ran together; a bold dot separates name and kind.
+  assert.match(elements['cover-lookup-modal-subtitle'].innerHTML,
+    /<span>Night<\/span><span class="cover-lookup-modal-subtitle-separator" aria-hidden="true"> • <\/span><span class="cover-lookup-modal-subtitle-meta">Custom collection<\/span>/);
   assert.equal((body.innerHTML.match(/cover-lookup-gallery/g) || []).length, 1);
   assert.match(body.innerHTML, /data-cover-lookup-file-input/);
   assert.match(body.innerHTML, /data-add-cover-lookup-remote/);

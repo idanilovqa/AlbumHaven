@@ -37944,7 +37944,8 @@ function buildCustomCollectionCoverLookupComposer(modalState) {
 
 function renderCustomCollectionCoverLookupModal(els, modalState) {
   const name = String(modalState.collectionName || '').trim();
-  if (els.subtitle) els.subtitle.innerHTML = `<span>${escapeHtml(name)}</span><span class="cover-lookup-modal-subtitle-meta">Custom collection</span>`;
+  // Owner 2026-11-17: the name and "Custom collection" ran together; a bold dot separates them.
+  if (els.subtitle) els.subtitle.innerHTML = `<span>${escapeHtml(name)}</span><span class="cover-lookup-modal-subtitle-separator" aria-hidden="true"> • </span><span class="cover-lookup-modal-subtitle-meta">Custom collection</span>`;
   if (els.status) els.status.textContent = '';
   // Fewer parts than the album version: the dialog sizes to its content (owner 2026-11-16).
   els.overlay.classList?.toggle?.('is-custom-collection', true);

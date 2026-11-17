@@ -4,6 +4,14 @@
 
 - Android: the app keeps playing through a network outage of any length. Losing Wi-Fi no longer stops playback at once with "Playback unavailable": the received audio plays on, reconnects retry with a growing delay of up to 5 seconds, and when the network returns the rest of the song continues from exactly where it was. Pausing while offline keeps the received audio, and Play while still offline plays it on while the app keeps asking the server for playback every 2 seconds, instead of failing with "Playback ownership is unavailable". Only another device taking over playback stops it.
 
+## 0.11.19 - 2026-11-17
+
+- Test-only: the album credits test (FTC-ALBUM-DETAILS-006) scrolls the gallery with the mouse wheel before clicking an album after a tag save, so the gallery no longer undoes its scroll and the test no longer fails intermittently.
+
+## 0.11.18 - 2026-11-17
+
+- Test-only: the Transatlantic search heading check (FTC-SEARCH-NAV-028) waits until the gallery has finished loading before it counts artist headings, so it no longer fails intermittently.
+
 ## 0.11.17 - 2026-11-17
 
 - Cover previews kept in app data no longer restart the preview relocation worker. Before, every such preview started a full relocation pass that rescanned all previews and copied the preview into the album folder, which slowed gallery loading and artist jumps.

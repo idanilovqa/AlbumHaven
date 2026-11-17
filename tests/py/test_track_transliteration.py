@@ -61,8 +61,8 @@ def no_fallbacks(monkeypatch):
 @pytest.fixture
 def fallbacks(monkeypatch):
     """Stand-ins answering as cutlet 0.5.2 and pypinyin 0.55.0 do for these titles."""
-    romaji = {"桜花抄": "Ouka shou", "焦燥": "Shousou", "天門": "Tenmon", "Hello 世界": "Hello sekai",
-              "カナエの気持ち": "Kanae no kimochi", "夢": "Yume"}
+    romaji = {"桜花抄": "Ouka shou", "焦燥": "Shousou", "天門": "Tenmon", "世界": "Sekai",
+              "カナエの気持ち": "Kanae no kimochi", "夢": "Yume", "自傷": "Jishou", "ジャイアニズム叱": "Jaianizumu ?"}
     pinyin = {"天门": ["tiān", "mén"], "天門": ["tiān", "mén"], "桜花抄": ["yīng", "huā", "chāo"], "你好 Love": ["nǐ", "hǎo", " Love"], "你好，世界": ["nǐ", "hǎo", "，", "shì", "jiè"]}
     monkeypatch.setitem(sys.modules, "cutlet", types.SimpleNamespace(
         Cutlet=lambda: types.SimpleNamespace(romaji=lambda text: romaji[text])))
@@ -211,6 +211,10 @@ def test_the_installed_libraries_give_the_approved_mockups_forms():
                                   stored=JAPANESE) == {
         (1, 1): "Ouka shou", (1, 2): "Omoide wa tooku no hibi", (1, 4): "Kanae no kimochi"}
     assert fallback_transliteration("天门", japanese=False) == "Tiān mén"
+    # A sandbox6 title (2026-11-17): Latin letters cutlet does not know stay as written.
+    assert fallback_transliteration("Gianizm Tsū/Two (ジャイアニズム痛, Massacre)", japanese=True) == (
+        "Gianizm Tsū/Two (jaianizumutsuu, Massacre)")
+    assert fallback_transliteration("Gianizm Shichi (ジャイアニズム叱, Scold)", japanese=True) is None
 
 
 def test_other_scripts_show_only_musicbrainz_and_cyrillic_never_shows_anything(fallbacks):
@@ -248,6 +252,17 @@ def test_text_with_nothing_latin_folds_to_no_key(text):
 
 def test_a_different_pronunciation_keeps_a_different_key():
     assert latin_search_key("Tiān mǎ") != latin_search_key("Tiān mén")
+
+
+# cutlet reads only a title's Japanese runs ---------------------------------------------------
+
+def test_only_the_japanese_runs_are_romanized_and_the_latin_text_stays_as_written(fallbacks):
+    assert fallback_transliteration("Jishō (自傷)", japanese=True) == "Jishō (jishou)"
+    assert fallback_transliteration("Hello 世界", japanese=True) == "Hello sekai"
+
+
+def test_a_run_cutlet_cannot_read_shows_no_latin_form_rather_than_a_question_mark(fallbacks):
+    assert fallback_transliteration("Gianizm Shichi (ジャイアニズム叱, Scold)", japanese=True) is None
 
 
 # Album details payload --------------------------------------------------------------------

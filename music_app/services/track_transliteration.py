@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import unicodedata
 from collections.abc import Iterable, Mapping
 from functools import lru_cache
@@ -65,9 +66,27 @@ def _cutlet():
         return None
 
 
+# A run of Japanese text: kana, ideographs, CJK punctuation and full-width forms. Only these go
+# to cutlet; the title's other text stays as written ("Jishō" is not cutlet's to spell, and it
+# answers "?" for letters it does not know).
+_JAPANESE_RUN = re.compile("[　-〿぀-ヿㇰ-ㇿ㐀-䶿一-鿿豈-﫿"
+                           "＀-￯\U00020000-\U0003134f]+")
+
+
 def _romaji(title: str) -> str | None:
+    """Each Japanese run in romaji, the rest kept; None when cutlet cannot read a run (its "?")."""
     katsu = _cutlet()
-    return katsu.romaji(title) if katsu is not None else None
+    if katsu is None:
+        return None
+    pieces, end = [], 0
+    for run in _JAPANESE_RUN.finditer(title):
+        latin = str(katsu.romaji(run.group()) or "").strip()
+        if not latin or latin.count("?") > run.group().count("?"):
+            return None
+        # cutlet capitalizes the start of what it reads; mid-title that is not a sentence start.
+        pieces += [title[end:run.start()], latin if run.start() == 0 else latin[:1].lower() + latin[1:]]
+        end = run.end()
+    return "".join(pieces + [title[end:]])
 
 
 def _pinyin(title: str) -> str | None:

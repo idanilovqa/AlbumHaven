@@ -773,3 +773,14 @@ test('small track tables render completely in one pass', () => {
   assert.equal(rowCount(container.innerHTML), 12);
   assert.equal(frames.length, 0);
 });
+
+test('the shared track table owns the Album Details type scale on every surface', () => {
+  // Owner FIX-TABLE-01: a Custom Collection table rendered at 16px because only Album Details' list set 0.8rem.
+  const css = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'album-track-table.css'),
+    'utf8',
+  );
+  const rule = css.match(/^\.album-track-table\s*\{([^}]*)\}/m)?.[1] || '';
+  assert.match(rule, /font-size:\s*0\.8rem/);
+  assert.match(rule, /line-height:\s*1\.3/);
+});

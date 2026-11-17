@@ -4,6 +4,9 @@
   --album-track-playing-period: 3.6s;
   --cdt-mobile-min-width: 0;
   min-width: 0;
+  /* The table owns its type scale; collection pages had none of Album Details' .track-modal-list and fell back to 16px. */
+  font-size: 0.8rem;
+  line-height: 1.3;
 }
 .album-track-table .compact-data-table[data-cdt-mobile="grouped"] {
   --cdt-mobile-columns: 36px minmax(0, 1fr) minmax(54px, auto);

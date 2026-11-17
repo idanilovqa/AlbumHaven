@@ -595,6 +595,68 @@ test('a gallery card whose album is gone closes Album Details and refreshes the 
   assert.doesNotMatch(context.getTrackModalElements().list.innerHTML, /data-track-modal-current-release/);
 });
 
+function splitByThisSessionResponses(chosen) {
+  const releases = [
+    { album_id: 92, album_key: 'artist::album::year::2014', name: 'Album', year: 2014, track_count: 1 },
+    { album_id: 93, album_key: 'artist::album::year::2004', name: 'Album', year: 2004, track_count: 17 },
+  ];
+  return [
+    { ok: false, status: 404, json: async () => ({ ok: false, error: 'Album not found' }) },
+    {
+      ok: false,
+      status: 409,
+      json: async () => ({ ok: false, resolution_kind: 'album_split', current_releases: releases }),
+    },
+    { ok: true, status: 200, json: async () => ({ ok: true, album: chosen }) },
+  ];
+}
+
+const releaseThisSessionSplit = {
+  album_id: 93,
+  key: 'artist::album::year::2004',
+  request_key: 'artist::album::year::2004',
+  name: 'Album',
+  year: 2004,
+  preview_only: false,
+  tracks: [{ path: 'one', title: 'Edited track' }],
+};
+
+test('a card this session split opens its own release by name and year, never a chooser', async () => {
+  const responses = splitByThisSessionResponses(releaseThisSessionSplit);
+  const { context } = loadHelper({ onFetchAlbumDetails: () => responses.shift() });
+  const card = { album_id: 17, key: 'artist::album', name: 'Album', year: 2004, preview_only: true };
+
+  context.rememberLocallyEditedAlbum(card);
+  context.openTrackModal(card);
+  await flushMicrotasks();
+
+  assert.deepEqual(context.fetchCalls.map(({ url }) => url), [
+    '/album-details?album_key=artist%3A%3Aalbum&album_id=17',
+    '/album-details?album_key=artist%3A%3Aalbum&album_id=17&resolve_lineage=1',
+    '/album-details?album_key=artist%3A%3Aalbum%3A%3Ayear%3A%3A2004&album_id=93',
+  ]);
+  assert.equal(context.getTrackModalElements().overlay.hidden, false);
+  assert.deepEqual(context.showToastCalls, []);
+  assert.doesNotMatch(context.getTrackModalElements().list.innerHTML, /Current releases|data-track-modal-current-release/);
+});
+
+test('inventory refresh follows the release this session split instead of closing', async () => {
+  const open = { ...releaseThisSessionSplit, album_id: 17, key: 'artist::album', request_key: 'artist::album' };
+  const responses = splitByThisSessionResponses(releaseThisSessionSplit);
+  const { context } = loadHelper({ initialAlbums: [open], onFetchAlbumDetails: () => responses.shift() });
+  context.rememberLocallyEditedAlbum(open);
+  context.state.modalReleases = [open];
+  context.state.modalReleaseIndex = 0;
+  context.getTrackModalElements().overlay.hidden = false;
+
+  assert.equal(await context.refreshOpenTrackModalAfterInventoryMutation(), true);
+  await flushMicrotasks();
+
+  assert.equal(context.fetchCalls.at(-1).url, '/album-details?album_key=artist%3A%3Aalbum%3A%3Ayear%3A%3A2004&album_id=93');
+  assert.equal(context.getTrackModalElements().overlay.hidden, false);
+  assert.deepEqual(context.showToastCalls, []);
+});
+
 test('inventory refresh closes Album Details when the open album is gone', async () => {
   const open = {
     album_id: 17,

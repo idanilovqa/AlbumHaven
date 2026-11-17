@@ -556,7 +556,8 @@ async function fetchCoverForAlbum(album, options = {}) {
     showToast(
       Number(data.downloaded_count || 0) > 0
         ? 'Cover art updated.'
-        : `Cover was not updated${data.job_result?.reason ? `: ${String(data.job_result.reason).replaceAll('_', ' ')}` : ''}.`,
+        : (data.job_result?.message
+          || `Cover was not updated${data.job_result?.reason ? `: ${String(data.job_result.reason).replaceAll('_', ' ')}` : ''}.`),
       Number(data.downloaded_count || 0) > 0 ? 'success' : 'error',
       3200,
     );

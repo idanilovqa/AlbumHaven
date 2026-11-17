@@ -77,7 +77,7 @@ test(`${CASE_ID} Space preserves native overlay actions and range playback acros
     await trackModalActions.pressSpaceOnFocusedLightboxClose({
       afterSpace: () => globalPlayerActions.waitForPlaybackState({ paused: false }),
     });
-    expect(await globalPlayerActions.readCurrentPlaybackSummary()).toEqual(expectedPlayback(false));
+    await expect.poll(() => globalPlayerActions.readCurrentPlaybackSummary(), { timeout: 1000 }).toEqual(expectedPlayback(false));
     expect((await playbackEvidence.waitForTrackPlaybackEvidence({
       after: playbackMark,
       path: playbackPath,
@@ -87,11 +87,11 @@ test(`${CASE_ID} Space preserves native overlay actions and range playback acros
   await stepLogger.step('Keep the player foregrounded and close Album Details with native Space without resuming', async () => {
     await globalPlayerActions.expectForegroundPlayerAndToggle('albumDetails', { paused: true });
     await globalPlayerActions.waitForPlaybackState({ paused: true });
-    expect(await globalPlayerActions.readCurrentPlaybackSummary()).toEqual(expectedPlayback(true));
+    await expect.poll(() => globalPlayerActions.readCurrentPlaybackSummary(), { timeout: 1000 }).toEqual(expectedPlayback(true));
     await trackModalActions.pressSpaceOnFocusedCloseControl({
       afterSpace: () => globalPlayerActions.waitForPlaybackState({ paused: true }),
     });
-    expect(await globalPlayerActions.readCurrentPlaybackSummary()).toEqual(expectedPlayback(true));
+    await expect.poll(() => globalPlayerActions.readCurrentPlaybackSummary(), { timeout: 1000 }).toEqual(expectedPlayback(true));
     await resumeWithRangeSpace();
   });
 
@@ -100,7 +100,7 @@ test(`${CASE_ID} Space preserves native overlay actions and range playback acros
     await coverLookupActions.pressSpaceOnFocusedDrawerOpener({
       afterSpace: () => globalPlayerActions.waitForPlaybackState({ paused: false }),
     });
-    expect(await globalPlayerActions.readCurrentPlaybackSummary()).toEqual(expectedPlayback(false));
+    await expect.poll(() => globalPlayerActions.readCurrentPlaybackSummary(), { timeout: 1000 }).toEqual(expectedPlayback(false));
     expect((await playbackEvidence.waitForTrackPlaybackEvidence({
       after: playbackMark,
       path: playbackPath,
@@ -110,11 +110,11 @@ test(`${CASE_ID} Space preserves native overlay actions and range playback acros
   await stepLogger.step('Keep the player foregrounded and close Notifications with Space without resuming', async () => {
     await globalPlayerActions.expectForegroundPlayerAndToggle('notifications', { paused: true });
     await globalPlayerActions.waitForPlaybackState({ paused: true });
-    expect(await globalPlayerActions.readCurrentPlaybackSummary()).toEqual(expectedPlayback(true));
+    await expect.poll(() => globalPlayerActions.readCurrentPlaybackSummary(), { timeout: 1000 }).toEqual(expectedPlayback(true));
     await coverLookupActions.pressSpaceOnFocusedDrawerClose({
       afterSpace: () => globalPlayerActions.waitForPlaybackState({ paused: true }),
     });
-    expect(await globalPlayerActions.readCurrentPlaybackSummary()).toEqual(expectedPlayback(true));
+    await expect.poll(() => globalPlayerActions.readCurrentPlaybackSummary(), { timeout: 1000 }).toEqual(expectedPlayback(true));
     await resumeWithRangeSpace();
   });
 
@@ -123,7 +123,7 @@ test(`${CASE_ID} Space preserves native overlay actions and range playback acros
     await settingsModalAppBarActions.pressSpaceOnFocusedSettingsOpener({
       afterSpace: () => globalPlayerActions.waitForPlaybackState({ paused: false }),
     });
-    expect(await globalPlayerActions.readCurrentPlaybackSummary()).toEqual(expectedPlayback(false));
+    await expect.poll(() => globalPlayerActions.readCurrentPlaybackSummary(), { timeout: 1000 }).toEqual(expectedPlayback(false));
     expect((await playbackEvidence.waitForTrackPlaybackEvidence({
       after: playbackMark,
       path: playbackPath,
@@ -132,21 +132,21 @@ test(`${CASE_ID} Space preserves native overlay actions and range playback acros
 
   await stepLogger.step('Keep the player foregrounded and close Settings with Space without resuming', async () => {
     await globalPlayerActions.expectForegroundPlayerAndToggle('settings', { paused: true });
-    expect(await globalPlayerActions.readCurrentPlaybackSummary()).toEqual(expectedPlayback(true));
+    await expect.poll(() => globalPlayerActions.readCurrentPlaybackSummary(), { timeout: 1000 }).toEqual(expectedPlayback(true));
     await settingsModalAppBarActions.pressSpaceOnFocusedSettingsClose({
       afterSpace: () => globalPlayerActions.waitForPlaybackState({ paused: true }),
     });
-    expect(await globalPlayerActions.readCurrentPlaybackSummary()).toEqual(expectedPlayback(true));
+    await expect.poll(() => globalPlayerActions.readCurrentPlaybackSummary(), { timeout: 1000 }).toEqual(expectedPlayback(true));
     await resumeWithRangeSpace();
   });
 
   await stepLogger.step('Preserve literal Space in editable search text', async () => {
     const playbackMark = await playbackEvidence.playbackMark();
-    expect(await globalPlayerActions.readCurrentPlaybackSummary()).toEqual(expectedPlayback(false));
+    await expect.poll(() => globalPlayerActions.readCurrentPlaybackSummary(), { timeout: 1000 }).toEqual(expectedPlayback(false));
     await searchToolbarActions.enterLiteralSpace();
-    expect(await globalPlayerActions.readCurrentPlaybackSummary()).toEqual(expectedPlayback(false));
+    await expect.poll(() => globalPlayerActions.readCurrentPlaybackSummary(), { timeout: 1000 }).toEqual(expectedPlayback(false));
     await searchToolbarActions.clearSearch();
-    expect(await globalPlayerActions.readCurrentPlaybackSummary()).toEqual(expectedPlayback(false));
+    await expect.poll(() => globalPlayerActions.readCurrentPlaybackSummary(), { timeout: 1000 }).toEqual(expectedPlayback(false));
     expect((await playbackEvidence.waitForTrackPlaybackEvidence({
       after: playbackMark,
       path: playbackPath,

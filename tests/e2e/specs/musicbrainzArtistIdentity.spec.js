@@ -269,11 +269,13 @@ test('FTC-MBID-003 an Unconfirmed match and its filter are in the first Problema
     await stepLogger.step('MBD1-10, MBD1-21: the filter and the Artist row arrive with the first page', async () => {
       await galleryActions.goto('/?surface=albums');
       await galleryActions.waitForGalleryReady();
-      await settingsModalAppBarActions.openSettings();
+      // Listen before Settings opens: it opens on Problematic files, whose bounded first page
+      // can otherwise answer before the wait starts (the 60 s flake seen on main, PR 74).
       const boundedPage = utilityProblematicFilesActions.waitForBoundedPageEvidence(
         'MBID: Unconfirmed match',
         UNCONFIRMED,
       );
+      await settingsModalAppBarActions.openSettings();
       await utilityTabBarActions.openTab('problematic-files');
       await utilityProblematicFilesActions.openProblemFilterMenu();
       await boundedPage;

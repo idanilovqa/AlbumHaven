@@ -8988,7 +8988,7 @@
     "expectedContracts": [
       "musicbrainz-track-title-transliteration"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.component.config.js",
@@ -9486,7 +9486,7 @@
     "expectedContracts": [
       "musicbrainz-series-tree-groups"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.component.config.js",
@@ -9501,13 +9501,13 @@
     "expectedContracts": [
       "musicbrainz-series-tree-kind-menu"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/seriesView.spec.js",
-    "case": "owner 2026-11-17: the Series button switches only the tree; the gallery header, URL and history stay and no row is selected",
+    "case": "owner 2026-11-17: the Series button switches only the tree; the gallery header, URL and history stay and no row is selected unless the gallery shows that series",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -9516,7 +9516,7 @@
     "expectedContracts": [
       "musicbrainz-series-tree-switch"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.component.config.js",

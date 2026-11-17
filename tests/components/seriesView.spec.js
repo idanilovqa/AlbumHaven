@@ -196,7 +196,7 @@ test('5B: a series menu offers Mark as Series and Mark as Featured In, the curre
   await expect(menu.getByRole('button', { name: 'Mark as Featured In', exact: true })).toBeDisabled();
 });
 
-test('owner 2026-11-17: the Series button switches only the tree; the gallery header, URL and history stay and no row is selected', async ({ page }) => {
+test('owner 2026-11-17: the Series button switches only the tree; the gallery header, URL and history stay and no row is selected unless the gallery shows that series', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   const template = fs.readFileSync(path.join(repoRoot, 'music_app/templates/components/navigation-tree-item.html'), 'utf8');
   const index = fs.readFileSync(path.join(repoRoot, 'music_app/templates/index.html'), 'utf8');
@@ -251,4 +251,12 @@ test('owner 2026-11-17: the Series button switches only the tree; the gallery he
   expect(await page.evaluate(() => window.__navigated === true)).toBe(false);
   // Only the tree was read; never a gallery.
   expect(await page.evaluate(() => window.__fetched)).toEqual(['/series-tree?category=main_library']);
+
+  // "Highlight X" (owner 2026-11-17): from a gallery already showing series X, row X is highlighted.
+  await page.evaluate((tree) => {
+    state.view = { ...state.view, selected_artist: '', selected_series: tree[0].mbid, series_sidebar: tree };
+    openNavigationTree('series');
+  }, TREE);
+  await expect(list.locator('[aria-current="true"]')).toHaveText(new RegExp(TREE[0].name));
+  await expect(list.locator('[aria-current], .is-selected')).toHaveCount(1);
 });

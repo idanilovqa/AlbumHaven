@@ -3878,7 +3878,7 @@
     },
     {
       "id": "js:runtime/library-settings.js#openUtilityChoiceDropdown",
-      "action": "click/keydown/pointerdown/resize listeners, MutationObserver observers installed by openUtilityChoiceDropdown",
+      "action": "Position, size and keyboard-navigate one open choice dropdown from its own rows (resize, keydown, click, outside pointerdown, MutationObserver)",
       "entrypoints": [
         "js:music_app/static/js/runtime/library-settings.js#openUtilityChoiceDropdown:event:click",
         "js:music_app/static/js/runtime/library-settings.js#openUtilityChoiceDropdown:event:keydown",
@@ -3890,11 +3890,27 @@
         "music_app/static/js/runtime/library-settings.js"
       ],
       "rules": [
+        "BI-01",
         "BI-03",
         "BI-09"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 5000
+      },
+      "budgets": {
+        "domQueries": 3,
+        "itemsVisited": 6
+      },
+      "growth": {
+        "metric": "itemsVisited",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test tests/js/runtime/utility-choice-dropdown-bounded.test.js",
+      "testIdentity": "BI choice dropdown resize and arrow keys read only the open menu rows at any page size",
+      "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
       "id": "js:runtime/library-settings.js#openUtilityFoobarGuide",

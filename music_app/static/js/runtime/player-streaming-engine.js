@@ -25,6 +25,8 @@ const STREAMING_REPLACEMENT_ACTIVE_OUTGOING_CUSHION_SECONDS = STREAMING_REPLACEM
 const STREAMING_WAVEFORM_READY_SECONDS = 1;
 const STREAMING_RESTORE_AUTOPLAY_SETTLEMENT_MS = 750;
 const STREAMING_REPLACEMENT_CUSHION_WAIT_MS = 1000;
+// A kept track only saves a server stream; a slow or stuck browser cache must not hold the start.
+const STREAMING_CACHED_TRACK_PRIME_DEADLINE_MS = 500;
 const STREAMING_MAX_KNOWN_TRACK_RATES = 512;
 const STREAMING_ENCODED_BUFFER_SECONDS = { current: 120, continuity: 30 };
 const STREAMING_ENCODED_BUFFER_MIN_BYTES = 1024 * 1024;
@@ -2929,7 +2931,14 @@ async function startBrowserStreamingTrack(track, {
   if (!keepDetached) endStreamingDetach();
   settleStreamingReplacementCushionWaiter(false);
   if (mayPrimeStreamingCachedTrack()) {
-    await primeStreamingCachedTrack(track);
+    let primeDeadline = 0;
+    await Promise.race([
+      primeStreamingCachedTrack(track),
+      new Promise((resolve) => {
+        primeDeadline = setTimeout(resolve, STREAMING_CACHED_TRACK_PRIME_DEADLINE_MS);
+      }),
+    ]);
+    clearTimeout(primeDeadline);
     if (engine.startRequestId !== startRequestId) return null;
   }
   const canPrepareReplacement = () => {

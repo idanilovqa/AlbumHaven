@@ -4,6 +4,26 @@
 
 - The web player keeps playing through a network switch. A song that had fully arrived plays on to its end; a song still arriving plays the audio already received up to a whole frame, and the rest joins it there from the next connection with no gap, skip or repeat. Reconnects retry while audio plays, and once it runs out the player waits silently where it is, however long the outage lasts, and plays on from there when the network returns. A paused player keeps the audio it received when the connection drops too. Seeking while offline plays at once inside the received audio; past it, the head moves to the target and waits there silently, paused if it was paused. A player that had to stop keeps its place: a seek moves it, and Play while still offline no longer resets it to the start. Losing the network no longer stops playback at all: the player keeps its playback claim through the outage, retrying every 2 seconds, and renews it when the network returns, even past the claim's 30-second lease. The server now accepts that renewal until another device has claimed playback, so only another device taking over stops it, and Play after reconnecting or after a long pause no longer shows "Playback unavailable". Pausing offline shows Play at once, keeps the claim's token when its give-back cannot reach the server so the next Play offline goes on instead of locking the player in "Playback unavailable", and no longer shows "Listening history could not be saved" for a save the network never carried (the listen stays open and is saved later).
 
+## 0.11.25 - 2026-11-17
+
+- Opening an album from a gallery card no longer shows the "This album was split" chooser; it appears only from a notification about a split album. If an album opened from the gallery changed elsewhere, the gallery refreshes in place, Album Details closes, and a toast says "This album changed—choose it again in the gallery." An album you just split yourself opens the matching release.
+
+## 0.11.24 - 2026-11-17
+
+- Android app: the library offers once to set Battery to Unrestricted, so battery saving stops closing the app in the background and reloading the library on return; any answer is final.
+
+## 0.11.23 - 2026-11-17
+
+- CI only, no application change: adding or removing a Playwright component test now needs only its entry in `tests/ci/test-data-matrix.json`. The foundation gate compares the component job's discovered cases with the matrix's component entries instead of a hard-coded 229, and the inventory and ownership checks derive their totals from the matrix. A missing or extra test still fails by name.
+
+## 0.11.22 - 2026-11-17
+
+- Playback no longer stalls when the browser's kept-track cache is slow to answer: a track's start waits at most half a second for it and otherwise streams from the server.
+
+## 0.11.21 - 2026-11-17
+
+- Test-only: the gallery overlap tests (FTC-GALLERY-NAV-035) wait for the deferred continuation and the settled query before asserting, so they no longer fail intermittently.
+
 ## 0.11.20 - 2026-11-17
 
 - Agents can run the search, Problematic Files, HTML reload, Edit Tags and bounded-interaction regression gates on GitHub-hosted runners with the on-demand Heavy Regression Gates workflow, instead of queueing for the owner's machine. Real-library and full-size-library checks stay local.

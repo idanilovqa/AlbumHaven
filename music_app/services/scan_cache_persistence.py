@@ -2088,21 +2088,22 @@ class _SharedConnection:
     Each `with shared.transaction() as connection:` block is its own
     transaction: it commits on success and rolls back on error, as a fresh
     connection would, and the connection stays open for the next block. Worker
-    threads of the run take turns. The connection is opened once, before any
-    album is processed; if it cannot be opened, or breaks, each later commit
-    fails on its own, as a failed connect would have."""
+    threads of the run take turns. The connection opens with the run's first
+    commit; one that breaks is closed, and the next commit opens a new one, so
+    a lost connection fails only the commit that was using it."""
 
-    def __init__(self, database_url: str, connection: Any):
+    def __init__(self, database_url: str, connect: Callable[[], Any]):
         self.database_url = database_url
+        self._connect = connect
         self._lock = threading.Lock()
-        self._connection = connection
+        self._connection: Any = None
 
     @contextmanager
     def transaction(self) -> Iterator[Any]:
         with self._lock:
+            if self._connection is None:
+                self._connection = self._connect()
             connection = self._connection
-            if connection is None:
-                raise RuntimeError("The cover run's database connection is unavailable.")
             try:
                 yield connection
             except BaseException:
@@ -2136,19 +2137,14 @@ _SHARED_CONNECTION: ContextVar[_SharedConnection | None] = ContextVar("scan_cach
 
 @contextmanager
 def shared_scan_cache_connection(config: dict[str, object]) -> Iterator[None]:
-    """Opens the one connection a cover run's per-album commits share (in this
-    context and contexts copied from it), and closes it on exit: a batch of
-    albums costs one connection, not one per album."""
+    """Provides the one connection a cover run's per-album commits share (in
+    this context and contexts copied from it), and closes it on exit: a batch
+    of albums costs one connection, not one per album."""
     database_url = str(config.get(_APP_DATABASE_URL_KEY) or "").strip() if isinstance(config, dict) else ""
     if not database_url or _SHARED_CONNECTION.get() is not None:
         yield
         return
-    try:
-        connection = PostgresScanCacheAdapter(config)._connect_to_database()
-    except Exception as exc:
-        _LOGGER.warning("Cover run database connection failed: %s", type(exc).__name__)
-        connection = None
-    shared = _SharedConnection(database_url, connection)
+    shared = _SharedConnection(database_url, PostgresScanCacheAdapter(config)._connect_to_database)
     token = _SHARED_CONNECTION.set(shared)
     try:
         yield

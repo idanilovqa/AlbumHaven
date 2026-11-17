@@ -254,6 +254,9 @@ def test_persist_cue_program_revision_replaces_segments_in_one_commit(monkeypatc
     normalized_calls = [_normalized_sql(sql) for sql, _params in connection.executed]
     previous_program_sql = next(sql for sql in normalized_calls if "cue_previous_program" in sql)
     assert previous_program_sql.count("cardinality(%(track_keys)s::text[])") == 3
+    # jsonb_build_object accepts any type, so Postgres cannot infer an uncast parameter there.
+    track_insert = next(sql for sql in normalized_calls if "insert into library.local_tracks" in sql)
+    assert "'cue_source_kind', %(source_kind)s::text" in track_insert
     segment_indexes = [index for index, sql in enumerate(normalized_calls) if "insert into library.cue_track_segments" in sql]
     deactivate_index = next(index for index, sql in enumerate(normalized_calls) if "cue_deactivate_program" in sql)
     activate_index = next(index for index, sql in enumerate(normalized_calls) if "cue_activate_program" in sql)

@@ -583,7 +583,7 @@ class PostgresScanCacheAdapter:
                     ) values (
                       %(library_id)s, %(album_id)s, %(artist_id)s, %(track_key)s, %(title)s,
                       %(track_number)s, %(duration_seconds)s, 'cue_program', now(), now(),
-                      jsonb_build_object('cue_source_kind', %(source_kind)s)
+                      jsonb_build_object('cue_source_kind', %(source_kind)s::text)
                     )
                     on conflict (library_id, track_key)
                     do update set album_id = excluded.album_id, artist_id = excluded.artist_id,

@@ -911,6 +911,16 @@ def test_root_gallery_route_contract_reads_one_published_page_at_production_trac
     measure_scale_pair(run=run, **_registered(interaction_id))
 
 
+# The test actor's current library, whose covers the reference boundary names.
+_COVER_LIBRARY_ID = 1
+
+
+def _named_cover_path(app, reference: str | None) -> str | None:
+    """The file a response's cover reference names in the test library."""
+    named = app.state.cover_reference_store.resolve(_COVER_LIBRARY_ID, reference) if reference else None
+    return named[0] if named else None
+
+
 def _cover_lookup_library(app, root: Path, album_count: int) -> tuple[Path, list[str], OperationCounts]:
     """`album_count` sibling albums in the Main Library (folders and cache
     entries) plus one selected two-track album; returns its folder, its track
@@ -982,8 +992,10 @@ def test_cover_lookup_add_remote_route_contract_reads_only_the_selected_album_at
             assert status == 200, body
             payload = decode_json(body)
             assert [item["id"] for item in payload["task"]["possible_matches"]] == ["pasted-1"]
-            assert payload["gallery"]["album_root"] == str(album_root)
-            assert [Path(item["path"]).name for item in payload["gallery"]["local_covers"]] == ["front.jpg"]
+            # The gallery names the album's local covers only by reference.
+            assert "album_root" not in payload["gallery"]
+            assert [_named_cover_path(library_app, item["candidate_cover_ref"])
+                    for item in payload["gallery"]["local_covers"]] == [str(album_root / "front.jpg")]
 
         request()
         counts.__init__()
@@ -1029,15 +1041,19 @@ def test_cover_lookup_local_select_route_contract_reads_only_the_selected_album_
     def run(album_count: int) -> OperationCounts:
         album_root, track_paths, counts = _cover_lookup_library(library_app, tmp_path / f"main-{album_count}", album_count)
         selected["track_paths"] = track_paths
+        # The lookup gallery named the local image as a candidate before the owner picked it.
+        source_ref = library_app.state.cover_reference_store.references_for(
+            _COVER_LIBRARY_ID, {str(album_root / "front.jpg"): "candidate"},
+        )[str(album_root / "front.jpg")]
 
         def request():
             status, _headers, body = run_asgi_request(
                 library_app, "POST", "/utilities/cover-lookup/local-select",
                 json_body={"album": {"name": "Album", "album_artist": "Selected", "tracks": [{"path": path} for path in track_paths]},
-                           "source_path": str(album_root / "front.jpg")},
+                           "source_cover_ref": source_ref},
             )
             assert status == 200, body
-            assert decode_json(body)["selected_cover_path"] == str(album_root / "cover.jpg")
+            assert _named_cover_path(library_app, decode_json(body)["selected_cover_ref"]) == str(album_root / "cover.jpg")
             assert persisted[-1] == (set(track_paths), str(album_root / "cover.jpg"))
 
         request()
@@ -1090,7 +1106,7 @@ def test_cover_lookup_save_remote_route_contract_reads_only_the_selected_album_a
                 json_body={"album": album, "task_id": task_id, "candidate_id": "remote-1"},
             )
             assert status == 200, body
-            assert decode_json(body)["optimistic_cover_path"] == str(album_root / "cover.jpg")
+            assert _named_cover_path(library_app, decode_json(body)["optimistic_cover_ref"]) == str(album_root / "cover.jpg")
             assert queued[-1] == ("remote-1", set(track_paths))
 
         request()

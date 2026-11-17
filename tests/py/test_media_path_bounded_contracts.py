@@ -436,6 +436,8 @@ def test_private_boundary_contract_resolves_restricted_artwork_from_the_root_sna
         _use_library(asgi_app, music_dir)
         cover = _seed_library(music_dir, album_count)[0].with_name("cover.png")
         Image.new("RGB", (40, 30), "teal").save(cover)
+        # The legacy path route serves only a cover the viewer's library already names.
+        cover_reference_url(asgi_app, cover)
 
         def request_artwork() -> int:
             status, headers, body = run_asgi_request(asgi_app, "GET", "/cover", query={"path": str(cover)})

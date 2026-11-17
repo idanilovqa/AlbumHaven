@@ -5389,6 +5389,82 @@ function bindAlbumDetailsCoverStackPointer(stack) {
   stack.addEventListener('pointercancel', clear);
 }
 
+const ALBUM_DETAILS_COVER_REAR_POSES = {
+  'is-top': 'translate(-8px, -8px) rotate(-1.8deg)',
+  'is-bottom': 'translate(8px, 8px) rotate(1.8deg)',
+};
+
+function albumDetailsCoverRearPose(stack, index) {
+  const rear = stack?.querySelector?.(`.album-details-cover-stack__rear[data-album-details-cover-index="${index}"]`);
+  return rear?.classList?.contains('is-bottom') ? 'is-bottom' : (rear ? 'is-top' : '');
+}
+
+// What the stack looks like before a cover switch re-renders it: the shuffle animates from here.
+function captureAlbumDetailsCoverStack(stack) {
+  const front = stack?.querySelector?.('.album-details-cover-stack__front');
+  if (!front) return null;
+  const poses = {};
+  stack.querySelectorAll('.album-details-cover-stack__rear').forEach((rear) => {
+    poses[rear.getAttribute('data-album-details-cover-index')] = albumDetailsCoverRearPose(stack, rear.getAttribute('data-album-details-cover-index'));
+  });
+  return {
+    front: front.cloneNode(true),
+    activeIndex: Number(stack.getAttribute('data-album-details-cover-active-index')),
+    poses,
+  };
+}
+
+// Owner pick 2026-11-17 (mock B, "Card shuffle"): the front cover slides out to the side, tucks behind the
+// stack, and the next cover rises forward into its place. `direction` is 1 (next) or -1 (previous).
+function animateAlbumDetailsCoverShuffle(previous, stack, direction) {
+  if (!previous || !stack?.animate || typeof window === 'undefined') return false;
+  if (window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) return false;
+  const activeIndex = Number(stack.getAttribute('data-album-details-cover-active-index'));
+  const front = stack.querySelector('.album-details-cover-stack__front');
+  if (!front || activeIndex === previous.activeIndex) return false;
+  const dir = direction < 0 ? -1 : 1;
+  const timing = { duration: 620, easing: 'cubic-bezier(.22,1,.36,1)', fill: 'backwards' };
+  stack.classList.add('is-shuffling');
+  // The old front cover leaves to the side and tucks in behind the stack, where its rear copy then shows.
+  const ghost = previous.front;
+  ghost.classList.add('album-details-cover-stack__ghost');
+  ghost.setAttribute('aria-hidden', 'true');
+  ghost.inert = true;
+  stack.append(ghost);
+  const tuckedRear = stack.querySelector(`.album-details-cover-stack__rear[data-album-details-cover-index="${previous.activeIndex}"]`);
+  const tuckedPose = ALBUM_DETAILS_COVER_REAR_POSES[albumDetailsCoverRearPose(stack, previous.activeIndex)] || 'none';
+  if (tuckedRear) tuckedRear.style.visibility = 'hidden';
+  const leaving = ghost.animate([
+    { transform: 'none', zIndex: 3, filter: 'brightness(1)' },
+    { transform: `translate(${dir * 70}%, -4%) rotate(${dir * 9}deg) scale(.96)`, zIndex: 3, filter: 'brightness(.95)', offset: 0.42 },
+    { transform: `translate(${dir * 38}%, 2%) rotate(${dir * 5}deg) scale(.94)`, zIndex: 0, filter: 'brightness(.8)', offset: 0.55 },
+    { transform: tuckedPose, zIndex: 0, filter: 'brightness(.82)' },
+  ], { ...timing, fill: 'forwards' });
+  // The next cover rises forward from the rear position it held.
+  const risingPose = ALBUM_DETAILS_COVER_REAR_POSES[previous.poses[String(activeIndex)]] || 'none';
+  front.animate([
+    { transform: risingPose, filter: 'brightness(.82)' },
+    { transform: 'translate(-3px, -3px) rotate(-.6deg) scale(.985)', offset: 0.45 },
+    { transform: 'none', filter: 'brightness(1)' },
+  ], timing);
+  // The third cover moves to its new rear position.
+  stack.querySelectorAll('.album-details-cover-stack__rear').forEach((rear) => {
+    if (rear === tuckedRear) return;
+    const index = rear.getAttribute('data-album-details-cover-index');
+    const from = previous.poses[index];
+    const to = albumDetailsCoverRearPose(stack, index);
+    if (from && from !== to) {
+      rear.animate([{ transform: ALBUM_DETAILS_COVER_REAR_POSES[from] }, { transform: ALBUM_DETAILS_COVER_REAR_POSES[to] }], timing);
+    }
+  });
+  leaving.finished.catch(() => {}).finally(() => {
+    ghost.remove();
+    if (tuckedRear) tuckedRear.style.removeProperty('visibility');
+    stack.classList.remove('is-shuffling');
+  });
+  return true;
+}
+
 function buildAlbumDetailsHeaderHtml(config = {}) {
   const layout = normalizeAlbumDetailsLayout(config.layout);
   const variant = config.variant === 'copy' ? 'copy' : 'album';
@@ -41542,7 +41618,11 @@ function browseTrackModalSelectedCover(value, options = {}) {
     albumKey: getTrackModalAlbumRequestKey(album),
     index,
   };
-  renderTrackModalRelease(album, { coverOnly: true });
+  // An arrow shuffles in its own direction; a clicked rear cover takes the direction of its stack position.
+  renderTrackModalRelease(album, {
+    coverOnly: true,
+    coverShuffle: options.absolute === true ? 'rear' : (requested < 0 ? -1 : 1),
+  });
   return true;
 }
 
@@ -41550,6 +41630,10 @@ function renderTrackModalRelease(album) {
   let els = getTrackModalElements();
   if (!els.overlay || !album) return;
   const coverOnly = arguments[1]?.coverOnly === true;
+  const coverShuffle = arguments[1]?.coverShuffle;
+  const previousCoverStack = coverShuffle && typeof captureAlbumDetailsCoverStack === 'function'
+    ? captureAlbumDetailsCoverStack(els.cover?.querySelector?.('.album-details-cover-stack'))
+    : null;
   const renderAlbumArtbox = typeof buildAlbumArtboxHtml === 'function'
     ? buildAlbumArtboxHtml
     : (config = {}) => String(config.coverHtml || '<div class="cover-placeholder">No cover art</div>');
@@ -41772,6 +41856,13 @@ function renderTrackModalRelease(album) {
   }
   if (typeof bindAlbumDetailsCoverStackPointer === 'function') {
     bindAlbumDetailsCoverStackPointer(els.cover.querySelector?.('.album-details-cover-stack'));
+  }
+  if (previousCoverStack && typeof animateAlbumDetailsCoverShuffle === 'function') {
+    // A rear cover peeking from the bottom comes forward like Previous; from the top, like Next.
+    const direction = coverShuffle === 'rear'
+      ? (previousCoverStack.poses[String(selectedCoverIndex)] === 'is-bottom' ? -1 : 1)
+      : coverShuffle;
+    animateAlbumDetailsCoverShuffle(previousCoverStack, els.cover.querySelector?.('.album-details-cover-stack'), direction);
   }
   if (coverOnly) return;
   const duplicateSources = albumMissing ? [] : getAlbumDuplicateSources(album);

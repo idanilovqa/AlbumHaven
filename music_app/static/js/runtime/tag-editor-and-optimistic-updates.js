@@ -2074,7 +2074,11 @@ function browseTrackModalSelectedCover(value, options = {}) {
     albumKey: getTrackModalAlbumRequestKey(album),
     index,
   };
-  renderTrackModalRelease(album, { coverOnly: true });
+  // An arrow shuffles in its own direction; a clicked rear cover takes the direction of its stack position.
+  renderTrackModalRelease(album, {
+    coverOnly: true,
+    coverShuffle: options.absolute === true ? 'rear' : (requested < 0 ? -1 : 1),
+  });
   return true;
 }
 
@@ -2082,6 +2086,10 @@ function renderTrackModalRelease(album) {
   let els = getTrackModalElements();
   if (!els.overlay || !album) return;
   const coverOnly = arguments[1]?.coverOnly === true;
+  const coverShuffle = arguments[1]?.coverShuffle;
+  const previousCoverStack = coverShuffle && typeof captureAlbumDetailsCoverStack === 'function'
+    ? captureAlbumDetailsCoverStack(els.cover?.querySelector?.('.album-details-cover-stack'))
+    : null;
   const renderAlbumArtbox = typeof buildAlbumArtboxHtml === 'function'
     ? buildAlbumArtboxHtml
     : (config = {}) => String(config.coverHtml || '<div class="cover-placeholder">No cover art</div>');
@@ -2304,6 +2312,13 @@ function renderTrackModalRelease(album) {
   }
   if (typeof bindAlbumDetailsCoverStackPointer === 'function') {
     bindAlbumDetailsCoverStackPointer(els.cover.querySelector?.('.album-details-cover-stack'));
+  }
+  if (previousCoverStack && typeof animateAlbumDetailsCoverShuffle === 'function') {
+    // A rear cover peeking from the bottom comes forward like Previous; from the top, like Next.
+    const direction = coverShuffle === 'rear'
+      ? (previousCoverStack.poses[String(selectedCoverIndex)] === 'is-bottom' ? -1 : 1)
+      : coverShuffle;
+    animateAlbumDetailsCoverShuffle(previousCoverStack, els.cover.querySelector?.('.album-details-cover-stack'), direction);
   }
   if (coverOnly) return;
   const duplicateSources = albumMissing ? [] : getAlbumDuplicateSources(album);

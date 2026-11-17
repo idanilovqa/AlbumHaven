@@ -51,9 +51,9 @@ test('Album Details cover browsing wraps without changing saved order', () => {
   assert.equal(context.getTrackModalSelectedCoverIndex(album), 2);
   assert.deepEqual(album.selected_covers.map((slot) => slot.selection_id), savedOrder);
   assert.deepEqual(JSON.parse(JSON.stringify(renders)), [
-    ['album-1', { coverOnly: true }],
-    ['album-1', { coverOnly: true }],
-    ['album-1', { coverOnly: true }],
+    ['album-1', { coverOnly: true, coverShuffle: 1 }],
+    ['album-1', { coverOnly: true, coverShuffle: -1 }],
+    ['album-1', { coverOnly: true, coverShuffle: -1 }],
   ]);
 });
 

@@ -202,6 +202,17 @@
   from { opacity: 0.86; transform: translateY(2px); }
   to { opacity: 1; transform: translateY(0); }
 }
+/* Card shuffle (owner pick 2026-11-17): the script animates the covers instead of the settle. */
+.album-details-cover-stack.is-shuffling {
+  animation: none;
+}
+.album-details-cover-stack__front.album-details-cover-stack__ghost {
+  position: absolute;
+  inset-inline: 0;
+  top: 12px;
+  z-index: 3;
+  pointer-events: none;
+}
 .album-details-cover-stack__front {
   position: relative;
   z-index: 2;

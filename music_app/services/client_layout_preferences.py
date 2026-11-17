@@ -148,9 +148,13 @@ class PostgresClientLayoutPreferences:
             ).fetchall()
         for row in rows:
             profile = normalize_profile(row["client_profile"])
-            saved = row["preferences"]
-            if saved:
-                profiles[profile].update(normalize_changes(saved))
+            for family, value in (row["preferences"] or {}).items():
+                # One family at a time: a family this build does not know (saved by a newer
+                # build) or no longer accepts keeps its default instead of failing the load.
+                try:
+                    profiles[profile].update(normalize_changes({family: value}))
+                except ValueError:
+                    continue
         return profiles
 
     def save_changes(self, *, account_id: int, profile: str, changes: object) -> dict[str, object]:

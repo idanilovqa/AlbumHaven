@@ -400,6 +400,33 @@ export class GalleryActions {
     await this.galleryPage.albumCard.detailsButtonByAlbumName(albumName).first().click();
   }
 
+  async clickRevealedAlbumDetailsByAlbumName(albumName) {
+    const button = this.galleryPage.albumCard.detailsButtonByAlbumName(albumName).first();
+    await this.revealInGalleryByWheel(button);
+    await button.click();
+  }
+
+  // After an Edit Tags save the gallery holds its scroll position until the user
+  // scrolls; Playwright's own scroll-into-view is not user input and is undone.
+  async revealInGalleryByWheel(locator, options = {}) {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const [targetBox, galleryBox] = await Promise.all([
+        locator.boundingBox(),
+        this.galleryPage.galleryScroll.boundingBox(),
+      ]);
+      if (!targetBox || !galleryBox) return;
+      const below = targetBox.y + targetBox.height - (galleryBox.y + galleryBox.height);
+      const above = galleryBox.y - targetBox.y;
+      const deltaY = below > 0 ? Math.ceil(below) + 24 : above > 0 ? -(Math.ceil(above) + 24) : 0;
+      if (!deltaY) return;
+      const { scrollTop } = await this.readGalleryScrollState();
+      await this.scrollGalleryBy(deltaY, options);
+      await this.galleryPage.waitForGalleryScrollMovement(scrollTop, Math.sign(deltaY), {
+        timeout: options.timeout || 5000,
+      });
+    }
+  }
+
   async waitForGalleryReady(options = {}) {
     const minimumCards = options.minimumCards === undefined
       ? 1

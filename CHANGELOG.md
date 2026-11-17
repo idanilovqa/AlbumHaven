@@ -1,8 +1,12 @@
 # Changelog
 
-## 0.11.19 - 2026-11-17
+## 0.11.20 - 2026-11-17
 
 - Agents can run the search, Problematic Files, HTML reload, Edit Tags and bounded-interaction regression gates on GitHub-hosted runners with the on-demand Heavy Regression Gates workflow, instead of queueing for the owner's machine. Real-library and full-size-library checks stay local.
+
+## 0.11.19 - 2026-11-17
+
+- Test-only: the album credits test (FTC-ALBUM-DETAILS-006) scrolls the gallery with the mouse wheel before clicking an album after a tag save, so the gallery no longer undoes its scroll and the test no longer fails intermittently.
 
 ## 0.11.18 - 2026-11-17
 

@@ -161,8 +161,7 @@ test('FTC-ALBUM-DETAILS-029 stale album references follow merges and return to t
 
   await stepLogger.step('Show both split cards in the untouched client without a click or reload', async () => {
     try {
-      await expect(liveGallery.albumCard.cardByAlbumName(FAILURE_FIXTURE_ALBUM))
-        .toHaveCount(0, { timeout: 30000 });
+      await liveSession.galleryActions.waitForAlbumHidden(FAILURE_FIXTURE_ALBUM);
       for (const album of [LINEAGE_SPLIT_ALBUM_A, LINEAGE_SPLIT_ALBUM_B]) {
         await liveSession.galleryActions.waitForAlbumVisibleUnderHeading(FIXTURE_ARTIST, album);
       }
@@ -276,16 +275,12 @@ test('FTC-ALBUM-DETAILS-029 stale album references follow merges and return to t
   });
 
   const firstPaintSession = await freshBrowserSession.create();
-  await stepLogger.step('Open the exact card from first paint while gallery data is unavailable', async () => {
-    // CI saw /view-data return 503 right after a save; the first-paint cards must still
-    // open their own release by id instead of a key shared by several releases.
-    await firstPaintSession.page.route('**/view-data?**', (route) => route.fulfill({
-      status: 503,
-      contentType: 'application/json',
-      body: JSON.stringify({ ok: false, error: 'Gallery data is busy' }),
-    }));
+  await stepLogger.step('Open the exact card from first paint after the save', async () => {
+    // CI saw /view-data answer 503 right after a save, leaving first-paint cards in charge;
+    // they must open their own release by id, never by a key shared by several releases.
     const requests = firstPaintSession.galleryActions.recordAlbumDetailsRequests();
     try {
+      // No gallery-ready wait: the click may land before the first /view-data reply.
       await firstPaintSession.galleryActions.goto(ARTIST_VIEW_URL);
       await firstPaintSession.galleryActions.waitForAlbumVisibleUnderHeading(
         FIXTURE_ARTIST,
@@ -301,11 +296,7 @@ test('FTC-ALBUM-DETAILS-029 stale album references follow merges and return to t
       expect(summary.trackRows).toBe(2);
       expect(await firstPaintSession.trackModalActions.readTrackTitles()).toHaveLength(2);
       await expect(firstPaintSession.trackModalActions.trackModal.splitChooser).toHaveCount(0);
-      expect(requests.urls.length).toBeGreaterThan(0);
-      for (const url of requests.urls) {
-        expect(Number(url.searchParams.get('album_id'))).toBeGreaterThan(0);
-        expect(url.searchParams.has('resolve_lineage')).toBe(false);
-      }
+      requests.expectExactCardOpens();
     } finally {
       requests.stop();
     }

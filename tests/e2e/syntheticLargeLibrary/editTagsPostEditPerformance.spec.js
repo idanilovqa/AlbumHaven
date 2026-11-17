@@ -398,11 +398,7 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
           expect(summary.trackRows).toBeGreaterThan(0);
           expect(await trackModalActions.readTrackTitles()).toContain(TRACK_TITLE);
           await expect(trackModalActions.trackModal.splitChooser).toHaveCount(0);
-          expect(albumDetailsRequests.urls.length).toBeGreaterThan(0);
-          for (const url of albumDetailsRequests.urls) {
-            expect(Number(url.searchParams.get('album_id'))).toBeGreaterThan(0);
-            expect(url.searchParams.has('resolve_lineage')).toBe(false);
-          }
+          albumDetailsRequests.expectExactCardOpens();
         } finally {
           albumDetailsRequests.stop();
         }

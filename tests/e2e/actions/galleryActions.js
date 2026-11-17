@@ -1536,8 +1536,14 @@ export class GalleryActions {
     };
     page.on('request', record);
     return {
-      urls,
       stop: () => page.off('request', record),
+      expectExactCardOpens: () => {
+        expect(urls.length).toBeGreaterThan(0);
+        for (const url of urls) {
+          expect(Number(url.searchParams.get('album_id'))).toBeGreaterThan(0);
+          expect(url.searchParams.has('resolve_lineage')).toBe(false);
+        }
+      },
     };
   }
 

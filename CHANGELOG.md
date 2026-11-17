@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.30 - 2026-11-17
+
+- Hovering Play no longer slides the loop scissors out when the player cannot cut a loop: with no track loaded, while another tab holds playback ("Playing in another tab"), or when playback is unavailable. The scissors stay folded beside Play. If playback is lost while they are open, they fold at once.
+
 ## 0.11.27 - 2026-11-17
 
 - The server sends JavaScript, CSS and other text files gzip-compressed to browsers that accept it, so a first visit downloads about 0.6 MB of scripts and styles instead of about 2.9 MB. Images and audio are sent as before.

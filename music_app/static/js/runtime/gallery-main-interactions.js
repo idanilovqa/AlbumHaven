@@ -652,7 +652,7 @@ function updateGalleryMainChrome() {
       metadata.hidden = !content.metadataHtml;
       metadata.innerHTML = content.metadataHtml;
     }
-    if (!series) oldInfo?.remove();
+    if (!gallerySeriesHasInfo(series)) oldInfo?.remove();
     else if (!oldInfo) infoAnchor.insertAdjacentHTML('afterend', `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(series.name)}" aria-label="Information about ${escapeHtml(series.name)}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`);
     else {
       oldInfo.dataset.artist = series.name;
@@ -779,13 +779,14 @@ function buildGalleryArtistIdentitiesHtml(artistMusicBrainz) {
   return `<div class="artist-info-overlay__identities" data-artist-info-identities><p class="artist-info-overlay__source">${heading}</p><ul>${items}</ul></div>`;
 }
 
-// A series' i (Series view): its MusicBrainz type, album count and MusicBrainz page, in the
-// artist information surface.
+// A series' i (approved D2 batch 3, 4): only its stored Wikipedia introduction and the
+// Wikipedia link. A series has no picture of its own, so there is no art box; a series
+// without a Wikipedia page has no i (gallerySeriesHasInfo).
 function renderGallerySeriesInfo(overlay, series) {
   const closeAction = ButtonComponent.renderActionButton({ icon: 'close', ariaLabel: 'Close series information', presentation: 'bare', className: 'mobile-artist-info-close', attributes: { 'data-close-mobile-artist-info': '' } });
-  const link = ButtonComponent.renderExternalServiceLink({ service: 'musicbrainz', href: series.musicbrainz_url, subject: series.name });
+  const link = ButtonComponent.renderExternalServiceLink({ service: 'wikipedia', href: series.wikipedia?.url });
   overlay.setAttribute('aria-label', `Information about ${series.name}`);
-  overlay.innerHTML = `${closeAction}<header><div class="artist-info-overlay__image artist-info-overlay__image--empty" aria-hidden="true">♪</div><div><span>${series.kind === 'featured_in' ? 'Featured In' : 'Series'}</span><h2>${escapeHtml(series.name)}</h2></div></header><div class="artist-info-overlay__body gallery-scrollbar"><p data-series-info-summary>${escapeHtml(`${series.type_label || 'Series'} • ${galleryMainPlural(series.album_count, 'album')}`)}</p>${link ? `<div class="artist-info-overlay__links"><div class="ui-external-link-list">${link}</div></div>` : ''}</div>`;
+  overlay.innerHTML = `${closeAction}<header><div><h2>${escapeHtml(series.name)}</h2></div></header><div class="artist-info-overlay__body gallery-scrollbar"><p data-series-info-summary>${escapeHtml(series.wikipedia?.extract || '')}</p>${link ? `<div class="artist-info-overlay__links"><div class="ui-external-link-list">${link}</div></div>` : ''}</div>`;
   return overlay;
 }
 

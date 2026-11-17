@@ -271,3 +271,45 @@ test('3A: the folded sidebar has a Series button directly below the Artist Tree 
   // Linked sleeves: two rounded sleeves, their discs and the link, in the rail's stroke.
   assert.match(rail.slice(series), /<rect x="2\.5" y="2\.5" width="9" height="9" rx="1\.6"><\/rect><circle cx="7" cy="7" r="1\.8"><\/circle><rect x="12\.5" y="12\.5" width="9" height="9" rx="1\.6"><\/rect><circle cx="17" cy="17" r="1\.8"><\/circle>/);
 });
+
+const WIKI = { extract: 'A reference book of one thousand and one albums <chosen> by critics.', url: 'https://en.wikipedia.org/wiki/1001_Albums_You_Must_Hear_Before_You_Die' };
+
+function seriesInfo(series) {
+  const context = components();
+  context.document = { ...context.document, querySelector: () => null, addEventListener() {} };
+  context.ButtonComponent = context.window.ButtonComponent || context.ButtonComponent;
+  vm.runInContext(fs.readFileSync(runtime('gallery-main-interactions.js'), 'utf8'), context, { filename: 'gallery-main-interactions.js' });
+  const overlay = { attributes: {}, innerHTML: '', setAttribute(name, value) { this.attributes[name] = value; } };
+  context.renderGallerySeriesInfo(overlay, series);
+  return overlay;
+}
+
+test('batch 3, 4: a series i shows only its Wikipedia introduction and the Wikipedia link', () => {
+  const overlay = seriesInfo({ ...SERIES, kind: 'featured_in', album_count: 15, musicbrainz_url: `https://musicbrainz.org/series/${COLOSSUS}`, wikipedia: WIKI });
+  assert.equal(overlay.attributes['aria-label'], 'Information about Colossus Projects');
+  assert.match(overlay.innerHTML, /<header><div><h2>Colossus Projects<\/h2><\/div><\/header>/);
+  assert.match(overlay.innerHTML, /<p data-series-info-summary>A reference book of one thousand and one albums &lt;chosen&gt; by critics\.<\/p>/);
+  assert.match(overlay.innerHTML, /<div class="artist-info-overlay__links"><div class="ui-external-link-list"><a class="ui-external-link ui-external-link--wikipedia" href="https:\/\/en\.wikipedia\.org\/wiki\/1001_Albums_You_Must_Hear_Before_You_Die" target="_blank" rel="noopener noreferrer" aria-label="Open on Wikipedia"><span class="ui-external-link__text">Wikipedia<\/span><\/a><\/div><\/div>/);
+  // Not the type, count, kind label or MusicBrainz page.
+  assert.doesNotMatch(overlay.innerHTML, /Album series|Featured In|15 albums|musicbrainz/i);
+});
+
+test('batch 3, 4 (owner): a series with no picture of its own shows no art box in its info panel', () => {
+  const overlay = seriesInfo({ ...SERIES, kind: 'series', wikipedia: WIKI });
+  assert.doesNotMatch(overlay.innerHTML, /artist-info-overlay__image|♪/);
+});
+
+test('batch 3, 4: only a series with a stored Wikipedia page has an i; artists always keep theirs', () => {
+  const { gallerySeriesHasInfo, buildFamilyArtistHeaderHtml } = components();
+  assert.equal(gallerySeriesHasInfo({ ...SERIES, wikipedia: WIKI }), true);
+  for (const series of [SERIES, { ...SERIES, wikipedia: null }, { ...SERIES, wikipedia: { url: WIKI.url } }, { ...SERIES, wikipedia: { extract: WIKI.extract } }, null]) {
+    assert.equal(gallerySeriesHasInfo(series), false);
+  }
+  assert.match(buildFamilyArtistHeaderHtml({ artist: 'Colossus Projects', series: { ...SERIES, wikipedia: WIKI }, albumCount: 2 }), /data-artist-info-trigger/);
+  assert.doesNotMatch(buildFamilyArtistHeaderHtml({ artist: 'Genius Rock Opera', series: SERIES, albumCount: 3 }), /data-artist-info-trigger/);
+  assert.match(buildFamilyArtistHeaderHtml({ artist: 'Angra', albumCount: 3 }), /data-artist-info-trigger/);
+  const chrome = fs.readFileSync(runtime('gallery-main-interactions.js'), 'utf8');
+  assert.match(chrome, /if \(!gallerySeriesHasInfo\(series\)\) oldInfo\?\.remove\(\);/, 'the Series header drops its i without a page');
+  const grid = fs.readFileSync(runtime('virtual-artist-grid.js'), 'utf8');
+  assert.equal((grid.match(/buildFamilyArtistHeaderHtml\(\{[^)]*series: (?:safeG|g)roup\.series,/g) || []).length, 2);
+});

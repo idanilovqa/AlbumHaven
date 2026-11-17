@@ -4988,10 +4988,16 @@ function buildGalleryDividerHtml(config = {}) {
   return `<div class="gallery-divider"><span>${escapeHtml(config.label || 'Family')}</span><span class="gallery-divider__line"></span><span>${escapeHtml(galleryMainPlural(config.albumCount, 'album'))}</span></div>`;
 }
 
+// A series has an i only with a stored Wikipedia introduction (approved D2 batch 3, 4);
+// an artist always has one.
+function gallerySeriesHasInfo(series) {
+  return Boolean(series?.wikipedia?.extract && series.wikipedia.url);
+}
+
 function buildFamilyArtistHeaderHtml(config = {}) {
   const romanized = galleryRomanizedArtistLabel(config.artist);
   const status = buildGalleryArtistStatusHtml(config);
-  const info = `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(config.infoArtist || config.artist || '')}" aria-label="Information about ${escapeHtml(config.infoArtist || config.artist || '')}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`;
+  const info = config.series && !gallerySeriesHasInfo(config.series) ? '' : `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(config.infoArtist || config.artist || '')}" aria-label="Information about ${escapeHtml(config.infoArtist || config.artist || '')}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`;
   return `<div class="family-artist-header" data-scroll-artist="${escapeHtml(config.artist || '')}" data-gallery-album-count="${Math.max(0, Number(config.albumCount || 0))}"><h2 class="artist-name">${escapeHtml(config.artist || '')}${romanized ? ` <span class="gallery-artist-romanized">${escapeHtml(romanized)}</span>` : ''}</h2>${info}<span class="artist-musicbrainz-status">${status}</span><span class="gallery-divider__line"></span><span>${escapeHtml(galleryMainPlural(config.albumCount, 'album'))}</span></div>`;
 }
 
@@ -7617,7 +7623,7 @@ function updateGalleryMainChrome() {
       metadata.hidden = !content.metadataHtml;
       metadata.innerHTML = content.metadataHtml;
     }
-    if (!series) oldInfo?.remove();
+    if (!gallerySeriesHasInfo(series)) oldInfo?.remove();
     else if (!oldInfo) infoAnchor.insertAdjacentHTML('afterend', `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(series.name)}" aria-label="Information about ${escapeHtml(series.name)}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`);
     else {
       oldInfo.dataset.artist = series.name;
@@ -7744,13 +7750,14 @@ function buildGalleryArtistIdentitiesHtml(artistMusicBrainz) {
   return `<div class="artist-info-overlay__identities" data-artist-info-identities><p class="artist-info-overlay__source">${heading}</p><ul>${items}</ul></div>`;
 }
 
-// A series' i (Series view): its MusicBrainz type, album count and MusicBrainz page, in the
-// artist information surface.
+// A series' i (approved D2 batch 3, 4): only its stored Wikipedia introduction and the
+// Wikipedia link. A series has no picture of its own, so there is no art box; a series
+// without a Wikipedia page has no i (gallerySeriesHasInfo).
 function renderGallerySeriesInfo(overlay, series) {
   const closeAction = ButtonComponent.renderActionButton({ icon: 'close', ariaLabel: 'Close series information', presentation: 'bare', className: 'mobile-artist-info-close', attributes: { 'data-close-mobile-artist-info': '' } });
-  const link = ButtonComponent.renderExternalServiceLink({ service: 'musicbrainz', href: series.musicbrainz_url, subject: series.name });
+  const link = ButtonComponent.renderExternalServiceLink({ service: 'wikipedia', href: series.wikipedia?.url });
   overlay.setAttribute('aria-label', `Information about ${series.name}`);
-  overlay.innerHTML = `${closeAction}<header><div class="artist-info-overlay__image artist-info-overlay__image--empty" aria-hidden="true">♪</div><div><span>${series.kind === 'featured_in' ? 'Featured In' : 'Series'}</span><h2>${escapeHtml(series.name)}</h2></div></header><div class="artist-info-overlay__body gallery-scrollbar"><p data-series-info-summary>${escapeHtml(`${series.type_label || 'Series'} • ${galleryMainPlural(series.album_count, 'album')}`)}</p>${link ? `<div class="artist-info-overlay__links"><div class="ui-external-link-list">${link}</div></div>` : ''}</div>`;
+  overlay.innerHTML = `${closeAction}<header><div><h2>${escapeHtml(series.name)}</h2></div></header><div class="artist-info-overlay__body gallery-scrollbar"><p data-series-info-summary>${escapeHtml(series.wikipedia?.extract || '')}</p>${link ? `<div class="artist-info-overlay__links"><div class="ui-external-link-list">${link}</div></div>` : ''}</div>`;
   return overlay;
 }
 
@@ -46128,7 +46135,7 @@ class VirtualArtistGrid {
 
     return `
       <section class="artist-section ${section.sectionType}">
-        ${this.sectionHeaderHeight > 0 ? buildFamilyArtistHeaderHtml({ artist: group.artist_display || group.artist, infoArtist: group.artist, albumCount: group.albums.length, artistMusicBrainzProblem: getGalleryArtistMusicBrainzStatus(group).problem, artistMusicBrainzState: getGalleryArtistMusicBrainzStatus(group).state }) : ''}
+        ${this.sectionHeaderHeight > 0 ? buildFamilyArtistHeaderHtml({ artist: group.artist_display || group.artist, infoArtist: group.artist, series: group.series, albumCount: group.albums.length, artistMusicBrainzProblem: getGalleryArtistMusicBrainzStatus(group).problem, artistMusicBrainzState: getGalleryArtistMusicBrainzStatus(group).state }) : ''}
         <div class="artist-rows">${topSpacer}${rowBlocks}${bottomSpacer}</div>
       </section>
     `;
@@ -46174,7 +46181,7 @@ function buildArtistSectionHtml(
   const showHeader = virtualGrid.showArtistSectionHeaders;
   return `
     <section class="artist-section ${sectionType}">
-      ${showHeader ? buildFamilyArtistHeaderHtml({ artist: safeGroup.artist_display || safeGroup.artist || 'Artist', infoArtist: safeGroup.artist, albumCount: albums.length, artistMusicBrainzProblem: getGalleryArtistMusicBrainzStatus(safeGroup).problem, artistMusicBrainzState: getGalleryArtistMusicBrainzStatus(safeGroup).state }) : ''}
+      ${showHeader ? buildFamilyArtistHeaderHtml({ artist: safeGroup.artist_display || safeGroup.artist || 'Artist', infoArtist: safeGroup.artist, series: safeGroup.series, albumCount: albums.length, artistMusicBrainzProblem: getGalleryArtistMusicBrainzStatus(safeGroup).problem, artistMusicBrainzState: getGalleryArtistMusicBrainzStatus(safeGroup).state }) : ''}
       <div class="artist-rows">${buildArtistSectionRowsHtml(albums, columns, layoutConfig, cardTrackWidth)}</div>
     </section>
   `;

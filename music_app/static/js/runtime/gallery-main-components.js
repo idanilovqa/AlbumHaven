@@ -340,10 +340,16 @@ function buildGalleryDividerHtml(config = {}) {
   return `<div class="gallery-divider"><span>${escapeHtml(config.label || 'Family')}</span><span class="gallery-divider__line"></span><span>${escapeHtml(galleryMainPlural(config.albumCount, 'album'))}</span></div>`;
 }
 
+// A series has an i only with a stored Wikipedia introduction (approved D2 batch 3, 4);
+// an artist always has one.
+function gallerySeriesHasInfo(series) {
+  return Boolean(series?.wikipedia?.extract && series.wikipedia.url);
+}
+
 function buildFamilyArtistHeaderHtml(config = {}) {
   const romanized = galleryRomanizedArtistLabel(config.artist);
   const status = buildGalleryArtistStatusHtml(config);
-  const info = `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(config.infoArtist || config.artist || '')}" aria-label="Information about ${escapeHtml(config.infoArtist || config.artist || '')}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`;
+  const info = config.series && !gallerySeriesHasInfo(config.series) ? '' : `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(config.infoArtist || config.artist || '')}" aria-label="Information about ${escapeHtml(config.infoArtist || config.artist || '')}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`;
   return `<div class="family-artist-header" data-scroll-artist="${escapeHtml(config.artist || '')}" data-gallery-album-count="${Math.max(0, Number(config.albumCount || 0))}"><h2 class="artist-name">${escapeHtml(config.artist || '')}${romanized ? ` <span class="gallery-artist-romanized">${escapeHtml(romanized)}</span>` : ''}</h2>${info}<span class="artist-musicbrainz-status">${status}</span><span class="gallery-divider__line"></span><span>${escapeHtml(galleryMainPlural(config.albumCount, 'album'))}</span></div>`;
 }
 

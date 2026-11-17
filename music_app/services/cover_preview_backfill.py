@@ -116,7 +116,7 @@ class CoverPreviewBackfill:
             ):
                 generation_options = {}
                 recorder = self._config.get("_GENERATED_PREVIEW_INVENTORY_RECORDER")
-                if recorder is not None:
+                if recorder is not None and storage_policy is not None:
                     generation_options["on_published"] = recorder
                 self._generate(
                     source_path,

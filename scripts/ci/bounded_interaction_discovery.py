@@ -658,10 +658,23 @@ def _launched_callable(node: ast.Call) -> tuple[str, ast.AST] | None:
         # Thread(group, target) and Timer(interval, function).
         return ("thread", node.args[1]) if len(node.args) > 1 else None
     if name == "submit" and node.args:
-        return "executor", node.args[0]
+        return "executor", _context_run_target(node.args, 0)
     if name == "run_in_executor" and len(node.args) > 1:
-        return "executor", node.args[1]
+        return "executor", _context_run_target(node.args, 1)
     return None
+
+
+def _context_run_target(args: list[ast.AST], position: int) -> ast.AST:
+    """The callable at `position`, or, when that is `copy_context().run`
+    (`submit(contextvars.copy_context().run, job, ...)`), the callable it runs."""
+    target = args[position]
+    if (
+        isinstance(target, ast.Attribute) and target.attr == "run"
+        and isinstance(target.value, ast.Call) and _call_name(target.value)[1] == "copy_context"
+        and len(args) > position + 1
+    ):
+        return args[position + 1]
+    return target
 
 
 def _callable_target(node: ast.AST) -> ast.AST | None:

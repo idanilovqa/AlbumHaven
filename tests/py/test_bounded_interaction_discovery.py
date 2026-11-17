@@ -1315,3 +1315,17 @@ async def async_lock(request):
     assert found["completed"] == ["concurrent.futures.as_completed"]
     # Only a lock some holder keeps across I/O can make the loop wait on it.
     assert "try_acquire" not in found and "async_lock" not in found and "bookkeeping" not in found
+
+
+def test_work_submitted_through_a_copied_context_is_the_callable_it_runs(tmp_path: Path):
+    _write(tmp_path, "music_app/services/jobs.py", """
+import contextvars
+
+def cover_job(job):
+    return job
+
+def start(pool, jobs):
+    return [pool.submit(contextvars.copy_context().run, cover_job, job) for job in jobs]
+""")
+    keys = [item["key"].split("#")[1] for item in discovery.discover_python_entrypoints(tmp_path)]
+    assert keys == ["cover_job:background:executor"]

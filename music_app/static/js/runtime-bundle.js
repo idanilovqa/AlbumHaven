@@ -37774,7 +37774,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
             </svg>
           </button>
           ${isActive ? '<span class="cover-lookup-art-check">&#10003;</span>' : ''}
-          ${kind === 'local' ? `<button class="cover-lookup-art-delete" type="button" data-delete-local-cover="${escapeHtml(item.path || '')}" aria-label="Delete local cover art">&#128465;</button>` : ''}
+          ${kind === 'local' ? `<button class="cover-lookup-art-delete" type="button" data-delete-local-cover="${escapeHtml(item.path || '')}" aria-label="Delete local cover art"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg></button>` : ''}
           ${isPastedKind ? `<button class="cover-lookup-art-delete" type="button" data-remove-pasted-cover="${escapeHtml(item.id || '')}" aria-label="Remove staged image">&#10005;</button>` : ''}
         </span>
         <span class="cover-lookup-art-meta">

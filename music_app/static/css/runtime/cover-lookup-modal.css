@@ -678,25 +678,37 @@
   color: white;
   z-index: 2;
 }
+/* Delete reads like the app's destructive buttons (owner, 11-16): a hollow red ring and glyph on a dark
+   backing, solid red under the pointer. The glyph is an SVG so it takes the colour (an emoji stays grey). */
 .cover-lookup-art-delete {
   top: 8px;
   right: 8px;
   padding: 0;
-  border: 1px solid rgba(239,68,68,0.34);
-  background: rgba(127,29,29,0.92);
-  color: #fecaca;
+  border: 1.5px solid var(--appearance-error, #ef5350);
+  background: rgba(8, 10, 14, 0.62);
+  color: var(--appearance-error, #ef5350);
   opacity: 0;
-  transition: opacity 140ms ease;
+  transition: opacity 140ms ease, background-color 120ms ease, color 120ms ease;
   cursor: pointer;
   z-index: 2;
+}
+.cover-lookup-art-delete svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 .cover-lookup-art-card:hover .cover-lookup-art-delete,
 .cover-lookup-art-card:focus-within .cover-lookup-art-delete {
   opacity: 1;
 }
-.cover-lookup-art-delete:hover:not(:disabled) {
-  border-color: rgba(252,165,165,0.72);
-  color: #fff1f2;
+#cover-lookup-modal .cover-lookup-art-delete:is(:hover, :focus-visible):not(:disabled) {
+  border-color: var(--appearance-error, #ef5350);
+  background: var(--appearance-error, #ef5350);
+  color: #fff;
 }
 .cover-lookup-art-card .cover-lookup-art-delete:disabled {
   opacity: 0.55;

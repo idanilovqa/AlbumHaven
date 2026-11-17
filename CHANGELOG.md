@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.17 - 2026-11-17
+
+- Agents can run the search, Problematic Files, HTML reload, Edit Tags and bounded-interaction regression gates on GitHub-hosted runners with the on-demand Heavy Regression Gates workflow, instead of queueing for the owner's machine. Real-library and full-size-library checks stay local.
+
 ## 0.11.16 - 2026-11-17
 
 - The Android app says "Not enough storage" (Free up space on this phone, then try again) when a full phone stops an update, instead of the generic "Update failed. Try again".

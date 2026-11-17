@@ -180,7 +180,11 @@ test('problematic-file render scrolls the focused track row into view determinis
   context.renderProblematicFiles();
 
   assert.deepEqual(cssEscapeCalls, [trackPath]);
-  assert.deepEqual(selectorCalls, [`[data-problematic-track-path="${escapedTrackPath}"]`]);
+  // The renderer also checks for a retained duplicate review; only track-row lookups are under test.
+  assert.deepEqual(
+    selectorCalls.filter((selector) => selector.startsWith('[data-problematic-track-path')),
+    [`[data-problematic-track-path="${escapedTrackPath}"]`],
+  );
   assert.equal(detail.scrollTop, 88);
 
   detail.scrollTop = 0;

@@ -59,6 +59,11 @@ def test_separate_release_summary_key_resolves_composite_persisted_credit(monkey
 
         def execute(self, sql, params=None):
             sql = " ".join(sql.split())
+            if sql.upper().startswith("SET LOCAL ") or "identity.artist_mbid" in sql:
+                # Planner settings (2aa35a1f7) and the detail's known-artist lookup (834696086)
+                # carry no inventory scope; this fixture has no matched artist.
+                self.result = []
+                return self
             if "album_ids" in (params or {}):
                 selected.extend(params["album_ids"])
                 self.result = [row for row in rows if row["album_id"] in params["album_ids"]]

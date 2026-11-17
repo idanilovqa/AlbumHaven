@@ -69,14 +69,40 @@ jobs:
           ref: ${{ inputs.ref }}
           persist-credentials: false
 
-      - name: Checkout trusted fixture downloader
+      - name: Checkout trusted fixture scripts
         uses: actions/checkout@v5
         with:
           ref: ${{ github.sha }}
           path: .trusted-ci
-          sparse-checkout: scripts/ci/fetch-test-fixtures.ps1
+          sparse-checkout: |
+            scripts/ci/fetch-test-fixtures.ps1
+            scripts/run-regression-gate.ps1
           sparse-checkout-cone-mode: false
           persist-credentials: false
+
+      # Like PR Gates, fetch fixtures with trusted scripts before any tested-ref code runs.
+      - name: Fetch released fixture profiles
+        env:
+          ALBUM_HAVEN_FIXTURES_TOKEN: ${{ secrets.ALBUM_HAVEN_FIXTURES_TOKEN }}
+        run: |
+          $distribution = Join-Path "${{ runner.temp }}" "album-haven-fixture-distribution"
+          New-Item -ItemType Directory -Force -Path (Join-Path $distribution "profiles") | Out-Null
+          foreach ($profile in @(.\.trusted-ci\scripts\run-regression-gate.ps1 -Gate "${{ matrix.gate }}" -ListFixtureProfiles)) {
+            $exports = Join-Path "${{ runner.temp }}" "fixture-$profile.env"
+            & ".trusted-ci\scripts\ci\fetch-test-fixtures.ps1" `
+              -Release fixtures-v1.0.30 `
+              -Profile $profile `
+              -ManifestSha256 0CBF9D17930C0347B40415A5B367DEBD93EC5CA7D8439CFAB7060A7E0BB13752 `
+              -GithubEnv $exports
+            $prefix = "ALBUM_HAVEN_FIXTURE_ROOT="
+            $root = @(Get-Content -LiteralPath $exports | Where-Object { $_.StartsWith($prefix) })[-1].Substring($prefix.Length)
+            Move-Item -LiteralPath $root -Destination (Join-Path $distribution "profiles\$profile")
+            $manifest = Join-Path $distribution "manifest.json"
+            if (-not (Test-Path -LiteralPath $manifest)) {
+              Copy-Item -LiteralPath (Join-Path $distribution "profiles\$profile\manifest.json") -Destination $manifest
+            }
+          }
+          "ALBUM_HAVEN_FIXTURE_DISTRIBUTION=$distribution" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Require the shared gate runner
         env:
@@ -116,28 +142,6 @@ jobs:
       - name: Expand Windows IPv4 dynamic port range
         run: netsh interface ipv4 set dynamicport tcp start=10000 num=55535
 
-      - name: Fetch released fixture profiles
-        env:
-          ALBUM_HAVEN_FIXTURES_TOKEN: ${{ secrets.ALBUM_HAVEN_FIXTURES_TOKEN }}
-        run: |
-          $distribution = Join-Path "${{ runner.temp }}" "album-haven-fixture-distribution"
-          New-Item -ItemType Directory -Force -Path (Join-Path $distribution "profiles") | Out-Null
-          foreach ($profile in @(.\scripts\run-regression-gate.ps1 -Gate "${{ matrix.gate }}" -ListFixtureProfiles)) {
-            $exports = Join-Path "${{ runner.temp }}" "fixture-$profile.env"
-            & ".trusted-ci\scripts\ci\fetch-test-fixtures.ps1" `
-              -Release fixtures-v1.0.30 `
-              -Profile $profile `
-              -ManifestSha256 0CBF9D17930C0347B40415A5B367DEBD93EC5CA7D8439CFAB7060A7E0BB13752 `
-              -GithubEnv $exports
-            $prefix = "ALBUM_HAVEN_FIXTURE_ROOT="
-            $root = @(Get-Content -LiteralPath $exports | Where-Object { $_.StartsWith($prefix) })[-1].Substring($prefix.Length)
-            Move-Item -LiteralPath $root -Destination (Join-Path $distribution "profiles\$profile")
-            $manifest = Join-Path $distribution "manifest.json"
-            if (-not (Test-Path -LiteralPath $manifest)) {
-              Copy-Item -LiteralPath (Join-Path $distribution "profiles\$profile\manifest.json") -Destination $manifest
-            }
-          }
-          "ALBUM_HAVEN_FIXTURE_DISTRIBUTION=$distribution" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       # The same two isolated databases as the PR Gates Python job: one for destructive
       # contracts, one pristine database for persistent contracts.

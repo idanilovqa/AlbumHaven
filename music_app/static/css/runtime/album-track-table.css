@@ -140,6 +140,9 @@
   100% { opacity: 0; transform: rotate(1turn) scale(1); filter: brightness(1); }
 }
 .album-track-table__title { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A title's Latin form after the album details' "•" separator, dimmed (S7, 1A). */
+.album-track-table__transliteration { color: var(--appearance-muted, var(--muted)); }
+.album-track-table__transliteration > [aria-hidden="true"] { margin: 0 8px; }
 .album-track-table__secondary { display: block; color: var(--appearance-muted, var(--muted)); font-size: 0.7rem; line-height: 1.15; }
 .album-track-table__path { display: block; min-width: 0; overflow: hidden; color: var(--appearance-muted, var(--muted)); font-size: 0.72rem; text-overflow: ellipsis; white-space: nowrap; }
 .album-track-table .track-duration { margin-left: 0; color: var(--appearance-ink, var(--text)); }

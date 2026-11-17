@@ -1910,13 +1910,15 @@ class PostgresLibraryBrowseRepository:
         detail_album.pop("_text_problem_reason_cache", None)
 
         from music_app.services.album_details import _attach_album_detail_track_rows
+        from music_app.services.track_transliteration import apply_track_transliterations
 
-        return _apply_track_sections(_apply_musicbrainz_track_artists(_attach_album_detail_track_rows(
+        detail_album = _apply_track_sections(_apply_musicbrainz_track_artists(_attach_album_detail_track_rows(
             detail_album,
             client_surface_class=client_surface_class,
             config=None,
             viewer_opinion_preferences={},
         )), track_sections)
+        return apply_track_transliterations(connection, detail_album, album_id=first_row_payload.get("album_id"))
 
     def build_non_album_detail_payload(
         self,

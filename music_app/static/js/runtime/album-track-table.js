@@ -22,7 +22,12 @@ function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
   if (track.isSearchMatch) classes.push('album-track-table__row--search-match');
   if (track.isPlaying && config.playingAnimation !== false) classes.push('album-track-table__row--animated');
   const secondary = String(track.secondaryArtist || track.secondary_artist || '').trim();
-  const titleHtml = `<span class="album-track-table__title">${escapeHtml(track.title || '')}${secondary ? `<span class="album-track-table__secondary">${escapeHtml(secondary)}</span>` : ''}</span>`;
+  // A title in another script than Latin or Cyrillic: its Latin form after a dot (owner 2026-11-17, 1A).
+  const latin = String(track.titleTransliteration || '').trim();
+  const latinHtml = latin
+    ? `<span class="album-track-table__transliteration"><span aria-hidden="true">•</span>${escapeHtml(latin)}</span>`
+    : '';
+  const titleHtml = `<span class="album-track-table__title">${escapeHtml(track.title || '')}${latinHtml}${secondary ? `<span class="album-track-table__secondary">${escapeHtml(secondary)}</span>` : ''}</span>`;
   const problemHtml = track.isProblematic
     ? `<button class="track-problem-link" type="button" data-open-track-problematic="1" data-track-path="${escapeHtml(trackPath)}" title="Open this track in Problematic Files" aria-label="Open this track in Problematic Files">!</button>`
     : '';

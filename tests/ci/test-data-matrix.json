@@ -8978,6 +8978,21 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/albumTrackTable.spec.js",
+    "case": "a non-Latin title shows its Latin form after a dot on the same line, dimmed; Latin and Cyrillic titles show none",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "musicbrainz-track-title-transliteration"
+    ],
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/playerViews.spec.js",
     "case": "mobile thin seek surface keeps touch dragging under player control",
     "profile": null,

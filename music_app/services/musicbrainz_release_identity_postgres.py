@@ -310,6 +310,78 @@ class MusicBrainzReleaseIdentityPostgresRepository(EnrichmentJobQueue):
                  "observed_at": _aware_utc(observed_at), "retry_at": _aware_utc(retry_at) if retry_at else None,
                  "library_id": row["library_id"], "album_key": row["album_key"], "release_mbid": row["release_mbid"]})
 
+    def claim_transliteration(self, *, now: datetime) -> dict[str, object] | None:
+        """One certain release whose Latin tracklist (S7) is due, with its local albums' track
+        titles: never asked, or asked more than 30 days ago, and not failed in the last day.
+        Only releases with a title beyond Latin and Cyrillic letters are considered (the
+        caller decides exactly). The row is written now, its ``failed_at`` holding it for a
+        day, so another lane skips it and a crash or failure rests it."""
+        sql = _active_library_cte() + r"""
+            , due as (
+              select decision.release_mbid
+              from active_library
+              join library.local_album_musicbrainz_releases decision
+                on decision.library_id = active_library.library_id and decision.state = 'release'
+              join library.local_albums albums
+                on albums.library_id = decision.library_id and albums.album_key = decision.album_key
+              left join integration.musicbrainz_release_transliterations transliteration
+                on transliteration.release_mbid = decision.release_mbid
+              where (transliteration.checked_at is null
+                     or transliteration.checked_at < %(now)s - interval '""" + _STALE_AFTER + r"""')
+                and (transliteration.failed_at is null or transliteration.failed_at < %(now)s - interval '1 day')
+                and exists (select 1 from library.local_tracks tracks
+                            where tracks.library_id = albums.library_id and tracks.album_id = albums.id
+                              and tracks.title ~ '[^\x01-\u024F\u0400-\u052F\u1E00-\u1EFF\u2000-\u206F]')
+              order by transliteration.checked_at nulls first, decision.release_mbid
+              limit 1
+            ), held as (
+              insert into integration.musicbrainz_release_transliterations (
+                release_mbid, failed_at, created_at, updated_at)
+              select release_mbid, %(now)s, %(now)s, %(now)s from due
+              on conflict (release_mbid) do update set failed_at = excluded.failed_at, updated_at = excluded.updated_at
+              where (integration.musicbrainz_release_transliterations.checked_at is null
+                     or integration.musicbrainz_release_transliterations.checked_at
+                        < %(now)s - interval '""" + _STALE_AFTER + r"""')
+                and (integration.musicbrainz_release_transliterations.failed_at is null
+                     or integration.musicbrainz_release_transliterations.failed_at < %(now)s - interval '1 day')
+              returning release_mbid
+            )
+            select held.release_mbid::text as release_mbid,
+                   coalesce((select json_agg(tracks.title order by tracks.id)
+                             from active_library
+                             join library.local_album_musicbrainz_releases decision
+                               on decision.library_id = active_library.library_id
+                              and decision.release_mbid = held.release_mbid and decision.state = 'release'
+                             join library.local_albums albums
+                               on albums.library_id = decision.library_id and albums.album_key = decision.album_key
+                             join library.local_tracks tracks
+                               on tracks.library_id = albums.library_id and tracks.album_id = albums.id),
+                            '[]'::json) as titles
+            from held;
+        """
+        with self._connect(self._database_url) as connection:
+            with _transaction(connection):
+                row = connection.execute(sql, {"now": _aware_utc(now)}).fetchone()
+        if not row:
+            return None
+        row = _row_mapping(row)
+        titles = row.get("titles")
+        return {"release_mbid": row["release_mbid"], "titles": json.loads(titles) if isinstance(titles, str) else titles}
+
+    def store_transliteration(self, *, release_mbid: str, transliteration_mbid: str | None,
+                              media: list[dict[str, object]], observed_at: datetime) -> None:
+        """MusicBrainz's answer for a claimed release: its Latin pseudo-release and tracklist,
+        or none. A failure stores nothing, so the claim rests the release a day."""
+        with self._connect(self._database_url) as connection:
+            connection.execute(
+                "update integration.musicbrainz_release_transliterations"
+                " set transliteration_mbid = %(transliteration_mbid)s::uuid, media = %(media)s::jsonb,"
+                "     checked_at = %(observed_at)s, failed_at = null, updated_at = %(observed_at)s"
+                " where release_mbid = %(release_mbid)s::uuid",
+                {"release_mbid": release_mbid, "transliteration_mbid": transliteration_mbid,
+                 "media": json.dumps(media if transliteration_mbid else [], ensure_ascii=False),
+                 "observed_at": _aware_utc(observed_at)})
+
     def unsized_series(self, *, limit: int, now: datetime) -> list[str]:
         """Series whose size can still decide their kind, never counted or last counted more
         than 30 days ago, and not failed in the last day; never counted first. A series its

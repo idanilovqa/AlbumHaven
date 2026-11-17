@@ -343,6 +343,33 @@ test('track modal hands each track row provider sub-section to the track table, 
   assert.deepEqual([...tableConfig.groups[0].tracks].map((track) => track.section), ['', 'Where Dead Angels Lie']);
 });
 
+test('track modal hands a track row Latin form to the track table only beside the title it was made for', () => {
+  let tableConfig = null;
+  const context = loadHelper([], {
+    state: { player: { current: null } },
+    escapeHtml: (value) => String(value ?? ''),
+    formatAlbumDuration: () => '',
+    formatTrackDuration: () => '3:00',
+    getPlayerPlaybackSnapshot: () => ({ paused: true, ended: false }),
+    buildAlbumTrackTableHtml: (config) => { tableConfig = config; return ''; },
+    document: { documentElement: null },
+  });
+  const tracks = [['桜花抄', null], ['焦燥', 'A corrected title'], ['Kiss', null]].map(([title, display], index) => ({
+    path: `C:/Music/${index}.flac`, title, display_title: display, track_number: index + 1, disc_number: 1,
+    duration_seconds: 180,
+  }));
+  context.buildTrackListHtml(tracks, {
+    track_rows: [
+      { path: tracks[0].path, track_number: 1, title: '桜花抄', title_transliteration: 'Oukashou' },
+      { path: tracks[1].path, track_number: 2, title: '焦燥', title_transliteration: 'Shousou' },
+      { path: tracks[2].path, track_number: 3, title: 'Kiss' },
+    ],
+  });
+
+  assert.deepEqual([...tableConfig.groups[0].tracks].map((track) => [track.title, track.titleTransliteration]),
+    [['桜花抄', 'Oukashou'], ['A corrected title', ''], ['Kiss', '']]);
+});
+
 test('track modal playback refresh preserves generic Play track and Pause track accessible names', () => {
   const trackPath = 'C:\\Music\\Named Track.flac';
   const attributes = new Map([

@@ -4,6 +4,10 @@
 
 - Android app: the library offers once to set Battery to Unrestricted, so battery saving stops closing the app in the background and reloading the library on return; any answer is final.
 
+## 0.11.22 - 2026-11-17
+
+- Playback no longer stalls when the browser's kept-track cache is slow to answer: a track's start waits at most half a second for it and otherwise streams from the server.
+
 ## 0.11.21 - 2026-11-17
 
 - Test-only: the gallery overlap tests (FTC-GALLERY-NAV-035) wait for the deferred continuation and the settled query before asserting, so they no longer fail intermittently.

@@ -556,7 +556,10 @@ jobs:
       - name: Validate Python test inventory
         run: node scripts/ci/validate-foundation-gates.cjs --pytest-collection=${{ runner.temp }}\pytest-collection.txt
 
+      # Each bounded-interaction contract records which test measured which id.
       - name: Run Python tests
+        env:
+          BOUNDED_INTERACTION_EVIDENCE: ${{ runner.temp }}\bounded-interactions-evidence.jsonl
         run: |
           $env:PGPASSWORD = $null
           python -m pytest -q --junitxml="${{ runner.temp }}\pytest-results.xml" -vv --durations=20 -o faulthandler_timeout=60
@@ -564,6 +567,12 @@ jobs:
       - name: Validate Python skip policy
         if: ${{ !cancelled() }}
         run: node scripts/ci/validate-foundation-gates.cjs --pytest-junit=${{ runner.temp }}\pytest-results.xml --allowed-skips=tests/ci/pytest-allowed-skips.json
+
+      # Every Python bounded-interaction contract must have measured its own
+      # registered entry in the run above.
+      - name: Verify bounded interaction Python contract evidence
+        if: ${{ !cancelled() }}
+        run: node scripts/run-bounded-interactions.cjs --python-evidence "${{ runner.temp }}\bounded-interactions-evidence.jsonl"
 
       - name: Teardown pristine PostgreSQL for persistent Python contracts
         if: ${{ always() }}

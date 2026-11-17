@@ -135,6 +135,17 @@ test('a check-only stage fails the run without spawning anything', () => {
   assert.equal(runCommands([[null, [], () => []]], spawn), 0);
 });
 
+test('python-evidence runs nothing and checks only the Python contracts against the recorded evidence', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bounded-runner-python-evidence-'));
+  const file = path.join(dir, 'evidence.jsonl');
+  const identified = { interactions: registry.interactions.map(entry => ({ ...entry, testIdentity: `test_${entry.id}` })) };
+  const commands = buildCommands({ registry: identified, python: 'py', reportDir: REPORTS, pythonEvidence: file });
+  assert.deepEqual(commands.map(([command]) => command), [null]);
+  assert.deepEqual(commands[0][2](), ['route: its test "test_route" did not measure route']);
+  fs.writeFileSync(file, `${JSON.stringify({ id: 'route', test: 'test_route' })}\n`);
+  assert.deepEqual(commands[0][2](), []);
+});
+
 test('node-only runs just the JavaScript contracts and checks only their evidence', () => {
   const commands = buildCommands({ registry, python: 'py', reportDir: REPORTS, nodeOnly: true });
   assert.deepEqual(commands.map(([command]) => command), [process.execPath, null]);

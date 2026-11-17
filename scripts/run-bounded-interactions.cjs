@@ -17,6 +17,9 @@
 // --node-only runs just the JavaScript contract stage with the same skip, todo,
 // and evidence checks. CI uses it in the portable JavaScript job, where the
 // inventory is validated separately and Python contracts run in the Python job.
+// --python-evidence <file> runs nothing: it checks that every Python contract
+// was measured by its own test in a pytest run that recorded its evidence to
+// <file>. CI uses it after the full Python suite.
 
 const fs = require('node:fs');
 const os = require('node:os');
@@ -130,10 +133,18 @@ function pytestReportErrors(report, selections) {
   return errors;
 }
 
-function buildCommands({ registry, changedPaths = null, discovery, python = process.env.PYTHON || 'python', reportDir = os.tmpdir(), nodeOnly = false }) {
+const isPython = selection => fileOf(selection).endsWith('.py');
+
+function buildCommands({
+  registry, changedPaths = null, discovery, python = process.env.PYTHON || 'python', reportDir = os.tmpdir(), nodeOnly = false,
+  pythonEvidence = null,
+}) {
   const entries = selectedEntries(registry, changedPaths, discovery);
+  if (pythonEvidence) {
+    const pythonEntries = entries.filter(entry => testSelections(entry.command).some(isPython));
+    return [[null, [], () => evidenceErrors(pythonEntries, pythonEvidence)]];
+  }
   const selections = selectedTests(entries, changedPaths);
-  const isPython = selection => fileOf(selection).endsWith('.py');
   const nodeFiles = [...new Set(selections.filter(selection => !isPython(selection)).map(fileOf))];
   const pythonSelections = selections.filter(isPython);
   const commands = nodeOnly ? [] : [[process.execPath, ['scripts/ci/validate-bounded-interactions.cjs']]];
@@ -183,12 +194,16 @@ async function main(argv = process.argv.slice(2)) {
   const changedPaths = changedIndex >= 0
     ? fs.readFileSync(argv[changedIndex + 1], 'utf8').split(/\r?\n/).map(line => line.trim()).filter(Boolean)
     : null;
+  const evidenceIndex = argv.indexOf('--python-evidence');
+  const pythonEvidence = evidenceIndex >= 0 ? path.resolve(argv[evidenceIndex + 1]) : null;
   const registry = loadRegistry(REPO_ROOT);
   const discovery = changedPaths ? await discoverRepository({ registry }) : undefined;
   const reportDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bounded-interactions-'));
   process.env[EVIDENCE_ENV] = evidencePath(reportDir);
   try {
-    return runCommands(buildCommands({ registry, changedPaths, discovery, reportDir, nodeOnly: argv.includes('--node-only') }));
+    return runCommands(buildCommands({
+      registry, changedPaths, discovery, reportDir, nodeOnly: argv.includes('--node-only'), pythonEvidence,
+    }));
   } finally {
     fs.rmSync(reportDir, { recursive: true, force: true });
   }

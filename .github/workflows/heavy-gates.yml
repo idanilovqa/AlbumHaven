@@ -5,7 +5,7 @@ name: Heavy Regression Gates
 # on its own windows-2025 runner with an isolated PostgreSQL 17 database and released
 # synthetic fixtures. Real-library (real MP3) and full-size-library checks stay local.
 #
-#   gh workflow run heavy-gates.yml --ref main -f ref=<branch> -f gates=search,problematic-files
+#   gh workflow run heavy-gates.yml --ref main -f ref=<commit-sha> -f gates=search,problematic-files
 
 on:
   workflow_dispatch:

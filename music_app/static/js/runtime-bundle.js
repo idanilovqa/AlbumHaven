@@ -4612,20 +4612,26 @@ function galleryArtistDisplayName(artist, artistMusicBrainz = null) {
   return credited && canonical ? canonical : String(artist || '');
 }
 
-function buildGalleryArtistMetadataHtml(artistMusicBrainz = null) {
+// The artist header shows one genre (its country sits beside the album count); the
+// information panel names the country and up to three genres.
+function buildGalleryArtistMetadataHtml(artistMusicBrainz = null, { country = false, genreLimit = 1 } = {}) {
   const projection = artistMusicBrainz && typeof artistMusicBrainz === 'object'
     ? artistMusicBrainz
     : {};
+  const countryName = country ? galleryCountryName(projection.country) : '';
+  const countryHtml = countryName
+    ? `<span class="ui-metadata-pill ui-metadata-pill--country">${escapeHtml(countryName)}</span>`
+    : '';
   const genres = (Array.isArray(projection.genres) ? projection.genres : [])
     .map((genre) => String(genre || '').trim())
     .filter(Boolean)
-    .slice(0, 1);
+    .slice(0, genreLimit);
   const genreHtml = genres.map((genre) => (
     genre === 'Genre unavailable'
       ? '<span class="ui-metadata-pill ui-metadata-pill--genre ui-metadata-pill--genre-unavailable">Genre unavailable</span>'
       : `<span class="ui-metadata-pill ui-metadata-pill--genre">${escapeHtml(genre)}</span>`
   )).join('');
-  return genreHtml;
+  return `${countryHtml}${genreHtml}`;
 }
 
 function buildGalleryArtistSummaryHtml(albumCount, artistMusicBrainz = null) {
@@ -7701,7 +7707,7 @@ function renderGalleryArtistInfo(anchor) {
   // The text always ends with the full-page control; it stays disabled until artist pages exist.
   const fullPage = `<button type="button" class="artist-info-overlay__full-page" aria-disabled="true" disabled title="Artist pages are not available yet">${GALLERY_ARTIST_FULL_PAGE_LABEL}</button>`;
   const links = buildGalleryArtistExternalLinksHtml(group.artist_musicbrainz, artist);
-  const metadata = buildGalleryArtistMetadataHtml(group.artist_musicbrainz);
+  const metadata = buildGalleryArtistMetadataHtml(group.artist_musicbrainz, { country: true, genreLimit: 3 });
   // Matched under another name ("3 Crows" on Chris Buck): the MusicBrainz name is the
   // title, and the tag is named beside the links (display only).
   const displayName = galleryArtistDisplayName(artist, group.artist_musicbrainz);

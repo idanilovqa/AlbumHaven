@@ -648,6 +648,12 @@ test('current GalleryBar owner keeps artist metadata to two lines', () => {
   assert.match(markup, />Heavy Metal</);
   assert.doesNotMatch(markup, /Power Metal|Hard Rock|Fourth Genre/);
   assert.doesNotMatch(markup, /gallery-bar__actions[\s\S]*MusicBrainz/);
+  // The information panel keeps the country and up to three genres.
+  const panelMetadata = requireContract(context, 'buildGalleryArtistMetadataHtml')(projection, { country: true, genreLimit: 3 });
+  assert.match(panelMetadata, /^<span class="ui-metadata-pill ui-metadata-pill--country">Russia<\/span>/);
+  assert.equal((panelMetadata.match(/ui-metadata-pill--genre/g) || []).length, 3);
+  assert.doesNotMatch(panelMetadata, /Fourth Genre/);
+  assert.match(galleryMainInteractionsSource, /buildGalleryArtistMetadataHtml\(group\.artist_musicbrainz, \{ country: true, genreLimit: 3 \}\)/);
 
   assert.match(buttonComponentCssSource, /\.ui-metadata-pill\s*\{[^}]*display:\s*inline-flex/s);
   assert.match(buttonComponentCssSource, /\.ui-metadata-pill--genre\s*\{[^}]*background:\s*#11202a[^}]*border[^;]*#4199c3[^}]*color:\s*#8bd9ff/is);

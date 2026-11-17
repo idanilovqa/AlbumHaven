@@ -786,7 +786,7 @@ function renderGalleryArtistInfo(anchor) {
   // The text always ends with the full-page control; it stays disabled until artist pages exist.
   const fullPage = `<button type="button" class="artist-info-overlay__full-page" aria-disabled="true" disabled title="Artist pages are not available yet">${GALLERY_ARTIST_FULL_PAGE_LABEL}</button>`;
   const links = buildGalleryArtistExternalLinksHtml(group.artist_musicbrainz, artist);
-  const metadata = buildGalleryArtistMetadataHtml(group.artist_musicbrainz);
+  const metadata = buildGalleryArtistMetadataHtml(group.artist_musicbrainz, { country: true, genreLimit: 3 });
   // Matched under another name ("3 Crows" on Chris Buck): the MusicBrainz name is the
   // title, and the tag is named beside the links (display only).
   const displayName = galleryArtistDisplayName(artist, group.artist_musicbrainz);

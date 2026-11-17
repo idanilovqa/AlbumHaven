@@ -34,20 +34,26 @@ function galleryArtistDisplayName(artist, artistMusicBrainz = null) {
   return credited && canonical ? canonical : String(artist || '');
 }
 
-function buildGalleryArtistMetadataHtml(artistMusicBrainz = null) {
+// The artist header shows one genre (its country sits beside the album count); the
+// information panel names the country and up to three genres.
+function buildGalleryArtistMetadataHtml(artistMusicBrainz = null, { country = false, genreLimit = 1 } = {}) {
   const projection = artistMusicBrainz && typeof artistMusicBrainz === 'object'
     ? artistMusicBrainz
     : {};
+  const countryName = country ? galleryCountryName(projection.country) : '';
+  const countryHtml = countryName
+    ? `<span class="ui-metadata-pill ui-metadata-pill--country">${escapeHtml(countryName)}</span>`
+    : '';
   const genres = (Array.isArray(projection.genres) ? projection.genres : [])
     .map((genre) => String(genre || '').trim())
     .filter(Boolean)
-    .slice(0, 1);
+    .slice(0, genreLimit);
   const genreHtml = genres.map((genre) => (
     genre === 'Genre unavailable'
       ? '<span class="ui-metadata-pill ui-metadata-pill--genre ui-metadata-pill--genre-unavailable">Genre unavailable</span>'
       : `<span class="ui-metadata-pill ui-metadata-pill--genre">${escapeHtml(genre)}</span>`
   )).join('');
-  return genreHtml;
+  return `${countryHtml}${genreHtml}`;
 }
 
 function buildGalleryArtistSummaryHtml(albumCount, artistMusicBrainz = null) {

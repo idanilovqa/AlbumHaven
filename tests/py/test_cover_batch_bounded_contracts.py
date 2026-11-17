@@ -405,7 +405,7 @@ def test_fetch_cover_refresh_contract_reads_and_republishes_only_the_selected_al
         persisted.append(set(track_paths))
         return commit_guard(lambda: {"track_file_rows_updated": len(track_paths)})
 
-    monkeypatch.setattr(cover_refresh_execution, "persist_cover_selection_for_tracks_for_config", persist_cover_selection)
+    monkeypatch.setattr(cover_refresh_execution, "persist_cover_selection_in_shared_transaction", persist_cover_selection)
 
     class CountingAlbums(list):
         counts = OperationCounts()
@@ -449,3 +449,167 @@ def test_fetch_cover_refresh_contract_reads_and_republishes_only_the_selected_al
         return counts
 
     measure_scale_pair(run=run, **_registered(interaction_id))
+
+
+
+class _CountingCoverDatabase:
+    """Stands in for Postgres behind the scan-cache adapter's cover commits.
+    Counts every connection opened (`pool_leases`) and statement run, and
+    answers each statement the way a one-album cover commit expects."""
+
+    def __init__(self, counts: OperationCounts):
+        self.counts = counts
+        self.cleared: list[set[str]] = []
+
+    def connect(self, _database_url):
+        self.counts.pool_leases += 1
+        database = self
+
+        class Rows:
+            def __init__(self, row):
+                self._row = row
+
+            def fetchone(self):
+                return self._row
+
+        class Connection:
+            closed = False
+
+            def execute(self, sql, params=None):
+                database.counts.sql_statements += 1
+                if isinstance(params, dict) and "track_paths" in params:
+                    count = len(params["track_paths"])
+                    if params.get("selected_cover_path") is None:
+                        database.cleared.append(set(params["track_paths"]))
+                    return Rows({
+                        "input_path_count": count, "resolved_path_count": count, "selected_album_count": 1,
+                        "album_track_file_count": count, "album_rows_updated": 1, "track_file_rows_updated": count,
+                    })
+                if "inventory_mutation_revision" in str(sql):
+                    return Rows({"inventory_mutation_revision": 0})
+                return Rows({"ready": True})
+
+            def commit(self):
+                database.counts.transactions += 1
+
+            def rollback(self):
+                pass
+
+            def close(self):
+                self.closed = True
+
+            # As psycopg: leaving the block commits (or rolls back) and closes.
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, *_exc):
+                self.rollback() if exc_type else self.commit()
+                self.close()
+                return False
+
+        return Connection()
+
+
+def _with_counting_cover_database(app, monkeypatch, counts: OperationCounts) -> _CountingCoverDatabase:
+    """Routes the real cover commits to a counting stand-in; the album
+    candidate snapshots and provider outcomes (their own stores) stay out."""
+    from types import SimpleNamespace
+
+    from music_app.services import cover_refresh_execution, scan_cache_persistence
+
+    database = _CountingCoverDatabase(counts)
+    app.state.config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://contract/cover-commits"
+    monkeypatch.setattr(scan_cache_persistence, "_connect", database.connect)
+    monkeypatch.setattr(
+        cover_refresh_execution, "AlbumCoverCandidateSnapshotRepository",
+        lambda _config: SimpleNamespace(resolve_album_ids_for_track_path_sets=lambda sets: [None] * len(sets)),
+    )
+    monkeypatch.setattr(cover_refresh_execution, "persist_cover_provider_outcomes", lambda *_args, **_kwargs: None)
+    return database
+
+
+def _missing_cover_albums(root: Path, count: int) -> dict[str, dict[str, object]]:
+    """`count` albums whose recorded automatic cover file no longer exists."""
+    file_cache = {}
+    for index in range(count):
+        folder = root / f"Artist {index:05d}" / "Album"
+        folder.mkdir(parents=True)
+        path = str(folder / "01.mp3")
+        file_cache[path] = {
+            "path": path, "title": "One", "album": f"Album {index}", "album_artist": f"Artist {index:05d}",
+            "artist": f"Artist {index:05d}", "cover_path": str(folder / "cover.jpg"),
+            "cover_revision": "gone", "cover_selection_origin": "automatic",
+        }
+    return file_cache
+
+
+def test_fetch_cover_clears_a_missing_cover_for_its_album_through_one_connection_at_production_album_count(
+    cover_state, tmp_path, monkeypatch,
+):
+    """Fetch cover for one album whose cover file is gone, when the search finds
+    nothing, clears that album's cover selection with one guarded commit: one
+    connection, however large the library."""
+    from music_app.services import state as state_service
+    from music_app.services.library import build_albums_from_file_cache
+    from music_app.services.library_album_index import publish_library_albums
+
+    app, _executor, searches = cover_state
+    config, logger = app.state.config, app.state.logger
+
+    def run(album_count: int) -> OperationCounts:
+        searches.clear()
+        counts = OperationCounts()
+        database = _with_counting_cover_database(app, monkeypatch, counts)
+        config["COVER_CACHE_PATH"] = tmp_path / f"cover-cache-{album_count}.json"
+        library = {
+            path: {"path": path, "title": "One", "album": "Album", "album_artist": f"Other {index:05d}"}
+            for index in range(album_count - 1)
+            for path in (f"/music/Other {index:05d}/Album/01.mp3",)
+        }
+        selected = _missing_cover_albums(tmp_path / f"selected-{album_count}", 1)
+        (selected_path,) = selected
+        library_state = app.state.library_state
+        library_state.update({"covers_in_progress": False, "scan_in_progress": False, "file_cache": {**library, **selected}})
+        publish_library_albums(library_state, build_albums_from_file_cache(library_state["file_cache"]))
+
+        result = state_service.refresh_cover_artwork_for_track_paths_for_state(
+            library_state, config, logger, {selected_path}, force_search=True,
+        )
+        assert result["changed"] is True
+        assert database.cleared == [{selected_path}]
+        cleared = library_state["file_cache"][selected_path]
+        assert (cleared["cover_path"], cleared["cover_revision"], cleared["cover_selection_origin"]) == (None, None, None)
+        assert len(searches) == 1
+        return counts
+
+    measure_scale_pair(run=run, **_registered("py:services/cover_refresh_runtime.py#refresh_cover_artwork_for_track_paths_request"))
+
+
+def test_unsuccessful_cover_batch_clears_each_missing_cover_through_one_connection_at_production_album_count(
+    cover_state, tmp_path, monkeypatch,
+):
+    """Fetch covers for unsuccessful albums, over albums whose cover files are
+    gone and for which the search finds nothing, clears each album's selection
+    for its own tracks, one guarded commit per album, all through one
+    connection: 20 albums or 1,000 cost the same single connection."""
+    from music_app.services import state as state_service
+
+    app, _executor, searches = cover_state
+    config, logger = app.state.config, app.state.logger
+
+    def run(album_count: int) -> OperationCounts:
+        searches.clear()
+        counts = OperationCounts()
+        database = _with_counting_cover_database(app, monkeypatch, counts)
+        config["COVER_CACHE_PATH"] = tmp_path / f"cover-cache-{album_count}.json"
+        file_cache = _missing_cover_albums(tmp_path / f"library-{album_count}", album_count)
+        library_state = app.state.library_state
+        library_state.update({"covers_in_progress": False, "scan_in_progress": False, "file_cache": file_cache})
+
+        state_service.refresh_unsuccessful_cover_artwork_for_state(library_state, config, logger, force_search=True)
+        assert sorted(map(sorted, database.cleared)) == sorted([path] for path in file_cache)
+        assert all(entry["cover_path"] is None for entry in library_state["file_cache"].values())
+        assert len(searches) == album_count
+        return counts
+
+    measure_scale_pair(run=run, **_registered("py:services/cover_refresh_runtime.py#refresh_unsuccessful_cover_artwork_request"))

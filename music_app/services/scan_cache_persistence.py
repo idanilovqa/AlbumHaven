@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import Callable
-from contextlib import ExitStack
+from collections.abc import Callable, Iterator
+from contextlib import ExitStack, contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 import logging
 from pathlib import Path
 from time import perf_counter
+import threading
 from typing import Any, Protocol
 
 from config import PERSISTENCE_BACKEND_POSTGRES
@@ -198,6 +200,9 @@ class ScanCacheAdapter(Protocol):
         expected_inventory_mutation_revision: int | None = None,
         commit_guard: Callable[[Callable[[], object]], object] | None = None,
     ) -> dict[str, object]:
+        ...
+
+    def persist_cover_selection_in_shared_transaction(self, **options) -> dict[str, object]:
         ...
 
     def persist_structural_tag_edit(
@@ -758,8 +763,21 @@ class PostgresScanCacheAdapter:
             None,
         )
 
-    def persist_cover_selection(
+    def persist_cover_selection(self, **options) -> dict[str, object]:
+        """Commit one album's cover selection over its own new connection."""
+        return self._persist_cover_selection(self._connect_to_database, **options)
+
+    def persist_cover_selection_in_shared_transaction(self, **options) -> dict[str, object]:
+        """Commit one album's cover selection as one transaction on the cover
+        run's shared connection (see `shared_scan_cache_connection`)."""
+        shared = _SHARED_CONNECTION.get()
+        if shared is None or shared.database_url != self._database_url:
+            raise RuntimeError("Cover selections in a cover run commit through the run's shared connection.")
+        return self._persist_cover_selection(shared.transaction, **options)
+
+    def _persist_cover_selection(
         self,
+        open_transaction: Callable[[], Any],
         *,
         track_paths: set[str],
         selected_cover_path: Path | None,
@@ -857,7 +875,7 @@ class PostgresScanCacheAdapter:
             if linked_remote
             else {}
         )
-        with self._connect_to_database() as connection:
+        with open_transaction() as connection:
             connection.execute(_inventory_publication_advisory_lock_sql())
             _ensure_bootstrap_context(connection)
             if (
@@ -2062,6 +2080,81 @@ class PostgresScanCacheAdapter:
         if not self._database_url:
             raise RuntimeError("ALBUM_HAVEN_APP_DATABASE_URL is required for Postgres scan_cache persistence.")
         return self._connect(self._database_url)
+
+
+class _SharedConnection:
+    """The one connection a cover run's commits use, one transaction at a time.
+
+    Each `with shared.transaction() as connection:` block is its own
+    transaction: it commits on success and rolls back on error, as a fresh
+    connection would, and the connection stays open for the next block. Worker
+    threads of the run take turns. The connection is opened once, before any
+    album is processed; if it cannot be opened, or breaks, each later commit
+    fails on its own, as a failed connect would have."""
+
+    def __init__(self, database_url: str, connection: Any):
+        self.database_url = database_url
+        self._lock = threading.Lock()
+        self._connection = connection
+
+    @contextmanager
+    def transaction(self) -> Iterator[Any]:
+        with self._lock:
+            connection = self._connection
+            if connection is None:
+                raise RuntimeError("The cover run's database connection is unavailable.")
+            try:
+                yield connection
+            except BaseException:
+                try:
+                    connection.rollback()
+                except Exception:
+                    self._discard()
+                raise
+            else:
+                try:
+                    connection.commit()
+                except Exception:
+                    self._discard()
+                    raise
+
+    def _discard(self) -> None:
+        connection, self._connection = self._connection, None
+        try:
+            connection.close()
+        except Exception:
+            pass
+
+    def close(self) -> None:
+        with self._lock:
+            if self._connection is not None:
+                self._discard()
+
+
+_SHARED_CONNECTION: ContextVar[_SharedConnection | None] = ContextVar("scan_cache_shared_connection", default=None)
+
+
+@contextmanager
+def shared_scan_cache_connection(config: dict[str, object]) -> Iterator[None]:
+    """Opens the one connection a cover run's per-album commits share (in this
+    context and contexts copied from it), and closes it on exit: a batch of
+    albums costs one connection, not one per album."""
+    database_url = str(config.get(_APP_DATABASE_URL_KEY) or "").strip() if isinstance(config, dict) else ""
+    if not database_url or _SHARED_CONNECTION.get() is not None:
+        yield
+        return
+    try:
+        connection = PostgresScanCacheAdapter(config)._connect_to_database()
+    except Exception as exc:
+        _LOGGER.warning("Cover run database connection failed: %s", type(exc).__name__)
+        connection = None
+    shared = _SharedConnection(database_url, connection)
+    token = _SHARED_CONNECTION.set(shared)
+    try:
+        yield
+    finally:
+        _SHARED_CONNECTION.reset(token)
+        shared.close()
 
 
 def is_scan_cache_postgres_available(config: dict[str, object] | None) -> bool:

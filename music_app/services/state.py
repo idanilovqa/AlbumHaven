@@ -326,7 +326,6 @@ def _drain_watcher_cover_refresh_queue(
                 build_cover_jobs=build_cover_refresh_jobs,
                 run_cover_jobs=lambda **kwargs: run_cover_jobs(
                     **kwargs,
-                    allow_full_snapshot_persistence=False,
                     expected_inventory_mutation_revision=int(
                         targeted_state["inventory_mutation_revision"]
                     ),

@@ -522,6 +522,28 @@ def persist_cover_selection_for_tracks_for_config(
     config: dict[str, object],
     track_paths: set[str],
     selected_cover_path: Path | None,
+    **options,
+) -> dict[str, object]:
+    """Commit one album's cover selection over its own connection."""
+    return _select_runtime_scan_cache_adapter(config).persist_cover_selection(
+        track_paths=track_paths, selected_cover_path=selected_cover_path, **_cover_selection_options(**options),
+    )
+
+
+def persist_cover_selection_in_shared_transaction(
+    config: dict[str, object],
+    track_paths: set[str],
+    selected_cover_path: Path | None,
+    **options,
+) -> dict[str, object]:
+    """Commit one album's cover selection on the cover run's shared connection,
+    so a batch of albums costs one connection."""
+    return _select_runtime_scan_cache_adapter(config).persist_cover_selection_in_shared_transaction(
+        track_paths=track_paths, selected_cover_path=selected_cover_path, **_cover_selection_options(**options),
+    )
+
+
+def _cover_selection_options(
     *,
     cover_revision: str | None = None,
     remote_cover_url: str | None = None,
@@ -546,7 +568,6 @@ def persist_cover_selection_for_tracks_for_config(
     logger=None,
 ) -> dict[str, object]:
     del logger
-    adapter = _select_runtime_scan_cache_adapter(config)
     persistence_options: dict[str, object] = {}
     if cover_revision:
         persistence_options["cover_revision"] = cover_revision
@@ -582,11 +603,7 @@ def persist_cover_selection_for_tracks_for_config(
         )
     if commit_guard is not None:
         persistence_options["commit_guard"] = commit_guard
-    return adapter.persist_cover_selection(
-        track_paths=track_paths,
-        selected_cover_path=selected_cover_path,
-        **persistence_options,
-    )
+    return persistence_options
 
 
 def persist_structural_tag_edit_for_config(

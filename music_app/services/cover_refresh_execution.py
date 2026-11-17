@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import contextvars
 import logging
-import time
 import uuid
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -16,10 +16,7 @@ from music_app.services.album_cover_candidate_publisher import AlbumCoverCandida
 from music_app.services.album_cover_candidate_snapshots_postgres import (
     AlbumCoverCandidateSnapshotRepository,
 )
-from music_app.services.cache import (
-    persist_cover_selection_for_tracks_for_config,
-    save_cache_to_disk_for_config,
-)
+from music_app.services.cache import persist_cover_selection_in_shared_transaction
 from music_app.services.cover_workflow import (
     begin_external_cover_write_promotion,
     complete_local_image_promotion,
@@ -38,8 +35,7 @@ from music_app.services.cover_provider_outcomes_postgres import persist_cover_pr
 from music_app.services.edit_state import rebuild_affected_albums_in_state
 from music_app.services.library import build_albums_from_file_cache
 from music_app.services.library_album_index import publish_library_albums
-from music_app.services.library_roots import library_root_cache_identity
-from music_app.services.scan_cache_persistence import select_scan_cache_adapter
+from music_app.services.scan_cache_persistence import shared_scan_cache_connection
 
 StateGetter = Callable[[], dict[str, object]]
 
@@ -57,6 +53,13 @@ _COVER_SELECTION_FIELDS = (
 
 def _cover_selection_values(entry: Mapping[str, object]) -> tuple[object, ...]:
     return tuple(entry.get(field) for field in _COVER_SELECTION_FIELDS)
+
+
+# What clearing an album's cover selection removes, as Postgres's
+# `clear_selection` does; the album's decoded local dimensions stay.
+_CLEARED_COVER_SELECTION = {
+    field: None for field in _COVER_SELECTION_FIELDS if field not in {"local_cover_width", "local_cover_height"}
+}
 
 
 def _recover_existing_cover_selection(
@@ -139,7 +142,7 @@ def _recover_existing_cover_selection(
                     current_entries[path].update(selection)
                 return result
 
-        result = persist_cover_selection_for_tracks_for_config(
+        result = persist_cover_selection_in_shared_transaction(
             config, paths, selected, cover_revision=revision,
             cover_selection_origin="automatic", reject_if_user_controlled=True,
             expected_cover_state=(expected_origin or None, expected_revision or None),
@@ -259,7 +262,7 @@ def _build_automatic_cover_write_guard(
                     return result
 
             persistence_origin = "user" if preserve_user_ownership else "automatic"
-            persistence_result = persist_cover_selection_for_tracks_for_config(
+            persistence_result = persist_cover_selection_in_shared_transaction(
                 config,
                 track_paths,
                 selected_cover_path,
@@ -290,7 +293,7 @@ def _build_automatic_cover_write_guard(
 
             exact_revision = cover_revision_for_path(written_path)
             if exact_revision != provisional_revision:
-                persist_cover_selection_for_tracks_for_config(
+                persist_cover_selection_in_shared_transaction(
                     config,
                     track_paths,
                     written_path,
@@ -441,14 +444,49 @@ def run_cover_jobs(
     allow_apple_web_fallback_when_has_cover: bool = True,
     negative_cache_ttl_seconds: float | None = None,
     job_workers: int = 1,
-    allow_full_snapshot_persistence: bool = True,
     republish_changed_albums_only: bool = False,
+) -> dict[str, object]:
+    # Every album's cover commit in this run, from any job worker, shares one
+    # Postgres connection (one transaction each), not one connection per album.
+    with shared_scan_cache_connection(config):
+        return _run_cover_jobs(
+            get_state=get_state, config=config, logger=logger, cache_lock=cache_lock, jobs=jobs,
+            file_cache=file_cache, separate_release_keys=separate_release_keys,
+            image_extensions=image_extensions, user_agent=user_agent, cover_cache=cover_cache,
+            scan_generation=scan_generation, cover_generation=cover_generation,
+            expected_inventory_mutation_revision=expected_inventory_mutation_revision,
+            force_search=force_search, allow_apple_web_fallback=allow_apple_web_fallback,
+            allow_apple_web_fallback_when_has_cover=allow_apple_web_fallback_when_has_cover,
+            negative_cache_ttl_seconds=negative_cache_ttl_seconds, job_workers=job_workers,
+            republish_changed_albums_only=republish_changed_albums_only,
+        )
+
+
+def _run_cover_jobs(
+    *,
+    get_state: StateGetter,
+    config,
+    logger,
+    cache_lock,
+    jobs: list[dict[str, object]],
+    file_cache: dict[str, dict[str, object]],
+    separate_release_keys: set[str],
+    image_extensions: set[str],
+    user_agent: str,
+    cover_cache,
+    scan_generation: int | None,
+    cover_generation: int | None,
+    expected_inventory_mutation_revision: int | None,
+    force_search: bool,
+    allow_apple_web_fallback: bool,
+    allow_apple_web_fallback_when_has_cover: bool,
+    negative_cache_ttl_seconds: float | None,
+    job_workers: int,
+    republish_changed_albums_only: bool,
 ) -> dict[str, object]:
     library_state = get_state()
     changed = False
-    selection_conflict = False
     runtime_cover_updates: dict[str, tuple[tuple[object, ...], dict[str, object]]] = {}
-    needs_snapshot = False
     failed = 0
     skipped = 0
     downloaded_count = 0
@@ -703,8 +741,63 @@ def run_cover_jobs(
             provider_outcome_persistence_uncertain=provider_outcome_error is not None,
         )
 
+    def clear_album_cover_selection(job: dict[str, object]) -> None:
+        """Clears the cover selection of this album's tracks, and only theirs,
+        when the search found nothing and the old cover is gone. Postgres
+        commits first, guarded by the album's observed selection state, so a
+        cover chosen meanwhile (or any user-owned one) is never cleared; the
+        runtime entries follow only once that commit succeeds."""
+        nonlocal changed
+        paths = {str(path) for path in job.get("track_paths") or []}
+        live_entries = library_state.get("file_cache") or {}
+        baseline = {
+            path: _cover_selection_values(live_entries[path])
+            for path in paths if isinstance(live_entries.get(path), dict)
+        }
+        states = {
+            (str(live_entries[path].get("cover_selection_origin") or "").strip().casefold(),
+             str(live_entries[path].get("cover_revision") or ""))
+            for path in baseline
+        }
+        if not paths or len(baseline) != len(paths) or len(states) != 1:
+            logger.warning("Cover clearing skipped: album selection is not uniform folder=%r", str(job.get("folder") or ""))
+            return
+        expected_origin, expected_revision = next(iter(states))
+        if expected_origin == "user":
+            # A user's choice is never cleared by an automatic search.
+            return
+
+        def commit_clear(commit_action):
+            with cache_lock:
+                current = get_state()
+                current_entries = current.get("file_cache") or {} if current is library_state else {}
+                if not owns_progress() or any(
+                    not isinstance(current_entries.get(path), dict)
+                    or _cover_selection_values(current_entries[path]) != values
+                    for path, values in baseline.items()
+                ):
+                    raise RuntimeError("Album cover selection changed before it was cleared.")
+                result = commit_action()
+                for path in paths:
+                    current_entries[path].update(_CLEARED_COVER_SELECTION)
+                return result
+
+        try:
+            result = persist_cover_selection_in_shared_transaction(
+                config, paths, None,
+                clear_selection=True,
+                expected_cover_state=(expected_origin or None, expected_revision or None),
+                expected_inventory_mutation_revision=expected_inventory_mutation_revision,
+                commit_guard=commit_clear,
+            )
+        except Exception as exc:
+            logger.warning("Cover clearing skipped folder=%r error=%r", str(job.get("folder") or ""), exc)
+            return
+        if not result.get("blocked_by_expected_cover_state") and not result.get("blocked_by_user_selection"):
+            changed = True
+
     def apply_job_result(index: int, job: dict[str, object], cover_path: Path | None, downloaded: bool, detail: dict[str, object]) -> None:
-        nonlocal changed, selection_conflict, needs_snapshot
+        nonlocal changed
         folder = job["folder"]
         artist = str(job.get("artist") or "")
         album = str(job.get("album") or "")
@@ -713,8 +806,6 @@ def run_cover_jobs(
             and Path(str(job["selected_cover_path"])) == Path(cover_path)
         )
         selection_changed = bool(detail.get("selection_conflict"))
-        if selection_changed and id(job) not in mixed_folder_jobs:
-            selection_conflict = True
         if retained_selection:
             paths = {str(path) for path in job.get("track_paths") or []}
             current_entries = get_state().get("file_cache") or {}
@@ -728,7 +819,6 @@ def run_cover_jobs(
                 _cover_selection_values(current_entries[path]) != baseline[path] for path in paths
             ):
                 selection_changed = True
-                selection_conflict = True
                 cover_path = None
                 if owns_progress() and same_album:
                     current_paths = {str(current_entries[path].get("cover_path") or "") for path in paths}
@@ -827,7 +917,6 @@ def run_cover_jobs(
                 )
                 raise
             changed = changed or recovered
-            selection_conflict = selection_conflict or conflict
             if conflict:
                 detail["recovery_conflict"] = True
                 detail["reason"] = "recovered_cover_selection_conflict"
@@ -837,6 +926,7 @@ def run_cover_jobs(
                     level="warning", reason="recovered_cover_selection_conflict",
                 )
 
+        clearing_paths: list[str] = []
         for track_path in job.get("track_paths") or []:
             if recovering_selection or retained_selection or selection_changed:
                 continue
@@ -880,9 +970,10 @@ def run_cover_jobs(
             if local_cover_changed:
                 previous_selection = _cover_selection_values(entry)
                 if not downloaded and not cover_path:
-                    # Keep legacy clearing private until its snapshot commits.
+                    # Cleared below for this album alone, once Postgres commits;
+                    # until then the change stays private.
                     entry = dict(entry)
-                    needs_snapshot = True
+                    clearing_paths.append(str(track_path))
                 entry["cover_path"] = cover_value
                 entry["remote_cover_url"] = None
                 entry["remote_cover_thumbnail_url"] = None
@@ -902,6 +993,11 @@ def run_cover_jobs(
                     {field: entry.get(field) for field in _COVER_SELECTION_FIELDS},
                 )
                 changed = True
+
+        if clearing_paths:
+            for path in clearing_paths:
+                runtime_cover_updates.pop(path, None)
+            clear_album_cover_selection(job)
 
         record_job_outcome(index, job, cover_path, downloaded, detail)
         # Image selections are committed by the guarded writer per album. Keep
@@ -944,6 +1040,8 @@ def run_cover_jobs(
         with ThreadPoolExecutor(max_workers=effective_job_workers, thread_name_prefix="albumhaven-cover-job") as executor:
             future_map = {
                 executor.submit(
+                    # In the run's context, so the job's cover commits share its connection.
+                    contextvars.copy_context().run,
                     execute_cover_job,
                     job=job,
                     image_extensions=image_extensions,
@@ -1074,9 +1172,6 @@ def run_cover_jobs(
     flush_log_handlers(logger)
 
     if changed:
-        snapshot = None
-        snapshot_options = {}
-
         def republish_albums(entries: dict[str, dict[str, object]]) -> None:
             if republish_changed_albums_only:
                 # A selected-album refresh rebuilds only the albums its jobs hold.
@@ -1084,12 +1179,6 @@ def run_cover_jobs(
                 rebuild_affected_albums_in_state(library_state, entries, entries, job_paths, separate_release_keys)
             else:
                 publish_library_albums(library_state, build_albums_from_file_cache(entries, separate_release_keys))
-        if allow_full_snapshot_persistence and needs_snapshot and not selection_conflict:
-            adapter = select_scan_cache_adapter(config)
-            snapshot_options = {
-                "expected_cover_mutation_revision": adapter.load_cover_mutation_revision(),
-                "expected_inventory_mutation_revision": adapter.load_inventory_mutation_revision(),
-            }
 
         def publication_is_current() -> bool:
             current = get_state()
@@ -1105,45 +1194,12 @@ def run_cover_jobs(
         with cache_lock:
             if publication_is_current():
                 current_entries = library_state.get("file_cache") or {}
-                accepted_updates = {}
                 for path, (baseline, selection) in runtime_cover_updates.items():
                     entry = current_entries.get(path)
-                    if not isinstance(entry, dict):
-                        selection_conflict = True
-                        continue
-                    current_selection = _cover_selection_values(entry)
-                    if current_selection not in (baseline, _cover_selection_values(selection)):
-                        selection_conflict = True
-                        continue
-                    accepted_updates[path] = selection
-                    if selection.get("cover_path") is not None:
+                    # An entry another writer changed meanwhile keeps that change.
+                    if isinstance(entry, dict) and _cover_selection_values(entry) == baseline and selection.get("cover_path") is not None:
                         entry.update(selection)
-                if allow_full_snapshot_persistence and needs_snapshot and not selection_conflict:
-                    baseline_entries = {path: dict(entry) for path, entry in current_entries.items()}
-                    snapshot = {path: dict(entry) for path, entry in current_entries.items()}
-                    for path, selection in accepted_updates.items():
-                        snapshot[path].update(selection)
                 republish_albums(current_entries)
-
-        if snapshot is not None:
-            def commit_snapshot(commit_action):
-                with cache_lock:
-                    if not publication_is_current() or library_state.get("file_cache") != baseline_entries:
-                        raise RuntimeError("Cover snapshot publication changed before commit.")
-                    result = commit_action()
-                    for path, selection in accepted_updates.items():
-                        library_state["file_cache"][path].update(selection)
-                    republish_albums(library_state["file_cache"])
-                    return result
-
-            # Preserve the legacy clearing path. Revision guards reject concurrent
-            # DB changes; pre-existing DB/runtime divergence is not reconciled here.
-            save_cache_to_disk_for_config(
-                config, config["CACHE_PATH"], snapshot,
-                library_root_cache_identity(config),
-                float(library_state.get("last_scan") or time.time()),
-                publication_commit_guard=commit_snapshot, **snapshot_options,
-            )
 
     with cache_lock:
         if owns_progress():

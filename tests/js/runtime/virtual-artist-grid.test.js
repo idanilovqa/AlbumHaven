@@ -7267,6 +7267,28 @@ test('a root window refresh keeps an absolute scroll position over the same arti
   assert.equal(sectionOf('Artist 300').top, before, 'the restored coordinates still show the same artist');
 });
 
+test('a root window refresh ending above the previous content keeps that end reachable until later pages load', () => {
+  const { context, virtualGrid, frames, runNextFrame, bottomSpacerEl } = loadCountedGallery(400);
+  const groups = Array.from(context.state.view.artist_groups);
+  const previousEnd = virtualGrid.totalHeight;
+  context.isPagedRootGallery = () => true;
+  const mount = (last, hasMore, options = {}) => {
+    const shown = groups.slice(290, last);
+    context.state.view = { ...context.state.view, artist_groups: shown, gallery_page: { has_previous: true, has_more: hasMore } };
+    virtualGrid.setGroups([], [], shown, { preserveScroll: true, preserveAbsoluteScroll: true, ...options });
+    while (frames.size) runNextFrame();
+  };
+  const bottomSpace = () => Number.parseFloat(bottomSpacerEl.style.height || '0');
+
+  mount(300, true, { holdGalleryScrollTop: true });
+  assert.ok(virtualGrid.totalHeight < previousEnd, 'the window ends above the previous content');
+  assert.ok(bottomSpace() >= previousEnd - virtualGrid.totalHeight, 'the previous end stays reachable');
+  assert.equal(virtualGrid.heldTrailingSpace, previousEnd - virtualGrid.totalHeight);
+
+  mount(300, false);
+  assert.equal(virtualGrid.heldTrailingSpace, 0, 'the last page releases the held end');
+});
+
 test('a root gallery continuation drops the measured shift of the artist it replaces', async () => {
   const gallery = loadCountedRootContinuation(40);
   const { context, prepareNextPage, virtualGrid } = gallery;

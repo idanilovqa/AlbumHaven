@@ -19048,7 +19048,9 @@ async function loadNextRootGalleryPage() {
   if (!isPagedRootGallery(view) || !page.has_more || !page.next_cursor
     || rootGalleryPageRequest || state.busy || hasPendingSidebarNavigation()
     || !scroll || scroll.clientHeight <= 0
-    || scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight
+    // Space held below the loaded artists is not content: measure to the last loaded artist.
+    || scroll.scrollHeight - Number(typeof virtualGrid === 'undefined' ? 0 : virtualGrid?.heldTrailingSpace || 0)
+      - scroll.scrollTop - scroll.clientHeight
       > ROOT_GALLERY_PREFETCH_VIEWPORT_COUNT * scroll.clientHeight) return false;
   const request = {
     controller: new AbortController(),
@@ -43032,6 +43034,7 @@ class VirtualArtistGrid {
     this._layoutRowEstimateFromMeasurement = false;
     this._layoutRowEstimateMeasured = false;
     this._leadingExtent = 0;
+    this._heldContentBottom = 0;
     this.columns = 1;
     this.cardTrackWidth = CARD_GALLERY_LAYOUT_CONFIG.cardMinWidth;
     this.lastKey = '';
@@ -43771,13 +43774,21 @@ class VirtualArtistGrid {
       ? (semanticScrollAnchorIsCurrent ? options.semanticScrollAnchor : this.captureScrollAnchor())
       : null;
     this._absoluteScrollRestore = preservedAbsoluteScroll;
-    // Only a root gallery with earlier pages still to load can hold empty space above its sections.
-    const rootHasEarlierPages = preserveScroll
-      && typeof isPagedRootGallery === 'function' && isPagedRootGallery(state.view)
-      && Boolean(state.view.gallery_page?.has_previous);
+    // Only a root gallery with earlier or later pages still to load can hold
+    // empty space above or below its sections.
+    const pagedRootRender = preserveScroll
+      && typeof isPagedRootGallery === 'function' && isPagedRootGallery(state.view);
+    const rootHasEarlierPages = pagedRootRender && Boolean(state.view.gallery_page?.has_previous);
     const previousLeadingExtent = rootHasEarlierPages ? this._leadingExtent : 0;
     const previousSectionByKey = this.sectionByKey;
     this._leadingExtent = 0;
+    // A window refresh can end above the previous content's end; the gallery
+    // keeps that end reachable, so a restored scroll position is not clamped,
+    // until later pages load in its place.
+    if (!pagedRootRender || !state.view.gallery_page?.has_more) this._heldContentBottom = 0;
+    else if (options.holdGalleryScrollTop === true) {
+      this._heldContentBottom = Math.max(this._heldContentBottom, Number(this.totalHeight || 0));
+    }
     const sections = [];
     const renderedPrimaryGroups = buildDisplayGroups(primaryGroups);
     const renderedFamilyGroups = buildDisplayGroups(familyGroups);
@@ -44121,6 +44132,10 @@ class VirtualArtistGrid {
 
   get leadingExtent() {
     return this._leadingExtent;
+  }
+
+  get heldTrailingSpace() {
+    return Math.max(0, this._heldContentBottom - Number(this.totalHeight || 0));
   }
 
   setLeadingExtent(extent) {
@@ -44664,7 +44679,9 @@ class VirtualArtistGrid {
     this.lastKey = rangeKey;
 
     this.topSpacerEl.style.height = `${visible.length ? visible[0].top : 0}px`;
-    const bottomHeight = visible.length ? Math.max(0, this.totalHeight - visible[visible.length - 1].bottom) : 0;
+    const bottomHeight = visible.length
+      ? Math.max(0, Math.max(this.totalHeight, this._heldContentBottom) - visible[visible.length - 1].bottom)
+      : 0;
     this.bottomSpacerEl.style.height = `${bottomHeight}px`;
     let foundFirstRenderedArtistSection = false;
     this.patchRenderedSections(visible.map((section) => {

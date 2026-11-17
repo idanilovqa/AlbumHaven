@@ -54,6 +54,13 @@ test('root page loads only near end, with one in-flight owner', async () => {
   assert.equal(await f.context.loadNextRootGalleryPage(), false); assert.equal(f.pending.length, 1);
   f.pending[0].resolve(page([])); await first;
 });
+test('root page measures its prefetch threshold to the last loaded artist, not held space below it', async () => {
+  const f = fixture(); f.scroll.scrollHeight = 20000; f.scroll.scrollTop = 1000;
+  f.context.virtualGrid = { ...f.context.virtualGrid, heldTrailingSpace: 15000 };
+  const request = f.context.loadNextRootGalleryPage();
+  assert.equal(f.pending.length, 1, 'the loaded artists end near the viewport');
+  f.pending[0].resolve(page([])); await request;
+});
 test('root page prefetches eight viewports ahead on desktop and mobile with one in-flight owner', async () => {
   const desktop = fixture();
   desktop.scroll.clientHeight = 632;

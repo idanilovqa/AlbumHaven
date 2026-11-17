@@ -153,7 +153,9 @@ async function loadNextRootGalleryPage() {
   if (!isPagedRootGallery(view) || !page.has_more || !page.next_cursor
     || rootGalleryPageRequest || state.busy || hasPendingSidebarNavigation()
     || !scroll || scroll.clientHeight <= 0
-    || scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight
+    // Space held below the loaded artists is not content: measure to the last loaded artist.
+    || scroll.scrollHeight - Number(typeof virtualGrid === 'undefined' ? 0 : virtualGrid?.heldTrailingSpace || 0)
+      - scroll.scrollTop - scroll.clientHeight
       > ROOT_GALLERY_PREFETCH_VIEWPORT_COUNT * scroll.clientHeight) return false;
   const request = {
     controller: new AbortController(),

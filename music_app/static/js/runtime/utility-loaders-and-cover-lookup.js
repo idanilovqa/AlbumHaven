@@ -2535,6 +2535,12 @@ function getTagEditorTrackDisplayName(track) {
   const path = getTagEditorTrackIdentity(track);
   const title = String(track?.title || '').trim();
   if (String(track?.media_ref || track?.mediaRef || '').trim()) return title || 'Track';
+  // A CUE track has no file of its own; its identity is an opaque cue: key (owner 2026-11-17: "not helpful").
+  if (!String(track?.path || '').trim() && String(track?.cue_segment_ref || track?.cueSegmentRef || '').trim()) {
+    const number = Number.parseInt(String(track?.track_number ?? ''), 10);
+    return [Number.isInteger(number) && number > 0 ? String(number).padStart(2, '0') : '', title || 'Track']
+      .filter(Boolean).join('. ');
+  }
   return path.split(/[\\/]/).pop() || title || path;
 }
 
@@ -2610,11 +2616,14 @@ function renderTagEditorArtwork(selectedPaths) {
   const focusedPath = selectedPathSet.has(String(state.tagEditor.anchorPath || ''))
     ? String(state.tagEditor.anchorPath || '')
     : (selectedPaths[0] || '');
-  const track = (state.tagEditor.tracks || []).find((item) => String(item.path || '') === focusedPath);
+  const track = (state.tagEditor.tracks || []).find((item) => getTagEditorTrackIdentity(item) === focusedPath);
   const coverRef = track?.cover_ref || state.tagEditor.album?.cover_ref || '';
   const label = getTagEditorTrackDisplayName(track) || 'selected track';
   const separatorIndex = Math.max(focusedPath.lastIndexOf('/'), focusedPath.lastIndexOf('\\'));
-  const folderPath = separatorIndex > 0 ? focusedPath.slice(0, separatorIndex) : '';
+  // A CUE track shows the image file it plays (owner-only: only the owner's CUE structure carries it).
+  const folderPath = String(track?.path || '').trim()
+    ? (separatorIndex > 0 ? focusedPath.slice(0, separatorIndex) : '')
+    : String(track?.cue_structure?.media_path || '');
   const artwork = coverRef
     ? `<img src="/cover/${encodeURIComponent(coverRef)}" alt="Artwork for ${escapeHtml(label)}">`
     : `<div class="tag-editor-artwork-placeholder" role="img" aria-label="No album artwork">${buildMissingAlbumMarkHtml()}</div>`;
@@ -2790,8 +2799,10 @@ function renderTagEditor(options = {}) {
         const message = state.tagEditor.cueError || (state.tagEditor.cueWritesSource
           ? 'Apply writes supported corrections to the external CUE and retains one prior revision.'
           : 'Display only stores CUE corrections in this library. Source files are not changed.');
-    els.cueAlert.hidden = !cueLoaded;
-    els.cueAlert.innerHTML = cueLoaded ? buildOnPageAlertHtml({
+    // A failed CUE load says so; it used to leave no trace and simply never offer the CUE view.
+    const showCueAlert = cueLoaded || Boolean(cueTrack && state.tagEditor.cueError);
+    els.cueAlert.hidden = !showCueAlert;
+    els.cueAlert.innerHTML = showCueAlert ? buildOnPageAlertHtml({
       severity: state.tagEditor.cueError ? 'error' : 'warning',
           title: state.tagEditor.cueError
             ? 'CUE structure unavailable'

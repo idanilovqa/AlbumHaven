@@ -53,6 +53,7 @@ class Connection:
                 "start_frame": 1050,
                 "end_frame": 1800,
                 "internal_indexes": [],
+                "media_path": "/music/Album/image.flac",
                 "metadata_correction": {"title": "Corrected title"},
             }])
         if "cue_restore_correction" in sql or "cue_store_correction" in sql:
@@ -71,7 +72,7 @@ def actor(*, owner=True):
     )
 
 
-def test_cue_editor_state_is_path_free_and_includes_active_overlays():
+def test_owner_cue_editor_state_names_only_the_image_and_includes_active_overlays():
     service = CueCorrectionService(
         {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://unused"},
         connect=lambda _url: Connection(),
@@ -95,10 +96,11 @@ def test_cue_editor_state_is_path_free_and_includes_active_overlays():
                 "start_frame": 1050,
                 "end_frame": 1800,
                 "internal_indexes": [],
+                # Owner 2026-11-17: Edit Tags shows the image path beside the artbox, as it does a file's folder.
+                "media_path": "/music/Album/image.flac",
             },
         }],
     }
-    assert "path" not in repr(state).lower()
 
 
 def test_non_owner_cue_editor_gets_metadata_without_structural_controls():
@@ -113,6 +115,7 @@ def test_non_owner_cue_editor_gets_metadata_without_structural_controls():
     assert state["can_edit_structure"] is False
     assert state["tracks"][0]["title"] == "Corrected title"
     assert "cue_structure" not in state["tracks"][0]
+    assert "path" not in repr(state).lower()
 
 
 def test_cue_editor_reports_retained_source_restore_without_exposing_a_path():
@@ -304,3 +307,22 @@ def test_restore_action_restores_the_retained_external_cue_revision():
 
     assert result == {"ok": True, "restored_source": True, "program_id": 8}
     assert calls == [(5, 7)]
+
+
+def test_default_write_check_reads_the_media_host_settings(monkeypatch):
+    # Owner 2026-11-17: opening a CUE album's Edit Tags failed with "Library is not the configured media
+    # host", so the Tags / CUE structure views never appeared. The default check passed only library_id,
+    # which takes the scoped path that also needs the media host id.
+    from music_app.services import library_roots
+
+    calls = []
+
+    def load(config, **kwargs):
+        calls.append(kwargs)
+        return {"metadata_corrections": library_roots.METADATA_CORRECTIONS_WRITE_TAGS}
+
+    monkeypatch.setattr(library_roots, "load_library_root_settings", load)
+    service = CueCorrectionService({"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://unused"}, connect=lambda _url: None)
+
+    assert service._write_enabled(1) is True
+    assert calls == [{}]

@@ -78,6 +78,29 @@ test('tag editor shows folder path beside artwork and provides an icon-only fold
   assert.match(artwork.innerHTML, />C:\\Music\\Album<\/div>/);
 });
 
+test('a CUE track shows the image it plays beside the artwork', () => {
+  // Owner 2026-11-17: the path beside the artbox was empty for CUE tracks (they have no file of their own).
+  const artwork = { innerHTML: '' };
+  const image = 'C:/Music/Album/image.flac';
+  const context = loadHelpers({
+    state: {
+      tagEditor: {
+        anchorPath: 'cue:two',
+        album: { cover_ref: 'album-cover' },
+        tracks: [
+          { cue_segment_ref: 'cue:one', cue_structure: { media_path: image } },
+          { cue_segment_ref: 'cue:two', cue_structure: { media_path: image } },
+        ],
+      },
+    },
+    getTagEditorElements: () => ({ artwork }),
+  });
+
+  context.renderTagEditorArtwork(['cue:one', 'cue:two']);
+  assert.match(artwork.innerHTML, /<img src="\/cover\/album-cover"/);
+  assert.match(artwork.innerHTML, />C:\/Music\/Album\/image\.flac<\/div>/);
+});
+
 test('loading folder files preserves selection and pending values while deduplicating paths', async () => {
   const requests = [];
   const button = {

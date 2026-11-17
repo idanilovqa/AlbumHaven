@@ -262,6 +262,13 @@ test('Edit Tags reuses its dialog, list, footer, shared tabs, and alert host for
   assert.match(primaryModalsTemplate, /id="tag-editor-cue-structure"/);
 });
 
+test('a failed CUE structure load shows its error in the CUE alert', () => {
+  // Owner 2026-11-17: the CUE views were missing with no explanation because the error alert only showed
+  // after a successful load.
+  assert.match(utilityLoaderSource, /const showCueAlert = cueLoaded \|\| Boolean\(cueTrack && state\.tagEditor\.cueError\);/);
+  assert.match(utilityLoaderSource, /els\.cueAlert\.hidden = !showCueAlert;/);
+});
+
 test('Edit Tags reuses the CUE alert to restore a retained external source revision', () => {
   assert.match(utilityLoaderSource, /data-restore-cue-source="1"/);
   assert.match(utilityHandlerSource, /restoreCueCorrection\('source', identity\)/);

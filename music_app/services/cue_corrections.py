@@ -46,8 +46,12 @@ class CueCorrectionService:
             load_library_root_settings,
         )
 
+        # The media host's settings, read the same way as the library data-corrections route. Passing only
+        # library_id took the scoped path, which also requires the media host id, so opening any CUE album's
+        # structure failed with "Library is not the configured media host" (owner 2026-11-17).
+        del library_id
         return (
-            load_library_root_settings(self._config, library_id=library_id).get("metadata_corrections")
+            load_library_root_settings(self._config).get("metadata_corrections")
             == METADATA_CORRECTIONS_WRITE_TAGS
         )
 
@@ -118,7 +122,7 @@ class CueCorrectionService:
                        p.source_kind,
                        p.revision_sha256,
                        coalesce((boundary.payload->>'start_frame')::bigint, s.start_frame) as start_frame,
-                       s.end_frame, s.internal_indexes,
+                       s.end_frame, s.internal_indexes, media.private_path as media_path,
                        metadata.payload->'fields' as metadata_correction,
                        boundary.id is not null as boundary_corrected,
                        metadata.id is not null as metadata_corrected
@@ -127,6 +131,8 @@ class CueCorrectionService:
                 join library.cue_track_segments s on s.program_id = selected_segment.program_id
                 join library.local_tracks t on t.id = s.track_id
                 join library.cue_programs p on p.id = s.program_id
+                left join library.cue_media_sources media
+                  on media.id = s.media_source_id and media.library_id = t.library_id
                 left join lateral (
                     select c.id, c.payload from library.cue_corrections c
                     where c.library_id = t.library_id and c.track_id = t.id
@@ -184,6 +190,8 @@ class CueCorrectionService:
                     "start_frame": row["start_frame"],
                     "end_frame": row["end_frame"],
                     "internal_indexes": row.get("internal_indexes") or [],
+                    # The image file this track plays; a raw path, so owner-only like the rest of the structure.
+                    "media_path": str(row.get("media_path") or ""),
                 }
             tracks.append(track)
         return {

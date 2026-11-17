@@ -91,6 +91,13 @@ test('shared tag-editor list shows a title instead of an opaque member identity'
     path: 'C:/Music/Artist/01 Track.flac',
     title: 'Track',
   }), '01 Track.flac');
+  // Owner 2026-11-17: a CUE track listed its opaque cue: key; it shows its number and title instead.
+  assert.equal(context.getTagEditorTrackDisplayName({
+    cue_segment_ref: 'cue:3fb2807b0d795d5b',
+    track_number: 1,
+    title: 'Thin Low Sine',
+  }), '01. Thin Low Sine');
+  assert.equal(context.getTagEditorTrackDisplayName({ cue_segment_ref: 'cue:untitled' }), 'Track');
 });
 
 test('shared tag-editor identity keeps pathless CUE tracks selectable and editable', () => {

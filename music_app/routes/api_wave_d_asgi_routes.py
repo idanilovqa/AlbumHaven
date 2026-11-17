@@ -87,7 +87,6 @@ from music_app.services.covers import image_dimensions, score_image
 from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 from music_app.services.repair_previews import build_problematic_album_detail_payload
 from music_app.services.save_tasks import (
-    acquire_structural_tag_edit_reservation,
     latest_structural_tag_edit_destination,
     structural_tag_edit_resource_keys,
 )
@@ -1108,49 +1107,43 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
         current_track_paths: set[str],
         cancel_event: Event,
     ) -> tuple[dict[str, object], set[str]]:
-        reservation = acquire_structural_tag_edit_reservation(
-            reservation_resource_keys,
-            cancel_event=cancel_event,
-        )
-        if reservation is None:
-            return current_album, current_track_paths
+        # Owner (11-16): a cover search never waits for a tag edit on the album. It searches with the
+        # album's stored record as it is now; a tag save in progress has nothing to do with the search.
+        del cancel_event
         prepared_album = current_album
-        try:
-            album_context = _resolve_cover_album_context(config, prepared_album)
-            album_id = _album_id(prepared_album)
-            repository = PostgresLibraryBrowseRepository(config)
-            if album_id is not None:
-                reconciliation = latest_structural_tag_edit_destination(
-                    reservation_resource_keys,
-                    completed_after_monotonic=reconciliation_started_at,
-                )
-                destination_album_id = int(
-                    (reconciliation or {}).get("destination_album_id") or 0
-                )
-                refreshed_album = repository.build_album_detail_payload_by_id(
-                    destination_album_id or album_id
-                )
-                if refreshed_album is not None:
-                    prepared_album = _album_with_context_tracks(refreshed_album)
-                    album_context = _resolve_cover_album_context(config, prepared_album)
-                elif destination_album_id > 0:
-                    album_context = None
-            if album_context is None and current_track_paths:
-                current_albums = repository.build_album_payloads_by_track_paths(
-                    current_track_paths
-                )
-                for refreshed_album in current_albums:
-                    candidate = _album_with_context_tracks(refreshed_album)
-                    candidate_context = _resolve_cover_album_context(config, candidate)
-                    if (
-                        candidate_context is not None
-                        and current_track_paths <= candidate_context.track_paths
-                    ):
-                        prepared_album = candidate
-                        album_context = candidate_context
-                        break
-        finally:
-            reservation.release()
+        album_context = _resolve_cover_album_context(config, prepared_album)
+        album_id = _album_id(prepared_album)
+        repository = PostgresLibraryBrowseRepository(config)
+        if album_id is not None:
+            reconciliation = latest_structural_tag_edit_destination(
+                reservation_resource_keys,
+                completed_after_monotonic=reconciliation_started_at,
+            )
+            destination_album_id = int(
+                (reconciliation or {}).get("destination_album_id") or 0
+            )
+            refreshed_album = repository.build_album_detail_payload_by_id(
+                destination_album_id or album_id
+            )
+            if refreshed_album is not None:
+                prepared_album = _album_with_context_tracks(refreshed_album)
+                album_context = _resolve_cover_album_context(config, prepared_album)
+            elif destination_album_id > 0:
+                album_context = None
+        if album_context is None and current_track_paths:
+            current_albums = repository.build_album_payloads_by_track_paths(
+                current_track_paths
+            )
+            for refreshed_album in current_albums:
+                candidate = _album_with_context_tracks(refreshed_album)
+                candidate_context = _resolve_cover_album_context(config, candidate)
+                if (
+                    candidate_context is not None
+                    and current_track_paths <= candidate_context.track_paths
+                ):
+                    prepared_album = candidate
+                    album_context = candidate_context
+                    break
         if album_context is None:
             raise ValueError("Album does not contain any tracks")
         return prepared_album, album_context.track_paths

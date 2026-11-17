@@ -9,7 +9,7 @@ import hashlib
 import io
 import importlib
 from pathlib import Path
-from threading import Event, Timer
+from threading import Event, Thread, Timer
 from types import SimpleNamespace
 from uuid import UUID
 
@@ -5444,15 +5444,6 @@ def test_cover_lookup_start_uses_recorded_edit_destination_before_stale_album_lo
     )
     events = []
 
-    class Reservation:
-        def release(self):
-            events.append("released")
-
-    def acquire_reservation(resource_keys, *, cancel_event=None):
-        assert cancel_event is not None
-        events.append(("acquired", resource_keys))
-        return Reservation()
-
     def refresh_album(_self, album_id, *, client_surface_class=None):
         events.append(("refreshed", album_id, client_surface_class))
         if album_id == 14674:
@@ -5470,12 +5461,6 @@ def test_cover_lookup_start_uses_recorded_edit_destination_before_stale_album_lo
         )
         return "task-1"
 
-    monkeypatch.setattr(
-        asgi_routes,
-        "acquire_structural_tag_edit_reservation",
-        acquire_reservation,
-        raising=False,
-    )
     monkeypatch.setattr(
         PostgresLibraryBrowseRepository,
         "build_album_detail_payload_by_id",
@@ -5522,19 +5507,18 @@ def test_cover_lookup_start_uses_recorded_edit_destination_before_stale_album_lo
 
     prepared_album, prepared_paths = queued[4](queued[1], queued[2], Event())
 
-    acquired = events[1]
-    assert acquired[0] == "acquired"
-    assert "album:ovderhead::telepathic minds" in acquired[1]
+    # Owner (11-16): preparing never takes or waits for the tag-edit reservation.
+    reconciled = events[1]
+    assert reconciled[0] == "reconciled"
+    assert "album:ovderhead::telepathic minds" in reconciled[1]
     stale_path_key = next(iter(asgi_routes.structural_tag_edit_resource_keys(
         "",
         {str(stale_path)},
     )))
-    assert stale_path_key in acquired[1]
-    assert events[2][0] == "reconciled"
-    assert events[2][1] == acquired[1]
-    assert events[2][2] > 0
-    assert events[3] == ("refreshed", 24674, None)
-    assert events[4] == "released"
+    assert stale_path_key in reconciled[1]
+    assert reconciled[2] > 0
+    assert events[2] == ("refreshed", 24674, None)
+    assert len(events) == 3
     assert prepared_album["album_artist"] == "Overhead"
     assert prepared_paths == {str(current_path)}
 
@@ -5668,10 +5652,6 @@ def test_cover_lookup_start_recovers_empty_id_projection_by_track_paths(
     }
     queued = []
 
-    class Reservation:
-        def release(self):
-            pass
-
     class Repository:
         def __init__(self, _config):
             pass
@@ -5684,19 +5664,10 @@ def test_cover_lookup_start_recovers_empty_id_projection_by_track_paths(
             assert track_paths == {str(track_path)}
             return [current_album]
 
-    def acquire_reservation(_resource_keys, *, cancel_event=None):
-        assert cancel_event is not None
-        return Reservation()
-
     def queue_lookup(album, track_paths, _manual_urls, **kwargs):
         queued.append((album, track_paths, kwargs.get("prepare")))
         return "task-1"
 
-    monkeypatch.setattr(
-        asgi_routes,
-        "acquire_structural_tag_edit_reservation",
-        acquire_reservation,
-    )
     monkeypatch.setattr(asgi_routes, "PostgresLibraryBrowseRepository", Repository)
     monkeypatch.setattr(
         asgi_routes,
@@ -5878,10 +5849,6 @@ def test_cover_lookup_start_prepares_album_split_across_part_folders(app, monkey
     }
     queued = []
 
-    class Reservation:
-        def release(self):
-            pass
-
     class Repository:
         def __init__(self, _config):
             pass
@@ -5894,11 +5861,6 @@ def test_cover_lookup_start_prepares_album_split_across_part_folders(app, monkey
         queued.append((queued_album, queued_paths, kwargs.get("prepare")))
         return "task-1"
 
-    monkeypatch.setattr(
-        asgi_routes,
-        "acquire_structural_tag_edit_reservation",
-        lambda _keys, *, cancel_event=None: Reservation(),
-    )
     monkeypatch.setattr(asgi_routes, "PostgresLibraryBrowseRepository", Repository)
     monkeypatch.setattr(asgi_routes, "latest_structural_tag_edit_destination", lambda *_a, **_k: None)
     monkeypatch.setattr(asgi_routes, "queue_cover_lookup_task", queue_lookup)
@@ -5917,3 +5879,63 @@ def test_cover_lookup_start_prepares_album_split_across_part_folders(app, monkey
     prepared_album, prepared_paths = queued[0][2](queued[0][0], queued[0][1], Event())
     assert prepared_paths == {str(path) for path in track_paths}
     assert prepared_album["album_id"] == 5001
+
+
+def test_cover_lookup_prepare_never_waits_for_a_tag_edit_on_the_album(app, monkeypatch):
+    # Owner (11-16): a cover search must not wait while a tag edit on the same album saves; it searches
+    # with what it was started with. A real reservation is held for the album's keys during prepare.
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+    from music_app.services.save_tasks import (
+        acquire_structural_tag_edit_reservation,
+        structural_tag_edit_resource_keys,
+    )
+
+    album_folder = (app.config["MUSIC_DIR"] / "Artist" / "2000 - Held").resolve()
+    track_path = (album_folder / "01.mp3").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    album = {**_album_payload(track_path), "album_id": 5002, "key": "artist::held"}
+    queued = []
+
+    class Repository:
+        def __init__(self, _config):
+            pass
+
+        def build_album_detail_payload_by_id(self, album_id, *, client_surface_class=None):
+            return album
+
+    def queue_lookup(queued_album, queued_paths, _manual_urls, **kwargs):
+        queued.append((queued_album, queued_paths, kwargs.get("prepare")))
+        return "task-held"
+
+    monkeypatch.setattr(asgi_routes, "PostgresLibraryBrowseRepository", Repository)
+    monkeypatch.setattr(asgi_routes, "latest_structural_tag_edit_destination", lambda *_a, **_k: None)
+    monkeypatch.setattr(asgi_routes, "queue_cover_lookup_task", queue_lookup)
+    monkeypatch.setattr(asgi_routes, "cover_lookup_result", lambda task_id: {"id": task_id, "status": "queued"})
+    monkeypatch.setattr(asgi_routes, "serialize_cover_lookup_task_payload", lambda payload: payload)
+    monkeypatch.setattr(asgi_routes, "log_app_event", lambda *_args, **_kwargs: None)
+
+    status, _headers, body = _run_asgi_request(
+        _make_wave_d_app(app), "POST", "/utilities/cover-lookup/start",
+        json_body={"album": album, "manual_urls": []},
+    )
+    assert status == 200, body
+
+    held = acquire_structural_tag_edit_reservation(
+        structural_tag_edit_resource_keys("artist::held", {str(track_path)})
+    )
+    try:
+        result = {}
+        worker = Thread(
+            target=lambda: result.update(prepared=queued[0][2](queued[0][0], queued[0][1], Event())),
+            daemon=True,
+        )
+        worker.start()
+        worker.join(timeout=3)
+        assert not worker.is_alive(), "prepare waited for the tag edit's reservation"
+    finally:
+        held.release()
+        worker.join(timeout=3)
+    prepared_album, prepared_paths = result["prepared"]
+    assert prepared_paths == {str(track_path)}
+    assert prepared_album["album_id"] == 5002

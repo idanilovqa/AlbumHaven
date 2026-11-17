@@ -187,16 +187,18 @@ def test_backfill_keeps_unrevisioned_candidates_in_configured_data_dir(tmp_path)
             "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app@example/library",
             "DATA_DIR": str(data_dir),
             "_GENERATED_PREVIEW_STORAGE_POLICY": AlbumFolderStoragePolicy(),
+            "_GENERATED_PREVIEW_INVENTORY_RECORDER": object(),
         },
         connect=lambda *_args, **_kwargs: _ConnectionContext(connection),
         generate=lambda source_path, **kwargs: generated.append(
-            (Path(source_path), Path(kwargs["cache_root"]))
+            (Path(source_path), Path(kwargs["cache_root"]), kwargs.get("on_published"))
         ),
         throttle_seconds=0,
     )
 
     assert worker.run_once() == 1
-    assert generated == [(source, data_dir / "display-cover-cache")]
+    # Recording it would make the relocation inventory move it into the album folder.
+    assert generated == [(source, data_dir / "display-cover-cache", None)]
 
 
 def test_inventory_existing_previews_records_album_folder_bytes(tmp_path):

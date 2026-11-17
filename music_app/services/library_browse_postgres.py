@@ -7362,7 +7362,7 @@ def _queue_display_cover_variants_for_groups(
                 ):
                     inventory_options = {}
                     recorder = config.get("_GENERATED_PREVIEW_INVENTORY_RECORDER")
-                    if recorder is not None:
+                    if recorder is not None and preview_policy is not None:
                         inventory_options["on_published"] = recorder
                     queue_cover_display_variant_generation(
                         source_path,

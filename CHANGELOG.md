@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.11.17 - 2026-11-17
+
+- Cover previews kept in app data no longer restart the preview relocation worker. Before, every such preview started a full relocation pass that rescanned all previews and copied the preview into the album folder, which slowed gallery loading and artist jumps.
+
+## 0.11.16 - 2026-11-17
+
+- The Android app says "Not enough storage" (Free up space on this phone, then try again) when a full phone stops an update, instead of the generic "Update failed. Try again".
+
+## 0.11.15 - 2026-11-16
+
+- Settings choice lists (the Android app's sandbox server picker and Library settings' path choices) are at least as wide as their button and grow to fit their longest choice, up to the screen width, so no choice such as "sandbox10" is cut off.
+
 ## 0.11.14 - 2026-11-16
 
 - Release only, no application change: carries 0.11.12 to the stable Android channel. 0.11.13 was merged before its pipeline's final gate ran, and that gate cannot run after a merge, so this release merges only once its complete pipeline has passed.

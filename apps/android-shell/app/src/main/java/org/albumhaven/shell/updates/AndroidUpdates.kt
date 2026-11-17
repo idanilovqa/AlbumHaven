@@ -12,6 +12,7 @@ import android.content.pm.SigningInfo
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.storage.StorageManager
 import android.provider.Settings
 import androidx.core.content.IntentCompat
 import androidx.core.content.edit
@@ -121,6 +122,7 @@ private class AndroidUpdatePorts(private val context: Context, private val polic
     )
     private val downloads = context.getSystemService(DownloadManager::class.java)
     private val installer = context.packageManager.packageInstaller
+    private val storage = context.getSystemService(StorageManager::class.java)
     private var downloadId: Long? = null
 
     // The finished download's row, removed once its file has been moved into private storage.
@@ -197,8 +199,8 @@ private class AndroidUpdatePorts(private val context: Context, private val polic
                 }
             }
 
-            private fun progressed(progress: Pair<Int, Long>?) {
-                val (status, bytes) = progress ?: return finish(id, DownloadResult.Failed, done)
+            private fun progressed(progress: Triple<Int, Long, Int>?) {
+                val (status, bytes, reason) = progress ?: return finish(id, DownloadResult.Failed, done)
                 when {
                     bytes > manifest.apkSize -> finish(id, DownloadResult.Refused(Rejection.SIZE_MISMATCH), done)
                     status == DownloadManager.STATUS_SUCCESSFUL -> {
@@ -207,7 +209,11 @@ private class AndroidUpdatePorts(private val context: Context, private val polic
                         completedId = id
                         done(DownloadResult.Completed)
                     }
-                    status == DownloadManager.STATUS_FAILED -> finish(id, DownloadResult.Failed, done)
+                    status == DownloadManager.STATUS_FAILED -> finish(
+                        id,
+                        if (reason == DownloadManager.ERROR_INSUFFICIENT_SPACE) DownloadResult.NoSpace else DownloadResult.Failed,
+                        done,
+                    )
                     else -> {
                         onProgress(bytes)
                         main.postDelayed(this, POLL_MS)
@@ -225,12 +231,14 @@ private class AndroidUpdatePorts(private val context: Context, private val polic
         done(result)
     }
 
-    private fun query(id: Long): Pair<Int, Long>? = downloadManagerOrNull {
+    /** Status, bytes so far, and the failure reason. */
+    private fun query(id: Long): Triple<Int, Long, Int>? = downloadManagerOrNull {
         downloads.query(DownloadManager.Query().setFilterById(id))?.use { cursor ->
             if (!cursor.moveToFirst()) return@use null
             val status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
             val bytes = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
-            status to bytes
+            val reason = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
+            Triple(status, bytes, reason)
         }
     }
 
@@ -338,7 +346,7 @@ private class AndroidUpdatePorts(private val context: Context, private val polic
         val id = try {
             installer.createSession(params)
         } catch (_: IOException) {
-            return StageResult.Failed
+            return stagingFailed(manifest)
         }
         return try {
             // The private copy is hashed again as it is written, so the session holds exactly the verified bytes.
@@ -355,10 +363,23 @@ private class AndroidUpdatePorts(private val context: Context, private val polic
                 else -> StageResult.Staged(id)
             }
         } catch (_: IOException) {
-            abandoned(id, StageResult.Failed)
+            abandoned(id, stagingFailed(manifest))
         } catch (_: SecurityException) {
             abandoned(id, StageResult.Failed)
         }
+    }
+
+    /**
+     * Android reports a full phone during staging only as an [IOException], so a failure counts as
+     * [StageResult.NoSpace] when Android cannot make room for the staged and the installed copy.
+     */
+    private fun stagingFailed(manifest: UpdateManifest): StageResult {
+        val allocatable = try {
+            storage.getAllocatableBytes(StorageManager.UUID_DEFAULT)
+        } catch (_: IOException) {
+            return StageResult.Failed
+        }
+        return if (allocatable < 2 * manifest.apkSize) StageResult.NoSpace else StageResult.Failed
     }
 
     private fun abandoned(id: Int, result: StageResult): StageResult {
@@ -415,6 +436,7 @@ class UpdateInstallReceiver : BroadcastReceiver() {
             }
             PackageInstaller.STATUS_SUCCESS -> InstallStatus.Succeeded
             PackageInstaller.STATUS_FAILURE_ABORTED -> InstallStatus.Cancelled
+            PackageInstaller.STATUS_FAILURE_STORAGE -> InstallStatus.NoSpace
             else -> InstallStatus.Failed
         }
         updater.onInstallStatus(sessionId, status)

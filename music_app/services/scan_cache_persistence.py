@@ -620,9 +620,10 @@ class PostgresScanCacheAdapter:
                     **row, "track_id": track_id, "program_id": program_id,
                     "media_source_id": media_ids[str(row["media_path"])], "revision": revision,
                     "internal_indexes": json.dumps(row["internal_indexes"]),
-                    "provenance": json.dumps([
+                    # The column holds a JSON object (migration 0181), so the CUE commands go under one key.
+                    "provenance": json.dumps({"commands": [
                         list(item) for item in (*program.provenance, *row["provenance"])
-                    ]),
+                    ]}),
                 })
 
             retired_rows = connection.execute("""

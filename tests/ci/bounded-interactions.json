@@ -8400,6 +8400,40 @@
       "proof": "static"
     },
     {
+      "id": "py:routes/android_artifacts_asgi.py#android_sandbox_index",
+      "action": "Serve the signed sandbox build index file, probed off the event loop",
+      "entrypoints": [
+        "py:music_app/routes/android_artifacts_asgi.py#android_sandbox_index:route:GET /artifacts/android/sandbox/index.json"
+      ],
+      "owners": [
+        "music_app/routes/android_artifacts_asgi.py"
+      ],
+      "rules": [
+        "BI-04",
+        "BI-08",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "py:routes/android_artifacts_asgi.py#android_sandbox_rebuild",
+      "action": "Dispatch one owner-requested rebuild of a sandbox's current Android build",
+      "entrypoints": [
+        "py:music_app/routes/android_artifacts_asgi.py#android_sandbox_rebuild:route:POST /artifacts/android/sandbox/rebuild/{sandbox}"
+      ],
+      "owners": [
+        "music_app/routes/android_artifacts_asgi.py"
+      ],
+      "rules": [
+        "BI-04",
+        "BI-08",
+        "BI-14"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "py:routes/api_read_asgi_routes.py#_attach_library_watch_health",
       "action": "Run watcher _attach_library_watch_health",
       "entrypoints": [

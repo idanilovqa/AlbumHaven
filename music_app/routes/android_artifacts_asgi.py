@@ -176,7 +176,7 @@ async def android_sandbox_index(request: Request) -> Response:
         await _signed(request, "sandbox")
     except ArtifactAccessError as error:
         return _refused(error)
-    path = index_path()
+    path = await run_in_threadpool(index_path)
     if path is None:
         return _not_found()
     return FileResponse(path, media_type="application/json", headers=_NO_STORE)

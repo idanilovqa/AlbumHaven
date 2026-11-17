@@ -28216,7 +28216,7 @@
 },
 "title": "Cosmopolitan Life"
 },
-"/release?release-group=cd4f312f-76ad-39c2-be38-287627f0d4ce&fmt=json&limit=100": {
+"/release?release-group=cd4f312f-76ad-39c2-be38-287627f0d4ce&inc=media&fmt=json&limit=100": {
 "release-count": 6,
 "release-offset": 0,
 "releases": [

@@ -164,12 +164,12 @@ _SEARCH_RELEASES = 2
 
 
 def search_certain_release(album: dict[str, object], *, artist_name: str, barcode: str | None,
-                           discogs: DiscogsMetadataClient) -> dict[str, object] | None:
+                           discogs: DiscogsMetadataClient) -> dict[str, object]:
     """The Discogs release a local album certainly is, found by search (S8: a " / " album whose
     MusicBrainz release links to no Discogs release): the MusicBrainz barcode first, then the
     artist and title. A candidate counts only by the fallback's own rule (title, track titles
-    and track count, a whole release or one disc). None when nothing is certain or Discogs
-    does not answer."""
+    and track count, a whole release or one disc). ``classification`` is "found" (with
+    ``album``), "not_found" when nothing is certain, or why Discogs did not answer."""
     budget = _Budget(_SEARCH_REQUESTS)
     names = (artist_name,)
     # Discogs spells the apostrophe straight; local titles often carry the curly one (U+2019).
@@ -184,10 +184,10 @@ def search_certain_release(album: dict[str, object], *, artist_name: str, barcod
                 agreement = release and _agreement(str(album.get("title") or ""), release["title"], names)
                 certain = agreement and _certain_album(album, agreement, release, release.get("year"))
                 if certain:
-                    return certain
-    except _Failure:
-        return None
-    return None
+                    return {"classification": "found", "album": certain}
+    except _Failure as failure:
+        return {"classification": failure.classification}
+    return {"classification": "not_found"}
 
 
 def _musicbrainz(method, *args):

@@ -7,7 +7,7 @@ replayed from a hand-built fixture; nothing calls MusicBrainz or Discogs.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -21,6 +21,7 @@ from music_app.services.tracklist_sections import (
     discogs_sections,
     local_discs,
     musicbrainz_sections,
+    section_retry_at,
     wants_discogs_sections,
 )
 from tests.py.musicbrainz_test_mirror import OK
@@ -147,6 +148,9 @@ class _Repository:
     def claim_due_job(self, **_kwargs):
         return {"id": 1, "attempt_count": 0}
 
+    def enqueue(self, **_kwargs):
+        return 0
+
     def load_context(self, **_kwargs):
         return [{"artist_mbid": "b5c6e1ad-4f5a-4b1a-9a1e-0123456789ab", "local_name": "Dissection",
                  "albums": [{"id": 5, "title": self.title, "tracks": self.tracks}]}]
@@ -162,7 +166,7 @@ class _Repository:
 
 
 def _process(monkeypatch, *, title=DISSECTION_TITLE, media=None, discogs=None, release_mbid=MB_RELEASE,
-             barcode=None, tracks=None):
+             barcode=None, tracks=None, result_of=None):
     release = {"id": release_mbid, "barcode": barcode, "media": media or [_medium(13)]}
     monkeypatch.setattr(release_identity, "resolve_album_releases", lambda context, client: {
         "classification": "complete", "release_groups": {}, "releases": {release_mbid: release},
@@ -171,7 +175,10 @@ def _process(monkeypatch, *, title=DISSECTION_TITLE, media=None, discogs=None, r
     repository, mb_calls = _Repository(title, tracks or _tracks(13)), []
     MusicBrainzAlbumReleaseProcessor(repository=repository, client=_musicbrainz(mb_calls), discogs=discogs,
                                      now=lambda: NOW).process_next(worker_id="w")
-    return repository.recorded[0]["albums"][0]["track_sections"], mb_calls
+    album = repository.recorded[0]["albums"][0]
+    if result_of is not None:
+        result_of.update(album)
+    return album["track_sections"], mb_calls
 
 
 def test_dissection_resolves_end_to_end_through_the_musicbrainz_discogs_link(monkeypatch):
@@ -274,3 +281,85 @@ def test_album_details_name_the_heading_on_each_track_row_only():
     rows = _apply_track_sections(album, DISSECTION_SECTIONS)["track_rows"]
     assert [row.get("section") for row in rows] == [None, SECTION, SECTION]
     assert _apply_track_sections({"track_rows": [{"track_number": 9}]}, [])["track_rows"] == [{"track_number": 9}]
+
+
+# Discogs unavailable: hourly retries (owner 2026-11-16) ----------------------------------
+
+FAILED = datetime(2026, 11, 16, 12, 0, tzinfo=timezone.utc)
+
+
+def test_retries_are_hourly_for_a_day_then_daily_and_stop_after_a_week():
+    assert section_retry_at(FAILED, FAILED) == FAILED + timedelta(hours=1)
+    assert section_retry_at(FAILED, FAILED + timedelta(hours=23)) == FAILED + timedelta(hours=24)
+    assert section_retry_at(FAILED, FAILED + timedelta(hours=24)) == FAILED + timedelta(hours=48)
+    assert section_retry_at(FAILED, FAILED + timedelta(days=6)) == FAILED + timedelta(days=7)
+    assert section_retry_at(FAILED, FAILED + timedelta(days=7)) is None
+
+
+def test_a_discogs_outage_marks_a_slash_album_for_retry(monkeypatch):
+    album = {}
+    assert _process(monkeypatch, discogs=_discogs(fail=True), result_of=album)[0] == []
+    assert album["discogs_sections_unavailable"] is True
+
+
+def test_a_missing_release_or_a_definitive_miss_is_never_retried(monkeypatch):
+    # The link leads to a release Discogs no longer has (404).
+    gone = DiscogsMetadataClient(lambda path, params: {"__not_found__": True})
+    album = {}
+    _process(monkeypatch, discogs=gone, result_of=album)
+    assert not album.get("discogs_sections_unavailable")
+    # No link and no certain match: a definitive miss.
+    only_1995 = [{"params": entry["params"], "results": [{"id": 1995001, "title": "Storm Of The Light's Bane"}]}
+                 for entry in FIXTURE["discogs_searches"]]
+    album = {}
+    _process(monkeypatch, title=CURLY_TITLE, release_mbid=SANDBOX_RELEASE, barcode="0727361664626",
+             tracks=_dissection_tracks(), discogs=_discogs(searches=only_1995), result_of=album)
+    assert not album.get("discogs_sections_unavailable")
+
+
+class _RetryRepository(_Repository):
+    def __init__(self, first_failed_at):
+        super().__init__(CURLY_TITLE, _dissection_tracks())
+        self.first_failed_at = first_failed_at
+        self.stored = []
+
+    def claim_due_job(self, **_kwargs):
+        return None
+
+    def claim_section_retry(self, *, now):
+        return {"library_id": 1, "album_key": "dissection", "local_album_id": 5, "title": CURLY_TITLE,
+                "local_name": "Dissection", "release_mbid": SANDBOX_RELEASE, "barcode": "0727361664626",
+                "media": [_medium(13)], "tracks": _dissection_tracks(), "first_failed_at": self.first_failed_at}
+
+    def store_section_retry(self, **kwargs):
+        self.stored.append(kwargs)
+
+
+def _retry(first_failed_at, now, discogs):
+    repository = _RetryRepository(first_failed_at)
+    result = MusicBrainzAlbumReleaseProcessor(repository=repository, client=_musicbrainz([]), discogs=discogs,
+                                              now=lambda: now).process_next(worker_id="w")
+    return result, repository.stored
+
+
+def test_a_due_retry_after_a_5xx_stores_the_headings_once_discogs_answers():
+    result, stored = _retry(FAILED, FAILED + timedelta(hours=1), _discogs())
+    assert result["state"] == "succeeded"
+    assert stored == [{"row": stored[0]["row"], "track_sections": DISSECTION_SECTIONS, "retry_at": None,
+                       "observed_at": FAILED + timedelta(hours=1)}]
+
+
+def test_a_due_retry_that_fails_again_backs_off_and_stops_after_a_week():
+    _result, stored = _retry(FAILED, FAILED + timedelta(hours=2), _discogs(fail=True))
+    assert (stored[0]["track_sections"], stored[0]["retry_at"]) == (None, FAILED + timedelta(hours=3))
+    _result, stored = _retry(FAILED, FAILED + timedelta(days=2), _discogs(fail=True))
+    assert stored[0]["retry_at"] == FAILED + timedelta(days=3)
+    _result, stored = _retry(FAILED, FAILED + timedelta(days=7), _discogs(fail=True))
+    assert (stored[0]["track_sections"], stored[0]["retry_at"]) == (None, None)
+
+
+def test_a_retry_that_ends_in_a_definitive_miss_stops_retrying():
+    only_1995 = [{"params": entry["params"], "results": [{"id": 1995001, "title": "Storm Of The Light's Bane"}]}
+                 for entry in FIXTURE["discogs_searches"]]
+    _result, stored = _retry(FAILED, FAILED + timedelta(hours=1), _discogs(searches=only_1995))
+    assert (stored[0]["track_sections"], stored[0]["retry_at"]) == ([], None)

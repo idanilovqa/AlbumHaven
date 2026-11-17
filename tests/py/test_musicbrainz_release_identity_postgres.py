@@ -278,3 +278,49 @@ def test_a_released_albums_sub_sections_are_stored_and_cleared_with_its_release(
     processor.process_next(worker_id="w")
     with isolatedPostgres._connect(setup_url) as connection:
         assert _album_track_sections(connection, albums["cry"]) == []
+
+
+def test_an_unavailable_discogs_check_keeps_the_headings_and_is_retried_until_answered(monkeypatch):
+    """Owner 2026-11-16: hourly retries for a Discogs outage; a definitive answer ends them."""
+    from music_app.services.library_browse_postgres import _album_track_sections
+
+    setup_url, repository, ids, albums = _seed(monkeypatch)
+    from music_app.services import musicbrainz_release_identity as module
+    sections = [{"disc_number": 1, "track_number": 2, "section": "Where Dead Angels Lie"}]
+    state = {"unavailable": False}
+
+    def outcome(context):
+        result = _outcome(context)
+        for album in result["albums"]:
+            if album["state"] == "release":
+                album["track_sections"] = [] if state["unavailable"] else sections
+                album["discogs_sections_unavailable"] = state["unavailable"]
+        return result
+
+    monkeypatch.setattr(module, "resolve_album_releases", lambda context, client: outcome(context))
+    processor = MusicBrainzAlbumReleaseProcessor(repository=repository, client=FakeResolverClient(), now=lambda: NOW)
+    repository.enqueue(reason="test", observed_at=NOW, local_artist_id=ids["angra"], force=True)
+    processor.process_next(worker_id="w")
+    state["unavailable"] = True
+    repository.enqueue(reason="test", observed_at=NOW, local_artist_id=ids["angra"], force=True)
+    processor.process_next(worker_id="w")
+    with isolatedPostgres._connect(setup_url) as connection:
+        assert _album_track_sections(connection, albums["cry"]) == sections
+        row = connection.execute(
+            "select discogs_section_attempts, discogs_section_first_failed_at, discogs_section_retry_at"
+            " from library.local_album_musicbrainz_releases where album_key = 'rel-cry'").fetchone()
+    assert (row["discogs_section_attempts"], row["discogs_section_first_failed_at"],
+            row["discogs_section_retry_at"]) == (1, NOW, NOW + timedelta(hours=1))
+    assert repository.claim_section_retry(now=NOW + timedelta(minutes=59)) is None
+    due = repository.claim_section_retry(now=NOW + timedelta(hours=1))
+    assert (due["release_mbid"], due["title"], due["first_failed_at"]) == (RELEASE, "Angels Cry", NOW)
+    # Held: a second lane does not take it again.
+    assert repository.claim_section_retry(now=NOW + timedelta(hours=1)) is None
+    repository.store_section_retry(row=due, track_sections=None, retry_at=NOW + timedelta(hours=2),
+                                   observed_at=NOW + timedelta(hours=1))
+    repository.store_section_retry(row=due, track_sections=[], retry_at=None, observed_at=NOW + timedelta(hours=2))
+    with isolatedPostgres._connect(setup_url) as connection:
+        row = connection.execute(
+            "select discogs_section_attempts, discogs_section_retry_at, track_sections"
+            " from library.local_album_musicbrainz_releases where album_key = 'rel-cry'").fetchone()
+    assert (row["discogs_section_attempts"], row["discogs_section_retry_at"], row["track_sections"]) == (0, None, [])

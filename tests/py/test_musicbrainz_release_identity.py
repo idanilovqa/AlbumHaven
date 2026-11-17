@@ -55,6 +55,58 @@ def test_a_two_disc_original_plus_a_third_bonus_disc():
     assert main_disc_count([DISC_1, DISC_2, DISC_3], original=original, matched=None)["main_disc_count"] == 2
 
 
+# Owner 2026-11-16: the main album is as many discs as the release group's smallest version.
+
+def test_a_one_disc_version_makes_every_later_disc_a_bonus_disc():
+    assert main_disc_count([DISC_1, DISC_2], original=None, matched=None, fewest_discs=1) == {
+        "main_disc_count": 1, "source": "fewest_discs"}
+
+
+def test_when_every_version_has_two_discs_both_are_the_main_album():
+    assert main_disc_count([DISC_1, DISC_2], original=None, matched=None, fewest_discs=2) == {
+        "main_disc_count": 2, "source": "fewest_discs"}
+
+
+def test_a_third_local_disc_beyond_every_two_disc_version_is_a_bonus_disc():
+    assert main_disc_count([DISC_1, DISC_2, DISC_3], original=None, matched=None, fewest_discs=2)[
+        "main_disc_count"] == 2
+
+
+def test_the_fewest_discs_rule_wins_over_the_original_release_and_medium_titles():
+    # The original release is the two-disc deluxe, yet a one-disc version exists.
+    original = {"media": [_medium(DISC_1), _medium(DISC_2, position=2)]}
+    assert main_disc_count([DISC_1, DISC_2], original=original, matched=original, fewest_discs=1)[
+        "main_disc_count"] == 1
+
+
+def test_unknown_disc_counts_keep_the_earlier_evidence():
+    original = {"media": [_medium(DISC_1)]}
+    deluxe = {"media": [_medium(DISC_1), _medium(DISC_2, position=2)]}
+    assert main_disc_count([DISC_1, DISC_2], original=original, matched=deluxe, fewest_discs=None)[
+        "source"] == "original_release"
+
+
+def test_the_original_release_browse_names_the_fewest_audio_discs():
+    def get_json(url, _agent):
+        assert "inc=media" in url
+        return {"releases": [
+            {"id": "11111111-1111-4111-8111-111111111111", "status": "Official", "date": "1995",
+             "media": [{"format": "CD", "track-count": 8}]},
+            {"id": "22222222-2222-4222-8222-222222222222", "status": "Official", "date": "2002",
+             "media": [{"format": "CD", "track-count": 13}, {"format": "DVD-Video", "track-count": 4}]},
+        ]}, OK
+    client = MusicBrainzClient(base_url="http://127.0.0.1:5050/ws/2", user_agent="Test", get_json=get_json)
+    found = client.original_release_id("33333333-3333-4333-8333-333333333333")
+    assert (found["release_id"], found["fewest_discs"]) == ("11111111-1111-4111-8111-111111111111", 1)
+
+
+def test_a_browse_without_media_names_no_disc_count():
+    def get_json(_url, _agent):
+        return {"releases": [{"id": "11111111-1111-4111-8111-111111111111", "status": "Official"}]}, OK
+    client = MusicBrainzClient(base_url="http://127.0.0.1:5050/ws/2", user_agent="Test", get_json=get_json)
+    assert client.original_release_id("33333333-3333-4333-8333-333333333333")["fewest_discs"] is None
+
+
 def test_a_single_disc_is_the_main_album():
     assert main_disc_count([DISC_1], original=None, matched=None) == {"main_disc_count": 1, "source": "single_disc"}
 

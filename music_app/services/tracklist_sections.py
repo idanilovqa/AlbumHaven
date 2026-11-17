@@ -17,6 +17,11 @@ track under a heading, in disc and track order. Tags never change.
 from __future__ import annotations
 
 import re
+from datetime import datetime, timedelta
+
+# Discogs unavailable (owner 2026-11-16): hourly for a day, then daily, never after a week.
+_HOURLY_FOR = timedelta(hours=24)
+_RETRIES_END_AFTER = timedelta(days=7)
 
 # "CD 2", "Disc 2: Name", "Disk II", "CD1 - Bonus": a disc's own name.
 _DISC_NAME = re.compile(r"^\s*(?:cd|dis[ck])\s*(?:\d+|[ivx]+)\b", re.IGNORECASE)
@@ -82,3 +87,11 @@ def discogs_sections(discs: list[list[dict[str, object]]], tracks: list[dict[str
     for track in tracks:
         remote.setdefault(int(track.get("disc") or 1), []).append(str(track.get("section") or "").strip() or None)
     return _sections(discs, [remote[disc] for disc in sorted(remote)])
+
+
+def section_retry_at(first_failed_at: datetime, failed_at: datetime) -> datetime | None:
+    """When to ask Discogs again after it was unavailable at ``failed_at`` (first at
+    ``first_failed_at``); None once a week has passed. A definitive answer is never retried."""
+    step = timedelta(hours=1) if failed_at - first_failed_at < _HOURLY_FOR else timedelta(days=1)
+    retry_at = failed_at + step
+    return retry_at if retry_at <= first_failed_at + _RETRIES_END_AFTER else None

@@ -50,6 +50,7 @@ from music_app.services.tracklist_sections import (
     discogs_sections,
     local_discs,
     musicbrainz_sections,
+    section_retry_at,
     wants_discogs_sections,
 )
 
@@ -145,9 +146,10 @@ def _complete(albums: list[dict[str, object]], results: list[dict[str, object]],
         result["track_artists"] = display_track_artists(album.get("tracks") or [], release)
         discs = local_discs(album.get("tracks") or [])
         result["track_sections"] = musicbrainz_sections(discs, release)
-        original = None
+        original, fewest_discs = None, None
         if len(discs) > 1 and not result.get("disc_position"):
             found = mirror.call("original_release_id", result["release_group_mbid"])
+            fewest_discs = (found or {}).get("fewest_discs")
             original_id = (found or {}).get("release_id")
             if original_id and original_id not in releases:
                 looked_up = mirror.call("lookup_release_tracklist", original_id)
@@ -156,7 +158,7 @@ def _complete(albums: list[dict[str, object]], results: list[dict[str, object]],
             original = releases.get(original_id or "")
             if original:
                 result["original_release_mbid"] = original_id
-        result["main_disc"] = main_disc_count(discs, original=original, matched=release)
+        result["main_disc"] = main_disc_count(discs, original=original, matched=release, fewest_discs=fewest_discs)
     return {"classification": "complete", "albums": results, "release_groups": release_groups, "releases": releases}
 
 
@@ -262,10 +264,13 @@ def _disc_agrees(local_tracks: list[dict[str, object]], medium: dict[str, object
 
 
 def main_disc_count(local_discs: list[list[dict[str, object]]], *, original: dict[str, object] | None,
-                    matched: dict[str, object] | None) -> dict[str, object] | None:
-    """How many of the local album's discs, in order, are the main album (owner 2026-11-08).
+                    matched: dict[str, object] | None, fewest_discs: int | None = None) -> dict[str, object] | None:
+    """How many of the local album's discs, in order, are the main album (owner 2026-11-08,
+    2026-11-16).
 
     ``local_discs`` holds each local disc's tracks in disc order. Evidence order:
+    0. the fewest audio discs any release of the group has: a one-disc version makes every
+       later disc a bonus disc; when every version has two discs, both are the main album;
     1. the release group's original release: its media, matched to the local discs by
        track count and titles or lengths, are the main album and any later local disc is a
        bonus;
@@ -275,6 +280,8 @@ def main_disc_count(local_discs: list[list[dict[str, object]]], *, original: dic
         return None
     if len(local_discs) == 1:
         return {"main_disc_count": 1, "source": "single_disc"}
+    if fewest_discs:
+        return {"main_disc_count": min(fewest_discs, len(local_discs)), "source": "fewest_discs"}
     media = (original or {}).get("media") or []
     if media and len(media) <= len(local_discs) and all(
             _disc_agrees(local_discs[index], medium) for index, medium in enumerate(media)):
@@ -360,7 +367,7 @@ class MusicBrainzAlbumReleaseProcessor:
                 job = self._repository.claim_due_job(worker_id=worker_id, now=observed_at,
                                                      lease_duration=self._lease_duration)
         if not job:
-            return {"processed": False, "state": "idle"}
+            return self._retry_discogs_sections(observed_at)
         job_id = int(job["id"])
         outcomes = []
         for context in self._repository.load_context(job_id=job_id, worker_id=worker_id):
@@ -390,9 +397,8 @@ class MusicBrainzAlbumReleaseProcessor:
 
     def _add_discogs_sections(self, context: dict[str, object], outcome: dict[str, object]) -> None:
         """A certainly matched album titled "A / B" whose MusicBrainz release names no media
-        takes its sub-sections from Discogs: the release MusicBrainz links to, else the
-        release a Discogs search certainly finds (barcode, then artist and title). A failed
-        or missing answer leaves it without sub-sections until its next re-check."""
+        takes its sub-sections from Discogs. When Discogs (or the link lookup) is unavailable,
+        the album is marked for the hourly retry and keeps what it had."""
         if self._discogs is None:
             return
         albums = {album.get("id"): album for album in context.get("albums") or [] if isinstance(album, dict)}
@@ -401,20 +407,44 @@ class MusicBrainzAlbumReleaseProcessor:
             release = (outcome.get("releases") or {}).get(result.get("release_mbid") or "")
             if not release or not wants_discogs_sections(album.get("title"), release):
                 continue
-            link = self._client.lookup_release_discogs_id(result["release_mbid"])
-            if link.get("classification") != "complete":
-                continue
-            if link.get("discogs_release_id"):
-                found = self._discogs.release(link["discogs_release_id"])
-                if found.get("classification") == "complete":
-                    result["track_sections"] = discogs_sections(local_discs(album.get("tracks") or []),
-                                                                found["release"]["tracks"])
-                continue
-            certain = search_certain_release(album, artist_name=str(context.get("local_name") or ""),
-                                             barcode=release.get("barcode"), discogs=self._discogs)
-            if certain:
-                # Only the matched disc's headings, when the album is one disc of the release.
-                result["track_sections"] = certain["track_sections"]
+            sections = self._discogs_sections(album, result["release_mbid"], release.get("barcode"),
+                                              str(context.get("local_name") or ""))
+            if sections is None:
+                result["discogs_sections_unavailable"] = True
+            else:
+                result["track_sections"] = sections
+
+    def _discogs_sections(self, album: dict[str, object], release_mbid: str, barcode: object,
+                          artist_name: str) -> list[dict[str, object]] | None:
+        """Sub-sections from the Discogs release MusicBrainz links to, else from the release a
+        Discogs search certainly finds (barcode, then artist and title). ``[]`` is a
+        definitive answer; None means a provider did not answer (timeout, 5xx, rate limit)."""
+        link = self._client.lookup_release_discogs_id(release_mbid)
+        if link.get("classification") not in {"complete", "not_found"}:
+            return [] if link.get("classification") == "invalid_request" else None
+        discs = local_discs(album.get("tracks") or [])
+        if link.get("discogs_release_id"):
+            found = self._discogs.release(link["discogs_release_id"])
+            if found.get("classification") == "provider_unavailable":
+                return None
+            return discogs_sections(discs, found["release"]["tracks"]) if found.get("classification") == "complete" else []
+        searched = search_certain_release(album, artist_name=artist_name, barcode=str(barcode or "") or None,
+                                          discogs=self._discogs)
+        if searched["classification"] == "provider_unavailable":
+            return None
+        # Only the matched disc's headings, when the album is one disc of the release.
+        return searched["album"]["track_sections"] if searched["classification"] == "found" else []
+
+    def _retry_discogs_sections(self, observed_at) -> dict[str, object]:
+        """One " / " album whose Discogs check is due again (owner 2026-11-16)."""
+        due = self._repository.claim_section_retry(now=observed_at) if self._discogs is not None else None
+        if not due:
+            return {"processed": False, "state": "idle"}
+        sections = self._discogs_sections(due, due["release_mbid"], due.get("barcode"), str(due.get("local_name") or ""))
+        self._repository.store_section_retry(
+            row=due, track_sections=sections, observed_at=observed_at,
+            retry_at=None if sections is not None else section_retry_at(due["first_failed_at"], observed_at))
+        return {"processed": True, "state": "succeeded"}
 
     def _size_new_series(self, observed_at) -> None:
         """A list or an award names far more albums than a real album series (owner

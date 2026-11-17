@@ -25,6 +25,7 @@ from music_app.services.musicbrainz_enrichment_postgres import (
     _transaction,
 )
 from music_app.services.musicbrainz_release_identity import DIAGNOSTICS, RELEASE_MATCHER_VERSION
+from music_app.services.tracklist_sections import section_retry_at
 
 JOB_KIND = "musicbrainz_album_releases"
 _DATE = re.compile(r"^\d{4}(-\d{2}(-\d{2})?)?$")
@@ -226,10 +227,72 @@ class MusicBrainzReleaseIdentityPostgresRepository(EnrichmentJobQueue):
                 row = connection.execute(_REPLACE_ALBUMS, {
                     "job_id": _positive_id(job_id), "worker_id": _bounded_text(worker_id, 128, required=True),
                     "job_kind": JOB_KIND, "observed_at": observed, "matcher_version": RELEASE_MATCHER_VERSION,
-                    "rows": json.dumps([_album_row(album, releases) for album in albums]),
+                    "rows": json.dumps([_album_row(album, releases, observed) for album in albums]),
                 }).fetchone()
         return int(_row_mapping(row).get("stored") or 0)
 
+
+    def claim_section_retry(self, *, now: datetime) -> dict[str, object] | None:
+        """The " / " album whose Discogs check is most overdue, held for 15 minutes so another
+        lane skips it. None when nothing is due."""
+        sql = _active_library_cte() + """
+            , due as (
+              select decision.library_id, decision.album_key
+              from active_library
+              join library.local_album_musicbrainz_releases decision on decision.library_id = active_library.library_id
+              where decision.discogs_section_retry_at <= %(now)s and decision.state = 'release'
+                and decision.decision_source = 'automatic'
+              order by decision.discogs_section_retry_at
+              limit 1
+              for update of decision skip locked
+            ), held as (
+              update library.local_album_musicbrainz_releases decision
+              set discogs_section_retry_at = %(now)s + interval '15 minutes'
+              from due where decision.library_id = due.library_id and decision.album_key = due.album_key
+              returning decision.library_id, decision.album_key, decision.release_mbid,
+                        decision.discogs_section_first_failed_at
+            )
+            select held.library_id, held.album_key, held.release_mbid::text as release_mbid,
+                   held.discogs_section_first_failed_at as first_failed_at, albums.id as local_album_id,
+                   albums.title, artists.name as local_name, releases.barcode, album_tracks.tracks
+            from held
+            join library.local_albums albums
+              on albums.library_id = held.library_id and albums.album_key = held.album_key
+            join library.local_artists artists on artists.library_id = albums.library_id and artists.id = albums.artist_id
+            join integration.musicbrainz_releases releases on releases.mbid = held.release_mbid
+            join lateral (
+              select json_agg(json_build_object(
+                       'title', tracks.title, 'duration_seconds', tracks.duration_seconds,
+                       'disc_number', coalesce(nullif(tracks.disc_number, 0), 1), 'track_number', tracks.track_number)
+                       order by coalesce(nullif(tracks.disc_number, 0), 1), tracks.track_number, tracks.title) as tracks
+              from library.local_tracks tracks
+              where tracks.library_id = albums.library_id and tracks.album_id = albums.id
+            ) album_tracks on true;
+        """
+        with self._connect(self._database_url) as connection:
+            with _transaction(connection):
+                row = connection.execute(sql, {"now": _aware_utc(now)}).fetchone()
+        return _row_mapping(row) if row else None
+
+    def store_section_retry(self, *, row: dict[str, object], track_sections: list[dict[str, object]] | None,
+                            retry_at: datetime | None, observed_at: datetime) -> None:
+        """A definitive answer (``track_sections``, possibly empty) ends the retries; None counts
+        one more unavailable answer and schedules ``retry_at`` (None once a week has passed)."""
+        failed = track_sections is None
+        with self._connect(self._database_url) as connection:
+            connection.execute(
+                """
+                update library.local_album_musicbrainz_releases
+                set track_sections = case when %(failed)s then track_sections else %(sections)s::jsonb end,
+                    discogs_section_attempts = case when %(failed)s then discogs_section_attempts + 1 else 0 end,
+                    discogs_section_first_failed_at = case when %(failed)s then discogs_section_first_failed_at end,
+                    discogs_section_retry_at = %(retry_at)s, updated_at = %(observed_at)s
+                where library_id = %(library_id)s and album_key = %(album_key)s
+                  and release_mbid = %(release_mbid)s::uuid and discogs_section_attempts > 0
+                """,
+                {"failed": failed, "sections": json.dumps(track_sections or []),
+                 "observed_at": _aware_utc(observed_at), "retry_at": _aware_utc(retry_at) if retry_at else None,
+                 "library_id": row["library_id"], "album_key": row["album_key"], "release_mbid": row["release_mbid"]})
 
     def unsized_series(self, *, limit: int) -> list[str]:
         """Series stored without their size yet, oldest first."""
@@ -306,8 +369,9 @@ def _replace_series(connection, groups, releases, observed: datetime) -> None:
             params)
 
 
-def _album_row(album: dict[str, object], releases: dict[str, object]) -> dict[str, object]:
+def _album_row(album: dict[str, object], releases: dict[str, object], observed: datetime) -> dict[str, object]:
     main = album.get("main_disc") or {}
+    unavailable = bool(album.get("discogs_sections_unavailable"))
     original = album.get("original_release_mbid")
     diagnostic = album.get("diagnostic")
     return {"local_album_id": album.get("local_album_id"), "state": album.get("state"),
@@ -318,7 +382,10 @@ def _album_row(album: dict[str, object], releases: dict[str, object]) -> dict[st
             "diagnostic": diagnostic if diagnostic in DIAGNOSTICS else None,
             "main_disc_count": main.get("main_disc_count"), "main_disc_source": main.get("source"),
             "track_artists": album.get("track_artists") or [], "track_sections": album.get("track_sections") or [],
-            "signals": list(album.get("signals") or [])}
+            "signals": list(album.get("signals") or []),
+            # Discogs did not answer: a fresh retry schedule starts now.
+            "discogs_section_first_failed_at": observed.isoformat() if unavailable else None,
+            "discogs_section_retry_at": section_retry_at(observed, observed).isoformat() if unavailable else None}
 
 
 _UPSERT_GROUP = """
@@ -372,7 +439,8 @@ _REPLACE_ALBUMS = _active_library_cte() + """
       cross join jsonb_to_recordset(%(rows)s::jsonb) as rows(
         local_album_id bigint, state text, artist_mbid uuid, release_group_mbid uuid, release_mbid uuid,
         original_release_mbid uuid, disc_position integer, diagnostic text, main_disc_count integer,
-        main_disc_source text, track_artists jsonb, track_sections jsonb, signals text[])
+        main_disc_source text, track_artists jsonb, track_sections jsonb, signals text[],
+        discogs_section_first_failed_at timestamptz, discogs_section_retry_at timestamptz)
       join library.local_albums albums
         on albums.library_id = job.library_id and albums.artist_id = job.local_artist_id
        and albums.id = rows.local_album_id
@@ -380,13 +448,16 @@ _REPLACE_ALBUMS = _active_library_cte() + """
       insert into library.local_album_musicbrainz_releases (
         library_id, album_key, state, artist_mbid, release_group_mbid, release_mbid, original_release_mbid,
         disc_position, diagnostic, main_disc_count, main_disc_source, track_artists, track_sections, signals,
+        discogs_section_attempts, discogs_section_first_failed_at, discogs_section_retry_at,
         decision_source, matcher_version, observed_at, created_at, updated_at)
       select incoming.library_id, incoming.album_key, incoming.state,
              (select mbid from integration.musicbrainz_artists where mbid = incoming.artist_mbid),
              incoming.release_group_mbid, incoming.release_mbid, incoming.original_release_mbid,
              incoming.disc_position, incoming.diagnostic, incoming.main_disc_count, incoming.main_disc_source,
              coalesce(incoming.track_artists, '[]'::jsonb), coalesce(incoming.track_sections, '[]'::jsonb),
-             coalesce(incoming.signals, '{}'::text[]), 'automatic',
+             coalesce(incoming.signals, '{}'::text[]),
+             case when incoming.discogs_section_first_failed_at is null then 0 else 1 end,
+             incoming.discogs_section_first_failed_at, incoming.discogs_section_retry_at, 'automatic',
              %(matcher_version)s, %(observed_at)s, %(observed_at)s, %(observed_at)s
       from incoming
       on conflict (library_id, album_key) do update
@@ -395,7 +466,14 @@ _REPLACE_ALBUMS = _active_library_cte() + """
           original_release_mbid = excluded.original_release_mbid, disc_position = excluded.disc_position,
           diagnostic = excluded.diagnostic, main_disc_count = excluded.main_disc_count,
           main_disc_source = excluded.main_disc_source, track_artists = excluded.track_artists,
-          track_sections = excluded.track_sections,
+          -- Discogs did not answer: the same release keeps the headings it had.
+          track_sections = case
+            when excluded.discogs_section_attempts > 0
+             and library.local_album_musicbrainz_releases.release_mbid = excluded.release_mbid
+            then library.local_album_musicbrainz_releases.track_sections else excluded.track_sections end,
+          discogs_section_attempts = excluded.discogs_section_attempts,
+          discogs_section_first_failed_at = excluded.discogs_section_first_failed_at,
+          discogs_section_retry_at = excluded.discogs_section_retry_at,
           signals = excluded.signals, matcher_version = excluded.matcher_version,
           observed_at = excluded.observed_at, updated_at = excluded.updated_at
       where library.local_album_musicbrainz_releases.decision_source <> 'manual'

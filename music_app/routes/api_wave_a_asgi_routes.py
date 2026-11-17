@@ -1823,7 +1823,8 @@ async def utilities_edit_tags(request: Request) -> JSONResponse:
             payload,
         )
     )
-    reservation_resource_keys = _edit_tags_reservation_resource_keys(
+    reservation_resource_keys = await run_in_threadpool(
+        _edit_tags_reservation_resource_keys,
         album,
         updates,
     )

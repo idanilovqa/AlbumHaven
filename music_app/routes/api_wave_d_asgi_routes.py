@@ -1077,7 +1077,8 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
         return _json_response(
             ({"ok": False, "error": "Album does not contain any tracks"}, 400)
         )
-    reservation_resource_keys = structural_tag_edit_resource_keys(
+    reservation_resource_keys = await run_in_threadpool(
+        structural_tag_edit_resource_keys,
         str((album or {}).get("key") or (album or {}).get("album_ref") or ""),
         requested_track_paths,
     )

@@ -269,7 +269,9 @@ async function loadPreviousRootGalleryPage() {
   if (!isPagedRootGallery(view) || !page?.has_previous || !page.previous_cursor
     || rootGalleryPageRequest || state.busy || hasPendingSidebarNavigation()
     || !scroll || scroll.clientHeight <= 0
-    || scroll.scrollTop > scroll.clientHeight * ROOT_GALLERY_PREFETCH_VIEWPORT_COUNT) return false;
+    // Space held above the loaded artists is not content: measure from the first loaded artist.
+    || scroll.scrollTop - Number(typeof virtualGrid === 'undefined' ? 0 : virtualGrid?.leadingExtent || 0)
+      > scroll.clientHeight * ROOT_GALLERY_PREFETCH_VIEWPORT_COUNT) return false;
 
   const request = {
     controller: new AbortController(),
@@ -1517,6 +1519,8 @@ async function fetchAndRender(url, push = true, options = {}) {
         ? { preserveMountedGalleryChildren: true }
         : {}),
       ...(preserveMountedGallery ? { preserveMountedGallery: true } : {}),
+      // The window replaces the loaded artists above it; their height stays as space, holding the scroll.
+      ...(rootWindow ? { holdGalleryScrollTop: true } : {}),
     });
     if (appliedNewInventoryRevision
         && typeof invalidateAllHydratedTrackModalAlbumDetails === 'function') {

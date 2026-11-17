@@ -362,6 +362,26 @@ test('anchored gallery does not request earlier pages until the user scrolls nea
   assert.equal(f.pending.length, 0);
 });
 
+test('anchored gallery measures the earlier-page threshold from its first loaded artist, not held space', async () => {
+  const f = fixture();
+  f.state.view.gallery_page = {
+    ...f.state.view.gallery_page,
+    previous_cursor: 'earlier-page',
+    has_previous: true,
+  };
+  f.scroll.scrollTop = 4500;
+  f.scroll.scrollHeight = 10000;
+  f.context.virtualGrid = { ...f.context.virtualGrid, leadingExtent: 4000 };
+
+  const loading = f.context.loadPreviousRootGalleryPage();
+  assert.equal(f.pending.length, 1, 'the first loaded artist is near the viewport');
+  f.pending[0].resolve({
+    artist_groups: [{ artist: 'Earlier', albums: [{ key: 'earlier-1' }] }],
+    gallery_page: { ...f.state.view.gallery_page, previous_cursor: null, has_previous: false },
+  });
+  assert.equal(await loading, true);
+});
+
 for (const mobile of [false, true]) {
   for (const scrollTop of [1779, 754 * 8]) {
     test(`reverse prefetch loads earlier groups before the boundary (${mobile ? 'mobile' : 'desktop'}, ${scrollTop}px)`, async () => {

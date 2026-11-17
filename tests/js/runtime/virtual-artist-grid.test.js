@@ -7205,6 +7205,46 @@ test('a superseded root gallery continuation neither appends nor repaints', asyn
   assert.equal(virtualGrid.lastKey, lastKey, 'nothing was rendered');
 });
 
+test('a root window refresh holds the scroll offset over the artists it drops until earlier pages return', () => {
+  const { context, scrollEl, virtualGrid, frames, runNextFrame } = loadCountedGallery(400);
+  const groups = Array.from(context.state.view.artist_groups);
+  const sectionOf = artist => virtualGrid.sections.find(section => section.group.artist === artist);
+  const visibleTop = () => sectionOf('Artist 300').top - scrollEl.scrollTop;
+  scrollEl.scrollTop = sectionOf('Artist 300').top + 50;
+  const heldScrollTop = scrollEl.scrollTop;
+  // The visible album keeps its viewport offset through every render.
+  virtualGrid.captureScrollAnchor = () => ({ scrollTop: scrollEl.scrollTop, albumKey: 'album-300' });
+  virtualGrid.restoreScrollAnchor = () => { scrollEl.scrollTop = sectionOf('Artist 300').top + 50; };
+  context.isPagedRootGallery = () => true;
+  const mount = (first, hasPrevious, options = {}) => {
+    const shown = groups.slice(first, 340);
+    context.state.view = { ...context.state.view, artist_groups: shown, gallery_page: { has_previous: hasPrevious } };
+    virtualGrid.setGroups([], [], shown, { preserveScroll: true, ...options });
+    while (frames.size) runNextFrame();
+  };
+
+  mount(290, true, { holdGalleryScrollTop: true });
+  assert.equal(scrollEl.scrollTop, heldScrollTop, 'the window refresh keeps the scroll offset');
+  assert.equal(visibleTop(), -50, 'the visible album keeps its place');
+  assert.equal(virtualGrid.sections[0].top, virtualGrid.leadingExtent, 'the dropped artists remain as space above the window');
+  assert.equal(virtualGrid.totalHeight, virtualGrid.sections.at(-1).bottom);
+
+  const extent = virtualGrid.leadingExtent;
+  mount(240, true);
+  assert.equal(scrollEl.scrollTop, heldScrollTop, 'an earlier page fills the space instead of moving the gallery');
+  assert.ok(virtualGrid.leadingExtent < extent && virtualGrid.leadingExtent > 0);
+  assert.equal(virtualGrid.sections[0].top, virtualGrid.leadingExtent);
+
+  mount(260, true);
+  assert.ok(virtualGrid.leadingExtent < extent, 'only a window refresh widens the space');
+  assert.equal(visibleTop(), -50);
+
+  mount(0, false);
+  assert.equal(virtualGrid.leadingExtent, 0, 'the first page removes the space');
+  assert.equal(virtualGrid.sections[0].top, 0);
+  assert.equal(visibleTop(), -50);
+});
+
 test('a root gallery continuation drops the measured shift of the artist it replaces', async () => {
   const gallery = loadCountedRootContinuation(40);
   const { context, prepareNextPage, virtualGrid } = gallery;

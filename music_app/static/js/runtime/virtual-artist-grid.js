@@ -315,6 +315,8 @@ class VirtualSectionShifts {
   constructor(length) {
     this.length = length;
     this.tree = new Float64Array(length + 1);
+    // Height held above the first section, shared by every section's top.
+    this.offset = 0;
   }
 
   add(index, delta) {
@@ -360,7 +362,7 @@ const VIRTUAL_SECTION_GEOMETRY = Object.freeze({
   top: {
     configurable: true,
     enumerable: true,
-    get() { return this.layoutTop + this.layoutShifts.before(this.layoutIndex); },
+    get() { return this.layoutTop + this.layoutShifts.offset + this.layoutShifts.before(this.layoutIndex); },
   },
   bottom: {
     configurable: true,
@@ -398,6 +400,7 @@ class VirtualArtistGrid {
     this._sectionShifts = new VirtualSectionShifts(0);
     this._layoutRowEstimateFromMeasurement = false;
     this._layoutRowEstimateMeasured = false;
+    this._leadingExtent = 0;
     this.columns = 1;
     this.cardTrackWidth = CARD_GALLERY_LAYOUT_CONFIG.cardMinWidth;
     this.lastKey = '';
@@ -1137,6 +1140,13 @@ class VirtualArtistGrid {
       ? (semanticScrollAnchorIsCurrent ? options.semanticScrollAnchor : this.captureScrollAnchor())
       : null;
     this._absoluteScrollRestore = preservedAbsoluteScroll;
+    // Only a root gallery with earlier pages still to load can hold empty space above its sections.
+    const rootHasEarlierPages = preserveScroll
+      && typeof isPagedRootGallery === 'function' && isPagedRootGallery(state.view)
+      && Boolean(state.view.gallery_page?.has_previous);
+    const holdsLeadingExtent = rootHasEarlierPages && Boolean(preservedAnchor);
+    const scrollTopBeforeGroups = Number(this.scrollEl?.scrollTop || 0);
+    if (!rootHasEarlierPages) this._leadingExtent = 0;
     const sections = [];
     const renderedPrimaryGroups = buildDisplayGroups(primaryGroups);
     const renderedFamilyGroups = buildDisplayGroups(familyGroups);
@@ -1274,6 +1284,13 @@ class VirtualArtistGrid {
             this.render(true);
             this.restoreScrollAnchor(preservedAnchor);
           }
+          if (holdsLeadingExtent) {
+            this.holdScrollTopWithLeadingExtent(
+              scrollTopBeforeGroups,
+              options.holdGalleryScrollTop === true,
+              preservedAnchor,
+            );
+          }
           this._pendingStabilizationScroll = {
             generation: this._stabilizeGeneration,
             scrollLeft: Number(this.scrollEl.scrollLeft || 0),
@@ -1370,7 +1387,7 @@ class VirtualArtistGrid {
     this._sectionShifts.resize(firstReplaced + groups.length);
     // Appended sections are unshifted, so every one stores its true top less
     // the shifts recorded before it.
-    let layoutTop = this.totalHeight - this._sectionShifts.before(firstReplaced);
+    let layoutTop = this.totalHeight - this._sectionShifts.offset - this._sectionShifts.before(firstReplaced);
     groups.forEach((group, offset) => {
       const section = { kind: 'artist', group, sectionType: 'all', sectionKey: '' };
       this.keyArtistSection(section, replacedByMeasurementKey);
@@ -1471,6 +1488,30 @@ class VirtualArtistGrid {
     });
   }
 
+  get leadingExtent() {
+    return this._leadingExtent;
+  }
+
+  setLeadingExtent(extent) {
+    this.totalHeight += extent - this._leadingExtent;
+    this._leadingExtent = extent;
+    this._sectionShifts.offset = extent;
+    this.lastKey = '';
+  }
+
+  // A root window refresh that drops the loaded artists above it holds their
+  // height as empty space, so the scroll offset stays where it was while earlier
+  // pages remain to load. Only such a refresh (`mayGrow`) widens it; any other
+  // mounted render only narrows it, as earlier pages arrive above the window.
+  holdScrollTopWithLeadingExtent(scrollTop, mayGrow, anchor) {
+    const extent = Math.max(0, this._leadingExtent + scrollTop - Number(this.scrollEl.scrollTop || 0));
+    if (Math.abs(extent - this._leadingExtent) < 1 / 64 || (!mayGrow && extent > this._leadingExtent)) return;
+    this.setLeadingExtent(extent);
+    this.render(true);
+    if (anchor) this.restoreScrollAnchor(anchor);
+    else this.scrollEl.scrollTop = scrollTop;
+  }
+
   hasDeferredMountedGroupUpdate() {
     return Boolean(this._deferredSetGroups || this._deferredAppends.length);
   }
@@ -1537,6 +1578,7 @@ class VirtualArtistGrid {
     this._layoutRowEstimateMeasured = Boolean(measuredRowHeight);
     const rowLayout = { rowGeometryKey, mobileGeometry, displayMode, estimatedRowHeight };
     this._sectionShifts = new VirtualSectionShifts(this.sections.length);
+    this._sectionShifts.offset = this._leadingExtent;
     let offsetTop = 0;
     this.sectionByKey = new Map();
     this.sections.forEach((section, index) => {
@@ -1545,7 +1587,7 @@ class VirtualArtistGrid {
       this.placeSection(section, index, offsetTop);
       offsetTop += section.height;
     });
-    this.totalHeight = offsetTop;
+    this.totalHeight = offsetTop + this._leadingExtent;
     this._rowLayout = rowLayout;
   }
 

@@ -6405,8 +6405,8 @@
         "BI-03",
         "BI-13"
       ],
-      "workClass": "constant",
-      "proof": "static",
+      "workClass": "page",
+      "proof": "contract",
       "requestOwnership": {
         "allowed": [
           "/home-data",
@@ -6414,7 +6414,25 @@
           "/view-data"
         ],
         "forbidden": []
-      }
+      },
+      "cardinalities": {
+        "small": 100,
+        "production": 20000
+      },
+      "budgets": {
+        "requests": 1,
+        "responseRows": 50
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-refresh-and-status.test.js",
+      "testIdentity": "request capture: a post-save root refresh requests one window and holds the scroll at any scroll depth",
+      "performanceTargets": [
+        "edit-tags-post-edit"
+      ],
+      "rollback": "Revert the held gallery scroll; a post-save root refresh then still requests one window, but the gallery's scroll offset drops by the height of the artists above it."
     },
     {
       "id": "js:runtime/utility-loaders-and-cover-lookup.js#cancelAlbumCoverScan",

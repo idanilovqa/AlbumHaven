@@ -7277,6 +7277,19 @@ test('preserveScroll root refresh reloads only the window on screen', async () =
   assert.equal(gallery.calls.renderView[0].preserveScroll, true);
 });
 
+test('preserveScroll root window refresh asks the gallery to hold its scroll offset', async () => {
+  const gallery = deepRootRefresh(20000, 12000, () => jsonResponse(rootWindowPayload(12000)));
+  assert.equal(await gallery.context.fetchAndRender(rootRefreshUrl, false, { preserveScroll: true }), true);
+  assert.equal(gallery.calls.renderView.length, 1);
+  assert.equal(gallery.calls.renderView[0].holdGalleryScrollTop, true);
+});
+
+test('preserveScroll refresh outside the root window does not hold space above the gallery', async () => {
+  const gallery = deepRootRefresh(2000, 0, () => jsonResponse(rootWindowPayload(0)));
+  assert.equal(await gallery.context.fetchAndRender(`${rootRefreshUrl}&q=Artist`, false, { preserveScroll: true }), true);
+  assert.equal(gallery.calls.renderView[0].holdGalleryScrollTop, undefined);
+});
+
 test('preserveScroll root refresh at the top of the gallery stays an unanchored first page', async () => {
   const gallery = deepRootRefresh(2000, 0, () => jsonResponse(rootWindowPayload(0)));
   assert.equal(await gallery.context.fetchAndRender(rootRefreshUrl, false, { preserveScroll: true }), true);
@@ -7328,6 +7341,39 @@ test('request capture: catalog-change recovery requests one window at any scroll
   const midsize = await recover(2000);
   assert.deepEqual([midsize.requests, midsize.responseRows], [3, 100]);
   await measureInteractionContract(id, recover);
+});
+
+// A completed tag save whose canonical albums must come from the server refreshes the root window
+// on screen once, whatever the scroll depth, and asks the gallery to hold the scroll offset.
+test('request capture: a post-save root refresh requests one window and holds the scroll at any scroll depth', async () => {
+  const id = 'js:runtime/utility-list-builders.js#watchSaveTask';
+  const saveAndRefresh = async (albums) => {
+    const visible = Math.floor(albums * 0.6);
+    const gallery = deepRootRefresh(albums, visible, () => jsonResponse({
+      ...rootWindowPayload(visible, gallery.capture.counter), inventory_mutation_revision: 7,
+    }));
+    const { context } = gallery;
+    const renderView = context.renderView;
+    vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'tag-editor-and-optimistic-updates.js'), 'utf8'), context);
+    vm.runInContext(tagMutationSource, context);
+    context.renderView = renderView;
+    context.rememberCurrentRuntimeAlbumCoverAuthority = () => {};
+    const originalAlbum = { key: `album-${visible}`, name: 'Album', album_artist: viewportArtist(visible), tracks: [] };
+    await context.watchSaveTask('saved-tags', {
+      originalAlbum,
+      terminalPayload: {
+        ok: true, task_id: 'saved-tags', status: 'completed',
+        requires_view_refresh: true, updated_albums: [], inventory_mutation_revision: 7,
+      },
+    });
+    assert.deepEqual(gallery.capture.urls().map(anchorOf), [viewportArtist(visible)]);
+    assert.equal(gallery.calls.renderView.length, 1);
+    assert.equal(gallery.calls.renderView[0].holdGalleryScrollTop, true);
+    assert.equal(context.state.view.artist_groups.length, 50, 'only the refreshed window is applied');
+    assertInteractionRequests(id, gallery.capture.urls());
+    return gallery.capture.counter.snapshot();
+  };
+  await measureInteractionContract(id, saveAndRefresh);
 });
 
 const { countedCollection, measureScalePair } = require('../helpers/bounded-interaction-counter');

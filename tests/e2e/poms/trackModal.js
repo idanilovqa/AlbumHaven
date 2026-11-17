@@ -26,8 +26,10 @@ export class TrackModal extends BasePage {
     this.mobileBackButton = page.locator('#mobile-back-button');
     this.title = page.locator(this.titleSelector);
     this.subtitle = page.locator(this.subtitleSelector);
-    this.currentReleaseChoices = this.dialog.locator('[data-track-modal-current-release]');
-    this.currentReleaseChoiceTitles = this.currentReleaseChoices.locator('span:first-child');
+    this.splitChooser = this.dialog.getByRole('group', { name: 'Current releases' });
+    this.changedAlbumNotice = page.locator('#toast-layer .toast', {
+      hasText: 'This album changed—choose it again in the gallery.',
+    });
     this.footer = page.locator(this.footerSelector);
     this.discHeaders = this.dialog.locator('.album-track-table__disc-heading');
     this.discTotals = this.dialog.locator('.album-track-table__disc-total');
@@ -333,12 +335,6 @@ export class TrackModal extends BasePage {
     return this.trackRows.filter({
       has: this.page.locator('.album-track-table__title').filter({ hasText: exactNormalizedText(trackTitle) }),
     }).first();
-  }
-
-  currentReleaseChoiceByTitle(albumName) {
-    return this.currentReleaseChoices.filter({
-      has: this.page.getByText(albumName, { exact: true }),
-    });
   }
 
   playButtonByTrackTitle(trackTitle) {

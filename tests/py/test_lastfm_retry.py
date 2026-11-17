@@ -557,6 +557,28 @@ def test_a_failed_lookup_leaves_the_outcome_unknown_and_is_retried_after_its_bac
     assert ledger.entry(1)["scrobble_verification_failures"] == 0
 
 
+def test_submit_reports_a_failed_lookup_as_incomplete(scrobble_ledger, monkeypatch):
+    ledger, provider = scrobble_ledger()
+    _add_unverified(ledger, 2)
+    ledger.recent_tracks.answer = lambda _call: LastfmError(
+        "Network is unreachable", retryable=True, error_kind="network_error", request_sent=False)
+    events = []
+    monkeypatch.setattr(lastfm_retry, "log_app_event", lambda _config, _logger, action, **fields: events.append(
+        (action, fields)))
+    monkeypatch.setattr(lastfm_retry, "_WORKER_WAKE_EVENT", threading.Event())
+
+    lastfm_retry.request_lastfm_submission(_submit_scope())
+    lastfm_retry._run_requested_pass(_CONFIG, None, *lastfm_retry._take_request())
+
+    assert provider.calls == []
+    assert lastfm_retry.lastfm_submission_status(ACCOUNT_ID) == {"state": "failed", "error": lastfm_retry.SUBMISSION_INCOMPLETE}
+    pass_line = [fields for action, fields in events if action == "Last.fm scrobble retry pass completed"]
+    assert [{key: fields[key] for key in ("attempted", "failed", "verified_present", "verified_absent")}
+            for fields in pass_line] == [{"attempted": 0, "failed": 2, "verified_present": 0, "verified_absent": 0}]
+    failure = [fields for action, fields in events if action == "Last.fm pending scrobble submission failed"]
+    assert [(fields["failed"], fields["attempted"]) for fields in failure] == [(2, 0)]
+
+
 def test_a_lookup_that_needs_reauthentication_holds_only_that_account(scrobble_ledger):
     other_account = ACCOUNT_ID + 1
     ledger, provider = scrobble_ledger()

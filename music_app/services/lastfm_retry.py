@@ -491,12 +491,17 @@ def _count_result(
 def _count_verification(
     summary: dict[str, int], scope_summaries: dict[tuple[int, int], dict[str, int]], after: PendingListenEntry,
 ) -> None:
-    """Counts a listen found on Last.fm, or returned to the send queue; a failed lookup changes neither."""
+    """Counts a listen found on Last.fm, returned to the send queue, or, after a failed
+    lookup, still unknown: that counts as failed, so Submit reports it as incomplete."""
+    scope = _scope_counts(scope_summaries, after)
     if after.entry.get("scrobbled"):
-        _scope_counts(scope_summaries, after)["verified_present"] += 1
+        scope["verified_present"] += 1
     elif is_pending_scrobble_entry(after.entry):
-        _scope_counts(scope_summaries, after)["verified_absent"] += 1
+        scope["verified_absent"] += 1
         summary["pending_after"] += 1
+    else:
+        scope["failed"] += 1
+        summary["failed"] += 1
 
 
 def _scope_counts(scope_summaries: dict[tuple[int, int], dict[str, int]], item: PendingListenEntry) -> dict[str, int]:

@@ -101,3 +101,50 @@ def test_the_queue_names_its_next_run_and_the_hourly_run_writes_nothing_yet():
         "auto_submit_bulks": True, "next_run_at": NOW + timedelta(minutes=30)}}
     assert service.submit_due_bulk_corrections() == 0
 
+
+
+def test_problematic_files_invalidation_refreshes_stored_corrections_in_the_background(monkeypatch):
+    from music_app.services import library_browse_postgres, musicbrainz_corrections_postgres as store
+
+    scheduled = []
+    monkeypatch.setattr(store, "schedule_correction_refresh", scheduled.append)
+
+    library_browse_postgres.invalidate_postgres_utility_projection_cache(database_url="postgresql://s4", kinds=("rules",))
+    library_browse_postgres.invalidate_postgres_utility_projection_cache(
+        database_url="postgresql://s4", kinds=("problematic-files",))
+
+    assert scheduled == ["postgresql://s4"]
+
+
+def test_background_refreshes_run_only_where_enabled_and_fold_requests_into_one_more_run(monkeypatch):
+    import threading
+
+    from music_app.services import musicbrainz_corrections_postgres as store
+
+    started, release, runs = threading.Event(), threading.Event(), []
+
+    class Repository:
+        def __init__(self, config):
+            self.url = config["ALBUM_HAVEN_APP_DATABASE_URL"]
+
+        def refresh(self):
+            runs.append(self.url)
+            started.set()
+            release.wait(5)
+
+    monkeypatch.setattr(store, "MusicBrainzCorrectionsPostgresRepository", Repository)
+    monkeypatch.setattr(store, "_REFRESH_ENABLED", set())
+    monkeypatch.setattr(store, "_REFRESH_RUNNING", {})
+
+    store.schedule_correction_refresh("postgresql://other")
+    store.enable_background_correction_refresh("postgresql://s4")
+    assert started.wait(5)
+    store.schedule_correction_refresh("postgresql://s4")
+    store.schedule_correction_refresh("postgresql://s4")
+    release.set()
+    for _ in range(100):
+        if not store._REFRESH_RUNNING:
+            break
+        threading.Event().wait(0.05)
+
+    assert runs == ["postgresql://s4", "postgresql://s4"]

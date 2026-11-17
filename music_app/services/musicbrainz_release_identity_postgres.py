@@ -10,6 +10,7 @@ queue, and never touches media.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
@@ -24,6 +25,7 @@ from music_app.services.musicbrainz_enrichment_postgres import (
     _row_mapping,
     _transaction,
 )
+from music_app.services.musicbrainz_corrections_postgres import MusicBrainzCorrectionsPostgresRepository
 from music_app.services.musicbrainz_release_identity import DIAGNOSTICS, RELEASE_MATCHER_VERSION
 
 JOB_KIND = "musicbrainz_album_releases"
@@ -233,6 +235,14 @@ class MusicBrainzReleaseIdentityPostgresRepository(EnrichmentJobQueue):
                     "job_kind": JOB_KIND, "observed_at": observed, "matcher_version": RELEASE_MATCHER_VERSION,
                     "rows": json.dumps([_album_row(album, releases) for album in albums]),
                 }).fetchone()
+        # The decided albums' data corrections (S4), stored for Problematic Files.
+        try:
+            MusicBrainzCorrectionsPostgresRepository(
+                {"ALBUM_HAVEN_APP_DATABASE_URL": self._database_url}, connect=self._connect,
+            ).refresh(album_ids=[album["local_album_id"] for album in albums if album.get("local_album_id")],
+                      observed_at=observed)
+        except Exception:
+            logging.getLogger(__name__).warning("MusicBrainz data corrections could not be refreshed.")
         return int(_row_mapping(row).get("stored") or 0)
 
 

@@ -72,7 +72,7 @@ def test_corrections_name_each_real_difference_from_the_certain_release_and_noth
     _setup_url, repository, _ids = _corrections(monkeypatch)
     service = MusicBrainzCorrectionService(repository, now=lambda: NOW)
 
-    albums = {album["album_key"]: album for album in service.list_corrections()}
+    albums = {key: service.get_correction(album_key=key) for key in ("rel-cry", "rel-holy")}
 
     assert set(albums) == {"rel-cry", "rel-holy"}
     cry = albums["rel-cry"]
@@ -82,8 +82,7 @@ def test_corrections_name_each_real_difference_from_the_certain_release_and_noth
     holy = albums["rel-holy"]
     assert [(item["label"], item["current"], item["proposed"]) for item in holy["corrections"]] == [
         ("Album title", "Holy Land", "Holy Land Box")]
-    assert [album["album_key"] for album in service.list_corrections(album_key="rel-holy")] == ["rel-holy"]
-    assert service.list_corrections(album_key="rel-else") == []
+    assert service.get_correction(album_key="rel-else") is None
 
 
 def test_album_artist_differences_use_the_release_credit_as_written(monkeypatch):
@@ -92,7 +91,7 @@ def test_album_artist_differences_use_the_release_credit_as_written(monkeypatch)
         connection.execute("update integration.musicbrainz_releases set artist_credit = %s where mbid = %s",
                            (json.dumps(_credit("Magma")), BOX))
 
-    (holy,) = MusicBrainzCorrectionService(repository).list_corrections(album_key="rel-holy")
+    holy = MusicBrainzCorrectionService(repository).get_correction(album_key="rel-holy")
 
     assert [(item["field"], item["current"], item["proposed"]) for item in holy["corrections"]] == [
         ("album", "Holy Land", "Holy Land Box"), ("album_artist", "Angra", "Magma")]
@@ -109,7 +108,8 @@ def test_add_to_queue_keeps_the_snapshot_and_remove_drops_it(monkeypatch):
     (entry,) = service.list_queue()["items"]
     assert (entry["album_title"], entry["artist_name"], entry["release_mbid"]) == ("Angels Cry", "Angra", RELEASE)
     assert [item["label"] for item in entry["corrections"]] == ["Artist (1 track)", "Track 2 title"]
-    assert {album["album_key"]: album["queued_at"] for album in service.list_corrections()}["rel-cry"] == NOW
+    repository.refresh(observed_at=NOW)
+    assert {row["album_key"]: row["queued_at"] for row in service.list_correction_summaries()}["rel-cry"] == NOW
     assert service.queue_correction(album_key="rel-else", actor_account_id=None) is None
     with isolatedPostgres._connect(setup_url) as connection:
         tracks = connection.execute("select title from library.local_tracks where track_key like 'rel-cry-%%'"
@@ -171,7 +171,72 @@ def test_each_correction_rule(monkeypatch, local, remote, proposed):
         connection.execute("update integration.musicbrainz_releases set media = %s where mbid = %s", (json.dumps(
             [_medium(1, ("Don’t Despair", "Angra"), (remote, "Angra"))]), RELEASE))
 
-    albums = MusicBrainzCorrectionService(repository).list_corrections(album_key="rel-cry")
+    album = MusicBrainzCorrectionService(repository).get_correction(album_key="rel-cry")
 
-    rows = [(item["current"], item["proposed"]) for album in albums for item in album["corrections"]]
+    rows = [(item["current"], item["proposed"]) for item in (album or {}).get("corrections", [])]
     assert rows == ([(local, remote)] if proposed else [])
+
+
+def test_stored_counts_follow_decisions_and_tag_changes_and_only_changed_albums_are_compared(monkeypatch):
+    setup_url, repository, _ids = _corrections(monkeypatch)
+
+    assert repository.refresh(observed_at=NOW) == 2
+    assert {row["album_key"]: row["correction_count"] for row in repository.list_summaries()} == {
+        "rel-cry": 2, "rel-holy": 1}
+    # Nothing changed: nothing is compared again.
+    assert repository.refresh(observed_at=NOW) == 0
+
+    with isolatedPostgres._connect(setup_url) as connection:
+        # The owner fixed the second track's title by hand; the album title of the box set too.
+        connection.execute("update library.local_tracks set title = 'Carry On' where track_key = 'rel-cry-2'")
+        connection.execute("update library.local_albums set title = 'Holy Land Box' where album_key = 'rel-holy'")
+    assert repository.refresh(observed_at=NOW) == 2
+    assert {row["album_key"]: row["correction_count"] for row in repository.list_summaries()} == {"rel-cry": 1}
+
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute("update library.local_album_musicbrainz_releases set state = 'release_group',"
+                           " release_mbid = null where album_key = 'rel-cry'")
+    repository.refresh(observed_at=NOW)
+    with isolatedPostgres._connect(setup_url) as connection:
+        stored = connection.execute("select album_key from library.local_album_musicbrainz_corrections").fetchall()
+    assert [row["album_key"] for row in stored] == ["rel-holy"]
+
+
+def test_opening_the_problematic_files_list_never_runs_the_comparison(monkeypatch):
+    from types import SimpleNamespace
+
+    from music_app.routes.musicbrainz_corrections_asgi import load_problematic_correction_items
+
+    setup_url, repository, _ids = _corrections(monkeypatch)
+    repository.refresh(observed_at=NOW)
+    statements = []
+
+    class Recording:
+        def __init__(self, connection):
+            self._connection = connection
+
+        def __enter__(self):
+            self._inner = self._connection.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self._connection.__exit__(*args)
+
+        def execute(self, sql, *args, **kwargs):
+            statements.append(str(sql))
+            return self._inner.execute(sql, *args, **kwargs)
+
+    recording = MusicBrainzCorrectionsPostgresRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": setup_url},
+        connect=lambda _url: Recording(isolatedPostgres._connect(setup_url)))
+    actor = SimpleNamespace(account_id=1, current_library_id=1,
+                            library_relationships=(SimpleNamespace(library_id=1, is_primary_owner=True),))
+    request = SimpleNamespace(state=SimpleNamespace(current_actor=actor), app=SimpleNamespace(state=SimpleNamespace(
+        musicbrainz_correction_service=MusicBrainzCorrectionService(recording), config={})))
+
+    items = load_problematic_correction_items(request)
+
+    assert {item["musicbrainz_correction"]["album_key"]: item["musicbrainz_correction"]["correction_count"]
+            for item in items} == {"rel-cry": 2, "rel-holy": 1}
+    assert len(statements) == 1
+    assert "remote_tracks" not in statements[0] and "jsonb_array_elements" not in statements[0]

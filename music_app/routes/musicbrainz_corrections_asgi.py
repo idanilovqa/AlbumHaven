@@ -32,6 +32,19 @@ _QUEUE_FIELDS = ("entry_id", "album_key", "album_title", "artist_name", "year", 
 _CORRECTION_FIELDS = ("field", "label", "current", "proposed", "tracks")
 
 
+@router.get("")
+async def get_album_correction(album_key: str, request: Request):
+    """One album's full correction, compared now, for its Problematic Files detail."""
+    await _require_current_library_owner(request)
+    if not 0 < len(album_key.strip()) <= 1024:
+        raise HTTPException(400, "Invalid data correction request.")
+    album = await _call(request, "get_correction", album_key=album_key)
+    if not isinstance(album, Mapping):
+        raise HTTPException(404, "This album has no data correction.")
+    return {"correction": {**_correction_payload(album), "track_count": album.get("track_count"),
+                           "file_types": list(album.get("file_types") or [])}}
+
+
 @router.get("/queue")
 async def list_correction_queue(request: Request):
     await _require_current_library_owner(request)
@@ -85,13 +98,14 @@ async def save_correction_settings(request: Request):
                          "next_run_at": settings.get("next_run_at")}}
 
 
-def load_problematic_correction_items(request: Request, *, album_key: str | None = None) -> list[dict[str, object]]:
-    """The primary owner's albums needing a data correction, as Problematic Files rows.
-    Owner-only, so never cached with the library-wide projection. A failure yields no rows."""
+def load_problematic_correction_items(request: Request) -> list[dict[str, object]]:
+    """The primary owner's albums needing a data correction, as Problematic Files rows, from
+    the stored counts (no comparison runs here). Owner-only, so never cached with the
+    library-wide projection. A failure yields no rows."""
     if not _is_current_library_owner(getattr(request.state, "current_actor", None)):
         return []
     try:
-        albums = _service(request).list_corrections(album_key=album_key)
+        albums = _service(request).list_correction_summaries()
     except Exception:
         _logger(request).warning("MusicBrainz data corrections were unavailable for Problematic Files.")
         return []
@@ -103,8 +117,9 @@ def project_correction_problems_into_problematic_files(
     payload: object,
     correction_items: list[dict[str, object]] | None = None,
 ) -> object:
-    """An album already listed gains the label and its correction; any other album needing
-    one is added as a row of its own, by name."""
+    """An album already listed gains the label; any other album needing a correction is
+    added as a row of its own, by name, to the complete list only (the bounded first page
+    stays bounded)."""
     if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
         return payload
     if correction_items is None:
@@ -115,6 +130,8 @@ def project_correction_problems_into_problematic_files(
         flagged = by_key.get(_album_key(item.get("key")))
         if flagged is not None and item.get("entity_kind") is None:
             _label(item, flagged["musicbrainz_correction"])
+    if payload.get("complete") is False:
+        return payload
     listed = {_album_key(item.get("key")) for item in payload["items"] if item.get("entity_kind") is None}
     added = [item for key, item in by_key.items() if key not in listed]
     if added:
@@ -124,10 +141,17 @@ def project_correction_problems_into_problematic_files(
 
 
 def project_correction_into_problematic_detail(request: Request, payload: object) -> object:
-    """A loaded album detail keeps the label and correction its summary row carried."""
-    if isinstance(payload, dict) and payload.get("key"):
-        for item in load_problematic_correction_items(request, album_key=_album_key(payload["key"])):
-            _label(payload, item["musicbrainz_correction"])
+    """A loaded album detail carries its label and full correction, compared for this album."""
+    if not isinstance(payload, dict) or not payload.get("key") \
+            or not _is_current_library_owner(getattr(request.state, "current_actor", None)):
+        return payload
+    try:
+        album = _service(request).get_correction(album_key=_album_key(payload["key"]))
+    except Exception:
+        _logger(request).warning("MusicBrainz data correction was unavailable for an album detail.")
+        return payload
+    if isinstance(album, Mapping):
+        _label(payload, _correction_payload(album))
     return payload
 
 
@@ -143,23 +167,27 @@ def _label(item: dict[str, object], correction: dict[str, object]) -> None:
     item["musicbrainz_correction"] = correction
 
 
+def _correction_payload(album: Mapping[str, object]) -> dict[str, object]:
+    """The correction a row carries: its count always, its changes once compared."""
+    payload = {"album_key": str(album["album_key"]), "release_mbid": album.get("release_mbid"),
+               "queued_at": album.get("queued_at"), "correction_count": album.get("correction_count")}
+    if "corrections" in album:
+        payload["corrections"] = _corrections(album.get("corrections"))
+        payload["correction_count"] = len(payload["corrections"])
+    return payload
+
+
 def _problematic_correction_item(album: Mapping[str, object]) -> dict[str, object]:
-    album_key = str(album["album_key"])
     return {
-        "key": f"musicbrainz-correction:{album_key}",
+        "key": f"musicbrainz-correction:{album['album_key']}",
         "entity_kind": "musicbrainz_correction",
         "name": str(album.get("album_title") or "").strip() or "Unknown Album",
         "album_artist": str(album.get("artist_name") or "").strip() or "Unknown Artist",
         "year": album.get("year"),
         "cover_path": album.get("cover_path") or None,
-        "track_count": album.get("track_count"),
-        "file_types": list(album.get("file_types") or []),
         "problem_reasons": [DATA_CORRECTION_LABEL],
-        "musicbrainz_correction": {
-            "album_key": album_key, "release_mbid": album.get("release_mbid"),
-            "queued_at": album.get("queued_at"), "corrections": _corrections(album.get("corrections")),
-        },
-        # A summary row like every other; its detail is the row itself.
+        "musicbrainz_correction": _correction_payload(album),
+        # A summary row like every other; its correction loads when it is opened.
         "detail_loaded": False,
     }
 

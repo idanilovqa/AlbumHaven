@@ -178,6 +178,13 @@ def invalidate_postgres_utility_projection_cache(
                 _UTILITY_PROJECTION_GENERATIONS.get(cache_key, 0) + 1
             )
             _UTILITY_PROJECTION_CACHE.pop(cache_key, None)
+    if "problematic-files" in normalized_kinds:
+        # Tags may have changed: refresh stored MusicBrainz data corrections (S4) in the
+        # background; only albums whose tag signature moved are compared again.
+        from music_app.services.musicbrainz_corrections_postgres import schedule_correction_refresh
+
+        for url in {normalized_database_url} if normalized_database_url else {key[0] for key in affected_keys}:
+            schedule_correction_refresh(url)
 
 
 def _request_flag(value: object) -> bool:

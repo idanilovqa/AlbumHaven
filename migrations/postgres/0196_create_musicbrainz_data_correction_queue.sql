@@ -6,6 +6,25 @@
 -- "Add to queue" keeps the owner's approved snapshot here until Bulk Correction writes it
 -- through Edit Tags. Nothing here writes media tags. "Auto submit bulks" is stored per
 -- library (one per server); when on, the queue is due hourly.
+-- Each certainly matched album's correction summary, stored when its release decision is
+-- recorded and refreshed after its tags change; the signature covers the tags and release
+-- compared, so a refresh recomputes only albums whose signature moved. Problematic Files
+-- reads this; the full correction is computed for one album when it is opened.
+create table if not exists library.local_album_musicbrainz_corrections (
+  library_id bigint not null,
+  album_key text not null,
+  signature text not null check (char_length(signature) between 1 and 64),
+  release_mbid uuid not null,
+  correction_count integer not null check (correction_count >= 0),
+  computed_at timestamptz not null,
+  primary key (library_id, album_key),
+  foreign key (library_id, album_key) references library.local_albums(library_id, album_key)
+    on update cascade on delete cascade
+);
+
+create index if not exists local_album_musicbrainz_corrections_needed_idx
+  on library.local_album_musicbrainz_corrections (library_id) where correction_count > 0;
+
 create table if not exists ops.musicbrainz_correction_queue (
   id bigint generated always as identity primary key,
   library_id bigint not null,
@@ -28,24 +47,27 @@ create table if not exists ops.musicbrainz_correction_settings (
   changed_by_account_id bigint references app.accounts(id) on delete set null
 );
 
-revoke all on table ops.musicbrainz_correction_queue, ops.musicbrainz_correction_settings from public;
+revoke all on table library.local_album_musicbrainz_corrections, ops.musicbrainz_correction_queue,
+  ops.musicbrainz_correction_settings from public;
 revoke all on sequence ops.musicbrainz_correction_queue_id_seq from public;
 
 do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'album_haven_readonly') then
-    grant select on table ops.musicbrainz_correction_queue, ops.musicbrainz_correction_settings
-      to album_haven_readonly;
+    grant select on table library.local_album_musicbrainz_corrections, ops.musicbrainz_correction_queue,
+      ops.musicbrainz_correction_settings to album_haven_readonly;
   end if;
   if exists (select 1 from pg_roles where rolname = 'album_haven_app') then
-    grant select, insert, update, delete on table ops.musicbrainz_correction_queue to album_haven_app;
+    grant select, insert, update, delete on table library.local_album_musicbrainz_corrections,
+      ops.musicbrainz_correction_queue to album_haven_app;
     grant select, insert, update on table ops.musicbrainz_correction_settings to album_haven_app;
     grant usage, select on sequence ops.musicbrainz_correction_queue_id_seq to album_haven_app;
     -- The Edits Queue removes a waiting MusicBrainz lookup (S5's queue).
     grant delete on table ops.musicbrainz_lookup_requests to album_haven_app;
   end if;
   if exists (select 1 from pg_roles where rolname = 'album_haven_migrator') then
-    grant select, insert, update, delete on table ops.musicbrainz_correction_queue to album_haven_migrator;
+    grant select, insert, update, delete on table library.local_album_musicbrainz_corrections,
+      ops.musicbrainz_correction_queue to album_haven_migrator;
     grant select, insert, update on table ops.musicbrainz_correction_settings to album_haven_migrator;
     grant usage, select on sequence ops.musicbrainz_correction_queue_id_seq to album_haven_migrator;
   end if;

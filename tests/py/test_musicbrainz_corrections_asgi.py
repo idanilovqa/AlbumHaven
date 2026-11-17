@@ -21,6 +21,7 @@ from tests.py.test_musicbrainz_lookup_asgi import request
 RELEASE = "6f3c2a1e-0000-4000-8000-0000000c0de1"
 NOW = datetime(2026, 11, 16, 10, 20, tzinfo=timezone.utc)
 ROUTES = [
+    ("/api/musicbrainz/corrections", "GET", "library.problems.read"),
     ("/api/musicbrainz/corrections/queue", "GET", "library.problems.read"),
     ("/api/musicbrainz/corrections/queue", "POST", "library.metadata_matches.review"),
     ("/api/musicbrainz/corrections/queue/{entry_id}", "DELETE", "library.metadata_matches.review"),
@@ -40,11 +41,18 @@ class Corrections:
         self.fail = fail
         self.calls = []
 
-    def list_corrections(self, *, album_key=None):
-        self.calls.append(("list_corrections", {"album_key": album_key}))
+    def list_correction_summaries(self):
+        self.calls.append(("list_correction_summaries", {}))
         if self.fail:
             raise RuntimeError("database unavailable")
-        return [album for album in self.albums if album_key is None or album["album_key"] == album_key]
+        return [{**{key: value for key, value in album.items() if key not in {"corrections", "track_count", "file_types"}},
+                 "correction_count": len(album["corrections"])} for album in self.albums]
+
+    def get_correction(self, *, album_key):
+        self.calls.append(("get_correction", {"album_key": album_key}))
+        if self.fail:
+            raise RuntimeError("database unavailable")
+        return next((album for album in self.albums if album["album_key"] == album_key), None)
 
     def queue_correction(self, *, album_key, actor_account_id):
         self.calls.append(("queue_correction", {"album_key": album_key, "actor_account_id": actor_account_id}))
@@ -91,6 +99,7 @@ def test_routes_are_registered_with_the_musicbrainz_owner_capabilities():
 
 
 @pytest.mark.parametrize("method,path,body", [
+    ("GET", "/api/musicbrainz/corrections?album_key=wurdah", None),
     ("GET", "/api/musicbrainz/corrections/queue", None),
     ("POST", "/api/musicbrainz/corrections/queue", {"album_key": "wurdah"}),
     ("DELETE", "/api/musicbrainz/corrections/queue/4", None),
@@ -197,6 +206,39 @@ def _pf_request(corrections, *, owner=True):
         musicbrainz_correction_service=corrections, config={}, logger=logging.getLogger("test"))))
 
 
+def test_one_album_correction_is_compared_when_opened():
+    corrections = Corrections()
+
+    status, payload = request(app(corrections=corrections), "GET", "/api/musicbrainz/corrections?album_key=wurdah")
+
+    assert status == 200
+    assert payload["correction"] == {"album_key": "wurdah", "release_mbid": RELEASE, "queued_at": None,
+                                     "correction_count": 1, "corrections": [CORRECTION], "track_count": 12,
+                                     "file_types": ["FLAC"]}
+    assert corrections.calls == [("get_correction", {"album_key": "wurdah"})]
+    assert request(app(corrections=corrections), "GET", "/api/musicbrainz/corrections?album_key=none")[0] == 404
+
+
+def test_the_list_reads_stored_counts_and_never_compares():
+    corrections = Corrections()
+    payload = {"items": [{"key": "a", "name": "A"}], "count": 1}
+
+    project_correction_problems_into_problematic_files(_pf_request(corrections), payload)
+
+    assert corrections.calls == [("list_correction_summaries", {})]
+
+
+def test_the_bounded_first_page_labels_listed_albums_but_adds_no_rows():
+    payload = {"items": [{"key": "wurdah", "name": "Wurdah Ïtah", "problem_reasons": []}], "count": 1,
+               "complete": False}
+    secret = {**ALBUM, "album_key": "secret", "album_title": "The Secret"}
+
+    project_correction_problems_into_problematic_files(_pf_request(Corrections([ALBUM, secret])), payload)
+
+    assert [item["key"] for item in payload["items"]] == ["wurdah"]
+    assert payload["items"][0]["problem_reasons"] == ["Data Correction Needed"]
+
+
 def test_a_listed_album_gains_the_label_and_another_album_is_added_by_name():
     secret = {**ALBUM, "album_key": "secret", "album_title": "The Secret", "artist_name": "The Alan Parsons Project"}
     payload = {"items": [{"key": "wurdah::year::1974", "name": "Wurdah Ïtah", "problem_reasons": ["Missing year"],
@@ -210,14 +252,15 @@ def test_a_listed_album_gains_the_label_and_another_album_is_added_by_name():
         "musicbrainz-artist:7", "musicbrainz-correction:secret", "wurdah::year::1974"]
     _artist, added, listed = payload["items"]
     assert listed["problem_reasons"] == ["Missing year", "Data Correction Needed"]
-    assert listed["musicbrainz_correction"]["corrections"] == [CORRECTION]
+    assert listed["musicbrainz_correction"] == {"album_key": "wurdah", "release_mbid": RELEASE, "queued_at": None,
+                                                "correction_count": 1}
     assert payload["initial_detail"]["problem_reasons"] == ["Missing year", "Data Correction Needed"]
     assert added == {
         "key": "musicbrainz-correction:secret", "entity_kind": "musicbrainz_correction", "name": "The Secret",
         "album_artist": "The Alan Parsons Project", "year": 1974, "cover_path": "covers/wurdah.jpg",
-        "track_count": 12, "file_types": ["FLAC"], "problem_reasons": ["Data Correction Needed"],
+        "problem_reasons": ["Data Correction Needed"],
         "musicbrainz_correction": {"album_key": "secret", "release_mbid": RELEASE, "queued_at": None,
-                                   "corrections": [CORRECTION]},
+                                   "correction_count": 1},
         "detail_loaded": False,
     }
     assert payload["count"] == 3
@@ -230,7 +273,8 @@ def test_a_loaded_detail_keeps_its_label_and_correction():
     project_correction_into_problematic_detail(_pf_request(corrections), detail)
 
     assert detail["problem_reasons"] == ["Missing year", "Data Correction Needed"]
-    assert corrections.calls == [("list_corrections", {"album_key": "wurdah"})]
+    assert detail["musicbrainz_correction"]["corrections"] == [CORRECTION]
+    assert corrections.calls == [("get_correction", {"album_key": "wurdah"})]
 
 
 def test_non_owners_and_failures_leave_problematic_files_unchanged():

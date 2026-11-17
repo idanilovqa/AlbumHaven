@@ -3064,6 +3064,7 @@ function getFilteredProblematicAlbums() {
 
   const filtered = items.filter((album) => {
     if (!albumMatchesProblemFilters(album)) return false;
+    if (typeof isMusicBrainzCorrectionRowShown === 'function' && !isMusicBrainzCorrectionRowShown(album)) return false;
     if (!query) return true;
     const repairRows = Array.isArray(album.repair_preview_rows) ? album.repair_preview_rows : [];
     const trackTitles = Array.isArray(album.tracks) ? album.tracks.map((track) => String(track.title || '')) : [];

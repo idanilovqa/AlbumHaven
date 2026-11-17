@@ -25320,6 +25320,7 @@ function getFilteredProblematicAlbums() {
 
   const filtered = items.filter((album) => {
     if (!albumMatchesProblemFilters(album)) return false;
+    if (typeof isMusicBrainzCorrectionRowShown === 'function' && !isMusicBrainzCorrectionRowShown(album)) return false;
     if (!query) return true;
     const repairRows = Array.isArray(album.repair_preview_rows) ? album.repair_preview_rows : [];
     const trackTitles = Array.isArray(album.tracks) ? album.tracks.map((track) => String(track.title || '')) : [];
@@ -28344,6 +28345,9 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
   }
   if (typeof isMusicBrainzCorrectionProblem === 'function' && isMusicBrainzCorrectionProblem(selectedAlbum)) {
     els.detail.innerHTML = buildMusicBrainzCorrectionProblemDetail(selectedAlbum);
+    if (!selectedAlbum.musicbrainz_correction?.corrections && !selectedAlbum.musicbrainz_correction_failed) {
+      void loadMusicBrainzCorrectionDetail(selectedAlbum);
+    }
     return;
   }
   if (selectedAlbum?.detail_load_failed) {
@@ -37408,8 +37412,18 @@ const EDITS_QUEUE_TABS = { 'data-correction': 'Data Correction', 'musicbrainz-lo
 const editsQueue = { tab: 'data-correction', corrections: null, settings: null, lookups: null, queueStartsAt: null,
   loading: null, failed: false, busy: false };
 
+// Until the owner decides, albums listed only for a correction show when the "Data
+// Correction Needed" filter is chosen; true shows them by default.
+const MUSICBRAINZ_CORRECTION_ROWS_SHOWN_BY_DEFAULT = false;
+
 function isMusicBrainzCorrectionProblem(item) {
   return item?.entity_kind === 'musicbrainz_correction';
+}
+
+function isMusicBrainzCorrectionRowShown(item, selectedFilters = state.utility.selectedProblemFilters || []) {
+  const normalize = typeof normalizeProblemFilterReason === 'function' ? normalizeProblemFilterReason : (reason) => reason;
+  return MUSICBRAINZ_CORRECTION_ROWS_SHOWN_BY_DEFAULT || !isMusicBrainzCorrectionProblem(item)
+    || selectedFilters.some((reason) => normalize(reason) === normalize(MUSICBRAINZ_DATA_CORRECTION_LABEL));
 }
 
 function canReviewMusicBrainzCorrections() {
@@ -37472,8 +37486,15 @@ function buildMusicBrainzCorrectionHtml(album, { heading = false } = {}) {
     ${action ? `<div class="utility-detected-actions">${action}</div>` : ''}`;
 }
 
-// An album listed only because it needs a correction: its own detail, from the row itself.
+// An album listed only because it needs a correction: the row's facts, then its correction,
+// compared when it is opened.
 function buildMusicBrainzCorrectionProblemDetail(item) {
+  if (item.musicbrainz_correction_failed) {
+    return buildOnPageAlertHtml({ severity: 'error', title: 'Album details unavailable', message: 'Unable to load this data correction.' });
+  }
+  if (!Array.isArray(item.musicbrainz_correction?.corrections)) {
+    return '<div class="utility-empty-state">Loading the data correction…</div>';
+  }
   const title = String(item.name || 'Unknown Album');
   const fileTypes = Array.isArray(item.file_types) && item.file_types.length ? item.file_types.join(', ') : 'Unknown';
   return `<div class="utility-detail-header">
@@ -37487,6 +37508,25 @@ function buildMusicBrainzCorrectionProblemDetail(item) {
       </div>
     </div>
     ${buildMusicBrainzCorrectionHtml(item, { heading: true })}`;
+}
+
+async function loadMusicBrainzCorrectionDetail(item) {
+  if (!isMusicBrainzCorrectionProblem(item) || item.musicbrainz_correction_loading) return;
+  item.musicbrainz_correction_loading = true;
+  try {
+    const response = await fetch(`/api/musicbrainz/corrections?album_key=${encodeURIComponent(item.musicbrainz_correction.album_key)}`,
+      { headers: { Accept: 'application/json' } });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload?.correction) throw new Error('unavailable');
+    const { track_count: trackCount, file_types: fileTypes, ...correction } = payload.correction;
+    Object.assign(item, { musicbrainz_correction: correction, track_count: trackCount, file_types: fileTypes,
+      musicbrainz_correction_failed: false });
+  } catch {
+    item.musicbrainz_correction_failed = true;
+  } finally {
+    item.musicbrainz_correction_loading = false;
+  }
+  if (state.utility.activeTab === 'problematic-files') renderProblematicFiles({ preserveProblematicTree: true });
 }
 
 async function queueMusicBrainzCorrection(albumKey) {

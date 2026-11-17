@@ -314,3 +314,44 @@ test('phones list the Edits Queue only for whoever may review MusicBrainz correc
   assert.equal(context.allowed('edits-queue', { 'library.metadata_matches.review': true }), true);
   assert.equal(context.allowed('edits-queue', { 'library.problems.read': true }), false);
 });
+
+test('albums listed only for a correction show only under the Data Correction Needed filter', () => {
+  const { context } = loadContext();
+  const standalone = correctionItem();
+  const listed = { key: 'other', name: 'Other', problem_reasons: ['Missing year', 'Data Correction Needed'] };
+
+  assert.equal(context.isMusicBrainzCorrectionRowShown(standalone, []), false);
+  assert.equal(context.isMusicBrainzCorrectionRowShown(standalone, ['Missing year']), false);
+  assert.equal(context.isMusicBrainzCorrectionRowShown(standalone, ['Data Correction Needed']), true);
+  assert.equal(context.isMusicBrainzCorrectionRowShown(listed, []), true, 'a listed album keeps its row and label');
+  assert.match(read('music_app/static/js/runtime/musicbrainz-corrections.js'),
+    /^const MUSICBRAINZ_CORRECTION_ROWS_SHOWN_BY_DEFAULT = false;$/m);
+});
+
+test('an album listed only for a correction loads its changes when opened', async () => {
+  const item = correctionItem({ musicbrainz_correction: { album_key: 'wurdah', release_mbid: 'r1', queued_at: null, correction_count: 2 } });
+  delete item.track_count;
+  delete item.file_types;
+  const { context, requests, renders } = loadContext({ items: [item], responses: {
+    'GET /api/musicbrainz/corrections?album_key=wurdah': { status: 200, body: { correction: {
+      album_key: 'wurdah', release_mbid: 'r1', queued_at: null, correction_count: 2, corrections: [ARTIST, TRACK_ARTISTS],
+      track_count: 12, file_types: ['FLAC'] } } } } });
+
+  assert.match(context.buildMusicBrainzCorrectionProblemDetail(item), /Loading the data correction/);
+  await context.loadMusicBrainzCorrectionDetail(item);
+
+  assert.deepEqual(requests, [['GET', '/api/musicbrainz/corrections?album_key=wurdah', undefined]]);
+  assert.equal(item.track_count, 12);
+  assert.match(text(context.buildMusicBrainzCorrectionProblemDetail(item)), /Artist \(12 tracks\) Christian Vander Magma/);
+  assert.deepEqual(renders, ['problematic-files']);
+});
+
+test('a correction that cannot load says so', async () => {
+  const item = correctionItem({ musicbrainz_correction: { album_key: 'wurdah', correction_count: 2 } });
+  const { context } = loadContext({ items: [item], responses: {
+    'GET /api/musicbrainz/corrections?album_key=wurdah': { status: 503, body: {} } } });
+
+  await context.loadMusicBrainzCorrectionDetail(item);
+
+  assert.match(context.buildMusicBrainzCorrectionProblemDetail(item), /Unable to load this data correction/);
+});

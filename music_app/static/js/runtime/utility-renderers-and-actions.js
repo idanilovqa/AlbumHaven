@@ -177,6 +177,9 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
   }
   if (typeof isMusicBrainzCorrectionProblem === 'function' && isMusicBrainzCorrectionProblem(selectedAlbum)) {
     els.detail.innerHTML = buildMusicBrainzCorrectionProblemDetail(selectedAlbum);
+    if (!selectedAlbum.musicbrainz_correction?.corrections && !selectedAlbum.musicbrainz_correction_failed) {
+      void loadMusicBrainzCorrectionDetail(selectedAlbum);
+    }
     return;
   }
   if (selectedAlbum?.detail_load_failed) {

@@ -452,6 +452,7 @@ def create_asgi_app():
     from music_app.services.musicbrainz_enrichment_api import (
         build_musicbrainz_enrichment_api_service,
     )
+    from music_app.services.musicbrainz_corrections_postgres import enable_background_correction_refresh
     from music_app.services.musicbrainz_enrichment_postgres import (
         MusicBrainzEnrichmentPostgresRepository,
     )
@@ -648,6 +649,8 @@ def create_asgi_app():
                 _app.state.musicbrainz_enrichment_api_service = (
                     build_musicbrainz_enrichment_api_service(runtime.config)
                 )
+                # Stored data corrections follow tag changes from here on (S4).
+                enable_background_correction_refresh(runtime.config.get("ALBUM_HAVEN_APP_DATABASE_URL"))
                 try:
                     schedule_startup_backfill(enrichment_scheduler)
                 except Exception:

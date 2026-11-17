@@ -87,16 +87,21 @@ class MusicBrainzCorrectionService:
         self._repository = repository
         self._now = now or (lambda: datetime.now(timezone.utc))
 
-    def list_corrections(self, *, album_key: str | None = None) -> list[dict[str, object]]:
-        return group_corrections(self._repository.list_differences(album_key=album_key))
+    def list_correction_summaries(self) -> list[dict[str, object]]:
+        """Problematic Files' rows: the stored counts, no comparison."""
+        return self._repository.list_summaries()
+
+    def get_correction(self, *, album_key: str) -> dict[str, object] | None:
+        """One album's full correction, compared now (album detail)."""
+        albums = group_corrections(self._repository.list_differences(album_key=album_key))
+        return albums[0] if albums else None
 
     def queue_correction(self, *, album_key: str, actor_account_id: int | None) -> dict[str, object] | None:
         """Queue the album's correction as it stands now; the client's copy is never trusted.
         None: the album has no correction."""
-        albums = self.list_corrections(album_key=album_key)
-        if not albums:
+        album = self.get_correction(album_key=album_key)
+        if album is None:
             return None
-        album = albums[0]
         stored = self._repository.queue(album_key=album["album_key"], release_mbid=album["release_mbid"],
                                         corrections=album["corrections"], actor_account_id=actor_account_id,
                                         observed_at=self._now())

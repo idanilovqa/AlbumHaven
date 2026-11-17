@@ -29,6 +29,8 @@ SCAN_OWNED_ALBUM_CHILD_TABLES = frozenset(
         # Automatic MusicBrainz release decisions and Discogs fallback releases (Delivery 2);
         # an owner's manual release choice is guarded below.
         "library.local_album_discogs_releases",
+        # Data correction summaries (S4), recomputed from tags and the release decision.
+        "library.local_album_musicbrainz_corrections",
     }
 )
 # Tables whose foreign key to library.local_albums may hold a user decision;

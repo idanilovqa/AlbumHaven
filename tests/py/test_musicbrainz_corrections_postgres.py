@@ -250,6 +250,9 @@ def test_search_finds_an_applied_correction_and_after_undo_only_the_tag(monkeypa
     changed = []
     repository._on_change = changed.append
     with isolatedPostgres._connect(setup_url) as connection:
+        # Search lists only albums with files on disk.
+        connection.execute("insert into library.local_track_files (track_id, private_path, metadata)"
+                           " select id, 'C:/Music/' || track_key || '.flac', '{}'::jsonb from library.local_tracks")
         # A small edit (a typo) applies automatically.
         connection.execute("update library.local_tracks set title = 'Hostlities' where track_key = 'rel-cry-1'")
         connection.execute("update integration.musicbrainz_releases set media = %s where mbid = %s", (json.dumps(

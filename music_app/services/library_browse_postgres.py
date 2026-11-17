@@ -10554,8 +10554,9 @@ def _search_preview_sql(
           from library.local_albums
           where lower(btrim(coalesce(library.local_albums.title, '')))
             like lower(%(query_like)s) escape ''
-             or lower(btrim(coalesce(library.local_albums.corrected_title, '')))
-            like lower(%(query_like)s) escape ''
+             or (library.local_albums.corrected_title is not null
+                 and lower(btrim(coalesce(library.local_albums.corrected_title, '')))
+                 like lower(%(query_like)s) escape '')
           union
           -- Every album of a MusicBrainz series whose name matches ("Colossus").
           select series_albums.library_id, series_albums.album_id
@@ -10581,8 +10582,9 @@ def _search_preview_sql(
           from library.local_albums
           where lower(btrim(coalesce(library.local_albums.metadata ->> 'album_artist', '')))
                 like lower(%(query_like)s) escape ''
-             or lower(btrim(coalesce(library.local_albums.corrected_album_artist, '')))
-                like lower(%(query_like)s) escape ''
+             or (library.local_albums.corrected_album_artist is not null
+                 and lower(btrim(coalesce(library.local_albums.corrected_album_artist, '')))
+                 like lower(%(query_like)s) escape '')
         ),
         credited_raw_artist_matches as materialized (
           select

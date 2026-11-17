@@ -240,6 +240,18 @@ test('an unavailable queue shows an error instead of an empty list', async () =>
   assert.match(detail.innerHTML, /Edits Queue unavailable/);
 });
 
+// MusicBrainz look ups need the enrichment service; Data Correction is served without it.
+test('unavailable look ups leave Data Correction usable and show the error only on their tab', async () => {
+  const { context, detail } = queueContext({ 'GET /api/musicbrainz/lookups': { status: 503, body: {} } });
+
+  await context.loadUtilityEditsQueue(true);
+
+  assert.match(text(detail.innerHTML), /Case only · 1 album, 1 change/);
+  assert.doesNotMatch(detail.innerHTML, /Edits Queue unavailable/);
+  context.handleMusicBrainzCorrectionEvent({ target: closest({ 'data-edits-queue-tab': 'musicbrainz-lookup' }), preventDefault() {} });
+  assert.match(detail.innerHTML, /Edits Queue unavailable/);
+});
+
 test('album details show the applied value beside the tag, and the tag editor keeps the real tags', () => {
   const context = { console, ButtonComponent };
   vm.createContext(context);

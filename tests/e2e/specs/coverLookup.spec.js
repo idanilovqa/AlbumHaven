@@ -897,8 +897,11 @@ test('FTC-COVERS-036 notification cards keep independent album identity after co
     ]),
   ));
   const scrollBeforeDelete = await coverLookupActions.readDrawerScrollTop();
+  // A cover card names its album first on its second line (owner 2026-11-16, cover card title).
+  const selectedByline = [selected.identity.album, selected.identity.artist, selected.identity.year]
+    .filter(Boolean).join(' · ');
   await coverLookupActions.clearTaskAndExpectImmediateRemoval(
-    new RegExp(`^\\s*${selected.identity.album}\\s*$`, 'u'),
+    new RegExp(`^\\s*${selectedByline}\\s*$`, 'u'),
   );
   expect(await coverLookupActions.readDrawerScrollTop()).toBe(scrollBeforeDelete);
   await expect(coverLookupActions.coverLookup.taskCardById(selected.taskId)).toHaveCount(0);

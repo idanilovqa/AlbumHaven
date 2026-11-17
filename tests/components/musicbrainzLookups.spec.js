@@ -14,7 +14,8 @@ const stylesheets = [...['css/appearance-backgrounds.css', 'css/button-component
   .filter((file) => fs.existsSync(file));
 const drawerRuntime = read('music_app/static/js/runtime/cover-lookup-modal-and-drawer.js');
 const cardStart = drawerRuntime.indexOf('const NOTIFICATION_CARD_TITLES');
-const cardBuilder = drawerRuntime.slice(cardStart, drawerRuntime.indexOf('\n}\n', cardStart) + 3);
+// The builder ends at its first closing brace line; line endings follow the checkout (CRLF on Windows).
+const cardBuilder = drawerRuntime.slice(cardStart).match(/^[\s\S]*?\r?\n\}\r?\n/)[0];
 const MBID = '6f3c2a1e-1111-4222-8333-444455556b51';
 
 // The popup exactly as the template writes it, with the shared close button rendered.
@@ -39,6 +40,9 @@ async function mount(page, body, { width = 1440, height = 900 } = {}) {
   await page.addScriptTag({ content: `
     window.state = { status: { allowed_actions: { 'catalogue.enrichment.request': true } }, coverLookup: {}, utility: {} };
     window.showToast = () => {};
+    // The cover URL helpers live in modal-and-overlay-helpers.js, not loaded here: no cover art.
+    window.buildAlbumDisplayCoverUrl = () => '';
+    window.buildAlbumLightboxCoverUrl = () => '';
   ` });
   for (const file of [
     'music_app/static/js/button-component.js',

@@ -1,5 +1,6 @@
 import { assertCompactProblematicSummary } from '../helpers/problematicPayloadEvidence.js';
 import { seedMusicBrainzCorrections } from '../helpers/musicbrainzCorrectionsFixture.js';
+import { UtilityEditsQueueTab } from '../poms/utilityEditsQueueTab.js';
 import { expect, test } from '../support/performanceFixtures.js';
 
 import {
@@ -209,6 +210,7 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
     settingsModalAppBarActions,
     stepLogger,
     utilityProblematicFilesActions,
+    utilityTabBarActions,
   }) => {
     expect(process.env.PLAYWRIGHT_ISOLATED_LIBRARY_APP).toBe('1');
     const seeded = await stepLogger.step('Store about 10,800 synthetic data corrections in the isolated database', async () => (
@@ -246,7 +248,7 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
     const filterMs = await stepLogger.step('Choose Data Correction Needed until page 1 is visible', async () => {
       const startedAt = Date.now();
       await utilityProblematicFilesActions.applySingleProblemFilter(DATA_CORRECTION_LABEL);
-      await page.locator('[data-problematic-album-key^="musicbrainz-correction:"]').first()
+      await utilityProblematicFilesActions.utilityProblematicFilesTab.musicBrainzCorrectionListItems.first()
         .waitFor({ state: 'visible', timeout: 60000 });
       return Date.now() - startedAt;
     });
@@ -255,11 +257,12 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
     // Settings → Edits Queue → Data Correction: the kinds, then page 1 of the largest kind.
     const editsQueueMs = await stepLogger.step('Open Edits Queue until its first page of applied changes is visible', async () => {
       const startedAt = Date.now();
-      await page.locator('[data-utility-tab="edits-queue"]').click();
-      const kind = page.locator('[data-edits-queue-open-kind="case"]');
+      const editsQueue = new UtilityEditsQueueTab(page);
+      await utilityTabBarActions.openTab('edits-queue');
+      const kind = editsQueue.kindButton('case');
       await kind.waitFor({ state: 'visible', timeout: 60000 });
       await kind.click();
-      await page.locator('[data-edits-queue-album-row]').first().waitFor({ state: 'visible', timeout: 60000 });
+      await editsQueue.albumRows.first().waitFor({ state: 'visible', timeout: 60000 });
       return Date.now() - startedAt;
     });
     const editsQueueOutcome = evaluateTimingBudget(editsQueueMs, READY_BUDGET);

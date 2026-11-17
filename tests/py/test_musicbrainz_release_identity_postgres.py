@@ -270,13 +270,17 @@ def test_a_released_albums_sub_sections_are_stored_and_cleared_with_its_release(
         return result
 
     monkeypatch.setattr(module, "resolve_album_releases", lambda context, client: outcome(context))
-    processor = MusicBrainzAlbumReleaseProcessor(repository=repository, client=FakeResolverClient(), now=lambda: NOW)
+    clock = {"now": NOW}
+    processor = MusicBrainzAlbumReleaseProcessor(repository=repository, client=FakeResolverClient(),
+                                                 now=lambda: clock["now"])
     repository.enqueue(reason="test", observed_at=NOW, local_artist_id=ids["angra"], force=True)
     processor.process_next(worker_id="w")
     with isolatedPostgres._connect(setup_url) as connection:
         assert _album_track_sections(connection, albums["cry"]) == sections
         assert _album_track_sections(connection, albums["holy"]) == []
     state["release"] = False
+    # The second comparison is due a minute later: the processor claims it then.
+    clock["now"] = NOW + timedelta(minutes=1)
     repository.enqueue(reason="test", observed_at=NOW + timedelta(minutes=1), local_artist_id=ids["angra"], force=True)
     processor.process_next(worker_id="w")
     with isolatedPostgres._connect(setup_url) as connection:

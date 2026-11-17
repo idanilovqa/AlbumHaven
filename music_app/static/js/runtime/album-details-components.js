@@ -178,7 +178,7 @@ function buildAlbumDetailsSeriesHtml(album, { inline = false } = {}) {
       .map((item) => `<button type="button" class="album-open-trigger album-title-button album-details-series__link" title="Show all albums in this series" data-open-series="${escapeHtml(item.mbid)}">${escapeHtml(item.name || '')}</button>`);
     if (!links.length) return '';
     return inline
-      ? `<div class="album-details-series album-details-series--inline" data-album-details-series="${kind}"><span class="album-details-series__label">${label}:</span><span class="album-details-series__names">${links.join(', ')}</span></div>`
+      ? `<div class="album-details-series album-details-series--inline" data-album-details-series="${kind}"><span class="album-details-series__label">${label}:</span> <span class="album-details-series__names">${links.join(', ')}</span></div>`
       : `<div class="album-details-series" data-album-details-series="${kind}"><div class="section-split-label">${label}</div>${links.join('')}</div>`;
   }).join('');
 }

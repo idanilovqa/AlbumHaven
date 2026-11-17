@@ -158,8 +158,9 @@ test('FTC-SETTINGS-S01 six tabs preserve keyboard wrapping and joined Close hit 
   page, galleryActions, settingsModalAppBarActions, utilityTabBarActions, utilityProblematicFilesActions,
 }) => {
   const shell = await openProblems({ page, galleryActions, settingsModalAppBarActions, utilityTabBarActions, utilityProblematicFilesActions });
-  const keys = ['problematic-files', 'rules', 'loops', 'log-history', 'integrations', 'appearance'];
-  await expect(shell.tabs).toHaveCount(6);
+  // MusicBrainz Delivery 2 adds Settings → Edits Queue after Problematic Files (owner decision E, 2026-11-15).
+  const keys = ['problematic-files', 'edits-queue', 'rules', 'loops', 'log-history', 'integrations', 'appearance'];
+  await expect(shell.tabs).toHaveCount(7);
   await expect(shell.androidTab).toBeHidden();
   for (const key of keys) {
     await shell.tab(key).click();

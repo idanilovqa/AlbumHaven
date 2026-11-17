@@ -188,3 +188,9 @@ def test_search_matches_the_corrected_values_through_their_own_prefiltered_index
                 not in sql)
         assert f"library.search_utf8_hex(lower(btrim(coalesce(library.local_tracks.{column}, ''))))" in sql
         assert f"library.search_utf8_hex(lower(btrim(coalesce({column}, '')))) %i.gin_trgm_ops" in migration
+    # Album arms name their column non-null so the planner can use 0254's partial indexes.
+    album_migration = " ".join((__import__("pathlib").Path(__file__).resolve().parents[2] / "migrations" / "postgres"
+                                / "0254_add_musicbrainz_corrected_album_search_indexes.sql").read_text(encoding="utf-8").lower().split())
+    for column in ("corrected_title", "corrected_album_artist"):
+        assert f"(library.local_albums.{column} is not null and lower(btrim(coalesce(library.local_albums.{column}" in sql
+        assert f"( (lower(btrim(coalesce({column}, '')))) %i.gin_trgm_ops ) where {column} is not null" in album_migration

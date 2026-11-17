@@ -441,7 +441,17 @@ test('FTC-MBID-003 an Unconfirmed match and its filter are in the first Problema
       await utilityProblematicFilesActions.retryMusicBrainzIdentity(OUTAGE);
       await utilityProblematicFilesActions.clearProblemFilter('MusicBrainz: Provider unavailable');
       await utilityProblematicFilesActions.search(OUTAGE);
-      await utilityProblematicFilesActions.waitForNoSearchResults(OUTAGE);
+      // The artist's row is gone. Once its identity resolves, Delivery 2 compares its albums with
+      // MusicBrainz, so albums it has no release for stay listed under the artist with their own
+      // album label ("MusicBrainz has no info", owner decision C2, 2026-11-15).
+      await utilityProblematicFilesActions.waitForSearchResults(OUTAGE);
+      const remaining = await utilityProblematicFilesActions.readVisibleListItems();
+      expect(remaining.filter((item) => item.key.startsWith('musicbrainz-artist:'))).toEqual([]);
+      expect(remaining.filter((item) => item.issues.includes('Provider unavailable'))).toEqual([]);
+      for (const item of remaining) {
+        expect(item.meta.startsWith(OUTAGE)).toBe(true);
+        expect(item.issues).toContain('MusicBrainz has no info');
+      }
       await settingsModalAppBarActions.closeSettings();
       await openArtist({ galleryActions, searchToolbarActions }, OUTAGE);
       await expect.poll(() => galleryActions.readArtistContextMetadata(), { timeout: 60000 }).toEqual({

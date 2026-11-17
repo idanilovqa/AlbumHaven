@@ -34,6 +34,9 @@ async function mount(page, { width = 1440, height = 900, phone = false } = {}) {
     window.state = { utility: { activeTab: 'edits-queue', problematicFiles: [] } };
     window.AlbumHavenCapabilities = { allows: (action) => action === 'library.metadata_matches.review' };
     window.showToast = () => {};
+    // The cover URL helpers live in modal-and-overlay-helpers.js, not loaded here: no cover art.
+    window.buildAlbumDisplayCoverUrl = () => '';
+    window.buildAlbumLightboxCoverUrl = () => '';
     window.getUtilityModalElements = () => ({ overlay: document.getElementById('utility-modal'),
       detail: document.getElementById('utility-problematic-detail'), list: document.getElementById('utility-problematic-list') });
   ` });

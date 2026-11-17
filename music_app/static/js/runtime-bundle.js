@@ -5526,7 +5526,7 @@ function buildAlbumDetailsSeriesHtml(album, { inline = false } = {}) {
       .map((item) => `<button type="button" class="album-open-trigger album-title-button album-details-series__link" title="Show all albums in this series" data-open-series="${escapeHtml(item.mbid)}">${escapeHtml(item.name || '')}</button>`);
     if (!links.length) return '';
     return inline
-      ? `<div class="album-details-series album-details-series--inline" data-album-details-series="${kind}"><span class="album-details-series__label">${label}:</span><span class="album-details-series__names">${links.join(', ')}</span></div>`
+      ? `<div class="album-details-series album-details-series--inline" data-album-details-series="${kind}"><span class="album-details-series__label">${label}:</span> <span class="album-details-series__names">${links.join(', ')}</span></div>`
       : `<div class="album-details-series" data-album-details-series="${kind}"><div class="section-split-label">${label}</div>${links.join('')}</div>`;
   }).join('');
 }
@@ -37754,7 +37754,7 @@ function handleMusicBrainzLookupEvent(event) {
 const MUSICBRAINZ_DATA_CORRECTION_LABEL = 'Data Correction Needed';
 const EDITS_QUEUE_TABS = { 'data-correction': 'Data Correction', 'musicbrainz-lookup': 'MusicBrainz Look Up' };
 const editsQueue = { tab: 'data-correction', section: 'applied', kinds: null, pages: {}, openKind: null,
-  settings: null, lookups: null, queueStartsAt: null, loading: null, failed: false, busy: false };
+  settings: null, lookups: null, queueStartsAt: null, loading: null, failed: false, lookupsFailed: false, busy: false };
 
 // Owner 2026-11-16: albums listed only for a correction show only under the "Data Correction
 // Needed" filter; true shows them by default.
@@ -38052,13 +38052,15 @@ function buildEditsQueueHtml() {
   const tabs = `<div class="in-page-tabs" role="tablist" aria-label="Edits Queue">${Object.entries(EDITS_QUEUE_TABS)
     .map(([key, label]) => `<button type="button" role="tab" aria-selected="${key === editsQueue.tab}" data-edits-queue-tab="${key}">${escapeHtml(label)}</button>`)
     .join('')}</div>`;
+  // Each tab stands alone: MusicBrainz look ups need the enrichment service, data corrections do not.
+  const corrections = editsQueue.tab === 'data-correction';
   let body;
-  if (editsQueue.failed) {
+  if (corrections ? editsQueue.failed : editsQueue.lookupsFailed) {
     body = buildOnPageAlertHtml({ severity: 'error', title: 'Edits Queue unavailable', message: 'Unable to load the Edits Queue. Try again shortly.' });
-  } else if (!editsQueue.kinds || !editsQueue.lookups) {
+  } else if (!(corrections ? editsQueue.kinds : editsQueue.lookups)) {
     body = '<div class="utility-empty-state">Loading the Edits Queue…</div>';
   } else {
-    body = editsQueue.tab === 'data-correction' ? buildEditsQueueCorrectionsHtml() : buildEditsQueueLookupsHtml();
+    body = corrections ? buildEditsQueueCorrectionsHtml() : buildEditsQueueLookupsHtml();
   }
   return `<div class="edits-queue">${tabs}<div class="edits-queue-body">${body}</div></div>`;
 }
@@ -38084,19 +38086,23 @@ async function loadUtilityEditsQueue(force = false) {
     return null;
   }
   renderUtilityEditsQueue();
-  editsQueue.loading = Promise.all([
+  editsQueue.loading = Promise.allSettled([
     readEditsQueueJson(`/api/musicbrainz/corrections/edits?section=${editsQueue.section}`),
     readEditsQueueJson('/api/musicbrainz/lookups'),
   ])
     .then(([queue, lookups]) => {
-      editsQueue.kinds = Array.isArray(queue.kinds) ? queue.kinds : [];
-      editsQueue.settings = queue.settings || {};
-      editsQueue.pages = {};
-      editsQueue.lookups = Array.isArray(lookups.queued) ? lookups.queued : [];
-      editsQueue.queueStartsAt = lookups.queue_starts_at || null;
-      editsQueue.failed = false;
+      editsQueue.failed = queue.status === 'rejected';
+      if (!editsQueue.failed) {
+        editsQueue.kinds = Array.isArray(queue.value.kinds) ? queue.value.kinds : [];
+        editsQueue.settings = queue.value.settings || {};
+        editsQueue.pages = {};
+      }
+      editsQueue.lookupsFailed = lookups.status === 'rejected';
+      if (!editsQueue.lookupsFailed) {
+        editsQueue.lookups = Array.isArray(lookups.value.queued) ? lookups.value.queued : [];
+        editsQueue.queueStartsAt = lookups.value.queue_starts_at || null;
+      }
     })
-    .catch(() => { editsQueue.failed = true; })
     .finally(() => {
       editsQueue.loading = null;
       if (state.utility.activeTab === 'edits-queue') renderUtilityEditsQueue();

@@ -25,6 +25,8 @@ export class UtilityProblematicFilesTab extends BasePage {
     this.searchSection = new UtilitySearchSection(page, testInfo);
     this.mainBody = new UtilityMainBody(page, testInfo);
     this.listItems = page.locator(this.listItemSelector);
+    // Albums listed only for a MusicBrainz data correction (Delivery 2, S4).
+    this.musicBrainzCorrectionListItems = page.locator('[data-problematic-album-key^="musicbrainz-correction:"]');
     this.activeListItem = page.locator(this.activeListItemSelector);
     this.listEmptyState = page.locator(this.listEmptyStateSelector).first();
     this.detailEmptyState = page.locator('#utility-problematic-detail .utility-empty-state').first();

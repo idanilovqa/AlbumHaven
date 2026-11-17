@@ -23,8 +23,10 @@
 .album-details-series > .section-split-label { margin: 0; padding: 0; }
 .album-details-series__link { text-align: left; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
 /* Web: one line, "Series: <name>" (owner 2026-11-15); the label keeps its own column and the
-   names wrap left-aligned under the first name (owner 2026-11-16). */
-.album-details-series--inline { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 0.3em; align-items: baseline; }
+   names wrap left-aligned under the first name (owner 2026-11-16). Top-aligned, not baseline:
+   a name button is an inline block whose baseline is its last line, so a long wrapped name
+   would pull the label down to that line. */
+.album-details-series--inline { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 0.3em; align-items: start; }
 .album-details-series--inline + .album-details-series--inline { margin-top: 4px; }
 .album-details-series__label { color: var(--muted); white-space: nowrap; }
 .album-details-series__names { min-width: 0; overflow-wrap: anywhere; }

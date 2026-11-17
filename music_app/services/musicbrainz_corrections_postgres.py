@@ -184,9 +184,10 @@ _ALBUM_ROWS_SQL = _active_library_cte() + f"""
 # page of albums with their rows. Albums sent to review whole form their own group. A page
 # reads only its kind's rows (%(kind)s is null for the counts). A row has at most one decision
 # (its primary key is _DECISION_MATCH), so one join gives _STATE_SQL's state without three
-# probes per row.
+# probes per row. "rows" is materialized before the state filter: Postgres cannot estimate
+# that filter and otherwise probes the stored albums once per row (measured 400 ms of 640).
 _GROUP_SQL = _active_library_cte() + f"""
-    , rows as (
+    , rows as materialized (
       select correction.*, stored.review_whole,
              case decision.decision when 'approved' then 'applied' when 'undone' then 'undone'
                                     when 'skipped' then 'skipped'
@@ -197,9 +198,8 @@ _GROUP_SQL = _active_library_cte() + f"""
       join library.local_album_musicbrainz_corrections stored
         on stored.library_id = correction.library_id and stored.album_key = correction.album_key
       left join library.local_album_musicbrainz_correction_decisions decision on {_DECISION_MATCH}
-      where %(kind)s::text is null
-         or (case when %(section)s = 'review' and stored.review_whole then '{WHOLE_ALBUM_GROUP}'
-                  else correction.kind end) = %(kind)s::text
+      where (%(kind)s::text is null or %(kind)s::text = '{WHOLE_ALBUM_GROUP}' or correction.kind = %(kind)s::text)
+        and (%(album_keys)s::text[] is null or correction.album_key = any(%(album_keys)s::text[]))
     ), listed as (
       select case when %(section)s = 'review' and review_whole then '{WHOLE_ALBUM_GROUP}' else kind end as grouping,
              rows.*
@@ -212,28 +212,31 @@ _KIND_COUNTS_SQL = _GROUP_SQL + """
     select grouping as kind, count(distinct album_key)::integer as albums, count(*)::integer as rows
     from listed group by grouping order by grouping;
 """
-_KIND_PAGE_SQL = _GROUP_SQL + """
-    , albums as (
-      select distinct listed.library_id, listed.album_key, lower(local.title) as sort_title
-      from listed
-      join library.local_albums local on local.library_id = listed.library_id and local.album_key = listed.album_key
-      where listed.grouping = %(kind)s
-      order by sort_title, listed.album_key offset %(offset)s limit %(limit)s
+# A page is two reads: its albums' keys, then only those albums' rows (by the album index).
+_KIND_PAGE_ALBUMS_SQL = _GROUP_SQL + """
+    , kind_albums as (
+      select library_id, album_key from listed where grouping = %(kind)s group by library_id, album_key
     )
-    select albums.album_key, local.title as album_title, artists.name as artist_name, local.release_year as year,
+    select kind_albums.album_key
+    from kind_albums
+    join library.local_albums local
+      on local.library_id = kind_albums.library_id and local.album_key = kind_albums.album_key
+    order by lower(local.title), kind_albums.album_key offset %(offset)s limit %(limit)s;
+"""
+_KIND_PAGE_SQL = _GROUP_SQL + """
+    select listed.album_key, local.title as album_title, artists.name as artist_name, local.release_year as year,
            local.cover_path,
            json_agg(json_build_object('field', listed.field, 'disc_number', listed.disc_number,
                                       'track_number', listed.track_number, 'current_value', listed.current_value,
                                       'proposed_value', listed.proposed_value, 'kind', listed.kind,
                                       'state', listed.state)
                     order by listed.disc_number, listed.track_number, listed.field) as rows
-    from albums
-    join listed on listed.library_id = albums.library_id and listed.album_key = albums.album_key
-               and listed.grouping = %(kind)s
-    join library.local_albums local on local.library_id = albums.library_id and local.album_key = albums.album_key
+    from listed
+    join library.local_albums local on local.library_id = listed.library_id and local.album_key = listed.album_key
     left join library.local_artists artists on artists.id = local.artist_id
-    group by albums.album_key, albums.sort_title, local.title, artists.name, local.release_year, local.cover_path
-    order by albums.sort_title, albums.album_key;
+    where listed.grouping = %(kind)s
+    group by listed.album_key, local.title, artists.name, local.release_year, local.cover_path
+    order by lower(local.title), listed.album_key;
 """
 
 # Record one decision for the chosen rows: an album's applied automatic rows (undone), or its
@@ -412,12 +415,15 @@ class MusicBrainzCorrectionsPostgresRepository:
     def kinds(self, *, section: str) -> list[dict[str, object]]:
         with self._connect(self._database_url) as connection:
             return [_row_mapping(row) for row in connection.execute(
-                _KIND_COUNTS_SQL, {"section": section, "kind": None}).fetchall()]
+                _KIND_COUNTS_SQL, {"section": section, "kind": None, "album_keys": None}).fetchall()]
 
     def kind_page(self, *, section: str, kind: str, offset: int, limit: int) -> list[dict[str, object]]:
-        params = {"section": section, "kind": kind, "offset": max(0, int(offset)), "limit": max(1, int(limit))}
+        params = {"section": section, "kind": kind, "album_keys": None,
+                  "offset": max(0, int(offset)), "limit": max(1, int(limit))}
         with self._connect(self._database_url) as connection:
-            rows = [_row_mapping(row) for row in connection.execute(_KIND_PAGE_SQL, params).fetchall()]
+            keys = [_row_mapping(row)["album_key"] for row in connection.execute(_KIND_PAGE_ALBUMS_SQL, params)]
+            rows = [_row_mapping(row) for row in connection.execute(
+                _KIND_PAGE_SQL, {**params, "album_keys": keys}).fetchall()] if keys else []
         for row in rows:
             row["rows"] = _json(row["rows"])
         return rows

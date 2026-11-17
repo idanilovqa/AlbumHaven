@@ -39,6 +39,17 @@ function galleryRomanizedArtistName(name) {
   return typeof romanizedArtistName === 'function' ? romanizedArtistName(name) : '';
 }
 
+// The page's Gallery Bar is the server template (partials/gallery-bar.html), which has no
+// romanized slot; it gets one right after the name the first time it is needed.
+function galleryContextRomanizedElement(bar) {
+  const existing = bar?.querySelector?.('[data-gallery-context-romanized]');
+  if (existing) return existing;
+  const name = bar?.querySelector?.('[data-gallery-context-name]');
+  if (typeof name?.insertAdjacentHTML !== 'function') return null;
+  name.insertAdjacentHTML('afterend', '<span class="gallery-artist-romanized" data-gallery-context-romanized hidden></span>');
+  return bar.querySelector('[data-gallery-context-romanized]');
+}
+
 function galleryRomanizedArtistLabel(name) {
   return typeof romanizedArtistLabel === 'function' ? romanizedArtistLabel(name) : '';
 }

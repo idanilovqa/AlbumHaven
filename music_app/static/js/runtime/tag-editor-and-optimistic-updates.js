@@ -2152,12 +2152,6 @@ function renderTrackModalRelease(album) {
   }
   if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(album);
   els.list.innerHTML = albumMissing ? '' : buildTrackListHtml(tracks, album, totalLength);
-  if (typeof syncAlbumDetailsSeries === 'function') {
-    syncAlbumDetailsSeries(album, {
-      cover: els.cover, list: els.list,
-      mobile: els.overlay?.classList?.contains('is-mobile-page') && usesMobilePageLayout(),
-    });
-  }
   if (els.footer) {
     els.footer.textContent = '';
     els.footer.hidden = true;

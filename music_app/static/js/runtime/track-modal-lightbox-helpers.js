@@ -25,6 +25,12 @@ function albumRequiresHydration(album) {
   return declaredTrackCounts.length > 0 && !declaredTrackCounts.includes(tracks.length);
 }
 
+// The details request returns what only album details carry (MusicBrainz type, Series and
+// Featured In, a.k.a. titles); gallery payloads never do, even with every track.
+function albumHasLoadedDetails(album) {
+  return album?.album_details_loaded === true;
+}
+
 function renderTrackModalLoadingState(album) {
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
@@ -466,7 +472,32 @@ async function fetchTrackModalAlbumDetails(albumKey, options = {}) {
     ) error.currentReleases = payload.current_releases;
     throw error;
   }
+  // Marked on the parsed response itself, which the details caches keep by identity.
+  payload.album.album_details_loaded = true;
   return payload.album;
+}
+
+// A gallery album opened with all its tracks renders at once; the details request every other
+// album makes then adds what the gallery payload lacks, if this album is still the one open.
+function completeOpenTrackModalAlbumDetails(album) {
+  const albumKey = String(getAlbumRequestKey(album) || '').trim();
+  if (!albumKey || albumHasLoadedDetails(album) || album.inventory_status === 'missing') return;
+  const generation = trackModalCleanupGeneration;
+  loadTrackModalAlbumDetails(albumKey, { albumId: album.album_id || album.id }).then((details) => {
+    const els = getTrackModalElements();
+    if (generation !== trackModalCleanupGeneration || !els.overlay || els.overlay.hidden) return;
+    if (!albumHasLoadedDetails(details) || albumRequiresHydration(details)) return;
+    const shown = getCurrentTrackModalAlbum();
+    if (String(getAlbumRequestKey(shown) || '') !== albumKey) return;
+    // Re-render in place (it recomposes the phone page too): the modal, its page and its player
+    // are already open. An edition tab keeps its label.
+    const withContext = attachGalleryPlaybackContextToAlbum(details);
+    const completed = shown.tabLabel === undefined ? withContext : { ...withContext, tabLabel: shown.tabLabel };
+    state.modalReleases[state.modalReleaseIndex] = completed;
+    renderTrackModalRelease(completed);
+  }).catch(() => {
+    // The album stays as the gallery showed it; opening it again retries.
+  });
 }
 
 function renderTrackModalIdentitySplitChoices(releases) {
@@ -777,6 +808,7 @@ function openTrackModal(album, options = {}) {
   if (typeof presentMobileAlbumPage === 'function') presentMobileAlbumPage(albumWithPlaybackContext);
   if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(albumWithPlaybackContext);
   attachSharedPlayer();
+  completeOpenTrackModalAlbumDetails(albumWithPlaybackContext);
 }
 
 function getCurrentTrackModalAlbum() {

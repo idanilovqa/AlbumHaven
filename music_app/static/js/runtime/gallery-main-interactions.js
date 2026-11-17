@@ -604,7 +604,7 @@ function updateGalleryMainChrome() {
     artist_musicbrainz: model.groups.find((group) => galleryMainGroupArtist(group) === primaryArtist)?.artist_musicbrainz || null,
   });
   const name = bar.querySelector('[data-gallery-context-name]');
-  const romanized = bar.querySelector('[data-gallery-context-romanized]');
+  const romanized = galleryContextRomanizedElement(bar);
   // The info button follows the romanized name, which follows the name (approved J3).
   const infoAnchor = romanized || name;
   const summary = bar.querySelector('[data-gallery-context-summary]');

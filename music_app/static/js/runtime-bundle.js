@@ -4669,6 +4669,17 @@ function galleryRomanizedArtistName(name) {
   return typeof romanizedArtistName === 'function' ? romanizedArtistName(name) : '';
 }
 
+// The page's Gallery Bar is the server template (partials/gallery-bar.html), which has no
+// romanized slot; it gets one right after the name the first time it is needed.
+function galleryContextRomanizedElement(bar) {
+  const existing = bar?.querySelector?.('[data-gallery-context-romanized]');
+  if (existing) return existing;
+  const name = bar?.querySelector?.('[data-gallery-context-name]');
+  if (typeof name?.insertAdjacentHTML !== 'function') return null;
+  name.insertAdjacentHTML('afterend', '<span class="gallery-artist-romanized" data-gallery-context-romanized hidden></span>');
+  return bar.querySelector('[data-gallery-context-romanized]');
+}
+
 function galleryRomanizedArtistLabel(name) {
   return typeof romanizedArtistLabel === 'function' ? romanizedArtistLabel(name) : '';
 }
@@ -5625,6 +5636,9 @@ function syncMobileAlbumComposition(album) {
     if (identity) overview.before(identity);
     overview.remove();
   }
+  // Here rather than at render time: album details render before the phone page is presented,
+  // and this also runs after presentation and on every breakpoint change (approved 1B / 4A).
+  syncAlbumDetailsSeries(album, { cover, list: document.getElementById('track-modal-list'), mobile });
   if (mobile) {
     const descriptor = mobilePageState.pages.find(page => page.kind === 'album');
     if (descriptor) Object.assign(descriptor, mobilePageDescriptor('album', album));
@@ -7532,7 +7546,7 @@ function updateGalleryMainChrome() {
     artist_musicbrainz: model.groups.find((group) => galleryMainGroupArtist(group) === primaryArtist)?.artist_musicbrainz || null,
   });
   const name = bar.querySelector('[data-gallery-context-name]');
-  const romanized = bar.querySelector('[data-gallery-context-romanized]');
+  const romanized = galleryContextRomanizedElement(bar);
   // The info button follows the romanized name, which follows the name (approved J3).
   const infoAnchor = romanized || name;
   const summary = bar.querySelector('[data-gallery-context-summary]');
@@ -16109,6 +16123,12 @@ function albumRequiresHydration(album) {
   return declaredTrackCounts.length > 0 && !declaredTrackCounts.includes(tracks.length);
 }
 
+// The details request returns what only album details carry (MusicBrainz type, Series and
+// Featured In, a.k.a. titles); gallery payloads never do, even with every track.
+function albumHasLoadedDetails(album) {
+  return album?.album_details_loaded === true;
+}
+
 function renderTrackModalLoadingState(album) {
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
@@ -16550,7 +16570,32 @@ async function fetchTrackModalAlbumDetails(albumKey, options = {}) {
     ) error.currentReleases = payload.current_releases;
     throw error;
   }
+  // Marked on the parsed response itself, which the details caches keep by identity.
+  payload.album.album_details_loaded = true;
   return payload.album;
+}
+
+// A gallery album opened with all its tracks renders at once; the details request every other
+// album makes then adds what the gallery payload lacks, if this album is still the one open.
+function completeOpenTrackModalAlbumDetails(album) {
+  const albumKey = String(getAlbumRequestKey(album) || '').trim();
+  if (!albumKey || albumHasLoadedDetails(album) || album.inventory_status === 'missing') return;
+  const generation = trackModalCleanupGeneration;
+  loadTrackModalAlbumDetails(albumKey, { albumId: album.album_id || album.id }).then((details) => {
+    const els = getTrackModalElements();
+    if (generation !== trackModalCleanupGeneration || !els.overlay || els.overlay.hidden) return;
+    if (!albumHasLoadedDetails(details) || albumRequiresHydration(details)) return;
+    const shown = getCurrentTrackModalAlbum();
+    if (String(getAlbumRequestKey(shown) || '') !== albumKey) return;
+    // Re-render in place (it recomposes the phone page too): the modal, its page and its player
+    // are already open. An edition tab keeps its label.
+    const withContext = attachGalleryPlaybackContextToAlbum(details);
+    const completed = shown.tabLabel === undefined ? withContext : { ...withContext, tabLabel: shown.tabLabel };
+    state.modalReleases[state.modalReleaseIndex] = completed;
+    renderTrackModalRelease(completed);
+  }).catch(() => {
+    // The album stays as the gallery showed it; opening it again retries.
+  });
 }
 
 function renderTrackModalIdentitySplitChoices(releases) {
@@ -16861,6 +16906,7 @@ function openTrackModal(album, options = {}) {
   if (typeof presentMobileAlbumPage === 'function') presentMobileAlbumPage(albumWithPlaybackContext);
   if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(albumWithPlaybackContext);
   attachSharedPlayer();
+  completeOpenTrackModalAlbumDetails(albumWithPlaybackContext);
 }
 
 function getCurrentTrackModalAlbum() {
@@ -40276,12 +40322,6 @@ function renderTrackModalRelease(album) {
   }
   if (typeof syncMobileAlbumComposition === 'function') syncMobileAlbumComposition(album);
   els.list.innerHTML = albumMissing ? '' : buildTrackListHtml(tracks, album, totalLength);
-  if (typeof syncAlbumDetailsSeries === 'function') {
-    syncAlbumDetailsSeries(album, {
-      cover: els.cover, list: els.list,
-      mobile: els.overlay?.classList?.contains('is-mobile-page') && usesMobilePageLayout(),
-    });
-  }
   if (els.footer) {
     els.footer.textContent = '';
     els.footer.hidden = true;

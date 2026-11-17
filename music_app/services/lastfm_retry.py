@@ -9,10 +9,18 @@ cost the same however many scrobbles wait. A pass sends up
 to 50 scrobbles per Last.fm call. Each batch is claimed in one transaction,
 which marks its listens as being submitted before any is sent, and its results
 are stored in a second one, so a listen is never sent twice, even after a crash.
+
+A listen whose submission outcome is unknown (a lost or unclear answer, or a
+crash after its claim) is never sent again blindly. Five minutes after its
+submission started, a pass looks it up among the account's scrobbles on Last.fm,
+in batches of up to 50 listens, reading only the hours around their timestamps.
+Listed, it is accepted; not listed, it returns to the send queue. Its result is
+stored under the same locks as a submission, and only while the listen is still
+unchanged since it was loaded.
 """
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import logging
@@ -26,23 +34,31 @@ from music_app.services.lastfm import (
     LASTFM_SCROBBLE_BATCH_LIMIT,
     LastfmError,
     LastfmSession,
+    get_lastfm_scrobbles_between,
     lastfm_api_enabled,
     load_saved_lastfm_sessions,
     scrobble_tracks,
 )
 from music_app.services.lastfm_listen_sync import record_retry_results
 from music_app.services.lastfm_sync_bridge import (
-    ATTEMPTING_UPDATES,
+    attempting_updates,
     failed_batch_disposition,
+    failed_verification_updates,
+    listen_scrobble_identity,
     plan_pending_scrobble,
     scrobble_attempt_updates,
     scrobble_due_at,
+    scrobble_identity,
     scrobble_retry_delay_seconds,
+    scrobble_verification_due,
+    scrobble_verification_due_at,
+    verified_scrobble_updates,
 )
 from music_app.services.listen_history import (
     build_listen_history_status_counts,
     has_sendable_scrobbles,
     is_pending_scrobble_entry,
+    is_unverified_scrobble_entry,
     listen_history_connection,
     load_pending_scrobble_entries,
 )
@@ -56,6 +72,10 @@ from music_app.services.measured_listen_history import VERSION as MEASURED_VERSI
 
 # With nothing waiting, the worker sleeps until woken, and checks this often with one query.
 _IDLE_CHECK_SECONDS = 30 * 60
+# A lookup reads the account's scrobbles in windows of at most an hour around a batch's listens,
+# at most 15 pages of 200 each: Last.fm takes at most 2,800 scrobbles a day, 14 such pages.
+_VERIFICATION_WINDOW_SECONDS = 60 * 60
+_VERIFICATION_MAX_PAGES = 15
 # Each scheduled retry waits up to this much longer, so passes do not align with other clients.
 _RETRY_JITTER = 0.2
 _RETRY_LOCK = threading.Lock()
@@ -181,7 +201,8 @@ def retry_pending_lastfm_scrobbles(
     library_ids: frozenset[int] | None = None,
     bypass_backoff: bool = False,
 ) -> LastfmRetryPass:
-    """Sends the pending scrobbles in scope, in batches of up to 50 per account.
+    """Looks up the listens in scope whose outcome is unknown, then sends the pending
+    scrobbles, each in batches of up to 50 per account.
 
     A failing Last.fm stops the pass; an account it asks to reconnect only stops that account's batches."""
     result = LastfmRetryPass(summary={
@@ -195,24 +216,57 @@ def retry_pending_lastfm_scrobbles(
     with _RETRY_LOCK:
         try:
             with listen_history_connection(config) as connection:
-                pending = load_pending_scrobble_entries(
+                loaded = load_pending_scrobble_entries(
                     config,
                     limit=None,
                     connection=connection,
+                    include_unverified=True,
                     eligible=lambda item: (
                         (account_id is None or item.account_id == account_id)
                         and (library_ids is None or item.library_id in library_ids)
                     ),
                 )
-                sessions = load_saved_lastfm_sessions(connection, {item.account_id for item in pending})
-                pending = [item for item in pending if item.account_id in sessions]
+                sessions = load_saved_lastfm_sessions(connection, {item.account_id for item in loaded})
+                loaded = [item for item in loaded if item.account_id in sessions]
+                pending = [item for item in loaded if is_pending_scrobble_entry(item.entry)]
                 summary["pending_before"] = summary["pending_after"] = len(pending)
                 now = datetime.now(timezone.utc)
-                latest = {item.row_id: item for item in pending}
+                latest = {item.row_id: item for item in loaded}
+
+                def store(after: PendingListenEntry) -> None:
+                    latest[after.row_id] = after
+                    if after.entry.get("measurement_version") != MEASURED_VERSION:
+                        pending_changes[str(after.entry["id"])] = (
+                            after.entry if is_pending_scrobble_entry(after.entry) else None
+                        )
+
                 # Accounts Last.fm asked to reconnect: their other listens wait for the reconnection.
                 revoked: set[int] = set()
-                for batch in _account_batches(pending, now=now, reauthenticated=reauthenticated,
-                                              bypass_backoff=bypass_backoff):
+                # Set when Last.fm is failing: the pass stops, and later batches wait for its backoff.
+                stopped = False
+                for batch in _account_batches(
+                    [item for item in loaded if is_unverified_scrobble_entry(item.entry)],
+                    due=lambda entry: scrobble_verification_due(
+                        entry, now=now, reauthenticated=reauthenticated, bypass_backoff=bypass_backoff),
+                ):
+                    if batch[0].account_id in revoked:
+                        continue
+                    stored, retry_in, error = _verify_batch(
+                        config, connection, batch, session=sessions[batch[0].account_id], now=now,
+                    )
+                    for after in stored:
+                        store(after)
+                        _count_verification(summary, scope_summaries, after)
+                        if is_pending_scrobble_entry(after.entry):
+                            pending.append(after)
+                    if error is not None and error.reauthentication_required:
+                        revoked.add(batch[0].account_id)
+                    elif error is not None:
+                        result.retry_in_seconds, stopped = retry_in, True
+                        break
+                for batch in () if stopped else _account_batches(pending, due=lambda entry: plan_pending_scrobble(
+                    entry, now=now, reauthenticated=reauthenticated, bypass_backoff=bypass_backoff,
+                ) is not None):
                     if batch[0].account_id in revoked:
                         continue
                     stored, retry_in, error = _submit_batch(
@@ -220,19 +274,14 @@ def retry_pending_lastfm_scrobbles(
                         reauthenticated=reauthenticated, bypass_backoff=bypass_backoff,
                     )
                     for before, after, attempted in stored:
-                        latest[after.row_id] = after
+                        store(after)
                         _count_result(summary, scope_summaries, before, after, attempted=attempted)
-                        if after.entry.get("measurement_version") != MEASURED_VERSION:
-                            pending_changes[str(after.entry["id"])] = (
-                                after.entry if is_pending_scrobble_entry(after.entry) else None
-                            )
                     if error is not None and error.reauthentication_required:
                         revoked.add(batch[0].account_id)
                     elif error is not None:
-                        # The provider is failing: later batches wait for the same backoff.
-                        result.retry_in_seconds = retry_in
+                        result.retry_in_seconds, stopped = retry_in, True
                         break
-                else:
+                if not stopped:
                     result.retry_in_seconds = _seconds_until_next_due(
                         (item.entry for item in latest.values() if item.account_id not in revoked), now=now,
                     )
@@ -250,29 +299,109 @@ def retry_pending_lastfm_scrobbles(
 
 
 def _seconds_until_next_due(entries, *, now: datetime) -> float | None:
-    """Seconds until the earliest listen still waiting may be sent; None when none waits.
+    """Seconds until the earliest listen still waiting may be sent or looked up; None when none waits.
 
     A listen that needs its account reconnected waits for the reconnection instead."""
     due = [
-        scrobble_due_at(entry, now=now)
+        scrobble_due_at(entry, now=now) if is_pending_scrobble_entry(entry)
+        else scrobble_verification_due_at(entry, now=now)
         for entry in entries
-        if is_pending_scrobble_entry(entry) and not entry.get("scrobble_reauthentication_required")
+        if (is_pending_scrobble_entry(entry) or is_unverified_scrobble_entry(entry))
+        and not entry.get("scrobble_reauthentication_required")
     ]
     return max(0.0, (min(due) - now).total_seconds()) if due else None
 
 
 def _account_batches(
-    pending: list[PendingListenEntry], *, now: datetime, reauthenticated: bool, bypass_backoff: bool,
+    items: list[PendingListenEntry], *, due: Callable[[dict[str, object]], bool],
 ) -> Iterator[list[PendingListenEntry]]:
-    """Each account's listens that have a next step, in batches of up to 50."""
+    """Each account's listens whose next step is ``due``, in batches of up to 50."""
     by_account: dict[int, list[PendingListenEntry]] = {}
-    for item in pending:
-        if plan_pending_scrobble(item.entry, now=now, reauthenticated=reauthenticated,
-                                 bypass_backoff=bypass_backoff) is not None:
+    for item in items:
+        if due(item.entry):
             by_account.setdefault(item.account_id, []).append(item)
-    for items in by_account.values():
-        for start in range(0, len(items), LASTFM_SCROBBLE_BATCH_LIMIT):
-            yield items[start:start + LASTFM_SCROBBLE_BATCH_LIMIT]
+    for account_items in by_account.values():
+        for start in range(0, len(account_items), LASTFM_SCROBBLE_BATCH_LIMIT):
+            yield account_items[start:start + LASTFM_SCROBBLE_BATCH_LIMIT]
+
+
+def _verify_batch(
+    config: dict[str, Any],
+    connection: Any,
+    batch: list[PendingListenEntry],
+    *,
+    session: LastfmSession,
+    now: datetime,
+) -> tuple[list[PendingListenEntry], int | None, LastfmError | None]:
+    """Looks a batch of listens whose outcome is unknown up on Last.fm, then stores every
+    result in one transaction. Returns each stored listen and, when Last.fm could not be
+    read, the backoff in seconds and the error."""
+    listed: set[int] = set()
+    unread: set[int] = set()
+    failure = None
+    try:
+        for window in _verification_windows(batch):
+            found, complete = _listed_scrobbles(config, session, window)
+            for _timestamp, item in window:
+                if listen_scrobble_identity(item.entry) in found:
+                    listed.add(item.row_id)
+                elif not complete:
+                    unread.add(item.row_id)
+    except LastfmError as error:
+        failure = error
+    loaded = {item.row_id: item.entry for item in batch}
+    stored = []
+    with connection.transaction():
+        for item in lock_pending_entries(connection, batch).values():
+            # A submitter or another lookup may have handled the listen since it was loaded.
+            if item.entry != loaded[item.row_id]:
+                continue
+            if item.row_id in listed or (failure is None and item.row_id not in unread):
+                updates = verified_scrobble_updates(item.entry, listed=item.row_id in listed, verified_at=now)
+            else:
+                updates = failed_verification_updates(
+                    item.entry, looked_up_at=now,
+                    reauthentication_required=failure is not None and failure.reauthentication_required,
+                )
+            stored.append(replace(item, entry={**item.entry, **updates}))
+        write_listen_entries(connection, stored)
+    retry_in = None
+    if failure is not None:
+        failures = max(int(entry.get("scrobble_verification_failures") or 0) + 1 for entry in loaded.values())
+        retry_in = max(scrobble_retry_delay_seconds(failures), failure.retry_after_seconds or 0)
+    return stored, retry_in, failure
+
+
+def _verification_windows(batch: list[PendingListenEntry]) -> list[list[tuple[int, PendingListenEntry]]]:
+    """The batch's listens with their timestamps, grouped into windows spanning at most an hour.
+
+    A listen without a timestamp cannot be on Last.fm: it is left out, so it counts as not listed
+    and the send queue fails it as invalid."""
+    windows: list[list[tuple[int, PendingListenEntry]]] = []
+    timed = ((listen_scrobble_identity(item.entry)[0], item) for item in batch)
+    for timestamp, item in sorted((pair for pair in timed if pair[0] > 0), key=lambda pair: pair[0]):
+        if windows and timestamp - windows[-1][0][0] <= _VERIFICATION_WINDOW_SECONDS:
+            windows[-1].append((timestamp, item))
+        else:
+            windows.append([(timestamp, item)])
+    return windows
+
+
+def _listed_scrobbles(
+    config: dict[str, Any], session: LastfmSession, window: list[tuple[int, PendingListenEntry]],
+) -> tuple[set[tuple[int, str, str]], bool]:
+    """The scrobbles Last.fm lists from the first to the last listen of a window, and
+    whether it listed all of them within the page limit."""
+    found: set[tuple[int, str, str]] = set()
+    page = 1
+    while True:
+        scrobbles, pages = get_lastfm_scrobbles_between(
+            config, session=session, after=window[0][0] - 1, before=window[-1][0] + 1, page=page,
+        )
+        found.update(scrobble_identity(scrobble.timestamp, scrobble.artist, scrobble.track) for scrobble in scrobbles)
+        if page >= min(pages, _VERIFICATION_MAX_PAGES):
+            return found, pages <= _VERIFICATION_MAX_PAGES
+        page += 1
 
 
 def _submit_batch(
@@ -304,7 +433,7 @@ def _submit_batch(
                 claimed.append(updated)
             else:
                 sending.append((item, plan.payload))
-                claimed.append(replace(item, entry={**item.entry, **ATTEMPTING_UPDATES}))
+                claimed.append(replace(item, entry={**item.entry, **attempting_updates(now)}))
         write_listen_entries(connection, claimed)
     if not sending:
         return stored, None, None
@@ -345,15 +474,30 @@ def _count_result(
     attempted: bool,
 ) -> None:
     succeeded = bool(after.entry.get("scrobbled"))
-    scope = scope_summaries.setdefault(
-        (after.account_id, after.library_id), {"attempted": 0, "succeeded": 0, "failed": 0},
-    )
+    scope = _scope_counts(scope_summaries, after)
     for counts in (summary, scope):
         counts["attempted"] += int(attempted)
         counts["succeeded"] += int(succeeded)
         counts["failed"] += int(not succeeded)
     if is_pending_scrobble_entry(before.entry) and not is_pending_scrobble_entry(after.entry):
         summary["pending_after"] -= 1
+
+
+def _count_verification(
+    summary: dict[str, int], scope_summaries: dict[tuple[int, int], dict[str, int]], after: PendingListenEntry,
+) -> None:
+    """Counts a listen found on Last.fm, or returned to the send queue; a failed lookup changes neither."""
+    if after.entry.get("scrobbled"):
+        _scope_counts(scope_summaries, after)["verified_present"] += 1
+    elif is_pending_scrobble_entry(after.entry):
+        _scope_counts(scope_summaries, after)["verified_absent"] += 1
+        summary["pending_after"] += 1
+
+
+def _scope_counts(scope_summaries: dict[tuple[int, int], dict[str, int]], item: PendingListenEntry) -> dict[str, int]:
+    return scope_summaries.setdefault((item.account_id, item.library_id), {
+        "attempted": 0, "succeeded": 0, "failed": 0, "verified_present": 0, "verified_absent": 0,
+    })
 
 
 def _log_scope_summaries(config: dict[str, Any], scope_summaries: dict[tuple[int, int], dict[str, int]]) -> None:

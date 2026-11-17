@@ -3,8 +3,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import unicodedata
 
 from music_app.services.lastfm import LastfmError
+from music_app.services.listen_history import is_unverified_scrobble_entry
 from music_app.services.measured_listen_history import (
     MeasuredListenError,
     load_measured,
@@ -200,10 +202,10 @@ def record_playback_session_complete(
                 retryable = False
                 reauthentication_required = False
                 submission_state = "uncertain"
-                stored = update_listen_history_entry(config, stored["id"], {
-                    "scrobble_submission_state": "attempting", "scrobble_retryable": False,
-                    "scrobble_error": "Last.fm submission outcome is uncertain",
-                }, account_id=account_id, library_id=library_id) or stored
+                stored = update_listen_history_entry(
+                    config, stored["id"], attempting_updates(datetime.now(timezone.utc)),
+                    account_id=account_id, library_id=library_id,
+                ) or stored
                 try:
                     normalized_payload = normalize_playback_track_payload(payload)
                     provider_attempted = True
@@ -369,11 +371,17 @@ class PendingScrobblePlan:
 
 
 _BLOCKED_SUBMISSION_STATES = frozenset({"attempting", "sent", "uncertain", "accepted"})
-ATTEMPTING_UPDATES: JsonDict = {
-    "scrobble_submission_state": "attempting",
-    "scrobble_retryable": False,
-    "scrobble_error": "Last.fm submission outcome is uncertain",
-}
+
+
+def attempting_updates(claimed_at: datetime) -> JsonDict:
+    """Claims a listen for one submission. The claim time tells a later verification
+    when a submission that never stored its result started."""
+    return {
+        "scrobble_submission_state": "attempting",
+        "scrobble_retryable": False,
+        "scrobble_error": "Last.fm submission outcome is uncertain",
+        "last_scrobble_attempt_at": claimed_at.isoformat(),
+    }
 
 
 def plan_pending_scrobble(
@@ -410,22 +418,112 @@ def scrobble_due_at(entry: JsonDict, *, now: datetime) -> datetime:
     """When a pending listen may be sent again: ``now`` until it has failed once, then
     after its backoff from the last attempt."""
     attempts = int(entry.get("scrobble_retry_count") or 0)
-    last_attempt_text = str(entry.get("last_scrobble_attempt_at") or "").strip()
-    if not attempts or not last_attempt_text:
+    last_attempt_at = _stored_time(entry.get("last_scrobble_attempt_at"))
+    if not attempts or last_attempt_at is None:
         return now
-    try:
-        last_attempt_at = datetime.fromisoformat(last_attempt_text.replace("Z", "+00:00"))
-    except ValueError:
-        return now
-    if last_attempt_at.tzinfo is None:
-        last_attempt_at = last_attempt_at.replace(tzinfo=timezone.utc)
     return last_attempt_at + timedelta(seconds=scrobble_retry_delay_seconds(attempts))
+
+
+def _stored_time(value: object) -> datetime | None:
+    text = str(value or "").strip()
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00")) if text else None
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=timezone.utc) if parsed is not None and parsed.tzinfo is None else parsed
 
 
 def scrobble_retry_delay_seconds(attempts: int) -> float:
     """How long a listen waits after its ``attempts``-th failed submission: 30 s, doubling
     to a 15-minute cap, so a long Last.fm or network outage is retried until it ends."""
     return min(_MAX_RETRY_DELAY_SECONDS, _BASE_RETRY_DELAY_SECONDS * (2 ** max(0, attempts - 1)))
+
+
+# Last.fm can list a scrobble some time after it accepted it, most of all while it is failing,
+# which is when submission outcomes are lost. Five minutes is far past the 12 s request timeout,
+# so the lost submission can no longer be on its way, and keeps the answer within one 15-minute
+# retry cap.
+SCROBBLE_VERIFICATION_DELAY_SECONDS = 5 * 60
+NOT_ON_LASTFM = "Last.fm has no record of this listen, so it will be sent again."
+
+
+def scrobble_verification_due(
+    entry: JsonDict, *, now: datetime, reauthenticated: bool = False, bypass_backoff: bool = False,
+) -> bool:
+    """Whether a listen whose submission outcome is unknown may be looked up on Last.fm now."""
+    if not is_unverified_scrobble_entry(entry):
+        return False
+    if bool(entry.get("scrobble_reauthentication_required")) and not reauthenticated:
+        return False
+    return now >= scrobble_verification_due_at(entry, now=now, bypass_backoff=reauthenticated or bypass_backoff)
+
+
+def scrobble_verification_due_at(entry: JsonDict, *, now: datetime, bypass_backoff: bool = False) -> datetime:
+    """Five minutes after the listen's last submission started (without one, after it was
+    recorded); after a failed lookup, also its backoff, as for a failed submission."""
+    started = _stored_time(entry.get("last_scrobble_attempt_at")) or _stored_time(entry.get("recorded_at"))
+    due = now if started is None else started + timedelta(seconds=SCROBBLE_VERIFICATION_DELAY_SECONDS)
+    failures = int(entry.get("scrobble_verification_failures") or 0)
+    last_lookup = _stored_time(entry.get("last_scrobble_verification_at"))
+    if failures and last_lookup is not None and not bypass_backoff:
+        due = max(due, last_lookup + timedelta(seconds=scrobble_retry_delay_seconds(failures)))
+    return due
+
+
+def scrobble_identity(timestamp: object, artist: object, track: object) -> tuple[int, str, str]:
+    """What makes a Last.fm scrobble the same listen: its Unix second, and its artist and track
+    names compared without case, Unicode compatibility forms, or extra spaces ("ДДТ" is "ддт")."""
+    return int(timestamp or 0), _comparable_name(artist), _comparable_name(track)
+
+
+def _comparable_name(value: object) -> str:
+    return " ".join(unicodedata.normalize("NFKC", str(value or "")).casefold().split())
+
+
+def listen_scrobble_identity(entry: JsonDict) -> tuple[int, str, str]:
+    """The identity of the scrobble a submission of this listen sends."""
+    payload = build_pending_scrobble_payload(entry)
+    return scrobble_identity(payload["timestamp"], payload["artist"], payload["track"])
+
+
+def verified_scrobble_updates(entry: JsonDict, *, listed: bool, verified_at: datetime) -> JsonDict:
+    """Ends a listen's unknown outcome. Listed on Last.fm, it is accepted as if Last.fm had
+    answered its submission; otherwise it returns to the send queue, due after the backoff of
+    its last submission."""
+    settled = {
+        "scrobble_verification_failures": 0,
+        "last_scrobble_verification_at": "",
+        "scrobble_reauthentication_required": False,
+        "scrobble_retryable": not listed,
+    }
+    if listed:
+        return {
+            **build_scrobble_result_updates(
+                scrobbled=True, scrobble_error="",
+                attempted_at=str(entry.get("last_scrobble_attempt_at") or verified_at.isoformat()),
+                retry_count=int(entry.get("scrobble_retry_count") or 0),
+            ),
+            **settled,
+            "scrobble_submission_state": "accepted",
+        }
+    return {
+        **settled,
+        "scrobble_submission_state": "not_sent",
+        "scrobble_error": NOT_ON_LASTFM,
+        "sync_problem": _scrobble_sync_problem(NOT_ON_LASTFM, retryable=True, reauthentication_required=False),
+    }
+
+
+def failed_verification_updates(
+    entry: JsonDict, *, looked_up_at: datetime, reauthentication_required: bool,
+) -> JsonDict:
+    """A lookup that failed leaves the outcome unknown; the next waits for its backoff, or for
+    the account to reconnect."""
+    return {
+        "scrobble_verification_failures": int(entry.get("scrobble_verification_failures") or 0) + 1,
+        "last_scrobble_verification_at": looked_up_at.isoformat(),
+        "scrobble_reauthentication_required": bool(reauthentication_required),
+    }
 
 
 def scrobble_attempt_updates(
@@ -465,6 +563,9 @@ def _scrobble_sync_problem(error: str, *, retryable: bool, reauthentication_requ
     ))
 
 
+# Last.fm error codes that refuse the request itself (invalid service, method, format,
+# parameters or resource), so it recorded none of its scrobbles and the same request fails again.
+_REJECTED_REQUEST_ERROR_CODES = frozenset({2, 3, 5, 6, 7})
 # Statuses that mean Last.fm did not process the request.
 _UNPROCESSED_HTTP_STATUSES = frozenset({408, 425, 429, 503})
 # Statuses after which Last.fm may have recorded the scrobbles, whatever error code the body carries:
@@ -480,7 +581,9 @@ def failed_batch_disposition(error: LastfmError) -> tuple[bool, str]:
     never fully left the server (network down, Last.fm unreachable), or the account
     must reconnect. Any other failure (a timeout, a 500, 502 or 504 even when its body
     carries a Last.fm error code, or an unreadable answer after the POST) may have
-    been recorded, so its outcome stays uncertain and it is never sent twice."""
+    been recorded, so its outcome stays uncertain until the account's scrobbles on
+    Last.fm show whether it arrived; it is never sent again blindly. A request Last.fm
+    refused outright is final."""
     if error.http_status in _UNCERTAIN_HTTP_STATUSES and not error.reauthentication_required:
         return False, "uncertain"
     retryable = bool(
@@ -490,4 +593,9 @@ def failed_batch_disposition(error: LastfmError) -> tuple[bool, str]:
         or (error.retryable and error.error_kind == "provider_error" and error.code is not None)
         or (error.retryable and error.http_status in _UNPROCESSED_HTTP_STATUSES)
     )
-    return retryable, "not_sent" if retryable else "uncertain"
+    if retryable:
+        return True, "not_sent"
+    if error.error_kind == "provider_error" and error.code in _REJECTED_REQUEST_ERROR_CODES:
+        # Like an ignored scrobble, a refused request is final; verifying it would resend it forever.
+        return False, "sent"
+    return False, "uncertain"

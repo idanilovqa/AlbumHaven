@@ -12866,14 +12866,15 @@
     },
     {
       "id": "py:services/lastfm_retry.py#start_lastfm_retry_worker.<locals>.worker",
-      "action": "Send waiting Last.fm scrobbles on their own in batches of 50: at start-up, when a listen is left unsent or Submit asks, and after each capped, jittered backoff until none waits; idle on one query",
+      "action": "Send waiting Last.fm scrobbles on their own in batches of 50, after looking up the listens whose outcome is unknown on Last.fm in batches of 50, reading only the hours around their timestamps: at start-up, when a listen is left unsent or Submit asks, and after each capped, jittered backoff until none waits; idle on one query",
       "entrypoints": [
         "py:music_app/services/lastfm_retry.py#start_lastfm_retry_worker.<locals>.worker:background:thread"
       ],
       "owners": [
         "music_app/services/lastfm_retry.py",
         "music_app/services/listen_history_postgres.py",
-        "music_app/services/lastfm_sync_bridge.py"
+        "music_app/services/lastfm_sync_bridge.py",
+        "music_app/services/lastfm.py"
       ],
       "rules": [
         "BI-05",
@@ -12887,17 +12888,18 @@
         "production": 5000
       },
       "budgets": {
-        "provider_calls": 101,
-        "transactions": 202,
-        "sql_statements": 413
+        "provider_calls": 151,
+        "transactions": 201,
+        "sql_statements": 512,
+        "candidate_rows": 2500
       },
       "growth": {
         "metric": "provider_calls",
-        "largeMinusSmallMax": 99
+        "largeMinusSmallMax": 148
       },
       "command": "python -m pytest tests/py/test_lastfm_retry.py::test_lastfm_retry_worker_contract_recovers_from_an_outage_in_batches_of_fifty_and_idles_on_one_query",
       "testIdentity": "test_lastfm_retry_worker_contract_recovers_from_an_outage_in_batches_of_fifty_and_idles_on_one_query",
-      "rollback": "Reverting returns the worker to one Last.fm call and one database connection per pending scrobble on a fixed 30-minute pass that scans all listen history even when nothing waits; at 5,000 queued scrobbles the pass makes 5,000 provider calls and the provider_calls budget fails."
+      "rollback": "Reverting returns the worker to one Last.fm call and one database connection per pending scrobble on a fixed 30-minute pass that scans all listen history even when nothing waits; at 5,000 queued scrobbles the pass makes 5,000 provider calls and the provider_calls budget fails. A lookup that read the account's whole Last.fm history instead of each batch's window returns 50,000 scrobbles at 5,000 listens and fails the candidate_rows budget; one lookup per listen fails the provider_calls budget."
     },
     {
       "id": "py:services/library_album_index.py#publish_library_albums",

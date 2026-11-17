@@ -91,6 +91,17 @@ def is_pending_scrobble_entry(item: object) -> bool:
     )
 
 
+def is_unverified_scrobble_entry(item: object) -> bool:
+    """Whether Last.fm may or may not have recorded this listen: its submission's answer was
+    unclear, or never stored. It is looked up on Last.fm before it is sent again."""
+    return (
+        isinstance(item, dict)
+        and bool(item.get("scrobble_eligible"))
+        and not bool(item.get("scrobbled"))
+        and str(item.get("scrobble_submission_state") or "") in {"attempting", "uncertain"}
+    )
+
+
 def is_meaningful_listen_session(entry: object) -> bool:
     if not isinstance(entry, dict):
         return False
@@ -159,15 +170,16 @@ def load_pending_scrobble_entries(
     limit: int | None = 25,
     eligible: Callable[[PendingListenEntry], bool] | None = None,
     connection=None,
+    include_unverified: bool = False,
 ):
     return _listen_history_adapter(config).load_pending_entries(
-        limit=limit, eligible=eligible, connection=connection,
+        limit=limit, eligible=eligible, connection=connection, include_unverified=include_unverified,
     )
 
 
 def has_sendable_scrobbles(config: dict) -> bool:
-    """Whether any account with a connected Last.fm session has a listen waiting to be sent,
-    answered by one query that stops at the first such listen."""
+    """Whether any account with a connected Last.fm session has a listen waiting to be sent or
+    looked up on Last.fm, answered by one query that stops at the first such listen."""
     with _listen_history_adapter(config)._connect_to_database() as connection:
         row = connection.execute("""
             select exists (
@@ -177,11 +189,17 @@ def has_sendable_scrobbles(config: dict) -> bool:
                   and h.scrobble_status is distinct from 'scrobbled'
                   and h.metadata->'source_payload'->>'scrobble_eligible' = 'true'
                   and coalesce(h.metadata->'source_payload'->>'scrobbled', 'false') != 'true'
-                  and coalesce(h.metadata->'source_payload'->>'scrobble_retryable', 'true') = 'true'
-                  and coalesce(h.metadata->'source_payload'->>'scrobble_retry_exhausted', 'false') != 'true'
                   and coalesce(h.metadata->'source_payload'->>'scrobble_reauthentication_required', 'false') != 'true'
-                  and coalesce(h.metadata->'source_payload'->>'scrobble_submission_state', '')
-                      not in ('attempting', 'sent', 'uncertain', 'accepted')
+                  and (
+                    coalesce(h.metadata->'source_payload'->>'scrobble_submission_state', '')
+                        in ('attempting', 'uncertain')
+                    or (
+                      coalesce(h.metadata->'source_payload'->>'scrobble_retryable', 'true') = 'true'
+                      and coalesce(h.metadata->'source_payload'->>'scrobble_retry_exhausted', 'false') != 'true'
+                      and coalesce(h.metadata->'source_payload'->>'scrobble_submission_state', '')
+                          not in ('attempting', 'sent', 'uncertain', 'accepted')
+                    )
+                  )
             ) as has_sendable_scrobbles
         """, (list(LASTFM_SCROBBLE_SOURCE_FAMILIES),)).fetchone()
     return bool(row["has_sendable_scrobbles"])

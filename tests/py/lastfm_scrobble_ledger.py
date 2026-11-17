@@ -10,7 +10,7 @@ import contextlib
 import copy
 from types import SimpleNamespace
 
-from music_app.services.lastfm import LastfmError, LastfmSubmissionOutcome
+from music_app.services.lastfm import LASTFM_RECENT_TRACKS_PAGE_LIMIT, LastfmError, LastfmScrobble, LastfmSubmissionOutcome
 from tests.py.bounded_interactions import CountingConnection, OperationCounts
 
 ACCOUNT_ID = 7
@@ -143,9 +143,9 @@ class ScrobbleLedger:
                 for account_id in params[0] if account_id in self.sessions
             )
         if "as has_sendable_scrobbles" in text:
-            from music_app.services.listen_history import is_pending_scrobble_entry
+            from music_app.services.listen_history import is_pending_scrobble_entry, is_unverified_scrobble_entry
             return _Rows([{"has_sendable_scrobbles": any(
-                is_pending_scrobble_entry(self.entry(row_id))
+                (is_pending_scrobble_entry(self.entry(row_id)) or is_unverified_scrobble_entry(self.entry(row_id)))
                 and not self.entry(row_id).get("scrobble_reauthentication_required")
                 and row["account_id"] in self.sessions
                 for row_id, row in self.rows.items()
@@ -186,6 +186,38 @@ class FakeLastfm:
         if isinstance(result, BaseException):
             raise result
         return result
+
+
+class FakeRecentTracks:
+    """Answers `get_lastfm_scrobbles_between` from the account's scrobbles on Last.fm,
+    recording each call's window and counting the scrobbles it returns as candidate rows."""
+
+    def __init__(self, ledger: ScrobbleLedger) -> None:
+        self.ledger = ledger
+        self.scrobbles: list[LastfmScrobble] = []
+        self.calls: list[SimpleNamespace] = []
+        # Called with each call's record; an exception it returns is raised as Last.fm's answer.
+        self.answer = None
+
+    def __call__(self, _config, *, session, after, before, page=1):
+        self.ledger.counts.provider_calls += 1
+        call = SimpleNamespace(session_key=session.session_key, user=session.username,
+                               after=after, before=before, page=page)
+        self.calls.append(call)
+        failure = self.answer(call) if self.answer is not None else None
+        if isinstance(failure, BaseException):
+            raise failure
+        listed = sorted((scrobble for scrobble in self.scrobbles if after < scrobble.timestamp < before),
+                        key=lambda scrobble: -scrobble.timestamp)
+        size = LASTFM_RECENT_TRACKS_PAGE_LIMIT
+        found = listed[(page - 1) * size:page * size]
+        self.ledger.counts.candidate_rows += len(found)
+        return found, -(-len(listed) // size)
+
+    def lists(self, *entries) -> None:
+        """Puts the scrobbles these listens send on Last.fm."""
+        self.scrobbles.extend(LastfmScrobble(int(entry["started_at_unix"]), str(entry["artist"]),
+                                             str(entry["title"])) for entry in entries)
 
 
 def transient_failure(_payloads):

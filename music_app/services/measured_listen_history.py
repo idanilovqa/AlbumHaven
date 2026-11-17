@@ -12,7 +12,7 @@ _SERVER_FIELDS = {
     "id", "recorded_at", "scrobbled", "scrobble_error", "scrobble_retryable",
     "scrobble_reauthentication_required", "scrobble_submission_state",
     "scrobble_retry_count", "scrobble_retry_exhausted", "last_scrobble_attempt_at",
-    "scrobbled_at", "sync_problem",
+    "scrobbled_at", "sync_problem", "scrobble_verification_failures", "last_scrobble_verification_at",
 }
 _HANDOFF_FINGERPRINT_DOMAIN = b"album-haven:playback-handoff-completion:v1:json\0"
 NO_HANDOFF_COMPLETION_DIGEST = hashlib.sha256(

@@ -10,12 +10,17 @@ from types import SimpleNamespace
 import pytest
 
 from music_app.services import lastfm_retry, listen_history, listen_history_postgres
-from music_app.services.lastfm import LastfmError, LastfmSubmissionOutcome
+from music_app.services.lastfm import LastfmError, LastfmScrobble, LastfmSubmissionOutcome
 from music_app.services.lastfm_sync_bridge import (
+    attempting_updates,
     failed_batch_disposition,
     plan_pending_scrobble,
     scrobble_attempt_updates,
+    scrobble_identity,
     scrobble_retry_delay_seconds,
+    scrobble_verification_due,
+    scrobble_verification_due_at,
+    verified_scrobble_updates,
 )
 from music_app.services.log_history import HistoryScope
 from tests.py.bounded_interactions import OperationCounts, measure_scale_pair
@@ -23,6 +28,7 @@ from tests.py.lastfm_scrobble_ledger import (
     ACCOUNT_ID,
     LIBRARY_ID,
     FakeLastfm,
+    FakeRecentTracks,
     ScrobbleLedger,
     listen_entry,
     transient_failure,
@@ -46,11 +52,14 @@ def scrobble_ledger(monkeypatch):
     monkeypatch.setattr(lastfm_retry, "_RUNNING", {})
 
     def install(counts: OperationCounts | None = None, *, answer=None) -> tuple[ScrobbleLedger, FakeLastfm]:
+        """The ledger and Last.fm's scrobble call; ``ledger.recent_tracks`` answers lookups."""
         ledger = ScrobbleLedger(counts)
         ledger.sessions[ACCOUNT_ID] = "fixture-session"
         provider = FakeLastfm(ledger, answer)
+        ledger.recent_tracks = FakeRecentTracks(ledger)
         monkeypatch.setattr(listen_history_postgres, "_connect", ledger.connect)
         monkeypatch.setattr(lastfm_retry, "scrobble_tracks", provider)
+        monkeypatch.setattr(lastfm_retry, "get_lastfm_scrobbles_between", ledger.recent_tracks)
         return ledger, provider
 
     return install
@@ -119,7 +128,10 @@ def test_plan_holds_a_listen_that_needs_reauthentication_until_reconnect():
     (LastfmError("Network error contacting Last.fm", retryable=True, error_kind="network_error"),
      (False, "uncertain")),
     (LastfmError("Malformed", retryable=True, error_kind="malformed_response"), (False, "uncertain")),
-    (LastfmError("Invalid parameters", code=6), (False, "uncertain")),
+    # Last.fm refused the request itself, so it recorded nothing: final, never looked up or resent.
+    (LastfmError("Invalid parameters", code=6), (False, "sent")),
+    # "Operation failed" may have happened after Last.fm recorded the scrobbles.
+    (LastfmError("Operation failed", code=8), (False, "uncertain")),
     # Network down or Last.fm unreachable: the request never fully left the server.
     (LastfmError("Connection refused", retryable=True, error_kind="network_error", request_sent=False),
      (True, "not_sent")),
@@ -287,7 +299,8 @@ def test_permanent_rejection_marks_the_batch_without_resending(scrobble_ledger):
 
     assert len(provider.calls) == 1
     for entry in ledger.entries():
-        assert (entry["scrobble_submission_state"], entry["scrobble_retryable"]) == ("uncertain", False)
+        assert (entry["scrobble_submission_state"], entry["scrobble_retryable"]) == ("sent", False)
+        assert not listen_history.is_unverified_scrobble_entry(entry)
         assert entry["sync_problem"]["status"] == "permanent_failure"
         assert not listen_history.is_pending_scrobble_entry(entry)
 
@@ -383,6 +396,308 @@ def test_each_library_gets_one_history_event_holding_counts_only(scrobble_ledger
     assert {key: fields[key] for key in ("attempted", "succeeded", "failed")} == {
         "attempted": 60, "succeeded": 60, "failed": 0}
     assert not {"artist", "album", "title", "track", "session_key"} & set(fields)
+
+
+# Verifying unknown outcomes ------------------------------------------------
+
+def _ago(minutes: float) -> str:
+    return (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
+
+
+def _add_unverified(ledger: ScrobbleLedger, count: int, *, minutes_ago: float = 10, start: int = 0,
+                    account_id: int = ACCOUNT_ID, **changes) -> None:
+    """Listens whose last submission ended with an unknown outcome ``minutes_ago``."""
+    ledger.add_pending(count, start=start, account_id=account_id, **{
+        "scrobble_submission_state": "uncertain", "scrobble_retryable": False, "scrobble_retry_count": 1,
+        "last_scrobble_attempt_at": _ago(minutes_ago), **changes,
+    })
+
+
+def test_scrobble_identity_ignores_case_width_and_spacing_in_any_script():
+    assert scrobble_identity(1_700_000_000, "ДДТ", "Осень") == scrobble_identity("1700000000", "ддт", "  ОСЕНЬ ")
+    assert scrobble_identity(1, "Ёлка", "Прощай,  ШКОЛА") == scrobble_identity(1, "ёлка", "прощай, школа")
+    assert scrobble_identity(1, "Ｍｕｓｅ", "Straße") == scrobble_identity(1, "muse", "STRASSE")
+    # Different seconds, artists or tracks are different scrobbles.
+    assert scrobble_identity(1, "ДДТ", "Осень") != scrobble_identity(2, "ДДТ", "Осень")
+    assert scrobble_identity(1, "ДДТ", "Осень") != scrobble_identity(1, "ДДТ", "Осень (live)")
+    assert scrobble_identity(1, "Е", "Song") != scrobble_identity(1, "Ё", "Song")
+
+
+def test_an_unknown_outcome_is_looked_up_five_minutes_after_its_submission_and_backs_off_after_a_failed_lookup():
+    entry = listen_entry(1, scrobble_submission_state="uncertain", scrobble_retryable=False,
+                         last_scrobble_attempt_at=_NOW.isoformat())
+    assert scrobble_verification_due_at(entry, now=_NOW) == _NOW + timedelta(minutes=5)
+    assert not scrobble_verification_due(entry, now=_NOW + timedelta(minutes=4), bypass_backoff=True)
+    assert scrobble_verification_due(entry, now=_NOW + timedelta(minutes=5))
+    # A crash after the claim leaves the listen claimed; the claim time is when its submission started.
+    claimed = {**listen_entry(1), **attempting_updates(_NOW)}
+    assert scrobble_verification_due_at(claimed, now=_NOW) == _NOW + timedelta(minutes=5)
+    # Failed lookups back off like failed submissions, to the 15-minute cap; Submit skips the backoff.
+    failed = {**entry, "scrobble_verification_failures": 7,
+              "last_scrobble_verification_at": (_NOW + timedelta(minutes=10)).isoformat()}
+    assert scrobble_verification_due_at(failed, now=_NOW) == _NOW + timedelta(minutes=25)
+    assert scrobble_verification_due(failed, now=_NOW + timedelta(minutes=11), bypass_backoff=True)
+    # Reauthentication holds the lookup until the account reconnects.
+    revoked = {**entry, "scrobble_reauthentication_required": True}
+    assert not scrobble_verification_due(revoked, now=_NOW + timedelta(hours=1), bypass_backoff=True)
+    assert scrobble_verification_due(revoked, now=_NOW + timedelta(hours=1), reauthenticated=True)
+    # A listen whose outcome is known is never looked up.
+    for state in ("accepted", "sent", "not_sent", ""):
+        assert not scrobble_verification_due({**entry, "scrobble_submission_state": state}, now=_NOW + timedelta(hours=1))
+
+
+def test_a_listen_found_on_last_fm_is_accepted_and_never_sent_again(scrobble_ledger, monkeypatch):
+    ledger, provider = scrobble_ledger()
+    _add_unverified(ledger, 2, measured=False)
+    ledger.recent_tracks.lists(*ledger.entries())
+    events = []
+    monkeypatch.setattr(lastfm_retry, "log_app_event", lambda _config, _logger, _action, **fields: events.append(fields))
+
+    first = lastfm_retry.retry_pending_lastfm_scrobbles(_CONFIG)
+    second = lastfm_retry.retry_pending_lastfm_scrobbles(_CONFIG, bypass_backoff=True)
+
+    assert provider.calls == []
+    assert len(ledger.recent_tracks.calls) == 1
+    for entry in ledger.entries():
+        assert (entry["scrobbled"], entry["scrobble_submission_state"], entry["sync_problem"]) == (True, "accepted", None)
+        assert entry["scrobbled_at"] == entry["last_scrobble_attempt_at"]
+        assert entry["scrobble_retry_count"] == 1
+        assert not listen_history.is_unverified_scrobble_entry(entry)
+    assert first.retry_in_seconds is None and second.summary["pending_before"] == 0
+    assert [{key: fields[key] for key in ("attempted", "verified_present", "verified_absent")} for fields in events] == [
+        {"attempted": 0, "verified_present": 2, "verified_absent": 0}]
+
+
+def test_a_listen_missing_from_last_fm_is_resent_once_through_the_batch(scrobble_ledger, monkeypatch):
+    ledger, provider = scrobble_ledger()
+    _add_unverified(ledger, 3)
+    ledger.recent_tracks.lists(ledger.entry(2))
+    events = []
+    monkeypatch.setattr(lastfm_retry, "log_app_event", lambda _config, _logger, action, **fields: events.append(
+        (action, fields)))
+
+    result = lastfm_retry.retry_pending_lastfm_scrobbles(_CONFIG)
+    lastfm_retry.retry_pending_lastfm_scrobbles(_CONFIG, bypass_backoff=True)
+
+    # Song 1 was on Last.fm; the others were not, and go out together in one batch call.
+    assert [call.tracks for call in provider.calls] == [["Song 0", "Song 2"]]
+    assert provider.calls[0].claimed_states == {"attempting"}
+    assert [entry["scrobble_submission_state"] for entry in ledger.entries()] == ["accepted"] * 3
+    assert [entry["scrobble_retry_count"] for entry in ledger.entries()] == [2, 1, 2]
+    assert result.summary == {"pending_before": 0, "attempted": 2, "succeeded": 2, "failed": 0, "pending_after": 0}
+    [(action, fields)] = events
+    assert action == "Last.fm scrobble retry pass completed"
+    assert {key: fields[key] for key in ("attempted", "succeeded", "failed", "verified_present", "verified_absent")} == {
+        "attempted": 2, "succeeded": 2, "failed": 0, "verified_present": 1, "verified_absent": 2}
+    assert not {"artist", "album", "title", "track", "session_key"} & set(fields)
+
+
+def test_a_resend_last_fm_ignores_is_final(scrobble_ledger):
+    ledger, provider = scrobble_ledger(answer=lambda payloads: [
+        LastfmSubmissionOutcome(sent=True, ignored=1, outcome="ignored", ignored_code=3, message="Timestamp too old")
+        for _payload in payloads])
+    _add_unverified(ledger, 1)
+
+    lastfm_retry.retry_pending_lastfm_scrobbles(_CONFIG)
+    for _later in range(3):
+        lastfm_retry.retry_pending_lastfm_scrobbles(_CONFIG, bypass_backoff=True)
+
+    [entry] = ledger.entries()
+    assert (len(ledger.recent_tracks.calls), len(provider.calls)) == (1, 1)
+    assert (entry["scrobbled"], entry["scrobble_submission_state"], entry["scrobble_retryable"]) == (False, "sent", False)
+    assert entry["sync_problem"]["status"] == "permanent_failure"
+    assert not listen_history.is_pending_scrobble_entry(entry)
+    assert not listen_history.is_unverified_scrobble_entry(entry)
+
+
+def test_a_resend_with_an_unknown_outcome_is_looked_up_again_before_any_further_send(scrobble_ledger):
+    ledger, provider = scrobble_ledger(answer=lambda _payloads: LastfmError("Bad gateway", retryable=True, http_status=502))
+    _add_unverified(ledger, 1)
+
+    lastfm_retry.retry_pending_lastfm_scrobbles(_CONFIG)
+    lastfm_retry.retry_pending_lastfm_scrobbles(_CONFIG, bypass_backoff=True)
+
+    [entry] = ledger.entries()
+    assert (len(ledger.recent_tracks.calls), len(provider.calls)) == (1, 1)
+    assert (entry["scrobble_submission_state"], entry["scrobble_retry_count"]) == ("uncertain", 2)
+    assert scrobble_verification_due_at(entry, now=_NOW) == datetime.fromisoformat(
+        entry["last_scrobble_attempt_at"]) + timedelta(minutes=5)
+
+
+@pytest.mark.parametrize("failure", [
+    LastfmError("Network is unreachable", retryable=True, error_kind="network_error", request_sent=False),
+    LastfmError("Network error contacting Last.fm", retryable=True, error_kind="network_error"),
+    LastfmError("Rate limited", retryable=True, http_status=429, retry_after_seconds=60),
+    LastfmError("Unavailable", retryable=True, http_status=503),
+    LastfmError("Malformed", retryable=True, error_kind="malformed_response"),
+], ids=["unreachable", "timeout", "429", "503", "malformed"])
+def test_a_failed_lookup_leaves_the_outcome_unknown_and_is_retried_after_its_backoff(scrobble_ledger, failure):
+    ledger, provider = scrobble_ledger()
+    _add_unverified(ledger, 2)
+    ledger.recent_tracks.lists(ledger.entry(1))
+    ledger.recent_tracks.answer = lambda _call: failure
+    ledger.add_pending(1, start=10)
+
+    during = lastfm_retry.retry_pending_lastfm_scrobbles(_CONFIG)
+
+    # Last.fm cannot be read, so the pass stops before sending the waiting listen too.
+    assert provider.calls == [] and len(ledger.recent_tracks.calls) == 1
+    assert during.retry_in_seconds == max(30, failure.retry_after_seconds or 0)
+    for entry in ledger.entries()[:2]:
+        assert (entry["scrobble_submission_state"], entry["scrobble_verification_failures"]) == ("uncertain", 1)
+        assert listen_history.is_unverified_scrobble_entry(entry)
+        assert not entry.get("scrobble_reauthentication_required")
+        assert not scrobble_verification_due(entry, now=datetime.now(timezone.utc))
+
+    ledger.recent_tracks.answer = None
+    lastfm_retry.retry_pending_lastfm_scrobbles(_CONFIG, bypass_backoff=True)
+
+    assert [entry["scrobble_submission_state"] for entry in ledger.entries()] == ["accepted"] * 3
+    assert [call.tracks for call in provider.calls] == [["Song 1", "Song 10"]]
+    assert ledger.entry(1)["scrobble_verification_failures"] == 0
+
+
+def test_a_lookup_that_needs_reauthentication_holds_only_that_account(scrobble_ledger):
+    other_account = ACCOUNT_ID + 1
+    ledger, provider = scrobble_ledger()
+    ledger.sessions[other_account] = "other-session"
+    _add_unverified(ledger, 2)
+    _add_unverified(ledger, 1, start=100, account_id=other_account)
+    ledger.add_pending(1, start=200)
+    ledger.recent_tracks.lists(ledger.entry(3))
+    ledger.recent_tracks.answer = lambda call: (
+        LastfmError("Invalid session key (Last.fm error 9)", code=9, reauthentication_required=True)
+        if call.session_key == "fixture-session" else None)
+
+    result = lastfm_retry.retry_pending_lastfm_scrobbles(_CONFIG)
+
+    assert [call.session_key for call in ledger.recent_tracks.calls] == ["fixture-session", "other-session"]
+    assert provider.calls == [], "the revoked account's waiting listen waits for its reconnection"
+    held = ledger.entries()[:2]
+    assert all(entry["scrobble_reauthentication_required"] for entry in held)
+    assert all(listen_history.is_unverified_scrobble_entry(entry) for entry in held)
+    assert ledger.entry(3)["scrobbled"] is True
+    assert result.retry_in_seconds is None
+
+    ledger.recent_tracks.answer = None
+    lastfm_retry.retry_pending_lastfm_scrobbles(_CONFIG, reauthenticated=True)
+
+    assert all(entry["scrobbled"] for entry in ledger.entries())
+    assert [call.tracks for call in provider.calls] == [["Song 0", "Song 1", "Song 200"]]
+
+
+def test_a_lookup_reads_only_the_window_around_its_batch_never_the_whole_history(scrobble_ledger):
+    ledger, _provider = scrobble_ledger()
+    # 60 listens: 50 within one minute, then 10 two hours later, so two batches of one window
+    # each. Last.fm also holds 30,000 other scrobbles before, between, and after them.
+    _add_unverified(ledger, 50)
+    _add_unverified(ledger, 10, start=7200)
+    ledger.recent_tracks.lists(*ledger.entries())
+    ledger.recent_tracks.scrobbles.extend(
+        LastfmScrobble(timestamp, "Other", "Track")
+        for timestamp in (*range(1_690_000_000, 1_690_010_000), *range(1_700_000_100, 1_700_007_000),
+                          *range(1_700_010_000, 1_700_023_100)))
+
+    lastfm_retry.retry_pending_lastfm_scrobbles(_CONFIG)
+
+    assert [(call.after, call.before, call.page) for call in ledger.recent_tracks.calls] == [
+        (1_700_000_000 - 1, 1_700_000_049 + 1, 1),
+        (1_700_007_200 - 1, 1_700_007_209 + 1, 1),
+    ]
+    assert {call.user for call in ledger.recent_tracks.calls} == {f"listener-{ACCOUNT_ID}"}
+    assert ledger.counts.candidate_rows == 60
+    assert all(entry["scrobbled"] for entry in ledger.entries())
+
+
+def test_a_window_with_more_scrobbles_than_its_page_limit_resolves_only_what_it_read(scrobble_ledger, monkeypatch):
+    monkeypatch.setattr(lastfm_retry, "_VERIFICATION_MAX_PAGES", 2)
+    ledger, provider = scrobble_ledger()
+    # Two listens 40 minutes apart, with 500 other scrobbles between them: three pages.
+    _add_unverified(ledger, 1)
+    _add_unverified(ledger, 1, start=2400)
+    ledger.recent_tracks.lists(ledger.entry(2))
+    ledger.recent_tracks.scrobbles.extend(LastfmScrobble(1_700_000_001 + offset, "Other", "Track") for offset in range(500))
+
+    lastfm_retry.retry_pending_lastfm_scrobbles(_CONFIG)
+
+    assert [call.page for call in ledger.recent_tracks.calls] == [1, 2]
+    # The newest listen was on the pages read; the oldest may be on the page left unread, so its
+    # outcome stays unknown.
+    first, second = ledger.entries()
+    assert (second["scrobbled"], first["scrobble_submission_state"], first["scrobble_verification_failures"]) == (
+        True, "uncertain", 1)
+    assert provider.calls == []
+
+
+def test_a_listen_without_a_timestamp_is_never_looked_up_and_fails_as_invalid(scrobble_ledger):
+    ledger, provider = scrobble_ledger()
+    _add_unverified(ledger, 1, started_at_unix=0)
+
+    lastfm_retry.retry_pending_lastfm_scrobbles(_CONFIG)
+
+    [entry] = ledger.entries()
+    assert ledger.recent_tracks.calls == [] and provider.calls == []
+    assert (entry["scrobble_submission_state"], entry["scrobble_retryable"]) == ("not_sent", False)
+    assert entry["scrobble_error"] == "Missing listen timestamp for queued scrobble."
+
+
+def test_a_listen_claimed_moments_ago_is_not_looked_up_while_its_submission_may_be_running(scrobble_ledger):
+    ledger, provider = scrobble_ledger()
+    ledger.add(listen_entry(1, **attempting_updates(datetime.now(timezone.utc) - timedelta(seconds=30))))
+    ledger.add(listen_entry(2, **attempting_updates(datetime.now(timezone.utc) - timedelta(minutes=6))))
+    ledger.recent_tracks.lists(ledger.entry(2))
+
+    result = lastfm_retry.retry_pending_lastfm_scrobbles(_CONFIG, bypass_backoff=True)
+
+    assert len(ledger.recent_tracks.calls) == 1
+    assert ledger.entry(1)["scrobble_submission_state"] == "attempting"
+    assert ledger.entry(2)["scrobble_submission_state"] == "accepted"
+    assert provider.calls == []
+    assert 4 * 60 < result.retry_in_seconds <= 4.5 * 60
+
+
+@pytest.mark.parametrize("concurrent", ["accepted by a live submission", "returned to the queue by another lookup"])
+def test_a_lookup_never_overwrites_a_listen_another_submitter_handled_after_it_was_loaded(
+    scrobble_ledger, monkeypatch, concurrent,
+):
+    ledger, provider = scrobble_ledger()
+    _add_unverified(ledger, 2)
+    lock = listen_history_postgres.lock_pending_entries
+    handled = (
+        scrobble_attempt_updates(ledger.entry(1), attempted_at=_NOW, submission_state="accepted")
+        if concurrent.startswith("accepted")
+        else verified_scrobble_updates(ledger.entry(1), listed=False, verified_at=_NOW)
+    )
+
+    def handled_meanwhile(connection, batch):
+        ledger.entry(1).update(handled)
+        return lock(connection, batch)
+
+    monkeypatch.setattr(lastfm_retry, "lock_pending_entries", handled_meanwhile)
+    lastfm_retry.retry_pending_lastfm_scrobbles(_CONFIG)
+
+    assert {key: ledger.entry(1)[key] for key in handled} == handled
+    # The other listen was not on Last.fm either; it alone is resent, once.
+    assert [call.tracks for call in provider.calls] == [["Song 1"]]
+
+
+def test_a_lookup_and_a_batch_send_take_the_same_provider_guards_as_a_live_submission(scrobble_ledger, monkeypatch):
+    ledger, _provider = scrobble_ledger()
+    _add_unverified(ledger, 2)
+    ledger.add_pending(1, start=10)
+    guarded = []
+    lock = listen_history_postgres.lock_pending_entries
+
+    def observed(connection, batch):
+        guarded.append(sorted(item.entry["title"] for item in batch))
+        return lock(connection, batch)
+
+    monkeypatch.setattr(lastfm_retry, "lock_pending_entries", observed)
+    lastfm_retry.retry_pending_lastfm_scrobbles(_CONFIG)
+
+    # The lookup's results are stored under the guard, and so is the claim of the resend.
+    assert guarded == [["Song 0", "Song 1"], ["Song 0", "Song 1", "Song 10"]]
+    assert ledger.unknown == []
 
 
 # Requests and the worker ---------------------------------------------------
@@ -558,25 +873,32 @@ def test_lastfm_retry_worker_contract_recovers_from_an_outage_in_batches_of_fift
 
     monkeypatch.setattr(lastfm_retry, "_IDLE_CHECK_SECONDS", 3600)
 
-    def run(pending: int) -> OperationCounts:
+    def run(listens: int) -> OperationCounts:
+        """``listens`` sends whose outcome Last.fm left unknown (a 502), half of them recorded."""
         counts = OperationCounts()
+        ledger, provider = scrobble_ledger(counts)
+        _add_unverified(ledger, listens)
+        ledger.recent_tracks.lists(*ledger.entries()[::2])
+        # The account's history on Last.fm is ten times larger, all outside the listens' windows.
+        ledger.recent_tracks.scrobbles.extend(
+            LastfmScrobble(1_600_000_000 + offset, "Other", "Track") for offset in range(10 * listens))
         outage = {"calls": 1}
 
-        def last_fm_down_once(payloads):
+        def last_fm_down_once(_call):
             if outage["calls"]:
                 outage["calls"] -= 1
-                return transient_failure(payloads)
-            return [LastfmSubmissionOutcome(sent=True, accepted=1, outcome="accepted") for _payload in payloads]
+                return LastfmError("Network is unreachable", retryable=True, error_kind="network_error",
+                                   request_sent=False)
+            return None
 
-        ledger, provider = scrobble_ledger(counts, answer=last_fm_down_once)
-        ledger.add_pending(pending)
+        ledger.recent_tracks.answer = last_fm_down_once
         with _WorkerProbe(monkeypatch) as worker:
-            # Start-up finds waiting listens; the first call meets the outage and the pass stops.
+            # Start-up finds listens to look up; the first lookup meets the outage and the pass stops.
             assert worker.next("check") is True
             during_outage = worker.next("pass")
-            assert during_outage.summary["attempted"] == min(pending, 50)
+            assert during_outage.summary["attempted"] == 0
             assert during_outage.retry_in_seconds == pytest.approx(0.02)
-            # After the backoff the worker retries on its own and sends everything.
+            # After the backoff the worker looks every listen up on its own and resends the missing half.
             assert worker.next("check") is True
             recovered = worker.next("pass")
             converged = OperationCounts(**vars(counts))
@@ -585,15 +907,20 @@ def test_lastfm_retry_worker_contract_recovers_from_an_outage_in_batches_of_fift
             assert worker.next("check") is False
             with pytest.raises(queue.Empty):
                 worker.events.get(timeout=0.3)
-        batches = math.ceil(pending / 50)
-        assert recovered.summary == {"pending_before": pending, "attempted": pending, "succeeded": pending,
+        lookups, resends, missing = math.ceil(listens / 50), math.ceil(listens / 2 / 50), listens // 2
+        assert recovered.summary == {"pending_before": 0, "attempted": missing, "succeeded": missing,
                                      "failed": 0, "pending_after": 0}
         assert recovered.retry_in_seconds is None
         assert all(entry["scrobbled"] for entry in ledger.entries())
-        assert converged.provider_calls == 1 + batches
-        assert converged.transactions == 2 + 2 * batches, "one claim and one result transaction per batch"
-        # Two checks, two passes of 3 reads each, and 4 statements per batch.
-        assert converged.sql_statements == 2 + 3 + 4 + 3 + 4 * batches
+        assert sum(len(call.tracks) for call in provider.calls) == missing, "each missing listen is resent once"
+        # One window per batch of 50 listens, read on one page: never the account's whole history.
+        assert len(ledger.recent_tracks.calls) == 1 + lookups
+        assert counts.candidate_rows == listens - missing
+        assert converged.provider_calls == 1 + lookups + resends
+        assert converged.transactions == 1 + lookups + 2 * resends, (
+            "one result transaction per lookup batch, one claim and one result transaction per send batch")
+        # Two checks, two passes of 3 reads each, 3 statements per lookup batch and 4 per send batch.
+        assert converged.sql_statements == 2 + 3 + 3 + 3 + 3 * lookups + 4 * resends
         assert counts.provider_calls == converged.provider_calls, "Last.fm calls stop once the queue is empty"
         assert counts.transactions == converged.transactions
         assert counts.sql_statements - converged.sql_statements == 1

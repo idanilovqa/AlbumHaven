@@ -116,13 +116,15 @@ class PostgresListenHistoryAdapter:
         limit: int | None = 25,
         eligible: Callable[[PendingListenEntry], bool] | None = None,
         connection: Any = None,
+        include_unverified: bool = False,
     ):
         """Pending scrobbles with their row provenance; ``limit=None`` returns all of them.
 
-        ``connection`` reads on the caller's connection instead of opening one."""
+        ``connection`` reads on the caller's connection instead of opening one, and
+        ``include_unverified`` adds the listens whose submission outcome is unknown."""
         # This preserves the existing configured legacy retry family while
         # carrying its actual row provenance into delayed callbacks.
-        from music_app.services.listen_history import is_pending_scrobble_entry
+        from music_app.services.listen_history import is_pending_scrobble_entry, is_unverified_scrobble_entry
         with (nullcontext(connection) if connection is not None else self._connect_to_database()) as connection:
             rows = connection.execute(_load_listen_history_sql(include_provenance=True)).fetchall()
             measured_rows = connection.execute("""
@@ -136,7 +138,9 @@ class PostgresListenHistoryAdapter:
         result = []
         for row in rows:
             item = _listen_history_item_from_row(row)
-            if row['account_id'] and row['library_id'] and is_pending_scrobble_entry(item):
+            if row['account_id'] and row['library_id'] and (
+                is_pending_scrobble_entry(item) or (include_unverified and is_unverified_scrobble_entry(item))
+            ):
                 pending = PendingListenEntry(item, row['account_id'], row['library_id'], row['id'])
                 if eligible is not None and not eligible(pending):
                     continue

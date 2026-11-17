@@ -210,9 +210,10 @@ def apply_track_transliterations(connection: Any, album: dict[str, object] | Non
 
 # Albums with a track whose title may need a Latin form (the claim's test, refined in Python)
 # and no current row for it: none yet, its title changed, or the album's release decision or
-# MusicBrainz answer is newer than the row.
+# MusicBrainz answer changed since the row was made (compared as stored values, never clocks).
 _DUE_LATIN_ALBUMS_SQL = r"""
-    select distinct albums.id as album_id, albums.library_id, albums.album_key
+    select distinct albums.id as album_id, albums.library_id, albums.album_key,
+           greatest(decision.updated_at, transliteration.updated_at) as source_updated_at
     from library.local_albums albums
     join library.local_tracks tracks on tracks.library_id = albums.library_id and tracks.album_id = albums.id
     left join library.local_track_latin_titles latin on latin.track_id = tracks.id
@@ -223,14 +224,14 @@ _DUE_LATIN_ALBUMS_SQL = r"""
     where albums.library_id = any(%(library_ids)s)
       and ((tracks.title ~ '[^\x01-ɏЀ-ԯḀ-ỿ -⁯]'
             and (latin.track_id is null
-                 or latin.computed_at < greatest(decision.updated_at, transliteration.updated_at)))
+                 or latin.source_updated_at is distinct from greatest(decision.updated_at, transliteration.updated_at)))
            or (latin.track_id is not null and latin.source_title is distinct from tracks.title))
     order by albums.id
     limit %(limit)s
 """
 
 
-def refresh_latin_titles(connection: Any, *, library_ids: list[int], limit: int, now: object) -> list[str]:
+def refresh_latin_titles(connection: Any, *, library_ids: list[int], limit: int) -> list[str]:
     """Store the shown Latin form and its search key of each track of up to ``limit`` due
     albums (0255); a track needing none keeps no row, one with no known form a null one.
     Returns the refreshed albums' keys."""
@@ -258,8 +259,8 @@ def refresh_latin_titles(connection: Any, *, library_ids: list[int], limit: int,
         for row in rows:
             connection.execute(
                 "insert into library.local_track_latin_titles (track_id, library_id, source_title, latin, search_key,"
-                " computed_at) values (%(track_id)s, %(library_id)s, %(title)s, %(latin)s, %(key)s, %(now)s)"
+                " source_updated_at) values (%(track_id)s, %(library_id)s, %(title)s, %(latin)s, %(key)s, %(source)s)"
                 " on conflict (track_id) do update set source_title = excluded.source_title, latin = excluded.latin,"
-                " search_key = excluded.search_key, computed_at = excluded.computed_at",
-                {**row, "library_id": album["library_id"], "now": now})
+                " search_key = excluded.search_key, source_updated_at = excluded.source_updated_at",
+                {**row, "library_id": album["library_id"], "source": album["source_updated_at"]})
     return [str(album["album_key"]) for album in albums]

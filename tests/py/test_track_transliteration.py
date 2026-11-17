@@ -299,7 +299,7 @@ class _Repository:
     def store_transliteration(self, **kwargs):
         self.stored.append(kwargs)
 
-    def refresh_latin_titles(self, *, now):
+    def refresh_latin_titles(self):
         self.refreshed = getattr(self, "refreshed", 0) + 1
         return self.latin_due if hasattr(self, "latin_due") else 0
 

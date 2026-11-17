@@ -168,7 +168,7 @@ def test_plain_folded_and_spaceless_queries_find_a_tone_marked_track(monkeypatch
     from music_app.services import musicbrainz_corrections_postgres
 
     monkeypatch.setitem(musicbrainz_corrections_postgres._ON_CHANGE, setup_url, changed.append)
-    assert repository.refresh_latin_titles(now=NOW) >= 1
+    assert repository.refresh_latin_titles() >= 1
     assert ("天门", "Tiān mén", "tianmen") in _latin_rows(setup_url)
     assert any("tianmen" in keys for keys in changed), "the album's cached searches are dropped"
     for query in ("tian men", "tianmen", "Tian Men", "Tiān mén", "TIANMEN"):
@@ -182,15 +182,15 @@ def test_a_changed_title_is_redone_and_a_title_turned_latin_drops_its_row(monkey
     setup_url, repository, _albums = _seed(monkeypatch)
     _pinyin_only(monkeypatch)
     track = _chinese_album(setup_url)
-    repository.refresh_latin_titles(now=NOW)
-    assert repository.refresh_latin_titles(now=NOW) == 0, "nothing is due twice"
+    repository.refresh_latin_titles()
+    assert repository.refresh_latin_titles() == 0, "nothing is due twice"
     with isolatedPostgres._connect(setup_url) as connection:
         connection.execute("update library.local_tracks set title = '天門' where id = %s", (track,))
-    assert repository.refresh_latin_titles(now=NOW) == 1
+    assert repository.refresh_latin_titles() == 1
     assert ("天門", "Tiān mén", "tianmen") in _latin_rows(setup_url)
     with isolatedPostgres._connect(setup_url) as connection:
         connection.execute("update library.local_tracks set title = 'Heaven Gate' where id = %s", (track,))
-    assert repository.refresh_latin_titles(now=NOW) == 1
+    assert repository.refresh_latin_titles() == 1
     assert all(row[0] != "Heaven Gate" for row in _latin_rows(setup_url)), "a Latin title needs no row"
     assert "tianmen" not in _search(setup_url, "tianmen")
 
@@ -199,6 +199,6 @@ def test_a_title_with_no_known_latin_form_keeps_a_null_row_and_is_not_redone(mon
     setup_url, repository, _albums = _seed(monkeypatch)
     _pinyin_only(monkeypatch)
     _chinese_album(setup_url, title="사랑")  # Korean: only MusicBrainz could give its Latin form.
-    repository.refresh_latin_titles(now=NOW)
+    repository.refresh_latin_titles()
     assert ("사랑", None, None) in _latin_rows(setup_url)
-    assert repository.refresh_latin_titles(now=NOW) == 0
+    assert repository.refresh_latin_titles() == 0

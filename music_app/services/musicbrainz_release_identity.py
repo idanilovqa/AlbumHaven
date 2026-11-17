@@ -451,7 +451,7 @@ class MusicBrainzAlbumReleaseProcessor:
             if stored["processed"]:
                 return stored
             # Network-free: the Latin titles search finds tracks by (0255).
-            refreshed = self._repository.refresh_latin_titles(now=observed_at)
+            refreshed = self._repository.refresh_latin_titles()
             return {"processed": True, "state": "succeeded"} if refreshed else stored
         job_id = int(job["id"])
         outcomes = []

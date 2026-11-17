@@ -386,7 +386,7 @@ class MusicBrainzReleaseIdentityPostgresRepository(EnrichmentJobQueue):
                  "media": json.dumps(media if transliteration_mbid else [], ensure_ascii=False),
                  "observed_at": _aware_utc(observed_at)})
 
-    def refresh_latin_titles(self, *, now: datetime, limit: int = 25) -> int:
+    def refresh_latin_titles(self, *, limit: int = 25) -> int:
         """The active library's due albums' Latin titles and search keys (0255); how many.
         Search finds tracks by them, so those albums' cached searches are dropped."""
         from music_app.services.musicbrainz_corrections_postgres import notify_searchable_values_changed
@@ -396,8 +396,8 @@ class MusicBrainzReleaseIdentityPostgresRepository(EnrichmentJobQueue):
             with _transaction(connection):
                 library_ids = [int(_row_mapping(row)["library_id"]) for row in connection.execute(
                     _active_library_cte() + " select library_id from active_library").fetchall()]
-                album_keys = refresh_latin_titles(connection, library_ids=library_ids, limit=limit,
-                                                  now=_aware_utc(now)) if library_ids else []
+                album_keys = refresh_latin_titles(connection, library_ids=library_ids,
+                                                  limit=limit) if library_ids else []
         notify_searchable_values_changed(self._database_url, album_keys)
         return len(album_keys)
 

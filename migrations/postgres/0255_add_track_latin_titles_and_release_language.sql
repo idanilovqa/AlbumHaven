@@ -20,7 +20,9 @@ create table if not exists library.local_track_latin_titles (
   -- Null when no Latin form is known (no MusicBrainz form, no fallback for the script).
   latin text check (char_length(latin) between 1 and 2048),
   search_key text check (search_key ~ '^[a-z0-9]+$'),
-  computed_at timestamptz not null,
+  -- The album's release decision or MusicBrainz answer the row was made from (their latest
+  -- update); a newer one redoes it. Null when the album has neither.
+  source_updated_at timestamptz,
   check ((latin is null) = (search_key is null))
 );
 

@@ -4,7 +4,8 @@ const { spawnSync } = require('node:child_process');
 
 const MINIMUM_PYTEST_CASES = 3037;
 const MINIMUM_PYTEST_MODULES = 147;
-const EXPECTED_COMPONENT_CASES = 230;
+const COMPONENT_CONFIG = 'playwright.component.config.js';
+const TEST_DATA_MATRIX = 'tests/ci/test-data-matrix.json';
 
 function jobSource(workflow, jobName, nextJobName) {
   const start = workflow.indexOf(`  ${jobName}:`);
@@ -58,7 +59,7 @@ function discoverComponentCases(repoRoot, options = {}) {
     'test',
     '--list',
     '--reporter=line',
-    '--config=playwright.component.config.js',
+    `--config=${COMPONENT_CONFIG}`,
   ], {
     cwd: repoRoot,
     env: { ...process.env, ALBUM_HAVEN_PLAYWRIGHT_INVENTORY_DISCOVERY: '1' },
@@ -71,6 +72,15 @@ function discoverComponentCases(repoRoot, options = {}) {
     throw new Error(`Playwright component discovery failed${detail ? `: ${detail}` : ''}`);
   }
   return parsePlaywrightList(result.stdout);
+}
+
+// The test-data matrix contract checks case names; this count stops the
+// component job from passing when its own discovery loses cases.
+function validateComponentDiscovery(componentCases, matrix) {
+  const owned = matrix.filter((entry) => entry.config === COMPONENT_CONFIG).length;
+  return componentCases.length === owned
+    ? []
+    : [`component discovery found ${componentCases.length} cases but ${TEST_DATA_MATRIX} owns ${owned}`];
 }
 
 function validateDependencyContract(requirements) {
@@ -320,6 +330,7 @@ module.exports = {
   parsePytestCollectionOutput,
   parsePytestJunit,
   runNodeTests,
+  validateComponentDiscovery,
   validateDependencyContract,
   validatePytestCollection,
   validateWorkflowContract,
@@ -337,10 +348,10 @@ if (require.main === module) {
     if (process.argv.includes('--list')) {
       const nodeFiles = discoverNodeTestFiles(repoRoot);
       if (nodeFiles.length === 0) errors.push('Node test discovery is empty');
-      const componentCases = discoverComponentCases(repoRoot);
-      if (componentCases.length !== EXPECTED_COMPONENT_CASES) {
-        errors.push(`component discovery must contain ${EXPECTED_COMPONENT_CASES} cases`);
-      }
+      errors.push(...validateComponentDiscovery(
+        discoverComponentCases(repoRoot),
+        JSON.parse(fs.readFileSync(path.join(repoRoot, TEST_DATA_MATRIX), 'utf8')),
+      ));
     }
     if (process.argv.includes('--run-node-tests')) {
       const status = runNodeTests(repoRoot);

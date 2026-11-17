@@ -6714,6 +6714,32 @@ test('a kept track plays with no server stream, and leaving it closes nothing', 
   assert.equal(harness.sent('open').length, 1);
 });
 
+test('a browser cache that never answers does not hold the start of a track', async () => {
+  const deadlines = [];
+  const harness = createEngineHarness({
+    setTimeout: (callback, delay) => {
+      if (delay === 500) {
+        deadlines.push(delay);
+        Promise.resolve().then(callback);
+        return 1;
+      }
+      return setTimeout(callback, delay);
+    },
+  });
+  Object.assign(harness.context, {
+    streamingTrackCacheKey: (track, quality) => `${track.path}|${quality || 'original'}`,
+    loadStreamingCachedTrack: () => new Promise(() => {}),
+    keepStreamingCachedTrack: () => {},
+  });
+
+  const start = harness.api.start(makeTrack());
+  await harness.settle();
+
+  assert.deepEqual(deadlines, [500]);
+  assert.equal(harness.sent('open').length, 1, 'the track streams from the server instead');
+  await start;
+});
+
 test('a kept track starts mid-track from its seek table', async () => {
   const { decoders, create } = recordingDecoders();
   const harness = encodedHarness({ createStreamingDecoder: create });

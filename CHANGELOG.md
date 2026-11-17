@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.11.23 - 2026-11-17
+
+- CI only, no application change: adding or removing a Playwright component test now needs only its entry in `tests/ci/test-data-matrix.json`. The foundation gate compares the component job's discovered cases with the matrix's component entries instead of a hard-coded 229, and the inventory and ownership checks derive their totals from the matrix. A missing or extra test still fails by name.
+
+## 0.11.22 - 2026-11-17
+
+- Playback no longer stalls when the browser's kept-track cache is slow to answer: a track's start waits at most half a second for it and otherwise streams from the server.
+
+## 0.11.21 - 2026-11-17
+
+- Test-only: the gallery overlap tests (FTC-GALLERY-NAV-035) wait for the deferred continuation and the settled query before asserting, so they no longer fail intermittently.
+
+## 0.11.20 - 2026-11-17
+
+- Agents can run the search, Problematic Files, HTML reload, Edit Tags and bounded-interaction regression gates on GitHub-hosted runners with the on-demand Heavy Regression Gates workflow, instead of queueing for the owner's machine. Real-library and full-size-library checks stay local.
+
+## 0.11.19 - 2026-11-17
+
+- Test-only: the album credits test (FTC-ALBUM-DETAILS-006) scrolls the gallery with the mouse wheel before clicking an album after a tag save, so the gallery no longer undoes its scroll and the test no longer fails intermittently.
+
+## 0.11.18 - 2026-11-17
+
+- Test-only: the Transatlantic search heading check (FTC-SEARCH-NAV-028) waits until the gallery has finished loading before it counts artist headings, so it no longer fails intermittently.
+
 ## 0.11.17 - 2026-11-17
 
 - Cover previews kept in app data no longer restart the preview relocation worker. Before, every such preview started a full relocation pass that rescanned all previews and copied the preview into the album folder, which slowed gallery loading and artist jumps.

@@ -282,6 +282,48 @@ def test_an_album_title_with_no_known_latin_form_keeps_a_null_row_and_is_not_red
     assert repository.refresh_latin_titles() == 0
 
 
+def _plan_nodes(node):
+    yield node
+    for child in node.get("Plans") or []:
+        yield from _plan_nodes(child)
+
+
+def test_an_idle_pass_reads_only_the_indexed_titles_never_the_whole_library(monkeypatch):
+    """Orchestrator 2026-11-17 (the 6.5 freeze-guard pattern): with nothing due, the due checks
+    read only the partial indexes over titles beyond Latin and Cyrillic and the stored rows,
+    with default planner settings, on tables large enough for a scan to be the costlier path."""
+    from music_app.services.track_transliteration import _DUE_LATIN_ALBUM_TITLES_SQL, _DUE_LATIN_ALBUMS_SQL
+
+    setup_url, repository, albums = _seed(monkeypatch)
+    _pinyin_only(monkeypatch)
+    with isolatedPostgres._connect(setup_url) as connection:
+        library_id, artist = connection.execute(
+            "select library_id, artist_id from library.local_albums where id = %s", (albums["latin"],)).fetchone().values()
+        connection.execute(
+            "insert into library.local_albums (library_id, artist_id, album_key, title, metadata)"
+            " select %s, %s, 'bulk-' || n, 'Bulk Album ' || n, '{}'::jsonb from generate_series(1, 2000) n",
+            (library_id, artist))
+        connection.execute(
+            "insert into library.local_tracks (library_id, album_id, artist_id, track_key, title, disc_number,"
+            " track_number, duration_seconds, metadata)"
+            " select %s, albums.id, %s, albums.album_key || '-' || n, 'Plain Song ' || n, 1, n, 200, '{}'::jsonb"
+            " from library.local_albums albums cross join generate_series(1, 10) n"
+            " where albums.album_key like 'bulk-%%'", (library_id, artist))
+    assert repository.refresh_latin_titles() >= 1
+    assert repository.refresh_latin_titles() == 0, "an idle pass finds nothing"
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute("analyze library.local_tracks, library.local_albums,"
+                           " library.local_track_latin_titles, library.local_album_latin_titles")
+        for sql, table, index in ((_DUE_LATIN_ALBUMS_SQL, "local_tracks", "local_tracks_beyond_latin_title_idx"),
+                                  (_DUE_LATIN_ALBUM_TITLES_SQL, "local_albums", "local_albums_beyond_latin_title_idx")):
+            plan = connection.execute("explain (format json) " + sql,
+                                      {"library_ids": [library_id], "limit": 25}).fetchone()
+            nodes = list(_plan_nodes(next(iter(plan.values()))[0]["Plan"]))
+            assert any(node.get("Index Name") == index for node in nodes), index
+            assert not any(node.get("Node Type") == "Seq Scan" and node.get("Relation Name") == table
+                           for node in nodes), f"an idle pass scans every row of {table}"
+
+
 def test_symbol_titles_that_need_no_form_keep_null_rows_and_are_never_due_again(monkeypatch):
     """"★" and "♪" pass the refreshes' coarse test but need no Latin form. Their null rows keep
     them from being due on every pass, ahead of real albums, dropping cached searches each time."""

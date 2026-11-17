@@ -39,6 +39,13 @@ begin
 end
 $latin_title_index$;
 
+-- The few albums whose title has a character beyond Latin, Cyrillic and general punctuation,
+-- as for tracks (0255): the background refresh reads only these. The pattern is
+-- music_app.services.track_transliteration._BEYOND_LATIN, written identically.
+create index if not exists local_albums_beyond_latin_title_idx
+  on library.local_albums (library_id)
+  where title ~ '[^\x01-\u024f\u0400-\u052f\u1e00-\u1eff\u2000-\u206f]';
+
 comment on table library.local_album_latin_titles is
   'Each album''s shown Latin title (S7) and its folded search key; derived, rebuilt from titles and MusicBrainz.';
 

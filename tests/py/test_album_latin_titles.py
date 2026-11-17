@@ -81,7 +81,7 @@ class _Connection:
         self.due, self.language, self.writes = due, language, []
 
     def execute(self, sql, params):
-        if "local_album_latin_titles latin on latin.album_id" in sql:
+        if sql == module._DUE_LATIN_ALBUM_TITLES_SQL:
             return _Result(self.due)
         if "musicbrainz_release_transliterations transliteration" in sql:
             return _Result([] if self.language is None else [{
@@ -134,9 +134,23 @@ def test_a_row_is_due_when_its_title_or_source_changed_compared_as_stored_values
     assert ("latin.source_updated_at is distinct from greatest(decision.updated_at, transliteration.updated_at)"
             in sql)
     assert "now()" not in sql.lower() and "current_timestamp" not in sql.lower()
-    # The same coarse script test as the tracks' due check (0255), shared with the Python side.
-    assert "albums.title ~ %(beyond_latin)s" in sql
-    assert "tracks.title ~ %(beyond_latin)s" in " ".join(module._DUE_LATIN_ALBUMS_SQL.split())
+    # The same coarse script test as the tracks' due check (0255), shared with the Python side
+    # and inlined so the planner can use the migrations' partial indexes.
+    assert f"albums.title ~ '{module._BEYOND_LATIN}'" in sql
+    assert f"tracks.title ~ '{module._BEYOND_LATIN}'" in " ".join(module._DUE_LATIN_ALBUMS_SQL.split())
+
+
+def test_the_partial_indexes_use_exactly_the_refreshes_pattern():
+    """The planner uses a partial index only for a predicate written identically, so the
+    migrations' index predicates and the due checks must share the pattern byte for byte."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2] / "migrations" / "postgres"
+    for name, table in (("0255_add_track_latin_titles_and_release_language.sql", "local_tracks"),
+                        ("0256_add_album_latin_titles.sql", "local_albums")):
+        sql = (root / name).read_text(encoding="utf-8")
+        assert f"on library.{table} (library_id)\n  where title ~ '{module._BEYOND_LATIN}';" in sql, name
+    assert module._BEYOND_LATIN.isascii(), "written with escapes, never literal characters"
 
 
 def test_a_symbol_title_keeps_a_null_row_so_it_is_not_due_again(fallbacks):
@@ -154,8 +168,7 @@ def test_a_symbol_track_title_keeps_a_null_row_and_a_latin_one_none(fallbacks):
     """The same rule for tracks (0255): "Intro ♪" keeps a null row; "Outro" keeps none."""
     class Tracks(_Connection):
         def execute(self, sql, params):
-            if "local_track_latin_titles latin on latin.track_id" in sql:
-                assert params["beyond_latin"] == module._BEYOND_LATIN
+            if sql == module._DUE_LATIN_ALBUMS_SQL:
                 return _Result(self.due)
             if sql.startswith("select id, disc_number, track_number, title from library.local_tracks"):
                 return _Result([{"id": 11, "disc_number": 1, "track_number": 1, "title": "Intro ♪"},

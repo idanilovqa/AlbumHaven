@@ -45,6 +45,15 @@ begin
 end
 $latin_title_index$;
 
+-- The few tracks whose title has a character beyond Latin, Cyrillic and general punctuation:
+-- the background refresh reads only these, so an idle pass costs nothing like a scan of every
+-- track (0.9-2.1 s on a 163k-track library before, 15-35 ms with this index). The pattern is
+-- music_app.services.track_transliteration._BEYOND_LATIN, written identically so the planner
+-- matches the refresh's predicate to this index.
+create index if not exists local_tracks_beyond_latin_title_idx
+  on library.local_tracks (library_id)
+  where title ~ '[^\x01-\u024f\u0400-\u052f\u1e00-\u1eff\u2000-\u206f]';
+
 comment on table library.local_track_latin_titles is
   'Each track''s shown Latin form (S7) and its folded search key; derived, rebuilt from titles and MusicBrainz.';
 

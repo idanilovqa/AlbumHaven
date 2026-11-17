@@ -327,11 +327,20 @@ def test_awaited_executor_work_is_followed_synchronously(tmp_path: Path):
     _write(tmp_path, "music_app/services/relations.py", "def build_relation_views(albums):\n    return albums\n")
     _write(tmp_path, "music_app/routes/read.py", """
 import asyncio
+import contextvars
 from music_app.services.relations import build_relation_views
 
 @router.get("/pooled")
 def pooled(state, pool):
     return pool.submit(build_relation_views, state).result()
+
+@router.get("/pooled-in-context")
+def pooled_in_context(state, pool):
+    return pool.submit(contextvars.copy_context().run, build_relation_views, state).result()
+
+@router.get("/executor-in-context")
+async def executor_in_context(state):
+    return await asyncio.get_running_loop().run_in_executor(None, contextvars.copy_context().run, build_relation_views, state)
 
 @router.get("/pooled-lambda")
 def pooled_lambda(state, pool):
@@ -352,7 +361,9 @@ def queued(state, pool):
     rejected = sorted(item["entrypoint"].split("#")[1] for item in analysis["hazards"] if item["reject"])
     assert rejected == [
         "executor:route:GET /executor",
+        "executor_in_context:route:GET /executor-in-context",
         "pooled:route:GET /pooled",
+        "pooled_in_context:route:GET /pooled-in-context",
         "pooled_lambda:route:GET /pooled-lambda",
     ]
 
@@ -958,8 +969,8 @@ def repair(request):
     ]
 
 
-# The structural tag save finalizer that resolved every cached file's cover
-# path (owner incident, sandbox2, 11-17), reduced to its call shape: the state
+# A structural tag save finalizer that resolves every cached file's cover
+# path, reduced to its call shape: the state
 # getter arrives through a queueing helper's `**kwargs`, the refresh is a
 # closure run through `_post_commit_value(..., lambda: guard(refresh), ...)`
 # and an optional mutation guard, and the per-file probe sits in a sibling

@@ -1434,10 +1434,10 @@ def _callees(definition: Definition, index: Index) -> list[tuple[Definition, boo
         found.extend((target, in_loop, node.lineno, node) for target in targets)
         _, name = _call_name(node)
         position = SYNCHRONOUS_DISPATCH.get(name)
-        dispatched = node.args[position] if position is not None and len(node.args) > position else None
+        dispatched = _context_run_target(node.args, position) if position is not None and len(node.args) > position else None
         submit = _awaited_submit(node)
         if submit is not None and submit.args:
-            dispatched = submit.args[0]
+            dispatched = _context_run_target(submit.args, 0)
         if dispatched is not None:
             found.extend((target, in_loop, node.lineno, node) for target in resolve(_callable_target(dispatched)))
         for argument in _invoked_arguments(node, targets, definition):
@@ -1479,7 +1479,7 @@ def _loop_calls(definition: Definition, index: Index) -> list[tuple[ast.Call, li
                 if argument is not None:
                     targets.extend(resolve(_callable_target(argument)))
         found.append((node, targets))
-    found.extend((submit, resolve(_callable_target(submit.args[0]))) for submit in waited.values())
+    found.extend((submit, resolve(_callable_target(_context_run_target(submit.args, 0)))) for submit in waited.values())
     return found
 
 

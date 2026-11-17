@@ -1041,7 +1041,7 @@ def test_cover_lookup_local_select_route_contract_reads_only_the_selected_album_
     def run(album_count: int) -> OperationCounts:
         album_root, track_paths, counts = _cover_lookup_library(library_app, tmp_path / f"main-{album_count}", album_count)
         selected["track_paths"] = track_paths
-        # The lookup gallery named the local image as a candidate before the owner picked it.
+        # The lookup gallery named the local image as a candidate before the user picked it.
         source_ref = library_app.state.cover_reference_store.references_for(
             _COVER_LIBRARY_ID, {str(album_root / "front.jpg"): "candidate"},
         )[str(album_root / "front.jpg")]

@@ -1307,9 +1307,8 @@ def _assert_off_event_loop() -> None:
 
 
 def test_asgi_home_data_builds_the_payload_off_the_event_loop(asgi_app, monkeypatch):
-    # The incident: an async /home-data built the payload on the event loop and
-    # the server answered nothing else for ~10 s. A slow builder must leave the
-    # loop free (the ASGI test client fails any request blocking it > 250 ms).
+    # A slow Home builder must leave the event loop free, so other requests are
+    # served meanwhile (the ASGI test client fails any request blocking it > 250 ms).
     from music_app.routes import api_read_asgi_routes as asgi_read_routes
 
     def slow_build_home_payload(**_kwargs) -> dict[str, object]:

@@ -407,6 +407,15 @@ const DEFECTS = [
     expected: /^rejected BI-04 library-scale:py:music_app\/services\/relations\.py#build_relation_views at music_app\/services\/relations\.py:\d+ from py:music_app\/routes\/api_read_asgi_routes\.py#soundtracks_read_reserved:route:GET \/soundtracks\/\{soundtrack_ref\} via build_relation_views$/,
   },
   {
+    id: 'BI-04 read request that waits on a relation rebuild run through a copied context',
+    language: 'py',
+    file: 'music_app/routes/api_read_asgi_routes.py',
+    anchor: '    normalized_work_ref = str(work_ref or "").strip()\n',
+    replacement: '    normalized_work_ref = str(work_ref or "").strip()\n    _SEEDED_CONTEXT_POOL.submit(_seeded_contextvars.copy_context().run, _seeded_context_rebuild, [], {}).result()\n',
+    prelude: 'import contextvars as _seeded_contextvars\nfrom music_app.services.relations import build_relation_views as _seeded_context_rebuild\n_SEEDED_CONTEXT_POOL = ThreadPoolExecutor(max_workers=1)\n',
+    expected: /^rejected BI-04 library-scale:py:music_app\/services\/relations\.py#build_relation_views at music_app\/services\/relations\.py:\d+ from py:music_app\/routes\/api_read_asgi_routes\.py#works_read_reserved:route:GET \/works\/\{work_ref\} via build_relation_views$/,
+  },
+  {
     id: 'BI-06 folder walk behind a method name defined by two classes',
     language: 'py',
     file: 'music_app/routes/api_read_asgi_routes.py',
@@ -465,8 +474,8 @@ const DEFECTS = [
     expected: /^unregistered entrypoint py:music_app\/routes\/api_read_asgi_routes\.py#_seeded_rebuild_library:background:thread$/,
   },
   {
-    // The incident: an async route ran the file-backed Home build on the event
-    // loop, so no other request was served for ~10 s on a 163k-file library.
+    // An async route that runs the file-backed Home build on the event loop
+    // serves no other request until the build finishes.
     id: 'BI-08 Home builder called directly inside async def home_data',
     language: 'py',
     file: 'music_app/routes/api_read_asgi_routes.py',
@@ -508,9 +517,8 @@ const DEFECTS = [
     expected: /^rejected BI-08 event-loop-blocking:database:\S+ at music_app\/routes\/api_read_asgi_routes\.py:\d+ from py:music_app\/routes\/api_read_asgi_routes\.py#album_note_replies_create_reserved:route:POST \/album-note-replies via LogHistoryPostgresAdapter\.append/,
   },
   {
-    // The incident: Edit Tags built its reservation keys with one
-    // `Path(path).resolve()` per track on the event loop; `resolve` was not
-    // treated as filesystem work, so the 48-request burst stalled the loop.
+    // `Path(path).resolve()` per requested track is filesystem work; on the
+    // event loop a burst of such requests stalls every other request.
     id: 'BI-08 async route resolving each requested path on the event loop',
     language: 'py',
     file: 'music_app/routes/api_read_asgi_routes.py',

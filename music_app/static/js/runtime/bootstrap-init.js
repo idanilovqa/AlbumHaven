@@ -508,6 +508,7 @@ if (tagEditorFooter) {
     canSave: false,
     leadingElement: document.getElementById('tag-editor-auto-number-controls'),
     secondary: { label: 'Cancel', attributes: { 'data-close-tag-editor': '1' } },
-    primary: { label: 'Apply', attributes: { 'data-open-tag-edit-confirm': '1' } },
+    // getTagEditorElements finds Apply by id: CUE mode swaps its data-* action attribute.
+    primary: { label: 'Apply', attributes: { id: 'tag-editor-apply', 'data-open-tag-edit-confirm': '1' } },
   });
 }

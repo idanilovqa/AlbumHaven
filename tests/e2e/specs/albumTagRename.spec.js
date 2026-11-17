@@ -71,7 +71,7 @@ test('FTC-ALBUM-DETAILS-029 stale album references follow merges and return to t
   tagEditorActions,
   trackModalActions,
 }) => {
-  test.setTimeout(240_000);
+  test.setTimeout(180_000);
 
   const staleSplitSession = await freshBrowserSession.create();
   await stepLogger.step('Keep the original album card open in a second client', async () => {

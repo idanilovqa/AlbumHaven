@@ -290,3 +290,24 @@ def test_live_every_album_child_table_is_classified(watcher_repair_inventory):
             """).fetchall()
         }
     assert children == SCAN_OWNED_ALBUM_CHILD_TABLES | GUARDED_ALBUM_CHILD_TABLES
+
+
+def test_live_missing_candidates_query_is_an_anti_join_not_a_per_file_rescan(watcher_repair_inventory):
+    # Owner (11-16): a quick scan sat 25 minutes in "Refreshing artist relations": an OR beside the
+    # NOT EXISTS made Postgres rescan the whole current-path array for every one of 163k files.
+    from music_app.services.scan_cache_persistence import _SOURCE, _scan_missing_candidates_sql
+
+    fixture = watcher_repair_inventory
+    fixture.seed(*_edition_entries(fixture, "Bonus EP"))
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        roots = [row["root_id"] for row in connection.execute(
+            "select coalesce(nullif(metadata ->> 'root_id', ''), '') as root_id from library.library_roots"
+        ).fetchall()]
+        plan = "\n".join(next(iter(row.values())) for row in connection.execute(
+            "explain " + _scan_missing_candidates_sql(),
+            {"current_paths": ["C:/Music/a.flac", "C:/Music/b.flac"], "source": _SOURCE,
+             "observed_root_ids": roots, "unreachable_root_ids": []},
+        ).fetchall())
+
+    assert "Anti Join" in plan, plan
+    assert "SubPlan" not in plan, plan

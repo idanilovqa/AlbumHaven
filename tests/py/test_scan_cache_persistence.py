@@ -294,8 +294,10 @@ def test_full_scan_stale_sql_anti_joins_current_paths_instead_of_comparing_all()
 
     normalized_sql = _normalized_sql(scan_cache_persistence._scan_missing_candidates_sql())
 
-    # `<> all(array)` compared every candidate file with every current path.
+    # `<> all(array)` compared every candidate file with every current path, and an OR beside the
+    # NOT EXISTS keeps it a per-file subplan instead of a hashed anti-join (owner scan, 11-16).
     assert "<> all(" not in normalized_sql
+    assert "or not exists" not in normalized_sql
     assert (
         "not exists ( select 1 from unnest(%(current_paths)s::text[]) as current_file(private_path) "
         "where current_file.private_path = library.local_track_files.private_path )"
@@ -321,19 +323,6 @@ def test_artist_upsert_skips_unchanged_artists(preserve_existing_identity):
             "where (library.local_artists.name, library.local_artists.sort_name, library.local_artists.metadata) "
             "is distinct from (excluded.name, excluded.sort_name, library.local_artists.metadata || excluded.metadata)"
         ) in normalized_sql
-
-
-def test_full_scan_stale_sql_anti_joins_current_paths_instead_of_comparing_all():
-    from music_app.services import scan_cache_persistence
-
-    normalized_sql = _normalized_sql(scan_cache_persistence._mark_stale_track_files_sql())
-
-    # `<> all(array)` compared every candidate file with every current path.
-    assert "<> all(" not in normalized_sql
-    assert (
-        "not exists ( select 1 from unnest(%(current_paths)s::text[]) as current_file(private_path) "
-        "where current_file.private_path = library.local_track_files.private_path )"
-    ) in normalized_sql
 
 
 @pytest.mark.parametrize("preserve_existing_identity", [False, True])
@@ -3261,7 +3250,6 @@ def test_postgres_scan_cache_adapter_saves_inventory_rows(monkeypatch):
         "C:/Music/Broadcast/Tender Buttons/01 I Found The F.mp3",
         "C:/Music/Incoming/problem-file.mp3",
     ]
-    assert stale_params["current_path_count"] == 2
 
     synchronize_params = next(
         params

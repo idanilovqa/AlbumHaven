@@ -3,11 +3,12 @@ from __future__ import annotations
 import asyncio
 import importlib
 import sys
+import threading
 import time
 
 import pytest
 
-from tests.py.asgi_testing import EventLoopStall, run_asgi_request
+from tests.py.asgi_testing import EventLoopStall, run_asgi_request, run_asgi_request_async
 
 
 async def _respond(send) -> None:
@@ -37,6 +38,30 @@ def test_a_request_that_awaits_keeps_the_event_loop_free():
     status, _headers, _body = run_asgi_request(waiting_app, "GET", "/waiting")
 
     assert status == 204
+
+
+def test_concurrent_requests_share_one_sampler_thread():
+    """A sampler thread per request would make a burst of concurrent requests
+    stall the loop through their own observers."""
+    in_flight_threads = []
+
+    async def waiting_app(_scope, _receive, send):
+        await asyncio.sleep(0.05)
+        in_flight_threads.append(threading.active_count())
+        await _respond(send)
+
+    async def burst():
+        await run_asgi_request_async(waiting_app, "GET", "/warm")  # starts the shared sampler
+        idle_threads = threading.active_count()
+        responses = await asyncio.gather(
+            *(run_asgi_request_async(waiting_app, "GET", f"/waiting/{index}") for index in range(64))
+        )
+        return idle_threads, responses
+
+    idle_threads, responses = asyncio.run(burst())
+
+    assert [status for status, _headers, _body in responses] == [204] * 64
+    assert max(in_flight_threads) == idle_threads
 
 
 def test_work_handed_to_a_thread_keeps_the_event_loop_free():

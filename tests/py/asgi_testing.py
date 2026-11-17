@@ -35,11 +35,50 @@ def _importing(frame) -> bool:
     return False
 
 
+class _StackSampler:
+    """One process-wide thread samples the loop thread's stack for every active
+    watchdog. A thread per request would make concurrent requests start and
+    contend with their own observers, so a burst of requests on the loop would
+    be measured as a stall the watchdogs themselves caused."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._active = threading.Condition(self._lock)
+        self._watchdogs: set[EventLoopWatchdog] = set()
+        self._thread: threading.Thread | None = None
+
+    def add(self, watchdog: EventLoopWatchdog) -> None:
+        with self._lock:
+            self._watchdogs.add(watchdog)
+            self._active.notify()
+            start = self._thread is None
+            if start:
+                self._thread = threading.Thread(target=self._run, name="asgi-event-loop-watchdog", daemon=True)
+        if start:
+            self._thread.start()
+
+    def remove(self, watchdog: EventLoopWatchdog) -> None:
+        """Returns once no sampling pass can still record for `watchdog`."""
+        with self._lock:
+            self._watchdogs.discard(watchdog)
+
+    def _run(self) -> None:
+        while True:
+            with self._lock:
+                while not self._watchdogs:
+                    self._active.wait()
+            time.sleep(_SAMPLE_SECONDS)
+            with self._lock:
+                stacks: dict[int, tuple[str, bool] | None] = {}
+                for watchdog in self._watchdogs:
+                    watchdog._sample(stacks)
+
+
 class EventLoopWatchdog:
     """Fails a request during which the event loop is blocked for over 250 ms.
 
-    A heartbeat task records how late the loop runs it. A sampler thread reads
-    the loop thread's stack through `sys._current_frames()` while the heartbeat
+    A heartbeat task records how late the loop runs it. A shared sampler thread
+    reads the loop thread's stack through `sys._current_frames()` while the heartbeat
     is overdue, so the failure names the blocking call. A stall every sample of
     which is inside import machinery is a test process's first import of a
     module, not request work, and is not counted. A stall the sampler could not
@@ -60,23 +99,20 @@ class EventLoopWatchdog:
         # each marked when it was inside import machinery.
         self._samples: dict[float, list[tuple[str, bool]]] = {}
         self._samples_lock = threading.Lock()
-        self._done = threading.Event()
-        self._sampler = threading.Thread(target=self._sample, name="asgi-event-loop-watchdog", daemon=True)
         self._heartbeat: asyncio.Task | None = None
 
     async def __aenter__(self) -> EventLoopWatchdog:
         self._last_beat = time.monotonic()
         self._last_beat_cpu = time.process_time()
         self._heartbeat = asyncio.get_running_loop().create_task(self._beat())
-        self._sampler.start()
+        _SAMPLER.add(self)
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> bool:
+        _SAMPLER.remove(self)
         self._observe()
-        self._done.set()
         self._heartbeat.cancel()
         await asyncio.gather(self._heartbeat, return_exceptions=True)
-        self._sampler.join()
         if exc_type is None and self._worst_stall > EVENT_LOOP_STALL_LIMIT_SECONDS:
             raise EventLoopStall(
                 f"the request blocked the event loop for {self._worst_stall * 1000:.0f} ms "
@@ -107,16 +143,24 @@ class EventLoopWatchdog:
             self._observe()
             await asyncio.sleep(_HEARTBEAT_SECONDS)
 
-    def _sample(self) -> None:
-        while not self._done.wait(_SAMPLE_SECONDS):
-            beat = self._last_beat
-            if time.monotonic() - beat < EVENT_LOOP_STALL_LIMIT_SECONDS / 2:
-                continue
+    def _sample(self, stacks: dict[int, tuple[str, bool] | None]) -> None:
+        """Records the loop thread's stack if the heartbeat is overdue; `stacks`
+        shares one formatted stack per thread across a sampling pass."""
+        beat = self._last_beat
+        if time.monotonic() - beat < EVENT_LOOP_STALL_LIMIT_SECONDS / 2:
+            return
+        if self._loop_thread not in stacks:
             frame = sys._current_frames().get(self._loop_thread)
-            if frame is not None:
-                sample = ("".join(traceback.format_stack(frame)), _importing(frame))
-                with self._samples_lock:
-                    self._samples.setdefault(beat, []).append(sample)
+            stacks[self._loop_thread] = (
+                None if frame is None else ("".join(traceback.format_stack(frame)), _importing(frame))
+            )
+        sample = stacks[self._loop_thread]
+        if sample is not None:
+            with self._samples_lock:
+                self._samples.setdefault(beat, []).append(sample)
+
+
+_SAMPLER = _StackSampler()
 
 
 class _BootstrapOwnerResolver:

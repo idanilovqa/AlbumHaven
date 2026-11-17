@@ -144,6 +144,14 @@ test('a scrolled label that has not passed the viewport keeps the previous artis
   assert.equal(barParts['[data-gallery-context-name]'].textContent, 'Artist 00005');
 });
 
+test('a rendered label the viewport has passed owns the bar before its rows are measured', () => {
+  const { context, scrollTo, barParts } = loadGallery(20);
+  // Unmeasured rows above left Artist 00006 modelled 200 px lower than its rendered label.
+  context.virtualGrid.sections[6].top = 6 * SECTION_HEIGHT + 200;
+  scrollTo(6 * SECTION_HEIGHT + 50);
+  assert.equal(barParts['[data-gallery-context-name]'].textContent, 'Artist 00006');
+});
+
 test('gallery scroll context falls back to a full chrome update when the view changed', () => {
   const { context, scrollTo, barParts } = loadGallery(20);
   context.state.view = { ...context.state.view, artist_count: 3 };

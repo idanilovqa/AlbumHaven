@@ -669,22 +669,38 @@ function findGalleryMainContextSection(threshold) {
   }
   const scroll = document.getElementById('albums-scroll');
   const viewportTop = scroll?.getBoundingClientRect?.().top || 0;
+  // A rendered label's position comes from the page, which can run ahead of the
+  // modelled section tops until the rows are measured; it decides whenever it exists.
+  const labelPosition = (section) => {
+    if (section?.kind !== 'artist' && !section?.group) return null;
+    const artist = galleryMainGroupArtist(section.group);
+    if (!artist) return null;
+    const label = scroll?.querySelector?.(`[data-scroll-artist="${cssEscape(artist)}"] .artist-name`);
+    return {
+      artist,
+      rendered: Boolean(label),
+      labelBottom: label
+        ? label.getBoundingClientRect().bottom - viewportTop + scroll.scrollTop
+        : Number(section.top || 0) + Number(virtualGrid?.sectionHeaderHeight || 0),
+    };
+  };
+  // Rendered labels that the viewport has passed although their modelled top is still below it.
+  for (let next = index + 1; next < sections.length; next += 1) {
+    const position = labelPosition(sections[next]);
+    if (!position) continue;
+    if (!position.rendered || position.labelBottom > threshold) break;
+    index = next;
+  }
   for (; index >= 0; index -= 1) {
     const section = sections[index];
-    if (section?.kind !== 'artist' && !section?.group) continue;
-    const artist = galleryMainGroupArtist(section.group);
-    if (!artist) continue;
-    const label = scroll?.querySelector?.(`[data-scroll-artist="${cssEscape(artist)}"] .artist-name`);
-    const labelBottom = label
-      ? label.getBoundingClientRect().bottom - viewportTop + scroll.scrollTop
-      : Number(section.top || 0) + Number(virtualGrid?.sectionHeaderHeight || 0);
-    if (labelBottom <= threshold) {
+    const position = labelPosition(section);
+    if (position && position.labelBottom <= threshold) {
       return {
-        artist,
+        artist: position.artist,
         albumCount: Array.isArray(section.group?.albums) ? section.group.albums.length : 0,
         artist_musicbrainz: section.group?.artist_musicbrainz || null,
         top: Number(section.top || 0),
-        labelBottom,
+        labelBottom: position.labelBottom,
       };
     }
   }

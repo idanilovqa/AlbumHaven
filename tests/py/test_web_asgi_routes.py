@@ -12,7 +12,7 @@ from urllib.parse import parse_qs, quote, urlsplit
 import pytest
 from music_app.services import startup_bootstrap
 from music_app.services.loops import loop_previews_dir, loops_dir, save_loops
-from tests.py.asgi_testing import create_test_asgi_app
+from tests.py.asgi_testing import cover_reference_url, create_test_asgi_app
 from tests.py.asgi_testing import decode_json as _decode_json
 from tests.py.asgi_testing import collect_route_paths as _collect_route_paths
 from tests.py.asgi_testing import run_asgi_request as _run_asgi_request
@@ -136,11 +136,6 @@ def _configure_selected_postgres_empty_root_bootstrap(monkeypatch, web_asgi) -> 
     monkeypatch.setattr(web_asgi, "library_browse_postgres_is_effective", lambda _config: True)
     monkeypatch.setattr(
         web_asgi,
-        "get_primary_music_root",
-        lambda config: Path(config["MUSIC_DIR"]).expanduser().resolve(strict=False),
-    )
-    monkeypatch.setattr(
-        web_asgi,
         "_build_postgres_root_startup_view",
         fake_build_postgres_root_startup_view,
     )
@@ -205,6 +200,7 @@ def test_asgi_web_routes_register_natively(asgi_app):
         "/bootstrap-data",
         "/track",
         "/cover",
+        "/cover/{reference}",
         "/loops/media/{loop_id}",
         "/loops/pitch-preview/{preview_id}",
     ):
@@ -576,11 +572,6 @@ def test_bootstrap_direct_selected_artist_urls_keep_query_and_sidebar_context_di
         web_asgi,
         "PostgresLibraryBrowseRepository",
         DirectUrlBrowseRepository,
-    )
-    monkeypatch.setattr(
-        web_asgi,
-        "get_primary_music_root",
-        lambda config: Path(config["MUSIC_DIR"]).expanduser().resolve(strict=False),
     )
     asgi_app = _make_asgi_app()
 
@@ -1520,28 +1511,28 @@ def test_asgi_track_cover_and_loop_media_preserve_private_file_policy(app, monke
     cover_status, cover_headers, cover_body = _run_asgi_request(
         asgi_app,
         "GET",
-        "/cover",
-        query={"path": str(cover_path)},
+        cover_reference_url(asgi_app, cover_path),
+        query={},
     )
     rejected_cover_status, rejected_cover_headers, rejected_cover_body = _run_asgi_request(
         asgi_app,
         "GET",
-        "/cover",
-        query={"path": str(outside_path)},
+        cover_reference_url(asgi_app, outside_path),
+        query={},
     )
     revalidated_cover_status, revalidated_cover_headers, revalidated_cover_body = _run_asgi_request(
         asgi_app,
         "GET",
-        "/cover",
-        query={"path": str(cover_path)},
+        cover_reference_url(asgi_app, cover_path),
+        query={},
         headers={"if-none-match": cover_headers["etag"]},
     )
     revalidated_cover_mtime_status, revalidated_cover_mtime_headers, revalidated_cover_mtime_body = (
         _run_asgi_request(
             asgi_app,
             "GET",
-            "/cover",
-            query={"path": str(cover_path)},
+            cover_reference_url(asgi_app, cover_path),
+            query={},
             headers={"if-modified-since": cover_headers["last-modified"]},
         )
     )
@@ -1697,7 +1688,7 @@ def test_asgi_cover_uses_dedicated_capacity_instead_of_the_shared_request_worker
         shared_worker_started.set()
         release_shared_worker.wait(timeout=5)
 
-    monkeypatch.setattr(web_asgi, "_cover_response", lambda *_args: expected_response)
+    monkeypatch.setattr(web_asgi, "_legacy_cover_response", lambda *_args: expected_response)
 
     async def request_cover():
         limiter = anyio.to_thread.current_default_thread_limiter()
@@ -1739,8 +1730,8 @@ def test_asgi_cover_preserves_rfc_safe_content_disposition_for_punctuation_and_u
     status, headers, body = _run_asgi_request(
         asgi_app,
         "GET",
-        "/cover",
-        query={"path": str(cover_path)},
+        cover_reference_url(asgi_app, cover_path),
+        query={},
     )
     expected_disposition = f"inline; filename*=utf-8''{quote(filename)}"
 
@@ -1754,8 +1745,8 @@ def test_asgi_cover_preserves_rfc_safe_content_disposition_for_punctuation_and_u
     revalidated_status, revalidated_headers, revalidated_body = _run_asgi_request(
         asgi_app,
         "GET",
-        "/cover",
-        query={"path": str(cover_path)},
+        cover_reference_url(asgi_app, cover_path),
+        query={},
         headers={"if-none-match": headers["etag"]},
     )
 
@@ -1780,8 +1771,8 @@ def test_asgi_cover_serves_opaque_png_display_variant_as_jpeg(app, monkeypatch):
     status, headers, body = _run_asgi_request(
         asgi_app,
         "GET",
-        "/cover",
-        query={"path": str(cover_path), "size": "480"},
+        cover_reference_url(asgi_app, cover_path),
+        query={"size": "480"},
     )
 
     assert status == 200
@@ -1821,11 +1812,12 @@ def test_asgi_cover_snapshots_new_variant_before_relocation_can_remove_it(
 
     monkeypatch.setattr(web_asgi, "_conditional_file_response", relocate_before_send)
 
+    asgi_app = _make_asgi_app(app)
     status, headers, body = _run_asgi_request(
-        _make_asgi_app(app),
+        asgi_app,
         "GET",
-        "/cover",
-        query={"path": str(cover_path), "size": "480"},
+        cover_reference_url(asgi_app, cover_path),
+        query={"size": "480"},
     )
 
     assert status == 200
@@ -1868,11 +1860,12 @@ def test_asgi_cover_snapshots_existing_active_variant_before_relocation_can_remo
         return original_response(request, path, **kwargs)
 
     monkeypatch.setattr(web_asgi, "_conditional_file_response", relocate_before_send)
+    asgi_app = _make_asgi_app(app)
     status, headers, body = _run_asgi_request(
-        _make_asgi_app(app),
+        asgi_app,
         "GET",
-        "/cover",
-        query={"path": str(cover_path), "size": "480"},
+        cover_reference_url(asgi_app, cover_path),
+        query={"size": "480"},
     )
 
     assert status == 200
@@ -1927,8 +1920,8 @@ def test_asgi_cover_snapshots_legacy_fallback_before_relocation_can_remove_it(
     status, _headers, body = _run_asgi_request(
         asgi_app,
         "GET",
-        "/cover",
-        query={"path": str(source_path), "size": "480", "v": revision},
+        cover_reference_url(asgi_app, source_path),
+        query={"size": "480", "v": revision},
     )
 
     assert status == 200

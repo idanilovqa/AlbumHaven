@@ -329,7 +329,7 @@ function createGalleryRefreshContext() {
   };
   transitionImage = Object.create(context.HTMLImageElement.prototype);
   transitionImage.loading = 'lazy';
-  transitionImage.attributes = new Map([['src', '/cover?path=old']]);
+  transitionImage.attributes = new Map([['src', '/cover/old']]);
   transitionImage.removeAttribute = function removeAttribute(name) {
     this.attributes.delete(name);
   };

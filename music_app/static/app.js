@@ -37,7 +37,6 @@
     show_all_artists_sidebar_link: true,
     related_filter_artists: [],
     primary_filter_active: false,
-    music_dir: '',
     app_name: 'Album Haven',
     app_version: releaseVersion,
     ignored_version_keys: [],
@@ -113,7 +112,7 @@
     const rating = album?.album_preference?.rating;
     return Number.isInteger(rating) && rating >= 1 && rating <= 10 ? rating : null;
   };
-  const getFailedStartupCoverPaths = () => {
+  const getFailedStartupCoverRefs = () => {
     if (!window.__ALBUM_HAVEN_FAILED_LOCAL_DISPLAY_COVERS__
       || typeof window.__ALBUM_HAVEN_FAILED_LOCAL_DISPLAY_COVERS__ !== 'object') {
       window.__ALBUM_HAVEN_FAILED_LOCAL_DISPLAY_COVERS__ = {};
@@ -132,10 +131,11 @@
     }
     imageElement.dataset.coverVisualState = 'ready';
     imageElement.removeAttribute('aria-hidden');
-    const coverPath = String(imageElement.getAttribute('data-cover-path') || '').trim();
+    const coverRef = String(imageElement.getAttribute('data-cover-ref') || '').trim();
     try {
-      const loadedCoverPath = new URL(imageElement.currentSrc || imageElement.src, window.location.href).searchParams.get('path');
-      if (coverPath && loadedCoverPath === coverPath) delete getFailedStartupCoverPaths()[coverPath];
+      const loadedPath = new URL(imageElement.currentSrc || imageElement.src, window.location.href).pathname;
+      const loadedCoverRef = loadedPath.startsWith('/cover/') ? decodeURIComponent(loadedPath.slice('/cover/'.length)) : '';
+      if (coverRef && loadedCoverRef === coverRef) delete getFailedStartupCoverRefs()[coverRef];
     } catch (_error) {
       // The loaded image remains valid even when a nonstandard URL cannot be parsed.
     }
@@ -147,9 +147,9 @@
       imageElement.setAttribute('aria-hidden', 'true');
     }
     if (imageElement && typeof imageElement.getAttribute === 'function') {
-      const failedPath = String(imageElement.getAttribute('data-cover-path') || '').trim();
-      if (failedPath) {
-        getFailedStartupCoverPaths()[failedPath] = true;
+      const failedRef = String(imageElement.getAttribute('data-cover-ref') || '').trim();
+      if (failedRef) {
+        getFailedStartupCoverRefs()[failedRef] = true;
       }
     }
     const remoteFallbackUrl = imageElement && typeof imageElement.getAttribute === 'function'
@@ -177,9 +177,9 @@
     if (canonicalPreviewUrl) {
       return canonicalPreviewUrl;
     }
-    const coverPath = String(album?.cover_path || '').trim();
-    if (coverPath && !getFailedStartupCoverPaths()[coverPath]) {
-      return `/cover?path=${encodeURIComponent(coverPath)}&size=${STARTUP_COVER_DISPLAY_SIZE}`;
+    const coverRef = String(album?.cover_ref || '').trim();
+    if (coverRef && !getFailedStartupCoverRefs()[coverRef]) {
+      return `/cover/${encodeURIComponent(coverRef)}?size=${STARTUP_COVER_DISPLAY_SIZE}`;
     }
     const remoteUrl = String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim();
     if (remoteUrl) {
@@ -192,12 +192,12 @@
     const coverUrl = buildStartupCoverUrl(album);
     const albumKey = escapeHtml(String(album?.key || '').trim());
     const albumName = escapeHtml(String(album?.display_name || album?.name || 'Album'));
-    const localCoverPath = escapeHtml(String(album?.cover_path || '').trim());
+    const localCoverRef = escapeHtml(String(album?.cover_ref || '').trim());
     const remoteCoverUrl = escapeHtml(String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim());
     const rating = getAlbumCardRating(album);
     const eagerCover = options.eagerCover === true;
     const coverMarkup = coverUrl
-      ? `<img loading="${eagerCover ? 'eager' : 'lazy'}" decoding="async" fetchpriority="${eagerCover ? 'high' : 'low'}" src="${escapeHtml(coverUrl)}" data-cover-visual-state="pending" aria-hidden="true" alt="Album cover for ${albumName}" data-cover-path="${localCoverPath}" data-remote-cover-url="${remoteCoverUrl}" onload="handleStartupAlbumCoverImageLoad(this)" onerror="handleStartupAlbumCoverImageError(this)">`
+      ? `<img loading="${eagerCover ? 'eager' : 'lazy'}" decoding="async" fetchpriority="${eagerCover ? 'high' : 'low'}" src="${escapeHtml(coverUrl)}" data-cover-visual-state="pending" aria-hidden="true" alt="Album cover for ${albumName}" data-cover-ref="${localCoverRef}" data-remote-cover-url="${remoteCoverUrl}" onload="handleStartupAlbumCoverImageLoad(this)" onerror="handleStartupAlbumCoverImageError(this)">`
       : '<div class="cover-placeholder">No cover art</div>';
     return `
       <section class="album-card" data-startup-preview-card="1">
@@ -241,10 +241,10 @@
       groups.forEach((group) => {
         const albums = Array.isArray(group?.albums) ? group.albums : [];
         albums.forEach((album) => {
-          const coverPath = String(album?.cover_path || '').trim();
+          const coverRef = String(album?.cover_ref || '').trim();
           const coverUrl = String(album?.cover_preview_url || '').trim();
-          if (coverPath && coverUrl) {
-            remembered.set(coverPath, coverUrl);
+          if (coverRef && coverUrl) {
+            remembered.set(coverRef, coverUrl);
           }
         });
       });

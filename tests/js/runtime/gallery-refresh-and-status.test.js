@@ -519,7 +519,7 @@ test('fetchAndRender skips the loaded-album snapshot when no album modal is open
 
 test('fetchAndRender uses the open-modal snapshot without flattening the loaded gallery', async () => {
   const { context, pendingRequests } = createContext();
-  context.state.modalReleases = [{ key: 'artist::album', cover_path: 'cover.jpg' }];
+  context.state.modalReleases = [{ key: 'artist::album', cover_ref: 'cover.jpg' }];
   context.state.modalReleaseIndex = 0;
   context.flattenVisibleAlbums = () => {
     throw new Error('the loaded gallery must not be flattened');
@@ -1347,7 +1347,7 @@ test('gallery render equivalence requires the same ordered artist groups and ren
   assert.equal(context.hasEquivalentGalleryRenderTopology(retained, [{
     ...equivalentCanonical[0],
     albums: [
-      { ...equivalentCanonical[0].albums[0], cover_url: '/cover?path=updated' },
+      { ...equivalentCanonical[0].albums[0], cover_url: '/cover/updated' },
       equivalentCanonical[0].albums[1],
     ],
   }, equivalentCanonical[1]]), false, 'Changed cover state must rerender the mounted card.');
@@ -1880,7 +1880,7 @@ test('fetchAndRender rerenders same-key cards when canonical title and cover dat
       albums: [{
         key: 'neal-morse::sola-scriptura',
         name: 'Sola Scriptura',
-        cover_url: '/cover?path=old',
+        cover_url: '/cover/old',
       }],
     }],
     family_artist_groups: [],
@@ -1889,7 +1889,7 @@ test('fetchAndRender rerenders same-key cards when canonical title and cover dat
       albums: [{
         key: 'neal-morse::sola-scriptura',
         name: 'Sola Scriptura',
-        cover_url: '/cover?path=old',
+        cover_url: '/cover/old',
       }],
     }],
     album_count: 1,
@@ -1909,7 +1909,7 @@ test('fetchAndRender rerenders same-key cards when canonical title and cover dat
       albums: [{
         key: 'neal-morse::sola-scriptura',
         name: 'Sola Scriptura (Remastered)',
-        cover_url: '/cover?path=new',
+        cover_url: '/cover/new',
       }],
     }],
     family_artist_groups: [],
@@ -1918,7 +1918,7 @@ test('fetchAndRender rerenders same-key cards when canonical title and cover dat
       albums: [{
         key: 'neal-morse::sola-scriptura',
         name: 'Sola Scriptura (Remastered)',
-        cover_url: '/cover?path=new',
+        cover_url: '/cover/new',
       }],
     }],
     album_count: 1,
@@ -1927,7 +1927,7 @@ test('fetchAndRender rerenders same-key cards when canonical title and cover dat
   await flushMicrotasks();
 
   assert.equal(context.state.view.artist_groups[0].albums[0].name, 'Sola Scriptura (Remastered)');
-  assert.equal(context.state.view.artist_groups[0].albums[0].cover_url, '/cover?path=new');
+  assert.equal(context.state.view.artist_groups[0].albums[0].cover_url, '/cover/new');
   assert.equal(calls.renderArtistGroups, 1);
 });
 
@@ -2002,7 +2002,7 @@ test('fetchAndRender preserves decoded gallery nodes while showing a pending tra
 
   assert.equal(context.state.ui.pendingViewTransition, true);
   assert.equal(artistGroups.innerHTML, '<section class="artist-section"></section>');
-  assert.equal(transitionImage.attributes.get('src'), '/cover?path=old');
+  assert.equal(transitionImage.attributes.get('src'), '/cover/old');
   assert.equal(topSpacer.style.height, '120px');
   assert.equal(bottomSpacer.style.height, '120px');
   assert.equal(calls.renderLibraryLoader.length, 1);
@@ -2034,7 +2034,7 @@ test('fetchAndRender keeps the current gallery visible when a request skips the 
 
   assert.equal(context.state.ui.pendingViewTransition, undefined);
   assert.equal(artistGroups.innerHTML, '<section class="artist-section"></section>');
-  assert.equal(transitionImage.attributes.get('src'), '/cover?path=old');
+  assert.equal(transitionImage.attributes.get('src'), '/cover/old');
   assert.equal(topSpacer.style.height, '120px');
   assert.equal(bottomSpacer.style.height, '120px');
   assert.equal(calls.renderLibraryLoader.length, 0);
@@ -5290,12 +5290,12 @@ test('closeScanPage restores the retained cover-complete gallery when cancellati
         {
           key: 'neal-morse::sola-scriptura',
           name: 'Sola Scriptura',
-          cover_path: 'C:\\Music\\Neal Morse\\Sola Scriptura\\cover.jpg',
+          cover_ref: 'C:\\Music\\Neal Morse\\Sola Scriptura\\cover.jpg',
         },
         {
           key: 'neal-morse::question-mark',
           name: '?',
-          cover_path: 'C:\\Music\\Neal Morse\\Question Mark\\cover.jpg',
+          cover_ref: 'C:\\Music\\Neal Morse\\Question Mark\\cover.jpg',
         },
       ],
     }],
@@ -5315,12 +5315,12 @@ test('closeScanPage restores the retained cover-complete gallery when cancellati
         {
           key: 'neal-morse::sola-scriptura',
           name: 'Sola Scriptura',
-          cover_path: 'C:\\Music\\Neal Morse\\Sola Scriptura\\cover.jpg',
+          cover_ref: 'C:\\Music\\Neal Morse\\Sola Scriptura\\cover.jpg',
         },
         {
           key: 'neal-morse::question-mark',
           name: '?',
-          cover_path: '',
+          cover_ref: '',
         },
       ],
     }],
@@ -5360,7 +5360,7 @@ test('closeScanPage remounts a retained cancelled gallery when no album cards re
       albums: [{
         key: 'дубы-колдуны::там-за-окном',
         name: 'Там, за окном',
-        cover_path: 'C:\\Music\\ДДТ\\Там, за окном\\cover.jpg',
+        cover_ref: 'C:\\Music\\ДДТ\\Там, за окном\\cover.jpg',
       }],
     }],
   };

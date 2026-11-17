@@ -188,7 +188,7 @@ function createBrowserPlayer() {
 /** A browser body as the server stores it from a reference: the path becomes the track's reference. */
 function byReference({ effect, body }, refs) {
   assert.ok(body.path in refs, `write names an unknown track: ${body.path}`);
-  const { path: _path, cover_path: _cover, ...rest } = body;
+  const { path: _path, cover_ref: _cover, ...rest } = body;
   return { effect, body: { ...rest, playbackRef: refs[body.path] } };
 }
 
@@ -220,7 +220,7 @@ test('every listen fixture scenario records writes and names no path', () => {
   for (const scenario of fixture.scenarios) {
     assert.ok(Array.isArray(scenario.writes) && scenario.writes.length > 0, scenario.name);
     for (const { body } of scenario.writes) {
-      assert.equal('path' in body || 'cover_path' in body, false, scenario.name);
+      assert.equal('path' in body || 'cover_ref' in body, false, scenario.name);
       assert.equal(typeof body.playbackRef, 'string');
     }
   }

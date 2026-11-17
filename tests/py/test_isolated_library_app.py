@@ -4107,6 +4107,10 @@ def test_gapless_fixture_persists_integer_cache_durations_without_rounding_manif
     ]
     assert [Path(track["path"]).suffix.lower() for track in encoded_chain] == [".mp3"] * 3
     assert [track["durationSeconds"] for track in encoded_chain] == [6.0, 6.0, 6.0]
+    untagged_chain = [track for track in tracks if str(track["kind"]).startswith("untagged-chain-")]
+    assert [track["kind"] for track in untagged_chain] == ["untagged-chain-a", "untagged-chain-b"]
+    assert [Path(track["path"]).suffix.lower() for track in untagged_chain] == [".mp3"] * 2
+    assert tracks.index(untagged_chain[1]) == tracks.index(untagged_chain[0]) + 1
 
 
 def test_gapless_fixture_registration_accepts_empty_cache_and_builds_complete_metadata(

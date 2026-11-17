@@ -991,7 +991,7 @@ def test_single_track_cd_album_gallery_excludes_sibling_album_cover(config, tmp_
         is_squareish_cover=lambda width, height: width == height,
     )
 
-    assert [candidate["path"] for candidate in payload["local_covers"]] == [str(album_cover)]
+    assert [candidate["candidate_cover_path"] for candidate in payload["local_covers"]] == [str(album_cover)]
 
 
 def test_single_track_cd_album_rejects_sibling_album_cover_selection(config, tmp_path: Path):
@@ -1053,7 +1053,7 @@ def test_late_cd_sibling_is_excluded_when_gallery_serializes(config, tmp_path: P
         is_squareish_cover=lambda width, height: width == height,
     )
 
-    assert [candidate["path"] for candidate in payload["local_covers"]] == [str(album_cover)]
+    assert [candidate["candidate_cover_path"] for candidate in payload["local_covers"]] == [str(album_cover)]
 
 
 def test_late_cd_sibling_cannot_be_selected(config, tmp_path: Path):

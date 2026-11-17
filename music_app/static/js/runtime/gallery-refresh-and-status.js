@@ -1433,7 +1433,7 @@ async function fetchAndRender(url, push = true, options = {}) {
     // legacy selection fields are unchanged. Check before applying this view.
     const responseOwnsModalAlbum = Boolean(responseModalAlbum?.key && responseModalCoverAuthority
       && (!requestModalAlbum || responseModalAlbum === requestModalAlbum)
-      && ['cover_path', 'cover_revision', 'cover_selection_origin', 'cover_selection_provenance',
+      && ['cover_ref', 'cover_revision', 'cover_selection_origin', 'cover_selection_provenance',
         'remote_cover_url', 'remote_cover_thumbnail_url', 'remote_cover_source'].every(
         (field) => responseModalAlbum[field] === responseModalCoverAuthority[field],
       ));
@@ -1534,7 +1534,7 @@ async function fetchAndRender(url, push = true, options = {}) {
         .flatMap((group) => (Array.isArray(group?.albums) ? group.albums : []))
         .find((album) => (
           album.key === currentModalAlbum.key && !albumRequiresHydration(album)
-          && (Object.prototype.hasOwnProperty.call(album, 'cover_path')
+          && (Object.prototype.hasOwnProperty.call(album, 'cover_ref')
             || Object.prototype.hasOwnProperty.call(album, 'remote_cover_url'))
         ));
       if (canonicalAlbum && !retainedMountedSelectedViewState) {

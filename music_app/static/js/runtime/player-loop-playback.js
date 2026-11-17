@@ -256,9 +256,9 @@ function setCurrentPlayerTrack(track, options = {}) {
       duration: Number(previousPlaybackSnapshot?.duration) || undefined,
     });
   }
-  if (track && !String(track.coverPath || '').trim() && typeof resolveAlbumForPlayerTrack === 'function') {
-    const resolvedCoverPath = String(resolveAlbumForPlayerTrack(track)?.cover_path || '').trim();
-    if (resolvedCoverPath) track = { ...track, coverPath: resolvedCoverPath };
+  if (track && !String(track.coverRef || '').trim() && typeof resolveAlbumForPlayerTrack === 'function') {
+    const resolvedCoverRef = String(resolveAlbumForPlayerTrack(track)?.cover_ref || '').trim();
+    if (resolvedCoverRef) track = { ...track, coverRef: resolvedCoverRef };
   }
   state.player.current = track;
   state.player.timelineDragging = false;
@@ -281,7 +281,7 @@ function setCurrentPlayerTrack(track, options = {}) {
   state.player.loopEditDurationSeconds = 0;
   renderGlobalPlayerMetadata(els, track);
   if (els.coverButton) {
-    const coverPath = track?.coverPath || '';
+    const coverRef = track?.coverRef || '';
     const loadId = (state.player.coverLoadId || 0) + 1;
     state.player.coverLoadId = loadId;
     els.coverButton.hidden = false;
@@ -290,8 +290,8 @@ function setCurrentPlayerTrack(track, options = {}) {
     els.coverButton.textContent = '';
     if (!track) {
       els.coverButton.textContent = '';
-    } else if (coverPath) {
-      const coverSrc = `/cover?path=${encodeURIComponent(coverPath)}`;
+    } else if (coverRef) {
+      const coverSrc = `/cover/${encodeURIComponent(coverRef)}`;
       const probe = new Image();
       probe.onload = () => {
         if (state.player.coverLoadId !== loadId) return;
@@ -444,6 +444,16 @@ function resumePlayerPlaybackFromPageCache(playbackSnapshot) {
   });
 }
 
+// Only the queue owner knows whether `track` follows the current one inside the same album.
+function queuedNextContinuityOptions(track) {
+  return {
+    kind: 'queued-next',
+    startSeconds: 0,
+    consecutiveAlbumBoundary: typeof isConsecutiveAlbumSuccessor === 'function'
+      && isConsecutiveAlbumSuccessor(track),
+  };
+}
+
 let handledStreamingFirstFrameIdentity = '';
 let pendingStreamingFirstFrameIdentity = '';
 let pendingStreamingFirstFrameSchedule = null;
@@ -475,7 +485,7 @@ async function handleStreamingPlaybackFirstFrame(event = {}) {
       || selectedTrackPath !== String(state.player.current?.path || '')) return;
     return state.player.loopActive
       ? dispatchActiveStreamingLoop()
-      : nextTrack ? scheduleStreamingContinuity(nextTrack) : null;
+      : nextTrack ? scheduleStreamingContinuity(nextTrack, queuedNextContinuityOptions(nextTrack)) : null;
   });
   pendingStreamingFirstFrameSchedule = scheduling;
   try {
@@ -624,7 +634,7 @@ async function handleStreamingPlaybackBoundary(event = {}) {
     ? peekNextQueuedTrack()
     : null;
   if (subsequentTrack && typeof scheduleStreamingContinuity === 'function') {
-    await scheduleStreamingContinuity(subsequentTrack);
+    await scheduleStreamingContinuity(subsequentTrack, queuedNextContinuityOptions(subsequentTrack));
   }
   if (typeof promoteWaveformPeaks === 'function') {
     try {
@@ -801,9 +811,7 @@ function setLoopActive(active) {
       ? peekNextQueuedTrack()
       : null;
     if (nextTrack && typeof scheduleStreamingContinuity === 'function') {
-      const result = scheduleStreamingContinuity(nextTrack, {
-        kind: 'queued-next', startSeconds: 0,
-      });
+      const result = scheduleStreamingContinuity(nextTrack, queuedNextContinuityOptions(nextTrack));
       if (typeof observeStreamingFacadeCallback === 'function') {
         observeStreamingFacadeCallback(result, 'loop-disable-continuity-error');
       }
@@ -1078,7 +1086,7 @@ async function saveCurrentLoop() {
         artist: current.artist || '',
         title: current.title || '',
         album: current.album || '',
-        cover_path: current.coverPath || '',
+        cover_ref: current.coverRef || '',
       }),
     });
     const data = await response.json().catch(() => ({}));
@@ -1169,7 +1177,7 @@ function activateSharedTrackButton(btn, { restart = false, focusTimeline = false
     artist: btn.getAttribute('data-track-artist') || '',
     albumArtist: btn.getAttribute('data-track-album-artist') || '',
     album: btn.getAttribute('data-track-album') || '',
-    coverPath: btn.getAttribute('data-track-cover') || '',
+    coverRef: btn.getAttribute('data-track-cover') || '',
     durationSeconds: Number(btn.getAttribute('data-track-duration-seconds')) || 0,
   });
   if (currentAlbum) {

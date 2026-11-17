@@ -178,6 +178,50 @@ class _BootstrapOwnerResolver:
         )
 
 
+class InMemoryCoverReferences:
+    """Test double of `CoverReferenceStore` for route units without Postgres.
+
+    References are deterministic, so a test can name a cover before or after the app does.
+    """
+
+    def __init__(self):
+        self.named: dict[tuple[int, str], tuple[str, str]] = {}
+
+    @staticmethod
+    def reference(path) -> str:
+        import base64
+        import hashlib
+
+        return base64.urlsafe_b64encode(hashlib.sha256(str(path).encode("utf-8")).digest()).decode("ascii")[:22]
+
+    def references_for(self, library_id, wanted):
+        for path, kind in wanted.items():
+            current = self.named.get((library_id, path))
+            if current is None or (current[1] == "candidate" and kind == "cover"):
+                self.named[(library_id, path)] = (self.reference(path), kind)
+        return {path: self.named[(library_id, path)][0] for path in wanted}
+
+    def resolve(self, library_id, reference, *, refresh=False):
+        return next(
+            ((path, kind) for (library, path), (named, kind) in self.named.items()
+             if library == library_id and named == reference),
+            None,
+        )
+
+    def paths_for(self, library_id, references):
+        return {reference: hit[0] for reference in set(references) if (hit := self.resolve(library_id, reference))}
+
+    def is_named_cover(self, library_id, path):
+        return self.named.get((library_id, str(path)), ("", ""))[1] == "cover"
+
+
+def cover_reference_url(asgi_app, path, library_id: int = 1) -> str:
+    """Name `path` as a cover of the test library and return its `/cover/<reference>` route."""
+    configure_test_bootstrap_actor(asgi_app)
+    store = asgi_app.state.cover_reference_store
+    return f"/cover/{store.references_for(library_id, {str(path): 'cover'})[str(path)]}"
+
+
 def configure_test_bootstrap_actor(asgi_app) -> None:
     """Authenticate legacy route-unit requests through the production boundary."""
 
@@ -188,6 +232,8 @@ def configure_test_bootstrap_actor(asgi_app) -> None:
         # may deliberately clear the host or supply another actor afterward.
         if getattr(asgi_app.state, "media_host_library_id", None) is None:
             asgi_app.state.media_host_library_id = 1
+    if getattr(asgi_app.state, "cover_reference_store", None) is None:
+        asgi_app.state.cover_reference_store = InMemoryCoverReferences()
     if not hasattr(asgi_app.state, "auth_policy_config"):
         asgi_app.state.auth_policy_config = {
             "hmac": {

@@ -71,7 +71,12 @@
     "music_app/services/album_local_membership.py",
     "music_app/services/cover_provider_outcomes_postgres.py",
     "music_app/services/album_ratings_postgres.py",
-    "tests/e2e/syntheticLargeLibrary/longSessionGalleryMemory.spec.js"
+    "tests/e2e/syntheticLargeLibrary/longSessionGalleryMemory.spec.js",
+    "music_app/services/cover_reference_boundary.py",
+    "music_app/services/cover_references.py",
+    "migrations/postgres/0200_create_cover_references.sql",
+    "migrations/postgres/0201_backfill_cover_references.sql",
+    "music_app/static/js/runtime/modal-and-overlay-helpers.js"
   ],
   "rules": [
     {
@@ -152,6 +157,13 @@
         "all-artists",
         "gapless-playback"
       ]
+    },
+    {
+      "paths": [
+        "music_app/static/js/audio-worklets/gapless-playback-processor.js",
+        "music_app/static/js/runtime/player-streaming-engine.js"
+      ],
+      "targets": ["gapless-playback"]
     },
     {
       "paths": ["music_app/static/js/runtime/track-modal-lightbox-helpers.js"],
@@ -260,6 +272,25 @@
         "tests/e2e/helpers/realAppBenchmarkHelpers.js"
       ],
       "targets": [
+        "gallery-artwork-diversity"
+      ]
+    },
+    {
+      "paths": [
+        "music_app/services/cover_reference_boundary.py",
+        "music_app/services/cover_references.py",
+        "migrations/postgres/0200_create_cover_references.sql",
+        "migrations/postgres/0201_backfill_cover_references.sql",
+        "music_app/static/js/runtime/modal-and-overlay-helpers.js"
+      ],
+      "targets": [
+        "artist-family",
+        "search-all-artists",
+        "search-browse",
+        "utility-problematic-files",
+        "problematic-files-focused",
+        "app-open-all-artists",
+        "artist-tree-scroll-navigation",
         "gallery-artwork-diversity"
       ]
     }

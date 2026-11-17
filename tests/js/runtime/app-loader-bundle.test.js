@@ -204,8 +204,8 @@ test('startup album covers stay presentation-hidden until native decoded readine
   assert.match(appJs, /imageElement\.naturalWidth/);
   assert.match(appJs, /imageElement\.dataset\.coverVisualState = 'ready'/);
   assert.match(appJs, /imageElement\.removeAttribute\('aria-hidden'\)/);
-  assert.match(appJs, /loadedCoverPath === coverPath/);
-  assert.match(appJs, /delete getFailedStartupCoverPaths\(\)\[coverPath\]/);
+  assert.match(appJs, /loadedCoverRef === coverRef/);
+  assert.match(appJs, /delete getFailedStartupCoverRefs\(\)\[coverRef\]/);
   assert.match(appJs, /cover-placeholder cover-placeholder-blank/);
 });
 
@@ -217,8 +217,8 @@ test('startup and runtime covers preserve the server-authored production cache i
   assert.match(appJs, /return canonicalPreviewUrl/);
   assert.match(appJs, /rememberStartupCoverUrls\(initialView\)/);
   assert.match(bundleJs, /album\?\.cover_preview_url/);
-  assert.match(bundleJs, /rememberedStartupUrls\.get\(localCoverPath\)/);
-  assert.match(bundleJs, /startupPreviewUrl && !state\.coverRefreshTokens\[localCoverPath\]/);
+  assert.match(bundleJs, /rememberedStartupUrls\.get\(localCoverRef\)/);
+  assert.match(bundleJs, /startupPreviewUrl && !state\.coverRefreshTokens\[localCoverRef\]/);
 });
 
 test('startup fallback album cards render ten app-owned rating positions without inventing zero', () => {

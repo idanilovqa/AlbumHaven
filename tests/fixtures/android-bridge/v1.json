@@ -23,6 +23,7 @@
       "playback.resumption.v1",
       "playback.album_details.v1",
       "updates.manual.v1",
+      "updates.choose.v1",
       "downloads.link.v1",
       "files.save.v1",
       "app.copy.v1"
@@ -62,6 +63,7 @@
         "playback.resumption.v1",
         "playback.album_details.v1",
         "updates.manual.v1",
+        "updates.choose.v1",
         "downloads.link.v1",
         "files.save.v1",
         "app.copy.v1"
@@ -83,6 +85,11 @@
         "checkedAt": null,
         "error": null,
         "reason": null
+      },
+      "builds": {
+        "installedVersionCode": 1,
+        "count": 0,
+        "single": null
       },
       "sandbox": {
         "slot": 2,

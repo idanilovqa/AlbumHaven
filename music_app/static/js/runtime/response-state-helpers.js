@@ -974,7 +974,6 @@ function normalizeViewPayload(payload, fallbackView = null) {
     gallery_scope: normalizeRuntimeString(source.gallery_scope, base.gallery_scope),
     gallery_display_mode: normalizeRuntimeGalleryDisplayMode(source.gallery_display_mode, base.gallery_display_mode),
     gallery_scale_percent: normalizeRuntimeGalleryScalePercent(source.gallery_scale_percent, base.gallery_scale_percent),
-    music_dir: normalizeRuntimeString(source.music_dir, base.music_dir),
     app_name: normalizeRuntimeString(source.app_name, base.app_name),
     app_version: normalizeRuntimeString(source.app_version, base.app_version),
     album_count: normalizeRuntimeNumber(source.album_count, base.album_count),
@@ -1334,7 +1333,7 @@ function compactCurrentViewForIdle() {
 }
 
 const RUNTIME_ALBUM_COVER_AUTHORITY_FIELDS = [
-  'cover_path',
+  'cover_ref',
   'cover_preview_url',
   'cover_revision',
   'cover_selection_origin',

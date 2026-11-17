@@ -42,7 +42,7 @@ function albumCardHtml(album, options = {}) {
     track_count_preview: Number(album?.track_count_preview || 0),
     total_duration_seconds: Number(album?.total_duration_seconds || 0),
     total_duration_display: String(album?.total_duration_display || ''),
-    cover_path: String(album?.cover_path || ''),
+    cover_ref: String(album?.cover_ref || ''),
     cover_preview_url: String(album?.cover_preview_url || ''),
     cover_revision: String(album?.cover_revision || ''),
     remote_cover_url: String(album?.remote_cover_url || ''),
@@ -56,14 +56,14 @@ function albumCardHtml(album, options = {}) {
       ? album.allowed_actions
       : {},
   });
-  const localCoverPath = escapeHtml(String(album?.cover_path || '').trim());
+  const localCoverRef = escapeHtml(String(album?.cover_ref || '').trim());
   const remoteCoverUrl = escapeHtml(String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim());
   const coverHtml = albumMissing
     ? ''
     : (albumHasDisplayCover(album)
       ? buildAlbumCardCoverHtml(album, {
         coverPriority: options.coverPriority,
-        localCoverPath,
+        localCoverRef,
         remoteCoverUrl,
       })
       : '<div class="cover-placeholder">No cover art</div>');
@@ -127,7 +127,7 @@ function getAlbumCardRenderKey(album) {
     Number(summary.trackCount || 0),
     String(summary.lengthDisplay || ''),
     albumHasDisplayCover(album) ? buildAlbumDisplayCoverUrl(album) : '',
-    String(album?.cover_path || '').trim(),
+    String(album?.cover_ref || '').trim(),
     String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim(),
     String(album?.inventory_status || ''),
     String(album?.missing_since || ''),
@@ -188,14 +188,14 @@ function buildAlbumCardCoverHtml(album, options = {}) {
   const loadingAttribute = coverPriority === 'visible' ? 'eager' : 'lazy';
   const fetchPriorityAttribute = coverPriority === 'visible' ? 'high' : 'low';
   const coverSrc = buildAlbumDisplayCoverUrl(album);
-  const localCoverPath = typeof options.localCoverPath === 'string'
-    ? options.localCoverPath
-    : escapeHtml(String(album?.cover_path || '').trim());
+  const localCoverRef = typeof options.localCoverRef === 'string'
+    ? options.localCoverRef
+    : escapeHtml(String(album?.cover_ref || '').trim());
   const remoteCoverUrl = typeof options.remoteCoverUrl === 'string'
     ? options.remoteCoverUrl
     : escapeHtml(String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim());
   const coverAlt = escapeHtml(`Album cover for ${album.display_name || album.name}`);
-  return `<img loading="${loadingAttribute}" fetchpriority="${fetchPriorityAttribute}" decoding="async" data-gallery-cover-priority="${coverPriority}" data-gallery-cover-src="${coverSrc}" data-production-cover-src="${coverSrc}" data-cover-visual-state="pending" aria-hidden="true" alt="${coverAlt}" data-cover-path="${localCoverPath}" data-remote-cover-url="${remoteCoverUrl}" onload="handleAlbumDisplayCoverImageLoad(this)" onerror="handleAlbumDisplayCoverImageError(this)">`;
+  return `<img loading="${loadingAttribute}" fetchpriority="${fetchPriorityAttribute}" decoding="async" data-gallery-cover-priority="${coverPriority}" data-gallery-cover-src="${coverSrc}" data-production-cover-src="${coverSrc}" data-cover-visual-state="pending" aria-hidden="true" alt="${coverAlt}" data-cover-ref="${localCoverRef}" data-remote-cover-url="${remoteCoverUrl}" onload="handleAlbumDisplayCoverImageLoad(this)" onerror="handleAlbumDisplayCoverImageError(this)">`;
 }
 
 function refreshRenderedAlbumCoverOnly(updatedAlbum) {

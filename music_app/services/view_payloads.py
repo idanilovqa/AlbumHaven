@@ -40,7 +40,6 @@ from music_app.services.ignored_versions import load_ignored_version_keys
 from music_app.services.library import album_preview_to_dict, build_artist_groups
 from music_app.services.library_roots import (
     configured_library_root_paths_snapshot,
-    get_primary_music_root,
     relative_parts_within_roots,
 )
 from music_app.services.manual_versions import load_manual_version_links
@@ -1877,7 +1876,6 @@ def build_view_payload(
             "gallery_scale_percent": gallery_scale_percent or DEFAULT_GALLERY_SCALE_PERCENT,
             "local_tree_submode": local_tree_submode,
             "visible_library_categories": visible_library_categories,
-            "music_dir": str(get_primary_music_root(config)),
             "app_name": config.get("APP_NAME", "Album Haven"),
             "app_version": config.get("APP_VERSION", RELEASE_VERSION),
             "ignored_version_keys": ignored_version_keys,
@@ -2737,7 +2735,6 @@ def build_view_payload(
             "gallery_display_mode": gallery_display_mode,
             "gallery_scale_percent": gallery_scale_percent,
             "visible_library_categories": visible_library_categories,
-            "music_dir": str(get_primary_music_root(config)),
             "app_name": config.get("APP_NAME", "Album Haven"),
             "app_version": config.get("APP_VERSION", RELEASE_VERSION),
             "ignored_version_keys": ignored_version_keys,
@@ -2977,7 +2974,6 @@ def build_view_payload(
         "gallery_scale_percent": gallery_scale_percent or DEFAULT_GALLERY_SCALE_PERCENT,
         "local_tree_submode": local_tree_submode,
         "visible_library_categories": visible_library_categories,
-        "music_dir": str(get_primary_music_root(config)),
         "app_name": config.get("APP_NAME", "Album Haven"),
         "app_version": config.get("APP_VERSION", RELEASE_VERSION),
         "ignored_version_keys": ignored_version_keys,

@@ -164,11 +164,6 @@ def test_index_exposes_release_meta_tag(asgi_app, monkeypatch):
     monkeypatch.setattr(web_asgi, "library_browse_postgres_is_effective", lambda _config: True)
     monkeypatch.setattr(
         web_asgi,
-        "get_primary_music_root",
-        lambda config: Path(config["MUSIC_DIR"]).expanduser().resolve(strict=False),
-    )
-    monkeypatch.setattr(
-        web_asgi,
         "_build_postgres_root_startup_view",
         fake_build_postgres_root_startup_view,
     )

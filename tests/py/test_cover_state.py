@@ -86,7 +86,7 @@ def test_cover_gallery_excludes_managed_preview_files(tmp_path: Path):
         is_squareish_cover=lambda width, height: width == height,
     )
 
-    assert [item["path"] for item in payload["local_covers"]] == [str(cover_path)]
+    assert [item["candidate_cover_path"] for item in payload["local_covers"]] == [str(cover_path)]
 
 
 def test_cover_gallery_includes_active_cover_outside_album_folder(tmp_path: Path):
@@ -108,7 +108,7 @@ def test_cover_gallery_includes_active_cover_outside_album_folder(tmp_path: Path
 
     assert payload["local_covers"] == [
         {
-            "path": str(active_cover),
+            "candidate_cover_path": str(active_cover),
             "filename": active_cover.name,
             "relative_path": active_cover.name,
             "width": 12,
@@ -167,8 +167,8 @@ def test_cover_gallery_hashes_local_duplicates_without_hashlib_file_digest(
         is_squareish_cover=lambda width, height: width == height,
     )
 
-    candidates = {item["path"]: item for item in payload["local_covers"]}
-    assert candidates[str(duplicate_cover)]["duplicate_of"] == str(active_cover)
+    candidates = {item["candidate_cover_path"]: item for item in payload["local_covers"]}
+    assert candidates[str(duplicate_cover)]["duplicate_of_cover_path"] == str(active_cover)
 
 
 def test_serialize_cover_gallery_payload_prefers_saved_remote_cover(tmp_path: Path):
@@ -217,9 +217,9 @@ def test_serialize_cover_gallery_payload_prefers_saved_remote_cover(tmp_path: Pa
         "height": 1500,
         "resolution": "1500x1500",
     }
-    assert payload["local_covers"][0]["path"] == str(local_cover)
+    assert payload["local_covers"][0]["candidate_cover_path"] == str(local_cover)
     assert payload["local_covers"][0]["is_active"] is False
-    assert payload["other_art"][0]["path"] == str(other_art)
+    assert payload["other_art"][0]["candidate_cover_path"] == str(other_art)
 
 
 def test_serialize_cover_gallery_payload_assigns_revision_only_to_active_local_cover(
@@ -249,7 +249,7 @@ def test_serialize_cover_gallery_payload_assigns_revision_only_to_active_local_c
     )
 
     candidates_by_path = {
-        candidate["path"]: candidate for candidate in payload["local_covers"]
+        candidate["candidate_cover_path"]: candidate for candidate in payload["local_covers"]
     }
     assert candidates_by_path[str(active_cover)].get("cover_revision") == (
         "authoritative-cover-revision"
@@ -280,7 +280,7 @@ def test_serialize_cover_gallery_payload_excludes_generated_preview_assets(tmp_p
         is_squareish_cover=lambda width, height: abs(width - height) / max(width, height) <= 0.18,
     )
 
-    assert [candidate["path"] for candidate in payload["local_covers"]] == [
+    assert [candidate["candidate_cover_path"] for candidate in payload["local_covers"]] == [
         str(active_cover)
     ]
 
@@ -304,7 +304,7 @@ def test_serialize_cover_gallery_payload_allows_reserved_ancestor_outside_album_
         is_squareish_cover=lambda width, height: abs(width - height) / max(width, height) <= 0.18,
     )
 
-    assert [candidate["path"] for candidate in payload["local_covers"]] == [
+    assert [candidate["candidate_cover_path"] for candidate in payload["local_covers"]] == [
         str(active_cover)
     ]
 

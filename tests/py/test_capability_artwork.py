@@ -143,6 +143,9 @@ def test_scoped_root_save_keeps_view_only_artwork_on_global_roots(tmp_path, monk
     monkeypatch.setattr("music_app.services.scoped_library_roots.save_scoped_roots", save_scoped)
     monkeypatch.setattr("music_app.services.policy_asgi.allowed_actions_for_request",
                         lambda *_args, **_kwargs: AllowedActions(()))
+    # Both files are named covers, so only the root snapshot decides which one is served.
+    monkeypatch.setattr("music_app.services.cover_references.legacy_cover_path_is_named",
+                        lambda *_args: True)
     config = {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app",
               "PERSISTENCE_BACKENDS": {"library_roots": "postgres"}}
     library_roots.load_library_root_settings(config)

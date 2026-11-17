@@ -1835,3 +1835,97 @@ test('bounded interaction: worklet seek commands copy one fixed boundary capture
     growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
   });
 });
+
+// At 8 kHz the padding bounds are 512 edge frames (64 ms) and an 80-frame (10 ms) content window.
+function createAlbumBoundaryFixture({ tail, head, consecutiveAlbumBoundary }) {
+  const fixture = createProcessor({
+    sampleRate: 8_000, currentCapacityFrames: 4_096, continuityCapacityFrames: 4_096,
+  });
+  const outgoing = [...Array(1_000).fill(0.25), ...tail];
+  const incoming = [...head, ...Array(1_000).fill(0.5)];
+  enqueue(fixture, { streamId: 81, role: 'current', sequence: 0, left: outgoing });
+  markEos(fixture, { streamId: 81, role: 'current', emittedFrames: outgoing.length });
+  fixture.send({
+    type: 'expect-continuity', generation: fixture.generation, active: true, consecutiveAlbumBoundary,
+  });
+  enqueue(fixture, { streamId: 82, role: 'continuity', sequence: 0, left: incoming });
+  markEos(fixture, { streamId: 82, role: 'continuity', emittedFrames: incoming.length });
+  play(fixture);
+  const rendered = [];
+  while (rendered.length < outgoing.length + incoming.length) rendered.push(...renderQuantum(fixture).left);
+  return { fixture, rendered };
+}
+
+function quietRunAfterOutgoingContent(rendered) {
+  const firstQuiet = rendered.findIndex((sample) => Math.abs(sample) < 0.01);
+  const resumed = rendered.findIndex((sample, index) => index > firstQuiet && sample === 0.5);
+  return { firstQuiet, run: resumed - firstQuiet };
+}
+
+test('a natural consecutive-album handoff removes proven decoder padding from both edges', () => {
+  const { fixture, rendered } = createAlbumBoundaryFixture({
+    tail: Array(200).fill(0.0001), head: Array(150).fill(0), consecutiveAlbumBoundary: true,
+  });
+
+  assert.equal(rendered.indexOf(0.5), 1_000, 'the successor content follows the outgoing content directly');
+  assert.ok(rendered.slice(0, 1_000).every((sample) => sample === 0.25));
+  assert.ok(rendered.slice(1_000, 2_000).every((sample) => sample === 0.5));
+  assert.deepEqual(fixture.events('boundary-padding').map(({ edge, streamId, removableFrames, confident }) => ({
+    edge, streamId, removableFrames, confident,
+  })), [
+    { edge: 'suffix', streamId: 81, removableFrames: 200, confident: true },
+    { edge: 'prefix', streamId: 82, removableFrames: 150, confident: true },
+  ]);
+  const [boundary] = fixture.events('boundary');
+  assert.equal(boundary.outgoingStreamId, 81);
+  assert.equal(boundary.incomingStreamId, 82);
+  assert.equal(boundary.renderedFrame, 1_000);
+  assert.equal(fixture.events('underrun').length, 0);
+  assert.equal(fixture.processor.timelineFrame, 150 + 1_000, 'the successor timeline keeps its source position');
+});
+
+test('a successor not qualified as the next album track keeps every boundary frame', () => {
+  const { fixture, rendered } = createAlbumBoundaryFixture({
+    tail: Array(200).fill(0.0001), head: Array(150).fill(0), consecutiveAlbumBoundary: false,
+  });
+
+  assert.deepEqual(quietRunAfterOutgoingContent(rendered), { firstQuiet: 1_000, run: 350 });
+  assert.equal(fixture.events('boundary-padding').length, 0);
+  assert.equal(fixture.processor.timelineFrame, 150 + 1_000);
+});
+
+test('intentional silence longer than the padding bound keeps every boundary frame', () => {
+  const { fixture, rendered } = createAlbumBoundaryFixture({
+    tail: Array(800).fill(0), head: Array(800).fill(0), consecutiveAlbumBoundary: true,
+  });
+
+  assert.deepEqual(quietRunAfterOutgoingContent(rendered), { firstQuiet: 1_000, run: 1_600 });
+  assert.deepEqual(fixture.events('boundary-padding').map(({ edge, removableFrames, confident }) => ({
+    edge, removableFrames, confident,
+  })), [
+    { edge: 'suffix', removableFrames: 0, confident: false },
+    { edge: 'prefix', removableFrames: 0, confident: false },
+  ]);
+});
+
+test('a fade into the boundary keeps every frame because its edge is not far below the content', () => {
+  const fadeOut = Array.from({ length: 2_000 }, (_unused, index) => 0.25 * (1 - ((index + 1) / 2_000)));
+  const fadeIn = fadeOut.slice().reverse();
+  const { fixture, rendered } = createAlbumBoundaryFixture({
+    tail: fadeOut, head: fadeIn, consecutiveAlbumBoundary: true,
+  });
+
+  assert.deepEqual(rendered.slice(1_000, 5_000), [...fadeOut, ...fadeIn].map(Math.fround));
+  assert.ok(fixture.events('boundary-padding').every(({ removableFrames, confident }) => (
+    removableFrames === 0 && confident === false
+  )));
+});
+
+test('a hard cut without quiet edges is left untouched', () => {
+  const { fixture, rendered } = createAlbumBoundaryFixture({
+    tail: [], head: [], consecutiveAlbumBoundary: true,
+  });
+
+  assert.equal(rendered.indexOf(0.5), 1_000);
+  assert.ok(fixture.events('boundary-padding').every(({ removableFrames }) => removableFrames === 0));
+});

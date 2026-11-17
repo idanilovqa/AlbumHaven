@@ -771,7 +771,6 @@ class PostgresLibraryBrowseRepository:
             "gallery_scale_percent": view_state["gallery_scale_percent"],
             "local_tree_submode": "",
             "visible_library_categories": view_state["visible_library_categories"],
-            "music_dir": str(self._config_value("MUSIC_DIR")),
             "app_name": str(self._config_value("APP_NAME", "Album Haven")),
             "app_version": str(self._config_value("APP_VERSION", RELEASE_VERSION)),
             "ignored_version_keys": support_state["ignored_version_keys"],
@@ -1115,7 +1114,6 @@ class PostgresLibraryBrowseRepository:
             "gallery_scale_percent": view_state["gallery_scale_percent"],
             "local_tree_submode": "",
             "visible_library_categories": view_state["visible_library_categories"],
-            "music_dir": str(self._config_value("MUSIC_DIR")),
             "app_name": str(self._config_value("APP_NAME", "Album Haven")),
             "app_version": str(self._config_value("APP_VERSION", RELEASE_VERSION)),
             "non_album_tracks": build_non_album_track_list(
@@ -1669,7 +1667,6 @@ class PostgresLibraryBrowseRepository:
             "gallery_scale_percent": view_state["gallery_scale_percent"],
             "local_tree_submode": "",
             "visible_library_categories": view_state["visible_library_categories"],
-            "music_dir": str(self._config_value("MUSIC_DIR")),
             "app_name": str(self._config_value("APP_NAME", "Album Haven")),
             "app_version": str(self._config_value("APP_VERSION", RELEASE_VERSION)),
             "ignored_version_keys": support_state["ignored_version_keys"],
@@ -1998,7 +1995,6 @@ class PostgresLibraryBrowseRepository:
             "gallery_scale_percent": view_state["gallery_scale_percent"],
             "local_tree_submode": "",
             "visible_library_categories": view_state["visible_library_categories"],
-            "music_dir": str(self._config_value("MUSIC_DIR")),
             "app_name": str(self._config_value("APP_NAME", "Album Haven")),
             "app_version": str(self._config_value("APP_VERSION", RELEASE_VERSION)),
             "ignored_version_keys": support_state["ignored_version_keys"],
@@ -2610,7 +2606,6 @@ class PostgresLibraryBrowseRepository:
             "gallery_scale_percent": view_state["gallery_scale_percent"],
             "local_tree_submode": "",
             "visible_library_categories": view_state["visible_library_categories"],
-            "music_dir": str(self._config_value("MUSIC_DIR")),
             "app_name": str(self._config_value("APP_NAME", "Album Haven")),
             "app_version": str(self._config_value("APP_VERSION", RELEASE_VERSION)),
             "ignored_version_keys": support_state["ignored_version_keys"],
@@ -7310,7 +7305,7 @@ def _queue_display_cover_variants_for_groups(
                 ):
                     inventory_options = {}
                     recorder = config.get("_GENERATED_PREVIEW_INVENTORY_RECORDER")
-                    if recorder is not None:
+                    if recorder is not None and preview_policy is not None:
                         inventory_options["on_published"] = recorder
                     queue_cover_display_variant_generation(
                         source_path,
@@ -8235,10 +8230,6 @@ def _artist_musicbrainz_projection(
     if credit_name:
         # Matched through a release credit: "credited as 3 Crows".
         projection["credited_as"] = credit_name
-    associated = _projected_identities(row.get("artist_identities"))
-    if associated:
-        # A person's same-named band, whose albums keep its own MBID (Alice Cooper).
-        projection["associated"] = associated
     discogs_artist_id = row.get("artist_discogs_artist_id")
     if isinstance(discogs_artist_id, int) and not isinstance(discogs_artist_id, bool) and discogs_artist_id > 0:
         projection["discogs_url"] = f"https://www.discogs.com/artist/{discogs_artist_id}"
@@ -8755,9 +8746,7 @@ def _artist_musicbrainz_projection_joins_sql(
             join integration.musicbrainz_artists identity_artist
               on identity_artist.mbid = identity.artist_mbid
             -- The first test depends only on the outer row: other artists skip the scan.
-            where (split_match.local_artist_id is not null or artist_match.associated_artist_mbids is not null)
-              and (split_match.local_artist_id is not null
-                   or identity.artist_mbid = any(artist_match.associated_artist_mbids))
+            where split_match.local_artist_id is not null
               and identity_album.library_id = {library_id}
               and identity_album.artist_id = {artist_id}
             group by 1, 2, 3

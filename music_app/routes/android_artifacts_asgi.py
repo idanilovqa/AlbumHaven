@@ -8,6 +8,10 @@ Every route except the short-lived download link sits behind the private route b
 (signed in, ``account.self.android_updates``). The manifest and the APK exchange also need a request signed by a
 device key this account attested (see ``android_artifact_access``). The exchange returns a
 five-minute HMAC link for one file, which ``DownloadManager`` fetches without cookies.
+
+A sandbox also serves the metadata-only index of every sandbox's build for the app's build
+picker, and lets the owner (``system.android_sandbox_rebuild``) rebuild one sandbox's build under a
+newer version code (see ``android_sandbox_builds``). Both need a signed request too.
 """
 
 from __future__ import annotations
@@ -28,6 +32,7 @@ from music_app.services.android_artifact_access import (
     AndroidArtifactAccess,
     ArtifactAccessError,
 )
+from music_app.services.android_sandbox_builds import SANDBOX, RebuildError, SandboxRebuilds, index_path
 
 ARTIFACTS_DIR_ENV = "ALBUM_HAVEN_ANDROID_ARTIFACTS_DIR"
 DOWNLOAD_PREFIX = "/artifacts/android/download/"
@@ -42,6 +47,13 @@ _DETAILS = {
     "attestation_refused": "Device attestation was refused.",
     "signature_invalid": "Request signature is not valid.",
     "attestation_unavailable": "Device attestation is unavailable.",
+}
+_REBUILD_DETAILS = {
+    "rebuild_unavailable": "Rebuilds are not set up on this server.",
+    "no_build": "This sandbox has no build to rebuild.",
+    "too_many_rebuilds": "Too many rebuilds this hour.",
+    "rebuild_running": "This sandbox's build is already being rebuilt.",
+    "dispatch_failed": "The rebuild could not be started.",
 }
 
 router = APIRouter()
@@ -156,6 +168,39 @@ async def android_manifest(request: Request, channel: str) -> Response:
     if path is None:
         return _not_found()
     return FileResponse(path, media_type="application/json", headers=_NO_STORE)
+
+
+@router.get("/artifacts/android/sandbox/index.json")
+async def android_sandbox_index(request: Request) -> Response:
+    try:
+        await _signed(request, "sandbox")
+    except ArtifactAccessError as error:
+        return _refused(error)
+    path = index_path()
+    if path is None:
+        return _not_found()
+    return FileResponse(path, media_type="application/json", headers=_NO_STORE)
+
+
+@router.post("/artifacts/android/sandbox/rebuild/{sandbox}")
+async def android_sandbox_rebuild(request: Request, sandbox: str) -> Response:
+    """Dispatches a rebuild of ``sandbox``'s current build; the owner only (route boundary)."""
+    if not SANDBOX.fullmatch(sandbox):
+        return _not_found()
+    try:
+        await _require_empty_body(request)
+        await _signed(request, "sandbox")
+        state = request.app.state
+        rebuilds = getattr(state, "android_sandbox_rebuilds", None)
+        if rebuilds is None:
+            rebuilds = state.android_sandbox_rebuilds = SandboxRebuilds()
+        result = await run_in_threadpool(rebuilds.rebuild, int(sandbox))
+    except ArtifactAccessError as error:
+        return _refused(error)
+    except RebuildError as error:
+        return JSONResponse({"detail": _REBUILD_DETAILS[error.code], "code": error.code},
+                            status_code=error.status, headers=_NO_STORE)
+    return JSONResponse(result, status_code=202, headers=_NO_STORE)
 
 
 @router.post("/artifacts/android/{channel}/{name}")

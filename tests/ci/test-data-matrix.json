@@ -9938,6 +9938,21 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/androidUpdateMenu.spec.js",
+    "case": "Not enough storage Free up space on this phone, then try again stays pressable and sends updates.download",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "Not enough storage Free up space on this phone, then try again stays pressable and sends updates.download"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/appCopy.spec.js",
     "case": "app copy service worker › IAR-001: once kept, a start shows the copy at once without asking the server for the page",
     "profile": null,
@@ -10123,7 +10138,7 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/musicbrainzArtistIdentity.spec.js",
-    "case": "FTC-MBID-002 a split name lists each MusicBrainz artist; a person and their band stay one artist",
+    "case": "FTC-MBID-002 a split name lists each MusicBrainz artist; a person and their band are separate artists",
     "profile": "functional-core",
     "setupScope": "isolated",
     "stateMode": "owned-mutation",

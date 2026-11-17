@@ -16,7 +16,7 @@ import pytest
 from music_app.services import startup_bootstrap
 from music_app.services.library_roots import library_root_cache_identity
 from music_app.services.loops import loop_previews_dir, loops_dir, save_loops
-from tests.py.asgi_testing import create_test_asgi_app
+from tests.py.asgi_testing import cover_reference_url, create_test_asgi_app
 from tests.py.asgi_testing import collect_route_paths
 from tests.py.asgi_testing import decode_json
 from tests.py.asgi_testing import runtime_app_from_asgi_app
@@ -1510,8 +1510,8 @@ def test_asgi_unrevisioned_cover_preview_stays_in_app_data(app, asgi_app):
     status, _headers, body = run_asgi_request(
         asgi_app,
         "GET",
-        "/cover",
-        query={"path": str(cover_path), "size": "480"},
+        cover_reference_url(asgi_app, cover_path),
+        query={"size": "480"},
     )
 
     assert status == 200
@@ -1582,8 +1582,8 @@ def test_asgi_cover_route_probes_exact_cached_variant_off_event_loop(app, asgi_a
     status, headers, body = run_asgi_request(
         asgi_app,
         "GET",
-        "/cover",
-        query={"path": str(cover_path), "size": "320"},
+        cover_reference_url(asgi_app, cover_path),
+        query={"size": "320"},
     )
 
     assert status == 200
@@ -1630,8 +1630,8 @@ def test_asgi_cover_route_reuses_loaded_library_root_paths_for_authorization(
     status, _headers, body = run_asgi_request(
         asgi_app,
         "GET",
-        "/cover",
-        query={"path": str(cover_path), "size": "480"},
+        cover_reference_url(asgi_app, cover_path),
+        query={"size": "480"},
     )
 
     assert status == 200
@@ -1656,8 +1656,8 @@ def test_asgi_cover_route_maps_explicit_background_priority_header(app, asgi_app
     status, headers, body = run_asgi_request(
         asgi_app,
         "GET",
-        "/cover",
-        query={"path": str(cover_path), "size": "480"},
+        cover_reference_url(asgi_app, cover_path),
+        query={"size": "480"},
         headers={"x-album-haven-cover-priority": "background"},
     )
 
@@ -1684,8 +1684,8 @@ def test_asgi_cover_route_maps_missing_priority_header_to_foreground(app, asgi_a
     status, headers, body = run_asgi_request(
         asgi_app,
         "GET",
-        "/cover",
-        query={"path": str(cover_path), "size": "480"},
+        cover_reference_url(asgi_app, cover_path),
+        query={"size": "480"},
     )
 
     assert status == 200
@@ -1694,7 +1694,10 @@ def test_asgi_cover_route_maps_missing_priority_header_to_foreground(app, asgi_a
     assert observed_priorities == ["foreground"]
 
 
-def test_asgi_cover_route_records_generated_preview(app, asgi_app, monkeypatch, tmp_path):
+def test_asgi_cover_route_records_only_revisioned_generated_previews(
+    app, asgi_app, monkeypatch, tmp_path
+):
+    """An unrevisioned preview stays in app data; recording it would queue a relocation."""
     cover_path = app.config["MUSIC_DIR"] / "Artist" / "Album" / "cover.jpg"
     cover_path.parent.mkdir(parents=True, exist_ok=True)
     Image.new("RGB", (640, 640), color=(64, 96, 128)).save(
@@ -1714,6 +1717,7 @@ def test_asgi_cover_route_records_generated_preview(app, asgi_app, monkeypatch, 
         cache_root,
         max_size,
         priority,
+        revision=None,
         on_published=None,
     ):
         observed_recorders.append(on_published)
@@ -1726,8 +1730,8 @@ def test_asgi_cover_route_records_generated_preview(app, asgi_app, monkeypatch, 
     status, _headers, body = run_asgi_request(
         asgi_app,
         "GET",
-        "/cover",
-        query={"path": str(cover_path), "size": "480"},
+        cover_reference_url(asgi_app, cover_path),
+        query={"size": "480", "v": "d" * 64},
     )
 
     assert status == 200
@@ -1737,17 +1741,25 @@ def test_asgi_cover_route_records_generated_preview(app, asgi_app, monkeypatch, 
     status, _headers, body = run_asgi_request(
         asgi_app,
         "GET",
-        "/cover",
-        query={
-            "path": str(cover_path),
-            "size": "480",
-            "v": "process-session-cache-token",
-        },
+        cover_reference_url(asgi_app, cover_path),
+        query={"size": "480"},
     )
 
     assert status == 200
     assert body == bounded_variant.read_bytes()
     assert observed_recorders == [recorder, None]
+
+    status, _headers, body = run_asgi_request(
+        asgi_app,
+        "GET",
+        cover_reference_url(asgi_app, cover_path),
+        query={"size": "480",
+            "v": "process-session-cache-token"},
+    )
+
+    assert status == 200
+    assert body == bounded_variant.read_bytes()
+    assert observed_recorders == [recorder, None, None]
 
 
 def test_asgi_track_and_loop_media_routes_preserve_private_file_policy(app, asgi_app, monkeypatch):
@@ -1919,8 +1931,8 @@ def test_asgi_revisioned_cover_route_serves_local_variant_without_source_file(ap
     status, headers, body = run_asgi_request(
         asgi_app,
         "GET",
-        "/cover",
-        query={"path": str(source_path), "size": "480", "v": revision},
+        cover_reference_url(asgi_app, source_path),
+        query={"size": "480", "v": revision},
     )
 
     assert status == 200
@@ -1974,12 +1986,9 @@ def test_asgi_revisioned_cover_route_prefers_centralized_variant_without_source_
     status, _headers, body = run_asgi_request(
         asgi_app,
         "GET",
-        "/cover",
-        query={
-            "path": str(source_path),
-            "size": "480",
-            "v": revision,
-        },
+        cover_reference_url(asgi_app, source_path),
+        query={"size": "480",
+            "v": revision},
     )
 
     assert not source_path.exists()

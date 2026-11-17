@@ -458,6 +458,9 @@ GAPLESS_PLAYBACK_TRACK_FIXTURES = (
     {"filename": "08 - Encoded Chain A.mp3", "title": "Encoded Chain A", "duration_seconds": 6.0, "kind": "encoded-chain-a", "sample": 0.09375},
     {"filename": "09 - Encoded Chain B.mp3", "title": "Encoded Chain B", "duration_seconds": 6.0, "kind": "encoded-chain-b", "sample": -0.15625},
     {"filename": "10 - Encoded Chain C.mp3", "title": "Encoded Chain C", "duration_seconds": 6.0, "kind": "encoded-chain-c", "sample": 0.21875},
+    # No LAME/Xing tag, so the server cannot trim them and their decoder padding reaches the browser.
+    {"filename": "11 - Untagged Chain A.mp3", "title": "Untagged Chain A", "duration_seconds": 6.0, "kind": "untagged-chain-a", "sample": 0.09375},
+    {"filename": "12 - Untagged Chain B.mp3", "title": "Untagged Chain B", "duration_seconds": 6.0, "kind": "untagged-chain-b", "sample": -0.15625},
 )
 LASTFM_FAKE_API_KEY = "album-haven-e2e-api-key"
 LASTFM_FAKE_API_SECRET = "album-haven-e2e-api-secret"
@@ -967,10 +970,12 @@ def generate_gapless_playback_fixture_audio(media_root: Path) -> dict[str, objec
                 f"duration={duration_seconds}:sample_rate=48000"
             )
             codec_args = ["-codec:a", "libmp3lame", "-q:a", "4"]
-        elif str(fixture["kind"]).startswith("encoded-chain-"):
+        elif str(fixture["kind"]).startswith(("encoded-chain-", "untagged-chain-")):
             sample = float(fixture["sample"])
             source = f"aevalsrc={sample}|{sample}:d={duration_seconds}:s=48000"
             codec_args = ["-codec:a", "libmp3lame", "-q:a", "4"]
+            if str(fixture["kind"]).startswith("untagged-chain-"):
+                codec_args += ["-write_xing", "0"]
         elif fixture["kind"] == "near-end-seek":
             before_seek_sample = float(fixture["before_seek_sample"])
             after_seek_sample = float(fixture["after_seek_sample"])

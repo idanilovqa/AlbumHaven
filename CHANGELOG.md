@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.11.17 - 2026-11-17
+
+- Cover previews kept in app data no longer restart the preview relocation worker. Before, every such preview started a full relocation pass that rescanned all previews and copied the preview into the album folder, which slowed gallery loading and artist jumps.
+
+## 0.11.16 - 2026-11-17
+
+- The Android app says "Not enough storage" (Free up space on this phone, then try again) when a full phone stops an update, instead of the generic "Update failed. Try again".
+
+## 0.11.15 - 2026-11-16
+
+- Settings choice lists (the Android app's sandbox server picker and Library settings' path choices) are at least as wide as their button and grow to fit their longest choice, up to the screen width, so no choice such as "sandbox10" is cut off.
+
+## 0.11.14 - 2026-11-16
+
+- Release only, no application change: carries 0.11.12 to the stable Android channel. 0.11.13 was merged before its pipeline's final gate ran, and that gate cannot run after a merge, so this release merges only once its complete pipeline has passed.
+
+## 0.11.13 - 2026-11-16
+
+- Release only, no application change: carries 0.11.12 to the stable Android channel. The stable promotion needs a commit whose complete PR pipeline passed; 0.11.12's pipeline could not finish after its admin merge.
+
+## 0.11.12 - 2026-11-15
+
+- Gapless playback: when an album plays on into its next track, the near-silent MP3 decoder padding at the end of one track and the start of the next (MP3s without encoder gapless metadata) is removed, so the transition no longer pauses. Only edges at most 64 ms long, below -40 dBFS and at least 20 dB under the neighbouring audio are trimmed; seeks, loops, skips and moves into another album keep every sample. Web and Android behave the same.
+
+## 0.11.11 - 2026-11-15
+
+- Android Sandbox app: Update offers the build each sandbox serves. One waiting build installs at once, switching to its sandbox (and signing in there) when it belongs to another; two or more open a build sheet. An older build is rebuilt under a newer version code by the owner's one-tap rebuild, so no uninstall is needed. Sandbox promotions now name their sandbox, branch and label; a `test_build` pull request names its sandbox with one `sandbox<N>` label. The Stable app is unchanged.
+
+## 0.11.10 - 2026-11-15
+
+- Covers are addressed by opaque references (`/cover/<reference>`): no page or payload carries a local cover file path or the music folder any more. Migration 0200 stores the references and 0201 names every stored cover without changing any cover choice.
+- Only images the library names as covers can be fetched; the legacy `/cover?path=` route no longer serves other files under a library root and will be removed in a later release.
+- Cover responses are cached privately by the viewer's browser only.
+
+## 0.11.9 - 2026-11-15
+
+- Added the append-only migration attestation table (migration 0210) used to reconcile the production migration ledger with the repository without rewriting its history. Fresh databases need no attestations; production applies it only through the owner-approved reconciliation plan.
+
+## 0.11.8 - 2026-11-14
+
+- A same-name person and band that MusicBrainz links as "member of band" are now separate artists with their own MBIDs, split album by album like other same-name artists; a re-check clears the earlier person-plus-band link. Migration 0178's column is kept and no longer written.
+
 ## 0.11.7 - 2026-11-14
 
 - Contributor rules: development uses restored copies of the production database with media writes disabled, migration numbers come from a shared reservation ledger, and migrations declare dependencies and reach shared databases only from main.

@@ -26,10 +26,17 @@ class EventLoopStall(AssertionError):
     """A request blocked the event loop, so every other request would have waited."""
 
 
+# The import system itself (`<frozen importlib._bootstrap>`, or its source
+# file), not other `importlib` packages: reading package metadata or resources
+# (`importlib.metadata`, `importlib.resources`) is request work.
+_IMPORT_MACHINERY = ("importlib._bootstrap", "_bootstrap.py", "_bootstrap_external.py")
+
+
 def _importing(frame) -> bool:
     """Whether the stack is inside import machinery (a first import of a module)."""
     while frame is not None:
-        if "importlib" in frame.f_code.co_filename:
+        filename = frame.f_code.co_filename
+        if filename.endswith(_IMPORT_MACHINERY[1:]) and "importlib" in filename or _IMPORT_MACHINERY[0] in filename:
             return True
         frame = frame.f_back
     return False
@@ -83,16 +90,18 @@ class EventLoopWatchdog:
     which is inside import machinery is a test process's first import of a
     module, not request work, and is not counted. A stall the sampler could not
     sample means the sampler thread did not run either: either the loop thread
-    held the GIL (a long C call, which spends process CPU time and is counted)
-    or the operating system did not schedule the process (machine load, which
-    spends almost none and is not counted). A test that needs to wait must
+    held the GIL (a long C call, which spends the loop thread's own CPU time and
+    is counted) or the operating system did not schedule it (machine load,
+    which spends almost none of it and is not counted). Only the loop thread's
+    CPU time counts: worker threads busy while the loop thread waits for the
+    processor never make a scheduling delay look like a block. A test that needs to wait must
     `await asyncio.sleep(...)`, never block the loop.
     """
 
     def __init__(self) -> None:
         self._loop_thread = threading.get_ident()
         self._last_beat = time.monotonic()
-        self._last_beat_cpu = time.process_time()
+        self._last_beat_cpu = time.thread_time()
         self._worst_stall = 0.0
         self._stack = ""
         # The stacks sampled during each stall, keyed by the beat it started at,
@@ -103,7 +112,7 @@ class EventLoopWatchdog:
 
     async def __aenter__(self) -> EventLoopWatchdog:
         self._last_beat = time.monotonic()
-        self._last_beat_cpu = time.process_time()
+        self._last_beat_cpu = time.thread_time()
         self._heartbeat = asyncio.get_running_loop().create_task(self._beat())
         _SAMPLER.add(self)
         return self
@@ -123,7 +132,7 @@ class EventLoopWatchdog:
 
     def _observe(self) -> None:
         now = time.monotonic()
-        now_cpu = time.process_time()
+        now_cpu = time.thread_time()
         stall = now - self._last_beat - _HEARTBEAT_SECONDS
         with self._samples_lock:
             samples = self._samples.pop(self._last_beat, [])

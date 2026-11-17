@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import importlib.metadata
 import sys
 import threading
 import time
@@ -124,16 +125,61 @@ def test_cpu_work_holding_the_gil_fails_even_though_the_sampler_cannot_run():
         sys.setswitchinterval(interval)
 
 
-def test_an_unsampled_stall_without_process_cpu_is_machine_load_not_request_work():
+def test_an_unsampled_stall_without_loop_thread_cpu_is_machine_load_not_request_work():
     from tests.py.asgi_testing import EventLoopWatchdog
 
     watchdog = EventLoopWatchdog()
     watchdog._last_beat = time.monotonic() - 0.6
-    watchdog._last_beat_cpu = time.process_time()
+    watchdog._last_beat_cpu = time.thread_time()
     watchdog._observe()
     assert watchdog._worst_stall == 0.0
 
     watchdog._last_beat = time.monotonic() - 0.6
-    watchdog._last_beat_cpu = time.process_time() - 0.6
+    watchdog._last_beat_cpu = time.thread_time() - 0.6
     watchdog._observe()
     assert watchdog._worst_stall > 0.25
+
+
+def test_cpu_spent_by_other_threads_during_an_unsampled_stall_is_not_charged_to_the_loop():
+    """While the loop thread waits for the processor, worker threads of the same
+    process may run: their CPU time is not the loop thread's, so the delay is
+    machine load, not a blocked loop."""
+    from tests.py.asgi_testing import EventLoopWatchdog
+
+    def burn(seconds: float) -> None:
+        deadline = time.thread_time() + seconds
+        while time.thread_time() < deadline:
+            pass
+
+    watchdog = EventLoopWatchdog()
+    watchdog._last_beat = time.monotonic() - 0.6
+    watchdog._last_beat_cpu = time.thread_time()
+    process_before = time.process_time()
+    worker = threading.Thread(target=burn, args=(0.4,))
+    worker.start()
+    worker.join()
+    assert time.process_time() - process_before >= 0.3
+    watchdog._observe()
+    assert watchdog._worst_stall == 0.0
+
+
+def test_reading_package_metadata_is_request_work_not_import_machinery():
+    from tests.py.asgi_testing import _importing
+
+    captured = {}
+
+    def capture():
+        captured["frame"] = sys._getframe()
+
+    real_distribution = importlib.metadata.Distribution.from_name
+
+    def from_name(name):
+        capture()
+        return real_distribution(name)
+
+    try:
+        importlib.metadata.Distribution.from_name = staticmethod(from_name)
+        importlib.metadata.version("pytest")
+    finally:
+        importlib.metadata.Distribution.from_name = real_distribution
+    assert not _importing(captured["frame"])

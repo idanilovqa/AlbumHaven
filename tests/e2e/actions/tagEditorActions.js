@@ -1060,9 +1060,9 @@ export class TagEditorActions {
         url: response.url(),
         inventoryMutationRevision: data?.inventory_mutation_revision ?? null,
         projectionStale: data?.gallery_page?.projection_stale === true,
-        selectedArtist: data?.selected_artist ?? null,
       }), () => ({ url: response.url(), unreadable: true })));
     };
+    const requestTimelineObservation = await this.tagEditor.startRequestTimelineObservation();
     this.tagEditor.page.on('request', observeSaveTaskPoll);
     this.tagEditor.page.on('response', observeViewDataResponse);
     try {
@@ -1097,7 +1097,7 @@ export class TagEditorActions {
       await expect(this.tagEditor.confirmOverlay).toBeHidden({ timeout });
       await expect(this.tagEditor.repairAlertMessage).toHaveText(TAG_EDIT_SAVED_MESSAGE, { timeout });
       await expect(this.tagEditor.repairAlert).toBeVisible({ timeout });
-      const requestTimeline = await notificationObservation.finishRequestTimeline();
+      const requestTimeline = await requestTimelineObservation.finish();
       const notificationSamples = await notificationObservation.finish();
       notificationObservation = null;
       const postSaveTimeline = buildPostSaveTimeline(
@@ -1120,6 +1120,7 @@ export class TagEditorActions {
     } finally {
       this.tagEditor.page.off('request', observeSaveTaskPoll);
       this.tagEditor.page.off('response', observeViewDataResponse);
+      await requestTimelineObservation.finish();
       if (notificationObservation) await notificationObservation.finish();
     }
   }

@@ -1546,3 +1546,34 @@ test('a renewal refused because another client took over shows that client as pl
   assert.equal(context.isPlaybackPlayingElsewhere(), true);
   assert.equal(context.getMirroredPlaybackTrack().title, 'Taken Song');
 });
+
+// Round 6 (hosted FTC-PLAYBACK-OFFLINE-002): after an outage, a press on another song sent its
+// reference or claim request on a connection that died without closing; no answer came, the claim
+// was given up and nothing played. Each is asked again once, so one press plays.
+test('a start whose reference or claim request goes unanswered asks again once and claims playback', async () => {
+  const requests = [];
+  const timeouts = [];
+  let refsAnswered = false;
+  let claimAnswered = false;
+  const { context, stopStreamingPlaybackCalls } = loadHelper({
+    setTimeout: (callback, delay) => { timeouts.push(delay); return 0; },
+    fetch: async (url, init = {}) => {
+      requests.push(`${init.method || 'GET'} ${url}`);
+      if (url === '/playback/refs') {
+        if (!refsAnswered) { refsAnswered = true; throw new TypeError('Failed to fetch'); }
+        return jsonResponse({ protocol: 1, expiresAt: '2099-01-01T00:00:00Z', tracks: [{ playbackRef: 'ref-1' }] });
+      }
+      if (!claimAnswered) { claimAnswered = true; throw new TypeError('Failed to fetch'); }
+      return jsonResponse({ protocol: 1, claimToken: 'claim-1', expiresAt: '2099-01-01T00:00:00Z', leaseMs: 30000 });
+    },
+  });
+
+  assert.equal(await context.claimPlaybackOwnership(localTrack), true);
+
+  assert.deepEqual(requests, [
+    'POST /playback/refs', 'POST /playback/refs', 'PUT /playback/state', 'PUT /playback/state',
+  ]);
+  assert.equal(context.state.player.ownership.activeClaim.claimToken, 'claim-1');
+  assert.equal(stopStreamingPlaybackCalls.length, 0, 'nothing was stopped');
+  assert.ok(timeouts.includes(4000), 'the first try waits only a few seconds for its answer');
+});

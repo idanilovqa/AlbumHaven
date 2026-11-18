@@ -5998,8 +5998,9 @@ def _finalize_detached_album_restore_sql() -> str:
         ),
         updated_library as (
           update library.libraries
-          set metadata = jsonb_set(
-                coalesce(library.libraries.metadata, '{}'::jsonb)
+          -- Row triggers journal every changed album. Marking the relation
+          -- index stale here would journal an unknown library-wide change.
+          set metadata = coalesce(library.libraries.metadata, '{}'::jsonb)
                   || jsonb_build_object(
                        'inventory_mutation_revision',
                        coalesce(
@@ -6010,23 +6011,6 @@ def _finalize_detached_album_restore_sql() -> str:
                          0
                        ) + 1
                      ),
-                '{scan_cache}',
-                coalesce(
-                  library.libraries.metadata -> 'scan_cache',
-                  '{}'::jsonb
-                ) || jsonb_build_object(
-                  'relation_projection',
-                  coalesce(
-                    library.libraries.metadata
-                      #> '{scan_cache,relation_projection}',
-                    '{}'::jsonb
-                  ) || jsonb_build_object(
-                    'status', 'stale',
-                    'rebuild_reason', 'structural_tag_edit'
-                  )
-                ),
-                true
-              ),
               updated_at = now()
           from bootstrap_context
           where library.libraries.id = bootstrap_context.library_id
@@ -6873,8 +6857,9 @@ def _persist_structural_album_tag_edit_sql(
         ),
         updated_library as (
           update library.libraries
-          set metadata = jsonb_set(
-                coalesce(library.libraries.metadata, '{}'::jsonb)
+          -- Row triggers journal every changed album. Marking the relation
+          -- index stale here would journal an unknown library-wide change.
+          set metadata = coalesce(library.libraries.metadata, '{}'::jsonb)
                   || jsonb_build_object(
                        'inventory_mutation_revision',
                        coalesce(
@@ -6885,20 +6870,6 @@ def _persist_structural_album_tag_edit_sql(
                          0
                        ) + 1
                      ),
-                '{scan_cache}',
-                coalesce(library.libraries.metadata -> 'scan_cache', '{}'::jsonb)
-                  || jsonb_build_object(
-                       'relation_projection',
-                       coalesce(
-                         library.libraries.metadata #> '{scan_cache,relation_projection}',
-                         '{}'::jsonb
-                       ) || jsonb_build_object(
-                         'status', 'stale',
-                         'rebuild_reason', 'structural_tag_edit'
-                       )
-                     ),
-                true
-              ),
               updated_at = now()
           from bootstrap_context
           where library.libraries.id = bootstrap_context.library_id

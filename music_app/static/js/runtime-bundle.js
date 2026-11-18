@@ -11709,13 +11709,62 @@ function setDesktopLibraryModeRailVisible(visible) {
   }
   if (desktopLibraryModeRailHideTimer !== null) clearTimeout(desktopLibraryModeRailHideTimer);
   desktopLibraryModeRailHideTimer = null;
+  desktopLibraryModeRailHideHeld = false;
   if (show && canHide) {
-    desktopLibraryModeRailHideTimer = setTimeout(() => {
-      const focused = rail?.contains?.(document.activeElement);
-      setDesktopLibraryModeRailVisible(Boolean(focused));
-    }, DESKTOP_LIBRARY_MODE_RAIL_HIDE_DELAY_MS);
+    installDesktopLibraryModeRailOverlayWatch();
+    if (isBackgroundOverlayOpen()) desktopLibraryModeRailHideHeld = true;
+    else startDesktopLibraryModeRailHideTimer(rail);
   }
   return show;
+}
+
+function startDesktopLibraryModeRailHideTimer(rail) {
+  desktopLibraryModeRailHideTimer = setTimeout(() => {
+    desktopLibraryModeRailHideTimer = null;
+    if (isBackgroundOverlayOpen()) {
+      desktopLibraryModeRailHideHeld = true;
+      return;
+    }
+    const focused = rail?.contains?.(document.activeElement);
+    setDesktopLibraryModeRailVisible(Boolean(focused));
+  }, DESKTOP_LIBRARY_MODE_RAIL_HIDE_DELAY_MS);
+}
+
+// Owner 2026-11-17: the side bar never collapses on its own behind an open modal. Its timer waits until the
+// modal closes and then starts over; a modal opening before it fires holds it again.
+const BACKGROUND_OVERLAY_IDS = [
+  'track-modal', 'tag-editor-modal', 'utility-modal', 'cover-lookup-modal', 'non-album-modal', 'image-lightbox',
+  'app-confirm-modal', 'app-form-modal', 'cover-lookup-delete-confirm-modal', 'loop-delete-confirm-modal',
+  'loop-name-modal', 'repair-confirm-modal', 'repair-progress-overlay', 'tag-edit-confirm-modal',
+];
+let desktopLibraryModeRailHideHeld = false;
+let desktopLibraryModeRailOverlayWatch = null;
+
+function isBackgroundOverlayOpen() {
+  return BACKGROUND_OVERLAY_IDS.some((id) => {
+    const overlay = document.getElementById(id);
+    return Boolean(overlay) && overlay.hidden === false;
+  });
+}
+
+function installDesktopLibraryModeRailOverlayWatch() {
+  if (desktopLibraryModeRailOverlayWatch || typeof MutationObserver !== 'function') return;
+  desktopLibraryModeRailOverlayWatch = new MutationObserver(() => {
+    const rail = document.getElementById('shell-navigation-rail');
+    if (isBackgroundOverlayOpen()) {
+      if (desktopLibraryModeRailHideTimer === null) return;
+      clearTimeout(desktopLibraryModeRailHideTimer);
+      desktopLibraryModeRailHideTimer = null;
+      desktopLibraryModeRailHideHeld = true;
+    } else if (desktopLibraryModeRailHideHeld) {
+      desktopLibraryModeRailHideHeld = false;
+      startDesktopLibraryModeRailHideTimer(rail);
+    }
+  });
+  BACKGROUND_OVERLAY_IDS.forEach((id) => {
+    const overlay = document.getElementById(id);
+    if (overlay) desktopLibraryModeRailOverlayWatch.observe(overlay, { attributes: true, attributeFilter: ['hidden'] });
+  });
 }
 
 function setMobileLibraryModeRailVisible() {

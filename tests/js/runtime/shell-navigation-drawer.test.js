@@ -1059,3 +1059,40 @@ test('folding reassembles the panel: buttons travel, the edge moves, text fades'
   assert.equal(drawerRail.classList.contains('is-expanding'), false);
   assert.equal(compactNavigation.hidden, true);
 }
+
+test('the desktop side bar waits for an open modal to close before its idle collapse', () => {
+  // Owner 2026-11-17: "when modal of any kind open that background overlays, in the background side bar should
+  // not collapse on its own. the timer for that will wait until modal is closed. if it was not able to collapse
+  // before next modal is open, timer resets".
+  const { context, drawerRail, pendingTimers } = loadHelper({ isMobile: false });
+  const trackModal = { hidden: true };
+  const getElementById = context.document.getElementById;
+  context.document.getElementById = id => (id === 'track-modal' ? trackModal : getElementById(id));
+  let notifyOverlayChange = null;
+  context.MutationObserver = class {
+    constructor(callback) { notifyOverlayChange = callback; }
+    observe() {}
+  };
+  const idleTimers = () => [...pendingTimers.values()].filter(callback => callback.delay === 30000);
+
+  context.syncArtistsDrawerVisibility();
+  assert.equal(idleTimers().length, 1);
+
+  trackModal.hidden = false;
+  notifyOverlayChange();
+  assert.equal(idleTimers().length, 0, 'an open modal holds the collapse');
+
+  trackModal.hidden = true;
+  notifyOverlayChange();
+  assert.equal(idleTimers().length, 1, 'closing the modal starts the full wait again');
+
+  trackModal.hidden = false;
+  notifyOverlayChange();
+  assert.equal(idleTimers().length, 0, 'the next modal holds it again before it fires');
+  assert.equal(drawerRail.classList.contains('is-library-mode-rail-hidden'), false);
+
+  trackModal.hidden = true;
+  notifyOverlayChange();
+  idleTimers()[0]();
+  assert.equal(drawerRail.classList.contains('is-library-mode-rail-hidden'), true, 'it collapses once nothing is open');
+});

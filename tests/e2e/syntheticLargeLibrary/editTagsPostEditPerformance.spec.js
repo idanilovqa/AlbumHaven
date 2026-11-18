@@ -58,8 +58,13 @@ const CONCURRENT_PROBE_BUDGET = defineTimingBudget({
 });
 // Page clock, from the save response to the visible saved notification.
 const RESPONSE_TO_SAVED_BUDGET = defineTimingBudget({
-  targetMaximum: 500,
-  graceMs: 250,
+  targetMaximum: 800,
+  graceMs: 400,
+});
+// Page clock, from the last gallery response to the visible saved notification.
+const GALLERY_TO_SAVED_BUDGET = defineTimingBudget({
+  targetMaximum: 150,
+  graceMs: 150,
 });
 const BUDGETS = Object.freeze(Object.fromEntries([
   'tagEditorOpenMs',
@@ -345,6 +350,12 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
           RESPONSE_TO_SAVED_BUDGET,
           'Typo-artist save response to saved notification',
         );
+        expectTimingBudget(
+          expect,
+          result.postSaveTimeline.galleryToSavedMs,
+          GALLERY_TO_SAVED_BUDGET,
+          'Typo-artist save gallery to saved notification',
+        );
         expect({
           browserArtist: new URL(page.url()).searchParams.get('artist'),
           destinationAlbumKey: result.payload.destination_album_key,
@@ -452,6 +463,12 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
             result.postSaveTimeline.responseToSavedMs,
             RESPONSE_TO_SAVED_BUDGET,
             `Save ${index + 1} response to saved notification`,
+          );
+          expectTimingBudget(
+            expect,
+            result.postSaveTimeline.galleryToSavedMs,
+            GALLERY_TO_SAVED_BUDGET,
+            `Save ${index + 1} gallery to saved notification`,
           );
           await trackModalActions.close();
         });

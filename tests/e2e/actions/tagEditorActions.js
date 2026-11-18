@@ -14,8 +14,15 @@ function buildPostSaveTimeline(requestTimeline, notificationSamples, viewDataRes
   ));
   if (!post || !saved) return null;
   const viewData = [...viewDataResponses];
+  const lastGalleryResponseMs = Math.max(post.endMs, ...requestTimeline
+    .filter((entry) => (
+      new URL(entry.url).pathname === '/view-data' && entry.endMs <= saved.atMs
+    ))
+    .map((entry) => entry.endMs));
   return {
     responseToSavedMs: saved.atMs - post.endMs,
+    // Browser-only wait: the saved notice after the last gallery response it needed.
+    galleryToSavedMs: saved.atMs - lastGalleryResponseMs,
     requests: requestTimeline
       .filter((entry) => entry.endMs >= post.endMs && entry.startMs <= saved.atMs)
       .map((entry) => {

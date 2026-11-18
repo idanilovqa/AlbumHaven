@@ -394,7 +394,30 @@ test.describe('FTC-GALLERY-NAV-032 synthetic-large Artist Tree scroll navigation
     await navigationPanelActions.waitForAllArtistsVisibility(true, { timeout: 120000 });
     await navigationPanelActions.waitForSidebarSelection(artist, { timeout: 120000 });
     await galleryActions.waitForSelectedArtistGallery(artist, { timeout: 120000 });
-    await navigationPanelActions.waitForActiveSelectionInViewport({ timeout: 10000 });
+    await navigationPanelActions.waitForActiveSelectionInViewport({ timeout: 10000 }).catch(async error => {
+      // parity-check: allow-read-only-measurement-evaluate -- record the tree geometry behind a failed reveal
+      const geometry = await page.evaluate(() => {
+        const list = document.getElementById('sidebar-list');
+        const active = list?.querySelector('.artist-link.active');
+        const rect = node => node?.getBoundingClientRect?.().toJSON?.() || null;
+        return {
+          active: active?.getAttribute('data-sidebar-artist') || '',
+          activeRect: rect(active),
+          listRect: rect(list),
+          scrollTop: list?.scrollTop,
+          scrollHeight: list?.scrollHeight,
+          virtualWindow: list?.albumHavenSidebarVirtualWindow || null,
+          sourceLength: list?.albumHavenSidebarArtistsSource?.length || 0,
+          pendingReveal: state.ui?.pendingSidebarRevealArtist || '',
+          railClass: document.querySelector('.shell-navigation-rail')?.className || '',
+        };
+      });
+      await test.info().attach('failed-search-clear-reveal-geometry', {
+        body: JSON.stringify(geometry, null, 2),
+        contentType: 'application/json',
+      });
+      throw error;
+    });
     // Observe the follow-up virtual-window render; this delay is not a readiness condition.
     await page.waitForTimeout(1500);
     expect(await navigationPanelActions.readActiveSidebarArtistName()).toBe(artist);

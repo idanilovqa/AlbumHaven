@@ -8146,3 +8146,11 @@ test('PF Discogs and MusicBrainz buttons open a known artist page and search onl
   context.openAlbumOnDiscogs({ ...unknown, musicbrainz_artist: { musicbrainz_url: known.musicbrainz_artist.musicbrainz_url } });
   assert.deepEqual(opened, ['https://www.discogs.com/search/?q=fallback', 'https://www.discogs.com/artist/12345', 'https://www.discogs.com/search/?q=fallback']);
 });
+
+test('opening Settings starts with an empty Problematic Files search unless the route asks to keep it', () => {
+  // FTC-UTIL-PROBLEMS-001: a reopened Settings kept a filter that matched nothing, so the list stayed empty.
+  const loaderSource = fs.readFileSync(path.join(
+    __dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'utility-loaders-and-cover-lookup.js',
+  ), 'utf8');
+  assert.match(loaderSource, /function openUtilityModal\(\{ resetSearch = true, resetSelection = true, forceLoad = true \} = \{\}\)/);
+});

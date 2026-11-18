@@ -1371,7 +1371,10 @@ function scheduleUtilityModalOpenWorkAfterPaint(generation, forceLoad) {
   scheduleBrowserAnimationFrame(() => scheduleBrowserAnimationFrame(run));
 }
 
-function openUtilityModal({ resetSearch = false, resetSelection = true, forceLoad = true } = {}) {
+// Opening Settings starts with an empty Problematic Files search, as on main; routes that need a search pass
+// resetSearch themselves. (2aa35a1f7 flipped this default, so a reopened Settings kept a filter that matched
+// nothing: FTC-UTIL-PROBLEMS-001.)
+function openUtilityModal({ resetSearch = true, resetSelection = true, forceLoad = true } = {}) {
   if (typeof isMobileClient === 'function' && isMobileClient() && !mobileUtilityTabAllowed(state.utility.activeTab)) state.utility.activeTab = 'appearance';
   const els = getUtilityModalElements();
   if (!els.overlay) return;

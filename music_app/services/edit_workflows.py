@@ -8,6 +8,7 @@ from time import perf_counter, sleep
 import uuid
 
 from music_app.services.edit_tag_timings import EditTagTimingRecorder
+from music_app.services.library_watch_suppression import suppress_library_watch_events
 from music_app.services.tag_edit_intents_postgres import DuplicateTagEditRequest
 from music_app.services.scan_cache_persistence import (
     StructuralTagEditDestinationConflict,
@@ -167,7 +168,9 @@ def _run_edit_jobs(
     future_map = {}
     completed_changes: list[tuple[int, str, JsonDict, dict[str, str], list[str]]] = []
     failures: list[tuple[int, str, Exception]] = []
-    with ThreadPoolExecutor(max_workers=edit_write_workers) as executor:
+    # The save persists what it writes; the watcher must not reconcile (and
+    # invalidate whole-library projections for) the app's own tag writes.
+    with suppress_library_watch_events(path for path, _entry, _repairs in repair_jobs),             ThreadPoolExecutor(max_workers=edit_write_workers) as executor:
         for job_index, (raw_path, entry, repairs) in enumerate(repair_jobs):
             future = executor.submit(apply_repairs_worker, raw_path, repairs)
             future_map[future] = (job_index, raw_path, entry, repairs)

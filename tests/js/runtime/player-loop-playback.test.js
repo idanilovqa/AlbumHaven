@@ -264,6 +264,8 @@ function loadHelper(overrides = {}) {
       json: async () => ({ ok: true }),
     }),
     console,
+    setTimeout,
+    clearTimeout,
   };
   Object.assign(context, overrides, {
     audio,
@@ -1550,6 +1552,36 @@ test('streaming first-frame scheduling peeks exactly one queued track', async ()
 
   assert.equal(peekCalls, 1);
   assert.deepEqual(scheduled, [nextTrack]);
+});
+
+test('a first-frame schedule that never settles stops holding its stream, so a later first frame schedules again', async () => {
+  const nextTrack = { path: 'C:\\Music\\Next.flac', durationSeconds: 30 };
+  const timers = [];
+  const scheduled = [];
+  const { context } = loadHelper({
+    peekNextQueuedTrack: () => nextTrack,
+    setTimeout: (callback, delay, ...args) => timers.push({ fire: () => callback(...args), delay }),
+    clearTimeout: () => {},
+    scheduleStreamingContinuity(track) {
+      scheduled.push(track);
+      return scheduled.length === 1 ? new Promise(() => {}) : Promise.resolve();
+    },
+  });
+  const firstFrame = { generation: 1, streamId: 7 };
+
+  const stuck = context.handleStreamingPlaybackFirstFrame(firstFrame);
+  await new Promise(setImmediate);
+  assert.equal(await Promise.race([context.handleStreamingPlaybackFirstFrame(firstFrame).then(() => 'settled'),
+    new Promise(resolve => setImmediate(resolve, 'held'))]), 'held', 'before the deadline the stream stays pending');
+  timers[0].fire();
+  await stuck;
+
+  await context.handleStreamingPlaybackFirstFrame(firstFrame);
+  await context.handleStreamingPlaybackFirstFrame(firstFrame);
+
+  assert.deepEqual(timers.map(({ delay }) => delay), [2000, 2000]);
+  assert.deepEqual(scheduled, [nextTrack, nextTrack],
+    'the stuck schedule is retried once, and the settled retry ends further scheduling');
 });
 
 test('natural queued-next scheduling carries the queue owner consecutive-album qualification', async () => {

@@ -4085,6 +4085,36 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/playerWaveformBusy.spec.js",
+    "case": "the current track draws its waveform after another build keeps the server busy for 3 s",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "waveform-waits-out-busy-builder"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/playerWaveformBusy.spec.js",
+    "case": "a busy wait stops asking once the player moves to another track",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "waveform-busy-wait-ends-on-track-change"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/playerViews.spec.js",
     "case": "expanded waveform player uses the approved centerline and player-edge metadata anchor",
     "profile": null,

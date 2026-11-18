@@ -76,7 +76,8 @@ test('FTC-IAR-W09 after the first visit, a new tab opened offline shows the save
   await expect.poll(async () => (await keptPages(page)).map(kept => kept.key), { timeout: 15_000 }).toContain('/');
 
   await context.setOffline(true);
-  const tab = await context.newPage();
+  // A second tab in the test's own guarded context, so it shares the worker and the offline state.
+  const tab = await page.context().newPage();
   const tabGallery = new GalleryActions(new GalleryPage(tab, testInfo));
   const started = Date.now();
   await tab.goto('/');

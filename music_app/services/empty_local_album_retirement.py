@@ -32,6 +32,8 @@ SCAN_OWNED_ALBUM_CHILD_TABLES = frozenset(
         # Data correction summaries (S4), recomputed from tags and the release decision.
         "library.local_album_musicbrainz_corrections",
         "library.local_album_musicbrainz_correction_rows",
+        # Album Latin titles (S7, 0256), remade from the title by the background refresh.
+        "library.local_album_latin_titles",
     }
 )
 # Tables whose foreign key to library.local_albums may hold a user decision;

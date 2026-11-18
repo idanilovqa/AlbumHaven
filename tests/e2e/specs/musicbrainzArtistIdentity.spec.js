@@ -229,7 +229,9 @@ test('FTC-MBID-002 a split name lists each MusicBrainz artist; a person and thei
     });
 
     await stepLogger.step('MBD1-37: Album Details names which band an album belongs to', async () => {
-      const tags = await albumDetailsTags({ galleryActions, trackModalActions }, LEAD, 'Functional Fixture Album 250');
+      // D2 item 3: a proven album sits under its own identity's label; both are Groups with no
+      // country, so the label steps down to the disambiguation.
+      const tags = await albumDetailsTags({ galleryActions, trackModalActions }, `${LEAD} (Swedish band)`, 'Functional Fixture Album 250');
       expect(tags).toContain('MusicBrainz: Compilation Signal Lead (Swedish band)');
       await trackModalActions.closeIfOpen();
     });

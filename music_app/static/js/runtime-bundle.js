@@ -16733,9 +16733,12 @@ async function fetchTrackModalAlbumDetails(albumKey, options = {}) {
 // album makes then adds what the gallery payload lacks, if this album is still the one open.
 function completeOpenTrackModalAlbumDetails(album) {
   const albumKey = String(getAlbumRequestKey(album) || '').trim();
-  if (!albumKey || albumHasLoadedDetails(album) || album.inventory_status === 'missing') return;
+  // Only by the album's own id: a key alone can name several releases (a first-paint card
+  // carries none, and completes when opened again from the loaded gallery).
+  const albumId = Number(album?.album_id || album?.id || 0);
+  if (!albumKey || !(albumId > 0) || albumHasLoadedDetails(album) || album.inventory_status === 'missing') return;
   const generation = trackModalCleanupGeneration;
-  loadTrackModalAlbumDetails(albumKey, { albumId: album.album_id || album.id }).then((details) => {
+  loadTrackModalAlbumDetails(albumKey, { albumId }).then((details) => {
     const els = getTrackModalElements();
     if (generation !== trackModalCleanupGeneration || !els.overlay || els.overlay.hidden) return;
     if (!albumHasLoadedDetails(details) || albumRequiresHydration(details)) return;

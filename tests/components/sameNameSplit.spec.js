@@ -13,7 +13,7 @@ const template = fs.readFileSync(path.join(repoRoot, 'music_app/templates/compon
 async function renderTree(page, { tree, split }) {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.setContent(`<style>:root { --text: rgb(20, 20, 20); --muted: rgb(120, 120, 120); } body { color: var(--text); }</style>
-    <template id="navigation-tree-item-template">${template}</template><nav id="sidebar" style="width:260px"></nav>`);
+    <script id="navigation-tree-item-template" type="text/plain">${template}</script><nav id="sidebar" style="width:260px"></nav>`);
   await page.addStyleTag({ path: path.join(staticRoot, 'css/navigation-tree.css') });
   await page.addScriptTag({ content: 'window.escapeHtml = (v) => String(v ?? "").replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\\"":"&quot;"}[c])); window.state = { view: {} };' });
   for (const file of ['js/navigation-tree.js', 'js/runtime/view-state-helpers.js', 'js/runtime/browser-navigation-helpers.js',
@@ -44,7 +44,8 @@ async function rowParts(page, artist) {
 }
 
 function labelRows(page) {
-  return page.evaluate(() => [...document.querySelectorAll('#sidebar .navigation-tree-label')]
+  // Artist rows only; the tree's leading "All artists" row is not a split name.
+  return page.evaluate(() => [...document.querySelectorAll('#sidebar [data-navigation-tree-key^="artist:"] .navigation-tree-label')]
     .map((label) => label.textContent.replace(/\s+/g, ' ').trim()));
 }
 

@@ -11011,6 +11011,12 @@ def _search_preview_sql(
             on visible_album_ids.library_id = album_title_matches.library_id
            and visible_album_ids.album_id = album_title_matches.album_id
           union
+          select latin_title_album_matches.album_id
+          from latin_title_album_matches
+          join visible_album_ids
+            on visible_album_ids.library_id = latin_title_album_matches.library_id
+           and visible_album_ids.album_id = latin_title_album_matches.album_id
+          union
           select library.local_album_featured_artists.album_id
           from display_artist_matches
           join library.local_album_featured_artists

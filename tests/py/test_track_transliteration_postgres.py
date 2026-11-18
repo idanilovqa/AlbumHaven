@@ -332,7 +332,8 @@ def test_symbol_titles_that_need_no_form_keep_null_rows_and_are_never_due_again(
     album = _chinese_titled_album(setup_url, title="Best ★ Hits")
     with isolatedPostgres._connect(setup_url) as connection:
         connection.execute("update library.local_tracks set title = 'Intro ♪' where album_id = %s", (album,))
-    assert repository.refresh_latin_titles() == 1
+    # The seeded Japanese album's tracks are due on the same pass, so this first pass changes two.
+    assert repository.refresh_latin_titles() == 2
     assert _album_latin_rows(setup_url) == [("Best ★ Hits", None, None)]
     assert ("Intro ♪", None, None) in _latin_rows(setup_url)
     assert repository.refresh_latin_titles() == 0, "nothing is due twice"

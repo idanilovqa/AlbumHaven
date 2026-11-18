@@ -222,11 +222,17 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags split and merge`, (
     }
     await expectRemixesPhysicalState(expect);
 
-    const comparability = {
-      split: expectComparableTimings(expect.soft, saves.filter((s) => s.kind === 'split').map((s) => s.saveMs), 'split saves'),
-      merge: expectComparableTimings(expect.soft, saves.filter((s) => s.kind === 'merge').map((s) => s.saveMs), 'merge saves'),
-      cardsReady: expectComparableTimings(expect.soft, samples.cardsReadyMs, 'save to visible cards'),
-    };
+    const comparability = Object.fromEntries(['split', 'merge'].flatMap((kind) => {
+      const ofKind = saves.filter((entry) => entry.kind === kind);
+      return [
+        [`${kind}Save`, expectComparableTimings(expect.soft, ofKind.map((entry) => entry.saveMs), `${kind} saves`)],
+        [`${kind}CardsReady`, expectComparableTimings(
+          expect.soft,
+          ofKind.map((entry) => entry.cardsReadyMs),
+          `${kind} save to visible cards`,
+        )],
+      ];
+    }));
     const metrics = Object.fromEntries(BUDGET_KEYS.map((key) => [key, Math.max(...samples[key])]));
     for (const key of BUDGET_KEYS) {
       await editTagsSplitMergeLocalReport.recordTimingCheckpoint({

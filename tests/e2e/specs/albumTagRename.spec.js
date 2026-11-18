@@ -1563,6 +1563,8 @@ test('FTC-TAGS-015 / FTC-UTIL-PROBLEMS-012 keeps one stable destination through 
     await utilityTabBarActions.openTab('problematic-files');
     await utilityProblematicFilesActions.waitForReady({ requirePopulated: true });
     await utilityProblematicFilesActions.search(SPLIT_ORIGINAL_ALBUM);
+    // The list re-renders for the query; selecting before it settles walks the old, scrolled list.
+    await utilityProblematicFilesActions.waitForSearchResults(SPLIT_ORIGINAL_ALBUM);
     await utilityProblematicFilesActions.selectAlbumByTitle(SPLIT_ORIGINAL_ALBUM);
     const detail = await utilityProblematicFilesActions.readSelectedDetailSummary();
     expect(detail.title).toBe(SPLIT_ORIGINAL_ALBUM);

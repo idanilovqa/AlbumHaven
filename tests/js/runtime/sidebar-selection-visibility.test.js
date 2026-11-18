@@ -245,3 +245,23 @@ test('a queued reveal uses the latest selection instead of a superseded payload'
     - (safeTop + (safeBottom - safeTop - activeLink.rect.height) / 2));
   assert.equal(context.__testState.ui.pendingSidebarRevealArtist, '');
 });
+
+test('a reveal scrolls the tree that the render produced, not the container of the short tree it replaced', () => {
+  const { context, activeLink, sidebarList, scrollContainer, player, initialScrollTop } = createHarness();
+  const callbacks = [];
+  context.scheduleBrowserAnimationFrame = callback => callbacks.push(callback);
+  // The cleared search's one-artist tree does not scroll, so the outer sidebar is the container at render time.
+  context.__testRenderSidebar();
+  // The full tree has now replaced it and scrolls by itself.
+  sidebarList.rect = scrollContainer.rect;
+  sidebarList.clientHeight = 800;
+  sidebarList.scrollHeight = 60000;
+  sidebarList.scrollTop = 0;
+  callbacks.shift()();
+  const safeTop = 8;
+  const safeBottom = player.rect.top - 8;
+  assert.equal(sidebarList.scrollTop, activeLink.rect.top
+    - (safeTop + (safeBottom - safeTop - activeLink.rect.height) / 2));
+  assert.equal(scrollContainer.scrollTop, initialScrollTop);
+  assert.equal(context.__testState.ui.pendingSidebarRevealArtist, '');
+});

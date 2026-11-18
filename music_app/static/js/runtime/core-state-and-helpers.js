@@ -643,6 +643,9 @@ function renderSidebar() {
   scheduleBrowserAnimationFrame(() => {
     const activeLink = el.querySelector('.artist-link.active');
     if (activeLink instanceof HTMLElement) {
+      // Resolve after the new rows exist: a short search tree is not scrollable, so the container picked
+      // before the render (the outer sidebar) is the wrong one once the full tree replaces it.
+      const scrollContainer = resolveSidebarScrollContainer(el);
       if (!(scrollContainer instanceof HTMLElement)) return;
       const activeRect = activeLink.getBoundingClientRect();
       // Folded trees have zero-size rows; keep the reveal for their visible layout.

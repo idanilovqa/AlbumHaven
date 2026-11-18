@@ -10271,7 +10271,7 @@
     "expectedContracts": [
       "browser-copy-slow-online-no-offline-notice"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.config.js",
@@ -10308,7 +10308,7 @@
     "expectedContracts": [
       "IAR-W01: a browser takes the server's page and keeps the first visit once the worker runs"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.component.config.js",
@@ -10323,7 +10323,7 @@
     "expectedContracts": [
       "IAR-W11: a slow server that still answers is waited for; the copy and its notice never stand in"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.component.config.js",
@@ -10338,6 +10338,6 @@
     "expectedContracts": [
       "IAR-W11: a worker left from an earlier build answers at most one more load once the server has a new one"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   }
 ]

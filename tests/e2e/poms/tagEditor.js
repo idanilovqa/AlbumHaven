@@ -354,8 +354,20 @@ export class TagEditor extends BasePage {
         },
       };
     }, this.repairAlertMessageSelector);
+    let finished = false;
+    return {
+      async finish() {
+        if (finished) return [];
+        finished = true;
+        // parity-check: allow-read-only-measurement-evaluate -- disconnect the notification observer and return buffered observations without mutating application state
+        return observation.evaluate((ownedObservation) => ownedObservation.finish());
+      },
+    };
+  }
+
+  async startRequestTimelineObservation() {
     // parity-check: allow-read-only-measurement-evaluate -- record request timing on the page clock without touching application state
-    const requestTimeline = await this.page.evaluateHandle(() => {
+    const timeline = await this.page.evaluateHandle(() => {
       const entries = [];
       const collect = (list) => list.forEach((entry) => entries.push({
         url: entry.name,
@@ -377,12 +389,8 @@ export class TagEditor extends BasePage {
       async finish() {
         if (finished) return [];
         finished = true;
-        // parity-check: allow-read-only-measurement-evaluate -- disconnect the notification observer and return buffered observations without mutating application state
-        return observation.evaluate((ownedObservation) => ownedObservation.finish());
-      },
-      async finishRequestTimeline() {
         // parity-check: allow-read-only-measurement-evaluate -- disconnect the request timing observer and return its entries
-        return requestTimeline.evaluate((ownedTimeline) => ownedTimeline.finish());
+        return timeline.evaluate((ownedTimeline) => ownedTimeline.finish());
       },
     };
   }

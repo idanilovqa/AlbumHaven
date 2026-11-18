@@ -66,9 +66,7 @@ test('FTC-PLAYER-016 production playback crosses a sample-exact stable-stream bo
       sampleRate: e.sampleRate,
     };
   });
-  const diagTimer = setInterval(() => {
-    diagEngine().then((s) => diagSamples.push({ t: Date.now() - diagT0, ...s })).catch(() => {});
-  }, 500);
+  const diagTimer = null; // periodic page.evaluate sampling removed: it masked the failure
   const diagDump = async (label) => {
     clearInterval(diagTimer);
     const finalEngine = await diagEngine().catch((error) => ({ error: String(error) }));

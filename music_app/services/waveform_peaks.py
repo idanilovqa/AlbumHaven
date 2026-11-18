@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import time
 from typing import Awaitable, Callable
 
 from music_app.services.ffmpeg_runtime import resolve_ffmpeg_executable
@@ -222,6 +223,33 @@ async def _cancel_active_read(read_task: asyncio.Task[bytes] | None) -> None:
 
 
 async def build_waveform_peaks(
+    path: Path,
+    *,
+    bins: int,
+    cancel_event: asyncio.Event,
+) -> WaveformPeaks:
+    from music_app.services.diag_ftc016 import diag, track_name
+
+    started = time.perf_counter()
+    track = track_name(path)
+    diag("build-start", bins=bins, track=track)
+    outcome = "ok"
+    try:
+        return await _build_waveform_peaks_impl(path, bins=bins, cancel_event=cancel_event)
+    except BaseException as error:
+        outcome = type(error).__name__
+        raise
+    finally:
+        diag(
+            "build-end",
+            bins=bins,
+            track=track,
+            outcome=outcome,
+            durationMs=round((time.perf_counter() - started) * 1000),
+        )
+
+
+async def _build_waveform_peaks_impl(
     path: Path,
     *,
     bins: int,

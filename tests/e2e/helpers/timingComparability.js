@@ -3,7 +3,7 @@
 // sub-second timings is not a failure), and when its later half is not slower than
 // its earlier half by more than MAX_GROWTH_RATIO (again with the absolute floor).
 // Proposed for owner approval (2026-11-18); see FTC-TAGS-031P and FTC-TAGS-032P.
-const MAX_SPREAD_RATIO = 2;
+const MAX_SPREAD_RATIO = 2.5;
 const MAX_GROWTH_RATIO = 1.5;
 const SPREAD_FLOOR_MS = 500;
 

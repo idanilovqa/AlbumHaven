@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.11.35 - 2026-11-18
+
+- Large data responses (artist pages, search, gallery pages, Problematic Files) are now sent compressed to browsers that accept it. Selecting an artist on a large library downloads about 40 KB instead of about 1 MB, and search about 22 KB instead of about 275 KB, which makes these steps faster over a network (about 0.3 s faster for an artist page at 20 Mbps). Audio, streaming, partial (Range) and small responses are unchanged.
+
+## 0.11.33 - 2026-11-18
+
+- The player's waveform no longer goes missing when another waveform is still being built. The server builds one waveform at a time and answers "busy" meanwhile; the player gave up after about 1.5 s and showed no waveform for that track. It now keeps waiting, every 2 s, for as long as the track stays loaded.
+- The next song is no longer silently skipped when the browser's track cache stops answering. The player looked for the next song in the cache before fetching it ahead, and a cache read that never returned left it waiting with nothing fetched, so playback stopped at the end of the current song. Like the start of a song, it now waits at most 0.5 s for the cache and then streams the next song from the server.
+
+## 0.11.31 - 2026-11-17
+
+- Android: the app keeps playing through a network outage of any length. Losing Wi-Fi no longer stops playback at once with "Playback unavailable": the received audio plays on, reconnects retry with a growing delay of up to 5 seconds, and when the network returns the rest of the song continues from exactly where it was. Pausing while offline keeps the received audio, and Play while still offline plays it on while the app keeps asking the server for playback every 2 seconds, instead of failing with "Playback ownership is unavailable". Only another device taking over playback stops it. Offline, a seek into the audio already received plays there at once, playing or paused; a seek past it puts the head where it was placed, makes no sound and does not advance (Play keeps it there), and when the network is back it plays from there. A paused seek offline no longer unloads the song. The server now renews a claim past its 30-second lease for the device that held it, until another device claims playback, so a phone that played on offline keeps playing when it reconnects.
+
+## 0.11.30 - 2026-11-17
+
+- Hovering Play no longer slides the loop scissors out when the player cannot cut a loop: with no track loaded, while another tab holds playback ("Playing in another tab"), or when playback is unavailable. The scissors stay folded beside Play. If playback is lost while they are open, they fold at once.
+
 ## 0.11.27 - 2026-11-17
 
 - The server sends JavaScript, CSS and other text files gzip-compressed to browsers that accept it, so a first visit downloads about 0.6 MB of scripts and styles instead of about 2.9 MB. Images and audio are sent as before.

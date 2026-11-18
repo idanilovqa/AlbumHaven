@@ -10412,22 +10412,33 @@ function keepHeardStreamingWire(roleState) {
 }
 
 // Loads `track` from the cache before a role opens it, so the open itself stays synchronous.
+// No caller waits past the deadline: a browser cache that is slow or never answers leaves the
+// track to stream from the server, and a late answer still primes it for a later open.
 async function primeStreamingCachedTrack(track) {
   const engine = streamingEngineState();
   const key = streamingTrackCacheKey(track, chooseStreamingQuality(track));
   engine.primedTracks ??= new Map();
   if (engine.primedTracks.has(key)) return;
-  const entry = await loadStreamingCachedTrack(key);
-  if (!entry) return;
-  engine.primedTracks.set(key, entry);
-  while (engine.primedTracks.size > STREAMING_PRIMED_TRACKS) {
-    engine.primedTracks.delete(engine.primedTracks.keys().next().value);
-  }
-  // Its rate is known, so its start needs no probe.
-  rememberStreamingTrackFormat(String(track.path || ''), entry.sampleRate, {
-    fallbackSampleRate: 0,
-    sizeBytes: entry.bytes.length,
+  const priming = loadStreamingCachedTrack(key).then((entry) => {
+    if (!entry) return;
+    engine.primedTracks.set(key, entry);
+    while (engine.primedTracks.size > STREAMING_PRIMED_TRACKS) {
+      engine.primedTracks.delete(engine.primedTracks.keys().next().value);
+    }
+    // Its rate is known, so its start needs no probe.
+    rememberStreamingTrackFormat(String(track.path || ''), entry.sampleRate, {
+      fallbackSampleRate: 0,
+      sizeBytes: entry.bytes.length,
+    });
   });
+  let deadline = 0;
+  await Promise.race([
+    priming,
+    new Promise((resolve) => {
+      deadline = setTimeout(resolve, STREAMING_CACHED_TRACK_PRIME_DEADLINE_MS);
+    }),
+  ]);
+  clearTimeout(deadline);
 }
 
 function mayPrimeStreamingCachedTrack() {
@@ -10596,14 +10607,7 @@ async function startBrowserStreamingTrack(track, {
   const startRequestId = engine.startRequestId;
   settleStreamingReplacementCushionWaiter(false);
   if (mayPrimeStreamingCachedTrack()) {
-    let primeDeadline = 0;
-    await Promise.race([
-      primeStreamingCachedTrack(track),
-      new Promise((resolve) => {
-        primeDeadline = setTimeout(resolve, STREAMING_CACHED_TRACK_PRIME_DEADLINE_MS);
-      }),
-    ]);
-    clearTimeout(primeDeadline);
+    await primeStreamingCachedTrack(track);
     if (engine.startRequestId !== startRequestId) return null;
   }
   const canPrepareReplacement = () => {
@@ -17038,6 +17042,9 @@ function attachModalEvents() {
 const PLAYER_WAVEFORM_PEAK_COUNT = 280;
 const PLAYER_WAVEFORM_DETAIL_PEAK_COUNT = 720;
 const PLAYER_WAVEFORM_BUSY_RETRY_DELAYS_MS = Object.freeze([50, 100, 200, 400, 800]);
+// The server builds one waveform at a time, so player peaks keep waiting out another build
+// at this pace for as long as their playback generation lasts.
+const PLAYER_WAVEFORM_BUSY_RETRY_MAX_DELAY_MS = 2000;
 const playerWaveformPeakCache = new Map();
 const playerWaveformPeakProbes = new Map();
 const savedLoopWaveformPeakCache = new Map();
@@ -17214,9 +17221,10 @@ async function loadWaveformPeaks(path, sampleCount = PLAYER_WAVEFORM_PEAK_COUNT,
       const query = new URLSearchParams({ path: rawPath, bins: String(sampleCount) });
       for (let attempt = 0; ; attempt += 1) {
         const response = await fetch(`/playback/waveform?${query}`, { signal: controller.signal });
-        if (response.status === 429 && attempt < PLAYER_WAVEFORM_BUSY_RETRY_DELAYS_MS.length) {
+        if (response.status === 429) {
           await new Promise((resolve) => {
-            setTimeout(resolve, PLAYER_WAVEFORM_BUSY_RETRY_DELAYS_MS[attempt]);
+            setTimeout(resolve, PLAYER_WAVEFORM_BUSY_RETRY_DELAYS_MS[attempt]
+              ?? PLAYER_WAVEFORM_BUSY_RETRY_MAX_DELAY_MS);
           });
           if (controller.signal.aborted || state.player.streaming.generation !== generation) return null;
           continue;
@@ -17401,8 +17409,10 @@ function mountLoopEditActionControl({
     if (foldTimer !== null) clearTimeout(foldTimer);
     revealTimer = foldTimer = null;
   };
+  // Scissors only slide out when a loop can be cut: creation allowed and a playable track loaded.
+  const usable = () => currentCanCreate && currentEnabled;
   const renderEngagement = (engaged) => {
-    currentEngaged = Boolean(engaged && currentCanCreate && !destroyed);
+    currentEngaged = Boolean(engaged && usable() && !destroyed);
     root.setAttribute?.('data-loop-action-engaged', String(currentEngaged));
     compound.setAttribute?.('data-loop-action-engaged', String(currentEngaged));
     [enter, create, cancel].forEach(button => button?.setAttribute?.('tabindex', currentEngaged ? '0' : '-1'));
@@ -17410,7 +17420,7 @@ function mountLoopEditActionControl({
   const retained = () => Boolean(touchQuery?.matches || (keyboardInput && focusWithin));
   const leave = () => {
     clearTimers();
-    if (!currentCanCreate) return renderEngagement(false);
+    if (!usable()) return renderEngagement(false);
     if (pointerWithin || retained()) return renderEngagement(true);
     if (!currentActive) return renderEngagement(false);
     foldTimer = setTimeout(() => {
@@ -17420,7 +17430,7 @@ function mountLoopEditActionControl({
   };
   const visit = () => {
     clearTimers();
-    if (!currentCanCreate) return renderEngagement(false);
+    if (!usable()) return renderEngagement(false);
     if (currentActive || retained()) return renderEngagement(true);
     if (currentEngaged) return;
     revealTimer = setTimeout(() => {
@@ -17431,20 +17441,20 @@ function mountLoopEditActionControl({
   const update = (next = {}) => {
     if (destroyed) return;
     const wasActive = currentActive;
-    const wasAllowed = currentCanCreate;
+    const wasUsable = usable();
     const contextChanged = Object.prototype.hasOwnProperty.call(next, 'contextKey') && String(next.contextKey || '') !== currentContextKey;
     if (contextChanged) currentContextKey = String(next.contextKey || '');
     if (Object.prototype.hasOwnProperty.call(next, 'enabled')) currentEnabled = Boolean(next.enabled);
     if (Object.prototype.hasOwnProperty.call(next, 'canCreate')) currentCanCreate = Boolean(next.canCreate);
     if (Object.prototype.hasOwnProperty.call(next, 'active')) currentActive = Boolean(next.active);
     if (Object.prototype.hasOwnProperty.call(next, 'busy')) currentBusy = Boolean(next.busy);
-    if (next.reset || contextChanged || !currentCanCreate || (wasActive && !currentActive)) {
+    if (next.reset || contextChanged || !usable() || (wasActive && !currentActive)) {
       clearTimers();
-      renderEngagement(retained() && currentCanCreate);
+      renderEngagement(retained());
       // Start a fresh dwell for the current track after cancelling its predecessor's timer.
       pointerWithin = pointerWithin || Boolean(compound.matches?.(':hover'));
-      if (pointerWithin && currentCanCreate) visit();
-    } else if ((!wasActive && currentActive) || (!wasAllowed && currentCanCreate)) {
+      if (pointerWithin && usable()) visit();
+    } else if ((!wasActive && currentActive) || (!wasUsable && usable())) {
       pointerWithin = pointerWithin || Boolean(compound.matches?.(':hover'));
       focusWithin = focusWithin || Boolean(ownerDocument?.activeElement && compound.contains?.(ownerDocument.activeElement));
       clearTimers();
@@ -45064,11 +45074,11 @@ function updatePlayerUi() {
       : `${formatLoopTime(current)} / ${formatLoopTime(duration)}`;
   }
   els.loopActions?._loopActionController?.update({
-    enabled: Boolean(getPlayerPlaybackSnapshot().src || state.player.current?.src),
+    enabled: Boolean(!lockedByAnotherTab && (getPlayerPlaybackSnapshot().src || state.player.current?.src)),
     canCreate: state.loopCreateAllowed === true,
     contextKey: state.player.current?.path || state.player.current?.src || '',
     active: state.player.loopActive,
-    busy: state.player.saveBusy || lockedByAnotherTab,
+    busy: state.player.saveBusy,
   });
   if (els.play) {
     renderGlobalPlayerPlayGlyph(els.play, playback.paused);
@@ -45313,6 +45323,9 @@ function queuedNextContinuityOptions(track) {
   };
 }
 
+// A first-frame schedule that has not settled by then stops holding its identity, so a later
+// first frame or reconciliation of the same stream schedules its continuity again.
+const STREAMING_FIRST_FRAME_SCHEDULE_DEADLINE_MS = 2000;
 let handledStreamingFirstFrameIdentity = '';
 let pendingStreamingFirstFrameIdentity = '';
 let pendingStreamingFirstFrameSchedule = null;
@@ -45347,10 +45360,16 @@ async function handleStreamingPlaybackFirstFrame(event = {}) {
       : nextTrack ? scheduleStreamingContinuity(nextTrack, queuedNextContinuityOptions(nextTrack)) : null;
   });
   pendingStreamingFirstFrameSchedule = scheduling;
+  let deadline = 0;
+  const expired = new Promise((resolve) => {
+    deadline = setTimeout(resolve, STREAMING_FIRST_FRAME_SCHEDULE_DEADLINE_MS, false);
+  });
   try {
-    await scheduling;
-    handledStreamingFirstFrameIdentity = identity;
+    if (await Promise.race([scheduling.then(() => true), expired])) {
+      handledStreamingFirstFrameIdentity = identity;
+    }
   } finally {
+    clearTimeout(deadline);
     if (pendingStreamingFirstFrameSchedule === scheduling) {
       pendingStreamingFirstFrameIdentity = '';
       pendingStreamingFirstFrameSchedule = null;

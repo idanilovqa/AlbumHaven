@@ -288,6 +288,7 @@ function createContext(options = {}) {
       }
       return '/view-data?artist=&gallery_scope=all&omit_sidebar=1';
     },
+    resolveViewSurface: (view) => productionUrlContext.resolveViewSurface(view),
     buildSelectedArtistRuntimeArtistGroups(view, primaryGroups, familyGroups) {
       return [...(Array.isArray(primaryGroups) ? primaryGroups : []), ...(Array.isArray(familyGroups) ? familyGroups : [])];
     },
@@ -1810,6 +1811,48 @@ test('library-home navigation already at the root responds by scrolling to the t
   assert.equal(calls.fetchAndRender.length, 0);
   assert.equal(calls.suspendSelectedArtistCoverLoadsForUserAction, 0);
   assert.equal(calls.pushBrowserViewState.length, 1);
+});
+
+test('Back to the gallery from a freshly loaded root gallery keeps the shown gallery instead of reloading it', () => {
+  // Owner, 11-18: Back from Admin rebuilt the whole root gallery (three view-data reads) after every page load,
+  // because the loaded root view reports all_artists_active: false although it is exactly Home's gallery.
+  const { context, calls } = createContext({ currentUrl: 'http://localhost/albums' });
+  context.state.view = {
+    ...context.state.view,
+    surface: { active: 'albums' },
+    query: '',
+    selected_artist: '',
+    all_artists_active: false,
+    related_filter_artists: [],
+    primary_filter_active: false,
+    gallery_page: { has_previous: false },
+  };
+
+  const { event, wasPrevented } = createAllArtistsEvent({ libraryHome: true });
+  context.handleGalleryBootstrapClick(event);
+
+  assert.equal(wasPrevented(), true);
+  assert.equal(calls.fetchAndRender.length, 0);
+  assert.equal(calls.pushBrowserViewState.length, 1);
+  assert.equal(calls.pushBrowserViewState[0].all_artists_active, true);
+});
+
+test('library-home navigation still loads the gallery when the shown view is the Home surface', () => {
+  const { context, calls } = createContext({ currentUrl: 'http://localhost/' });
+  context.state.view = {
+    ...context.state.view,
+    surface: { active: 'home' },
+    query: '',
+    selected_artist: '',
+    all_artists_active: false,
+    related_filter_artists: [],
+    primary_filter_active: false,
+    gallery_page: { has_previous: false },
+  };
+
+  context.handleGalleryBootstrapClick(createAllArtistsEvent({ libraryHome: true }).event);
+
+  assert.equal(calls.fetchAndRender.length, 1);
 });
 
 test('library-home navigation does not use the no-fetch shortcut while a view request is active', () => {

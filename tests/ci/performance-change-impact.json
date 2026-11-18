@@ -9,6 +9,7 @@
     "music_app/services/app_copy.py",
     "music_app/static/js/app-copy.js",
     "music_app/static/js/app-copy-worker.js",
+    "music_app/services/client_layout_preferences.py",
     "music_app/services/scan_cache_persistence.py",
     "music_app/services/empty_local_album_retirement.py",
     "music_app/services/relation_projection_postgres.py",
@@ -127,6 +128,10 @@
     },
     {
       "paths": ["music_app/services/app_copy.py", "music_app/static/js/app-copy.js", "music_app/static/js/app-copy-worker.js"],
+      "targets": ["app-open-all-artists", "artist-tree-scroll-navigation"]
+    },
+    {
+      "paths": ["music_app/services/client_layout_preferences.py"],
       "targets": ["app-open-all-artists", "artist-tree-scroll-navigation"]
     },
     {

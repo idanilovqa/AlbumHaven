@@ -11128,6 +11128,58 @@
   {
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
+    "test": "tests/e2e/syntheticLargeLibrary/editTagsSplitMergePerformance.spec.js",
+    "case": "FTC-TAGS-031P synthetic-large repeated Edit Tags split and merge › every split and merge save stays fast, comparable, and correct",
+    "profile": "synthetic-large-library",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "databaseScenarios": [
+      "large-library:repeated-edit-tags-split-merge"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-large-library",
+      "media-restore:ddt-remixes-byte-snapshot"
+    ],
+    "expectedContracts": [
+      "repeated-split-merge-save-timing-within-budget",
+      "split-merge-save-timings-comparable-across-cycles",
+      "split-merge-visible-cards-and-physical-tags",
+      "post-save-album-and-unrelated-search-responsiveness"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:ftc-tags-031p"
+    },
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.synthetic-large-library.config.cjs",
+    "project": "synthetic-large-library",
+    "test": "tests/e2e/syntheticLargeLibrary/editTagsApiConsecutivePerformance.spec.js",
+    "case": "FTC-TAGS-032P synthetic-large consecutive Edit Tags API saves › consecutive saves complete within budget and the server stays responsive",
+    "profile": "synthetic-large-library",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "databaseScenarios": [
+      "large-library:consecutive-edit-tags-api-saves"
+    ],
+    "filesystemScenarios": [
+      "media:synthetic-large-library",
+      "media-restore:ddt-remixes-byte-snapshot"
+    ],
+    "expectedContracts": [
+      "consecutive-edit-tags-api-saves-within-budget",
+      "edit-tags-api-save-timings-comparable",
+      "server-status-responsive-during-and-after-saves",
+      "no-server-errors-during-consecutive-saves"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:ftc-tags-032p"
+    },
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.synthetic-large-library.config.cjs",
+    "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/albumTitleSearchPerformance.spec.js",
     "case": "FTC-SEARCH-NAV-029P synthetic-large album-title search performance › correct album becomes visible within the approved budget",
     "profile": "synthetic-large-library",

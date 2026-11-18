@@ -5,7 +5,7 @@ const repositoryRoot = path.join(__dirname, '..', '..');
 const { renderActionButton } = require(path.join(repositoryRoot, 'music_app/static/js/button-component.js'));
 const componentUrl = 'http://artist-tree-component.test/reflow';
 
-test('folding Artist Tree reclaims layout width and preserves the persistent player node', async ({ page }) => {
+async function openArtistTreeFixture(page, { viewRail = '', compactViews = '' } = {}) {
   await page.route(componentUrl, route => route.fulfill({
     contentType: 'text/html; charset=utf-8',
     body: `<!doctype html><html><body>
@@ -14,12 +14,14 @@ test('folding Artist Tree reclaims layout width and preserves the persistent pla
         <aside class="sidebar shell-navigation-rail" id="shell-navigation-rail" data-shell-default-collapsed="false">
           <div id="artist-tree-expanded">
             <div class="sidebar-top shell-navigation-rail-header">${renderActionButton({ ariaLabel: "Collapse Artist Tree", icon: "previous", presentation: "bare", className: "shell-navigation-rail-toggle", attributes: { id: "artist-tree-fold-button", "data-toggle-artist-tree-fold": "1", "aria-expanded": "true" } })}<h2>Artists</h2></div>
+            ${viewRail}
             <div id="sidebar-list"><button id="selected-artist">Selected artist</button></div>
           </div>
       <nav class="shell-navigation-compact" id="shell-navigation-compact" aria-label="Library navigation" hidden>
             <button class="shell-navigation-compact-action" id="artist-tree-navigation-button" data-toggle-artist-tree-fold="1" aria-label="Artist Tree" aria-controls="sidebar-list" aria-expanded="false">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20V5"></path></svg>
             </button>
+            ${compactViews}
           </nav>
         </aside>
         <main class="shell-main-surface" id="shell-main-surface"></main>
@@ -35,6 +37,10 @@ test('folding Artist Tree reclaims layout width and preserves the persistent pla
   await page.addStyleTag({ path: path.join(repositoryRoot, 'music_app/static/css/appearance-backgrounds.css') });
   await page.addStyleTag({ path: path.join(repositoryRoot, 'music_app/static/css/button-component.css') });
   await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app/static/js/runtime/shell-navigation-drawer.js') });
+}
+
+test('folding Artist Tree reclaims layout width and preserves the persistent player node', async ({ page }) => {
+  await openArtistTreeFixture(page);
   await page.evaluate(() => {
     window.__artistTreeResizeWidths = [];
     window.__artistTreeSettlementWidths = [];
@@ -163,4 +169,47 @@ test('folding Artist Tree reclaims layout width and preserves the persistent pla
   expect(Math.round(expandedResizeWidth)).toBe(Math.round(expanded.width));
   expect(await page.evaluate(() => window.__artistTreeResizeWidths.length)).toBe(0);
   expect(await player.evaluate(element => element.isConnected && element.dataset.identity === 'persistent')).toBe(true);
+});
+
+test('the view buttons travel in step with the moving edge', async ({ page }) => {
+  // Owner 2026-11-17: expanding "does not feel like expansion and movement of the buttons happen at the same
+  // time". A separate button animation ran ahead of the edge whenever the gallery layout slowed the frames.
+  const view = (mode, top) => `<button data-library-navigation-mode="${mode}" style="height:36px;margin-top:${top}px">${mode}</button>`;
+  await openArtistTreeFixture(page, {
+    viewRail: `<div class="library-navigation-mode-rail">${view('artists', 40)}${view('custom-collections', 8)}</div>`,
+    compactViews: `${view('artists', 0)}${view('custom-collections', 0)}`,
+  });
+  await page.evaluate(() => {
+    document.documentElement.dataset.shellMotion = 'instant';
+    state.ui.artistTreeFolded = true;
+    syncArtistTreeFoldVisibility();
+    getComputedStyle(document.documentElement).getPropertyValue('--compact-rail-width');
+    delete document.documentElement.dataset.shellMotion;
+    document.documentElement.dataset.compactPlayerMotion = 'slow';
+  });
+  const samples = await page.evaluate(async () => {
+    const rail = document.getElementById('shell-navigation-rail');
+    const compact = [...document.querySelectorAll('#shell-navigation-compact [data-library-navigation-mode]')];
+    const start = compact.map(button => button.getBoundingClientRect().top);
+    toggleArtistTreeFold();
+    const targets = [...document.querySelectorAll('.library-navigation-mode-rail [data-library-navigation-mode]')]
+      .map(button => button.getBoundingClientRect().top);
+    const frames = [];
+    while (rail.classList.contains('is-expanding')) {
+      // Busy frames like the gallery's re-layout: the buttons must still match the edge.
+      const until = performance.now() + 40;
+      while (performance.now() < until);
+      await new Promise(resolve => requestAnimationFrame(resolve));
+      if (!rail.classList.contains('is-expanding')) break;
+      const progress = (rail.getBoundingClientRect().width - 64) / 256;
+      frames.push(compact.map((button, i) => ({
+        expected: start[i] + ((targets[i] - start[i]) * progress),
+        actual: button.getBoundingClientRect().top,
+        progress,
+      })));
+    }
+    return frames.flat();
+  });
+  expect(samples.some(sample => sample.progress > 0.1 && sample.progress < 0.9)).toBe(true);
+  for (const sample of samples) expect(Math.abs(sample.actual - sample.expected)).toBeLessThanOrEqual(1);
 });

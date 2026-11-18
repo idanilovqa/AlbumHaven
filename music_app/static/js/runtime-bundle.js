@@ -11670,6 +11670,8 @@ Object.defineProperty(window, '__ALBUM_HAVEN_STREAMING_DIAGNOSTICS__', {
 const MOBILE_ARTISTS_DRAWER_MEDIA_QUERY = '(max-width: 900px)';
 const ARTIST_TREE_SETTLED_EVENT = 'album-haven:artist-tree-settled';
 const ARTIST_TREE_TOGGLE_STARTING_EVENT = 'album-haven:artist-tree-toggle-starting';
+const ARTIST_TREE_FOLDED_WIDTH = 64;
+const ARTIST_TREE_EXPANDED_WIDTH = 320;
 const DESKTOP_LIBRARY_MODE_RAIL_HIDE_DELAY_MS = 30000;
 let cancelPendingArtistTreeResize = null;
 let desktopLibraryModeRailHideTimer = null;
@@ -12049,7 +12051,7 @@ function syncArtistTreeFoldVisibility(options = {}) {
   if (expandedTree) expandedTree.hidden = isFolded && !isCollapsing;
   if (compactNavigation) compactNavigation.hidden = !(isFolded || isExpanding);
   if (list) list.hidden = isFolded && !isCollapsing;
-  document.documentElement?.style?.setProperty('--compact-rail-width', isFolded ? '64px' : '320px');
+  document.documentElement?.style?.setProperty('--compact-rail-width', `${isFolded ? ARTIST_TREE_FOLDED_WIDTH : ARTIST_TREE_EXPANDED_WIDTH}px`);
   if (!isArtistsDrawerMobileViewport()) setDesktopLibraryModeRailVisible(true);
   if (typeof syncDockedCompactPresentation === 'function') syncDockedCompactPresentation();
   return isFolded;
@@ -12058,26 +12060,28 @@ function syncArtistTreeFoldVisibility(options = {}) {
 // Owner 2026-11-16: folding and unfolding reassemble the panel. The compact view buttons travel between
 // their expanded places (the view rail) and their collapsed places while the edge moves and the text fades;
 // the expanded and compact buttons are matched by data-library-navigation-mode.
-function animateLibraryViewButtons({ folding, compactNavigation, expandedTree }) {
-  const root = document.documentElement;
-  const styles = typeof window.getComputedStyle === 'function' ? window.getComputedStyle(root) : null;
-  const duration = parseCssTimeMs(styles?.getPropertyValue?.('--compact-motion-duration'));
-  if (duration < 50) return;
-  const easing = String(styles?.getPropertyValue?.('--compact-motion-easing') || '').trim() || 'ease';
+// Owner 2026-11-17: the buttons must move with the edge. A separate button animation ran smoothly while the
+// edge, which re-lays out the gallery every frame, stepped behind it on a busy machine. Each button now records
+// its full travel per pixel of rail width, and CSS derives its offset from the same animated
+// --compact-rail-width as the edge, so both are drawn in the same frames.
+function setLibraryViewButtonTravel({ compactNavigation, expandedTree }) {
   const expanded = new Map([...(expandedTree?.querySelectorAll?.('.library-navigation-mode-rail [data-library-navigation-mode]') || [])]
     .map((button) => [button.getAttribute('data-library-navigation-mode'), button]));
   compactNavigation?.querySelectorAll?.('[data-library-navigation-mode]').forEach((button) => {
     const target = expanded.get(button.getAttribute('data-library-navigation-mode'));
-    if (typeof button.animate !== 'function' || !target?.getBoundingClientRect) return;
-    button.getAnimations?.().forEach((animation) => animation.cancel());
+    if (!target?.getBoundingClientRect || !button.style) return;
+    clearLibraryViewButtonTravel(button);
     const from = target.getBoundingClientRect();
     const to = button.getBoundingClientRect();
-    const offset = `translate(${from.left - to.left}px, ${from.top - to.top}px)`;
-    button.animate(
-      folding ? [{ transform: offset }, { transform: 'none' }] : [{ transform: 'none' }, { transform: offset }],
-      { duration, easing, fill: folding ? 'none' : 'forwards' },
-    );
+    const span = ARTIST_TREE_EXPANDED_WIDTH - ARTIST_TREE_FOLDED_WIDTH;
+    button.style.setProperty('--fold-travel-x', String((from.left - to.left) / span));
+    button.style.setProperty('--fold-travel-y', String((from.top - to.top) / span));
   });
+}
+
+function clearLibraryViewButtonTravel(button) {
+  button.style?.removeProperty?.('--fold-travel-x');
+  button.style?.removeProperty?.('--fold-travel-y');
 }
 
 function parseCssTimeMs(value) {
@@ -12151,7 +12155,7 @@ function toggleArtistTreeFold({ instant = false } = {}) {
   if (instant) root?.setAttribute?.('data-shell-motion', 'instant');
   const isFolded = syncArtistTreeFoldVisibility({ transitioning: !instant });
   const { compactNavigation, expandedTree } = getArtistTreeFoldElements();
-  if (!instant) animateLibraryViewButtons({ folding: isFolded, compactNavigation, expandedTree });
+  if (!instant) setLibraryViewButtonTravel({ compactNavigation, expandedTree });
   if (moveFocusWithinRail && isFolded) {
     navigationButton?.focus?.();
   }
@@ -12160,7 +12164,7 @@ function toggleArtistTreeFold({ instant = false } = {}) {
     syncArtistTreeFoldVisibility();
     // The expanded view rail takes over exactly where the travelling compact buttons stopped.
     compactNavigation?.querySelectorAll?.('[data-library-navigation-mode]')
-      .forEach((compact) => compact.getAnimations?.().forEach((animation) => animation.cancel()));
+      .forEach(clearLibraryViewButtonTravel);
     if (!isFolded && state.ui.pendingSidebarRevealArtist) renderSidebar();
     if (moveFocusWithinRail && !isFolded) button?.focus?.();
   };

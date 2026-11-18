@@ -189,6 +189,11 @@
   width: 44px;
   z-index: 2;
 }
+/* The view buttons ride the same animated rail width as the edge (owner 2026-11-17: "at the same time"). */
+.shell-navigation-rail:is(.is-expanding, .is-collapsing) .shell-navigation-compact > [data-library-navigation-mode] {
+  translate: calc((var(--compact-rail-width) - 64px) * var(--fold-travel-x, 0))
+    calc((var(--compact-rail-width) - 64px) * var(--fold-travel-y, 0));
+}
 .shell-navigation-rail.is-expanding .shell-navigation-compact > :not([data-library-navigation-mode]) {
   animation: artist-tree-compact-control-exit var(--compact-motion-duration) ease both;
 }

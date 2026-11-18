@@ -1034,7 +1034,10 @@ test('folding reassembles the panel: buttons travel, the edge moves, text fades'
   assert.match(css, /\.is-collapsing #artist-tree-expanded \{[^}]*animation: artist-tree-content-fade-out/);
   assert.match(css, /\.is-expanding \.library-navigation-mode-rail,\s*\.shell-navigation-rail\.is-collapsing \.library-navigation-mode-rail \{ visibility: hidden; \}/);
   assert.doesNotMatch(css, /\.is-expanding \.shell-navigation-compact \{[^}]*animation:/);
-  assert.match(source, /function animateLibraryViewButtons\(/);
+  assert.match(source, /function setLibraryViewButtonTravel\(/);
+  // Owner 2026-11-17: the buttons ride the edge's own animated width, not a separate animation.
+  assert.match(css, /\.is-collapsing\) \.shell-navigation-compact > \[data-library-navigation-mode\] \{\s*translate: calc\(\(var\(--compact-rail-width\) - 64px\) \* var\(--fold-travel-x, 0\)\)/);
+  assert.doesNotMatch(source, /\.animate\(/);
 });
 
 {

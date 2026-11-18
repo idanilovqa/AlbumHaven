@@ -76,11 +76,14 @@ operate, or contribute to the application.
   with `gh run view --log-failed`, the job summary timing table, and the
   `heavy-gate-<gate>` artifact. Locally, `scripts/run-regression-gate.ps1
   -Gate <gate>` runs the same stages.
-- To reproduce, diagnose, or verify specific failures, run only those on the
-  same hosted runner: `-f gates=focused -f cases=<FTC ids or exact titles>`
-  and/or `-f targets=<measured target names>` (comma-separated). A focused
-  run never satisfies a gate; the full gate must still pass on the handed-off
-  commit.
+- To reproduce, diagnose, or verify specific failures, run only those tests
+  (owner rule, 2026-11-17). If the machine-wide heavy-job lock is free, take it
+  and run them locally with `scripts/run-regression-gate.ps1 -Gate focused
+  -Cases <FTC ids or exact titles> -Targets <measured target names>`, then
+  release it. If another chat holds the lock, do not wait: run the same
+  selection on the hosted runner with `-f gates=focused -f cases=...` and/or
+  `-f targets=...` (comma-separated). A focused run never satisfies a gate;
+  the full gate must still pass on the handed-off commit.
 - A hosted run satisfies a gate only when that gate's job succeeded on the
   commit being handed off. It uses isolated PostgreSQL 17, released synthetic
   fixtures, and the `local` timing contract. It is not the pull-request

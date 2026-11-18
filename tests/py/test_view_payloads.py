@@ -7641,3 +7641,44 @@ def test_home_payload_contract_shapes_loose_tracks_without_probing_them_at_produ
         budgets={"filesystem_enumerations": 0, "stat_calls": 2, "open_calls": 0, "sql_statements": 2},
         growth=("stat_calls", 0),
     )
+
+
+def test_non_album_candidates_load_library_roots_once_per_build(tmp_path, monkeypatch):
+    from music_app.services import library_roots as library_roots_module
+    from music_app.services import view_payloads
+
+    loads: list[object] = []
+    settings = {
+        "version": 1,
+        "main_library_roots": [{"id": "main", "path": str(tmp_path.resolve()), "layout_mode": "artist"}],
+        "hoarding_library_roots": [],
+        "new_arrivals_roots": [],
+        "move_policy": {},
+    }
+    monkeypatch.setattr(
+        library_roots_module,
+        "load_library_root_settings",
+        lambda config, **_kwargs: loads.append(config) or settings,
+    )
+    file_cache = {}
+    for index in range(25):
+        track = tmp_path / f"Artist {index}" / "Loose" / "Track.flac"
+        track.parent.mkdir(parents=True)
+        track.write_bytes(b"")
+        file_cache[str(track)] = {
+            "path": str(track),
+            "album": "",
+            "artist": f"Artist {index}",
+            "library_root_category": "main_library",
+        }
+
+    candidates = view_payloads._build_non_album_entry_candidates(
+        file_cache,
+        {},
+        ["main_library"],
+        config={},
+    )
+
+    assert len(candidates) == 25
+    assert candidates[0]["path_parts"] == frozenset({"artist 0", "loose"})
+    assert len(loads) == 1

@@ -11762,6 +11762,38 @@
       "proof": "static"
     },
     {
+      "id": "py:services/compressed_static_files.py#_GzipCache.warm",
+      "action": "Pre-compress the app's own static assets once per process, off the request path",
+      "entrypoints": [
+        "py:music_app/services/compressed_static_files.py#_GzipCache.warm:background:thread"
+      ],
+      "owners": [
+        "music_app/services/compressed_static_files.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 1,
+        "production": 100
+      },
+      "budgets": {
+        "filesystem_enumerations": 1,
+        "stat_calls": 24,
+        "open_calls": 6
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_static_gzip_bounded_contract.py::test_static_gzip_warmup_contract_compresses_once_per_process_however_often_it_is_requested",
+      "testIdentity": "test_static_gzip_warmup_contract_compresses_once_per_process_however_often_it_is_requested",
+      "rollback": "Reverting the once-per-process guard makes every static request start another full walk and gzip of the assets folder; the growth assertion then fails."
+    },
+    {
       "id": "py:services/cover_lookup_diagnostics.py#_run_provider_call",
       "action": "Run one cover provider call for one album in a diagnostics scenario",
       "entrypoints": [

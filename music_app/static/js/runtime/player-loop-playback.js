@@ -205,11 +205,11 @@ function updatePlayerUi() {
   if (emptyMessage) emptyMessage.hidden = hasTrack;
   const { duration, current } = renderPlayerTimelinePosition(els, playback, status);
   els.loopActions?._loopActionController?.update({
-    enabled: Boolean(getPlayerPlaybackSnapshot().src || state.player.current?.src),
+    enabled: Boolean(!lockedByAnotherTab && (getPlayerPlaybackSnapshot().src || state.player.current?.src)),
     canCreate: state.loopCreateAllowed === true,
     contextKey: state.player.current?.path || state.player.current?.src || '',
     active: state.player.loopActive,
-    busy: state.player.saveBusy || lockedByAnotherTab,
+    busy: state.player.saveBusy,
   });
   if (els.play) {
     renderGlobalPlayerPlayGlyph(els.play, playback.paused);

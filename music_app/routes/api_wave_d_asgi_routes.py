@@ -615,6 +615,10 @@ async def _cover_lookup_album_split_response(
     task_track_paths: set[str],
     lineage_choices: object = None,
 ) -> tuple[JsonDict, int] | None:
+    # Only a lookup notification for the previous identity asks; without one the
+    # gallery already shows every release the split produced.
+    if not task_track_paths:
+        return None
     if isinstance(lineage_choices, list) and len(lineage_choices) > 1:
         current_releases = [
             {

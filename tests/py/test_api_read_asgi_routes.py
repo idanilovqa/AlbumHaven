@@ -23,6 +23,11 @@ def app(tmp_path, monkeypatch):
     return runtime_app_from_asgi_app(create_test_asgi_app(tmp_path, monkeypatch))
 
 
+def _assert_off_event_loop() -> None:
+    with pytest.raises(RuntimeError):
+        asyncio.get_running_loop()
+
+
 def _make_asgi_app():
     from music_app import create_asgi_app
 
@@ -3819,10 +3824,20 @@ def test_asgi_album_details_uses_valid_key_when_numeric_id_is_stale(
     ]
 
 
-def test_asgi_album_details_returns_current_release_choices_for_a_stale_split(
+@pytest.mark.parametrize(
+    "query",
+    [
+        {"album_key": "artist::old", "album_id": "17"},
+        {"album_key": "artist::old"},
+    ],
+    ids=["card-with-id", "key-only"],
+)
+def test_asgi_album_details_never_offers_the_split_chooser_without_lineage_request(
     asgi_app,
     monkeypatch,
+    query,
 ):
+    """Gallery opens show both split results as cards, so only a notification asks."""
     from music_app.routes import api_read_asgi_routes as asgi_read_routes
 
     async def fake_run_in_threadpool(function, *args, **kwargs):
@@ -3889,16 +3904,11 @@ def test_asgi_album_details_returns_current_release_choices_for_a_stale_split(
         asgi_app,
         "GET",
         "/album-details",
-        query={"album_key": "artist::old", "album_id": "17"},
+        query=query,
     )
 
-    assert status == 409
-    assert _decode_json(body) == {
-        "ok": False,
-        "error": "This album was split—choose the current release",
-        "resolution_kind": "album_split",
-        "current_releases": choices,
-    }
+    assert status == 404
+    assert _decode_json(body) == {"ok": False, "error": "Album not found"}
 
 
 def test_asgi_album_details_uses_transient_runtime_album_during_active_scan(
@@ -5628,3 +5638,56 @@ def test_asgi_gallery_pending_projection_returns_retryable_response(app, asgi_ap
     assert _decode_json(body)["code"] == "gallery_projection_pending"
     assert headers["retry-after"] == "1"
     assert headers["cache-control"] == "no-store"
+
+
+@pytest.mark.parametrize(
+    ("path", "query", "builder_name"),
+    [
+        ("/home-data", None, "build_home_payload"),
+        ("/album-details", {"album_key": "non-album::Synthetic Artist"}, "build_album_detail_payload"),
+    ],
+)
+def test_asgi_runtime_payload_builds_keep_health_responsive(app, asgi_app, monkeypatch, path, query, builder_name):
+    from music_app.routes import api_read_asgi_routes as asgi_read_routes
+    from tests.py.asgi_testing import run_asgi_request_async
+
+    entered = Event()
+    release = Event()
+    finished = Event()
+
+    def blocked_builder(*_args, **_kwargs):
+        _assert_off_event_loop()
+        entered.set()
+        try:
+            release.wait(timeout=3)
+            return {"kind": "home", "key": "non-album::Synthetic Artist"}
+        finally:
+            finished.set()
+
+    asgi_app.state.library_state = {**app.library_state, "albums": [], "scan_in_progress": False}
+    # The library is hydrated, so the route builds instead of answering 'still loading'.
+    monkeypatch.setattr(asgi_read_routes, "_library_hydration_pending_for_asgi", lambda _request: None)
+    monkeypatch.setattr(asgi_read_routes, builder_name, blocked_builder)
+    monkeypatch.setattr(
+        asgi_read_routes,
+        "select_runtime_persistence_adapter",
+        lambda seam_id, _config: SimpleNamespace(seam_id=seam_id, effective_backend="memory"),
+    )
+
+    async def exercise():
+        request_task = asyncio.create_task(run_asgi_request_async(asgi_app, "GET", path, query=query))
+        try:
+            assert await asyncio.to_thread(entered.wait, 3), "Payload build did not start"
+            status, _headers, _body = await asyncio.wait_for(
+                run_asgi_request_async(asgi_app, "GET", "/health"), timeout=1,
+            )
+            assert status == 200
+            assert not finished.is_set(), "Health could not respond until the payload build finished"
+        finally:
+            release.set()
+            response = await asyncio.wait_for(request_task, timeout=5)
+        return response
+
+    status, _headers, _body = asyncio.run(exercise())
+
+    assert status == 200

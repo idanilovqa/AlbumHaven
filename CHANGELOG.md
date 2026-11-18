@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.11.30 - 2026-11-17
+
+- Hovering Play no longer slides the loop scissors out when the player cannot cut a loop: with no track loaded, while another tab holds playback ("Playing in another tab"), or when playback is unavailable. The scissors stay folded beside Play. If playback is lost while they are open, they fold at once.
+
+## 0.11.27 - 2026-11-17
+
+- The server sends JavaScript, CSS and other text files gzip-compressed to browsers that accept it, so a first visit downloads about 0.6 MB of scripts and styles instead of about 2.9 MB. Images and audio are sent as before.
+
+## 0.11.26 - 2026-11-17
+
+- The server no longer freezes while it builds the library home view (`/home-data`, opened by the phone layout's library home and by the Android app). It read the library root settings from the database twice for every loose or non-album track; it now reads them once per build, and the home, News and file-backed album-detail payloads are built off the server's event loop, so other requests keep being answered meanwhile.
+
+## 0.11.25 - 2026-11-17
+
+- Opening an album from a gallery card no longer shows the "This album was split" chooser; it appears only from a notification about a split album. If an album opened from the gallery changed elsewhere, the gallery refreshes in place, Album Details closes, and a toast says "This album changed—choose it again in the gallery." An album you just split yourself opens the matching release.
+
+## 0.11.24 - 2026-11-17
+
+- Android app: the library offers once to set Battery to Unrestricted, so battery saving stops closing the app in the background and reloading the library on return; any answer is final.
+
 ## 0.11.23 - 2026-11-17
 
 - CI only, no application change: adding or removing a Playwright component test now needs only its entry in `tests/ci/test-data-matrix.json`. The foundation gate compares the component job's discovered cases with the matrix's component entries instead of a hard-coded 229, and the inventory and ownership checks derive their totals from the matrix. A missing or extra test still fails by name.

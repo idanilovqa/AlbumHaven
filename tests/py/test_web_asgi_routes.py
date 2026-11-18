@@ -250,6 +250,48 @@ def test_asgi_bootstrap_keeps_health_responsive_during_database_work(app, monkey
     assert finished.is_set()
 
 
+def test_asgi_news_payload_build_keeps_health_responsive(app, monkeypatch):
+    from music_app.routes import web_asgi
+    from tests.py.asgi_testing import run_asgi_request_async
+
+    _configure_selected_postgres_empty_root_bootstrap(monkeypatch, web_asgi)
+    entered = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+
+    def blocked_build_news_payload(**_kwargs):
+        entered.set()
+        try:
+            release.wait(timeout=3)
+            return {
+                "shell_layout": {"slots": {"main_content": {"content_kind": "discovery_center_page"}}},
+                "discovery_center": {"page_kind": "discovery_center"},
+            }
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(web_asgi, "build_news_payload", blocked_build_news_payload)
+    asgi_app = _make_asgi_app(app)
+
+    async def exercise():
+        request_task = asyncio.create_task(run_asgi_request_async(asgi_app, "GET", "/news"))
+        try:
+            assert await asyncio.to_thread(entered.wait, 3), "News payload build did not start"
+            status, _headers, _body = await asyncio.wait_for(
+                run_asgi_request_async(asgi_app, "GET", "/health"), timeout=1,
+            )
+            assert status == 200
+            assert not finished.is_set(), "Health could not respond until the news payload build finished"
+        finally:
+            release.set()
+            response = await asyncio.wait_for(request_task, timeout=5)
+        return response
+
+    status, _headers, body = asyncio.run(exercise())
+    assert status == 200
+    assert b"<!doctype html>" in body
+
+
 @pytest.mark.parametrize("path", ["/", "/news"])
 def test_asgi_html_render_keeps_health_responsive_during_template_preparation(
     app,

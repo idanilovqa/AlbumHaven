@@ -16,6 +16,7 @@ import android.os.Environment
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
 import android.view.View
@@ -146,6 +147,12 @@ class ShellActivity : ComponentActivity(), BridgeHost {
     private lateinit var lastScreen: LastScreen
     private lateinit var lastScreenView: ImageView
     private lateinit var sandboxWarning: View
+    private lateinit var batteryPrompt: BatteryPrompt
+    private lateinit var batteryCard: View
+
+    /** The battery offer's Settings screen while it is open; on return it may lead on to App info. */
+    private var batterySettingsOpen: BatterySettings? = null
+    private val batteryOffer = Runnable(::offerBattery)
     private lateinit var pendingBuildStrip: View
     private val handshakes = HandshakeWatch(originPolicy.channel)
     private val foregrounds = ForegroundWatch()
@@ -203,6 +210,14 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         sandboxWarning = findViewById(R.id.sandbox_warning)
         findViewById<View>(R.id.sandbox_warning_switch).setOnClickListener { showSandboxChoice() }
         findViewById<View>(R.id.sandbox_warning_dismiss).setOnClickListener { sandboxWarning.isVisible = false }
+        batteryPrompt = BatteryPrompt(preferences)
+        batteryCard = findViewById(R.id.battery_prompt)
+        findViewById<TextView>(R.id.battery_prompt_reason).setText(BatteryPrompt.reason(Build.MANUFACTURER))
+        findViewById<View>(R.id.battery_prompt_allow).setOnClickListener {
+            answerBattery()
+            openBatterySettings(BatterySettings.REQUEST)
+        }
+        findViewById<View>(R.id.battery_prompt_decline).setOnClickListener { answerBattery() }
         pendingBuildStrip = findViewById(R.id.pending_build)
         findViewById<View>(R.id.pending_build_cancel).setOnClickListener {
             preferences.pendingBuild = null
@@ -279,6 +294,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
                 download()
             }
         }
+        batterySettingsOpen?.let(::returnedFromBatterySettings)
         if (returnedFromBackground) probeForegroundDocument()
         returnedFromBackground = false
         scheduleRebuildPoll()
@@ -332,6 +348,51 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         }
         // Signed out at launch, the index could not be read; the Update row needs it now.
         if (picker?.builds == null) picker?.refresh()
+        mainHandler.postDelayed(batteryOffer, BATTERY_OFFER_DELAY_MS)
+    }
+
+    /** Once the library has drawn, with nothing of the shell's own over it or waiting on the user. */
+    private fun offerBattery() {
+        if (batteryCard.isVisible || recovery.showing || sandboxWarning.isVisible || pendingBuildStrip.isVisible ||
+            downloadAfterAsking != null || !lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) ||
+            webView.url?.toUri()?.path == SIGN_IN_PATH
+        ) return
+        batteryCard.isVisible = batteryPrompt.shouldOffer(batteryState())
+    }
+
+    private fun batteryState() = BatteryState(
+        ignoringOptimizations = getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName),
+        backgroundRestricted = getSystemService(ActivityManager::class.java).isBackgroundRestricted,
+    )
+
+    private fun openBatterySettings(settings: BatterySettings) {
+        val action = when (settings) {
+            BatterySettings.REQUEST -> Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+            BatterySettings.APP_INFO -> Settings.ACTION_APPLICATION_DETAILS_SETTINGS
+        }
+        val opened = try {
+            startActivity(Intent(action, "package:$packageName".toUri()))
+            true
+        } catch (_: ActivityNotFoundException) {
+            false
+        } catch (_: SecurityException) {
+            // Some makers' Settings refuse to open this for another app.
+            false
+        }
+        // Without Android's question, App info; without that either, nothing is left to offer.
+        if (opened) batterySettingsOpen = settings else if (settings == BatterySettings.REQUEST) openBatterySettings(BatterySettings.APP_INFO)
+    }
+
+    private fun answerBattery() {
+        batteryPrompt.answered()
+        batteryCard.isVisible = false
+    }
+
+    private fun returnedFromBatterySettings(opened: BatterySettings) {
+        batterySettingsOpen = null
+        val state = batteryState()
+        Log.i(TAG, "battery_prompt opened=$opened unrestricted=${state.unrestricted}")
+        BatteryPrompt.followUp(opened, state)?.let(::openBatterySettings)
     }
 
     override fun onForegroundReady(token: Long) {
@@ -629,6 +690,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         if (::bridge.isInitialized) bridge.reset()
         handshakes.pageStarted()
         mainHandler.removeCallbacks(handshakeTimeout)
+        mainHandler.removeCallbacks(batteryOffer)
         sandboxWarning.isVisible = false
     }
 
@@ -781,7 +843,11 @@ class ShellActivity : ComponentActivity(), BridgeHost {
 
         override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
             // The sign-in page means signed out: the page's copy went as it left (app-copy-worker.js).
-            if (url.toUri().path == SIGN_IN_PATH && originPolicy.isSameOrigin(url, siteOrigin)) copies.reported(siteOrigin, stored = false)
+            if (url.toUri().path == SIGN_IN_PATH && originPolicy.isSameOrigin(url, siteOrigin)) {
+                copies.reported(siteOrigin, stored = false)
+                // An offer still unanswered waits for the library after signing in.
+                batteryCard.isVisible = false
+            }
             // The same origin's next document re-attaches to the running queue from its handshake.
             documentGone()
             incompatibleWeb = false
@@ -871,6 +937,9 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         /** As long as the page's own bridge commands, its handshake among them, wait for the shell. */
         const val BRIDGE_TIMEOUT_MS = 15_000L
         const val FOREGROUND_TIMEOUT_MS = 5_000L
+
+        /** The battery offer never lands on the library's first paint. */
+        const val BATTERY_OFFER_DELAY_MS = 2_000L
 
         /** A page still not drawn after this long shows the Connecting screen, so a picture never looks frozen. */
         const val LAST_SCREEN_MAX_MS = 6_000L

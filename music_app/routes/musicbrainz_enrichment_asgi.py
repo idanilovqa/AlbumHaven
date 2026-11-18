@@ -81,6 +81,16 @@ async def list_artist_status(request: Request):
     rows = await _call_service(request, "list_artist_attention")
     if not isinstance(rows, (list, tuple)):
         raise _unavailable()
+    # Projecting, serializing and hashing every artist is library-scale CPU work,
+    # so it runs in the threadpool, never on the event loop.
+    body, revision = await run_in_threadpool(_artist_status_body, rows)
+    headers = {"ETag": revision, "Cache-Control": "private, no-store"}
+    if revision in _if_none_match_revisions(request):
+        return Response(status_code=304, headers=headers)
+    return Response(body, media_type="application/json", headers=headers)
+
+
+def _artist_status_body(rows) -> tuple[bytes, str]:
     payload = {"artists": [
         {
             **{field: row.get(field) for field in _STATUS_FIELDS},
@@ -92,11 +102,7 @@ async def list_artist_status(request: Request):
     # The revision names this exact answer. A poller that already holds it gets
     # a bodiless 304, so an unchanged status costs no per-artist transfer.
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True, default=str).encode("utf-8")
-    revision = f'"{hashlib.sha256(body).hexdigest()[:32]}"'
-    headers = {"ETag": revision, "Cache-Control": "private, no-store"}
-    if revision in _if_none_match_revisions(request):
-        return Response(status_code=304, headers=headers)
-    return Response(body, media_type="application/json", headers=headers)
+    return body, f'"{hashlib.sha256(body).hexdigest()[:32]}"'
 
 
 def _if_none_match_revisions(request: Request) -> set[str]:

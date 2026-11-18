@@ -63,8 +63,8 @@ const RESPONSE_TO_SAVED_BUDGET = defineTimingBudget({
 });
 // Page clock, from the last gallery response to the visible saved notification.
 const GALLERY_TO_SAVED_BUDGET = defineTimingBudget({
-  targetMaximum: 150,
-  graceMs: 150,
+  targetMaximum: 100,
+  graceMs: 200,
 });
 const BUDGETS = Object.freeze(Object.fromEntries([
   'tagEditorOpenMs',

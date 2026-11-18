@@ -48,22 +48,27 @@ function labelRows(page) {
     .map((label) => label.textContent.replace(/\s+/g, ' ').trim()));
 }
 
-test('same-name split: each identity shows its full country name, dimmed, and a code with no English name shows as the code', async ({ page }) => {
+test('same-name split: an identity shows its full country name where known, dimmed; one without a country shows its type; a code with no English name shows as the code', async ({ page }) => {
   await renderTree(page, {
     tree: [
       { artist: 'Amarok (Poland)', artist_display: 'Amarok (Poland)', count: 4 },
       { artist: 'Amarok (Spain)', artist_display: 'Amarok (Spain)', count: 3 },
+      { artist: 'Amarok (Band)', artist_display: 'Amarok (Band)', count: 2 },
       { artist: 'Arion (QZ)', artist_display: 'Arion (QZ)', count: 2 },
       { artist: 'Arion (Finland)', artist_display: 'Arion (Finland)', count: 1 },
       { artist: 'Angra', artist_display: 'Angra', count: 16 },
     ],
-    split: { 'Amarok (Poland)': 'Poland', 'Amarok (Spain)': 'Spain', 'Arion (QZ)': 'QZ', 'Arion (Finland)': 'Finland' },
+    split: { 'Amarok (Poland)': 'Poland', 'Amarok (Spain)': 'Spain', 'Amarok (Band)': 'Band', 'Arion (QZ)': 'QZ', 'Arion (Finland)': 'Finland' },
   });
-  expect(await labelRows(page)).toEqual(['Amarok (Poland)', 'Amarok (Spain)', 'Arion (QZ)', 'Arion (Finland)', 'Angra']);
+  expect(await labelRows(page)).toEqual(['Amarok (Poland)', 'Amarok (Spain)', 'Amarok (Band)', 'Arion (QZ)', 'Arion (Finland)', 'Angra']);
   const { parts: spain } = await rowParts(page, 'Amarok (Spain)');
   expect(spain.secondary).toBe('(Spain)');
   expect(spain.secondaryColor).toBe('rgb(120, 120, 120)');
   expect(spain.nameColor).not.toBe(spain.secondaryColor);
+  // An identity with no known country shows its type instead, dimmed the same way.
+  const { parts: noCountry } = await rowParts(page, 'Amarok (Band)');
+  expect(noCountry.secondary).toBe('(Band)');
+  expect(noCountry.secondaryColor).toBe('rgb(120, 120, 120)');
   // Negative: a code with no English name is shown as the code, still dimmed, never dropped.
   const { parts: unknown } = await rowParts(page, 'Arion (QZ)');
   expect(unknown.secondary).toBe('(QZ)');

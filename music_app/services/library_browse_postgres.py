@@ -9159,24 +9159,45 @@ def _split_album_groups_cte_sql(
               order by countries.country_code
               limit 1
             ) country on true
-          ), qualified as (
-            -- Owner 2026-11-17 ("Same-name split labels"): the full country name; in the same
-            -- country, the type ("Person", "Band") when it tells them apart; MusicBrainz's
-            -- disambiguation only when the type is the same too.
-            select described.artist_id, described.artist_mbid,
-                   case
-                     when country is not null
-                          and count(*) over (partition by artist_id, country) = 1 then country
-                     when kind is not null
-                          and count(*) over (partition by artist_id, kind) = 1 then kind
-                     when disambiguation is not null
-                          and count(*) over (partition by artist_id, disambiguation) = 1 then disambiguation
-                     when country is not null and disambiguation is not null
-                          and count(*) over (partition by artist_id, country, disambiguation) = 1
-                       then country || ', ' || disambiguation
-                     else left(artist_mbid::text, 8)
-                   end as qualifier
+          ), candidates as (
+            -- Owner 2026-11-17 ("Same-name split labels", "Country where known"): each identity's
+            -- labels in order of preference. With a known country: the full country name, then
+            -- the type ("Person", "Band"), then MusicBrainz's disambiguation, then both country
+            -- and disambiguation. Without one: the type, then the disambiguation. Last, the
+            -- MBID's start ("ID start, as built"). Everyone starts at their first choice;
+            -- only labels that collide within the name step down, round by round.
+            select artist_id, artist_mbid, 1 as choice,
+                   array_remove(case when country is not null
+                     then array[country, kind, disambiguation, country || ', ' || disambiguation]
+                     else array[kind, disambiguation] end
+                     || left(artist_mbid::text, 8), null) as choices
             from described
+          ), round_1 as (
+            select artist_id, artist_mbid, choices,
+                   case when choice < cardinality(choices)
+                             and count(*) over (partition by artist_id, choices[choice]) > 1
+                        then choice + 1 else choice end as choice
+            from candidates
+          ), round_2 as (
+            select artist_id, artist_mbid, choices,
+                   case when choice < cardinality(choices)
+                             and count(*) over (partition by artist_id, choices[choice]) > 1
+                        then choice + 1 else choice end as choice
+            from round_1
+          ), round_3 as (
+            select artist_id, artist_mbid, choices,
+                   case when choice < cardinality(choices)
+                             and count(*) over (partition by artist_id, choices[choice]) > 1
+                        then choice + 1 else choice end as choice
+            from round_2
+          ), round_4 as (
+            select artist_id, artist_mbid, choices,
+                   case when choice < cardinality(choices)
+                             and count(*) over (partition by artist_id, choices[choice]) > 1
+                        then choice + 1 else choice end as choice
+            from round_3
+          ), qualified as (
+            select artist_id, artist_mbid, choices[choice] as qualifier from round_4
           )
           select proven.album_id, proven.artist_id,
                  split_artist.name || ' (' || qualified.qualifier || ')' as group_label,

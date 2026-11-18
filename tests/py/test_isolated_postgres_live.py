@@ -6712,6 +6712,29 @@ def test_live_split_labels_in_one_country_name_the_type_and_the_disambiguation_o
         "Owner (the 1969 band)", "Owner (the 1990 band)"]
 
 
+def test_live_split_labels_show_a_country_where_known_and_step_down_only_where_labels_collide(watcher_repair_inventory):
+    """Owner 2026-11-17 "Country where known": the identity with a country keeps it; the one
+    without falls back to its type, then its disambiguation, stepping down only on a collision."""
+    fixture = watcher_repair_inventory
+    albums = _seed_same_name_split(fixture)
+    library_id = albums["Hunt"]["library_id"]
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute("delete from integration.musicbrainz_artist_countries where artist_mbid = %s", (_SPLIT_POLAND,))
+    _relabel_split(fixture, {_SPLIT_POLAND: ("PL", None, "Group", "progressive rock band from Poland"),
+                             _SPLIT_SPAIN: ("ES", None, "Group", "Spanish fusion band")})
+    assert sorted(row["group_label"] for row in _narrow_split_groups(fixture, library_id)) == [
+        "Owner (Band)", "Owner (Spain)"]
+    # Negative: two bands with no country would both read "(Band)", so both step down to their
+    # disambiguation; a type that tells them apart is kept.
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute("delete from integration.musicbrainz_artist_countries where artist_mbid = %s", (_SPLIT_SPAIN,))
+    assert sorted(row["group_label"] for row in _narrow_split_groups(fixture, library_id)) == [
+        "Owner (Spanish fusion band)", "Owner (progressive rock band from Poland)"]
+    _relabel_split(fixture, {_SPLIT_SPAIN: ("ES", None, "Person", "Spanish fusion band")})
+    assert sorted(row["group_label"] for row in _narrow_split_groups(fixture, library_id)) == [
+        "Owner (Band)", "Owner (Person)"]
+
+
 def test_live_the_plain_row_holds_only_undecided_albums_and_is_gone_when_every_album_is_matched(
     watcher_repair_inventory,
 ):

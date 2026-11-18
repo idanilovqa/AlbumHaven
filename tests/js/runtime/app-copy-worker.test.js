@@ -61,7 +61,6 @@ function page(account, { version = 'v1', body = 'Library', cacheControl = 'priva
 // [mode] 'app' is the Android app (the copy answers at once); 'web' a browser (the server first).
 function setup({ respond = () => page('acct-a'), maxCoverBytes, mode, caches = fakeCaches() } = {}) {
   const calls = [];
-  const timers = [];
   const pending = [];
   let clock = 1_000_000;
   const fetch = async (request) => {
@@ -70,9 +69,8 @@ function setup({ respond = () => page('acct-a'), maxCoverBytes, mode, caches = f
     if (response instanceof Error) throw response;
     return response;
   };
-  const setTimeout = (callback, delay) => { timers.push({ callback, delay }); return timers.length; };
   const worker = createAppCopyWorker({
-    caches, fetch, origin: ORIGIN, now: () => clock, maxCoverBytes, mode, setTimeout,
+    caches, fetch, origin: ORIGIN, now: () => clock, maxCoverBytes, mode,
   });
   // Work the worker keeps doing after it answered (event.waitUntil).
   const event = { waitUntil: promise => pending.push(promise) };
@@ -85,7 +83,7 @@ function setup({ respond = () => page('acct-a'), maxCoverBytes, mode, caches = f
     return response;
   };
   return {
-    caches, calls, timers, worker, handle, settled, event, advance(ms) { clock += ms; },
+    caches, calls, worker, handle, settled, event, advance(ms) { clock += ms; },
   };
 }
 
@@ -704,26 +702,25 @@ test('IAR-W05: in a browser a gateway error (the tunnel without its server) also
   assert.match(await response.text(), /content="cache"/);
 });
 
-test('IAR-W01: in a browser the copy answers after 1.5 s without the server; its late page is kept for later', async () => {
+// Owner report: a slow network flashed the Offline notice. Online, a slow server is waited for.
+test('IAR-W11: in a browser a slow server is waited for; its copy never stands in while it can still answer', async () => {
   let answer = null;
-  const { caches, timers, worker, event, settled, handle } = setup({
+  const { worker, event, handle } = setup({
     mode: 'web',
     respond: () => (answer ? new Promise((resolve) => { answer = resolve; }) : page('acct-a', { body: 'Old' })),
   });
   await handle(navigation('/'));
   answer = true;
 
-  const responding = worker.handle('page', navigation('/'), event);
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(timers.at(-1).delay, 1500);
-  timers.at(-1).callback();
-  const response = await responding;
+  let response = null;
+  const responding = worker.handle('page', navigation('/'), event).then((result) => { response = result; });
+  // Longer than the 1.5 s the copy used to wait for.
+  await new Promise(resolve => setTimeout(resolve, 1600));
+  assert.equal(response, null);
 
-  assert.match(await response.text(), /content="cache"[\s\S]*Old/);
   answer(page('acct-a', { body: 'New' }));
-  await settled();
-  const kept = await caches.stores.get(`${CACHE_PREFIX}acct-a`).match(`${ORIGIN}/`);
-  assert.match(await kept.text(), /New/);
+  await responding;
+  assert.match(await response.text(), /content="network"[\s\S]*New/);
 });
 
 test('IAR-W02: in a browser a signed-out answer shows the sign-in page and deletes the copy', async () => {
@@ -837,25 +834,6 @@ test('the Android app still opens only the copy of the page asked for', async ()
   online = false;
 
   await assert.rejects(handle(navigation('/?artist=Mono')), TypeError);
-});
-
-test('IAR-W10: a slow server still answers an address never kept; the last view does not replace it', async () => {
-  let answer = null;
-  const { timers, worker, event } = setup({
-    mode: 'web',
-    respond: () => (answer ? new Promise((resolve) => { answer = resolve; }) : page('acct-a', { body: 'Broadcast' })),
-  });
-  await worker.message({ type: 'save', url: `${ORIGIN}/?artist=Broadcast` });
-  answer = true;
-
-  const responding = worker.handle('page', navigation('/?artist=Mono'), event);
-  await new Promise(resolve => setImmediate(resolve));
-  timers.at(-1).callback();
-  answer(page('acct-a', { body: 'Mono' }));
-  const response = await responding;
-
-  assert.equal(response.status, 200);
-  assert.match(await response.text(), /content="network"[\s\S]*Mono/);
 });
 
 test('IAR-W10: a last view whose page is gone from storage is not opened, so navigations never loop', async () => {

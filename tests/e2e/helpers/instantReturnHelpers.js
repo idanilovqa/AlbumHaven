@@ -38,6 +38,44 @@ export async function primeCopy(page, galleryActions) {
   await expect.poll(async () => (await keptPages(page)).map(kept => kept.key)).toContain(LIBRARY_PATH);
 }
 
+// A slow but working connection for the page and the copy's worker: Chrome's own network
+// throttling, so every request still reaches the real server unchanged. Throttling the page alone
+// does not reach the worker's requests, so its target is throttled too. Returns the undo.
+export async function slowConnection(page, latency) {
+  const conditions = ms => ({ offline: false, latency: ms, downloadThroughput: -1, uploadThroughput: -1 });
+  const pageSession = await page.context().newCDPSession(page);
+  const browserSession = await page.context().browser().newBrowserCDPSession();
+  const { targetInfos } = await browserSession.send('Target.getTargets');
+  const worker = targetInfos.find(info => info.type === 'service_worker' && info.url.includes('/app-copy-worker.js'));
+  expect(worker, 'the copy worker runs').toBeTruthy();
+  // Chrome answers commands for an attached target as events on the browser session.
+  const replies = new Map();
+  browserSession.on('Target.receivedMessageFromTarget', ({ message }) => {
+    const reply = JSON.parse(message);
+    replies.get(reply.id)?.(reply);
+  });
+  const { sessionId } = await browserSession.send('Target.attachToTarget', { targetId: worker.targetId, flatten: false });
+  let lastId = 0;
+  const sendToWorker = (method, params) => new Promise((resolve) => {
+    lastId += 1;
+    replies.set(lastId, resolve);
+    void browserSession.send('Target.sendMessageToTarget', { sessionId, message: JSON.stringify({ id: lastId, method, params }) });
+  });
+  const apply = async (ms) => {
+    await pageSession.send('Network.emulateNetworkConditions', conditions(ms));
+    const reply = await sendToWorker('Network.emulateNetworkConditions', conditions(ms));
+    expect(reply.error, 'the worker accepts the throttling').toBeUndefined();
+  };
+  await pageSession.send('Network.enable');
+  await sendToWorker('Network.enable', {});
+  await apply(latency);
+  return async () => {
+    await apply(0);
+    await pageSession.detach();
+    await browserSession.detach();
+  };
+}
+
 // The album titles inside the window, as the gallery POM finds them.
 export async function visibleAlbumNames(galleryPage) {
   // parity-check: allow-read-only-measurement-evaluate: reads which album titles are inside the window.

@@ -5,8 +5,8 @@
 // request, the versioned assets that page loads, and cover thumbnails already seen. Two modes:
 // - `app` (the Android app): a navigation to a page kept recently is answered from the copy at once;
 //   the page then brings itself up to date.
-// - `web` (a browser, `?mode=web`): the server answers first; the copy answers only when the server
-//   cannot be reached, fails at its gateway, or has not answered within SERVER_WAIT_MS.
+// - `web` (a browser, `?mode=web`): the server answers first, however slowly; the copy answers only
+//   when the server cannot be reached or fails at its gateway.
 // A copy is shown for at most seven days, and never past the end of the session the server named.
 // Only responses the server marked as copies for an account are kept, never anything no-store.
 // Signing in or out deletes every copy, as does a page for another account. The copy is only for
@@ -26,9 +26,6 @@
   const CACHE_PREFIX = `${COPY_FAMILY}v2:`;
   const META_PATH = '/__app-copy__/meta';
   const MAX_COPY_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-  const SERVER_WAIT_MS = 1500;
-  // What the wait resolves to when the server has not answered in time.
-  const SLOW = Symbol('slow');
   const MAX_PAGES = 4;
   const MAX_COVER_BYTES = 200 * 1024 * 1024;
   const KEPT_COVER_PREFIX = '/__album-haven-cover/';
@@ -59,7 +56,6 @@
 
   function createAppCopyWorker({
     caches, fetch, origin, now = Date.now, maxCoverBytes = MAX_COVER_BYTES, mode = 'app',
-    setTimeout = root.setTimeout?.bind(root),
   }) {
     const metaUrl = new URL(META_PATH, origin).href;
     // Kept covers by key in least-recently-seen order, with their sizes; read from the cache once.
@@ -246,23 +242,13 @@
       return null;
     }
 
-    // A browser asks the server first and falls back to the copy; the late server page still
-    // updates the copy, but no longer as the running version.
+    // A browser waits for the server, however slow, while it can answer: a slow connection is not
+    // an offline one. Only an unreachable server or a gateway error falls back to the copy.
     async function serverFirst(url, event) {
-      const page = { running: true };
-      const network = fetchPage(url, page, event);
-      quietly(network);
-      const target = await accountCache();
-      if (!target) return network;
-      const waited = new Promise((resolve) => { setTimeout(() => resolve(SLOW), SERVER_WAIT_MS); });
-      const answer = await Promise.race([network.catch(() => null), waited]);
-      if (answer && answer !== SLOW && answer.status < 500) return answer;
-      page.running = false;
-      // A slow server still answers the address asked for, so only its own copy stands in.
-      const copy = (await freshCopy(url)) || (answer === SLOW ? null : await lastView(url));
-      if (copy) return copy;
-      page.running = true;
-      return network;
+      const network = fetchPage(url, { running: true }, event);
+      const answer = await network.catch(() => null);
+      if (answer && answer.status < 500) return answer;
+      return (await freshCopy(url)) || (await lastView(url)) || network;
     }
 
     async function navigate(request, event) {

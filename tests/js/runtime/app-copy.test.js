@@ -8,7 +8,7 @@ const { createAppCopyClient } = require(path.join(__dirname, '..', '..', '..', '
 
 function setup({
   marker = null, account = 'acct-a', answer = async () => ({ ok: true, status: 200, type: 'basic', json: async () => ({ account }) }),
-  androidShell = true, secure = true, workers = true, controlled = false,
+  androidShell = true, secure = true, workers = true, controlled = false, onLine = true,
 } = {}) {
   const listeners = new Map();
   const notice = { hidden: true };
@@ -46,6 +46,7 @@ function setup({
     document,
     window: { isSecureContext: secure, addEventListener: (name, listener) => listeners.set(`window:${name}`, listener) },
     navigator: workers ? {
+      onLine,
       serviceWorker: {
         controller: controlled ? {} : null,
         async register(url, options) { env.registered.push({ url, options }); return registration; },
@@ -268,13 +269,15 @@ test('in a browser, a page the worker did not load is saved the first time it is
   assert.deepEqual(posted.filter(message => message.type === 'save'), [{ type: 'save', url: 'https://sandbox9.albumhaven.org/?artist=Broadcast' }]);
 });
 
-test('IAR-W01: in a browser a page from the copy is read-only from its first paint until the server answers', async () => {
+// Owner report: the Offline notice flashed during an ordinary load. A connected device shows it only
+// once the server has failed to answer the account check.
+test('IAR-W11: in a browser a page from the copy is read-only from its first paint, without the notice while connected', async () => {
   let answer;
   const { client, notice, env, settle } = setup({
     androidShell: false, marker: 'cache', answer: () => new Promise((resolve) => { answer = resolve; }),
   });
   assert.equal(client.isReadOnly(), true);
-  assert.equal(notice.hidden, false);
+  assert.equal(notice.hidden, true);
 
   answer({ ok: true, status: 200, type: 'basic', json: async () => ({ account: 'acct-a' }) });
   await settle();
@@ -282,6 +285,22 @@ test('IAR-W01: in a browser a page from the copy is read-only from its first pai
   assert.equal(client.isReadOnly(), false);
   assert.equal(notice.hidden, true);
   assert.deepEqual(env.readOnlyCalls, [true, false]);
+});
+
+test('IAR-W11: in a browser a copy shows the notice at once when the device is offline', () => {
+  const { client, notice } = setup({ androidShell: false, marker: 'cache', onLine: false, answer: () => new Promise(() => {}) });
+
+  assert.equal(client.isReadOnly(), true);
+  assert.equal(notice.hidden, false);
+});
+
+test('IAR-W11: in a browser a connected device shows the notice once the server cannot answer', async () => {
+  const { notice, settle } = setup({
+    androidShell: false, marker: 'cache', answer: async () => { throw new TypeError('Failed to fetch'); },
+  });
+  await settle();
+
+  assert.equal(notice.hidden, false);
 });
 
 test('the Android app shows its copy without the notice while the server answers', async () => {

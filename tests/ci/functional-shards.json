@@ -567,6 +567,13 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/instantReturnBrowser.spec.js",
+              "case": "FTC-IAR-W11 a slow connection that is still online never shows the Offline notice while the library loads",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/instantReturnSignOut.spec.js",
               "case": "FTC-IAR-W02 signing out deletes the copy; the next start is the sign-in page, never the library",
               "area": "gallery-search"

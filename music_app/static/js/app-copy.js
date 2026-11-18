@@ -9,7 +9,8 @@
 //
 // A page the worker answered from its copy is marked `content="cache"`. It asks the server which
 // account is signed in: another account, or none, deletes the copy and loads the page again; no
-// answer makes the copy read-only, with its notice and every write hidden, until one comes. Each
+// answer makes the copy read-only, with its Offline notice and every write hidden, until one comes.
+// The notice means unreachable (no answer, a gateway error, or the device offline), never slow. Each
 // answer lets the runtime bring the view up to date in place (onServerAnswer).
 (function appCopy(root) {
   'use strict';
@@ -75,11 +76,16 @@
       location.reload();
     }
 
-    function setReadOnly(on) {
-      if (readOnly === on) return;
-      readOnly = on;
+    // The Offline notice, shown only while the server cannot be reached, never for a slow answer.
+    function showNotice(on) {
       const notice = document.getElementById('app-copy-offline-notice');
       if (notice) notice.hidden = !on;
+    }
+
+    function setReadOnly(on) {
+      if (!on) showNotice(false);
+      if (readOnly === on) return;
+      readOnly = on;
       capabilities()?.setReadOnly?.(on);
     }
 
@@ -95,6 +101,7 @@
       }
       if (!response || response.status >= 500) {
         setReadOnly(true);
+        showNotice(true);
         retryTimer = setTimeout(confirmAccount, RETRY_DELAYS_MS[Math.min(retries, RETRY_DELAYS_MS.length - 1)]);
         retries += 1;
         return;
@@ -163,8 +170,12 @@
     });
     if (inBrowser) window.addEventListener('pagehide', saveInBrowser);
     window.addEventListener('online', () => { if (readOnly) void confirmAccount(); });
-    // A browser shows its copy only when the server did not answer in time, so the copy starts read-only.
-    if (startedFromCopy && inBrowser) setReadOnly(true);
+    // A browser shows its copy only when the server could not answer, so the copy starts read-only.
+    // The notice waits for the account check unless the device itself is offline.
+    if (startedFromCopy && inBrowser) {
+      setReadOnly(true);
+      if (navigator.onLine === false) showNotice(true);
+    }
     if (startedFromCopy) void confirmAccount();
 
     return { startedFromCopy, isReadOnly: () => readOnly, adoptShell, forget, onServerAnswer };

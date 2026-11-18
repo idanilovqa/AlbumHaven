@@ -10260,6 +10260,22 @@
   {
     "config": "playwright.config.js",
     "project": "functional",
+    "test": "tests/e2e/specs/instantReturnBrowser.spec.js",
+    "case": "FTC-IAR-W11 a slow connection that is still online never shows the Offline notice while the library loads",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "browser-copy-slow-online-no-offline-notice"
+    ],
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
     "test": "tests/e2e/specs/instantReturnSignOut.spec.js",
     "case": "FTC-IAR-W02 signing out deletes the copy; the next start is the sign-in page, never the library",
     "profile": "functional-core",
@@ -10283,15 +10299,45 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/appCopy.spec.js",
-    "case": "app copy service worker › IAR-W01: a browser takes the server's page when it is quick and the copy after 1.5 s without it",
+    "case": "app copy service worker › IAR-W01: a browser takes the server's page and keeps the first visit once the worker runs",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": [
-      "IAR-W01: a browser takes the server's page when it is quick and the copy after 1.5 s without it"
+      "IAR-W01: a browser takes the server's page and keeps the first visit once the worker runs"
     ],
-    "ownerApproval": "approved"
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/appCopy.spec.js",
+    "case": "app copy service worker › IAR-W11: a slow server that still answers is waited for; the copy and its notice never stand in",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "IAR-W11: a slow server that still answers is waited for; the copy and its notice never stand in"
+    ],
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/appCopy.spec.js",
+    "case": "app copy service worker › IAR-W11: a worker left from an earlier build answers at most one more load once the server has a new one",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "IAR-W11: a worker left from an earlier build answers at most one more load once the server has a new one"
+    ],
+    "ownerApproval": "pending"
   }
 ]

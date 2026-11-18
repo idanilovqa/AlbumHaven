@@ -6,7 +6,7 @@ import { defineTimingBudget, expectTimingBudget } from '../helpers/timingBudget.
 import { GalleryActions } from '../actions/index.js';
 import { GalleryPage } from '../poms/index.js';
 import {
-  primeCopy, keptPages, visibleAlbumNames, workerReady, LIBRARY_PATH,
+  primeCopy, keptPages, slowConnection, visibleAlbumNames, workerReady, LIBRARY_PATH,
 } from '../helpers/instantReturnHelpers.js';
 
 test.use({ serviceWorkers: 'allow' });
@@ -60,6 +60,41 @@ test('FTC-IAR-W05 offline, the saved library appears at once, read-only, and rec
   expect(navigations).toEqual([]);
   expect(await visibleAlbumNames(galleryPage)).toEqual(albumsOnline);
   await expect(scanControl).toBeVisible();
+});
+
+// Owner report: "no flashing offline messaging when network is on". A connection slower than the
+// old 1.5 s wait, still online, loads the server's page; the notice is never shown at any moment.
+test('FTC-IAR-W11 a slow connection that is still online never shows the Offline notice while the library loads', {
+  tag: '@area:gallery-search',
+}, async ({ page, galleryActions }) => {
+  const { galleryPage } = galleryActions;
+  await primeCopy(page, galleryActions);
+
+  const restore = await slowConnection(page, 2000);
+  const shown = [];
+  let samples = 0;
+  let loading = true;
+  const sampling = (async () => {
+    while (loading) {
+      samples += 1;
+      if (await galleryPage.appCopyOfflineNotice.isVisible()) shown.push(Date.now());
+    }
+  })();
+  try {
+    await page.reload();
+    await galleryActions.waitForGalleryReady();
+    // Long enough for any account check started by the load to have answered through the delay.
+    await page.waitForTimeout(5000);
+  } finally {
+    loading = false;
+    await sampling;
+    await restore();
+  }
+
+  expect(samples, 'the notice was sampled throughout the load').toBeGreaterThan(50);
+  expect(shown, 'moments the Offline notice was visible').toEqual([]);
+  await expect(galleryPage.appCopyMarker).toHaveAttribute('content', 'network');
+  expect((await visibleAlbumNames(galleryPage)).length).toBeGreaterThan(0);
 });
 
 // The owner's D2 retest: the first visit with the copy on, then airplane mode without leaving the

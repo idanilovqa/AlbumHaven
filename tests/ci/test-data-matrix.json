@@ -10550,7 +10550,7 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/sameNameSplit.spec.js",
-    "case": "same-name split: an identity shows its full country name where known, dimmed; one without a country shows its type; a code with no English name shows as the code",
+    "case": "same-name split: an identity shows its full country name where known, else its MusicBrainz area, dimmed; one with neither shows its type; a code with no English name shows as the code",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -10559,7 +10559,7 @@
     "expectedContracts": [
       "musicbrainz-same-name-split-country"
     ],
-    "ownerApproval": "approved"
+    "ownerApproval": "pending"
   },
   {
     "config": "playwright.component.config.js",

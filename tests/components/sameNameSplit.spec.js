@@ -48,7 +48,7 @@ function labelRows(page) {
     .map((label) => label.textContent.replace(/\s+/g, ' ').trim()));
 }
 
-test('same-name split: an identity shows its full country name where known, dimmed; one without a country shows its type; a code with no English name shows as the code', async ({ page }) => {
+test('same-name split: an identity shows its full country name where known, else its MusicBrainz area, dimmed; one with neither shows its type; a code with no English name shows as the code', async ({ page }) => {
   await renderTree(page, {
     tree: [
       { artist: 'Amarok (Poland)', artist_display: 'Amarok (Poland)', count: 4 },
@@ -56,16 +56,21 @@ test('same-name split: an identity shows its full country name where known, dimm
       { artist: 'Amarok (Band)', artist_display: 'Amarok (Band)', count: 2 },
       { artist: 'Arion (QZ)', artist_display: 'Arion (QZ)', count: 2 },
       { artist: 'Arion (Finland)', artist_display: 'Arion (Finland)', count: 1 },
+      { artist: 'Arion (Chico)', artist_display: 'Arion (Chico)', count: 1 },
       { artist: 'Angra', artist_display: 'Angra', count: 16 },
     ],
-    split: { 'Amarok (Poland)': 'Poland', 'Amarok (Spain)': 'Spain', 'Amarok (Band)': 'Band', 'Arion (QZ)': 'QZ', 'Arion (Finland)': 'Finland' },
+    split: { 'Amarok (Poland)': 'Poland', 'Amarok (Spain)': 'Spain', 'Amarok (Band)': 'Band', 'Arion (QZ)': 'QZ', 'Arion (Finland)': 'Finland', 'Arion (Chico)': 'Chico' },
   });
-  expect(await labelRows(page)).toEqual(['Amarok (Poland)', 'Amarok (Spain)', 'Amarok (Band)', 'Arion (QZ)', 'Arion (Finland)', 'Angra']);
+  expect(await labelRows(page)).toEqual(['Amarok (Poland)', 'Amarok (Spain)', 'Amarok (Band)', 'Arion (QZ)', 'Arion (Finland)', 'Arion (Chico)', 'Angra']);
   const { parts: spain } = await rowParts(page, 'Amarok (Spain)');
   expect(spain.secondary).toBe('(Spain)');
   expect(spain.secondaryColor).toBe('rgb(120, 120, 120)');
   expect(spain.nameColor).not.toBe(spain.secondaryColor);
-  // An identity with no known country shows its type instead, dimmed the same way.
+  // No country but an area MusicBrainz gives: the area, dimmed the same way.
+  const { parts: area } = await rowParts(page, 'Arion (Chico)');
+  expect(area.secondary).toBe('(Chico)');
+  expect(area.secondaryColor).toBe('rgb(120, 120, 120)');
+  // Neither a country nor an area: the type, dimmed the same way.
   const { parts: noCountry } = await rowParts(page, 'Amarok (Band)');
   expect(noCountry.secondary).toBe('(Band)');
   expect(noCountry.secondaryColor).toBe('rgb(120, 120, 120)');

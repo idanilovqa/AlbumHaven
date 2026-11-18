@@ -9144,7 +9144,9 @@ def _split_album_groups_cte_sql(
               on identities.library_id = albums.library_id and identities.album_key = albums.album_key
           ), described as (
             select distinct proven.artist_id, proven.artist_mbid,
-                   nullif(btrim(remote.disambiguation), '') as disambiguation, country.name as country,
+                   nullif(btrim(remote.disambiguation), '') as disambiguation,
+                   -- The place: the country, else the area MusicBrainz gives ("Chico", 0257).
+                   coalesce(country.name, nullif(btrim(remote.area_name), '')) as country,
                    case remote.artist_kind
                      when 'Person' then 'Person' when 'Group' then 'Band' when 'Orchestra' then 'Orchestra'
                      when 'Choir' then 'Choir' when 'Character' then 'Character'
@@ -9161,7 +9163,8 @@ def _split_album_groups_cte_sql(
             ) country on true
           ), candidates as (
             -- Owner 2026-11-17 ("Same-name split labels", "Country where known"): each identity's
-            -- labels in order of preference. With a known country: the full country name, then
+            -- labels in order of preference. With a known place (the full country name, else the
+            -- area MusicBrainz gives, "For those bands put a location identifier"): the place, then
             -- the type ("Person", "Band"), then MusicBrainz's disambiguation, then both country
             -- and disambiguation. Without one: the type, then the disambiguation. Last, the
             -- MBID's start ("ID start, as built"). Everyone starts at their first choice;

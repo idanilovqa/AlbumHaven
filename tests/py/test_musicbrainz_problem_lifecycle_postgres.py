@@ -1002,6 +1002,48 @@ def test_a_split_artists_identities_store_their_country_and_a_recheck_without_on
     assert countries() == {(GERMAN, "ES")}
 
 
+def test_identities_and_matched_artists_store_their_area_and_a_lookup_without_one_keeps_it(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """0257, owner 2026-11-17: where MusicBrainz names no country, the area it gives ("Chico")."""
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    _library_id, artist_id = _seed_present_artist(setup_url, "amarok")
+    with isolatedPostgres._connect(setup_url) as connection:
+        album = connection.execute(
+            "select id from library.local_albums where album_key = 'amarok-album'").fetchone()["id"]
+    repository = MusicBrainzEnrichmentPostgresRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": runtime_url}, connect=lambda _url: isolatedPostgres._connect(runtime_url))
+    chico = "00000000-0000-4000-8000-0000000000c1"
+
+    def areas():
+        with isolatedPostgres._connect(setup_url) as connection:
+            return {str(row["mbid"]): (row["area_name"], row["area_mbid"] and str(row["area_mbid"])) for row in connection.execute(
+                "select mbid, area_name, area_mbid from integration.musicbrainz_artists where mbid = any(%s::uuid[])",
+                ([GERMAN, TRANCE],))}
+
+    def split(trance_area):
+        repository.record_automatic_outcome(
+            local_artist_id=artist_id, state="per_album", artist=None, confidence=1, observed_at=NOW,
+            evidence_summary="Your albums belong to 2 MusicBrainz artists.",
+            identity_artists=[{"mbid": GERMAN, "canonical_name": "Amarok", "country_code": "ES", "area_name": "Spain"},
+                              {"mbid": TRANCE, "canonical_name": "Amarok", **trance_area}],
+            album_identities=[{"local_album_id": album, "artist_mbid": TRANCE}])
+
+    split({"area_name": "Chico", "area_mbid": chico})
+    assert areas() == {GERMAN: ("Spain", None), TRANCE: ("Chico", chico)}
+    # Negative: a re-check that brings no area keeps the stored one.
+    split({})
+    assert areas()[TRANCE] == ("Chico", chico)
+    # A matched artist's lookup stores its area too, and one without an area never blanks it.
+    for area in ({"area_name": "Butte County", "area_mbid": chico}, {}):
+        repository.record_automatic_outcome(
+            local_artist_id=artist_id, state="matched", confidence=1, observed_at=NOW,
+            evidence_summary="MusicBrainz album evidence agreed.",
+            artist={"mbid": TRANCE, "canonical_name": "Amarok", "artist_type": "Group", **area},
+            album_identities=[{"local_album_id": album, "artist_mbid": TRANCE}])
+        assert areas()[TRANCE] == ("Butte County", chico)
+
+
 def test_albums_of_several_artists_store_their_identities_and_leave_problematic_files(monkeypatch: pytest.MonkeyPatch):
     """0177, owner decision 2026-11-08: each album takes the artist it certainly matches."""
     setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)

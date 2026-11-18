@@ -1199,6 +1199,14 @@ def _mbid(value: object) -> str:
     return text
 
 
+def _optional_mbid(value: object) -> str | None:
+    """A secondary identifier (an artist's area): None when missing or malformed, never an error."""
+    try:
+        return _mbid(value) if value else None
+    except ValueError:
+        return None
+
+
 def _match_state(value: object) -> str:
     state = str(value or "").strip().casefold()
     if state not in {"pending", "matched", "ambiguous", "not_found", "conflict", "manual_review"}:
@@ -1240,6 +1248,9 @@ def _artist_projection(
         "disambiguation": _bounded_text(artist.get("disambiguation"), 1024) or None,
         "country_code": _bounded_text(artist.get("country_code"), 8).upper() or None,
         "country_name": _bounded_text(artist.get("country_name"), 128) or None,
+        # 0257: where MusicBrainz names no country, the area it gives ("Chico") labels a split name.
+        "area_mbid": _optional_mbid(artist.get("area_mbid")),
+        "area_name": _bounded_text(artist.get("area_name"), 256) or None,
         "discogs_artist_id": _discogs_artist_id(artist.get("discogs_artist_id")),
         "aliases": _alias_rows(artist.get("aliases")),
         "tags": _artist_tag_rows(artist),
@@ -1357,6 +1368,8 @@ def _projection_params(projection: dict[str, object] | None) -> dict[str, object
         "disambiguation": projection.get("disambiguation"),
         "country_code": projection.get("country_code"),
         "country_name": projection.get("country_name"),
+        "area_mbid": projection.get("area_mbid"),
+        "area_name": projection.get("area_name"),
         "discogs_artist_id": projection.get("discogs_artist_id"),
     }
 
@@ -1572,14 +1585,15 @@ def _upsert_identity_artists_sql() -> str:
         with rows as (
           select * from jsonb_to_recordset(%(identity_artists)s::jsonb) as rows(
             mbid uuid, canonical_name text, sort_name text, preferred_native_name text, artist_kind text,
-            disambiguation text, discogs_artist_id bigint, country_code text)
+            disambiguation text, discogs_artist_id bigint, country_code text, area_mbid uuid, area_name text)
         ), upserted as (
           insert into integration.musicbrainz_artists (
             mbid, canonical_name, sort_name, preferred_native_name, artist_kind,
-            disambiguation, discogs_artist_id, refreshed_at, created_at, updated_at
+            disambiguation, discogs_artist_id, area_mbid, area_name, refreshed_at, created_at, updated_at
           )
           select rows.mbid, rows.canonical_name, rows.sort_name, rows.preferred_native_name, rows.artist_kind,
-                 rows.disambiguation, rows.discogs_artist_id, %(observed_at)s, %(observed_at)s, %(observed_at)s
+                 rows.disambiguation, rows.discogs_artist_id, rows.area_mbid, rows.area_name,
+                 %(observed_at)s, %(observed_at)s, %(observed_at)s
           from rows
           on conflict (mbid) do update
           -- A listing from album credits alone never blanks what a full lookup stored.
@@ -1587,6 +1601,8 @@ def _upsert_identity_artists_sql() -> str:
               sort_name = coalesce(excluded.sort_name, integration.musicbrainz_artists.sort_name),
               artist_kind = coalesce(excluded.artist_kind, integration.musicbrainz_artists.artist_kind),
               disambiguation = coalesce(excluded.disambiguation, integration.musicbrainz_artists.disambiguation),
+              area_mbid = coalesce(excluded.area_mbid, integration.musicbrainz_artists.area_mbid),
+              area_name = coalesce(excluded.area_name, integration.musicbrainz_artists.area_name),
               updated_at = excluded.updated_at
           returning mbid
         )
@@ -1785,11 +1801,12 @@ def _automatic_outcome_sql() -> str:
         ), upsert_artist as (
           insert into integration.musicbrainz_artists (
             mbid, canonical_name, sort_name, preferred_native_name, artist_kind,
-            disambiguation, discogs_artist_id, refreshed_at, created_at, updated_at
+            disambiguation, discogs_artist_id, area_mbid, area_name, refreshed_at, created_at, updated_at
           )
           select %(artist_mbid)s::uuid, %(canonical_name)s, %(sort_name)s,
                  %(preferred_native_name)s, %(artist_kind)s, %(disambiguation)s,
-                 %(discogs_artist_id)s::bigint, %(observed_at)s, %(observed_at)s, %(observed_at)s
+                 %(discogs_artist_id)s::bigint, %(area_mbid)s::uuid, %(area_name)s,
+                 %(observed_at)s, %(observed_at)s, %(observed_at)s
           from active_artist
           where %(artist_mbid)s::uuid is not null
           on conflict (mbid) do update
@@ -1799,6 +1816,9 @@ def _automatic_outcome_sql() -> str:
               artist_kind = excluded.artist_kind,
               disambiguation = excluded.disambiguation,
               discogs_artist_id = excluded.discogs_artist_id,
+              -- 0257: a lookup without an area never blanks a stored one.
+              area_mbid = coalesce(excluded.area_mbid, integration.musicbrainz_artists.area_mbid),
+              area_name = coalesce(excluded.area_name, integration.musicbrainz_artists.area_name),
               refreshed_at = excluded.refreshed_at,
               updated_at = excluded.updated_at
           returning mbid
@@ -1918,11 +1938,12 @@ def _manual_artist_sql() -> str:
     return _authorized_artist_cte() + """
         insert into integration.musicbrainz_artists (
           mbid, canonical_name, sort_name, preferred_native_name, artist_kind,
-          disambiguation, discogs_artist_id, refreshed_at, created_at, updated_at
+          disambiguation, discogs_artist_id, area_mbid, area_name, refreshed_at, created_at, updated_at
         )
         select %(artist_mbid)s::uuid, %(canonical_name)s, %(sort_name)s,
                %(preferred_native_name)s, %(artist_kind)s, %(disambiguation)s,
-               %(discogs_artist_id)s::bigint, %(observed_at)s, %(observed_at)s, %(observed_at)s
+               %(discogs_artist_id)s::bigint, %(area_mbid)s::uuid, %(area_name)s,
+                 %(observed_at)s, %(observed_at)s, %(observed_at)s
         from authorized_artist
         on conflict (mbid) do update
         set canonical_name = excluded.canonical_name,
@@ -1931,6 +1952,9 @@ def _manual_artist_sql() -> str:
             artist_kind = excluded.artist_kind,
             disambiguation = excluded.disambiguation,
             discogs_artist_id = excluded.discogs_artist_id,
+            -- 0257: a lookup without an area never blanks a stored one.
+            area_mbid = coalesce(excluded.area_mbid, integration.musicbrainz_artists.area_mbid),
+            area_name = coalesce(excluded.area_name, integration.musicbrainz_artists.area_name),
             refreshed_at = excluded.refreshed_at,
             updated_at = excluded.updated_at;
     """
@@ -1955,11 +1979,12 @@ def _refresh_artist_sql() -> str:
         , refreshed_artist as (
           insert into integration.musicbrainz_artists (
             mbid, canonical_name, sort_name, preferred_native_name, artist_kind,
-            disambiguation, discogs_artist_id, refreshed_at, created_at, updated_at
+            disambiguation, discogs_artist_id, area_mbid, area_name, refreshed_at, created_at, updated_at
           )
           select artist_mbid, %(canonical_name)s, %(sort_name)s,
                  %(preferred_native_name)s, %(artist_kind)s, %(disambiguation)s,
-                 %(discogs_artist_id)s::bigint, %(observed_at)s, %(observed_at)s, %(observed_at)s
+                 %(discogs_artist_id)s::bigint, %(area_mbid)s::uuid, %(area_name)s,
+                 %(observed_at)s, %(observed_at)s, %(observed_at)s
           from matched_artist
           on conflict (mbid) do update
           set canonical_name = excluded.canonical_name,
@@ -1968,6 +1993,9 @@ def _refresh_artist_sql() -> str:
               artist_kind = excluded.artist_kind,
               disambiguation = excluded.disambiguation,
               discogs_artist_id = excluded.discogs_artist_id,
+              -- 0257: a lookup without an area never blanks a stored one.
+              area_mbid = coalesce(excluded.area_mbid, integration.musicbrainz_artists.area_mbid),
+              area_name = coalesce(excluded.area_name, integration.musicbrainz_artists.area_name),
               refreshed_at = excluded.refreshed_at,
               updated_at = excluded.updated_at
           returning true as refreshed

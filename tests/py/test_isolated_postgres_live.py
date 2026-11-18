@@ -6735,6 +6735,27 @@ def test_live_split_labels_show_a_country_where_known_and_step_down_only_where_l
         "Owner (Band)", "Owner (Person)"]
 
 
+def test_live_split_labels_show_the_musicbrainz_area_where_no_country_is_known(watcher_repair_inventory):
+    """0257, owner 2026-11-17: "For those bands put a location identifier that is available from
+    MusicBrainz": the country name, else the area MusicBrainz gives ("Chico"), then the type."""
+    fixture = watcher_repair_inventory
+    albums = _seed_same_name_split(fixture)
+    library_id = albums["Hunt"]["library_id"]
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute("delete from integration.musicbrainz_artist_countries where artist_mbid = %s", (_SPLIT_POLAND,))
+        connection.execute("update integration.musicbrainz_artists set area_name = 'Chico', artist_kind = 'Group'"
+                           " where mbid = %s", (_SPLIT_POLAND,))
+        connection.execute("update integration.musicbrainz_artists set area_name = 'Madrid', artist_kind = 'Group'"
+                           " where mbid = %s", (_SPLIT_SPAIN,))
+    assert sorted(row["group_label"] for row in _narrow_split_groups(fixture, library_id)) == [
+        "Owner (Chico)", "Owner (Spain)"], "a known country wins over its own area"
+    # Negative: no country and no area falls back to the type, as before.
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute("update integration.musicbrainz_artists set area_name = null where mbid = %s", (_SPLIT_POLAND,))
+    assert sorted(row["group_label"] for row in _narrow_split_groups(fixture, library_id)) == [
+        "Owner (Band)", "Owner (Spain)"]
+
+
 def test_live_the_plain_row_holds_only_undecided_albums_and_is_gone_when_every_album_is_matched(
     watcher_repair_inventory,
 ):

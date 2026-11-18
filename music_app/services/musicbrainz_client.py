@@ -4,7 +4,7 @@ import re
 import unicodedata
 import urllib.parse
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from functools import partial
 
 from music_app.services.musicbrainz_http import count_json_matches
@@ -176,6 +176,7 @@ def project_artist(
         "artist_type": _text(payload.get("type")) or None,
         "disambiguation": _text(payload.get("disambiguation"))[:1024] or None,
         "country_code": country if len(country) == 2 and country.isalpha() else None,
+        **_artist_area(payload),
         "preferred_native_name": preferred_native_name,
         "source_url": artist_url(mbid),
         "aliases": aliases,
@@ -362,7 +363,16 @@ def _candidate(payload: object) -> JsonDict | None:
             result[target] = payload[source]
     if isinstance(payload.get("aliases"), list):
         result["aliases"] = _bounded_aliases(payload["aliases"], 24)
+    result.update({key: value for key, value in _artist_area(payload).items() if value})
     return result
+
+
+def _artist_area(payload: Mapping[str, object]) -> JsonDict:
+    """The area MusicBrainz gives an artist (a country, region or city such as "Chico"), with its
+    MBID; where it names no country, a split name's label shows it (owner 2026-11-17, 0257)."""
+    area = payload.get("area") if isinstance(payload.get("area"), Mapping) else {}
+    name = _text(area.get("name"))[:256]
+    return {"area_mbid": _valid_mbid(area.get("id")) if name else None, "area_name": name or None}
 
 
 class MusicBrainzClient:

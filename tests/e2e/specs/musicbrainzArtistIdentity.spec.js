@@ -205,6 +205,7 @@ test('FTC-MBID-001 a matched artist shows its MusicBrainz name, country, genres 
 
 test('FTC-MBID-002 a split name lists each MusicBrainz artist; a person and their band are separate artists', { tag: '@area:album-details' }, async ({
   galleryActions,
+  navigationPanelActions,
   searchToolbarActions,
   stepLogger,
   trackModalActions,
@@ -229,9 +230,17 @@ test('FTC-MBID-002 a split name lists each MusicBrainz artist; a person and thei
     });
 
     await stepLogger.step('MBD1-37: Album Details names which band an album belongs to', async () => {
-      // D2 item 3: a proven album sits under its own identity's label; both are Groups with no
-      // country, so the label steps down to the disambiguation.
-      const tags = await albumDetailsTags({ galleryActions, trackModalActions }, `${LEAD} (Swedish band)`, 'Functional Fixture Album 250');
+      // Owner 2026-11-18: the search lands on the plain name (its undecided albums); the
+      // Swedish band's albums are under its own tree row, so the step switches to it.
+      const band = `${LEAD} (Swedish band)`;
+      await openArtist({ galleryActions, searchToolbarActions }, LEAD);
+      await navigationPanelActions.waitForSidebarSelection(LEAD);
+      expect(await navigationPanelActions.readActiveSidebarArtistName()).toBe(LEAD);
+      await navigationPanelActions.selectSidebarArtistByName(band);
+      await navigationPanelActions.waitForSidebarSelection(band);
+      expect(await navigationPanelActions.readActiveSidebarArtistName()).toBe(band);
+      // The band's own gallery names it "Compilation Signal Lead", its qualifier dimmed beside.
+      const tags = await albumDetailsTags({ galleryActions, trackModalActions }, LEAD, 'Functional Fixture Album 250');
       expect(tags).toContain('MusicBrainz: Compilation Signal Lead (Swedish band)');
       await trackModalActions.closeIfOpen();
     });

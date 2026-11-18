@@ -579,3 +579,93 @@ def test_build_album_detail_payload_adds_shared_track_rows_for_non_album_groups(
             "total_duration_display": "2m 05s",
         },
     }
+
+
+_CONTAINER_ALBUM = "Queued Album Rename Fixture"
+_CONTAINER_FOLDER = f"C:/Music/E2E Rarity Artist/2026 - {_CONTAINER_ALBUM}"
+
+
+def _container_library(*, filler_albums: int = 0) -> dict[str, dict[str, object]]:
+    file_cache = {
+        f"{_CONTAINER_FOLDER}/{number:02d} - Rename Track {number}.mp3": {
+            "path": f"{_CONTAINER_FOLDER}/{number:02d} - Rename Track {number}.mp3",
+            "album": _CONTAINER_ALBUM,
+            "album_artist": "E2E Rarity Artist",
+            "track_number": number,
+        }
+        for number in range(1, 19)
+    }
+    for album in range(filler_albums):
+        for number in range(1, 11):
+            path = f"C:/Music/Filler/Album {album:05d}/{number:02d}.mp3"
+            file_cache[path] = {"path": path, "album": f"Album {album:05d}", "track_number": number}
+    return file_cache
+
+
+def _blank_album_evidence(library_state: dict[str, object], target_path: str) -> tuple[dict, list]:
+    from music_app.services.edit_workflows import _album_container_sibling_entries
+
+    cleared = {**library_state["file_cache"][target_path], "album": ""}
+    evidence = {**_album_container_sibling_entries(library_state, {target_path}), target_path: cleared}
+    return cleared, list(evidence.values())
+
+
+def test_blank_album_edit_evidence_keeps_a_strongly_inferred_track_like_main():
+    library_state = {"file_cache": _container_library(filler_albums=3)}
+    target_path = f"{_CONTAINER_FOLDER}/02 - Rename Track 2.mp3"
+
+    cleared, evidence = _blank_album_evidence(library_state, target_path)
+
+    assert len(evidence) == 18, "the edited track plus its 17 container siblings, no other album's tracks"
+    assert infer_blank_album_membership(cleared, evidence) == _CONTAINER_ALBUM
+    full_cache = [*library_state["file_cache"].values(), cleared]
+    assert infer_blank_album_membership(cleared, full_cache) == _CONTAINER_ALBUM
+
+
+def test_blank_album_edit_evidence_includes_a_second_album_sharing_the_folder_like_main():
+    file_cache = _container_library()
+    intruder_path = f"{_CONTAINER_FOLDER}/99 - Bonus From Elsewhere.mp3"
+    # An exception track belongs to no published album, yet main weighed it.
+    file_cache[intruder_path] = {
+        "path": intruder_path, "album": "A Different Album", "track_number": 3,
+        "exception_type": "Single",
+    }
+    library_state = {"file_cache": file_cache}
+    target_path = f"{_CONTAINER_FOLDER}/02 - Rename Track 2.mp3"
+
+    cleared, evidence = _blank_album_evidence(library_state, target_path)
+
+    assert intruder_path in {entry["path"] for entry in evidence}
+    assert infer_blank_album_membership(cleared, evidence) is None
+    assert infer_blank_album_membership(cleared, [*file_cache.values(), cleared]) is None
+
+
+def test_album_container_lookup_work_does_not_grow_with_library_size(monkeypatch):
+    from music_app.services import non_album_view_payloads
+
+    real_container = non_album_view_payloads._album_container
+    calls = {"count": 0}
+
+    def counted_container(path):
+        calls["count"] += 1
+        return real_container(path)
+
+    monkeypatch.setattr(non_album_view_payloads, "_album_container", counted_container)
+    target_path = f"{_CONTAINER_FOLDER}/02 - Rename Track 2.mp3"
+    lookup_calls = {}
+    for filler_albums in (10, 10_000):
+        library_state = {"file_cache": _container_library(filler_albums=filler_albums)}
+        non_album_view_payloads.album_container_track_paths(library_state, {target_path})
+        calls["count"] = 0
+        for _ in range(10):
+            paths = non_album_view_payloads.album_container_track_paths(library_state, {target_path})
+        lookup_calls[filler_albums] = calls["count"]
+        assert len(paths) == 18
+
+        # Publishing a new cache object rebuilds the index once for it.
+        library_state["file_cache"] = {**library_state["file_cache"]}
+        calls["count"] = 0
+        non_album_view_payloads.album_container_track_paths(library_state, {target_path})
+        assert calls["count"] == len(library_state["file_cache"]) + 1
+
+    assert lookup_calls == {10: 10, 10_000: 10}, "one container per edited path per lookup, at any library size"

@@ -9,7 +9,7 @@ from time import perf_counter
 import uuid
 
 from music_app.services.edit_tag_timings import EditTagTimingRecorder
-from music_app.services.library_album_index import library_album_index
+from music_app.services.non_album_view_payloads import album_container_track_paths
 from music_app.services.scan_cache_persistence import (
     StructuralTagEditDestinationConflict,
 )
@@ -61,19 +61,17 @@ _ALLOWED_TAG_EDIT_FIELDS = {
 }
 
 
-def _source_album_sibling_entries(
+def _album_container_sibling_entries(
     library_state: StateDict,
-    file_cache: Mapping[str, JsonDict],
     changed_paths: TrackPathSet,
 ) -> FileCache:
-    """The entries of the other tracks of the published albums holding the
-    changed paths, read by track path, never by scanning the library."""
+    """The other live entries in the changed tracks' album containers: every
+    entry blank-Album inference weighs, read through the container index."""
+    file_cache = library_state.get("file_cache") or {}
     return {
         path: entry
-        for album in library_album_index(library_state).albums_with_any_track(changed_paths)
-        for track in getattr(album, "tracks", ()) or ()
-        if (path := str(getattr(track, "path", "") or "")) not in changed_paths
-        and isinstance(entry := file_cache.get(path), dict)
+        for path in album_container_track_paths(library_state, changed_paths) - changed_paths
+        if isinstance(entry := file_cache.get(path), dict)
     }
 
 
@@ -910,10 +908,10 @@ def _handle_edit_tags_request_after_reservation(
             task_id=task_id,
             config=config,
             logger=logger,
-            # The changed entries, plus their albums' other tracks: a blank-Album
-            # edit keeps membership only on sibling evidence.
+            # The changed entries, plus the rest of their album containers: a
+            # blank-Album edit keeps membership only on that sibling evidence.
             updated_file_cache={
-                **_source_album_sibling_entries(st, file_cache, changed_paths),
+                **_album_container_sibling_entries(st, set(changed_paths)),
                 **updated_entries,
             },
             previous_file_cache={path: dict(file_cache[path]) for path in changed_paths},

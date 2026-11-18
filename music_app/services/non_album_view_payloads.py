@@ -143,6 +143,35 @@ def infer_blank_album_membership(
     return inferred_album
 
 
+_CONTAINER_PATHS_STATE_KEY = "_album_container_track_paths"
+
+
+def album_container_track_paths(library_state: dict[str, object], track_paths: Iterable[str]) -> set[str]:
+    """Every live file-cache path in the album containers of `track_paths`.
+
+    These are all the entries `infer_blank_album_membership` weighs for those
+    tracks. The container index is built once per published file cache: its
+    paths change only when a new cache is published, never in place, so the
+    cache object it was built from identifies it.
+    """
+    file_cache = library_state.get("file_cache")
+    if not isinstance(file_cache, dict):
+        return set()
+    cached = library_state.get(_CONTAINER_PATHS_STATE_KEY)
+    if not (isinstance(cached, tuple) and cached[0] is file_cache):
+        paths_by_container: dict[PurePosixPath | PureWindowsPath, list[str]] = defaultdict(list)
+        for path in file_cache:
+            if (container := _album_container(path)) is not None:
+                paths_by_container[container].append(path)
+        cached = library_state[_CONTAINER_PATHS_STATE_KEY] = (file_cache, dict(paths_by_container))
+    paths_by_container = cached[1]
+    return {
+        path
+        for container in {_album_container(track_path) for track_path in track_paths} - {None}
+        for path in paths_by_container.get(container, ())
+    }
+
+
 def build_non_album_album_groups(entries: list[dict[str, object]]) -> list[dict[str, object]]:
     buckets: dict[tuple[str, str, str, str], dict[str, object]] = {}
     for entry in entries:

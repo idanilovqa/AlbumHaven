@@ -43,6 +43,7 @@ test('FTC-PLAYBACK-OFFLINE-001 a seek past the received audio offline stays play
     await trackModalActions.playTrackByTitle(TITLE);
     const evidence = await playbackEvidence.waitForTrackPlaybackEvidence({ after: mark, path: track.path });
     expect(evidence.nonZeroSamples).toBeGreaterThan(0);
+    expect(evidence.renderedFrameDelta).toBeGreaterThan(0);
     await expect(player.playButton).toHaveAttribute('aria-label', 'Pause');
   };
   const expectHeldSilentlyAt = async (expectedLabel, targetSeconds) => {
@@ -66,6 +67,7 @@ test('FTC-PLAYBACK-OFFLINE-001 a seek past the received audio offline stays play
     expect(displayedSeconds(await player.time.textContent())).toBeLessThan(heldAt + 20);
     const evidence = await playbackEvidence.waitForTrackPlaybackEvidence({ after: mark, path: track.path });
     expect(evidence.nonZeroSamples).toBeGreaterThan(0);
+    expect(evidence.renderedFrameDelta).toBeGreaterThan(0);
     await expect(player.playButton).toHaveAttribute('aria-label', 'Pause');
   };
 

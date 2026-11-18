@@ -7496,13 +7496,14 @@ def _synchronize_album_cover_file_entries_sql(
     # indexes; the planner otherwise scans every track file's metadata.
     return f"""
         with repaired_albums as materialized (
-          select album.* from library.local_albums album
+          select album.id, album.library_id, album.cover_path, album.metadata
+          from library.local_albums album
           join library.libraries lib on lib.id = album.library_id
           join app.bootstrap_owners owner on owner.account_id = lib.owner_account_id
           where owner.owner_key = 'local-bootstrap-owner' and lib.library_kind = 'local'
             and {album_filter}
         ), repaired_files as materialized (
-          select files.id as file_id, album.*
+          select files.id as file_id, album.id, album.cover_path, album.metadata
           from repaired_albums album
           join library.local_tracks tracks
             on tracks.album_id = album.id and album.library_id = tracks.library_id

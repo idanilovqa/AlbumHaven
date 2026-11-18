@@ -421,6 +421,9 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
     const hovered = await globalPlayerActions.hoverLoopAction();
     expect(hovered.styles.state).toBe('disabled');
     expect(hovered.podBounds).toEqual(unavailable.visual.podBounds);
+    const dwell = await globalPlayerActions.expectScissorsStayFoldedOnPlayHover();
+    expect(dwell.after.podBounds).toEqual(dwell.before.podBounds);
+    expect(dwell.after.podBounds).toEqual(unavailable.visual.podBounds);
   });
 
   await stepLogger.step('Select the exact signed journey album and start its fake loop source track', async () => {

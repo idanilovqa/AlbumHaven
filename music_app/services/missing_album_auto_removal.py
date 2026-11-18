@@ -34,6 +34,18 @@ def remove_untouched_deleted(connection: Any, file_ids: Iterable[int]) -> AutoRe
     ids = sorted({int(file_id) for file_id in file_ids})
     if not ids:
         return AutoRemoval([], [])
+    import logging
+    logging.getLogger(__name__).error("DIAG auto-removal candidates: %s", [dict(r) for r in connection.execute("""
+        select albums.album_key, albums.cover_path, albums.metadata->>'cover_selection_origin' as origin,
+          albums.metadata->>'cover_selection_provenance' as provenance, albums.metadata->>'remote_cover_url' as remote,
+          albums.metadata ? 'cover_selection_repair_previous' as repair,
+          (select array_agg(array[files.scan_cache_stale::text, files.metadata #>> '{scan_cache,missing_reason}'])
+             from library.local_track_files files join library.local_tracks t on t.id=files.track_id
+             where t.album_id=albums.id) as files,
+          exists(select 1 from app.album_ratings r where r.album_key=albums.album_key) as rated
+        from library.local_albums albums where albums.id in (select tracks.album_id from library.local_track_files files
+          join library.local_tracks tracks on tracks.id=files.track_id where files.id = any(%(file_ids)s::bigint[]))
+    """, {"file_ids": ids}).fetchall()])
     album_keys = []
     for row in connection.execute(_UNTOUCHED_DELETED_ALBUMS_SQL, {"file_ids": ids}).fetchall():
         album_key = str(_value(row, "album_key"))

@@ -1015,7 +1015,7 @@ function leaseHarness({ clientOffsetMs = 0, renew }) {
         playbackState: { is_playing_here: true } });
       if (!body.claimToken) return answer();
       renewals += 1;
-      return renew ? renew(answer, options.signal) : answer();
+      return renew ? renew(answer, options.signal, options) : answer();
     },
   });
   loaded.context.state.player.current = localTrack;
@@ -1117,7 +1117,10 @@ test('the local lease runs for the answer\'s leaseMs from before the request was
   assert.equal(context.state.player.ownership.activeClaim, null, 'an answer without leaseMs is refused');
 });
 
-test('lease expiry still drops ownership when renewals stop answering', async () => {
+// Owner decision 2026-11-15: losing the network never stops playback. A claim the server has not
+// refused stays this client's past its lease; its token renews it on reconnect (the server accepts a
+// lapsed token until another client claims), and only a refusal stops playback.
+test('a lease that lapses with renewals unanswered keeps playing and its token', async () => {
   const harness = leaseHarness({ renew: (_answer, signal) => new Promise((_resolve, reject) => {
     signal.addEventListener('abort', () => reject(new Error('aborted')));
   }) });
@@ -1127,26 +1130,123 @@ test('lease expiry still drops ownership when renewals stop answering', async ()
   const unanswered = harness.leaseTimers()[0].callback();
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(harness.renewals(), 1, 'no renewal in flight: the lapsed lease asks the server once');
-  assert.notEqual(context.state.player.ownership.activeClaim, null);
   harness.timers.filter(({ delay }) => delay === 10_000).at(-1).callback();
   await unanswered;
-  assert.equal(context.state.player.ownership.activeClaim, null, 'an unanswered renewal ends the lease');
-  assert.deepEqual(stopStreamingPlaybackCalls, ['ownership-lost']);
+  assert.equal(context.state.player.ownership.activeClaim?.claimToken, 'claim-1');
+  assert.equal(context.isActivePlaybackOwner(), false, 'listen writes wait for a renewed lease');
+  assert.equal(context.state.player.ownership.blockedReason, '');
+  assert.equal(context.isPlaybackLockedByAnotherTab(), false);
+  assert.deepEqual(stopStreamingPlaybackCalls, []);
+  assert.ok(harness.timers.some(({ delay }) => delay === 2_000), 'the lapsed claim keeps retrying');
+});
 
+for (const outcome of ['renewed', 'taken over']) {
+  test(`a lapsed claim's reconnect renewal ${outcome === 'renewed' ? 'keeps playing' : 'answered 409 stops'}`, async () => {
+    let offline = true;
+    const harness = leaseHarness({ renew: (answer) => {
+      if (offline) return Promise.reject(new TypeError('Failed to fetch'));
+      return outcome === 'renewed' ? answer() : jsonResponse({ error: 'claimed elsewhere' }, { ok: false, status: 409 });
+    } });
+    const { context, clock, stopStreamingPlaybackCalls } = harness;
+    assert.equal(await context.claimPlaybackOwnership(localTrack), true);
+    clock.monotonic = 95_000;
+    await harness.leaseTimers()[0].callback();
+    assert.equal(context.state.player.ownership.activeClaim?.claimToken, 'claim-1');
+    offline = false;
+    harness.timers.filter(({ delay }) => delay === 2_000).at(-1).callback();
+    await new Promise((resolve) => setImmediate(resolve));
+    if (outcome === 'renewed') {
+      assert.equal(context.isActivePlaybackOwner(), true);
+      assert.equal(context.state.player.ownership.activeClaim.leaseDeadline, 125_000);
+      assert.deepEqual(stopStreamingPlaybackCalls, []);
+    } else {
+      assert.equal(context.state.player.ownership.activeClaim, null);
+      assert.deepEqual(stopStreamingPlaybackCalls, ['ownership-lost']);
+    }
+  });
+}
+
+test('play while offline past the lease plays on with the kept token', async () => {
+  let offline = false;
+  const harness = leaseHarness({ renew: (answer) => (offline
+    ? Promise.reject(new TypeError('Failed to fetch')) : answer()) });
+  const { context, clock, stopStreamingPlaybackCalls } = harness;
   assert.equal(await context.claimPlaybackOwnership(localTrack), true);
-  harness.heartbeat();
+  offline = true;
+  clock.monotonic = 120_000;
+  assert.equal(await context.claimPlaybackOwnership(localTrack), true);
+  assert.equal(context.state.player.ownership.activeClaim?.claimToken, 'claim-1');
+  assert.equal(context.state.player.ownership.blockedReason, '');
+  assert.deepEqual(stopStreamingPlaybackCalls, []);
+});
+
+test('the browser coming back online renews a lapsed claim at once', async () => {
+  const listeners = {};
+  let offline = true;
+  const harness = leaseHarness({ renew: (answer) => (offline
+    ? Promise.reject(new TypeError('Failed to fetch')) : answer()) });
+  const { context, clock } = harness;
+  context.window.addEventListener = (type, listener) => { listeners[type] = listener; };
+  context.state.player.ownership.initialized = false;
+  context.initPlaybackOwnershipCoordinator();
+  assert.equal(await context.claimPlaybackOwnership(localTrack), true);
+  clock.monotonic = 45_000;
+  await harness.leaseTimers()[0].callback();
+  const before = harness.renewals();
+  offline = false;
+  listeners.online();
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(harness.renewals(), 2);
-  clock.monotonic = 60_000;
-  const expiry = harness.leaseTimers()[1].callback();
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.notEqual(context.state.player.ownership.activeClaim, null);
-  const renewalDeadline = harness.timers.filter(({ delay }) => delay === 10_000).at(-1);
-  renewalDeadline.callback();
-  await expiry;
-  assert.equal(context.state.player.ownership.activeClaim, null);
-  assert.equal(context.state.player.ownership.blockedReason, 'playback_unavailable');
-  assert.deepEqual(stopStreamingPlaybackCalls, ['ownership-lost', 'ownership-lost']);
+  assert.equal(harness.renewals(), before + 1);
+  assert.equal(context.isActivePlaybackOwner(), true);
+});
+
+// A network switch fails the renewals sent while it lasts. As Android's PlaybackClaimOwner, the claim
+// and its audio outlive them until the lease ends; dropping the token at once also made the next play
+// an anonymous acquire the server refused (409) while this client's own lease still ran.
+for (const failure of ['network', 503, 429]) {
+  test(`a renewal ${failure === 'network' ? 'with no answer' : `answered ${failure}`} inside the lease keeps playing and retries in 2 s`, async () => {
+    let failing = true;
+    const harness = leaseHarness({ renew: (answer) => {
+      if (!failing) return answer();
+      if (failure === 'network') return Promise.reject(new TypeError('Failed to fetch'));
+      return jsonResponse({ error: 'busy' }, { ok: false, status: failure });
+    } });
+    const { context, clock, stopStreamingPlaybackCalls } = harness;
+    assert.equal(await context.claimPlaybackOwnership(localTrack), true);
+    clock.monotonic = 10_000;
+    harness.heartbeat();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(harness.renewals(), 1);
+    assert.equal(context.state.player.ownership.activeClaim?.claimToken, 'claim-1');
+    assert.equal(context.state.player.ownership.blockedReason, '');
+    assert.deepEqual(stopStreamingPlaybackCalls, []);
+
+    const retry = harness.timers.filter(({ delay }) => delay === 2_000).at(-1);
+    assert.ok(retry, 'the failed renewal is retried in 2 s');
+    failing = false;
+    clock.monotonic = 12_000;
+    retry.callback();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(harness.renewals(), 2, 'the retry renews with the kept token');
+    assert.equal(context.state.player.ownership.activeClaim.leaseDeadline, 42_000);
+    assert.equal(context.isActivePlaybackOwner(), true);
+    assert.deepEqual(stopStreamingPlaybackCalls, []);
+  });
+}
+
+test('play while the network is down keeps a claim whose lease still runs', async () => {
+  let offline = false;
+  const harness = leaseHarness({ renew: (answer) => (offline
+    ? Promise.reject(new TypeError('Failed to fetch')) : answer()) });
+  const { context, clock, stopStreamingPlaybackCalls } = harness;
+  assert.equal(await context.claimPlaybackOwnership(localTrack), true);
+  offline = true;
+  clock.monotonic = 15_000;
+  assert.equal(await context.claimPlaybackOwnership(localTrack), true);
+  assert.equal(harness.renewals(), 1);
+  assert.equal(context.state.player.ownership.activeClaim?.claimToken, 'claim-1');
+  assert.equal(context.state.player.ownership.blockedReason, '');
+  assert.deepEqual(stopStreamingPlaybackCalls, []);
 });
 
 test('a client clock jump past the lease keeps a playing claim the server still honours', async () => {
@@ -1179,7 +1279,7 @@ test('a client clock jump past the lease drops the claim when the server refuses
   assert.deepEqual(stopStreamingPlaybackCalls, ['ownership-lost']);
 });
 
-test('a paused claim lapses at the local lease deadline without renewing', async () => {
+test('a paused claim lapses silently with its token, and play renews it', async () => {
   const harness = leaseHarness({});
   const { context, clock, stopStreamingPlaybackCalls } = harness;
   assert.equal(await context.claimPlaybackOwnership(localTrack), true);
@@ -1187,8 +1287,88 @@ test('a paused claim lapses at the local lease deadline without renewing', async
   clock.monotonic += 299_000;
   await harness.leaseTimers()[0].callback();
   assert.equal(harness.renewals(), 0, 'a paused client cannot extend its claim');
+  assert.equal(context.isActivePlaybackOwner(), false);
+  assert.equal(context.state.player.ownership.activeClaim?.claimToken, 'claim-1');
+  assert.equal(context.isPlaybackLockedByAnotherTab(), false, 'no "Playback unavailable" for its own lapse');
+  assert.deepEqual(stopStreamingPlaybackCalls, []);
+  context.getPlayerPlaybackSnapshot = () => ({ paused: false, ended: false, currentTime: 0 });
+  assert.equal(await context.claimPlaybackOwnership(localTrack), true);
+  assert.equal(harness.renewals(), 1, 'play renews the lapsed claim with its token');
+  assert.equal(context.isActivePlaybackOwner(), true);
+});
+
+// Owner retest B-D4 (2026-11-17): offline, Pause and then Play locked the player in "Playback
+// unavailable". The pause gave the claim back with no answer, and Play's anonymous acquire, with no
+// answer either, was taken for a refusal. The token whose give-back never arrived is offered again.
+test('Play offline after a pause whose give-back went unanswered plays on with the same token', async () => {
+  let offline = false;
+  const sent = [];
+  const harness = leaseHarness({ renew: (answer, _signal, options) => {
+    sent.push(options.method);
+    if (offline) return Promise.reject(new TypeError('Failed to fetch'));
+    return options.method === 'DELETE' ? jsonResponse({ protocol: 1 }) : answer();
+  } });
+  const { context, stopStreamingPlaybackCalls } = harness;
+  assert.equal(await context.claimPlaybackOwnership(localTrack), true);
+  offline = true;
+  await context.releasePlaybackOwnership('paused', localTrack);
   assert.equal(context.state.player.ownership.activeClaim, null);
-  assert.deepEqual(stopStreamingPlaybackCalls, ['ownership-lost']);
+
+  assert.equal(await context.claimPlaybackOwnership(localTrack), true, 'no answer is not a refusal');
+  assert.equal(context.state.player.ownership.activeClaim?.claimToken, 'claim-1');
+  assert.equal(context.state.player.ownership.blockedReason, '');
+  assert.equal(context.isPlaybackLockedByAnotherTab(), false);
+  assert.deepEqual(stopStreamingPlaybackCalls, []);
+  assert.deepEqual(sent, ['DELETE', 'PUT'], 'the acquire offers the token whose give-back went unanswered');
+
+  offline = false;
+  harness.timers.filter(({ delay }) => delay === 2_000).at(-1).callback();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(context.isActivePlaybackOwner(), true, 'back online, the kept token renews');
+});
+
+test('a token whose unanswered give-back did arrive is refused, and play acquires anew', async () => {
+  let offline = false;
+  let released = false;
+  const harness = leaseHarness({ renew: (answer, _signal, options) => {
+    if (options.method === 'DELETE') {
+      released = true;
+      return Promise.reject(new TypeError('Failed to fetch'));
+    }
+    if (offline) return Promise.reject(new TypeError('Failed to fetch'));
+    return released ? jsonResponse({ error: 'claim ended' }, { ok: false, status: 409 }) : answer();
+  } });
+  const { context, stopStreamingPlaybackCalls } = harness;
+  assert.equal(await context.claimPlaybackOwnership(localTrack), true);
+  await context.releasePlaybackOwnership('paused', localTrack);
+  assert.equal(await context.claimPlaybackOwnership(localTrack), true);
+  assert.equal(context.state.player.ownership.activeClaim?.claimToken, 'claim-1');
+  assert.equal(context.isActivePlaybackOwner(), true);
+  assert.deepEqual(stopStreamingPlaybackCalls, []);
+});
+
+test('a paused lapsed claim ends when the heartbeat sees another client playing', async () => {
+  const stateReads = [];
+  const harness = leaseHarness({});
+  const { context, clock, stopStreamingPlaybackCalls } = harness;
+  assert.equal(await context.claimPlaybackOwnership(localTrack), true);
+  context.getPlayerPlaybackSnapshot = () => ({ paused: true, ended: false, currentTime: 0 });
+  clock.monotonic += 60_000;
+  await harness.leaseTimers()[0].callback();
+  const serve = context.fetch;
+  context.fetch = async (url, options = {}) => {
+    if (String(url).startsWith('/playback/state?')) {
+      stateReads.push(url);
+      return jsonResponse({ is_playing_elsewhere: true, track: { title: 'Elsewhere' } });
+    }
+    return serve(url, options);
+  };
+  harness.heartbeat();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(stateReads.length, 1);
+  assert.equal(context.state.player.ownership.activeClaim, null);
+  assert.equal(context.state.player.ownership.blockedReason, 'playing_in_another_tab');
+  assert.deepEqual(stopStreamingPlaybackCalls, ['ownership-takeover']);
 });
 
 {
@@ -1261,4 +1441,35 @@ test('a native-playback shell leaves the claim to Android and reads ownership as
   await context.handlePlaybackOwnershipEvent();
   assert.deepEqual(requests, [{ url: `/playback/state?client_id=${nativeClientId}`, method: 'GET' }]);
   assert.equal(context.isActivePlaybackOwner(), false);
+});
+
+// Round 6 (hosted FTC-PLAYBACK-OFFLINE-002): after an outage, a press on another song sent its
+// reference or claim request on a connection that died without closing; no answer came, the claim
+// was given up and nothing played. Each is asked again once, so one press plays.
+test('a start whose reference or claim request goes unanswered asks again once and claims playback', async () => {
+  const requests = [];
+  const timeouts = [];
+  let refsAnswered = false;
+  let claimAnswered = false;
+  const { context, stopStreamingPlaybackCalls } = loadHelper({
+    setTimeout: (callback, delay) => { timeouts.push(delay); return 0; },
+    fetch: async (url, init = {}) => {
+      requests.push(`${init.method || 'GET'} ${url}`);
+      if (url === '/playback/refs') {
+        if (!refsAnswered) { refsAnswered = true; throw new TypeError('Failed to fetch'); }
+        return jsonResponse({ protocol: 1, expiresAt: '2099-01-01T00:00:00Z', tracks: [{ playbackRef: 'ref-1' }] });
+      }
+      if (!claimAnswered) { claimAnswered = true; throw new TypeError('Failed to fetch'); }
+      return jsonResponse({ protocol: 1, claimToken: 'claim-1', expiresAt: '2099-01-01T00:00:00Z', leaseMs: 30000 });
+    },
+  });
+
+  assert.equal(await context.claimPlaybackOwnership(localTrack), true);
+
+  assert.deepEqual(requests, [
+    'POST /playback/refs', 'POST /playback/refs', 'PUT /playback/state', 'PUT /playback/state',
+  ]);
+  assert.equal(context.state.player.ownership.activeClaim.claimToken, 'claim-1');
+  assert.equal(stopStreamingPlaybackCalls.length, 0, 'nothing was stopped');
+  assert.ok(timeouts.includes(4000), 'the first try waits only a few seconds for its answer');
 });

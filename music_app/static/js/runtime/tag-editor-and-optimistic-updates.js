@@ -1170,6 +1170,8 @@ async function confirmManualTagEdit() {
           title: hasCompletionWarning ? 'Tags saved with warning' : 'Tags updated',
         },
       );
+      // The saved collections replace the tree's counts from the edit (owner 2026-11-18).
+      if (typeof syncCustomCollectionsAfterTagEdit === 'function') syncCustomCollectionsAfterTagEdit({ fresh: true });
     }
     if (responseIsTerminal) {
       pendingProblematicEntry.accept();

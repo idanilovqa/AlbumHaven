@@ -1938,9 +1938,25 @@ function buildChangedTagEditorUpdates(album, tracks, valuesByPath) {
 
 function applyTagEditsToNonAlbumView(album, updates) {
   const view = state.view || (state.view = {});
-  const currentTracks = Array.isArray(view.non_album_tracks)
-    ? view.non_album_tracks.slice()
-    : [];
+  view.non_album_tracks = applyTagEditsToNonAlbumTracks(view.non_album_tracks, album, updates);
+  // Owner 2026-11-18: the library-wide list behind Loose Tracks and every collection page follows the same
+  // edit, so the open page and the collections tree change at once instead of after a reload.
+  if (Array.isArray(view.library_non_album_tracks)) {
+    const libraryTracks = applyTagEditsToNonAlbumTracks(view.library_non_album_tracks, album, updates);
+    if (typeof libraryNonAlbumHydrationCache !== 'undefined'
+      && libraryNonAlbumHydrationCache?.tracks === view.library_non_album_tracks) {
+      libraryNonAlbumHydrationCache = { ...libraryNonAlbumHydrationCache, tracks: libraryTracks };
+    }
+    view.library_non_album_tracks = libraryTracks;
+  }
+  if (typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
+  if (typeof refreshOpenLooseTracksPage === 'function') refreshOpenLooseTracksPage();
+  if (typeof syncCustomCollectionsAfterTagEdit === 'function') syncCustomCollectionsAfterTagEdit();
+  return view.non_album_tracks;
+}
+
+function applyTagEditsToNonAlbumTracks(tracks, album, updates) {
+  const currentTracks = Array.isArray(tracks) ? tracks.slice() : [];
   const tracksByPath = new Map(
     (Array.isArray(album?.tracks) ? album.tracks : [])
       .map((track) => [String(track?.path || ''), track])
@@ -1991,9 +2007,7 @@ function applyTagEditsToNonAlbumView(album, updates) {
       display_path: String(track?.display_path || normalizedPath),
     });
   });
-  view.non_album_tracks = Array.from(nextByPath.values());
-  if (typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
-  return view.non_album_tracks;
+  return Array.from(nextByPath.values());
 }
 
 function normalizeCommittedTrackTagValues(values) {

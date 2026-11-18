@@ -2774,6 +2774,8 @@ async function watchSaveTask(taskId, context = {}) {
         } else if (!consumesProvidedTerminalPayload) {
           showRepairAlert('Library view updated from saved files.', 'success', 1000);
         }
+        // The saved collections replace the tree's counts from the edit (owner 2026-11-18).
+        if (typeof syncCustomCollectionsAfterTagEdit === 'function') syncCustomCollectionsAfterTagEdit({ fresh: true });
         settleTagEditViewMutation(tagEditMutationClaim);
         return;
       }

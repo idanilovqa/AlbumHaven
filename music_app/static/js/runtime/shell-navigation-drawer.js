@@ -176,23 +176,54 @@ async function syncCustomCollectionSearchIndicator() {
 }
 
 // Owner 2026-11-18: when the Artists tree finds nothing but a collection does, the search opens the collection
-// with the most matching tracks, as it opens the best-matching artist. Once per search; never over an open page.
+// with the most matching tracks, as it opens the best-matching artist. Only for the search just submitted, once
+// its results are in; redraws (a tag edit, a reload of the same view) never open anything, nor over an open page.
 function openBestCustomCollectionForSearch(query) {
-  if (state.ui.customCollectionSearchAutoOpened === query) return;
+  if (state.ui.customCollectionSearchAutoOpenQuery !== query || state.ui.pendingViewTransition) return;
+  state.ui.customCollectionSearchAutoOpenQuery = '';
   const collections = Array.isArray(customCollectionCatalog.collections) ? customCollectionCatalog.collections : [];
   const view = state.view || {};
   if (
     !(Number(state.ui?.libraryLooseTracksCount) > 0)
-    || state.ui.pendingViewTransition
     || (Array.isArray(view.artists_sidebar) && view.artists_sidebar.length)
     || (typeof isEffectivelyEmptyView === 'function' && !isEffectivelyEmptyView(view))
     || document.querySelector?.('#non-album-modal:not([hidden])')
   ) return;
-  state.ui.customCollectionSearchAutoOpened = query;
   // A matching loose track in no collection opens All Loose Tracks, already filtered by the search.
   const best = collections.reduce((top, item) => (!top || item.count > top.count ? item : top), null);
   void setLibraryNavigationMode('custom-collections');
   openLooseTracksPage({ collectionName: best?.name || '' });
+}
+
+// Owner 2026-11-18: a tag edit that moves tracks between collections shows in the tree at once. Right after
+// the edit the counts come from the edited Loose Tracks list; once the save completes (`fresh`), the server's
+// catalog replaces them. The tree is redrawn only while it is the one on screen.
+function syncCustomCollectionsAfterTagEdit({ fresh = false } = {}) {
+  const redraw = (collections) => {
+    if (state.ui.libraryNavigationMode === 'custom-collections') renderCustomCollectionNavigation(collections);
+  };
+  if (fresh) {
+    customCollectionCatalog = { ...customCollectionCatalog, collections: null, request: null };
+    void loadCustomCollectionCatalog({ fresh: true }).then(redraw, () => {});
+    return;
+  }
+  const view = state.view || {};
+  const tracks = view.library_non_album_tracks;
+  if (!Array.isArray(tracks) || !view.library_non_album_tracks_hydrated_scope) return;
+  // During a search the tree counts matches; a list that is not the search's own cannot recount it.
+  if (String(view.query || '').trim() && view.library_non_album_tracks_search_matched !== true) return;
+  const counts = new Map();
+  tracks.forEach((track) => {
+    const name = String(track?.custom_collection_name || '').trim();
+    if (!name || String(track?.exception_type || '').trim().toLowerCase() !== 'custom collection') return;
+    counts.set(name, (counts.get(name) || 0) + 1);
+  });
+  const collections = [...counts.entries()]
+    .map(([name, count]) => ({ name, count }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+  customCollectionCatalog = { ...customCollectionCatalog, key: customCollectionCatalogUrl().search, collections };
+  state.ui.libraryLooseTracksCount = tracks.length;
+  redraw(collections);
 }
 
 function loadCustomCollectionCatalog({ fresh = false } = {}) {

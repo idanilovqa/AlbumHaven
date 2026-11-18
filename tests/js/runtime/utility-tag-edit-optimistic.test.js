@@ -1406,3 +1406,30 @@ test('year-only edit sends only year and creates two same-name year cards', () =
     ],
   );
 });
+
+test('moving tracks to a new collection updates the library list, the open page and the tree at once', () => {
+  // Owner 2026-11-18 (COLL-LIVE-01): edited tracks into "женя машина 2"; the new collection did not appear
+  // in the tree and the tracks stayed in the open collection until a reload.
+  const context = loadHelpers();
+  const songs = ['a', 'b', 'c'].map((name) => ({
+    path: `D:/Music/Женя машина/${name}.mp3`, title: name, album: '',
+    exception_type: 'Custom Collection', custom_collection_name: 'Женя машина',
+  }));
+  const library = songs.slice();
+  context.state = { view: { non_album_tracks: [], library_non_album_tracks: library } };
+  context.libraryNonAlbumHydrationCache = { key: 'scope', tracks: library, searchMatched: false };
+  const calls = [];
+  context.refreshOpenLooseTracksPage = () => calls.push('page');
+  context.syncCustomCollectionsAfterTagEdit = () => calls.push('tree');
+
+  context.applyTagEditsToNonAlbumView({ tracks: songs }, {
+    [songs[0].path]: { custom_collection_name: 'Женя машина 2' },
+    [songs[1].path]: { custom_collection_name: 'Женя машина 2' },
+  });
+
+  const names = context.state.view.library_non_album_tracks.map((track) => track.custom_collection_name);
+  assert.deepEqual(JSON.parse(JSON.stringify(names)), ['Женя машина 2', 'Женя машина 2', 'Женя машина']);
+  assert.equal(context.libraryNonAlbumHydrationCache.tracks, context.state.view.library_non_album_tracks,
+    'a re-opened page reads the edited list, not the one from before the edit');
+  assert.deepEqual(calls, ['page', 'tree']);
+});

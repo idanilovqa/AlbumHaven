@@ -11867,23 +11867,54 @@ async function syncCustomCollectionSearchIndicator() {
 }
 
 // Owner 2026-11-18: when the Artists tree finds nothing but a collection does, the search opens the collection
-// with the most matching tracks, as it opens the best-matching artist. Once per search; never over an open page.
+// with the most matching tracks, as it opens the best-matching artist. Only for the search just submitted, once
+// its results are in; redraws (a tag edit, a reload of the same view) never open anything, nor over an open page.
 function openBestCustomCollectionForSearch(query) {
-  if (state.ui.customCollectionSearchAutoOpened === query) return;
+  if (state.ui.customCollectionSearchAutoOpenQuery !== query || state.ui.pendingViewTransition) return;
+  state.ui.customCollectionSearchAutoOpenQuery = '';
   const collections = Array.isArray(customCollectionCatalog.collections) ? customCollectionCatalog.collections : [];
   const view = state.view || {};
   if (
     !(Number(state.ui?.libraryLooseTracksCount) > 0)
-    || state.ui.pendingViewTransition
     || (Array.isArray(view.artists_sidebar) && view.artists_sidebar.length)
     || (typeof isEffectivelyEmptyView === 'function' && !isEffectivelyEmptyView(view))
     || document.querySelector?.('#non-album-modal:not([hidden])')
   ) return;
-  state.ui.customCollectionSearchAutoOpened = query;
   // A matching loose track in no collection opens All Loose Tracks, already filtered by the search.
   const best = collections.reduce((top, item) => (!top || item.count > top.count ? item : top), null);
   void setLibraryNavigationMode('custom-collections');
   openLooseTracksPage({ collectionName: best?.name || '' });
+}
+
+// Owner 2026-11-18: a tag edit that moves tracks between collections shows in the tree at once. Right after
+// the edit the counts come from the edited Loose Tracks list; once the save completes (`fresh`), the server's
+// catalog replaces them. The tree is redrawn only while it is the one on screen.
+function syncCustomCollectionsAfterTagEdit({ fresh = false } = {}) {
+  const redraw = (collections) => {
+    if (state.ui.libraryNavigationMode === 'custom-collections') renderCustomCollectionNavigation(collections);
+  };
+  if (fresh) {
+    customCollectionCatalog = { ...customCollectionCatalog, collections: null, request: null };
+    void loadCustomCollectionCatalog({ fresh: true }).then(redraw, () => {});
+    return;
+  }
+  const view = state.view || {};
+  const tracks = view.library_non_album_tracks;
+  if (!Array.isArray(tracks) || !view.library_non_album_tracks_hydrated_scope) return;
+  // During a search the tree counts matches; a list that is not the search's own cannot recount it.
+  if (String(view.query || '').trim() && view.library_non_album_tracks_search_matched !== true) return;
+  const counts = new Map();
+  tracks.forEach((track) => {
+    const name = String(track?.custom_collection_name || '').trim();
+    if (!name || String(track?.exception_type || '').trim().toLowerCase() !== 'custom collection') return;
+    counts.set(name, (counts.get(name) || 0) + 1);
+  });
+  const collections = [...counts.entries()]
+    .map(([name, count]) => ({ name, count }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+  customCollectionCatalog = { ...customCollectionCatalog, key: customCollectionCatalogUrl().search, collections };
+  state.ui.libraryLooseTracksCount = tracks.length;
+  redraw(collections);
 }
 
 function loadCustomCollectionCatalog({ fresh = false } = {}) {
@@ -16004,6 +16035,44 @@ function openLooseTracksPage(options = {}) {
   });
 }
 
+function paintNonAlbumTrackTable(els, looseTracks, collectionName) {
+  if (collectionName) {
+    els.table.innerHTML = buildCustomCollectionDetailMarkup(
+      looseTracks,
+      collectionName,
+      state.ui.customCollectionArtworkByName?.[collectionName] || null,
+    );
+    return;
+  }
+  // All Loose Tracks can hold hundreds of rows: paint the first screen now, the rest per frame.
+  renderAlbumTrackTableProgressively(els.table, buildNonAlbumTrackSectionsConfig(looseTracks), {
+    // Rows are built with the current playback state; whole-table refreshes run once at the end.
+    onBatch: ({ complete }) => {
+      attachSharedPlayer();
+      if (!complete) return;
+      nonAlbumTrackSelectionController?.refreshRows?.();
+      if (typeof refreshNonAlbumModalPlaybackState === 'function') refreshNonAlbumModalPlaybackState();
+    },
+  });
+}
+
+// Owner 2026-11-18: a tag edit shows at once on the open Loose Tracks or collection page: tracks that left
+// the collection go, its count follows. The page is redrawn in place, without a new history entry.
+function refreshOpenLooseTracksPage() {
+  const els = getNonAlbumModalElements();
+  if (!els.overlay || els.overlay.hidden || !els.table || state.ui?.nonAlbumLibraryWide !== true) return false;
+  const collectionName = String(state.ui.nonAlbumCollectionName || '').trim();
+  const looseTracks = getVisibleNonAlbumTracks({ libraryWide: true, collectionName });
+  const subtitle = document.getElementById('non-album-modal-subtitle');
+  if (subtitle) subtitle.textContent = `${looseTracks.length} ${looseTracks.length === 1 ? 'track' : 'tracks'}`;
+  if (looseTracks.length) paintNonAlbumTrackTable(els, looseTracks, collectionName);
+  else els.table.innerHTML = '<div class="utility-empty-state">No non-album tracks found in this view.</div>';
+  installNonAlbumCollapsibleSections(els);
+  installNonAlbumTrackSelection(els);
+  attachSharedPlayer();
+  return true;
+}
+
 function openNonAlbumModal(options = {}) {
   const els = getNonAlbumModalElements();
   if (!els.overlay || !els.table) return;
@@ -16068,24 +16137,7 @@ function openNonAlbumModal(options = {}) {
   scheduleBrowserAnimationFrame(() => {
     scheduleBrowserAnimationFrame(() => {
       if (els.overlay.hidden || els.table.dataset.enhancementRevision !== enhancementRevision) return;
-      if (!hydrationPending && populated && collectionName) {
-        els.table.innerHTML = buildCustomCollectionDetailMarkup(
-          looseTracks,
-          collectionName,
-          state.ui.customCollectionArtworkByName?.[collectionName] || null,
-        );
-      } else if (!hydrationPending && populated) {
-        // All Loose Tracks can hold hundreds of rows: paint the first screen now, the rest per frame.
-        renderAlbumTrackTableProgressively(els.table, buildNonAlbumTrackSectionsConfig(looseTracks), {
-          // Rows are built with the current playback state; whole-table refreshes run once at the end.
-          onBatch: ({ complete }) => {
-            attachSharedPlayer();
-            if (!complete) return;
-            nonAlbumTrackSelectionController?.refreshRows?.();
-            if (typeof refreshNonAlbumModalPlaybackState === 'function') refreshNonAlbumModalPlaybackState();
-          },
-        });
-      }
+      if (!hydrationPending && populated) paintNonAlbumTrackTable(els, looseTracks, collectionName);
       installNonAlbumCollapsibleSections(els);
       installNonAlbumTrackSelection(els);
       attachSharedPlayer();
@@ -26787,6 +26839,8 @@ async function watchSaveTask(taskId, context = {}) {
         } else if (!consumesProvidedTerminalPayload) {
           showRepairAlert('Library view updated from saved files.', 'success', 1000);
         }
+        // The saved collections replace the tree's counts from the edit (owner 2026-11-18).
+        if (typeof syncCustomCollectionsAfterTagEdit === 'function') syncCustomCollectionsAfterTagEdit({ fresh: true });
         settleTagEditViewMutation(tagEditMutationClaim);
         return;
       }
@@ -34261,9 +34315,25 @@ function buildChangedTagEditorUpdates(album, tracks, valuesByPath) {
 
 function applyTagEditsToNonAlbumView(album, updates) {
   const view = state.view || (state.view = {});
-  const currentTracks = Array.isArray(view.non_album_tracks)
-    ? view.non_album_tracks.slice()
-    : [];
+  view.non_album_tracks = applyTagEditsToNonAlbumTracks(view.non_album_tracks, album, updates);
+  // Owner 2026-11-18: the library-wide list behind Loose Tracks and every collection page follows the same
+  // edit, so the open page and the collections tree change at once instead of after a reload.
+  if (Array.isArray(view.library_non_album_tracks)) {
+    const libraryTracks = applyTagEditsToNonAlbumTracks(view.library_non_album_tracks, album, updates);
+    if (typeof libraryNonAlbumHydrationCache !== 'undefined'
+      && libraryNonAlbumHydrationCache?.tracks === view.library_non_album_tracks) {
+      libraryNonAlbumHydrationCache = { ...libraryNonAlbumHydrationCache, tracks: libraryTracks };
+    }
+    view.library_non_album_tracks = libraryTracks;
+  }
+  if (typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
+  if (typeof refreshOpenLooseTracksPage === 'function') refreshOpenLooseTracksPage();
+  if (typeof syncCustomCollectionsAfterTagEdit === 'function') syncCustomCollectionsAfterTagEdit();
+  return view.non_album_tracks;
+}
+
+function applyTagEditsToNonAlbumTracks(tracks, album, updates) {
+  const currentTracks = Array.isArray(tracks) ? tracks.slice() : [];
   const tracksByPath = new Map(
     (Array.isArray(album?.tracks) ? album.tracks : [])
       .map((track) => [String(track?.path || ''), track])
@@ -34314,9 +34384,7 @@ function applyTagEditsToNonAlbumView(album, updates) {
       display_path: String(track?.display_path || normalizedPath),
     });
   });
-  view.non_album_tracks = Array.from(nextByPath.values());
-  if (typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
-  return view.non_album_tracks;
+  return Array.from(nextByPath.values());
 }
 
 function normalizeCommittedTrackTagValues(values) {
@@ -40895,6 +40963,8 @@ async function confirmManualTagEdit() {
           title: hasCompletionWarning ? 'Tags saved with warning' : 'Tags updated',
         },
       );
+      // The saved collections replace the tree's counts from the edit (owner 2026-11-18).
+      if (typeof syncCustomCollectionsAfterTagEdit === 'function') syncCustomCollectionsAfterTagEdit({ fresh: true });
     }
     if (responseIsTerminal) {
       pendingProblematicEntry.accept();
@@ -53901,6 +53971,8 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     releasePendingGallerySearchSuspensions();
     return;
   }
+  // Only a search the owner just submitted may open its best collection; redraws never do.
+  state.ui.customCollectionSearchAutoOpenQuery = String(nextQuery || '').trim();
   clearPendingSelectedArtistReconcile();
   clearPendingGallerySearchCommit();
   if (

@@ -1019,6 +1019,44 @@ function openLooseTracksPage(options = {}) {
   });
 }
 
+function paintNonAlbumTrackTable(els, looseTracks, collectionName) {
+  if (collectionName) {
+    els.table.innerHTML = buildCustomCollectionDetailMarkup(
+      looseTracks,
+      collectionName,
+      state.ui.customCollectionArtworkByName?.[collectionName] || null,
+    );
+    return;
+  }
+  // All Loose Tracks can hold hundreds of rows: paint the first screen now, the rest per frame.
+  renderAlbumTrackTableProgressively(els.table, buildNonAlbumTrackSectionsConfig(looseTracks), {
+    // Rows are built with the current playback state; whole-table refreshes run once at the end.
+    onBatch: ({ complete }) => {
+      attachSharedPlayer();
+      if (!complete) return;
+      nonAlbumTrackSelectionController?.refreshRows?.();
+      if (typeof refreshNonAlbumModalPlaybackState === 'function') refreshNonAlbumModalPlaybackState();
+    },
+  });
+}
+
+// Owner 2026-11-18: a tag edit shows at once on the open Loose Tracks or collection page: tracks that left
+// the collection go, its count follows. The page is redrawn in place, without a new history entry.
+function refreshOpenLooseTracksPage() {
+  const els = getNonAlbumModalElements();
+  if (!els.overlay || els.overlay.hidden || !els.table || state.ui?.nonAlbumLibraryWide !== true) return false;
+  const collectionName = String(state.ui.nonAlbumCollectionName || '').trim();
+  const looseTracks = getVisibleNonAlbumTracks({ libraryWide: true, collectionName });
+  const subtitle = document.getElementById('non-album-modal-subtitle');
+  if (subtitle) subtitle.textContent = `${looseTracks.length} ${looseTracks.length === 1 ? 'track' : 'tracks'}`;
+  if (looseTracks.length) paintNonAlbumTrackTable(els, looseTracks, collectionName);
+  else els.table.innerHTML = '<div class="utility-empty-state">No non-album tracks found in this view.</div>';
+  installNonAlbumCollapsibleSections(els);
+  installNonAlbumTrackSelection(els);
+  attachSharedPlayer();
+  return true;
+}
+
 function openNonAlbumModal(options = {}) {
   const els = getNonAlbumModalElements();
   if (!els.overlay || !els.table) return;
@@ -1083,24 +1121,7 @@ function openNonAlbumModal(options = {}) {
   scheduleBrowserAnimationFrame(() => {
     scheduleBrowserAnimationFrame(() => {
       if (els.overlay.hidden || els.table.dataset.enhancementRevision !== enhancementRevision) return;
-      if (!hydrationPending && populated && collectionName) {
-        els.table.innerHTML = buildCustomCollectionDetailMarkup(
-          looseTracks,
-          collectionName,
-          state.ui.customCollectionArtworkByName?.[collectionName] || null,
-        );
-      } else if (!hydrationPending && populated) {
-        // All Loose Tracks can hold hundreds of rows: paint the first screen now, the rest per frame.
-        renderAlbumTrackTableProgressively(els.table, buildNonAlbumTrackSectionsConfig(looseTracks), {
-          // Rows are built with the current playback state; whole-table refreshes run once at the end.
-          onBatch: ({ complete }) => {
-            attachSharedPlayer();
-            if (!complete) return;
-            nonAlbumTrackSelectionController?.refreshRows?.();
-            if (typeof refreshNonAlbumModalPlaybackState === 'function') refreshNonAlbumModalPlaybackState();
-          },
-        });
-      }
+      if (!hydrationPending && populated) paintNonAlbumTrackTable(els, looseTracks, collectionName);
       installNonAlbumCollapsibleSections(els);
       installNonAlbumTrackSelection(els);
       attachSharedPlayer();

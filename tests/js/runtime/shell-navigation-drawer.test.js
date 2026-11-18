@@ -1131,6 +1131,11 @@ test('a search with no artist opens the collection holding the most matching tra
   context.state.view.artists_sidebar = [];
   context.state.view.query = 'ace';
 
+  // A redraw during a search that was not just submitted (e.g. after a tag edit) opens nothing.
+  await context.syncCustomCollectionSearchIndicator();
+  assert.deepEqual(opened, []);
+
+  context.state.ui.customCollectionSearchAutoOpenQuery = 'ace';
   await context.syncCustomCollectionSearchIndicator();
   assert.deepEqual(opened, ['Disco']);
   assert.equal(context.state.ui.libraryNavigationMode, 'custom-collections');
@@ -1140,13 +1145,49 @@ test('a search with no artist opens the collection holding the most matching tra
 
   // A matching loose track in no collection opens All Loose Tracks.
   context.state.view.query = 'solo';
+  context.state.ui.customCollectionSearchAutoOpenQuery = 'solo';
   await context.syncCustomCollectionSearchIndicator();
   assert.deepEqual(opened, ['Disco', '']);
 
   // An artist match, or an open page, keeps the search where it is.
   pageOpen = false;
   context.state.view.query = 'ace again';
+  context.state.ui.customCollectionSearchAutoOpenQuery = 'ace again';
   context.state.view.artists_sidebar = [{ artist: 'Ace Of Base' }];
   await context.syncCustomCollectionSearchIndicator();
   assert.deepEqual(opened, ['Disco', '']);
+});
+
+test('a tag edit recounts the open collections tree at once, then takes the saved catalog', async () => {
+  // Owner 2026-11-18 (COLL-LIVE-01): a new collection made by a tag edit appears in the tree immediately.
+  const { context, artistList } = loadHelper();
+  stubCollectionTree(context);
+  context.URL = URL;
+  context.escapeHtml = value => String(value);
+  context.state.ui.libraryNavigationMode = 'custom-collections';
+  context.state.view.library_non_album_tracks_hydrated_scope = 'scope';
+  context.state.view.library_non_album_tracks = [
+    { exception_type: 'Custom Collection', custom_collection_name: 'Женя машина 2' },
+    { exception_type: 'Custom Collection', custom_collection_name: 'Женя машина 2' },
+    { exception_type: 'Custom Collection', custom_collection_name: 'Женя машина' },
+    { exception_type: '', custom_collection_name: '' },
+  ];
+  let fetches = 0;
+  context.fetch = () => {
+    fetches += 1;
+    return Promise.resolve({ ok: true, status: 200, json: async () => ({
+      custom_collections: [{ name: 'Женя машина', count: 1 }, { name: 'Женя машина 2', count: 2 }],
+      loose_tracks_count: 4,
+    }) });
+  };
+
+  context.syncCustomCollectionsAfterTagEdit();
+  assert.equal(fetches, 0, 'the edit itself asks the server nothing');
+  assert.match(artistList.innerHTML, /data-open-custom-collection="Женя машина">Женя машина:1<\/button><button data-open-custom-collection="Женя машина 2">Женя машина 2:2<\/button>$/);
+  assert.equal(context.state.ui.libraryLooseTracksCount, 4);
+
+  context.syncCustomCollectionsAfterTagEdit({ fresh: true });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(fetches, 1, 'the completed save refreshes the catalog');
+  assert.match(artistList.innerHTML, /Женя машина 2:2<\/button>$/);
 });

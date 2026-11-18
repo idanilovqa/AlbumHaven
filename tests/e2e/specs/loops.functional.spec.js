@@ -1304,7 +1304,7 @@ test('FTC-PLAYER-017 paused reload restores the current waveform', { tag: '@area
   expect(waveform.rightBins).toBe(720);
 });
 
-test('FTC-PLAYER-023 the playing song draws its waveform while a prefetch build is still running', { tag: '@area:loops' }, async ({
+test('FTC-PLAYER-023 the playing song draws its waveform while a prefetch build runs and keeps it through a seek', { tag: '@area:loops' }, async ({
   galleryActions,
   globalPlayerActions,
   page,
@@ -1349,6 +1349,13 @@ test('FTC-PLAYER-023 the playing song draws its waveform while a prefetch build 
     // The playing song never waits for the prefetch: that build is still running or it
     // already yielded with a busy answer, and it never finished first.
     expect([null, 429]).toContain(prefetchStatusAtDraw);
+
+    // A seek restarts playback of the same song; its waveform must stay drawn, not blank out.
+    await globalPlayerActions.seekToSeconds(7);
+    const afterSeek = await globalPlayerActions.globalPlayer.readRenderedWaveformCheckpoint();
+    expect(afterSeek.path).toBe(selectedTrack.path);
+    expect(afterSeek.leftBins).toBe(720);
+    expect(afterSeek.nonPlayheadPixels).toBeGreaterThan(0);
     await globalPlayerActions.pauseIfPlaying();
   } finally {
     if (prefetch) await prefetch.done;

@@ -18348,11 +18348,9 @@ async function updateWaveformAppearance(forceReload = false) {
   if (forceReload) {
     clearWaveformCanvas();
   }
-  const generation = Number(playback.generation ?? state.player.streaming?.generation) || 0;
+  // Peaks belong to the file, so a seek or replay of the same song keeps drawing them.
   const active = state.player.waveform.compactPeaks;
-  const waveform = active?.path === path && active.generation === generation
-    ? active.data
-    : null;
+  const waveform = active?.path === path ? active.data : null;
   if (state.player.waveform.renderToken !== renderToken) return;
   const duration = Number(playback.duration) || 0;
   const progressRatio = duration > 0 ? (Number(playback.currentTime) || 0) / duration : 0;
@@ -18363,9 +18361,13 @@ async function handleStreamingPlaybackWaveformReady(event = {}) {
   const generation = Number(event.generation) || 0;
   const currentPath = String(event.currentPath || '');
   const continuityPath = String(event.continuityPath || '');
-  const currentPeaks = await loadWaveformPeaks(currentPath, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, generation, {
-    current: true,
-  });
+  const shownPeaks = state.player.waveform.compactPeaks;
+  // A seek restarts playback in a new generation of the same song: reuse its peaks.
+  const currentPeaks = shownPeaks?.path === currentPath && shownPeaks.data
+    ? shownPeaks.data
+    : await loadWaveformPeaks(currentPath, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, generation, {
+      current: true,
+    });
   const playback = getPlayerPlaybackSnapshot();
   if (!currentPeaks || Number(playback.generation ?? state.player.streaming?.generation) !== generation
       || String(state.player.current?.path || '') !== currentPath) return;

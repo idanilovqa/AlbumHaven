@@ -369,6 +369,33 @@ async function run() {
   }
 
   {
+    const requests = [];
+    const { context } = loadWaveformSelectionRuntime(async (url) => {
+      requests.push(String(url));
+      return { ok: true, status: 200, json: async () => peakPayload(0.5) };
+    });
+    let waveformRenders = 0;
+    context.updateWaveformAppearance = async () => { waveformRenders += 1; };
+    const track = { path: 'C:/Music/seeked.flac', title: 'Seeked' };
+    context.state.player.current = track;
+    const shown = { left: [0.5], right: [0.25], sampleCount: 1 };
+    context.state.player.waveform.compactPeaks = { path: track.path, generation: 7, data: shown };
+    context.state.player.streaming.generation = 8;
+
+    await context.handleStreamingPlaybackWaveformReady({
+      generation: 8,
+      currentPath: track.path,
+      continuityPath: '',
+    });
+
+    assert.deepEqual(requests, [], 'a seek within the same song must not ask for its peaks again');
+    assert.equal(context.state.player.waveform.compactPeaks.generation, 8);
+    assert.equal(context.state.player.waveform.compactPeaks.data, shown,
+      'the waveform drawn before the seek stays on screen');
+    assert.equal(waveformRenders, 1);
+  }
+
+  {
     const streamingSnapshot = {
       currentTime: 8.5,
       duration: 42,

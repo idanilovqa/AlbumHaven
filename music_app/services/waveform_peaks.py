@@ -29,6 +29,9 @@ CURRENT_SONG_SEGMENT_SECONDS = 30.0
 CURRENT_SONG_MAX_SEGMENTS = 4
 # Distinct playing songs (one per listening device) that may build at the same time.
 CURRENT_SONG_MAX_BUILDS = 2
+# A seek or reload drops the playing song's request and asks again once playback has
+# buffered, so its build keeps going this long for that request to rejoin.
+CURRENT_SONG_REJOIN_SECONDS = 5.0
 SEGMENT_SEEK_PREROLL_SECONDS = 0.25
 _EXACT_SEEK_SUFFIXES = frozenset({".wav", ".wave", ".flac", ".aif", ".aiff"})
 _PEAK_LEVEL_PATTERN = re.compile(
@@ -509,11 +512,19 @@ class _BuildJob:
     task: asyncio.Task[WaveformPeaks] | None = None
     waiters: int = 0
     stopping: bool = False
+    # Set while a playing-song build with no callers waits for its song to ask again.
+    linger_timer: asyncio.TimerHandle | None = None
 
     def stop(self) -> None:
         """Cancel the build; callers still waiting get a busy answer, not a cancellation."""
         self.stopping = True
         self.cancel_event.set()
+        self.cancel_linger()
+
+    def cancel_linger(self) -> None:
+        if self.linger_timer is not None:
+            self.linger_timer.cancel()
+            self.linger_timer = None
 
 
 class WaveformPeaksRegistry:
@@ -637,14 +648,15 @@ class WaveformPeaksRegistry:
         active = [job for job in self._jobs if not job.task.done()]  # type: ignore[union-attr]
         for job in active:
             if job.key == key and not job.stopping and (job.current or not current):
+                job.cancel_linger()
                 return job
         if current:
-            # A build whose callers all left is only winding down, so it holds no place.
+            # Another song plays now, so builds nobody waits for give way at once.
+            for job in active:
+                if not job.current or job.linger_timer is not None:
+                    job.stop()
             if sum(job.current and not job.stopping for job in active) >= CURRENT_SONG_MAX_BUILDS:
                 raise WaveformPeaksBusyError("waveform peak job already active")
-            for job in active:
-                if not job.current:
-                    job.stop()
         elif active:
             raise WaveformPeaksBusyError("waveform peak job already active")
         job = _BuildJob(key=key, current=current, cancel_event=asyncio.Event())
@@ -690,10 +702,16 @@ class WaveformPeaksRegistry:
             return await asyncio.shield(task)
         except asyncio.CancelledError:
             if job.waiters == 1 and not task.done():
-                # The last caller left, so nobody needs this build any more.
-                job.stop()
-                with suppress(BaseException):
-                    await asyncio.shield(task)
+                if job.current:
+                    # The last caller left: wait briefly for the playing song to ask again.
+                    job.linger_timer = asyncio.get_running_loop().call_later(
+                        CURRENT_SONG_REJOIN_SECONDS,
+                        job.stop,
+                    )
+                else:
+                    job.stop()
+                    with suppress(BaseException):
+                        await asyncio.shield(task)
             raise
         finally:
             job.waiters -= 1

@@ -105,16 +105,6 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     return;
   }
 
-  // PF-NEW-PROBLEMS (owner): a problem filter lists every matching album; a partly loaded list
-  // would show a few of them and then change under the filter.
-  if ((state.utility.selectedProblemFilters || []).length && state.utility.problematicFilesComplete !== true) {
-    if (!state.utility.completeLoadPromise) void loadProblematicFiles(true, { completeOnly: true });
-    els.count.textContent = '';
-    replaceListContents('<div class="utility-empty-state compact">Loading matching albums...</div>');
-    els.detail.innerHTML = '<div class="utility-empty-state">Loading matching albums...</div>';
-    return;
-  }
-
   if (!items.length && state.utility.problematicLoadError) {
     replaceListContents('<div class="utility-empty-state compact">Unable to load problematic albums.</div>');
     els.detail.innerHTML = buildOnPageAlertHtml({

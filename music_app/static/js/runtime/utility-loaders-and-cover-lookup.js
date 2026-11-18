@@ -1,15 +1,3 @@
-// PF-NEW-PROBLEMS (owner): an album fixed by a save must leave the list, so the complete list
-// may not be older than the newest library edit this page has seen.
-function buildCompleteProblematicFilesUrl() {
-  const revision = Math.max(
-    Number(state.status?.inventory_mutation_revision) || 0,
-    Number(state.utility.problematicMinInventoryRevision) || 0,
-  );
-  return revision > 0
-    ? `/utilities/problematic-files?min_inventory_revision=${revision}`
-    : '/utilities/problematic-files';
-}
-
 async function loadProblematicFiles(force = false, options = {}) {
   if (force) state.utility.problematicServerSearchCache = {};
   // 'when-open' (a Settings-intent prefetch) paints only once the modal is open.
@@ -173,7 +161,7 @@ async function loadProblematicFiles(force = false, options = {}) {
       let committedSelection;
       if (options.completeOnly === true) {
         // The tab opened on a list loaded in the background: its bounded page is already on screen.
-        data = await fetchSummary(buildCompleteProblematicFilesUrl());
+        data = await fetchSummary('/utilities/problematic-files');
         if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
         committedSelection = commitCompleteList(data);
         settleInitialSummary(state.utility.problematicFiles);
@@ -217,7 +205,7 @@ async function loadProblematicFiles(force = false, options = {}) {
         }
         if (reconcile) {
           // Requested only after the bounded page has painted, so it can never arrive first.
-          data = await fetchSummary(buildCompleteProblematicFilesUrl());
+          data = await fetchSummary('/utilities/problematic-files');
           if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
           committedSelection = commitCompleteList(data);
         } else if (!awaitsOpenReconcile) {

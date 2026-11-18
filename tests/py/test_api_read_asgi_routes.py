@@ -5317,7 +5317,7 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
         def __init__(self, config):
             repository_configs.append(config)
 
-        def build_problematic_files_payload(self, *, min_inventory_revision=0):
+        def build_problematic_files_payload(self):
             return {
                 "count": 1,
                 "items": [

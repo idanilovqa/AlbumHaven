@@ -3036,14 +3036,11 @@ class PostgresLibraryBrowseRepository:
                     _UTILITY_PROJECTION_SINGLEFLIGHT.pop(cache_key, None)
                     flight.set()
 
-    def build_problematic_files_payload(self, *, min_inventory_revision: int = 0) -> dict[str, object]:
+    def build_problematic_files_payload(self) -> dict[str, object]:
         kind = "problematic-files"
 
         def cached() -> dict[str, object] | None:
             payload = self._get_cached_utility_projection(kind)
-            # A list built before the caller's last known edit is stale for that caller.
-            if payload is not None and _coerce_int(payload.get("inventory_revision")) < min_inventory_revision:
-                return None
             if payload is not None:
                 payload.pop(_PROBLEMATIC_LOOSE_TRACKS_DETAIL_KEY, None)
                 payload.pop(_PROBLEMATIC_LOOSE_GROUP_IDENTITIES_KEY, None)
@@ -3088,10 +3085,7 @@ class PostgresLibraryBrowseRepository:
             )
             # Same snapshot as the rows: a stored list is served only while
             # the inventory is still exactly this one.
-            fingerprint = _duplicate_inventory_fingerprint(connection).get("fingerprint")
-            payload[_SNAPSHOT_FINGERPRINT_KEY] = json.dumps(fingerprint, default=str) if fingerprint else ""
-            # PF-NEW-PROBLEMS (owner): a client that saw a newer edit can refuse this list.
-            payload["inventory_revision"] = _coerce_int(fingerprint[1]) if fingerprint else 0
+            payload[_SNAPSHOT_FINGERPRINT_KEY] = _problematic_inventory_fingerprint(connection)
             return payload
 
     def build_problematic_files_page(self, *, limit: int, cursor: str = "") -> dict[str, object]:

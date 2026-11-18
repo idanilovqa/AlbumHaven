@@ -25894,9 +25894,7 @@ async function settleProblematicSaveTaskMutation(taskId, { reconcileSelection = 
     String(state.utility.selectedProblematicKey || '') === String(mutation.albumKey || '')
   );
   if (reconcileSelection && mutationOwnsView) {
-    // PF-NEW-PROBLEMS (owner): an album that no longer matches the active filter leaves the
-    // selection too, so the survivor comes from the list on screen.
-    const items = getFilteredProblematicAlbums();
+    const items = getAllProblematicItems();
     const survivingKeys = new Set(items.map((album) => String(album?.key || '')).filter(Boolean));
     const selectedKey = String(mutation.albumKey || '');
     if (survivingKeys.has(selectedKey)) {
@@ -30123,16 +30121,6 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     return;
   }
 
-  // PF-NEW-PROBLEMS (owner): a problem filter lists every matching album; a partly loaded list
-  // would show a few of them and then change under the filter.
-  if ((state.utility.selectedProblemFilters || []).length && state.utility.problematicFilesComplete !== true) {
-    if (!state.utility.completeLoadPromise) void loadProblematicFiles(true, { completeOnly: true });
-    els.count.textContent = '';
-    replaceListContents('<div class="utility-empty-state compact">Loading matching albums...</div>');
-    els.detail.innerHTML = '<div class="utility-empty-state">Loading matching albums...</div>';
-    return;
-  }
-
   if (!items.length && state.utility.problematicLoadError) {
     replaceListContents('<div class="utility-empty-state compact">Unable to load problematic albums.</div>');
     els.detail.innerHTML = buildOnPageAlertHtml({
@@ -32228,18 +32216,6 @@ function reorderTagEditorTracksByPath(tracks, draggedPath, beforePath = null) {
 
 // BEGIN js/runtime/utility-loaders-and-cover-lookup.js
 
-// PF-NEW-PROBLEMS (owner): an album fixed by a save must leave the list, so the complete list
-// may not be older than the newest library edit this page has seen.
-function buildCompleteProblematicFilesUrl() {
-  const revision = Math.max(
-    Number(state.status?.inventory_mutation_revision) || 0,
-    Number(state.utility.problematicMinInventoryRevision) || 0,
-  );
-  return revision > 0
-    ? `/utilities/problematic-files?min_inventory_revision=${revision}`
-    : '/utilities/problematic-files';
-}
-
 async function loadProblematicFiles(force = false, options = {}) {
   if (force) state.utility.problematicServerSearchCache = {};
   // 'when-open' (a Settings-intent prefetch) paints only once the modal is open.
@@ -32403,7 +32379,7 @@ async function loadProblematicFiles(force = false, options = {}) {
       let committedSelection;
       if (options.completeOnly === true) {
         // The tab opened on a list loaded in the background: its bounded page is already on screen.
-        data = await fetchSummary(buildCompleteProblematicFilesUrl());
+        data = await fetchSummary('/utilities/problematic-files');
         if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
         committedSelection = commitCompleteList(data);
         settleInitialSummary(state.utility.problematicFiles);
@@ -32447,7 +32423,7 @@ async function loadProblematicFiles(force = false, options = {}) {
         }
         if (reconcile) {
           // Requested only after the bounded page has painted, so it can never arrive first.
-          data = await fetchSummary(buildCompleteProblematicFilesUrl());
+          data = await fetchSummary('/utilities/problematic-files');
           if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
           committedSelection = commitCompleteList(data);
         } else if (!awaitsOpenReconcile) {
@@ -42030,11 +42006,6 @@ async function confirmManualTagEdit() {
     const updatedAlbums = Array.isArray(data.updated_albums)
       ? data.updated_albums
       : [data.updated_album].filter(Boolean);
-    // PF-NEW-PROBLEMS (owner): Problematic Files must not show a list from before this save.
-    state.utility.problematicMinInventoryRevision = Math.max(
-      Number(state.utility.problematicMinInventoryRevision) || 0,
-      Number(data.inventory_mutation_revision) || 0,
-    );
     const saveTaskCompleted = Boolean(data.save_task_id)
       && String(data.save_task_status || '').trim().toLowerCase() === 'completed';
     const responseIsTerminal = !data.save_task_id || saveTaskCompleted;

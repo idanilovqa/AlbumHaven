@@ -1923,7 +1923,7 @@ def test_asgi_create_problem_ignores_returns_full_compact_ack_without_broad_proj
         def build_utility_rules_payload(self):
             raise AssertionError("compact create must not build the broad Rules projection")
 
-        def build_problematic_files_payload(self, *, min_inventory_revision=0):
+        def build_problematic_files_payload(self):
             raise AssertionError("compact create must not build Problematic Files")
 
     def fake_create(config, payload, *, resolve_items):

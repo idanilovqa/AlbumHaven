@@ -4,8 +4,6 @@ const PLAYBACK_HANDOFF_STORAGE_KEY = 'albumhaven.playbackHandoff.v1';
 const PLAYBACK_HANDOFF_WINDOW_MS = 15000;
 const PLAYBACK_HANDOFF_RETRY_MS = 100;
 const PLAYBACK_OWNERSHIP_RETRY_MS = 2000;
-// How long a start's first request waits for its answer before asking once more.
-const PLAYBACK_START_FIRST_ANSWER_MS = 4000;
 let pendingPlaybackOwnershipHandoff = takePlaybackOwnershipHandoffEnvelope();
 let playbackOwnershipRuntimeClaimToken = pendingPlaybackOwnershipHandoff.handoff
   ? createPlaybackOwnershipToken() : '';
@@ -237,12 +235,12 @@ function recoverPlaybackOwnership(callback) {
   });
 }
 
-async function playbackOwnershipTrack(track, previous = null, timeoutMs = undefined) {
+async function playbackOwnershipTrack(track, previous = null) {
   if (!track?.path) throw new Error('Playback track is unavailable.');
   let playbackRef = previous?.path === track.path ? previous.track.playbackRef : null;
   if (!playbackRef || Date.parse(previous?.referenceExpiresAt || '') <= Date.now()) {
     const refs = await playbackOwnershipRequest('POST', '/playback/refs', { protocol: 1,
-      tracks: [{ clientKey: getPlaybackOwnershipTabId(), path: track.path }] }, timeoutMs);
+      tracks: [{ clientKey: getPlaybackOwnershipTabId(), path: track.path }] });
     if (refs.protocol !== 1 || refs.tracks?.length !== 1 || !refs.tracks[0].playbackRef) {
       throw new Error('Playback reference is unavailable.');
     }
@@ -271,29 +269,35 @@ async function requestPlaybackClaim(payload, timeoutMs) {
 // an anonymous acquire then says whether another client holds playback.
 // [fields] go with every request (the playing song's position); [takeover] (playback.claim.takeover)
 // only with one that offers no token.
-async function requestOfferedPlaybackClaim(claim, track, { takeover = false, fields = {}, timeoutMs = undefined } = {}) {
+async function requestOfferedPlaybackClaim(claim, track, { takeover = false, fields = {} } = {}) {
   const payload = { protocol: 1, clientId: getPlaybackOwnershipTabId(), clientSurface: 'private_web',
     state: 'playing', track, ...fields };
   const fresh = takeover ? { claimToken: null, takeover: true } : { claimToken: null };
   try {
-    return await requestPlaybackClaim(claim?.claimToken ? { ...payload, claimToken: claim.claimToken } : { ...payload, ...fresh },
-      timeoutMs);
+    return await requestPlaybackClaim(claim?.claimToken ? { ...payload, claimToken: claim.claimToken } : { ...payload, ...fresh });
   } catch (error) {
     if (!claim?.releaseUnanswered || error?.unanswered) throw error;
-    return requestPlaybackClaim({ ...payload, ...fresh }, timeoutMs);
+    return requestPlaybackClaim({ ...payload, ...fresh });
   }
 }
 
-// A request sent on a connection that died without closing is never answered (round 6: after an
-// outage, a press on another song stopped with nothing playing). A start's requests wait a few
-// seconds for their answer, then ask once more, on whatever connection the browser opens next.
-async function askAgainOnceWhenUnanswered(request) {
-  try {
-    return await request(PLAYBACK_START_FIRST_ANSWER_MS);
-  } catch (error) {
-    if (!error?.unanswered) throw error;
-    return request(PLAYBACK_OWNERSHIP_HEARTBEAT_MS);
-  }
+// A start nobody answered is not refused (owner retest B-D4 round 6, 2026-11-18: "I had to click
+// into another song 6 TIMES before it started to play after Network came back"): the connections a
+// browser kept from before an outage can stay dead for a while after it, so every request on them
+// goes unanswered. The song plays on, and its claim is asked again every couple of seconds until the
+// server answers; only a refusal stops it.
+function askAgainUntilAnswered(track, options, error) {
+  if (!error?.unanswered) return false;
+  const ownership = getPlaybackOwnershipState();
+  const version = ownership.requestVersion;
+  if (ownership.retryTimer) clearTimeout(ownership.retryTimer);
+  ownership.retryTimer = setTimeout(() => {
+    ownership.retryTimer = 0;
+    if (version === ownership.requestVersion && !ownership.activeClaim && isPlaybackClaimRenewable()) {
+      void claimPlaybackOwnership(track, options);
+    }
+  }, PLAYBACK_OWNERSHIP_RETRY_MS);
+  return true;
 }
 
 function acceptPlaybackClaim(result, prepared) {
@@ -415,14 +419,12 @@ async function claimPlaybackOwnership(track, options = {}) {
     if (playingEngine()?.holdsOwnClaim) return true;
     try {
       if (isShellPlaybackUnavailable()) throw new Error('Playback is unavailable in this app.');
-      // With no claim to keep, an unanswered request would give playback up: it is asked again once.
-      const ask = claim ? (request) => request() : askAgainOnceWhenUnanswered;
-      const prepared = await ask((timeoutMs) => playbackOwnershipTrack(track, claim, timeoutMs));
+      const prepared = await playbackOwnershipTrack(track, claim);
       if (version !== ownership.requestVersion) return false;
       const result = handoff
         ? await acquirePlaybackOwnershipHandoff(prepared, handoff)
-        : await ask((timeoutMs) => requestOfferedPlaybackClaim(claim, prepared.track,
-          { takeover: options.takeover === true, fields: positionField(track), timeoutMs }));
+        : await requestOfferedPlaybackClaim(claim, prepared.track,
+          { takeover: options.takeover === true, fields: positionField(track) });
       if (version !== ownership.requestVersion) {
         if (!claim) await deletePlaybackClaim(result).catch(() => {});
         return false;
@@ -437,6 +439,7 @@ async function claimPlaybackOwnership(track, options = {}) {
           ownership.unansweredRelease = null;
         }
         if (claim && ownership.activeClaim === claim && keepUnansweredPlaybackClaim(claim, error)) return true;
+        if (!claim && !handoff && askAgainUntilAnswered(track, options, error)) return true;
         losePlaybackOwnership();
         await handlePlaybackOwnershipEvent();
         if (options.showBlockedToast !== false) notifyBlockedPlaybackStart();

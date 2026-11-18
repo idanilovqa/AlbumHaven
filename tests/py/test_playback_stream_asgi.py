@@ -3343,6 +3343,32 @@ def test_a_keepalive_keeps_the_socket_and_any_other_field_is_refused(playback_ap
     assert asyncio.run(scenario()) == 4400
 
 
+def test_a_client_that_asks_hears_a_heartbeat_however_long_answers_take(playback_app, media_path):
+    async def scenario() -> list[str]:
+        heard = []
+        async with websocket_session(playback_app, "/playback/pcm?heartbeat=100") as socket:
+            for _ in range(2):
+                heard.append((await asyncio.wait_for(socket.receive_json(), 2))["type"])
+            await socket.send_json({"type": "probe", "requestId": 1, "path": str(media_path)})
+            while (event := await asyncio.wait_for(socket.receive_json(), 2))["type"] == "heartbeat":
+                pass
+            heard.append(event["type"])
+        return heard
+
+    assert asyncio.run(scenario()) == ["heartbeat", "heartbeat", "probe-result"]
+
+
+def test_no_heartbeat_unless_asked_or_outside_its_bounds(playback_app, media_path):
+    async def scenario(path: str) -> str:
+        async with websocket_session(playback_app, path) as socket:
+            await asyncio.sleep(0.3)
+            await socket.send_json({"type": "probe", "requestId": 1, "path": str(media_path)})
+            return (await asyncio.wait_for(socket.receive_json(), 2))["type"]
+
+    for path in ("/playback/pcm", "/playback/pcm?heartbeat=50", "/playback/pcm?heartbeat=x"):
+        assert asyncio.run(scenario(path)) == "probe-result", path
+
+
 def test_a_seek_table_request_must_be_a_boolean(playback_app, media_path, decoder_factory):
     async def scenario() -> int:
         async with websocket_session(playback_app, "/playback/pcm") as socket:

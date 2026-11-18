@@ -48,6 +48,9 @@ MAX_PLAYBACK_CONNECTIONS = 6
 MAX_PLAYBACK_DECODERS = 8
 MAX_DECODERS_PER_CONNECTION = 2
 MAX_CONTROL_MESSAGE_BYTES = 16_384
+# A client that asks (`/playback/pcm?heartbeat=<ms>`) hears from the server at least this often.
+MIN_HEARTBEAT_MS = 100
+MAX_HEARTBEAT_MS = 10_000
 MIN_PCM_SAMPLE_RATE = 8_000
 MAX_PCM_SAMPLE_RATE = 192_000
 MAX_CREDIT_FRAMES_PER_MESSAGE = MAX_PCM_SAMPLE_RATE
@@ -445,6 +448,7 @@ class _PlaybackPcmConnection:
         self._pending_credit_tasks: set[asyncio.Task[None]] = set()
         self._retire_tasks: set[asyncio.Task[None]] = set()
         self._transport_failed = asyncio.Event()
+        self._heartbeat_task: asyncio.Task[None] | None = None
         self._closed = False
         self._finalized = False
 
@@ -506,9 +510,34 @@ class _PlaybackPcmConnection:
         await self._registry.release_decoder()
         return True
 
+    def _requested_heartbeat_seconds(self) -> float | None:
+        requested = self._websocket.query_params.get("heartbeat", "")
+        milliseconds = _bounded_integer(
+            int(requested) if requested.isdecimal() else None,
+            minimum=MIN_HEARTBEAT_MS,
+            maximum=MAX_HEARTBEAT_MS,
+        )
+        return None if milliseconds is None else milliseconds / 1000
+
+    async def _beat(self, interval_seconds: float) -> None:
+        """Tells the client its connection lives, however long the server takes to answer.
+
+        A client cannot tell a connection that died without closing from a busy server by how long
+        its answers take (owner retest B-D4 round 6, 2026-11-18, with the CPU at 100%); it can by
+        hearing nothing at all.
+        """
+        with suppress(WebSocketDisconnect, OSError, RuntimeError):
+            while not self._closed:
+                await asyncio.sleep(interval_seconds)
+                if not self._closed:
+                    await self._send_json({"type": "heartbeat"})
+
     async def run(self) -> None:
         try:
             await self._websocket.accept()
+            heartbeat_seconds = self._requested_heartbeat_seconds()
+            if heartbeat_seconds is not None:
+                self._heartbeat_task = asyncio.create_task(self._beat(heartbeat_seconds))
             while not self._closed:
                 message = await self._receive_or_transport_failure()
                 message_type = message.get("type")
@@ -1173,6 +1202,9 @@ class _PlaybackPcmConnection:
                 return
             self._closed = True
             failures: list[BaseException] = []
+            if self._heartbeat_task is not None:
+                self._heartbeat_task.cancel()
+                await asyncio.gather(self._heartbeat_task, return_exceptions=True)
             try:
                 current = asyncio.current_task()
                 pending = [task for task in self._pending_opens if task is not current]

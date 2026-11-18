@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.35 - 2026-11-18
+
+- The hosted Problematic Files regression gate runs its end-to-end cases again; since 0.11.34 it failed before running them.
+
 ## 0.11.34 - 2026-11-18
 
 - Hosted regression gates can run just the named end-to-end cases or measured targets (`gates=focused`), so one failure is reproduced or checked in minutes instead of a full gate run.

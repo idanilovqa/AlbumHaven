@@ -4500,6 +4500,35 @@ def test_remote_cover_images_are_remembered_and_the_oldest_leave_first(monkeypat
     assert runtime._REMOTE_IMAGE_CACHE_BYTES == 6
 
 
+def test_remote_cover_preview_is_card_sized_and_passes_through_what_it_cannot_shrink():
+    """Apple, Deezer and YouTube Music cards received the full original, Apple up to 6 MB."""
+    import io
+
+    from PIL import Image
+
+    from music_app.services import cover_lookup_runtime as runtime
+
+    original = io.BytesIO()
+    Image.new("RGB", (3000, 2000), (200, 40, 40)).save(original, "JPEG", quality=95)
+    preview, mime_type = runtime.remote_cover_preview(original.getvalue(), "image/jpeg")
+    with Image.open(io.BytesIO(preview)) as image:
+        assert (image.format, image.size) == ("JPEG", (480, 320))
+    assert mime_type == "image/jpeg"
+    assert len(preview) < len(original.getvalue()) / 10
+
+    transparent = io.BytesIO()
+    Image.new("RGBA", (1200, 1200), (0, 0, 0, 0)).save(transparent, "PNG")
+    preview, mime_type = runtime.remote_cover_preview(transparent.getvalue(), "image/png")
+    with Image.open(io.BytesIO(preview)) as image:
+        assert (image.format, image.size, image.mode) == ("WEBP", (480, 480), "RGBA")
+    assert mime_type == "image/webp"
+
+    small = io.BytesIO()
+    Image.new("RGB", (300, 300)).save(small, "PNG")
+    assert runtime.remote_cover_preview(small.getvalue(), "image/png") == (small.getvalue(), "image/png")
+    assert runtime.remote_cover_preview(b"<svg/>", "image/svg+xml") == (b"<svg/>", "image/svg+xml")
+
+
 def test_probe_measurement_is_remembered_by_image_content(monkeypatch):
     import io
 

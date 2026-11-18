@@ -21660,3 +21660,37 @@ def test_loose_track_search_normalizes_the_alias_map_once_per_request_not_per_tr
     )
 
     assert aliases.iterations <= 1, f"alias map normalized {aliases.iterations} times"
+
+
+def test_cover_lookup_track_path_reads_lease_the_shared_browse_pool(monkeypatch):
+    """Cover Look Up spent 150-350 ms per open on two fresh connections around queries under 2 ms."""
+    from contextlib import contextmanager
+
+    import music_app.services.library_browse_postgres as browse
+
+    leases = []
+
+    class _Rows:
+        def fetchall(self):
+            return []
+
+    class _Connection:
+        def execute(self, _sql, params):
+            assert params == {"track_paths": ["N:/Album/01.flac"]}
+            return _Rows()
+
+    @contextmanager
+    def pooled(_database_url, *, workload):
+        leases.append(workload)
+        yield _Connection()
+
+    def fresh_connection(_database_url):
+        raise AssertionError("a Cover Look Up read opened a fresh connection")
+
+    monkeypatch.setattr(browse, "_pooled_connection", pooled)
+    monkeypatch.setattr(browse, "_connect", fresh_connection)
+    repository = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://unused/db"})
+
+    assert repository.build_cover_state_entries_by_paths({"N:/Album/01.flac"}) == {}
+    assert repository.build_album_payloads_by_track_paths({"N:/Album/01.flac"}) == []
+    assert leases == ["browse", "browse"]

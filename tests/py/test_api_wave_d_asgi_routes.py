@@ -3723,6 +3723,44 @@ def test_asgi_cover_lookup_add_remote_merges_existing_candidates_and_remote_imag
     assert _decode_json(failed_body) == {"ok": False, "error": "Failed to load remote image"}
 
 
+def test_remote_card_preview_is_downscaled_and_cached_apart_from_the_original(app, monkeypatch):
+    import io
+
+    from PIL import Image
+
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+
+    original = io.BytesIO()
+    Image.new("RGB", (2400, 2400), (10, 120, 200)).save(original, "JPEG", quality=95)
+    fetches = []
+
+    def fetch(image_url, **_kwargs):
+        fetches.append(image_url)
+        return original.getvalue(), "image/jpeg"
+
+    monkeypatch.setattr(asgi_routes, "fetch_remote_cover_bytes", fetch)
+    asgi_app = _make_wave_d_app(app)
+    asgi_app.state.flask_app = _FatalFlaskBridge()
+    url = "https://images.example/apple-3000.jpg"
+
+    def get(**query):
+        return _run_asgi_request(asgi_app, "GET", "/utilities/cover-lookup/remote-image", query={"url": url, **query})
+
+    first_status, first_headers, first_body = get(size="480", key="candidate")
+    again_status, _again_headers, again_body = get(size="480", key="candidate")
+    full_status, _full_headers, full_body = get()
+    unsupported_status, _unsupported_headers, unsupported_body = get(size="4000")
+
+    assert (first_status, again_status, full_status, unsupported_status) == (200, 200, 200, 200)
+    assert first_headers["content-type"] == "image/jpeg"
+    with Image.open(io.BytesIO(first_body)) as preview:
+        assert preview.size == (480, 480)
+    assert again_body == first_body
+    # The lightbox keeps the original; only the one card edge is ever resized.
+    assert full_body == unsupported_body == original.getvalue()
+    assert fetches == [url, url]
+
+
 def test_remote_candidate_image_download_does_not_block_cover_lookup_api(app, monkeypatch):
     from music_app.routes import api_wave_d_asgi_routes as asgi_routes
 

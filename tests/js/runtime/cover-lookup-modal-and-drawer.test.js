@@ -1013,7 +1013,7 @@ require('node:test')('notification thumbnails show the best candidate when no us
 
   assert.match(
     bodyElement.innerHTML,
-    /src="\/utilities\/cover-lookup\/remote-image\?url=https%3A%2F%2Fimages.example%2Frevelations-best.jpg&key=revelations-best"/,
+    /src="\/utilities\/cover-lookup\/remote-image\?url=https%3A%2F%2Fimages.example%2Frevelations-best.jpg&key=revelations-best&size=480"/,
   );
   assert.doesNotMatch(bodyElement.innerHTML, /automatic-or-stale-cover|is-placeholder/);
   assert.doesNotMatch(bodyElement.innerHTML, /current-art/);
@@ -9013,7 +9013,10 @@ require('node:test')('loading Cover Lookup renders only known gallery card place
 
   assert.match(bodyElement.innerHTML, /cover-lookup-gallery-loading/);
   assert.match(bodyElement.innerHTML, /cover-lookup-task-loading-line/);
-  assert.doesNotMatch(bodyElement.innerHTML, />LOCAL</);
+  // LOCAL is a still heading with no count and no placeholder until its listing answers.
+  assert.match(bodyElement.innerHTML, />LOCAL</);
+  assert.doesNotMatch(bodyElement.innerHTML, /LOCAL ·/);
+  assert.doesNotMatch(bodyElement.innerHTML, /data-cover-lookup-loading-section="local"/);
   assert.doesNotMatch(bodyElement.innerHTML, />OTHER ART</);
   assert.match(bodyElement.innerHTML, />REMOTE · 4 images</);
   assert.match(bodyElement.innerHTML, />MANUAL SEARCH</);
@@ -9332,6 +9335,52 @@ require('node:test')('reopening a cached empty gallery waits for fresh inventory
   context.ensureCoverLookupPolling = () => {};
   context.refreshCoverLookupGallery = async () => assert.equal(context.state.coverLookup.modal.loading, true);
   await context.openCoverLookupModal(album);
+});
+
+require('node:test')('reopening while the folder re-indexes after a delete shows the remaining cards at once', async () => {
+  class TestButton { setAttribute(name, value) { this[name] = String(value); } }
+  const overlay = { hidden: true, classList: { toggle() {} }, removeAttribute() {}, toggleAttribute() {} };
+  const context = loadHelper({
+    HTMLButtonElement: TestButton,
+    markAlbumCoverPathsFresh() {},
+    document: { body: { classList: { add() {} } }, getElementById: id => id === 'cover-lookup-modal' ? overlay : null },
+  });
+  const album = { key: 'reindexing', tracks: [{ path: 'N:/Album/01.flac' }] };
+  context.state.coverLookup.modal.album = album;
+  vm.runInContext('coverLookupLocalInventoryMutations', context).set(context.buildCoverLookupGalleryCacheKey(album), {
+    addedCovers: new Map(), deletedPaths: new Set(['N:/Album/deleted.jpg']), selectedPath: '',
+  });
+  // The stale index still lists the deleted file; this page's own delete is laid over it.
+  context.applyCoverLookupGalleryPayload({
+    ok: true, local_inventory_complete: false, local_inventory_available: true, local_inventory_pending: true,
+    local_covers: [{ path: 'N:/Album/front.jpg', is_active: true }, { path: 'N:/Album/deleted.jpg' }],
+    other_art: [],
+  });
+  context.renderCoverLookupModal = () => {};
+  context.ensureCoverLookupPolling = () => {};
+  let openedWith = null;
+  context.refreshCoverLookupGallery = async () => {
+    openedWith = {
+      loading: context.state.coverLookup.modal.loading,
+      paths: context.state.coverLookup.modal.localCovers.map(cover => cover.path),
+    };
+  };
+
+  await context.openCoverLookupModal({ ...album });
+
+  assert.equal(JSON.stringify(openedWith), JSON.stringify({ loading: false, paths: ['N:/Album/front.jpg'] }));
+});
+
+require('node:test')('a remote card shows the 480 px preview while its lightbox keeps the original', () => {
+  const context = loadHelper({ escapeHtml: value => String(value ?? '') });
+  const card = context.buildCoverLookupCard({
+    id: 'apple-1', source: 'apple', url: 'https://images.example/3000x3000bb.jpg',
+  }, 'remote', true);
+  const preview = card.match(/<img class="cover-lookup-art-preview-image" src="([^"]+)"/)[1];
+  const full = card.match(/data-cover-src="([^"]+)"/)[1];
+
+  assert.match(preview, /size=480/);
+  assert.doesNotMatch(full, /size=/);
 });
 
 require('node:test')('the Extract action stages attachments without choosing art or sending a save', async () => {

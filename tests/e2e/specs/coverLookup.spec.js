@@ -3526,3 +3526,165 @@ test('FTC-COVERS-019 manual lookup leaves the user-owned cover unchanged before 
     expect(thirdPartyRequestEvidence.snapshot()).toEqual([]);
   });
 });
+
+// Owner (2026-11-18): Cover Look Up was slow and blinking on every open. Every card of an opening shows at
+// once; only an image still loading inside its own card may blink, and an album without art never blinks.
+test('FTC-COVERS-048 every Cover Look Up opening shows all of its cards at once', { tag: '@area:cover-providers' }, async ({
+  coverLookupActions,
+  galleryActions,
+  page,
+  stepLogger,
+  trackModalActions,
+}) => {
+  test.setTimeout(240_000);
+  const lookup = coverLookupActions.coverLookup;
+  let ownedPath = '';
+  const observeOpening = async (open) => {
+    const observation = await lookup.startOpeningObservation();
+    let samples;
+    try {
+      await open();
+      await coverLookupActions.waitForModalReady();
+      await coverLookupActions.waitForModalResultsReady();
+    } finally {
+      samples = await lookup.finishOpeningObservation(observation);
+    }
+    return samples;
+  };
+  // The first painted state holding any LOCAL card already holds the settled set, each card with its own
+  // preview, and LOCAL never shows more placeholders than the album's one known cover.
+  const expectLocalCardsAtOnce = (samples, label) => {
+    const settled = samples.at(-1);
+    expect(settled?.local, `${label}: settled LOCAL cards`).toBeGreaterThan(0);
+    const first = samples.find(sample => sample.local > 0);
+    expect(first, `${label}: ${JSON.stringify(samples.slice(0, 6))}`).toMatchObject({
+      local: settled.local,
+      localPreviews: settled.local,
+    });
+    expect(samples.filter(sample => sample.localPlaceholders > 1), label).toEqual([]);
+    expect(samples.filter(sample => sample.emptyLocal), label).toEqual([]);
+    return { first, settled };
+  };
+  const openAlbumDetails = async (target, url) => {
+    await galleryActions.goto(url);
+    await galleryActions.waitForGalleryReady();
+    expect(await galleryActions.selectAlbumDetailsByIdentity(target)).toEqual(target);
+    await trackModalActions.waitForLoadedSummary();
+  };
+
+  try {
+    await stepLogger.step('Case 1: every LOCAL card appears in the first painted listing', async () => {
+      await openAlbumDetails(COVER_LOOKUP_TARGET, COVER_LOOKUP_FILTERED_URL);
+      const samples = await observeOpening(() => trackModalActions.openCoverLookup());
+      expectLocalCardsAtOnce(samples, 'first opening');
+      await coverLookupActions.closeModal();
+      await trackModalActions.close();
+    });
+
+    await stepLogger.step('Case 2: an album without art opens straight into its empty state, with nothing blinking', async () => {
+      await openAlbumDetails({ artist: SPLIT_FIXTURE.artist, album: SPLIT_FIXTURE.album, year: SPLIT_FIXTURE.year });
+      const samples = await observeOpening(() => trackModalActions.openCoverLookup());
+      expect(samples.at(-1)).toMatchObject({ local: 0, emptyLocal: true });
+      const blinking = samples.filter(sample => (
+        sample.localPlaceholders || sample.loadingLines || sample.remotePlaceholders
+      ));
+      expect(blinking, JSON.stringify(blinking.slice(0, 5))).toEqual([]);
+      await expect(lookup.localEmptyState).toBeVisible();
+      await coverLookupActions.closeModal();
+      await trackModalActions.close();
+    });
+
+    await stepLogger.step('Case 3: a notification opens with every REMOTE card its search found', async () => {
+      await openAlbumDetails(PROVIDER_STORAGE_POLICY_TARGET);
+      await trackModalActions.openCoverLookup();
+      await coverLookupActions.waitForModalReady();
+      await coverLookupActions.setProviderFixtureMode('normal');
+      const taskId = String((await coverLookupActions.startSearch()).task?.id || '').trim();
+      expect(taskId).not.toBe('');
+      await coverLookupActions.waitForModalSearchCompleted();
+      const remoteIds = await coverLookupActions.readRemoteCandidateIds();
+      expect(remoteIds.length).toBeGreaterThan(0);
+      await coverLookupActions.closeModal();
+      await trackModalActions.close();
+      // A fresh page holds no gallery of this album; the notification's own match count is all it knows.
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await galleryActions.waitForGalleryReady();
+      await coverLookupActions.openDrawer();
+      const samples = await observeOpening(() => coverLookupActions.openTaskById(taskId));
+      const first = samples.find(sample => sample.remote + sample.remotePlaceholders > 0);
+      expect(first?.remote + first?.remotePlaceholders, JSON.stringify(samples.slice(0, 6)))
+        .toBeGreaterThanOrEqual(remoteIds.length);
+      expect(await coverLookupActions.readRemoteCandidateIds()).toEqual(remoteIds);
+      await coverLookupActions.closeModal();
+      await coverLookupActions.openDrawer();
+      const taskCard = lookup.taskCardById(taskId);
+      await taskCard.getByRole('button', { name: 'Delete notification', exact: true }).click();
+      await expect(taskCard).toHaveCount(0);
+      await coverLookupActions.closeDrawer();
+    });
+
+    await stepLogger.step("Case 4: after a cover change the reopened lookup shows the new cover's picture at once", async () => {
+      await openAlbumDetails(COVER_LOOKUP_TARGET, COVER_LOOKUP_FILTERED_URL);
+      await trackModalActions.openCoverLookup();
+      await coverLookupActions.waitForModalReady();
+      const source = (await coverLookupActions.readLocalCoverCandidates()).find(item => (
+        !item.isActive && /[\\/]Art[\\/]Back\.jpg$/i.test(item.sourcePath)
+      ));
+      expect(source).not.toBeUndefined();
+      ownedPath = path.join(path.dirname(source.sourcePath), `instant-open-e2e-${process.pid}.jpg`);
+      fs.copyFileSync(source.sourcePath, ownedPath);
+      await coverLookupActions.closeModal();
+      await expect.poll(async () => {
+        await trackModalActions.openCoverLookup();
+        await coverLookupActions.waitForModalResultsReady();
+        const paths = (await coverLookupActions.readLocalCoverCandidates()).map(item => item.sourcePath);
+        if (!paths.includes(ownedPath)) await coverLookupActions.closeModal();
+        return paths;
+      }, { message: 'Expected the owned copy to be listed in LOCAL.', timeout: 30_000 }).toContain(ownedPath);
+      await coverLookupActions.selectLocalCoverBySourcePathAndSave(ownedPath);
+      const samples = await observeOpening(() => trackModalActions.openCoverLookup());
+      const { first } = expectLocalCardsAtOnce(samples, 'reopening after a cover change');
+      expect(first).toMatchObject({ activeLocal: ownedPath, selectedImageComplete: true });
+      expect(samples.filter(sample => sample.loadingLines), 'no placeholder cards after a change').toEqual([]);
+    });
+
+    await stepLogger.step('Case 6: deleting a cover inside the lookup shows the remaining cards at once', async () => {
+      const before = (await coverLookupActions.readLocalCoverCandidates()).map(item => item.sourcePath);
+      const observation = await lookup.startOpeningObservation();
+      let samples;
+      try {
+        await coverLookupActions.deleteLocalCoverBySourcePath(ownedPath);
+        await coverLookupActions.waitForModalResultsReady();
+      } finally {
+        samples = await lookup.finishOpeningObservation(observation);
+      }
+      expect(fs.existsSync(ownedPath)).toBe(false);
+      const afterDelete = samples.filter(sample => sample.local !== before.length);
+      expect(afterDelete[0]?.local, JSON.stringify(samples.slice(0, 6))).toBe(before.length - 1);
+      expect(afterDelete.filter(sample => (
+        sample.local !== before.length - 1 || sample.localPlaceholders || sample.loadingLines
+      ))).toEqual([]);
+      expect((await coverLookupActions.readLocalCoverCandidates()).map(item => item.sourcePath)).not.toContain(ownedPath);
+      const saved = page.waitForResponse(response => (
+        response.request().method() === 'POST'
+        && new URL(response.url()).pathname === '/utilities/cover-lookup/local-select'
+      ));
+      await lookup.saveRemoteButton.click();
+      expect((await (await saved).json()).ok).toBe(true);
+      await expect(lookup.modal).toBeHidden();
+    });
+
+    await stepLogger.step('Case 5: after a delete the reopened lookup shows every remaining card at once', async () => {
+      const samples = await observeOpening(() => trackModalActions.openCoverLookup());
+      const { settled } = expectLocalCardsAtOnce(samples, 'reopening after a delete');
+      expect(samples.filter(sample => sample.loadingLines), 'no placeholder cards after a delete').toEqual([]);
+      expect((await coverLookupActions.readLocalCoverCandidates()).map(item => item.sourcePath)).not.toContain(ownedPath);
+      expect(settled.activeLocal).not.toBe('');
+      await coverLookupActions.closeModal();
+      await trackModalActions.close();
+    });
+  } finally {
+    await coverLookupActions.setProviderFixtureMode('normal');
+    if (ownedPath && fs.existsSync(ownedPath)) fs.unlinkSync(ownedPath);
+  }
+});

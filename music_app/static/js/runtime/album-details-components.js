@@ -36,11 +36,9 @@ function resolveAlbumDetailsCoverSlots(album) {
 }
 
 // The rear-cover preview Album Details shows; the gallery preloads the same URL (owner 2026-11-16).
-// The front cover asks for a display size too: unsized, it was a 2048px PNG on every switch (owner 2026-11-17).
-const ALBUM_DETAILS_FRONT_COVER_SIZE = 960;
-function albumDetailsCoverPreviewUrl(slot, size = 480) {
+function albumDetailsCoverPreviewUrl(slot) {
   const url = String(slot?.imageUrl || '');
-  return url ? `${url}${url.includes('?') ? '&' : '?'}size=${size}` : '';
+  return url ? `${url}${url.includes('?') ? '&' : '?'}size=480` : '';
 }
 
 function buildAlbumDetailsCoverStackHtml(config = {}) {

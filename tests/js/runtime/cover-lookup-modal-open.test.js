@@ -99,6 +99,9 @@ test('collection Cover Lookup renders one unlabeled local gallery and only the s
   // Owner 2026-11-17: "Женя машинаCustom collection" ran together; a bold dot separates name and kind.
   assert.match(elements['cover-lookup-modal-subtitle'].innerHTML,
     /<span>Night<\/span><span class="cover-lookup-modal-subtitle-separator" aria-hidden="true"> • <\/span><span class="cover-lookup-modal-subtitle-meta">Custom collection<\/span>/);
+  const css = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'css', 'runtime', 'cover-lookup-modal.css'), 'utf8');
+  // Owner 2026-11-17: "do some spaces between the words and dot too" - the flex row drops the dot's spaces.
+  assert.match(css, /\.cover-lookup-modal-subtitle-separator \{\s*margin-inline: 0\.45em;\s*font-weight: 700;/);
   assert.equal((body.innerHTML.match(/cover-lookup-gallery/g) || []).length, 1);
   assert.match(body.innerHTML, /data-cover-lookup-file-input/);
   assert.match(body.innerHTML, /data-add-cover-lookup-remote/);
@@ -107,7 +110,6 @@ test('collection Cover Lookup renders one unlabeled local gallery and only the s
   // Owner 2026-11-16: collection wording and a dialog sized to its few parts.
   assert.match(body.innerHTML, /placeholder="Paste an image or a direct image URL here"/);
   assert.equal(overlayClasses.has('is-custom-collection'), true);
-  const css = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'css', 'runtime', 'cover-lookup-modal.css'), 'utf8');
   assert.match(css, /\.is-custom-collection > \.cover-lookup-modal-dialog \{[^}]*height: auto;/);
   assert.match(css, /\.is-custom-collection \.cover-lookup-modal-body \{ align-content: start; \}/);
   assert.match(css, /\.is-custom-collection \.cover-lookup-manual-open \{ margin-top: auto; \}/);

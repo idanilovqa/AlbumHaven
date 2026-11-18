@@ -45,6 +45,12 @@
   color: var(--muted);
   font-size: 0.86rem;
 }
+/* Flex items drop their edge spaces, so the dot's gaps are margins (owner 2026-11-17: "do some spaces between
+   the words and dot too"). */
+.cover-lookup-modal-subtitle-separator {
+  margin-inline: 0.45em;
+  font-weight: 700;
+}
 .cover-lookup-modal-album-link {
   min-width: 0;
   padding: 0;

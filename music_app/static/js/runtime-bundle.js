@@ -5313,11 +5313,9 @@ function resolveAlbumDetailsCoverSlots(album) {
 }
 
 // The rear-cover preview Album Details shows; the gallery preloads the same URL (owner 2026-11-16).
-// The front cover asks for a display size too: unsized, it was a 2048px PNG on every switch (owner 2026-11-17).
-const ALBUM_DETAILS_FRONT_COVER_SIZE = 960;
-function albumDetailsCoverPreviewUrl(slot, size = 480) {
+function albumDetailsCoverPreviewUrl(slot) {
   const url = String(slot?.imageUrl || '');
-  return url ? `${url}${url.includes('?') ? '&' : '?'}size=${size}` : '';
+  return url ? `${url}${url.includes('?') ? '&' : '?'}size=480` : '';
 }
 
 function buildAlbumDetailsCoverStackHtml(config = {}) {
@@ -41903,8 +41901,12 @@ function renderTrackModalRelease(album) {
       ${coverSourceMarkersHtml}
     `;
   } else if (activeSelectedCover ? !activeSelectedCover.unavailable : albumHasDisplayCover(album)) {
-    const coverSrc = activeSelectedCover?.imageUrl
-      ? albumDetailsCoverPreviewUrl(activeSelectedCover, ALBUM_DETAILS_FRONT_COVER_SIZE)
+    // Owner rule: Album Details shows the very preview the gallery already loaded. The primary cover is the
+    // album's display cover (the gallery card's image); the others use the preview the gallery preloads and
+    // the stack's rear cards show. A separate full-size URL left the cover black while it downloaded
+    // (owner 2026-11-17). The lightbox still opens the full image.
+    const coverSrc = activeSelectedCover?.imageUrl && !(selectedCoverIndex === 0 && albumHasDisplayCover(album))
+      ? albumDetailsCoverPreviewUrl(activeSelectedCover)
       : buildAlbumDisplayCoverUrl(album);
     const lightboxSrc = activeSelectedCover?.imageUrl || (typeof buildAlbumLightboxCoverUrl === 'function'
       ? buildAlbumLightboxCoverUrl(album)

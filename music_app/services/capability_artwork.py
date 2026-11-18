@@ -51,12 +51,13 @@ def sanitized_artwork(path: Path, *, max_edge: int = _MAX_EDGE, image_format: st
     return output.getvalue()
 
 
-def render_browse_artwork(path: Path, *, max_edge: int = _MAX_EDGE) -> Response:
+def render_browse_artwork(path: Path, *, max_edge: int = _MAX_EDGE, cache_control: str = "private, no-store",
+                          etag: str = "") -> Response:
     """Return only decoded image pixels from an already root-validated path."""
-    return Response(
-        sanitized_artwork(path, max_edge=max_edge), media_type="image/png",
-        headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
-    )
+    headers = {"Cache-Control": cache_control, "X-Content-Type-Options": "nosniff"}
+    if etag:
+        headers["ETag"] = etag
+    return Response(sanitized_artwork(path, max_edge=max_edge), media_type="image/png", headers=headers)
 
 
 async def browse_artwork_response(request) -> Response | None:

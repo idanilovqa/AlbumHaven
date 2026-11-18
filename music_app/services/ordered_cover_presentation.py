@@ -1,6 +1,8 @@
 """Bounded saved-cover presentation, with source access only at image load time."""
 from __future__ import annotations
 
+import hashlib
+
 from urllib.parse import urlencode
 
 from fastapi import HTTPException
@@ -91,6 +93,11 @@ def project_ordered_covers_for_request(request, payload: object) -> object:
     return visit(payload)
 
 
+# Owner 2026-11-17 approved caching selected covers like the gallery's own previews: kept privately by the
+# browser for a day (never by shared caches), then revalidated by ETag. Errors stay uncached.
+SELECTED_COVER_CACHE_CONTROL = "private, max-age=86400"
+
+
 async def selected_cover_artwork_response(request) -> Response:
     """Serve one saved source through the existing artwork authority, never paths."""
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
@@ -152,7 +159,7 @@ async def selected_cover_artwork_response(request) -> Response:
         if payload is None:
             raise HTTPException(status_code=502, detail="Failed to load remote image.")
         return Response(payload, media_type=mime_type, headers={
-            "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff",
+            "Cache-Control": SELECTED_COVER_CACHE_CONTROL, "X-Content-Type-Options": "nosniff",
         })
     if not context.get("track_paths"):
         raise missing
@@ -163,7 +170,20 @@ async def selected_cover_artwork_response(request) -> Response:
     local = next(reference for reference in references if reference["selection_id"] == selection_id)
     if not local.get("path") or local.get("unavailable"):
         raise missing
+    max_edge = normalize_cover_variant_size(query.get("size")) or 2048
+    source = Path(local["path"])
+    try:
+        stat = await run_in_threadpool(source.stat)
+    except OSError:
+        raise missing from None
+    # The same image at the same size answers "not modified" without re-rendering it.
+    etag = '"' + hashlib.sha256(
+        f"{selection_id}|{stat.st_mtime_ns}|{stat.st_size}|{max_edge}".encode()).hexdigest()[:32] + '"'
+    if etag in {tag.strip() for tag in request.headers.get("if-none-match", "").split(",")}:
+        return Response(status_code=304, headers={
+            "ETag": etag, "Cache-Control": SELECTED_COVER_CACHE_CONTROL, "X-Content-Type-Options": "nosniff",
+        })
     return await run_in_threadpool(
-        render_browse_artwork, Path(local["path"]),
-        max_edge=normalize_cover_variant_size(query.get("size")) or 2048,
+        render_browse_artwork, source, max_edge=max_edge,
+        cache_control=SELECTED_COVER_CACHE_CONTROL, etag=etag,
     )

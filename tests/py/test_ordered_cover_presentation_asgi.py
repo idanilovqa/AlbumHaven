@@ -30,7 +30,7 @@ def actor(*grants, library_id=23):
         capability_grants=tuple(CapabilityGrant(grant, "library", library_id) for grant in grants))
 
 
-async def http_get(app, url):
+async def http_get(app, url, extra_headers=()):
     target = urlsplit(url)
     messages = []
     sent = False
@@ -49,7 +49,7 @@ async def http_get(app, url):
     await app({"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "GET",
         "scheme": "https", "path": target.path, "raw_path": target.path.encode(),
         "query_string": target.query.encode(), "headers": [(b"host", b"music.test"),
-        (b"cookie", b"__Host-album_haven_session=synthetic")],
+        (b"cookie", b"__Host-album_haven_session=synthetic"), *extra_headers],
         "client": ("203.0.113.8", 50000), "server": ("music.test", 443)}, receive, send)
     start = next(item for item in messages if item["type"] == "http.response.start")
     body = b"".join(item.get("body", b"") for item in messages if item["type"] == "http.response.body")
@@ -58,6 +58,9 @@ async def http_get(app, url):
 
 @pytest.fixture
 def api(monkeypatch, tmp_path):
+    # Downloaded-cover providers come from Postgres (test_local_cover_provenance covers them); unit tests here
+    # forbid database access.
+    monkeypatch.setattr(read_routes, "_attach_local_cover_sources_for_request", lambda request, payload: payload)
     root = tmp_path / "library"
     album = root / "release"
     album.mkdir(parents=True)
@@ -125,10 +128,10 @@ def api(monkeypatch, tmp_path):
     async def raw_cover():
         calls.append(("raw-fallback", None))
         return Response(b"PRIVATE_RAW_FALLBACK", media_type="application/octet-stream")
-    def request(target=None, **selectors):
+    def request(target=None, headers=(), **selectors):
         if target is None:
             target = "/cover?" + urlencode({"library_id": 23, "album_id": 72, "selection_id": "front", **selectors})
-        return asyncio.run(http_get(app, target))
+        return asyncio.run(http_get(app, target, headers))
     return SimpleNamespace(app=app, state=state, context=context, saved=saved, browse_album=browse_album,
                            calls=calls, cover=cover, outside=outside, foreign=foreign, request=request)
 
@@ -138,7 +141,9 @@ def test_view_preset_reads_selected_local_pixels_without_lookup_paths_or_media(a
     status, headers, body = api.request()
     assert status == 200
     assert headers[b"content-type"].startswith(b"image/png")
-    assert b"no-store" in headers[b"cache-control"]
+    # Owner 2026-11-17 approved caching selected covers privately, like the gallery's previews.
+    assert headers[b"cache-control"] == b"private, max-age=86400"
+    assert headers[b"etag"]
     assert headers[b"x-content-type-options"] == b"nosniff"
     assert b"PRIVATE_" not in body
     with Image.open(BytesIO(body)) as image:
@@ -198,10 +203,31 @@ def test_raw_media_grant_still_gets_sanitized_selected_image(api):
     api.state.user = actor("capability.view", "library.media.read")
     status, headers, body = api.request()
     assert status == 200 and b"PRIVATE_" not in body
-    assert b"no-store" in headers[b"cache-control"]
+    assert headers[b"cache-control"] == b"private, max-age=86400"
     with Image.open(BytesIO(body)) as image:
         assert image.getpixel((0, 0)) == (255, 0, 0)
     assert not any(name == "raw-fallback" for name, _ in api.calls)
+
+
+def test_an_unchanged_selected_cover_answers_not_modified_without_rendering(api, monkeypatch):
+    # Owner 2026-11-17: reopening Album Details must not download and re-render the same covers again.
+    from music_app.services import capability_artwork
+
+    status, headers, _ = api.request(size="480")
+    assert status == 200
+    etag = headers[b"etag"]
+    renders = []
+    monkeypatch.setattr(capability_artwork, "sanitized_artwork", lambda *a, **k: renders.append(1) or b"")
+    status, headers, body = api.request(size="480", headers=[(b"if-none-match", etag)])
+    assert (status, body, renders) == (304, b"", [])
+    assert headers[b"etag"] == etag and headers[b"cache-control"] == b"private, max-age=86400"
+    status, _, _ = api.request(size="960", headers=[(b"if-none-match", etag)])
+    assert status == 200, "another size is another image"
+    api.cover.write_bytes(api.cover.read_bytes() + b"")
+    import os
+    os.utime(api.cover, ns=(1, 1))
+    status, _, _ = api.request(size="480", headers=[(b"if-none-match", etag)])
+    assert status == 200, "a changed file is sent again"
 
 
 @pytest.mark.parametrize("extra", [{"path": "/private/submitted.png"}, {"loop_id": "loop"},

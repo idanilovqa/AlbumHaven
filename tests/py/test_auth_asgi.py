@@ -1609,6 +1609,7 @@ def test_logout_requires_session_bound_csrf_revokes_and_clears_cookies(auth_asgi
 
     assert status == 303 and body == b""
     assert dict(response_headers)["location"] == "/login"
+    assert dict(response_headers)["clear-site-data"] == '"cache"', "privately cached covers leave with the session"
     revoked = app.state.auth_session_service.revoked
     assert revoked[0][0] == SESSION
     assert str(getattr(revoked[0][1], "value", revoked[0][1])) == "logout"

@@ -1034,6 +1034,8 @@ async def post_logout(request: Request) -> Response:
             httponly=httponly,
             samesite="lax",
         )
+    # Covers are kept privately by the browser; signing out removes them from a shared computer (owner 2026-11-17).
+    response.headers["Clear-Site-Data"] = '"cache"'
     return _no_store(response)
 
 

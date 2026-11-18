@@ -65,11 +65,13 @@ test('the rising cover shows its decoded rear picture until its own image arrive
   assert.equal(visual.children.includes(rearImage), false, 'the real cover takes over once loaded');
 });
 
-test('Album Details asks for a display-size front cover, not the full original', () => {
+test('Album Details shows the previews the gallery already loaded, never a separate full-size download', () => {
+  // Owner 2026-11-17: "that 3 cover artbox should have really loaded all the previews while it was at gallery
+  // ... there were supposed to be no black absent covers".
   const context = { console };
   vm.createContext(context);
   vm.runInContext(source, context);
-  assert.equal(context.albumDetailsCoverPreviewUrl({ imageUrl: '/cover?selection_id=a' }, 960), '/cover?selection_id=a&size=960');
+  assert.equal(context.albumDetailsCoverPreviewUrl({ imageUrl: '/cover?selection_id=a' }), '/cover?selection_id=a&size=480');
   const tagEditor = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'tag-editor-and-optimistic-updates.js'), 'utf8');
-  assert.match(tagEditor, /albumDetailsCoverPreviewUrl\(activeSelectedCover, ALBUM_DETAILS_FRONT_COVER_SIZE\)/);
+  assert.match(tagEditor, /const coverSrc = activeSelectedCover\?\.imageUrl && !\(selectedCoverIndex === 0 && albumHasDisplayCover\(album\)\)\s*\? albumDetailsCoverPreviewUrl\(activeSelectedCover\)\s*: buildAlbumDisplayCoverUrl\(album\);/);
 });

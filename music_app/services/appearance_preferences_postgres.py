@@ -271,11 +271,17 @@ def _floating_player_edge(value: object) -> dict[str, str | None]:
     return {"source": source, "color": color}
 
 
+# Album page "Display provider badge for local covers" (owner 2026-11-17): optional, "on" when absent, and
+# outside the keep-one-enabled rule of the three library-source choices.
+_LOCAL_COVER_BADGES = "local_cover_badges"
+
+
 def _source_indicators(value: object) -> dict[str, bool]:
-    if (not isinstance(value, Mapping) or set(value) != set(_SOURCE_INDICATOR_DEFAULTS)
+    if (not isinstance(value, Mapping)
+            or not set(_SOURCE_INDICATOR_DEFAULTS) <= set(value) <= {*_SOURCE_INDICATOR_DEFAULTS, _LOCAL_COVER_BADGES}
             or any(type(flag) is not bool for flag in value.values())):
         raise ValueError("Library source indicators require three boolean choices.")
-    if not any(value.values()):
+    if not any(value[field] for field in _SOURCE_INDICATOR_DEFAULTS):
         raise ValueError("At least one library source indicator must remain enabled.")
     return dict(value)
 

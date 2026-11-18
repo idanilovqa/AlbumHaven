@@ -60,6 +60,7 @@ from music_app.services.cover_lookup_tasks import (
     update_cover_lookup_task,
 )
 from music_app.services.cover_lookup_notifications import load_cover_lookup_notification
+from music_app.services.local_cover_provenance import record_local_cover_provenance
 from music_app.services.cover_manual_links import add_manual_cover_candidates_from_urls
 from music_app.services.client_surfaces import client_surface_from_request
 from music_app.services.cover_refresh_runtime import (
@@ -1557,6 +1558,16 @@ async def albums_selected_covers_save(request: Request, album_ref: str) -> JSONR
         return JSONResponse({"ok": False, "persisted": True, "error": "The selection was saved, but its display could not refresh. Retry the same request."}, status_code=503)
     except Exception:
         return JSONResponse({"ok": False, "error": "Cover selection is temporarily unavailable. Retry the same request."}, status_code=503)
+    if downloads.provenance and not result["replayed"]:
+        # Album Details shows a downloaded cover's provider badge (album page setting, owner 2026-11-17).
+        # The cover is saved either way; a failure here only loses the badge.
+        try:
+            await run_in_threadpool(
+                record_local_cover_provenance, config,
+                library_id=request.state.current_actor.current_library_id, provenance=downloads.provenance,
+            )
+        except Exception:
+            logging.getLogger(__name__).exception("Could not record the provider of a downloaded cover.")
     # Which lookup and provider each saved cover came from, including downloaded online covers.
     provenance = {
         item["selection_id"]: (

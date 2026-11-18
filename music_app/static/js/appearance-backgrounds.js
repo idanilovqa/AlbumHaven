@@ -14,12 +14,19 @@
     { id: 'graphite-moss', name: 'Graphite moss', description: 'Dark graphite with muted moss details.', style: { surface: { mode: 'gradient', angle: 0, start: '#292B23', end: '#151713' }, controls: { fill: '#9BAA64', border: '#D0D8AA' }, waveform: { fill: '#74884D', edge: '#C4D19A' }, handles: { color: '#C4D19A' } } },
     { id: 'soft-black', name: 'Soft black', description: 'A quiet neutral player with silver detail.', style: { surface: { mode: 'gradient', angle: 0, start: '#171817', end: '#050606' }, controls: { fill: '#BFC4C1', border: '#F0F2F1' }, waveform: { fill: '#8E9691', edge: '#E5E8E6' }, handles: { color: '#E5E8E6' } } },
   ];
+  // local_cover_badges is the album page "Display provider badge for local covers" (owner 2026-11-17): on when
+  // absent from older saved settings, and outside the keep-one-enabled rule of the three library-source choices.
+  const librarySourceFields = ['card_colors', 'hover_outline_colors', 'icons'];
   const sourceIndicatorDefaults = () => ({ card_colors: false, hover_outline_colors: true, icons: true });
+  const localCoverBadgesEnabled = indicators => indicators?.local_cover_badges !== false;
   function normalizeSourceIndicators(value = sourceIndicatorDefaults()) {
-    const fields = Object.keys(sourceIndicatorDefaults());
-    if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length !== fields.length
-        || !fields.every(field => typeof value[field] === 'boolean')) throw new TypeError('Library source indicators require three boolean choices.');
-    if (!Object.values(value).some(Boolean)) throw new TypeError('At least one library source indicator must remain enabled.');
+    const keys = value && typeof value === 'object' && !Array.isArray(value) ? Object.keys(value) : null;
+    if (!keys || !librarySourceFields.every(field => typeof value[field] === 'boolean')
+        || keys.some(key => !librarySourceFields.includes(key) && key !== 'local_cover_badges')
+        || (Object.hasOwn(value, 'local_cover_badges') && typeof value.local_cover_badges !== 'boolean')) {
+      throw new TypeError('Library source indicators require three boolean choices.');
+    }
+    if (!librarySourceFields.some(field => value[field])) throw new TypeError('At least one library source indicator must remain enabled.');
     return { ...value };
   }
   const empty = () => ({ main_surface_color: null, panel_background_color: null });
@@ -336,9 +343,11 @@
     rootElement.setAttribute?.('data-docked-compact-player-regular-style', String(preference.docked_compact_player_regular_style === true));
     rootElement.setAttribute?.('data-album-details-layout', preference.album_details_layout || 'classic_bar');
     rootElement.setAttribute?.('data-album-playing-row-animation', preference.album_playing_row_animation || 'enabled');
-    for (const [name, enabled] of Object.entries(normalizeSourceIndicators(preference.library_source_indicators))) {
-      rootElement.setAttribute?.('data-library-source-' + name.replaceAll('_', '-'), String(enabled));
+    const sourceIndicators = normalizeSourceIndicators(preference.library_source_indicators);
+    for (const name of librarySourceFields) {
+      rootElement.setAttribute?.('data-library-source-' + name.replaceAll('_', '-'), String(sourceIndicators[name]));
     }
+    rootElement.setAttribute?.('data-library-source-local-cover-badges', String(localCoverBadgesEnabled(sourceIndicators)));
     rootElement.setAttribute?.('data-alert-family', preference.alert_family || 'ember');
     if (preference.action_button_outlines === false) rootElement.setAttribute?.('data-action-button-outlines', 'off');
     else rootElement.removeAttribute?.('data-action-button-outlines');
@@ -646,7 +655,7 @@
       promoteAggregate(); draft.album_details_layout = layout; error = ''; notify();
     };
     const setLibrarySourceIndicator = (field, enabled) => {
-      if (!Object.hasOwn(sourceIndicatorDefaults(), field) || typeof enabled !== 'boolean') throw new TypeError('Invalid library source indicator.');
+      if ((!librarySourceFields.includes(field) && field !== 'local_cover_badges') || typeof enabled !== 'boolean') throw new TypeError('Invalid library source indicator.');
       const next = normalizeSourceIndicators({ ...(draft.library_source_indicators || sourceIndicatorDefaults()), [field]: enabled });
       if (editBlocked()) return;
       promoteAggregate();
@@ -992,7 +1001,7 @@
       ['stacked_bar', 'Stacked Bar', 'Identity and metadata use two header lines.'],
       ['editorial_canvas', 'Editorial Canvas', 'Art and large album identity lead the page.'],
     ];
-    return `<section class="appearance-background-editor appearance-album-page" aria-labelledby="appearance-album-page-title"><div class="appearance-section-heading"><div><h3 id="appearance-album-page-title">Album page</h3><p class="background-intro">Choose the Album Details composition and current-track motion.</p></div><span>Draft preview</span></div><div class="appearance-album-page__workspace"><section class="appearance-album-page__controls" aria-labelledby="appearance-album-layout-title"><div class="appearance-subsection-heading"><div><h4 id="appearance-album-layout-title">Album Details layout</h4><p class="background-help">Choose how the header, art, and album information are arranged.</p></div></div><div class="appearance-album-layout-grid">${layouts.map(([value, label, description]) => `<button class="appearance-album-layout-card" type="button" data-album-details-layout="${value}" aria-pressed="false"><span class="appearance-album-layout-card__diagram appearance-album-layout-card__diagram--${value}" aria-hidden="true"><i></i><b></b><em></em><u></u></span><strong>${label}</strong><small>${description}</small></button>`).join('')}</div><div class="appearance-album-motion"><div><strong>Currently playing animation</strong><p class="background-help">Use perimeter motion on the active track. Reduced motion keeps a static accent outline.</p></div><div class="appearance-segmented" role="group" aria-label="Currently playing animation"><button type="button" data-album-playing-row-animation="enabled" aria-pressed="false">On</button><button type="button" data-album-playing-row-animation="disabled" aria-pressed="false">Off</button></div></div><div class="appearance-subsection-heading"><div><h4>Library sources</h4><p class="background-help">Keep at least one source indicator enabled. Warning icons remain visible independently.</p></div></div>${[['card_colors', 'Color cards by library source'], ['hover_outline_colors', 'Color hover outlines by library source'], ['icons', 'Show library source icons']].map(([field, label]) => `<div class="appearance-album-motion"><strong>${label}</strong><div class="appearance-segmented" role="group" aria-label="${label}"><button type="button" data-library-source-indicator="${field}" aria-pressed="false">On</button></div></div>`).join('')}</section><section class="appearance-live-preview appearance-album-page__preview"><div class="appearance-preview-heading"><div><h4>Live preview</h4><p class="background-help">The state switch previews behavior; it is not saved.</p></div><div class="appearance-segmented" role="group" aria-label="Album preview state"><button type="button" data-album-preview-state="present" aria-pressed="true">Present</button><button type="button" data-album-preview-state="missing" aria-pressed="false">Missing</button></div></div><div class="appearance-album-preview" data-album-page-live-preview data-layout="classic_bar" data-preview-state="present"><header class="appearance-album-preview__bar"><div class="appearance-album-preview__identity"><strong><span>Transatlantic</span><i>•</i><span>SMPTe - The Roine Stolt Mixes</span><i>•</i><span>2003</span></strong><small><span>2003</span><i>•</i><span>ALBUM</span></small></div><span class="appearance-album-preview__type">ALBUM</span><div class="appearance-album-preview__actions"><button type="button" data-album-preview-file-action aria-label="Edit tags">${previewPencilIcon}</button><button type="button" data-album-preview-file-action aria-label="Open folder">${previewFolderIcon}</button><button type="button" aria-label="Close">${previewCloseIcon}</button></div></header><div class="appearance-album-preview__body"><div class="appearance-album-preview__art" aria-label="Missing album artwork"><span></span></div><div class="appearance-album-preview__content"><div class="appearance-album-preview__editorial-copy"><h5>SMPTe - The Roine Stolt Mixes</h5><p>Transatlantic <i>•</i> 2003 <i>•</i> ALBUM</p></div><div data-album-preview-present>${albumPreviewTableMarkup()}</div><div data-album-preview-missing hidden>${previewOnPageAlertMarkup()}</div></div></div></div></section></div><div class="background-request-error" data-background-request-error hidden></div><div class="background-actions"></div></section>`;
+    return `<section class="appearance-background-editor appearance-album-page" aria-labelledby="appearance-album-page-title"><div class="appearance-section-heading"><div><h3 id="appearance-album-page-title">Album page</h3><p class="background-intro">Choose the Album Details composition and current-track motion.</p></div><span>Draft preview</span></div><div class="appearance-album-page__workspace"><section class="appearance-album-page__controls" aria-labelledby="appearance-album-layout-title"><div class="appearance-subsection-heading"><div><h4 id="appearance-album-layout-title">Album Details layout</h4><p class="background-help">Choose how the header, art, and album information are arranged.</p></div></div><div class="appearance-album-layout-grid">${layouts.map(([value, label, description]) => `<button class="appearance-album-layout-card" type="button" data-album-details-layout="${value}" aria-pressed="false"><span class="appearance-album-layout-card__diagram appearance-album-layout-card__diagram--${value}" aria-hidden="true"><i></i><b></b><em></em><u></u></span><strong>${label}</strong><small>${description}</small></button>`).join('')}</div><div class="appearance-album-motion"><div><strong>Currently playing animation</strong><p class="background-help">Use perimeter motion on the active track. Reduced motion keeps a static accent outline.</p></div><div class="appearance-segmented" role="group" aria-label="Currently playing animation"><button type="button" data-album-playing-row-animation="enabled" aria-pressed="false">On</button><button type="button" data-album-playing-row-animation="disabled" aria-pressed="false">Off</button></div></div><div class="appearance-subsection-heading"><div><h4>Library sources</h4><p class="background-help">Keep at least one source indicator enabled. Warning icons remain visible independently.</p></div></div>${[['card_colors', 'Color cards by library source'], ['hover_outline_colors', 'Color hover outlines by library source'], ['icons', 'Show library source icons']].map(([field, label]) => `<div class="appearance-album-motion"><strong>${label}</strong><div class="appearance-segmented" role="group" aria-label="${label}"><button type="button" data-library-source-indicator="${field}" aria-pressed="false">On</button></div></div>`).join('')}<div class="appearance-subsection-heading"><div><h4>Covers</h4><p class="background-help">A cover downloaded from an online provider keeps that provider's badge.</p></div></div><div class="appearance-album-motion"><strong>Display provider badge for local covers</strong><div class="appearance-segmented" role="group" aria-label="Display provider badge for local covers"><button type="button" data-library-source-indicator="local_cover_badges" aria-pressed="false">On</button></div></div></section><section class="appearance-live-preview appearance-album-page__preview"><div class="appearance-preview-heading"><div><h4>Live preview</h4><p class="background-help">The state switch previews behavior; it is not saved.</p></div><div class="appearance-segmented" role="group" aria-label="Album preview state"><button type="button" data-album-preview-state="present" aria-pressed="true">Present</button><button type="button" data-album-preview-state="missing" aria-pressed="false">Missing</button></div></div><div class="appearance-album-preview" data-album-page-live-preview data-layout="classic_bar" data-preview-state="present"><header class="appearance-album-preview__bar"><div class="appearance-album-preview__identity"><strong><span>Transatlantic</span><i>•</i><span>SMPTe - The Roine Stolt Mixes</span><i>•</i><span>2003</span></strong><small><span>2003</span><i>•</i><span>ALBUM</span></small></div><span class="appearance-album-preview__type">ALBUM</span><div class="appearance-album-preview__actions"><button type="button" data-album-preview-file-action aria-label="Edit tags">${previewPencilIcon}</button><button type="button" data-album-preview-file-action aria-label="Open folder">${previewFolderIcon}</button><button type="button" aria-label="Close">${previewCloseIcon}</button></div></header><div class="appearance-album-preview__body"><div class="appearance-album-preview__art" aria-label="Missing album artwork"><span></span></div><div class="appearance-album-preview__content"><div class="appearance-album-preview__editorial-copy"><h5>SMPTe - The Roine Stolt Mixes</h5><p>Transatlantic <i>•</i> 2003 <i>•</i> ALBUM</p></div><div data-album-preview-present>${albumPreviewTableMarkup()}</div><div data-album-preview-missing hidden>${previewOnPageAlertMarkup()}</div></div></div></div></section></div><div class="background-request-error" data-background-request-error hidden></div><div class="background-actions"></div></section>`;
   }
   const defaultSelectionAccent = { enabled: true, color: '#34CA78' };
   const mutedInteractionColors = ['#35506B', '#526B8B', '#4F665D', '#737548', '#785568', '#855F4F', '#666B72'];
@@ -1362,10 +1371,12 @@
         editor.querySelectorAll('[data-album-playing-row-animation]').forEach(button => button.setAttribute('aria-pressed', String(button.getAttribute('data-album-playing-row-animation') === state.draft.album_playing_row_animation)));
         const indicators = state.draft.library_source_indicators || sourceIndicatorDefaults();
         editor.querySelectorAll('[data-library-source-indicator]').forEach(button => {
-          const field = button.getAttribute('data-library-source-indicator'), enabled = indicators[field];
+          const field = button.getAttribute('data-library-source-indicator');
+          const enabled = field === 'local_cover_badges' ? localCoverBadgesEnabled(indicators) : indicators[field];
           button.setAttribute('aria-pressed', String(enabled));
           button.textContent = enabled ? 'On' : 'Off';
-          const lastIndicator = enabled && Object.values(indicators).filter(Boolean).length === 1;
+          const lastIndicator = enabled && librarySourceFields.includes(field)
+            && librarySourceFields.filter(name => indicators[name]).length === 1;
           button.disabled = disabled || !state.canEdit || lastIndicator;
           button.title = lastIndicator ? 'Keep at least one source indicator enabled' : '';
         });
@@ -1392,7 +1403,8 @@
         else if (button.hasAttribute('data-album-playing-row-animation')) controller.setAlbumPlayingRowAnimation(button.getAttribute('data-album-playing-row-animation'));
         else if (button.hasAttribute('data-library-source-indicator')) {
           const field = button.getAttribute('data-library-source-indicator');
-          controller.setLibrarySourceIndicator(field, !controller.getState().draft.library_source_indicators[field]);
+          const indicators = controller.getState().draft.library_source_indicators || sourceIndicatorDefaults();
+          controller.setLibrarySourceIndicator(field, field === 'local_cover_badges' ? !localCoverBadgesEnabled(indicators) : !indicators[field]);
         }
         else if (button.hasAttribute('data-album-preview-state')) { previewState = button.getAttribute('data-album-preview-state'); sync(controller.getState()); }
       });

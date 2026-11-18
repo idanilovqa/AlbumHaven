@@ -75,3 +75,19 @@ test('an available rear cover remains selectable when the active saved slot is u
   assert.equal(context.browseTrackModalSelectedCover(1, { absolute: true }), true);
   assert.equal(context.getTrackModalSelectedCoverIndex(album), 1);
 });
+
+test('a downloaded local cover shows its provider badge unless the album page setting is off', () => {
+  // Owner 2026-11-17: album page setting "Display provider badge for local covers".
+  const { context } = loadRuntime();
+  let setting = null;
+  context.document = { documentElement: { getAttribute: name => (name === 'data-library-source-local-cover-badges' ? setting : null) } };
+  context.buildTrackModalCoverSourceBadge = source => `<badge>${source}</badge>`;
+
+  assert.equal(context.buildAlbumDetailsLocalCoverSourceBadge({ kind: 'local', source: 'discogs' }), '<badge>discogs</badge>');
+  setting = 'true';
+  assert.equal(context.buildAlbumDetailsLocalCoverSourceBadge({ kind: 'local', source: 'discogs' }), '<badge>discogs</badge>');
+  assert.equal(context.buildAlbumDetailsLocalCoverSourceBadge({ kind: 'local' }), '', 'an own file has no provider');
+  assert.equal(context.buildAlbumDetailsLocalCoverSourceBadge({ kind: 'remote', source: 'spotify' }), '');
+  setting = 'false';
+  assert.equal(context.buildAlbumDetailsLocalCoverSourceBadge({ kind: 'local', source: 'discogs' }), '');
+});

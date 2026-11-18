@@ -529,3 +529,21 @@ def test_panel_outline_rejects_invalid_color():
     from music_app.services.appearance_preferences_postgres import normalize_appearance_preferences
     with pytest.raises(ValueError):
         normalize_appearance_preferences(aggregate_write(interaction_overrides={**INTERACTION_OVERRIDES, "panel_outline": "red;"}))
+
+
+def test_album_page_local_cover_badge_choice_is_optional_and_outside_the_keep_one_rule():
+    # Owner 2026-11-17: "Display provider badge for local covers" is an album page setting. It is a fourth,
+    # optional key of library_source_indicators ("on" when absent), and turning it off never counts toward
+    # the rule that one of the three library-source choices stays enabled.
+    import pytest
+    from music_app.services.appearance_preferences_postgres import _source_indicators
+
+    three = {"card_colors": False, "hover_outline_colors": True, "icons": False}
+    assert _source_indicators(three) == three
+    assert _source_indicators({**three, "local_cover_badges": False}) == {**three, "local_cover_badges": False}
+    with pytest.raises(ValueError):
+        _source_indicators({"card_colors": False, "hover_outline_colors": False, "icons": False, "local_cover_badges": True})
+    with pytest.raises(ValueError):
+        _source_indicators({**three, "local_cover_badges": "yes"})
+    with pytest.raises(ValueError):
+        _source_indicators({**three, "unknown": True})

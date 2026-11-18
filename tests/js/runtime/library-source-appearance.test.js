@@ -59,3 +59,25 @@ test('custom device indicators do not overwrite the desktop draft and cancel res
   editor.cancel();
   assert.deepEqual(editor.getState().draft.library_source_indicators, defaults);
 });
+
+test('the album page local cover badge choice is on by default and saves only when changed', async () => {
+  // Owner 2026-11-17: "Display provider badge for local covers" is an album page setting.
+  const requests = [];
+  const editor = createController({ initial: initial(), request: async (method, value) => {
+    requests.push(value);
+    return { ...value, revision: 1, player_recent_sets: [] };
+  } });
+  const attrs = {};
+  const root = { style: { setProperty() {}, removeProperty() {} }, setAttribute: (name, value) => { attrs[name] = value; }, removeAttribute: name => { delete attrs[name]; } };
+  applyTheme({ ...initial(), library_source_indicators: defaults }, root);
+  assert.equal(attrs['data-library-source-local-cover-badges'], 'true');
+
+  // Turning it off is never blocked by the keep-one-enabled rule of the library-source choices.
+  editor.setLibrarySourceIndicator('hover_outline_colors', false);
+  editor.setLibrarySourceIndicator('local_cover_badges', false);
+  assert.equal(await editor.save(), true);
+  assert.deepEqual(requests[0].library_source_indicators, { ...defaults, hover_outline_colors: false, local_cover_badges: false });
+  applyTheme({ ...initial(), library_source_indicators: requests[0].library_source_indicators }, root);
+  assert.equal(attrs['data-library-source-local-cover-badges'], 'false');
+  assert.throws(() => editor.setLibrarySourceIndicator('local_cover_badges', 'no'), TypeError);
+});

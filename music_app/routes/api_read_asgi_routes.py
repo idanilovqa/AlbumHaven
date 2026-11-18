@@ -192,6 +192,27 @@ def _project_album_payload_for_request(
     )
 
 
+def _attach_local_cover_sources_for_request(request: Request, payload: object) -> object:
+    """The open album's downloaded covers carry their provider for the badge (owner 2026-11-17)."""
+    if not isinstance(payload, dict):
+        return payload
+    from music_app.services.local_cover_provenance import attach_local_cover_sources
+    from music_app.services.policy_asgi import allowed_actions_for_request
+
+    remote_read = allowed_actions_for_request(
+        request, ("library.covers.remote.read",),
+    ).as_payload().get("library.covers.remote.read") is True
+    try:
+        return attach_local_cover_sources(
+            _app_config(request), payload,
+            library_id=request.state.current_actor.current_library_id, remote_read_allowed=remote_read,
+        )
+    except Exception:
+        # A missing badge never blocks Album Details.
+        logging.getLogger(__name__).exception("Could not load the providers of the album's local covers.")
+        return payload
+
+
 def _project_non_album_tracks_for_request(request: Request, payload: object) -> object:
     actor = request.state.current_actor
     if is_current_library_owner(actor):
@@ -1372,6 +1393,10 @@ async def album_details(request: Request) -> JSONResponse:
         )
         await require_action("library.browse.read", refresh_actor=True)(request)
         payload = _project_album_payload_for_request(request, payload, include_duplicate_copy_review=True)
+        if isinstance(payload, dict) and any(
+            isinstance(slot, dict) and slot.get("kind") == "local" for slot in payload.get("selected_covers") or []
+        ):
+            payload = await run_in_threadpool(_attach_local_cover_sources_for_request, request, payload)
         return JSONResponse({"ok": True, "album": payload}, headers={"Cache-Control": "private, no-store"})
 
     _hydrate_cached_library_for_asgi(request)

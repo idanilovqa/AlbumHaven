@@ -2082,6 +2082,14 @@ function browseTrackModalSelectedCover(value, options = {}) {
   return true;
 }
 
+// A selected local cover that a save downloaded keeps its provider's badge, unless the album page setting
+// "Display provider badge for local covers" is off (owner 2026-11-17).
+function buildAlbumDetailsLocalCoverSourceBadge(slot) {
+  if (slot?.kind !== 'local' || !slot.source || typeof buildTrackModalCoverSourceBadge !== 'function') return '';
+  if (document.documentElement?.getAttribute?.('data-library-source-local-cover-badges') === 'false') return '';
+  return buildTrackModalCoverSourceBadge(slot.source);
+}
+
 function renderTrackModalRelease(album) {
   let els = getTrackModalElements();
   if (!els.overlay || !album) return;
@@ -2227,7 +2235,7 @@ function renderTrackModalRelease(album) {
     els.cover.innerHTML = `
       <div class="track-modal-cover-shell">
       ${coverPresentationHtml}
-      ${activeSelectedCover ? '' : coverSourceBadge}
+      ${activeSelectedCover ? buildAlbumDetailsLocalCoverSourceBadge(activeSelectedCover) : coverSourceBadge}
       </div>
       ${coverSourceMarkersHtml}
     `;

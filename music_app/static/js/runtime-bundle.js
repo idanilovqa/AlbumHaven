@@ -5304,6 +5304,9 @@ function resolveAlbumDetailsCoverSlots(album) {
   if (album?.selected_covers_loaded !== true || !Array.isArray(album.selected_covers)) return [];
   return album.selected_covers.slice(0, 3).map((slot) => ({
     selectionId: String(slot?.selectionId || slot?.selection_id || ''),
+    // A downloaded local cover's provider, for its badge (owner 2026-11-17).
+    ...(slot?.kind ? { kind: String(slot.kind) } : {}),
+    ...(slot?.source ? { source: String(slot.source) } : {}),
     imageUrl: String(slot?.imageUrl || slot?.image_url || ''),
     unavailable: slot?.unavailable === true || !String(slot?.imageUrl || slot?.image_url || ''),
   })).filter((slot) => slot.selectionId);
@@ -41679,6 +41682,14 @@ function browseTrackModalSelectedCover(value, options = {}) {
   return true;
 }
 
+// A selected local cover that a save downloaded keeps its provider's badge, unless the album page setting
+// "Display provider badge for local covers" is off (owner 2026-11-17).
+function buildAlbumDetailsLocalCoverSourceBadge(slot) {
+  if (slot?.kind !== 'local' || !slot.source || typeof buildTrackModalCoverSourceBadge !== 'function') return '';
+  if (document.documentElement?.getAttribute?.('data-library-source-local-cover-badges') === 'false') return '';
+  return buildTrackModalCoverSourceBadge(slot.source);
+}
+
 function renderTrackModalRelease(album) {
   let els = getTrackModalElements();
   if (!els.overlay || !album) return;
@@ -41824,7 +41835,7 @@ function renderTrackModalRelease(album) {
     els.cover.innerHTML = `
       <div class="track-modal-cover-shell">
       ${coverPresentationHtml}
-      ${activeSelectedCover ? '' : coverSourceBadge}
+      ${activeSelectedCover ? buildAlbumDetailsLocalCoverSourceBadge(activeSelectedCover) : coverSourceBadge}
       </div>
       ${coverSourceMarkersHtml}
     `;

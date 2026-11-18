@@ -92,6 +92,8 @@ def api(monkeypatch, tmp_path):
         return downloaded_image["bytes"], "image/jpeg"
     downloaded_image = {"bytes": None}
     monkeypatch.setattr(routes, "fetch_remote_cover_bytes", fetch)
+    # Recording a downloaded cover's provider is a database write; tests that care replace it.
+    monkeypatch.setattr(routes, "record_local_cover_provenance", lambda _config, **_kwargs: None)
     def persist(config, **kwargs):
         calls.append(("save", kwargs))
         result = {"selected_covers": [{"selection_id": "front", "kind": "local", "path": "/private/never-disclose.jpg"}],
@@ -287,9 +289,14 @@ def test_online_cover_is_downloaded_as_cover_jpg_keeping_the_previous_cover(api,
     (api.album_root / "cover.jpg").write_bytes(previous)
     api.downloaded_image["bytes"] = jpeg((0, 0, 200))
     save_choosing_downloads(api, monkeypatch)
+    recorded = []
+    monkeypatch.setattr(routes, "record_local_cover_provenance", lambda _config, **kwargs: recorded.append(kwargs))
     status, body = api.request({**BODY, "references": [online("apple-1")]})
     assert status == 200
     assert api.fetched == ["https://images.example/apple-1.jpg"]
+    # Owner 2026-11-17: the downloaded file keeps its provider, for the album page's local cover badge.
+    assert [(item["provenance"].keys() and list(item["provenance"]), item["provenance"][str(api.album_root / "cover.jpg")]["source"])
+            for item in recorded] == [([str(api.album_root / "cover.jpg")], "apple")]
     save = next(args for name, args in api.calls if name == "save")
     cover = api.album_root / "cover.jpg"
     assert save["downloads"] == {("apple-1", REMOTE_GENERATION): str(cover)}

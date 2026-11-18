@@ -47,11 +47,8 @@ function syncMobilePageShell() {
     const summary = document.getElementById('mobile-page-summary');
     summary.textContent = active.subtitle;
     if (active.loopCount) { const count = document.createElement('span'); count.className = 'mobile-loop-count'; count.textContent = active.loopCount; summary.appendChild(count); }
-    document.title = `${active.title} — Album Haven`;
-  } else if (albumHavenBaseDocumentTitle) {
-    // Owner 2026-11-17: the tab kept a closed page's title (an album or a collection) after navigating away.
-    document.title = albumHavenBaseDocumentTitle;
   }
+  syncAlbumHavenDocumentTitle();
   document.getElementById('mobile-settings-actions').hidden = active?.kind !== 'utilities';
   document.getElementById('mobile-settings-button').hidden = active?.kind !== 'utilities';
   syncMobileAlbumHeader();
@@ -707,9 +704,46 @@ function promoteVisibleMobileDialogs() {
   }
 }
 
+// Owner 2026-11-17: the browser tab names what is on screen and follows every navigation: the open page
+// (Cover Look Up, Album Details, Settings, a collection), else the gallery's artist or search, else the app.
+function currentAlbumHavenPageTitle() {
+  const active = usesMobilePageLayout() ? mobilePageState.pages.at(-1) : null;
+  if (active) return active.title;
+  const open = id => document.getElementById(id)?.hidden === false;
+  if (open('cover-lookup-modal')) return 'Cover Art Look Up';
+  if (open('track-modal')) {
+    const album = typeof getCurrentTrackModalAlbum === 'function' ? getCurrentTrackModalAlbum() : null;
+    return String(album?.display_name || album?.name || 'Album');
+  }
+  if (open('utility-modal')) return 'Settings';
+  if (open('non-album-modal')) return String(state.ui?.nonAlbumCollectionName || '').trim() || 'Loose Tracks';
+  const query = String(state.view?.query || '').trim();
+  if (query) return `Search: ${query}`;
+  return String(state.view?.selected_artist || '').trim();
+}
+
+function syncAlbumHavenDocumentTitle() {
+  if (typeof document === 'undefined') return;
+  const title = currentAlbumHavenPageTitle();
+  const next = title ? `${title} — Album Haven` : albumHavenBaseDocumentTitle;
+  if (next && document.title !== next) document.title = next;
+}
+
+// Desktop pages open and close by toggling `hidden`; one observer keeps the tab title in step with all of them.
+function installAlbumHavenDocumentTitleSync() {
+  if (typeof MutationObserver !== 'function') return;
+  const observer = new MutationObserver(() => syncAlbumHavenDocumentTitle());
+  ['cover-lookup-modal', 'track-modal', 'utility-modal', 'non-album-modal'].forEach((id) => {
+    const element = document.getElementById(id);
+    if (element) observer.observe(element, { attributes: true, attributeFilter: ['hidden'] });
+  });
+  syncAlbumHavenDocumentTitle();
+}
+
 function initMobileNavigation() {
   if (mobilePageState.initialized || !document.getElementById('mobile-navigation')) return;
   mobilePageState.initialized = true;
+  installAlbumHavenDocumentTitleSync();
   const form = document.getElementById('search-form');
   const submit = form?.querySelector('[data-search-submit]');
   if (submit) { submit.id = 'mobile-search-button'; submit.setAttribute('aria-controls', 'search-input'); }

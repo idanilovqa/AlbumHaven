@@ -552,6 +552,8 @@ function renderSidebar() {
   if (!el) return;
   // The Custom Collections button's search dot and tree follow the current search (owner 2026-11-17).
   if (typeof syncCustomCollectionSearchIndicator === 'function') void syncCustomCollectionSearchIndicator();
+  // The gallery's artist or search names the tab while no page is open (owner 2026-11-17).
+  if (typeof syncAlbumHavenDocumentTitle === 'function') syncAlbumHavenDocumentTitle();
   if (state.ui.libraryNavigationMode === 'custom-collections') {
     if (typeof customCollectionCatalogUrl === 'function' && typeof setLibraryNavigationMode === 'function'
         && el.dataset.customCollectionsSearch !== customCollectionCatalogUrl().search) {

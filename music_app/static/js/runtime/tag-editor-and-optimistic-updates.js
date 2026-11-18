@@ -2329,6 +2329,8 @@ function renderTrackModalRelease(album) {
     animateAlbumDetailsCoverShuffle(previousCoverStack, els.cover.querySelector?.('.album-details-cover-stack'), direction);
   }
   if (coverOnly) return;
+  // Moving to another album keeps Album Details open, so the tab title is renamed here too.
+  if (typeof syncAlbumHavenDocumentTitle === 'function') syncAlbumHavenDocumentTitle();
   const duplicateSources = albumMissing ? [] : getAlbumDuplicateSources(album);
   const duplicateSourceIndex = getTrackModalDuplicateSourceIndex(album, duplicateSources);
   const activeDuplicateSource = duplicateSources[duplicateSourceIndex] || null;

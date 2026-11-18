@@ -1029,6 +1029,8 @@ function openNonAlbumModal(options = {}) {
   state.ui.nonAlbumLibraryWide = libraryWide;
   state.ui.nonAlbumCollectionName = collectionName;
   const page = setNonAlbumPagePresentation(els.overlay, true);
+  // Switching collections keeps the page open, so the tab title is renamed here too.
+  if (typeof syncAlbumHavenDocumentTitle === 'function') syncAlbumHavenDocumentTitle();
   const hydrationPending = needsNonAlbumHydration({ libraryWide });
   const looseTracks = getVisibleNonAlbumTracks({ libraryWide, collectionName });
   // All Loose Tracks shows its total like a collection (owner 2026-11-16); before its rows load, the tree

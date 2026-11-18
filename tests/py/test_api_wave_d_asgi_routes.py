@@ -288,6 +288,53 @@ def test_indexed_cover_gallery_api_uses_validated_inventory_without_filesystem_r
         assert events.count("queue_context") == 1
 
 
+def test_cover_gallery_waits_for_the_first_listing_of_an_unlisted_folder(app, monkeypatch):
+    """Owner (2026-11-18): an album opened before its folder was listed showed "not listed yet", then asked again."""
+    from music_app.routes import api_wave_d_asgi_routes as routes
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    root = Path(app.config["MUSIC_DIR"]) / "Artist" / "Unlisted Album"
+    track = root / "song.mp3"
+    listing = [{"path": str(root / "front.jpg"), "filename": "front.jpg", "is_squareish": True,
+                "width": 600, "height": 600, "sha256": "b" * 64}]
+    reads = []
+    requested = []
+
+    def get(_root):
+        reads.append(_root)
+        # The worker publishes while the request waits.
+        return {"available": True, "complete": True, "candidates": listing} if len(reads) >= 3 else None
+
+    worker = SimpleNamespace(
+        repository=SimpleNamespace(root_for_tracks=lambda paths: root, get=get),
+        note_foreground_activity=lambda: None,
+        request=requested.append,
+        request_context=lambda paths: pytest.fail("a known folder needs no context request"),
+    )
+    monkeypatch.setattr(routes.AlbumCoverCandidateSnapshotRepository, "resolve_album_track_context",
+                        lambda _self, **_kwargs: {"album_id": 42, "album_key": "artist::unlisted album", "track_paths": [str(track)]},
+                        raising=False)
+    monkeypatch.setattr(routes.AlbumCoverCandidateSnapshotRepository, "resolve_album_id_for_track_paths",
+                        lambda _self, *, track_paths: 42)
+    monkeypatch.setattr(PostgresLibraryBrowseRepository, "build_cover_state_entries_by_paths", lambda *args: {})
+    monkeypatch.setattr(routes, "_UNLISTED_INVENTORY_POLL_SECONDS", 0.001)
+    app.config["_LOCAL_COVER_INVENTORY"] = worker
+    asgi_app = _make_wave_d_app(app)
+    asgi_app.state.local_cover_inventory = worker
+
+    status, _, body = _run_asgi_request(
+        asgi_app, "POST", "/utilities/cover-lookup/gallery",
+        json_body={"album": {"album_id": 42, "name": "Unlisted Album", "tracks": []}},
+    )
+
+    assert status == 200
+    payload = _decode_json(body)
+    assert payload["local_inventory_complete"] is True
+    assert [item["filename"] for item in payload["local_covers"]] == ["front.jpg"]
+    assert requested == [root]
+    assert len(reads) == 3
+
+
 class _FatalFlaskBridge:
     def __init__(self, reason: str = "route must not use Flask bridge"):
         self._reason = reason
@@ -3793,6 +3840,44 @@ def test_asgi_cover_lookup_add_remote_merges_existing_candidates_and_remote_imag
 
     assert failed_status == 502
     assert _decode_json(failed_body) == {"ok": False, "error": "Failed to load remote image"}
+
+
+def test_remote_card_preview_is_downscaled_and_cached_apart_from_the_original(app, monkeypatch):
+    import io
+
+    from PIL import Image
+
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+
+    original = io.BytesIO()
+    Image.new("RGB", (2400, 2400), (10, 120, 200)).save(original, "JPEG", quality=95)
+    fetches = []
+
+    def fetch(image_url, **_kwargs):
+        fetches.append(image_url)
+        return original.getvalue(), "image/jpeg"
+
+    monkeypatch.setattr(asgi_routes, "fetch_remote_cover_bytes", fetch)
+    asgi_app = _make_wave_d_app(app)
+    asgi_app.state.flask_app = _FatalFlaskBridge()
+    url = "https://images.example/apple-3000.jpg"
+
+    def get(**query):
+        return _run_asgi_request(asgi_app, "GET", "/utilities/cover-lookup/remote-image", query={"url": url, **query})
+
+    first_status, first_headers, first_body = get(size="480", key="candidate")
+    again_status, _again_headers, again_body = get(size="480", key="candidate")
+    full_status, _full_headers, full_body = get()
+    unsupported_status, _unsupported_headers, unsupported_body = get(size="4000")
+
+    assert (first_status, again_status, full_status, unsupported_status) == (200, 200, 200, 200)
+    assert first_headers["content-type"] == "image/jpeg"
+    with Image.open(io.BytesIO(first_body)) as preview:
+        assert preview.size == (480, 480)
+    assert again_body == first_body
+    # The lightbox keeps the original, remembered from the card's fetch; only the card edge is ever resized.
+    assert full_body == unsupported_body == original.getvalue()
+    assert fetches == [url]
 
 
 def test_remote_candidate_image_download_does_not_block_cover_lookup_api(app, monkeypatch):

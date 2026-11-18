@@ -3859,7 +3859,7 @@ class PostgresLibraryBrowseRepository:
         normalized_paths = _normalized_track_paths(track_paths)
         if not normalized_paths:
             return {}
-        with self._connect_to_database() as connection:
+        with self._browse_connection_context() as connection:
             rows = connection.execute(
                 _cover_state_rows_by_track_paths_sql(),
                 {"track_paths": sorted(normalized_paths)},
@@ -4554,7 +4554,8 @@ class PostgresLibraryBrowseRepository:
         }
 
     def _load_album_rows_by_track_paths(self, track_paths: set[str]) -> list[object]:
-        with self._connect_to_database() as connection:
+        # Cover Look Up runs this on every open; a fresh connection cost 150-350 ms, the query under 2 ms.
+        with self._browse_connection_context() as connection:
             cursor = connection.execute(
                 _album_rows_by_track_paths_sql(),
                 {"track_paths": sorted(track_paths)},

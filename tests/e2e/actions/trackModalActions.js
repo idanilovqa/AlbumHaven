@@ -461,12 +461,13 @@ export class TrackModalActions {
   }
 
   async readTrackCreditAt(index) {
-    const titleElement = this.trackModal.trackTitleAt(index);
-    const secondaryArtistElement = this.trackModal.secondaryArtistAt(index);
-    const fullTitle = String(await titleElement.textContent() || '').trim();
-    const secondaryArtist = await secondaryArtistElement.count()
-      ? String(await secondaryArtistElement.textContent() || '').trim()
-      : '';
+    // One read of the rendered title: separate title and credit queries could straddle a table re-render and
+    // see the new title with the old credit missing (title "Track 1feat. Partner", credit "").
+    // parity-check: allow-read-only-measurement-evaluate -- atomically read one rendered track title and its credit
+    const { fullTitle, secondaryArtist } = await this.trackModal.trackTitleAt(index).evaluate((title) => ({
+      fullTitle: String(title.textContent || '').trim(),
+      secondaryArtist: String(title.querySelector('.album-track-table__secondary')?.textContent || '').trim(),
+    }));
     const title = secondaryArtist && fullTitle.endsWith(secondaryArtist)
       ? fullTitle.slice(0, -secondaryArtist.length).trim()
       : fullTitle;

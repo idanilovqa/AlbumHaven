@@ -53,10 +53,12 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   }
   html, body { width: 100%; overflow-x: hidden; }
   .shell-layout { --app-bar-height: calc(56px + env(safe-area-inset-top, 0px)); grid-template-columns: minmax(0, 1fr); grid-template-rows: var(--app-bar-height) var(--mobile-navigation-height) minmax(0, 1fr); }
-  .shell-layout .app-bar { grid-row: 1; grid-template-columns: 40px 40px minmax(0, 1fr); grid-template-rows: 56px; height: var(--app-bar-height); min-height: var(--app-bar-height); padding: env(safe-area-inset-top, 0px) 12px 0; gap: 8px; }
-  .shell-layout .app-bar-brand { grid-column: 1; grid-row: 1; justify-self: start; margin: 0; }
+  /* Settings pages (admin, account) share the library app bar geometry: common buttons never move. */
+  :is(.shell-layout, .settings-host) .app-bar { grid-row: 1; grid-template-columns: 40px 40px minmax(0, 1fr); grid-template-rows: 56px; height: var(--app-bar-height); min-height: var(--app-bar-height); padding: env(safe-area-inset-top, 0px) 12px 0; gap: 8px; }
+  :is(.shell-layout, .settings-host) .app-bar-brand { grid-column: 1; grid-row: 1; justify-self: start; margin: 0; }
+  .settings-host .app-bar > .account-menu-component { grid-column: 3; grid-row: 1; justify-self: end; margin: 0; }
   .shell-layout .toolbar-right { grid-column: 3; grid-row: 1; justify-content: flex-end; gap: 4px; min-width: 0; }
-  .shell-layout .toolbar-right > .action-button, .shell-layout .toolbar-right [data-account-menu-trigger] { width: 40px; height: 40px; min-width: 40px; min-height: 40px; }
+  .shell-layout .toolbar-right > .action-button, :is(.shell-layout .toolbar-right, .settings-host .app-bar) [data-account-menu-trigger] { width: 40px; height: 40px; min-width: 40px; min-height: 40px; }
   .mobile-navigation { display: none; align-items: center; justify-content: flex-end; grid-row: 2; grid-column: 1; padding: 0 12px; min-width: 0; height: var(--mobile-navigation-height); }
 
   .app-bar--library #search-form { grid-column: 2; grid-row: 1; display: block; width: 40px; max-width: 100%; min-width: 0; padding: 0; margin: 0; transition: width 340ms cubic-bezier(.22, 1, .36, 1); }
@@ -655,9 +657,11 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   [data-gallery-bar-layout="mobile-primary"] .gallery-bar__context > .album-details-cover-source-markers {
     grid-column: text / end; grid-row: 3;
   }
+  /* Owner (2026-11-18): actions of any height (40px icons, a 34px Add user) share the title's centerline:
+     the slot is exactly one title line tall and centres its overflowing buttons on it. */
   [data-gallery-bar-layout="mobile-primary"] > .gallery-bar__actions {
     grid-column: actions; grid-row: 1; justify-self: end; align-self: start;
-    margin: calc((var(--gallery-bar-title-line, 24px) - 40px) / 2) 0;
+    block-size: var(--gallery-bar-title-line, 24px); align-items: center; overflow: visible; margin: 0;
   }
   /* Non-artist contexts may wrap. Artist headers stay two lines and move controls to row two first. */
   [data-gallery-bar-instance="gallery"][data-gallery-bar-layout="mobile-primary"] .gallery-bar__title { grid-row: 1; align-items: center; }
@@ -666,13 +670,15 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   /* Owner (11-09): the 40px buttons sit on the 24px title line without making it taller, so the count follows the
      title as closely as on web. */
   /* Owner (MOBILE-SETTINGS-HEADER 3): the buttons' top edge stays inside the header surface. */
-  [data-gallery-bar-instance="gallery"][data-gallery-bar-layout="mobile-primary"]:not(.is-name-wrapping):not(.is-controls-below) > .gallery-bar__actions { grid-row: 1; margin-block: -4px -12px; }
+  [data-gallery-bar-instance="gallery"][data-gallery-bar-layout="mobile-primary"]:not(.is-name-wrapping):not(.is-controls-below) > .gallery-bar__actions { grid-row: 1; margin-block: 4px -4px; }
   [data-gallery-bar-instance="gallery"][data-gallery-bar-layout="mobile-primary"].is-name-wrapping .gallery-bar__title > [data-gallery-context-name] { white-space: normal; overflow: visible; overflow-wrap: anywhere; }
   [data-gallery-bar-instance="gallery"][data-gallery-context-kind="artist"] { grid-template-rows: 24px auto; }
   [data-gallery-bar-instance="gallery"][data-gallery-context-kind="artist"] .gallery-bar__artist-metadata { display: none; }
   [data-gallery-bar-instance="gallery"][data-gallery-context-kind="artist"] .gallery-bar__artist-mobile-summary {
     /* Owner (MOBILE-SETTINGS-HEADER 2, 6, 7): one line close under the name; genres that do not fit are dropped. */
-    display: flex; grid-column: text / end; grid-row: 2; align-items: center; flex-wrap: nowrap; gap: 6px; min-width: 0;
+    /* Owner (2026-11-18): labels stop before the title-line buttons; they never run underneath them. */
+    display: flex; grid-column: text / actions; grid-row: 2; align-items: center; flex-wrap: nowrap; gap: 6px; min-width: 0;
+    margin-inline-end: 8px;
     margin-top: -4px; color: var(--muted); font-size: 12px; line-height: 20px; white-space: nowrap; overflow: hidden;
   }
   [data-gallery-bar-instance="gallery"][data-gallery-context-kind="artist"] .gallery-bar__artist-mobile-summary .gallery-bar__artist-genres { display: contents; }
@@ -680,7 +686,9 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   [data-gallery-bar-instance="gallery"][data-gallery-context-kind="artist"] .gallery-bar__artist-genre::before { display: none; }
   [data-gallery-bar-instance="gallery"][data-gallery-context-kind="artist"].is-controls-below { grid-template-rows: 24px 40px auto; }
   [data-gallery-bar-instance="gallery"][data-gallery-context-kind="artist"].is-controls-below > .gallery-bar__actions { grid-row: 2; margin: 0; }
-  [data-gallery-bar-instance="gallery"][data-gallery-context-kind="artist"].is-controls-below .gallery-bar__artist-mobile-summary { grid-row: 3; padding-top: 0; }
+  [data-gallery-bar-instance="gallery"][data-gallery-context-kind="artist"].is-controls-below .gallery-bar__artist-mobile-summary { grid-column: text / end; grid-row: 3; padding-top: 0; margin-inline-end: 0; }
+  /* Owner (2026-11-18): the country label keeps its full width; genres never overlap it. */
+  [data-gallery-bar-instance="gallery"][data-gallery-context-kind="artist"] .gallery-bar__artist-mobile-summary .gallery-bar__artist-country { flex: 0 0 auto; }
   :root #mobile-library-button {
     border: 0 !important; background: transparent !important; box-shadow: none !important;
     color: inherit;

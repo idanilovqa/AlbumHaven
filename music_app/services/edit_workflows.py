@@ -60,6 +60,19 @@ _ALLOWED_TAG_EDIT_FIELDS = {
 }
 
 
+def _request_loaded_entries(file_cache: Mapping[str, JsonDict]) -> FileCache:
+    """The entries a request loaded over the live cache: a request-scoped state
+    overlays the selected albums' inventory as the front maps of a ChainMap
+    whose last map is the live cache. The live cache itself is never walked."""
+    if not isinstance(file_cache, ChainMap):
+        return {}
+    *overlays, live = file_cache.maps
+    loaded = _request_loaded_entries(live)
+    for overlay in reversed(overlays):
+        loaded.update(overlay)
+    return loaded
+
+
 def _album_log_context(album: JsonDict) -> dict[str, object]:
     return {
         "artist": str(album.get("album_artist") or ""),
@@ -893,8 +906,10 @@ def _handle_edit_tags_request_after_reservation(
             task_id=task_id,
             config=config,
             logger=logger,
-            # The finalizer reads only the changed paths' entries.
-            updated_file_cache=dict(updated_entries),
+            # The changed entries over the inventory this request loaded for the
+            # selected albums: a blank-Album edit weighs those siblings as well
+            # as the live cache's (read by the finalizer).
+            updated_file_cache={**_request_loaded_entries(file_cache), **updated_entries},
             previous_file_cache={path: dict(file_cache[path]) for path in changed_paths},
             changed_paths=set(changed_paths),
             requested_track_paths=set(requested_track_paths),

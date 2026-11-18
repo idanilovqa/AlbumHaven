@@ -3722,7 +3722,6 @@ function startStatusIndicatorImmediately(overrides = {}) {
 function updateStatusIndicator(data) {
   const normalizedStatus = applyStatusPayload(data);
   if (typeof refreshGalleryArtistMusicBrainzStatus === 'function') void refreshGalleryArtistMusicBrainzStatus();
-  if (typeof refreshRomanizedArtistNames === 'function') void refreshRomanizedArtistNames();
   if (typeof refreshMusicBrainzLookupNotifications === 'function') void refreshMusicBrainzLookupNotifications();
   const presentationSignature = stableStatusPresentationSignature(normalizedStatus);
   if (presentationSignature === lastStatusPresentationSignature) return;
@@ -4953,6 +4952,10 @@ function refreshGalleryArtistMusicBrainzStatus({ force = false } = {}) {
           JSON.stringify(previous.get(key) || null) !== JSON.stringify(next.get(key) || null)
         )))
         : new Set();
+      // A match that changed after the first read can bring a romanized name or split label.
+      if (galleryArtistMusicBrainzStatus.loadedAt > 0 && typeof refreshRomanizedArtistNames === 'function') {
+        void refreshRomanizedArtistNames();
+      }
       galleryArtistMusicBrainzStatus.signature = signature;
       galleryArtistMusicBrainzStatus.byArtist = next;
       galleryArtistMusicBrainzStatus.pending = [...next.values()].some((value) => value.state === 'pending');
@@ -4994,8 +4997,9 @@ function refreshGalleryArtistMusicBrainzStatus({ force = false } = {}) {
   return galleryArtistMusicBrainzStatus.promise;
 }
 
-// Romanized artist names change only when MusicBrainz matches an artist, so the status
-// poll asks for them at most every ten minutes; a change redraws the tree and the gallery.
+// Romanized artist names change only when MusicBrainz matches an artist: the gallery loads
+// them at start, and a changed artist status asks again, at most every ten minutes. A
+// change redraws the tree and the gallery.
 const ROMANIZED_ARTIST_NAMES_REFRESH_MS = 600000;
 const romanizedArtistNamesLoad = { loadedAt: 0, signature: '{}{}', promise: null };
 
@@ -8468,6 +8472,8 @@ function initGalleryMain() {
   const recentSearch = document.getElementById('recent-search-popover');
   if (recentSearch) recentSearch.dataset.anchoredSurface = 'search-suggestions';
   updateGalleryMainChrome();
+  // Romanized names and split qualifiers load once here; a changed artist status reloads them.
+  if (typeof refreshRomanizedArtistNames === 'function') void refreshRomanizedArtistNames();
   // The page renders unsearched browsing first; a Series view URL (reload, shared link)
   // then opens its series.
   const locationState = typeof parseBrowserUrlState === 'function' ? parseBrowserUrlState(window.location.href) : {};

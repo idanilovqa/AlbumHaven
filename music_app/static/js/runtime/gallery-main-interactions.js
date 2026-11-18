@@ -1285,6 +1285,8 @@ function initGalleryMain() {
   const recentSearch = document.getElementById('recent-search-popover');
   if (recentSearch) recentSearch.dataset.anchoredSurface = 'search-suggestions';
   updateGalleryMainChrome();
+  // Romanized names and split qualifiers load once here; a changed artist status reloads them.
+  if (typeof refreshRomanizedArtistNames === 'function') void refreshRomanizedArtistNames();
   // The page renders unsearched browsing first; a Series view URL (reload, shared link)
   // then opens its series.
   const locationState = typeof parseBrowserUrlState === 'function' ? parseBrowserUrlState(window.location.href) : {};

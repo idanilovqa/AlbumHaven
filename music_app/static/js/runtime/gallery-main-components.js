@@ -147,6 +147,10 @@ function refreshGalleryArtistMusicBrainzStatus({ force = false } = {}) {
           JSON.stringify(previous.get(key) || null) !== JSON.stringify(next.get(key) || null)
         )))
         : new Set();
+      // A match that changed after the first read can bring a romanized name or split label.
+      if (galleryArtistMusicBrainzStatus.loadedAt > 0 && typeof refreshRomanizedArtistNames === 'function') {
+        void refreshRomanizedArtistNames();
+      }
       galleryArtistMusicBrainzStatus.signature = signature;
       galleryArtistMusicBrainzStatus.byArtist = next;
       galleryArtistMusicBrainzStatus.pending = [...next.values()].some((value) => value.state === 'pending');
@@ -188,8 +192,9 @@ function refreshGalleryArtistMusicBrainzStatus({ force = false } = {}) {
   return galleryArtistMusicBrainzStatus.promise;
 }
 
-// Romanized artist names change only when MusicBrainz matches an artist, so the status
-// poll asks for them at most every ten minutes; a change redraws the tree and the gallery.
+// Romanized artist names change only when MusicBrainz matches an artist: the gallery loads
+// them at start, and a changed artist status asks again, at most every ten minutes. A
+// change redraws the tree and the gallery.
 const ROMANIZED_ARTIST_NAMES_REFRESH_MS = 600000;
 const romanizedArtistNamesLoad = { loadedAt: 0, signature: '{}{}', promise: null };
 

@@ -456,6 +456,26 @@ test('romanized names load once per ten minutes and redraw the tree and gallery 
   assert.equal(calls.length, 5);
 });
 
+// Main's status-poll budget: an unchanged poll fetches nothing more. Only an artist status that
+// changed after the first read (a new match) asks for romanized names again.
+test('a changed artist status after the first read refreshes romanized names; the first read does not', async () => {
+  const context = loadComponents();
+  const urls = [];
+  let artists = [{ local_artist_name: 'Amarok', gallery_artist: 'Amarok', match_state: 'pending' }];
+  context.state = { status: { allowed_actions: { 'catalogue.enrichment.request': true } } };
+  context.fetch = async (url) => {
+    urls.push(url);
+    return { ok: true, headers: { get: () => '' }, json: async () => (url.includes('romanized') ? { names: {} } : { artists }) };
+  };
+  await context.refreshGalleryArtistMusicBrainzStatus({ force: true });
+  assert.deepEqual(urls, ['/api/musicbrainz/artists/status']);
+  artists = [];
+  await context.refreshGalleryArtistMusicBrainzStatus({ force: true });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(urls, ['/api/musicbrainz/artists/status', '/api/musicbrainz/artists/status',
+    '/api/musicbrainz/artists/romanized-names']);
+});
+
 test('album details carry the romanized artist name as hover text on desktop and a line on phones (J3)', () => {
   const context = loadComponents();
   for (const layout of ['classic_bar', 'stacked_bar', 'editorial_canvas']) {

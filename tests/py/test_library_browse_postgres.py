@@ -11092,6 +11092,7 @@ def test_postgres_album_payloads_by_track_paths_applies_separate_release_split_t
     assert "scan_cache,file_entry" in str(executed[0])
     assert payload == [
         {
+            "album_id": 501,
             "key": "split artist::split album::year::1999",
             "album_ref": "split artist::split album::year::1999",
             "_persisted_album_key": "split artist::split album",
@@ -11260,6 +11261,7 @@ def test_postgres_album_payloads_by_track_paths_excludes_exception_track_and_kee
 
     assert payload == [
         {
+            "album_id": 601,
             "key": "exception-artist-exception-album",
             "album_ref": "exception-artist-exception-album",
             "_persisted_album_key": "exception-artist-exception-album",

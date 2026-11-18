@@ -344,7 +344,6 @@ function startStatusIndicatorImmediately(overrides = {}) {
 function updateStatusIndicator(data) {
   const normalizedStatus = applyStatusPayload(data);
   if (typeof refreshGalleryArtistMusicBrainzStatus === 'function') void refreshGalleryArtistMusicBrainzStatus();
-  if (typeof refreshRomanizedArtistNames === 'function') void refreshRomanizedArtistNames();
   if (typeof refreshMusicBrainzLookupNotifications === 'function') void refreshMusicBrainzLookupNotifications();
   const presentationSignature = stableStatusPresentationSignature(normalizedStatus);
   if (presentationSignature === lastStatusPresentationSignature) return;

@@ -7981,6 +7981,8 @@ def _selected_artist_album_payloads(
             if not isinstance(artists, list):
                 artists = [artist_display] if artist_display else []
             album = {
+                # The card's own release: a shared key alone can name several (FTC-ALBUM-DETAILS-029).
+                "album_id": persisted_album_id,
                 "key": album_key,
                 "album_ref": album_key,
                 "_persisted_album_key": persisted_album_key,

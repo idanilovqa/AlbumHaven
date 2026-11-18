@@ -509,8 +509,12 @@ def test_native_scan_invalidation_recovers_root_snapshot_publication(gallery_inv
     if fail_first:
         with pytest.raises(RuntimeError, match="temporary relation repair failure"):
             refreshes[0].result(timeout=10)
+        # Keep last families: the scopes published before the failed relation
+        # rebuild, so the watcher-found artist already shows, ungrouped.
         with isolatedPostgres._connect(fixture.runtime_url) as connection:
-            assert gallery.load_gallery_projection_page(connection, fixture.view_state, {}) is None
+            page = gallery.load_gallery_projection_page(connection, fixture.view_state, {})
+        assert page is not None
+        assert "name:new artist" in {row["artist_id"] for row in page[0]}
         assert repository._load_relation_alias_maps().get("projection_stale_reason")
         deadline = monotonic() + 5
         identity = (fixture.config["ALBUM_HAVEN_APP_DATABASE_URL"], "refresh")
@@ -540,7 +544,7 @@ def test_relation_refresh_and_targeted_publication_use_consistent_lock_order(gal
     fixture.seed(fixture.first, fixture.second, added)
     concurrent = fixture.entry("Concurrent/Fourth/four.flac", artist="Concurrent", album="Fourth")
     built, publish, revision_locked = Event(), Event(), Event()
-    release_target, target_family_attempt = Event(), Event()
+    release_target, target_family_write = Event(), Event()
     build_views = relations.build_relation_views_from_postgres_rows
     replace_families = relations.replace_artist_family_projection_in_transaction
 
@@ -553,7 +557,6 @@ def test_relation_refresh_and_targeted_publication_use_consistent_lock_order(gal
     def coordinate_family_publication(*args, **kwargs):
         result = replace_families(*args, **kwargs)
         release_target.set()
-        assert target_family_attempt.wait(10)
         return result
 
     class Connection:
@@ -578,7 +581,7 @@ def test_relation_refresh_and_targeted_publication_use_consistent_lock_order(gal
                 # taking family rows that the owner still needs to replace.
                 release_target.set()
             if self.targeted and "insert into library.local_artist_family_links" in statement.lower():
-                target_family_attempt.set()
+                target_family_write.set()
             result = self.connection.execute(query, params)
             if self.targeted and statement == persistence._increment_inventory_mutation_revision_sql():
                 revision_locked.set()
@@ -614,8 +617,8 @@ def test_relation_refresh_and_targeted_publication_use_consistent_lock_order(gal
         finally:
             publish.set()
             release_target.set()
-            target_family_attempt.set()
-    # The watcher publication leaves its relations to the queued background refresh.
+    # The watcher publication leaves family rows to the queued background refresh.
+    assert not target_family_write.is_set()
     relations.ensure_relation_projection_ready(fixture.config, connect=isolatedPostgres._connect)
     repository = browse.PostgresLibraryBrowseRepository(fixture.config, connect=isolatedPostgres._connect)
     aliases = repository._load_relation_alias_maps()

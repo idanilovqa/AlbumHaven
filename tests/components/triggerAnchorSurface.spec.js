@@ -191,7 +191,15 @@ async function readConnectedOutline(page, anchor, surface) {
       if (x >= Math.floor(trigger.left - 1) && x <= Math.ceil(trigger.right + 1)) continue;
       if (![pixel(x, topY - 1), pixel(x, topY), pixel(x, topY + 1)].some(differsFromFill)) topGaps.push(x);
     }
-    return { connectorGaps, connectorAccentGaps, topGaps };
+    const topLineSizes = getComputedStyle(document.querySelector(surfaceSelector), '::after').backgroundSize
+      .split(',').map(layer => Number.parseFloat(layer.trim()));
+    return {
+      connectorGaps,
+      connectorAccentGaps,
+      topGaps,
+      topLineSideWidths: { left: topLineSizes[1], right: topLineSizes[2] },
+      triggerOffsets: { left: trigger.left - panel.left, right: panel.right - trigger.right },
+    };
   }, {
     base64: screenshot.toString('base64'),
     anchorSelector: await anchor.evaluate(element => {
@@ -650,6 +658,10 @@ for (const name of [
     expect(outline.connectorGaps, 'trigger outline reaches the panel without a detached fragment').toEqual([]);
     expect(outline.connectorAccentGaps, 'the connected trigger-to-panel outline stays blue').toEqual([]);
     expect(outline.topGaps, 'panel top edge is continuous outside the open trigger').toEqual([]);
+    expect(outline.topLineSideWidths.left, 'left panel line stops at the trigger corner')
+      .toBeLessThanOrEqual(outline.triggerOffsets.left + 0.01);
+    expect(outline.topLineSideWidths.right, 'right panel line stops at the trigger corner')
+      .toBeLessThanOrEqual(outline.triggerOffsets.right + 0.01);
     await expect(page).toHaveScreenshot(`gallery-${name.toLowerCase().replaceAll(' ', '-')}-anchor.png`, {
       animations: 'disabled',
       clip: { x: 48, y: 0, width: 392, height: 240 },

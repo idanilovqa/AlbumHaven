@@ -497,22 +497,7 @@
   gap: 12px;
   padding: 32px 20px;
 }
-.gallery-bar--scan .gallery-bar__context {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-}
-.library-scan-gallery-copy {
-  min-width: 0;
-}
 .gallery-bar--scan .library-loader-back-button {
-  position: static;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  min-height: 34px;
-  padding: 0;
   border: 0;
   background: transparent;
   color: var(--text);

@@ -154,7 +154,7 @@ function handleGalleryBootstrapClick(event) {
     }
 
     if (action === 'edit-tags') {
-      if (album?.allowed_actions?.['library.files.edit_tags']) {
+      if (canEditAlbumTags(album)) {
         openTagEditor(album, { tracksMode: 'all' });
       }
       return;
@@ -1649,14 +1649,8 @@ function handleGalleryBootstrapSearchSubmit(event) {
   }
   const input = document.getElementById('search-input');
   const nextQuery = input?.value || '';
-  // On phones an empty search is the way out of a search: it goes home exactly as the logo does,
-  // clearing the query and the artist the search selected.
-  const libraryHome = document?.querySelector?.('.app-bar-brand[data-library-home="1"]');
-  if (!String(nextQuery).trim() && libraryHome
-      && typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) {
-    libraryHome.click();
-    return;
-  }
+  // Owner (2026-11-18): an empty search clears the query on phones exactly as on web: the full artist
+  // tree returns with the selected artist kept. Home stays the logo's job.
   applyImmediateExactSearchArtistSelection(nextQuery);
   if (String(nextQuery).trim()) revealArtistTreeForSearch();
   else clearMobileSearchResultsMarker();

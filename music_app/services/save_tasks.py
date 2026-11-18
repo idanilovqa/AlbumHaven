@@ -12,6 +12,7 @@ from concurrent.futures import Future
 from contextlib import nullcontext
 from datetime import datetime, timezone
 import os
+from functools import lru_cache
 from pathlib import Path
 from threading import Event, Lock
 from time import perf_counter
@@ -315,27 +316,33 @@ def _mark_structurally_inherited_cover_entries(
     updated_file_entries: dict[str, JsonDict],
     changed_paths: set[str],
 ) -> dict[str, JsonDict]:
-    def cover_identity(entry: object) -> tuple[str, str, str] | None:
-        if not isinstance(entry, dict):
-            return None
-        cover_path = str(entry.get("cover_path") or "").strip()
-        if not cover_path:
+    def album_identity(entry: object) -> tuple[str, str] | None:
+        if not isinstance(entry, dict) or not str(entry.get("cover_path") or "").strip():
             return None
         return (
             " ".join(str(entry.get("album_artist") or "").casefold().split()),
             " ".join(str(entry.get("album") or "").casefold().split()),
-            os.path.normcase(str(Path(cover_path).resolve(strict=False))),
         )
 
+    @lru_cache(maxsize=None)
+    def resolved_cover(cover_path: str) -> str:
+        return os.path.normcase(str(Path(cover_path).resolve(strict=False)))
+
+    def cover_identity(entry: dict) -> tuple[str, str, str]:
+        return (*album_identity(entry), resolved_cover(str(entry["cover_path"]).strip()))
+
     inherited_identities = {
-        identity
+        cover_identity(entry)
         for path in changed_paths
         for entries in (previous_file_entries, updated_file_entries)
-        if (identity := cover_identity(entries.get(path))) is not None
+        if album_identity(entry := entries.get(path)) is not None
     }
+    inherited_albums = {identity[:2] for identity in inherited_identities}
     marked_cache = dict(file_cache)
     for path, entry in file_cache.items():
-        if cover_identity(entry) not in inherited_identities:
+        # Owner (11-17): resolving every library file's cover path on the (network) filesystem made a
+        # 4-file save take minutes. Only files of the edited albums can match, so only they are resolved.
+        if album_identity(entry) not in inherited_albums or cover_identity(entry) not in inherited_identities:
             continue
         marked_entry = dict(entry)
         marked_entry["cover_inherited_from_structural_edit"] = True

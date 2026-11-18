@@ -249,3 +249,36 @@ def test_intent_lease_preparation_failure_closes_owned_session():
         lease.prepare_intent(library_root_identity="root", changes=changes())
     assert connection.events[-1] == "close"
     assert "pg_advisory_unlock" in connection.calls[-1][0]
+
+
+SAVE_ID = "8b1f6a52-3c4d-4e5f-9a0b-1c2d3e4f5a6b"
+
+
+def test_intent_lease_uses_the_pages_save_id_so_a_resent_save_is_recognised():
+    """Owner (2026-11-17): a save the page got no answer for is kept and sent again with the same id."""
+    connection = LeaseConnection([FakeCursor(), FakeCursor(row={"id": SAVE_ID}), FakeCursor()])
+    lease = lease_repository(connection).intent_lease(SAVE_ID)
+    assert lease.prepare_intent(library_root_identity="root", changes=changes()) == SAVE_ID
+    assert connection.calls[1][1]["intent_id"] == SAVE_ID
+    assert "on conflict (id) do nothing" in connection.calls[1][0]
+    lease.release()
+
+
+def test_a_resent_save_the_server_already_has_writes_nothing():
+    from music_app.services.tag_edit_intents_postgres import DuplicateTagEditRequest
+
+    connection = LeaseConnection([FakeCursor(), FakeCursor(row=None), FakeCursor()])
+    lease = lease_repository(connection).intent_lease(SAVE_ID)
+    with pytest.raises(DuplicateTagEditRequest):
+        lease.prepare_intent(library_root_identity="root", changes=changes())
+    assert "pg_advisory_unlock" in connection.calls[-1][0]
+    assert connection.events[-1] == "close"
+
+
+def test_save_status_reads_the_journal_and_ignores_ids_that_are_not_uuids():
+    connection = FakeConnection([FakeCursor(row={"status": "completed"}), FakeCursor(row=None)])
+    repository = repository_for(connection)
+    assert repository.request_status(SAVE_ID) == "completed"
+    assert repository.request_status(SAVE_ID) is None
+    assert repository.request_status("not-a-uuid") is None
+    assert len(connection.calls) == 2

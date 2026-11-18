@@ -371,6 +371,16 @@ function buildCoverLookupLocalSummaryCards(_checkpoints, metricsPayload) {
       value: `${Math.round(Number(metricsPayload?.saveAcceptedMs || 0))} ms`,
       note: 'Save action to accepted response and closed modal',
     },
+    {
+      label: 'Local Cards Shown',
+      value: `${Math.round(Number(metricsPayload?.localCardsShownMs || 0))} ms`,
+      note: 'Cover Lookup action to every LOCAL card, or the empty state',
+    },
+    {
+      label: 'Reopen Cards Shown',
+      value: `${Math.round(Number(metricsPayload?.reopenAllCardsShownMs || 0))} ms`,
+      note: 'Reopening after Save to every LOCAL and REMOTE card',
+    },
   ];
 }
 
@@ -1146,6 +1156,8 @@ export const test = base.extend({
         'cover-lookup.candidateReadyMs',
         'cover-lookup.candidateSelectionMs',
         'cover-lookup.saveAcceptedMs',
+        'cover-lookup.localCardsShownMs',
+        'cover-lookup.reopenAllCardsShownMs',
       ],
     });
   },

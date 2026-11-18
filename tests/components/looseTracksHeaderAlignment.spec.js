@@ -14,8 +14,9 @@ async function mountHeaders(page, width) {
   await page.setContent(`
     <main class="shell-main-surface">
       <header id="gallery" class="gallery-bar" data-gallery-bar-instance="gallery" data-gallery-bar-layout="mobile-primary">
+        <button id="mobile-library-button" class="action-button mobile-bar-action">Menu</button>
         <div class="gallery-bar__context">
-          <div class="gallery-bar__title"><button id="mobile-library-button" class="action-button mobile-bar-action">Menu</button><span>ДДТ family</span></div>
+          <div class="gallery-bar__title"><span>ДДТ family</span></div>
           <span class="gallery-bar__summary">6 artists · 68 albums</span>
         </div>
       </header>

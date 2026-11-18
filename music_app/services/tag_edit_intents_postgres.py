@@ -20,6 +20,18 @@ _UNFINISHED_STATUSES = frozenset({"prepared", "files_verified", "recovery_failed
 _TERMINAL_STATUSES = frozenset({"completed", "rolled_back", "reconciled_external"})
 
 
+class DuplicateTagEditRequest(RuntimeError):
+    """The page resent a save the server already received (same client request id)."""
+
+
+def normalize_client_request_id(value: object) -> str:
+    """A page-made save id is a UUID; anything else is ignored rather than trusted."""
+    try:
+        return str(uuid.UUID(str(value or "").strip()))
+    except ValueError:
+        return ""
+
+
 class PostgresTagEditIntentRepository:
     """Durable journal for Edit Tags operations that cross file and DB boundaries."""
 
@@ -32,9 +44,24 @@ class PostgresTagEditIntentRepository:
         self._database_url = str(config.get(_APP_DATABASE_URL_KEY) or "").strip()
         self._connect = connect or _connect
 
-    def intent_lease(self):
-        """Own a journal session until the edit's background finalizer releases it."""
-        return _TagEditIntentLease(self)
+    def intent_lease(self, request_id: str = ""):
+        """Own a journal session until the edit's background finalizer releases it.
+
+        ``request_id`` is the page's id for this save; it becomes the intent id so a resent save is
+        recognised (owner, 2026-11-17: a save without a server answer is kept and sent again)."""
+        return _TagEditIntentLease(self, request_id)
+
+    def request_status(self, request_id: str) -> str | None:
+        """The journal status of a page's save, or None when the server never received it."""
+        normalized = normalize_client_request_id(request_id)
+        if not normalized:
+            return None
+        with self._connect_to_database() as connection:
+            row = _first_row(connection.execute(
+                "select status from library.tag_edit_intents where id = %(intent_id)s::uuid",
+                {"intent_id": normalized},
+            ))
+        return str(_row_mapping(row).get("status") or "") or None if row is not None else None
 
     @contextmanager
     def claim_unfinished_intent(self, intent_id: str, *, library_root_identity: str):
@@ -234,8 +261,9 @@ class _FallbackJsonb:
 class _TagEditIntentLease:
     """A dedicated session lock; no transaction stays open during media writes."""
 
-    def __init__(self, repository):
+    def __init__(self, repository, request_id: str = ""):
         self._repository = repository
+        self._request_id = normalize_client_request_id(request_id)
         self._stack = ExitStack()
         self._connection = None
         self._intent_id = ""
@@ -262,13 +290,16 @@ class _TagEditIntentLease:
         if not identity:
             raise ValueError("Tag edit intent requires a library root identity.")
         try:
-            self._acquire(str(uuid.uuid4()), wait=True)
+            self._acquire(self._request_id or str(uuid.uuid4()), wait=True)
             with _transaction(self._connection):
-                self._connection.execute(_prepare_intent_sql(), {
+                inserted = _first_row(self._connection.execute(_prepare_intent_sql(), {
                     "intent_id": self._intent_id,
                     "library_root_identity": identity,
                     "changes": _jsonb(normalized_changes),
-                })
+                }))
+            if inserted is None:
+                # The same save arrived twice: the first one owns it, so this one writes nothing.
+                raise DuplicateTagEditRequest(self._intent_id)
             return self._intent_id
         except BaseException:
             self.release()
@@ -365,6 +396,7 @@ def _prepare_intent_sql() -> str:
         ) values (
           %(intent_id)s::uuid, %(library_root_identity)s, 'prepared', %(changes)s::jsonb
         )
+        on conflict (id) do nothing
         returning id::text as id
     """
 

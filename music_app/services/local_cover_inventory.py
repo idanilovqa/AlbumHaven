@@ -54,6 +54,17 @@ def local_inventory_root_for_tracks(config, track_paths):
     return folder if below_a_root(folder) else None
 
 
+def watch_request_relocates_tracks(request, image_extensions):
+    """Whether a watcher batch can change which folder an album's art is in.
+
+    BUGFIX-19 (owner): a rewritten track (tags or embedded art after a save) stays in its folder, so
+    it keeps its album's known art folder; only removed or moved tracks, or removed folders, change it."""
+    relocated = [*request.deleted_paths, *(path for move in request.moves for path in (move.source, move.destination))]
+    return bool(request.deleted_subtrees) or any(
+        Path(path).suffix.lower() not in image_extensions for path in relocated
+    )
+
+
 def local_inventory_tracks_exist(track_paths):
     return any(Path(path).is_file() for path in track_paths)
 

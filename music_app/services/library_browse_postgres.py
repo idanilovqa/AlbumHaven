@@ -574,7 +574,13 @@ class PostgresLibraryBrowseRepository:
         view_state = _root_sidebar_view_state(query_params)
         selected_artist = str(params.get("artist") or "").strip()
         query = str(params.get("q") or "")
-        with self._connect_to_database() as connection:
+        # Only the background rebuild reads the whole library and stores a snapshot;
+        # it must not hold a shared browse connection. Requests only read the snapshot.
+        with (
+            self._owned_connection_context()
+            if rebuild_missing_snapshot
+            else self._browse_connection_context()
+        ) as connection:
             tracks = self._load_non_album_track_snapshot(connection)
             relation_alias_maps = None
             if (
@@ -923,7 +929,14 @@ class PostgresLibraryBrowseRepository:
         except (TypeError, ValueError):
             gallery_offset = 0
         view_state["gallery_offset"] = gallery_offset
-        connection = self._connect_to_database()
+        # The first page reads the ready gallery projection; later pages always
+        # recount the whole library and must not hold a shared browse connection.
+        connection_stack = ExitStack()
+        connection = connection_stack.enter_context(
+            self._owned_connection_context()
+            if gallery_offset
+            else self._browse_connection_context()
+        )
         try:
             connection.execute(
                 "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
@@ -999,9 +1012,7 @@ class PostgresLibraryBrowseRepository:
                 if callable(rollback):
                     rollback()
             finally:
-                close = getattr(connection, "close", None)
-                if callable(close):
-                    close()
+                connection_stack.close()
         if projected_sidebar is not None:
             # The projection already counts missing albums under their artists.
             artists_sidebar, album_count = projected_sidebar
@@ -1083,8 +1094,7 @@ class PostgresLibraryBrowseRepository:
             schedule_gallery_projection_refresh,
         )
 
-        connection = self._connect_to_database()
-        try:
+        with self._browse_connection_context() as connection:
             connection.execute(
                 "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
             )
@@ -1092,15 +1102,6 @@ class PostgresLibraryBrowseRepository:
                 connection,
                 _root_sidebar_view_state(query_params),
             )
-        finally:
-            try:
-                rollback = getattr(connection, "rollback", None)
-                if callable(rollback):
-                    rollback()
-            finally:
-                close = getattr(connection, "close", None)
-                if callable(close):
-                    close()
         if projected is None:
             schedule_gallery_projection_refresh(self._config, connect=self._connect)
             raise GalleryProjectionPending("Gallery is being prepared.")
@@ -1463,7 +1464,7 @@ class PostgresLibraryBrowseRepository:
         _connection: Any | None = None,
     ) -> dict[str, object]:
         if _connection is None:
-            with self._connect_to_database() as connection:
+            with self._browse_connection_context() as connection:
                 connection.execute(
                     "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
                 )
@@ -3401,6 +3402,8 @@ class PostgresLibraryBrowseRepository:
             complete, status = False, "stale"
             cached_payload = self._get_stale_utility_projection("problematic-files")
         if cached_payload is None:
+            cached_payload = self._load_problematic_files_snapshot(allow_outdated=True)
+        if cached_payload is None:
             # Search is its own bounded query. Never queue it behind a complete
             # projection rebuild; that would make typing wait for the slow path
             # the search endpoint exists to avoid.
@@ -3857,7 +3860,7 @@ class PostgresLibraryBrowseRepository:
         normalized_paths = _normalized_track_paths(track_paths)
         if not normalized_paths:
             return {}
-        with self._connect_to_database() as connection:
+        with self._browse_connection_context() as connection:
             rows = connection.execute(
                 _cover_state_rows_by_track_paths_sql(),
                 {"track_paths": sorted(normalized_paths)},
@@ -4297,7 +4300,7 @@ class PostgresLibraryBrowseRepository:
 
         if connection is not None:
             return load_rows(connection)
-        with self._connect_to_database() as owned_connection:
+        with self._browse_connection_context() as owned_connection:
             return load_rows(owned_connection)
 
     def _load_search_rows(
@@ -4438,7 +4441,7 @@ class PostgresLibraryBrowseRepository:
         )
 
         if connection is None:
-            with self._connect_to_database() as owned_connection:
+            with self._browse_connection_context() as owned_connection:
                 return self._load_relation_alias_maps(connection=owned_connection)
 
         def fetch_one(cursor: Any) -> object | None:
@@ -4552,7 +4555,8 @@ class PostgresLibraryBrowseRepository:
         }
 
     def _load_album_rows_by_track_paths(self, track_paths: set[str]) -> list[object]:
-        with self._connect_to_database() as connection:
+        # Cover Look Up runs this on every open; a fresh connection cost 150-350 ms, the query under 2 ms.
+        with self._browse_connection_context() as connection:
             cursor = connection.execute(
                 _album_rows_by_track_paths_sql(),
                 {"track_paths": sorted(track_paths)},
@@ -4581,8 +4585,8 @@ class PostgresLibraryBrowseRepository:
         }
 
         def load_rows(active_connection: Any) -> list[object]:
-            if normalized_album_key:
-                # The physical-parent expression index beats six full file scans for one album.
+            if normalized_album_key or use_selected_album_ids:
+                # The physical-parent expression index beats six full file scans for selected albums.
                 active_connection.execute("SET LOCAL enable_seqscan = off")
 
             def execute(build_sql: Callable[[bool], str], params: Mapping[str, object]) -> Any:
@@ -4704,7 +4708,12 @@ class PostgresLibraryBrowseRepository:
 
         if connection is not None:
             return load_rows(connection)
-        with self._connect_to_database() as owned_connection:
+        # One album is a short read; the whole-library scan must not hold a shared browse connection.
+        with (
+            self._browse_connection_context()
+            if normalized_album_key
+            else self._owned_connection_context()
+        ) as owned_connection:
             return load_rows(owned_connection)
 
     def _load_problematic_loose_file_rows(
@@ -4849,7 +4858,7 @@ class PostgresLibraryBrowseRepository:
         ]
 
     def _load_utility_rules_rows(self) -> list[object]:
-        with self._connect_to_database() as connection:
+        with self._browse_connection_context() as connection:
             cursor = connection.execute(_utility_rules_sql(), {})
             return list(cursor.fetchall())
 
@@ -4860,10 +4869,17 @@ class PostgresLibraryBrowseRepository:
 
     @contextmanager
     def _browse_connection_context(self) -> Any:
+        """Short reads lease the small shared browse pool."""
         if self._use_shared_connection_pool:
             with _pooled_connection(self._database_url, workload="browse") as connection:
                 yield connection
             return
+        with self._owned_connection_context() as connection:
+            yield connection
+
+    @contextmanager
+    def _owned_connection_context(self) -> Any:
+        """A fresh connection, for writes and whole-library reads that must not starve the browse pool."""
         connection_resource = self._connect_to_database()
         if callable(getattr(connection_resource, "__enter__", None)):
             with connection_resource as connection:
@@ -4974,7 +4990,7 @@ class PostgresLibraryBrowseRepository:
         if not self._problematic_snapshot_available():
             return None
         try:
-            with self._connect_to_database() as connection:
+            with self._browse_connection_context() as connection:
                 row = connection.execute(_problematic_files_snapshot_load_sql()).fetchone()
                 current_fingerprint = _problematic_inventory_fingerprint(connection) if row is not None else None
         except Exception as error:
@@ -5292,6 +5308,8 @@ def _filter_non_album_snapshot_tracks(
     )
     query_text = str(query or "").strip()
     filtered = []
+    # Owner (11-17): normalize the alias map once per request; per track it made main search take seconds.
+    normalized_aliases = None
     for raw_track in tracks:
         track = dict(_row_mapping(raw_track))
         if not entry_visible_in_categories(track, visible_library_categories):
@@ -5303,16 +5321,20 @@ def _filter_non_album_snapshot_tracks(
             visible_path_parts,
         ):
             continue
-        if query_text and not _non_album_entry_matches_query(
-            track,
-            query_text,
-            artist_names=_expanded_artist_name_list(
-                (track.get("artist"), track.get("album_artist")),
-                alias_to_canonical or {},
-                canonical_to_aliases or {},
-            ),
-        ):
-            continue
+        if query_text:
+            if normalized_aliases is None:
+                normalized_aliases = _normalized_artist_aliases(alias_to_canonical or {})
+            if not _non_album_entry_matches_query(
+                track,
+                query_text,
+                artist_names=_expanded_artist_name_list(
+                    (track.get("artist"), track.get("album_artist")),
+                    alias_to_canonical or {},
+                    canonical_to_aliases or {},
+                    normalized_alias_to_canonical=normalized_aliases,
+                ),
+            ):
+                continue
         filtered.append(track)
     return filtered
 
@@ -7758,14 +7780,9 @@ def _decode_problematic_search_cursor(
 
 
 def _problematic_filter_reason_types(items: Iterable[object]) -> list[str]:
-    reasons: list[object] = [
-        *_PROBLEM_REASON_IDENTITY_CODES,
-        "Album not found",
-        "Duplicate track outside album folder",
-        "Edition descriptor in album name",
-        "Incomplete track order",
-        "Spotify cover search quota exceeded",
-    ]
+    # Only problems the listed albums actually have (owner decision 2026-11-16): a type
+    # no album has is never offered as a filter.
+    reasons: list[object] = []
     for item in items:
         if isinstance(item, Mapping):
             reasons.extend(item.get("problem_reasons") or ())
@@ -8526,10 +8543,12 @@ def _expanded_artist_name_list(
     artists: Iterable[object],
     alias_to_canonical: Mapping[str, object],
     canonical_to_aliases: Mapping[str, object],
+    *,
+    normalized_alias_to_canonical: Mapping[str, object] | None = None,
 ) -> list[str]:
     values: list[str] = []
     seen: set[str] = set()
-    normalized_aliases = None
+    normalized_aliases = normalized_alias_to_canonical
     for artist in artists:
         if normalized_aliases is None and alias_to_canonical.get(str(artist or "").strip()) is None:
             normalized_aliases = _normalized_artist_aliases(alias_to_canonical)

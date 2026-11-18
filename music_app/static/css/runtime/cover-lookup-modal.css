@@ -84,11 +84,6 @@
   font-size: 0.84rem;
 }
 
-.cover-lookup-inline-notice {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
 
 @media (max-width: 900px) {
   .cover-lookup-modal-header { flex-shrink: 0; }
@@ -202,15 +197,6 @@
   align-items: center;
   justify-content: flex-start;
   gap: 10px;
-}
-.cover-lookup-local-alert:is(:hover, :focus-visible) {
-  height: 30px;
-  min-height: 30px;
-  border-radius: 15px;
-}
-.cover-lookup-section-heading .cover-lookup-local-alert:is(:hover, :focus-visible) .small-alert__text {
-  padding-block: 0;
-  white-space: nowrap;
 }
 .cover-lookup-section-title,
 .cover-lookup-subsection-title {
@@ -450,17 +436,6 @@
   width: 48%;
   margin-bottom: 4px;
 }
-.cover-lookup-gallery-resolving {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  color: var(--muted);
-  font-size: 0.82rem;
-}
-.cover-lookup-gallery-resolving .cover-lookup-task-loading-line {
-  width: min(180px, 55%);
-  margin: 0;
-}
 .cover-lookup-art-card-shell {
   position: relative;
 }
@@ -514,54 +489,28 @@
   outline-offset: -2px;
   box-shadow: none;
 }
-/* INT-028: the suggested cover's green frame glows: a light travels around its edge and the frame slowly
-   breathes. Reduced motion keeps the steady frame. */
-@property --cover-lookup-suggest-angle { syntax: '<angle>'; inherits: false; initial-value: 0turn; }
-@keyframes cover-lookup-suggest-travel { to { --cover-lookup-suggest-angle: 1turn; } }
-@keyframes cover-lookup-suggest-breathe {
-  50% { outline-color: color-mix(in srgb, var(--appearance-success, var(--success, #52d7aa)) 45%, transparent); box-shadow: 0 0 18px color-mix(in srgb, var(--appearance-success, var(--success, #52d7aa)) 35%, transparent); }
-}
+/* Owner (2026-11-09, reconfirmed 2026-11-15): the suggested cover glows with a steady green pulse
+   (Small bug fixes' version). A suggested cover the user selects keeps the blue selection frame
+   with the pulsing green ring outside it (INT-028). Reduced motion keeps the frames still. */
 .cover-lookup-art-card.is-suggested {
-  position: relative;
   border-color: var(--appearance-success, var(--success, #52d7aa));
-  outline: 3px solid var(--appearance-success, var(--success, #52d7aa));
-  outline-offset: -2px;
-  animation: cover-lookup-suggest-breathe 2.8s ease-in-out infinite;
+  outline-color: var(--appearance-success, var(--success, #52d7aa));
+  animation: cover-lookup-suggested-pulse 1.8s ease-in-out infinite;
 }
-.cover-lookup-art-card.is-suggested::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  z-index: 3;
-  pointer-events: none;
-  padding: 3px;
-  border-radius: inherit;
-  background: conic-gradient(from var(--cover-lookup-suggest-angle), transparent 0turn 0.72turn,
-    color-mix(in srgb, var(--appearance-success, var(--success, #52d7aa)) 70%, white) 0.86turn, #fff 0.9turn,
-    color-mix(in srgb, var(--appearance-success, var(--success, #52d7aa)) 70%, white) 0.94turn, transparent 1turn);
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  mask-composite: exclude;
-  animation: cover-lookup-suggest-travel 3.2s linear infinite;
-}
-/* INT-028 (owner): a suggested cover the user selects keeps both frames: the blue selection inside, the
-   breathing green suggestion ring outside it. */
-@keyframes cover-lookup-suggest-breathe-ring {
-  50% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--appearance-success, var(--success, #52d7aa)) 45%, transparent), 0 0 18px color-mix(in srgb, var(--appearance-success, var(--success, #52d7aa)) 35%, transparent); }
+@keyframes cover-lookup-suggested-pulse {
+  50% { box-shadow: 0 0 16px color-mix(in srgb, var(--appearance-success, var(--success, #52d7aa)) 58%, transparent); }
 }
 .cover-lookup-art-card.is-suggested.is-active {
   border-color: #60a5fa;
-  outline: 3px solid #60a5fa;
-  outline-offset: -2px;
+  outline-color: #60a5fa;
   box-shadow: 0 0 0 3px var(--appearance-success, var(--success, #52d7aa));
-  overflow: visible;
-  animation: cover-lookup-suggest-breathe-ring 2.8s ease-in-out infinite;
+  animation: cover-lookup-suggested-active-pulse 1.8s ease-in-out infinite;
 }
-.cover-lookup-art-card.is-suggested.is-active::after { inset: -4px; border-radius: 17px; }
+@keyframes cover-lookup-suggested-active-pulse {
+  50% { box-shadow: 0 0 0 3px var(--appearance-success, var(--success, #52d7aa)), 0 0 16px color-mix(in srgb, var(--appearance-success, var(--success, #52d7aa)) 58%, transparent); }
+}
 @media (prefers-reduced-motion: reduce) {
   .cover-lookup-art-card.is-suggested, .cover-lookup-art-card.is-suggested.is-active { animation: none; }
-  .cover-lookup-art-card.is-suggested::after { display: none; }
 }
 .cover-lookup-art-preview {
   position: relative;
@@ -713,25 +662,37 @@
   color: white;
   z-index: 2;
 }
+/* Delete reads like the app's destructive buttons (owner, 11-16): a hollow red ring and glyph on a dark
+   backing, solid red under the pointer. The glyph is an SVG so it takes the colour (an emoji stays grey). */
 .cover-lookup-art-delete {
   top: 8px;
   right: 8px;
   padding: 0;
-  border: 1px solid rgba(239,68,68,0.34);
-  background: rgba(127,29,29,0.92);
-  color: #fecaca;
+  border: 1.5px solid var(--appearance-error, #ef5350);
+  background: rgba(8, 10, 14, 0.62);
+  color: var(--appearance-error, #ef5350);
   opacity: 0;
-  transition: opacity 140ms ease;
+  transition: opacity 140ms ease, background-color 120ms ease, color 120ms ease;
   cursor: pointer;
   z-index: 2;
+}
+.cover-lookup-art-delete svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 .cover-lookup-art-card:hover .cover-lookup-art-delete,
 .cover-lookup-art-card:focus-within .cover-lookup-art-delete {
   opacity: 1;
 }
-.cover-lookup-art-delete:hover:not(:disabled) {
-  border-color: rgba(252,165,165,0.72);
-  color: #fff1f2;
+#cover-lookup-modal .cover-lookup-art-delete:is(:hover, :focus-visible):not(:disabled) {
+  border-color: var(--appearance-error, #ef5350);
+  background: var(--appearance-error, #ef5350);
+  color: #fff;
 }
 .cover-lookup-art-card .cover-lookup-art-delete:disabled {
   opacity: 0.55;
@@ -811,7 +772,7 @@
   font: inherit;
 }
 
-.album-card-context-menu-item:hover {
+.album-card-context-menu-item:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.08);
 }
 

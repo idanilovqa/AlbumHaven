@@ -7,11 +7,14 @@ from dataclasses import replace
 from functools import partial
 from datetime import datetime, timezone
 import inspect
+from io import BytesIO
 from types import MethodType
 import os
 from pathlib import Path
 from threading import Event, Lock
 import time
+
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 from music_app.services import cover_provider_matching
 from music_app.services.album_cover_candidate_publisher import AlbumCoverCandidatePublisher
@@ -453,8 +456,41 @@ _REMOTE_IMAGE_CACHE_BYTES = 0
 _REMOTE_IMAGE_CACHE_LOCK = Lock()
 
 
-def cached_remote_cover_image(image_url: str) -> tuple[bytes, str | None] | None:
+# Apple, Deezer and YouTube Music offer no thumbnail, so a REMOTE card received the full original
+# (Apple up to 6 MB). A card asks for this edge instead; the lightbox still opens the original.
+REMOTE_COVER_PREVIEW_EDGE = 480
+
+
+def remote_cover_preview(payload: bytes, mime_type: str | None) -> tuple[bytes, str | None]:
+    """The card-sized preview of a remote image; anything Pillow cannot shrink is served as it came."""
+    edge = REMOTE_COVER_PREVIEW_EDGE
+    try:
+        with Image.open(BytesIO(payload)) as image:
+            if max(image.size) <= edge or getattr(image, "is_animated", False):
+                return payload, mime_type
+            if image.format == "JPEG":
+                image.draft("RGB", (edge, edge))
+            image.thumbnail((edge, edge), Image.Resampling.LANCZOS)
+            # The re-encoded preview carries no EXIF, so it is turned the way a browser shows the original.
+            preview = ImageOps.exif_transpose(image)
+            alpha = "A" in preview.getbands() or "transparency" in preview.info
+            output = BytesIO()
+            if alpha:
+                preview.convert("RGBA").save(output, "WEBP", quality=85)
+                return output.getvalue(), "image/webp"
+            preview.convert("RGB").save(output, "JPEG", quality=85)
+            return output.getvalue(), "image/jpeg"
+    except (OSError, ValueError, UnidentifiedImageError, Image.DecompressionBombError):
+        return payload, mime_type
+
+
+def _remote_image_cache_key(image_url: str, preview: bool) -> str:
     key = normalize_remote_image_url(image_url)
+    return f"preview:{key}" if preview else key
+
+
+def cached_remote_cover_image(image_url: str, *, preview: bool = False) -> tuple[bytes, str | None] | None:
+    key = _remote_image_cache_key(image_url, preview)
     with _REMOTE_IMAGE_CACHE_LOCK:
         cached = _REMOTE_IMAGE_CACHE.get(key)
         if cached is not None:
@@ -462,9 +498,11 @@ def cached_remote_cover_image(image_url: str) -> tuple[bytes, str | None] | None
         return cached
 
 
-def remember_remote_cover_image(image_url: str, payload: bytes, mime_type: str | None) -> None:
+def remember_remote_cover_image(
+    image_url: str, payload: bytes, mime_type: str | None, *, preview: bool = False,
+) -> None:
     global _REMOTE_IMAGE_CACHE_BYTES
-    key = normalize_remote_image_url(image_url)
+    key = _remote_image_cache_key(image_url, preview)
     with _REMOTE_IMAGE_CACHE_LOCK:
         previous = _REMOTE_IMAGE_CACHE.pop(key, None)
         if previous is not None:

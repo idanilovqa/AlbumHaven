@@ -779,7 +779,7 @@ test('renderLibraryLoader keeps the Browse Library label while a browse request 
 test('Library Status Page GalleryBar keeps neutral browsing before separate destructive cancellation', () => {
   const runtime = fs.readFileSync(helperPaths[1], 'utf8');
   const actionsMatch = runtime.match(
-    /<section class="gallery-bar gallery-bar--scan"[\s\S]*?<div class="gallery-bar__actions library-loader-actions"[\s\S]*?<\/div>[\s\S]*?<\/section>/,
+    /actionsHtml:\s*`[\s\S]*?id="library-loader-browse-button"[\s\S]*?id="library-loader-cancel-button"[\s\S]*?`/,
   );
 
   assert.ok(actionsMatch, 'Expected one Scan Page action group');

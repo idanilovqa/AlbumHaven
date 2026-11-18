@@ -1727,6 +1727,25 @@ test('mobile Home invalidates an earlier search response and its remembered quer
   assert.equal(calls.fetchAndRender.at(-1).url, '/home-data');
 });
 
+test('empty mobile Search clears the query and keeps the selected artist, as on web', () => {
+  // Owner (2026-11-18): search a band, delete the query, tap Search: the full tree returns with the
+  // band still selected; the phone must not go Home.
+  const { context, calls } = createContext({ searchInputValue: '', useProductionBuildApiUrl: true });
+  context.usesMobilePageLayout = () => true;
+  context.state.view.query = 'ддт';
+  context.state.view.selected_artist = 'ДДТ';
+  let homeClicks = 0;
+  const querySelector = context.document.querySelector?.bind(context.document);
+  context.document.querySelector = selector => (String(selector).includes('data-library-home')
+    ? { click() { homeClicks += 1; } }
+    : querySelector?.(selector));
+  context.handleGalleryBootstrapSearchSubmit(createSubmitEvent());
+  assert.equal(homeClicks, 0);
+  assert.equal(calls.buildApiUrl.at(-1).query, '');
+  assert.equal(calls.buildApiUrl.at(-1).selected_artist, 'ДДТ');
+  assert.notEqual(calls.fetchAndRender.at(-1).url, '/home-data');
+});
+
 test('explicit empty Search refreshes the artist tree even when query state is already empty', () => {
   const { context, calls } = createContext({ searchInputValue: '', useProductionBuildApiUrl: true });
   context.state.view.query = '';

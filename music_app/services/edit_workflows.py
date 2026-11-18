@@ -61,7 +61,7 @@ _ALLOWED_TAG_EDIT_FIELDS = {
 }
 
 
-def _published_album_sibling_entries(
+def _source_album_sibling_entries(
     library_state: StateDict,
     file_cache: Mapping[str, JsonDict],
     changed_paths: TrackPathSet,
@@ -913,7 +913,7 @@ def _handle_edit_tags_request_after_reservation(
             # The changed entries, plus their albums' other tracks: a blank-Album
             # edit keeps membership only on sibling evidence.
             updated_file_cache={
-                **_published_album_sibling_entries(st, file_cache, changed_paths),
+                **_source_album_sibling_entries(st, file_cache, changed_paths),
                 **updated_entries,
             },
             previous_file_cache={path: dict(file_cache[path]) for path in changed_paths},

@@ -963,6 +963,45 @@ def _identities(connection, library_id):
                 " from library.local_album_artist_identities where library_id = %s", (library_id,)).fetchall()}
 
 
+def test_a_split_artists_identities_store_their_country_and_a_recheck_without_one_keeps_it(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Orchestrator 2026-11-17: the Polish Amarok had no country although MusicBrainz gives
+    PL, because the split path dropped the identities' country codes ("Amarok (Poland)")."""
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    _library_id, artist_id = _seed_present_artist(setup_url, "amarok")
+    with isolatedPostgres._connect(setup_url) as connection:
+        album = connection.execute(
+            "select id from library.local_albums where album_key = 'amarok-album'").fetchone()["id"]
+    repository = MusicBrainzEnrichmentPostgresRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": runtime_url}, connect=lambda _url: isolatedPostgres._connect(runtime_url))
+
+    def recheck(polish_country):
+        repository.record_automatic_outcome(
+            local_artist_id=artist_id, state="per_album", artist=None, confidence=1, observed_at=NOW,
+            evidence_summary="Your albums belong to 2 MusicBrainz artists.",
+            identity_artists=[{"mbid": GERMAN, "canonical_name": "Amarok", "country_code": "es"},
+                              {"mbid": TRANCE, "canonical_name": "Amarok", "country_code": polish_country}],
+            album_identities=[{"local_album_id": album, "artist_mbid": TRANCE}])
+
+    def countries():
+        with isolatedPostgres._connect(setup_url) as connection:
+            return {(str(row["artist_mbid"]), row["country_code"]) for row in connection.execute(
+                "select artist_mbid, country_code from integration.musicbrainz_artist_countries"
+                " where artist_mbid = any(%s::uuid[])", ([GERMAN, TRANCE],))}
+
+    recheck("PL")
+    assert countries() == {(GERMAN, "ES"), (TRANCE, "PL")}
+    # Negative: a re-check whose listing brings no country keeps the stored one.
+    recheck(None)
+    assert countries() == {(GERMAN, "ES"), (TRANCE, "PL")}
+    # Negative: a malformed code is never stored.
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute("delete from integration.musicbrainz_artist_countries where artist_mbid = %s", (TRANCE,))
+    recheck("Poland")
+    assert countries() == {(GERMAN, "ES")}
+
+
 def test_albums_of_several_artists_store_their_identities_and_leave_problematic_files(monkeypatch: pytest.MonkeyPatch):
     """0177, owner decision 2026-11-08: each album takes the artist it certainly matches."""
     setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)

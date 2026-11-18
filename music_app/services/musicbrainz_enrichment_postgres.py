@@ -1565,24 +1565,37 @@ def _sync_problem_sql() -> str:
 
 
 def _upsert_identity_artists_sql() -> str:
-    """The MusicBrainz artists a split artist's albums belong to, so their identities resolve."""
+    """The MusicBrainz artists a split artist's albums belong to, so their identities resolve,
+    with their country codes (the "Amarok (Poland)" label needs it). A re-check that brings no
+    country never removes a stored one."""
     return """
-        insert into integration.musicbrainz_artists (
-          mbid, canonical_name, sort_name, preferred_native_name, artist_kind,
-          disambiguation, discogs_artist_id, refreshed_at, created_at, updated_at
+        with rows as (
+          select * from jsonb_to_recordset(%(identity_artists)s::jsonb) as rows(
+            mbid uuid, canonical_name text, sort_name text, preferred_native_name text, artist_kind text,
+            disambiguation text, discogs_artist_id bigint, country_code text)
+        ), upserted as (
+          insert into integration.musicbrainz_artists (
+            mbid, canonical_name, sort_name, preferred_native_name, artist_kind,
+            disambiguation, discogs_artist_id, refreshed_at, created_at, updated_at
+          )
+          select rows.mbid, rows.canonical_name, rows.sort_name, rows.preferred_native_name, rows.artist_kind,
+                 rows.disambiguation, rows.discogs_artist_id, %(observed_at)s, %(observed_at)s, %(observed_at)s
+          from rows
+          on conflict (mbid) do update
+          -- A listing from album credits alone never blanks what a full lookup stored.
+          set canonical_name = excluded.canonical_name,
+              sort_name = coalesce(excluded.sort_name, integration.musicbrainz_artists.sort_name),
+              artist_kind = coalesce(excluded.artist_kind, integration.musicbrainz_artists.artist_kind),
+              disambiguation = coalesce(excluded.disambiguation, integration.musicbrainz_artists.disambiguation),
+              updated_at = excluded.updated_at
+          returning mbid
         )
-        select rows.mbid, rows.canonical_name, rows.sort_name, rows.preferred_native_name, rows.artist_kind,
-               rows.disambiguation, rows.discogs_artist_id, %(observed_at)s, %(observed_at)s, %(observed_at)s
-        from jsonb_to_recordset(%(identity_artists)s::jsonb) as rows(
-          mbid uuid, canonical_name text, sort_name text, preferred_native_name text, artist_kind text,
-          disambiguation text, discogs_artist_id bigint)
-        on conflict (mbid) do update
-        -- A listing from album credits alone never blanks what a full lookup stored.
-        set canonical_name = excluded.canonical_name,
-            sort_name = coalesce(excluded.sort_name, integration.musicbrainz_artists.sort_name),
-            artist_kind = coalesce(excluded.artist_kind, integration.musicbrainz_artists.artist_kind),
-            disambiguation = coalesce(excluded.disambiguation, integration.musicbrainz_artists.disambiguation),
-            updated_at = excluded.updated_at;
+        insert into integration.musicbrainz_artist_countries (artist_mbid, country_code, provenance, observed_at)
+        select rows.mbid, rows.country_code, 'musicbrainz', %(observed_at)s
+        from rows
+        join upserted on upserted.mbid = rows.mbid
+        where rows.country_code is not null
+        on conflict (artist_mbid, country_code) do nothing;
     """
 
 

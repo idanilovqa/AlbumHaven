@@ -825,10 +825,11 @@ def _finish_publication(connection, context, metadata, result, *, reason, config
     bridge_started = perf_counter()
     if copy_legacy_views:
         # Older writers need the cached summary, never a rebuild of album/track sources.
-        connection.execute("""update library.libraries set metadata=jsonb_set(jsonb_set(metadata,
-            '{scan_cache,relation_projection}',%(metadata)s::jsonb),
-            '{scan_cache,relation_views}',library.local_relation_compatibility_views(id)),updated_at=now() where id=%(library_id)s""",
-            {'library_id': library_id, 'metadata': _jsonb(metadata)})
+        with persistence_stage('relation_publication.legacy_views_copy'):
+            connection.execute("""update library.libraries set metadata=jsonb_set(jsonb_set(metadata,
+                '{scan_cache,relation_projection}',%(metadata)s::jsonb),
+                '{scan_cache,relation_views}',library.local_relation_compatibility_views(id)),updated_at=now() where id=%(library_id)s""",
+                {'library_id': library_id, 'metadata': _jsonb(metadata)})
     else:
         connection.execute("""update library.libraries set metadata=jsonb_set(metadata,
             '{scan_cache,relation_projection}',%(metadata)s::jsonb),updated_at=now() where id=%(library_id)s""",

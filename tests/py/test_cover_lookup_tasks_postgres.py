@@ -294,7 +294,7 @@ def test_load_notification_summary_page_returns_newest_first_page_and_counts():
         "membership_revision": "",
     }
     page_sql, page_params = connection.operations[-1]
-    assert "offset" not in page_sql
+    assert "offset %s" not in page_sql
     assert "job_kind" in page_sql
     assert "order by coalesce(" in page_sql
     assert "ops.cover_lookup_tasks.task_key desc" in page_sql
@@ -431,10 +431,10 @@ def test_notification_summary_page_items_omit_tracks_and_local_paths():
     )
     page_sql = connection.operations[-1][0]
     assert "'tracks'" not in page_sql
-    assert "album_payload' -> 'cover_path'" in page_sql
+    assert "album_payload -> 'cover_path'" in page_sql
     assert "'album_id', coalesce(" in page_sql
-    assert "album_payload' -> 'id'" in page_sql
-    assert "album_payload' -> 'album_id'" in page_sql
+    assert "album_payload -> 'id'" in page_sql
+    assert "album_payload -> 'album_id'" in page_sql
 
 
 def test_notification_summary_page_prefers_current_user_cover_and_keeps_best_candidate_preview():
@@ -474,7 +474,7 @@ def test_notification_summary_page_prefers_current_user_cover_and_keeps_best_can
     assert "current_album_by_id.id is null" in page_sql
     assert "current_album.metadata ->> 'cover_selection_origin' = 'user'" in page_sql
     assert "as identity(album_id, album_key)" in page_sql
-    assert "album_payload' ->> 'key'" in page_sql
+    assert "album_payload ->> 'key'" in page_sql
     assert "from library.local_albums as album" not in page_sql
     assert "with ordinality as candidates(candidate, ordinal)" in page_sql
     assert page_sql.count(
@@ -547,3 +547,19 @@ def test_terminal_notification_queries_exclude_albums_without_current_files():
         assert "current_album.has_active_tracks" in query
         assert "status in ('pending', 'running')" in query
 
+
+def test_notification_reads_detoast_metadata_once_per_row():
+    # Each raw `metadata` reference decompresses the whole TOASTed document again;
+    # sandbox2's 27 notifications made the page projection take ~350 ms that way.
+    queries = (
+        cover_lookup_tasks_postgres._load_notification_summaries_sql(),
+        cover_lookup_tasks_postgres._count_notifications_sql(),
+        cover_lookup_tasks_postgres._load_notification_summary_page_sql(
+            has_cursor=True, active_only=True, has_task_ids=True,
+        ),
+    )
+    for query in queries:
+        assert query.count("ops.cover_lookup_tasks.metadata") == 3, query
+        assert "ops.cover_lookup_tasks.metadata ? 'source_family'" in query
+        assert "ops.cover_lookup_tasks.metadata ->> 'source_family' = any(" in query
+        assert "(select ops.cover_lookup_tasks.metadata #> '{}' offset 0)" in query

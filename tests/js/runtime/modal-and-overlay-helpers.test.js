@@ -1875,6 +1875,17 @@ test('stale navigation and close-like invalidation during decode cannot reveal a
   );
 }
 
+test('buildCoverUrl lets a known content hash win over a refresh stamp only when asked', () => {
+  const { context } = loadHelper();
+  context.state.coverRefreshTokens = { 'C:/a/cover-existing-2.jpg': '1794800056451' };
+  assert.match(context.buildCoverUrl('C:/a/cover-existing-2.jpg', { revision: 'abc' }), /v=1794800056451$/);
+  assert.match(
+    context.buildCoverUrl('C:/a/cover-existing-2.jpg', { revision: 'abc', preferRevision: true }),
+    /v=abc$/,
+    'Cover Look Up cards keep their image when the file becomes the album cover',
+  );
+});
+
 test('buildCoverUrl keeps one server process cover identity stable across browser epochs', () => {
   const buildUrlForProcess = (coverCacheToken, now) => {
     const { context } = loadHelper();
@@ -2339,6 +2350,24 @@ test('album context menu disables Edit Tags when the album lacks permission', ()
   );
 });
 
+
+test('album rebuilt after a tag save keeps Edit Tags enabled from the session capability', () => {
+  const { context } = loadHelper();
+  context.window = { ...(context.window || {}), AlbumHavenCapabilities: { allows: key => key === 'library.files.edit_tags' } };
+  const menu = () => context.document.getElementById('album-card-context-menu');
+  const editTags = () => menu().innerHTML.match(/<button[^>]*data-album-card-action="edit-tags"[^>]*>/)[0];
+
+  // Optimistic split/merge albums carry no allowed_actions.
+  context.showAlbumCardContextMenu(12, 24, { key: 'ддт::ремиксы2' });
+  assert.doesNotMatch(editTags(), /disabled/);
+  assert.equal(context.canEditAlbumTags({ key: 'ддт::ремиксы2' }), true);
+
+  context.showAlbumCardContextMenu(12, 24, { key: 'gone', inventory_status: 'missing' });
+  assert.match(editTags(), /disabled/);
+  context.window.AlbumHavenCapabilities = { allows: () => false };
+  context.showAlbumCardContextMenu(12, 24, { key: 'listener-view' });
+  assert.match(editTags(), /disabled/);
+});
 
 test('album context menus are unavailable for narrow layouts and wide mobile clients', () => {
   for (const [mobile, narrow] of [[true, false], [false, true]]) {

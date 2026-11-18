@@ -208,6 +208,27 @@ def test_resolve_returns_split_choices_without_guessing():
     assert [choice["track_count"] for choice in result["choices"]] == [4, 5]
 
 
+def test_resolve_calls_a_split_by_the_cards_tracks_even_when_its_saved_id_survives():
+    # Owner (BUGFIX-05, 2026-11-18): the split kept album 37072 (Ремиксы) for six tracks and moved five into a
+    # new Ремиксы2. The card's saved id/key still match Ремиксы, but its eleven tracks now span both albums.
+    kept = _candidate(37072, "ддт::ремиксы", depth=0, matched_paths=6, requested_paths=11,
+                      matched_by_id=True, matched_by_key=True, track_count=6)
+    moved = _candidate(1140726, "ддт::ремиксы2", depth=0, matched_paths=5, requested_paths=11,
+                       matched_by_id=False, matched_by_key=False, track_count=5)
+    for candidate in (kept, moved):
+        candidate["path_set_complete"] = True
+    repository, _connection = _repository([kept, moved])
+
+    result = repository.resolve(
+        album_id=37072,
+        album_key="ддт::ремиксы",
+        track_paths={f"N:/Music/ДДТ/Ремиксы/{number:02d}.mp3" for number in range(1, 12)},
+    )
+
+    assert result["status"] == "split"
+    assert [choice["album_id"] for choice in result["choices"]] == [37072, 1140726]
+
+
 def test_resolve_uses_complete_track_path_evidence_to_disambiguate_a_split():
     repository, connection = _repository(
         [

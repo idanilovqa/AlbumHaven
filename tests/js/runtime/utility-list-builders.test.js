@@ -1208,6 +1208,20 @@ test('applyUpdatedAlbumsToCurrentView replaces a trackless preview by its stable
   );
 });
 
+test('a merge into a compact card keeps its own duration and adds only the moved tracks', () => {
+  const context = loadHelpers();
+  // Sandbox2, 2026-11-15: ДДТ – Ремиксы2 (5 tracks, 16:56) merged back into a compact Ремиксы card (6 tracks, 32:00).
+  const visible = {
+    key: 'ддт::ремиксы::year::2000', name: 'Ремиксы', album_artist: 'ДДТ', year: 2000, preview_only: true,
+    track_count_preview: 6, total_duration_seconds: 1920, total_duration_display: '32m 00s',
+  };
+  const moved = Array.from({ length: 5 }, (_, index) => ({ path: `N:/DDT/Remixes/0${index + 1}.mp3`, duration_seconds: index === 0 ? 204 : 203 }));
+  const candidate = { key: 'ддт::ремиксы', name: 'Ремиксы', album_artist: 'ДДТ', year: 2000, tracks: moved };
+  const merged = context.mergeVisibleAlbumWithOptimisticCandidate(visible, candidate);
+  assert.equal(merged.track_count_preview, 11);
+  assert.equal(merged.total_duration_seconds, 1920 + 1016, 'the card shows the whole merged album, not only the moved tracks');
+});
+
 test('applyUpdatedAlbumsToCurrentView replaces a trackless source preview during destination-to-source merge', () => {
   const context = loadHelpers();
   const sourcePreview = {

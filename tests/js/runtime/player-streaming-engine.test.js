@@ -89,7 +89,11 @@ function createEngineHarness(options = {}) {
   let now = options.now ?? 1000;
   const timeOrigin = options.timeOrigin ?? 1_700_000_000_000;
   const dateNow = options.dateNow ?? Math.floor(timeOrigin + now);
-  const scheduleTimeout = options.setTimeout || setTimeout;
+  const givenTimeout = options.setTimeout || setTimeout;
+  // A start's answer deadline (5 s) runs only where a test asks for it: elsewhere it would give up
+  // sockets this harness never answers.
+  const scheduleTimeout = (callback, delay, ...rest) => (
+    delay === 5_000 && !options.watchStartAnswers ? 0 : givenTimeout(callback, delay, ...rest));
   const cancelTimeout = options.clearTimeout || clearTimeout;
 
   class FakeDate extends Date {
@@ -7039,7 +7043,7 @@ test('reconnects keep trying while the received audio plays, and once it runs ou
     timers.fire(timer);
     await settleTwice(harness);
   }
-  assert.deepEqual(delays, [500, 1_000, 2_000, 4_000, 5_000, 5_000]);
+  assert.deepEqual(delays, [500, 1_000, 2_000, 2_000, 2_000, 2_000]);
   assert.equal(harness.sockets.length, 8);
   assert.notEqual(harness.api.snapshot().mode, 'error', 'failures stay silent while audio plays');
 
@@ -7048,7 +7052,7 @@ test('reconnects keep trying while the received audio plays, and once it runs ou
     renderedFrame: 1, missingFrames: 128,
   });
   // The owner's rule (2026-11-17): losing the network never stops playback, however long.
-  assert.deepEqual(timers.pending().map(({ delay }) => delay), [5_000], 'no deadline ends the wait');
+  assert.deepEqual(timers.pending().map(({ delay }) => delay), [2_000], 'no deadline ends the wait');
   for (let attempt = 0; attempt < 20; attempt += 1) {
     timers.fire(timers.pending()[0]);
     await settleTwice(harness);
@@ -7368,6 +7372,88 @@ test('the browser going offline gives up the open socket at once, so a seek past
   );
   assert.equal(harness.api.snapshot().paused, false);
   assert.equal(harness.api.snapshot().diagnostics.transportState, 'connected');
+});
+
+// Owner retest B-D4 round 5 (2026-11-17), laptop: "when I clicked into the zone that wasn't
+// downloaded, music did not stop immediately. it was playing apparently from the last available
+// moment. The time did not ticked. Then play button became paused". A laptop with another network
+// interface never reports `offline`: the socket stays open and silent.
+test('a seek the open socket does not begin to answer jumps to its target silently and keeps playing, with no offline event', async () => {
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => count > 1,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+  });
+  const open = await startLocallySeekable(harness, 100_000);
+
+  harness.setNow(1_000);
+  await harness.api.seek(60);
+  await settleTwice(harness);
+  assert.ok(harness.engine.pendingSeek, 'past the received audio, the seek asks the server');
+  harness.setNow(1_500);
+  harness.nodes[0].port.dispatch({ type: 'position', generation: open.generation, streamId: open.streamId, timelineFrame: 100 });
+  assert.equal(harness.sockets[0].closeCalls, 0, 'an answer may still be on its way');
+
+  harness.setNow(1_800);
+  harness.nodes[0].port.dispatch({ type: 'position', generation: open.generation, streamId: open.streamId, timelineFrame: 200 });
+  await settleTwice(harness);
+
+  assert.equal(harness.sockets[0].closeCalls, 1, 'the unanswering socket is given up');
+  const held = harness.api.snapshot();
+  assert.equal(held.currentTime, 60);
+  assert.equal(held.paused, false, 'the player stays playing, silent at its target');
+  assert.notEqual(held.mode, 'error');
+  assert.equal(held.diagnostics.transportState, 'detached-seek');
+  assert.ok(harness.portMessages('configure').at(-1).generation > open.generation, 'the old audio stops at once');
+  assert.ok(harness.portMessages('pause').some(({ generation }) => generation === open.generation),
+    'the old audio is silenced before the jump reconfigures the worklet');
+  assert.equal(harness.portMessages('play').at(-1).generation, harness.portMessages('configure').at(-1).generation,
+    'the jump plays on at its target');
+});
+
+test('a socket that owes bytes and has gone silent is given up while the received audio plays, with no network event', async () => {
+  const harness = encodedHarness({ createStreamingDecoder: recordingDecoders().create });
+  const open = await startLocallySeekable(harness, 100_000);
+
+  harness.setNow(2_000);
+  harness.nodes[0].port.dispatch({ type: 'position', generation: open.generation, streamId: open.streamId, timelineFrame: 100 });
+  assert.equal(harness.sockets[0].closeCalls, 0, 'bytes arrived a moment ago');
+
+  harness.setNow(5_000);
+  harness.nodes[0].port.dispatch({ type: 'position', generation: open.generation, streamId: open.streamId, timelineFrame: 200 });
+  await settleTwice(harness);
+
+  assert.equal(harness.sockets[0].closeCalls, 1);
+  assert.equal(harness.api.snapshot().diagnostics.transportDetaches, 1);
+  assert.equal(harness.api.snapshot().paused, false);
+  assert.equal(harness.sockets[1].sent.find(({ type }) => type === 'open').startFrame, 999 * 1_152, 'the rest joins at the splice');
+});
+
+// Round 5: "After network is back I tried to play completely different track and it took me 4 or
+// 5 tries". A start sent on a socket that died silently is never answered: it goes again, once.
+test('a start its socket does not answer is sent again on a new socket, with no second press', async () => {
+  const timers = manualTimers();
+  const harness = encodedHarness({ setTimeout: timers.setTimeout, clearTimeout: timers.clearTimeout, watchStartAnswers: true });
+  await startEncoded(harness, makeTrack('01.mp3'));
+  await harness.api.pause();
+  await harness.settle();
+
+  void harness.api.start(makeTrack('02.mp3'));
+  await settleTwice(harness);
+  const unanswered = harness.sent('open').at(-1);
+  assert.equal(unanswered.path, makeTrack('02.mp3').path);
+  const deadline = timers.pending().find(({ delay }) => delay === 5_000);
+  assert.ok(deadline, 'a start waits a few seconds for its answer');
+  timers.fire(deadline);
+  await settleTwice(harness);
+  await settleTwice(harness);
+
+  assert.equal(harness.sockets[0].closeCalls, 1);
+  const again = harness.sockets[1].sent.filter(({ type }) => type === 'open');
+  assert.equal(again.at(-1).path, makeTrack('02.mp3').path, 'the same start goes on the new socket');
+  assert.notEqual(harness.api.snapshot().mode, 'error');
 });
 
 test('the browser going offline also gives up a reconnect socket still waiting to join the splice', async () => {

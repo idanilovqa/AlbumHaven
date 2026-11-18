@@ -77,10 +77,15 @@ export async function startNetworkRelay(targetPort, { playbackBytesPerSecond = 0
       server = null;
       for (const socket of sockets) socket.pause?.();
     },
-    /** Accepts connections again on the same port; stalled ones carry on where they stopped. */
-    restore: async () => {
+    /**
+     * Accepts connections again on the same port. Stalled ones carry on where they stopped, or,
+     * with `revive: false`, stay dead without closing, as connections do when the network that
+     * returns is not the one they were made on: only new connections work.
+     */
+    restore: async ({ revive = true } = {}) => {
+      const stalled = [...sockets];
       if (!server) await listen();
-      for (const socket of sockets) socket.resume?.();
+      if (revive) for (const socket of stalled) socket.resume?.();
     },
     close() {
       server?.close();

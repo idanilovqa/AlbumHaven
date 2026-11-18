@@ -8075,9 +8075,13 @@ const STREAMING_CREDIT_LOW_WATER_SECONDS = 0.25;
 const STREAMING_INITIAL_PLAYBACK_CUSHION_SECONDS = 2;
 const STREAMING_AUTOMATIC_RECONNECT_ATTEMPTS = 1;
 // A lost socket is replaced at once, then after each of these delays, then every last one.
-const STREAMING_RECONNECT_DELAYS_MS = [500, 1000, 2000, 4000, 5000];
-// After a network change, a socket that owes bytes and sent none for this long is presumed lost.
+const STREAMING_RECONNECT_DELAYS_MS = [500, 1000, 2000];
+// A socket that owes bytes and sent none for this long is presumed lost.
 const STREAMING_SILENT_SOCKET_MS = 3000;
+// A seek past the received audio that its socket has not begun to answer by then finds the socket gone.
+const STREAMING_SEEK_ANSWER_MS = 750;
+// A start its socket has not begun to answer by then was sent on a socket that died without closing.
+const STREAMING_START_ANSWER_MS = 5000;
 // A reconnect attempt begun on a network that is gone can hang for tens of seconds; it is given up.
 const STREAMING_CONNECT_DEADLINE_MS = 4000;
 // The server's own refusals: another socket would be refused too.
@@ -8508,6 +8512,7 @@ async function recoverUnexpectedStreamingSocketClose(socket, event) {
     return;
   }
   if (detachStreamingTransport(event?.code)) return;
+  if (detachUnansweredStreamingSeek(event?.code)) return;
   const current = engine.roles.current;
   const startRequestId = engine.startRequestId;
   // A restart lost before its stream opened keeps the place it was restarting from.
@@ -8625,16 +8630,8 @@ function detachStreamingTransport(code) {
   const deliveredThrough = streamingDecodedThroughFrame(encoded) - encoded.decodedFrames;
   if (!whole && !(spliceFrame > deliveredThrough)) return false;
 
-  // Nothing may name the lost socket's streams on the next one.
-  engine.lostStreamIds ??= new Set();
-  for (const roleState of [current, engine.roles.continuity]) {
-    if (!roleState) continue;
-    engine.lostStreamIds.add(roleState.streamId);
-    if (roleState.encoded?.wire.streamId) engine.lostStreamIds.add(roleState.encoded.wire.streamId);
-  }
   wire.lost = true;
-  engine.socket = null;
-  engine.pendingControls = [];
+  forgetLostStreamingSocket();
   const heldSeekSeconds = engine.pendingPromotion?.requestedSeekSeconds;
   engine.pendingPromotion = null;
   engine.detached = {
@@ -8671,6 +8668,46 @@ function detachStreamingTransport(code) {
   engine.diagnostics.transportDetaches = (Number(engine.diagnostics.transportDetaches) || 0) + 1;
   if (!engine.detached.paused) connectStreamingSocket();
   if (Number.isFinite(heldSeekSeconds)) void seekStreamingPlayback(heldSeekSeconds);
+  publishStreamingDiagnostics();
+  return true;
+}
+
+// Nothing may name the lost socket's streams on the next one.
+function forgetLostStreamingSocket() {
+  const engine = streamingEngineState();
+  engine.lostStreamIds ??= new Set();
+  for (const roleState of [engine.roles.current, engine.roles.continuity]) {
+    if (!roleState) continue;
+    engine.lostStreamIds.add(roleState.streamId);
+    if (roleState.encoded?.wire.streamId) engine.lostStreamIds.add(roleState.encoded.wire.streamId);
+  }
+  engine.socket = null;
+  engine.pendingControls = [];
+}
+
+// The socket was lost under a seek that asked the server for audio past what arrived: the head
+// jumps to the seek's target and waits there, silent, in the state the listener chose, and the
+// stream opens there on the next socket, as an offline seek past the received audio does.
+function detachUnansweredStreamingSeek(code) {
+  const engine = streamingEngineState();
+  const seek = engine.pendingSeek;
+  const track = engine.roles.current?.track;
+  if (!seek || seek.kind === 'replacement' || !track || STREAMING_REFUSED_CLOSE_CODES.has(code)
+      || engine.mode === 'error' || engine.snapshot.ended) return false;
+  forgetLostStreamingSocket();
+  engine.pendingPromotion = null;
+  engine.detached = {
+    kind: 'reopen',
+    spliceFrame: null,
+    failures: 0,
+    timer: 0,
+    paused: Boolean(engine.snapshot.paused),
+  };
+  engine.diagnostics.transportDetaches = (Number(engine.diagnostics.transportDetaches) || 0) + 1;
+  // The old audio stops now, not once the jump has reconfigured the worklet.
+  engine.node?.port.postMessage({ type: 'pause', generation: engine.generation });
+  void jumpWhileDetached(track, seek.startFrame / engine.sampleRate);
+  if (!engine.detached.paused) connectStreamingSocket();
   publishStreamingDiagnostics();
   return true;
 }
@@ -8875,12 +8912,34 @@ function handleStreamingNetworkChange() {
     return;
   }
   const socket = engine.socket;
-  const wire = engine.roles.current?.encoded?.wire;
-  if (socket?.readyState !== WebSocket.OPEN || !wire || wire.serverless || wire.eos
-      || !(wire.creditedBytes > 0)
-      || performance.now() - Math.max(wire.lastArrivalMs, wire.creditSentAtMs)
-        <= STREAMING_SILENT_SOCKET_MS) return;
+  if (socket?.readyState !== WebSocket.OPEN || !streamingSocketOwesSilently(performance.now())) return;
   giveUpStreamingSocket(socket, 'network changed');
+}
+
+/** The current stream is owed bytes its socket has sent none of for a while. */
+function streamingSocketOwesSilently(now) {
+  const wire = streamingEngineState().roles.current?.encoded?.wire;
+  return Boolean(wire && !wire.serverless && !wire.eos && wire.creditedBytes > 0
+    && now - Math.max(wire.lastArrivalMs, wire.creditSentAtMs) > STREAMING_SILENT_SOCKET_MS);
+}
+
+// Owner retest B-D4 round 5 (2026-11-17): a laptop that keeps another network interface (a VPN or
+// a virtual adapter) never reports `offline` when its Wi-Fi goes, and its socket stays open but
+// silent. So while audio renders, a seek the socket has not begun to answer, or bytes it owes and
+// has stopped sending, mean it is gone: it is given up at once instead of waited on until the
+// keepalive, so the received audio plays on, a seek past it waits silently at its target, and the
+// next socket is tried at once.
+function checkStreamingSocketLiveness() {
+  const engine = streamingEngineState();
+  const socket = engine.socket;
+  if (engine.detached || socket?.readyState !== WebSocket.OPEN) return;
+  const now = performance.now();
+  const seek = engine.pendingSeek;
+  const seekRole = seek && engine.roles.continuity?.streamId === seek.streamId ? engine.roles.continuity : null;
+  const seekUnanswered = Boolean(seekRole && !seekRole.local && !seekRole.metadataAccepted
+    && seek.requestedAtMs > 0 && now - seek.requestedAtMs > STREAMING_SEEK_ANSWER_MS);
+  if (seekUnanswered) giveUpStreamingSocket(socket, 'seek unanswered');
+  else if (streamingSocketOwesSilently(now)) giveUpStreamingSocket(socket, 'socket silent');
 }
 
 // Offline, the open socket can deliver nothing, but with Wi-Fi off it may stay open and silent
@@ -8889,6 +8948,21 @@ function handleStreamingNetworkChange() {
 function handleStreamingOffline() {
   const socket = streamingEngineState().socket;
   if (socket?.readyState === WebSocket.OPEN) giveUpStreamingSocket(socket, 'offline');
+}
+
+// A start sent on a socket that died without closing is never answered (round 5: "it took me 4
+// or 5 tries"): after a few seconds the socket is given up, and the start goes again, once, on the
+// next one, so one press always starts it.
+function watchStreamingStartAnswer(roleState) {
+  const engine = streamingEngineState();
+  const socket = engine.socket;
+  if (socket?.readyState !== WebSocket.OPEN || roleState.cachedTrack) return;
+  roleState.answerTimer = window.setTimeout(() => {
+    roleState.answerTimer = 0;
+    if (engine.socket !== socket || engine.roles.current !== roleState || roleState.metadataAccepted
+        || socket.readyState !== WebSocket.OPEN) return;
+    giveUpStreamingSocket(socket, 'start unanswered');
+  }, STREAMING_START_ANSWER_MS);
 }
 
 function watchStreamingNetwork() {
@@ -9276,6 +9350,8 @@ function handleStreamingControl(message) {
       return;
     }
     roleState.metadataAccepted = true;
+    if (roleState.answerTimer) window.clearTimeout(roleState.answerTimer);
+    roleState.answerTimer = 0;
     if (message.codec) {
       createStreamingEncodedRole(roleState, message);
       refillStreamingEncodedBytes(roleState);
@@ -10286,6 +10362,8 @@ function handleStreamingWorkletMessage(message) {
       engine.diagnostics.staleMessages += 1;
       return;
     }
+    checkStreamingSocketLiveness();
+    if (engine.roles.current !== current) return;
     if (engine.pendingSeek?.currentStreamId === current.streamId) return;
     const timelineFrame = streamingAbsoluteTimelineFrame(current, message.timelineFrame);
     const monotonicTimelineFrame = Math.max(
@@ -11168,6 +11246,7 @@ async function startBrowserStreamingTrack(track, {
   const current = openStreamingRole('current', track, startFrame);
   if (!current) return null;
   current.transportRecoveryAttempt = Math.max(0, Number(transportRecoveryAttempt) || 0);
+  watchStreamingStartAnswer(current);
   probeStreamingTrackWaveform(track);
   engine.node.port.postMessage({
     type: 'configure',
@@ -11465,6 +11544,8 @@ async function seekBrowserStreaming(seconds) {
     streamId: replacement.streamId,
     startFrame,
     prepareSent: false,
+    // When the server was asked; a seek it does not begin to answer finds the socket gone.
+    requestedAtMs: performance.now(),
   };
   engine.node.port.postMessage({
     type: 'reserve-seek',

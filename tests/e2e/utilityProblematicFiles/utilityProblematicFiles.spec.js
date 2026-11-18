@@ -1,8 +1,10 @@
+import path from 'node:path';
 import { assertCompactProblematicSummary } from '../helpers/problematicPayloadEvidence.js';
 import { expect, test } from '../support/performanceFixtures.js';
 import { setProblematicCompleteListHeld } from '../helpers/coverLookupProviderHelpers.js';
 import { createWatchedAlbumFixture } from '../helpers/libraryFilesystemWatcherFixture.js';
-import { authenticatedPageGet } from '../helpers/authenticatedPageRequest.js';
+import { authenticatedPageGet, authenticatedPagePost } from '../helpers/authenticatedPageRequest.js';
+import { queryPersistedAlbumIdentity } from '../helpers/postgresAlbumIdentityHelpers.js';
 
 import {
   expectPostgresLibraryBrowseTelemetry,
@@ -129,6 +131,7 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
         album: `PF Missing Album ${token}`,
         year: 2003,
         trackTitles: ['PF Missing First', 'PF Missing Second'],
+        createLocalArt: true,
         ownedDirectoryName: 'problematic-files-missing-album',
         context,
         managedAppLifecycle,
@@ -141,12 +144,30 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
         const payload = await response.json();
         return (payload.items || []).flatMap((item) => item.problem_reasons || []);
       };
-      // A new album without art is itself problematic, so the server listing it proves indexing.
-      await expect.poll(async () => (await ownedAlbumReasons()).length > 0, {
+      // The watcher must persist the album before its folder is removed.
+      await expect.poll(async () => {
+        const identity = await queryPersistedAlbumIdentity({
+          artist: `PF Missing Artist ${token}`, album: `PF Missing Album ${token}`, year: 2003,
+        });
+        return identity.track_counts;
+      }, {
         message: 'The watcher must index the owned album before it is removed.',
         timeout: 90000,
         intervals: [500, 1000, 2000],
-      }).toBe(true);
+      }).toEqual([2]);
+      // Owner rule (2026-11-08): an untouched album whose files are deleted is removed outright. An in-app
+      // cover choice is the owner's data, so this album stays listed as "Album not found".
+      const coverChoice = await authenticatedPagePost(page, '/utilities/cover-lookup/local-select', {
+        data: {
+          album: {
+            name: `PF Missing Album ${token}`,
+            album_artist: `PF Missing Artist ${token}`,
+            tracks: missingAlbumFixture.tracks.map((track) => ({ path: track.path })),
+          },
+          source_path: path.join(missingAlbumFixture.albumDirectory, 'booklet-page.jpg'),
+        },
+      });
+      expect(coverChoice.status(), await coverChoice.text()).toBe(200);
       missingAlbumFixture.deleteAlbum();
       await expect.poll(async () => ownedAlbumReasons(), {
         message: 'The server must report the removed owned album as Album not found.',

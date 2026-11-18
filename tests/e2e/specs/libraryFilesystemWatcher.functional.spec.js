@@ -698,6 +698,7 @@ test('FTC-LIBROOTS-016 / 017 / 018 reconciles filesystem changes and confirms mi
   test.setTimeout(240000);
   const latencySamples = [];
   let fixture;
+  let laterAlbum;
   let originalFailure;
   try {
     await stepLogger.step('Open the production gallery and record the current inventory revision', async () => {
@@ -709,13 +710,16 @@ test('FTC-LIBROOTS-016 / 017 / 018 reconciles filesystem changes and confirms mi
 
     await stepLogger.step('Copy a three-album burst into the watched root without starting a scan', async () => {
       const startedAt = Date.now();
-      fixture = await createWatchedAlbumFixture({ artist: ARTIST, album: TARGET_ALBUM, year: TARGET_YEAR, context, managedAppLifecycle });
+      // The target ships local art so the owner can choose its cover in Cover Look Up below.
+      fixture = await createWatchedAlbumFixture({
+        artist: ARTIST, album: TARGET_ALBUM, year: TARGET_YEAR, createLocalArt: true, context, managedAppLifecycle,
+      });
       await fixture.createSiblingAlbum({
         album: EARLIER_ALBUM,
         year: 2001,
         trackTitles: ['Earlier Signal'],
       });
-      await fixture.createSiblingAlbum({
+      laterAlbum = await fixture.createSiblingAlbum({
         album: LATER_ALBUM,
         year: 2009,
         trackTitles: ['Later Signal'],
@@ -791,7 +795,9 @@ test('FTC-LIBROOTS-016 / 017 / 018 reconciles filesystem changes and confirms mi
       expect(response.status()).toBe(200);
       await coverLookupActions.waitForModalResultsReady();
       expect(await coverLookupActions.readModalSubtitle()).toContain(TARGET_ALBUM);
-      await coverLookupActions.closeModal();
+      // Owner rule (2026-11-08): an in-app cover choice is the owner's data, so deleting this album's
+      // files keeps it as "Album not found"; an untouched album is removed (last step).
+      await coverLookupActions.selectFirstInactiveLocalCoverAndSave();
       await trackModalActions.close();
       await galleryActions.clickAlbumDetailsByAlbumName(TARGET_ALBUM);
       await expect(trackModalActions.trackModal.trackRows).toHaveCount(1, { timeout: 15000 });
@@ -892,6 +898,22 @@ test('FTC-LIBROOTS-016 / 017 / 018 reconciles filesystem changes and confirms mi
       await page.reload();
       await galleryActions.waitForGalleryReady();
       await expect(galleryActions.galleryPage.albumCard.cardByAlbumName(TARGET_ALBUM)).toHaveCount(0);
+    });
+
+    await stepLogger.step('Delete an untouched album and remove its card live without a missing card', async () => {
+      await searchToolbarActions.search(ARTIST, { submitWithEnter: true });
+      await searchToolbarActions.waitForQuery(ARTIST);
+      await galleryActions.waitForAlbumVisible(LATER_ALBUM, { timeout: 60000 });
+      const previousRevision = (await libraryFilesystemWatcherActions.readStatus()).inventory_mutation_revision;
+      fs.rmSync(laterAlbum.albumDirectory, { recursive: true });
+      status = await libraryFilesystemWatcherActions.waitForRevisionAfter(previousRevision);
+      await expect(galleryActions.galleryPage.albumCard.cardByAlbumName(LATER_ALBUM)).toHaveCount(0, { timeout: 60000 });
+      await expect(galleryActions.galleryPage.albumCard.cardByAlbumName(EARLIER_ALBUM)).toHaveCount(1);
+      await expect(appBarActions.appBar.errorToasts).toHaveCount(0);
+      await expect.poll(async () => {
+        const identity = await queryPersistedAlbumIdentity({ artist: ARTIST, album: LATER_ALBUM, year: 2009 });
+        return identity.album_ids.length;
+      }, { timeout: 60000, intervals: [250, 500, 1000] }).toBe(0);
     });
   } catch (error) {
     originalFailure = error;

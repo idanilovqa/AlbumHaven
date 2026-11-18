@@ -7456,6 +7456,41 @@ test('a start its socket does not answer is sent again on a new socket, with no 
   assert.notEqual(harness.api.snapshot().mode, 'error');
 });
 
+// Round 5, hosted FTC-PLAYBACK-OFFLINE-002: paused through the outage, one press on another song
+// asked a dead socket for that song's rate and waited forever.
+test('a rate probe its socket does not answer goes again on a new socket, so one press starts the song', async () => {
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    setTimeout: timers.setTimeout, clearTimeout: timers.clearTimeout, watchStartAnswers: true, holdSampleRateProbes: true,
+    trackSampleRates: new Map(),
+  });
+  const first = harness.api.start(makeTrack('01.mp3'));
+  for (let turn = 0; turn < 20 && !harness.sockets[0]?.probes.length; turn += 1) await harness.settle();
+  harness.sockets[0].receive({ type: 'probe-result', requestId: harness.sockets[0].probes[0].requestId, sampleRate: 48_000 });
+  await first;
+  acceptMetadata(harness, harness.sent('open').at(-1), { codec: 'mp3', skipFrames: 1_105, totalFrames: 2_000 });
+  await harness.settle();
+  await harness.api.pause();
+  await harness.settle();
+
+  void harness.api.start(makeTrack('02.mp3'));
+  await settleTwice(harness);
+  assert.equal(harness.sockets[0].probes.at(-1)?.path, makeTrack('02.mp3').path, 'the new song asks for its rate');
+  const deadline = timers.pending().find(({ delay }) => delay === 5_000);
+  assert.ok(deadline, 'a probe waits a few seconds for its answer');
+  timers.fire(deadline);
+  await settleTwice(harness);
+
+  assert.equal(harness.sockets[0].closeCalls, 1, 'the unanswering socket is replaced');
+  const again = harness.sockets[1].probes.at(-1);
+  assert.equal(again?.path, makeTrack('02.mp3').path, 'the probe goes again on the new socket');
+  harness.sockets[1].receive({ type: 'probe-result', requestId: again.requestId, sampleRate: 48_000 });
+  await settleTwice(harness);
+  await settleTwice(harness);
+  assert.equal(harness.sockets[1].sent.filter(({ type }) => type === 'open').at(-1)?.path, makeTrack('02.mp3').path);
+  assert.notEqual(harness.api.snapshot().mode, 'error');
+});
+
 test('the browser going offline also gives up a reconnect socket still waiting to join the splice', async () => {
   const harness = encodedHarness({ createStreamingDecoder: recordingDecoders().create });
   await startLocallySeekable(harness, 100_000);

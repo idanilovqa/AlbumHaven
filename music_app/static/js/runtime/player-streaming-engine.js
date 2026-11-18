@@ -2559,6 +2559,7 @@ function settleStreamingSampleRateProbe(requestId, sampleRate, format = null) {
   const engine = streamingEngineState();
   const probe = engine.sampleRateProbes?.get(requestId);
   if (!probe) return;
+  window.clearTimeout(probe.timer);
   engine.sampleRateProbes.delete(requestId);
   if (sampleRate > 0) rememberStreamingTrackFormat(probe.path, sampleRate, format);
   probe.resolve(sampleRate);
@@ -2572,11 +2573,45 @@ function requestStreamingSampleRate(track) {
   engine.nextSampleRateProbeId = (Number(engine.nextSampleRateProbeId) || 0) + 1;
   const requestId = engine.nextSampleRateProbeId;
   return new Promise((resolve) => {
-    engine.sampleRateProbes.set(requestId, { path: String(track?.path || ''), resolve });
-    if (!sendStreamingControl({ type: 'probe', requestId, path: track.path })) {
-      settleStreamingSampleRateProbe(requestId, 0);
-    }
+    const probe = { path: String(track?.path || ''), resolve, socket: null, timer: 0 };
+    engine.sampleRateProbes.set(requestId, probe);
+    if (!sendStreamingProbe(requestId, probe)) settleStreamingSampleRateProbe(requestId, 0);
   });
+}
+
+// A probe waits a few seconds for its answer on the socket it went to; one that died without
+// closing never answers (round 5: a press on another song after the network returned waited
+// forever), so it is replaced and the probe goes again on the next socket.
+function sendStreamingProbe(requestId, probe) {
+  const engine = streamingEngineState();
+  window.clearTimeout(probe.timer);
+  probe.socket = engine.socket;
+  if (!sendStreamingControl({ type: 'probe', requestId, path: probe.path })) return false;
+  probe.timer = window.setTimeout(() => replaceUnansweringStreamingSocket(probe.socket, requestId),
+    STREAMING_START_ANSWER_MS);
+  return true;
+}
+
+function replaceUnansweringStreamingSocket(socket, requestId) {
+  const engine = streamingEngineState();
+  if (!engine.sampleRateProbes?.has(requestId) || engine.socket !== socket
+      || socket?.readyState !== WebSocket.OPEN) return;
+  // Audio playing from it detaches as any lost socket does; otherwise a new socket simply takes over.
+  if (engine.roles.current && !engine.snapshot.paused) {
+    giveUpStreamingSocket(socket, 'probe unanswered');
+    return;
+  }
+  forgetLostStreamingSocket();
+  engine.expectedSocketClose = socket;
+  socket.close();
+  connectStreamingSocket();
+}
+
+/** Probes still waiting that went to another socket go again on [socket], now open. */
+function resendStreamingProbes(socket) {
+  for (const [requestId, probe] of streamingEngineState().sampleRateProbes || []) {
+    if (probe.socket !== socket) sendStreamingProbe(requestId, probe);
+  }
 }
 
 async function retireStreamingAudioGraph() {
@@ -2604,6 +2639,7 @@ function connectStreamingSocket() {
   socket.onopen = () => {
     window.clearTimeout(connectDeadline);
     flushStreamingControls();
+    resendStreamingProbes(socket);
     keepStreamingSocketAlive(socket);
     if (engine.socket === socket) resumeStreamingTransport();
   };

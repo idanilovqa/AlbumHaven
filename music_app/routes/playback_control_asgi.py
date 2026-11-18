@@ -155,9 +155,9 @@ async def playback_artwork(request: Request, resume_token: str) -> Response:
 
 
 @router.get("/playback/state")
-async def playback_state(request: Request, client_id: str = ""):
+async def playback_state(request: Request, client_id: str = "", include_path: bool = False):
     result = await playback_call(PostgresPlaybackClaims(playback_config(request)).get,
-        request.state.current_actor, client_id)
+        request.state.current_actor, client_id, include_path=include_path)
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
@@ -172,7 +172,8 @@ async def acquire_playback(request: Request):
         result = await playback_call(PostgresPlaybackClaims(playback_config(request)).acquire,
             request.state.current_actor, client_id=payload.get("clientId"),
             client_surface=payload.get("clientSurface"), track=payload.get("track"),
-            claim_token=payload.get("claimToken"), handoff=payload.get("handoff"))
+            claim_token=payload.get("claimToken"), handoff=payload.get("handoff"),
+            takeover=payload.get("takeover", False), position=payload.get("position"))
         claimed_at = time.perf_counter()
         scrobbling = await _scrobbling_status(request)
         timing["scrobbling_ms"] = round((time.perf_counter() - claimed_at) * 1000)

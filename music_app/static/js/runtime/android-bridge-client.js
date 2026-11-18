@@ -494,7 +494,7 @@ function androidNativeCurrentRole() {
 }
 
 async function startAndroidNativePlaybackTrack(track, {
-  startSeconds = 0, autoplay = true, referenceRetry = false, keepCurrent = false,
+  startSeconds = 0, autoplay = true, referenceRetry = false, keepCurrent = false, takeover = false,
 } = {}) {
   const native = androidNativePlayback;
   const revision = ++native.revision;
@@ -511,6 +511,8 @@ async function startAndroidNativePlaybackTrack(track, {
     // A pause or play while the references were fetched decides whether the kept item plays.
     if (keepCurrent) autoplay = !native.snapshot.paused;
     ({ payload, first } = buildAndroidNativeQueuePayload(revision, queueWindow, refs, startSeconds, autoplay, keepCurrent));
+    // Play while another client plays: Android's claim replaces that client's (playback.claim.takeover).
+    if (takeover && autoplay) payload.takeover = true;
     native.holdsQueue = true;
     await sendAndroidBridgeCommand('playback.loadQueue', payload);
   } catch (error) {

@@ -2,6 +2,24 @@
   {
     "config": "playwright.config.js",
     "project": "functional",
+    "test": "tests/e2e/specs/playbackTakeover.spec.js",
+    "case": "FTC-PLAYBACK-TAKEOVER-001 Play on the playing-elsewhere overlay continues the other device's song here at its place and stops the other device",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 1,
+    "databaseScenarios": ["playback:two-context-takeover-at-position"],
+    "filesystemScenarios": ["audio-copy:playback-length-signals"],
+    "expectedContracts": ["visible-elsewhere-overlay", "pressable-play-above-dimming", "takeover-continues-song-at-position", "single-audible-owner"],
+    "mutationOwnership": {
+      "databaseIdentity": "case:playback-takeover",
+      "filesystemCopy": "media/Playback Start Signals/Length And Repetition"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
     "test": "tests/e2e/specs/playbackOwnership.spec.js",
     "case": "FTC-PLAYBACK-LASTFM-010 two browsers hand off playback without duplicate paused listens",
     "profile": "functional-core",

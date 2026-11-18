@@ -383,9 +383,11 @@ function syncCompactPlayerUi(snapshot = {}) {
     els.cover.setAttribute('aria-label', openLabel);
   }
   if (els.play) {
+    // Playing on another device, Play takes playback over here, as on the expanded player.
+    const elsewhere = typeof isPlaybackPlayingElsewhere === 'function' && isPlaybackPlayingElsewhere();
     els.play.querySelector('.compact-player-play-icon path')?.setAttribute('d', playback.paused ? 'M8 5v14l12-7z' : 'M6 5h4v14H6zM14 5h4v14h-4z');
-    els.play.setAttribute('aria-label', playback.paused ? 'Play' : 'Pause');
-    els.play.disabled = !hasTrack || locked;
+    els.play.setAttribute('aria-label', elsewhere ? 'Play here' : playback.paused ? 'Play' : 'Pause');
+    els.play.disabled = !hasTrack || (locked && !elsewhere);
   }
   const queue = state.player.playbackQueue;
   const controls = resolveCompactQueueControls({ queueLength: queue?.tracks?.length || 0, currentIndex: currentQueueIndex() });

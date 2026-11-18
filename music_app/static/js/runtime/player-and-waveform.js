@@ -1,6 +1,7 @@
 function getPlayerElements() {
   return {
     player: document.querySelector('.global-player'),
+    elsewhere: document.querySelector('[data-player-elsewhere]'),
     coverButton: document.getElementById('player-cover-button'),
     play: document.getElementById('player-play'),
     title: document.getElementById('player-title'),

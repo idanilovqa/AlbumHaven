@@ -13010,7 +13010,7 @@ function androidNativeCurrentRole() {
 }
 
 async function startAndroidNativePlaybackTrack(track, {
-  startSeconds = 0, autoplay = true, referenceRetry = false, keepCurrent = false,
+  startSeconds = 0, autoplay = true, referenceRetry = false, keepCurrent = false, takeover = false,
 } = {}) {
   const native = androidNativePlayback;
   const revision = ++native.revision;
@@ -13027,6 +13027,8 @@ async function startAndroidNativePlaybackTrack(track, {
     // A pause or play while the references were fetched decides whether the kept item plays.
     if (keepCurrent) autoplay = !native.snapshot.paused;
     ({ payload, first } = buildAndroidNativeQueuePayload(revision, queueWindow, refs, startSeconds, autoplay, keepCurrent));
+    // Play while another client plays: Android's claim replaces that client's (playback.claim.takeover).
+    if (takeover && autoplay) payload.takeover = true;
     native.holdsQueue = true;
     await sendAndroidBridgeCommand('playback.loadQueue', payload);
   } catch (error) {
@@ -13643,8 +13645,8 @@ const ANDROID_NATIVE_PLAYBACK_ENGINE = Object.freeze({
   claimClientId: () => getAndroidNativePlaybackClientId(),
   ownsPlayback: () => isAndroidNativePlaybackOwner(),
   adopt: persistedState => attachAndroidNativePlayback(persistedState),
-  start: (track, { startSeconds = 0, autoplay = true } = {}) =>
-    startAndroidNativePlaybackTrack(track, { startSeconds, autoplay }),
+  start: (track, { startSeconds = 0, autoplay = true, takeover = false } = {}) =>
+    startAndroidNativePlaybackTrack(track, { startSeconds, autoplay, takeover }),
   pause: () => pauseAndroidNativePlayback(),
   resume: (_expectedStartRequestId, onPlaybackStarted) => resumeAndroidNativePlayback(onPlaybackStarted),
   seek: seconds => seekAndroidNativePlayback(seconds),
@@ -14026,12 +14028,16 @@ async function refreshPlaybackOwnershipClaim(track = null) {
       if (version !== (ownership.requestVersion || 0)) return false;
       const result = await requestPlaybackClaim({ protocol: 1,
         clientId: getPlaybackOwnershipTabId(), clientSurface: 'private_web', claimToken: claim.claimToken,
-        state: 'playing', track: prepared.track });
+        state: 'playing', track: prepared.track, ...positionField(track || state.player.current) });
       if (ownership.activeClaim !== claim || version !== (ownership.requestVersion || 0)) return false;
       acceptPlaybackClaim(result, prepared);
       return true;
-    } catch (_error) {
-      if (ownership.activeClaim === claim && version === (ownership.requestVersion || 0)) losePlaybackOwnership();
+    } catch (error) {
+      if (ownership.activeClaim === claim && version === (ownership.requestVersion || 0)) {
+        losePlaybackOwnership();
+        // Taken over: show which client plays now, as "Playing in another tab".
+        if (error?.status === 409) await handlePlaybackOwnershipEvent();
+      }
       return false;
     }
   })().finally(() => { ownership.renewing = false; });
@@ -14082,7 +14088,9 @@ async function claimPlaybackOwnership(track, options = {}) {
         ? await acquirePlaybackOwnershipHandoff(prepared, handoff)
         : await requestPlaybackClaim({ protocol: 1,
           clientId: getPlaybackOwnershipTabId(), clientSurface: 'private_web',
-          claimToken: claim?.claimToken || null, state: 'playing', track: prepared.track });
+          claimToken: claim?.claimToken || null, state: 'playing', track: prepared.track,
+          ...(options.takeover && !claim ? { takeover: true } : {}),
+          ...positionField(track) });
       if (version !== ownership.requestVersion) {
         if (!claim) await deletePlaybackClaim(result).catch(() => {});
         return false;
@@ -14169,7 +14177,60 @@ function restorePlaybackOwnershipFromPageCache(playbackSnapshot = null) {
   });
 }
 
-function canStartPlaybackInThisTab(track) { return claimPlaybackOwnership(track); }
+function canStartPlaybackInThisTab(track, options = {}) {
+  return claimPlaybackOwnership(track, { takeover: options.takeover === true });
+}
+
+/**
+ * Play while another client plays (owner, 2026-11-17, playback.claim.takeover): that client's
+ * song continues here from where it last said it was, and this claim replaces its claim.
+ */
+async function takeOverPlaybackHere() {
+  let snapshot;
+  try {
+    snapshot = await playbackOwnershipRequest('GET',
+      `/playback/state?client_id=${encodeURIComponent(getPlaybackOwnershipTabId())}&include_path=true`);
+  } catch (_error) {
+    notifyBlockedPlaybackStart();
+    return false;
+  }
+  if (!snapshot?.is_playing_elsewhere) {
+    // It stopped meanwhile: the player shows what holds now, and the next Play starts here.
+    syncMirroredPlaybackState(snapshot);
+    return false;
+  }
+  if (!snapshot.path) {
+    if (typeof showToast === 'function') showToast('That song cannot be opened here.', 'error', 2800);
+    return false;
+  }
+  const song = normalizePlaybackOwnershipTrack(snapshot.track);
+  const position = snapshot.position;
+  state.player.playbackQueue = null;
+  return playTrackFromPayload({
+    src: `/track?path=${encodeURIComponent(snapshot.path)}`,
+    path: snapshot.path,
+    title: song.title || 'Track',
+    artist: song.artist,
+    albumArtist: '',
+    album: song.album,
+    coverRef: '',
+    durationSeconds: position ? position.durationMs / 1000 : 0,
+  }, { startSeconds: position ? position.ms / 1000 : 0, takeover: true });
+}
+
+/**
+ * Where [track] is, so another client can continue it there: `{ position }`, or nothing while the
+ * player still holds another song (a start claims before its song loads) or its length is unknown.
+ */
+function positionField(track) {
+  if (typeof getPlayerPlaybackSnapshot !== 'function') return {};
+  const playback = getPlayerPlaybackSnapshot();
+  if (track?.src && playback.src && playback.src !== track.src) return {};
+  const durationMs = Math.round((Number(playback.duration) || 0) * 1000);
+  if (durationMs < 1) return {};
+  const ms = Math.min(durationMs, Math.max(0, Math.round((Number(playback.currentTime) || 0) * 1000)));
+  return { position: { ms, durationMs } };
+}
 
 function isActivePlaybackOwner() {
   const claim = getPlaybackOwnershipState().activeClaim;
@@ -14193,6 +14254,11 @@ function getPlaybackClaimContext() {
 }
 
 function isPlaybackLockedByAnotherTab() { return getPlaybackOwnershipState().lockStatus === 'locked'; }
+/** Another client of this account plays now: this one may take playback over. */
+function isPlaybackPlayingElsewhere() {
+  const ownership = getPlaybackOwnershipState();
+  return ownership.lockStatus === 'locked' && ownership.blockedReason === 'playing_in_another_tab';
+}
 function getMirroredPlaybackTrack() { return getPlaybackOwnershipState().mirroredTrack; }
 
 function initPlaybackOwnershipCoordinator() {
@@ -18068,6 +18134,7 @@ const loopEditSessionExpiryController = createLoopEditSessionExpiryController({
 function getPlayerElements() {
   return {
     player: document.querySelector('.global-player'),
+    elsewhere: document.querySelector('[data-player-elsewhere]'),
     coverButton: document.getElementById('player-cover-button'),
     play: document.getElementById('player-play'),
     title: document.getElementById('player-title'),
@@ -45037,6 +45104,10 @@ function updatePlayerUi() {
   const playbackUnavailable = lockedByAnotherTab && typeof getPlaybackOwnershipState === 'function'
     && getPlaybackOwnershipState().blockedReason === 'playback_unavailable';
   const blockedLabel = playbackUnavailable ? 'Playback unavailable' : 'Playing in another tab';
+  // The overlay dims the other device's song under its status; Play stays pressable above it.
+  const playingElsewhere = lockedByAnotherTab && !playbackUnavailable;
+  els.player?.classList?.toggle('is-playing-elsewhere', playingElsewhere);
+  if (els.elsewhere) els.elsewhere.hidden = !playingElsewhere;
   const mirroredTrack = lockedByAnotherTab && typeof getMirroredPlaybackTrack === 'function'
     ? getMirroredPlaybackTrack()
     : null;
@@ -45058,7 +45129,7 @@ function updatePlayerUi() {
     els.timeline.disabled = !hasTrack || lockedByAnotherTab;
   }
   if (els.time) {
-    els.time.hidden = !hasTrack;
+    els.time.hidden = !hasTrack || playingElsewhere;
     els.time.textContent = lockedByAnotherTab
       ? blockedLabel
       : state.player.loopActive
@@ -45074,10 +45145,10 @@ function updatePlayerUi() {
   });
   if (els.play) {
     renderGlobalPlayerPlayGlyph(els.play, playback.paused);
-    els.play.setAttribute('aria-label', lockedByAnotherTab
-      ? (playbackUnavailable ? blockedLabel : 'Playback locked in another tab')
+    els.play.setAttribute('aria-label', playingElsewhere ? 'Play here'
+      : lockedByAnotherTab ? blockedLabel
       : (playback.paused ? 'Play' : 'Pause'));
-    els.play.disabled = lockedByAnotherTab || !hasTrack;
+    els.play.disabled = playbackUnavailable || !hasTrack;
   }
   if (typeof syncCompactPlayerUi === 'function') syncCompactPlayerUi({ displayTrack, playback, hasTrack, lockedByAnotherTab });
   els.timeline?.parentElement?.classList.toggle('is-looping', state.player.loopActive);
@@ -45226,7 +45297,7 @@ async function playTrackFromPayload(track, options = {}) {
   // Instant start, as Android's: the track starts while this tab's claim is asked for, and a
   // refusal pauses it again. A settled answer is never awaited, so rapid queue steps keep their starts.
   const pendingClaim = shouldAutoplay && !ownershipAlreadyClaimed && typeof canStartPlaybackInThisTab === 'function'
-    ? canStartPlaybackInThisTab(track)
+    ? canStartPlaybackInThisTab(track, { takeover: options.takeover === true })
     : true;
   if (pendingClaim === false) return false;
   if (selectionToken !== playerTrackSelectionToken) return false;
@@ -45248,6 +45319,7 @@ async function playTrackFromPayload(track, options = {}) {
       startSeconds,
       autoplay: shouldAutoplay,
       allowSuspendedAutoplayFallback: options.allowSuspendedAutoplayFallback === true,
+      takeover: options.takeover === true,
     });
   } catch (error) {
     if (selectionToken !== playerTrackSelectionToken) return false;
@@ -45784,6 +45856,13 @@ function isPlayerSurfaceVisible() {
 
 function togglePlayerPlayback(options = {}) {
   const focusTimelineOnResume = options.focusTimelineOnResume !== false;
+  // Play while another client plays moves its song here (playback.claim.takeover).
+  if (typeof isPlaybackPlayingElsewhere === 'function' && isPlaybackPlayingElsewhere()) {
+    void Promise.resolve(takeOverPlaybackHere()).catch((error) => {
+      console.warn('[AlbumHaven][Playback] Taking playback over failed.', error);
+    });
+    return true;
+  }
   const playback = getPlayerPlaybackSnapshot();
   if (!(playback.src || state.player.current?.src)) return false;
   if (typeof resumeStreamingPlayback !== 'function'
@@ -46622,9 +46701,11 @@ function syncCompactPlayerUi(snapshot = {}) {
     els.cover.setAttribute('aria-label', openLabel);
   }
   if (els.play) {
+    // Playing on another device, Play takes playback over here, as on the expanded player.
+    const elsewhere = typeof isPlaybackPlayingElsewhere === 'function' && isPlaybackPlayingElsewhere();
     els.play.querySelector('.compact-player-play-icon path')?.setAttribute('d', playback.paused ? 'M8 5v14l12-7z' : 'M6 5h4v14H6zM14 5h4v14h-4z');
-    els.play.setAttribute('aria-label', playback.paused ? 'Play' : 'Pause');
-    els.play.disabled = !hasTrack || locked;
+    els.play.setAttribute('aria-label', elsewhere ? 'Play here' : playback.paused ? 'Play' : 'Pause');
+    els.play.disabled = !hasTrack || (locked && !elsewhere);
   }
   const queue = state.player.playbackQueue;
   const controls = resolveCompactQueueControls({ queueLength: queue?.tracks?.length || 0, currentIndex: currentQueueIndex() });

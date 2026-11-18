@@ -34,7 +34,7 @@ test('FTC-PLAYER-016 production playback crosses a sample-exact stable-stream bo
   // LOCAL DIAGNOSTICS ONLY (never pushed): observe waveform traffic and engine state.
   const diagT0 = Date.now();
   const diagFs = await import('node:fs');
-  const diagServerLog = (await import('node:path')).join((await import('node:os')).tmpdir(), 'album-haven-diag-ftc016.log');
+  const diagServerLog = (await import('node:path')).join(process.cwd(), 'album-haven-diag-ftc016.log');
   try { diagFs.rmSync(diagServerLog, { force: true }); } catch { /* diagnostic only */ }
   const diagWaveform = [];
   const diagSamples = [];

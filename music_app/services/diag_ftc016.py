@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
+from pathlib import Path
 import time
 
-DIAG_PATH = os.path.join(tempfile.gettempdir(), "album-haven-diag-ftc016.log")
+DIAG_PATH = str(Path(__file__).resolve().parents[2] / "album-haven-diag-ftc016.log")
 
 
 def diag(event: str, **fields: object) -> None:

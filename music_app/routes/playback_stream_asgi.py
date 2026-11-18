@@ -95,6 +95,39 @@ async def playback_waveform(
     cachedOnly: str = "",
     bins: int = 280,
 ) -> Response:
+    from music_app.services.diag_ftc016 import diag, track_name
+
+    started = time.perf_counter()
+    track = track_name(path)
+    diag("route-start", bins=bins, cachedOnly=cachedOnly, track=track)
+    status: object = "exception"
+    try:
+        response = await _playback_waveform_impl(
+            request, path=path, loop_id=loop_id, cachedOnly=cachedOnly, bins=bins
+        )
+        status = response.status_code
+        return response
+    except BaseException as error:
+        status = f"raised {type(error).__name__}"
+        raise
+    finally:
+        diag(
+            "route-end",
+            bins=bins,
+            cachedOnly=cachedOnly,
+            track=track,
+            status=status,
+            durationMs=round((time.perf_counter() - started) * 1000),
+        )
+
+
+async def _playback_waveform_impl(
+    request: Request,
+    path: str = "",
+    loop_id: str = "",
+    cachedOnly: str = "",
+    bins: int = 280,
+) -> Response:
     if bins not in {280, 720}:
         return JSONResponse({"error": "Unsupported waveform sample count"}, status_code=400)
     requested_path = str(path or "").strip()

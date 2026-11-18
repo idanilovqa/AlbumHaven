@@ -31,6 +31,57 @@ test('FTC-PLAYER-016 production playback crosses a sample-exact stable-stream bo
   utilityTabBarActions,
 }, testInfo) => {
   const traffic = playbackEvidence;
+  // LOCAL DIAGNOSTICS ONLY (never pushed): observe waveform traffic and engine state.
+  const diagT0 = Date.now();
+  const diagFs = await import('node:fs');
+  const diagServerLog = (await import('node:path')).join((await import('node:os')).tmpdir(), 'album-haven-diag-ftc016.log');
+  try { diagFs.rmSync(diagServerLog, { force: true }); } catch { /* diagnostic only */ }
+  const diagWaveform = [];
+  const diagSamples = [];
+  const diagIsWave = (url) => url.includes('/playback/waveform');
+  const diagShort = (url) => {
+    const u = new URL(url);
+    return `${u.searchParams.get('bins')}${u.searchParams.get('cachedOnly') === '1' ? ' cachedOnly' : ''} ${String(u.searchParams.get('path') || '').split(/[\\/]/).pop()}`;
+  };
+  page.on('request', (r) => { if (diagIsWave(r.url())) diagWaveform.push({ t: Date.now() - diagT0, ev: 'request', q: diagShort(r.url()) }); });
+  page.on('requestfinished', async (r) => {
+    if (!diagIsWave(r.url())) return;
+    const res = await r.response().catch(() => null);
+    diagWaveform.push({ t: Date.now() - diagT0, ev: 'finished', status: res?.status(), q: diagShort(r.url()) });
+  });
+  page.on('requestfailed', (r) => { if (diagIsWave(r.url())) diagWaveform.push({ t: Date.now() - diagT0, ev: 'failed', err: r.failure()?.errorText, q: diagShort(r.url()) }); });
+  const diagEngine = () => page.evaluate(() => {
+    const e = (typeof state !== 'undefined' && state.player?.streaming) || {};
+    const name = (track) => (track?.path ? String(track.path).split(/[\\/]/).pop() : null);
+    return {
+      generation: e.generation, mode: e.mode,
+      pendingContinuityTrack: name(e.pendingContinuityTrack),
+      pendingPromotion: Boolean(e.pendingPromotion),
+      bufferedFrames: e.diagnostics?.bufferedFrames, inFlightFrames: e.diagnostics?.inFlightFrames,
+      firstFrameAtMs: e.diagnostics?.firstFrameAtMs, buffering: e.diagnostics?.buffering,
+      snapshotPaused: e.snapshot?.paused, renderedFrame: e.snapshot?.renderedFrame,
+      currentFirstFrameNotified: e.roles?.current?.firstFrameNotified,
+      currentBoundaryNotified: e.roles?.current?.boundaryNotified,
+      currentTrack: name(e.roles?.current?.track), continuityTrack: name(e.roles?.continuity?.track),
+      sampleRate: e.sampleRate,
+    };
+  });
+  const diagTimer = setInterval(() => {
+    diagEngine().then((s) => diagSamples.push({ t: Date.now() - diagT0, ...s })).catch(() => {});
+  }, 500);
+  const diagDump = async (label) => {
+    clearInterval(diagTimer);
+    const finalEngine = await diagEngine().catch((error) => ({ error: String(error) }));
+    const controls = traffic.snapshotSince(0).map(({ path: _p, ...control }) => control);
+    let server = [];
+    try {
+      server = diagFs.readFileSync(diagServerLog, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line));
+    } catch (error) { server = [{ unavailable: String(error), diagServerLog }]; }
+    const body = JSON.stringify({ label, t0EpochMs: diagT0, waveform: diagWaveform, server, controls, samples: diagSamples, finalEngine });
+    console.log(`[DIAG-FTC016] ${body}`);
+    try { diagFs.writeFileSync(testInfo.outputPath('diag-ftc016.json'), body); } catch { /* diagnostic only */ }
+    if (process.env.DIAG_OUT) diagFs.writeFileSync(process.env.DIAG_OUT, body);
+  };
   {
     await stepLogger.step('Open the generated lossless-boundary album through visible controls', async () => {
       await galleryActions.goto('/?surface=albums');
@@ -125,7 +176,11 @@ test('FTC-PLAYER-016 production playback crosses a sample-exact stable-stream bo
       }
       await initialStartDiagnostics.finish();
       await globalPlayerActions.waitForPlaybackState({ paused: false, minimumCurrentTime: 0.02 });
-      continuityOpen = await traffic.waitForControl({ type: 'open', role: 'continuity' });
+      try {
+        continuityOpen = await traffic.waitForControl({ type: 'open', role: 'continuity' });
+      } finally {
+        await diagDump(continuityOpen ? 'continuity-opened' : 'continuity-missing');
+      }
       const diagnostics = await readGaplessPlaybackDiagnostics(page);
       expect(diagnostics.firstFrameAtEpochMs).toBeGreaterThan(0);
       expect(diagnostics.roleOpenedAtEpochMs.continuity).toBeGreaterThanOrEqual(

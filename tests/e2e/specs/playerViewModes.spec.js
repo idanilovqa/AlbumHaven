@@ -330,7 +330,8 @@ test(`${CASE_ID} switches expanded, docked, and floating player views without sh
     expect((await globalPlayerActions.readViewCheckpoint()).style).toBe('floating');
     await globalPlayerActions.expandPlayer();
   });
-  await stepLogger.step('A second tab shows a disabled play icon rather than a Locked label', async () => {
+  // Owner, mockup playback-elsewhere-status v003 (2026-11-17): Play stays pressable, never dimmed.
+  await stepLogger.step('A second tab keeps a pressable Play icon rather than a Locked label', async () => {
     await galleryActions.selectAlbumDetailsByIdentity(ALBUM);
     await trackModalActions.waitForLoadedSummary();
     await trackModalActions.trackModal.trackTitleAt(0).dblclick();
@@ -339,9 +340,9 @@ test(`${CASE_ID} switches expanded, docked, and floating player views without sh
     try {
       await peer.goto(page.url());
       const peerSurfaces = new InteractionSurfaces(peer);
-      await expect(peerSurfaces.play).toBeDisabled();
+      await expect(peerSurfaces.play).toBeEnabled();
       await expect(peerSurfaces.play).not.toContainText('Locked');
-      await expect(peerSurfaces.play).toHaveAttribute('aria-label', 'Playback locked in another tab');
+      await expect(peerSurfaces.play).toHaveAttribute('aria-label', 'Play here');
       const peerPlayer = new GlobalPlayerActions(new GlobalPlayer(peer, testInfo));
       if ((await peerPlayer.readViewCheckpoint()).mode !== 'expanded') await peerPlayer.expandPlayer();
       await expect(peerPlayer.globalPlayer.loopAction).toHaveAttribute('data-loop-action-state', 'disabled');

@@ -105,7 +105,8 @@ data class LoopRange(val startFrame: Long, val endFrame: Long, val sampleRate: I
 
 /**
  * [keepCurrent] says the current item is the one already playing: only the queue around it
- * changes, as when the web's queue changes under the playing track.
+ * changes, as when the web's queue changes under the playing track. [takeover] says Play was
+ * pressed while another client plays: this client's claim replaces that client's.
  */
 data class QueueLoad(
     val queueRevision: Long,
@@ -115,6 +116,7 @@ data class QueueLoad(
     val loop: LoopRange?,
     val autoplay: Boolean,
     val keepCurrent: Boolean = false,
+    val takeover: Boolean = false,
 )
 
 enum class NativePlaybackState(val wire: String) {
@@ -242,7 +244,13 @@ class NativePlaybackController(
     @Volatile var snapshot = NativePlaybackSnapshot(clientId, NativePlaybackState.IDLE, 0, null, 0, 0)
         private set
 
-    private val claims = PlaybackClaimOwner(claimApi, clientId, io, ::post, clock, ::onClaimEvent)
+    private val claims = PlaybackClaimOwner(claimApi, clientId, io, ::post, clock, ::onClaimEvent) {
+        // Where the song is, so another device can take it over there (owner, 2026-11-17).
+        queue.getOrNull(index)?.durationMs?.takeIf { it > 0 }?.let { ClaimPosition(positionMs().coerceIn(0, it), it) }
+    }
+
+    /** The loaded queue's Play replaces another client's claim: pressed while that client plays. */
+    private var takeOverOnPlay = false
 
     private val listens = ListenSessions(
         deviceId = deviceId,
@@ -574,6 +582,7 @@ class NativePlaybackController(
         recoveryAttempted = false
         changeListenTrack(outgoing, outgoingPositionMs)
         emit { NativePlaybackEvent.CurrentItem(it, CurrentItemReason.LOAD) }
+        takeOverOnPlay = load.autoplay && load.takeover
         if (load.autoplay) {
             requestPlay(start)
         } else {
@@ -658,7 +667,8 @@ class NativePlaybackController(
         if (transportOpen && !loaded) startEngineAt(index, heldPositionMs)
         val requestRevision = revision
         val requestIndex = index
-        claims.acquire(item.claimTrack()) { outcome ->
+        val takeOver = takeOverOnPlay.also { takeOverOnPlay = false }
+        claims.acquire(item.claimTrack(), takeOver) { outcome ->
             if (!wantPlay || revision != requestRevision || index != requestIndex) return@acquire
             when (outcome) {
                 ClaimOutcome.GRANTED -> {

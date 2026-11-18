@@ -1377,6 +1377,13 @@
               "test": "tests/e2e/specs/playerArtworkSearchContext.spec.js",
               "case": "FTC-PLAYER-015 player artwork reopens the playing album after selecting an unrelated search result",
               "area": "playback"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playbackTakeover.spec.js",
+              "case": "FTC-PLAYBACK-TAKEOVER-001 Play on the playing-elsewhere overlay continues the other device's song here at its place and stops the other device",
+              "area": "playback"
             }
           ]
         }

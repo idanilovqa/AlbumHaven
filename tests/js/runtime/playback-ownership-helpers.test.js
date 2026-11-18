@@ -948,7 +948,8 @@ test('renewal failure stops audible output and clears local ownership', async ()
   await heartbeat();
   await new Promise((resolve) => setImmediate(resolve));
 
-  assert.equal(stateRequests, 2, 'renewal must reach the server before rejection stops playback');
+  // The refused renewal, then the state read that shows who plays now (a takeover's overlay).
+  assert.equal(stateRequests, 3, 'renewal must reach the server before rejection stops playback');
   assert.equal(stopStreamingPlaybackCalls.length, 1);
   assert.match(stopStreamingPlaybackCalls[0], /ownership|claim|lease/);
   assert.equal(context.state.player.ownership.activeClaim, null);
@@ -1261,4 +1262,107 @@ test('a native-playback shell leaves the claim to Android and reads ownership as
   await context.handlePlaybackOwnershipEvent();
   assert.deepEqual(requests, [{ url: `/playback/state?client_id=${nativeClientId}`, method: 'GET' }]);
   assert.equal(context.isActivePlaybackOwner(), false);
+});
+
+// Owner, 2026-11-17 (playback.claim.takeover): Play while another client plays continues that
+// client's song here from where it last said it was, and this claim replaces the other one.
+function playingElsewhereState() {
+  return {
+    player: {
+      current: null,
+      ownership: {
+        tabId: '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70', lockStatus: 'locked',
+        blockedReason: 'playing_in_another_tab', mirroredTrack: { title: 'Their Song' },
+        activeClaim: null, channel: null, heartbeatTimer: 0, initialized: true,
+      },
+      playbackQueue: { tracks: [localTrack] },
+    },
+  };
+}
+
+test('Play while another client plays opens its song here at its place and claims with a takeover', async () => {
+  const requests = [];
+  const started = [];
+  const { context } = loadHelper({
+    state: playingElsewhereState(),
+    playTrackFromPayload: async (track, options) => { started.push({ track, options }); return true; },
+    fetch: async (url, init = {}) => {
+      requests.push({ url, method: init.method || 'GET' });
+      return jsonResponse({ protocol: 1, is_playing_elsewhere: true, path: 'C:/Music/their.flac',
+        track: { playbackRef: 'their-ref', title: 'Their Song', artist: 'Them', album: 'Their Album', artworkUrl: null },
+        position: { ms: 61500, durationMs: 300000 } });
+    },
+  });
+
+  assert.equal(context.isPlaybackPlayingElsewhere(), true);
+  assert.equal(await context.takeOverPlaybackHere(), true);
+
+  assert.deepEqual(requests.map(({ url, method }) => [method, url]), [
+    ['GET', '/playback/state?client_id=0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70&include_path=true'],
+  ]);
+  assert.equal(started.length, 1);
+  const [{ track, options }] = started;
+  assert.equal(track.path, 'C:/Music/their.flac');
+  assert.equal(track.src, '/track?path=C%3A%2FMusic%2Ftheir.flac');
+  assert.equal(track.title, 'Their Song');
+  assert.equal(track.durationSeconds, 300);
+  assert.equal(options.startSeconds, 61.5);
+  assert.equal(options.takeover, true);
+  assert.equal(context.state.player.playbackQueue, null, 'their song is not this tab\'s old queue');
+});
+
+test('a takeover claim asks to replace the other claim once and every claim request reports the place', async () => {
+  const bodies = [];
+  const { context } = loadHelper({
+    state: playingElsewhereState(),
+    getPlayerPlaybackSnapshot: () => ({ paused: false, ended: false, currentTime: 61.5, duration: 300 }),
+    fetch: async (url, init = {}) => {
+      if (url === '/playback/refs') {
+        return jsonResponse({ protocol: 1, expiresAt: '2099-01-01T00:00:00Z', tracks: [{ playbackRef: 'ref-1' }] });
+      }
+      bodies.push(JSON.parse(init.body));
+      return jsonResponse({ protocol: 1, claimToken: 'claim-1', expiresAt: '2099-01-01T00:00:00Z', leaseMs: 30000 });
+    },
+  });
+
+  assert.equal(await context.claimPlaybackOwnership(localTrack, { takeover: true }), true);
+  assert.equal(bodies[0].takeover, true);
+  assert.equal(bodies[0].claimToken, null);
+  assert.deepEqual(bodies[0].position, { ms: 61500, durationMs: 300000 });
+
+  assert.equal(await context.refreshPlaybackOwnershipClaim(localTrack), true);
+  assert.equal('takeover' in bodies[1], false, 'a renewal never takes over');
+  assert.deepEqual(bodies[1].position, { ms: 61500, durationMs: 300000 });
+
+  context.getPlayerPlaybackSnapshot = () => ({ paused: false, ended: false, currentTime: 0, duration: 0 });
+  assert.equal(await context.refreshPlaybackOwnershipClaim(localTrack), true);
+  assert.equal('position' in bodies[2], false, 'no place is reported before the song\'s length is known');
+
+  context.getPlayerPlaybackSnapshot = () => ({ paused: false, ended: false, currentTime: 200, duration: 250,
+    src: '/track?path=previous.flac' });
+  assert.equal(await context.refreshPlaybackOwnershipClaim(localTrack), true);
+  assert.equal('position' in bodies[3], false, 'the previous song\'s place is never reported for this one');
+});
+
+test('a renewal refused because another client took over shows that client as playing elsewhere', async () => {
+  const requests = [];
+  const { context } = loadHelper({
+    state: activeOwnershipState(),
+    getPlayerPlaybackSnapshot: () => ({ paused: false, ended: false, currentTime: 5, duration: 60 }),
+    fetch: async (url, init = {}) => {
+      if (url === '/playback/refs') {
+        return jsonResponse({ protocol: 1, expiresAt: '2099-01-01T00:00:00Z', tracks: [{ playbackRef: 'ref-1' }] });
+      }
+      requests.push(init.method || 'GET');
+      if ((init.method || 'GET') === 'PUT') return jsonResponse({}, { ok: false, status: 409 });
+      return jsonResponse({ protocol: 1, is_playing_elsewhere: true,
+        track: { title: 'Taken Song', artist: 'Them', album: 'Their Album', artworkUrl: null } });
+    },
+  });
+
+  assert.equal(await context.refreshPlaybackOwnershipClaim(localTrack), false);
+
+  assert.deepEqual(requests, ['PUT', 'GET']);
+  assert.equal(context.isPlaybackPlayingElsewhere(), true);
+  assert.equal(context.getMirroredPlaybackTrack().title, 'Taken Song');
 });

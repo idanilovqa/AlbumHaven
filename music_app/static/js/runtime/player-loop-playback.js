@@ -160,6 +160,10 @@ function updatePlayerUi() {
   const playbackUnavailable = lockedByAnotherTab && typeof getPlaybackOwnershipState === 'function'
     && getPlaybackOwnershipState().blockedReason === 'playback_unavailable';
   const blockedLabel = playbackUnavailable ? 'Playback unavailable' : 'Playing in another tab';
+  // The overlay dims the other device's song under its status; Play stays pressable above it.
+  const playingElsewhere = lockedByAnotherTab && !playbackUnavailable;
+  els.player?.classList?.toggle('is-playing-elsewhere', playingElsewhere);
+  if (els.elsewhere) els.elsewhere.hidden = !playingElsewhere;
   const mirroredTrack = lockedByAnotherTab && typeof getMirroredPlaybackTrack === 'function'
     ? getMirroredPlaybackTrack()
     : null;
@@ -181,7 +185,7 @@ function updatePlayerUi() {
     els.timeline.disabled = !hasTrack || lockedByAnotherTab;
   }
   if (els.time) {
-    els.time.hidden = !hasTrack;
+    els.time.hidden = !hasTrack || playingElsewhere;
     els.time.textContent = lockedByAnotherTab
       ? blockedLabel
       : state.player.loopActive
@@ -197,10 +201,10 @@ function updatePlayerUi() {
   });
   if (els.play) {
     renderGlobalPlayerPlayGlyph(els.play, playback.paused);
-    els.play.setAttribute('aria-label', lockedByAnotherTab
-      ? (playbackUnavailable ? blockedLabel : 'Playback locked in another tab')
+    els.play.setAttribute('aria-label', playingElsewhere ? 'Play here'
+      : lockedByAnotherTab ? blockedLabel
       : (playback.paused ? 'Play' : 'Pause'));
-    els.play.disabled = lockedByAnotherTab || !hasTrack;
+    els.play.disabled = playbackUnavailable || !hasTrack;
   }
   if (typeof syncCompactPlayerUi === 'function') syncCompactPlayerUi({ displayTrack, playback, hasTrack, lockedByAnotherTab });
   els.timeline?.parentElement?.classList.toggle('is-looping', state.player.loopActive);
@@ -349,7 +353,7 @@ async function playTrackFromPayload(track, options = {}) {
   // Instant start, as Android's: the track starts while this tab's claim is asked for, and a
   // refusal pauses it again. A settled answer is never awaited, so rapid queue steps keep their starts.
   const pendingClaim = shouldAutoplay && !ownershipAlreadyClaimed && typeof canStartPlaybackInThisTab === 'function'
-    ? canStartPlaybackInThisTab(track)
+    ? canStartPlaybackInThisTab(track, { takeover: options.takeover === true })
     : true;
   if (pendingClaim === false) return false;
   if (selectionToken !== playerTrackSelectionToken) return false;
@@ -371,6 +375,7 @@ async function playTrackFromPayload(track, options = {}) {
       startSeconds,
       autoplay: shouldAutoplay,
       allowSuspendedAutoplayFallback: options.allowSuspendedAutoplayFallback === true,
+      takeover: options.takeover === true,
     });
   } catch (error) {
     if (selectionToken !== playerTrackSelectionToken) return false;
@@ -907,6 +912,13 @@ function isPlayerSurfaceVisible() {
 
 function togglePlayerPlayback(options = {}) {
   const focusTimelineOnResume = options.focusTimelineOnResume !== false;
+  // Play while another client plays moves its song here (playback.claim.takeover).
+  if (typeof isPlaybackPlayingElsewhere === 'function' && isPlaybackPlayingElsewhere()) {
+    void Promise.resolve(takeOverPlaybackHere()).catch((error) => {
+      console.warn('[AlbumHaven][Playback] Taking playback over failed.', error);
+    });
+    return true;
+  }
   const playback = getPlayerPlaybackSnapshot();
   if (!(playback.src || state.player.current?.src)) return false;
   if (typeof resumeStreamingPlayback !== 'function'

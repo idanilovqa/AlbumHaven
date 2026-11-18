@@ -305,12 +305,16 @@ async function refreshPlaybackOwnershipClaim(track = null) {
       if (version !== (ownership.requestVersion || 0)) return false;
       const result = await requestPlaybackClaim({ protocol: 1,
         clientId: getPlaybackOwnershipTabId(), clientSurface: 'private_web', claimToken: claim.claimToken,
-        state: 'playing', track: prepared.track });
+        state: 'playing', track: prepared.track, ...positionField(track || state.player.current) });
       if (ownership.activeClaim !== claim || version !== (ownership.requestVersion || 0)) return false;
       acceptPlaybackClaim(result, prepared);
       return true;
-    } catch (_error) {
-      if (ownership.activeClaim === claim && version === (ownership.requestVersion || 0)) losePlaybackOwnership();
+    } catch (error) {
+      if (ownership.activeClaim === claim && version === (ownership.requestVersion || 0)) {
+        losePlaybackOwnership();
+        // Taken over: show which client plays now, as "Playing in another tab".
+        if (error?.status === 409) await handlePlaybackOwnershipEvent();
+      }
       return false;
     }
   })().finally(() => { ownership.renewing = false; });
@@ -361,7 +365,9 @@ async function claimPlaybackOwnership(track, options = {}) {
         ? await acquirePlaybackOwnershipHandoff(prepared, handoff)
         : await requestPlaybackClaim({ protocol: 1,
           clientId: getPlaybackOwnershipTabId(), clientSurface: 'private_web',
-          claimToken: claim?.claimToken || null, state: 'playing', track: prepared.track });
+          claimToken: claim?.claimToken || null, state: 'playing', track: prepared.track,
+          ...(options.takeover && !claim ? { takeover: true } : {}),
+          ...positionField(track) });
       if (version !== ownership.requestVersion) {
         if (!claim) await deletePlaybackClaim(result).catch(() => {});
         return false;
@@ -448,7 +454,60 @@ function restorePlaybackOwnershipFromPageCache(playbackSnapshot = null) {
   });
 }
 
-function canStartPlaybackInThisTab(track) { return claimPlaybackOwnership(track); }
+function canStartPlaybackInThisTab(track, options = {}) {
+  return claimPlaybackOwnership(track, { takeover: options.takeover === true });
+}
+
+/**
+ * Play while another client plays (owner, 2026-11-17, playback.claim.takeover): that client's
+ * song continues here from where it last said it was, and this claim replaces its claim.
+ */
+async function takeOverPlaybackHere() {
+  let snapshot;
+  try {
+    snapshot = await playbackOwnershipRequest('GET',
+      `/playback/state?client_id=${encodeURIComponent(getPlaybackOwnershipTabId())}&include_path=true`);
+  } catch (_error) {
+    notifyBlockedPlaybackStart();
+    return false;
+  }
+  if (!snapshot?.is_playing_elsewhere) {
+    // It stopped meanwhile: the player shows what holds now, and the next Play starts here.
+    syncMirroredPlaybackState(snapshot);
+    return false;
+  }
+  if (!snapshot.path) {
+    if (typeof showToast === 'function') showToast('That song cannot be opened here.', 'error', 2800);
+    return false;
+  }
+  const song = normalizePlaybackOwnershipTrack(snapshot.track);
+  const position = snapshot.position;
+  state.player.playbackQueue = null;
+  return playTrackFromPayload({
+    src: `/track?path=${encodeURIComponent(snapshot.path)}`,
+    path: snapshot.path,
+    title: song.title || 'Track',
+    artist: song.artist,
+    albumArtist: '',
+    album: song.album,
+    coverRef: '',
+    durationSeconds: position ? position.durationMs / 1000 : 0,
+  }, { startSeconds: position ? position.ms / 1000 : 0, takeover: true });
+}
+
+/**
+ * Where [track] is, so another client can continue it there: `{ position }`, or nothing while the
+ * player still holds another song (a start claims before its song loads) or its length is unknown.
+ */
+function positionField(track) {
+  if (typeof getPlayerPlaybackSnapshot !== 'function') return {};
+  const playback = getPlayerPlaybackSnapshot();
+  if (track?.src && playback.src && playback.src !== track.src) return {};
+  const durationMs = Math.round((Number(playback.duration) || 0) * 1000);
+  if (durationMs < 1) return {};
+  const ms = Math.min(durationMs, Math.max(0, Math.round((Number(playback.currentTime) || 0) * 1000)));
+  return { position: { ms, durationMs } };
+}
 
 function isActivePlaybackOwner() {
   const claim = getPlaybackOwnershipState().activeClaim;
@@ -472,6 +531,11 @@ function getPlaybackClaimContext() {
 }
 
 function isPlaybackLockedByAnotherTab() { return getPlaybackOwnershipState().lockStatus === 'locked'; }
+/** Another client of this account plays now: this one may take playback over. */
+function isPlaybackPlayingElsewhere() {
+  const ownership = getPlaybackOwnershipState();
+  return ownership.lockStatus === 'locked' && ownership.blockedReason === 'playing_in_another_tab';
+}
 function getMirroredPlaybackTrack() { return getPlaybackOwnershipState().mirroredTrack; }
 
 function initPlaybackOwnershipCoordinator() {

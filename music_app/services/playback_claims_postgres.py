@@ -38,6 +38,17 @@ def _handoff(value):
     return _client(value["id"]), _token(value["token"])
 
 
+def _position(value):
+    """Where the claim's song is, as its client last heard it: {"ms", "durationMs"} or None."""
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != {"ms", "durationMs"} or any(
+        type(value[key]) is not int for key in value
+    ) or value["ms"] < 0 or value["durationMs"] < 1:
+        raise PlaybackContractError()
+    return {"ms": min(value["ms"], value["durationMs"]), "durationMs": value["durationMs"]}
+
+
 class PostgresPlaybackClaims:
     def __init__(self, config, *, clock=None, connect=None):
         self._config = config
@@ -70,34 +81,57 @@ class PostgresPlaybackClaims:
         PlaybackReferenceService(self._config, clock=self._clock, connect=self._connect).resolve(actor, track["playbackRef"])
         return track
 
-    @staticmethod
-    def _state(row, client_id):
+    def _state(self, row, client_id, path_for=None):
         here = row is not None and str(row["client_id"]) == client_id
         elsewhere = row is not None and not here
-        return {"protocol": 1, "is_playing_here": here, "is_playing_elsewhere": elsewhere,
-                "elsewhere_client_kind": row["client_surface"] if elsewhere else None,
-                "status_label": "Playing elsewhere" if elsewhere else "Playing here" if here else "Ready to play",
-                "can_start_here": not elsewhere,
-                "expiresAt": row["expires_at"].isoformat() if row else None,
-                "track": row["track"] if row else None}
+        stored = dict(row["track"]) if row else None
+        heard = stored.pop("position", None) if stored else None
+        position = None
+        if heard:
+            # The claim's song played on since its client last said where it was.
+            played = int((self._clock() - datetime.fromisoformat(heard["at"])).total_seconds() * 1000)
+            position = {"ms": min(heard["ms"] + max(0, played), heard["durationMs"]),
+                        "durationMs": heard["durationMs"]}
+        state = {"protocol": 1, "is_playing_here": here, "is_playing_elsewhere": elsewhere,
+                 "elsewhere_client_kind": row["client_surface"] if elsewhere else None,
+                 "status_label": "Playing elsewhere" if elsewhere else "Playing here" if here else "Ready to play",
+                 "can_start_here": not elsewhere,
+                 "expiresAt": row["expires_at"].isoformat() if row else None,
+                 "track": stored, "position": position}
+        if elsewhere and path_for is not None:
+            # The browser names a song by its library path, so a takeover can open it there.
+            try:
+                state["path"] = PlaybackReferenceService(self._config, clock=self._clock, connect=self._connect) \
+                    .resolve_library_path(path_for, stored["playbackRef"])
+            except PlaybackContractError:
+                state["path"] = None
+        return state
 
-    def get(self, actor, client_id):
+    def get(self, actor, client_id, *, include_path=False):
+        """The claim as `client_id` sees it; `include_path` (browsers only) adds another client's song path."""
         client_id = _client(client_id) if client_id else ""
         with self._connect(self._database_url) as connection:
             account_id, library_id = require_playback_membership(connection, actor)
             row = connection.execute("""select client_id, client_surface, expires_at, track
                 from app.playback_claims where account_id = %s and library_id = %s and expires_at > %s""",
                 (account_id, library_id, self._clock())).fetchone()
-        return self._state(row, client_id)
+        return self._state(row, client_id, actor if include_path else None)
 
-    def acquire(self, actor, *, client_id, client_surface, track, claim_token=None, handoff=None):
+    def acquire(self, actor, *, client_id, client_surface, track, claim_token=None, handoff=None,
+                takeover=False, position=None):
         client_id = _client(client_id)
         if not isinstance(client_surface, str) or client_surface not in {"private_web", "mobile"}:
             raise PlaybackContractError()
         if handoff is not None and client_surface != "private_web":
             raise PlaybackContractError()
+        # playback.claim.takeover (owner, 2026-11-17): a fresh claim may replace another client's
+        # live claim of the same account and library.
+        if type(takeover) is not bool or (takeover and (claim_token is not None or handoff is not None)):
+            raise PlaybackContractError()
         track = self._track(actor, track)
         now = self._clock()
+        heard = _position(position)
+        stored_track = {**track, "position": {**heard, "at": now.isoformat()}} if heard else track
         expires = now + timedelta(seconds=_CLAIM_LEASE_SECONDS)
         if handoff is not None and claim_token is None:
             raise PlaybackContractError()
@@ -121,7 +155,7 @@ class PostgresPlaybackClaims:
                       and pending_handoff_expires_at > %s
                       and client_id <> %s and token_digest <> %s
                     returning client_id, client_surface, expires_at, track""",
-                    (client_id, client_surface, digest, expires, json.dumps(track),
+                    (client_id, client_surface, digest, expires, json.dumps(stored_track),
                      account_id, library_id, handoff_id, handoff_digest, now,
                      client_id, digest)).fetchone()
                 if row is None:
@@ -134,7 +168,7 @@ class PostgresPlaybackClaims:
                           and pending_completion_digest is null
                           and pending_handoff_expires_at is null
                         returning client_id, client_surface, expires_at, track""",
-                        (expires, json.dumps(track), account_id, library_id,
+                        (expires, json.dumps(stored_track), account_id, library_id,
                          client_id, digest, now)).fetchone()
             elif issued:
                 row = connection.execute("""insert into app.playback_claims
@@ -146,12 +180,12 @@ class PostgresPlaybackClaims:
                       track = excluded.track, pending_handoff_id = null,
                       pending_handoff_digest = null, pending_completion_digest = null,
                       pending_handoff_expires_at = null
-                    where app.playback_claims.expires_at <= %s
+                    where %s or (app.playback_claims.expires_at <= %s
                       and (app.playback_claims.pending_handoff_expires_at is null
-                        or app.playback_claims.pending_handoff_expires_at <= %s)
+                        or app.playback_claims.pending_handoff_expires_at <= %s))
                     returning client_id, client_surface, expires_at, track""",
                     (account_id, library_id, client_id, client_surface, digest, expires,
-                     json.dumps(track), now, now)).fetchone()
+                     json.dumps(stored_track), takeover, now, now)).fetchone()
             else:
                 # The token renews its claim even past the lease, as for a client that played on
                 # without a network: until another client's acquire replaces the row or its release
@@ -159,7 +193,7 @@ class PostgresPlaybackClaims:
                 row = connection.execute("""update app.playback_claims set expires_at = %s, track = %s::jsonb
                     where account_id = %s and library_id = %s and client_id = %s and token_digest = %s
                     returning client_id, client_surface, expires_at, track""",
-                    (expires, json.dumps(track), account_id, library_id, client_id, digest)).fetchone()
+                    (expires, json.dumps(stored_track), account_id, library_id, client_id, digest)).fetchone()
             if row is None:
                 raise PlaybackContractError(409)
         return {"protocol": 1, "claimToken": token, "expiresAt": expires.isoformat(),

@@ -12,6 +12,9 @@ data class ClaimTrack(
     val artworkUrl: String?,
 )
 
+/** Where the claim's song is, so another client can take it over there (owner, 2026-11-17). */
+data class ClaimPosition(val ms: Long, val durationMs: Long)
+
 sealed interface ClaimResponse {
     /** [scrobblingAvailable] is the answer's `scrobbling.available`; null when it does not say. */
     data class Granted(val claimToken: String, val scrobblingAvailable: Boolean? = null) : ClaimResponse
@@ -28,7 +31,17 @@ sealed interface ClaimResponse {
 
 /** Blocking calls to the server-backed playback claim (music_app/routes/playback_control_asgi.py). */
 interface PlaybackClaimApi {
-    fun acquire(clientId: String, claimToken: String?, track: ClaimTrack): ClaimResponse
+    /**
+     * [takeover] (`playback.claim.takeover`) replaces another client's live claim of this account
+     * and library; only a fresh claim asks for it. [position] is reported for other clients.
+     */
+    fun acquire(
+        clientId: String,
+        claimToken: String?,
+        track: ClaimTrack,
+        takeover: Boolean = false,
+        position: ClaimPosition? = null,
+    ): ClaimResponse
     /** Gives the claim back; false when the server never answered, so its lease may still run. */
     fun release(clientId: String, claimToken: String): Boolean
 }
@@ -54,9 +67,14 @@ class PlaybackClaimOwner(
     private val post: (Runnable) -> Unit,
     private val clock: () -> Long,
     private val events: (ClaimEvent) -> Unit,
+    /** Where the playing song is now, sent with every acquire and renewal; null when unknown. */
+    private val position: () -> ClaimPosition? = { null },
 ) {
     private var token: String? = null
     private var track: ClaimTrack? = null
+
+    /** The pending acquire replaces another client's claim: a Play press while that client plays. */
+    private var takeover = false
     private var epoch = 0L
     var acquiring = false
         private set
@@ -98,13 +116,17 @@ class PlaybackClaimOwner(
     }
 
     /** Requests ownership for [claimTrack]; [onResult] runs once on the playback thread. */
-    fun acquire(claimTrack: ClaimTrack, onResult: (ClaimOutcome) -> Unit) {
+    fun acquire(claimTrack: ClaimTrack, onResult: (ClaimOutcome) -> Unit) = acquire(claimTrack, false, onResult)
+
+    /** As [acquire]; with [takeOver] the claim replaces another client's live one (owner, 2026-11-17). */
+    fun acquire(claimTrack: ClaimTrack, takeOver: Boolean, onResult: (ClaimOutcome) -> Unit) {
         track = claimTrack
         if (token != null) {
             onResult(ClaimOutcome.GRANTED)
             return
         }
         waiters += onResult
+        if (takeOver) takeover = true
         if (acquiring) return
         acquiring = true
         sendAcquire(claimTrack)
@@ -113,12 +135,15 @@ class PlaybackClaimOwner(
     private fun sendAcquire(claimTrack: ClaimTrack) {
         val requestEpoch = epoch
         val sentMs = clock()
-        val offered = unansweredRelease.also { unansweredRelease = null }
+        val takingOver = takeover
+        // A takeover asks for a fresh claim; a token whose give-back went unanswered is no better.
+        val offered = unansweredRelease.also { unansweredRelease = null }.takeUnless { takingOver }
+        val at = position()
         io.execute {
-            var response = call { api.acquire(clientId, offered, claimTrack) }
+            var response = call { api.acquire(clientId, offered, claimTrack, takingOver, at) }
             // A refused token was taken over or its claim already ended; only an anonymous acquire says which.
             if (offered != null && (response is ClaimResponse.Conflict || response is ClaimResponse.Rejected)) {
-                response = call { api.acquire(clientId, null, claimTrack) }
+                response = call { api.acquire(clientId, null, claimTrack, false, at) }
             }
             if (response is ClaimResponse.Granted) {
                 unreadGrant.set(response.claimToken)
@@ -154,8 +179,9 @@ class PlaybackClaimOwner(
         renewing = true
         nextRenewMs = now + HEARTBEAT_MS
         val requestEpoch = epoch
+        val at = position()
         io.execute {
-            val response = call { api.acquire(clientId, held, claimTrack) }
+            val response = call { api.acquire(clientId, held, claimTrack, false, at) }
             post(Runnable { renewed(requestEpoch, now, response) })
         }
     }
@@ -213,6 +239,7 @@ class PlaybackClaimOwner(
         token = null
         scrobblingAvailable = null
         acquiring = false
+        takeover = false
         acquireRetryAtMs = null
         renewing = false
         settle(ClaimOutcome.UNAVAILABLE)
@@ -227,6 +254,8 @@ class PlaybackClaimOwner(
             return
         }
         acquiring = false
+        // An unanswered takeover is sent again as one; any answer settles it.
+        if (response != ClaimResponse.Unreachable) takeover = false
         when (response) {
             is ClaimResponse.Granted -> {
                 token = response.claimToken

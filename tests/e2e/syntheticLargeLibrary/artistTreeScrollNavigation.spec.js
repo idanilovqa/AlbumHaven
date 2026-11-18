@@ -368,4 +368,36 @@ test.describe('FTC-GALLERY-NAV-032 synthetic-large Artist Tree scroll navigation
     await expect(appendedCard).toBeInViewport();
     expectTimingBudgetOutcome(expect, htmlTiming, 'Root HTML response');
   });
+
+  test('clearing a search keeps a deep selected artist revealed in the restored virtual tree', async ({
+    galleryActions,
+    navigationPanelActions,
+    page,
+    searchToolbarActions,
+  }) => {
+    await waitForSyntheticRoot(page, galleryActions, navigationPanelActions);
+    const artists = await navigationPanelActions.readRuntimeSidebarArtistNames();
+    // Deep rows magnify any per-row drift between the virtual extent and the rendered rows.
+    expect(artists.length).toBeGreaterThan(1000);
+    const artist = artists[Math.floor(artists.length * 0.9)];
+
+    await searchToolbarActions.search(artist, { submitWithEnter: true });
+    await searchToolbarActions.waitForQuery(artist, { timeout: 120000 });
+    if (await navigationPanelActions.readActiveSidebarArtistName() !== artist) {
+      await navigationPanelActions.selectSidebarArtistByName(artist);
+    }
+    await navigationPanelActions.waitForSidebarSelection(artist, { timeout: 120000 });
+
+    await searchToolbarActions.clearSearch({ submitWithEnter: true });
+    await searchToolbarActions.waitForQuery('', { timeout: 120000 });
+    await searchToolbarActions.waitForUrlWithoutQueryParameter('q');
+    await navigationPanelActions.waitForAllArtistsVisibility(true, { timeout: 120000 });
+    await navigationPanelActions.waitForSidebarSelection(artist, { timeout: 120000 });
+    await galleryActions.waitForSelectedArtistGallery(artist, { timeout: 120000 });
+    await navigationPanelActions.waitForActiveSelectionInViewport({ timeout: 10000 });
+    // Observe the follow-up virtual-window render; this delay is not a readiness condition.
+    await page.waitForTimeout(1500);
+    expect(await navigationPanelActions.readActiveSidebarArtistName()).toBe(artist);
+    await navigationPanelActions.waitForActiveSelectionInViewport({ timeout: 100 });
+  });
 });

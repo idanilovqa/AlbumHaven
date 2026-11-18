@@ -133,7 +133,9 @@ test('deep windows keep exact spacer geometry for long artist names', () => {
     'utf8',
   );
 
- assert.match(css, /\.artist-list\[data-sidebar-virtualized='true'\] \.artist-link\s*\{[^}]*height:\s*41px/s);
+  assert.match(css, /\.artist-list\[data-sidebar-virtualized='true'\] \.artist-link\s*\{[^}]*height:\s*41px/s);
+  // The list is a flex column; a shrinking row breaks the fixed extent the reveal scroll relies on.
+  assert.match(css, /\.artist-list\[data-sidebar-virtualized='true'\] \.artist-link\s*\{[^}]*flex-shrink:\s*0/s);
  assert.match(css, /\.artist-list\[data-sidebar-virtualized='true'\] \.artist-link \.artist-name-label\s*\{[^}]*white-space:\s*nowrap[^}]*text-overflow:\s*ellipsis/s);
  assert.doesNotMatch(css, /(?<!virtualized='true'\] )\.artist-link\s*\{[^}]*height:\s*41px/s);
  assert.match(css, /\.artist-link \.artist-name-label\s*\{[^}]*white-space:\s*normal[^}]*overflow-wrap:\s*anywhere/s);

@@ -435,6 +435,7 @@ const PERFORMANCE_TARGETS = {
       'search and Home destinations do not rebound after settling',
       'far, consecutive, nearby, and reverse jumps retain exact artist ownership and complete groups',
       'root continuation starts eight viewports early and never reaches a hard stop during its real request',
+      'clearing a search keeps a deep selected artist revealed in the restored virtual tree',
       'mobile Cards › long-press Scroll, album, Back restores an artist beyond the first root page',
       'mobile Cards › long-press Scroll, ordinary scroll to another artist, album, Back retains the new position',
       'mobile Covers › long-press Scroll, album, Back restores an artist beyond the first root page',

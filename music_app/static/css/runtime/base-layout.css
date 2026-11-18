@@ -66,7 +66,8 @@ body {
   overflow-wrap: anywhere;
   line-height: 1.2;
 }
-.artist-list[data-sidebar-virtualized='true'] .artist-link { height: 41px; }
+/* Rows must keep the fixed extent the virtual window counts on; a shrinking row drifts the reveal. */
+.artist-list[data-sidebar-virtualized='true'] .artist-link { height: 41px; flex-shrink: 0; }
 .artist-list[data-sidebar-virtualized='true'] .artist-link .artist-name-label {
   white-space: nowrap;
   overflow: hidden;

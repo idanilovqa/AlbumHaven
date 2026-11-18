@@ -2447,6 +2447,7 @@ test('artist scroll completion requires all navigation, restoration, presentatio
   const titles = [
     'far, consecutive, nearby, and reverse jumps retain exact artist ownership and complete groups',
     'root continuation starts eight viewports early and never reaches a hard stop during its real request',
+    'clearing a search keeps a deep selected artist revealed in the restored virtual tree',
     'search and Home destinations do not rebound after settling',
     ...['Cards', 'Covers', 'Rows'].flatMap((view) => [
       `mobile ${view} > long-press Scroll, album, Back restores an artist beyond the first root page`,
@@ -2465,7 +2466,10 @@ test('artist scroll completion requires all navigation, restoration, presentatio
     'desktop Covers > native wheel input tracks the commanded gesture without reverse movement or layout jitter',
     'real continuation response during held touch keeps gallery coordinates stable',
     'full preserve-scroll response during wheel sequence keeps gallery coordinates stable',
-    'real continuation response during wheel sequence keeps gallery coordinates stable',
+    'real continuation response during wheel sequence keeps gallery coordinates stable',
+    ...['cards', 'covers'].map((view) => (
+      `${view}: deep midpoint stays visible during pinch, paged continuation stays usable and returning to the top is complete`
+    )),
   ];
   const parsedTestResults = titles.map(testName => ({
     status: 'passed', testName, fullName: `FTC-GALLERY-NAV-03 > ${testName}`,
@@ -2476,8 +2480,8 @@ test('artist scroll completion requires all navigation, restoration, presentatio
     expectedCasePatterns: target.casePatterns || [target.casePattern],
     parsedTestResults,
   };
-  assert.equal(target.casePatterns.length, 23);
-  assert.equal(new Set(target.casePatterns).size, 23);
+  assert.equal(target.casePatterns.length, 26);
+  assert.equal(new Set(target.casePatterns).size, 26);
   assert.match('FTC-GALLERY-NAV-037', new RegExp(target.grep));
   assert.equal(target.casePatterns.some((pattern) => pattern.includes('›')), true);
   assert.equal(_private.classifyPerformanceAttempt(record, 'local').outcome, 'passed');

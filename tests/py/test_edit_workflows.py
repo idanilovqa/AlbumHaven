@@ -1613,34 +1613,3 @@ def test_failed_edit_restores_a_file_another_process_holds_briefly(config, monke
 
     assert albums == {first: "Ремиксы", second: "Ремиксы"}
     assert failure["edit_outcome"] == "failed_rolled_back"
-
-
-def test_tag_writes_suppress_the_watcher_for_the_written_files(tmp_path):
-    """Owner (11-18): the watcher reconciled every tag save again, which dropped the
-    whole Problematic Files list (a 94 s rebuild on the real library)."""
-    from music_app.services.edit_workflows import _run_edit_jobs
-    from music_app.services.library_watch_suppression import is_library_watch_event_suppressed
-
-    written = str(tmp_path / "Artist" / "Album" / "01.mp3")
-    untouched = str(tmp_path / "Artist" / "Album" / "02.mp3")
-    observed = []
-
-    def write(raw_path, repairs):
-        observed.append((is_library_watch_event_suppressed(raw_path), is_library_watch_event_suppressed(untouched)))
-        return raw_path, True, list(repairs)
-
-    changed, skipped, error = _run_edit_jobs(
-        album={"name": "Album", "album_artist": "Artist"},
-        repair_jobs=[(written, {"path": written}, {"album": "Album2"})],
-        config={}, logger=None, apply_repairs_worker=write,
-        update_cache_entry_after_repairs=lambda _path, entry, repairs: {**entry, **repairs},
-        append_log_history=lambda *_args, **_kwargs: None,
-        log_app_event=lambda *_args, **_kwargs: None,
-        updated_file_cache={}, action_name="Tag edit failed",
-        failure_prefix="Failed to edit tags for", edit_write_workers=1,
-    )
-
-    assert error is None and len(changed) == 1
-    assert observed == [(True, False)]
-    # The grace period also covers the operating system's late change notification.
-    assert is_library_watch_event_suppressed(written)

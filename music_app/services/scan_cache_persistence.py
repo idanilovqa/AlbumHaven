@@ -1460,7 +1460,7 @@ class PostgresScanCacheAdapter:
             base_revision = int(_row_mapping(_first_row(connection.execute(
                 _load_inventory_mutation_revision_sql()))).get("inventory_mutation_revision") or 0)
             results = []
-            inherited_destination_ids = set()
+            inherited_album_ids = set()
             for paths in groups:
                 group_fields = set(changed_field_names) & set().union(*(delta_fields[path] for path in paths))
                 result = scoped._persist_structural_tag_edit_group(
@@ -1473,7 +1473,10 @@ class PostgresScanCacheAdapter:
                     unchanged_group=not group_fields, identity_repairs_by_path=identity_repairs)
                 results.append(result)
                 if result.get("cover_inherited_from_structural_edit") and result.get("inserted_destination_album"):
-                    inherited_destination_ids.add(int(result["destination_album_id"]))
+                    inherited_album_ids.add(int(result["destination_album_id"]))
+                    # Owner (2026-11-17): the album left behind by the split keeps the folder's cover too.
+                    if int(result.get("source_album_id") or 0) > 0:
+                        inherited_album_ids.add(int(result["source_album_id"]))
             affected_ids = source_ids | {int(result[field]) for result in results
                 for field in ("source_album_id", "destination_album_id") if result.get(field)}
             selected_paths = {str(Path(value)) for path in changed_paths
@@ -1497,11 +1500,11 @@ class PostgresScanCacheAdapter:
             destination_ids = {int(row["album_id"]) for row in retained
                                if str(Path(row["private_path"])) in selected_paths}
             inherited_members = {str(Path(row["private_path"])) for row in retained
-                                 if int(row["album_id"]) in inherited_destination_ids}
+                                 if int(row["album_id"]) in inherited_album_ids}
             inherited_paths = {path for path in changed_paths if str(Path(path)) in inherited_members}
             if inherited_paths:
                 connection.execute(_synchronize_album_cover_file_entries_sql(by_album_ids=True), {
-                    "album_ids": sorted(inherited_destination_ids),
+                    "album_ids": sorted(inherited_album_ids),
                     "active_paths": sorted(inherited_paths),
                     "cover_inherited_from_structural_edit": True,
                 })
@@ -1918,15 +1921,18 @@ class PostgresScanCacheAdapter:
                 [str(entry.get("path") or path) for path, entry in updated_entries.items()], normalized_changed_fields)
             # Staying in the same album must preserve distinct disc/track covers.
             cover_album_ids = [destination_album_id] if destination_album_id and destination_album_id != source_album_id else []
+            split_in_folder = input_path_count < source_album_track_file_count
+            # Owner (2026-11-17): a cover belongs to its folder-album, so a split keeps it on both halves. The
+            # album left behind is marked too, or the folder pass drops its cover as two albums in one folder.
+            if cover_album_ids and split_in_folder and source_album_id:
+                cover_album_ids.append(source_album_id)
             if cover_album_ids:
                 connection.execute(
                     _synchronize_album_cover_file_entries_sql(by_album_ids=True),
                     {
                         "album_ids": cover_album_ids,
                         "active_paths": sorted(normalized_paths),
-                        "cover_inherited_from_structural_edit": (
-                            input_path_count < source_album_track_file_count
-                        ),
+                        "cover_inherited_from_structural_edit": split_in_folder,
                     },
                 )
             committed_relation_state = (

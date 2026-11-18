@@ -587,7 +587,15 @@ def publish_affected_relation_projection(connection, *, album_ids=(), album_keys
             legacy = relations._relation_projection_scan_cache_from_row(
                 _first_row(connection.execute(relations._load_relation_projection_sql())))
             legacy['relation_views'] = _stored_legacy_views(connection, library_id)
-            native_pending = metadata.get('status') == 'stale'
+            stale = metadata.get('status') == 'stale'
+            # Older structural saves marked the index stale without touching the
+            # legacy contract; their album journal rows carry all pending work,
+            # and the replay below still proves that contract before publishing.
+            journaled_edit = stale and metadata.get('rebuild_reason') == 'structural_tag_edit'
+            native_pending = stale and not journaled_edit
+            if journaled_edit:
+                key = relations.RELATION_PROJECTION_METADATA_KEY
+                legacy[key] = {**(legacy.get(key) or {}), 'status': 'ready'}
             if native_pending:
                 _validate_pending_scan_receipt(connection, context, compatibility_state, metadata, legacy['relation_views'])
             invalid = None if native_pending else relations.relation_projection_stale_reason(legacy)

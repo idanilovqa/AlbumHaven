@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from pathlib import Path
 import re
 from typing import Any
@@ -110,7 +111,7 @@ def artist_alias_problem_reason(
 def build_utility_rules_payload(
     *,
     config: dict[str, object],
-    albums: list[object],
+    albums_with_keys: Callable[[Iterable[str]], list[object]],
     file_cache: dict[str, object],
     ignored_version_keys: set[str],
     ignored_repair_keys: set[str],
@@ -125,15 +126,10 @@ def build_utility_rules_payload(
     }
 
     version_albums = []
-    if ignored_version_keys:
-        albums_by_key = {
-            key: album_to_dict(album)
-            for album in albums
-            for key in [str(getattr(album, "key", ""))]
-            if key and key in ignored_version_keys
-        }
-    else:
-        albums_by_key = {}
+    albums_by_key = {
+        str(getattr(album, "key", "")): album_to_dict(album)
+        for album in albums_with_keys(ignored_version_keys)
+    }
 
     for key in sorted(ignored_version_keys):
         album = albums_by_key.get(key)

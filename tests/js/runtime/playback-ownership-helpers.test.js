@@ -1262,3 +1262,172 @@ test('a native-playback shell leaves the claim to Android and reads ownership as
   assert.deepEqual(requests, [{ url: `/playback/state?client_id=${nativeClientId}`, method: 'GET' }]);
   assert.equal(context.isActivePlaybackOwner(), false);
 });
+
+// Request-capture contract (tests/ci/bounded-interactions.json): rapid track selections claim
+// once, renewal reuses a live reference, and release and refusal each add one bounded request.
+const { assertInteractionRequests, createRequestCapture, measureInteractionContract } = require('../helpers/request-capture');
+
+test('request capture: playback ownership requests stay on ownership endpoints with one claim per selection burst', async () => {
+  const id = 'js:runtime/playback-ownership-helpers.js#playbackOwnershipRequest';
+  await measureInteractionContract(id, async (selections) => {
+    let refuseClaims = false;
+    const capture = createRequestCapture(async (url, options) => {
+      const body = options.body ? JSON.parse(options.body) : null;
+      if (url === '/playback/refs') {
+        return jsonResponse({ ...protocolFixture.valid.refsResponse, expiresAt: '2099-10-24T00:00:00Z',
+          tracks: [{ ...protocolFixture.valid.refsResponse.tracks[0], clientKey: body.tracks[0].clientKey }] });
+      }
+      if (options.method === 'PUT' && refuseClaims) return jsonResponse({ ok: false }, { ok: false, status: 409 });
+      if (options.method === 'PUT') return jsonResponse({ ...protocolFixture.valid.claimResponse, expiresAt: '2099-10-23T23:00:30Z' });
+      return jsonResponse({ protocol: 1, ok: true });
+    });
+    const { context } = loadHelper({ fetch: capture.fetch });
+    const tracks = Array.from({ length: selections }, (_, index) => ({ ...localTrack, path: `C:/Music/${index}.flac` }));
+    const claims = tracks.map(track => context.claimPlaybackOwnership(track));
+    assert.equal((await Promise.all(claims)).at(-1), true, 'the latest selection owns playback');
+    context.state.player.current = tracks.at(-1);
+    assert.equal(await context.refreshPlaybackOwnershipClaim(), true);
+    assert.equal(await context.releasePlaybackOwnership(), true);
+    refuseClaims = true;
+    assert.equal(await context.claimPlaybackOwnership(localTrack, { showBlockedToast: false }), false);
+    const methods = capture.requests.map(({ url, options }) => `${options.method} ${url.split('?')[0]}`);
+    assert.deepEqual(methods, [
+      'POST /playback/refs', 'PUT /playback/state', 'PUT /playback/state', 'DELETE /playback/state',
+      'POST /playback/refs', 'PUT /playback/state', 'GET /playback/state',
+    ]);
+    assertInteractionRequests(id, capture.urls());
+    return capture.counter.snapshot();
+  });
+});
+
+// Bounded-interaction contracts (tests/ci/bounded-interactions.json): over a long session the
+// heartbeat, other tabs' broadcasts and the lease renewals repaint the player only when the lock,
+// its reason or the mirrored track changes, never once per tick.
+const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+
+function loadCountedOwnership(counter, { ownership = {}, ...overrides } = {}) {
+  let heartbeat = null;
+  const leaseTimers = [];
+  const loaded = loadHelper({
+    performance: { now: () => 0 },
+    setInterval: (callback) => { counter.count('timers'); heartbeat = callback; return 17; },
+    setTimeout: (callback, delay) => {
+      if (delay === 30_000) { counter.count('timers'); leaseTimers.push(callback); }
+      return leaseTimers.length;
+    },
+    getPlayerPlaybackSnapshot: () => ({ paused: false, ended: false, currentTime: 0 }),
+    updatePlayerUi: () => counter.count('renderCommits'),
+    ...overrides,
+  });
+  Object.assign(loaded.context.state.player.ownership, ownership);
+  loaded.context.state.player.current = localTrack;
+  return { ...loaded, heartbeat: () => heartbeat(), leaseTimers };
+}
+
+function countedOwnershipFetch(counter, { elsewhere = () => null } = {}) {
+  return async (url, options = {}) => {
+    counter.count('requests');
+    const body = options.body ? JSON.parse(options.body) : null;
+    if (url === '/playback/refs') {
+      return jsonResponse({ protocol: 1, expiresAt: '2099-10-24T00:00:00Z',
+        tracks: [{ clientKey: body.tracks[0].clientKey, playbackRef: 'playback-ref-1' }] });
+    }
+    if (options.method === 'PUT') {
+      return jsonResponse({ protocol: 1, claimToken: 'claim-1', expiresAt: '2099-10-23T23:00:30Z', leaseMs: 30_000 });
+    }
+    const track = elsewhere();
+    return jsonResponse(track ? { is_playing_elsewhere: true, track } : { is_playing_elsewhere: false });
+  };
+}
+
+const flushOwnershipTick = () => new Promise((resolve) => setImmediate(resolve));
+const remoteOwnershipTrack = { title: 'Remote Track', artist: 'Remote Artist', album: 'Remote Album', artworkUrl: null };
+
+test('bounded interaction: a playback ownership heartbeat repaints the player only when the lock changes', async () => {
+  const run = async (ticks) => {
+    const counter = createInteractionCounter();
+    const owner = loadCountedOwnership(counter, { fetch: countedOwnershipFetch(counter) });
+    assert.equal(await owner.context.claimPlaybackOwnership(localTrack), true);
+    let remote = null;
+    const mirror = loadCountedOwnership(counter, { fetch: countedOwnershipFetch(counter, { elsewhere: () => remote }) });
+    mirror.context.startPlaybackOwnershipHeartbeat();
+    const work = await counter.measure(async () => {
+      for (let tick = 0; tick < ticks; tick += 1) {
+        owner.heartbeat();
+        if (tick === 1) remote = remoteOwnershipTrack;
+        mirror.heartbeat();
+        await flushOwnershipTick();
+      }
+    });
+    assert.equal(owner.context.isActivePlaybackOwner(), true, 'every renewal keeps the claim');
+    assert.equal(mirror.context.isPlaybackLockedByAnotherTab(), true);
+    assert.equal(mirror.context.getMirroredPlaybackTrack().title, 'Remote Track');
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:runtime/playback-ownership-helpers.js#startPlaybackOwnershipHeartbeat',
+    small: 6,
+    large: 2160,
+    run,
+    budgets: { renderCommits: 1 },
+    growth: { metric: 'renderCommits', largeMinusSmallMax: 0 },
+  });
+});
+
+test('bounded interaction: ownership broadcasts from other tabs repaint the player only when the lock changes', async () => {
+  const run = async (messages) => {
+    const counter = createInteractionCounter();
+    const channels = [];
+    let remote = null;
+    const tab = loadCountedOwnership(counter, {
+      ownership: { initialized: false },
+      fetch: countedOwnershipFetch(counter, { elsewhere: () => remote }),
+      BroadcastChannel: class {
+        constructor() { this.listeners = []; channels.push(this); }
+        addEventListener(type, listener) { counter.count('listeners'); this.listeners.push(listener); }
+        postMessage() {}
+      },
+    });
+    tab.context.initPlaybackOwnershipCoordinator();
+    await flushOwnershipTick();
+    const work = await counter.measure(async () => {
+      for (let message = 0; message < messages; message += 1) {
+        if (message === messages - 1) remote = remoteOwnershipTrack;
+        channels[0].listeners.forEach((listener) => listener({ data: { type: 'changed' } }));
+        await flushOwnershipTick();
+      }
+    });
+    assert.equal(tab.context.isPlaybackLockedByAnotherTab(), true, 'the last broadcast mirrors the other tab');
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:runtime/playback-ownership-helpers.js#initPlaybackOwnershipCoordinator',
+    small: 6,
+    large: 2160,
+    run,
+    budgets: { renderCommits: 1, listeners: 0 },
+    growth: { metric: 'renderCommits', largeMinusSmallMax: 0 },
+  });
+});
+
+test('bounded interaction: playing lease renewals keep the claim without repainting the player', async () => {
+  const run = async (leases) => {
+    const counter = createInteractionCounter();
+    const owner = loadCountedOwnership(counter, { fetch: countedOwnershipFetch(counter) });
+    assert.equal(await owner.context.claimPlaybackOwnership(localTrack), true);
+    const work = await counter.measure(async () => {
+      for (let lease = 0; lease < leases; lease += 1) await owner.leaseTimers.at(-1)();
+    });
+    assert.equal(owner.context.isActivePlaybackOwner(), true);
+    assert.equal(owner.leaseTimers.length, leases + 1, 'each renewal times exactly one new lease');
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:runtime/playback-ownership-helpers.js#acceptPlaybackClaim',
+    small: 6,
+    large: 2160,
+    run,
+    budgets: { renderCommits: 0 },
+    growth: { metric: 'renderCommits', largeMinusSmallMax: 0 },
+  });
+});

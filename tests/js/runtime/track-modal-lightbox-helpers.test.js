@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const { loadPendingProjectionFetch } = require('../helpers/pending-projection-fetch');
 
 const helperPath = path.join(
   __dirname,
@@ -443,6 +444,7 @@ function loadHelper(options = {}) {
   };
 
   vm.createContext(context);
+  loadPendingProjectionFetch(context);
   vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'album-artbox.js'), 'utf8'), context);
   vm.runInContext(helperSource, context, { filename: helperPath });
 
@@ -1633,7 +1635,7 @@ test('opening a mobile album recomposes it after mobile page presentation', () =
 async function run() {
   {
     const { context, trackModal } = loadHelper();
-    context.openTrackModal({ key: 'alpha', name: 'Album Alpha' });
+    context.openTrackModal({ key: 'alpha', album_id: 1, name: 'Album Alpha' });
     await flushMicrotasks();
 
     assert.equal(trackModal.hidden, false);
@@ -1824,6 +1826,7 @@ async function run() {
   {
     const hydratedAlbum = {
       key: 'hydrated-cover-album',
+      album_id: 3,
       name: 'Hydrated Cover Album',
       preview_only: false,
       tracks: [{ path: 'C:\\Music\\Hydrated Cover Album\\01 Track.flac' }],
@@ -3383,6 +3386,7 @@ async function run() {
   {
     const fullAlbum = {
       key: 'alpha',
+      album_id: 9,
       name: 'Album Alpha',
       album_artist: 'Artist Alpha',
       tracks: [{ path: 'C:\\Music\\Album Alpha\\01 Track.flac', title: 'Track 1' }],
@@ -3512,7 +3516,7 @@ test('a gallery album with its tracks opens at once, then takes the server detai
     musicbrainz_series: [{ mbid: 's1', name: 'Pitchfork: 10/10', kind: 'series' }],
   };
   const { context } = loadHelper({ fetchedAlbum: details });
-  const galleryAlbum = { key: 'alpha', name: 'Album Alpha', tracks: [{ path: 'C:\Music\Alpha\01.flac' }] };
+  const galleryAlbum = { key: 'alpha', album_id: 7, name: 'Album Alpha', tracks: [{ path: 'C:\Music\Alpha\01.flac' }] };
 
   context.openTrackModal(galleryAlbum);
   assert.equal(context.renderTrackModalReleaseAlbums[0].key, 'alpha', 'no loading shell: the gallery album renders at once');
@@ -3520,7 +3524,7 @@ test('a gallery album with its tracks opens at once, then takes the server detai
   await flushMicrotasks();
 
   assert.equal(context.fetchCalls.length, 1);
-  assert.match(context.fetchCalls[0].url, /^\/album-details\?album_key=alpha/);
+  assert.match(context.fetchCalls[0].url, /^\/album-details\?album_key=alpha&album_id=7$/, 'by the card\'s own id');
   const shown = context.renderTrackModalReleaseAlbums.at(-1);
   assert.equal(shown.musicbrainz_release.type_label, 'Live');
   assert.equal(shown.musicbrainz_series[0].name, 'Pitchfork: 10/10');
@@ -3532,12 +3536,22 @@ test('a gallery album with its tracks opens at once, then takes the server detai
   assert.equal(context.fetchCalls.length, 1);
 });
 
+// A first-paint card carries no album id; its key alone can name several releases, so it asks
+// nothing until it is opened again from the loaded gallery (FTC-ALBUM-DETAILS-029).
+test('a gallery album without its own id opens at once and asks no details by key alone', async () => {
+  const { context } = loadHelper();
+  context.openTrackModal({ key: 'alpha', name: 'Album Alpha', tracks: [{ path: 'a' }] });
+  await flushMicrotasks();
+  assert.equal(context.renderTrackModalReleaseAlbums[0].key, 'alpha');
+  assert.equal(context.fetchCalls.length, 0);
+});
+
 test('gallery album details that arrive after the modal closed or moved on are dropped', async () => {
   let resolveDetails;
   const { context, trackModal } = loadHelper({
     onFetchAlbumDetails: () => new Promise((resolve) => { resolveDetails = resolve; }),
   });
-  context.openTrackModal({ key: 'alpha', name: 'Album Alpha', tracks: [{ path: 'a' }] });
+  context.openTrackModal({ key: 'alpha', album_id: 7, name: 'Album Alpha', tracks: [{ path: 'a' }] });
   const renders = context.renderTrackModalReleaseAlbums.length;
   trackModal.hidden = true;
   resolveDetails({ ok: true, status: 200, json: async () => ({ ok: true, album: {
@@ -3545,7 +3559,7 @@ test('gallery album details that arrive after the modal closed or moved on are d
   await flushMicrotasks();
   assert.equal(context.renderTrackModalReleaseAlbums.length, renders, 'a closed modal is not reopened');
   // A missing album has no details to load.
-  context.openTrackModal({ key: 'gone', name: 'Gone', tracks: [], inventory_status: 'missing' });
+  context.openTrackModal({ key: 'gone', album_id: 8, name: 'Gone', tracks: [], inventory_status: 'missing' });
   await flushMicrotasks();
   assert.equal(context.fetchCalls.length, 1);
 });
@@ -3559,8 +3573,8 @@ test('gallery album details land only on the album still open and keep its editi
     key, name: key, tracks: [{ path: key }], musicbrainz_release: { type_label: 'Live' } } }) });
   context.getAlbumReleaseSet = (album) => ({ releases: [{ ...album, tabLabel: 'Deluxe' }], selectedIndex: 0 });
 
-  context.openTrackModal({ key: 'alpha', name: 'alpha', tracks: [{ path: 'alpha' }] });
-  context.openTrackModal({ key: 'beta', name: 'beta', tracks: [{ path: 'beta' }] });
+  context.openTrackModal({ key: 'alpha', album_id: 1, name: 'alpha', tracks: [{ path: 'alpha' }] });
+  context.openTrackModal({ key: 'beta', album_id: 2, name: 'beta', tracks: [{ path: 'beta' }] });
   answer('alpha');
   await flushMicrotasks();
   assert.equal(context.state.modalReleases[0].key, 'beta', 'the superseded album is not shown');
@@ -3571,4 +3585,27 @@ test('gallery album details land only on the album still open and keep its editi
   const shown = context.renderTrackModalReleaseAlbums.at(-1);
   assert.equal(shown.musicbrainz_release.type_label, 'Live');
   assert.equal(shown.tabLabel, 'Deluxe');
+});
+
+// Request-capture contract (tests/ci/bounded-interactions.json): repeated Album Details opens
+// share one /album-details request and the cached result; a rejected album_id adds one retry.
+const { assertInteractionRequests, measureInteractionContract } = require('../helpers/request-capture');
+
+test('request capture: Album Details opens fetch /album-details once per album', async () => {
+  const id = 'js:runtime/track-modal-lightbox-helpers.js#fetchTrackModalAlbumDetails';
+  await measureInteractionContract(id, async (opens) => {
+    const { context } = loadHelper({
+      onFetchAlbumDetails: ({ url }) => (url.includes('album_id=')
+        ? { ok: false, status: 400, json: () => Promise.resolve({ ok: false, error: 'Unsupported album-details query parameter', unsupported_parameters: ['album_id'] }) }
+        : { ok: true, status: 200, json: () => Promise.resolve({ ok: true, album: { key: new URL(url, 'http://localhost').searchParams.get('album_key'), tracks: [] } }) }),
+    });
+    const loadMany = albumKey => Promise.all(Array.from({ length: opens }, () => context.loadTrackModalAlbumDetails(albumKey)));
+    await loadMany('alpha');
+    await loadMany('alpha');
+    await context.loadTrackModalAlbumDetails('beta', { albumId: 7 });
+    const urls = context.fetchCalls.map(call => call.url);
+    assert.deepEqual(urls, ['/album-details?album_key=alpha', '/album-details?album_key=beta&album_id=7', '/album-details?album_key=beta']);
+    assertInteractionRequests(id, urls);
+    return { requests: urls.length };
+  });
 });

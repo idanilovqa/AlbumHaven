@@ -426,3 +426,52 @@ test('gallery cards show the corrected title and artist; keys and the tag fields
   assert.match(grid, /artist: album\.display_artist \|\| album\.album_artist,/);
   assert.doesNotMatch(grid, /albumKey[^\n]*display_title/);
 });
+
+// Request-capture contracts (tests/ci/bounded-interactions.json): the Edits Queue's two
+// request helpers take their target at runtime; every target stays on the queue's own
+// endpoints, and the request count does not grow with how many albums wait.
+const { assertInteractionRequests, measureInteractionContract } = require('../helpers/request-capture');
+
+function queueOf(albumCount) {
+  const albums = Array.from({ length: albumCount }, (_, index) => ({ ...ALBUM, album_key: `album-${index}`, rows: [CASE_ROW] }));
+  return queueContext({
+    'GET /api/musicbrainz/corrections/edits/case?section=applied&offset=0&limit=50': { status: 200,
+      body: { albums: albums.slice(0, 50), next_offset: albumCount > 50 ? 50 : null } },
+    'PUT /api/musicbrainz/corrections/settings': { status: 200, body: { settings: { auto_submit_bulks: true } } },
+    'POST /api/musicbrainz/corrections/albums/undo': { status: 200, body: { decided: 1 } },
+    'POST /api/musicbrainz/corrections/kinds/edition_suffix/approve': { status: 200, body: { decided: albumCount } },
+    'DELETE /api/musicbrainz/lookups/9': { status: 200, body: { removed: true } },
+  });
+}
+
+test('request capture: the Edits Queue reads only its queue endpoints, one page per open', async () => {
+  const id = 'js:runtime/musicbrainz-corrections.js#readEditsQueueJson';
+  await measureInteractionContract(id, async (albumCount) => {
+    const { context, requests } = queueOf(albumCount);
+    await context.loadUtilityEditsQueue(true);
+    await context.loadEditsQueueKindPage('case');
+    const urls = requests.map(([, url]) => url);
+    assert.deepEqual(urls, ['/api/musicbrainz/corrections/edits?section=applied', '/api/musicbrainz/lookups',
+      '/api/musicbrainz/corrections/edits/case?section=applied&offset=0&limit=50']);
+    assertInteractionRequests(id, urls);
+    return { requests: urls.length };
+  });
+});
+
+test('request capture: Edits Queue changes reach only their own endpoints, once per action', async () => {
+  const id = 'js:runtime/musicbrainz-corrections.js#sendEditsQueueChange';
+  await measureInteractionContract(id, async (albumCount) => {
+    const { context, requests } = queueOf(albumCount);
+    await context.loadUtilityEditsQueue(true);
+    const before = requests.length;
+    await context.setEditsQueueAutoSubmit(true);
+    await context.decideEditsQueueAlbum('undo', 'album-0');
+    await context.approveEditsQueueKind('edition_suffix');
+    await context.removeEditsQueueLookup('9');
+    const changes = requests.slice(before).filter(([method]) => method !== 'GET').map(([, url]) => url);
+    assert.deepEqual(changes, ['/api/musicbrainz/corrections/settings', '/api/musicbrainz/corrections/albums/undo',
+      '/api/musicbrainz/corrections/kinds/edition_suffix/approve', '/api/musicbrainz/lookups/9']);
+    assertInteractionRequests(id, changes);
+    return { requests: changes.length };
+  });
+});

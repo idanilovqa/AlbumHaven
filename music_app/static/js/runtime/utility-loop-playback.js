@@ -34,8 +34,13 @@ function updateUtilityLoopStereoWaveform(loopId, audio) {
   });
 }
 
+// Player UI updates refresh the mounted loop waveforms; the saved-loop list is
+// replaced, never edited in place, so the peak cache is pruned once per list.
+let utilityLoopListRetainedForPeaks = null;
 function refreshUtilityLoopStereoWaveforms() {
-  if (state.utility.loopsLoaded && Array.isArray(state.utility.loops)) {
+  if (state.utility.loopsLoaded && Array.isArray(state.utility.loops)
+      && state.utility.loops !== utilityLoopListRetainedForPeaks) {
+    utilityLoopListRetainedForPeaks = state.utility.loops;
     retainSavedLoopWaveformPeaks(state.utility.loops.map(loop => loop.id));
   }
   document.querySelectorAll('[data-loop-audio]').forEach(audio => {
@@ -992,8 +997,25 @@ async function deleteSavedLoop(loopId, { confirmed = false } = {}) {
   }
 }
 
+// The saved-loop list is replaced, never edited in place, so one index per list serves every
+// drag event and order lookup against it.
+const utilityLoopIndexes = new WeakMap();
+function getUtilityLoopIndex(loops = state.utility.loops || []) {
+  let index = utilityLoopIndexes.get(loops);
+  if (!index) {
+    index = { byId: new Map(), bySong: new Map() };
+    for (const loop of loops) {
+      index.byId.set(String(loop.id), loop);
+      if (!index.bySong.has(loop.song_key)) index.bySong.set(loop.song_key, []);
+      index.bySong.get(loop.song_key).push(loop);
+    }
+    utilityLoopIndexes.set(loops, index);
+  }
+  return index;
+}
+
 function getUtilityLoopOrderScope(songKey, loops = state.utility.loops || []) {
-  const members = loops.filter(loop => loop.song_key === songKey);
+  const members = getUtilityLoopIndex(loops).bySong.get(songKey) || [];
   const revision = members[0]?.order_revision;
   if (!members.length || !members.every(loop => canReorderUtilityLoop(loop) && loop.order_revision === revision)) return null;
   return { songKey, revision, loops: members };
@@ -1010,7 +1032,9 @@ function replaceUtilityLoopSong(loops, songKey, members) {
   return next;
 }
 
-function buildReorderedUtilityLoops(loops, draggedItem, targetItem, position) {
+// The dragged song's loops in their new order, or null when the drop is not a move. A drag
+// reads only that song's loops.
+function reorderUtilityLoopSong(loops, draggedItem, targetItem, position) {
   if (!['before', 'after'].includes(position) || draggedItem?.type !== 'loop' || targetItem?.type !== 'loop') return null;
   const songKey = String(draggedItem.groupKey || '');
   if (!songKey || songKey !== targetItem.groupKey || draggedItem.id === targetItem.id) return null;
@@ -1023,7 +1047,12 @@ function buildReorderedUtilityLoops(loops, draggedItem, targetItem, position) {
   const to = members.findIndex(loop => String(loop.id) === String(targetItem.id));
   members.splice(to + (position === 'after' ? 1 : 0), 0, moving);
   if (members.every((loop, index) => loop.id === scope.loops[index].id)) return null;
-  return replaceUtilityLoopSong(loops, songKey, members);
+  return members;
+}
+
+function buildReorderedUtilityLoops(loops, draggedItem, targetItem, position) {
+  const members = reorderUtilityLoopSong(loops, draggedItem, targetItem, position);
+  return members && replaceUtilityLoopSong(loops, String(draggedItem.groupKey), members);
 }
 
 function captureUtilityLoopOrderView(songKey) {

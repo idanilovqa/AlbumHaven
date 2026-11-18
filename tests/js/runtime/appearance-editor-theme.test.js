@@ -371,3 +371,179 @@ test('leaving Main elements restores saved colors without persisting its live pr
   assert.equal(root.getAttribute('data-appearance-palette'), 'steelblue');
   assert.equal(instance.controller.getState().saved.palette_id, 'steelblue');
 });
+
+test('bounded interaction: seekbar editor input stays bounded at the five-set player history limit', async () => {
+  const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const run = async (cardinality) => {
+    const counter = createInteractionCounter();
+    const countedElement = () => {
+      const node = element();
+      let markup = '';
+      Object.defineProperty(node, 'innerHTML', {
+        get: () => markup,
+        set(value) {
+          counter.count('renderCommits');
+          counter.count('markupBytes', String(value).length);
+          markup = String(value);
+        },
+      });
+      const children = new Map();
+      node.querySelector = (selector) => {
+        counter.count('domQueries');
+        if (!children.has(selector)) children.set(selector, countedElement());
+        return children.get(selector);
+      };
+      const { setAttribute } = node;
+      node.setAttribute = (key, value) => { counter.count('domMutations'); setAttribute(key, value); };
+      node.querySelectorAll = () => { counter.count('domQueries'); return []; };
+      const { setProperty } = node.style;
+      node.style.setProperty = (key, value) => { counter.count('domMutations'); setProperty(key, value); };
+      return node;
+    };
+    const initial = preference({
+      revision: 7,
+      interaction_overrides: { item_hover: null, item_selected: null, button_hover_background: null, button_pressed: null, item_outline: { source: 'automatic', color: null } },
+      selection_accent: { enabled: true, color: '#34CA78' },
+      player_style_override: api.playerThemes[0].style,
+      player_recent_sets: api.playerThemes.slice(0, cardinality).map(theme => theme.style),
+    });
+    const root = element(), host = element();
+    const document = {
+      documentElement: root, addEventListener() {}, createElement: () => countedElement(),
+      getElementById: id => id === 'appearance-bootstrap' ? { textContent: JSON.stringify(initial) } : null,
+    };
+    const window = {
+      location: { href: 'https://music.test/', origin: 'https://music.test' },
+      addEventListener() {}, confirm: () => true,
+      fetch: async () => {
+        counter.count('requests');
+        return { ok: true, status: 200, redirected: false, json: async () => ({ ...initial, csrf_token: 'owned-test-session' }) };
+      },
+    };
+    const instance = api.installBrowser(window, document);
+    assert.equal(await instance.load(), true);
+    host.querySelector = (selector) => {
+      if (selector !== '.appearance-background-editor') return element();
+      host.editor ||= countedElement();
+      return host.editor;
+    };
+    instance.mountSeekbar(host);
+    const editor = host.editor;
+    const angle = { value: '0', getAttribute: () => null, hasAttribute: name => name === 'data-player-style-angle' };
+    const work = await counter.measure(() => {
+      for (let step = 1; step <= 10; step += 1) {
+        angle.value = String(step * 9);
+        editor.listeners.get('input')({ target: angle });
+      }
+    });
+    assert.equal(instance.controller.getState().draft.player_style_override.surface.angle, 90);
+    assert.equal(instance.controller.getState().playerRecentSets.length, cardinality);
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:appearance-backgrounds.js#mountSeekbar',
+    small: 1,
+    large: 5,
+    run,
+    budgets: { requests: 0, domQueries: 410, domMutations: 650, renderCommits: 30, markupBytes: 24620 },
+    growth: { metric: 'domQueries', largeMinusSmallMax: 0 },
+  });
+});
+
+// Counted editor nodes: a query finds (and keeps) a child, as the editor's own markup provides, and
+// replacing a node's markup drops its children, so each mount renders a new editor.
+function countedEditorElement(counter) {
+  const { CountedElement } = require('../helpers/counted-dom.js').createCountedDom(counter);
+  return class EditorElement extends CountedElement {
+    get innerHTML() { return super.innerHTML; }
+    set innerHTML(value) { super.innerHTML = value; this.selectors.clear(); }
+    querySelector(selector) {
+      const found = super.querySelector(selector);
+      if (found) return found;
+      const child = new EditorElement();
+      child.parentElement = this;
+      this.selectors.set(selector, child);
+      return child;
+    }
+    hasAttribute(name) { return Object.hasOwn(this.attributes, name); }
+    removeAttribute(name) { counter.count('domMutations'); delete this.attributes[name]; }
+    insertAdjacentHTML(_position, markup) { counter.count('domMutations'); counter.count('markupBytes', markup.length); }
+    closest(selector) { return super.closest(selector) || this; }
+  };
+}
+
+// Ten color inputs into an editor mounted [mounts] times, with the account's player and waveform
+// histories at their five-entry limits.
+async function measureEditorColorInput(method, mounts, inputTarget) {
+  const { createInteractionCounter } = require('../helpers/bounded-interaction-counter.js');
+  const counter = createInteractionCounter();
+  const EditorElement = countedEditorElement(counter);
+  const initial = preference({
+    revision: 7,
+    interaction_overrides: { item_hover: null, item_selected: null, button_hover_background: null, button_pressed: null, item_outline: { source: 'automatic', color: null } },
+    selection_accent: { enabled: true, color: '#34CA78' },
+    player_style_override: api.playerThemes[0].style,
+    player_recent_sets: api.playerThemes.slice(0, 5).map(theme => theme.style),
+    waveform_recent_colors: ['#112233', '#223344', '#334455', '#445566', '#556677'],
+  });
+  const host = new EditorElement();
+  const document = {
+    documentElement: new EditorElement('html'), addEventListener() {}, createElement: tag => new EditorElement(tag),
+    getElementById: id => id === 'appearance-bootstrap' ? { textContent: JSON.stringify(initial) } : null,
+  };
+  const window = {
+    location: { href: 'https://music.test/', origin: 'https://music.test' },
+    addEventListener() {}, confirm: () => true,
+    fetch: async () => {
+      counter.count('requests');
+      return { ok: true, status: 200, redirected: false, json: async () => ({ ...initial, csrf_token: 'owned-test-session' }) };
+    },
+  };
+  const instance = api.installBrowser(window, document);
+  assert.equal(await instance.load(), true);
+  for (let mount = 0; mount < mounts; mount += 1) instance[method](host);
+  const editor = host.querySelector('.appearance-background-editor');
+  const target = new EditorElement('input', { attributes: inputTarget });
+  const colors = Array.from({ length: 10 }, (_value, step) => `#${String(step).repeat(2)}A0B0`);
+  const work = await counter.measure(() => {
+    for (const color of colors) {
+      target.value = color;
+      editor.dispatch('input', { target });
+    }
+  });
+  return { work, state: instance.controller.getState(), lastColor: colors.at(-1) };
+}
+
+test('bounded interaction: Main elements color input stays bounded after 500 editor mounts', async () => {
+  const { measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  await measureScalePair({
+    id: 'js:appearance-backgrounds.js#mount',
+    small: 1,
+    large: 500,
+    budgets: { requests: 0, listeners: 0, domQueries: 220, domMutations: 1690, renderCommits: 30, markupBytes: 2040 },
+    growth: { metric: 'domQueries', largeMinusSmallMax: 0 },
+    async run(mounts) {
+      const { work, state, lastColor } = await measureEditorColorInput('mount', mounts, { 'data-player-hex': 'fill' });
+      assert.equal(state.draft.player_override.fill, lastColor);
+      assert.equal(state.waveformColorUpdates.length, 5);
+      assert.equal(state.playerRecentSets.length, 5);
+      return work;
+    },
+  });
+});
+
+test('bounded interaction: Selection & Hover accent input stays bounded after 500 editor mounts', async () => {
+  const { measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  await measureScalePair({
+    id: 'js:appearance-backgrounds.js#mountSelectionAccent',
+    small: 1,
+    large: 500,
+    budgets: { requests: 0, listeners: 0, domQueries: 220, domMutations: 1340, renderCommits: 10, markupBytes: 0 },
+    growth: { metric: 'domQueries', largeMinusSmallMax: 0 },
+    async run(mounts) {
+      const { work, state, lastColor } = await measureEditorColorInput('mountSelectionAccent', mounts, { 'data-aggregate-accent-custom': '' });
+      assert.deepEqual(state.draft.selection_accent, { enabled: true, color: lastColor });
+      return work;
+    },
+  });
+});

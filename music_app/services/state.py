@@ -6,6 +6,7 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 from datetime import datetime
+from functools import partial
 from os.path import normcase
 from pathlib import Path
 
@@ -27,10 +28,8 @@ from music_app.services.cover_refresh_runtime import (
 )
 from music_app.services.cover_refresh_planning import build_cover_refresh_jobs
 from music_app.services.exception_overrides import load_exception_overrides
-from music_app.services.library_hydration import (
-    hydrate_library_state_from_disk,
-    refresh_cached_cover_paths_in_library_state,
-)
+from music_app.services.library_album_index import publish_library_albums
+from music_app.services.library_hydration import hydrate_library_state_from_disk
 from music_app.services.library_indexing import ScanCancelled, scan_library_file_cache
 from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 from music_app.services.gallery_projection_postgres import (
@@ -69,6 +68,10 @@ from music_app.services.relation_projection_postgres import (
 _CACHE_LOCK = threading.Lock()
 _SCAN_EXECUTOR = create_daemon_executor(max_workers=1, thread_name_prefix="albumhaven-scan")
 _HYDRATE_EXECUTOR = create_daemon_executor(max_workers=1, thread_name_prefix="albumhaven-hydrate")
+_HYDRATION_REQUEST_LOCK = threading.Lock()
+# Readers poll status every few seconds; a failed hydration waits this long
+# before the next reader may queue another database attempt.
+_HYDRATION_RETRY_SECONDS = 5.0
 _COVER_EXECUTOR = create_daemon_executor(max_workers=1, thread_name_prefix="albumhaven-cover")
 _MBID_ASSERTION_EXECUTOR = create_daemon_executor(max_workers=1, thread_name_prefix="albumhaven-mbid")
 _RELATION_REBUILD_LOCK = threading.Lock()
@@ -323,7 +326,6 @@ def _drain_watcher_cover_refresh_queue(
                 build_cover_jobs=build_cover_refresh_jobs,
                 run_cover_jobs=lambda **kwargs: run_cover_jobs(
                     **kwargs,
-                    allow_full_snapshot_persistence=False,
                     expected_inventory_mutation_revision=int(
                         targeted_state["inventory_mutation_revision"]
                     ),
@@ -531,6 +533,8 @@ def init_state(app) -> None:
         "relation_projection_rebuild_reason": "not_checked",
         "relation_projection_duration_ms": 0.0,
         "hydrate_in_progress": False,
+        "hydration_settled": False,
+        "hydration_attempted_at": None,
         "covers_in_progress": False,
         "covers_processed": 0,
         "covers_completed": 0,
@@ -739,21 +743,6 @@ def format_timestamp(value: float) -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(value))
 
 
-def refresh_cached_cover_paths_for_state(
-    library_state: dict[str, object],
-    config: dict[str, object],
-    *,
-    min_interval_seconds: float = 5.0,
-) -> bool:
-    with _CACHE_LOCK:
-        return refresh_cached_cover_paths_in_library_state(
-            library_state,
-            config,
-            min_interval_seconds=min_interval_seconds,
-            now=time.time(),
-        )
-
-
 def cover_file_cache_snapshot_for_state(
     library_state: dict[str, object],
     config: dict[str, object] | None = None,
@@ -813,25 +802,19 @@ def hydrate_library_state_for_config(
             ).load_ignored_repair_keys,
             album_to_dict=lambda album: __import__(
                 "music_app.services.library",
-                fromlist=["album_to_dict"],
-            ).album_to_dict(album, config=config),
+                fromlist=["album_detail_to_dict"],
+            ).album_detail_to_dict(album, config=config),
         )
     with _CACHE_LOCK:
-        try:
-            return _call_hydrate_library_state_from_disk(
-                library_state,
-                config,
-                ensure_relations=ensure_relations,
-                validate_cache=validate_cache,
-                queue_problematic_albums_prewarm=queue_problematic_albums_prewarm,
-                queue_utility_rules_prewarm=queue_utility_rules_prewarm,
-                logger=logger_for_prewarm,
-            )
-        except ValueError as exc:
-            if "runtime persistence adapter is unavailable" not in str(exc):
-                raise
-            library_state["last_error"] = str(exc)
-            return False
+        return _call_hydrate_library_state_from_disk(
+            library_state,
+            config,
+            ensure_relations=ensure_relations,
+            validate_cache=validate_cache,
+            queue_problematic_albums_prewarm=queue_problematic_albums_prewarm,
+            queue_utility_rules_prewarm=queue_utility_rules_prewarm,
+            logger=logger_for_prewarm,
+        )
 
 
 def refresh_relation_views_for_state(
@@ -935,10 +918,10 @@ def refresh_relation_views_for_state(
                     path: {**entry, **repaired_entries[path]} if path in repaired_entries else entry
                     for path, entry in current_entries.items()
                 }
-                target_state["albums"] = build_albums_from_file_cache(
+                publish_library_albums(target_state, build_albums_from_file_cache(
                     target_state["file_cache"],
                     set(target_state.get("separate_release_keys") or set()),
-                )
+                ))
                 repaired_cover_published = True
         if postgres_relation_projection:
             if not isinstance(committed_relation_state, dict) or not isinstance(
@@ -972,7 +955,7 @@ def refresh_relation_views_for_state(
                 raise ScanCancelled()
             if repaired_cover_published:
                 library_state["file_cache"] = target_state["file_cache"]
-                library_state["albums"] = target_state["albums"]
+                publish_library_albums(library_state, target_state["albums"])
             for key in (
                 "relation_views",
                 "relations_in_progress",
@@ -1128,7 +1111,7 @@ def refresh_cover_artwork_for_track_paths_for_state(
         force_search=force_search,
         select_manual_track_cover_refresh_jobs=select_manual_track_cover_refresh_jobs,
         build_cover_jobs=build_cover_refresh_jobs,
-        run_cover_jobs=run_cover_jobs,
+        run_cover_jobs=partial(run_cover_jobs, republish_changed_albums_only=True),
         log_cover_refresh_completion=log_cover_refresh_completion,
     )
 
@@ -1198,8 +1181,8 @@ def _queue_utility_rules_prewarm_for_state(library_state, config, logger) -> Non
         ).load_ignored_repair_keys,
         album_to_dict=lambda album: __import__(
             "music_app.services.library",
-            fromlist=["album_to_dict"],
-        ).album_to_dict(album, config=config),
+            fromlist=["album_detail_to_dict"],
+        ).album_detail_to_dict(album, config=config),
     )
 
 
@@ -1442,6 +1425,51 @@ def _refresh_library_worker(
     refresh_library_for_state(library_state, config, logger, force=force)
 
 
+def _library_inventory_ready(library_state: dict[str, object]) -> bool:
+    return bool(
+        library_state.get("albums")
+        or library_state.get("scan_in_progress")
+        or library_state.get("hydration_settled")
+    )
+
+
+def request_library_hydration_for_state(
+    library_state: dict[str, object],
+    config: dict[str, object],
+    logger=None,
+) -> bool:
+    """Report whether the in-memory inventory is published.
+
+    Interactive readers never hydrate the library: an unpublished inventory
+    queues the single background hydration owner and the caller answers with
+    a pending state. An attempt that completed without albums settles, and
+    scans publish the inventory from then on; a failed attempt is retried by
+    the first reader after the retry interval.
+    """
+    if _library_inventory_ready(library_state):
+        return True
+    with _HYDRATION_REQUEST_LOCK:
+        if _library_inventory_ready(library_state):
+            return True
+        if library_state.get("hydrate_in_progress"):
+            return False
+        now = time.monotonic()
+        attempted_at = library_state.get("hydration_attempted_at")
+        if attempted_at is not None and now - attempted_at < _HYDRATION_RETRY_SECONDS:
+            return False
+        library_state["hydration_attempted_at"] = now
+        library_state["hydrate_in_progress"] = True
+    _HYDRATE_EXECUTOR.submit(
+        _hydrate_library_state_worker,
+        library_state,
+        config,
+        logger,
+        ensure_relations=False,
+        validate_cache=False,
+    )
+    return False
+
+
 def _hydrate_library_state_worker(
     library_state: dict[str, object],
     config: dict[str, object],
@@ -1450,6 +1478,7 @@ def _hydrate_library_state_worker(
     validate_cache: bool,
     enable_prewarm: bool = True,
 ) -> None:
+    settled = hydrated = False
     try:
         hydrated = hydrate_library_state_for_config(
             library_state,
@@ -1458,15 +1487,29 @@ def _hydrate_library_state_worker(
             validate_cache=validate_cache,
             logger_for_prewarm=logger if enable_prewarm else None,
         )
-        if hydrated and not enable_prewarm:
-            _prewarm_root_browse_payload_for_state(library_state, config, logger)
+        settled = True
     except Exception as exc:
+        # A failed attempt stays unsettled so a reader queues a retry once the
+        # retry interval has passed.
         library_state["last_error"] = str(exc)
         if logger is not None:
-            logger.exception("Background library hydration failed")
+            if "runtime persistence adapter is unavailable" in str(exc):
+                logger.warning("Background library hydration deferred: %s", exc)
+            else:
+                logger.exception("Background library hydration failed")
     finally:
-        with _CACHE_LOCK:
+        with _HYDRATION_REQUEST_LOCK:
+            if settled:
+                library_state["hydration_settled"] = True
             library_state["hydrate_in_progress"] = False
+    if hydrated and not enable_prewarm:
+        # The inventory is already published; a failed prewarm only leaves the
+        # first browse to build its payload, so it is not a hydration failure.
+        try:
+            _prewarm_root_browse_payload_for_state(library_state, config, logger)
+        except Exception:
+            if logger is not None:
+                logger.exception("Root browse prewarm failed after library hydration")
 
 
 def _run_mbid_assertion_follow_up(logger, kwargs: dict[str, object]) -> None:

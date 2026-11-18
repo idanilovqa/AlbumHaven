@@ -123,9 +123,12 @@ function resolveSidebarVirtualWindow(sidebarArtists = [], options = {}) {
 // Romanized artist names (owner-approved J3): the Latin form MusicBrainz gives an
 // original-script name, shown in parentheses beside it. Display only.
 let romanizedArtistNames = new Map();
+// Bumped whenever either label map is replaced, so a drawn tree knows to redraw.
+let artistDisplayLabelsVersion = 0;
 
 function setRomanizedArtistNames(names = {}) {
   romanizedArtistNames = new Map(Object.entries(names || {}).map(([name, latin]) => [String(name).trim(), String(latin || '').trim()]));
+  artistDisplayLabelsVersion += 1;
 }
 
 // "Tenmon" for "天門" (hover text); empty for every other name.
@@ -145,6 +148,7 @@ let splitArtistQualifiers = new Map();
 
 function setSplitArtistQualifiers(qualifiers = {}) {
   splitArtistQualifiers = new Map(Object.entries(qualifiers || {}).map(([label, qualifier]) => [String(label).trim(), String(qualifier || '').trim()]));
+  artistDisplayLabelsVersion += 1;
 }
 
 // The one way an artist name is drawn: { name: 'Amarok', qualifier: '(Poland)', secondary:
@@ -239,21 +243,41 @@ function buildSeriesSidebarHtml(view = {}, collapsedGroups = state.ui?.seriesTre
   }, '');
 }
 
+// Sidebar artist lists are replaced, never edited in place, so each list's
+// content is read once and named by a short generation that window scrolls
+// reuse instead of rescanning or comparing every artist. A replacement list
+// with the same content keeps its generation, so it re-renders nothing.
+const sidebarArtistGenerations = new WeakMap();
+let lastSidebarArtistContent = null;
+let lastSidebarArtistGeneration = 0;
+function sidebarArtistGeneration(sidebarArtists) {
+  let generation = sidebarArtistGenerations.get(sidebarArtists);
+  if (generation === undefined) {
+    const content = sidebarArtists.map((item) => [
+      String(item?.artist || ''),
+      String(item?.artist_display || item?.artist || ''),
+      String(item?.count ?? ''),
+    ].join('\u001f')).join('\u001e');
+    if (content !== lastSidebarArtistContent) {
+      lastSidebarArtistContent = content;
+      lastSidebarArtistGeneration += 1;
+    }
+    generation = lastSidebarArtistGeneration;
+    sidebarArtistGenerations.set(sidebarArtists, generation);
+  }
+  return generation;
+}
+
 function buildSidebarStructureSignature(sidebarArtists = [], options = {}) {
   const showAllArtistsLink = Object.prototype.hasOwnProperty.call(options, 'showAllArtistsOverride')
     && options.showAllArtistsOverride !== null
     ? (options.showAllArtistsOverride ? '1' : '0')
     : String(options.view?.show_all_artists_sidebar_link !== false ? '1' : '0');
-  const artistSignature = sidebarArtists.map((item) => [
-    String(item?.artist || ''),
-    String(item?.artist_display || item?.artist || ''),
-    artistDisplayParts(item?.artist_display || item?.artist).secondary,
-    String(item?.count ?? ''),
-  ].join('\u001f')).join('\u001e');
   const virtualWindow = options.virtualWindow?.virtualized
     ? `${options.virtualWindow.start}:${options.virtualWindow.end}`
     : 'all';
-  return `${showAllArtistsLink}\u001d${artistSignature}\u001c${virtualWindow}`;
+  // The dimmed text (romanized names, split qualifiers) arrives apart from the list.
+  return `${showAllArtistsLink}:${sidebarArtistGeneration(sidebarArtists)}:${artistDisplayLabelsVersion}:${virtualWindow}`;
 }
 
 function applySidebarSelectionMarkup(container, options = {}) {

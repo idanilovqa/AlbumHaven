@@ -244,6 +244,7 @@ const state = {
       submitting: false,
       loadPromise: null,
       requestGeneration: 0,
+      followToken: 0,
     },
     localPlaylistImport: {
       selectedFile: null,
@@ -349,6 +350,7 @@ const state = {
     anchorPath: '',
     dragSelecting: false,
     dragAnchorPath: '',
+    dragHoverPath: '',
     values: {},
   },
   coverLookup: {
@@ -536,16 +538,20 @@ function restoreSidebarFocus(sidebarList, focusIdentity) {
 // 2026-11-17: the tree switches, the gallery stays).
 function renderSeriesSidebar(el, view) {
   const series = typeof showsSeriesTree === 'function' && showsSeriesTree();
-  const heading = document.querySelector('.desktop-artists-heading');
-  const label = series ? 'Series' : 'Artists';
-  if (heading && heading.textContent !== label) heading.textContent = label;
-  const fold = document.getElementById('artist-tree-fold-button');
-  const foldLabel = series ? 'Collapse Series Tree' : 'Collapse Artist Tree';
-  if (fold && fold.getAttribute('aria-label') !== foldLabel) {
-    fold.setAttribute('aria-label', foldLabel);
-    fold.setAttribute('title', foldLabel);
+  const kind = series ? 'series' : 'artists';
+  // The heading and fold button change only when the tree does; a scroll frame reads neither.
+  if (el.dataset.navigationTree !== kind) {
+    const heading = document.querySelector('.desktop-artists-heading');
+    const label = series ? 'Series' : 'Artists';
+    if (heading && heading.textContent !== label) heading.textContent = label;
+    const fold = document.getElementById('artist-tree-fold-button');
+    const foldLabel = series ? 'Collapse Series Tree' : 'Collapse Artist Tree';
+    if (fold && fold.getAttribute('aria-label') !== foldLabel) {
+      fold.setAttribute('aria-label', foldLabel);
+      fold.setAttribute('title', foldLabel);
+    }
+    el.dataset.navigationTree = kind;
   }
-  el.dataset.navigationTree = series ? 'series' : 'artists';
   if (!series) return false;
   const html = buildSeriesSidebarHtml(view);
   if (el.dataset.sidebarStructureSignature !== html) {

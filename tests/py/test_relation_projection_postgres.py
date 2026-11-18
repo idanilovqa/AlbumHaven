@@ -112,6 +112,7 @@ class _ProjectionDatabase:
         self.before_failure_merge = before_failure_merge
         self.before_advisory_lock = before_advisory_lock
         self.advisory_lock_count = 0
+        self.inventory_mutation_revision = 0
         self.fail_on_replace = fail_on_replace
         self.fail_on_scan_cache_save = fail_on_scan_cache_save
 
@@ -123,6 +124,7 @@ class _ProjectionConnection:
     def __init__(self, database):
         self.database = database
         self.scan_cache = deepcopy(database.scan_cache)
+        self.inventory_mutation_revision = database.inventory_mutation_revision
         self.family_links = deepcopy(database.family_links)
         self.search_projection = deepcopy(database.search_projection)
 
@@ -152,11 +154,13 @@ class _ProjectionConnection:
                     self.database.advisory_lock_count,
                 )
                 self.scan_cache = deepcopy(self.database.scan_cache)
+                self.inventory_mutation_revision = self.database.inventory_mutation_revision
             self.database.events.append("advisory_lock")
             return _Cursor([{}])
         if "metadata -> 'scan_cache' as scan_cache" in sql:
             return _Cursor([{
                 "scan_cache": deepcopy(self.scan_cache),
+                "inventory_mutation_revision": self.inventory_mutation_revision,
                 "artist_search_projection": deepcopy(self.search_projection),
             }])
         if "relation_views" in sql and projection.RELATION_PROJECTION_METADATA_KEY in sql:
@@ -1247,6 +1251,35 @@ def test_unchanged_stale_scan_fingerprint_rebuilds_current_sources_instead_of_re
     assert database.events.count("source_load") == 1
 
 
+def test_projection_marked_stale_over_unchanged_sources_is_restored_without_rebuilding(monkeypatch):
+    monkeypatch.setattr(projection, "Jsonb", None)
+    database = _ProjectionDatabase(source_rows=_morse_rows())
+    built = projection.ensure_relation_projection_ready(_config(), connect=database.connect)
+    # An inventory publication (a watcher event or an album move) marks the
+    # projection stale without checking whether relation sources changed.
+    database.scan_cache[projection.RELATION_PROJECTION_METADATA_KEY]["status"] = "stale"
+    family_links = list(database.family_links)
+
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("unchanged relation sources must not be rebuilt")
+
+    monkeypatch.setattr(projection, "build_relation_views_from_postgres_rows", unexpected)
+    monkeypatch.setattr(projection, "replace_artist_family_projection_in_transaction", unexpected)
+
+    restored = projection.ensure_relation_projection_ready(_config(), connect=database.connect)
+
+    metadata = database.scan_cache[projection.RELATION_PROJECTION_METADATA_KEY]
+    assert restored["rebuild_reason"] == "source_unchanged"
+    assert restored["startup_rebuilt"] is False
+    assert metadata["status"] == "ready"
+    assert metadata["built_from_fingerprint"] == projection.relation_source_fingerprint(_morse_rows())
+    assert restored["relation_views"] == built["relation_views"]
+    assert database.family_links == family_links
+    assert not projection.relation_projection_readiness_stale_reason(database.scan_cache | {
+        projection._ARTIST_SEARCH_PROJECTION_ROWS_KEY: database.search_projection,
+    })
+
+
 def test_ensure_relation_projection_ready_healthy_fast_path_loads_only_projection_fields(monkeypatch):
     fingerprint = projection.relation_source_fingerprint(_morse_rows())
     relation_views = _complete_relation_views()
@@ -1535,6 +1568,51 @@ def test_projection_revalidates_changed_sources_under_lock_then_rebuilds_outside
     next_build = database.events.index("pure_build", next_fingerprint)
     assert "commit" in database.events[first_lock:next_source_load]
     assert first_lock < next_source_load < next_fingerprint < next_build
+
+
+def test_inventory_publication_over_an_already_stale_projection_forces_a_rebuild_from_current_sources(
+    monkeypatch,
+):
+    """A watcher event that lands while a pending rebuild is building only flips
+    an already-stale status to stale again; its revision still invalidates the
+    build, so its new artist is not lost behind a ready publication."""
+    monkeypatch.setattr(projection, "Jsonb", None)
+    initial_rows = _morse_rows()
+    changed_rows = deepcopy(initial_rows)
+    changed_rows[1]["owner_artist_name"] = "Paul Gilbert"
+    changed_rows[1]["album_artist"] = "Paul Gilbert"
+    changed_rows[1]["member_artist_name"] = "Paul Gilbert"
+    stale_metadata = {
+        "status": "stale",
+        "builder_version": projection.RELATION_PROJECTION_BUILDER_VERSION,
+        "source_fingerprint": "fingerprint-at-the-earlier-watcher-event",
+        "built_from_fingerprint": "fingerprint-of-the-last-ready-projection",
+        "rebuild_reason": "scan_inventory_changed",
+    }
+
+    def watcher_publication_at_first_lock(database, lock_count):
+        if lock_count == 1:
+            database.source_rows = changed_rows
+            database.valid_artist_keys.add("paul gilbert")
+            database.inventory_mutation_revision += 1
+            assert database.scan_cache[projection.RELATION_PROJECTION_METADATA_KEY] == stale_metadata
+
+    database = _ProjectionDatabase(
+        scan_cache={
+            "relation_views": _complete_relation_views(),
+            projection.RELATION_PROJECTION_METADATA_KEY: deepcopy(stale_metadata),
+        },
+        source_rows=initial_rows,
+        before_advisory_lock=watcher_publication_at_first_lock,
+    )
+
+    result = projection.ensure_relation_projection_ready(_config(), connect=database.connect)
+
+    metadata = database.scan_cache[projection.RELATION_PROJECTION_METADATA_KEY]
+    assert metadata["status"] == "ready"
+    assert metadata["built_from_fingerprint"] == projection.relation_source_fingerprint(changed_rows)
+    assert "Paul Gilbert" in result["relation_views"]["artists"]
+    assert database.events.count("source_load") == 2
 
 
 def test_exhausted_retries_do_not_overwrite_concurrently_published_ready_metadata(monkeypatch):

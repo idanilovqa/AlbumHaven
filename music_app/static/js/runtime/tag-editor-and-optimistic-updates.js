@@ -280,6 +280,7 @@ function openTagEditor(album, options = {}) {
     anchorPath: String(tracks[0].path || ''),
     dragSelecting: false,
     dragAnchorPath: '',
+    dragHoverPath: '',
     reorder: null,
     values,
     sessionMutationClaim: claimTagEditViewMutation(album),
@@ -1500,7 +1501,7 @@ async function markAlbumVersion(albumKey, parentAlbumKey) {
   const targetKey = String(parentAlbumKey || '');
   if (!childKey || !targetKey || childKey === targetKey) return;
   try {
-    const response = await fetch('/versions/mark', {
+    const response = await fetchRetryingPendingProjection('/versions/mark', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ album_key: childKey, parent_album_key: targetKey }),

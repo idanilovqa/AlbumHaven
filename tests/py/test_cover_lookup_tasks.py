@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from concurrent.futures import Future
 from pathlib import Path
 from threading import Event, Thread, current_thread
@@ -229,40 +230,59 @@ def test_task_list_uses_compact_persisted_summaries(monkeypatch):
     ]
 
 
-def test_task_list_terminalizes_stale_persisted_running_task(monkeypatch):
-    from music_app.services import cover_lookup_tasks as task_service
+@pytest.fixture
+def notification_store(monkeypatch):
+    """The real Postgres notification adapter over an ops.cover_lookup_tasks double."""
+    from contextlib import contextmanager
 
+    from music_app.services import cover_lookup_notifications, cover_lookup_tasks_postgres
+
+    database = _NotificationStoreDatabase()
+    monkeypatch.setattr(cover_lookup_notifications, "select_runtime_persistence_adapter", lambda *_args: None)
+    monkeypatch.setattr(cover_lookup_tasks_postgres, "Jsonb", None)
+
+    @contextmanager
+    def pooled_connection(_database_url, **_options):
+        yield database
+
+    monkeypatch.setattr(cover_lookup_tasks_postgres, "_pooled_connection", pooled_connection)
+    reset_cover_lookup_runtime_state()
+    return {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://isolated.invalid/cover-lookup-store"}, database
+
+
+def test_task_list_terminalizes_stale_persisted_running_task_and_keeps_its_stored_payload(notification_store):
+    config, database = notification_store
     stale_task = {
         "id": "orphaned-task",
         "status": "running",
         "artist": "Perelandra",
         "album": "Eden",
         "progress": 45,
+        "created_at": "2020-01-01T00:00:00+00:00",
         "updated_at": "2020-01-01T00:00:00+00:00",
-        "album_payload": {"key": "perelandra::eden"},
+        "album_payload": {"key": "perelandra::eden", "tracks": [{"path": "Perelandra/Eden/01.flac"}]},
+        "track_paths": ["Perelandra/Eden/01.flac"],
+        "possible_matches": [{"id": "caa-1", "art_kind": "cover", "url": "https://covers.example/1.jpg"}],
     }
-    persisted = []
-    monkeypatch.setattr(
-        task_service,
-        "load_cover_lookup_notification_summaries",
-        lambda config: [stale_task],
-    )
-    monkeypatch.setattr(
-        task_service,
-        "upsert_cover_lookup_notification",
-        lambda config, task, *, persistence_revision: persisted.append(
-            (task, persistence_revision)
-        ),
-    )
+    task_service.upsert_cover_lookup_notifications(config, [(stale_task, 1)])
 
-    summaries = task_service.list_cover_lookup_task_summaries(config={})
+    summaries = task_service.list_cover_lookup_task_summaries(config=config)
 
+    assert summaries[0]["id"] == "orphaned-task"
     assert summaries[0]["status"] == "failed"
     assert summaries[0]["result_kind"] == "interrupted"
     assert summaries[0]["progress_label"] == "Interrupted"
     assert "stopped before it could finish" in summaries[0]["message"].casefold()
-    assert persisted[0][0]["id"] == "orphaned-task"
-    assert persisted[0][0]["notification_action_taken"] is False
+    stored = database.rows["orphaned-task"]
+    assert stored["status"] == "failed"
+    # Recovery changes only the status fields; the full task the summary omits survives.
+    assert {key: stored["payload"][key] for key in ("album_payload", "track_paths", "possible_matches", "progress")} == {
+        "album_payload": stale_task["album_payload"],
+        "track_paths": stale_task["track_paths"],
+        "possible_matches": stale_task["possible_matches"],
+        "progress": 100,
+    }
+    assert stored["payload"]["result_kind"] == "interrupted"
 
 
 def test_notification_count_reconciles_stale_persisted_tasks(monkeypatch):
@@ -359,7 +379,7 @@ def test_notification_reconciliation_interrupts_stale_live_worker(monkeypatch, c
     )
     monkeypatch.setattr(
         task_service,
-        "_save_cover_lookup_notification_task",
+        "_save_cover_lookup_notification_tasks",
         lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(
@@ -378,7 +398,7 @@ def test_notification_reconciliation_interrupts_stale_live_worker(monkeypatch, c
 def test_failed_worker_future_terminalizes_live_task(monkeypatch, config):
     monkeypatch.setattr(
         task_service,
-        "_save_cover_lookup_notification_task",
+        "_save_cover_lookup_notification_tasks",
         lambda *_args, **_kwargs: None,
     )
     task_id, cancel_event = create_cover_lookup_task(
@@ -399,7 +419,7 @@ def test_failed_worker_future_terminalizes_live_task(monkeypatch, config):
 def test_superseded_candidate_future_cannot_fail_active_cover_save(monkeypatch, config):
     monkeypatch.setattr(
         task_service,
-        "_save_cover_lookup_notification_task",
+        "_save_cover_lookup_notification_tasks",
         lambda *_args, **_kwargs: None,
     )
     task_id, cancel_event = create_cover_lookup_task(
@@ -426,7 +446,7 @@ def test_superseded_candidate_future_cannot_fail_active_cover_save(monkeypatch, 
 def test_failed_cover_save_future_reports_a_save_failure(monkeypatch, config):
     monkeypatch.setattr(
         task_service,
-        "_save_cover_lookup_notification_task",
+        "_save_cover_lookup_notification_tasks",
         lambda *_args, **_kwargs: None,
     )
     task_id, _cancel_event = create_cover_lookup_task(
@@ -453,7 +473,7 @@ def test_failed_cover_save_future_reports_a_save_failure(monkeypatch, config):
 def test_failed_future_does_not_resurrect_cleared_terminal_task(monkeypatch):
     monkeypatch.setattr(
         task_service,
-        "_save_cover_lookup_notification_task",
+        "_save_cover_lookup_notification_tasks",
         lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(
@@ -494,7 +514,7 @@ def test_notification_reconciliation_keeps_recent_candidate_worker_alive(
     )
     monkeypatch.setattr(
         task_service,
-        "_save_cover_lookup_notification_task",
+        "_save_cover_lookup_notification_tasks",
         lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(
@@ -529,7 +549,7 @@ def test_notification_reconciliation_uses_newest_activity_timestamp(
     )
     monkeypatch.setattr(
         task_service,
-        "_save_cover_lookup_notification_task",
+        "_save_cover_lookup_notification_tasks",
         lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(
@@ -547,7 +567,7 @@ def test_notification_reconciliation_uses_newest_activity_timestamp(
 def test_running_transition_records_fresh_activity_timestamp(monkeypatch):
     monkeypatch.setattr(
         task_service,
-        "_save_cover_lookup_notification_task",
+        "_save_cover_lookup_notification_tasks",
         lambda *_args, **_kwargs: None,
     )
     task_id, _cancel_event = create_cover_lookup_task(
@@ -569,7 +589,7 @@ def test_running_transition_records_fresh_activity_timestamp(monkeypatch):
 def test_failed_lookup_can_transition_to_remote_cover_save(monkeypatch):
     monkeypatch.setattr(
         task_service,
-        "_save_cover_lookup_notification_task",
+        "_save_cover_lookup_notification_tasks",
         lambda *_args, **_kwargs: None,
     )
     task_id, _cancel_event = create_cover_lookup_task(
@@ -600,7 +620,7 @@ def test_failed_lookup_can_transition_to_remote_cover_save(monkeypatch):
 def test_timeout_failure_cannot_be_reversed_by_late_worker_completion(monkeypatch):
     monkeypatch.setattr(
         task_service,
-        "_save_cover_lookup_notification_task",
+        "_save_cover_lookup_notification_tasks",
         lambda *_args, **_kwargs: None,
     )
     task_id, _cancel_event = create_cover_lookup_task(
@@ -1290,7 +1310,7 @@ def test_cleared_task_reclaims_tombstone_and_persistence_lock_after_last_future_
     from music_app.services import cover_lookup_tasks as task_service
 
     config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://album_haven_app@localhost/test"
-    monkeypatch.setattr(task_service, "upsert_cover_lookup_notification", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(task_service, "upsert_cover_lookup_notifications", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         task_service,
         "delete_cover_lookup_notifications",
@@ -1611,8 +1631,8 @@ def test_mark_action_taken_for_track_paths_waits_for_matching_active_task(monkey
     monkeypatch.setattr(task_service, "load_cover_lookup_notifications", lambda _config: tasks)
     monkeypatch.setattr(
         task_service,
-        "mark_cover_lookup_task_notification_action_taken",
-        lambda task_id, *, config: marked_ids.append(task_id) or {"id": task_id},
+        "mark_cover_lookup_tasks_notification_action_taken",
+        lambda task_ids, *, config: [marked_ids.append(task_id) or {"id": task_id} for task_id in task_ids],
     )
     reset_cover_lookup_runtime_state()
 
@@ -1831,3 +1851,121 @@ def test_task_level_bounded_notification_reads_preserve_contract(monkeypatch):
     assert task_service.load_cover_lookup_task_summary_page(
         config={"key": "value"}, limit=50, cursor=None, active_only=False
     ) == page
+
+
+class _Rows:
+    def __init__(self, rows=()):
+        self._rows = list(rows)
+
+    def fetchall(self):
+        return list(self._rows)
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+
+class _NotificationStoreDatabase:
+    """Stands in for ops.cover_lookup_tasks behind the real Postgres adapter: it
+    answers the bootstrap check, the compact summary read, the per-task upsert
+    and the in-place stale interrupt."""
+
+    # The summary read returns these task fields, never the full stored payload.
+    _SUMMARY_FIELDS = ("artist", "album", "progress", "progress_label", "message", "result_kind",
+                       "started_at", "updated_at", "finished_at")
+
+    def __init__(self) -> None:
+        self.rows: dict[str, dict[str, object]] = {}
+
+    def _interrupt_stale(self, params):
+        completed_at, message, _completed, finished_at, _message, _families, statuses, stale_before = params
+        interrupted = []
+        for task_key, row in self.rows.items():
+            payload = row["payload"]
+            activity = max(
+                datetime.fromisoformat(str(payload[field]))
+                for field in ("candidate_updated_at", "updated_at", "started_at", "created_at")
+                if payload.get(field)
+            )
+            if row["status"] in statuses and activity <= stale_before:
+                row["status"] = "failed"
+                row["payload"] = {**payload, "status": "failed", "progress": 100, "progress_label": "Interrupted",
+                                  "result_kind": "interrupted", "finished_at": finished_at.isoformat(),
+                                  "message": message}
+                interrupted.append({"task_key": task_key})
+        return _Rows(interrupted)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return None
+
+    def transaction(self):
+        from contextlib import nullcontext
+
+        return nullcontext()
+
+    def execute(self, query, params=None):
+        if "bootstrap_context_ready" in query:
+            return _Rows([{"bootstrap_context_ready": 1}])
+        if "insert into ops.cover_lookup_tasks" in query:
+            task_key, status, *_rest, metadata = params
+            self.rows[task_key] = {"status": status, "payload": dict(metadata["source_payload"])}
+            return _Rows()
+        if "update ops.cover_lookup_tasks" in query:
+            return self._interrupt_stale(params)
+        if "jsonb_strip_nulls" in query:
+            return _Rows([
+                {"task_summary": {
+                    **{field: row["payload"][field] for field in self._SUMMARY_FIELDS if field in row["payload"]},
+                    "id": task_key,
+                    "status": row["status"],
+                    "created_at": row["payload"].get("created_at"),
+                }}
+                for task_key, row in self.rows.items()
+            ])
+        raise AssertionError(f"unexpected cover lookup store statement: {query[:120]}")
+
+
+def test_cover_lookup_notification_store_contract_opens_one_connection_per_call_at_any_task_count(monkeypatch):
+    """Upserting tasks, and the stale recovery in the task summary list, each
+    lease one connection however many tasks they touch."""
+    from contextlib import contextmanager
+
+    from music_app.services import cover_lookup_notifications, cover_lookup_tasks_postgres
+    from tests.py.bounded_interactions import CountingConnection, OperationCounts, assert_plateau
+
+    config = {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://isolated.invalid/cover-lookup-store"}
+    monkeypatch.setattr(cover_lookup_notifications, "select_runtime_persistence_adapter", lambda *_args: None)
+    monkeypatch.setattr(cover_lookup_tasks_postgres, "Jsonb", None)
+    current: dict[str, object] = {}
+
+    @contextmanager
+    def pooled_connection(_database_url, **_options):
+        current["counts"].pool_leases += 1
+        yield CountingConnection(current["database"], current["counts"])
+
+    monkeypatch.setattr(cover_lookup_tasks_postgres, "_pooled_connection", pooled_connection)
+    stale = "2026-01-01T00:00:00+00:00"
+
+    def run(task_count: int) -> tuple[OperationCounts, OperationCounts]:
+        reset_cover_lookup_runtime_state()
+        database = current["database"] = _NotificationStoreDatabase()
+        tasks = [({"id": f"task-{index:05d}", "status": "running", "artist": "Artist", "album": f"Album {index}",
+                   "created_at": stale, "updated_at": stale}, 1) for index in range(task_count)]
+        upsert = current["counts"] = OperationCounts()
+        task_service.upsert_cover_lookup_notifications(config, tasks)
+        assert len(database.rows) == task_count
+        recovery = current["counts"] = OperationCounts()
+        summaries = task_service.list_cover_lookup_task_summaries(config=config)
+        assert len(summaries) == task_count
+        assert {row["status"] for row in database.rows.values()} == {"failed"}
+        assert {row["payload"]["result_kind"] for row in database.rows.values()} == {"interrupted"}
+        return upsert, recovery
+
+    small, large = run(5), run(500)
+
+    assert (small[0].pool_leases, small[1].pool_leases) == (1, 3)
+    assert_plateau([small[0].pool_leases, large[0].pool_leases], label="upsert connections")
+    # One summary read, one in-place interrupt of every stale task, and one re-read.
+    assert_plateau([small[1].pool_leases, large[1].pool_leases], label="stale recovery connections")

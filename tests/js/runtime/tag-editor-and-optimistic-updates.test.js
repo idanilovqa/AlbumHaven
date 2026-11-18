@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const { loadPendingProjectionFetch } = require('../helpers/pending-projection-fetch');
 const ButtonComponent = require(path.join(
   __dirname,
   '..',
@@ -177,6 +178,7 @@ function loadHelper(albums, overrides = {}) {
   Object.assign(context, overrides);
 
   vm.createContext(context);
+  loadPendingProjectionFetch(context);
   vm.runInContext(helperSource, context, { filename: helperPath });
   return context;
 }
@@ -5060,4 +5062,53 @@ test('A named Bonus disc MusicBrainz counts as main album stays main', () => {
     index === 1 ? { ...track, disc_subtitle: 'Bonus' } : track));
   const grouped = context.groupAlbumTracks(tracks, { musicbrainz_release: { last_main_disc_number: 2 } });
   assert.deepEqual(Array.from(grouped.groups, (group) => group.isBonus), [false, false]);
+});
+
+// Request-capture contract (tests/ci/bounded-interactions.json): confirming a missing album's
+// removal posts once, then refreshes the current view once through the real fetchAndRender.
+const { assertRequestOwnership } = require('../helpers/bounded-interaction-counter');
+const { createGalleryRefreshContext, useRealViewUrls } = require('../helpers/gallery-refresh-context');
+const {
+  assertInteractionRequests, createRequestCapture, jsonResponse, measureInteractionContract,
+} = require('../helpers/request-capture');
+
+test('request capture: missing album removal posts once and refreshes its own view once', async () => {
+  const id = 'js:runtime/tag-editor-and-optimistic-updates.js#confirmMissingAlbumRemoval';
+  await measureInteractionContract(id, async (albums) => {
+    const { context } = createGalleryRefreshContext();
+    useRealViewUrls(context);
+    vm.runInContext(fs.readFileSync(helperPath, 'utf8'), context, { filename: helperPath });
+    let removalStatus = 200;
+    let accepted = true;
+    const capture = createRequestCapture(url => (url.startsWith('/api/')
+      ? jsonResponse({ removed_album_key: 'missing' }, { status: removalStatus })
+      : jsonResponse({ artist_groups: [], payload_tier: 'full' })));
+    context.fetch = capture.fetch;
+    context.showAppConfirmDialog = async () => accepted;
+    const album = { key: 'missing', inventory_status: 'missing', allowed_actions: { 'library.inventory.manage': true } };
+    const remove = async (view) => {
+      context.state.busy = false;
+      context.state.view = {
+        ...view,
+        artist_groups: [{ artist: 'Owner', albums: [album, ...Array.from({ length: albums }, (_, index) => ({ key: `kept-${index}` }))] }],
+      };
+      return context.confirmMissingAlbumRemoval(album);
+    };
+    assert.equal(await remove({}), true);
+    assert.equal(await remove({ selected_artist: 'Owner' }), true);
+    removalStatus = 409;
+    assert.equal(await remove({ selected_artist: 'Owner' }), false);
+    accepted = false;
+    assert.equal(await remove({ selected_artist: 'Owner' }), false);
+    const urls = capture.urls();
+    const shape = urls.map(url => [new URL(url, 'http://localhost').pathname, new URL(url, 'http://localhost').searchParams.get('artist')]);
+    assert.deepEqual(shape, [
+      ['/api/library/albums/missing/confirm-removal', null], ['/home-data', null],
+      ['/api/library/albums/missing/confirm-removal', null], ['/view-data', 'Owner'],
+      ['/api/library/albums/missing/confirm-removal', null], ['/view-data', 'Owner'],
+    ]);
+    assertRequestOwnership([urls[1]], { allowed: ['/home-data'], forbidden: ['/view-data'] }, 'Home refresh');
+    assertInteractionRequests(id, urls);
+    return capture.counter.snapshot();
+  });
 });

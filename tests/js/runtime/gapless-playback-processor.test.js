@@ -1804,6 +1804,39 @@ test('processor partial underrun credits preceding frames before ending the meas
   assert.equal(receiver.session.measurement.contiguous,0);
 });
 
+test('bounded interaction: worklet seek commands copy one fixed boundary capture after 10,000 rendered quanta', async () => {
+  const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const run = async (quanta) => {
+    const counter = createInteractionCounter();
+    const fixture = createProcessor({ currentCapacityFrames: 512 });
+    play(fixture);
+    const left = Array(QUANTUM_FRAMES).fill(0.25);
+    for (let quantum = 0; quantum < quanta; quantum += 1) {
+      enqueue(fixture, { streamId: 41, role: 'current', sequence: quantum, left });
+      assertRenderedStereo(fixture, left);
+    }
+    fixture.port.events.length = 0;
+    const work = await counter.measure(() => {
+      for (let step = 0; step < 10; step += 1) {
+        fixture.send({ type: 'reserve-seek', generation: fixture.generation, streamId: 42, timelineStartFrame: step * 64 });
+        const { left, right } = fixture.processor.pendingSeek.outgoingCapture;
+        counter.count('itemsVisited', left.length + right.length);
+      }
+      counter.count('outputEmissions', fixture.port.events.length);
+    });
+    assert.equal(fixture.processor.pendingSeek.outgoingCapture.frames, 64, 'the capture holds the last 64 rendered frames');
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:audio-worklets/gapless-playback-processor.js#GaplessPlaybackProcessor.constructor',
+    small: 10,
+    large: 10000,
+    run,
+    budgets: { itemsVisited: 1280, outputEmissions: 0 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
+  });
+});
+
 // At 8 kHz the padding bounds are 512 edge frames (64 ms) and an 80-frame (10 ms) content window.
 function createAlbumBoundaryFixture({ tail, head, consecutiveAlbumBoundary }) {
   const fixture = createProcessor({

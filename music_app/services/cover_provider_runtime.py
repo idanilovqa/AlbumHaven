@@ -18,7 +18,9 @@ from music_app.services import cover_provider_musicbrainz_caa
 from music_app.services import cover_provider_spotify
 from music_app.services import cover_provider_youtube_music
 from music_app.services import music_identity_matching
-from music_app.services.app_logging import log_app_event
+# Provider searches log per query, candidate and probe: application log only,
+# never a log-history write (one database connection each).
+from music_app.services.app_logging import log_app_message_event as log_provider_event
 from music_app.services.cover_provider_candidates import CoverCandidate, normalize_remote_image_url
 from music_app.services.cover_provider_deadline import (
     AutomaticCoverDeadlineExceeded,
@@ -52,7 +54,7 @@ def http_get_bytes(
         context=context,
         extra_headers=extra_headers,
         logger=LOGGER,
-        app_event_logger=log_app_event,
+        app_event_logger=log_provider_event,
         append_apple_request_trace=cover_provider_apple.append_apple_request_trace,
         mark_discogs_rate_limited=cover_provider_discogs_mark_rate_limited,
     )
@@ -74,7 +76,7 @@ def http_get_json(
         context=context,
         extra_headers=extra_headers,
         logger=LOGGER,
-        app_event_logger=log_app_event,
+        app_event_logger=log_provider_event,
         musicbrainz_json_getter=musicbrainz_get_json,
         http_get_bytes=http_get_bytes,
         should_cancel=should_cancel,
@@ -87,7 +89,7 @@ def http_get_json_via_curl(url: str, *, user_agent: str, context: str = "") -> d
         user_agent=user_agent,
         context=context,
         logger=LOGGER,
-        app_event_logger=log_app_event,
+        app_event_logger=log_provider_event,
     )
 
 
@@ -104,7 +106,7 @@ def http_get_json_via_subprocess(
         context=context,
         service=service,
         logger=LOGGER,
-        app_event_logger=log_app_event,
+        app_event_logger=log_provider_event,
     )
 
 
@@ -158,7 +160,7 @@ def discogs_api_get_json(
         context=context,
         config=Config,
         logger=LOGGER,
-        app_event_logger=log_app_event,
+        app_event_logger=log_provider_event,
         mark_rate_limited=cover_provider_discogs.mark_discogs_rate_limited,
     )
 
@@ -290,7 +292,7 @@ def probe_match_candidates(
                 if metrics:
                     successful_url = probe_url
                     if probe_index > 1:
-                        log_app_event(
+                        log_provider_event(
                             {},
                             LOGGER,
                             f"{source.title()} probe fallback succeeded",
@@ -317,7 +319,7 @@ def probe_match_candidates(
                     candidate_probe_urls,
                 )
                 if source == "deezer":
-                    log_app_event(
+                    log_provider_event(
                         {},
                         LOGGER,
                         "Deezer probe rejected candidate",
@@ -481,7 +483,7 @@ def search_apple_candidates(
         extract_og_image=cover_provider_fallback_web.extract_og_image,
         album_name_in_alt=cover_provider_matching.album_name_in_alt,
         dedupe_candidates=cover_provider_matching.dedupe_candidates,
-        log_event=log_app_event,
+        log_event=log_provider_event,
         logger=LOGGER,
     )
 
@@ -505,13 +507,13 @@ def search_deezer_candidates(
         parse_year=cover_provider_matching.parse_year,
         probe_match_candidates=probe_match_candidates,
         dedupe_candidates=cover_provider_matching.dedupe_candidates,
-        log_event=log_app_event,
+        log_event=log_provider_event,
         logger=LOGGER,
     )
 
 
 def youtube_music_client() -> object | None:
-    return cover_provider_youtube_music.youtube_music_client(log_event=log_app_event, logger=LOGGER)
+    return cover_provider_youtube_music.youtube_music_client(log_event=log_provider_event, logger=LOGGER)
 
 
 def search_youtube_music_candidates(
@@ -547,7 +549,7 @@ def search_youtube_music_candidates(
             parse_year=cover_provider_matching.parse_year,
             probe_match_candidates=probe_match_candidates,
             dedupe_candidates=cover_provider_matching.dedupe_candidates,
-            log_event=log_app_event,
+            log_event=log_provider_event,
             logger=LOGGER,
         )
 
@@ -567,7 +569,7 @@ def spotify_request_json(
         data=data,
         context=context,
         logger=LOGGER,
-        log_event=log_app_event,
+        log_event=log_provider_event,
     )
 
 
@@ -576,7 +578,7 @@ def spotify_access_token() -> str | None:
         config=Config,
         api_enabled=lambda: cover_provider_spotify.spotify_api_enabled(config=Config),
         request_json=spotify_request_json,
-        log_event=log_app_event,
+        log_event=log_provider_event,
     )
 
 
@@ -586,7 +588,7 @@ def spotify_api_get(path: str, *, params: dict[str, object] | None = None) -> di
         params=params,
         access_token=spotify_access_token,
         request_json=spotify_request_json,
-        log_event=log_app_event,
+        log_event=log_provider_event,
     )
 
 
@@ -612,7 +614,7 @@ def spotify_collect_album_matches(
         api_get=spotify_api_get,
         match_score=cover_provider_matching.match_score,
         parse_year=cover_provider_matching.parse_year,
-        log_event=log_app_event,
+        log_event=log_provider_event,
     )
 
 
@@ -639,7 +641,7 @@ def spotify_collect_artist_album_matches(
         similarity=cover_provider_matching.similarity,
         match_score=cover_provider_matching.match_score,
         parse_year=cover_provider_matching.parse_year,
-        log_event=log_app_event,
+        log_event=log_provider_event,
     )
 
 
@@ -666,7 +668,7 @@ def search_spotify_candidates(
         collect_artist_album_matches=spotify_collect_artist_album_matches,
         probe_match_candidates=probe_match_candidates,
         dedupe_cover_candidates=cover_provider_matching.dedupe_candidates,
-        log_event=log_app_event,
+        log_event=log_provider_event,
     )
 
 
@@ -689,7 +691,7 @@ def spotify_candidates_from_album_url(
         api_get=spotify_api_get,
         match_score=cover_provider_matching.match_score,
         parse_year=cover_provider_matching.parse_year,
-        log_event=log_app_event,
+        log_event=log_provider_event,
     )
 
 
@@ -742,7 +744,7 @@ def search_musicbrainz_release_candidates(
         http_get_json=http_get_json,
         get_disk_cache=cover_provider_cache._get_musicbrainz_release_disk_cache,
         set_disk_cache=cover_provider_cache._set_musicbrainz_release_disk_cache,
-        log_event=log_app_event,
+        log_event=log_provider_event,
         should_cancel=should_cancel,
     )
 
@@ -764,7 +766,7 @@ def fetch_musicbrainz_release_context(
         match_score=cover_provider_matching.match_score,
         parse_year=cover_provider_matching.parse_year,
         search_release_candidates=search_musicbrainz_release_candidates,
-        log_event=log_app_event,
+        log_event=log_provider_event,
     )
 
 
@@ -789,7 +791,7 @@ def fetch_musicbrainz_bandcamp_context(
         parse_year=cover_provider_matching.parse_year,
         search_release_candidates=search_musicbrainz_release_candidates,
         http_get_json=http_get_json,
-        log_event=log_app_event,
+        log_event=log_provider_event,
         should_cancel=should_cancel,
     )
 
@@ -821,7 +823,7 @@ def search_cover_art_archive_candidates(
         get_caa_disk_cache=cover_provider_cache._get_caa_results_disk_cache,
         set_caa_disk_cache=cover_provider_cache._set_caa_results_disk_cache,
         search_musicbrainz_release_candidates=search_musicbrainz_release_candidates,
-        log_event=log_app_event,
+        log_event=log_provider_event,
     )
 
 

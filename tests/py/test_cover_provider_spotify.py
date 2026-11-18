@@ -519,7 +519,7 @@ def test_manual_links_spotify_pasted_link_uses_runtime_api_get(spotify, monkeypa
     monkeypatch.setattr(cover_provider_runtime.Config, "SPOTIFY_CLIENT_ID", "client-id")
     monkeypatch.setattr(cover_provider_runtime.Config, "SPOTIFY_CLIENT_SECRET", "client-secret")
     monkeypatch.setattr(cover_provider_runtime.Config, "SPOTIFY_MARKET", "US")
-    monkeypatch.setattr(cover_provider_runtime, "log_app_event", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cover_provider_runtime, "log_provider_event", lambda *args, **kwargs: None)
 
     def fake_api_get(path, *, params=None):
         assert path == "/albums/abc123"

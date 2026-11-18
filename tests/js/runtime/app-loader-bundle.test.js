@@ -40,6 +40,7 @@ const expectedRuntimeOrder = [
   'bootstrap-state.js',
   'startup-metrics-helpers.js',
   'response-state-helpers.js',
+  'pending-projection-fetch.js',
   'view-state-helpers.js',
   'browser-navigation-helpers.js',
   'discovery-center-navigation.js',

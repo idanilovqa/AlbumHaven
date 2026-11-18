@@ -1776,6 +1776,17 @@ function rememberCurrentRuntimeAlbumCoverAuthority(view = state.view) {
   return state.ui.tagEditAlbumCoverAuthority;
 }
 
+// Fills cover fields an incoming view lacks from the authority retained for
+// the current cover mutation revision; a stale authority is dropped.
+function applyRetainedRuntimeAlbumCoverAuthority(view) {
+  const retainedCoverAuthority = state.ui?.tagEditAlbumCoverAuthority;
+  if (retainedCoverAuthority?.coverMutationRevision === Number(state.ui.albumCoverMutationRevision || 0)) {
+    preserveMissingRuntimeAlbumCoverAuthority(view, retainedCoverAuthority.albumsByKey);
+  } else if (retainedCoverAuthority) {
+    delete state.ui.tagEditAlbumCoverAuthority;
+  }
+}
+
 function findRememberedRuntimeAlbumCoverAuthority(album) {
   const retainedCoverAuthority = state.ui?.tagEditAlbumCoverAuthority;
   if (
@@ -1818,19 +1829,10 @@ function applyViewPayload(payload, options = {}) {
   const nextView = (options.retainFullAlbums || viewShouldRetainFullRuntimeAlbums(normalizedNextView))
     ? normalizedNextView
     : compactRuntimeViewPayload(normalizedNextView);
-  let retainedCoverAuthority = state.ui?.tagEditAlbumCoverAuthority;
   if (options.preserveMissingAlbumCoverAuthority === true) {
-    retainedCoverAuthority = rememberCurrentRuntimeAlbumCoverAuthority(mountedPreviousView);
+    rememberCurrentRuntimeAlbumCoverAuthority(mountedPreviousView);
   }
-  if (
-    retainedCoverAuthority
-    && retainedCoverAuthority.coverMutationRevision
-      === Number(state.ui.albumCoverMutationRevision || 0)
-  ) {
-    preserveMissingRuntimeAlbumCoverAuthority(nextView, retainedCoverAuthority.albumsByKey);
-  } else if (retainedCoverAuthority) {
-    delete state.ui.tagEditAlbumCoverAuthority;
-  }
+  applyRetainedRuntimeAlbumCoverAuthority(nextView);
   // Sidebar counts retain the source scope of their own response when album-only
   // hydration preserves the navigation tree.
   const sidebarCategories = options.preserveSidebarState
@@ -1915,6 +1917,11 @@ function applyViewPayload(payload, options = {}) {
       cacheState.relatedFilterBaseQuery = String(nextView.query || '');
     }
   }
+  return commitViewPayload(previousView, nextView, options);
+}
+
+// Mounts a normalized view and reconciles the browse state that follows it.
+function commitViewPayload(previousView, nextView, options = {}) {
   const previousViewWasReusableRootBrowse = isReusableRootBrowseViewCandidate(previousView);
   const nextViewIsReusableRootBrowse = isReusableRootBrowseViewCandidate(nextView);
   const syncSearchDraftQuery = shouldSyncSearchDraftQuery(previousView, nextView);
@@ -1988,6 +1995,24 @@ function applyViewPayload(payload, options = {}) {
     resetPreSearchViewState();
   }
   return nextView;
+}
+
+// A root gallery continuation appends one page to the mounted, already
+// normalized root view: only the page's groups are compacted and given the
+// retained cover authority, and the loaded group list is extended in place
+// instead of being copied. `mergedLastGroup` replaces the last loaded group
+// when the page continues that artist. Returns the mounted page groups.
+function commitRootGalleryContinuation({ mergedLastGroup = null, appendedGroups = [], galleryPage }) {
+  const previousView = state.view;
+  const page = { artist_groups: [...(mergedLastGroup ? [mergedLastGroup] : []), ...appendedGroups].map(compactRuntimeArtistGroupPayload) };
+  applyRetainedRuntimeAlbumCoverAuthority(page);
+  const groups = previousView.artist_groups;
+  if (mergedLastGroup) groups[groups.length - 1] = page.artist_groups[0];
+  groups.push(...page.artist_groups.slice(mergedLastGroup ? 1 : 0));
+  commitViewPayload(previousView, { ...previousView, gallery_page: { ...galleryPage }, initial_view_partial: false }, {
+    trackSidebarReveal: false,
+  });
+  return page.artist_groups;
 }
 
 function mergeViewPayload(patch, options = {}) {
@@ -2072,6 +2097,38 @@ function applyLocalRelatedFilterState(nextRelatedArtists, options = {}) {
 }
 
 // END js/runtime/response-state-helpers.js
+
+// BEGIN js/runtime/pending-projection-fetch.js
+
+// While the server publishes the library, projection-backed requests answer 503
+// with a pending code. The same request repeats once per second for up to 60 s;
+// aborting init.signal cancels the wait without another request.
+async function fetchRetryingPendingProjection(url, init) {
+  const signal = init?.signal;
+  const deadline = Date.now() + 60000;
+  while (true) {
+    const response = await fetch(url, init);
+    if (response.status !== 503) return response;
+    const pending = await response.clone().json().catch(() => null);
+    if (!['search_projection_pending', 'gallery_projection_pending'].includes(pending?.code) || Date.now() >= deadline) return response;
+    await new Promise((resolve, reject) => {
+      let timer;
+      const abort = () => {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', abort);
+        reject(Object.assign(new Error('Request cancelled'), { name: 'AbortError' }));
+      };
+      if (signal?.aborted) return abort();
+      signal?.addEventListener('abort', abort, { once: true });
+      timer = setTimeout(() => {
+        signal?.removeEventListener('abort', abort);
+        resolve();
+      }, 1000);
+    });
+  }
+}
+
+// END js/runtime/pending-projection-fetch.js
 
 // BEGIN js/runtime/view-state-helpers.js
 
@@ -3760,11 +3817,53 @@ function notificationSurfaceIsHidden(node) {
   return Boolean(node?.hidden || node?.closest?.('[hidden], [inert], [aria-hidden="true"]'));
 }
 
+// The open modal's controls a notification must not cover. Each control the modal renders joins
+// the set at once; an IntersectionObserver then keeps only those on screen as the modal scrolls, so
+// a placement frame reads them instead of every control of a long modal list.
+let modalControlWatch = null;
+
+function releaseModalControls() {
+  modalControlWatch?.disconnect();
+  modalControlWatch = null;
+}
+
+function watchModalControls(modal) {
+  if (modalControlWatch?.modal === modal) return modalControlWatch.controls;
+  releaseModalControls();
+  const controls = new Set();
+  const onScreen = new IntersectionObserver((entries) => {
+    entries.forEach(({ target, isIntersecting }) => {
+      if (isIntersecting && target.isConnected) controls.add(target);
+      else controls.delete(target);
+    });
+    scheduleFloatingNotificationPlacement();
+  });
+  const isControl = node => Boolean(node.matches?.(NOTIFICATION_MODAL_CONTROL_SELECTOR));
+  const controlsIn = node => [...(isControl(node) ? [node] : []), ...(node.querySelectorAll?.(NOTIFICATION_MODAL_CONTROL_SELECTOR) || [])];
+  // Observing again brings a fresh report, so a control watched twice still leaves once off screen.
+  const watch = (control) => { controls.add(control); onScreen.unobserve(control); onScreen.observe(control); };
+  const unwatch = (control) => { controls.delete(control); onScreen.unobserve(control); };
+  // Rendered, removed, and newly focusable controls change the set by their own nodes only.
+  const rendering = new MutationObserver(records => records.forEach((record) => {
+    record.addedNodes?.forEach(node => controlsIn(node).forEach(watch));
+    record.removedNodes?.forEach(node => controlsIn(node).forEach(unwatch));
+    if (record.type === 'attributes') (isControl(record.target) ? watch : unwatch)(record.target);
+  }));
+  Array.from(modal.querySelectorAll?.(NOTIFICATION_MODAL_CONTROL_SELECTOR) || []).forEach(watch);
+  rendering.observe(modal, {
+    childList: true, subtree: true,
+    attributes: true, attributeFilter: ['tabindex', 'role', 'href', 'type', 'contenteditable', 'data-loop-range-surface'],
+  });
+  modalControlWatch = { modal, controls, disconnect() { onScreen.disconnect(); rendering.disconnect(); } };
+  return controls;
+}
+
 function getNotificationCollisionNodes() {
   const surfaces = Array.from(document.querySelectorAll?.(NOTIFICATION_COLLISION_SURFACE_SELECTOR) || []);
   const fixed = surfaces.filter(node => !isNotificationModalSurface(node) && !notificationSurfaceIsHidden(node));
   const activeModal = surfaces.filter(node => isNotificationModalSurface(node) && !notificationSurfaceIsHidden(node)).at(-1);
-  if (activeModal) fixed.push(...Array.from(activeModal.querySelectorAll?.(NOTIFICATION_MODAL_CONTROL_SELECTOR) || [])
+  if (!activeModal) releaseModalControls();
+  else fixed.push(...Array.from(watchModalControls(activeModal))
     .filter(node => !notificationSurfaceIsHidden(node) && !node.matches?.(':disabled')));
   return fixed;
 }
@@ -3839,6 +3938,7 @@ function placeFloatingNotifications() {
     const top = Math.max(viewport.top, rect.top), bottom = Math.min(viewport.bottom, rect.bottom);
     return right > left && bottom > top ? [{ left, right, top, bottom }] : [];
   });
+  const waitingBySlot = new Map();
   for (const [node, entry] of floatingNotifications) {
     if (!node.isConnected || node.hidden) { unregisterFloatingNotification(node); continue; }
     const availableWidth = `${Math.max(0, viewport.right - viewport.left - 16)}px`;
@@ -3873,6 +3973,14 @@ function placeFloatingNotifications() {
     }
     if (!position) {
       node.setAttribute('data-notification-deferred', '');
+      // A discardable notification that has never been shown waits alone in
+      // its lane and severity: only a newer one of the same severity replaces
+      // it, so blocked lanes cannot pile up and errors outlive lesser toasts.
+      if (entry.discard && !entry.presented) {
+        const slot = `${entry.lane}:${entry.severity}`;
+        waitingBySlot.get(slot)?.discard();
+        waitingBySlot.set(slot, entry);
+      }
       continue;
     }
     for (const [key, value] of Object.entries(position)) {
@@ -3909,6 +4017,7 @@ function registerFloatingNotification(node, options = {}) {
       targets.forEach(([target, event]) => target.removeEventListener(event, scheduleFloatingNotificationPlacement, true));
       if (floatingNotificationFrame !== null) cancelAnimationFrame(floatingNotificationFrame);
       floatingNotificationFrame = null;
+      releaseModalControls();
     } };
   } else floatingNotificationCleanup.resize.observe(node);
   scheduleFloatingNotificationPlacement();
@@ -4025,6 +4134,10 @@ function syncLibraryWatcherWarning(data = {}) {
   registerFloatingNotification(libraryWatcherWarning, { lane: 'bottom-right' });
 }
 
+function floatingNotificationSeverity(variant) {
+  return variant === 'success' ? 'info' : normalizeAlertSeverity(variant);
+}
+
 function buildFloatingNotificationAlertHtml(
   message,
   variant,
@@ -4033,7 +4146,7 @@ function buildFloatingNotificationAlertHtml(
   compact = false,
   title = '',
 ) {
-  const severity = variant === 'success' ? 'info' : normalizeAlertSeverity(variant);
+  const severity = floatingNotificationSeverity(variant);
   return buildOnPageAlertHtml({
     severity,
     title: compact
@@ -4064,15 +4177,16 @@ function showToast(message, variant = 'success', duration = 3600, options = {}) 
   toast.innerHTML = buildFloatingNotificationAlertHtml(message, variant, '', '', true);
   layer.appendChild(toast);
   if (errorKey) activeErrorToasts.set(errorKey, toast);
-  registerFloatingNotification(toast, { lane: options.placement === 'top-center' ? 'top-center' : 'top-right', fixedViewport: options.fixedViewport, onPlaced() {
+  const discard = () => {
+    unregisterFloatingNotification(toast);
+    toast.remove();
+    if (errorKey && activeErrorToasts.get(errorKey) === toast) activeErrorToasts.delete(errorKey);
+  };
+  registerFloatingNotification(toast, { lane: options.placement === 'top-center' ? 'top-center' : 'top-right', fixedViewport: options.fixedViewport, discard, severity: floatingNotificationSeverity(variant), onPlaced() {
     scheduleBrowserAnimationFrame(() => toast.classList.add('is-visible'));
     scheduleBrowserTimeout(() => {
       toast.classList.remove('is-visible');
-      scheduleBrowserTimeout(() => {
-        unregisterFloatingNotification(toast);
-        toast.remove();
-        if (errorKey && activeErrorToasts.get(errorKey) === toast) activeErrorToasts.delete(errorKey);
-      }, 260);
+      scheduleBrowserTimeout(discard, 260);
     }, duration);
   } });
 }
@@ -4292,9 +4406,12 @@ function resolveSidebarVirtualWindow(sidebarArtists = [], options = {}) {
 // Romanized artist names (owner-approved J3): the Latin form MusicBrainz gives an
 // original-script name, shown in parentheses beside it. Display only.
 let romanizedArtistNames = new Map();
+// Bumped whenever either label map is replaced, so a drawn tree knows to redraw.
+let artistDisplayLabelsVersion = 0;
 
 function setRomanizedArtistNames(names = {}) {
   romanizedArtistNames = new Map(Object.entries(names || {}).map(([name, latin]) => [String(name).trim(), String(latin || '').trim()]));
+  artistDisplayLabelsVersion += 1;
 }
 
 // "Tenmon" for "天門" (hover text); empty for every other name.
@@ -4314,6 +4431,7 @@ let splitArtistQualifiers = new Map();
 
 function setSplitArtistQualifiers(qualifiers = {}) {
   splitArtistQualifiers = new Map(Object.entries(qualifiers || {}).map(([label, qualifier]) => [String(label).trim(), String(qualifier || '').trim()]));
+  artistDisplayLabelsVersion += 1;
 }
 
 // The one way an artist name is drawn: { name: 'Amarok', qualifier: '(Poland)', secondary:
@@ -4408,21 +4526,41 @@ function buildSeriesSidebarHtml(view = {}, collapsedGroups = state.ui?.seriesTre
   }, '');
 }
 
+// Sidebar artist lists are replaced, never edited in place, so each list's
+// content is read once and named by a short generation that window scrolls
+// reuse instead of rescanning or comparing every artist. A replacement list
+// with the same content keeps its generation, so it re-renders nothing.
+const sidebarArtistGenerations = new WeakMap();
+let lastSidebarArtistContent = null;
+let lastSidebarArtistGeneration = 0;
+function sidebarArtistGeneration(sidebarArtists) {
+  let generation = sidebarArtistGenerations.get(sidebarArtists);
+  if (generation === undefined) {
+    const content = sidebarArtists.map((item) => [
+      String(item?.artist || ''),
+      String(item?.artist_display || item?.artist || ''),
+      String(item?.count ?? ''),
+    ].join('\u001f')).join('\u001e');
+    if (content !== lastSidebarArtistContent) {
+      lastSidebarArtistContent = content;
+      lastSidebarArtistGeneration += 1;
+    }
+    generation = lastSidebarArtistGeneration;
+    sidebarArtistGenerations.set(sidebarArtists, generation);
+  }
+  return generation;
+}
+
 function buildSidebarStructureSignature(sidebarArtists = [], options = {}) {
   const showAllArtistsLink = Object.prototype.hasOwnProperty.call(options, 'showAllArtistsOverride')
     && options.showAllArtistsOverride !== null
     ? (options.showAllArtistsOverride ? '1' : '0')
     : String(options.view?.show_all_artists_sidebar_link !== false ? '1' : '0');
-  const artistSignature = sidebarArtists.map((item) => [
-    String(item?.artist || ''),
-    String(item?.artist_display || item?.artist || ''),
-    artistDisplayParts(item?.artist_display || item?.artist).secondary,
-    String(item?.count ?? ''),
-  ].join('\u001f')).join('\u001e');
   const virtualWindow = options.virtualWindow?.virtualized
     ? `${options.virtualWindow.start}:${options.virtualWindow.end}`
     : 'all';
-  return `${showAllArtistsLink}\u001d${artistSignature}\u001c${virtualWindow}`;
+  // The dimmed text (romanized names, split qualifiers) arrives apart from the list.
+  return `${showAllArtistsLink}:${sidebarArtistGeneration(sidebarArtists)}:${artistDisplayLabelsVersion}:${virtualWindow}`;
 }
 
 function applySidebarSelectionMarkup(container, options = {}) {
@@ -4750,7 +4888,7 @@ function buildGalleryArtistMetadataHtml(artistMusicBrainz = null) {
 
 const GALLERY_ARTIST_MUSICBRAINZ_REFRESH_MS = 30000;
 const GALLERY_ARTIST_MUSICBRAINZ_IDLE_REFRESH_MS = 300000;
-const galleryArtistMusicBrainzStatus = { byArtist: new Map(), signature: '[]', loadedAt: 0, promise: null };
+const galleryArtistMusicBrainzStatus = { byArtist: new Map(), pending: false, signature: '[]', revision: '', loadedAt: 0, promise: null };
 
 function galleryArtistMusicBrainzStatusKey(artist) {
   return String(artist || '').normalize('NFKD').replace(/[̀-ͯ]/g, '')
@@ -4769,20 +4907,33 @@ function getGalleryArtistMusicBrainzStatus(group = {}) {
 function refreshGalleryArtistMusicBrainzStatus({ force = false } = {}) {
   if (state.status?.allowed_actions?.['catalogue.enrichment.request'] !== true) {
     galleryArtistMusicBrainzStatus.byArtist.clear();
+    galleryArtistMusicBrainzStatus.pending = false;
     galleryArtistMusicBrainzStatus.signature = '[]';
+    galleryArtistMusicBrainzStatus.revision = '';
     return Promise.resolve(false);
   }
   if (galleryArtistMusicBrainzStatus.promise) return galleryArtistMusicBrainzStatus.promise;
   // Poll quickly only while a first lookup is pending; otherwise back off.
-  const pending = [...galleryArtistMusicBrainzStatus.byArtist.values()].some((value) => value.state === 'pending');
-  const interval = pending ? GALLERY_ARTIST_MUSICBRAINZ_REFRESH_MS : GALLERY_ARTIST_MUSICBRAINZ_IDLE_REFRESH_MS;
+  const interval = galleryArtistMusicBrainzStatus.pending
+    ? GALLERY_ARTIST_MUSICBRAINZ_REFRESH_MS
+    : GALLERY_ARTIST_MUSICBRAINZ_IDLE_REFRESH_MS;
   if (!force && Date.now() - galleryArtistMusicBrainzStatus.loadedAt < interval) {
     return Promise.resolve(false);
   }
-  galleryArtistMusicBrainzStatus.promise = fetch('/api/musicbrainz/artists/status', { headers: { Accept: 'application/json' } })
-    .then((response) => (response.ok ? response.json() : null))
+  // The held revision lets the server answer an unchanged status with a bodiless 304.
+  const { revision } = galleryArtistMusicBrainzStatus;
+  let nextRevision = '';
+  galleryArtistMusicBrainzStatus.promise = fetch('/api/musicbrainz/artists/status', {
+    headers: { Accept: 'application/json', ...(revision ? { 'If-None-Match': revision } : {}) },
+  })
+    .then((response) => {
+      if (!response.ok) return null;
+      nextRevision = response.headers?.get?.('ETag') || '';
+      return response.json();
+    })
     .then((payload) => {
       if (!Array.isArray(payload?.artists)) return false;
+      galleryArtistMusicBrainzStatus.revision = nextRevision;
       const next = new Map();
       for (const row of payload.artists) {
         // Keyed by the canonical Gallery artist, so alias-combined groups match.
@@ -4804,6 +4955,7 @@ function refreshGalleryArtistMusicBrainzStatus({ force = false } = {}) {
         : new Set();
       galleryArtistMusicBrainzStatus.signature = signature;
       galleryArtistMusicBrainzStatus.byArtist = next;
+      galleryArtistMusicBrainzStatus.pending = [...next.values()].some((value) => value.state === 'pending');
       if (typeof virtualGrid !== 'undefined') virtualGrid?.render?.(true);
       // A finished lookup, re-check or manual match changes the shared Gallery
       // projection (links, pills). Reload the view when it shows such an artist,
@@ -5365,39 +5517,49 @@ function syncGalleryCardMetadataMotion(root) {
   if (!mobile) { galleryCardMetadataMotion?.dispose(); galleryCardMetadataMotion = null; return; }
   if (!root?.querySelectorAll || typeof ResizeObserver !== 'function') return;
   if (!galleryCardMetadataMotion) {
-    const rows = new Map();
+    // rows maps each metadata row to its text; texts maps the text back. A frame
+    // refreshes only the rows whose row or text resized (removal resizes to zero).
+    const rows = new Map(), texts = new Map(), dirty = new Set();
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
     let frame = 0, disposed = false;
     const refresh = () => {
       frame = 0;
-      for (const [row, text] of rows) {
-        if (!row.isConnected) { observer.unobserve(row); observer.unobserve(text); rows.delete(row); continue; }
+      for (const row of dirty) {
+        const text = rows.get(row);
+        if (!text) continue;
+        if (!row.isConnected) { observer.unobserve(row); observer.unobserve(text); rows.delete(row); texts.delete(text); continue; }
         const motion = !reduced.matches ? resolveCompactPlayerMetadataRowMotion({ clientWidth: row.clientWidth, scrollWidth: text.scrollWidth }) : { overflowing: false, distance: 0, durationMs: 0 };
         row.classList.toggle('is-card-text-overflowing', motion.overflowing);
         row.style.setProperty('--card-text-distance', `${motion.distance}px`);
         row.style.setProperty('--card-text-duration', `${motion.durationMs}ms`);
       }
+      dirty.clear();
     };
     const schedule = () => { if (!disposed && !frame) frame = requestAnimationFrame(refresh); };
-    const observer = new ResizeObserver(schedule);
-    reduced.addEventListener('change', schedule);
-    document.fonts?.ready.then(schedule);
+    const scheduleAll = () => { rows.forEach((_text, row) => dirty.add(row)); schedule(); };
+    const observer = new ResizeObserver((entries) => {
+      for (const { target } of entries) dirty.add(texts.get(target) || target);
+      schedule();
+    });
+    reduced.addEventListener('change', scheduleAll);
+    document.fonts?.ready.then(scheduleAll);
     galleryCardMetadataMotion = {
       update(root) {
         root.querySelectorAll('.album-card [data-gallery-metadata-text]').forEach(text => {
           const row = text.parentElement, previous = rows.get(row);
           if (previous === text) return;
-          if (previous) observer.unobserve(previous);
-          rows.set(row, text); observer.observe(row); observer.observe(text);
+          if (previous) { observer.unobserve(previous); texts.delete(previous); }
+          rows.set(row, text); texts.set(text, row); dirty.add(row);
+          observer.observe(row); observer.observe(text);
         });
         schedule();
       },
       dispose() {
         disposed = true;
         if (frame) cancelAnimationFrame(frame);
-        observer.disconnect(); reduced.removeEventListener('change', schedule);
+        observer.disconnect(); reduced.removeEventListener('change', scheduleAll);
         for (const row of rows.keys()) row.classList.remove('is-card-text-overflowing');
-        rows.clear();
+        rows.clear(); texts.clear(); dirty.clear();
       },
     };
   }
@@ -5968,6 +6130,7 @@ const state = {
       submitting: false,
       loadPromise: null,
       requestGeneration: 0,
+      followToken: 0,
     },
     localPlaylistImport: {
       selectedFile: null,
@@ -6073,6 +6236,7 @@ const state = {
     anchorPath: '',
     dragSelecting: false,
     dragAnchorPath: '',
+    dragHoverPath: '',
     values: {},
   },
   coverLookup: {
@@ -6260,16 +6424,20 @@ function restoreSidebarFocus(sidebarList, focusIdentity) {
 // 2026-11-17: the tree switches, the gallery stays).
 function renderSeriesSidebar(el, view) {
   const series = typeof showsSeriesTree === 'function' && showsSeriesTree();
-  const heading = document.querySelector('.desktop-artists-heading');
-  const label = series ? 'Series' : 'Artists';
-  if (heading && heading.textContent !== label) heading.textContent = label;
-  const fold = document.getElementById('artist-tree-fold-button');
-  const foldLabel = series ? 'Collapse Series Tree' : 'Collapse Artist Tree';
-  if (fold && fold.getAttribute('aria-label') !== foldLabel) {
-    fold.setAttribute('aria-label', foldLabel);
-    fold.setAttribute('title', foldLabel);
+  const kind = series ? 'series' : 'artists';
+  // The heading and fold button change only when the tree does; a scroll frame reads neither.
+  if (el.dataset.navigationTree !== kind) {
+    const heading = document.querySelector('.desktop-artists-heading');
+    const label = series ? 'Series' : 'Artists';
+    if (heading && heading.textContent !== label) heading.textContent = label;
+    const fold = document.getElementById('artist-tree-fold-button');
+    const foldLabel = series ? 'Collapse Series Tree' : 'Collapse Artist Tree';
+    if (fold && fold.getAttribute('aria-label') !== foldLabel) {
+      fold.setAttribute('aria-label', foldLabel);
+      fold.setAttribute('title', foldLabel);
+    }
+    el.dataset.navigationTree = kind;
   }
-  el.dataset.navigationTree = series ? 'series' : 'artists';
   if (!series) return false;
   const html = buildSeriesSidebarHtml(view);
   if (el.dataset.sidebarStructureSignature !== html) {
@@ -7167,11 +7335,54 @@ let galleryMainScrollFrame = 0;
 let galleryFamilyPanelObserver = null;
 let galleryFamilyDragHandlersBound = false;
 
-function getGalleryMainGroups() {
+function galleryMainGroupLists() {
   const primary = Array.isArray(state.view.primary_artist_groups) ? state.view.primary_artist_groups : [];
   const family = Array.isArray(state.view.family_artist_groups) ? state.view.family_artist_groups : [];
   const fallback = Array.isArray(state.view.artist_groups) ? state.view.artist_groups : [];
-  return primary.length || family.length ? [...primary, ...family] : fallback;
+  return primary.length || family.length ? [primary, family] : [fallback];
+}
+
+function getGalleryMainGroups() {
+  const [first, second] = galleryMainGroupLists();
+  return second ? [...first, ...second] : first;
+}
+
+// First loaded group per artist label, rebuilt only when the view or one of its
+// group lists is replaced or resized, so hover and focus prefetches stay
+// constant work. A hit is rechecked in place because groups can be replaced
+// inside an unchanged list.
+let galleryMainGroupIndex = null;
+
+function galleryMainGroupIndexToken() {
+  const view = state.view;
+  return [
+    view,
+    view.primary_artist_groups, view.primary_artist_groups?.length,
+    view.family_artist_groups, view.family_artist_groups?.length,
+    view.artist_groups, view.artist_groups?.length,
+  ];
+}
+
+function indexGalleryMainGroups() {
+  const byArtist = new Map();
+  for (const list of galleryMainGroupLists()) {
+    list.forEach((group, position) => {
+      const artist = String(group.artist_display || group.artist || '');
+      if (!byArtist.has(artist)) byArtist.set(artist, { group, list, position });
+    });
+  }
+  return byArtist;
+}
+
+function findGalleryMainGroup(artist) {
+  const token = galleryMainGroupIndexToken();
+  const current = galleryMainGroupIndex?.token.every((part, index) => part === token[index]);
+  let entry = current ? galleryMainGroupIndex.byArtist.get(artist) : null;
+  if (entry === null || (entry && entry.list[entry.position] !== entry.group)) {
+    galleryMainGroupIndex = { token, byArtist: indexGalleryMainGroups() };
+    entry = galleryMainGroupIndex.byArtist.get(artist);
+  }
+  return entry?.group;
 }
 
 function galleryMainGroupArtist(group = {}) {
@@ -7598,6 +7809,103 @@ function syncGalleryBarSearchVisibility() {
     : Boolean(draftQuery || committedQuery);
 }
 
+// Scroll-independent bar inputs from the last full chrome update, keyed by the
+// view, its group lists, and each filter field, so a scroll frame never
+// re-filters or re-counts the loaded gallery. Filter fields are compared one by
+// one because they are assigned in place; their arrays are always replaced.
+let galleryMainChromeInputs = null;
+
+function galleryMainChromeToken() {
+  const view = state.view || {};
+  const filters = ensureGalleryMainState();
+  return [
+    view, view.artist_groups, view.artist_groups?.length,
+    view.primary_artist_groups?.length, view.family_artist_groups?.length,
+    filters, filters.sources?.main_library, filters.sources?.new_arrivals, filters.sources?.hoard,
+    filters.view, filters.showFeaturedOn, filters.showSplitAlbums, filters.familySelectionExplicit,
+    filters.albumTypes, filters.familyArtists, filters.familyArtistOrder,
+  ];
+}
+
+function galleryMainChromeTokenMatches(token) {
+  const current = galleryMainChromeToken();
+  return token.length === current.length && token.every((part, index) => part === current[index]);
+}
+
+// Sections are laid out top-down, so the artist whose label the viewport has
+// passed is found by binary search over the grid's live section positions.
+function findGalleryMainContextSection(threshold) {
+  const sections = typeof virtualGrid !== 'undefined' && Array.isArray(virtualGrid?.sections)
+    ? virtualGrid.sections
+    : [];
+  let low = 0;
+  let high = sections.length - 1;
+  let index = -1;
+  while (low <= high) {
+    const middle = (low + high) >> 1;
+    if (Number(sections[middle]?.top || 0) <= threshold) {
+      index = middle;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  const scroll = document.getElementById('albums-scroll');
+  const viewportTop = scroll?.getBoundingClientRect?.().top || 0;
+  // A rendered label's position comes from the page, which can run ahead of the
+  // modelled section tops until the rows are measured; it decides whenever it exists.
+  const labelPosition = (section) => {
+    if (section?.kind !== 'artist' && !section?.group) return null;
+    const artist = galleryMainGroupArtist(section.group);
+    if (!artist) return null;
+    const label = scroll?.querySelector?.(`[data-scroll-artist="${cssEscape(artist)}"] .artist-name`);
+    return {
+      artist,
+      rendered: Boolean(label),
+      labelBottom: label
+        ? label.getBoundingClientRect().bottom - viewportTop + scroll.scrollTop
+        : Number(section.top || 0) + Number(virtualGrid?.sectionHeaderHeight || 0),
+    };
+  };
+  // Rendered labels that the viewport has passed although their modelled top is still below it.
+  for (let next = index + 1; next < sections.length; next += 1) {
+    const position = labelPosition(sections[next]);
+    if (!position) continue;
+    if (!position.rendered || position.labelBottom > threshold) break;
+    index = next;
+  }
+  for (; index >= 0; index -= 1) {
+    const section = sections[index];
+    const position = labelPosition(section);
+    if (position && position.labelBottom <= threshold) {
+      return {
+        artist: position.artist,
+        albumCount: Array.isArray(section.group?.albums) ? section.group.albums.length : 0,
+        artist_musicbrainz: section.group?.artist_musicbrainz || null,
+        top: Number(section.top || 0),
+        labelBottom: position.labelBottom,
+      };
+    }
+  }
+  return null;
+}
+
+function updateGalleryMainScrollContext() {
+  const bar = document.querySelector('[data-gallery-bar-instance="gallery"]');
+  const scroll = document.getElementById('albums-scroll');
+  if (!bar || !scroll) return;
+  if (!galleryMainChromeInputs || !galleryMainChromeTokenMatches(galleryMainChromeInputs.token)) {
+    updateGalleryMainChrome();
+    return;
+  }
+  const current = findGalleryMainContextSection(scroll.scrollTop);
+  renderGalleryMainContext(bar, resolveGalleryBarContext({
+    ...galleryMainChromeInputs.context,
+    scrollTop: scroll.scrollTop,
+    groups: current ? [current] : [],
+  }));
+}
+
 function updateGalleryMainChrome() {
   const bar = document.querySelector('[data-gallery-bar-instance="gallery"]');
   const scroll = document.getElementById('albums-scroll');
@@ -7608,16 +7916,80 @@ function updateGalleryMainChrome() {
   const primaryArtist = String(state.view.selected_artist || '').trim();
   const sections = getGalleryMainContextSections();
   const hasFamily = hasGalleryArtistFamily();
-  const summaryTotals = resolveGallerySummaryTotals(state.view, model.totals, state.gallery.mainState, model.groups);
-  const context = resolveGalleryBarContext({
-    scrollTop: scroll.scrollTop,
+  // Without a selected artist the summary counts distinct loaded albums; those
+  // counts are kept so a root page append can extend them.
+  const loadedTotals = primaryArtist
+    ? null
+    : countGalleryLoadedAlbums({ artistCount: 0, albumKeys: new Map(), unkeyedCount: 0 }, model.groups, 1);
+  const summaryTotals = loadedTotals
+    ? resolveGalleryLoadedSummaryTotals(loadedTotals)
+    : resolveGallerySummaryTotals(state.view, model.totals, state.gallery.mainState, model.groups);
+  const contextInputs = {
     primaryArtist,
     artistCount: summaryTotals.artistCount,
     albumCount: summaryTotals.albumCount,
-    groups: sections,
     hasFamily,
     artist_musicbrainz: model.groups.find((group) => galleryMainGroupArtist(group) === primaryArtist)?.artist_musicbrainz || null,
-  });
+  };
+  galleryMainChromeInputs = { token: galleryMainChromeToken(), context: contextInputs, loadedTotals };
+  renderGalleryMainContext(bar, resolveGalleryBarContext({ ...contextInputs, scrollTop: scroll.scrollTop, groups: sections }));
+  updateGalleryFamilyPanelChrome(primaryArtist);
+}
+
+function countGalleryLoadedAlbums(totals, groups, step) {
+  for (const group of groups) {
+    for (const album of group.albums || []) {
+      const key = String(album.key || '').trim();
+      if (!key) {
+        totals.unkeyedCount += step;
+        continue;
+      }
+      const count = (totals.albumKeys.get(key) || 0) + step;
+      if (count > 0) totals.albumKeys.set(key, count);
+      else totals.albumKeys.delete(key);
+    }
+  }
+  totals.artistCount += step * groups.length;
+  return totals;
+}
+
+function resolveGalleryLoadedSummaryTotals(loadedTotals) {
+  return resolveGallerySummaryTotals(state.view, {
+    artistCount: loadedTotals.artistCount,
+    albumCount: loadedTotals.albumKeys.size + loadedTotals.unkeyedCount,
+  }, state.gallery.mainState);
+}
+
+function isGalleryMainChromeCurrent() {
+  return Boolean(galleryMainChromeInputs && galleryMainChromeTokenMatches(galleryMainChromeInputs.token));
+}
+
+// A root page append replaces `removedGroups` (an artist split across the page
+// boundary) and adds `addedGroups` to the counted bar inputs instead of
+// re-filtering and re-counting the loaded gallery. Inputs that were not current
+// before the append (`wasCurrent`) take a full chrome update.
+function appendGalleryMainChromeGroups(wasCurrent, removedGroups, addedGroups) {
+  const inputs = galleryMainChromeInputs;
+  if (!wasCurrent || !inputs?.loadedTotals) {
+    updateGalleryMainChrome();
+    return;
+  }
+  countGalleryLoadedAlbums(inputs.loadedTotals, removedGroups, -1);
+  countGalleryLoadedAlbums(inputs.loadedTotals, addedGroups, 1);
+  const summaryTotals = resolveGalleryLoadedSummaryTotals(inputs.loadedTotals);
+  inputs.context = { ...inputs.context, artistCount: summaryTotals.artistCount, albumCount: summaryTotals.albumCount };
+  inputs.token = galleryMainChromeToken();
+  updateGalleryMainScrollContext();
+}
+
+// Root continuation groups as the gallery model shows them: filtering and
+// display splitting work per artist group, so a page's share of the root model
+// is built from that page alone.
+function buildGalleryMainRootPageGroups(groups) {
+  return buildDisplayGroups(filterGalleryModel({ groups, filterState: ensureGalleryMainState() }).groups);
+}
+
+function renderGalleryMainContext(bar, context) {
   const name = bar.querySelector('[data-gallery-context-name]');
   const romanized = galleryContextRomanizedElement(bar);
   // The info button follows the romanized name, which follows the name (approved J3).
@@ -7701,6 +8073,10 @@ function updateGalleryMainChrome() {
       oldInfo.setAttribute('aria-label', `Information about ${context.artist}`);
     }
   }
+  positionGalleryFamilyPanel(bar);
+}
+
+function updateGalleryFamilyPanelChrome(primaryArtist) {
   const panelBody = document.querySelector('[data-gallery-family-panel-body]');
   if (panelBody) {
     const panelSignature = JSON.stringify({
@@ -7723,6 +8099,9 @@ function updateGalleryMainChrome() {
     const total = galleryMainPlural(getGalleryFamilyPanelModel().totals.albumCount, 'album');
     if (panelTotal.textContent !== total) panelTotal.textContent = total;
   }
+}
+
+function positionGalleryFamilyPanel(bar) {
   const panel = document.querySelector('[data-artist-family-panel]');
   if (panel) {
     panel.style.top = `${Math.round(bar.getBoundingClientRect().bottom)}px`;
@@ -7808,7 +8187,7 @@ function renderGallerySeriesInfo(overlay, series) {
 
 function renderGalleryArtistInfo(anchor) {
   const artist = String(anchor.dataset.artist || '').trim();
-  const group = getGalleryMainGroups().find((candidate) => String(candidate.artist_display || candidate.artist || '') === artist) || {};
+  const group = findGalleryMainGroup(artist) || {};
   const overlay = document.querySelector('[data-artist-info-overlay]');
   if (!overlay) return null;
   if (group.series) return renderGallerySeriesInfo(overlay, group.series);
@@ -8009,7 +8388,7 @@ function initGalleryMain() {
         && (scroll.scrollTop !== active.openingScrollPosition.top
           || scroll.scrollLeft !== active.openingScrollPosition.left)) closeGalleryMainSurface(false, { reason: 'gallery-scroll' });
     if (galleryMainScrollFrame) return;
-    galleryMainScrollFrame = requestAnimationFrame(() => { galleryMainScrollFrame = 0; updateGalleryMainChrome(); });
+    galleryMainScrollFrame = requestAnimationFrame(() => { galleryMainScrollFrame = 0; updateGalleryMainScrollContext(); });
   }, { passive: true });
   window.addEventListener('resize', () => {
     updateGalleryMainChrome();
@@ -8025,7 +8404,7 @@ function initGalleryMain() {
       const anchor = event.target.closest?.('[data-artist-info-trigger]');
       if (!anchor) return;
       const artist = anchor.dataset.artist;
-      const group = getGalleryMainGroups().find(candidate => String(candidate.artist_display || candidate.artist || '') === artist) || {};
+      const group = findGalleryMainGroup(artist) || {};
       const { imageUrl } = resolveGalleryArtistInfo(group, artist);
       if (!imageUrl || prefetchedPortraits.has(imageUrl)) return;
       prefetchedPortraits.add(imageUrl);
@@ -10798,22 +11177,33 @@ function keepHeardStreamingWire(roleState) {
 }
 
 // Loads `track` from the cache before a role opens it, so the open itself stays synchronous.
+// No caller waits past the deadline: a browser cache that is slow or never answers leaves the
+// track to stream from the server, and a late answer still primes it for a later open.
 async function primeStreamingCachedTrack(track) {
   const engine = streamingEngineState();
   const key = streamingTrackCacheKey(track, chooseStreamingQuality(track));
   engine.primedTracks ??= new Map();
   if (engine.primedTracks.has(key)) return;
-  const entry = await loadStreamingCachedTrack(key);
-  if (!entry) return;
-  engine.primedTracks.set(key, entry);
-  while (engine.primedTracks.size > STREAMING_PRIMED_TRACKS) {
-    engine.primedTracks.delete(engine.primedTracks.keys().next().value);
-  }
-  // Its rate is known, so its start needs no probe.
-  rememberStreamingTrackFormat(String(track.path || ''), entry.sampleRate, {
-    fallbackSampleRate: 0,
-    sizeBytes: entry.bytes.length,
+  const priming = loadStreamingCachedTrack(key).then((entry) => {
+    if (!entry) return;
+    engine.primedTracks.set(key, entry);
+    while (engine.primedTracks.size > STREAMING_PRIMED_TRACKS) {
+      engine.primedTracks.delete(engine.primedTracks.keys().next().value);
+    }
+    // Its rate is known, so its start needs no probe.
+    rememberStreamingTrackFormat(String(track.path || ''), entry.sampleRate, {
+      fallbackSampleRate: 0,
+      sizeBytes: entry.bytes.length,
+    });
   });
+  let deadline = 0;
+  await Promise.race([
+    priming,
+    new Promise((resolve) => {
+      deadline = setTimeout(resolve, STREAMING_CACHED_TRACK_PRIME_DEADLINE_MS);
+    }),
+  ]);
+  clearTimeout(deadline);
 }
 
 function mayPrimeStreamingCachedTrack() {
@@ -10982,14 +11372,7 @@ async function startBrowserStreamingTrack(track, {
   const startRequestId = engine.startRequestId;
   settleStreamingReplacementCushionWaiter(false);
   if (mayPrimeStreamingCachedTrack()) {
-    let primeDeadline = 0;
-    await Promise.race([
-      primeStreamingCachedTrack(track),
-      new Promise((resolve) => {
-        primeDeadline = setTimeout(resolve, STREAMING_CACHED_TRACK_PRIME_DEADLINE_MS);
-      }),
-    ]);
-    clearTimeout(primeDeadline);
+    await primeStreamingCachedTrack(track);
     if (engine.startRequestId !== startRequestId) return null;
   }
   const canPrepareReplacement = () => {
@@ -14268,6 +14651,19 @@ function isShellPlaybackUnavailable() {
   return typeof isAndroidPlaybackUnavailable === 'function' && isAndroidPlaybackUnavailable();
 }
 
+// The player shows only the lock, its reason and the mirrored track, so a heartbeat, broadcast or
+// renewal that leaves them as they were repaints nothing.
+function playbackOwnershipPresentation() {
+  const { lockStatus, blockedReason, mirroredTrack: track } = getPlaybackOwnershipState();
+  return [lockStatus, blockedReason, track?.title, track?.artist, track?.album, track?.artworkUrl].join('\0');
+}
+
+function updatePlayerUiIfOwnershipPresentationChanged(previousPresentation) {
+  if (playbackOwnershipPresentation() !== previousPresentation && typeof updatePlayerUi === 'function') {
+    updatePlayerUi();
+  }
+}
+
 function clearBlockedPlaybackState() {
   const ownership = getPlaybackOwnershipState();
   ownership.lockStatus = 'unlocked';
@@ -14302,6 +14698,7 @@ function losePlaybackOwnership(reason = 'ownership-lost', updateUi = true) {
 
 function syncMirroredPlaybackState(snapshot) {
   const ownership = getPlaybackOwnershipState();
+  const previousPresentation = playbackOwnershipPresentation();
   if (snapshot?.is_playing_elsewhere) {
     if (ownership.blockedReason !== 'playing_in_another_tab') losePlaybackOwnership('ownership-takeover', false);
     ownership.lockStatus = 'locked';
@@ -14310,7 +14707,7 @@ function syncMirroredPlaybackState(snapshot) {
   } else if (!ownership.activeClaim && !isShellPlaybackUnavailable()) {
     clearBlockedPlaybackState();
   }
-  if (typeof updatePlayerUi === 'function') updatePlayerUi();
+  updatePlayerUiIfOwnershipPresentationChanged(previousPresentation);
 }
 
 async function handlePlaybackOwnershipEvent() {
@@ -14433,13 +14830,14 @@ function acceptPlaybackClaim(result, prepared) {
   const leaseDeadline = result.sentAt + result.leaseMs;
   const claim = { ...prepared, claimToken: result.claimToken, leaseDeadline, scrobblingAvailable };
   ownership.activeClaim = claim;
+  const previousPresentation = playbackOwnershipPresentation();
   clearBlockedPlaybackState();
   if (ownership.expiryTimer) clearTimeout(ownership.expiryTimer);
   ownership.expiryTimer = setTimeout(() => expirePlaybackClaim(claim),
     Math.max(0, leaseDeadline - performance.now()));
   startPlaybackOwnershipHeartbeat();
   announcePlaybackOwnership();
-  if (typeof updatePlayerUi === 'function') updatePlayerUi();
+  updatePlayerUiIfOwnershipPresentationChanged(previousPresentation);
 }
 
 async function expirePlaybackClaim(claim) {
@@ -16697,7 +17095,7 @@ async function fetchTrackModalAlbumDetails(albumKey, options = {}) {
     priority: options.speculative === true ? 'low' : 'high',
     ...(options.signal ? { signal: options.signal } : {}),
   };
-  let response = await fetch(`${albumKeyUrl}${albumIdQuery}${lineageQuery}`, requestOptions);
+  let response = await fetchRetryingPendingProjection(`${albumKeyUrl}${albumIdQuery}${lineageQuery}`, requestOptions);
   let payload = null;
   try {
     payload = await response.json();
@@ -16711,7 +17109,7 @@ async function fetchTrackModalAlbumDetails(albumKey, options = {}) {
     && Array.isArray(payload.unsupported_parameters)
     && payload.unsupported_parameters.includes('album_id')
   ) {
-    response = await fetch(albumKeyUrl, requestOptions);
+    response = await fetchRetryingPendingProjection(albumKeyUrl, requestOptions);
     try {
       payload = await response.json();
     } catch (_error) {
@@ -17540,6 +17938,9 @@ function attachModalEvents() {
 const PLAYER_WAVEFORM_PEAK_COUNT = 280;
 const PLAYER_WAVEFORM_DETAIL_PEAK_COUNT = 720;
 const PLAYER_WAVEFORM_BUSY_RETRY_DELAYS_MS = Object.freeze([50, 100, 200, 400, 800]);
+// The server builds one waveform at a time, so player peaks keep waiting out another build
+// at this pace for as long as their playback generation lasts.
+const PLAYER_WAVEFORM_BUSY_RETRY_MAX_DELAY_MS = 2000;
 const playerWaveformPeakCache = new Map();
 const playerWaveformPeakProbes = new Map();
 const savedLoopWaveformPeakCache = new Map();
@@ -17716,9 +18117,10 @@ async function loadWaveformPeaks(path, sampleCount = PLAYER_WAVEFORM_PEAK_COUNT,
       const query = new URLSearchParams({ path: rawPath, bins: String(sampleCount) });
       for (let attempt = 0; ; attempt += 1) {
         const response = await fetch(`/playback/waveform?${query}`, { signal: controller.signal });
-        if (response.status === 429 && attempt < PLAYER_WAVEFORM_BUSY_RETRY_DELAYS_MS.length) {
+        if (response.status === 429) {
           await new Promise((resolve) => {
-            setTimeout(resolve, PLAYER_WAVEFORM_BUSY_RETRY_DELAYS_MS[attempt]);
+            setTimeout(resolve, PLAYER_WAVEFORM_BUSY_RETRY_DELAYS_MS[attempt]
+              ?? PLAYER_WAVEFORM_BUSY_RETRY_MAX_DELAY_MS);
           });
           if (controller.signal.aborted || state.player.streaming.generation !== generation) return null;
           continue;
@@ -19032,9 +19434,9 @@ function cancelRootGalleryPageRequest() {
 
 function mergeRootGalleryPageGroups(existing, incoming) {
   const groups = (existing || []).map(group => ({ ...group, albums: [...(group.albums || [])] }));
-  const byArtist = new Map(groups.map(group => [String(group.display_artist_key || group.artist || ''), group]));
+  const byArtist = new Map(groups.map(group => [rootGalleryGroupKey(group), group]));
   for (const incomingGroup of incoming || []) {
-    const artistKey = String(incomingGroup.display_artist_key || incomingGroup.artist || '');
+    const artistKey = rootGalleryGroupKey(incomingGroup);
     let group = byArtist.get(artistKey);
     if (!group) {
       group = { ...incomingGroup, albums: [] };
@@ -19052,8 +19454,98 @@ function mergeRootGalleryPageGroups(existing, incoming) {
   return groups;
 }
 
+function rootGalleryGroupKey(group) {
+  return String(group?.display_artist_key || group?.artist || '');
+}
+
+// First loaded position of each root artist, per loaded list. Pages extend the
+// list in place, so its index only reads groups added since its last use; a
+// replaced list is indexed again once.
+const rootGalleryArtistIndexes = new WeakMap();
+
+function indexedRootGalleryArtistPositions(groups) {
+  let index = rootGalleryArtistIndexes.get(groups);
+  if (!index || index.length > groups.length) {
+    index = { length: 0, positions: new Map() };
+    rootGalleryArtistIndexes.set(groups, index);
+  }
+  for (let position = index.length; position < groups.length; position += 1) {
+    const key = rootGalleryGroupKey(groups[position]);
+    if (!index.positions.has(key)) index.positions.set(key, position);
+  }
+  index.length = groups.length;
+  return index.positions;
+}
+
+// Splits a next page into the last loaded artist it continues and the artists
+// it adds. Null when the page repeats any other loaded artist or one of its
+// own, which only the full merge reconciles.
+function splitRootGalleryContinuation(groups, incoming) {
+  const positions = indexedRootGalleryArtistPositions(groups);
+  const pageKeys = new Set();
+  const continuation = { continued: null, added: [] };
+  for (const [offset, group] of incoming.entries()) {
+    const key = rootGalleryGroupKey(group);
+    if (pageKeys.has(key)) return null;
+    pageKeys.add(key);
+    const position = positions.get(key);
+    if (position === undefined) continuation.added.push(group);
+    else if (offset === 0 && position === groups.length - 1) continuation.continued = group;
+    else return null;
+  }
+  return continuation;
+}
+
+// Appends a next page whose artists follow the loaded ones. Only the page's
+// groups are merged, applied, modelled and laid out, so the cost does not grow
+// with the loaded gallery. False, changing nothing, when the page needs the
+// full merge.
+function appendRootGalleryPage(artistGroups, galleryPage, renderOptions) {
+  const groups = state.view.artist_groups;
+  if (!Array.isArray(groups) || state.view.primary_artist_groups?.length || state.view.family_artist_groups?.length
+    || typeof virtualGrid === 'undefined' || typeof virtualGrid?.appendGroups !== 'function') return false;
+  const continuation = splitRootGalleryContinuation(groups, artistGroups);
+  if (!continuation) return false;
+  const lastGroup = continuation.continued ? groups[groups.length - 1] : null;
+  const replacedGroups = lastGroup ? buildGalleryMainRootPageGroups([lastGroup]) : [];
+  const chromeWasCurrent = isGalleryMainChromeCurrent();
+  const pageGroups = buildGalleryMainRootPageGroups(commitRootGalleryContinuation({
+    mergedLastGroup: lastGroup && mergeRootGalleryPageGroups([lastGroup], [continuation.continued])[0],
+    appendedGroups: continuation.added,
+    galleryPage,
+  }));
+  const regroup = () => renderArtistGroups(renderOptions);
+  if (!virtualGrid.appendGroups(pageGroups, replacedGroups, regroup)) regroup();
+  else if (typeof document?.querySelector === 'function') appendGalleryMainChromeGroups(chromeWasCurrent, replacedGroups, pageGroups);
+  return true;
+}
+
 function buildRootGalleryPageUrl(view) {
   return buildApiUrl({ ...view, ...(view.gallery_page_scope || {}) });
+}
+
+// A root refresh reloads one anchored window around the artist on screen, whatever the scroll
+// depth; pages outside it reload through the continuation owners when scrolled to. Neighbouring
+// artists, nearest first, stand in when that artist no longer exists. Without a captured album,
+// the artist whose label the scrolled viewport has passed is the one on screen.
+function rootGalleryViewportArtists(groups = [], scrollAnchor = null, scrollTop = 0) {
+  const albumKey = String(scrollAnchor?.albumKey || '');
+  let viewportIndex = albumKey
+    ? groups.findIndex(group => (group.albums || []).some(album => String(album.key || '') === albumKey))
+    : -1;
+  if (viewportIndex < 0 && scrollTop > 0) {
+    const visibleArtist = findGalleryMainContextSection(scrollTop)?.artist;
+    viewportIndex = visibleArtist ? groups.findIndex(group => galleryMainGroupArtist(group) === visibleArtist) : -1;
+  }
+  viewportIndex = Math.max(0, viewportIndex);
+  const artists = [];
+  for (let distance = 0; distance < groups.length && artists.length < ROOT_GALLERY_ANCHOR_RECOVERY_REQUEST_LIMIT; distance += 1) {
+    for (const index of distance ? [viewportIndex + distance, viewportIndex - distance] : [viewportIndex]) {
+      const artist = String(groups[index]?.artist || '').trim();
+      if (artist && !artists.includes(artist)) artists.push(artist);
+    }
+  }
+  return { artists: artists.slice(0, ROOT_GALLERY_ANCHOR_RECOVERY_REQUEST_LIMIT) };
 }
 
 function retainRootGalleryAnchorMetadata(currentPage = {}, nextPage = {}) {
@@ -19074,7 +19566,9 @@ async function loadNextRootGalleryPage() {
   if (!isPagedRootGallery(view) || !page.has_more || !page.next_cursor
     || rootGalleryPageRequest || state.busy || hasPendingSidebarNavigation()
     || !scroll || scroll.clientHeight <= 0
-    || scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight
+    // Space held below the loaded artists is not content: measure to the last loaded artist.
+    || scroll.scrollHeight - Number(typeof virtualGrid === 'undefined' ? 0 : virtualGrid?.heldTrailingSpace || 0)
+      - scroll.scrollTop - scroll.clientHeight
       > ROOT_GALLERY_PREFETCH_VIEWPORT_COUNT * scroll.clientHeight) return false;
   const request = {
     controller: new AbortController(),
@@ -19108,63 +19602,43 @@ async function loadNextRootGalleryPage() {
   try {
     let response = await fetchGalleryViewResponse(`${url.pathname}${url.search}`, request.controller.signal);
     let restarted = false;
-    let recoveryCoverage = 0;
-    let recoveryStartArtist = '';
-    let recoveryEndArtist = '';
-    let recoveryArtists = [];
     if (response.status === 409) {
-      let recoveryRequestCount = 1;
-      const fetchRecoveryResponse = async () => {
-        if (recoveryRequestCount >= ROOT_GALLERY_ANCHOR_RECOVERY_REQUEST_LIMIT) {
-          throw new Error('The previously viewed gallery artists are unavailable. Refresh the gallery to continue.');
-        }
-        recoveryRequestCount += 1;
-        return fetchGalleryViewResponse(`${url.pathname}${url.search}`, request.controller.signal);
-      };
       const conflict = await response.json();
       if (!ownsRootBrowseIdentity() || conflict?.restart_required !== true) return false;
-      // Catalog changes invalidate the cursor. Recover the retained window
-      // atomically; keep its cards visible until all required pages arrive.
-      url.searchParams.delete('gallery_cursor');
-      url.searchParams.delete('omit_sidebar');
-      const retainedGroups = state.view.artist_groups || [];
-      recoveryArtists = retainedGroups.map(group => String(group.artist || '').trim()).filter(Boolean);
-      recoveryCoverage = retainedGroups.reduce((count, group) => count + (group.albums || []).length, 0);
-      recoveryStartArtist = String(retainedGroups[0]?.artist || '').trim();
-      recoveryEndArtist = String(retainedGroups.at(-1)?.artist || '').trim();
-      if (recoveryStartArtist && (scroll.scrollTop > 0 || state.view.gallery_page?.anchor_artist)) {
-        url.searchParams.set('gallery_anchor_artist', recoveryStartArtist);
-      }
-      response = await fetchRecoveryResponse();
-      for (let index = 1; response.status === 400 && url.searchParams.has('gallery_anchor_artist'); index += 1) {
-        const failure = await response.json();
-        if (!ownsRootBrowseIdentity()) return false;
-        const message = String(failure?.error || failure?.detail || 'Unable to refresh gallery.');
-        if (message !== 'Gallery artist anchor is unavailable.' || index >= retainedGroups.length) {
-          throw new Error(message);
-        }
-        recoveryStartArtist = String(retainedGroups[index]?.artist || '').trim();
-        if (!recoveryStartArtist) throw new Error(message);
-        url.searchParams.set('gallery_anchor_artist', recoveryStartArtist);
-        response = await fetchRecoveryResponse();
-      }
+      // Catalog changes invalidate every loaded cursor: reload the window on screen. This
+      // conflict is the recovery's one revision restart and counts toward its request cap.
+      const recovered = await recoverRootGalleryWindow(
+        `${url.pathname}${url.search}`, response,
+        rootGalleryViewportArtists(state.view.artist_groups, request.semanticScrollAnchor, scroll.scrollTop).artists,
+        request.controller, ownsRootBrowseIdentity, { omitSidebar: false },
+      );
+      if (!recovered) return false;
+      response = recovered.response;
       restarted = true;
     }
     const ownsDataResponse = restarted ? ownsRootBrowseIdentity : ownsResponse;
-    let data = await readGalleryResponse(response, ownsDataResponse);
-    if (restarted && ownsDataResponse()) {
-      data = await collectRootGalleryRefresh(
-        data, `${url.pathname}${url.search}`, recoveryCoverage,
-        request.controller, ownsDataResponse, recoveryStartArtist, recoveryEndArtist, recoveryArtists,
-        restarted,
-      );
-    }
+    const data = await readGalleryResponse(response, ownsDataResponse);
     if (!ownsDataResponse()) return false;
     if (!data.gallery_page || !data.gallery_page.revision
       || (!restarted && data.gallery_page.revision !== request.revision)
       || (data.gallery_page.has_more && (!data.gallery_page.next_cursor
         || (!restarted && data.gallery_page.next_cursor === request.cursor)))
       || !Array.isArray(data.artist_groups)) return false;
+    const renderOptions = {
+      preserveScroll: true,
+      preserveMountedGalleryChildren: true,
+      semanticScrollAnchor: request.semanticScrollAnchor,
+      semanticScrollOwnerGeneration: request.semanticScrollOwnerGeneration,
+    };
+    const continuedPage = restarted ? null : {
+      ...retainRootGalleryAnchorMetadata(state.view.gallery_page, data.gallery_page),
+      previous_cursor: state.view.gallery_page?.previous_cursor || null,
+      has_previous: Boolean(state.view.gallery_page?.has_previous),
+    };
+    if (continuedPage && appendRootGalleryPage(data.artist_groups, continuedPage, renderOptions)) {
+      scheduleBrowserAnimationFrame(() => { void loadNextRootGalleryPage(); });
+      return true;
+    }
     const artistGroups = restarted
       ? data.artist_groups
       : mergeRootGalleryPageGroups(state.view.artist_groups, data.artist_groups);
@@ -19179,13 +19653,7 @@ async function loadNextRootGalleryPage() {
         },
       } : {}),
       artist_groups: artistGroups,
-      gallery_page: restarted
-        ? data.gallery_page
-        : {
-          ...retainRootGalleryAnchorMetadata(state.view.gallery_page, data.gallery_page),
-          previous_cursor: state.view.gallery_page?.previous_cursor || null,
-          has_previous: Boolean(state.view.gallery_page?.has_previous),
-        },
+      gallery_page: continuedPage || data.gallery_page,
       initial_view_partial: false,
     }, {
       trackSidebarReveal: false,
@@ -19193,12 +19661,6 @@ async function loadNextRootGalleryPage() {
       preserveGalleryBrowseLocationState: true,
       rootGalleryContinuation: true,
     });
-    const renderOptions = {
-      preserveScroll: true,
-      preserveMountedGalleryChildren: true,
-      semanticScrollAnchor: request.semanticScrollAnchor,
-      semanticScrollOwnerGeneration: request.semanticScrollOwnerGeneration,
-    };
     if (restarted) renderView(renderOptions);
     else renderArtistGroups(renderOptions);
     // Fill only the visible buffer, including a short initial page. Rechecking
@@ -19222,7 +19684,9 @@ async function loadPreviousRootGalleryPage() {
   if (!isPagedRootGallery(view) || !page?.has_previous || !page.previous_cursor
     || rootGalleryPageRequest || state.busy || hasPendingSidebarNavigation()
     || !scroll || scroll.clientHeight <= 0
-    || scroll.scrollTop > scroll.clientHeight * ROOT_GALLERY_PREFETCH_VIEWPORT_COUNT) return false;
+    // Space held above the loaded artists is not content: measure from the first loaded artist.
+    || scroll.scrollTop - Number(typeof virtualGrid === 'undefined' ? 0 : virtualGrid?.leadingExtent || 0)
+      > scroll.clientHeight * ROOT_GALLERY_PREFETCH_VIEWPORT_COUNT) return false;
 
   const request = {
     controller: new AbortController(),
@@ -19996,33 +20460,8 @@ function dispatchStartupHydrationFollowup(followup, delayMs = 0) {
   Promise.resolve().then(runDispatch);
 }
 
-async function fetchGalleryViewResponse(url, signal) {
-  const response = await fetch(url, { headers: { Accept: 'application/json' }, signal });
-  return retryPendingGalleryViewResponse(response, url, signal);
-}
-
-async function retryPendingGalleryViewResponse(response, url, signal) {
-  const deadline = Date.now() + 60000;
-  while (true) {
-    if (response.status !== 503) return response;
-    const pending = await response.clone().json().catch(() => null);
-    if (!['search_projection_pending', 'gallery_projection_pending'].includes(pending?.code) || Date.now() >= deadline) return response;
-    await new Promise((resolve, reject) => {
-      let timer;
-      const abort = () => {
-        clearTimeout(timer);
-        signal?.removeEventListener('abort', abort);
-        reject(Object.assign(new Error('Gallery request cancelled'), { name: 'AbortError' }));
-      };
-      if (signal?.aborted) return abort();
-      signal?.addEventListener('abort', abort, { once: true });
-      timer = setTimeout(() => {
-        signal?.removeEventListener('abort', abort);
-        resolve();
-      }, 1000);
-    });
-    response = await fetch(url, { headers: { Accept: 'application/json' }, signal });
-  }
+function fetchGalleryViewResponse(url, signal) {
+  return fetchRetryingPendingProjection(url, { headers: { Accept: 'application/json' }, signal });
 }
 
 async function readGalleryResponse(response, ownsResponse) {
@@ -20040,31 +20479,32 @@ async function readGalleryResponse(response, ownsResponse) {
   return data;
 }
 
-function rootGalleryRefreshCoverage(apiUrl, options) {
-  if (!options.preserveScroll || options.startupRefresh || !isPagedRootGallery()) return 0;
+// Whether a preserveScroll request refreshes the loaded paged root gallery in place.
+function refreshesRootGalleryWindow(apiUrl, options) {
+  if (!options.preserveScroll || options.startupRefresh || !isPagedRootGallery()) return false;
   const url = new URL(apiUrl, 'http://localhost');
   if (url.pathname !== '/view-data' || url.searchParams.get('surface') !== 'albums'
     || !url.searchParams.has('gallery_page_size')
     || (url.searchParams.has('payload_tier') && url.searchParams.get('payload_tier') !== 'full')
     || ['q', 'artist', 'genre', 'mood', 'style', 'duration_min', 'duration_max',
       'related_artist', 'primary_filter', 'gallery_cursor', 'root_sidebar']
-      .some(key => url.searchParams.has(key))) return 0;
+      .some(key => url.searchParams.has(key))) return false;
   const scope = state.view.gallery_page_scope || state.view;
-  if (String(scope.gallery_scope || '') !== String(url.searchParams.get('gallery_scope') || '')) return 0;
+  if (String(scope.gallery_scope || '') !== String(url.searchParams.get('gallery_scope') || '')) return false;
   const categories = [...(scope.visible_library_categories || [])].sort();
   const requestedCategories = url.searchParams.getAll('category').sort();
-  if (JSON.stringify(categories) !== JSON.stringify(requestedCategories)) return 0;
-  return (state.view.artist_groups || []).reduce((count, group) => count + (group.albums || []).length, 0);
+  if (JSON.stringify(categories) !== JSON.stringify(requestedCategories)) return false;
+  return (state.view.artist_groups || []).some(group => (group.albums || []).length > 0);
 }
 
-async function recoverRootGalleryRefreshFirstPage(
-  apiUrl, response, retainedArtists, controller, ownsResponse,
-  { omitSidebar = true, allowRevisionRestart = true } = {},
+async function recoverRootGalleryWindow(
+  apiUrl, response, windowArtists, controller, ownsResponse,
+  { omitSidebar = true } = {},
 ) {
   const requestedArtist = String(
     new URL(apiUrl, 'http://localhost').searchParams.get('gallery_anchor_artist') || '',
   ).trim();
-  const artists = [...new Set(retainedArtists)].filter(Boolean);
+  const artists = [...new Set(windowArtists)].filter(Boolean);
   if (response && requestedArtist) {
     const requestedIndex = artists.indexOf(requestedArtist);
     if (requestedIndex >= 0) artists.splice(requestedIndex, 1);
@@ -20101,8 +20541,8 @@ async function recoverRootGalleryRefreshFirstPage(
   }
   while (ownsResponse()) {
     if (currentResponse.status === 409) {
-      if (!allowRevisionRestart) return { restart: true, response: currentResponse };
-      if (restarted) throw new Error('Root gallery changed again while refreshing loaded albums.');
+      if (restarted) throw new Error('Root gallery changed again while refreshing the visible albums.');
+      if (!artists.length) break;
       restarted = true;
       const retry = await fetchArtist(artists[artistIndex]);
       if (!retry) return null;
@@ -20123,128 +20563,9 @@ async function recoverRootGalleryRefreshFirstPage(
       currentUrl = alternate.url;
       continue;
     }
-    return { response: currentResponse, url: currentUrl, restarted };
+    return { response: currentResponse, url: currentUrl };
   }
   throw new Error('The previously viewed gallery artists are unavailable. Refresh the gallery to continue.');
-}
-
-async function resolveRootGalleryRefreshEndpoint(apiUrl, retainedArtists, controller, ownsResponse) {
-  const result = await recoverRootGalleryRefreshFirstPage(
-    apiUrl, null, [...retainedArtists].reverse(), controller, ownsResponse,
-    { allowRevisionRestart: false },
-  );
-  if (!result || result.restart) return result;
-  const payload = await readGalleryResponse(result.response, ownsResponse);
-  if (!ownsResponse()) return null;
-  const page = payload?.gallery_page;
-  const canonicalArtist = String(page?.anchor_group_artist || '').trim();
-  const group = payload?.artist_groups?.find(item => String(item.artist || '').trim() === canonicalArtist);
-  if (!canonicalArtist || !Number.isInteger(page?.anchor_offset) || page.anchor_offset < 0 || !group?.albums?.length) {
-    throw new Error('Root gallery refresh endpoint metadata is unavailable.');
-  }
-  return { artist: canonicalArtist, offset: page.anchor_offset, length: group.albums.length, revision: page.revision };
-}
-
-async function collectRootGalleryRefresh(data, apiUrl, coverage, controller, ownsResponse, retainedStartArtist, retainedEndArtist = '', retainedArtists = [retainedEndArtist], revisionRestarted = false) {
-  const completeArtistPages = Boolean(new URL(apiUrl, 'http://localhost').searchParams.get('gallery_anchor_artist'));
-  let payload = data;
-  let restarted = revisionRestarted;
-  let endpointArtist = retainedEndArtist;
-  let endpointResolved = false;
-  let endpointLength = 0;
-  const cursors = new Set();
-  let remainingPages = Math.ceil(coverage / 50);
-  const restartRefresh = async (conflictResponse = { status: 409 }) => {
-    if (restarted) throw new Error('Root gallery changed again while refreshing loaded albums.');
-    restarted = true;
-    endpointArtist = retainedEndArtist;
-    endpointResolved = false;
-    endpointLength = 0;
-    cursors.clear();
-    remainingPages = Math.ceil(coverage / 50);
-    const recovered = await recoverRootGalleryRefreshFirstPage(
-      apiUrl, conflictResponse, retainedArtists, controller, ownsResponse,
-      { omitSidebar: false },
-    );
-    if (!recovered) {
-      payload = null;
-      return;
-    }
-    payload = await readGalleryResponse(recovered.response, ownsResponse);
-  };
-  while (ownsResponse()) {
-    const page = payload?.gallery_page;
-    const groups = payload?.artist_groups || [];
-    const retainedStart = groups.findIndex(group => String(group.artist || '').trim() === retainedStartArtist);
-    // Anchored responses include leading context, which must not displace the
-    // trailing portion of the window being refreshed.
-    const count = groups.slice(Math.max(0, retainedStart))
-      .reduce((sum, group) => sum + (group.albums || []).length, 0);
-    // Anchored pages contain complete artist groups, including album removals.
-    const retainedEndPresent = !endpointArtist || groups.some(group => (
-      String(group.artist || '').trim() === endpointArtist
-    ));
-    const endpointGroup = groups.find(group => String(group.artist || '').trim() === endpointArtist);
-    const endpointComplete = endpointResolved
-      ? (endpointGroup?.albums?.length || 0) >= endpointLength
-      : completeArtistPages || Boolean(page?.anchor_artist) || !endpointArtist;
-    if (!page?.has_more || (count >= coverage && retainedEndPresent && endpointComplete)) return payload;
-    if (!endpointResolved && ((!retainedEndPresent && remainingPages <= 0)
-      || (count >= coverage && !endpointComplete))) {
-      const endpoint = await resolveRootGalleryRefreshEndpoint(apiUrl, retainedArtists, controller, ownsResponse);
-      if (!ownsResponse()) return null;
-      if (endpoint.restart || String(endpoint.revision || '') !== String(page?.revision || '')) {
-        await restartRefresh(endpoint.restart ? endpoint.response : undefined);
-        continue;
-      }
-      endpointArtist = endpoint.artist;
-      endpointResolved = true;
-      endpointLength = endpoint.length;
-      if ((groups.find(group => String(group.artist || '').trim() === endpointArtist)?.albums?.length || 0) < endpointLength) {
-        const startArtist = String(page?.anchor_group_artist || retainedStartArtist).trim();
-        const startIndex = groups.findIndex(group => String(group.artist || '').trim() === startArtist);
-        let startOffset = 0;
-        if (page?.anchor_artist) {
-          const leadingCount = groups.slice(0, startIndex).reduce((sum, group) => sum + (group.albums || []).length, 0);
-          if (startIndex < 0 || !Number.isInteger(page.anchor_offset) || page.anchor_offset < leadingCount) {
-            throw new Error('Root gallery refresh start metadata is unavailable.');
-          }
-          // An alias can resolve inside its rendered group. Use the earliest
-          // possible start, so that uncertainty cannot undercount needed pages.
-          startOffset = Math.max(0, page.anchor_offset - leadingCount - ((groups[startIndex].albums || []).length - 1));
-        }
-        const loaded = groups.reduce((sum, group) => sum + (group.albums || []).length, 0);
-        remainingPages = Math.ceil((endpoint.offset + endpoint.length - startOffset - loaded) / 50);
-      }
-      continue;
-    }
-    const cursor = String(page.next_cursor || '');
-    if (!cursor || cursors.has(cursor) || remainingPages-- <= 0) {
-      throw new Error('Root gallery refresh did not advance within its loaded coverage.');
-    }
-    cursors.add(cursor);
-    const url = new URL(apiUrl, 'http://localhost');
-    url.searchParams.set('gallery_page_size', '50');
-    url.searchParams.set('gallery_cursor', cursor);
-    url.searchParams.set('omit_sidebar', '1');
-    const response = await fetchGalleryViewResponse(`${url.pathname}${url.search}`, controller?.signal);
-    if (!ownsResponse()) return null;
-    const next = response.status === 409 ? null : await readGalleryResponse(response, ownsResponse);
-    if (!ownsResponse()) return null;
-    if (response.status === 409 || String(next?.gallery_page?.revision || '') !== String(page.revision || '')) {
-      await restartRefresh(response.status === 409 ? response : undefined);
-      continue;
-    }
-    if (next.gallery_page.has_more && cursors.has(String(next.gallery_page.next_cursor || ''))) {
-      throw new Error('Root gallery refresh returned a repeated cursor.');
-    }
-    payload = {
-      ...payload,
-      artist_groups: mergeRootGalleryPageGroups(payload.artist_groups, next.artist_groups),
-      gallery_page: retainRootGalleryAnchorMetadata(payload.gallery_page, next.gallery_page),
-    };
-  }
-  return null;
 }
 
 async function fetchAndRender(url, push = true, options = {}) {
@@ -20262,20 +20583,24 @@ async function fetchAndRender(url, push = true, options = {}) {
   let apiUrl = url.startsWith('/view-data') || url.startsWith('/home-data')
     ? url
     : buildApiUrl(parseBrowserUrlState(url));
-  const rootRefreshCoverage = rootGalleryRefreshCoverage(apiUrl, requestOptions);
-  const retainedArtists = (state.view?.artist_groups || []).map(group => String(group.artist || '').trim()).filter(Boolean);
-  const retainedStartArtist = retainedArtists[0] || '';
-  const retainedEndArtist = retainedArtists.at(-1) || '';
-  if (rootRefreshCoverage > 0 && state.view?.gallery_page?.anchor_artist && retainedStartArtist) {
+  const galleryScrollTop = Number(document.getElementById('albums-scroll')?.scrollTop || 0);
+  const rootWindow = refreshesRootGalleryWindow(apiUrl, requestOptions)
+    ? rootGalleryViewportArtists(
+      state.view.artist_groups,
+      typeof virtualGrid === 'undefined' ? null : virtualGrid?.captureScrollAnchor?.(),
+      galleryScrollTop,
+    )
+    : null;
+  // Once scrolled, or in a jump's window, refresh the window on screen rather than the top of
+  // the gallery or the jump's original target.
+  if (rootWindow?.artists.length && (galleryScrollTop > 0 || state.view.gallery_page?.anchor_artist)) {
     const refreshUrl = new URL(apiUrl, 'http://localhost');
     if (!refreshUrl.searchParams.has('gallery_anchor_artist')) {
-      // A jump's original target may precede a rename or follow prepended pages.
-      // Refresh the retained window, rather than navigating back to that target.
-      refreshUrl.searchParams.set('gallery_anchor_artist', retainedStartArtist);
+      refreshUrl.searchParams.set('gallery_anchor_artist', rootWindow.artists[0]);
       apiUrl = `${refreshUrl.pathname}${refreshUrl.search}`;
     }
   }
-  const retainedRootGalleryPage = rootRefreshCoverage > 0 ? state.view?.gallery_page : null;
+  const retainedRootGalleryPage = rootWindow ? state.view?.gallery_page : null;
   const encodedCommittedQuery = String(
     apiUrl.match(/(?:[?&])q=([^&]*)/)?.[1] || ''
   ).replace(/\+/g, ' ');
@@ -20400,21 +20725,16 @@ async function fetchAndRender(url, push = true, options = {}) {
     markStartupFollowup('fetch_started', requestOptions, {
       endpoint: apiUrl,
     });
-    let response = await fetch(apiUrl, { headers: { Accept: 'application/json' }, signal: controller?.signal });
-    if (response.status === 503) {
-      response = await retryPendingGalleryViewResponse(response, apiUrl, controller?.signal);
-    }
+    let response = await fetchGalleryViewResponse(apiUrl, controller?.signal);
     const ownsInitialResponse = () => requestOwnsCurrentViewState(requestId, requestViewStateRevision);
-    let firstPageRevisionRestarted = false;
-    if (rootRefreshCoverage > 0) {
-      const recovered = await recoverRootGalleryRefreshFirstPage(
-        apiUrl, response, retainedArtists, controller, ownsInitialResponse,
+    if (rootWindow) {
+      const recovered = await recoverRootGalleryWindow(
+        apiUrl, response, rootWindow.artists, controller, ownsInitialResponse,
         { omitSidebar: false },
       );
       if (!recovered) return false;
       response = recovered.response;
       apiUrl = recovered.url;
-      firstPageRevisionRestarted = recovered.restarted === true;
     }
     let data = await readGalleryResponse(response, ownsInitialResponse);
     const selectedArtist = String(data?.selected_artist || '').trim();
@@ -20437,34 +20757,14 @@ async function fetchAndRender(url, push = true, options = {}) {
       ]) fallbackUrl.searchParams.delete(name);
       fallbackUrl.searchParams.set('all_artists', '1');
       apiUrl = `${fallbackUrl.pathname}${fallbackUrl.search}`;
-      response = await fetch(apiUrl, {
-        headers: { Accept: 'application/json' },
-        signal: controller?.signal,
-      });
-      if (response.status === 503) {
-        response = await retryPendingGalleryViewResponse(response, apiUrl, controller?.signal);
-      }
+      response = await fetchGalleryViewResponse(apiUrl, controller?.signal);
       data = await readGalleryResponse(response, ownsInitialResponse);
     }
-    if (rootRefreshCoverage > 0) {
+    if (rootWindow) {
       data = {
         ...data,
         gallery_page: retainRootGalleryAnchorMetadata(retainedRootGalleryPage, data.gallery_page),
       };
-      const ownsRefresh = () => {
-        if (!requestOwnsCurrentViewState(requestId, requestViewStateRevision)
-          || requestTagEditMutationRevision !== Number(state.ui.tagEditOptimisticMutationRevision || 0)) return false;
-        try {
-          return typeof requestOptions.shouldApplyResponse !== 'function' || requestOptions.shouldApplyResponse(data) === true;
-        } catch (_error) {
-          return false;
-        }
-      };
-      data = await collectRootGalleryRefresh(
-        data, apiUrl, rootRefreshCoverage, controller, ownsRefresh,
-        retainedStartArtist, retainedEndArtist, retainedArtists, firstPageRevisionRestarted,
-      );
-      if (!data || !ownsRefresh()) return false;
     }
     markStartupFollowup('payload_received', requestOptions, {
       endpoint: apiUrl,
@@ -20634,6 +20934,8 @@ async function fetchAndRender(url, push = true, options = {}) {
         ? { preserveMountedGalleryChildren: true }
         : {}),
       ...(preserveMountedGallery ? { preserveMountedGallery: true } : {}),
+      // The window replaces the loaded artists above it; their height stays as space, holding the scroll.
+      ...(rootWindow ? { holdGalleryScrollTop: true } : {}),
     });
     if (appliedNewInventoryRevision
         && typeof invalidateAllHydratedTrackModalAlbumDetails === 'function') {
@@ -23371,7 +23673,7 @@ async function openPlayerTrackAlbum(track, modalOptions = {}) {
   if (!path) return false;
   let message = "The playing album couldn't be opened. Try again.";
   try {
-    const response = await fetch(`/album-details?track_path=${encodeURIComponent(path)}`, {
+    const response = await fetchRetryingPendingProjection(`/album-details?track_path=${encodeURIComponent(path)}`, {
       headers: { Accept: 'application/json' },
     });
     const payload = await response.json().catch(() => null);
@@ -29072,15 +29374,21 @@ function clearUtilityLoopDragState() {
   state.utility.loopDropPosition = '';
 }
 
+// Only the dragged and drop-target loops carry drag classes, so a drag event restyles the rows
+// of the loops it marks or unmarks, never the whole saved-loop list.
+let utilityLoopDragMarkedIds = [];
 function syncUtilityLoopDragUi() {
-  document.querySelectorAll('[data-utility-loop-entry], [data-utility-loop-id]').forEach(node => {
-    const id = getUtilityLoopNodeId(node);
-    const dragging = id && id === state.utility.loopDragId;
-    const dropping = id && id === state.utility.loopDropTargetId;
-    node.classList.toggle('is-dragging', Boolean(dragging));
-    node.classList.toggle('is-drop-before', Boolean(dropping && state.utility.loopDropPosition === 'before'));
-    node.classList.toggle('is-drop-after', Boolean(dropping && state.utility.loopDropPosition === 'after'));
+  const markedIds = [state.utility.loopDragId, state.utility.loopDropTargetId].filter(Boolean);
+  new Set([...utilityLoopDragMarkedIds, ...markedIds]).forEach((id) => {
+    const escapedId = cssEscape(id);
+    document.querySelectorAll(`[data-utility-loop-entry="${escapedId}"], [data-utility-loop-id="${escapedId}"]`).forEach(node => {
+      const dropping = id === state.utility.loopDropTargetId;
+      node.classList.toggle('is-dragging', id === state.utility.loopDragId);
+      node.classList.toggle('is-drop-before', dropping && state.utility.loopDropPosition === 'before');
+      node.classList.toggle('is-drop-after', dropping && state.utility.loopDropPosition === 'after');
+    });
   });
+  utilityLoopDragMarkedIds = markedIds;
 }
 
 function getUtilityLoopNodeId(node) {
@@ -29090,7 +29398,7 @@ function getUtilityLoopNodeId(node) {
 function syncUtilityLoopMoveButtons() {
   document.querySelectorAll('[data-move-utility-loop]').forEach(button => {
     const id = button.getAttribute('data-move-utility-loop');
-    const loop = (state.utility.loops || []).find(item => String(item.id) === id);
+    const loop = getUtilityLoopIndex().byId.get(id);
     const scope = loop && getUtilityLoopOrderScope(loop.song_key);
     const index = scope?.loops.findIndex(item => String(item.id) === id) ?? -1;
     const direction = button.getAttribute('data-loop-move-direction');
@@ -29103,10 +29411,15 @@ function syncUtilityLoopMoveButtons() {
 }
 
 function updateUtilityLoopDropState(type, targetId, position, groupKey = '') {
-  state.utility.loopDropType = String(type || '');
-  state.utility.loopDropTargetId = String(targetId || '');
-  state.utility.loopDropGroupKey = String(groupKey || '');
-  state.utility.loopDropPosition = position === 'after' ? 'after' : position === 'before' ? 'before' : '';
+  const next = {
+    loopDropType: String(type || ''),
+    loopDropTargetId: String(targetId || ''),
+    loopDropGroupKey: String(groupKey || ''),
+    loopDropPosition: position === 'after' ? 'after' : position === 'before' ? 'before' : '',
+  };
+  // Dragover repeats while the pointer rests; an unchanged drop target restyles nothing.
+  if (Object.entries(next).every(([key, value]) => state.utility[key] === value)) return;
+  Object.assign(state.utility, next);
   syncUtilityLoopDragUi();
 }
 
@@ -29146,7 +29459,7 @@ function bindUtilityLoopDragAndDrop() {
         if (!event.target.closest('[data-utility-loop-id], [data-utility-loop-entry]')) updateUtilityLoopDropState('', '', '');
         return;
       }
-      if (!buildReorderedUtilityLoops(state.utility.loops, payload(), edge.target, edge.position)) {
+      if (!reorderUtilityLoopSong(state.utility.loops, payload(), edge.target, edge.position)) {
         updateUtilityLoopDropState('', '', '');
         return;
       }
@@ -29166,7 +29479,7 @@ function bindUtilityLoopDragAndDrop() {
     });
   });
   document.querySelectorAll('[data-utility-loop-entry], [data-utility-loop-id]').forEach(node => {
-    const currentLoop = () => (state.utility.loops || []).find(loop => String(loop.id) === getUtilityLoopNodeId(node));
+    const currentLoop = () => getUtilityLoopIndex().byId.get(getUtilityLoopNodeId(node));
     node.setAttribute('draggable', String(canReorderUtilityLoop(currentLoop())));
     if (node.dataset.dragBound === '1') return;
     node.dataset.dragBound = '1';
@@ -29177,10 +29490,11 @@ function bindUtilityLoopDragAndDrop() {
           || event.target?.closest?.('button, input, select, textarea, a, [data-loop-range-surface]')) {
         event.preventDefault(); clear(); return;
       }
+      clearUtilityLoopDragState();
       state.utility.loopDragType = 'loop'; state.utility.loopDragId = String(loop.id);
       state.utility.loopDragGroupKey = loop.song_key;
       state.utility.loopSuppressClick = false;
-      updateUtilityLoopDropState('', '', '');
+      syncUtilityLoopDragUi();
       if (event.dataTransfer) {
         event.dataTransfer.effectAllowed = 'move';
         event.dataTransfer.setData('text/plain', JSON.stringify(payload()));
@@ -29188,7 +29502,7 @@ function bindUtilityLoopDragAndDrop() {
     });
     node.addEventListener('dragover', event => {
       const position = getUtilityLoopDropPosition(node, event.clientY);
-      if (!buildReorderedUtilityLoops(state.utility.loops, payload(), target(), position)) {
+      if (!reorderUtilityLoopSong(state.utility.loops, payload(), target(), position)) {
         updateUtilityLoopDropState('', '', ''); return;
       }
       event.preventDefault();
@@ -29638,8 +29952,13 @@ function updateUtilityLoopStereoWaveform(loopId, audio) {
   });
 }
 
+// Player UI updates refresh the mounted loop waveforms; the saved-loop list is
+// replaced, never edited in place, so the peak cache is pruned once per list.
+let utilityLoopListRetainedForPeaks = null;
 function refreshUtilityLoopStereoWaveforms() {
-  if (state.utility.loopsLoaded && Array.isArray(state.utility.loops)) {
+  if (state.utility.loopsLoaded && Array.isArray(state.utility.loops)
+      && state.utility.loops !== utilityLoopListRetainedForPeaks) {
+    utilityLoopListRetainedForPeaks = state.utility.loops;
     retainSavedLoopWaveformPeaks(state.utility.loops.map(loop => loop.id));
   }
   document.querySelectorAll('[data-loop-audio]').forEach(audio => {
@@ -30596,8 +30915,25 @@ async function deleteSavedLoop(loopId, { confirmed = false } = {}) {
   }
 }
 
+// The saved-loop list is replaced, never edited in place, so one index per list serves every
+// drag event and order lookup against it.
+const utilityLoopIndexes = new WeakMap();
+function getUtilityLoopIndex(loops = state.utility.loops || []) {
+  let index = utilityLoopIndexes.get(loops);
+  if (!index) {
+    index = { byId: new Map(), bySong: new Map() };
+    for (const loop of loops) {
+      index.byId.set(String(loop.id), loop);
+      if (!index.bySong.has(loop.song_key)) index.bySong.set(loop.song_key, []);
+      index.bySong.get(loop.song_key).push(loop);
+    }
+    utilityLoopIndexes.set(loops, index);
+  }
+  return index;
+}
+
 function getUtilityLoopOrderScope(songKey, loops = state.utility.loops || []) {
-  const members = loops.filter(loop => loop.song_key === songKey);
+  const members = getUtilityLoopIndex(loops).bySong.get(songKey) || [];
   const revision = members[0]?.order_revision;
   if (!members.length || !members.every(loop => canReorderUtilityLoop(loop) && loop.order_revision === revision)) return null;
   return { songKey, revision, loops: members };
@@ -30614,7 +30950,9 @@ function replaceUtilityLoopSong(loops, songKey, members) {
   return next;
 }
 
-function buildReorderedUtilityLoops(loops, draggedItem, targetItem, position) {
+// The dragged song's loops in their new order, or null when the drop is not a move. A drag
+// reads only that song's loops.
+function reorderUtilityLoopSong(loops, draggedItem, targetItem, position) {
   if (!['before', 'after'].includes(position) || draggedItem?.type !== 'loop' || targetItem?.type !== 'loop') return null;
   const songKey = String(draggedItem.groupKey || '');
   if (!songKey || songKey !== targetItem.groupKey || draggedItem.id === targetItem.id) return null;
@@ -30627,7 +30965,12 @@ function buildReorderedUtilityLoops(loops, draggedItem, targetItem, position) {
   const to = members.findIndex(loop => String(loop.id) === String(targetItem.id));
   members.splice(to + (position === 'after' ? 1 : 0), 0, moving);
   if (members.every((loop, index) => loop.id === scope.loops[index].id)) return null;
-  return replaceUtilityLoopSong(loops, songKey, members);
+  return members;
+}
+
+function buildReorderedUtilityLoops(loops, draggedItem, targetItem, position) {
+  const members = reorderUtilityLoopSong(loops, draggedItem, targetItem, position);
+  return members && replaceUtilityLoopSong(loops, String(draggedItem.groupKey), members);
 }
 
 function captureUtilityLoopOrderView(songKey) {
@@ -30890,7 +31233,7 @@ async function loadProblematicFiles(force = false, options = {}) {
     try {
       const fetchSummary = async (url) => {
         const requestStartedAt = getProblematicUtilityNow();
-        const response = await fetch(url, { headers: { Accept: 'application/json' } });
+        const response = await fetchRetryingPendingProjection(url, { headers: { Accept: 'application/json' } });
         requestMs += roundProblematicUtilityMs(getProblematicUtilityNow() - requestStartedAt);
         responseStatus = Number(response.status || 0);
         const parseStartedAt = getProblematicUtilityNow();
@@ -31096,7 +31439,7 @@ async function loadProblematicAlbumDetail(albumKey, force = false, options = {})
     let loadError = '';
     try {
       const requestStartedAt = getProblematicUtilityNow();
-      const response = await fetch(`/utilities/problematic-files/detail?album_key=${encodeURIComponent(normalizedKey)}`, {
+      const response = await fetchRetryingPendingProjection(`/utilities/problematic-files/detail?album_key=${encodeURIComponent(normalizedKey)}`, {
         headers: { Accept: 'application/json' },
       });
       requestMs = roundProblematicUtilityMs(getProblematicUtilityNow() - requestStartedAt);
@@ -31390,7 +31733,8 @@ async function fetchCoverForAlbum(album, options = {}) {
     showToast(
       Number(data.downloaded_count || 0) > 0
         ? 'Cover art updated.'
-        : `Cover was not updated${data.job_result?.reason ? `: ${String(data.job_result.reason).replaceAll('_', ' ')}` : ''}.`,
+        : (data.job_result?.message
+          || `Cover was not updated${data.job_result?.reason ? `: ${String(data.job_result.reason).replaceAll('_', ' ')}` : ''}.`),
       Number(data.downloaded_count || 0) > 0 ? 'success' : 'error',
       3200,
     );
@@ -31706,21 +32050,34 @@ async function syncUtilityLogHistoryRevision(revision) {
   return { revision: state.utility.logHistoryRevision };
 }
 
+const LASTFM_SUBMIT_ERROR = 'Album Haven could not submit pending Last.fm scrobbles.';
+// While the server sends queued scrobbles, the page rereads the pending count.
+const LASTFM_SUBMISSION_POLL_MS = 2000;
+// A run whose count stops moving for a minute is left to the server; Submit becomes available again.
+const LASTFM_SUBMISSION_MAX_UNCHANGED_POLLS = 30;
+
 function ensureLastfmScrobbleState() {
   state.utility.lastfmScrobbles = state.utility.lastfmScrobbles || {
-    summary: null, loading: false, submitting: false, loadPromise: null, requestGeneration: 0,
+    summary: null, loading: false, submitting: false, loadPromise: null, requestGeneration: 0, followToken: 0,
   };
   state.utility.lastfmScrobbles.requestGeneration = Number(state.utility.lastfmScrobbles.requestGeneration || 0);
+  state.utility.lastfmScrobbles.followToken = Number(state.utility.lastfmScrobbles.followToken || 0);
   return state.utility.lastfmScrobbles;
 }
 
 function invalidateLastfmScrobbleSummary() {
   const owner = ensureLastfmScrobbleState();
   owner.requestGeneration += 1;
+  owner.followToken += 1;
   owner.summary = null;
   owner.loading = false;
   owner.loadPromise = null;
+  owner.submitting = false;
   return owner;
+}
+
+function isLastfmSubmissionActive(payload) {
+  return ['queued', 'running'].includes(String(payload?.submission?.state || ''));
 }
 
 function normalizeLastfmScrobbleSummary(payload, fallback = {}) {
@@ -31765,6 +32122,8 @@ async function loadLastfmScrobbleSummary(lastfm, { replace = false, preserveOnEr
       if (!response.ok || !data.ok) throw new Error(data.error || 'Failed to load Last.fm scrobble status');
       if (state.utility.lastfmScrobbles === owner && owner.requestGeneration === requestGeneration) {
         owner.summary = normalizeLastfmScrobbleSummary(data, lastfm);
+        // A run started earlier, or from another page, keeps reporting its progress here.
+        if (!owner.submitting && isLastfmSubmissionActive(data)) followLastfmScrobbleSubmission(owner, lastfm);
       }
       return owner.summary;
     } catch (error) {
@@ -32321,6 +32680,9 @@ async function submitPendingLastfmScrobbles() {
   const lastfm = (state.utility.integrations || []).find((item) => String(item?.key || '') === 'lastfm');
   if (owner.submitting || !lastfm?.connected || Number(owner.summary?.pending) <= 0 || owner.summary?.can_submit !== true) return false;
   const submitGeneration = ++owner.requestGeneration;
+  // A disconnect while the request is out ends this submission.
+  const submitFollowToken = owner.followToken;
+  const stillSubmitting = () => state.utility.lastfmScrobbles === owner && owner.followToken === submitFollowToken;
   owner.loading = false;
   owner.loadPromise = null;
   owner.submitting = true;
@@ -32333,30 +32695,72 @@ async function submitPendingLastfmScrobbles() {
     const data = await response.json().catch(() => ({}));
     if (state.utility.lastfmScrobbles === owner && owner.requestGeneration === submitGeneration) {
       owner.summary = normalizeLastfmScrobbleSummary(data, owner.summary || lastfm);
-      renderUtilityModalContent();
-      await loadLastfmScrobbleSummary(lastfm, { replace: true, preserveOnError: true });
     }
-    if (!response.ok || !data.ok) {
-      state.utility.logHistoryLoaded = false;
-      showRepairAlert(data.error || 'Album Haven could not submit pending Last.fm scrobbles.', 'error', null);
-      return false;
-    }
-    showToast('Pending Last.fm scrobbles submitted.', 'success', 2600);
+    if (!response.ok || !data.ok) throw new Error(data.error || LASTFM_SUBMIT_ERROR);
+    // The server sends the scrobbles in the background; Submit stays busy while the count falls.
+    if (stillSubmitting()) followLastfmScrobbleSubmission(owner, lastfm);
     return true;
   } catch (error) {
     console.error('[AlbumHaven][Integrations] Failed to submit pending Last.fm scrobbles.', error);
-    state.utility.logHistoryLoaded = false;
-    if (state.utility.lastfmScrobbles === owner && owner.requestGeneration === submitGeneration) {
-      await loadLastfmScrobbleSummary(lastfm, { replace: true, preserveOnError: true });
+    if (stillSubmitting()) {
+      await finishLastfmScrobbleSubmission(owner, lastfm, error.message || LASTFM_SUBMIT_ERROR);
     }
-    showRepairAlert(error.message || 'Album Haven could not submit pending Last.fm scrobbles.', 'error', null);
     return false;
-  } finally {
-    if (state.utility.lastfmScrobbles === owner) {
+  }
+}
+
+function followLastfmScrobbleSubmission(owner, lastfm) {
+  const token = ++owner.followToken;
+  let unchangedPolls = 0;
+  owner.submitting = true;
+  renderUtilityModalContent();
+  const following = () => state.utility.lastfmScrobbles === owner && owner.followToken === token;
+  const pollLastfmScrobbleSubmission = async () => {
+    if (!following()) return;
+    let data;
+    try {
+      // The progress read skips the provider total, so polling never calls Last.fm.
+      const response = await fetch('/utilities/integrations/lastfm/scrobbles?progress=1', { headers: { Accept: 'application/json' } });
+      data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) throw new Error(data.error || LASTFM_SUBMIT_ERROR);
+    } catch (error) {
+      if (following()) await finishLastfmScrobbleSubmission(owner, lastfm, error.message || LASTFM_SUBMIT_ERROR);
+      return;
+    }
+    if (!following()) return;
+    const summary = normalizeLastfmScrobbleSummary(data, owner.summary || lastfm);
+    if (summary.pending !== owner.summary?.pending || summary.scrobbled !== owner.summary?.scrobbled) {
+      owner.summary = summary;
+      unchangedPolls = 0;
+      renderUtilityModalContent();
+    } else {
+      unchangedPolls += 1;
+    }
+    if (String(data.submission?.state || '') === 'failed') {
+      await finishLastfmScrobbleSubmission(owner, lastfm, String(data.submission.error || LASTFM_SUBMIT_ERROR));
+    } else if (!isLastfmSubmissionActive(data)) {
+      await finishLastfmScrobbleSubmission(owner, lastfm, '');
+    } else if (unchangedPolls >= LASTFM_SUBMISSION_MAX_UNCHANGED_POLLS) {
+      owner.followToken += 1;
       owner.submitting = false;
       renderUtilityModalContent();
+    } else {
+      window.setTimeout(pollLastfmScrobbleSubmission, LASTFM_SUBMISSION_POLL_MS);
     }
+  };
+  window.setTimeout(pollLastfmScrobbleSubmission, LASTFM_SUBMISSION_POLL_MS);
+}
+
+async function finishLastfmScrobbleSubmission(owner, lastfm, error) {
+  owner.followToken += 1;
+  owner.submitting = false;
+  await loadLastfmScrobbleSummary(lastfm, { replace: true, preserveOnError: true });
+  if (error) {
+    state.utility.logHistoryLoaded = false;
+    showRepairAlert(error, 'error', null);
+    return;
   }
+  showToast('Pending Last.fm scrobbles submitted.', 'success', 2600);
 }
 
 function closeUtilityModal(skipAppearanceGuard = false) {
@@ -33453,7 +33857,17 @@ function renderTagEditor(options = {}) {
     els.autoNumberStatus.textContent = String(state.tagEditor.autoNumberStatus || '');
   }
 
-  const existingTrackButtons = options.preserveTrackList
+  const syncTrackRowSelection = (row) => {
+    const isSelected = selectedPathSet.has(String(row.getAttribute('data-tag-editor-track') || ''));
+    row.classList.toggle('is-active', isSelected);
+    row.querySelector?.('.tag-editor-track-select')
+      ?.setAttribute?.('aria-pressed', isSelected ? 'true' : 'false');
+  };
+  // A drag-selection step keeps the mounted list and names the rows it changed.
+  const changedSelectionPaths = options.preserveTrackList && Array.isArray(options.changedSelectionPaths)
+    ? options.changedSelectionPaths
+    : null;
+  const existingTrackButtons = options.preserveTrackList && !changedSelectionPaths
     ? Array.from(els.list.querySelectorAll('[data-tag-editor-track]'))
     : [];
   const canPreserveTrackList = existingTrackButtons.length === tracks.length
@@ -33461,14 +33875,13 @@ function renderTagEditor(options = {}) {
       String(existingTrackButtons[index]?.getAttribute('data-tag-editor-track') || '')
       === String(track.path || '')
     ));
-  if (canPreserveTrackList) {
-    existingTrackButtons.forEach((button) => {
-      const path = String(button.getAttribute('data-tag-editor-track') || '');
-      const isSelected = selectedPathSet.has(path);
-      button.classList.toggle('is-active', isSelected);
-      button.querySelector?.('.tag-editor-track-select')
-        ?.setAttribute?.('aria-pressed', isSelected ? 'true' : 'false');
+  if (changedSelectionPaths) {
+    changedSelectionPaths.forEach((path) => {
+      const row = els.list.querySelector(`[data-tag-editor-track="${cssEscape(path)}"]`);
+      if (row) syncTrackRowSelection(row);
     });
+  } else if (canPreserveTrackList) {
+    existingTrackButtons.forEach(syncTrackRowSelection);
   } else {
     const rows = tracks.map((track) => {
       const path = String(track.path || '');
@@ -34917,18 +35330,30 @@ function getCoverLookupTaskElapsedLabel(task, nowMs) {
   return formatCoverLookupTaskElapsedLabel(task, nowMs);
 }
 
+// Tasks are replaced, never edited in place, so one id index per task list serves every
+// poll and elapsed tick against it.
+const coverLookupTaskIndexes = new WeakMap();
+function getCoverLookupTaskById(taskId) {
+  const tasks = Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [];
+  let index = coverLookupTaskIndexes.get(tasks);
+  if (!index) {
+    index = new Map();
+    for (const task of tasks) {
+      const id = String(task?.id || '').trim();
+      if (id && !index.has(id)) index.set(id, task);
+    }
+    coverLookupTaskIndexes.set(tasks, index);
+  }
+  return index.get(String(taskId || '').trim()) || null;
+}
+
 function updateCoverLookupTaskElapsedLabels() {
   const body = document.getElementById('cover-lookup-drawer-body');
   if (!body || typeof body.querySelectorAll !== 'function') return;
-  const tasksById = new Map(
-    (Array.isArray(state.coverLookup.tasks) ? state.coverLookup.tasks : [])
-      .map((task) => [String(task?.id || '').trim(), task])
-      .filter(([taskId]) => Boolean(taskId)),
-  );
   const nowMs = Date.now();
   body.querySelectorAll('[data-cover-lookup-task-elapsed]').forEach((element) => {
     const taskId = String(element.getAttribute('data-cover-lookup-task-elapsed') || '').trim();
-    const elapsedLabel = getCoverLookupTaskElapsedLabel(tasksById.get(taskId), nowMs);
+    const elapsedLabel = getCoverLookupTaskElapsedLabel(getCoverLookupTaskById(taskId), nowMs);
     element.textContent = elapsedLabel;
     element.hidden = !elapsedLabel;
   });
@@ -35079,15 +35504,22 @@ const COVER_LOOKUP_TASK_RENDER_LIMIT = 60;
 const COVER_LOOKUP_TASK_OVERSCAN = 10;
 const COVER_LOOKUP_TASK_ROW_HEIGHT = 96;
 
+// A scroll anchor is a rendered card, so the rendered window is searched first.
+function findCoverLookupRenderedTaskIndex(tasks, taskId) {
+  const matches = task => String(task?.id || '').trim() === taskId;
+  const start = Math.min(tasks.length, Math.max(0, Number(state.coverLookup.taskRenderWindowStart || 0)));
+  const end = Math.min(tasks.length, start + COVER_LOOKUP_TASK_RENDER_LIMIT);
+  for (let index = start; index < end; index += 1) if (matches(tasks[index])) return index;
+  return tasks.findIndex(matches);
+}
+
 function getCoverLookupTaskRenderWindow(tasks, body, scrollAnchor = null) {
   const rowHeight = COVER_LOOKUP_TASK_ROW_HEIGHT;
   const maximumStart = Math.max(0, tasks.length - COVER_LOOKUP_TASK_RENDER_LIMIT);
   const scrollTop = body.innerHTML
     ? Number(body.scrollTop || 0)
     : Number(state.coverLookup.drawerScrollTop || 0);
-  const anchorIndex = scrollAnchor?.taskId
-    ? tasks.findIndex((task) => String(task?.id || '').trim() === scrollAnchor.taskId)
-    : -1;
+  const anchorIndex = scrollAnchor?.taskId ? findCoverLookupRenderedTaskIndex(tasks, scrollAnchor.taskId) : -1;
   const visibleStart = anchorIndex >= 0
     ? anchorIndex
     : Math.floor(Math.max(0, scrollTop) / rowHeight);
@@ -35406,6 +35838,19 @@ function renderCoverLookupDrawer({
     syncCoverLookupElapsedTimer();
     return;
   }
+  if (preserveSelectedNotificationText) {
+    state.coverLookup.taskRenderWindowStart = getCoverLookupTaskRenderWindow(
+      tasks, body, taskIds.length ? null : captureCoverLookupDrawerScrollAnchor(body),
+    ).start;
+  } else {
+    renderCoverLookupDrawerTaskWindow(body, tasks, taskIds);
+    state.coverLookup.drawerRenderedTerminalSignatures = buildCoverLookupDrawerTerminalSignatures(tasks);
+  }
+  syncCoverLookupElapsedTimer();
+}
+
+// Renders only the visible task window and its spacers.
+function renderCoverLookupDrawerTaskWindow(body, tasks, taskIds = []) {
   const restoreScrollTop = body.innerHTML
     ? Number(body.scrollTop || 0)
     : Number(state.coverLookup.drawerScrollTop || 0);
@@ -35536,20 +35981,33 @@ function renderCoverLookupDrawer({
       `,
     });
   }).join('');
-  if (!preserveSelectedNotificationText) {
-    const topSpacerHeight = renderWindow.start * renderWindow.rowHeight;
-    const bottomSpacerHeight = (tasks.length - renderWindow.end) * renderWindow.rowHeight;
-    replaceCoverLookupDrawerMarkup(body, `
-      <div class="cover-lookup-task-spacer" aria-hidden="true" style="height:${topSpacerHeight}px"></div>
-      ${taskMarkup}
-      <div class="cover-lookup-task-spacer" aria-hidden="true" style="height:${bottomSpacerHeight}px"></div>
-    `, taskIds);
-    if (!restoreCoverLookupDrawerScrollAnchor(body, scrollAnchor)) {
-      body.scrollTop = Math.max(0, restoreScrollTop);
-    }
-    state.coverLookup.drawerRenderedTerminalSignatures = buildCoverLookupDrawerTerminalSignatures(tasks);
+  const topSpacerHeight = renderWindow.start * renderWindow.rowHeight;
+  const bottomSpacerHeight = (tasks.length - renderWindow.end) * renderWindow.rowHeight;
+  replaceCoverLookupDrawerMarkup(body, `
+    <div class="cover-lookup-task-spacer" aria-hidden="true" style="height:${topSpacerHeight}px"></div>
+    ${taskMarkup}
+    <div class="cover-lookup-task-spacer" aria-hidden="true" style="height:${bottomSpacerHeight}px"></div>
+  `, taskIds);
+  if (!restoreCoverLookupDrawerScrollAnchor(body, scrollAnchor)) {
+    body.scrollTop = Math.max(0, restoreScrollTop);
   }
-  syncCoverLookupElapsedTimer();
+  return visibleTasks;
+}
+
+// Scrolling moves only the task window; the counts, timers, and the other
+// tasks' terminal signatures cannot change, so they are not recomputed.
+function renderCoverLookupDrawerScrollWindow() {
+  const body = document.getElementById('cover-lookup-drawer-body');
+  const tasks = state.coverLookup.tasks;
+  if (!body || !state.coverLookup.drawerOpen || !Array.isArray(tasks) || !tasks.length) {
+    renderCoverLookupDrawer({ preserveInteraction: false });
+    return;
+  }
+  const visibleTasks = renderCoverLookupDrawerTaskWindow(body, tasks);
+  state.coverLookup.drawerRenderedTerminalSignatures = Object.assign(
+    state.coverLookup.drawerRenderedTerminalSignatures || {},
+    buildCoverLookupDrawerTerminalSignatures(visibleTasks),
+  );
 }
 
 // One notification card for every kind: its kind is its title (owner, 2026-11-16), and the
@@ -36332,14 +36790,7 @@ async function loadCoverLookupTasks(options = {}) {
       renderCoverLookupDrawer({ preserveInteraction: false });
     }
   }
-  const previousActiveTaskIds = activeOnly
-    ? new Set(
-      (state.coverLookup.tasks || [])
-        .filter((task) => ['pending', 'running'].includes(String(task?.status || '')))
-        .map((task) => String(task?.id || ''))
-        .filter(Boolean),
-    )
-    : new Set();
+  const tasksBeforeRequest = state.coverLookup.tasks;
   try {
     const params = new URLSearchParams({ limit: '50' });
     if (activeOnly) {
@@ -36360,6 +36811,29 @@ async function loadCoverLookupTasks(options = {}) {
     if (!response.ok || !data.ok) {
       throw new Error(data.error || 'Failed to load cover lookups');
     }
+    // A poll that repeats the answer already applied to these very tasks and counts changes
+    // nothing, so it skips the per-task merge, snapshots and updates over every loaded task.
+    // Reconciliation and remote saves wait on the next answer, so they take the full path.
+    const appliedActiveAnswer = activeOnly ? {
+      answer: JSON.stringify(data),
+      tasks: tasksBeforeRequest,
+      counts: state.coverLookup.notificationCounts,
+      membershipRevision: state.coverLookup.tasksMembershipRevision,
+    } : null;
+    if (appliedActiveAnswer && state.coverLookup.tasks === tasksBeforeRequest
+        && !state.coverLookup.notificationReconciliationPending && !coverLookupPendingRemoteSaves.size
+        && Object.entries(appliedActiveAnswer).every(([key, value]) => lastAppliedActiveCoverLookupAnswer?.[key] === value)) {
+      stopCoverLookupPollingIfIdle();
+      return true;
+    }
+    const previousActiveTaskIds = activeOnly
+      ? new Set(
+        (tasksBeforeRequest || [])
+          .filter((task) => ['pending', 'running'].includes(String(task?.status || '')))
+          .map((task) => String(task?.id || ''))
+          .filter(Boolean),
+      )
+      : new Set();
     const previousNotificationTotal = Number(state.coverLookup.notificationCounts?.total_count);
     const previousMembershipRevision = String(
       state.coverLookup.tasksMembershipRevision || '',
@@ -36535,6 +37009,14 @@ async function loadCoverLookupTasks(options = {}) {
     }
     state.coverLookup.tasksSnapshot = snapshot;
     stopCoverLookupPollingIfIdle();
+    if (appliedActiveAnswer && !missingActiveTask && !notificationReconciliationPending) {
+      lastAppliedActiveCoverLookupAnswer = {
+        answer: appliedActiveAnswer.answer,
+        tasks: state.coverLookup.tasks,
+        counts: state.coverLookup.notificationCounts,
+        membershipRevision: state.coverLookup.tasksMembershipRevision,
+      };
+    }
     if (missingActiveTask || notificationReconciliationPending) {
       const loadedTaskCount = (state.coverLookup.tasks || []).length;
       const loadedTasksMatchAuthoritativeCount = (
@@ -36574,6 +37056,7 @@ async function loadCoverLookupTasks(options = {}) {
 let coverLookupPollingRequest = null;
 let coverLookupBackgroundPollTicks = 0;
 let coverLookupPollInFlight = false;
+let lastAppliedActiveCoverLookupAnswer = null;
 let coverLookupHistoryRequest = null;
 let coverLookupDrawerScrollRenderTimer = 0;
 
@@ -36600,12 +37083,12 @@ function handleCoverLookupDrawerScroll(event) {
   }
   const renderWindowChanged = nextWindow.start !== Number(state.coverLookup.taskRenderWindowStart || 0);
   if (renderWindowChanged && !captureCoverLookupDrawerScrollAnchor(body)?.taskId) {
-    renderCoverLookupDrawer({ preserveInteraction: false });
+    renderCoverLookupDrawerScrollWindow();
   } else if (renderWindowChanged && typeof window.setTimeout === 'function') {
     coverLookupDrawerScrollRenderTimer = window.setTimeout(() => {
       coverLookupDrawerScrollRenderTimer = 0;
       if (state.coverLookup.drawerOpen) {
-        renderCoverLookupDrawer({ preserveInteraction: false });
+        renderCoverLookupDrawerScrollWindow();
       }
     }, 120);
   }
@@ -36646,13 +37129,10 @@ function ensureCoverLookupPolling() {
     try {
       await loadCoverLookupTasksForPolling({ toast: false });
       const snapshot = state.coverLookup.modal.candidateSnapshot;
-      const hasMatchingActiveTask = (state.coverLookup.tasks || []).some((task) => (
-        String(task?.id || '') === String(state.coverLookup.modal.taskId || '')
-        && ['pending', 'running'].includes(String(task?.status || ''))
-      ));
+      const modalTask = getCoverLookupTaskById(state.coverLookup.modal.taskId);
       if (
         modalOpen
-        && !hasMatchingActiveTask
+        && !['pending', 'running'].includes(String(modalTask?.status || ''))
         && ['pending', 'running'].includes(String(snapshot?.status || ''))
       ) {
         await refreshCoverLookupGallery(false);
@@ -36665,8 +37145,8 @@ function ensureCoverLookupPolling() {
 
 function stopCoverLookupPollingIfIdle() {
   const modalOpen = !document.getElementById('cover-lookup-modal')?.hidden;
-  const activeTasks = (state.coverLookup.tasks || []).filter((task) => ['pending', 'running'].includes(String(task?.status || ''))).length;
-  const shouldKeepPolling = Boolean(state.coverLookup.drawerOpen || modalOpen || activeTasks > 0);
+  const shouldKeepPolling = Boolean(state.coverLookup.drawerOpen || modalOpen
+    || (state.coverLookup.tasks || []).some((task) => ['pending', 'running'].includes(String(task?.status || ''))));
   if (shouldKeepPolling) return;
   if (state.coverLookup.pollingTimer) {
     window.clearInterval(state.coverLookup.pollingTimer);
@@ -38673,6 +39153,7 @@ function openTagEditor(album, options = {}) {
     anchorPath: String(tracks[0].path || ''),
     dragSelecting: false,
     dragAnchorPath: '',
+    dragHoverPath: '',
     reorder: null,
     values,
     sessionMutationClaim: claimTagEditViewMutation(album),
@@ -39893,7 +40374,7 @@ async function markAlbumVersion(albumKey, parentAlbumKey) {
   const targetKey = String(parentAlbumKey || '');
   if (!childKey || !targetKey || childKey === targetKey) return;
   try {
-    const response = await fetch('/versions/mark', {
+    const response = await fetchRetryingPendingProjection('/versions/mark', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ album_key: childKey, parent_album_key: targetKey }),
@@ -43906,19 +44387,26 @@ function getAlbumIdentity(album) {
   return getAlbumPathSignature(album) || getAlbumRequestKey(album);
 }
 
-function rebuildAlbumIndex(groupsList) {
-  const nextIndex = new Map();
+function indexGalleryAlbums(groupsList, albumIndex) {
   (Array.isArray(groupsList) ? groupsList : []).forEach((group) => {
     (Array.isArray(group?.albums) ? group.albums : []).forEach((album) => {
       const key = getAlbumIdentity(album);
       const requestKey = getAlbumRequestKey(album);
       const versionKey = getAlbumCardVersionKey(album);
-      if (key) nextIndex.set(key, album);
-      if (requestKey) nextIndex.set(requestKey, album);
-      if (versionKey) nextIndex.set(versionKey, album);
+      if (key) albumIndex.set(key, album);
+      if (requestKey) albumIndex.set(requestKey, album);
+      if (versionKey) albumIndex.set(versionKey, album);
     });
   });
-  state.gallery.albumIndex = nextIndex;
+  return albumIndex;
+}
+
+function artistSectionGroupKey(group) {
+  return String(group?.display_artist_key || group?.artist || '');
+}
+
+function rebuildAlbumIndex(groupsList) {
+  state.gallery.albumIndex = indexGalleryAlbums(groupsList, new Map());
 }
 
 function getIndexedAlbum(albumKey) {
@@ -43960,6 +44448,69 @@ const MAX_VIRTUAL_GRID_DIAGNOSTIC_EVENTS = 24;
 const VIRTUAL_GRID_SCROLL_RENDER_FALLBACK_MS = 100;
 const MIN_SETTLED_GALLERY_CARD_WIDTH_RATIO = 0.94;
 
+// Height changes recorded since the last full layout, as a Fenwick tree over
+// section indexes: a row measurement moves every later section in O(log n)
+// instead of relaying out the whole loaded gallery.
+class VirtualSectionShifts {
+  constructor(length) {
+    this.length = length;
+    this.tree = new Float64Array(length + 1);
+    // Height held above the first section, shared by every section's top.
+    this.offset = 0;
+  }
+
+  add(index, delta) {
+    for (let position = index + 1; position <= this.length; position += position & -position) {
+      this.tree[position] += delta;
+    }
+  }
+
+  // Trailing sections can be dropped and appended without a full layout:
+  // appended sections start unshifted, so each new node holds only the earlier
+  // shifts it covers. Capacity doubles, keeping appends amortized constant.
+  resize(length) {
+    if (length >= this.tree.length) {
+      const grown = new Float64Array(Math.max(length + 1, this.tree.length * 2));
+      grown.set(this.tree.subarray(0, this.length + 1));
+      this.tree = grown;
+    }
+    const previousLength = Math.min(this.length, length);
+    this.length = length;
+    for (let position = previousLength + 1; position <= length; position += 1) {
+      this.tree[position] = this.before(position - 1) - this.before(position - (position & -position));
+    }
+  }
+
+  before(index) {
+    let total = 0;
+    for (let position = index; position > 0; position -= position & -position) total += this.tree[position];
+    return total;
+  }
+}
+
+// The first row height measured under the current measure keys, if any.
+function findMeasuredRowHeight(blockHeights, measureKeys = [], measuredKeys = []) {
+  return blockHeights.find((height, index) => {
+    const measureKey = String(measureKeys[index] || '');
+    return measureKey.startsWith('row:')
+      && String(measuredKeys[index] || '') === measureKey
+      && Number(height) > 0;
+  });
+}
+
+const VIRTUAL_SECTION_GEOMETRY = Object.freeze({
+  top: {
+    configurable: true,
+    enumerable: true,
+    get() { return this.layoutTop + this.layoutShifts.offset + this.layoutShifts.before(this.layoutIndex); },
+  },
+  bottom: {
+    configurable: true,
+    enumerable: true,
+    get() { return this.top + this.height; },
+  },
+});
+
 class VirtualArtistGrid {
   constructor() {
     this.scrollEl = document.getElementById('albums-scroll');
@@ -43984,6 +44535,13 @@ class VirtualArtistGrid {
     this.sections = [];
     this.albumCardNodeCache = new Map();
     this.sectionByKey = new Map();
+    this._sectionOccurrences = new Map();
+    this._rowLayout = null;
+    this._sectionShifts = new VirtualSectionShifts(0);
+    this._layoutRowEstimateFromMeasurement = false;
+    this._layoutRowEstimateMeasured = false;
+    this._leadingExtent = 0;
+    this._heldContentBottom = 0;
     this.columns = 1;
     this.cardTrackWidth = CARD_GALLERY_LAYOUT_CONFIG.cardMinWidth;
     this.lastKey = '';
@@ -44019,6 +44577,7 @@ class VirtualArtistGrid {
     this._scrollAnchorVisualPhase = 0;
     this._userScrollIntentGeneration = 0;
     this._deferredSetGroups = null;
+    this._deferredAppends = [];
     this._deferredArtistTreeSettlement = false;
     this._artistTreeReflowAnchor = undefined;
     this._deferredResizeOptions = null;
@@ -44144,6 +44703,7 @@ class VirtualArtistGrid {
     this._touchScrollGestureActive = false;
     this._touchScrollGestureHadScroll = false;
     this._deferredSetGroups = null;
+    this._deferredAppends = [];
     this._deferredArtistTreeSettlement = false;
     this._artistTreeReflowAnchor = undefined;
     this._deferredResizeOptions = null;
@@ -44416,9 +44976,7 @@ class VirtualArtistGrid {
           ))
           : null
       );
-      const capturedOccurrenceStillExists = Boolean(sectionOccurrenceKey) && this.sections.some((section) => (
-        this.getRenderedSectionKey(section) === sectionOccurrenceKey
-      ));
+      const capturedOccurrenceStillExists = this.sectionByRenderedKey.has(sectionOccurrenceKey);
       const fallbackAlbumTrigger = !sectionOccurrenceKey || !capturedOccurrenceStillExists
         ? matchingAlbumTriggers[0] || null
         : null;
@@ -44445,10 +45003,8 @@ class VirtualArtistGrid {
         return;
       }
       if (sectionOccurrenceKey && anchorAlbumName) {
-        const modeledSection = this.sections.find((section) => (
-          section.kind === 'artist'
-          && this.getRenderedSectionKey(section) === sectionOccurrenceKey
-        ));
+        const occurrenceSection = this.sectionByRenderedKey.get(sectionOccurrenceKey);
+        const modeledSection = occurrenceSection?.kind === 'artist' ? occurrenceSection : undefined;
         const modeledBlocks = Array.isArray(modeledSection?.blocksData)
           ? modeledSection.blocksData
           : modeledSection ? this.getBlocksForSection(modeledSection) : [];
@@ -44512,10 +45068,7 @@ class VirtualArtistGrid {
   scrollToArtist(artist) {
     const normalizedArtist = String(artist || '').trim();
     if (!normalizedArtist) return false;
-    const section = this.sections.find((candidate) => (
-      candidate.kind === 'artist'
-      && String(candidate.group?.artist || '') === normalizedArtist
-    ));
+    const section = this.artistSectionByName.get(normalizedArtist);
     if (!section) return false;
     if (this._scrollRestoreRaf) {
       cancelBrowserAnimationFrame(this._scrollRestoreRaf);
@@ -44616,6 +45169,8 @@ class VirtualArtistGrid {
   }
 
   setGroups(primaryGroups, familyGroups, fallbackGroups = null, options = {}, layoutConfig = null) {
+    // The regrouped state already holds every queued continuation page.
+    this._deferredAppends = [];
     const shouldDeferMountedGroupUpdate = (
       Boolean(options.preserveScroll)
       && options.preserveMountedGalleryChildren === true
@@ -44726,6 +45281,21 @@ class VirtualArtistGrid {
       ? (semanticScrollAnchorIsCurrent ? options.semanticScrollAnchor : this.captureScrollAnchor())
       : null;
     this._absoluteScrollRestore = preservedAbsoluteScroll;
+    // Only a root gallery with earlier or later pages still to load can hold
+    // empty space above or below its sections.
+    const pagedRootRender = preserveScroll
+      && typeof isPagedRootGallery === 'function' && isPagedRootGallery(state.view);
+    const rootHasEarlierPages = pagedRootRender && Boolean(state.view.gallery_page?.has_previous);
+    const previousLeadingExtent = rootHasEarlierPages ? this._leadingExtent : 0;
+    const previousSectionByKey = this.sectionByKey;
+    this._leadingExtent = 0;
+    // A window refresh can end above the previous content's end; the gallery
+    // keeps that end reachable, so a restored scroll position is not clamped,
+    // until later pages load in its place.
+    if (!pagedRootRender || !state.view.gallery_page?.has_more) this._heldContentBottom = 0;
+    else if (options.holdGalleryScrollTop === true) {
+      this._heldContentBottom = Math.max(this._heldContentBottom, Number(this.totalHeight || 0));
+    }
     const sections = [];
     const renderedPrimaryGroups = buildDisplayGroups(primaryGroups);
     const renderedFamilyGroups = buildDisplayGroups(familyGroups);
@@ -44771,30 +45341,9 @@ class VirtualArtistGrid {
         .filter((section) => section.kind === 'artist' && section.measurementKey)
         .map((section) => [section.measurementKey, section]),
     );
-    const measurementOccurrenceByArtist = new Map();
+    this._sectionOccurrences = new Map();
     sections.forEach((section) => {
-      if (section.kind !== 'artist') return;
-      const measurementArtistKey = `${section.sectionType}\u0000${String(
-        section.group?.display_artist_key || section.group?.artist || '',
-      )}`;
-      const measurementOccurrence = Number(measurementOccurrenceByArtist.get(measurementArtistKey) || 0);
-      measurementOccurrenceByArtist.set(measurementArtistKey, measurementOccurrence + 1);
-      section.measurementKey = `${measurementArtistKey}\u0000${measurementOccurrence}`;
-      section.sectionKey = `${section.sectionType}:${String(
-        section.group?.display_artist_key || section.group?.artist || '',
-      )}:${measurementOccurrence}`;
-      const previousSection = previousSectionsByMeasurementKey.get(section.measurementKey);
-      if (!previousSection) return;
-      section.rowGeometryKey = previousSection.rowGeometryKey;
-      section.blockHeights = Array.isArray(previousSection.blockHeights)
-        ? previousSection.blockHeights.slice()
-        : [];
-      section.blockMeasureKeys = Array.isArray(previousSection.blockMeasureKeys)
-        ? previousSection.blockMeasureKeys.slice()
-        : [];
-      section.measuredBlockKeys = Array.isArray(previousSection.measuredBlockKeys)
-        ? previousSection.measuredBlockKeys.slice()
-        : [];
+      if (section.kind === 'artist') this.keyArtistSection(section, previousSectionsByMeasurementKey);
     });
     this.sections = sections;
     rebuildAlbumIndex(
@@ -44804,6 +45353,13 @@ class VirtualArtistGrid {
     );
     this.lastKey = '';
     this.recalculate();
+    if (rootHasEarlierPages) {
+      this.setLeadingExtent(this.resolveLeadingExtent(
+        previousSectionByKey,
+        previousLeadingExtent,
+        options.holdGalleryScrollTop === true,
+      ));
+    }
     if (!preserveScroll && this.scrollEl) {
       this.applyScrollAnchorVisualPhase(0);
       this.scrollEl.scrollTop = 0;
@@ -44897,6 +45453,109 @@ class VirtualArtistGrid {
     }
   }
 
+  // Keys an artist section by type, artist and occurrence, carrying over the
+  // row measurements of the section it replaces.
+  keyArtistSection(section, previousSectionsByMeasurementKey) {
+    const artistKey = artistSectionGroupKey(section.group);
+    const measurementArtistKey = `${section.sectionType}\u0000${artistKey}`;
+    const occurrence = Number(this._sectionOccurrences.get(measurementArtistKey) || 0);
+    this._sectionOccurrences.set(measurementArtistKey, occurrence + 1);
+    section.measurementKey = `${measurementArtistKey}\u0000${occurrence}`;
+    section.sectionKey = `${section.sectionType}:${artistKey}:${occurrence}`;
+    const previousSection = previousSectionsByMeasurementKey.get(section.measurementKey);
+    if (!previousSection) return;
+    section.rowGeometryKey = previousSection.rowGeometryKey;
+    section.blockHeights = Array.isArray(previousSection.blockHeights) ? previousSection.blockHeights.slice() : [];
+    section.blockMeasureKeys = Array.isArray(previousSection.blockMeasureKeys) ? previousSection.blockMeasureKeys.slice() : [];
+    section.measuredBlockKeys = Array.isArray(previousSection.measuredBlockKeys) ? previousSection.measuredBlockKeys.slice() : [];
+  }
+
+  // A root gallery continuation replaces the trailing sections showing
+  // `replacedGroups` (an artist split across the page boundary) and appends
+  // `groups`. Only those sections are keyed, laid out and indexed; earlier
+  // sections keep their geometry, measurements and mounted DOM. Returns false,
+  // changing nothing, when the mounted sections cannot take the append, so the
+  // caller regroups instead. During touch or unsettled scroll input the append
+  // is queued, like a mounted setGroups update, and replays once input settles;
+  // `regroup` then runs if the replay is refused.
+  appendGroups(groups, replacedGroups = [], regroup = null) {
+    if (
+      !this._deferredSetGroups && !this._absoluteScrollRestore
+      && (this._deferredAppends.length || this._touchScrollGestureActive || !this.isScrollSettled)
+    ) {
+      this._deferredAppends.push({ groups, replacedGroups, regroup });
+      this.recordDiagnosticEvent('group-update-deferred', {
+        touchGestureActive: this._touchScrollGestureActive,
+      });
+      return true;
+    }
+    return this.appendGroupsNow(groups, replacedGroups);
+  }
+
+  // Replays queued appends as one new render generation. A refused replay
+  // regroups from the loaded state, which already includes the later pages.
+  replayDeferredAppends(deferredAppends) {
+    this._renderGeneration += 1;
+    this._preserveExistingChildrenGeneration = this._renderGeneration;
+    for (const { groups, replacedGroups, regroup } of deferredAppends) {
+      if (this.appendGroupsNow(groups, replacedGroups)) continue;
+      regroup?.();
+      return;
+    }
+  }
+
+  appendGroupsNow(groups, replacedGroups) {
+    const sections = this._sections;
+    const firstReplaced = sections.length - replacedGroups.length;
+    const last = sections[sections.length - 1];
+    if (
+      this._deferredSetGroups || !this._rowLayout || firstReplaced < 0
+      || !this.hasMeasurableScrollSurface()
+      || (last && (last.kind !== 'artist' || last.sectionType !== 'all'))
+      || replacedGroups.some((group, offset) => (
+        artistSectionGroupKey(sections[firstReplaced + offset].group) !== artistSectionGroupKey(group)
+      ))
+    ) return false;
+    // Only a replaced section can move mounted content; earlier sections keep their place.
+    const anchor = replacedGroups.length ? this.captureScrollAnchor() : null;
+    const replaced = sections.splice(firstReplaced);
+    const replacedByMeasurementKey = new Map();
+    for (const section of replaced) {
+      replacedByMeasurementKey.set(section.measurementKey, section);
+      const measurementArtistKey = section.measurementKey.slice(0, section.measurementKey.lastIndexOf('\u0000'));
+      this._sectionOccurrences.set(measurementArtistKey, this._sectionOccurrences.get(measurementArtistKey) - 1);
+      this.sectionByRenderedKey.delete(this.getRenderedSectionKey(section));
+      this.sectionByKey.delete(section.sectionKey);
+      const artist = String(section.group?.artist || '');
+      if (this.artistSectionByName.get(artist) === section) this.artistSectionByName.delete(artist);
+      this.totalHeight -= section.height;
+    }
+    // Drop the replaced sections' recorded shifts: their replacements are laid
+    // out afresh and must not move the sections appended after them.
+    this._sectionShifts.resize(firstReplaced);
+    this._sectionShifts.resize(firstReplaced + groups.length);
+    // Appended sections are unshifted, so every one stores its true top less
+    // the shifts recorded before it.
+    let layoutTop = this.totalHeight - this._sectionShifts.offset - this._sectionShifts.before(firstReplaced);
+    groups.forEach((group, offset) => {
+      const section = { kind: 'artist', group, sectionType: 'all', sectionKey: '' };
+      this.keyArtistSection(section, replacedByMeasurementKey);
+      this.layoutArtistSection(section, this._rowLayout);
+      this.placeSection(section, firstReplaced + offset, layoutTop);
+      layoutTop += section.height;
+      this.totalHeight += section.height;
+      sections.push(section);
+      this.sectionByRenderedKey.set(this.getRenderedSectionKey(section), section);
+      const artist = String(group?.artist || '');
+      if (!this.artistSectionByName.has(artist)) this.artistSectionByName.set(artist, section);
+    });
+    state.gallery.albumIndex ??= new Map();
+    indexGalleryAlbums(groups, state.gallery.albumIndex);
+    this.render(false, { preserveExistingChildren: true });
+    if (anchor?.albumKey || anchor?.sectionKey) this.restoreOwnedScrollAnchor(anchor);
+    return true;
+  }
+
   getBlocksForSection(section) {
         const albums = Array.isArray(section.group?.albums) ? section.group.albums : [];
         const uniqueAlbums = [];
@@ -44959,11 +45618,62 @@ class VirtualArtistGrid {
     );
   }
 
+  get sections() {
+    return this._sections;
+  }
+
+  // Lookups by rendered occurrence and by artist read one section instead of
+  // scanning every loaded section.
+  set sections(sections) {
+    this._sections = sections;
+    this.sectionByRenderedKey = new Map();
+    this.artistSectionByName = new Map();
+    sections.forEach((section) => {
+      this.sectionByRenderedKey.set(this.getRenderedSectionKey(section), section);
+      const artist = String(section.group?.artist || '');
+      if (section.kind === 'artist' && !this.artistSectionByName.has(artist)) {
+        this.artistSectionByName.set(artist, section);
+      }
+    });
+  }
+
+  get leadingExtent() {
+    return this._leadingExtent;
+  }
+
+  get heldTrailingSpace() {
+    return Math.max(0, this._heldContentBottom - Number(this.totalHeight || 0));
+  }
+
+  setLeadingExtent(extent) {
+    this.totalHeight += extent - this._leadingExtent;
+    this._leadingExtent = extent;
+    this._sectionShifts.offset = extent;
+    this.lastKey = '';
+  }
+
+  // A root window refresh that drops the loaded artists above it holds their
+  // height as empty space while earlier pages remain to load, so the first
+  // artist both layouts show keeps its previous top and every scroll position,
+  // absolute or anchored, stays where it was. Only such a refresh (`mayGrow`)
+  // widens the space; any other mounted render only narrows it, as earlier
+  // pages arrive above the window.
+  resolveLeadingExtent(previousSectionByKey, previousExtent, mayGrow) {
+    for (const section of this.sections) {
+      const previous = section.kind === 'artist' ? previousSectionByKey?.get(section.sectionKey) : null;
+      if (!previous) continue;
+      const extent = Math.max(0, Number(previous.top || 0) - Number(section.top || 0));
+      return mayGrow ? extent : Math.min(previousExtent, extent);
+    }
+    return 0;
+  }
+
   hasDeferredMountedGroupUpdate() {
-    return Boolean(this._deferredSetGroups);
+    return Boolean(this._deferredSetGroups || this._deferredAppends.length);
   }
 
   recalculate(options = {}) {
+    this._rowLayout = null;
     if (!this.hasMeasurableScrollSurface()) return false;
     this.sectionHeaderHeight = this.showArtistSectionHeaders ? 42 : 0;
     const layoutConfig = this.getLayoutConfig();
@@ -45011,80 +45721,109 @@ class VirtualArtistGrid {
       this.cardTrackWidth = mobileGeometry.cardTrackWidth;
     }
     const rowGeometryKey = `${displayMode}:${this.columns}:${this.cardTrackWidth}`;
-    const measuredRowHeight = this.sections.flatMap((section) => (
-      section.rowGeometryKey === rowGeometryKey
-        ? (section.blockHeights || []).filter((_height, index) => {
-          const measureKey = String(section.blockMeasureKeys?.[index] || '');
-          return measureKey.startsWith('row:')
-            && String(section.measuredBlockKeys?.[index] || '') === measureKey;
-        })
-        : []
-    )).find(height => Number(height) > 0);
+    let measuredRowHeight;
+    for (const section of this.sections) {
+      if (section.rowGeometryKey !== rowGeometryKey) continue;
+      measuredRowHeight = findMeasuredRowHeight(section.blockHeights || [], section.blockMeasureKeys, section.measuredBlockKeys);
+      if (measuredRowHeight) break;
+    }
     const estimatedRowHeight = mobileGeometry?.estimatedRowHeight
       || (displayMode === 'covers' ? this.cardTrackWidth : measuredRowHeight)
       || this.collapsedRowHeight;
+    this._layoutRowEstimateFromMeasurement = !mobileGeometry?.estimatedRowHeight && displayMode !== 'covers';
+    this._layoutRowEstimateMeasured = Boolean(measuredRowHeight);
+    const rowLayout = { rowGeometryKey, mobileGeometry, displayMode, estimatedRowHeight };
+    this._sectionShifts = new VirtualSectionShifts(this.sections.length);
+    this._sectionShifts.offset = this._leadingExtent;
     let offsetTop = 0;
     this.sectionByKey = new Map();
-    this.sections.forEach((section) => {
-      section.top = offsetTop;
-      if (section.kind === 'label') {
-        section.height = this.labelHeight;
-        offsetTop += section.height;
-        section.bottom = offsetTop;
-        return;
-      }
-
-      // Measurements only survive while the card geometry stays the same.
-      // In particular, picture-only rows are square from their first render.
-      if (section.rowGeometryKey !== rowGeometryKey) {
-        section.blockHeights = [];
-        section.blockMeasureKeys = [];
-        section.measuredBlockKeys = [];
-      }
-      section.rowGeometryKey = rowGeometryKey;
-      const blocks = this.getBlocksForSection(section);
-      const previousMeasureKeys = Array.isArray(section.blockMeasureKeys) ? section.blockMeasureKeys : [];
-      const previousMeasuredKeys = Array.isArray(section.measuredBlockKeys) ? section.measuredBlockKeys : [];
-      const nextMeasureKeys = blocks.map((block) => this.getBlockMeasureKey(block));
-      section.blocksData = blocks;
-      const previousBlockHeights = Array.isArray(section.blockHeights)
-        ? section.blockHeights
-        : [];
-      const sectionMeasuredRowHeight = previousBlockHeights.find((height, index) => {
-        const measureKey = String(previousMeasureKeys[index] || '');
-        return measureKey.startsWith('row:')
-          && String(previousMeasuredKeys[index] || '') === measureKey
-          && Number(height) > 0;
-      });
-      const sectionEstimatedRowHeight = mobileGeometry?.estimatedRowHeight
-        || (displayMode === 'covers' ? this.cardTrackWidth : sectionMeasuredRowHeight)
-        || estimatedRowHeight;
-      section.blockHeights = blocks.map((block, index) => {
-        if (block.kind === 'subheading') return this.subsectionLabelHeight;
-        const measureKey = nextMeasureKeys[index];
-        const hasMeasuredHeight = previousMeasureKeys[index] === measureKey
-          && previousMeasuredKeys[index] === measureKey
-          && Number(previousBlockHeights[index]) > 0;
-        return hasMeasuredHeight ? Number(previousBlockHeights[index]) : sectionEstimatedRowHeight;
-      });
-      section.blockMeasureKeys = nextMeasureKeys;
-      section.measuredBlockKeys = nextMeasureKeys.map((key, index) => (
-        previousMeasureKeys[index] === key ? String(previousMeasuredKeys[index] || '') : ''
-      ));
-      let blockOffset = 0;
-      section.blockOffsets = blocks.map((_block, index) => {
-        const top = blockOffset;
-        blockOffset += section.blockHeights[index] || 0;
-        if (index < blocks.length - 1) blockOffset += this.rowGap;
-        return top;
-      });
-      section.blocksHeight = blockOffset;
-      section.height = this.sectionHeaderHeight + section.blocksHeight + this.sectionMarginBottom;
+    this.sections.forEach((section, index) => {
+      if (section.kind === 'label') section.height = this.labelHeight;
+      else this.layoutArtistSection(section, rowLayout);
+      this.placeSection(section, index, offsetTop);
       offsetTop += section.height;
-      section.bottom = offsetTop;
-      this.sectionByKey.set(section.sectionKey, section);
     });
-    this.totalHeight = offsetTop;
+    this.totalHeight = offsetTop + this._leadingExtent;
+    this._rowLayout = rowLayout;
+  }
+
+  layoutArtistSection(section, { rowGeometryKey, mobileGeometry, displayMode, estimatedRowHeight }) {
+    // Measurements only survive while the card geometry stays the same.
+    // In particular, picture-only rows are square from their first render.
+    if (section.rowGeometryKey !== rowGeometryKey) {
+      section.blockHeights = [];
+      section.blockMeasureKeys = [];
+      section.measuredBlockKeys = [];
+    }
+    section.rowGeometryKey = rowGeometryKey;
+    const blocks = this.getBlocksForSection(section);
+    const previousMeasureKeys = Array.isArray(section.blockMeasureKeys) ? section.blockMeasureKeys : [];
+    const previousMeasuredKeys = Array.isArray(section.measuredBlockKeys) ? section.measuredBlockKeys : [];
+    const nextMeasureKeys = blocks.map((block) => this.getBlockMeasureKey(block));
+    section.blocksData = blocks;
+    const previousBlockHeights = Array.isArray(section.blockHeights)
+      ? section.blockHeights
+      : [];
+    const sectionMeasuredRowHeight = findMeasuredRowHeight(previousBlockHeights, previousMeasureKeys, previousMeasuredKeys);
+    const sectionEstimatedRowHeight = mobileGeometry?.estimatedRowHeight
+      || (displayMode === 'covers' ? this.cardTrackWidth : sectionMeasuredRowHeight)
+      || estimatedRowHeight;
+    section.blockHeights = blocks.map((block, index) => {
+      if (block.kind === 'subheading') return this.subsectionLabelHeight;
+      const measureKey = nextMeasureKeys[index];
+      const hasMeasuredHeight = previousMeasureKeys[index] === measureKey
+        && previousMeasuredKeys[index] === measureKey
+        && Number(previousBlockHeights[index]) > 0;
+      return hasMeasuredHeight ? Number(previousBlockHeights[index]) : sectionEstimatedRowHeight;
+    });
+    section.blockMeasureKeys = nextMeasureKeys;
+    section.measuredBlockKeys = nextMeasureKeys.map((key, index) => (
+      previousMeasureKeys[index] === key ? String(previousMeasuredKeys[index] || '') : ''
+    ));
+    this.layoutSectionBlocks(section);
+    this.sectionByKey.set(section.sectionKey, section);
+  }
+
+  layoutSectionBlocks(section) {
+    let blockOffset = 0;
+    const blockCount = section.blockHeights.length;
+    section.blockOffsets = section.blockHeights.map((height, index) => {
+      const top = blockOffset;
+      blockOffset += height || 0;
+      if (index < blockCount - 1) blockOffset += this.rowGap;
+      return top;
+    });
+    section.blocksHeight = blockOffset;
+    section.height = this.sectionHeaderHeight + section.blocksHeight + this.sectionMarginBottom;
+  }
+
+  placeSection(section, index, top) {
+    section.layoutIndex = index;
+    section.layoutTop = top;
+    section.layoutShifts = this._sectionShifts;
+    if (!Object.getOwnPropertyDescriptor(section, 'top')?.get) {
+      Object.defineProperties(section, VIRTUAL_SECTION_GEOMETRY);
+    }
+  }
+
+  // A row measurement relayouts only its own section: unmeasured rows take the
+  // section's measured height, and later sections move by the height change.
+  reflowMeasuredSection(section) {
+    const measuredRowHeight = findMeasuredRowHeight(section.blockHeights, section.blockMeasureKeys, section.measuredBlockKeys);
+    if (this._layoutRowEstimateFromMeasurement && measuredRowHeight) {
+      section.blockHeights = section.blockHeights.map((height, index) => {
+        const measureKey = String(section.blockMeasureKeys?.[index] || '');
+        return measureKey.startsWith('row:') && section.measuredBlockKeys?.[index] !== measureKey
+          ? measuredRowHeight
+          : height;
+      });
+    }
+    const previousHeight = section.height;
+    this.layoutSectionBlocks(section);
+    const delta = section.height - previousHeight;
+    if (!delta) return;
+    this._sectionShifts.add(section.layoutIndex, delta);
+    this.totalHeight += delta;
   }
 
   updateScrollDiagnostic(renderRafOwner, coalesced = false) {
@@ -45230,6 +45969,7 @@ class VirtualArtistGrid {
     if (
       hadScroll
       || this._deferredSetGroups
+      || this._deferredAppends.length
       || this._deferredArtistTreeSettlement
       || this._deferredResizeOptions
     ) {
@@ -45244,6 +45984,7 @@ class VirtualArtistGrid {
       if (this._touchScrollGestureActive) return;
       this.isScrollSettled = true;
       const deferredSetGroups = this._deferredSetGroups;
+      const deferredAppends = this._deferredAppends;
       const deferredArtistTreeSettlement = this._deferredArtistTreeSettlement;
       const deferredResizeOptions = this._deferredResizeOptions;
       const deferredReflowAnchor = deferredArtistTreeSettlement
@@ -45263,6 +46004,10 @@ class VirtualArtistGrid {
           deferredSetGroups.options,
           deferredSetGroups.layoutConfig,
         );
+      }
+      if (deferredAppends.length) {
+        this._deferredAppends = [];
+        this.replayDeferredAppends(deferredAppends);
       }
       if (deferredArtistTreeSettlement) {
         this._artistTreeReflowAnchor = undefined;
@@ -45386,7 +46131,18 @@ class VirtualArtistGrid {
     const effectiveBufferSections = String(state?.view?.selected_artist || '').trim()
       ? Math.max(3, configuredBufferSections)
       : configuredBufferSections;
-    let firstIndex = this.sections.findIndex((section) => section.bottom >= start);
+    // Sections are laid out top-down, so the first one reaching the window is
+    // found by binary search instead of scanning from the top of the gallery.
+    let firstIndex = -1;
+    for (let low = 0, high = this.sections.length - 1; low <= high;) {
+      const middle = (low + high) >> 1;
+      if (this.sections[middle].bottom >= start) {
+        firstIndex = middle;
+        high = middle - 1;
+      } else {
+        low = middle + 1;
+      }
+    }
     if (firstIndex === -1) firstIndex = 0;
     let lastIndex = this.sections.length - 1;
     for (let i = firstIndex; i < this.sections.length; i += 1) {
@@ -45430,7 +46186,9 @@ class VirtualArtistGrid {
     this.lastKey = rangeKey;
 
     this.topSpacerEl.style.height = `${visible.length ? visible[0].top : 0}px`;
-    const bottomHeight = visible.length ? Math.max(0, this.totalHeight - visible[visible.length - 1].bottom) : 0;
+    const bottomHeight = visible.length
+      ? Math.max(0, Math.max(this.totalHeight, this._heldContentBottom) - visible[visible.length - 1].bottom)
+      : 0;
     this.bottomSpacerEl.style.height = `${bottomHeight}px`;
     let foundFirstRenderedArtistSection = false;
     this.patchRenderedSections(visible.map((section) => {
@@ -45998,7 +46756,7 @@ class VirtualArtistGrid {
     const preservedAnchor = absoluteScrollActive
       ? null
       : reflowAnchor === undefined ? this.captureScrollAnchor() : reflowAnchor;
-    let changed = false;
+    const changedSections = new Set();
     const rowMeasurements = [];
     const rows = this.containerEl.querySelectorAll('.album-row[data-section-key][data-block-index]');
     rows.forEach((rowEl) => {
@@ -46033,9 +46791,10 @@ class VirtualArtistGrid {
       section.measuredBlockKeys[blockIndex] = measureKey;
       if (measured > 0 && Math.abs((section.blockHeights[blockIndex] || 0) - measured) >= (1 / 64)) {
         section.blockHeights[blockIndex] = measured;
-        changed = true;
+        changedSections.add(section);
       }
     });
+    const changed = changedSections.size > 0;
     const measurement = {
       changed,
       renderGeneration: Number(this._renderGeneration || 0),
@@ -46060,8 +46819,13 @@ class VirtualArtistGrid {
       });
     }
     this.lastKey = '';
-    // Height reconciliation must retain the layout that produced these measurements.
-    this.recalculate({ preserveColumnGeometry: true });
+    if (this._layoutRowEstimateFromMeasurement && !this._layoutRowEstimateMeasured) {
+      // The first measured row replaces the estimate of every unmeasured section.
+      // Height reconciliation must retain the layout that produced these measurements.
+      this.recalculate({ preserveColumnGeometry: true });
+    } else {
+      changedSections.forEach(section => this.reflowMeasuredSection(section));
+    }
     const latestScroll = this.diagnostics.latestScroll;
     const measurementRenderRafOwner = (
       Number(latestScroll?.renderGeneration || 0) === Number(this._renderGeneration || 0)
@@ -46524,22 +47288,25 @@ function renderGlobalPlayerPlayGlyph(button, paused) {
   button.setAttribute('data-player-glyph', icon);
 }
 
-function updatePlayerUi() {
-  const els = getPlayerElements();
-  const playback = getPlayerPlaybackSnapshot();
+function resolvePlayerUiStatus(playback) {
   const lockedByAnotherTab = typeof isPlaybackLockedByAnotherTab === 'function' && isPlaybackLockedByAnotherTab();
   const playbackUnavailable = lockedByAnotherTab && typeof getPlaybackOwnershipState === 'function'
     && getPlaybackOwnershipState().blockedReason === 'playback_unavailable';
-  const blockedLabel = playbackUnavailable ? 'Playback unavailable' : 'Playing in another tab';
   const mirroredTrack = lockedByAnotherTab && typeof getMirroredPlaybackTrack === 'function'
     ? getMirroredPlaybackTrack()
     : null;
   const displayTrack = mirroredTrack || state.player.current;
-  state.player.lastKnownWasPlaying = Boolean(!lockedByAnotherTab && !playback.paused && !playback.ended);
-  const hasTrack = Boolean(displayTrack && (lockedByAnotherTab || playback.src || state.player.current?.src));
-  els.player?.classList?.toggle('is-empty', !hasTrack);
-  const emptyMessage = els.player?.querySelector?.('[data-player-empty-message]');
-  if (emptyMessage) emptyMessage.hidden = hasTrack;
+  return {
+    lockedByAnotherTab,
+    playbackUnavailable,
+    blockedLabel: playbackUnavailable ? 'Playback unavailable' : 'Playing in another tab',
+    displayTrack,
+    hasTrack: Boolean(displayTrack && (lockedByAnotherTab || playback.src || state.player.current?.src)),
+  };
+}
+
+// The seek position and its time label: all that a timeline drag preview changes.
+function renderPlayerTimelinePosition(els, playback, { hasTrack, lockedByAnotherTab, blockedLabel }) {
   const duration = getPlayerDuration();
   const dragPreview = Number(state.player.timelineDragPreviewSeconds);
   const current = state.player.timelineDragging && Number.isFinite(dragPreview)
@@ -46559,6 +47326,19 @@ function updatePlayerUi() {
       ? `${formatLoopTime(state.player.loopStart, true)} - ${formatLoopTime(state.player.loopEnd, true)}`
       : `${formatLoopTime(current)} / ${formatLoopTime(duration)}`;
   }
+  return { duration, current };
+}
+
+function updatePlayerUi() {
+  const els = getPlayerElements();
+  const playback = getPlayerPlaybackSnapshot();
+  const status = resolvePlayerUiStatus(playback);
+  const { lockedByAnotherTab, playbackUnavailable, blockedLabel, displayTrack, hasTrack } = status;
+  state.player.lastKnownWasPlaying = Boolean(!lockedByAnotherTab && !playback.paused && !playback.ended);
+  els.player?.classList?.toggle('is-empty', !hasTrack);
+  const emptyMessage = els.player?.querySelector?.('[data-player-empty-message]');
+  if (emptyMessage) emptyMessage.hidden = hasTrack;
+  const { duration, current } = renderPlayerTimelinePosition(els, playback, status);
   els.loopActions?._loopActionController?.update({
     enabled: Boolean(!lockedByAnotherTab && (getPlayerPlaybackSnapshot().src || state.player.current?.src)),
     canCreate: state.loopCreateAllowed === true,
@@ -46809,6 +47589,9 @@ function queuedNextContinuityOptions(track) {
   };
 }
 
+// A first-frame schedule that has not settled by then stops holding its identity, so a later
+// first frame or reconciliation of the same stream schedules its continuity again.
+const STREAMING_FIRST_FRAME_SCHEDULE_DEADLINE_MS = 2000;
 let handledStreamingFirstFrameIdentity = '';
 let pendingStreamingFirstFrameIdentity = '';
 let pendingStreamingFirstFrameSchedule = null;
@@ -46843,10 +47626,16 @@ async function handleStreamingPlaybackFirstFrame(event = {}) {
       : nextTrack ? scheduleStreamingContinuity(nextTrack, queuedNextContinuityOptions(nextTrack)) : null;
   });
   pendingStreamingFirstFrameSchedule = scheduling;
+  let deadline = 0;
+  const expired = new Promise((resolve) => {
+    deadline = setTimeout(resolve, STREAMING_FIRST_FRAME_SCHEDULE_DEADLINE_MS, false);
+  });
   try {
-    await scheduling;
-    handledStreamingFirstFrameIdentity = identity;
+    if (await Promise.race([scheduling.then(() => true), expired])) {
+      handledStreamingFirstFrameIdentity = identity;
+    }
   } finally {
+    clearTimeout(deadline);
     if (pendingStreamingFirstFrameSchedule === scheduling) {
       pendingStreamingFirstFrameIdentity = '';
       pendingStreamingFirstFrameSchedule = null;
@@ -47643,8 +48432,8 @@ function attachPlayerEvents() {
     if (!state.player.timelineDragging) return;
     const next = getTimelineSecondsFromClientX(event.clientX);
     state.player.timelineDragPreviewSeconds = next;
-    if (els.timeline) els.timeline.value = String(next);
-    updatePlayerUi();
+    const playback = getPlayerPlaybackSnapshot();
+    renderPlayerTimelinePosition(getPlayerElements(), playback, resolvePlayerUiStatus(playback));
   });
   document.addEventListener('pointerup', (event) => {
     if (thinSeekGesture) {
@@ -47949,7 +48738,7 @@ function syncDockedCompactPresentation(els = compactPlayerElements()) {
 
 function positionFloatingCompactPlayer() {
   if (!compactPlayerPosition) return;
-  compactPlayerPosition = clampCompactPlayerPosition({ ...compactPlayerPosition,
+  compactPlayerPosition = clampCompactPlayerPosition({ x: compactPlayerPosition.x, y: compactPlayerPosition.y,
     playerWidth: 105, playerHeight: 105, viewportWidth: window.innerWidth,
     viewportHeight: window.innerHeight, margin: FLOATING_COMPACT_PLAYER_MARGIN,
     leftMargin: FLOATING_COMPACT_PLAYER_LEFT_MARGIN });
@@ -48039,6 +48828,9 @@ function currentQueueIndex() {
   compactPlayerPendingSelection = null;
   if (!queue?.tracks?.length) return -1;
   const path = String(state.player.current?.path || '');
+  // Every player update asks; the queue cursor answers without scanning a long queue.
+  const cursor = Number(queue.currentIndex) || 0;
+  if (String(queue.tracks[cursor]?.path || '') === path) return cursor;
   const found = queue.tracks.findIndex(track => String(track?.path || '') === path);
   return found >= 0 ? found : Number(queue.currentIndex) || 0;
 }
@@ -48229,7 +49021,8 @@ function initCompactPlayer() {
     if (compactPlayerDrag?.kind !== 'stay_docked' || compactPlayerDrag.pointerId !== event.pointerId) return;
     if (!compactPlayerDrag.didDrag) {
       compactPlayerDrag.didDrag = didCompactPlayerDrag({
-        ...compactPlayerDrag, currentX: event.clientX, currentY: event.clientY,
+        startX: compactPlayerDrag.startX, startY: compactPlayerDrag.startY,
+        currentX: event.clientX, currentY: event.clientY,
       });
       if (compactPlayerDrag.didDrag) els.player.classList.add('is-compact-player-dragging');
     }
@@ -48261,7 +49054,12 @@ function initCompactPlayer() {
   });
   els.cover?.addEventListener('pointermove', event => {
     if (compactPlayerDrag?.kind !== 'floating' || compactPlayerDrag.pointerId !== event.pointerId) return;
-    if (!compactPlayerDrag.didDrag) compactPlayerDrag.didDrag = didCompactPlayerDrag({ ...compactPlayerDrag, currentX: event.clientX, currentY: event.clientY });
+    if (!compactPlayerDrag.didDrag) {
+      compactPlayerDrag.didDrag = didCompactPlayerDrag({
+        startX: compactPlayerDrag.startX, startY: compactPlayerDrag.startY,
+        currentX: event.clientX, currentY: event.clientY,
+      });
+    }
     if (!compactPlayerDrag.didDrag) return;
     compactPlayerPosition = clampCompactPlayerPosition({ x: compactPlayerDrag.originX + event.clientX - compactPlayerDrag.startX,
       y: compactPlayerDrag.originY + event.clientY - compactPlayerDrag.startY, playerWidth: 105, playerHeight: 105,
@@ -48291,12 +49089,8 @@ function initCompactPlayer() {
       let savedMode = 'expanded';
       try { savedMode = (window.AlbumHavenDevicePreferences?.enabled ? window.AlbumHavenDevicePreferences : window.localStorage).getItem(COMPACT_PLAYER_MODE_STORAGE_KEY) || 'expanded'; } catch (_error) {}
       applyCompactPlayerMode(savedMode, { persist: false });
-    } else if (compactPlayerPresentation === 'floating' && compactPlayerPosition) {
-      compactPlayerPosition = clampCompactPlayerPosition({ ...compactPlayerPosition, playerWidth: 105, playerHeight: 105,
-        viewportWidth: window.innerWidth, viewportHeight: window.innerHeight, margin: FLOATING_COMPACT_PLAYER_MARGIN,
-        leftMargin: FLOATING_COMPACT_PLAYER_LEFT_MARGIN });
-      els.player.style.setProperty('--compact-player-x', `${compactPlayerPosition.x}px`);
-      els.player.style.setProperty('--compact-player-y', `${compactPlayerPosition.y}px`);
+    } else if (compactPlayerPresentation === 'floating') {
+      positionFloatingCompactPlayer();
     } else if (compactPlayerStyle === 'docked') {
       syncDockedCompactPresentation();
     }
@@ -48373,7 +49167,9 @@ function attachUtilityModalEvents() {
   els.overlay.dataset.bound = '1';
   bindOverlayPointerOrigin(els.overlay);
   let searchRenderTimer = null;
-  const scheduleSearchRender = () => {
+  // Typing only stores the query; one render runs after the keystrokes pause,
+  // so per-keystroke work never scales with the searched list.
+  const scheduleSearchRender = (render = renderUtilityModalContent) => {
     clearTimeout(searchRenderTimer);
     const owner = state.utility;
     const tab = owner.activeTab;
@@ -48381,7 +49177,7 @@ function attachUtilityModalEvents() {
       searchRenderTimer = null;
       if (tab === 'problematic-files' && owner.problematicFilesComplete === false
           && !(await waitForProblematicFilesComplete())) return;
-      if (state.utility === owner && owner.activeTab === tab && !els.overlay.hidden) renderUtilityModalContent();
+      if (state.utility === owner && owner.activeTab === tab && !els.overlay.hidden) render();
     }, 80);
   };
   els.search?.addEventListener('input', () => {
@@ -48397,7 +49193,7 @@ function attachUtilityModalEvents() {
     }
     if (state.utility.activeTab === 'loops') {
       state.utility.loopsSearchQuery = els.search.value || '';
-      filterUtilityLoopViews();
+      scheduleSearchRender(filterUtilityLoopViews);
       return;
     }
     if (state.utility.activeTab === 'rules') state.utility.rulesSearchQuery = els.search.value || '';
@@ -49761,6 +50557,7 @@ function handleUtilityBootstrapMouseDown(event) {
   if (!event.shiftKey && !event.ctrlKey && !event.metaKey) {
     state.tagEditor.dragSelecting = true;
     state.tagEditor.dragAnchorPath = path;
+    state.tagEditor.dragHoverPath = path;
   }
   renderTagEditor({ preserveTrackList: true });
   syncTagEditorAutoNumberControls();
@@ -49945,9 +50742,19 @@ function handleUtilityBootstrapMouseOver(event) {
   const trackButton = event.target.closest('[data-tag-editor-track]');
   if (!trackButton) return false;
   const path = trackButton.getAttribute('data-tag-editor-track') || '';
+  // Moves within the hovered track change nothing; a new track changes only
+  // the rows entering or leaving the dragged range.
+  if (path === state.tagEditor.dragHoverPath) return true;
+  state.tagEditor.dragHoverPath = path;
+  const previousPaths = new Set(state.tagEditor.selectedPaths || []);
   const rangePaths = getTagEditorRangePaths(state.tagEditor.dragAnchorPath, path);
   setTagEditorSelectedPaths(rangePaths, state.tagEditor.dragAnchorPath);
-  renderTagEditor({ preserveTrackList: true });
+  const selectedPaths = new Set(state.tagEditor.selectedPaths);
+  const changedSelectionPaths = [
+    ...[...previousPaths].filter(item => !selectedPaths.has(item)),
+    ...[...selectedPaths].filter(item => !previousPaths.has(item)),
+  ];
+  renderTagEditor({ preserveTrackList: true, changedSelectionPaths });
   syncTagEditorAutoNumberControls();
   return true;
 }
@@ -50010,6 +50817,7 @@ function handleUtilityBootstrapMouseUp(event) {
   }
   state.tagEditor.dragSelecting = false;
   state.tagEditor.dragAnchorPath = '';
+  state.tagEditor.dragHoverPath = '';
 }
 
 function toggleUtilityLoopGroupCollapse(groupKey) {

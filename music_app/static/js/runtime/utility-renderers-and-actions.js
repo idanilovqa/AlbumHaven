@@ -421,15 +421,21 @@ function clearUtilityLoopDragState() {
   state.utility.loopDropPosition = '';
 }
 
+// Only the dragged and drop-target loops carry drag classes, so a drag event restyles the rows
+// of the loops it marks or unmarks, never the whole saved-loop list.
+let utilityLoopDragMarkedIds = [];
 function syncUtilityLoopDragUi() {
-  document.querySelectorAll('[data-utility-loop-entry], [data-utility-loop-id]').forEach(node => {
-    const id = getUtilityLoopNodeId(node);
-    const dragging = id && id === state.utility.loopDragId;
-    const dropping = id && id === state.utility.loopDropTargetId;
-    node.classList.toggle('is-dragging', Boolean(dragging));
-    node.classList.toggle('is-drop-before', Boolean(dropping && state.utility.loopDropPosition === 'before'));
-    node.classList.toggle('is-drop-after', Boolean(dropping && state.utility.loopDropPosition === 'after'));
+  const markedIds = [state.utility.loopDragId, state.utility.loopDropTargetId].filter(Boolean);
+  new Set([...utilityLoopDragMarkedIds, ...markedIds]).forEach((id) => {
+    const escapedId = cssEscape(id);
+    document.querySelectorAll(`[data-utility-loop-entry="${escapedId}"], [data-utility-loop-id="${escapedId}"]`).forEach(node => {
+      const dropping = id === state.utility.loopDropTargetId;
+      node.classList.toggle('is-dragging', id === state.utility.loopDragId);
+      node.classList.toggle('is-drop-before', dropping && state.utility.loopDropPosition === 'before');
+      node.classList.toggle('is-drop-after', dropping && state.utility.loopDropPosition === 'after');
+    });
   });
+  utilityLoopDragMarkedIds = markedIds;
 }
 
 function getUtilityLoopNodeId(node) {
@@ -439,7 +445,7 @@ function getUtilityLoopNodeId(node) {
 function syncUtilityLoopMoveButtons() {
   document.querySelectorAll('[data-move-utility-loop]').forEach(button => {
     const id = button.getAttribute('data-move-utility-loop');
-    const loop = (state.utility.loops || []).find(item => String(item.id) === id);
+    const loop = getUtilityLoopIndex().byId.get(id);
     const scope = loop && getUtilityLoopOrderScope(loop.song_key);
     const index = scope?.loops.findIndex(item => String(item.id) === id) ?? -1;
     const direction = button.getAttribute('data-loop-move-direction');
@@ -452,10 +458,15 @@ function syncUtilityLoopMoveButtons() {
 }
 
 function updateUtilityLoopDropState(type, targetId, position, groupKey = '') {
-  state.utility.loopDropType = String(type || '');
-  state.utility.loopDropTargetId = String(targetId || '');
-  state.utility.loopDropGroupKey = String(groupKey || '');
-  state.utility.loopDropPosition = position === 'after' ? 'after' : position === 'before' ? 'before' : '';
+  const next = {
+    loopDropType: String(type || ''),
+    loopDropTargetId: String(targetId || ''),
+    loopDropGroupKey: String(groupKey || ''),
+    loopDropPosition: position === 'after' ? 'after' : position === 'before' ? 'before' : '',
+  };
+  // Dragover repeats while the pointer rests; an unchanged drop target restyles nothing.
+  if (Object.entries(next).every(([key, value]) => state.utility[key] === value)) return;
+  Object.assign(state.utility, next);
   syncUtilityLoopDragUi();
 }
 
@@ -495,7 +506,7 @@ function bindUtilityLoopDragAndDrop() {
         if (!event.target.closest('[data-utility-loop-id], [data-utility-loop-entry]')) updateUtilityLoopDropState('', '', '');
         return;
       }
-      if (!buildReorderedUtilityLoops(state.utility.loops, payload(), edge.target, edge.position)) {
+      if (!reorderUtilityLoopSong(state.utility.loops, payload(), edge.target, edge.position)) {
         updateUtilityLoopDropState('', '', '');
         return;
       }
@@ -515,7 +526,7 @@ function bindUtilityLoopDragAndDrop() {
     });
   });
   document.querySelectorAll('[data-utility-loop-entry], [data-utility-loop-id]').forEach(node => {
-    const currentLoop = () => (state.utility.loops || []).find(loop => String(loop.id) === getUtilityLoopNodeId(node));
+    const currentLoop = () => getUtilityLoopIndex().byId.get(getUtilityLoopNodeId(node));
     node.setAttribute('draggable', String(canReorderUtilityLoop(currentLoop())));
     if (node.dataset.dragBound === '1') return;
     node.dataset.dragBound = '1';
@@ -526,10 +537,11 @@ function bindUtilityLoopDragAndDrop() {
           || event.target?.closest?.('button, input, select, textarea, a, [data-loop-range-surface]')) {
         event.preventDefault(); clear(); return;
       }
+      clearUtilityLoopDragState();
       state.utility.loopDragType = 'loop'; state.utility.loopDragId = String(loop.id);
       state.utility.loopDragGroupKey = loop.song_key;
       state.utility.loopSuppressClick = false;
-      updateUtilityLoopDropState('', '', '');
+      syncUtilityLoopDragUi();
       if (event.dataTransfer) {
         event.dataTransfer.effectAllowed = 'move';
         event.dataTransfer.setData('text/plain', JSON.stringify(payload()));
@@ -537,7 +549,7 @@ function bindUtilityLoopDragAndDrop() {
     });
     node.addEventListener('dragover', event => {
       const position = getUtilityLoopDropPosition(node, event.clientY);
-      if (!buildReorderedUtilityLoops(state.utility.loops, payload(), target(), position)) {
+      if (!reorderUtilityLoopSong(state.utility.loops, payload(), target(), position)) {
         updateUtilityLoopDropState('', '', ''); return;
       }
       event.preventDefault();

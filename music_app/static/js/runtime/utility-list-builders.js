@@ -724,7 +724,7 @@ async function openPlayerTrackAlbum(track, modalOptions = {}) {
   if (!path) return false;
   let message = "The playing album couldn't be opened. Try again.";
   try {
-    const response = await fetch(`/album-details?track_path=${encodeURIComponent(path)}`, {
+    const response = await fetchRetryingPendingProjection(`/album-details?track_path=${encodeURIComponent(path)}`, {
       headers: { Accept: 'application/json' },
     });
     const payload = await response.json().catch(() => null);

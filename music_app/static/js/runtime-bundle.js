@@ -34410,7 +34410,11 @@ function getTrackTagInitialValues(track, album) {
       : String(album?.raw_name || album?.name || ''),
     title: String(track?.title || ''),
     genre: String(track?.genre || ''),
-    year: String(track?.year ?? album?.year ?? ''),
+    // A track that reports its own year (even an erased one) wins over the
+    // album summary, which may predate the last save.
+    year: Object.prototype.hasOwnProperty.call(track || {}, 'year')
+      ? String(track?.year ?? '')
+      : String(album?.year ?? ''),
     track_number: String(track?.track_number ?? ''),
     disc_number: String(track?.disc_number ?? ''),
     total_discs: String(track?.total_discs ?? ''),

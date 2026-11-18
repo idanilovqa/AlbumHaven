@@ -745,6 +745,7 @@ def create_asgi_app():
                     runtime.config,
                     revision=result.revision,
                     affected_album_keys=result.affected_album_keys,
+                    track_paths=result.active_track_paths if result.paths_complete else (),
                 )
                 queue_watcher_cover_refresh_for_track_paths_for_state(
                     runtime.library_state,

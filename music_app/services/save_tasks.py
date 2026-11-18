@@ -724,15 +724,23 @@ def _finalize_save_task(
 
         from music_app.services.problematic_albums import invalidate_problematic_albums_payload_cache
         from music_app.services.utility_rules import invalidate_utility_rules_payload_cache
+        from music_app.services.library_browse_postgres import refresh_postgres_utility_projections_after_edit
 
+        # The Postgres list is patched for the edited files, never dropped whole.
         for stage, callback in (
             (
                 "Problematic album invalidation",
-                lambda: invalidate_problematic_albums_payload_cache(st),
+                lambda: invalidate_problematic_albums_payload_cache(st, include_postgres=False),
             ),
             (
                 "Utility rule invalidation",
-                lambda: invalidate_utility_rules_payload_cache(st),
+                lambda: invalidate_utility_rules_payload_cache(st, include_postgres=False),
+            ),
+            (
+                "Utility projection refresh",
+                lambda: refresh_postgres_utility_projections_after_edit(
+                    config, track_paths=changed_paths or requested_track_paths,
+                ),
             ),
         ):
             try:
@@ -1020,14 +1028,15 @@ def finalize_structural_tag_edit_save_task(
             from music_app.services.problematic_albums import invalidate_problematic_albums_payload_cache
             from music_app.services.utility_rules import invalidate_utility_rules_payload_cache
 
+            # Structural persistence already patched the Postgres utility projections.
             for stage, callback in (
                 (
                     "Problematic album invalidation",
-                    lambda: invalidate_problematic_albums_payload_cache(st),
+                    lambda: invalidate_problematic_albums_payload_cache(st, include_postgres=False),
                 ),
                 (
                     "Utility rule invalidation",
-                    lambda: invalidate_utility_rules_payload_cache(st),
+                    lambda: invalidate_utility_rules_payload_cache(st, include_postgres=False),
                 ),
             ):
                 try:

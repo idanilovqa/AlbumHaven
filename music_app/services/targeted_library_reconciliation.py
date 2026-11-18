@@ -29,6 +29,9 @@ class TargetedReconciliationResult:
     health: str = "healthy"
     active_track_paths: tuple[str, ...] = ()
     new_track_paths: tuple[str, ...] = ()
+    # True when active_track_paths names every file the mutation touched
+    # (no deletions or moves), so projections may be patched by those paths.
+    paths_complete: bool = False
 
 
 class TargetedLibraryReconciler:
@@ -333,6 +336,7 @@ class TargetedLibraryReconciler:
                     )
                 ),
                 active_track_paths=tuple(sorted(active_entries, key=str.casefold)),
+                paths_complete=not (deleted_paths or deleted_subtrees or normalized_moves),
                 new_track_paths=tuple(
                     sorted(
                         {

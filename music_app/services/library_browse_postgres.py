@@ -187,7 +187,7 @@ def invalidate_postgres_utility_projection_cache(
     normalized_database_url = str(database_url or "").strip()
     normalized_kinds = {
         str(kind or "").strip()
-        for kind in (kinds or ("problematic-files", "rules", "duplicate-identities", "duplicate-absence", "non-album-candidates", "relation-alias-maps", "loose-tracks"))
+        for kind in (_UTILITY_PROJECTION_KINDS if kinds is None else kinds)
         if str(kind or "").strip()
     }
     if "problematic-files" in normalized_kinds:
@@ -234,6 +234,41 @@ def invalidate_postgres_utility_projection_cache(
         )
         timer.daemon = True
         timer.start()
+
+
+_UTILITY_PROJECTION_KINDS = (
+    "problematic-files", "rules", "duplicate-identities", "duplicate-absence",
+    "non-album-candidates", "relation-alias-maps", "loose-tracks",
+)
+
+
+def refresh_postgres_utility_projections_after_edit(
+    config: Mapping[str, object],
+    *,
+    track_paths: Iterable[str],
+) -> None:
+    """After a tag save or watcher edit, patch the Problematic Files list for the files'
+    albums and invalidate the other utility projections. If the list cannot be
+    patched it is invalidated (and rebuilt) as before."""
+    remaining = set(_UTILITY_PROJECTION_KINDS)
+    database_url = str(config.get(_APP_DATABASE_URL_KEY) or "").strip()
+    paths = {str(path) for path in track_paths if str(path or "").strip()}
+    if database_url and paths:
+        started = perf_counter()
+        try:
+            patched = PostgresLibraryBrowseRepository(dict(config)).patch_problematic_files_projection(
+                track_paths=paths,
+            )
+        except Exception:
+            logging.getLogger(__name__).exception("Problematic Files patch failed; the list is rebuilt instead")
+            patched = False
+        logging.getLogger(__name__).info(
+            "Problematic Files after a library edit: %s in %.0f ms for %d files",
+            "patched" if patched else "invalidated", (perf_counter() - started) * 1000, len(paths),
+        )
+        if patched:
+            remaining.discard("problematic-files")
+    invalidate_postgres_utility_projection_cache(database_url=database_url or None, kinds=remaining)
 
 
 def _run_utility_projection_rewarm(cache_key: tuple[str, str], rewarm: Callable[[], None]) -> None:
@@ -3073,6 +3108,91 @@ class PostgresLibraryBrowseRepository:
             return payload
 
         return self._build_utility_projection_once(kind, cached, build)
+
+    def patch_problematic_files_projection(self, *, track_paths: Iterable[str]) -> bool:
+        """Recompute the cached complete list only for the albums a save touched.
+
+        A whole-library rebuild takes minutes on a real library, so a save
+        patches the entries of the edited files' albums and their duplicate
+        identity peers instead. Returns False when there is nothing safe to
+        patch; the caller then invalidates the list as before.
+        """
+        kind = "problematic-files"
+        cache_key = self._utility_projection_cache_key(kind)
+        if cache_key is None:
+            return False
+        with _UTILITY_PROJECTION_CACHE_LOCK:
+            base = _UTILITY_PROJECTION_CACHE.get(cache_key)
+            generation = _UTILITY_PROJECTION_GENERATIONS.get(cache_key, 0)
+        if not isinstance(base, Mapping) or base.get("duplicate_resolution_pending"):
+            return False
+        paths = {
+            variant for path in track_paths if str(path or "").strip()
+            for variant in (str(path), str(Path(path)))
+        }
+        base_items = [item for item in base.get("items") or [] if isinstance(item, Mapping)]
+        old_identities = [
+            {"album_artist": str(item.get("album_artist") or ""), "album": str(item.get("name") or ""),
+             "year": str(item.get("year") or "")}
+            for item in base_items
+            if paths.intersection(item.get("track_paths") or [])
+        ]
+        with self._connect_to_database() as connection:
+            connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+            connection.execute("SET LOCAL jit = off")
+            scope = _row_mapping(connection.execute(_PROBLEMATIC_PATCH_SCOPE_SQL, {
+                "track_paths": sorted(paths),
+                "old_identities": json.dumps(old_identities),
+            }).fetchone() or {})
+            if scope.get("has_detached_track"):
+                # Loose-track groups span the library; they keep the full rebuild.
+                return False
+            album_ids = sorted({int(value) for value in scope.get("album_ids") or []})
+            rows = self._load_problematic_file_rows(connection=connection, album_ids=album_ids) if album_ids else []
+            partial = self._build_problematic_files_payload_from_rows(
+                connection=connection, rows=rows, missing_rows=[], include_initial_detail=False,
+            ) if rows else {"items": []}
+        if partial.get("duplicate_resolution_pending") or partial.get(_PROBLEMATIC_LOOSE_GROUP_IDENTITIES_KEY):
+            return False
+        # Every current track of a recomputed album, and every edited path, now
+        # belongs to a recomputed entry (or to none when the album is fixed).
+        replaced_paths = paths | {str(value) for value in scope.get("track_paths") or []}
+        new_items = list(partial.get("items") or [])
+        replaced_keys = {str(item.get("key") or "") for item in new_items}
+        removed = [
+            item for item in base_items
+            if str(item.get("key") or "") in replaced_keys
+            or replaced_paths.intersection(item.get("track_paths") or [])
+        ]
+        if any(_is_problematic_loose_tracks_key(item.get("key")) for item in removed):
+            return False
+        removed_ids = {id(item) for item in removed}
+        items = [item for item in base_items if id(item) not in removed_ids] + new_items
+        items.sort(key=_problematic_summary_sort_key)
+        patched = {**base, "items": items, "count": len(items)}
+        initial_detail = base.get("initial_detail")
+        if (
+            not items or not isinstance(initial_detail, Mapping)
+            or initial_detail.get("key") != items[0].get("key")
+            or str(initial_detail.get("key") or "") in {str(item.get("key") or "") for item in removed}
+        ):
+            # The page loads the first album's detail on demand.
+            patched["initial_detail"] = None
+        page_cache_key = self._utility_projection_cache_key(_PROBLEMATIC_FILES_PAGE_KIND)
+        with _UTILITY_PROJECTION_CACHE_LOCK:
+            if (
+                _UTILITY_PROJECTION_CACHE.get(cache_key) is not base
+                or _UTILITY_PROJECTION_GENERATIONS.get(cache_key, 0) != generation
+            ):
+                return False
+            _UTILITY_PROJECTION_GENERATIONS[cache_key] = generation + 1
+            _UTILITY_PROJECTION_CACHE[cache_key] = patched
+            if page_cache_key is not None:
+                _UTILITY_PROJECTION_GENERATIONS[page_cache_key] = (
+                    _UTILITY_PROJECTION_GENERATIONS.get(page_cache_key, 0) + 1
+                )
+                _UTILITY_PROJECTION_CACHE.pop(page_cache_key, None)
+        return True
 
     def _build_problematic_files_payload_uncached(self) -> dict[str, object]:
         with self._connect_to_database() as connection:
@@ -6564,6 +6684,9 @@ def _problematic_album_projection_payloads(rows: list[object]) -> list[dict[str,
                 "title": str(row_payload.get("track_title") or "").strip(),
                 "disc_number": row_payload.get("disc_number"),
                 "track_number": row_payload.get("track_number"),
+                # The file's current year (None when erased): Edit Tags must
+                # never fall back to the album summary's possibly older year.
+                "year": file_entry.get("year") or None,
                 "duration_seconds": _coerce_duration_seconds(row_payload.get("duration_seconds")),
                 "exception_type": file_entry["exception_type"],
             }
@@ -7918,6 +8041,67 @@ def _problematic_inventory_fingerprint(connection: Any) -> str:
     """The inventory revision plus root and exception-override versions, as text."""
     fingerprint = _duplicate_inventory_fingerprint(connection).get("fingerprint")
     return json.dumps(fingerprint, default=str) if fingerprint else ""
+
+
+# The albums of the saved files, plus every album sharing a duplicate identity
+# with them before or after the save (their duplicate state can flip).
+_PROBLEMATIC_PATCH_SCOPE_SQL = """
+    with library_scope as (
+      select libraries.id as library_id
+      from app.bootstrap_owners owners
+      join library.libraries libraries
+        on libraries.owner_account_id = owners.account_id
+       and libraries.name = 'Local Library'
+       and libraries.library_kind = 'local'
+      where owners.owner_key = 'local-bootstrap-owner'
+      limit 1
+    ), edited_tracks as (
+      select tracks.album_id
+      from library_scope
+      join library.local_tracks tracks on tracks.library_id = library_scope.library_id
+      join library.local_track_files files on files.track_id = tracks.id
+      where files.private_path = any(%(track_paths)s::text[])
+    ), touched as (
+      select distinct album_id as id from edited_tracks where album_id is not null
+    ), identities as materialized (
+      -- The same (album artist, album, year) identity duplicate detection uses.
+      select library.duplicate_identity_text(files.scan_file_album_artist) as artist_identity,
+             library.duplicate_identity_text(files.scan_file_album) as album_identity,
+             library.duplicate_identity_year(files.scan_file_year) as album_year
+      from library.local_tracks tracks
+      join library.local_track_files files on files.track_id = tracks.id
+      where tracks.album_id = any(array(select id from touched))
+      union
+      select library.duplicate_identity_text(old.album_artist),
+             library.duplicate_identity_text(old.album),
+             library.duplicate_identity_year(old.year)
+      from jsonb_to_recordset(%(old_identities)s::jsonb) as old(album_artist text, album text, year text)
+    ), scoped as (
+      select id from touched
+      union
+      select tracks.album_id
+      from identities
+      join library.local_track_files files
+        on library.duplicate_identity_text(files.scan_file_album_artist) = identities.artist_identity
+       and library.duplicate_identity_text(files.scan_file_album) = identities.album_identity
+       and library.duplicate_identity_year(files.scan_file_year) = identities.album_year
+       and files.scan_cache_stale is false
+       and files.scan_file_entry_is_object is true
+      join library.local_tracks tracks on tracks.id = files.track_id
+      join library_scope on library_scope.library_id = tracks.library_id
+      where identities.artist_identity <> '' and identities.album_identity <> ''
+        and tracks.album_id is not null
+    )
+    select
+      exists(select 1 from edited_tracks where album_id is null) as has_detached_track,
+      coalesce((select array_agg(id order by id) from scoped), '{}'::bigint[]) as album_ids,
+      coalesce((
+        select array_agg(files.private_path)
+        from library.local_tracks tracks
+        join library.local_track_files files on files.track_id = tracks.id
+        where tracks.album_id = any(array(select id from scoped))
+      ), '{}'::text[]) as track_paths
+"""
 
 
 def _is_undefined_table_error(error: BaseException) -> bool:

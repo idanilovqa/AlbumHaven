@@ -1,5 +1,5 @@
 from __future__ import annotations
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import Future
 import logging
 from pathlib import Path
@@ -661,13 +661,24 @@ def persist_structural_tag_edit_for_config(
         **persistence_options,
     )
     from music_app.services.library_browse_postgres import (
-        invalidate_postgres_utility_projection_cache,
+        refresh_postgres_utility_projections_after_edit,
     )
 
-    invalidate_postgres_utility_projection_cache(
-        database_url=config.get("ALBUM_HAVEN_APP_DATABASE_URL"),
+    refresh_postgres_utility_projections_after_edit(
+        config,
+        track_paths=_edited_track_paths(changed_paths, updated_file_entries),
     )
     return result
+
+
+def _edited_track_paths(changed_paths, updated_file_entries) -> set[str]:
+    """Selected paths plus any new path a rename wrote."""
+    paths = {str(path) for path in changed_paths}
+    paths.update(
+        str(entry.get("path")) for path in changed_paths
+        if isinstance(entry := updated_file_entries.get(path), Mapping) and entry.get("path")
+    )
+    return paths
 
 
 def validate_structural_tag_edit_for_config(

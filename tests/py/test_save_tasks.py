@@ -1193,7 +1193,7 @@ def test_scoped_postgres_exception_finalizer_warns_when_runtime_invalidation_fai
     }
     monkeypatch.setattr(
         "music_app.services.problematic_albums.invalidate_problematic_albums_payload_cache",
-        lambda _state: (_ for _ in ()).throw(
+        lambda _state, **_options: (_ for _ in ()).throw(
             RuntimeError("runtime invalidation unavailable")
         ),
     )
@@ -2402,11 +2402,11 @@ def test_successful_tag_save_does_not_prewarm_settings_on_the_foreground_browse_
 
     monkeypatch.setattr(
         "music_app.services.problematic_albums.invalidate_problematic_albums_payload_cache",
-        lambda _state: events.append("problematic-invalidated"),
+        lambda _state, **_options: events.append("problematic-invalidated"),
     )
     monkeypatch.setattr(
         "music_app.services.utility_rules.invalidate_utility_rules_payload_cache",
-        lambda _state: events.append("rules-invalidated"),
+        lambda _state, **_options: events.append("rules-invalidated"),
     )
     monkeypatch.setattr(
         "music_app.services.library_browse_postgres.PostgresLibraryBrowseRepository",

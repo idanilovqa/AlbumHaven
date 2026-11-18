@@ -1313,7 +1313,7 @@ def test_runtime_cache_save_forwards_the_publication_commit_guard(
     assert forwarded_guards == [guard]
 
 
-def test_structural_tag_persistence_invalidates_utility_projections(monkeypatch):
+def test_structural_tag_persistence_refreshes_utility_projections_for_its_paths(monkeypatch):
     from music_app.services import cache as cache_module
     from music_app.services import library_browse_postgres as browse_module
 
@@ -1332,20 +1332,22 @@ def test_structural_tag_persistence_invalidates_utility_projections(monkeypatch)
     )
     monkeypatch.setattr(
         browse_module,
-        "invalidate_postgres_utility_projection_cache",
-        lambda **options: invalidations.append(options),
+        "refresh_postgres_utility_projections_after_edit",
+        lambda config, **options: invalidations.append({"config": config, **options}),
     )
+    config = {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://runtime/library"}
 
     result = cache_module.persist_structural_tag_edit_for_config(
-        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://runtime/library"},
+        config,
         changed_paths={"track.flac"},
         previous_file_entries={"track.flac": {"album": "Before"}},
-        updated_file_entries={"track.flac": {"album": "After"}},
+        updated_file_entries={"track.flac": {"album": "After", "path": "renamed.flac"}},
         changed_field_names={"album"},
     )
 
     assert result == {"track_rows_updated": 1}
     assert calls[0]["changed_paths"] == {"track.flac"}
+    # Only the edited files' entries are recomputed, never the whole list.
     assert invalidations == [
-        {"database_url": "postgresql://runtime/library"}
+        {"config": config, "track_paths": {"track.flac", "renamed.flac"}}
     ]

@@ -23,6 +23,7 @@ from music_app.services.problematic_albums import (
     queue_problematic_albums_prewarm,
 )
 from tests.py.runtime_testing import configure_test_app_paths
+from tests.py.test_isolated_postgres_live import watcher_repair_inventory  # noqa: F401 (live fixture)
 
 
 @pytest.fixture
@@ -743,3 +744,64 @@ def test_problematic_albums_payload_keeps_acceptable_cached_dimensions_on_fast_p
     assert item["cover_width"] == 1200
     assert item["cover_height"] == 1200
     assert "Poor art quality" not in item["problem_reasons"]
+
+
+def _complete_problematic_list(config, *, rebuild: bool):
+    from music_app.services import library_browse_postgres as browse
+    from tests.e2e.support import isolatedPostgres
+
+    if rebuild:
+        browse.invalidate_postgres_utility_projection_cache(
+            database_url=config["ALBUM_HAVEN_APP_DATABASE_URL"], kinds=("problematic-files",),
+        )
+    payload = browse.PostgresLibraryBrowseRepository(
+        config, connect=isolatedPostgres._connect,
+    ).build_problematic_files_payload()
+    return payload["projection_cache_status"], sorted(
+        payload["items"], key=lambda item: (item["key"], item["track_paths"]),
+    )
+
+
+def test_live_tag_saves_patch_the_cached_problematic_list_to_a_full_rebuild(watcher_repair_inventory):
+    """Owner (11-18): each save rebuilt the whole list (94 s on the real library)."""
+    from music_app.services.library_browse_postgres import refresh_postgres_utility_projections_after_edit
+
+    fixture = watcher_repair_inventory
+    erased = fixture.entry("Drozd/Karusel/01.flac", artist="R.D.", album="Карусель Эпох")
+    erased["album_artist"] = "R.D."
+    first = fixture.entry("Twin/One/01.flac", artist="Twin", album="Same Release")
+    second = fixture.entry("Twin/Two/01.flac", artist="Twin", album="Same Release")
+    for entry in (first, second):
+        entry["album_artist"] = "Twin"
+    untouched = fixture.entry("Other/Album/01.flac", artist="Other", album="Untouched")
+    fixture.seed(erased, first, second, untouched)
+    status, before = _complete_problematic_list(fixture.config, rebuild=True)
+    assert status == "rebuilt"
+    untouched_item = next(item for item in before if item["name"] == "Untouched")
+
+    def save(entry, **changes):
+        updated = {**entry, **changes}
+        fixture.adapter.persist_structural_tag_edit(
+            changed_paths={entry["path"]}, previous_file_entries={entry["path"]: entry},
+            updated_file_entries={entry["path"]: updated}, changed_field_names=set(changes),
+        )
+        refresh_postgres_utility_projections_after_edit(fixture.config, track_paths={entry["path"]})
+        entry.update(updated)
+        status, patched = _complete_problematic_list(fixture.config, rebuild=False)
+        assert status == "hit", "A save must patch the cached list, not drop it."
+        assert patched == _complete_problematic_list(fixture.config, rebuild=True)[1]
+        return patched
+
+    # Erase the year: the album shows Missing year at once, and its tracks carry no year.
+    after_erase = save(erased, year=None)
+    drozd = next(item for item in after_erase if item["name"] == "Карусель Эпох")
+    assert "Missing year" in drozd["problem_reasons"]
+    # Renaming one twin changes the other twin's duplicate state as well.
+    save(second, album="Renamed Release")
+    # Restore the year: the reason leaves without a rebuild.
+    after_fix = save(erased, year=2006)
+    assert all(
+        "Missing year" not in item["problem_reasons"]
+        for item in after_fix if item["name"] == "Карусель Эпох"
+    )
+    assert untouched_item in after_fix

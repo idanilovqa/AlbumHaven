@@ -307,6 +307,7 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
         timingMs: saveTimingMs,
         details: {
           browserArtist: new URL(page.url()).searchParams.get('artist'),
+          postSaveTimeline: result.postSaveTimeline,
           terminalPayload: result.payload,
           sourceIdentity,
           destinationIdentity,
@@ -427,7 +428,11 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
             key: `edit-tags-save-${index + 1}`,
             label: `Edit Tags terminal save ${index + 1}`,
             timingMs: saveTimingMs,
-            details: { destinationAlbum, saveTaskId: result.saveTaskId },
+            details: {
+              destinationAlbum,
+              postSaveTimeline: result.postSaveTimeline,
+              saveTaskId: result.saveTaskId,
+            },
           });
           await trackModalActions.close();
         });

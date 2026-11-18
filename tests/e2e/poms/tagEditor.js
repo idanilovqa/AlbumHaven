@@ -329,6 +329,7 @@ export class TagEditor extends BasePage {
         const message = alert.querySelector(messageSelector);
         const style = getComputedStyle(alert);
         samples.push({
+          atMs: performance.now(),
           error: alert.classList.contains('is-error'),
           phase,
           text: String(message?.textContent || '').trim(),
@@ -353,6 +354,24 @@ export class TagEditor extends BasePage {
         },
       };
     }, this.repairAlertMessageSelector);
+    // parity-check: allow-read-only-measurement-evaluate -- record request timing on the page clock without touching application state
+    const requestTimeline = await this.page.evaluateHandle(() => {
+      const entries = [];
+      const collect = (list) => list.forEach((entry) => entries.push({
+        url: entry.name,
+        startMs: entry.startTime,
+        endMs: entry.responseEnd,
+      }));
+      const observer = new PerformanceObserver((list) => collect(list.getEntries()));
+      observer.observe({ type: 'resource' });
+      return {
+        finish() {
+          collect(observer.takeRecords());
+          observer.disconnect();
+          return entries;
+        },
+      };
+    });
     let finished = false;
     return {
       async finish() {
@@ -360,6 +379,10 @@ export class TagEditor extends BasePage {
         finished = true;
         // parity-check: allow-read-only-measurement-evaluate -- disconnect the notification observer and return buffered observations without mutating application state
         return observation.evaluate((ownedObservation) => ownedObservation.finish());
+      },
+      async finishRequestTimeline() {
+        // parity-check: allow-read-only-measurement-evaluate -- disconnect the request timing observer and return its entries
+        return requestTimeline.evaluate((ownedTimeline) => ownedTimeline.finish());
       },
     };
   }

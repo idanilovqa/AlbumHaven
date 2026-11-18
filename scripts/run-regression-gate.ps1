@@ -259,12 +259,13 @@ if ($definition.FunctionalShard) {
 if ($definition.FunctionalArea) {
     $contract = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $repositoryRoot 'tests\ci\functional-shards.json') | ConvertFrom-Json
     foreach ($shard in $contract.shards) {
-        $cases = @($shard.invocations | ForEach-Object { $_.cases } | Where-Object {
+        # Not $cases: variable names ignore case, so that would assign to the [string]$Cases parameter.
+        $areaCases = @($shard.invocations | ForEach-Object { $_.cases } | Where-Object {
             @($_.areas) + @($_.area) -contains $definition.FunctionalArea
         } | ForEach-Object { $_.case })
-        if ($cases.Count -eq 0) { continue }
+        if ($areaCases.Count -eq 0) { continue }
         Invoke-Checked {
-            & $functionalRunner -Shard $shard.name -Cases $cases @functionalCommon
+            & $functionalRunner -Shard $shard.name -Cases $areaCases @functionalCommon
         } "Functional $($definition.FunctionalArea) cases in $($shard.name)"
     }
 }

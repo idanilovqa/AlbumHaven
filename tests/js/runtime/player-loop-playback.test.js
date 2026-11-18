@@ -357,6 +357,26 @@ test('mirrored playback keeps metadata unobscured while showing its locked statu
   assert.equal(time.textContent, '10 - 20');
 });
 
+test('playback held by another tab or lost to the server disables the scissors for this tab', () => {
+  const updates = [];
+  const loopActions = { _loopActionController: { update: next => updates.push({ ...next }) } };
+  const play = new FakeElement({ tagName: 'BUTTON' });
+  const { context } = loadHelper({
+    getPlayerElements: () => ({ play, loopActions }),
+    isPlaybackLockedByAnotherTab: () => true,
+    getMirroredPlaybackTrack: () => ({ artist: 'Artist', title: 'Song', album: 'Album' }),
+    getPlayerPlaybackSnapshot: () => ({ currentTime: 3, duration: 60, paused: true, ended: false, src: '/track?path=song.flac' }),
+  });
+  context.state.player.current = { src: '/track?path=song.flac', path: 'C:/Music/song.flac' };
+
+  context.updatePlayerUi();
+  assert.equal(updates.at(-1).enabled, false, 'a locked player cannot cut a loop, so its scissors stay folded');
+
+  context.isPlaybackLockedByAnotherTab = () => false;
+  context.updatePlayerUi();
+  assert.equal(updates.at(-1).enabled, true);
+});
+
 test('lease loss renders unavailable status instead of claiming another tab owns playback', () => {
   const timelineWrap = new FakeElement();
   const timeline = new FakeElement({ tagName: 'INPUT', type: 'range', parentElement: timelineWrap });

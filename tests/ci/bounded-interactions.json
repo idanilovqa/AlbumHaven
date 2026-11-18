@@ -5162,6 +5162,21 @@
       "proof": "static"
     },
     {
+      "id": "js:runtime/player-loop-playback.js#handleStreamingPlaybackFirstFrame",
+      "action": "setTimeout timers installed by handleStreamingPlaybackFirstFrame",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/player-loop-playback.js#handleStreamingPlaybackFirstFrame:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/player-loop-playback.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:runtime/player-loop-playback.js#saveCurrentLoop",
       "action": "fetch requests installed by saveCurrentLoop",
       "entrypoints": [
@@ -5351,6 +5366,21 @@
       "testIdentity": "bounded interaction: streaming socket chunks and worklet messages stay constant over a 10,000-chunk session",
       "performanceTargets": [],
       "rollback": "Test-only contract; the streaming engine is unchanged. Reverting removes the test and returns this entry to static proof, which the guard rejects for its socket and worklet message entrypoints."
+    },
+    {
+      "id": "js:runtime/player-streaming-engine.js#primeStreamingCachedTrack",
+      "action": "setTimeout timers installed by primeStreamingCachedTrack",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/player-streaming-engine.js#primeStreamingCachedTrack:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/player-streaming-engine.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
     },
     {
       "id": "js:runtime/player-streaming-engine.js#startBrowserStreamingTrack",

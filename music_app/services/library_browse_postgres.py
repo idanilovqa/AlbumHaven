@@ -3920,6 +3920,18 @@ class PostgresLibraryBrowseRepository:
 
     @contextmanager
     def _browse_connection_context(self) -> Any:
+        # TEMPORARY (FTC-OPS-016 CI diagnostics; remove before PR 80 merges).
+        from music_app.services import browse_query_diagnostics
+
+        if browse_query_diagnostics.enabled():
+            with self._undiagnosed_browse_connection() as connection:
+                yield browse_query_diagnostics.DiagnosedConnection(connection, self._database_url)
+            return
+        with self._undiagnosed_browse_connection() as connection:
+            yield connection
+
+    @contextmanager
+    def _undiagnosed_browse_connection(self) -> Any:
         if self._use_shared_connection_pool:
             with _pooled_connection(self._database_url, workload="browse") as connection:
                 yield connection

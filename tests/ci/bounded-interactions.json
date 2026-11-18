@@ -12515,6 +12515,22 @@
       "proof": "static"
     },
     {
+      "id": "py:services/browse_query_diagnostics.py#_Watchdog._run",
+      "action": "TEMPORARY CI-only FTC-OPS-016 diagnostics: report a slow browse statement once a second over one probe connection (remove before PR 80 merges)",
+      "entrypoints": [
+        "py:music_app/services/browse_query_diagnostics.py#_Watchdog._run:background:thread"
+      ],
+      "owners": [
+        "music_app/services/browse_query_diagnostics.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
       "id": "py:services/cache.py#save_cache_updates_to_disk_for_config",
       "action": "Persist changed scan-cache entries on an executor",
       "entrypoints": [

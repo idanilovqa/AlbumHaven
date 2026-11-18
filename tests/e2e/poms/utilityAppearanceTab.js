@@ -198,8 +198,9 @@ export class UtilityAppearanceTab extends BasePage {
     return this.editor.locator(`[data-album-preview-state="${state}"]`);
   }
 
-  albumPlayingRowAnimationButton(value) {
-    return this.editor.locator(`button[data-album-playing-row-animation="${value}"]`);
+  // A compact Text Switch (owner 2026-11-18): one button, pressed while the animation is enabled.
+  get albumPlayingRowAnimationSwitch() {
+    return this.editor.locator('button[data-album-playing-row-animation-switch]');
   }
 
   get albumPageLivePreview() {

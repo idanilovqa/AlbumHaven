@@ -247,7 +247,6 @@
     background: var(--selection-body-background) !important; box-shadow: none !important;
     color: var(--text, var(--appearance-ink)); text-decoration: none; text-underline-offset: .22em;
   }
-  :root .in-page-tabs [role="tab"]:is(:hover, :active, :focus-visible) { background: transparent !important; }
 }
 
 /* Album Types uses the same seam position as Artist Family. The center is painted

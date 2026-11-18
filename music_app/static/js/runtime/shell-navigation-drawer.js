@@ -170,7 +170,29 @@ async function syncCustomCollectionSearchIndicator() {
   } catch {
     return;
   }
-  if (String(state.view?.query || '').trim() === query) mark(Number(state.ui?.libraryLooseTracksCount) > 0);
+  if (String(state.view?.query || '').trim() !== query) return;
+  mark(Number(state.ui?.libraryLooseTracksCount) > 0);
+  openBestCustomCollectionForSearch(query);
+}
+
+// Owner 2026-11-18: when the Artists tree finds nothing but a collection does, the search opens the collection
+// with the most matching tracks, as it opens the best-matching artist. Once per search; never over an open page.
+function openBestCustomCollectionForSearch(query) {
+  if (state.ui.customCollectionSearchAutoOpened === query) return;
+  const collections = Array.isArray(customCollectionCatalog.collections) ? customCollectionCatalog.collections : [];
+  const view = state.view || {};
+  if (
+    !(Number(state.ui?.libraryLooseTracksCount) > 0)
+    || state.ui.pendingViewTransition
+    || (Array.isArray(view.artists_sidebar) && view.artists_sidebar.length)
+    || (typeof isEffectivelyEmptyView === 'function' && !isEffectivelyEmptyView(view))
+    || document.querySelector?.('#non-album-modal:not([hidden])')
+  ) return;
+  state.ui.customCollectionSearchAutoOpened = query;
+  // A matching loose track in no collection opens All Loose Tracks, already filtered by the search.
+  const best = collections.reduce((top, item) => (!top || item.count > top.count ? item : top), null);
+  void setLibraryNavigationMode('custom-collections');
+  openLooseTracksPage({ collectionName: best?.name || '' });
 }
 
 function loadCustomCollectionCatalog({ fresh = false } = {}) {

@@ -241,7 +241,9 @@
 #artist-tree-expanded { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .library-navigation-body { display: grid; flex: 1 1 auto; grid-template-columns: 51px minmax(0, 1fr); gap: 8px; min-height: 0; overflow: hidden; transition: grid-template-columns var(--compact-motion-duration) var(--compact-motion-easing), gap var(--compact-motion-duration) var(--compact-motion-easing); }
 .library-navigation-mode-rail { display: flex; min-width: 0; flex-direction: column; align-items: center; gap: 8px; overflow: hidden; padding-right: 8px; border-right: 1px solid color-mix(in srgb, var(--app-muted) 24%, transparent); transition: opacity var(--compact-motion-duration) var(--compact-motion-easing), visibility 0s; }
-/* Owner 2026-11-17: a blue dot over the Custom Collections button while the search matches a loose track. */
+/* Owner 2026-11-18: every search-results marker uses the selection accent chosen in Settings, else the player's colour. */
+:root { --search-results-accent: var(--navigation-tree-selection-accent-color, var(--appearance-player-accent, var(--appearance-play, #4ade80))); }
+/* Owner 2026-11-17: a dot over the Custom Collections button while the search matches a loose track. */
 :root :is(.library-navigation-mode-action, .shell-navigation-compact-action)[data-search-results='true'] { position: relative; }
 :root :is(.library-navigation-mode-action, .shell-navigation-compact-action)[data-search-results='true']::after {
   content: '';
@@ -251,7 +253,7 @@
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--appearance-accent, #72baff);
+  background: var(--search-results-accent);
   box-shadow: 0 0 0 2px var(--app-chrome);
   pointer-events: none;
 }

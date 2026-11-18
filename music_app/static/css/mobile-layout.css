@@ -64,7 +64,7 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   #mobile-search-button { position: relative; }
   .app-bar--library:not(.is-search-open) #mobile-search-button[data-has-query="true"]::before {
     content: ''; position: absolute; top: 5px; right: 5px; width: 8px; height: 8px;
-    border-radius: 50%; background: var(--appearance-info, #64a8ff);
+    border-radius: 50%; background: var(--search-results-accent);
     box-shadow: 0 0 0 2px var(--app-chrome); pointer-events: none;
   }
   .app-bar--library .search-field {
@@ -289,6 +289,10 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
 .in-page-tabs > [aria-selected="true"] { color: var(--text, currentColor); border-bottom-color: var(--appearance-selected-accent, currentColor); font-weight: 650; }
 .in-page-tabs > [role="tab"]:disabled { color: var(--muted, currentColor); opacity: .45; cursor: default; }
 .in-page-tabs > [role="tab"]:focus-visible { outline: 2px solid var(--appearance-selected-accent, currentColor); outline-offset: 3px; }
+/* Owner 2026-11-18: hover, press and selection never fill a tab; only its text brightens and its underline shows. */
+:root .in-page-tabs > [role="tab"]:is(:hover, :active, :focus-visible, [aria-selected="true"]) { background: transparent !important; box-shadow: none !important; }
+:root .in-page-tabs > [role="tab"]:not(:disabled):not([aria-selected="true"]):is(:hover, :active) { color: var(--text, currentColor); border-color: transparent transparent color-mix(in srgb, var(--text, currentColor) 45%, transparent) !important; }
+:root .in-page-tabs > [aria-selected="true"]:is(:hover, :active) { border-color: transparent transparent var(--appearance-selected-accent, currentColor) !important; }
 .mobile-album-identity, .gallery-bar__home-tabs { display: none; }
 @media (max-width: 900px) {
   .gallery-bar__home-tabs:not([hidden]) { display: block; grid-column: 1 / -1; }
@@ -438,9 +442,9 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   .shell-navigation-rail .sidebar-top > [data-close-artists-drawer] { order: -1; }
   .shell-navigation-rail .sidebar-top .mobile-bar-action { display: inline-grid; width: 40px; height: 40px; min-width: 40px; min-height: 40px; }
   .shell-navigation-rail .sidebar-top .mobile-bar-action svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
- #mobile-library-button[data-search-results='true'] { animation: mobile-artists-search-pulse 2.4s ease-in-out infinite; border-color: var(--navigation-tree-selection-accent-color, var(--appearance-player-accent, var(--accent))); }
- @keyframes mobile-artists-search-pulse { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--navigation-tree-selection-accent-color, var(--appearance-player-accent, var(--accent))) 0%, transparent); } 50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--navigation-tree-selection-accent-color, var(--appearance-player-accent, var(--accent))) 22%, transparent); } }
- @media (prefers-reduced-motion: reduce) { #mobile-library-button[data-search-results='true'] { animation: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--navigation-tree-selection-accent-color, var(--appearance-player-accent, var(--accent))) 18%, transparent); } }
+ #mobile-library-button[data-search-results='true'] { animation: mobile-artists-search-pulse 2.4s ease-in-out infinite; border-color: var(--search-results-accent); }
+ @keyframes mobile-artists-search-pulse { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--search-results-accent) 0%, transparent); } 50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--search-results-accent) 22%, transparent); } }
+ @media (prefers-reduced-motion: reduce) { #mobile-library-button[data-search-results='true'] { animation: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--search-results-accent) 18%, transparent); } }
   .artist-family-panel__body { flex: 1 1 auto; min-height: 0; touch-action: pan-y; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
   .artist-family-panel :is(.ui-filter-pill, .ui-filter-pill *) { touch-action: pan-y; -webkit-user-select: none; user-select: none; }
   .mobile-settings-drawer { transform: translateX(-102%); transition: transform 220ms ease; }
@@ -507,7 +511,6 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
 }
 
 @media (max-width: 900px) {
-  :root .in-page-tabs > [role="tab"] { background: transparent !important; box-shadow: none !important; }
   .player-live-preview[data-mobile-player-preview="true"] .player-preview-transport { filter: saturate(1.35) contrast(1.08); }
 
 }
@@ -583,7 +586,9 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
 }
 
 /* Main-area loading and Home each occupy one complete page. */
-.shell-main-surface.has-library-loader:not(.has-mobile-page) > :not(#library-loader):not(#library-status-gallery-bar) { display: none !important; }
+/* An open collection page stays: it covers the area itself, and a search that matches only loose tracks
+   leaves the gallery empty behind it (owner 2026-11-18). */
+.shell-main-surface.has-library-loader:not(.has-mobile-page) > :not(#library-loader):not(#library-status-gallery-bar):not(.non-album-modal--page) { display: none !important; }
 @media (max-width: 900px) {
   /* Reserve the hamburger's column on both rows: counts start at the title,
      never under the navigation button. Controls share the count row when roomy. */
@@ -611,38 +616,34 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   [data-gallery-bar-layout="mobile-primary"] > .gallery-bar__actions {
     grid-column: 3; grid-row: 2; justify-self: end; align-self: start; margin: 0;
   }
+  /* Owner 2026-11-16: hamburger, then back, then artwork, then the title, side by side on one line. Each
+     visible leading item takes its own 40px column in DOM order (two used to share column 1 and overlap:
+     Back covered Settings sections); the title and actions are placed from the end. */
   .mobile-page-header[data-gallery-bar-layout="mobile-primary"] {
     grid-template-columns: 40px minmax(0, 1fr) auto;
     grid-template-rows: 24px 20px;
   }
-  .mobile-page-header[data-gallery-bar-layout="mobile-primary"]:has(> :is(.mobile-page-cover, .custom-collection-header-art):not([hidden])) {
+  .mobile-page-header[data-gallery-bar-layout="mobile-primary"]:has(> :is(.mobile-bar-action, .mobile-page-cover, .custom-collection-header-art):not([hidden]) ~ :is(.mobile-bar-action, .mobile-page-cover, .custom-collection-header-art):not([hidden])) {
     grid-template-columns: 40px 40px minmax(0, 1fr) auto;
   }
-  .mobile-page-header[data-gallery-bar-layout="mobile-primary"] > .mobile-bar-action {
-    position: static;
-    grid-column: 1;
-    grid-row: 1 / span 2;
-    align-self: center;
+  .mobile-page-header[data-gallery-bar-layout="mobile-primary"]:has(> :is(.mobile-bar-action, .mobile-page-cover, .custom-collection-header-art):not([hidden]) ~ :is(.mobile-bar-action, .mobile-page-cover, .custom-collection-header-art):not([hidden]) ~ :is(.mobile-bar-action, .mobile-page-cover, .custom-collection-header-art):not([hidden])) {
+    grid-template-columns: 40px 40px 40px minmax(0, 1fr) auto;
   }
-  .mobile-page-header[data-gallery-bar-layout="mobile-primary"] > :is(.mobile-page-cover, .custom-collection-header-art):not([hidden]) {
-    grid-column: 2;
+  /* #mobile-back-button in the list outranks the Gallery Bar's absolute back/library placement. */
+  .mobile-page-header[data-gallery-bar-layout="mobile-primary"] > :is(#mobile-back-button, .mobile-bar-action, .mobile-page-cover, .custom-collection-header-art):not([hidden]) {
+    position: static; inset: auto;
+    grid-column: auto;
     grid-row: 1 / span 2;
     align-self: center;
   }
   .mobile-page-header[data-gallery-bar-layout="mobile-primary"] .gallery-bar__title,
   .mobile-page-header[data-gallery-bar-layout="mobile-primary"] .gallery-bar__summary {
-    grid-column: 2;
-  }
-  .mobile-page-header[data-gallery-bar-layout="mobile-primary"]:has(> :is(.mobile-page-cover, .custom-collection-header-art):not([hidden])) :is(.gallery-bar__title, .gallery-bar__summary) {
-    grid-column: 3;
+    grid-column: -3 / -2;
   }
   .mobile-page-header[data-gallery-bar-layout="mobile-primary"] > .gallery-bar__actions {
-    grid-column: 3;
+    grid-column: -2 / -1;
     grid-row: 1 / span 2;
     align-self: center;
-  }
-  .mobile-page-header[data-gallery-bar-layout="mobile-primary"]:has(> :is(.mobile-page-cover, .custom-collection-header-art):not([hidden])) > .gallery-bar__actions {
-    grid-column: 4;
   }
   :root #mobile-library-button {
     border: 0 !important; background: transparent !important; box-shadow: none !important;

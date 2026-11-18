@@ -282,3 +282,40 @@ outline-offset: -1px !important;
 border-color: var(--muted, var(--appearance-muted, #9ca3af)) !important;
 box-shadow: none !important;
 }
+
+/* Text Switch (owner 2026-11-18): full is an On/Off pair, compact one button naming its state. On is solid green;
+   the app-wide button hover never refills either. */
+.ui-text-switch--full {
+display: inline-flex;
+flex: 0 0 auto;
+gap: 3px;
+padding: 3px;
+border: 1px solid var(--appearance-line, var(--border));
+border-radius: 10px;
+background: color-mix(in srgb, var(--appearance-main-surface, var(--bg)) 72%, black 28%);
+}
+:root :is(.ui-text-switch__option, .ui-text-switch--compact) {
+min-height: 28px;
+min-width: 44px;
+padding: 0 11px;
+border-radius: 7px;
+background: transparent !important;
+color: var(--appearance-muted, var(--muted));
+font: inherit;
+font-size: 11px;
+font-weight: 700;
+cursor: pointer;
+}
+:root .ui-text-switch__option { border: 0 !important; }
+:root .ui-text-switch--compact { flex: 0 0 auto; border: 1px solid var(--appearance-line, var(--border)) !important; }
+:root :is(.ui-text-switch__option, .ui-text-switch--compact):not(:disabled):not([aria-pressed="true"]):hover { color: var(--appearance-ink, var(--text)); }
+:root :is(.ui-text-switch__option--on, .ui-text-switch--compact)[aria-pressed="true"] {
+background: var(--ui-text-switch-on, var(--appearance-success, var(--success, #2eba70))) !important;
+border-color: var(--ui-text-switch-on, var(--appearance-success, var(--success, #2eba70))) !important;
+color: var(--ui-text-switch-on-ink, #04210f);
+}
+:root .ui-text-switch__option--off[aria-pressed="true"] {
+background: var(--appearance-control, color-mix(in srgb, var(--text) 12%, transparent)) !important;
+color: var(--appearance-ink, var(--text));
+}
+:root :is(.ui-text-switch__option, .ui-text-switch--compact):disabled { cursor: default; opacity: .55; }

@@ -16,7 +16,9 @@
   position: relative;
   display: grid;
   width: 100%;
+  /* Always square (owner 2026-11-18): a flex row never squeezes it out of shape. */
   aspect-ratio: 1 / 1;
+  flex-shrink: 0;
   overflow: hidden;
   place-items: center;
   border-radius: inherit;

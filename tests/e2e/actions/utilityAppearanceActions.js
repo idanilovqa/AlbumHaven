@@ -141,10 +141,11 @@ export class UtilityAppearanceActions {
   }
 
   async setAlbumPlayingRowAnimation(enabled) {
-    const value = enabled ? 'enabled' : 'disabled';
-    const button = this.utilityAppearanceTab.albumPlayingRowAnimationButton(value);
-    await button.click();
-    await expect(button).toHaveAttribute('aria-pressed', 'true');
+    const toggle = this.utilityAppearanceTab.albumPlayingRowAnimationSwitch;
+    const pressed = String(Boolean(enabled));
+    if (await toggle.getAttribute('aria-pressed') !== pressed) await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-pressed', pressed);
+    await expect(toggle).toHaveText(enabled ? 'On' : 'Off');
   }
 
   async selectAlbumPreviewState(previewState) {

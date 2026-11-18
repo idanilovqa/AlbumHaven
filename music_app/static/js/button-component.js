@@ -122,12 +122,48 @@
       + `<span class="ui-external-link__text">${escape(service.label)}</span></a>`;
   }
 
+  // Text Switch (owner 2026-11-18): one On/Off setting shown as text, On solid green.
+  // - full: both choices side by side; each button carries `attribute` with its value (`on`/`off` by default).
+  // - compact: one button naming the current state; it carries `attribute` with `value` and toggles on click.
+  // Pages set the state with syncTextSwitch and never restyle the switch.
+  function renderTextSwitch(options = {}) {
+    const attribute = String(options.attribute || '');
+    if (!/^data-[a-z][a-z0-9-]*$/.test(attribute)) throw new TypeError('Invalid text switch attribute.');
+    const label = String(options.label || '').trim();
+    if (!label) throw new TypeError('A text switch needs a label.');
+    const onLabel = options.onLabel || 'On';
+    const offLabel = options.offLabel || 'Off';
+    if (options.variant === 'compact') {
+      return `<button type="button" class="ui-text-switch ui-text-switch--compact" ${attribute}="${escape(options.value ?? '')}" aria-label="${escape(label)}" aria-pressed="false" data-text-switch-on="${escape(onLabel)}" data-text-switch-off="${escape(offLabel)}">${escape(offLabel)}</button>`;
+    }
+    const choices = [
+      { state: 'on', value: options.onValue ?? 'on', text: onLabel },
+      { state: 'off', value: options.offValue ?? 'off', text: offLabel },
+    ];
+    return `<div class="ui-text-switch ui-text-switch--full" role="group" aria-label="${escape(label)}">${choices.map(choice => (
+      `<button type="button" class="ui-text-switch__option ui-text-switch__option--${choice.state}" ${attribute}="${escape(choice.value)}" aria-pressed="false">${escape(choice.text)}</button>`
+    )).join('')}</div>`;
+  }
+
+  // Shows a Text Switch (either variant) as on or off.
+  function syncTextSwitch(element, on) {
+    if (!element) return;
+    if (element.classList?.contains('ui-text-switch--compact')) {
+      element.setAttribute('aria-pressed', String(Boolean(on)));
+      element.textContent = element.getAttribute(on ? 'data-text-switch-on' : 'data-text-switch-off') || (on ? 'On' : 'Off');
+      return;
+    }
+    element.querySelectorAll?.('.ui-text-switch__option').forEach((button) => {
+      button.setAttribute('aria-pressed', String(button.classList.contains('ui-text-switch__option--on') === Boolean(on)));
+    });
+  }
+
   function setDisabled(element, disabled) {
     element.disabled = Boolean(disabled);
     element.setAttribute('aria-disabled', String(element.disabled));
   }
 
-  const api = { renderButton, renderActionButton, renderIconSvg, renderExternalServiceLink, setDisabled };
+  const api = { renderButton, renderActionButton, renderIconSvg, renderExternalServiceLink, renderTextSwitch, syncTextSwitch, setDisabled };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   if (scope) scope.ButtonComponent = api;
 })(typeof window !== 'undefined' ? window : null);

@@ -5433,8 +5433,9 @@ function animateAlbumDetailsCoverShuffle(previous, stack, direction) {
   const front = stack.querySelector('.album-details-cover-stack__front');
   if (!front || activeIndex === previous.activeIndex) return false;
   const dir = direction < 0 ? -1 : 1;
-  // 900ms, up from 620ms: the owner found the switch too fast (2026-11-17).
-  const timing = { duration: 900, easing: 'cubic-bezier(.22,1,.36,1)', fill: 'backwards' };
+  // 1400ms with an even ease-in-out: at 900ms the ease-out curve still finished most of the move in the first
+  // third, and the owner found the switch too fast (2026-11-17, again 2026-11-18).
+  const timing = { duration: 1400, easing: 'cubic-bezier(.45,0,.25,1)', fill: 'backwards' };
   stack.classList.add('is-shuffling');
   // The old front cover leaves to the side and tucks in behind the stack, where its rear copy then shows.
   const ghost = previous.front;
@@ -11860,7 +11861,29 @@ async function syncCustomCollectionSearchIndicator() {
   } catch {
     return;
   }
-  if (String(state.view?.query || '').trim() === query) mark(Number(state.ui?.libraryLooseTracksCount) > 0);
+  if (String(state.view?.query || '').trim() !== query) return;
+  mark(Number(state.ui?.libraryLooseTracksCount) > 0);
+  openBestCustomCollectionForSearch(query);
+}
+
+// Owner 2026-11-18: when the Artists tree finds nothing but a collection does, the search opens the collection
+// with the most matching tracks, as it opens the best-matching artist. Once per search; never over an open page.
+function openBestCustomCollectionForSearch(query) {
+  if (state.ui.customCollectionSearchAutoOpened === query) return;
+  const collections = Array.isArray(customCollectionCatalog.collections) ? customCollectionCatalog.collections : [];
+  const view = state.view || {};
+  if (
+    !(Number(state.ui?.libraryLooseTracksCount) > 0)
+    || state.ui.pendingViewTransition
+    || (Array.isArray(view.artists_sidebar) && view.artists_sidebar.length)
+    || (typeof isEffectivelyEmptyView === 'function' && !isEffectivelyEmptyView(view))
+    || document.querySelector?.('#non-album-modal:not([hidden])')
+  ) return;
+  state.ui.customCollectionSearchAutoOpened = query;
+  // A matching loose track in no collection opens All Loose Tracks, already filtered by the search.
+  const best = collections.reduce((top, item) => (!top || item.count > top.count ? item : top), null);
+  void setLibraryNavigationMode('custom-collections');
+  openLooseTracksPage({ collectionName: best?.name || '' });
 }
 
 function loadCustomCollectionCatalog({ fresh = false } = {}) {
@@ -39791,9 +39814,13 @@ function setTagEditorView(view) {
 function updateCueStructureDraft(field, value, { commit = false } = {}) {
   const tagEditor = state.tagEditor;
   const tracks = tagEditor?.tracks || [];
-  const identity = typeof getTagEditorFocusedPath === 'function'
+  // A commit belongs to the track the time was typed for. Clicking another track selects it on pointerdown,
+  // before the field's blur commits, so the focused track has already moved on (owner 2026-11-18: the typed
+  // END landed on the last track as "CUE boundary is not editable." and the field snapped back).
+  const typedFor = commit && tagEditor?.cueTyping?.field === field ? tagEditor.cueTyping.identity : '';
+  const identity = typedFor || (typeof getTagEditorFocusedPath === 'function'
     ? getTagEditorFocusedPath()
-    : cueEditorTrackIdentity(tracks[0]);
+    : cueEditorTrackIdentity(tracks[0]));
   tagEditor.cueTyping = { identity, field, value: String(value ?? '') };
   try {
     tagEditor.cueDraft = buildCueBoundaryCorrection(tracks, identity, field, value);
@@ -41908,9 +41935,21 @@ function renderTrackModalRelease(album) {
     // album's display cover (the gallery card's image); the others use the preview the gallery preloads and
     // the stack's rear cards show. A separate full-size URL left the cover black while it downloaded
     // (owner 2026-11-17). The lightbox still opens the full image.
-    const coverSrc = activeSelectedCover?.imageUrl && !(selectedCoverIndex === 0 && albumHasDisplayCover(album))
-      ? albumDetailsCoverPreviewUrl(activeSelectedCover)
-      : buildAlbumDisplayCoverUrl(album);
+    // A cover brought forward from the stack keeps the rear card's picture, already loaded and decoded: it is
+    // never fetched again, which left one cover black while the others showed (owner 2026-11-18).
+    const shuffledRearImage = typeof HTMLImageElement !== 'undefined'
+      && previousCoverStack?.rearImages?.[String(selectedCoverIndex)] instanceof HTMLImageElement
+      ? previousCoverStack.rearImages[String(selectedCoverIndex)]
+      : null;
+    if (shuffledRearImage) {
+      shuffledRearImage.removeAttribute('loading');
+      shuffledRearImage.setAttribute('data-cover-visual-state', 'ready');
+    }
+    const coverSrc = shuffledRearImage
+      ? shuffledRearImage.getAttribute('src')
+      : activeSelectedCover?.imageUrl && !(selectedCoverIndex === 0 && albumHasDisplayCover(album))
+        ? albumDetailsCoverPreviewUrl(activeSelectedCover)
+        : buildAlbumDisplayCoverUrl(album);
     const lightboxSrc = activeSelectedCover?.imageUrl || (typeof buildAlbumLightboxCoverUrl === 'function'
       ? buildAlbumLightboxCoverUrl(album)
       : coverSrc);
@@ -41921,7 +41960,7 @@ function renderTrackModalRelease(album) {
     const existingProductionSrc = canInspectHtmlElements && existingCoverImage instanceof HTMLImageElement
       ? String(existingCoverImage.getAttribute('data-production-cover-src') || '').trim()
       : '';
-    const reusableCoverImage = canInspectHtmlElements && existingCoverImage instanceof HTMLImageElement
+    const reusableCoverImage = shuffledRearImage || (canInspectHtmlElements && existingCoverImage instanceof HTMLImageElement
       && (
         existingProductionSrc === coverSrc
         ||
@@ -41929,7 +41968,7 @@ function renderTrackModalRelease(album) {
         || existingCoverImage.currentSrc === new URL(coverSrc, window.location.href).href
       )
       ? existingCoverImage
-      : null;
+      : null);
     const localCoverRefRaw = activeSelectedCover ? '' : String(album?.cover_ref || '').trim();
     const remoteCoverUrlRaw = activeSelectedCover
       ? '' : String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim();
@@ -53751,6 +53790,9 @@ function scheduleGallerySearchCommit(nextQuery, options = {}) {
 
 function revealArtistTreeForSearch() {
   if (typeof setLibraryNavigationMode === 'function') setLibraryNavigationMode('artists');
+  // The search leaves an open Loose Tracks page for the gallery, so its best match shows as selected in the
+  // tree (owner 2026-11-18); the page's own "no artist selected" state ends here.
+  state.ui.suppressSidebarSelection = false;
   if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) {
     const button = document.getElementById('mobile-library-button');
     button?.setAttribute('data-search-results', 'true');
@@ -54810,6 +54852,12 @@ function handleGalleryBootstrapSearchBlur() {
   if (!input) return;
   closeRecentSearchPopover();
   state.ui.pendingSearchClearOnBlur = false;
+  // Owner 2026-11-18: an emptied field ends the search when focus leaves it, as Enter does: the full Artists
+  // tree returns with the selected artist revealed.
+  if (!String(input.value || '').trim() && String(state.view?.query || '').trim()) {
+    handleGalleryBootstrapSearchSubmit({ preventDefault() {} });
+    return;
+  }
   if (String(state.ui.searchDraftQuery || '') !== String(state.view?.query || '')) {
     releasePendingGallerySearchSuspensions();
   }

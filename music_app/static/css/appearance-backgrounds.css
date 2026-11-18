@@ -928,6 +928,8 @@ html .cover-lookup-drawer {
 .appearance-album-layout-card__diagram--editorial_canvas em { top: 13px; height: 7px; }
 .appearance-album-motion { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 16px; padding-top: 15px; border-top: 1px solid color-mix(in srgb, var(--appearance-line) 55%, transparent); }
 .appearance-album-motion .background-help { margin: 4px 0 0; font-size: 10px; }
+/* Each settings group starts its own block: its heading never sits on the row above (owner 2026-11-18). */
+.appearance-album-page__group { margin-top: 28px; padding-top: 18px; border-top: 1px solid var(--appearance-line); }
 .appearance-album-preview {
   margin-top: 14px;
   overflow: hidden;

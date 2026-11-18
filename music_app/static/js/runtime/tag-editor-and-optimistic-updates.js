@@ -89,9 +89,13 @@ function setTagEditorView(view) {
 function updateCueStructureDraft(field, value, { commit = false } = {}) {
   const tagEditor = state.tagEditor;
   const tracks = tagEditor?.tracks || [];
-  const identity = typeof getTagEditorFocusedPath === 'function'
+  // A commit belongs to the track the time was typed for. Clicking another track selects it on pointerdown,
+  // before the field's blur commits, so the focused track has already moved on (owner 2026-11-18: the typed
+  // END landed on the last track as "CUE boundary is not editable." and the field snapped back).
+  const typedFor = commit && tagEditor?.cueTyping?.field === field ? tagEditor.cueTyping.identity : '';
+  const identity = typedFor || (typeof getTagEditorFocusedPath === 'function'
     ? getTagEditorFocusedPath()
-    : cueEditorTrackIdentity(tracks[0]);
+    : cueEditorTrackIdentity(tracks[0]));
   tagEditor.cueTyping = { identity, field, value: String(value ?? '') };
   try {
     tagEditor.cueDraft = buildCueBoundaryCorrection(tracks, identity, field, value);
@@ -2206,9 +2210,21 @@ function renderTrackModalRelease(album) {
     // album's display cover (the gallery card's image); the others use the preview the gallery preloads and
     // the stack's rear cards show. A separate full-size URL left the cover black while it downloaded
     // (owner 2026-11-17). The lightbox still opens the full image.
-    const coverSrc = activeSelectedCover?.imageUrl && !(selectedCoverIndex === 0 && albumHasDisplayCover(album))
-      ? albumDetailsCoverPreviewUrl(activeSelectedCover)
-      : buildAlbumDisplayCoverUrl(album);
+    // A cover brought forward from the stack keeps the rear card's picture, already loaded and decoded: it is
+    // never fetched again, which left one cover black while the others showed (owner 2026-11-18).
+    const shuffledRearImage = typeof HTMLImageElement !== 'undefined'
+      && previousCoverStack?.rearImages?.[String(selectedCoverIndex)] instanceof HTMLImageElement
+      ? previousCoverStack.rearImages[String(selectedCoverIndex)]
+      : null;
+    if (shuffledRearImage) {
+      shuffledRearImage.removeAttribute('loading');
+      shuffledRearImage.setAttribute('data-cover-visual-state', 'ready');
+    }
+    const coverSrc = shuffledRearImage
+      ? shuffledRearImage.getAttribute('src')
+      : activeSelectedCover?.imageUrl && !(selectedCoverIndex === 0 && albumHasDisplayCover(album))
+        ? albumDetailsCoverPreviewUrl(activeSelectedCover)
+        : buildAlbumDisplayCoverUrl(album);
     const lightboxSrc = activeSelectedCover?.imageUrl || (typeof buildAlbumLightboxCoverUrl === 'function'
       ? buildAlbumLightboxCoverUrl(album)
       : coverSrc);
@@ -2219,7 +2235,7 @@ function renderTrackModalRelease(album) {
     const existingProductionSrc = canInspectHtmlElements && existingCoverImage instanceof HTMLImageElement
       ? String(existingCoverImage.getAttribute('data-production-cover-src') || '').trim()
       : '';
-    const reusableCoverImage = canInspectHtmlElements && existingCoverImage instanceof HTMLImageElement
+    const reusableCoverImage = shuffledRearImage || (canInspectHtmlElements && existingCoverImage instanceof HTMLImageElement
       && (
         existingProductionSrc === coverSrc
         ||
@@ -2227,7 +2243,7 @@ function renderTrackModalRelease(album) {
         || existingCoverImage.currentSrc === new URL(coverSrc, window.location.href).href
       )
       ? existingCoverImage
-      : null;
+      : null);
     const localCoverRefRaw = activeSelectedCover ? '' : String(album?.cover_ref || '').trim();
     const remoteCoverUrlRaw = activeSelectedCover
       ? '' : String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim();

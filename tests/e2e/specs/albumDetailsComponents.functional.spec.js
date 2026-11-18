@@ -300,7 +300,7 @@ test('FTC-ALBUM-DETAILS-020 preserves search, hover, playback, and reduced-motio
   await stepLogger.step('Enable persisted playing-row animation for this owned scenario', async () => {
     await page.emulateMedia({ reducedMotion: 'no-preference' });
     await openAppearanceAlbumPage({ settingsModalAppBarActions, utilityAppearanceActions, utilityTabBarActions });
-    if (await utilityAppearanceActions.utilityAppearanceTab.albumPlayingRowAnimationButton('enabled').getAttribute('aria-pressed') !== 'true') {
+    if (await utilityAppearanceActions.utilityAppearanceTab.albumPlayingRowAnimationSwitch.getAttribute('aria-pressed') !== 'true') {
       await utilityAppearanceActions.setAlbumPlayingRowAnimation(true);
       await utilityAppearanceActions.save();
     }

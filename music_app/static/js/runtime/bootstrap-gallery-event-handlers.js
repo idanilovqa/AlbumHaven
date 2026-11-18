@@ -1602,6 +1602,9 @@ function scheduleGallerySearchCommit(nextQuery, options = {}) {
 
 function revealArtistTreeForSearch() {
   if (typeof setLibraryNavigationMode === 'function') setLibraryNavigationMode('artists');
+  // The search leaves an open Loose Tracks page for the gallery, so its best match shows as selected in the
+  // tree (owner 2026-11-18); the page's own "no artist selected" state ends here.
+  state.ui.suppressSidebarSelection = false;
   if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) {
     const button = document.getElementById('mobile-library-button');
     button?.setAttribute('data-search-results', 'true');
@@ -2661,6 +2664,12 @@ function handleGalleryBootstrapSearchBlur() {
   if (!input) return;
   closeRecentSearchPopover();
   state.ui.pendingSearchClearOnBlur = false;
+  // Owner 2026-11-18: an emptied field ends the search when focus leaves it, as Enter does: the full Artists
+  // tree returns with the selected artist revealed.
+  if (!String(input.value || '').trim() && String(state.view?.query || '').trim()) {
+    handleGalleryBootstrapSearchSubmit({ preventDefault() {} });
+    return;
+  }
   if (String(state.ui.searchDraftQuery || '') !== String(state.view?.query || '')) {
     releasePendingGallerySearchSuspensions();
   }

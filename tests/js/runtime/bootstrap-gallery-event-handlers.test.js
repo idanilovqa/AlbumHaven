@@ -4647,18 +4647,19 @@ test('recordRecentSearchQuery keeps the new query in memory when session storage
   assert.deepEqual(JSON.parse(JSON.stringify(context.readRecentSearchQueries())), ['Joseph']);
 });
 
-test('native clear changes only the input draft until empty search submission', () => {
+test('native clear changes only the input draft until focus leaves the emptied field', () => {
   const { context, calls } = createContext({ searchInputValue: '' });
   context.state.view.query = 'Neal Morse';
 
   context.syncSearchClear();
-  context.handleGalleryBootstrapSearchBlur();
-
   assert.equal(context.state.ui.searchDraftQuery, '');
+  assert.deepEqual(calls.buildApiUrl, [], 'clearing alone commits nothing');
+
+  // Owner 2026-11-18: clearing the search and clicking outside restores the full tree.
+  context.handleGalleryBootstrapSearchBlur();
   assert.equal(context.state.ui.pendingSearchClearOnBlur, false);
-  assert.deepEqual(calls.scheduledSearchCommits, []);
-  assert.deepEqual(calls.buildApiUrl, []);
-  assert.deepEqual(calls.fetchAndRender, []);
+  assert.equal(calls.buildApiUrl.length, 1);
+  assert.equal(calls.buildApiUrl[0].query, '');
 });
 
 test('selecting a recent search immediately submits that query', () => {
@@ -4802,9 +4803,8 @@ test('empty explicit submission commits the same cleared-search view as Apply', 
   };
   context.state.ui.pendingSearchClearOnBlur = true;
 
+  // Leaving the emptied field (owner 2026-11-18) commits exactly what Enter does.
   context.handleGalleryBootstrapSearchBlur();
-  assert.deepEqual(calls.buildApiUrl, []);
-  submitSearch(context, '');
 
   assert.equal(calls.buildApiUrl.length, 1);
   assert.equal(calls.buildApiUrl[0].surface.active, 'albums');
@@ -4877,8 +4877,9 @@ test('native clear reloads the full selected-artist gallery when the search has 
   };
   context.state.ui.preSearchViewOrigin = 'canonical_root';
   context.state.ui.pendingSearchClearOnBlur = true;
+  // Owner 2026-11-18: leaving an emptied field ends the search, as Enter does.
+  context.document.getElementById('search-input').value = '';
   context.handleGalleryBootstrapSearchBlur();
-  submitSearch(context, '');
 
   assert.deepEqual(calls.applyViewPayload, []);
   assert.equal(context.state.view.artist_groups, mountedGalleryGroups);
@@ -4937,8 +4938,9 @@ test('canonical search clear keeps browse scope for a retained artist request bu
   blankClear.context.state.ui.preSearchViewOrigin = 'canonical_root';
   blankClear.context.state.ui.pendingSearchClearOnBlur = true;
 
+  // Owner 2026-11-18: leaving an emptied field ends the search, as Enter does.
+  blankClear.context.document.getElementById('search-input').value = '';
   blankClear.context.handleGalleryBootstrapSearchBlur();
-  submitSearch(blankClear.context, '');
 
   assert.deepEqual(blankClear.calls.getReusableRootBrowseView, [{
     query: '',
@@ -4992,8 +4994,9 @@ test('canonical search clear keeps browse scope for a retained artist request bu
   retainedArtistClear.context.state.ui.preSearchViewOrigin = 'canonical_root';
   retainedArtistClear.context.state.ui.pendingSearchClearOnBlur = true;
 
+  // Owner 2026-11-18: leaving an emptied field ends the search, as Enter does.
+  retainedArtistClear.context.document.getElementById('search-input').value = '';
   retainedArtistClear.context.handleGalleryBootstrapSearchBlur();
-  submitSearch(retainedArtistClear.context, '');
 
   assert.deepEqual(retainedArtistClear.calls.getReusableRootBrowseView, [{
     query: '',
@@ -5074,8 +5077,9 @@ test('native exact-artist 10/10 clear restores the cached root around the comple
   };
   context.state.ui.preSearchViewOrigin = 'canonical_root';
   context.state.ui.pendingSearchClearOnBlur = true;
+  // Owner 2026-11-18: leaving an emptied field ends the search, as Enter does.
+  context.document.getElementById('search-input').value = '';
   context.handleGalleryBootstrapSearchBlur();
-  submitSearch(context, '');
 
   assert.equal(calls.applyViewPayload.length, 1);
   assert.equal(calls.applyViewPayload[0].payload.query, '');
@@ -5155,8 +5159,9 @@ test('native exact-artist clear uses the selected-gallery completion denominator
   context.state.ui.preSearchViewOrigin = 'canonical_root';
   context.state.ui.pendingSearchClearOnBlur = true;
 
+  // Owner 2026-11-18: leaving an emptied field ends the search, as Enter does.
+  context.document.getElementById('search-input').value = '';
   context.handleGalleryBootstrapSearchBlur();
-  submitSearch(context, '');
 
   assert.equal(calls.applyViewPayload.length, 1);
   assert.equal(calls.applyViewPayload[0].payload.query, '');
@@ -5235,8 +5240,9 @@ test('native exact-artist clear restores the captured sidebar preview instead of
   context.state.ui.preSearchViewOrigin = 'canonical_root';
   context.state.ui.pendingSearchClearOnBlur = true;
 
+  // Owner 2026-11-18: leaving an emptied field ends the search, as Enter does.
+  context.document.getElementById('search-input').value = '';
   context.handleGalleryBootstrapSearchBlur();
-  submitSearch(context, '');
 
   assert.equal(calls.applyViewPayload.length, 1);
   assert.deepEqual(
@@ -5311,8 +5317,9 @@ test('native exact-artist clear fetches when a query-scoped denominator understa
   context.state.ui.preSearchViewOrigin = 'canonical_root';
   context.state.ui.pendingSearchClearOnBlur = true;
 
+  // Owner 2026-11-18: leaving an emptied field ends the search, as Enter does.
+  context.document.getElementById('search-input').value = '';
   context.handleGalleryBootstrapSearchBlur();
-  submitSearch(context, '');
 
   assert.deepEqual(calls.applyViewPayload, []);
   assert.equal(context.state.view.query, 'query match');
@@ -5394,8 +5401,9 @@ test('native clear does not retain a query-filtered selected-artist group over t
   context.state.ui.preSearchViewOrigin = 'canonical_root';
   context.state.ui.pendingSearchClearOnBlur = true;
 
+  // Owner 2026-11-18: leaving an emptied field ends the search, as Enter does.
+  context.document.getElementById('search-input').value = '';
   context.handleGalleryBootstrapSearchBlur();
-  submitSearch(context, '');
 
   assert.equal(context.state.view.query, 'Joseph');
   assert.equal(context.state.view.selected_artist, 'Neal Morse');
@@ -5483,8 +5491,9 @@ test(`cold direct-loaded Signal 1/1 clear preserves a complete cached root and m
 
   assert.equal(context.state.ui.pendingSearchClearOnBlur, false);
 
+  // Owner 2026-11-18: leaving an emptied field ends the search, as Enter does.
+  context.document.getElementById('search-input').value = '';
   context.handleGalleryBootstrapSearchBlur();
-  submitSearch(context, '');
 
   assert.equal(calls.applyViewPayload.length, 1);
   const restoredPayload = calls.applyViewPayload[0].payload;
@@ -5587,8 +5596,9 @@ test('native clear preserves an intentionally family-filtered mounted gallery an
   context.state.ui.preSearchViewOrigin = 'canonical_root';
 
   context.syncSearchClear();
+  // Owner 2026-11-18: leaving an emptied field ends the search, as Enter does.
+  context.document.getElementById('search-input').value = '';
   context.handleGalleryBootstrapSearchBlur();
-  submitSearch(context, '');
 
   assert.equal(calls.applyViewPayload.length, 1);
   assert.equal(calls.applyViewPayload[0].payload.query, '');
@@ -5660,8 +5670,9 @@ test('native clear restores the captured pre-search artist tree when no reusable
   calls.fetchAndRender.length = 0;
 
   context.syncSearchClear();
+  // Owner 2026-11-18: leaving an emptied field ends the search, as Enter does.
+  context.document.getElementById('search-input').value = '';
   context.handleGalleryBootstrapSearchBlur();
-  submitSearch(context, '');
 
   assert.equal(context.state.view.query, '');
   assert.equal(context.state.view.selected_artist, 'Aria');
@@ -5722,8 +5733,9 @@ test('syncSearchClear injects the selected artist into a cached preview sidebar 
 
   assert.equal(context.state.ui.pendingSearchClearOnBlur, false);
 
+  // Owner 2026-11-18: leaving an emptied field ends the search, as Enter does.
+  context.document.getElementById('search-input').value = '';
   context.handleGalleryBootstrapSearchBlur();
-  submitSearch(context, '');
 
   assert.deepEqual(JSON.parse(JSON.stringify(calls.applyViewPayload)), [{
     payload: {
@@ -5959,6 +5971,8 @@ test('search reveal resets navigation and expands only a folded desktop Artists 
   context.setLibraryNavigationMode = mode => {
     navigationModes.push(mode);
     context.state.ui.libraryNavigationMode = mode;
+    // Switching to Artists while Loose Tracks is still open suppresses the tree's selection.
+    context.state.ui.suppressSidebarSelection = true;
   };
   context.usesMobilePageLayout = () => false;
   context.document.getElementById = id => id === 'app-shell' ? { classList: { contains: name => name === 'is-artist-tree-folded' && folded } } : null;
@@ -5971,6 +5985,8 @@ test('search reveal resets navigation and expands only a folded desktop Artists 
   assert.deepEqual(JSON.parse(JSON.stringify(toggleOptions)), [{ instant: true }]);
   assert.deepEqual(navigationModes, ['artists', 'artists']);
   assert.equal(context.state.ui.libraryNavigationMode, 'artists');
+  // Owner 2026-11-18: a search from the Loose Tracks page leaves it, so the best match shows selected.
+  assert.equal(context.state.ui.suppressSidebarSelection, false);
 });
 
 

@@ -112,6 +112,13 @@ test('AlbumArtbox CSS makes every state square', () => {
     'utf8',
   );
   assert.match(css, /\.album-artbox\s*\{[^}]*aspect-ratio:\s*1\s*\/\s*1/s);
+  // Owner 2026-11-18: a flex row (a long CUE path beside Edit Tags artwork) never squeezes an artbox.
+  assert.match(css, /\.album-artbox\s*\{[^}]*flex-shrink:\s*0/s);
+  const utilitiesCss = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'utilities.css'),
+    'utf8',
+  );
+  assert.match(utilitiesCss, /\.tag-editor-artwork img,\s*\.tag-editor-artwork-placeholder\s*\{[^}]*flex:\s*0 0 52px;[^}]*aspect-ratio:\s*1\s*\/\s*1/s);
 });
 
 test('album artwork stretches into every fixed display box without cropping or bars', () => {

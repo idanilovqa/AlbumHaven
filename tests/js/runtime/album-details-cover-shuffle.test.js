@@ -27,7 +27,7 @@ function node(extra = {}) {
   return self;
 }
 
-test('the rising cover shows its decoded rear picture until its own image arrives, over 900ms', () => {
+test('the rising cover shows its decoded rear picture until its own image arrives, over 1400ms', () => {
   // Owner 2026-11-17: "When covers change in 3-covers artbox, the cover that appears from underneath is
   // absent" and "The animation is too fast on changing covers, slow it down a bit".
   const timings = [];
@@ -60,7 +60,7 @@ test('the rising cover shows its decoded rear picture until its own image arrive
   assert.equal(context.animateAlbumDetailsCoverShuffle(previous, stack, 1), true);
   assert.ok(visual.children.includes(rearImage), 'the decoded rear picture stands in');
   assert.equal(rearImage.classList.contains('album-details-cover-stack__stand-in'), true);
-  assert.deepEqual(timings, [900]);
+  assert.deepEqual(timings, [1400]);
   risingImage.fire('load');
   assert.equal(visual.children.includes(rearImage), false, 'the real cover takes over once loaded');
 });
@@ -73,5 +73,7 @@ test('Album Details shows the previews the gallery already loaded, never a separ
   vm.runInContext(source, context);
   assert.equal(context.albumDetailsCoverPreviewUrl({ imageUrl: '/cover?selection_id=a' }), '/cover?selection_id=a&size=480');
   const tagEditor = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'tag-editor-and-optimistic-updates.js'), 'utf8');
-  assert.match(tagEditor, /const coverSrc = activeSelectedCover\?\.imageUrl && !\(selectedCoverIndex === 0 && albumHasDisplayCover\(album\)\)\s*\? albumDetailsCoverPreviewUrl\(activeSelectedCover\)\s*: buildAlbumDisplayCoverUrl\(album\);/);
+  assert.match(tagEditor, /const coverSrc = shuffledRearImage\s*\? shuffledRearImage\.getAttribute\('src'\)\s*: activeSelectedCover\?\.imageUrl && !\(selectedCoverIndex === 0 && albumHasDisplayCover\(album\)\)\s*\? albumDetailsCoverPreviewUrl\(activeSelectedCover\)\s*: buildAlbumDisplayCoverUrl\(album\);/);
+  // Owner 2026-11-18: a cover brought forward reuses the decoded rear picture; it is never fetched again.
+  assert.match(tagEditor, /const reusableCoverImage = shuffledRearImage \|\|/);
 });

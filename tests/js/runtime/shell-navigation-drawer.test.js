@@ -304,6 +304,8 @@ test('a search narrows the collections tree and dots the Custom Collections butt
   };
   context.escapeHtml = value => String(value);
   context.state.view.query = 'night';
+  // An artist matches too, so the search keeps its artist rather than opening a collection.
+  context.state.view.artists_sidebar = [{ artist: 'Night Ranger' }];
 
   await context.syncCustomCollectionSearchIndicator();
   assert.equal(requests.at(-1), '/library/custom-collections?q=night');
@@ -1095,4 +1097,56 @@ test('the desktop side bar waits for an open modal to close before its idle coll
   notifyOverlayChange();
   idleTimers()[0]();
   assert.equal(drawerRail.classList.contains('is-library-mode-rail-hidden'), true, 'it collapses once nothing is open');
+});
+
+test('every search-results marker uses the selection accent, falling back to the player colour', () => {
+  const cssRoot = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'css');
+  const chrome = fs.readFileSync(path.join(cssRoot, 'app-chrome.css'), 'utf8');
+  const mobile = fs.readFileSync(path.join(cssRoot, 'mobile-layout.css'), 'utf8');
+  assert.match(chrome, /--search-results-accent:\s*var\(--navigation-tree-selection-accent-color,\s*var\(--appearance-player-accent,\s*var\(--appearance-play,/);
+  assert.match(chrome, /\[data-search-results='true'\]::after\s*\{[^}]*background:\s*var\(--search-results-accent\)/s);
+  assert.match(mobile, /#mobile-search-button\[data-has-query="true"\]::before\s*\{[^}]*background:\s*var\(--search-results-accent\)/s);
+  assert.match(mobile, /#mobile-library-button\[data-search-results='true'\]\s*\{[^}]*border-color:\s*var\(--search-results-accent\)/s);
+  for (const css of [chrome, mobile]) {
+    assert.doesNotMatch(css, /search-results='true'\][^{]*\{[^}]*(?:#72baff|#64a8ff|--appearance-info)/s);
+  }
+});
+
+test('a search with no artist opens the collection holding the most matching tracks, once', async () => {
+  // Owner 2026-11-18: the best match in Custom Collections opens the way the best-matching artist does.
+  const { context } = loadHelper();
+  stubCollectionTree(context);
+  context.document.querySelectorAll = () => [];
+  context.URL = URL;
+  context.escapeHtml = value => String(value);
+  let pageOpen = false;
+  context.document.querySelector = selector => (selector === '#non-album-modal:not([hidden])' && pageOpen ? {} : null);
+  context.isEffectivelyEmptyView = () => true;
+  const opened = [];
+  context.openLooseTracksPage = ({ collectionName }) => { opened.push(collectionName); pageOpen = true; };
+  context.fetch = (path) => Promise.resolve({ ok: true, status: 200, json: async () => ({
+    custom_collections: path.includes('q=ace') ? [{ name: 'Car', count: 1 }, { name: 'Disco', count: 4 }] : [],
+    loose_tracks_count: path.includes('q=ace') || path.includes('q=solo') ? 5 : 0,
+  }) });
+  context.state.view.artists_sidebar = [];
+  context.state.view.query = 'ace';
+
+  await context.syncCustomCollectionSearchIndicator();
+  assert.deepEqual(opened, ['Disco']);
+  assert.equal(context.state.ui.libraryNavigationMode, 'custom-collections');
+  pageOpen = false;
+  await context.syncCustomCollectionSearchIndicator();
+  assert.deepEqual(opened, ['Disco'], 'a redraw of the same search does not reopen it');
+
+  // A matching loose track in no collection opens All Loose Tracks.
+  context.state.view.query = 'solo';
+  await context.syncCustomCollectionSearchIndicator();
+  assert.deepEqual(opened, ['Disco', '']);
+
+  // An artist match, or an open page, keeps the search where it is.
+  pageOpen = false;
+  context.state.view.query = 'ace again';
+  context.state.view.artists_sidebar = [{ artist: 'Ace Of Base' }];
+  await context.syncCustomCollectionSearchIndicator();
+  assert.deepEqual(opened, ['Disco', '']);
 });

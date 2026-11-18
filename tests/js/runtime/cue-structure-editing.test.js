@@ -43,6 +43,19 @@ test('a half-typed CUE timecode stays in the field and is reported only once com
   assert.equal(editor.cueError, '', 'a valid value clears the error');
 });
 
+test('a typed CUE time commits to the track it was typed for after another track is selected', () => {
+  // Owner 2026-11-18: an END typed for one track was committed after a click selected the last track, so it
+  // failed as "CUE boundary is not editable." and the field snapped back.
+  const { context } = loadEditor();
+  const editor = context.state.tagEditor;
+  context.updateCueStructureDraft('end', '00:12:00');
+  context.getTagEditorFocusedPath = () => 'cue:2';
+  context.updateCueStructureDraft('end', '00:12:00', { commit: true });
+  assert.equal(editor.cueError, '');
+  assert.equal(editor.cueDraft.cue_segment_ref, 'cue:2', 'END of track 1 moves the start of track 2');
+  assert.equal(editor.cueDraft.start_frame, 12 * 75);
+});
+
 test('the CUE notice is a compact footer alert whose details open over the form', () => {
   // Owner 2026-11-17: "Relocate it into an expandable alert. Put it in the footer ... Don't break the page".
   const template = fs.readFileSync(path.join(runtime, '..', '..', '..', 'templates', 'partials', 'primary-modals.html'), 'utf8');

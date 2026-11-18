@@ -1544,3 +1544,46 @@ def test_targeted_reconciliation_rejects_shared_art_for_multiple_releases_in_one
     assert all(entry["cover_path"] is None for entry in entries.values())
 
 
+
+
+def test_targeted_reconcile_contract_reads_only_the_event_album_at_production_library_size(tmp_path, monkeypatch):
+    from music_app.services import metadata
+    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
+    from tests.py.bounded_interactions import OperationCounts, measure_scale_pair
+    from tests.py.filesystem_operation_counting import count_filesystem_and_media
+
+    def run(album_count: int) -> OperationCounts:
+        root = tmp_path / f"Music-{album_count}"
+        for index in range(album_count):
+            sibling = root / f"Artist {index:04d}" / "Album"
+            sibling.mkdir(parents=True)
+            (sibling / "01.flac").write_bytes(b"sibling")
+            (sibling / "cover.jpg").write_bytes(b"sibling cover")
+        album = root / "Broadcast" / "Tender Buttons"
+        album.mkdir(parents=True)
+        requested = album / "01.flac"
+        requested.write_bytes(b"one")
+        (album / "02.flac").write_bytes(b"two")
+        (album / "cover.jpg").write_bytes(b"cover")
+        repository = RecordingRepository()
+        counts = OperationCounts()
+        with count_filesystem_and_media(monkeypatch, counts, media_modules=(metadata,)):
+            reconciler = TargetedLibraryReconciler(
+                {"SUPPORTED_EXTENSIONS": {".flac"}, "IMAGE_EXTENSIONS": {".jpg"}},
+                repository=repository,
+                root_definitions=[{"id": "main", "path": root, "category": "main_library_roots"}],
+                stable_sample_interval=0,
+            )
+            reconciler.reconcile(_request(paths=(requested,)))
+        assert set(repository.calls[0]["active_file_entries"]) == {str(requested), str(album / "02.flac")}
+        return counts
+
+    small, production = measure_scale_pair(
+        interaction_id="py:services/targeted_library_reconciliation.py#TargetedLibraryReconciler.reconcile",
+        small=20,
+        large=1_000,
+        run=run,
+        budgets={"filesystem_enumerations": 1, "stat_calls": 36, "open_calls": 3, "media_parses": 2},
+        growth=("stat_calls", 0),
+    )
+    assert small == production

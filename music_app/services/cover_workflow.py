@@ -17,7 +17,12 @@ from music_app.services.generated_preview_storage import (
     is_generated_cover_artifact,
     is_managed_preview_path,
 )
-from music_app.services.library_roots import get_library_roots, iter_library_root_paths, resolve_configured_media_path
+from music_app.services.library_roots import (
+    get_library_roots,
+    iter_library_root_paths,
+    resolve_configured_media_path,
+    resolve_media_path_within_roots,
+)
 from music_app.services.library_watch_suppression import suppress_library_watch_events
 
 
@@ -106,7 +111,14 @@ def resolve_album_root_from_track_paths(
     config: dict[str, object],
     track_paths: set[str],
 ) -> Path | None:
-    configured_roots = get_library_roots(config)
+    return resolve_album_root_within_roots(track_paths, get_library_roots(config))
+
+
+def resolve_album_root_within_roots(
+    track_paths: set[str],
+    configured_roots: list[dict[str, object]],
+) -> Path | None:
+    """The album folder holding `track_paths`, under a snapshot of the roots."""
     configured_root_paths = [
         Path(str(root.get("path") or "")).resolve(strict=False)
         for root in configured_roots
@@ -118,18 +130,13 @@ def resolve_album_root_from_track_paths(
         raw_text = str(raw_path or "")
         if not raw_text:
             continue
-        resolved = resolve_configured_media_path(
-            config,
-            raw_text,
-            configured_root_paths=configured_root_paths,
-        )
+        resolved = resolve_media_path_within_roots(raw_text, configured_root_paths)
         if resolved is None:
-            resolved = resolve_configured_media_path(
-                config,
+            resolved = resolve_media_path_within_roots(
                 raw_text,
+                configured_root_paths,
                 require_file=False,
                 require_exists=False,
-                configured_root_paths=configured_root_paths,
             )
             if resolved is None or resolved.exists():
                 return None
@@ -161,20 +168,15 @@ def resolve_album_root_from_track_paths(
             album_root = common_root
             enforce_layout_depth = True
     if len(resolved_album_roots) == 1 and is_disc_like_folder(album_root):
-        parent_roots = _matching_library_roots(
-            config,
-            album_root.parent,
-            configured_roots=configured_roots,
-        )
+        parent_roots = _matching_library_roots(album_root.parent, configured_roots)
         if len(parent_roots) == 1:
             parent_config, parent_root = parent_roots[0]
             parent_depth = len(album_root.parent.relative_to(parent_root).parts)
             if parent_depth == _minimum_album_folder_depth(parent_config):
                 album_root = restrict_album_root_to_represented_disc(album_root.parent, track_paths)
     if not _is_valid_album_root(
-        config,
         album_root,
-        configured_roots=configured_roots,
+        configured_roots,
         enforce_layout_depth=enforce_layout_depth,
     ):
         return None
@@ -200,16 +202,17 @@ def resolve_album_write_root_from_track_paths(
     config: dict[str, object],
     track_paths: set[str],
 ) -> Path | None:
-    album_root = resolve_album_root_from_track_paths(config, track_paths)
+    configured_roots = get_library_roots(config)
+    album_root = resolve_album_root_within_roots(track_paths, configured_roots)
     if album_root is not None or len(track_paths) < 2:
         return album_root
-    contexts = [
-        resolve_album_context(config, {"tracks": [{"path": path}]})
+    track_roots = [
+        resolve_album_root_within_roots({path}, configured_roots)
         for path in sorted(track_paths)
     ]
-    if any(context is None for context in contexts):
+    if any(root is None for root in track_roots):
         return None
-    return contexts[0].album_root
+    return track_roots[0]
 
 
 def _is_path_within(path: Path, root: Path) -> bool:
@@ -221,14 +224,11 @@ def _is_path_within(path: Path, root: Path) -> bool:
 
 
 def _matching_library_roots(
-    config: dict[str, object],
     path: Path,
-    *,
-    configured_roots: list[dict[str, object]] | None = None,
+    configured_roots: list[dict[str, object]],
 ) -> list[tuple[dict[str, object], Path]]:
     matches: list[tuple[dict[str, object], Path]] = []
-    roots = get_library_roots(config) if configured_roots is None else configured_roots
-    for root in roots:
+    for root in configured_roots:
         if not isinstance(root, dict):
             continue
         root_path = Path(str(root.get("path") or "")).resolve(strict=False)
@@ -238,17 +238,12 @@ def _matching_library_roots(
 
 
 def _is_valid_album_root(
-    config: dict[str, object],
     album_root: Path,
+    configured_roots: list[dict[str, object]],
     *,
-    configured_roots: list[dict[str, object]] | None = None,
     enforce_layout_depth: bool = False,
 ) -> bool:
-    matching_roots = _matching_library_roots(
-        config,
-        album_root,
-        configured_roots=configured_roots,
-    )
+    matching_roots = _matching_library_roots(album_root, configured_roots)
     if len(matching_roots) != 1:
         return False
     root, root_path = matching_roots[0]

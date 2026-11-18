@@ -64,6 +64,59 @@ operate, or contribute to the application.
   the absence of clipped leading content after layout settles.
 - Report security problems through the process in `SECURITY.md`.
 
+## Mandatory bounded-interaction gate
+
+- Every interaction entrypoint (listener, timer, observer, request, route,
+  watcher, poller, background loop) is declared in
+  `tests/ci/bounded-interactions.json`. After adding, moving, or removing one,
+  run `node scripts/ci/validate-bounded-interactions.cjs --sync`, review the
+  entries it registers (action, work class), then validate. `--sync` never
+  grants endpoints: fill `requestOwnership.allowed` (and `forbidden`) with the
+  reviewed endpoints yourself.
+- Discovery is static and lives in `scripts/ci/bounded-interaction-discovery.cjs`
+  (JavaScript) and `scripts/ci/bounded_interaction_discovery.py` (Python).
+  Their comments are the reference for which entrypoints are hot paths, how
+  calls and receivers are resolved, and which operations count as hazards.
+- A hot-path entry (high-frequency or repeating events, intervals, animation
+  loops and pollers, observers, workers, and every Python route and background
+  entrypoint) passes statically only while no hazard is reachable from it.
+  Otherwise it needs a deterministic contract that runs the real code at a
+  small and a production-calibration cardinality and asserts absolute
+  operation budgets and growth (`tests/js/helpers/bounded-interaction-counter.js`,
+  `tests/py/bounded_interactions.py`). The contract measures under the entry's
+  registered id, or each id in its `measures` list, and the entry's
+  `testIdentity` must name the real test that measured it; a helper-level test
+  never proves a route or worker it does not drive. There are no allowlists,
+  waivers, or baselines.
+- Any entry also fails for an unregistered or stale entrypoint, a listener
+  whose event name does not resolve, a request target outside
+  `requestOwnership.allowed` or inside `forbidden`, a dynamic request target
+  without a request-capture contract, or a dedicated surface routed through a
+  generic endpoint.
+- Rejected outright: direct broad work in a high-frequency JavaScript handler;
+  a route reaching registered library-scale work or enumerating a directory
+  directly; event-loop blocking (BI-08) in an `async def` route, websocket, or
+  middleware; a database connection opened per loop item (BI-05) in a
+  route or middleware; and filesystem, media or database work per item of a
+  loop over the whole library state (`library-state-scan-io`) in a save,
+  finalize, watcher or reconciler entry narrower than `background-batch`. Fix BI-08 by making a route that awaits nothing a plain
+  `def`, or by handing the blocking part to `run_in_threadpool` after
+  authorization. Fix BI-05 at the owning boundary: load once and pass the
+  snapshot down, or write a batch in one transaction; do not add a
+  process-wide cache without an invalidation owner.
+- The ASGI test client (`tests/py/asgi_testing.py`) fails any request that
+  blocks the event loop for more than 250 ms outside a module's first import,
+  and has no opt-out.
+- Before calling an interaction implemented, run
+  `npm run test:bounded-interactions` (or with `--changed-paths <file>`). A
+  functional pass, mocked helper, small fixture, or elapsed time alone does
+  not prove bounded work. Report the interaction IDs, cardinalities, measured
+  operation counts and work class, the command and result, and any browser
+  performance target deferred to CI.
+- When unbounded work escapes the guard, first add it to
+  `tests/js/bounded-interaction-seeded-defects.test.js`, then change discovery
+  until that defect is reported.
+
 ## Where the mandatory regression gates run
 
 - Run the search, HTML reload, Edit Tags, Problematic Files, and

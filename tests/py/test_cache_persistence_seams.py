@@ -261,246 +261,166 @@ def test_runtime_cache_save_propagates_postgres_adapter_selection_failure(
     assert not (tmp_path / "must-not-exist.json").exists()
 
 
-def test_runtime_cache_update_merges_postgres_snapshot_and_propagates_write_contract(
-    tmp_path,
-    monkeypatch,
-):
-    cache_path = tmp_path / "library_cache.json"
+class _TargetedInventoryAdapter:
+    """Stands in for the Postgres scan-cache adapter's targeted surface: entry
+    loads by path, revision reads, and the revision-guarded targeted mutation."""
+
+    def __init__(self, file_cache, *, cover_mutation_revision=0, inventory_mutation_revision=0):
+        self.file_cache = {path: dict(entry) for path, entry in file_cache.items()}
+        self.cover_mutation_revision = cover_mutation_revision
+        self.inventory_mutation_revision = inventory_mutation_revision
+        self.loaded_paths: list[set[str]] = []
+        self.publications: list[dict[str, object]] = []
+        self.after_load = None
+
+    def load_cover_mutation_revision(self):
+        return self.cover_mutation_revision
+
+    def load_inventory_mutation_revision(self):
+        return self.inventory_mutation_revision
+
+    def load_file_entries(self, paths):
+        self.loaded_paths.append(set(paths))
+        loaded = {path: dict(self.file_cache[path]) for path in paths if path in self.file_cache}
+        if self.after_load is not None:
+            self.after_load(self)
+        return loaded
+
+    def load_snapshot(self, *_args):
+        pytest.fail("a queued cache update must not load the whole scan snapshot")
+
+    def save_snapshot(self, *_args, **_kwargs):
+        pytest.fail("a queued cache update must not republish the whole scan snapshot")
+
+    def persist_targeted_inventory_mutation(
+        self,
+        *,
+        root_id,
+        active_file_entries,
+        expected_cover_mutation_revision,
+        expected_inventory_mutation_revision,
+        before_commit,
+    ):
+        from music_app.services.scan_cache_persistence import ScanCachePublicationSuperseded
+
+        self.publications.append({
+            "root_id": root_id,
+            "active_file_entries": {path: dict(entry) for path, entry in active_file_entries.items()},
+            "expected_revisions": (expected_cover_mutation_revision, expected_inventory_mutation_revision),
+        })
+        if (expected_cover_mutation_revision, expected_inventory_mutation_revision) != (
+            self.cover_mutation_revision, self.inventory_mutation_revision,
+        ):
+            raise ScanCachePublicationSuperseded(f"forced queued-writer conflict {len(self.publications)}")
+        if before_commit is not None:
+            before_commit("transaction")
+        self.file_cache.update({path: dict(entry) for path, entry in active_file_entries.items()})
+        self.inventory_mutation_revision += 1
+        return {"inventory_mutation_revision": self.inventory_mutation_revision, "affected_album_keys": ["artist::album"]}
+
+
+@pytest.fixture
+def targeted_adapter(monkeypatch):
+    """Installs a targeted adapter double; the gallery refresh records its trigger."""
+    from music_app.services import gallery_projection_postgres
+
+    installed: dict[str, object] = {"refreshes": 0}
+
+    def install(file_cache, **revisions):
+        adapter = _TargetedInventoryAdapter(file_cache, **revisions)
+        installed["adapter"] = adapter
+        return adapter
+
+    monkeypatch.setattr(cache_module, "_select_runtime_scan_cache_adapter", lambda _config: installed["adapter"])
+    monkeypatch.setattr(
+        gallery_projection_postgres, "schedule_gallery_projection_refresh",
+        lambda _config, **_kwargs: installed.__setitem__("refreshes", installed["refreshes"] + 1),
+    )
+    install.installed = installed
+    return install
+
+
+_POSTGRES_CONFIG = {"PERSISTENCE_BACKENDS": {"scan_cache": PERSISTENCE_BACKEND_POSTGRES}}
+
+
+def test_runtime_cache_update_publishes_only_the_changed_entries_and_leaves_relations_stale(tmp_path, targeted_adapter):
     existing_track = tmp_path / "existing.mp3"
     changed_track = tmp_path / "changed.mp3"
-    config = {"PERSISTENCE_BACKENDS": {"scan_cache": PERSISTENCE_BACKEND_POSTGRES}}
-    saved_snapshots: list[dict[str, object]] = []
-
-    class FakePostgresScanCacheAdapter:
-        def load_cover_mutation_revision(self):
-            return 17
-
-        def load_snapshot(self, received_cache_path, received_root_identity):
-            assert received_cache_path == cache_path
-            assert received_root_identity == "root-1"
-            return (
-                {str(existing_track): _cache_entry(existing_track)},
-                123.0,
-                {"artists": ["Artist"]},
-                456.0,
-                None,
-            )
-
-        def save_snapshot(
-            self,
-            received_cache_path,
-            file_cache,
-            received_root_identity,
-            last_scan,
-            *,
-            relation_views=None,
-            relations_last_built=None,
-            expected_cover_mutation_revision=None,
-        ):
-            saved_snapshots.append(
-                {
-                    "cache_path": received_cache_path,
-                    "file_cache": dict(file_cache),
-                    "root_identity": received_root_identity,
-                    "last_scan": last_scan,
-                    "relation_views": relation_views,
-                    "relations_last_built": relations_last_built,
-                    "expected_cover_mutation_revision": expected_cover_mutation_revision,
-                }
-            )
-
-    monkeypatch.setattr(
-        cache_module,
-        "_select_runtime_scan_cache_adapter",
-        lambda received_config: (
-            FakePostgresScanCacheAdapter()
-            if received_config is config
-            else pytest.fail("runtime config was not forwarded")
-        ),
+    adapter = targeted_adapter(
+        {str(existing_track): _cache_entry(existing_track), str(changed_track): _cache_entry(changed_track)},
+        cover_mutation_revision=17,
+        inventory_mutation_revision=4,
     )
-    monkeypatch.setattr(
-        "music_app.services.library_roots.library_root_cache_identity",
-        lambda received_config: (
-            "root-1"
-            if received_config is config
-            else pytest.fail("runtime config was not forwarded")
-        ),
+    changed_entry = {**_cache_entry(changed_track), "title": "Changed", "library_root_id": "main"}
+
+    result = cache_module.save_cache_updates_to_disk_for_config(
+        _POSTGRES_CONFIG, {str(changed_track): changed_entry},
     )
 
-    cache_module.save_cache_updates_to_disk_for_config(
-        config,
-        cache_path,
-        {str(changed_track): _cache_entry(changed_track)},
-    )
-
-    assert saved_snapshots == [
-        {
-            "cache_path": cache_path,
-            "file_cache": {
-                str(existing_track): _cache_entry(existing_track),
-                str(changed_track): _cache_entry(changed_track),
-            },
-            "root_identity": "root-1",
-            "last_scan": 123.0,
-            "relation_views": {"artists": ["Artist"]},
-            "relations_last_built": 456.0,
-            "expected_cover_mutation_revision": 17,
-        }
-    ]
-    assert not cache_path.exists()
+    assert adapter.loaded_paths == [{str(changed_track)}]
+    assert adapter.publications == [{
+        "root_id": "main",
+        "active_file_entries": {str(changed_track): changed_entry},
+        "expected_revisions": (17, 4),
+    }]
+    assert result == {"inventory_mutation_revision": 5, "affected_album_keys": ["artist::album"], "projection_mode": "stale"}
+    # The stale relation projection is rebuilt by the background gallery refresh.
+    assert targeted_adapter.installed["refreshes"] == 1
 
 
-def test_runtime_cache_update_propagates_postgres_snapshot_error(tmp_path, monkeypatch):
-    class FailingPostgresScanCacheAdapter:
-        def load_cover_mutation_revision(self):
-            return 23
+def test_runtime_cache_update_propagates_postgres_inventory_load_error(tmp_path, targeted_adapter):
+    adapter = targeted_adapter({})
 
-        def load_snapshot(self, *_args):
-            return {}, 0.0, {}, 0.0, "Postgres snapshot unavailable"
+    def fail(_adapter):
+        raise RuntimeError("Postgres inventory unavailable")
 
-    monkeypatch.setattr(
-        cache_module,
-        "_select_runtime_scan_cache_adapter",
-        lambda _config: FailingPostgresScanCacheAdapter(),
-    )
-    monkeypatch.setattr(
-        "music_app.services.library_roots.library_root_cache_identity",
-        lambda _config: "root-1",
-    )
+    adapter.after_load = fail
 
-    with pytest.raises(RuntimeError, match="Postgres snapshot unavailable"):
+    with pytest.raises(RuntimeError, match="Postgres inventory unavailable"):
         cache_module.save_cache_updates_to_disk_for_config(
-            {"PERSISTENCE_BACKENDS": {"scan_cache": PERSISTENCE_BACKEND_POSTGRES}},
-            tmp_path / "must-not-exist.json",
+            _POSTGRES_CONFIG,
             {str(tmp_path / "track.mp3"): _cache_entry(tmp_path / "track.mp3")},
         )
 
-    assert not (tmp_path / "must-not-exist.json").exists()
+    assert adapter.publications == []
+    assert targeted_adapter.installed["refreshes"] == 0
 
 
-def test_queued_title_update_preserves_newer_authoritative_cover(tmp_path, monkeypatch):
-    from music_app.services.scan_cache_persistence import ScanCachePublicationSuperseded
-
-    cache_path = tmp_path / "unused.json"
+def test_queued_title_update_preserves_newer_authoritative_cover(tmp_path, targeted_adapter):
     track_path = str((tmp_path / "Generated" / "Kaipa" / "Kaipa" / "song.mp3").resolve())
     stale_cover_path = str((tmp_path / "Generated" / "Kaipa" / "Kaipa" / "Art" / "Back.jpg").resolve())
-    incidental_queued_cover_path = str(
-        (
-            tmp_path
-            / "Generated"
-            / "Kaipa"
-            / "Kaipa"
-            / "Art"
-            / "Incidental.jpg"
-        ).resolve()
-    )
+    incidental_queued_cover_path = str((tmp_path / "Generated" / "Kaipa" / "Kaipa" / "Art" / "Incidental.jpg").resolve())
     selected_cover_path = str((tmp_path / "Generated" / "Kaipa" / "Kaipa" / "cover.jpg").resolve())
-    store = {
-        "cover_mutation_revision": 0,
-        "file_cache": {
-            track_path: {
-                "path": track_path,
-                "cover_path": stale_cover_path,
-                "cover_revision": "stale-revision",
-                "title": "Old Title",
-                "play_count": 0,
-            }
-        },
-    }
-    events: list[str] = []
-    load_calls = 0
-    save_calls = 0
+    adapter = targeted_adapter({
+        track_path: {
+            "path": track_path, "cover_path": stale_cover_path, "cover_revision": "stale-revision",
+            "title": "Old Title", "play_count": 0, "library_root_id": "main",
+        }
+    })
 
-    class InterleavedPostgresScanCacheAdapter:
-        def load_cover_mutation_revision(self):
-            events.append("revision-loaded")
-            return store["cover_mutation_revision"]
+    def commit_authoritative_cover_after_first_load(store):
+        # An authoritative cover selection commits between the first load and publication.
+        if len(store.loaded_paths) == 1:
+            store.cover_mutation_revision = 1
+            store.file_cache[track_path].update({"cover_path": selected_cover_path, "cover_revision": "selected-revision"})
 
-        def load_snapshot(self, _cache_path, _root_identity):
-            nonlocal load_calls
-            load_calls += 1
-            events.append(f"snapshot-loaded-{load_calls}")
-            captured = {
-                path: dict(entry)
-                for path, entry in store["file_cache"].items()
-            }
-            if load_calls == 1:
-                store["cover_mutation_revision"] = 1
-                store["file_cache"][track_path].update(
-                    {
-                        "cover_path": selected_cover_path,
-                        "cover_revision": "selected-revision",
-                    }
-                )
-                events.append("authoritative-cover-committed")
-            return captured, 123.0, {"artists": ["Kaipa"]}, 456.0, None
-
-        def save_snapshot(
-            self,
-            _cache_path,
-            file_cache,
-            _root_identity,
-            _last_scan,
-            *,
-            expected_cover_mutation_revision=None,
-            **_kwargs,
-        ):
-            nonlocal save_calls
-            save_calls += 1
-            events.append(f"queued-writer-save-attempted-{save_calls}")
-            if (
-                expected_cover_mutation_revision is not None
-                and expected_cover_mutation_revision != store["cover_mutation_revision"]
-            ):
-                raise ScanCachePublicationSuperseded(
-                    "Cover mutation advanced after queued update snapshot capture."
-                )
-            store["file_cache"] = {
-                path: dict(entry)
-                for path, entry in file_cache.items()
-            }
-
-    adapter = InterleavedPostgresScanCacheAdapter()
-    monkeypatch.setattr(
-        cache_module,
-        "_select_runtime_scan_cache_adapter",
-        lambda _config: adapter,
-    )
-    monkeypatch.setattr(
-        "music_app.services.library_roots.library_root_cache_identity",
-        lambda _config: "generated-root",
-    )
-    queued_entry = {
-        "path": track_path,
-        "cover_path": incidental_queued_cover_path,
-        "cover_revision": "incidental-queued-revision",
-        "title": "New Title",
-        "play_count": 1,
-    }
+    adapter.after_load = commit_authoritative_cover_after_first_load
 
     cache_module.save_cache_updates_to_disk_for_config(
-        {"PERSISTENCE_BACKENDS": {"scan_cache": PERSISTENCE_BACKEND_POSTGRES}},
-        cache_path,
-        {track_path: queued_entry},
+        _POSTGRES_CONFIG,
+        {track_path: {
+            "path": track_path, "cover_path": incidental_queued_cover_path,
+            "cover_revision": "incidental-queued-revision", "title": "New Title", "play_count": 1,
+            "library_root_id": "main",
+        }},
     )
 
-    final_entry = store["file_cache"][track_path]
+    final_entry = adapter.file_cache[track_path]
     assert final_entry["cover_path"] == selected_cover_path
     assert final_entry["cover_revision"] == "selected-revision"
     assert final_entry["title"] == "New Title"
     assert final_entry["play_count"] == 1
-    assert load_calls == 2
-    assert save_calls == 2
-    assert events.index("snapshot-loaded-1") < events.index("authoritative-cover-committed")
-    assert events.index("authoritative-cover-committed") < events.index(
-        "queued-writer-save-attempted-1"
-    )
-    assert events.index("queued-writer-save-attempted-1") < events.index(
-        "snapshot-loaded-2"
-    )
-    assert events.index("snapshot-loaded-2") < events.index(
-        "queued-writer-save-attempted-2"
-    )
+    assert [publication["expected_revisions"] for publication in adapter.publications] == [(0, 0), (1, 0)]
 
 
 def test_file_entry_cache_round_trip_preserves_metadata_and_cover_validation_signature(tmp_path):
@@ -745,411 +665,226 @@ def test_queued_cache_update_accepts_already_committed_numeric_track_number_valu
     assert rebased[track_path]["track_number"] == "4"
 
 
-def test_queued_cache_update_repeated_revision_conflict_fails_after_one_rebase(
-    tmp_path,
-    monkeypatch,
-):
+def test_queued_cache_update_repeated_revision_conflict_fails_after_one_rebase(tmp_path, targeted_adapter):
     from music_app.services.scan_cache_persistence import ScanCachePublicationSuperseded
 
     track_path = str((tmp_path / "Generated" / "Artist" / "Album" / "song.mp3").resolve())
-    store = {
-        "cover_mutation_revision": 0,
-        "file_cache": {
-            track_path: {
-                "path": track_path,
-                "cover_path": str(tmp_path / "Generated" / "Artist" / "Album" / "cover.jpg"),
-                "cover_revision": "selected-revision",
-                "play_count": 0,
-            }
-        },
-    }
-    load_calls = 0
-    save_calls = 0
+    adapter = targeted_adapter({track_path: {"path": track_path, "play_count": 0, "library_root_id": "main"}})
 
-    class RepeatedConflictAdapter:
-        def load_cover_mutation_revision(self):
-            return store["cover_mutation_revision"]
+    def commit_cover_after_every_load(store):
+        store.cover_mutation_revision += 1
 
-        def load_snapshot(self, _cache_path, _root_identity):
-            nonlocal load_calls
-            load_calls += 1
-            return (
-                {path: dict(entry) for path, entry in store["file_cache"].items()},
-                123.0,
-                {},
-                0.0,
-                None,
-            )
+    adapter.after_load = commit_cover_after_every_load
 
-        def save_snapshot(
-            self,
-            _cache_path,
-            _file_cache,
-            _root_identity,
-            _last_scan,
-            *,
-            expected_cover_mutation_revision=None,
-            **_kwargs,
-        ):
-            nonlocal save_calls
-            save_calls += 1
-            store["cover_mutation_revision"] += 1
-            assert expected_cover_mutation_revision < store["cover_mutation_revision"]
-            raise ScanCachePublicationSuperseded(
-                f"forced queued-writer conflict {save_calls}"
-            )
-
-    monkeypatch.setattr(
-        cache_module,
-        "_select_runtime_scan_cache_adapter",
-        lambda _config: RepeatedConflictAdapter(),
-    )
-    monkeypatch.setattr(
-        "music_app.services.library_roots.library_root_cache_identity",
-        lambda _config: "generated-root",
-    )
-
-    with pytest.raises(
-        ScanCachePublicationSuperseded,
-        match="forced queued-writer conflict 2",
-    ):
+    with pytest.raises(ScanCachePublicationSuperseded, match="forced queued-writer conflict 2"):
         cache_module.save_cache_updates_to_disk_for_config(
-            {"PERSISTENCE_BACKENDS": {"scan_cache": PERSISTENCE_BACKEND_POSTGRES}},
-            tmp_path / "unused.json",
-            {
-                track_path: {
-                    **store["file_cache"][track_path],
-                    "play_count": 1,
-                }
-            },
+            _POSTGRES_CONFIG,
+            {track_path: {"path": track_path, "play_count": 1, "library_root_id": "main"}},
         )
 
-    assert load_calls == 2
-    assert save_calls == 2
-    assert store["file_cache"][track_path]["play_count"] == 0
+    assert len(adapter.loaded_paths) == 2
+    assert len(adapter.publications) == 2
+    assert adapter.file_cache[track_path]["play_count"] == 0
+    assert targeted_adapter.installed["refreshes"] == 0
 
 
-def test_scheduled_cache_update_captures_revision_before_delayed_worker_starts(
-    tmp_path,
-    monkeypatch,
+class _HeldExecutor:
+    """Holds submitted publications until the test runs them."""
+
+    def __init__(self):
+        self.submitted = []
+
+    def submit(self, callback, *args, **kwargs):
+        self.submitted.append((callback, args, kwargs))
+
+    def run_all(self) -> int:
+        ran = 0
+        while self.submitted:
+            callback, args, kwargs = self.submitted.pop(0)
+            callback(*args, **kwargs)
+            ran += 1
+        return ran
+
+
+@pytest.fixture
+def held_executor(monkeypatch):
+    executor = _HeldExecutor()
+    monkeypatch.setattr(cache_module, "_CACHE_WRITE_EXECUTOR", executor)
+    monkeypatch.setattr(cache_module, "_RUNNING_CACHE_UPDATES", set())
+    monkeypatch.setattr(cache_module, "_TRAILING_CACHE_UPDATES", {})
+    return executor
+
+
+def test_scheduled_cache_update_rebases_onto_a_cover_committed_before_the_worker_starts(
+    tmp_path, targeted_adapter, held_executor,
 ):
-    from music_app.services.scan_cache_persistence import ScanCachePublicationSuperseded
-
     track_path = str((tmp_path / "Generated" / "Kaipa" / "Kaipa" / "song.mp3").resolve())
-    stale_cover_path = str(
-        (tmp_path / "Generated" / "Kaipa" / "Kaipa" / "Art" / "Back.jpg").resolve()
-    )
-    selected_cover_path = str(
-        (tmp_path / "Generated" / "Kaipa" / "Kaipa" / "cover.jpg").resolve()
-    )
-    store = {
-        "cover_mutation_revision": 0,
-        "file_cache": {
-            track_path: {
-                "path": track_path,
-                "cover_path": stale_cover_path,
-                "cover_revision": "stale-revision",
-                "play_count": 0,
-            }
-        },
+    stale_cover_path = str((tmp_path / "Generated" / "Kaipa" / "Kaipa" / "Art" / "Back.jpg").resolve())
+    selected_cover_path = str((tmp_path / "Generated" / "Kaipa" / "Kaipa" / "cover.jpg").resolve())
+    stale_entry = {
+        "path": track_path, "cover_path": stale_cover_path, "cover_revision": "stale-revision",
+        "play_count": 0, "library_root_id": "main",
     }
-    execution_stage = "enqueue"
-    revision_observations: list[tuple[str, int]] = []
-    save_revisions: list[int | None] = []
-    delayed_jobs: list[tuple[object, tuple[object, ...], dict[str, object]]] = []
+    adapter = targeted_adapter({track_path: stale_entry})
 
-    class DelayedFuture:
-        def __init__(self):
-            self.callbacks = []
-
-        def add_done_callback(self, callback):
-            self.callbacks.append(callback)
-
-    submitted_future = DelayedFuture()
-
-    class DelayedExecutor:
-        def submit(self, callback, *args, **kwargs):
-            delayed_jobs.append((callback, args, kwargs))
-            return submitted_future
-
-    class QueueBoundaryAdapter:
-        def load_cover_mutation_revision(self):
-            revision = store["cover_mutation_revision"]
-            revision_observations.append((execution_stage, revision))
-            return revision
-
-        def load_snapshot(self, _cache_path, _root_identity):
-            return (
-                {path: dict(entry) for path, entry in store["file_cache"].items()},
-                123.0,
-                {"artists": ["Kaipa"]},
-                456.0,
-                None,
-            )
-
-        def save_snapshot(
-            self,
-            _cache_path,
-            file_cache,
-            _root_identity,
-            _last_scan,
-            *,
-            expected_cover_mutation_revision=None,
-            **_kwargs,
-        ):
-            save_revisions.append(expected_cover_mutation_revision)
-            if expected_cover_mutation_revision != store["cover_mutation_revision"]:
-                raise ScanCachePublicationSuperseded(
-                    "Delayed queued writer observed a newer cover mutation."
-                )
-            store["file_cache"] = {
-                path: dict(entry)
-                for path, entry in file_cache.items()
-            }
-
-    adapter = QueueBoundaryAdapter()
-    monkeypatch.setattr(cache_module, "_CACHE_WRITE_EXECUTOR", DelayedExecutor())
-    monkeypatch.setattr(
-        cache_module,
-        "_select_runtime_scan_cache_adapter",
-        lambda _config: adapter,
-    )
-    monkeypatch.setattr(
-        "music_app.services.library_roots.library_root_cache_identity",
-        lambda _config: "generated-root",
-    )
-    stale_queued_entry = {
-        "path": track_path,
-        "cover_path": stale_cover_path,
-        "cover_revision": "stale-revision",
-        "play_count": 1,
-    }
-
-    returned_future = cache_module.schedule_cache_updates_save_for_config(
-        {"PERSISTENCE_BACKENDS": {"scan_cache": PERSISTENCE_BACKEND_POSTGRES}},
-        tmp_path / "unused.json",
-        {track_path: stale_queued_entry},
+    future = cache_module.schedule_cache_updates_save_for_config(
+        _POSTGRES_CONFIG, {track_path: {**stale_entry, "play_count": 1}},
     )
 
-    assert returned_future is submitted_future
-    assert len(delayed_jobs) == 1
-    assert revision_observations == [("enqueue", 0)]
-    store["cover_mutation_revision"] = 1
-    store["file_cache"][track_path].update(
-        {
-            "cover_path": selected_cover_path,
-            "cover_revision": "selected-revision",
-        }
-    )
-    execution_stage = "worker"
-    callback, args, kwargs = delayed_jobs[0]
-    callback(*args, **kwargs)
+    # With no request baseline, the enqueue loads only the changed entry.
+    assert adapter.loaded_paths == [{track_path}]
+    assert not future.done()
+    adapter.cover_mutation_revision = 1
+    adapter.file_cache[track_path].update({"cover_path": selected_cover_path, "cover_revision": "selected-revision"})
+    assert held_executor.run_all() == 1
 
-    final_entry = store["file_cache"][track_path]
-    assert revision_observations == [("enqueue", 0), ("worker", 1)]
-    assert save_revisions == [0, 1]
+    assert future.result()["projection_mode"] == "stale"
+    assert [publication["expected_revisions"] for publication in adapter.publications] == [(1, 0)]
+    final_entry = adapter.file_cache[track_path]
     assert final_entry["cover_path"] == selected_cover_path
     assert final_entry["cover_revision"] == "selected-revision"
     assert final_entry["play_count"] == 1
 
 
 def test_scheduled_title_update_uses_request_baseline_when_cover_changed_before_enqueue(
-    tmp_path,
-    monkeypatch,
+    tmp_path, targeted_adapter, held_executor,
 ):
     track_path = str((tmp_path / "Artist" / "Album" / "song.mp3").resolve())
     old_cover = str((tmp_path / "Artist" / "Album" / "old-cover.jpg").resolve())
-    selected_cover = str(
-        (tmp_path / "Artist" / "Album" / "selected-cover.jpg").resolve()
-    )
+    selected_cover = str((tmp_path / "Artist" / "Album" / "selected-cover.jpg").resolve())
     request_baseline = {
-        track_path: {
-            "path": track_path,
-            "title": "Old Title",
-            "cover_path": old_cover,
-            "cover_revision": "old-cover",
-        }
+        track_path: {"path": track_path, "title": "Old Title", "cover_path": old_cover, "cover_revision": "old-cover"}
     }
-    store = {
-        "cover_mutation_revision": 1,
-        "file_cache": {
-            track_path: {
-                **request_baseline[track_path],
-                "cover_path": selected_cover,
-                "cover_revision": "selected-cover",
-            }
-        },
-    }
-
-    class CompletedFuture:
-        def add_done_callback(self, callback):
-            callback(self)
-
-        def exception(self):
-            return None
-
-    class ImmediateExecutor:
-        def submit(self, callback, *args, **kwargs):
-            callback(*args, **kwargs)
-            return CompletedFuture()
-
-    class Adapter:
-        def load_cover_mutation_revision(self):
-            return store["cover_mutation_revision"]
-
-        def load_snapshot(self, _cache_path, _root_identity):
-            return (
-                {
-                    path: dict(entry)
-                    for path, entry in store["file_cache"].items()
-                },
-                1.0,
-                {},
-                0.0,
-                None,
-            )
-
-        def save_snapshot(
-            self,
-            _cache_path,
-            file_cache,
-            _root_identity,
-            _last_scan,
-            *,
-            expected_cover_mutation_revision=None,
-            **_kwargs,
-        ):
-            assert (
-                expected_cover_mutation_revision
-                == store["cover_mutation_revision"]
-            )
-            store["file_cache"] = {
-                path: dict(entry)
-                for path, entry in file_cache.items()
-            }
-
-    monkeypatch.setattr(cache_module, "_CACHE_WRITE_EXECUTOR", ImmediateExecutor())
-    monkeypatch.setattr(
-        cache_module,
-        "_select_runtime_scan_cache_adapter",
-        lambda _config: Adapter(),
-    )
-    monkeypatch.setattr(
-        "music_app.services.library_roots.library_root_cache_identity",
-        lambda _config: "root",
+    adapter = targeted_adapter(
+        {track_path: {**request_baseline[track_path], "cover_path": selected_cover, "cover_revision": "selected-cover", "library_root_id": "main"}},
+        cover_mutation_revision=1,
     )
 
-    cache_module.schedule_cache_updates_save_for_config(
-        {"PERSISTENCE_BACKENDS": {"scan_cache": PERSISTENCE_BACKEND_POSTGRES}},
-        tmp_path / "unused.json",
-        {
-            track_path: {
-                **request_baseline[track_path],
-                "title": "New Title",
-            }
-        },
+    future = cache_module.schedule_cache_updates_save_for_config(
+        _POSTGRES_CONFIG,
+        {track_path: {**request_baseline[track_path], "title": "New Title"}},
         baseline_file_cache=request_baseline,
     )
+    held_executor.run_all()
 
-    assert store["file_cache"][track_path]["title"] == "New Title"
-    assert store["file_cache"][track_path]["cover_path"] == selected_cover
-    assert store["file_cache"][track_path]["cover_revision"] == "selected-cover"
+    assert future.exception() is None
+    assert adapter.file_cache[track_path]["title"] == "New Title"
+    assert adapter.file_cache[track_path]["cover_path"] == selected_cover
+    assert adapter.file_cache[track_path]["cover_revision"] == "selected-cover"
 
 
 def test_scheduled_cache_delta_preserves_structural_inventory_changed_before_worker_starts(
-    tmp_path,
-    monkeypatch,
+    tmp_path, targeted_adapter, held_executor,
 ):
-    from music_app.services.scan_cache_persistence import ScanCachePublicationSuperseded
-
     track_path = str((tmp_path / "Artist" / "Old Album" / "song.mp3").resolve())
-    store = {
-        "cover_mutation_revision": 0,
-        "inventory_mutation_revision": 0,
-        "file_cache": {
-            track_path: {
-                "path": track_path,
-                "album": "Old Album",
-                "album_artist": "Artist",
-                "title": "Song",
-                "play_count": 0,
-            }
-        },
-    }
-    delayed_jobs = []
+    entry = {"path": track_path, "album": "Old Album", "album_artist": "Artist", "title": "Song", "play_count": 0, "library_root_id": "main"}
+    adapter = targeted_adapter({track_path: entry})
 
-    class DelayedFuture:
-        def add_done_callback(self, _callback):
-            return None
-
-    class DelayedExecutor:
-        def submit(self, callback, *args, **kwargs):
-            delayed_jobs.append((callback, args, kwargs))
-            return DelayedFuture()
-
-    class Adapter:
-        def load_cover_mutation_revision(self):
-            return store["cover_mutation_revision"]
-
-        def load_inventory_mutation_revision(self):
-            return store["inventory_mutation_revision"]
-
-        def load_snapshot(self, _cache_path, _root_identity):
-            return (
-                {path: dict(entry) for path, entry in store["file_cache"].items()},
-                1.0,
-                {},
-                0.0,
-                None,
-            )
-
-        def save_snapshot(
-            self,
-            _cache_path,
-            file_cache,
-            _root_identity,
-            _last_scan,
-            *,
-            expected_cover_mutation_revision=None,
-            expected_inventory_mutation_revision=None,
-            **_kwargs,
-        ):
-            if (
-                expected_cover_mutation_revision != store["cover_mutation_revision"]
-                or expected_inventory_mutation_revision
-                != store["inventory_mutation_revision"]
-            ):
-                raise ScanCachePublicationSuperseded("inventory advanced")
-            store["file_cache"] = {
-                path: dict(entry) for path, entry in file_cache.items()
-            }
-
-    monkeypatch.setattr(cache_module, "_CACHE_WRITE_EXECUTOR", DelayedExecutor())
-    monkeypatch.setattr(cache_module, "_select_runtime_scan_cache_adapter", lambda _config: Adapter())
-    monkeypatch.setattr(
-        "music_app.services.library_roots.library_root_cache_identity",
-        lambda _config: "root",
+    future = cache_module.schedule_cache_updates_save_for_config(
+        _POSTGRES_CONFIG, {track_path: {**entry, "play_count": 1}},
     )
+    adapter.inventory_mutation_revision = 1
+    adapter.file_cache[track_path]["album"] = "Renamed Album"
+    held_executor.run_all()
 
-    cache_module.schedule_cache_updates_save_for_config(
-        {"PERSISTENCE_BACKENDS": {"scan_cache": PERSISTENCE_BACKEND_POSTGRES}},
-        tmp_path / "unused.json",
-        {
-            track_path: {
-                **store["file_cache"][track_path],
-                "play_count": 1,
-            }
-        },
+    assert future.exception() is None
+    assert adapter.file_cache[track_path]["album"] == "Renamed Album"
+    assert adapter.file_cache[track_path]["album_artist"] == "Artist"
+    assert adapter.file_cache[track_path]["play_count"] == 1
+
+
+def test_scheduled_cache_update_runs_intent_completion_inside_the_publication_transaction(
+    tmp_path, targeted_adapter, held_executor,
+):
+    track_path = str((tmp_path / "Artist" / "Album" / "song.mp3").resolve())
+    entry = {**_cache_entry(Path(track_path)), "library_root_id": "main"}
+    targeted_adapter({track_path: entry})
+    completed: list[object] = []
+
+    future = cache_module.schedule_cache_updates_save_for_config(
+        _POSTGRES_CONFIG,
+        {track_path: {**entry, "title": "Changed"}},
+        baseline_file_cache={track_path: entry},
+        before_commit=completed.append,
     )
+    held_executor.run_all()
 
-    store["inventory_mutation_revision"] = 1
-    store["file_cache"][track_path]["album"] = "Renamed Album"
-    callback, args, kwargs = delayed_jobs[0]
-    callback(*args, **kwargs)
+    assert future.exception() is None
+    assert completed == ["transaction"]
 
-    assert store["file_cache"][track_path]["album"] == "Renamed Album"
-    assert store["file_cache"][track_path]["album_artist"] == "Artist"
-    assert store["file_cache"][track_path]["play_count"] == 1
+
+def _rapid_title_saves(path: str, entry: dict[str, object], count: int, hooks: list[int]):
+    """`count` successive title edits of one track, each derived from the last."""
+    return [
+        (
+            {path: {**entry, "title": f"Title {index}"}},
+            {path: {**entry, "title": f"Title {index - 1}" if index else entry["title"]}},
+            lambda _connection, index=index: hooks.append(index),
+        )
+        for index in range(count)
+    ]
+
+
+def test_rapid_scheduled_saves_coalesce_into_one_running_and_one_trailing_publication(
+    tmp_path, targeted_adapter, held_executor,
+):
+    track_path = str((tmp_path / "Artist" / "Album" / "song.mp3").resolve())
+    entry = {**_cache_entry(Path(track_path)), "library_root_id": "main"}
+    adapter = targeted_adapter({track_path: entry})
+    hooks: list[int] = []
+    saves = _rapid_title_saves(track_path, entry, 10, hooks)
+    futures = []
+
+    def schedule(changed, baseline, hook):
+        futures.append(cache_module.schedule_cache_updates_save_for_config(
+            _POSTGRES_CONFIG, changed, baseline_file_cache=baseline, before_commit=hook,
+        ))
+
+    def arrive_while_the_first_publication_runs(_store):
+        adapter.after_load = None
+        for save in saves[1:]:
+            schedule(*save)
+
+    schedule(*saves[0])
+    adapter.after_load = arrive_while_the_first_publication_runs
+
+    assert len(held_executor.submitted) == 1
+    assert held_executor.run_all() == 2
+    assert len(adapter.publications) == 2
+    # Each save is acknowledged only once its own entries commit.
+    assert all(future.result()["projection_mode"] == "stale" for future in futures)
+    assert hooks == list(range(10))
+    assert adapter.file_cache[track_path]["title"] == "Title 9"
+    assert adapter.inventory_mutation_revision == 2
+
+
+def test_a_failing_save_in_a_trailing_batch_does_not_fail_the_saves_merged_with_it(
+    tmp_path, targeted_adapter, held_executor,
+):
+    first_path = str((tmp_path / "Artist" / "Album" / "01.mp3").resolve())
+    second_path = str((tmp_path / "Artist" / "Album" / "02.mp3").resolve())
+    first_entry = {**_cache_entry(Path(first_path)), "library_root_id": "main"}
+    second_entry = {**_cache_entry(Path(second_path)), "library_root_id": "main"}
+    adapter = targeted_adapter({first_path: first_entry, second_path: second_entry})
+
+    def schedule(path, changed, baseline, hook=None):
+        return cache_module.schedule_cache_updates_save_for_config(
+            _POSTGRES_CONFIG, {path: changed}, baseline_file_cache={path: baseline}, before_commit=hook,
+        )
+
+    def failing_hook(_connection):
+        raise RuntimeError("intent completion failed")
+
+    running = schedule(first_path, {**first_entry, "title": "Running"}, first_entry)
+    failing = schedule(first_path, {**first_entry, "title": "Failing"}, {**first_entry, "title": "Running"}, failing_hook)
+    merged = schedule(second_path, {**second_entry, "title": "Merged"}, second_entry)
+    held_executor.run_all()
+
+    assert running.exception() is None
+    assert str(failing.exception()) == "intent completion failed"
+    assert merged.exception() is None
+    assert adapter.file_cache[first_path]["title"] == "Running"
+    assert adapter.file_cache[second_path]["title"] == "Merged"
 
 
 def test_cache_delta_rebase_preserves_newer_inventory_removal():
@@ -1216,61 +951,6 @@ def test_runtime_cover_selection_uses_targeted_postgres_mutation_without_republi
             "selected_cover_path": cover_path,
         }
     ]
-
-
-def test_scheduled_cache_update_forwards_intent_completion_to_snapshot_transaction(
-    tmp_path,
-    monkeypatch,
-):
-    track_path = str((tmp_path / "Artist" / "Album" / "song.mp3").resolve())
-    entry = _cache_entry(Path(track_path))
-    before_commit = object()
-    observed: list[object] = []
-
-    class CompletedFuture:
-        def add_done_callback(self, callback):
-            callback(self)
-
-        def exception(self):
-            return None
-
-        def result(self):
-            return None
-
-    class ImmediateExecutor:
-        def submit(self, callback, *args, **kwargs):
-            callback(*args, **kwargs)
-            return CompletedFuture()
-
-    class Adapter:
-        def load_cover_mutation_revision(self):
-            return 0
-
-        def load_inventory_mutation_revision(self):
-            return 0
-
-        def load_snapshot(self, _cache_path, _root_identity):
-            return ({track_path: dict(entry)}, 1.0, {}, 0.0, None)
-
-        def save_snapshot(self, *_args, **kwargs):
-            observed.append(kwargs.get("before_commit"))
-
-    monkeypatch.setattr(cache_module, "_CACHE_WRITE_EXECUTOR", ImmediateExecutor())
-    monkeypatch.setattr(cache_module, "_select_runtime_scan_cache_adapter", lambda _config: Adapter())
-    monkeypatch.setattr(
-        "music_app.services.library_roots.library_root_cache_identity",
-        lambda _config: "root",
-    )
-
-    cache_module.schedule_cache_updates_save_for_config(
-        {"PERSISTENCE_BACKENDS": {"scan_cache": PERSISTENCE_BACKEND_POSTGRES}},
-        tmp_path / "unused.json",
-        {track_path: {**entry, "title": "Changed"}},
-        baseline_file_cache={track_path: entry},
-        before_commit=before_commit,
-    )
-
-    assert observed == [before_commit]
 
 
 def test_runtime_cache_save_forwards_the_publication_commit_guard(
@@ -1345,3 +1025,164 @@ def test_structural_tag_persistence_invalidates_utility_projections(monkeypatch)
     assert invalidations == [
         {"database_url": "postgresql://runtime/library"}
     ]
+
+
+class _Rows:
+    description = ("rows",)
+    rowcount = -1
+
+    def __init__(self, rows):
+        self._rows = list(rows)
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+    def fetchall(self):
+        return list(self._rows)
+
+    def __iter__(self):
+        return iter(self._rows)
+
+
+class _OneAlbumLibraryDatabase:
+    """Postgres double: one album of `album_paths` inside a library of
+    `track_count` tracks. Targeted reads return the album's persisted rows;
+    only library-wide reads (relation source rows, an unfiltered file load)
+    return `track_count` rows, so any global work shows up as growth."""
+
+    def __init__(self, *, track_count: int, entries: dict[str, dict[str, object]]):
+        self.track_count = track_count
+        self.entries = {path: dict(entry) for path, entry in entries.items()}
+        self.inventory_mutation_revision = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def commit(self):
+        pass
+
+    def pipeline(self):
+        from contextlib import nullcontext
+
+        return nullcontext()
+
+    def _album_rows(self, paths):
+        return [
+            {
+                "private_path": path, "album_id": 1, "album_key": "broadcast::tender buttons",
+                "album_owner_key": "broadcast", "album_title": "Tender Buttons", "album_artist": "Broadcast",
+                "artist_key": "broadcast", "library_root_id": "main", "file_entry": dict(self.entries[path]),
+            }
+            for path in sorted(paths)
+            if path in self.entries
+        ]
+
+    def execute(self, sql, params=None):
+        text = " ".join(str(sql).split()).lower()
+        params = params or {}
+        if "relation_locations as materialized" in text or ("{scan_cache,file_entry}" in text and set(params) == {"source"}):
+            return _Rows({"private_path": f"/library/{index}.mp3"} for index in range(self.track_count))
+        if "bootstrap_context_ready" in text:
+            return _Rows([{"bootstrap_context_ready": 1}])
+        if "update library.libraries" in text and "inventory_mutation_revision" in text:
+            self.inventory_mutation_revision += 1
+            return _Rows([{"inventory_mutation_revision": self.inventory_mutation_revision}])
+        if "as inventory_mutation_revision" in text:
+            return _Rows([{"inventory_mutation_revision": self.inventory_mutation_revision}])
+        if "as cover_mutation_revision" in text:
+            return _Rows([{"cover_mutation_revision": 0}])
+        if "insert into library.local_track_files" in text:
+            for row in params["rows"]:
+                self.entries[row["private_path"]] = dict(row["metadata"]["scan_cache"]["file_entry"])
+            return _Rows([])
+        if "{scan_cache,file_entry}" in text:
+            return _Rows(self._album_rows(params.get("paths", self.entries)))
+        if "active_paths" in params:
+            return _Rows(self._album_rows(params["active_paths"]))
+        return _Rows([])
+
+
+def test_queued_cache_update_contract_publishes_only_the_edited_album_and_coalesces_rapid_saves_at_production_track_count(
+    tmp_path, monkeypatch, held_executor,
+):
+    from music_app.services import gallery_projection_postgres, relation_projection_builder, scan_cache_persistence
+    from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+    from tests.py.bounded_interactions import CountingConnection, OperationCounts, measure_scale_pair
+    from tests.py.filesystem_operation_counting import count_filesystem_and_media
+    from tests.py.test_library_route_bounded_contracts import _registered
+
+    monkeypatch.setattr(scan_cache_persistence, "Jsonb", None)
+    current: dict[str, OperationCounts] = {}
+    for module, name in (
+        (scan_cache_persistence, "load_relation_source_rows_sql"),
+        (scan_cache_persistence, "relation_source_fingerprint"),
+        (scan_cache_persistence, "build_relation_views_from_postgres_rows"),
+        (relation_projection_builder, "build_postgres_relation_views"),
+    ):
+        original = getattr(module, name)
+        monkeypatch.setattr(module, name, lambda *args, original=original, **kwargs: (
+            current["counts"].count("builder_calls"), original(*args, **kwargs))[1])
+    # The background owner that rebuilds the stale relation projection.
+    monkeypatch.setattr(
+        gallery_projection_postgres, "schedule_gallery_projection_refresh",
+        lambda _config, **_kwargs: current["counts"].count("invalidations"),
+    )
+    album_root = (tmp_path / "Broadcast" / "Tender Buttons").resolve()
+    album = {
+        str(album_root / f"{number:02d}.mp3"): {
+            **_cache_entry(album_root / f"{number:02d}.mp3"),
+            "album": "Tender Buttons", "album_artist": "Broadcast", "artist": "Broadcast",
+            "title": f"Song {number}", "track_number": number, "library_root_id": "main",
+            "library_root_category": "main",
+        }
+        for number in range(1, 13)
+    }
+    edited_path = next(iter(album))
+    config = {**_POSTGRES_CONFIG, "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://isolated.invalid/cache-save"}
+    rapid_save_count = 25
+
+    def run(track_count: int) -> OperationCounts:
+        database = _OneAlbumLibraryDatabase(track_count=track_count, entries=album)
+        counts = current["counts"] = OperationCounts()
+        adapter = PostgresScanCacheAdapter(config, connect=lambda _url: CountingConnection(database, counts))
+        monkeypatch.setattr(cache_module, "_select_runtime_scan_cache_adapter", lambda _config: adapter)
+        hooks: list[int] = []
+        saves = _rapid_title_saves(edited_path, album[edited_path], rapid_save_count, hooks)
+        futures = []
+
+        def schedule(changed, baseline, hook):
+            futures.append(cache_module.schedule_cache_updates_save_for_config(
+                config, changed, baseline_file_cache=baseline, before_commit=hook,
+            ))
+
+        with count_filesystem_and_media(monkeypatch, counts):
+            schedule(*saves[0])
+            original_load = adapter.load_file_entries
+
+            def load_while_saves_arrive(paths):
+                # The remaining saves arrive while the first publication runs.
+                adapter.load_file_entries = original_load
+                loaded = original_load(paths)
+                for save in saves[1:]:
+                    schedule(*save)
+                return loaded
+
+            adapter.load_file_entries = load_while_saves_arrive
+            publications = held_executor.run_all()
+
+        assert publications == 2
+        counts.count("generation_changes", database.inventory_mutation_revision)
+        assert all(future.result()["projection_mode"] == "stale" for future in futures)
+        assert hooks == list(range(rapid_save_count))
+        assert database.entries[edited_path]["title"] == f"Title {rapid_save_count - 1}"
+        assert all(database.entries[path]["title"] == entry["title"] for path, entry in album.items() if path != edited_path)
+        return counts
+
+    small, production = measure_scale_pair(
+        run=run, **_registered("py:services/cache.py#save_cache_updates_to_disk_for_config"),
+    )
+    assert small.generation_changes == production.generation_changes == 2
+    assert small.sql_statements == production.sql_statements

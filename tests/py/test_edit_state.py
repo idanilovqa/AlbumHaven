@@ -9,7 +9,6 @@ from music_app.services.edit_state import (
     build_affected_album_dicts,
     find_album_dicts_by_track_paths,
     rebuild_affected_albums_in_state,
-    refresh_changed_files_in_cache,
     update_cache_entry_after_repairs,
 )
 
@@ -103,8 +102,31 @@ def test_partial_rebuild_replaces_automatically_year_split_albums(tmp_path):
             {paths[0]},
             {paths[0]},
             set(),
+            library_state=state,
         )
     ] == [(2001, "test artist::test album::year::2001")]
+
+
+def test_partial_rebuild_places_an_album_by_the_published_sort_order(tmp_path):
+    # Same artist and year: the published order is by release date before name.
+    releases = (("2001-01-01", "Bravo"), ("2001-06-01", "Charlie"), ("2001-12-01", "Alpha"))
+    file_cache = {
+        str(tmp_path / name / "song.flac"): {
+            "path": str(tmp_path / name / "song.flac"), "title": "Song", "track_number": 1,
+            "disc_number": 1, "artist": "Test Artist", "album_artist": "Test Artist", "album": name,
+            "year": 2001, "release_date": release_date, "duration_seconds": 180,
+        }
+        for release_date, name in releases
+    }
+    state = {"albums": edit_state_module.build_albums_from_file_cache(file_cache)}
+    assert [album.name for album in state["albums"]] == ["Bravo", "Charlie", "Alpha"]
+    changed = str(tmp_path / "Charlie" / "song.flac")
+    updated_file_cache = {**file_cache, changed: {**file_cache[changed], "title": "Updated Song"}}
+
+    rebuild_affected_albums_in_state(state, file_cache, updated_file_cache, {changed}, set())
+
+    assert [album.name for album in state["albums"]] == ["Bravo", "Charlie", "Alpha"]
+    assert state["albums"][1].tracks[0].title == "Updated Song"
 
 
 def test_partial_rebuild_keeps_explicit_year_siblings(tmp_path):
@@ -211,71 +233,23 @@ def test_update_cache_entry_after_year_repair_keeps_precise_release_date_in_sync
     assert updated["release_date"] == "2014"
 
 
-def test_refresh_changed_files_in_cache_uses_explicit_dependencies_without_flask_context(tmp_path, monkeypatch):
-    track_path = tmp_path / "song.mp3"
-    track_path.write_bytes(b"audio")
-    cache_path = tmp_path / "cache.json"
-    config = {"CACHE_PATH": cache_path, "DATA_DIR": tmp_path}
-    scheduled: list[tuple[dict[str, object], Path, dict[str, object]]] = []
+def test_replaced_album_index_keeps_order_and_lookups_without_reindexing():
+    from music_app.services.library_album_index import LibraryAlbumIndex
 
-    monkeypatch.setattr(edit_state_module, "load_exception_overrides", lambda received_config: {"ignored": received_config})
-    monkeypatch.setattr(
-        edit_state_module,
-        "read_metadata_for_file",
-        lambda path: {
-            "path": str(path),
-            "album": "Album",
-            "album_artist": "Artist",
-            "title": "New",
-        },
-    )
-    monkeypatch.setattr(
-        edit_state_module,
-        "apply_exception_override",
-        lambda entry, overrides: entry.update({"override_seen": overrides["ignored"] is config}),
-    )
-    monkeypatch.setattr(edit_state_module, "load_separate_release_keys", lambda received_config: {"release-key"})
-    monkeypatch.setattr(
-        edit_state_module,
-        "rebuild_affected_albums_in_state",
-        lambda st, previous, updated, changed, keys: st.update({"rebuilt_with": (changed, keys)}),
-    )
-    monkeypatch.setattr(
-        edit_state_module,
-        "schedule_cache_updates_save_for_config",
-        lambda received_config, path, payload: scheduled.append((received_config, path, payload)),
-    )
+    def album(key, artist, path):
+        return SimpleNamespace(key=key, album_artist=artist, year=None, name=key, tracks=[SimpleNamespace(path=path)])
 
-    changed = refresh_changed_files_in_cache(
-        {"separate_release_keys": set()},
-        {str(track_path): {"path": str(track_path), "title": "Old"}},
-        {str(track_path)},
-        config=config,
-        logger=None,
-    )
+    first, middle, last = album("a::x", "A", "a.mp3"), album("m::x", "M", "m.mp3"), album("z::x", "Z", "z.mp3")
+    index = LibraryAlbumIndex([first, middle, last])
+    rebuilt = [album("m::x::year::2001", "M", "m.mp3"), album("n::x", "N", "n.mp3")]
 
-    assert changed is True
-    assert scheduled == [
-            (
-                config,
-                cache_path,
-                {
-                str(track_path): {
-                    "path": str(track_path),
-                    "album": "Album",
-                    "album_artist": "Artist",
-                    "title": "New",
-                    "override_seen": True,
-                }
-            },
-        )
-    ]
+    derived = index.replaced([middle], rebuilt, sort_key=edit_state_module.album_sort_key)
+
+    assert derived.albums == [first, *rebuilt, last]
+    assert derived.albums_with_any_track({"z.mp3", "n.mp3", "m.mp3"}) == [*rebuilt, last]
+    assert derived.album("m::x") is None and derived.album("n::x") is rebuilt[1]
+    assert derived.albums_of_releases({"m::x"}) == [rebuilt[0]]
+    # The source index is untouched.
+    assert index.albums == [first, middle, last] and index.album("m::x") is middle
 
 
-def test_refresh_changed_files_in_cache_requires_explicit_config():
-    try:
-        refresh_changed_files_in_cache({}, {}, {"song.mp3"})
-    except TypeError as exc:
-        assert "config" in str(exc)
-    else:
-        raise AssertionError("refresh_changed_files_in_cache should require explicit config")

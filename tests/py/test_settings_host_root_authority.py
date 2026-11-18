@@ -125,3 +125,44 @@ def test_picker_lists_only_bounded_child_directories(monkeypatch,tmp_path):
     assert code==200
     assert 'album' in json.dumps(body) and 'track.flac' not in json.dumps(body)
     assert str(tmp_path/'foreign') not in json.dumps(body)
+
+
+def test_picker_contract_lists_only_the_browsed_folder_at_production_library_size(monkeypatch,tmp_path):
+    from tests.py.bounded_interactions import OperationCounts, measure_scale_pair
+    from tests.py.filesystem_operation_counting import count_filesystem_and_media
+
+    def run(album_count):
+        base=tmp_path/f'base-{album_count}';base.mkdir()
+        for name in ('Artist A','Artist B','Artist C'):
+            for index in range(album_count//3+1):
+                (base/name/f'Album {index:04d}').mkdir(parents=True)
+        (base/'track.flac').write_bytes(b'not-a-directory')
+        request,_effects,_actor=context(monkeypatch,base)
+        counts=OperationCounts()
+        with count_filesystem_and_media(monkeypatch,counts):
+            code,body=invoke(picker(),request,path=str(base))
+        assert code==200 and [entry['name'] for entry in body['entries']]==['Artist A','Artist B','Artist C']
+        return counts
+
+    small,production=measure_scale_pair(
+        interaction_id='py:routes/api_wave_a_asgi_routes.py#library_settings_browse',
+        small=20,large=1_000,run=run,
+        budgets={'filesystem_enumerations':1,'stat_calls':6,'open_calls':0},
+        growth=('stat_calls',0),
+    )
+    assert small==production
+
+
+def test_picker_stops_at_the_child_directory_cap(monkeypatch,tmp_path):
+    from tests.py.bounded_interactions import OperationCounts
+    from tests.py.filesystem_operation_counting import count_filesystem_and_media
+
+    base=tmp_path/'base';base.mkdir()
+    for index in range(1_000):(base/f'Artist {index:04d}').mkdir()
+    request,_effects,_actor=context(monkeypatch,base)
+    counts=OperationCounts()
+    with count_filesystem_and_media(monkeypatch,counts):
+        code,_body=invoke(picker(),request,path=str(base))
+    assert code==409
+    assert counts.filesystem_enumerations==1
+    assert counts.stat_calls<=2*502+10

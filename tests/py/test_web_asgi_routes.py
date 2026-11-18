@@ -1369,7 +1369,7 @@ def test_asgi_bootstrap_and_refresh_routes_preserve_payloads_and_redirect(app, m
     assert library_state["scan_progress_samples"] == []
 
 
-def test_asgi_view_data_hydrates_cached_library_before_file_payload(app, monkeypatch):
+def test_asgi_view_data_reads_published_library_before_file_payload(app, monkeypatch):
     from music_app.routes import api_read_asgi_routes
 
     hydrate_calls = []
@@ -1382,9 +1382,10 @@ def test_asgi_view_data_hydrates_cached_library_before_file_payload(app, monkeyp
     monkeypatch.setattr(api_read_asgi_routes, "_unsupported_postgres_album_search_response", lambda _request: None)
     monkeypatch.setattr(api_read_asgi_routes, "_unsupported_postgres_root_album_browse_response", lambda _request: None)
 
-    def fake_hydrate_cached_library_for_asgi(request, *, ensure_relations=False):
-        hydrate_calls.append(ensure_relations)
-        request.app.state.library_state["albums"] = [SimpleNamespace(name="Hydrated")]
+    def fake_request_library_hydration(library_state, _config, _logger):
+        hydrate_calls.append("requested")
+        library_state["albums"] = [SimpleNamespace(name="Hydrated")]
+        return True
 
     def fake_build_view_payload(*, library_state=None, **_kwargs):
         build_calls.append(list(library_state.get("albums", [])))
@@ -1397,7 +1398,7 @@ def test_asgi_view_data_hydrates_cached_library_before_file_payload(app, monkeyp
             "artists_sidebar": [],
         }
 
-    monkeypatch.setattr(api_read_asgi_routes, "_hydrate_cached_library_for_asgi", fake_hydrate_cached_library_for_asgi)
+    monkeypatch.setattr(api_read_asgi_routes, "request_library_hydration_for_state", fake_request_library_hydration)
     monkeypatch.setattr(api_read_asgi_routes, "build_view_payload", fake_build_view_payload)
 
     asgi_app = _make_asgi_app(app)
@@ -1410,7 +1411,7 @@ def test_asgi_view_data_hydrates_cached_library_before_file_payload(app, monkeyp
 
     assert status == 200
     assert _decode_json(body)["album_count"] == 1
-    assert hydrate_calls == [False]
+    assert hydrate_calls == ["requested"]
     assert len(build_calls) == 1
     assert len(build_calls[0]) == 1
     assert getattr(build_calls[0][0], "name", "") == "Hydrated"
@@ -1429,8 +1430,9 @@ def test_asgi_view_data_omit_sidebar_skips_cached_library_hydration_for_follow_u
     monkeypatch.setattr(api_read_asgi_routes, "_unsupported_postgres_album_search_response", lambda _request: None)
     monkeypatch.setattr(api_read_asgi_routes, "_unsupported_postgres_root_album_browse_response", lambda _request: None)
 
-    def fake_hydrate_cached_library_for_asgi(_request, *, ensure_relations=False):
-        hydrate_calls.append(ensure_relations)
+    def fake_request_library_hydration(*_args):
+        hydrate_calls.append("requested")
+        return True
 
     def fake_build_view_payload(*, library_state=None, **_kwargs):
         build_calls.append(list(library_state.get("albums", [])))
@@ -1443,7 +1445,7 @@ def test_asgi_view_data_omit_sidebar_skips_cached_library_hydration_for_follow_u
             "artists_sidebar": [],
         }
 
-    monkeypatch.setattr(api_read_asgi_routes, "_hydrate_cached_library_for_asgi", fake_hydrate_cached_library_for_asgi)
+    monkeypatch.setattr(api_read_asgi_routes, "request_library_hydration_for_state", fake_request_library_hydration)
     monkeypatch.setattr(api_read_asgi_routes, "build_view_payload", fake_build_view_payload)
 
     asgi_app = _make_asgi_app(app)
@@ -2200,8 +2202,8 @@ def test_index_logs_actual_bootstrap_counts(app, monkeypatch):
 
     events = []
     monkeypatch.setattr(web_asgi, "_build_postgres_root_startup_view", populated)
-    monkeypatch.setattr(web_asgi, "log_app_event",
-                        lambda _config, _logger, action, **fields: events.append((action, fields)))
+    monkeypatch.setattr(web_asgi, "log_app_message",
+                        lambda _logger, action, **fields: events.append((action, fields)))
     status, _, _ = _run_asgi_request(_make_asgi_app(app), "GET", "/")
     assert status == 200
     event = next(fields for action, fields in events if action == "Index request completed")

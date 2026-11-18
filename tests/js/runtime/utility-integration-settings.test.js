@@ -104,103 +104,282 @@ test('an older Last.fm summary cannot repopulate after disconnect and reconnect'
  assert.equal(c.state.utility.lastfmScrobbles.loading,false);
 });
 
-test('successful Submit refreshes all counts and shows the success notification',async()=>{
- const requests=[],toasts=[];const c=loadLastfmActions({
-  fetch:async(url,options={})=>{requests.push([url,options.method||'GET']);if(options.method==='POST')return {ok:true,json:async()=>({ok:true,attempted:1,succeeded:1,failed:0,pending_before:1,pending_after:0})};return {ok:true,json:async()=>({ok:true,scrobbled:18,lastfm_total:12001,pending:0,can_submit:true})};},
-  showToast:(...args)=>toasts.push(args),
+// A fake server for one background submission: POST queues it, each progress
+// read reports the pending count the worker has reached, and the final summary
+// read (no ?progress) carries the refreshed Last.fm total; a list of summaries
+// answers successive summary reads.
+function lastfmSubmissionServer({ progress, submit = { status: 200, body: {} }, summary = null, summaryFails = false }) {
+ const requests = [], timers = [];
+ const reads = [...progress];
+ return {
+  requests, timers,
+  setTimeout: (callback, delay) => { timers.push({ callback, delay }); return timers.length; },
+  async fetch(url, options = {}) {
+   requests.push([url, options.method || 'GET']);
+   if (options.method === 'POST') return { ok: submit.status < 400, status: submit.status, json: async () => ({ ...submit.body }) };
+   if (url.endsWith('?progress=1')) {
+    const next = reads.shift();
+    if (next instanceof Error) throw next;
+    return { ok: true, json: async () => ({ ok: true, can_submit: true, ...next }) };
+   }
+   if (summaryFails) return { ok: false, json: async () => ({ ok: false, error: 'status unavailable' }) };
+   const read = Array.isArray(summary) ? summary.shift() : summary;
+   return { ok: true, json: async () => ({ ok: true, can_submit: true, ...read }) };
+  },
+ };
+}
+
+async function runLastfmPolls(server, count = Infinity) {
+ for (let ran = 0; ran < count && server.timers.length; ran += 1) {
+  const { callback, delay } = server.timers.shift();
+  assert.equal(delay, 2000);
+  await callback();
+ }
+}
+
+function connectedLastfmSubmission(server, overrides = {}) {
+ const c = loadLastfmActions({ fetch: server.fetch, setTimeout: server.setTimeout, ...overrides });
+ c.state.utility.integrations = [{ key: 'lastfm', connected: true, api_configured: true }];
+ c.state.utility.lastfmScrobbles.summary = { scrobbled: 17, lastfm_total: 12000, pending: 120, can_submit: true };
+ return c;
+}
+
+const queuedSubmit = (pending, state = 'queued') => ({
+ status: 200,
+ body: { ok: true, scrobbled: 17, pending, pending_before: pending, attempted: 0, succeeded: 0, failed: 0, pending_after: pending, queued: pending, submission: { state, error: '' } },
+});
+
+test('Submit queues the background run and the pending count falls until it finishes',async()=>{
+ const toasts = [];
+ let renders = 0;
+ const server = lastfmSubmissionServer({
+  submit: queuedSubmit(120),
+  progress: [
+   { scrobbled: 17, pending: 120, submission: { state: 'running', error: '' } },
+   { scrobbled: 67, pending: 70, submission: { state: 'running', error: '' } },
+   { scrobbled: 67, pending: 70, submission: { state: 'running', error: '' } },
+   { scrobbled: 137, pending: 0, submission: { state: 'idle', error: '' } },
+  ],
+  summary: { scrobbled: 137, lastfm_total: 12120, pending: 0, submission: { state: 'idle', error: '' } },
  });
- c.state.utility.integrations=[{key:'lastfm',connected:true,api_configured:true}];
- c.state.utility.lastfmScrobbles.summary={scrobbled:17,lastfm_total:12000,pending:1,can_submit:true};
- await c.submitPendingLastfmScrobbles();
- assert.deepEqual(requests,[['/utilities/integrations/lastfm/scrobbles/submit','POST'],['/utilities/integrations/lastfm/scrobbles','GET']]);
- assert.equal(JSON.stringify(c.state.utility.lastfmScrobbles.summary),JSON.stringify({scrobbled:18,lastfm_total:12001,pending:0,can_submit:true}));
- assert.equal(c.state.utility.lastfmScrobbles.submitting,false);
- assert.deepEqual(toasts,[['Pending Last.fm scrobbles submitted.','success',2600]]);
+ const c = connectedLastfmSubmission(server, {
+  showToast: (...args) => toasts.push(args),
+  renderUtilityModalContent: () => { renders += 1; },
+ });
+ assert.equal(await c.submitPendingLastfmScrobbles(), true);
+ assert.equal(c.state.utility.lastfmScrobbles.submitting, true);
+ const busy = c.buildUtilityIntegrationDetail(c.state.utility.integrations[0]);
+ assert.match(busy, /data-submit-lastfm-scrobbles="1"[^>]*disabled/);
+ assert.match(busy, /Submitting\.\.\./);
+ await runLastfmPolls(server, 2);
+ assert.match(c.buildUtilityIntegrationDetail(c.state.utility.integrations[0]), /data-lastfm-pending[^>]*>Pending: 70</);
+ const rendersBeforeUnchanged = renders;
+ await runLastfmPolls(server, 1);
+ assert.equal(renders, rendersBeforeUnchanged, 'an unchanged count renders nothing');
+ assert.deepEqual(toasts, []);
+ await runLastfmPolls(server);
+ assert.deepEqual(server.requests, [
+  ['/utilities/integrations/lastfm/scrobbles/submit', 'POST'],
+  ['/utilities/integrations/lastfm/scrobbles?progress=1', 'GET'],
+  ['/utilities/integrations/lastfm/scrobbles?progress=1', 'GET'],
+  ['/utilities/integrations/lastfm/scrobbles?progress=1', 'GET'],
+  ['/utilities/integrations/lastfm/scrobbles?progress=1', 'GET'],
+  ['/utilities/integrations/lastfm/scrobbles', 'GET'],
+ ]);
+ assert.equal(server.timers.length, 0, 'the poller stops when the run ends');
+ assert.equal(JSON.stringify(c.state.utility.lastfmScrobbles.summary), JSON.stringify({ scrobbled: 137, lastfm_total: 12120, pending: 0, can_submit: true }));
+ assert.equal(c.state.utility.lastfmScrobbles.submitting, false);
+ assert.deepEqual(toasts, [['Pending Last.fm scrobbles submitted.', 'success', 2600]]);
 });
 
 test('Submit replaces an in-flight pre-Submit Last.fm summary refresh',async()=>{
- let resolveOld,getCount=0;const requests=[];const c=loadLastfmActions({fetch:async(url,options={})=>{
-  requests.push([url,options.method||'GET']);
-  if(options.method==='POST')return {ok:true,json:async()=>({ok:true,attempted:1,succeeded:1,failed:0,pending_before:1,pending_after:0})};
-  getCount++;
-  if(getCount===1)return new Promise(resolve=>{resolveOld=resolve;});
-  return {ok:true,json:async()=>({ok:true,scrobbled:18,lastfm_total:12001,pending:0,can_submit:true})};
- }});
- const lastfm={key:'lastfm',connected:true,api_configured:true};
- c.state.utility.integrations=[lastfm];
- c.state.utility.lastfmScrobbles.summary={scrobbled:17,lastfm_total:12000,pending:1,can_submit:true};
- const oldLoad=c.loadLastfmScrobbleSummary(lastfm);
+ let resolveOld, summaryReads = 0;
+ const server = lastfmSubmissionServer({
+  submit: queuedSubmit(1),
+  progress: [{ scrobbled: 18, pending: 0, submission: { state: 'idle', error: '' } }],
+  summary: { scrobbled: 18, lastfm_total: 12001, pending: 0 },
+ });
+ const c = connectedLastfmSubmission(server, { fetch: async (url, options = {}) => {
+  if (url === '/utilities/integrations/lastfm/scrobbles' && ++summaryReads === 1) {
+   server.requests.push([url, 'GET']);
+   return new Promise(resolve => { resolveOld = resolve; });
+  }
+  return server.fetch(url, options);
+ } });
+ c.state.utility.lastfmScrobbles.summary = { scrobbled: 17, lastfm_total: 12000, pending: 1, can_submit: true };
+ const oldLoad = c.loadLastfmScrobbleSummary(c.state.utility.integrations[0]);
  await c.submitPendingLastfmScrobbles();
- resolveOld({ok:true,json:async()=>({ok:true,scrobbled:17,lastfm_total:12000,pending:1,can_submit:true})});
+ resolveOld({ ok: true, json: async () => ({ ok: true, scrobbled: 16, lastfm_total: 11000, pending: 1, can_submit: true }) });
  await oldLoad;
- assert.equal(getCount,2);
- assert.deepEqual(requests,[
-  ['/utilities/integrations/lastfm/scrobbles','GET'],
-  ['/utilities/integrations/lastfm/scrobbles/submit','POST'],
-  ['/utilities/integrations/lastfm/scrobbles','GET'],
+ assert.equal(c.state.utility.lastfmScrobbles.summary.scrobbled, 17, 'the stale pre-Submit read is discarded');
+ await runLastfmPolls(server);
+ assert.deepEqual(server.requests, [
+  ['/utilities/integrations/lastfm/scrobbles', 'GET'],
+  ['/utilities/integrations/lastfm/scrobbles/submit', 'POST'],
+  ['/utilities/integrations/lastfm/scrobbles?progress=1', 'GET'],
+  ['/utilities/integrations/lastfm/scrobbles', 'GET'],
  ]);
- assert.equal(JSON.stringify(c.state.utility.lastfmScrobbles.summary),JSON.stringify({scrobbled:18,lastfm_total:12001,pending:0,can_submit:true}));
+ assert.equal(JSON.stringify(c.state.utility.lastfmScrobbles.summary), JSON.stringify({ scrobbled: 18, lastfm_total: 12001, pending: 0, can_submit: true }));
 });
 
-test('failed Submit refreshes counts and uses the regular bottom-right Error alert',async()=>{
- const alerts=[];let renders=0;const c=loadLastfmActions({
-  fetch:async(url,options={})=>options.method==='POST'
-   ? {ok:false,json:async()=>({ok:false,error:'Last.fm is temporarily unavailable.',attempted:1,succeeded:0,failed:1,pending_before:1,pending_after:1})}
-   : {ok:true,json:async()=>({ok:true,scrobbled:17,lastfm_total:12000,pending:1,can_submit:true})},
-  renderUtilityModalContent:()=>{renders++;},showRepairAlert:(...args)=>alerts.push(args),
+test('a rejected Submit refreshes counts and uses the regular bottom-right Error alert without polling',async()=>{
+ const alerts = [];
+ const server = lastfmSubmissionServer({
+  submit: { status: 409, body: { ok: false, error: 'Last.fm account is not connected.', pending_before: 1, attempted: 0, succeeded: 0, failed: 0, pending_after: 1 } },
+  progress: [],
+  summary: { scrobbled: 17, lastfm_total: 12000, pending: 1 },
  });
- c.state.utility.integrations=[{key:'lastfm',connected:true,api_configured:true}];
- c.state.utility.lastfmScrobbles.summary={scrobbled:17,lastfm_total:12000,pending:1,can_submit:true};
- await c.submitPendingLastfmScrobbles();
- assert.equal(c.state.utility.lastfmScrobbles.summary.pending,1);
- assert.equal(c.state.utility.lastfmScrobbles.submitting,false);
- assert.equal(c.state.utility.logHistoryLoaded,false);
- assert.deepEqual(alerts,[['Last.fm is temporarily unavailable.','error',null]]);
- assert.ok(renders>=2);
+ const c = connectedLastfmSubmission(server, { showRepairAlert: (...args) => alerts.push(args) });
+ c.state.utility.lastfmScrobbles.summary = { scrobbled: 17, lastfm_total: 12000, pending: 1, can_submit: true };
+ assert.equal(await c.submitPendingLastfmScrobbles(), false);
+ assert.deepEqual(server.requests, [['/utilities/integrations/lastfm/scrobbles/submit', 'POST'], ['/utilities/integrations/lastfm/scrobbles', 'GET']]);
+ assert.equal(server.timers.length, 0);
+ assert.equal(c.state.utility.lastfmScrobbles.summary.pending, 1);
+ assert.equal(c.state.utility.lastfmScrobbles.submitting, false);
+ assert.equal(c.state.utility.logHistoryLoaded, false);
+ assert.deepEqual(alerts, [['Last.fm account is not connected.', 'error', null]]);
 });
 
-test('failed Submit keeps its fresher complete counts and permission when refresh fails',async()=>{
- const alerts=[];const c=loadLastfmActions({
-  fetch:async(_url,options={})=>options.method==='POST'
-   ? {ok:false,json:async()=>({ok:false,error:'Last.fm is temporarily unavailable.',scrobbled:18,lastfm_total:12001,pending:2,attempted:1,succeeded:0,failed:1,pending_before:2,pending_after:2})}
-   : {ok:false,json:async()=>({ok:false,error:'status unavailable'})},
-  showRepairAlert:(...args)=>alerts.push(args),
+test('a rejected Submit keeps its fresher counts and permission when the refresh fails',async()=>{
+ const alerts = [];
+ const server = lastfmSubmissionServer({
+  submit: { status: 503, body: { ok: false, error: 'Last.fm API credentials are not configured on the server.', scrobbled: 18, pending: 2, pending_before: 2, pending_after: 2 } },
+  progress: [],
+  summaryFails: true,
  });
- c.state.utility.integrations=[{key:'lastfm',connected:true,api_configured:true}];
- c.state.utility.lastfmScrobbles.summary={scrobbled:17,lastfm_total:12000,pending:2,can_submit:true};
+ const c = connectedLastfmSubmission(server, { showRepairAlert: (...args) => alerts.push(args) });
  await c.submitPendingLastfmScrobbles();
- assert.equal(JSON.stringify(c.state.utility.lastfmScrobbles.summary),JSON.stringify({scrobbled:18,lastfm_total:12001,pending:2,can_submit:true}));
- assert.deepEqual(alerts,[['Last.fm is temporarily unavailable.','error',null]]);
+ assert.equal(JSON.stringify(c.state.utility.lastfmScrobbles.summary), JSON.stringify({ scrobbled: 18, lastfm_total: 12000, pending: 2, can_submit: true }));
+ assert.doesNotMatch(c.buildUtilityIntegrationDetail(c.state.utility.integrations[0]), /data-submit-lastfm-scrobbles="1"[^>]*disabled/);
+ assert.deepEqual(alerts, [['Last.fm API credentials are not configured on the server.', 'error', null]]);
 });
 
-test('partial failed Submit keeps updated pending count actionable when refresh fails',async()=>{
- const alerts=[];const c=loadLastfmActions({
-  fetch:async(_url,options={})=>options.method==='POST'
-   ? {ok:false,json:async()=>({ok:false,error:'One scrobble failed.',attempted:2,succeeded:1,failed:1,pending_before:2,pending_after:1})}
-   : {ok:false,json:async()=>({ok:false,error:'status unavailable'})},
-  showRepairAlert:(...args)=>alerts.push(args),
+test('a background run that fails a batch ends the poll with the server error alert',async()=>{
+ const alerts = [], toasts = [];
+ const server = lastfmSubmissionServer({
+  submit: queuedSubmit(120),
+  progress: [
+   { scrobbled: 67, pending: 70, submission: { state: 'running', error: '' } },
+   { scrobbled: 67, pending: 70, submission: { state: 'failed', error: 'Some pending scrobbles could not be submitted to Last.fm.' } },
+  ],
+  summary: { scrobbled: 67, lastfm_total: 12050, pending: 70, submission: { state: 'failed', error: 'Some pending scrobbles could not be submitted to Last.fm.' } },
  });
- const lastfm={key:'lastfm',connected:true,api_configured:true};
- c.state.utility.integrations=[lastfm];
- c.state.utility.lastfmScrobbles.summary={scrobbled:17,lastfm_total:12000,pending:2,can_submit:true};
+ const c = connectedLastfmSubmission(server, { showRepairAlert: (...args) => alerts.push(args), showToast: (...args) => toasts.push(args) });
  await c.submitPendingLastfmScrobbles();
- assert.equal(JSON.stringify(c.state.utility.lastfmScrobbles.summary),JSON.stringify({scrobbled:17,lastfm_total:12000,pending:1,can_submit:true}));
- assert.doesNotMatch(c.buildUtilityIntegrationDetail(lastfm),/data-submit-lastfm-scrobbles="1"[^>]*disabled/);
- assert.deepEqual(alerts,[['One scrobble failed.','error',null]]);
+ await runLastfmPolls(server);
+ assert.equal(server.timers.length, 0);
+ assert.equal(c.state.utility.lastfmScrobbles.submitting, false);
+ assert.equal(c.state.utility.lastfmScrobbles.summary.pending, 70);
+ assert.doesNotMatch(c.buildUtilityIntegrationDetail(c.state.utility.integrations[0]), /data-submit-lastfm-scrobbles="1"[^>]*disabled/);
+ assert.equal(c.state.utility.logHistoryLoaded, false);
+ assert.deepEqual(alerts, [['Some pending scrobbles could not be submitted to Last.fm.', 'error', null]]);
+ assert.deepEqual(toasts, []);
 });
 
-test('successful Submit keeps its fresher complete counts and permission when refresh fails',async()=>{
- const toasts=[];const c=loadLastfmActions({
-  fetch:async(_url,options={})=>options.method==='POST'
-   ? {ok:true,json:async()=>({ok:true,scrobbled:18,lastfm_total:12001,pending:0,attempted:1,succeeded:1,failed:0,pending_before:1,pending_after:0})}
-   : {ok:false,json:async()=>({ok:false,error:'status unavailable'})},
-  showToast:(...args)=>toasts.push(args),
- });
- c.state.utility.integrations=[{key:'lastfm',connected:true,api_configured:true}];
- c.state.utility.lastfmScrobbles.summary={scrobbled:17,lastfm_total:12000,pending:1,can_submit:true};
+test('a failed progress read stops the poller with the regular Error alert',async()=>{
+ const alerts = [];
+ const server = lastfmSubmissionServer({ submit: queuedSubmit(120), progress: [new Error('Network unavailable')], summaryFails: true });
+ const c = connectedLastfmSubmission(server, { showRepairAlert: (...args) => alerts.push(args) });
  await c.submitPendingLastfmScrobbles();
- assert.equal(JSON.stringify(c.state.utility.lastfmScrobbles.summary),JSON.stringify({scrobbled:18,lastfm_total:12001,pending:0,can_submit:true}));
- assert.deepEqual(toasts,[['Pending Last.fm scrobbles submitted.','success',2600]]);
+ await runLastfmPolls(server);
+ assert.equal(server.timers.length, 0);
+ assert.equal(c.state.utility.lastfmScrobbles.submitting, false);
+ assert.deepEqual(alerts, [['Network unavailable', 'error', null]]);
+});
+
+test('a run whose count stops moving for a minute releases Submit without an alert',async()=>{
+ const alerts = [], toasts = [];
+ const running = { scrobbled: 17, pending: 120, submission: { state: 'running', error: '' } };
+ const server = lastfmSubmissionServer({ submit: queuedSubmit(120, 'running'), progress: Array.from({ length: 40 }, () => running) });
+ const c = connectedLastfmSubmission(server, { showRepairAlert: (...args) => alerts.push(args), showToast: (...args) => toasts.push(args) });
+ await c.submitPendingLastfmScrobbles();
+ await runLastfmPolls(server);
+ assert.equal(server.requests.filter(([url]) => url.endsWith('?progress=1')).length, 30);
+ assert.equal(server.timers.length, 0);
+ assert.equal(c.state.utility.lastfmScrobbles.submitting, false);
+ assert.deepEqual([alerts, toasts], [[], []]);
+});
+
+test('disconnecting Last.fm stops following a background run',async()=>{
+ const server = lastfmSubmissionServer({ submit: queuedSubmit(120), progress: [{ pending: 70, submission: { state: 'running', error: '' } }] });
+ const c = connectedLastfmSubmission(server);
+ await c.submitPendingLastfmScrobbles();
+ c.invalidateLastfmScrobbleSummary();
+ await runLastfmPolls(server);
+ assert.deepEqual(server.requests, [['/utilities/integrations/lastfm/scrobbles/submit', 'POST']]);
+ assert.equal(c.state.utility.lastfmScrobbles.submitting, false);
+});
+
+for (const [race, expectFollow] of [['a summary refresh', true], ['a disconnect', false]]) test(`${race} while Submit is out ${expectFollow ? 'still follows' : 'ends'} the background run`,async()=>{
+ let resolveSubmit;
+ const server = lastfmSubmissionServer({ progress: [{ pending: 0, submission: { state: 'idle', error: '' } }], summary: { pending: 120 } });
+ const c = connectedLastfmSubmission(server, { fetch: async (url, options = {}) => {
+  if (options.method === 'POST') return new Promise(resolve => { resolveSubmit = resolve; });
+  return server.fetch(url, options);
+ } });
+ const submit = c.submitPendingLastfmScrobbles();
+ if (expectFollow) await c.loadLastfmScrobbleSummary(c.state.utility.integrations[0], { replace: true });
+ else c.invalidateLastfmScrobbleSummary();
+ resolveSubmit({ ok: true, status: 200, json: async () => queuedSubmit(120).body });
+ await submit;
+ assert.equal(c.state.utility.lastfmScrobbles.submitting, expectFollow);
+ assert.equal(server.timers.length, expectFollow ? 1 : 0);
+});
+
+test('reopening Integrations during a background run resumes its progress',async()=>{
+ const toasts = [];
+ const server = lastfmSubmissionServer({
+  progress: [{ scrobbled: 137, pending: 0, submission: { state: 'idle', error: '' } }],
+  summary: [
+   { scrobbled: 67, lastfm_total: 12050, pending: 70, submission: { state: 'running', error: '' } },
+   { scrobbled: 137, lastfm_total: 12120, pending: 0, submission: { state: 'idle', error: '' } },
+  ],
+ });
+ const c = connectedLastfmSubmission(server, { showToast: (...args) => toasts.push(args) });
+ await c.loadLastfmScrobbleSummary(c.state.utility.integrations[0], { replace: true });
+ assert.equal(c.state.utility.lastfmScrobbles.submitting, true);
+ assert.equal(c.state.utility.lastfmScrobbles.summary.pending, 70);
+ await runLastfmPolls(server, 1);
+ assert.equal(c.state.utility.lastfmScrobbles.submitting, false);
+ assert.deepEqual(toasts, [['Pending Last.fm scrobbles submitted.', 'success', 2600]]);
+});
+
+test('bounded interaction: following a background Last.fm submission does constant work per poll at 5,000 pending scrobbles',async()=>{
+ const { createInteractionCounter, measureScalePair, assertRequestOwnership } = require('../helpers/bounded-interaction-counter.js');
+ const { loadRegistry } = require('../../../scripts/ci/validate-bounded-interactions.cjs');
+ const interactionId = 'js:runtime/utility-loaders-and-cover-lookup.js#followLastfmScrobbleSubmission';
+ const entry = loadRegistry().interactions.find(item => item.id === interactionId);
+ const run = async (pending) => {
+  const counter = createInteractionCounter();
+  // The worker sends 50 scrobbles per batch, so every other poll sees a lower count.
+  const progress = Array.from({ length: 11 }, (_value, poll) => ({
+   scrobbled: Math.min(pending, Math.floor(poll / 2) * 50),
+   pending: Math.max(0, pending - Math.floor(poll / 2) * 50),
+   submission: { state: 'running', error: '' },
+  }));
+  const server = lastfmSubmissionServer({ submit: queuedSubmit(pending), progress });
+  const urls = [];
+  const c = connectedLastfmSubmission(server, {
+   fetch: async (url, options) => { counter.count('requests'); urls.push(url); return server.fetch(url, options); },
+   setTimeout: (callback, delay) => { counter.count('timers'); return server.setTimeout(callback, delay); },
+   renderUtilityModalContent: () => counter.count('renderCommits'),
+  });
+  c.state.utility.lastfmScrobbles.summary = { scrobbled: 0, lastfm_total: 12000, pending, can_submit: true };
+  await c.submitPendingLastfmScrobbles();
+  await runLastfmPolls(server, 1);
+  const work = await counter.measure(() => runLastfmPolls(server, 10));
+  assert.equal(c.state.utility.lastfmScrobbles.submitting, true);
+  assertRequestOwnership(urls.filter(url => url.includes('?progress=1')), entry.requestOwnership, interactionId);
+  return work;
+ };
+ await measureScalePair({
+  id: interactionId,
+  small: 20,
+  large: 5000,
+  run,
+  budgets: { requests: 10, timers: 10, renderCommits: 5 },
+  growth: { metric: 'requests', largeMinusSmallMax: 0 },
+ });
 });
 
 test('reopening loaded Integrations explicitly retries the Last.fm summary without erasing existing counts',async()=>{

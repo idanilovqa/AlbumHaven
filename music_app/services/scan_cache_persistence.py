@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import Callable
-from contextlib import ExitStack
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import ExitStack, contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 import logging
 from pathlib import Path
 from time import perf_counter
+import threading
 from typing import Any, Protocol
 
 from config import PERSISTENCE_BACKEND_POSTGRES
@@ -145,6 +147,9 @@ class ScanCacheAdapter(Protocol):
     def load_inventory_mutation_revision(self) -> int:
         ...
 
+    def load_file_entries(self, paths: set[str]) -> dict[str, dict[str, object]]:
+        ...
+
     def persist_targeted_inventory_mutation(
         self,
         *,
@@ -154,6 +159,18 @@ class ScanCacheAdapter(Protocol):
         deleted_subtrees: tuple[str, ...] = (),
         moves: tuple[dict[str, object], ...] = (),
         publication_guard: Callable | None = None,
+        expected_cover_mutation_revision: int | None = None,
+        expected_inventory_mutation_revision: int | None = None,
+        before_commit: Callable[[Any], object] | None = None,
+    ) -> dict[str, object]:
+        ...
+
+    def persist_moved_album_inventory(
+        self,
+        *,
+        root_id: str,
+        active_file_entries: dict[str, dict[str, object]],
+        moves: tuple[dict[str, object], ...],
     ) -> dict[str, object]:
         ...
 
@@ -185,6 +202,9 @@ class ScanCacheAdapter(Protocol):
     ) -> dict[str, object]:
         ...
 
+    def persist_cover_selection_in_shared_transaction(self, **options) -> dict[str, object]:
+        ...
+
     def persist_structural_tag_edit(
         self,
         *,
@@ -195,6 +215,7 @@ class ScanCacheAdapter(Protocol):
         commit_guard: Callable[[Callable[[], object]], object] | None = None,
         before_commit: Callable[[Any], object] | None = None,
         rebuild_relation_projection: bool = False,
+        blank_album_evidence: Callable[[set[str]], Mapping[str, dict[str, object]]] | None = None,
     ) -> dict[str, object]:
         ...
 
@@ -267,6 +288,21 @@ class PostgresScanCacheAdapter:
             _ensure_bootstrap_context(connection)
             return _load_inventory_mutation_revision(connection)
 
+    def load_file_entries(self, paths: set[str]) -> dict[str, dict[str, object]]:
+        """Load the active scan-cache entries of exactly these track paths."""
+        if not paths:
+            return {}
+        with self._connect_to_database() as connection:
+            rows = connection.execute(
+                _load_file_entries_sql(targeted_paths=True),
+                {"source": _SOURCE, "paths": sorted(paths)},
+            ).fetchall()
+        return dict(
+            hydrated
+            for row in rows
+            if (hydrated := _hydrated_file_entry(_row_mapping(row))) is not None
+        )
+
     def load_targeted_subtree_track_paths(
         self, subtrees_by_root: dict[str, set[str]],
     ) -> tuple[str, ...]:
@@ -285,6 +321,19 @@ class PostgresScanCacheAdapter:
             ).fetchall()
         return tuple(str(_row_mapping(row)["private_path"]) for row in rows)
 
+    def persist_moved_album_inventory(
+        self,
+        *,
+        root_id: str,
+        active_file_entries: dict[str, dict[str, object]],
+        moves: tuple[dict[str, object], ...],
+    ) -> dict[str, object]:
+        return self.persist_targeted_inventory_mutation(
+            root_id=root_id,
+            active_file_entries=active_file_entries,
+            moves=moves,
+        )
+
     def persist_targeted_inventory_mutation(
         self,
         *,
@@ -294,7 +343,17 @@ class PostgresScanCacheAdapter:
         deleted_subtrees: tuple[str, ...] = (),
         moves: tuple[dict[str, object], ...] = (),
         publication_guard: Callable | None = None,
+        expected_cover_mutation_revision: int | None = None,
+        expected_inventory_mutation_revision: int | None = None,
+        before_commit: Callable[[Any], object] | None = None,
     ) -> dict[str, object]:
+        """Publish one targeted inventory mutation without rebuilding relations.
+
+        The revision increment marks the relation projection stale; the caller
+        queues the gallery refresh, which rebuilds it in the background.
+        Expected revisions reject a mutation prepared before a newer cover or
+        inventory commit; `before_commit` runs inside its transaction.
+        """
         normalized_root_id = str(root_id or "").strip()
         if not normalized_root_id:
             raise ValueError("Targeted inventory mutation requires a root id.")
@@ -337,6 +396,16 @@ class PostgresScanCacheAdapter:
             connection.execute(_inventory_publication_advisory_lock_sql())
             connection.execute(relation_projection_advisory_lock_sql())
             _ensure_bootstrap_context(connection)
+            if (
+                expected_cover_mutation_revision is not None
+                and _load_cover_mutation_revision(connection) != expected_cover_mutation_revision
+            ) or (
+                expected_inventory_mutation_revision is not None
+                and _load_inventory_mutation_revision(connection) != expected_inventory_mutation_revision
+            ):
+                raise ScanCachePublicationSuperseded(
+                    "Cover or inventory changed while the targeted mutation was being prepared."
+                )
             if any(target["paths"] or target["subtrees"] for target in stale_by_root.values()):
                 from music_app.services.library_watch_health import guard_destructive_library_publication
 
@@ -555,6 +624,8 @@ class PostgresScanCacheAdapter:
                     ).strip()
                 )
             if not inventory_changed:
+                if before_commit is not None:
+                    before_commit(connection)
                 return {
                     "inventory_mutation_revision": 0,
                     "affected_album_keys": [],
@@ -657,17 +728,14 @@ class PostgresScanCacheAdapter:
             revision = int(
                 _row_mapping(revision_row).get("inventory_mutation_revision") or 0
             )
-            _commit_structural_relation_projection(
-                connection,
-                self._config,
-                reason="targeted_reconciliation",
-            )
+            if before_commit is not None:
+                before_commit(connection)
             connection.commit()
-        return {
-            "inventory_mutation_revision": revision,
-            "affected_album_keys": sorted(affected_album_keys),
-            "new_track_paths": new_track_paths,
-        }
+            return {
+                "inventory_mutation_revision": revision,
+                "affected_album_keys": sorted(affected_album_keys),
+                "new_track_paths": new_track_paths,
+            }
 
     def load_snapshot_strict(self, cache_path: Path, root_identity: object) -> ScanCacheSnapshot:
         del cache_path
@@ -681,39 +749,11 @@ class PostgresScanCacheAdapter:
                 return {}, 0.0, {}, 0.0, None
             file_rows = list(connection.execute(_load_file_entries_sql(), {"source": _SOURCE}).fetchall())
 
-        file_cache: dict[str, dict[str, object]] = {}
-        for row in file_rows:
-            row_payload = _row_mapping(row)
-            file_entry = row_payload.get("file_entry")
-            if not isinstance(file_entry, dict):
-                file_entry = _fallback_file_entry(row_payload)
-            if not isinstance(file_entry, dict):
-                continue
-            path = str(row_payload.get("private_path") or file_entry.get("path") or "").strip()
-            if not path:
-                continue
-            try:
-                hydrated_entry = deserialize_file_entry(file_entry)
-            except Exception:
-                hydrated_entry = dict(file_entry)
-            hydrated_entry["path"] = path
-            if type(row_payload.get("album_is_compilation")) is bool:
-                hydrated_entry["is_compilation"] = row_payload[
-                    "album_is_compilation"
-                ]
-            cover_selection_origin = str(
-                row_payload.get("cover_selection_origin") or ""
-            ).strip().casefold()
-            hydrated_entry["cover_selection_origin"] = (
-                cover_selection_origin
-                if cover_selection_origin in {"user", "automatic"}
-                else None
-            )
-            hydrated_entry["cover_selection_provenance"] = (
-                "explicit" if row_payload.get("cover_selection_provenance") == "explicit" else None
-            )
-            hydrated_entry["album_id"] = row_payload.get("album_id")
-            file_cache[path] = hydrated_entry
+        file_cache = dict(
+            hydrated
+            for row in file_rows
+            if (hydrated := _hydrated_file_entry(_row_mapping(row))) is not None
+        )
 
         relation_views = deserialize_relation_views(snapshot_payload.get("relation_views"))
         return (
@@ -724,8 +764,21 @@ class PostgresScanCacheAdapter:
             None,
         )
 
-    def persist_cover_selection(
+    def persist_cover_selection(self, **options) -> dict[str, object]:
+        """Commit one album's cover selection over its own new connection."""
+        return self._persist_cover_selection(self._connect_to_database, **options)
+
+    def persist_cover_selection_in_shared_transaction(self, **options) -> dict[str, object]:
+        """Commit one album's cover selection as one transaction on the cover
+        run's shared connection (see `shared_scan_cache_connection`)."""
+        shared = _SHARED_CONNECTION.get()
+        if shared is None or shared.database_url != self._database_url:
+            raise RuntimeError("Cover selections in a cover run commit through the run's shared connection.")
+        return self._persist_cover_selection(shared.transaction, **options)
+
+    def _persist_cover_selection(
         self,
+        open_transaction: Callable[[], Any],
         *,
         track_paths: set[str],
         selected_cover_path: Path | None,
@@ -823,7 +876,7 @@ class PostgresScanCacheAdapter:
             if linked_remote
             else {}
         )
-        with self._connect_to_database() as connection:
+        with open_transaction() as connection:
             connection.execute(_inventory_publication_advisory_lock_sql())
             _ensure_bootstrap_context(connection)
             if (
@@ -936,12 +989,20 @@ class PostgresScanCacheAdapter:
         commit_guard: Callable[[Callable[[], object]], object] | None,
         before_commit: Callable[[Any], object] | None,
         rebuild_relation_projection: bool,
+        blank_album_evidence: Callable[[set[str]], Mapping[str, dict[str, object]]] | None,
     ) -> dict[str, object]:
         source_album_name = str(next(iter(previous_entries.values())).get("album") or "").strip()
+        # Membership is kept only on sibling evidence: every entry sharing an
+        # edited track's album container, the edited tracks' own entries updated.
+        evidence = (
+            {**blank_album_evidence(set(normalized_paths)), **updated_file_entries}
+            if blank_album_evidence is not None
+            else updated_file_entries
+        )
         retained_memberships = {
             path: infer_blank_album_membership(
                 updated_file_entries[path],
-                updated_file_entries.values(),
+                evidence.values(),
             )
             for path in normalized_paths
         }
@@ -1172,6 +1233,7 @@ class PostgresScanCacheAdapter:
         commit_guard: Callable[[Callable[[], object]], object] | None = None,
         before_commit: Callable[[Any], object] | None = None,
         rebuild_relation_projection: bool = False,
+        blank_album_evidence: Callable[[set[str]], Mapping[str, dict[str, object]]] | None = None,
     ) -> dict[str, object]:
         normalized_paths = sorted(
             {str(path or "").strip() for path in changed_paths if str(path or "").strip()}
@@ -1309,6 +1371,7 @@ class PostgresScanCacheAdapter:
                 commit_guard=commit_guard,
                 before_commit=before_commit,
                 rebuild_relation_projection=rebuild_relation_projection,
+                blank_album_evidence=blank_album_evidence,
             )
         if (
             (
@@ -2028,6 +2091,77 @@ class PostgresScanCacheAdapter:
         if not self._database_url:
             raise RuntimeError("ALBUM_HAVEN_APP_DATABASE_URL is required for Postgres scan_cache persistence.")
         return self._connect(self._database_url)
+
+
+class _SharedConnection:
+    """The one connection a cover run's commits use, one transaction at a time.
+
+    Each `with shared.transaction() as connection:` block is its own
+    transaction: it commits on success and rolls back on error, as a fresh
+    connection would, and the connection stays open for the next block. Worker
+    threads of the run take turns. The connection opens with the run's first
+    commit; one that breaks is closed, and the next commit opens a new one, so
+    a lost connection fails only the commit that was using it."""
+
+    def __init__(self, database_url: str, connect: Callable[[], Any]):
+        self.database_url = database_url
+        self._connect = connect
+        self._lock = threading.Lock()
+        self._connection: Any = None
+
+    @contextmanager
+    def transaction(self) -> Iterator[Any]:
+        with self._lock:
+            if self._connection is None:
+                self._connection = self._connect()
+            connection = self._connection
+            try:
+                yield connection
+            except BaseException:
+                try:
+                    connection.rollback()
+                except Exception:
+                    self._discard()
+                raise
+            else:
+                try:
+                    connection.commit()
+                except Exception:
+                    self._discard()
+                    raise
+
+    def _discard(self) -> None:
+        connection, self._connection = self._connection, None
+        try:
+            connection.close()
+        except Exception:
+            pass
+
+    def close(self) -> None:
+        with self._lock:
+            if self._connection is not None:
+                self._discard()
+
+
+_SHARED_CONNECTION: ContextVar[_SharedConnection | None] = ContextVar("scan_cache_shared_connection", default=None)
+
+
+@contextmanager
+def shared_scan_cache_connection(config: dict[str, object]) -> Iterator[None]:
+    """Provides the one connection a cover run's per-album commits share (in
+    this context and contexts copied from it), and closes it on exit: a batch
+    of albums costs one connection, not one per album."""
+    database_url = str(config.get(_APP_DATABASE_URL_KEY) or "").strip() if isinstance(config, dict) else ""
+    if not database_url or _SHARED_CONNECTION.get() is not None:
+        yield
+        return
+    shared = _SharedConnection(database_url, PostgresScanCacheAdapter(config)._connect_to_database)
+    token = _SHARED_CONNECTION.set(shared)
+    try:
+        yield
+    finally:
+        _SHARED_CONNECTION.reset(token)
+        shared.close()
 
 
 def is_scan_cache_postgres_available(config: dict[str, object] | None) -> bool:
@@ -3699,6 +3833,34 @@ def _file_entries_by_path(file_cache: dict[str, dict[str, object]]) -> dict[str,
             if path:
                 entries[path] = entry
     return entries
+
+
+def _hydrated_file_entry(row_payload: dict[str, object]) -> tuple[str, dict[str, object]] | None:
+    """One loaded track-file row as its runtime (path, scan-cache entry)."""
+    file_entry = row_payload.get("file_entry")
+    if not isinstance(file_entry, dict):
+        file_entry = _fallback_file_entry(row_payload)
+    if not isinstance(file_entry, dict):
+        return None
+    path = str(row_payload.get("private_path") or file_entry.get("path") or "").strip()
+    if not path:
+        return None
+    try:
+        hydrated_entry = deserialize_file_entry(file_entry)
+    except Exception:
+        hydrated_entry = dict(file_entry)
+    hydrated_entry["path"] = path
+    if type(row_payload.get("album_is_compilation")) is bool:
+        hydrated_entry["is_compilation"] = row_payload["album_is_compilation"]
+    cover_selection_origin = str(row_payload.get("cover_selection_origin") or "").strip().casefold()
+    hydrated_entry["cover_selection_origin"] = (
+        cover_selection_origin if cover_selection_origin in {"user", "automatic"} else None
+    )
+    hydrated_entry["cover_selection_provenance"] = (
+        "explicit" if row_payload.get("cover_selection_provenance") == "explicit" else None
+    )
+    hydrated_entry["album_id"] = row_payload.get("album_id")
+    return path, hydrated_entry
 
 
 def _fallback_file_entry(row: dict[str, object]) -> dict[str, object] | None:
@@ -6521,8 +6683,10 @@ def _load_cover_selections_sql() -> str:
     """
 
 
-def _load_file_entries_sql(*, targeted_albums: bool = False) -> str:
+def _load_file_entries_sql(*, targeted_albums: bool = False, targeted_paths: bool = False) -> str:
     album_filter = "and library.local_albums.album_key = any(%(album_keys)s::text[])" if targeted_albums else ""
+    if targeted_paths:
+        album_filter += " and library.local_track_files.private_path = any(%(paths)s::text[])"
     album_metadata_selection = (
         "library.local_albums.metadata as album_metadata,"
         if targeted_albums

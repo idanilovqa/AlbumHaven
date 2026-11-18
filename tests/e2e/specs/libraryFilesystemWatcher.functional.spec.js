@@ -655,6 +655,11 @@ test("FTC-SEARCH-NAV-032 watcher sorts I'm with Her before IZZ without changing 
         context,
         managedAppLifecycle,
       });
+      // The tree is read on the next page load, so every album must be indexed
+      // first: wait for each addition before writing the next.
+      let revision = (await libraryFilesystemWatcherActions.waitForRevisionAfter(
+        status.inventory_mutation_revision,
+      )).inventory_mutation_revision;
       for (const target of siblings) {
         await fixture.createSiblingAlbum({
           album: target.album,
@@ -663,10 +668,9 @@ test("FTC-SEARCH-NAV-032 watcher sorts I'm with Her before IZZ without changing 
           trackArtist: target.artist,
           albumArtist: target.artist,
         });
+        revision = (await libraryFilesystemWatcherActions.waitForRevisionAfter(revision))
+          .inventory_mutation_revision;
       }
-      await libraryFilesystemWatcherActions.waitForRevisionAfter(
-        status.inventory_mutation_revision,
-      );
     });
 
     await stepLogger.step('Ignore leading punctuation for ordering but preserve every display name', async () => {

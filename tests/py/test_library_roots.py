@@ -428,6 +428,37 @@ def test_persisted_library_root_normalizer_accepts_an_explicit_main_root(tmp_pat
     assert normalized["main_library_roots"][0]["id"] == "main"
 
 
+def test_saving_root_settings_resolves_paths_and_reading_them_never_resolves(tmp_path, monkeypatch):
+    main_spelling = tmp_path / "Main" / ".." / "Main"
+    hoard_spelling = tmp_path / "Hoard" / "." / ""
+    main_root, hoard_root = (tmp_path / "Main").resolve(), (tmp_path / "Hoard").resolve()
+
+    saved = library_roots.normalize_persisted_library_root_settings({
+        "main_library_roots": [{"id": "main-1", "path": str(main_spelling)}],
+        "hoarding_library_roots": [str(hoard_spelling)],
+        "move_policy": {
+            "preferred_main_write_root": "main-1",
+            "move_new_arrivals_to": str(hoard_spelling),
+        },
+    })
+
+    assert [root["path"] for root in saved["main_library_roots"]] == [str(main_root)]
+    assert [root["path"] for root in saved["hoarding_library_roots"]] == [str(hoard_root)]
+    assert saved["move_policy"] == {
+        "preferred_main_write_root": "main-1",
+        "move_new_arrivals_to": "hoarding_library_roots-1",
+    }
+
+    def no_filesystem(*_args, **_kwargs):
+        raise AssertionError("reading stored root settings must not resolve paths")
+
+    monkeypatch.setattr(Path, "resolve", no_filesystem)
+    monkeypatch.setattr(library_roots.os.path, "realpath", no_filesystem)
+    read = library_roots.read_persisted_library_root_settings(saved)
+    assert read == saved
+    assert library_roots._root_paths_from_settings(read) == (main_root, hoard_root)
+
+
 def test_resolve_candidate_under_root_skips_permission_denied_paths(monkeypatch):
     root = Path(r"X:\SyntheticMusic")
     candidate = Path(r"X:\SyntheticMusic\Blocked\track.mp3")
@@ -537,13 +568,11 @@ def test_relative_parts_within_given_roots_does_not_reload_root_settings(tmp_pat
     track.parent.mkdir(parents=True)
     track.write_bytes(b"")
     loads = _count_root_settings_loads(monkeypatch, tmp_path)
-    roots = library_roots.get_library_roots({})
 
-    root, parts = library_roots.relative_parts_within_roots({}, str(track), roots=roots)
+    parts = library_roots.relative_parts_within_roots(str(track), (tmp_path.resolve(),))
 
-    assert root["id"] == "main"
     assert parts == ("Artist", "Loose", "Track.flac")
-    assert len(loads) == 1
+    assert loads == []
 
 
 def test_album_open_directories_load_root_settings_once_per_album(tmp_path, monkeypatch):

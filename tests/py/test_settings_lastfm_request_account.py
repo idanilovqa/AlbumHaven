@@ -27,6 +27,8 @@ def test_connection_lifecycle_forwards_account_scope_not_payload(monkeypatch, ac
     monkeypatch.setattr(wave,"authenticate_lastfm",capture)
     monkeypatch.setattr(wave,"build_lastfm_status",lambda *args,**kwargs:{"key":"lastfm"})
     monkeypatch.setattr(wave,"_enrich_lastfm_status",lambda config,status,**kwargs:status)
-    monkeypatch.setattr(wave,"retry_pending_lastfm_scrobbles",lambda *args,**kwargs:None)
+    retries = []
+    monkeypatch.setattr(wave,"request_lastfm_reconnect_retry",lambda account_id:retries.append(account_id))
     response = asyncio.run(wave.utilities_lastfm_settings(request))
     assert response.status_code == 200 and calls == [7]
+    assert retries == ([7] if action == "connect" else [])

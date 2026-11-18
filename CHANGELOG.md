@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.11.36 - 2026-11-18
+
+- A new early CI gate, the bounded-interaction freeze guard, fails any change that makes a click, request or background step do work that grows with the whole library: whole-library loops, repeated identical requests, or blocking file and database work on the server's event loop. It measures each registered interaction at a small and a large size and fails when the counts outgrow their budget.
+- Covers are never cleared when a library drive is offline or a chosen cover file is missing. Cover Refresh skips albums on an unreachable drive and reports them as "library root unavailable"; a missing cover file is reported instead of being removed. App startup and the album cover integrity repair keep recorded choices too.
+- Last.fm scrobbles that failed to send are retried with no limit on attempts, with holds kept per account, and are checked 30 minutes later: a scrobble counts as confirmed when its time matches and either its artist or its title does. One Last.fm entry confirms only one listen.
+- After saving tags, the gallery stays where it was: the artists above no longer drop out, and a jump from the artist bar is immediate again.
+- Artist relationships now update when the watcher finds a change while they are being rebuilt; that change could be lost before.
+- Cover fetching, the MusicBrainz review status and other large reads no longer freeze the server for other requests.
+
 ## 0.11.35 - 2026-11-18
 
 - The hosted Problematic Files regression gate runs its end-to-end cases again; since 0.11.34 it failed before running them.

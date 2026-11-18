@@ -1433,3 +1433,16 @@ test('moving tracks to a new collection updates the library list, the open page 
     'a re-opened page reads the edited list, not the one from before the edit');
   assert.deepEqual(calls, ['page', 'tree']);
 });
+
+test('a Loose Tracks list known by media references keeps every track through a collection edit', () => {
+  // Found while checking COLL-LIVE-01 on Sandbox1: tracks without a path were all dropped, emptying the page.
+  const context = loadHelpers();
+  const songs = ['m1', 'm2', 'm3'].map((ref) => ({
+    media_ref: ref, title: ref, album: '', exception_type: 'Custom Collection', custom_collection_name: 'Mix',
+  }));
+  context.state = { view: { non_album_tracks: [], library_non_album_tracks: songs.slice() } };
+  context.applyTagEditsToNonAlbumView({ tracks: [songs[0]] }, { m1: { custom_collection_name: 'Mix 2' } });
+  const after = JSON.parse(JSON.stringify(context.state.view.library_non_album_tracks));
+  assert.deepEqual(after.map((track) => [track.media_ref, track.custom_collection_name]), [['m1', 'Mix 2'], ['m2', 'Mix'], ['m3', 'Mix']]);
+  assert.equal(after[0].path, undefined, 'a media reference is not turned into a path');
+});

@@ -1957,15 +1957,16 @@ function applyTagEditsToNonAlbumView(album, updates) {
 
 function applyTagEditsToNonAlbumTracks(tracks, album, updates) {
   const currentTracks = Array.isArray(tracks) ? tracks.slice() : [];
+  // A track is known by its path, or by its media reference where the list carries no paths; a track with
+  // neither stays as it is (it used to be dropped, emptying the list for such a viewer).
+  const identity = (track) => String(track?.path || track?.media_ref || track?.mediaRef || '');
   const tracksByPath = new Map(
     (Array.isArray(album?.tracks) ? album.tracks : [])
-      .map((track) => [String(track?.path || ''), track])
+      .map((track) => [identity(track), track])
       .filter(([path]) => path),
   );
   const nextByPath = new Map(
-    currentTracks
-      .map((track) => [String(track?.path || ''), track])
-      .filter(([path]) => path),
+    currentTracks.map((track, index) => [identity(track) || `unidentified:${index}`, track]),
   );
   Object.entries(updates || {}).forEach(([path, edits]) => {
     const hasAlbumEdit = Object.prototype.hasOwnProperty.call(edits || {}, 'album');
@@ -1995,7 +1996,7 @@ function applyTagEditsToNonAlbumTracks(tracks, album, updates) {
     nextByPath.set(normalizedPath, {
       ...track,
       ...edits,
-      path: normalizedPath,
+      ...(track.path || !(track.media_ref || track.mediaRef) ? { path: normalizedPath } : {}),
       artist: String(track?.artist || album?.album_artist || 'Unknown Artist'),
       title: String(edits.title || track?.title || 'Unknown track'),
       album: albumName,

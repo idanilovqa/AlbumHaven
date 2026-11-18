@@ -1057,7 +1057,7 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/loops.functional.spec.js",
-              "case": "FTC-PLAYER-023 the playing song draws its waveform while a prefetch build runs and keeps it through a seek",
+              "case": "FTC-PLAYER-024 the playing song draws its waveform while a prefetch build runs and keeps it through a seek",
               "area": "loops"
             },
             {

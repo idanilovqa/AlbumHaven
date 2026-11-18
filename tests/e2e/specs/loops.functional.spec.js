@@ -1304,7 +1304,7 @@ test('FTC-PLAYER-017 paused reload restores the current waveform', { tag: '@area
   expect(waveform.rightBins).toBe(720);
 });
 
-test('FTC-PLAYER-023 the playing song draws its waveform while a prefetch build runs and keeps it through a seek', { tag: '@area:loops' }, async ({
+test('FTC-PLAYER-024 the playing song draws its waveform while a prefetch build runs and keeps it through a seek', { tag: '@area:loops' }, async ({
   galleryActions,
   globalPlayerActions,
   page,

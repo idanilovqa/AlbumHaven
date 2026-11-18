@@ -308,6 +308,10 @@ test('a search narrows the collections tree and dots the Custom Collections butt
   await context.syncCustomCollectionSearchIndicator();
   assert.equal(requests.at(-1), '/library/custom-collections?q=night');
   assert.deepEqual(buttons.map(button => button.attributes.get('data-search-results')), ['true', 'true']);
+  // Owner 2026-11-17: every sidebar redraw during a search refetched the catalog and all its artwork.
+  await context.syncCustomCollectionSearchIndicator();
+  await context.syncCustomCollectionSearchIndicator();
+  assert.equal(requests.length, 1, 'redraws reuse the loaded catalog');
   await context.setLibraryNavigationMode('custom-collections');
   assert.match(artistList.innerHTML, /<button data-open-custom-collection="Night">Night:1<\/button>$/);
   assert.equal(artistList.dataset.customCollectionsSearch, '?q=night');

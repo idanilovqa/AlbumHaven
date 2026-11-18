@@ -13,7 +13,9 @@
         ${ButtonComponent.renderButton({ label: secondary.label || 'Cancel', variant: 'secondary', quiet: true, action: 'secondary', className: 'button-secondary', attributes: { 'data-editor-footer-action': 'secondary', 'data-background-cancel': true, ...secondary.attributes } })}
         ${ButtonComponent.renderButton({ label: primary.label || 'Save', variant: 'primary', action: 'primary', className: 'background-save', attributes: { 'data-editor-footer-action': 'primary', 'data-background-save': true, disabled: !options.canSave, ...primary.attributes } })}</div>
     </footer>`;
-    if (options.leadingElement) container.querySelector('[data-editor-footer]').prepend(options.leadingElement);
+    // One element or several, kept in the given order before the footer's own controls.
+    const leading = [].concat(options.leadingElement || []).filter(Boolean);
+    if (leading.length) container.querySelector('[data-editor-footer]').prepend(...leading);
     const click = event => {
       const action = event.target?.closest?.('[data-editor-footer-action]')?.getAttribute('data-editor-footer-action');
       if (action === 'reset') options.onReset?.();

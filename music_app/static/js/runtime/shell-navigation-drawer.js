@@ -124,10 +124,15 @@ async function syncCustomCollectionSearchIndicator() {
   if (String(state.view?.query || '').trim() === query) mark(Number(state.ui?.libraryLooseTracksCount) > 0);
 }
 
-function loadCustomCollectionCatalog() {
+function loadCustomCollectionCatalog({ fresh = false } = {}) {
   const url = customCollectionCatalogUrl();
   const key = url.search;
   if (customCollectionCatalog.request?.key === key) return customCollectionCatalog.request.promise;
+  // A loaded catalog answers again: every sidebar redraw during a search used to refetch it and its artwork.
+  // Opening the Custom Collections tree still asks for a fresh one.
+  if (!fresh && customCollectionCatalog.key === key && Array.isArray(customCollectionCatalog.collections)) {
+    return Promise.resolve(customCollectionCatalog.collections);
+  }
   const promise = (async () => {
     const response = await fetch(`${url.pathname}${url.search}`, { headers: { Accept: 'application/json' } });
     const payload = await response.json().catch(() => ({}));
@@ -225,7 +230,7 @@ async function setLibraryNavigationMode(mode) {
   renderCustomCollectionNavigation(cached);
   setDesktopLibraryModeRailVisible(true);
   try {
-    const collections = await loadCustomCollectionCatalog();
+    const collections = await loadCustomCollectionCatalog({ fresh: true });
     if (state.ui.libraryNavigationMode === normalized) renderCustomCollectionNavigation(collections);
   } catch (error) {
     if (state.ui.libraryNavigationMode === normalized && cached === null) {

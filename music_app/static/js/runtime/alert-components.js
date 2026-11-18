@@ -23,7 +23,7 @@ function buildAlertIconHtml(severity) {
 function buildSmallAlertAttributes(attributes = {}) {
   if (!attributes || typeof attributes !== 'object') return '';
   return Object.entries(attributes).map(([name, value]) => {
-    const allowed = /^(?:aria-label|data-open-musicbrainz-artist-problem)$/.test(name);
+    const allowed = /^(?:aria-label|aria-expanded|aria-controls|data-open-musicbrainz-artist-problem|data-toggle-tag-editor-cue-alert)$/.test(name);
     if (!allowed || value == null || value === false) return '';
     return ` ${name}="${escapeAlertHtml(value)}"`;
   }).join('');

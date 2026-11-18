@@ -43,6 +43,13 @@ async function handleUtilityBootstrapClick(event) {
     setTagEditorView(tagEditorView.getAttribute('data-in-page-tab'));
     return;
   }
+  const cueAlertToggle = event.target.closest('[data-toggle-tag-editor-cue-alert="1"]');
+  if (cueAlertToggle && state.tagEditor) {
+    event.preventDefault();
+    state.tagEditor.cueAlertExpanded = cueAlertToggle.getAttribute('aria-expanded') !== 'true';
+    renderTagEditor({ preserveTrackList: true });
+    return;
+  }
   const applyCueCorrection = event.target.closest('[data-apply-cue-correction="1"]');
   if (applyCueCorrection) {
     event.preventDefault();
@@ -1148,14 +1155,7 @@ function handleUtilityBootstrapInput(event) {
   }
   const cueInput = event.target.closest('#tag-editor-form [data-cue-field]');
   if (cueInput) {
-    try {
-      updateCueStructureDraft(cueInput.getAttribute('data-cue-field'), cueInput.value);
-      state.tagEditor.cueError = '';
-    } catch (error) {
-      state.tagEditor.cueDraft = null;
-      state.tagEditor.cueError = error.message;
-      renderTagEditor({ preserveTrackList: true });
-    }
+    updateCueStructureDraft(cueInput.getAttribute('data-cue-field'), cueInput.value);
     return;
   }
   const autoNumberStartInput = event.target.closest('#tag-editor-auto-number-start');
@@ -1314,6 +1314,11 @@ function bindCoverLookupFileInput(coverLookupFiles) {
 }
 
 function handleUtilityBootstrapChange(event) {
+  const cueInput = event.target.closest('#tag-editor-form [data-cue-field]');
+  if (cueInput) {
+    updateCueStructureDraft(cueInput.getAttribute('data-cue-field'), cueInput.value, { commit: true });
+    return;
+  }
   const collectionArtworkInput = event.target.closest('[data-custom-collection-artwork-input]');
   if (collectionArtworkInput) {
     const file = collectionArtworkInput.files?.[0];

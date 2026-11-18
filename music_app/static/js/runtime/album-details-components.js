@@ -36,9 +36,11 @@ function resolveAlbumDetailsCoverSlots(album) {
 }
 
 // The rear-cover preview Album Details shows; the gallery preloads the same URL (owner 2026-11-16).
-function albumDetailsCoverPreviewUrl(slot) {
+// The front cover asks for a display size too: unsized, it was a 2048px PNG on every switch (owner 2026-11-17).
+const ALBUM_DETAILS_FRONT_COVER_SIZE = 960;
+function albumDetailsCoverPreviewUrl(slot, size = 480) {
   const url = String(slot?.imageUrl || '');
-  return url ? `${url}${url.includes('?') ? '&' : '?'}size=480` : '';
+  return url ? `${url}${url.includes('?') ? '&' : '?'}size=${size}` : '';
 }
 
 function buildAlbumDetailsCoverStackHtml(config = {}) {
@@ -130,13 +132,20 @@ function captureAlbumDetailsCoverStack(stack) {
   const front = stack?.querySelector?.('.album-details-cover-stack__front');
   if (!front) return null;
   const poses = {};
+  const rearImages = {};
   stack.querySelectorAll('.album-details-cover-stack__rear').forEach((rear) => {
-    poses[rear.getAttribute('data-album-details-cover-index')] = albumDetailsCoverRearPose(stack, rear.getAttribute('data-album-details-cover-index'));
+    const index = rear.getAttribute('data-album-details-cover-index');
+    poses[index] = albumDetailsCoverRearPose(stack, index);
+    // The decoded rear picture stands in for the rising cover until its own image arrives (owner 2026-11-17:
+    // "the cover that appears from underneath is absent").
+    const image = rear.querySelector('img');
+    if (image?.complete && image.naturalWidth > 0) rearImages[index] = image;
   });
   return {
     front: front.cloneNode(true),
     activeIndex: Number(stack.getAttribute('data-album-details-cover-active-index')),
     poses,
+    rearImages,
   };
 }
 
@@ -149,7 +158,8 @@ function animateAlbumDetailsCoverShuffle(previous, stack, direction) {
   const front = stack.querySelector('.album-details-cover-stack__front');
   if (!front || activeIndex === previous.activeIndex) return false;
   const dir = direction < 0 ? -1 : 1;
-  const timing = { duration: 620, easing: 'cubic-bezier(.22,1,.36,1)', fill: 'backwards' };
+  // 900ms, up from 620ms: the owner found the switch too fast (2026-11-17).
+  const timing = { duration: 900, easing: 'cubic-bezier(.22,1,.36,1)', fill: 'backwards' };
   stack.classList.add('is-shuffling');
   // The old front cover leaves to the side and tucks in behind the stack, where its rear copy then shows.
   const ghost = previous.front;
@@ -166,6 +176,16 @@ function animateAlbumDetailsCoverShuffle(previous, stack, direction) {
     { transform: `translate(${dir * 38}%, 2%) rotate(${dir * 5}deg) scale(.94)`, zIndex: 0, filter: 'brightness(.8)', offset: 0.55 },
     { transform: tuckedPose, zIndex: 0, filter: 'brightness(.82)' },
   ], { ...timing, fill: 'forwards' });
+  const risingImage = front.querySelector('.track-modal-cover-visual img');
+  const standIn = previous.rearImages?.[String(activeIndex)];
+  if (standIn && risingImage && !(risingImage.complete && risingImage.naturalWidth > 0)) {
+    standIn.classList.add('album-details-cover-stack__stand-in');
+    standIn.setAttribute('aria-hidden', 'true');
+    risingImage.parentElement?.append(standIn);
+    const settle = () => standIn.remove();
+    risingImage.addEventListener('load', settle, { once: true });
+    risingImage.addEventListener('error', settle, { once: true });
+  }
   // The next cover rises forward from the rear position it held.
   const risingPose = ALBUM_DETAILS_COVER_REAR_POSES[previous.poses[String(activeIndex)]] || 'none';
   front.animate([

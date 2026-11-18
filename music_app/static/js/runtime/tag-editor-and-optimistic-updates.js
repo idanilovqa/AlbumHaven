@@ -32,6 +32,7 @@ async function loadCueEditorState(tagEditor = state.tagEditor) {
   tagEditor.canRestoreCueSource = payload.can_restore_source === true;
   tagEditor.cueWritesSource = payload.writes_source === true;
   tagEditor.cueError = '';
+  tagEditor.cueTyping = null;
   if (typeof renderTagEditor === 'function') renderTagEditor();
   return payload;
 }
@@ -82,15 +83,25 @@ function setTagEditorView(view) {
   renderTagEditor();
 }
 
-function updateCueStructureDraft(field, value) {
-  const tracks = state.tagEditor?.tracks || [];
+// Owner 2026-11-17: the timecode fields must stay editable. Every keystroke used to re-render the field from
+// the saved structure, so a half-typed value snapped back and raised "Invalid CUE timecode." at once. The typed
+// text is kept as the field's value; it is reported invalid only once committed (change: blur or Enter).
+function updateCueStructureDraft(field, value, { commit = false } = {}) {
+  const tagEditor = state.tagEditor;
+  const tracks = tagEditor?.tracks || [];
   const identity = typeof getTagEditorFocusedPath === 'function'
     ? getTagEditorFocusedPath()
     : cueEditorTrackIdentity(tracks[0]);
-  const correction = buildCueBoundaryCorrection(tracks, identity, field, value);
-  state.tagEditor.cueDraft = correction;
+  tagEditor.cueTyping = { identity, field, value: String(value ?? '') };
+  try {
+    tagEditor.cueDraft = buildCueBoundaryCorrection(tracks, identity, field, value);
+    tagEditor.cueError = '';
+  } catch (error) {
+    tagEditor.cueDraft = null;
+    if (commit) tagEditor.cueError = error.message;
+  }
   renderTagEditor({ preserveTrackList: true });
-  return correction;
+  return tagEditor.cueDraft;
 }
 
 async function applyCueStructureDraft() {
@@ -98,6 +109,7 @@ async function applyCueStructureDraft() {
   if (!tagEditor?.cueDraft) return false;
   await submitCueStructureCorrection(tagEditor.cueDraft);
   tagEditor.cueDraft = null;
+  tagEditor.cueTyping = null;
   await loadCueEditorState(tagEditor);
   return true;
 }
@@ -2190,7 +2202,9 @@ function renderTrackModalRelease(album) {
       ${coverSourceMarkersHtml}
     `;
   } else if (activeSelectedCover ? !activeSelectedCover.unavailable : albumHasDisplayCover(album)) {
-    const coverSrc = activeSelectedCover?.imageUrl || buildAlbumDisplayCoverUrl(album);
+    const coverSrc = activeSelectedCover?.imageUrl
+      ? albumDetailsCoverPreviewUrl(activeSelectedCover, ALBUM_DETAILS_FRONT_COVER_SIZE)
+      : buildAlbumDisplayCoverUrl(album);
     const lightboxSrc = activeSelectedCover?.imageUrl || (typeof buildAlbumLightboxCoverUrl === 'function'
       ? buildAlbumLightboxCoverUrl(album)
       : coverSrc);

@@ -206,6 +206,12 @@
 .album-details-cover-stack.is-shuffling {
   animation: none;
 }
+/* The rising cover shows its already-decoded rear picture until its own image arrives (owner 2026-11-17). */
+.track-modal-cover-visual .album-details-cover-stack__stand-in {
+  z-index: 1;
+  object-fit: cover;
+  pointer-events: none;
+}
 .album-details-cover-stack__front.album-details-cover-stack__ghost {
   position: absolute;
   inset-inline: 0;

@@ -4408,7 +4408,7 @@ function buildAlertIconHtml(severity) {
 function buildSmallAlertAttributes(attributes = {}) {
   if (!attributes || typeof attributes !== 'object') return '';
   return Object.entries(attributes).map(([name, value]) => {
-    const allowed = /^(?:aria-label|data-open-musicbrainz-artist-problem)$/.test(name);
+    const allowed = /^(?:aria-label|aria-expanded|aria-controls|data-open-musicbrainz-artist-problem|data-toggle-tag-editor-cue-alert)$/.test(name);
     if (!allowed || value == null || value === false) return '';
     return ` ${name}="${escapeAlertHtml(value)}"`;
   }).join('');
@@ -5313,9 +5313,11 @@ function resolveAlbumDetailsCoverSlots(album) {
 }
 
 // The rear-cover preview Album Details shows; the gallery preloads the same URL (owner 2026-11-16).
-function albumDetailsCoverPreviewUrl(slot) {
+// The front cover asks for a display size too: unsized, it was a 2048px PNG on every switch (owner 2026-11-17).
+const ALBUM_DETAILS_FRONT_COVER_SIZE = 960;
+function albumDetailsCoverPreviewUrl(slot, size = 480) {
   const url = String(slot?.imageUrl || '');
-  return url ? `${url}${url.includes('?') ? '&' : '?'}size=480` : '';
+  return url ? `${url}${url.includes('?') ? '&' : '?'}size=${size}` : '';
 }
 
 function buildAlbumDetailsCoverStackHtml(config = {}) {
@@ -5407,13 +5409,20 @@ function captureAlbumDetailsCoverStack(stack) {
   const front = stack?.querySelector?.('.album-details-cover-stack__front');
   if (!front) return null;
   const poses = {};
+  const rearImages = {};
   stack.querySelectorAll('.album-details-cover-stack__rear').forEach((rear) => {
-    poses[rear.getAttribute('data-album-details-cover-index')] = albumDetailsCoverRearPose(stack, rear.getAttribute('data-album-details-cover-index'));
+    const index = rear.getAttribute('data-album-details-cover-index');
+    poses[index] = albumDetailsCoverRearPose(stack, index);
+    // The decoded rear picture stands in for the rising cover until its own image arrives (owner 2026-11-17:
+    // "the cover that appears from underneath is absent").
+    const image = rear.querySelector('img');
+    if (image?.complete && image.naturalWidth > 0) rearImages[index] = image;
   });
   return {
     front: front.cloneNode(true),
     activeIndex: Number(stack.getAttribute('data-album-details-cover-active-index')),
     poses,
+    rearImages,
   };
 }
 
@@ -5426,7 +5435,8 @@ function animateAlbumDetailsCoverShuffle(previous, stack, direction) {
   const front = stack.querySelector('.album-details-cover-stack__front');
   if (!front || activeIndex === previous.activeIndex) return false;
   const dir = direction < 0 ? -1 : 1;
-  const timing = { duration: 620, easing: 'cubic-bezier(.22,1,.36,1)', fill: 'backwards' };
+  // 900ms, up from 620ms: the owner found the switch too fast (2026-11-17).
+  const timing = { duration: 900, easing: 'cubic-bezier(.22,1,.36,1)', fill: 'backwards' };
   stack.classList.add('is-shuffling');
   // The old front cover leaves to the side and tucks in behind the stack, where its rear copy then shows.
   const ghost = previous.front;
@@ -5443,6 +5453,16 @@ function animateAlbumDetailsCoverShuffle(previous, stack, direction) {
     { transform: `translate(${dir * 38}%, 2%) rotate(${dir * 5}deg) scale(.94)`, zIndex: 0, filter: 'brightness(.8)', offset: 0.55 },
     { transform: tuckedPose, zIndex: 0, filter: 'brightness(.82)' },
   ], { ...timing, fill: 'forwards' });
+  const risingImage = front.querySelector('.track-modal-cover-visual img');
+  const standIn = previous.rearImages?.[String(activeIndex)];
+  if (standIn && risingImage && !(risingImage.complete && risingImage.naturalWidth > 0)) {
+    standIn.classList.add('album-details-cover-stack__stand-in');
+    standIn.setAttribute('aria-hidden', 'true');
+    risingImage.parentElement?.append(standIn);
+    const settle = () => standIn.remove();
+    risingImage.addEventListener('load', settle, { once: true });
+    risingImage.addEventListener('error', settle, { once: true });
+  }
   // The next cover rises forward from the rear position it held.
   const risingPose = ALBUM_DETAILS_COVER_REAR_POSES[previous.poses[String(activeIndex)]] || 'none';
   front.animate([
@@ -11793,10 +11813,15 @@ async function syncCustomCollectionSearchIndicator() {
   if (String(state.view?.query || '').trim() === query) mark(Number(state.ui?.libraryLooseTracksCount) > 0);
 }
 
-function loadCustomCollectionCatalog() {
+function loadCustomCollectionCatalog({ fresh = false } = {}) {
   const url = customCollectionCatalogUrl();
   const key = url.search;
   if (customCollectionCatalog.request?.key === key) return customCollectionCatalog.request.promise;
+  // A loaded catalog answers again: every sidebar redraw during a search used to refetch it and its artwork.
+  // Opening the Custom Collections tree still asks for a fresh one.
+  if (!fresh && customCollectionCatalog.key === key && Array.isArray(customCollectionCatalog.collections)) {
+    return Promise.resolve(customCollectionCatalog.collections);
+  }
   const promise = (async () => {
     const response = await fetch(`${url.pathname}${url.search}`, { headers: { Accept: 'application/json' } });
     const payload = await response.json().catch(() => ({}));
@@ -11894,7 +11919,7 @@ async function setLibraryNavigationMode(mode) {
   renderCustomCollectionNavigation(cached);
   setDesktopLibraryModeRailVisible(true);
   try {
-    const collections = await loadCustomCollectionCatalog();
+    const collections = await loadCustomCollectionCatalog({ fresh: true });
     if (state.ui.libraryNavigationMode === normalized) renderCustomCollectionNavigation(collections);
   } catch (error) {
     if (state.ui.libraryNavigationMode === normalized && cached === null) {
@@ -34057,6 +34082,12 @@ function formatCueTimecode(value) {
   return [minutes, seconds, frames].map(part => String(part).padStart(2, '0')).join(':');
 }
 
+// What the owner typed into a timecode field stays there, valid or not, until it is applied.
+function getCueTypedValue(track, field) {
+  const typing = state.tagEditor?.cueTyping;
+  return typing?.field === field && typing.identity === getTagEditorTrackIdentity(track) ? typing.value : null;
+}
+
 function buildCueBoundaryCorrection(tracks, trackIdentity, field, value) {
   const cueTracks = Array.isArray(tracks) ? tracks : [];
   const selectedIndex = cueTracks.findIndex(
@@ -35026,20 +35057,33 @@ function renderTagEditor(options = {}) {
           : 'Display only stores CUE corrections in this library. Source files are not changed.');
     // A failed CUE load says so; it used to leave no trace and simply never offer the CUE view.
     const showCueAlert = cueLoaded || Boolean(cueTrack && state.tagEditor.cueError);
+    const severity = state.tagEditor.cueError ? 'error' : 'warning';
+    const title = state.tagEditor.cueError
+      ? 'CUE structure unavailable'
+      : (state.tagEditor.cueWritesSource ? 'Write in tags' : 'Display only');
+    // Owner 2026-11-17: a compact alert in the footer that expands upward over the form, never pushing it.
+    const expanded = showCueAlert && state.tagEditor.cueAlertExpanded === true;
     els.cueAlert.hidden = !showCueAlert;
-    els.cueAlert.innerHTML = showCueAlert ? buildOnPageAlertHtml({
-      severity: state.tagEditor.cueError ? 'error' : 'warning',
-          title: state.tagEditor.cueError
-            ? 'CUE structure unavailable'
-            : (state.tagEditor.cueWritesSource ? 'Write in tags' : 'Display only'),
+    els.cueAlert.innerHTML = showCueAlert ? `${buildSmallAlertHtml({
+      severity,
+      message: state.tagEditor.cueError || title,
+      interactive: true,
+      attributes: {
+        'aria-expanded': String(expanded),
+        'aria-controls': 'tag-editor-cue-alert-details',
+        'data-toggle-tag-editor-cue-alert': '1',
+      },
+    })}<div class="tag-editor-cue-alert__details" id="tag-editor-cue-alert-details"${expanded ? '' : ' hidden'}>${buildOnPageAlertHtml({
+      severity,
+      title,
       message,
-          actionsHtml: [
-            canRestore
-              ? '<button class="button ui-button ui-button--quiet ui-button--small" type="button" data-restore-cue-correction="1">Restore correction</button>'
-              : '',
-            sourceRestoreAction,
-          ].filter(Boolean).join(''),
-    }) : '';
+      actionsHtml: [
+        canRestore
+          ? '<button class="button ui-button ui-button--quiet ui-button--small" type="button" data-restore-cue-correction="1">Restore correction</button>'
+          : '',
+        sourceRestoreAction,
+      ].filter(Boolean).join(''),
+    })}</div>` : '';
   }
   if (showCue) {
     const focusedIdentity = getTagEditorFocusedPath();
@@ -35050,13 +35094,13 @@ function renderTagEditor(options = {}) {
     if (els.cueIndex01) {
       const startFrame = draft?.cue_segment_ref === getTagEditorTrackIdentity(focusedTrack)
         ? draft.start_frame : focusedTrack?.cue_structure?.start_frame;
-      els.cueIndex01.value = formatCueTimecode(startFrame);
+      els.cueIndex01.value = getCueTypedValue(focusedTrack, 'index_01') ?? formatCueTimecode(startFrame);
       els.cueIndex01.disabled = !focusedTrack?.cue_structure;
     }
     if (els.cueEnd) {
       const endFrame = draft?.cue_segment_ref === getTagEditorTrackIdentity(nextTrack)
         ? draft.start_frame : nextTrack?.cue_structure?.start_frame;
-      els.cueEnd.value = formatCueTimecode(endFrame);
+      els.cueEnd.value = getCueTypedValue(focusedTrack, 'end') ?? formatCueTimecode(endFrame);
       els.cueEnd.disabled = !nextTrack?.cue_structure;
     }
     if (els.cueIndexes) {
@@ -39640,6 +39684,7 @@ async function loadCueEditorState(tagEditor = state.tagEditor) {
   tagEditor.canRestoreCueSource = payload.can_restore_source === true;
   tagEditor.cueWritesSource = payload.writes_source === true;
   tagEditor.cueError = '';
+  tagEditor.cueTyping = null;
   if (typeof renderTagEditor === 'function') renderTagEditor();
   return payload;
 }
@@ -39690,15 +39735,25 @@ function setTagEditorView(view) {
   renderTagEditor();
 }
 
-function updateCueStructureDraft(field, value) {
-  const tracks = state.tagEditor?.tracks || [];
+// Owner 2026-11-17: the timecode fields must stay editable. Every keystroke used to re-render the field from
+// the saved structure, so a half-typed value snapped back and raised "Invalid CUE timecode." at once. The typed
+// text is kept as the field's value; it is reported invalid only once committed (change: blur or Enter).
+function updateCueStructureDraft(field, value, { commit = false } = {}) {
+  const tagEditor = state.tagEditor;
+  const tracks = tagEditor?.tracks || [];
   const identity = typeof getTagEditorFocusedPath === 'function'
     ? getTagEditorFocusedPath()
     : cueEditorTrackIdentity(tracks[0]);
-  const correction = buildCueBoundaryCorrection(tracks, identity, field, value);
-  state.tagEditor.cueDraft = correction;
+  tagEditor.cueTyping = { identity, field, value: String(value ?? '') };
+  try {
+    tagEditor.cueDraft = buildCueBoundaryCorrection(tracks, identity, field, value);
+    tagEditor.cueError = '';
+  } catch (error) {
+    tagEditor.cueDraft = null;
+    if (commit) tagEditor.cueError = error.message;
+  }
   renderTagEditor({ preserveTrackList: true });
-  return correction;
+  return tagEditor.cueDraft;
 }
 
 async function applyCueStructureDraft() {
@@ -39706,6 +39761,7 @@ async function applyCueStructureDraft() {
   if (!tagEditor?.cueDraft) return false;
   await submitCueStructureCorrection(tagEditor.cueDraft);
   tagEditor.cueDraft = null;
+  tagEditor.cueTyping = null;
   await loadCueEditorState(tagEditor);
   return true;
 }
@@ -41798,7 +41854,9 @@ function renderTrackModalRelease(album) {
       ${coverSourceMarkersHtml}
     `;
   } else if (activeSelectedCover ? !activeSelectedCover.unavailable : albumHasDisplayCover(album)) {
-    const coverSrc = activeSelectedCover?.imageUrl || buildAlbumDisplayCoverUrl(album);
+    const coverSrc = activeSelectedCover?.imageUrl
+      ? albumDetailsCoverPreviewUrl(activeSelectedCover, ALBUM_DETAILS_FRONT_COVER_SIZE)
+      : buildAlbumDisplayCoverUrl(album);
     const lightboxSrc = activeSelectedCover?.imageUrl || (typeof buildAlbumLightboxCoverUrl === 'function'
       ? buildAlbumLightboxCoverUrl(album)
       : coverSrc);
@@ -50326,6 +50384,13 @@ async function handleUtilityBootstrapClick(event) {
     setTagEditorView(tagEditorView.getAttribute('data-in-page-tab'));
     return;
   }
+  const cueAlertToggle = event.target.closest('[data-toggle-tag-editor-cue-alert="1"]');
+  if (cueAlertToggle && state.tagEditor) {
+    event.preventDefault();
+    state.tagEditor.cueAlertExpanded = cueAlertToggle.getAttribute('aria-expanded') !== 'true';
+    renderTagEditor({ preserveTrackList: true });
+    return;
+  }
   const applyCueCorrection = event.target.closest('[data-apply-cue-correction="1"]');
   if (applyCueCorrection) {
     event.preventDefault();
@@ -51431,14 +51496,7 @@ function handleUtilityBootstrapInput(event) {
   }
   const cueInput = event.target.closest('#tag-editor-form [data-cue-field]');
   if (cueInput) {
-    try {
-      updateCueStructureDraft(cueInput.getAttribute('data-cue-field'), cueInput.value);
-      state.tagEditor.cueError = '';
-    } catch (error) {
-      state.tagEditor.cueDraft = null;
-      state.tagEditor.cueError = error.message;
-      renderTagEditor({ preserveTrackList: true });
-    }
+    updateCueStructureDraft(cueInput.getAttribute('data-cue-field'), cueInput.value);
     return;
   }
   const autoNumberStartInput = event.target.closest('#tag-editor-auto-number-start');
@@ -51597,6 +51655,11 @@ function bindCoverLookupFileInput(coverLookupFiles) {
 }
 
 function handleUtilityBootstrapChange(event) {
+  const cueInput = event.target.closest('#tag-editor-form [data-cue-field]');
+  if (cueInput) {
+    updateCueStructureDraft(cueInput.getAttribute('data-cue-field'), cueInput.value, { commit: true });
+    return;
+  }
   const collectionArtworkInput = event.target.closest('[data-custom-collection-artwork-input]');
   if (collectionArtworkInput) {
     const file = collectionArtworkInput.files?.[0];
@@ -56689,7 +56752,11 @@ if (tagEditorFooter) {
   EditorPage.mountFooter(tagEditorFooter, {
     showReset: false,
     canSave: false,
-    leadingElement: document.getElementById('tag-editor-auto-number-controls'),
+    // Owner 2026-11-17: the CUE notice lives in the footer as a compact alert that expands, where alerts go.
+    leadingElement: [
+      document.getElementById('tag-editor-cue-alert'),
+      document.getElementById('tag-editor-auto-number-controls'),
+    ],
     secondary: { label: 'Cancel', attributes: { 'data-close-tag-editor': '1' } },
     // getTagEditorElements finds Apply by id: CUE mode swaps its data-* action attribute.
     primary: { label: 'Apply', attributes: { id: 'tag-editor-apply', 'data-open-tag-edit-confirm': '1' } },

@@ -515,7 +515,11 @@ if (tagEditorFooter) {
   EditorPage.mountFooter(tagEditorFooter, {
     showReset: false,
     canSave: false,
-    leadingElement: document.getElementById('tag-editor-auto-number-controls'),
+    // Owner 2026-11-17: the CUE notice lives in the footer as a compact alert that expands, where alerts go.
+    leadingElement: [
+      document.getElementById('tag-editor-cue-alert'),
+      document.getElementById('tag-editor-auto-number-controls'),
+    ],
     secondary: { label: 'Cancel', attributes: { 'data-close-tag-editor': '1' } },
     // getTagEditorElements finds Apply by id: CUE mode swaps its data-* action attribute.
     primary: { label: 'Apply', attributes: { id: 'tag-editor-apply', 'data-open-tag-edit-confirm': '1' } },

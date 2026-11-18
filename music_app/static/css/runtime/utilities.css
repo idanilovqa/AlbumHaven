@@ -1738,7 +1738,6 @@
   padding: 14px;
 }
 .tag-editor-view-tabs,
-.tag-editor-cue-alert,
 .tag-editor-cue-structure {
   grid-column: 1 / -1;
 }
@@ -1748,6 +1747,17 @@
   gap: 14px;
 }
 .tag-editor-cue-structure[hidden] { display: none; }
+/* The CUE notice sits in the footer; its details open upward over the form without moving it. */
+.tag-editor-cue-alert { position: relative; min-width: 0; }
+.tag-editor-cue-alert[hidden] { display: none; }
+.tag-editor-cue-alert__details {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 0;
+  z-index: 5;
+  width: min(440px, calc(100vw - 48px));
+}
+.tag-editor-cue-alert__details[hidden] { display: none; }
 .tag-editor-cue-indexes {
   grid-column: 1 / -1;
   color: var(--muted);
@@ -1816,6 +1826,8 @@
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
+/* Its flex display beat the hidden attribute, so Exception showed on the CUE structure tab (owner 2026-11-17). */
+.tag-editor-exception-field[hidden] { display: none; }
 .tag-editor-exception-field::after {
   content: '';
   position: absolute;

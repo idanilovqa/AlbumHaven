@@ -1832,6 +1832,12 @@ function formatCueTimecode(value) {
   return [minutes, seconds, frames].map(part => String(part).padStart(2, '0')).join(':');
 }
 
+// What the owner typed into a timecode field stays there, valid or not, until it is applied.
+function getCueTypedValue(track, field) {
+  const typing = state.tagEditor?.cueTyping;
+  return typing?.field === field && typing.identity === getTagEditorTrackIdentity(track) ? typing.value : null;
+}
+
 function buildCueBoundaryCorrection(tracks, trackIdentity, field, value) {
   const cueTracks = Array.isArray(tracks) ? tracks : [];
   const selectedIndex = cueTracks.findIndex(
@@ -2801,20 +2807,33 @@ function renderTagEditor(options = {}) {
           : 'Display only stores CUE corrections in this library. Source files are not changed.');
     // A failed CUE load says so; it used to leave no trace and simply never offer the CUE view.
     const showCueAlert = cueLoaded || Boolean(cueTrack && state.tagEditor.cueError);
+    const severity = state.tagEditor.cueError ? 'error' : 'warning';
+    const title = state.tagEditor.cueError
+      ? 'CUE structure unavailable'
+      : (state.tagEditor.cueWritesSource ? 'Write in tags' : 'Display only');
+    // Owner 2026-11-17: a compact alert in the footer that expands upward over the form, never pushing it.
+    const expanded = showCueAlert && state.tagEditor.cueAlertExpanded === true;
     els.cueAlert.hidden = !showCueAlert;
-    els.cueAlert.innerHTML = showCueAlert ? buildOnPageAlertHtml({
-      severity: state.tagEditor.cueError ? 'error' : 'warning',
-          title: state.tagEditor.cueError
-            ? 'CUE structure unavailable'
-            : (state.tagEditor.cueWritesSource ? 'Write in tags' : 'Display only'),
+    els.cueAlert.innerHTML = showCueAlert ? `${buildSmallAlertHtml({
+      severity,
+      message: state.tagEditor.cueError || title,
+      interactive: true,
+      attributes: {
+        'aria-expanded': String(expanded),
+        'aria-controls': 'tag-editor-cue-alert-details',
+        'data-toggle-tag-editor-cue-alert': '1',
+      },
+    })}<div class="tag-editor-cue-alert__details" id="tag-editor-cue-alert-details"${expanded ? '' : ' hidden'}>${buildOnPageAlertHtml({
+      severity,
+      title,
       message,
-          actionsHtml: [
-            canRestore
-              ? '<button class="button ui-button ui-button--quiet ui-button--small" type="button" data-restore-cue-correction="1">Restore correction</button>'
-              : '',
-            sourceRestoreAction,
-          ].filter(Boolean).join(''),
-    }) : '';
+      actionsHtml: [
+        canRestore
+          ? '<button class="button ui-button ui-button--quiet ui-button--small" type="button" data-restore-cue-correction="1">Restore correction</button>'
+          : '',
+        sourceRestoreAction,
+      ].filter(Boolean).join(''),
+    })}</div>` : '';
   }
   if (showCue) {
     const focusedIdentity = getTagEditorFocusedPath();
@@ -2825,13 +2844,13 @@ function renderTagEditor(options = {}) {
     if (els.cueIndex01) {
       const startFrame = draft?.cue_segment_ref === getTagEditorTrackIdentity(focusedTrack)
         ? draft.start_frame : focusedTrack?.cue_structure?.start_frame;
-      els.cueIndex01.value = formatCueTimecode(startFrame);
+      els.cueIndex01.value = getCueTypedValue(focusedTrack, 'index_01') ?? formatCueTimecode(startFrame);
       els.cueIndex01.disabled = !focusedTrack?.cue_structure;
     }
     if (els.cueEnd) {
       const endFrame = draft?.cue_segment_ref === getTagEditorTrackIdentity(nextTrack)
         ? draft.start_frame : nextTrack?.cue_structure?.start_frame;
-      els.cueEnd.value = formatCueTimecode(endFrame);
+      els.cueEnd.value = getCueTypedValue(focusedTrack, 'end') ?? formatCueTimecode(endFrame);
       els.cueEnd.disabled = !nextTrack?.cue_structure;
     }
     if (els.cueIndexes) {

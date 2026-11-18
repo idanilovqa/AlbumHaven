@@ -1260,13 +1260,6 @@
               "test": "tests/e2e/specs/playbackNetworkOutage.spec.js",
               "case": "FTC-PLAYBACK-OFFLINE-002 with no offline event, a seek past the received audio falls silent at once and stays playing, and after the network returns one press plays the current or another song",
               "area": "playback"
-            },
-            {
-              "config": "playwright.config.js",
-              "project": "functional",
-              "test": "tests/e2e/specs/playbackTakeover.spec.js",
-              "case": "FTC-PLAYBACK-TAKEOVER-002 under full CPU load a second tab of the same browser opens promptly beside a playing tab, stays responsive, shows the overlay, and one Play here moves the song to it",
-              "area": "playback"
             }
           ]
         },

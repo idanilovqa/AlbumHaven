@@ -7,11 +7,14 @@ from dataclasses import replace
 from functools import partial
 from datetime import datetime, timezone
 import inspect
+from io import BytesIO
 from types import MethodType
 import os
 from pathlib import Path
 from threading import Event, Lock
 import time
+
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 from music_app.services import cover_provider_matching
 from music_app.services.album_cover_candidate_publisher import AlbumCoverCandidatePublisher
@@ -460,10 +463,6 @@ REMOTE_COVER_PREVIEW_EDGE = 480
 
 def remote_cover_preview(payload: bytes, mime_type: str | None) -> tuple[bytes, str | None]:
     """The card-sized preview of a remote image; anything Pillow cannot shrink is served as it came."""
-    from io import BytesIO
-
-    from PIL import Image, ImageOps, UnidentifiedImageError
-
     edge = REMOTE_COVER_PREVIEW_EDGE
     try:
         with Image.open(BytesIO(payload)) as image:

@@ -6,6 +6,11 @@ name: Heavy Regression Gates
 # synthetic fixtures. Real-library (real MP3) and full-size-library checks stay local.
 #
 #   gh workflow run heavy-gates.yml --ref main -f ref=<commit-sha> -f gates=search,problematic-files
+#
+# gates=focused runs only the named functional cases and/or measured targets, to reproduce or
+# verify one failure in minutes instead of a whole gate:
+#
+#   gh workflow run heavy-gates.yml --ref main -f ref=<commit-sha> -f gates=focused -f cases=FTC-TAGS-015
 
 on:
   workflow_dispatch:
@@ -15,9 +20,19 @@ on:
         required: true
         type: string
       gates:
-        description: "Comma-separated gates: search, problematic-files, html-reload, edit-tags, bounded-interactions"
+        description: "Comma-separated gates: search, problematic-files, html-reload, edit-tags, bounded-interactions, focused"
         required: true
         default: search
+        type: string
+      cases:
+        description: "focused only: comma-separated functional cases (FTC ids or exact approved titles)"
+        required: false
+        default: ""
+        type: string
+      targets:
+        description: "focused only: comma-separated measured target names from tests/ci/performance-targets.json"
+        required: false
+        default: ""
         type: string
 
 permissions:
@@ -27,7 +42,7 @@ env:
   ALBUM_HAVEN_EXPECTED_FFMPEG_VERSION: 7.1-essentials_build-www.gyan.dev
 
 concurrency:
-  group: heavy-gates-${{ inputs.ref }}-${{ inputs.gates }}
+  group: heavy-gates-${{ inputs.ref }}-${{ inputs.gates }}-${{ inputs.cases }}-${{ inputs.targets }}
   cancel-in-progress: false
 
 jobs:
@@ -41,13 +56,20 @@ jobs:
         id: plan
         env:
           GATES: ${{ inputs.gates }}
+          CASES: ${{ inputs.cases }}
+          TARGETS: ${{ inputs.targets }}
         run: |
           node -e '
-            const allowed = ["search", "problematic-files", "html-reload", "edit-tags", "bounded-interactions"];
+            const allowed = ["search", "problematic-files", "html-reload", "edit-tags", "bounded-interactions", "focused"];
             const gates = [...new Set(process.env.GATES.split(",").map((gate) => gate.trim()).filter(Boolean))];
             const unknown = gates.filter((gate) => !allowed.includes(gate));
             if (gates.length === 0 || unknown.length > 0) {
               console.error(`Unknown or empty gate selection: ${unknown.join(", ") || "(none)"}. Allowed: ${allowed.join(", ")}`);
+              process.exit(1);
+            }
+            const focusedSelection = Boolean(process.env.CASES.trim() || process.env.TARGETS.trim());
+            if (gates.includes("focused") !== focusedSelection) {
+              console.error("cases and targets go with gates=focused, and gates=focused needs at least one of them.");
               process.exit(1);
             }
             require("node:fs").appendFileSync(process.env.GITHUB_OUTPUT, `gates_json=${JSON.stringify(gates)}\n`);
@@ -84,10 +106,12 @@ jobs:
       - name: Fetch released fixture profiles
         env:
           ALBUM_HAVEN_FIXTURES_TOKEN: ${{ secrets.ALBUM_HAVEN_FIXTURES_TOKEN }}
+          FOCUSED_CASES: ${{ inputs.cases }}
+          FOCUSED_TARGETS: ${{ inputs.targets }}
         run: |
           $distribution = Join-Path "${{ runner.temp }}" "album-haven-fixture-distribution"
           New-Item -ItemType Directory -Force -Path (Join-Path $distribution "profiles") | Out-Null
-          foreach ($profile in @(.\.trusted-ci\scripts\run-regression-gate.ps1 -Gate "${{ matrix.gate }}" -ListFixtureProfiles)) {
+          foreach ($profile in @(.\.trusted-ci\scripts\run-regression-gate.ps1 -Gate "${{ matrix.gate }}" -Cases $env:FOCUSED_CASES -Targets $env:FOCUSED_TARGETS -ListFixtureProfiles)) {
             $exports = Join-Path "${{ runner.temp }}" "fixture-$profile.env"
             & ".trusted-ci\scripts\ci\fetch-test-fixtures.ps1" `
               -Release fixtures-v1.0.30 `
@@ -197,10 +221,15 @@ jobs:
           PLAYWRIGHT_CHROME_EXECUTABLE: ${{ steps.setup_chrome.outputs.chrome-path }}
           # Password of the runner image's disposable PostgreSQL service, not a project credential.
           POSTGRESQL_ADMIN_PASSWORD: root
+          FOCUSED_CASES: ${{ inputs.cases }}
+          FOCUSED_TARGETS: ${{ inputs.targets }}
         run: |
           $env:PGPASSWORD = $null
           $env:PLAYWRIGHT_PYTHON = Join-Path $env:pythonLocation "python.exe"
-          .\scripts\run-regression-gate.ps1 -Gate "${{ matrix.gate }}" -PostgresMajor 17
+          # Only the focused gate takes a selection, so refs with an older runner keep working for the others.
+          $selection = @{}
+          if ("${{ matrix.gate }}" -eq "focused") { $selection = @{ Cases = $env:FOCUSED_CASES; Targets = $env:FOCUSED_TARGETS } }
+          .\scripts\run-regression-gate.ps1 -Gate "${{ matrix.gate }}" @selection -PostgresMajor 17
 
       - name: Summarize measured timings
         if: ${{ always() }}

@@ -161,6 +161,7 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/open-album-location"): "library.files.open_location",
     ("POST", "/utilities/repair-album"): "library.files.repair",
     ("POST", "/utilities/edit-tags"): "library.files.edit_tags",
+    ("GET", "/utilities/edit-tags/requests/{client_request_id}"): "library.files.edit_tags",
     ("POST", "/utilities/tag-editor/folder-files"): "library.files.edit_tags",
     ("GET", "/utilities/cover-lookup/tasks"): "library.covers.tasks.read",
     ("GET", "/utilities/cover-lookup/tasks/counts"): "library.covers.tasks.read",

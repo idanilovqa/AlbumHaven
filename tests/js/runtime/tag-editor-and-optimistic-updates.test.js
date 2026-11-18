@@ -3228,6 +3228,48 @@ for (const [name, fetchResult] of [
   });
 }
 
+test('a tag save whose answer is lost keeps the edit and waits in the Edit Queue instead of reloading', async () => {
+  // Owner (2026-11-17): no answer is not a failure; the save is sent again later under the same id.
+  const trackPath = 'C:\\Music\\Artist\\Album\\01 - Track.flac';
+  const album = { key: 'artist::album::2000', name: 'Album', album_artist: 'Artist', tracks: [{ path: trackPath, album: 'Album' }] };
+  const alerts = [];
+  const restored = [];
+  const queued = [];
+  const posted = [];
+  let refreshes = 0;
+  const closedModal = { hidden: true };
+  const context = loadHelper([album], {
+    window: { AlbumHavenPendingTagEdits: { add: (entry) => queued.push(entry) } },
+    crypto: { randomUUID: () => '8b1f6a52-3c4d-4e5f-9a0b-1c2d3e4f5a6b' },
+    document: { body: { classList: { add() {}, remove() {} } }, getElementById() { return closedModal; } },
+    getTagEditConfirmElements() { return { overlay: closedModal }; },
+    getTagEditorElements() { return { overlay: closedModal }; },
+    buildChangedTagEditorUpdates() { return { [trackPath]: { album: 'Renamed' } }; },
+    buildOptimisticUpdatedAlbumsFromEdits() { return [album]; },
+    deepCloneJson(value) { return JSON.parse(JSON.stringify(value)); },
+    applyUpdatedAlbumsToCurrentView(albums, options) { if (options?.tagEdits?.[trackPath]?.album === 'Album') restored.push(albums); return albums; },
+    updateOpenTrackModalAfterTagEdit() {},
+    renderView() {},
+    showRepairAlert(...args) { alerts.push(args); },
+    showToast() {},
+    async prependUtilityLogHistoryEntry() {},
+    async refreshCurrentViewAfterBackgroundCompletion() { refreshes += 1; return true; },
+    fetch(_url, options) { posted.push(JSON.parse(options.body)); return Promise.reject(new TypeError('Failed to fetch')); },
+  });
+  context.state.ui = { viewStateRevision: 7 };
+  context.state.tagEditor = { album, tracks: album.tracks, values: {} };
+
+  await context.confirmManualTagEdit();
+
+  assert.equal(posted[0].client_request_id, '8b1f6a52-3c4d-4e5f-9a0b-1c2d3e4f5a6b');
+  assert.equal(queued.length, 1);
+  assert.equal(queued[0].id, '8b1f6a52-3c4d-4e5f-9a0b-1c2d3e4f5a6b');
+  assert.equal(JSON.stringify(queued[0].payload), JSON.stringify(posted[0]), 'the queued save is exactly what was sent');
+  assert.equal(refreshes, 0, 'the edit is not replaced by a reload from before the save');
+  assert.deepEqual(restored, [], 'the edit is never rolled back');
+  assert.equal(alerts.length, 1, 'only the "Saving tags" notice was shown');
+});
+
 test('repair POST does not apply origin albums after navigation and passes its revision to the save task', async () => {
   const trackPath = 'C:\\Music\\Artist\\Album\\01 - Selected.flac';
   const album = {

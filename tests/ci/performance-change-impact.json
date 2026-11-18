@@ -45,6 +45,7 @@
     "music_app/static/js/runtime/render-markup-helpers.js",
     "music_app/static/js/runtime/response-state-helpers.js",
     "music_app/static/js/runtime/status-ui-helpers.js",
+    "music_app/static/js/runtime/pending-tag-edits.js",
     "music_app/static/js/runtime/tag-editor-and-optimistic-updates.js",
     "music_app/static/js/runtime/track-modal-lightbox-helpers.js",
     "music_app/static/js/runtime/view-state-helpers.js",
@@ -251,6 +252,7 @@
     },
     {
       "paths": [
+        "music_app/static/js/runtime/pending-tag-edits.js",
         "music_app/static/js/runtime/tag-editor-and-optimistic-updates.js"
       ],
       "targets": [

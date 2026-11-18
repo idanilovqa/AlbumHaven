@@ -886,8 +886,11 @@ async function confirmManualTagEdit() {
   let failedSaveKeptNewTags = false;
   // No server verdict (connection lost, server restarted): the save may have landed.
   let saveOutcomeUnknown = false;
+  // Owner (2026-11-17): the save's own id lets the server recognise it if it is sent again.
+  const clientRequestId = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID() : '';
+  const requestPayload = { confirmed: true, album, updates, ...(clientRequestId ? { client_request_id: clientRequestId } : {}) };
   try {
-    const requestPayload = { confirmed: true, album, updates };
     if (problematicMutationOriginKey) {
       requestPayload.problematic_files_origin = true;
     }
@@ -1055,11 +1058,20 @@ async function confirmManualTagEdit() {
     }
     console.error('[AlbumHaven][Utilities] Failed to apply manual tag edits.', error);
     if (saveOutcomeUnknown) {
+      releaseFailedTagEditViewMutation(tagEditMutationClaim);
+      // Owner (2026-11-17): no answer is not a failure. The edit stays as shown and the save waits in the
+      // Edit Queue until the server confirms or refuses it; it is never rolled back here.
+      if (clientRequestId && typeof window !== 'undefined' && window.AlbumHavenPendingTagEdits) {
+        window.AlbumHavenPendingTagEdits.add({
+          id: clientRequestId, payload: requestPayload, album, trackCount: editedPaths.length,
+        });
+        showToast('Couldn’t reach the server. Your tag edit is kept and will be sent when it answers.', 'info', 5200);
+        return;
+      }
       showRepairAlert(
         'The connection to the server was lost while saving. The tags may already be saved, so the Gallery is reloading to show what the library now holds.',
         'error',
       );
-      releaseFailedTagEditViewMutation(tagEditMutationClaim);
       if (typeof refreshCurrentViewAfterBackgroundCompletion === 'function') {
         await refreshCurrentViewAfterBackgroundCompletion();
       }

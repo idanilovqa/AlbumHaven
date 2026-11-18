@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.32 - 2026-11-17
+
+- Hosted regression gates can run just the named end-to-end cases or measured targets (`gates=focused`), so one failure is reproduced or checked in minutes instead of a full gate run.
+
 ## 0.11.31 - 2026-11-17
 
 - Android: the app keeps playing through a network outage of any length. Losing Wi-Fi no longer stops playback at once with "Playback unavailable": the received audio plays on, reconnects retry with a growing delay of up to 5 seconds, and when the network returns the rest of the song continues from exactly where it was. Pausing while offline keeps the received audio, and Play while still offline plays it on while the app keeps asking the server for playback every 2 seconds, instead of failing with "Playback ownership is unavailable". Only another device taking over playback stops it. Offline, a seek into the audio already received plays there at once, playing or paused; a seek past it puts the head where it was placed, makes no sound and does not advance (Play keeps it there), and when the network is back it plays from there. A paused seek offline no longer unloads the song. The server now renews a claim past its 30-second lease for the device that held it, until another device claims playback, so a phone that played on offline keeps playing when it reconnects.

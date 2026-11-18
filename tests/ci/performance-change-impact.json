@@ -82,7 +82,12 @@
     "music_app/services/cover_workflow.py",
     "music_app/services/cache.py",
     "music_app/services/cover_provider_outcomes_postgres.py",
-    "music_app/services/album_ratings_postgres.py"
+    "music_app/services/album_ratings_postgres.py",
+    "music_app/static/js/runtime/cover-lookup-modal-and-drawer.js",
+    "music_app/static/css/runtime/cover-lookup-modal.css",
+    "music_app/services/cover_lookup_runtime.py",
+    "music_app/routes/api_wave_d_asgi_routes.py",
+    "tests/e2e/syntheticLargeLibrary/coverLookupPerformance.spec.js"
   ],
   "rules": [
     {
@@ -329,6 +334,19 @@
       ],
       "targets": [
         "gallery-artwork-diversity"
+      ]
+    },
+    {
+      "paths": [
+        "music_app/static/js/runtime/cover-lookup-modal-and-drawer.js",
+        "music_app/static/css/runtime/cover-lookup-modal.css",
+        "music_app/services/cover_lookup_runtime.py",
+        "music_app/routes/api_wave_d_asgi_routes.py",
+        "music_app/services/library_browse_postgres.py",
+        "tests/e2e/syntheticLargeLibrary/coverLookupPerformance.spec.js"
+      ],
+      "targets": [
+        "cover-lookup"
       ]
     }
   ]

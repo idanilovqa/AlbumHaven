@@ -242,7 +242,8 @@ box-shadow: none;
 .ui-button:disabled,
 .ui-button[aria-disabled='true'],
 .action-button:disabled,
-.action-button[aria-disabled='true'] {
+.action-button[aria-disabled='true'],
+.album-card-context-menu-item:disabled {
 opacity: 0.38;
 cursor: not-allowed;
 box-shadow: none;

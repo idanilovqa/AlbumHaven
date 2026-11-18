@@ -9,6 +9,7 @@ from uuid import uuid4
 import pytest
 
 from tests.e2e.support import isolatedPostgres
+from tests.py.test_isolated_postgres_live import watcher_repair_inventory  # noqa: F401 (live fixture)
 
 try:
     import psycopg
@@ -3703,3 +3704,177 @@ def test_full_snapshot_prepared_before_targeted_rename_is_rejected_by_inventory_
         and "insert into library.local_track_files" not in _normalized_sql(sql)
         for sql, _params in connection.executed
     )
+
+
+
+
+
+def _relation_journal(fixture):
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        album_ids = [row["album_id"] for row in connection.execute(
+            "select album_id from library.local_relation_dirty_albums order by album_id").fetchall()]
+        status = connection.execute("""select metadata #>> '{scan_cache,relation_projection,status}' as status
+            from library.libraries where name='Local Library' and library_kind='local'""").fetchone()["status"]
+    return album_ids, status
+
+
+def _album_titles_by_track(fixture, entries):
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        rows = connection.execute("""select files.private_path, albums.title
+            from library.local_track_files files join library.local_tracks tracks on tracks.id=files.track_id
+            left join library.local_albums albums on albums.id=tracks.album_id
+            where files.private_path=any(%s::text[])""", (sorted(entries),)).fetchall()
+    return {row["private_path"]: row["title"] for row in rows}
+
+
+def _save_album_edit(fixture, entries, paths, album):
+    """One Edit Tags save of the Album field, persisted as the route does (no inline relation publication)."""
+    previous = {path: dict(entries[path]) for path in paths}
+    updated = {path: {**entries[path], "album": album} for path in paths}
+    fixture.adapter.validate_structural_tag_edit(changed_paths=set(paths), previous_file_entries=previous,
+        updated_file_entries=updated, changed_field_names={"album"})
+    fixture.adapter.persist_structural_tag_edit(changed_paths=set(paths), previous_file_entries=previous,
+        updated_file_entries=updated, changed_field_names={"album"})
+    entries.update(updated)
+
+
+def _assert_save_left_only_album_journal(fixture, step):
+    album_ids, status = _relation_journal(fixture)
+    assert status == "ready", f"{step}: the save marked the relation index {status!r} without publishing it"
+    assert album_ids and all(album_id > 0 for album_id in album_ids), (
+        f"{step}: the save journaled a library-wide change {album_ids}; later saves would be refused")
+
+
+def _refresh_after_save(fixture, step):
+    from music_app.services.scoped_relation_projection import ensure_pending_relation_projection_ready
+    assert ensure_pending_relation_projection_ready(fixture.config).get("initialized")
+    assert _relation_journal(fixture) == ([], "ready"), f"{step}: the background refresh left pending work"
+
+
+def _seed_split_merge_album(fixture, monkeypatch):
+    from music_app.services import gallery_projection_postgres
+    scheduled = []
+    # The background refresh each save schedules runs explicitly, so every step is observable.
+    monkeypatch.setattr(gallery_projection_postgres, "schedule_gallery_projection_refresh",
+                        lambda *args, **kwargs: scheduled.append(kwargs))
+    entries = {}
+    for number, title in enumerate(("Храм", "Российское танго", "В последнюю осень", "Революция"), start=1):
+        entry = fixture.entry(f"ДДТ/2001 - Ремиксы/{number:02d}. {title}.flac", artist="ДДТ", album="Ремиксы")
+        entry.update(album_artist="ДДТ", title=title, track_number=number)
+        entries[entry["path"]] = entry
+    other = fixture.entry("ДДТ/1999 - Другой/01. Другой.flac", artist="ДДТ", album="Другой")
+    other["album_artist"] = "ДДТ"
+    fixture.seed(*entries.values(), other)
+    assert _relation_journal(fixture) == ([], "ready")
+    return entries, {other["path"]: other}, scheduled
+
+
+def test_live_postgres_split_merge_split_never_strands_the_relation_index(watcher_repair_inventory, monkeypatch):
+    fixture = watcher_repair_inventory
+    entries, other, scheduled = _seed_split_merge_album(fixture, monkeypatch)
+    first_half, second_half = sorted(entries)[:2], sorted(entries)[2:]
+
+    _save_album_edit(fixture, entries, second_half, "Ремиксы2")
+    _assert_save_left_only_album_journal(fixture, "split")
+    # Another album saved before the background refresh runs is not refused.
+    _save_album_edit(fixture, other, list(other), "Другой2")
+    _assert_save_left_only_album_journal(fixture, "unrelated save before refresh")
+    _refresh_after_save(fixture, "split")
+    assert set(_album_titles_by_track(fixture, entries).items()) == {
+        *((path, "Ремиксы") for path in first_half), *((path, "Ремиксы2") for path in second_half)}
+
+    _save_album_edit(fixture, entries, second_half, "Ремиксы")
+    _assert_save_left_only_album_journal(fixture, "merge back")
+    _refresh_after_save(fixture, "merge back")
+    assert set(_album_titles_by_track(fixture, entries).values()) == {"Ремиксы"}
+
+    _save_album_edit(fixture, entries, second_half, "Ремиксы2")
+    _assert_save_left_only_album_journal(fixture, "split again")
+    _refresh_after_save(fixture, "split again")
+
+    # Selecting both halves saves two source albums in one transaction.
+    _save_album_edit(fixture, entries, sorted(entries), "Ремиксы")
+    _assert_save_left_only_album_journal(fixture, "merge both halves")
+    _refresh_after_save(fixture, "merge both halves")
+    assert set(_album_titles_by_track(fixture, entries).values()) == {"Ремиксы"}
+    assert scheduled, "Each structural save must still schedule its background refresh."
+
+
+def test_live_postgres_merge_carries_a_split_half_card_onto_the_whole_merged_album(watcher_repair_inventory, monkeypatch):
+    """Owner (BUGFIX-05, 2026-11-18): a card searched on Ремиксы2 follows the merge into Ремиксы with every one of
+    Ремиксы's tracks, so splitting Ремиксы again opens the split chooser instead of one half's lookup."""
+    from psycopg.types.json import Jsonb
+
+    fixture = watcher_repair_inventory
+    entries, _other, _scheduled = _seed_split_merge_album(fixture, monkeypatch)
+    second_half = sorted(entries)[2:]
+    _save_album_edit(fixture, entries, second_half, "Ремиксы2")
+    _refresh_after_save(fixture, "split")
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        half = connection.execute("""select distinct albums.id, albums.album_key, albums.library_id
+            from library.local_track_files files join library.local_tracks tracks on tracks.id=files.track_id
+            join library.local_albums albums on albums.id=tracks.album_id
+            where files.private_path=any(%s::text[])""", (second_half,)).fetchone()
+        metadata = {"source_family": "runtime_cover_lookup_notifications_adapter", "track_paths": second_half,
+                    "notification_order_at": "2026-01-01T00:00:00Z",
+                    "source_payload": {"track_paths": second_half, "album_payload": {
+                        "id": half["id"], "key": half["album_key"], "name": "Ремиксы2", "track_paths": second_half}}}
+        connection.execute("""insert into ops.cover_lookup_tasks (library_id,task_key,status,album_key,metadata)
+            values(%s,'half-card','completed',%s,%s)""", (half["library_id"], half["album_key"], Jsonb(metadata)))
+        connection.commit()
+
+    _save_album_edit(fixture, entries, second_half, "Ремиксы")
+    _refresh_after_save(fixture, "merge back")
+
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        card = connection.execute("select metadata from ops.cover_lookup_tasks where task_key='half-card'").fetchone()["metadata"]
+        merged_id = connection.execute("""select distinct tracks.album_id from library.local_track_files files
+            join library.local_tracks tracks on tracks.id=files.track_id where files.private_path=any(%s::text[])""",
+            (sorted(entries),)).fetchall()
+    assert len(merged_id) == 1
+    assert card["source_payload"]["album_payload"]["id"] == merged_id[0]["album_id"]
+    assert card["source_payload"]["album_payload"]["name"] == "Ремиксы"
+    assert sorted(card["track_paths"]) == sorted(entries)
+    assert sorted(card["source_payload"]["track_paths"]) == sorted(entries)
+    assert sorted(card["source_payload"]["album_payload"]["track_paths"]) == sorted(entries)
+    assert card["source_payload"]["album_payload"]["track_count"] == len(entries)
+
+
+def test_live_postgres_stale_structural_mark_recovers_on_next_refresh(watcher_repair_inventory, monkeypatch):
+    fixture = watcher_repair_inventory
+    entries, _other, _scheduled = _seed_split_merge_album(fixture, monkeypatch)
+    # What older builds left behind: a structural save marked the index stale with
+    # no album rows journaled, so the library trigger journaled 0 and -1.
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute("""update library.libraries set metadata=jsonb_set(metadata,'{scan_cache,relation_projection}',
+            (metadata #> '{scan_cache,relation_projection}') || '{"status":"stale","rebuild_reason":"structural_tag_edit"}'::jsonb)
+            where name='Local Library' and library_kind='local'""")
+    assert _relation_journal(fixture) == ([-1, 0], "stale")
+
+    _refresh_after_save(fixture, "recovery")
+    _save_album_edit(fixture, entries, sorted(entries)[2:], "Ремиксы2")
+    _assert_save_left_only_album_journal(fixture, "save after recovery")
+    _refresh_after_save(fixture, "save after recovery")
+
+
+def test_live_postgres_failed_refresh_retries_without_blocking_other_saves(watcher_repair_inventory, monkeypatch):
+    from music_app.services import scoped_relation_projection
+    fixture = watcher_repair_inventory
+    entries, other, _scheduled = _seed_split_merge_album(fixture, monkeypatch)
+    _save_album_edit(fixture, entries, sorted(entries)[2:], "Ремиксы2")
+    finish = scoped_relation_projection._finish_publication
+    failures = []
+
+    def fail_once(*args, **kwargs):
+        if not failures:
+            failures.append(True)
+            raise RuntimeError("simulated publication failure")
+        return finish(*args, **kwargs)
+
+    monkeypatch.setattr(scoped_relation_projection, "_finish_publication", fail_once)
+    with pytest.raises(RuntimeError, match="simulated publication failure"):
+        scoped_relation_projection.ensure_pending_relation_projection_ready(fixture.config)
+    _assert_save_left_only_album_journal(fixture, "failed refresh")
+    _save_album_edit(fixture, other, list(other), "Другой2")
+    _assert_save_left_only_album_journal(fixture, "save after failed refresh")
+    _refresh_after_save(fixture, "retried refresh")

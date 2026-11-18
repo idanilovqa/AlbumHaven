@@ -3277,7 +3277,8 @@ test('terminal tag-edit failure waits for the failure notification before readin
     timeout: 1000,
   });
 
-  assert.ok(events.includes('to.be.visible'));
+  assert.ok(events.includes('to.be.hidden'));
+  assert.ok(!events.includes('to.be.visible'));
   assert.ok(events.includes('to.have.text'));
   assert.equal(result.alertText, 'permission denied table ignored_versions');
 });

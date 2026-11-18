@@ -59,6 +59,16 @@ def test_loading_preferences_requires_and_queries_exact_account():
         repository.load_profiles(account_id=None)
 
 
+def test_page_render_reads_lease_the_shared_pool_instead_of_opening_a_connection():
+    # Every HTML page (gallery, Admin, Account) loads layout preferences; a new connection per render
+    # cost 110-590 ms on a loaded server against ~15 ms for a pooled read.
+    from music_app.services.postgres_connections import pooled_connection
+
+    config = {'ALBUM_HAVEN_APP_DATABASE_URL': 'test'}
+    assert PostgresClientLayoutPreferences(config)._connect is pooled_connection
+    assert PostgresRecentAlbums(config)._connect is pooled_connection
+
+
 def test_recent_albums_query_scopes_account_and_library_and_bounds_work():
     connection = Connection([])
     repository = PostgresRecentAlbums({'ALBUM_HAVEN_APP_DATABASE_URL': 'test'}, connect=lambda _: connection)

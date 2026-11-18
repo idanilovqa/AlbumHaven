@@ -3401,6 +3401,8 @@ class PostgresLibraryBrowseRepository:
             complete, status = False, "stale"
             cached_payload = self._get_stale_utility_projection("problematic-files")
         if cached_payload is None:
+            cached_payload = self._load_problematic_files_snapshot(allow_outdated=True)
+        if cached_payload is None:
             # Search is its own bounded query. Never queue it behind a complete
             # projection rebuild; that would make typing wait for the slow path
             # the search endpoint exists to avoid.
@@ -3857,7 +3859,7 @@ class PostgresLibraryBrowseRepository:
         normalized_paths = _normalized_track_paths(track_paths)
         if not normalized_paths:
             return {}
-        with self._connect_to_database() as connection:
+        with self._browse_connection_context() as connection:
             rows = connection.execute(
                 _cover_state_rows_by_track_paths_sql(),
                 {"track_paths": sorted(normalized_paths)},
@@ -4552,7 +4554,8 @@ class PostgresLibraryBrowseRepository:
         }
 
     def _load_album_rows_by_track_paths(self, track_paths: set[str]) -> list[object]:
-        with self._connect_to_database() as connection:
+        # Cover Look Up runs this on every open; a fresh connection cost 150-350 ms, the query under 2 ms.
+        with self._browse_connection_context() as connection:
             cursor = connection.execute(
                 _album_rows_by_track_paths_sql(),
                 {"track_paths": sorted(track_paths)},
@@ -4581,8 +4584,8 @@ class PostgresLibraryBrowseRepository:
         }
 
         def load_rows(active_connection: Any) -> list[object]:
-            if normalized_album_key:
-                # The physical-parent expression index beats six full file scans for one album.
+            if normalized_album_key or use_selected_album_ids:
+                # The physical-parent expression index beats six full file scans for selected albums.
                 active_connection.execute("SET LOCAL enable_seqscan = off")
 
             def execute(build_sql: Callable[[bool], str], params: Mapping[str, object]) -> Any:
@@ -5292,6 +5295,8 @@ def _filter_non_album_snapshot_tracks(
     )
     query_text = str(query or "").strip()
     filtered = []
+    # Owner (11-17): normalize the alias map once per request; per track it made main search take seconds.
+    normalized_aliases = None
     for raw_track in tracks:
         track = dict(_row_mapping(raw_track))
         if not entry_visible_in_categories(track, visible_library_categories):
@@ -5303,16 +5308,20 @@ def _filter_non_album_snapshot_tracks(
             visible_path_parts,
         ):
             continue
-        if query_text and not _non_album_entry_matches_query(
-            track,
-            query_text,
-            artist_names=_expanded_artist_name_list(
-                (track.get("artist"), track.get("album_artist")),
-                alias_to_canonical or {},
-                canonical_to_aliases or {},
-            ),
-        ):
-            continue
+        if query_text:
+            if normalized_aliases is None:
+                normalized_aliases = _normalized_artist_aliases(alias_to_canonical or {})
+            if not _non_album_entry_matches_query(
+                track,
+                query_text,
+                artist_names=_expanded_artist_name_list(
+                    (track.get("artist"), track.get("album_artist")),
+                    alias_to_canonical or {},
+                    canonical_to_aliases or {},
+                    normalized_alias_to_canonical=normalized_aliases,
+                ),
+            ):
+                continue
         filtered.append(track)
     return filtered
 
@@ -7758,14 +7767,9 @@ def _decode_problematic_search_cursor(
 
 
 def _problematic_filter_reason_types(items: Iterable[object]) -> list[str]:
-    reasons: list[object] = [
-        *_PROBLEM_REASON_IDENTITY_CODES,
-        "Album not found",
-        "Duplicate track outside album folder",
-        "Edition descriptor in album name",
-        "Incomplete track order",
-        "Spotify cover search quota exceeded",
-    ]
+    # Only problems the listed albums actually have (owner decision 2026-11-16): a type
+    # no album has is never offered as a filter.
+    reasons: list[object] = []
     for item in items:
         if isinstance(item, Mapping):
             reasons.extend(item.get("problem_reasons") or ())
@@ -8526,10 +8530,12 @@ def _expanded_artist_name_list(
     artists: Iterable[object],
     alias_to_canonical: Mapping[str, object],
     canonical_to_aliases: Mapping[str, object],
+    *,
+    normalized_alias_to_canonical: Mapping[str, object] | None = None,
 ) -> list[str]:
     values: list[str] = []
     seen: set[str] = set()
-    normalized_aliases = None
+    normalized_aliases = normalized_alias_to_canonical
     for artist in artists:
         if normalized_aliases is None and alias_to_canonical.get(str(artist or "").strip()) is None:
             normalized_aliases = _normalized_artist_aliases(alias_to_canonical)

@@ -316,3 +316,25 @@ def test_unresolved_context_reports_storage_unavailable_only_when_files_are_miss
     worker._run()
 
     assert calls == [expected]
+
+
+def test_rewritten_tracks_keep_their_album_art_folder_but_moved_or_removed_tracks_do_not():
+    """BUGFIX-19 (owner): a cover or tag save rewrites the tracks in place; reopening Cover Look Up
+    must still find the album's art folder at once instead of rediscovering it."""
+    from music_app.services.library_event_coordinator import TargetedMove, TargetedReconciliationRequest
+
+    images = {".jpg", ".png"}
+    track = Path("library/artist/album/01.mp3")
+    rewritten = TargetedReconciliationRequest(root_id="r", paths=frozenset({track, track.with_name("cover.jpg")}))
+    assert not inventory.watch_request_relocates_tracks(rewritten, images)
+
+    removed = TargetedReconciliationRequest(root_id="r", deleted_paths=frozenset({track}))
+    assert inventory.watch_request_relocates_tracks(removed, images)
+    removed_image = TargetedReconciliationRequest(root_id="r", deleted_paths=frozenset({track.with_name("cover.jpg")}))
+    assert not inventory.watch_request_relocates_tracks(removed_image, images)
+    moved = TargetedReconciliationRequest(
+        root_id="r", moves=(TargetedMove(track, Path("library/artist/other/01.mp3"), "r", "r"),),
+    )
+    assert inventory.watch_request_relocates_tracks(moved, images)
+    removed_folder = TargetedReconciliationRequest(root_id="r", deleted_subtrees=frozenset({track.parent}))
+    assert inventory.watch_request_relocates_tracks(removed_folder, images)

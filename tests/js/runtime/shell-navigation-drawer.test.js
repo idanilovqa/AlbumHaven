@@ -1190,4 +1190,10 @@ test('a tag edit recounts the open collections tree at once, then takes the save
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(fetches, 1, 'the completed save refreshes the catalog');
   assert.match(artistList.innerHTML, /Женя машина 2:2<\/button>$/);
+
+  // With the Artists tree on screen a save adds no catalog query to the browsing that follows.
+  context.state.ui.libraryNavigationMode = 'artists';
+  context.syncCustomCollectionsAfterTagEdit({ fresh: true });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(fetches, 1);
 });

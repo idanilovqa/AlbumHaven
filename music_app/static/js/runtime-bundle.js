@@ -11895,7 +11895,11 @@ function syncCustomCollectionsAfterTagEdit({ fresh = false } = {}) {
   };
   if (fresh) {
     customCollectionCatalog = { ...customCollectionCatalog, collections: null, request: null };
-    void loadCustomCollectionCatalog({ fresh: true }).then(redraw, () => {});
+    // Only a tree on screen asks the server now; otherwise the next open fetches it, so a save never adds
+    // a catalog query to the browsing that follows it.
+    if (state.ui.libraryNavigationMode === 'custom-collections') {
+      void loadCustomCollectionCatalog({ fresh: true }).then(redraw, () => {});
+    }
     return;
   }
   const view = state.view || {};

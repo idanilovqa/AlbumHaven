@@ -204,36 +204,31 @@ test('nothing is saved while the copy is read-only', async () => {
 
 // ---- Ordinary browsers (IAR-W01, IAR-W07) ----
 
-test('in a browser over HTTPS the worker is registered for the server-first mode once the page has loaded', async () => {
+// Owner's D2 retest: a busy laptop fired `load` late, and Wi-Fi went off before anything was kept.
+test('IAR-W12: in a browser over HTTPS the server-first worker is registered as the page runs, without waiting for load', async () => {
   const { env, listeners, settle } = setup({ androidShell: false, marker: 'network' });
   await settle();
-  assert.deepEqual(env.registered, []);
 
-  listeners.get('window:load')();
-  await settle();
-
+  assert.equal(listeners.get('window:load'), undefined);
   assert.deepEqual(env.registered, [{ url: '/app-copy-worker.js?mode=web', options: { scope: '/', updateViaCache: 'none' } }]);
 });
 
 test('IAR-W07: without a secure context or service workers, a browser behaves as today', async () => {
   for (const options of [{ secure: false }, { workers: false }]) {
-    const { env, listeners, settle } = setup({ androidShell: false, ...options });
-    listeners.get('window:load')?.();
+    const { env, settle } = setup({ androidShell: false, ...options });
     await settle();
     assert.deepEqual(env.registered, [], JSON.stringify(options));
   }
 });
 
 test('the Android app never registers the browser worker; its shell decides', async () => {
-  const { env, listeners, settle } = setup({ androidShell: true });
-  listeners.get('window:load')?.();
+  const { env, settle } = setup({ androidShell: true });
   await settle();
   assert.deepEqual(env.registered, []);
 });
 
 test('in a browser, switching tabs saves the view only when it changed or ten minutes passed', async () => {
   const { env, listeners, posted, location, document, settle, hide } = setup({ androidShell: false, marker: 'network', controlled: true });
-  listeners.get('window:load')();
   await settle();
   const saves = () => posted.filter(message => message.type === 'save').length;
 
@@ -259,8 +254,7 @@ test('in a browser, switching tabs saves the view only when it changed or ten mi
 });
 
 test('in a browser, a page the worker did not load is saved the first time it is hidden', async () => {
-  const { listeners, posted, settle, hide } = setup({ androidShell: false, marker: null });
-  listeners.get('window:load')();
+  const { posted, settle, hide } = setup({ androidShell: false, marker: null });
   await settle();
 
   hide();
@@ -311,16 +305,14 @@ test('the Android app shows its copy without the notice while the server answers
 });
 
 test('IAR-W09: in a browser, a page the worker did not load is saved as soon as the worker runs, without being hidden', async () => {
-  const { listeners, posted, settle } = setup({ androidShell: false, marker: 'network' });
-  listeners.get('window:load')();
+  const { posted, settle } = setup({ androidShell: false, marker: 'network' });
   await settle();
 
   assert.deepEqual(posted.filter(message => message.type === 'save'), [{ type: 'save', url: 'https://sandbox9.albumhaven.org/?artist=Broadcast' }]);
 });
 
 test('IAR-W09: a page the worker already kept is not saved again when the worker runs', async () => {
-  const { listeners, posted, settle } = setup({ androidShell: false, marker: 'network', controlled: true });
-  listeners.get('window:load')();
+  const { posted, settle } = setup({ androidShell: false, marker: 'network', controlled: true });
   await settle();
 
   assert.deepEqual(posted.filter(message => message.type === 'save'), []);

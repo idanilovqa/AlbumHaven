@@ -2,7 +2,8 @@
 // client on a real origin, with a small server standing in for Album Haven and a fake shell port.
 // IAR-001 (a start from the copy), IAR-005 (offline read-only and recovery without a reload),
 // IAR-006 (signed out deletes the copy) and IAR-007 (the seven-day limit); in an ordinary browser,
-// IAR-W01 (the server first) and IAR-W11 (a slow server is waited for; a stale worker is replaced).
+// IAR-W01 (the server first), IAR-W11 (a slow server is waited for; a stale worker is replaced) and
+// IAR-W12 (the first visit is kept before the page has finished loading).
 const { test, expect } = require('@playwright/test');
 const fs = require('node:fs');
 const http = require('node:http');
@@ -21,8 +22,10 @@ self.addEventListener('fetch', (event) => {
 
 function startServer() {
   // [androidShell]: the page runs inside the Android app (capability-ui.js reports its bridge).
+  // [holdLoad]: the page has an image that never arrives, so its `load` never fires (a busy device).
   const server = {
     renders: 0, signedIn: true, account: 'acct-a', delayMs: 0, androidShell: true, workerBody: worker, workerServed: [],
+    holdLoad: false,
   };
   server.http = http.createServer(async (request, response) => {
     const url = new URL(request.url, 'http://localhost');
@@ -45,7 +48,7 @@ function startServer() {
       const shell = server.androidShell
         ? '<script>window.AlbumHavenCapabilities = { isAndroidShell: () => true, setReadOnly() {} };</script>' : '';
       response.end(`<!doctype html><html><head>${marker}${shell}<script src="/static/js/app-copy.js?v=t1" defer></script></head>
-        <body><h1 data-render>Render ${server.renders}</h1>
+        <body><h1 data-render>Render ${server.renders}</h1>${server.holdLoad ? '<img src="/held.png" alt="">' : ''}
         <section id="app-copy-offline-notice" class="on-page-alert" role="status" hidden>Offline</section></body></html>`);
       return;
     }
@@ -66,6 +69,8 @@ function startServer() {
       response.end(JSON.stringify(server.signedIn ? { account: server.account } : { detail: 'Authentication required.' }));
       return;
     }
+    // Never answered: the connection closes with the server.
+    if (url.pathname === '/held.png') return;
     if (url.pathname === '/login') {
       response.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-store' });
       response.end('<!doctype html><title>Sign in</title><form aria-label="Album Haven sign in"><label>Username <input></label></form>');
@@ -203,6 +208,22 @@ test.describe('app copy service worker', () => {
     await expect(renderHeading(page)).toHaveText('Render 3');
     await expect(page.locator('meta[name="album-haven-app-copy"]')).toHaveAttribute('content', 'network');
 
+  });
+
+  // Owner's D2 retest: on a busy laptop `load` came late, and Wi-Fi went off before the copy was kept.
+  test('IAR-W12: the first visit is kept while the page is still loading; a new tab opened offline then shows it', async ({ page, context }) => {
+    server.androidShell = false;
+    server.holdLoad = true;
+    await page.goto(`${server.origin}/`, { waitUntil: 'domcontentloaded' });
+    await expect.poll(() => copyCount(page)).toBe(1);
+    expect(await page.evaluate(() => document.readyState)).not.toBe('complete');
+
+    await context.setOffline(true);
+    const tab = await context.newPage();
+    await tab.goto(`${server.origin}/`, { waitUntil: 'domcontentloaded' });
+    await expect(renderHeading(tab)).toHaveText('Render 2');
+    await expect(tab.locator('meta[name="album-haven-app-copy"]')).toHaveAttribute('content', 'cache');
+    await expect(tab.locator('#app-copy-offline-notice')).toBeVisible();
   });
 
   test('IAR-W11: a slow server that still answers is waited for; the copy and its notice never stand in', async ({ page }) => {

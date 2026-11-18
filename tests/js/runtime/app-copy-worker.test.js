@@ -702,6 +702,34 @@ test('IAR-W05: in a browser a gateway error (the tunnel without its server) also
   assert.match(await response.text(), /content="cache"/);
 });
 
+// Owner's D2 retest: the Cloudflare tunnel dropped every site for a few minutes, answering 530.
+test('IAR-W12: a gateway error (530) on a cover or image shows the one kept, as offline does', async () => {
+  let up = true;
+  const server = libraryServer({ coverBytes: 7 });
+  const { handle, settled } = setup({
+    mode: 'web',
+    respond: (request) => {
+      if (!up) return new Response('Origin unreachable', { status: 530 });
+      return new URL(request.url).pathname === '/static/images/mark.svg' ? new Response('mark', { headers: {} }) : server(request);
+    },
+  });
+  await handle(navigation('/'));
+  await handle(resource(COVER_URL));
+  await handle(resource('/static/images/mark.svg'));
+  await settled();
+  up = false;
+
+  const cover = await handle(resource(COVER_URL));
+  const image = await handle(resource('/static/images/mark.svg'));
+  const unseen = await handle(resource(OTHER_COVER_URL));
+
+  assert.equal(cover.status, 200);
+  assert.equal((await cover.arrayBuffer()).byteLength, 7);
+  assert.equal(await image.text(), 'mark');
+  // Nothing kept: the server's own answer, as without the copy.
+  assert.equal(unseen.status, 530);
+});
+
 // Owner report: a slow network flashed the Offline notice. Online, a slow server is waited for.
 test('IAR-W11: in a browser a slow server is waited for; its copy never stands in while it can still answer', async () => {
   let answer = null;

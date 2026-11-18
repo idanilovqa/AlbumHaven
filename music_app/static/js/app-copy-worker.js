@@ -283,18 +283,21 @@
       return response;
     }
 
-    // Unversioned assets (images, fonts) stay network-first; the copy only stands in offline.
+    // Unversioned assets (images, fonts) stay network-first; the copy only stands in when the server
+    // cannot be reached or fails at its gateway (a tunnel without its server answers 530).
     async function asset(request, event) {
       const target = await accountCache();
+      let response;
       try {
-        const response = await fetch(request);
-        if (target && response.status === 200 && !noStore(response)) keepAsset(event, target.cache, request, response.clone());
-        return response;
+        response = await fetch(request);
       } catch (error) {
         const kept = target ? await target.cache.match(request) : null;
         if (kept) return kept;
         throw error;
       }
+      if (target && response.status >= 500) return (await target.cache.match(request)) || response;
+      if (target && response.status === 200 && !noStore(response)) keepAsset(event, target.cache, request, response.clone());
+      return response;
     }
 
     // Each cover is stored as `<key>?bytes=<size>`, so the sizes come from the key names alone.
@@ -348,7 +351,8 @@
       });
     }
 
-    // A cover from the server, as today, kept under its reference; offline, the one kept there.
+    // A cover from the server, as today, kept under its reference; offline or on a gateway error,
+    // the one kept there.
     async function cover(request, event) {
       const target = await accountCache();
       if (!target) return fetch(request);
@@ -362,6 +366,7 @@
         if (kept) return kept;
         throw error;
       }
+      if (response.status >= 500) return (await seenCover(target.cache, key)) || response;
       if (response.status === 200 && !noStore(response)) {
         const copy = response.clone();
         later(event, () => keepCover(key, copy, fetchedIn));

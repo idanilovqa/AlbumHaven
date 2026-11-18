@@ -10339,5 +10339,20 @@
       "IAR-W11: a worker left from an earlier build answers at most one more load once the server has a new one"
     ],
     "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/appCopy.spec.js",
+    "case": "app copy service worker › IAR-W12: the first visit is kept while the page is still loading; a new tab opened offline then shows it",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "IAR-W12: the first visit is kept while the page is still loading; a new tab opened offline then shows it"
+    ],
+    "ownerApproval": "pending"
   }
 ]

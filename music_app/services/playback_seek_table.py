@@ -213,3 +213,27 @@ def lookup(
         skip_frames=kept - table.samples[entry],
         total_frames=initial_total - offset_in_stream,
     )
+
+
+def whole_through(
+    table: SeekTable,
+    *,
+    initial_skip: int,
+    initial_total: int,
+    stream_start: int,
+    received_bytes: int,
+) -> int | None:
+    """The reference splice frame: the track frame up to which ``received_bytes`` decode whole.
+
+    A full seek stride short of the last received seek point, so a decoder's output surely passes
+    it; None when no such frame lies inside the stream. A client whose stream lost its server plays
+    on to this frame and a new stream from it takes over there.
+    """
+    last = bisect.bisect_right(table.offsets, received_bytes) - 1
+    spare = last - 1
+    if spare < 0:
+        return None
+    kept = table.samples[spare] - initial_skip
+    if kept <= 0:
+        return None
+    return stream_start + min(kept, initial_total)

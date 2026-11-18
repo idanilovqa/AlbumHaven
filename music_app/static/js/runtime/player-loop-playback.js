@@ -986,6 +986,8 @@ function pausePlayerPlaybackForHandoff(playback = getPlayerPlaybackSnapshot()) {
     && (ownershipVersion === null || ownershipVersion === (getPlaybackOwnershipState().requestVersion || 0));
   const pauseEffects = Promise.resolve(pauseStreamingPlayback()).then(async () => {
     if (!isCurrentPause()) return false;
+    // The button shows Play at once; what follows may wait on a network that is gone.
+    updatePlayerUi();
     closeListenSegment();
     markListenSessionPaused(Number(playback.currentTime) || 0);
     if (typeof maybeScrobbleListenSession === 'function') {
@@ -996,10 +998,11 @@ function pausePlayerPlaybackForHandoff(playback = getPlayerPlaybackSnapshot()) {
     if (typeof persistPausedListenSession === 'function') {
       try {
         await persistPausedListenSession(session);
-      } catch (_error) {
+      } catch (error) {
         if (!isCurrentPause()) return false;
         saved = false;
-        showToast('Listening history could not be saved.', 'error', 4200);
+        // Offline the listen stays open and the next checkpoint saves it; only an answer is a failure.
+        if (error?.status) showToast('Listening history could not be saved.', 'error', 4200);
       }
     }
     if (!isCurrentPause()) return saved;

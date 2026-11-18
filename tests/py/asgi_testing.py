@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
+import contextvars
 import gc
 import json
 import sys
@@ -19,6 +21,9 @@ from tests.py.runtime_testing import configure_test_app_paths
 
 
 EVENT_LOOP_STALL_LIMIT_SECONDS = 0.25
+# The watchdog's own sampler: formatting a stack reads source lines (a stat
+# each), which is the observer's work, never the request's.
+WATCHDOG_SAMPLER_THREAD_NAME = "asgi-event-loop-watchdog"
 _HEARTBEAT_SECONDS = 0.01
 _SAMPLE_SECONDS = 0.02
 
@@ -61,7 +66,7 @@ class _StackSampler:
             self._active.notify()
             start = self._thread is None
             if start:
-                self._thread = threading.Thread(target=self._run, name="asgi-event-loop-watchdog", daemon=True)
+                self._thread = threading.Thread(target=self._run, name=WATCHDOG_SAMPLER_THREAD_NAME, daemon=True)
         if start:
             self._thread.start()
 
@@ -511,13 +516,115 @@ async def run_asgi_request_async(
     return int(start["status"]), response_headers, response_body
 
 
+# Threadpool workers started with each test's loop, before its first request,
+# as a running server already has them: a request then never waits for the
+# operating system to start a thread. Requests needing more at once (a burst
+# of concurrent handlers) grow the pool as a server's pool grows.
+_WARM_THREADPOOL_WORKERS = 4
+
+
+async def _start_threadpool_workers(count: int) -> None:
+    import anyio.to_thread
+
+    started = threading.Barrier(count)
+    await asyncio.gather(*(anyio.to_thread.run_sync(started.wait) for _ in range(count)))
+
+
+class _ServerLoop:
+    """One event loop on its own thread, which every request of a test runs on,
+    as a server keeps one loop for all its requests.
+
+    The loop runs a long-lived root task the way `asyncio.run(server.serve())`
+    does, so AnyIO ties its threadpool workers to that root task and reuses
+    them across requests instead of starting (and waiting for) a fresh thread
+    for each one. A request runs in a copy of the caller's context, as
+    `asyncio.run` ran it. `close()` ends the root task, stops the workers,
+    and closes the loop and its thread."""
+
+    def __init__(self) -> None:
+        self._ready = threading.Event()
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._stop: asyncio.Event | None = None
+        self._thread = threading.Thread(target=self._run, name="asgi-test-server-loop", daemon=True)
+        self._thread.start()
+        self._ready.wait()
+
+    def _run(self) -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        async def serve() -> None:
+            self._stop = asyncio.Event()
+            self._loop = loop
+            await _start_threadpool_workers(_WARM_THREADPOOL_WORKERS)
+            self._ready.set()
+            await self._stop.wait()
+
+        try:
+            loop.run_until_complete(serve())
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
+            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            loop.run_until_complete(loop.shutdown_default_executor())
+        finally:
+            asyncio.set_event_loop(None)
+            loop.close()
+            self._ready.set()
+
+    def run(self, coroutine):
+        context = contextvars.copy_context()
+        outcome: concurrent.futures.Future = concurrent.futures.Future()
+
+        def start() -> None:
+            task = context.run(self._loop.create_task, coroutine)
+
+            def finish(done: asyncio.Task) -> None:
+                if done.cancelled():
+                    outcome.cancel()
+                elif done.exception() is not None:
+                    outcome.set_exception(done.exception())
+                else:
+                    outcome.set_result(done.result())
+
+            task.add_done_callback(finish)
+
+        self._loop.call_soon_threadsafe(start)
+        return outcome.result()
+
+    def close(self) -> None:
+        self._loop.call_soon_threadsafe(self._stop.set)
+        self._thread.join()
+
+
+_SERVER_LOOP_LOCK = threading.Lock()
+_SERVER_LOOP: _ServerLoop | None = None
+
+
+def close_server_loop() -> None:
+    """Ends the shared request loop, if a test started one; the next request
+    starts a new one. Called after every test, so no loop, thread or worker
+    outlives the test that used it."""
+    global _SERVER_LOOP
+    with _SERVER_LOOP_LOCK:
+        server_loop, _SERVER_LOOP = _SERVER_LOOP, None
+    if server_loop is not None:
+        server_loop.close()
+
+
 def run_asgi_request(
     app,
     method: str,
     path: str,
     **kwargs,
 ) -> tuple[int, dict[str, str], bytes]:
-    return asyncio.run(run_asgi_request_async(app, method, path, **kwargs))
+    global _SERVER_LOOP
+    with _SERVER_LOOP_LOCK:
+        if _SERVER_LOOP is None:
+            _SERVER_LOOP = _ServerLoop()
+        server_loop = _SERVER_LOOP
+    return server_loop.run(run_asgi_request_async(app, method, path, **kwargs))
 
 
 def decode_json(body: bytes) -> Any:

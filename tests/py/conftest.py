@@ -507,6 +507,15 @@ def _assert_safe_runtime_config(config_carrier: object) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _close_asgi_request_loop_after_each_test():
+    """A test's ASGI requests share one server-like loop; it ends with the test."""
+    yield
+    asgi_testing = sys.modules.get("tests.py.asgi_testing")
+    if asgi_testing is not None:
+        asgi_testing.close_server_loop()
+
+
+@pytest.fixture(autouse=True)
 def _reset_transient_log_history_between_tests():
     from music_app.services import log_history
 

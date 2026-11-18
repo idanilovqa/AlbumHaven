@@ -280,3 +280,74 @@ def test_a_short_gil_holding_block_without_a_collection_still_fails():
     finally:
         sys.setswitchinterval(interval)
     assert "; 0 ms of garbage collection on the loop thread not counted)" in str(stall.value)
+
+
+def test_a_tests_requests_share_one_loop_and_reuse_threadpool_workers_like_a_server():
+    """Each request used to run in a new `asyncio.run`, so AnyIO started a new
+    worker thread for every sync handler and the loop waited for the operating
+    system to start it. A server keeps one loop and its idle workers."""
+    import anyio.to_thread
+
+    from tests.py.asgi_testing import close_server_loop
+
+    seen = []
+
+    async def offloading_app(_scope, _receive, send):
+        loop_thread = threading.get_ident()
+        worker_thread = await anyio.to_thread.run_sync(threading.get_ident)
+        seen.append((loop_thread, worker_thread))
+        await _respond(send)
+
+    for index in range(5):
+        assert run_asgi_request(offloading_app, "GET", f"/offloaded/{index}")[0] == 204
+
+    assert len({loop for loop, _worker in seen}) == 1
+    assert len({worker for _loop, worker in seen}) == 1
+    assert seen[0][0] != threading.get_ident()
+
+    (worker,) = [thread for thread in threading.enumerate() if thread.ident == seen[0][1]]
+    close_server_loop()
+    assert not any(thread.ident == seen[0][0] for thread in threading.enumerate())
+    worker.join(timeout=5)  # Closing ends the root task, which tells each worker to stop.
+    assert not worker.is_alive()
+
+
+def test_a_request_runs_in_a_copy_of_the_callers_context():
+    import contextvars
+
+    marker = contextvars.ContextVar("asgi_testing_marker", default="unset")
+    seen = []
+
+    async def reading_app(_scope, _receive, send):
+        seen.append(marker.get())
+        marker.set("changed by the request")
+        await _respond(send)
+
+    token = marker.set("set by the test")
+    try:
+        run_asgi_request(reading_app, "GET", "/context")
+        assert seen == ["set by the test"]
+        assert marker.get() == "set by the test"
+    finally:
+        marker.reset(token)
+
+
+def test_the_samplers_own_stack_formatting_is_not_counted_as_request_filesystem_work(monkeypatch, tmp_path):
+    """Formatting a stalled stack reads source lines (a stat each) on the
+    sampler thread; that is the observer's work, so a contract's filesystem
+    budget never charges it to the request. Any other thread still counts."""
+    import os
+
+    from tests.py.asgi_testing import WATCHDOG_SAMPLER_THREAD_NAME
+    from tests.py.bounded_interactions import OperationCounts
+    from tests.py.filesystem_operation_counting import count_filesystem_and_media
+
+    counts = OperationCounts()
+    with count_filesystem_and_media(monkeypatch, counts):
+        for name in (WATCHDOG_SAMPLER_THREAD_NAME, "request-worker"):
+            thread = threading.Thread(target=os.stat, args=(tmp_path,), name=name)
+            thread.start()
+            thread.join()
+
+    assert counts.stat_calls == 1
+    assert counts.by_thread["stat_calls"] == {"request-worker": 1}

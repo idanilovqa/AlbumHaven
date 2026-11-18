@@ -16,6 +16,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from tests.py.asgi_testing import WATCHDOG_SAMPLER_THREAD_NAME
 from tests.py.bounded_interactions import OperationCounts
 
 _ENUMERATIONS = (
@@ -71,6 +72,12 @@ def quiesce_background_executors(timeout: float = 30.0) -> None:
                     _quiesce(executor, timeout)
 
 
+def _observer_thread() -> bool:
+    """The event-loop watchdog's sampler: it stats source files to format a
+    stall's stack, observer work that is never charged to the request."""
+    return threading.current_thread().name == WATCHDOG_SAMPLER_THREAD_NAME
+
+
 def _record_thread(counts: OperationCounts, metric: str) -> None:
     """Which thread did each counted operation, for a budget failure's report."""
     by_thread = counts.__dict__.setdefault("by_thread", {})
@@ -83,7 +90,7 @@ def _counted(function, counts: OperationCounts, metric: str, depth: _Depth, *, g
     if generator:
         @functools.wraps(function)
         def iterate(*args, **kwargs):
-            if depth.value == 0:
+            if depth.value == 0 and not _observer_thread():
                 counts.count(metric)
                 _record_thread(counts, metric)
             iterator = function(*args, **kwargs)
@@ -102,7 +109,7 @@ def _counted(function, counts: OperationCounts, metric: str, depth: _Depth, *, g
 
     @functools.wraps(function)
     def call(*args, **kwargs):
-        if depth.value == 0:
+        if depth.value == 0 and not _observer_thread():
             counts.count(metric)
             _record_thread(counts, metric)
         depth.value += 1

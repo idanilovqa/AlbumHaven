@@ -4488,11 +4488,19 @@ function buildSmallAlertHtml(config = {}) {
   const classes = `small-alert small-alert--${severity}${toneClass}${className ? ` ${escapeAlertHtml(className)}` : ''}`;
   const attributes = buildSmallAlertAttributes(config.attributes);
   const iconHtml = String(config.iconHtml || '') || buildAlertIconHtml(severity);
-  const content = `<span class="small-alert__icon">${iconHtml}</span><span class="small-alert__text">${escapeAlertHtml(message)}</span>`;
+  // dismiss: { ariaLabel, attributes } — owner (2026-11-17): the alert's own close X, inside it and shown only
+  // while it is expanded. A button alert cannot hold another button, so only a plain alert can be dismissed.
+  const dismissHtml = config.dismiss && !interactive && typeof ButtonComponent !== 'undefined'
+    ? ButtonComponent.renderActionButton({
+      icon: 'close', presentation: 'bare', className: 'small-alert__dismiss',
+      ariaLabel: String(config.dismiss.ariaLabel || 'Dismiss'), attributes: config.dismiss.attributes || {},
+    })
+    : '';
+  const content = `<span class="small-alert__icon">${iconHtml}</span><span class="small-alert__text">${escapeAlertHtml(message)}</span>${dismissHtml}`;
   if (interactive) {
     return `<button class="${classes}" type="button"${attributes} data-small-alert="${severity}">${content}</button>`;
   }
-  const focusable = config.focusable === true ? ' tabindex="0"' : '';
+  const focusable = config.focusable === true || dismissHtml ? ' tabindex="0"' : '';
   return `<span class="${classes}" role="status" aria-label="${escapeAlertHtml(message)}" data-small-alert="${severity}"${focusable}>${content}</span>`;
 }
 
@@ -35503,10 +35511,13 @@ function buildCoverLookupModalStatusHtml(taskRunning) {
   if (taskRunning) return '';
   const modal = state.coverLookup.modal;
   if (modal.failureNotice) {
-    return `<span class="cover-lookup-inline-notice">${buildSmallAlertHtml({
+    // Owner (2026-11-17): the close X belongs to the alert itself, inside it while it is expanded.
+    return buildSmallAlertHtml({
       severity: 'warning',
       message: modal.failureNotice,
-    })}${ButtonComponent.renderActionButton({ icon: 'close', ariaLabel: 'Dismiss cover lookup notice', presentation: 'bare', attributes: { 'data-dismiss-cover-lookup-notice': '1' } })}</span>`;
+      className: 'cover-lookup-inline-notice',
+      dismiss: { ariaLabel: 'Dismiss cover lookup notice', attributes: { 'data-dismiss-cover-lookup-notice': '1' } },
+    });
   }
   const statusText = String(modal.statusText || '');
   if (!statusText) return '';

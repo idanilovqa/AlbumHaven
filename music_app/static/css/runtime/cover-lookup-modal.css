@@ -84,11 +84,6 @@
   font-size: 0.84rem;
 }
 
-.cover-lookup-inline-notice {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
 
 @media (max-width: 900px) {
   .cover-lookup-modal-header { flex-shrink: 0; }

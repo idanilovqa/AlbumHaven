@@ -61,10 +61,13 @@ function buildCoverLookupModalStatusHtml(taskRunning) {
   if (taskRunning) return '';
   const modal = state.coverLookup.modal;
   if (modal.failureNotice) {
-    return `<span class="cover-lookup-inline-notice">${buildSmallAlertHtml({
+    // Owner (2026-11-17): the close X belongs to the alert itself, inside it while it is expanded.
+    return buildSmallAlertHtml({
       severity: 'warning',
       message: modal.failureNotice,
-    })}${ButtonComponent.renderActionButton({ icon: 'close', ariaLabel: 'Dismiss cover lookup notice', presentation: 'bare', attributes: { 'data-dismiss-cover-lookup-notice': '1' } })}</span>`;
+      className: 'cover-lookup-inline-notice',
+      dismiss: { ariaLabel: 'Dismiss cover lookup notice', attributes: { 'data-dismiss-cover-lookup-notice': '1' } },
+    });
   }
   const statusText = String(modal.statusText || '');
   if (!statusText) return '';

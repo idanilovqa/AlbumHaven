@@ -100,6 +100,12 @@ test('FTC-PLAYBACK-TAKEOVER-002 under full CPU load a second tab of the same bro
   let second = null;
   let track;
 
+  page.on('console', (message) => {
+    if (/ownership|claim|Playback/i.test(message.text())) console.log(`[first-tab console ${message.type()}] ${message.text().slice(0, 300)}`);
+  });
+  page.on('request', (request) => {
+    if (/\/playback\/(state|refs)/.test(request.url())) console.log(`[first-tab ${request.method()}] ${new URL(request.url()).pathname} ${Date.now()}`);
+  });
   try {
     await stepLogger.step('The first tab plays a long song well past its start', async () => {
       await galleryActions.goto();
@@ -116,6 +122,11 @@ test('FTC-PLAYBACK-TAKEOVER-002 under full CPU load a second tab of the same bro
       const evidence = await playbackEvidence.waitForTrackPlaybackEvidence({ after: mark, path: track.path });
       expect(evidence.renderedFrameDelta).toBeGreaterThan(0);
       await globalPlayerActions.waitForPlaybackState({ paused: false, minimumCurrentTime: 5 });
+      console.log(`[first-tab played] ${JSON.stringify(await page.evaluate(() => {
+        const o = state.player?.ownership || {};
+        return { claimed: Boolean(o.activeClaim), version: o.requestVersion, lockStatus: o.lockStatus, blockedReason: o.blockedReason,
+          unansweredRelease: Boolean(o.unansweredRelease), retry: Boolean(o.retryTimer), paused: getStreamingPlaybackSnapshot().paused };
+      }))}`);
     });
 
     await stepLogger.step('Under full CPU load a second tab opens promptly and its page never stops answering', async () => {

@@ -139,6 +139,8 @@ def test_targeted_reconciler_parses_only_requested_files_and_never_full_scans(
     assert result.affected_album_keys == ("broadcast::tender buttons",)
     assert result.active_track_paths == (str(requested),)
     assert result.new_track_paths == (str(requested),)
+    # Every touched file is named, so projections may be patched by path.
+    assert result.paths_complete is True
     assert repository.calls[0]["root_id"] == "main"
     entries = repository.calls[0]["active_file_entries"]
     assert list(entries) == [str(requested)]
@@ -768,8 +770,10 @@ def test_targeted_reconciler_passes_root_scoped_deleted_subtrees_without_scannin
         ],
     )
 
-    reconciler.reconcile(_request(deleted_subtrees=(deleted_album,)))
+    result = reconciler.reconcile(_request(deleted_subtrees=(deleted_album,)))
 
+    # A deleted folder's files are not named, so projections are rebuilt instead.
+    assert result.paths_complete is False
     assert repository.calls[0]["root_id"] == "main"
     assert repository.calls[0]["deleted_subtrees"] == (str(deleted_album),)
     assert repository.calls[0]["active_file_entries"] == {}
@@ -1582,3 +1586,28 @@ def test_catch_up_defers_without_publishing_when_a_full_scan_starts_midway(tmp_p
     assert result.health == "deferred"
     assert len(read) == 1
     assert repository.calls == []
+
+
+def test_targeted_projection_invalidation_patches_problematic_files_by_complete_paths(monkeypatch):
+    """Owner (11-18): each watcher pass dropped the whole Problematic Files list (94 s rebuild)."""
+    from music_app.services import state
+
+    events: list[object] = []
+    monkeypatch.setattr(state, "schedule_gallery_projection_refresh", lambda config: None)
+    monkeypatch.setattr(state, "invalidate_problematic_albums_payload_cache",
+                        lambda _state, include_postgres=True: events.append(("problems", include_postgres)))
+    monkeypatch.setattr(state, "invalidate_utility_rules_payload_cache",
+                        lambda _state, include_postgres=True: events.append(("rules", include_postgres)))
+    monkeypatch.setattr(state, "invalidate_postgres_utility_projection_cache",
+                        lambda **kwargs: events.append(("drop", kwargs)))
+    monkeypatch.setattr(state, "refresh_postgres_utility_projections_after_edit",
+                        lambda config, **kwargs: events.append(("patch", kwargs)))
+    monkeypatch.setattr(state, "library_browse_postgres_is_effective", lambda config: False)
+
+    state.invalidate_targeted_library_projections(
+        {}, {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://example"}, revision=2,
+        affected_album_keys=("artist::album",), track_paths=("C:/Music/Artist/Album/01.flac",),
+    )
+
+    assert events == [("problems", False), ("rules", False),
+                      ("patch", {"track_paths": ("C:/Music/Artist/Album/01.flac",)})]

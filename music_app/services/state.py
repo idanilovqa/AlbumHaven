@@ -39,6 +39,7 @@ from music_app.services.gallery_projection_postgres import (
 )
 from music_app.services.library_browse_postgres import (
     invalidate_postgres_utility_projection_cache,
+    refresh_postgres_utility_projections_after_edit,
 )
 from music_app.services.problematic_albums import (
     invalidate_problematic_albums_payload_cache,
@@ -109,8 +110,12 @@ def invalidate_targeted_library_projections(
     *,
     revision: int,
     affected_album_keys: tuple[str, ...],
+    track_paths: tuple[str, ...] = (),
 ) -> None:
-    """Invalidate only live projections affected by a committed watcher event."""
+    """Invalidate only live projections affected by a committed watcher event.
+
+    With the event's complete track paths, the Problematic Files list is
+    patched for those files' albums instead of rebuilt for the whole library."""
     with _CACHE_LOCK:
         browse_cache = library_state.get("_view_payload_root_browse_cache")
         if isinstance(browse_cache, dict):
@@ -122,12 +127,17 @@ def invalidate_targeted_library_projections(
         library_state["targeted_inventory_album_keys"] = tuple(affected_album_keys)
     if str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip():
         schedule_gallery_projection_refresh(config)
-    invalidate_problematic_albums_payload_cache(library_state)
-    invalidate_utility_rules_payload_cache(library_state)
-    invalidate_postgres_utility_projection_cache(
-        database_url=config.get("ALBUM_HAVEN_APP_DATABASE_URL"),
-        kinds=("problematic-files", "rules", "loose-tracks"),
-    )
+    if track_paths:
+        invalidate_problematic_albums_payload_cache(library_state, include_postgres=False)
+        invalidate_utility_rules_payload_cache(library_state, include_postgres=False)
+        refresh_postgres_utility_projections_after_edit(config, track_paths=track_paths)
+    else:
+        invalidate_problematic_albums_payload_cache(library_state)
+        invalidate_utility_rules_payload_cache(library_state)
+        invalidate_postgres_utility_projection_cache(
+            database_url=config.get("ALBUM_HAVEN_APP_DATABASE_URL"),
+            kinds=("problematic-files", "rules", "loose-tracks"),
+        )
     if config.get("ALBUM_HAVEN_APP_DATABASE_URL") and library_browse_postgres_is_effective(config):
         # As after a scan: rebuild the dropped projections in the background
         # (when prewarm is enabled) so the next Problematic Files open is warm.

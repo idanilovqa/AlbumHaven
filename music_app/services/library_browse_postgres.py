@@ -247,7 +247,7 @@ def refresh_postgres_utility_projections_after_edit(
     *,
     track_paths: Iterable[str],
 ) -> None:
-    """After a tag save, patch the Problematic Files list for the edited files'
+    """After a tag save or watcher edit, patch the Problematic Files list for the files'
     albums and invalidate the other utility projections. If the list cannot be
     patched it is invalidated (and rebuilt) as before."""
     remaining = set(_UTILITY_PROJECTION_KINDS)
@@ -263,7 +263,7 @@ def refresh_postgres_utility_projections_after_edit(
             logging.getLogger(__name__).exception("Problematic Files patch failed; the list is rebuilt instead")
             patched = False
         logging.getLogger(__name__).info(
-            "Problematic Files after tag save: %s in %.0f ms for %d files",
+            "Problematic Files after a library edit: %s in %.0f ms for %d files",
             "patched" if patched else "invalidated", (perf_counter() - started) * 1000, len(paths),
         )
         if patched:

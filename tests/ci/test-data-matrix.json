@@ -1818,6 +1818,36 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/coverLookup.spec.js",
+    "case": "FTC-COVERS-048 every Cover Look Up opening shows all of its cards at once",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "cover-lookup:instant-open"
+    ],
+    "filesystemScenarios": [
+      "covers:approved-existing-pool",
+      "media-copy:instant-open"
+    ],
+    "expectedContracts": [
+      "first-local-listing-shows-every-local-card-at-once",
+      "album-without-art-opens-into-empty-state-without-placeholders",
+      "notification-opening-shows-every-remote-card-at-once",
+      "reopening-after-cover-change-shows-selected-picture-at-once",
+      "reopening-after-delete-shows-remaining-cards-at-once",
+      "in-lookup-delete-shows-remaining-cards-at-once"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:instant-open",
+      "filesystemCopy": "media/cases/instant-open"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/coverLookup.spec.js",
     "case": "FTC-COVERS-013 partial cover results survive drawer reopen, save cancellation, and reload",
     "profile": "functional-core",
     "setupScope": "isolated",

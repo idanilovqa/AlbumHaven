@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from music_app.services.log_history import history_scope_for_request
 
+import asyncio
 from collections.abc import Mapping
 from datetime import datetime, timezone
 import logging
@@ -41,12 +42,14 @@ from music_app.services.cover_state import (
 from music_app.services.cover_lookup_jobs import build_cover_lookup_job_contract
 from music_app.services.cover_lookup_runtime import (
     CoverLookupFinishingError,
+    REMOTE_COVER_PREVIEW_EDGE,
     cached_remote_cover_image,
     fetch_remote_cover_bytes,
     merge_lookup_matches,
     queue_cover_lookup_save_remote_task,
     queue_cover_lookup_task,
     remember_remote_cover_image,
+    remote_cover_preview,
 )
 from music_app.services.cover_lookup_tasks import (
     cancel_cover_lookup_task_payload,
@@ -484,6 +487,33 @@ def _is_squareish_cover(width: int, height: int) -> bool:
     return abs(width - height) / max(width, height) <= 0.18
 
 
+# Owner (2026-11-18): a folder the index had never listed answered "not listed yet", and the page asked again a
+# second later. The request waits briefly for the worker's foreground listing instead; it never reads the folder.
+# A folder being re-indexed still answers at once with its previous listing.
+_UNLISTED_INVENTORY_WAIT_SECONDS = 1.5
+_UNLISTED_INVENTORY_POLL_SECONDS = 0.05
+
+
+async def _gallery_local_inventory(inventory_worker, album_root, track_paths: set[str]):
+    deadline = perf_counter() + _UNLISTED_INVENTORY_WAIT_SECONDS
+    repository = inventory_worker.repository
+    if album_root is None:
+        context = await run_in_threadpool(inventory_worker.request_context, track_paths) or {}
+        album_root = Path(context["root_path"]) if context.get("root_path") else None
+        while album_root is None and not context.get("error") and perf_counter() < deadline:
+            await asyncio.sleep(_UNLISTED_INVENTORY_POLL_SECONDS)
+            album_root = await run_in_threadpool(repository.root_for_tracks, track_paths)
+        if album_root is None:
+            return None, {"available": False, "complete": False, "error": context.get("error")}
+    inventory = await run_in_threadpool(repository.get, album_root)
+    if not inventory or not inventory.get("complete"):
+        await run_in_threadpool(inventory_worker.request, album_root)
+    while not (inventory or {}).get("available") and not (inventory or {}).get("error") and perf_counter() < deadline:
+        await asyncio.sleep(_UNLISTED_INVENTORY_POLL_SECONDS)
+        inventory = await run_in_threadpool(repository.get, album_root)
+    return album_root, inventory or {"available": False, "complete": False}
+
+
 async def _serialize_cover_gallery_from_asgi(
     request: Request,
     album_root,
@@ -516,14 +546,7 @@ async def _serialize_cover_gallery_from_asgi(
     local_inventory = None
     inventory_worker = getattr(request.app.state, "local_cover_inventory", None)
     if include_local and inventory_worker is not None:
-        if album_root is None:
-            context_inventory = await run_in_threadpool(inventory_worker.request_context, track_paths)
-            local_inventory = {"available": False, "complete": False, "error": (context_inventory or {}).get("error")}
-        else:
-            local_inventory = await run_in_threadpool(inventory_worker.repository.get, album_root)
-            if not local_inventory or not local_inventory.get("complete"):
-                await run_in_threadpool(inventory_worker.request, album_root)
-        local_inventory = local_inventory or {"available": False, "complete": False}
+        album_root, local_inventory = await _gallery_local_inventory(inventory_worker, album_root, track_paths)
     return await run_in_threadpool(
         serialize_cover_gallery_payload,
         album_root=album_root,
@@ -2200,11 +2223,13 @@ async def utilities_cover_lookup_remote_image(request: Request) -> Response:
     if not image_url:
         return _json_response(({"ok": False, "error": "Missing remote image URL"}, 400))
     config = _app_config(request)
-    cached = cached_remote_cover_image(image_url)
+    preview = request.query_params.get("size") == str(REMOTE_COVER_PREVIEW_EDGE)
+    cached = cached_remote_cover_image(image_url, preview=preview)
     if cached is not None:
         payload, mime_type = cached
     else:
-        payload, mime_type = await run_in_threadpool(
+        original = cached_remote_cover_image(image_url) if preview else None
+        payload, mime_type = original or await run_in_threadpool(
             fetch_remote_cover_bytes,
             image_url,
             config=config,
@@ -2212,7 +2237,12 @@ async def utilities_cover_lookup_remote_image(request: Request) -> Response:
         )
         if payload is None:
             return _json_response(({"ok": False, "error": "Failed to load remote image"}, 502))
-        remember_remote_cover_image(image_url, payload, mime_type)
+        if original is None:
+            # The lightbox opens this original after its card, so it stays remembered too.
+            remember_remote_cover_image(image_url, payload, mime_type)
+        if preview:
+            payload, mime_type = await run_in_threadpool(remote_cover_preview, payload, mime_type)
+            remember_remote_cover_image(image_url, payload, mime_type, preview=True)
     return Response(payload, media_type=mime_type, headers={"Cache-Control": "public, max-age=3600"})
 
 

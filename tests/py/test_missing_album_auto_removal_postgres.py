@@ -267,3 +267,43 @@ def test_live_keep_as_missing_is_recorded_and_keeps_the_album(watcher_repair_inv
     _delete_by_watcher(fixture, album)
 
     assert _album_exists(fixture, album.album_key)
+
+
+def test_live_confirmed_removal_keeps_the_gallery_baseline_for_the_next_watcher_event(watcher_repair_inventory):
+    """FTC-LIBROOTS-016/018: after the owner removes a missing album, the next deletion still reconciles."""
+    from music_app.services.gallery_projection_postgres import ensure_gallery_projection_ready
+    from music_app.services.missing_album_removal_postgres import PostgresMissingAlbumRemovalService
+    from tests.py.test_isolated_postgres_live import _finish_live_startup
+
+    fixture = watcher_repair_inventory
+    chosen = fixture.entry("Owner/Chosen Cover/01.flac", album="Chosen Cover")
+    mistake = fixture.entry("Owner/Added By Mistake/01.flac", album="Added By Mistake")
+    fixture.seed(chosen, mistake)
+    files = _files(fixture)
+    chosen_key, mistake_key = files[chosen["path"]][2], files[mistake["path"]][2]
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        album_id = connection.execute(
+            "select id from library.local_albums where album_key = %s", (chosen_key,)).fetchone()["id"]
+        _cover_choice(connection, SimpleNamespace(album_id=album_id))
+    _finish_live_startup(fixture.config)
+
+    _delete_by_watcher(fixture, SimpleNamespace(folder=Path(chosen["path"]).parent))
+    assert _files(fixture)[chosen["path"]][:2] == (True, "deleted")
+    PostgresMissingAlbumRemovalService(
+        fixture.config, connect=isolatedPostgres._connect, root_health_check=lambda _root_id: True,
+    ).confirm_removal(chosen_key)
+
+    # The removal publishes its own journal: nothing pending, every gallery scope current.
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        assert connection.execute(
+            "select count(*) as pending from library.local_relation_dirty_albums").fetchone()["pending"] == 0
+        generation = connection.execute("select generation from library.gallery_projection_state").fetchone()["generation"]
+        assert {row["source_generation"] for row in connection.execute(
+            "select source_generation from library.gallery_membership_headers").fetchall()} == {generation}
+    # As the route does after a removal.
+    ensure_gallery_projection_ready(fixture.config, connect=isolatedPostgres._connect)
+
+    _delete_by_watcher(fixture, SimpleNamespace(folder=Path(mistake["path"]).parent))
+
+    assert not _album_exists(fixture, chosen_key)
+    assert not _album_exists(fixture, mistake_key)

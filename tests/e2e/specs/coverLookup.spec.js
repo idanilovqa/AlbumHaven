@@ -3170,8 +3170,9 @@ test('FTC-COVERS-018 automatic lookup applies the first acceptable cover and sto
     expect(neutralCandidate.selected).toBe(false);
     await expect(coverLookupActions.coverLookup.suggestedCoverCards).toHaveCount(0);
     const neutralCandidateEvidence = await coverLookupActions.readRemoteCandidateEvidence(neutralCandidate.id);
-    expect(neutralCandidateEvidence.naturalWidth).toBe(600);
-    expect(neutralCandidateEvidence.naturalHeight).toBe(600);
+    // The card shows the proxy's 480 px preview of the 600 px original (owner, 2026-11-18).
+    expect(neutralCandidateEvidence.naturalWidth).toBe(480);
+    expect(neutralCandidateEvidence.naturalHeight).toBe(480);
     expect(neutralCandidateEvidence.src).toContain('automatic-coverless-neutral');
     const providerEvidence = await coverLookupActions.readProviderFixtureEvidence();
     expect(providerEvidence.fixture_neutral_original_source_sha256).toBe(

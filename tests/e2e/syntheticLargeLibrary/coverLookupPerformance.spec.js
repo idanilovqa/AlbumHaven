@@ -59,11 +59,6 @@ test.describe(`${CASE_ID} Cover Lookup interaction timing`, () => {
         () => coverLookupActions.waitForModalReady(),
       )
     ));
-    const localCardsShownMs = await stepLogger.step('Measure every LOCAL card of the first opening', async () => {
-      await coverLookupActions.waitForModalResultsReady();
-      const samples = await coverLookupActions.coverLookup.finishOpeningObservation(firstOpening);
-      return allCardsShownAtMs(samples, { includeRemote: false });
-    });
 
     let readyCandidate = null;
     let candidateReadyMs = null;
@@ -76,6 +71,12 @@ test.describe(`${CASE_ID} Cover Lookup interaction timing`, () => {
       candidateReadyMs = performance.now() - lookupStartedAt;
       const image = await coverLookupActions.readRemoteCandidateEvidence(readyCandidate.id);
       expect(image.sha256).not.toBe('');
+    });
+
+    const localCardsShownMs = await stepLogger.step('Measure every LOCAL card of the first opening', async () => {
+      await coverLookupActions.waitForModalResultsReady();
+      const samples = await coverLookupActions.coverLookup.finishOpeningObservation(firstOpening);
+      return allCardsShownAtMs(samples, { includeRemote: false });
     });
 
     let selectedCandidate = null;

@@ -2216,9 +2216,12 @@ async def utilities_cover_lookup_remote_image(request: Request) -> Response:
         )
         if payload is None:
             return _json_response(({"ok": False, "error": "Failed to load remote image"}, 502))
+        if original is None:
+            # The lightbox opens this original after its card, so it stays remembered too.
+            remember_remote_cover_image(image_url, payload, mime_type)
         if preview:
             payload, mime_type = await run_in_threadpool(remote_cover_preview, payload, mime_type)
-        remember_remote_cover_image(image_url, payload, mime_type, preview=preview)
+            remember_remote_cover_image(image_url, payload, mime_type, preview=True)
     return Response(payload, media_type=mime_type, headers={"Cache-Control": "public, max-age=3600"})
 
 

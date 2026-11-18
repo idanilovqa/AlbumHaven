@@ -3756,9 +3756,9 @@ def test_remote_card_preview_is_downscaled_and_cached_apart_from_the_original(ap
     with Image.open(io.BytesIO(first_body)) as preview:
         assert preview.size == (480, 480)
     assert again_body == first_body
-    # The lightbox keeps the original; only the one card edge is ever resized.
+    # The lightbox keeps the original, remembered from the card's fetch; only the card edge is ever resized.
     assert full_body == unsupported_body == original.getvalue()
-    assert fetches == [url, url]
+    assert fetches == [url]
 
 
 def test_remote_candidate_image_download_does_not_block_cover_lookup_api(app, monkeypatch):

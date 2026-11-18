@@ -462,7 +462,7 @@ def remote_cover_preview(payload: bytes, mime_type: str | None) -> tuple[bytes, 
     """The card-sized preview of a remote image; anything Pillow cannot shrink is served as it came."""
     from io import BytesIO
 
-    from PIL import Image, UnidentifiedImageError
+    from PIL import Image, ImageOps, UnidentifiedImageError
 
     edge = REMOTE_COVER_PREVIEW_EDGE
     try:
@@ -472,12 +472,14 @@ def remote_cover_preview(payload: bytes, mime_type: str | None) -> tuple[bytes, 
             if image.format == "JPEG":
                 image.draft("RGB", (edge, edge))
             image.thumbnail((edge, edge), Image.Resampling.LANCZOS)
-            alpha = "A" in image.getbands() or "transparency" in image.info
+            # The re-encoded preview carries no EXIF, so it is turned the way a browser shows the original.
+            preview = ImageOps.exif_transpose(image)
+            alpha = "A" in preview.getbands() or "transparency" in preview.info
             output = BytesIO()
             if alpha:
-                image.convert("RGBA").save(output, "WEBP", quality=85)
+                preview.convert("RGBA").save(output, "WEBP", quality=85)
                 return output.getvalue(), "image/webp"
-            image.convert("RGB").save(output, "JPEG", quality=85)
+            preview.convert("RGB").save(output, "JPEG", quality=85)
             return output.getvalue(), "image/jpeg"
     except (OSError, ValueError, UnidentifiedImageError, Image.DecompressionBombError):
         return payload, mime_type

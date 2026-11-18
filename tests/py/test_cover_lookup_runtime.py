@@ -4523,6 +4523,14 @@ def test_remote_cover_preview_is_card_sized_and_passes_through_what_it_cannot_sh
         assert (image.format, image.size, image.mode) == ("WEBP", (480, 480), "RGBA")
     assert mime_type == "image/webp"
 
+    rotated = io.BytesIO()
+    exif = Image.Exif()
+    exif[0x0112] = 6  # stored sideways, shown turned a quarter clockwise
+    Image.new("RGB", (1000, 500)).save(rotated, "JPEG", exif=exif)
+    preview, _mime_type = runtime.remote_cover_preview(rotated.getvalue(), "image/jpeg")
+    with Image.open(io.BytesIO(preview)) as image:
+        assert image.size == (240, 480)
+
     small = io.BytesIO()
     Image.new("RGB", (300, 300)).save(small, "PNG")
     assert runtime.remote_cover_preview(small.getvalue(), "image/png") == (small.getvalue(), "image/png")

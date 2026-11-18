@@ -384,9 +384,13 @@ function createEngineHarness(options = {}) {
       return sockets.flatMap((socket) => socket.sent).filter((message) => message.type === type);
     },
     portMessages(type) {
-      return nodes.flatMap((node) => node.port.messages)
-        .map(({ message }) => message)
-        .filter((message) => message.type === type);
+      const matches = [];
+      for (const node of nodes) {
+        for (const { message } of node.port.messages) {
+          if (message.type === type) matches.push(message);
+        }
+      }
+      return matches;
     },
   };
 }
@@ -6819,7 +6823,7 @@ async function startCountedStreamingSession(counter, options = {}) {
   let nowMs = 1000;
   // One 2-frame chunk arrives, the worklet plays it, and reports its position 100 ms later.
   const playChunk = () => {
-    harness.sockets[0].receive(createPcmMessage({ generation: current.generation, streamId: current.streamId, sequence }));
+    receivePcmAndAssertEnqueue(harness, { generation: current.generation, streamId: current.streamId, sequence });
     sequence += 1;
     port.dispatch({ type: 'consumed', generation: current.generation, streamId: current.streamId, role: 'current', frames: 2, bufferedFrames: 0 });
     nowMs += 100;

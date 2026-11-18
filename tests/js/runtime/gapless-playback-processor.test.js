@@ -1810,9 +1810,10 @@ test('bounded interaction: worklet seek commands copy one fixed boundary capture
     const counter = createInteractionCounter();
     const fixture = createProcessor({ currentCapacityFrames: 512 });
     play(fixture);
+    const left = Array(QUANTUM_FRAMES).fill(0.25);
     for (let quantum = 0; quantum < quanta; quantum += 1) {
-      enqueue(fixture, { streamId: 41, role: 'current', sequence: quantum, left: Array(QUANTUM_FRAMES).fill(0.25) });
-      renderQuantum(fixture);
+      enqueue(fixture, { streamId: 41, role: 'current', sequence: quantum, left });
+      assertRenderedStereo(fixture, left);
     }
     fixture.port.events.length = 0;
     const work = await counter.measure(() => {

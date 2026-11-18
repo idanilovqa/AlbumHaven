@@ -1,8 +1,12 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('search', 'problematic-files', 'html-reload', 'edit-tags', 'bounded-interactions')]
+    [ValidateSet('search', 'problematic-files', 'html-reload', 'edit-tags', 'bounded-interactions', 'focused')]
     [string]$Gate,
+    # Focused gate only: functional cases (FTC ids or exact approved titles) and measured target names,
+    # separated by commas or new lines. It runs just those, to reproduce or verify one failure quickly.
+    [string]$Cases = '',
+    [string]$Targets = '',
     [switch]$ListFixtureProfiles,
     [string]$FixtureDistribution = $env:ALBUM_HAVEN_FIXTURE_DISTRIBUTION,
     [string]$PythonPath = $env:PLAYWRIGHT_PYTHON,
@@ -57,8 +61,38 @@ $gates = @{
         Performance = @{ Profile = 'synthetic-large-library'; Targets = 'edit-tags-post-edit' }
     }
     'bounded-interactions' = @{ FixtureProfiles = @() }
+    'focused' = @{ FixtureProfiles = @() }
 }
 $definition = $gates[$Gate]
+
+function Split-FocusedSelection([string]$Value) {
+    return @($Value -split '[,\r\n]' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+}
+
+$focusedCases = @()
+$focusedTargets = @()
+if ($Gate -eq 'focused') {
+    $focusedCases = Split-FocusedSelection $Cases
+    $focusedTargets = Split-FocusedSelection $Targets
+    if ($focusedCases.Count -eq 0 -and $focusedTargets.Count -eq 0) {
+        throw 'The focused gate needs -Cases, -Targets, or both.'
+    }
+    # The trusted copy of this script lists fixtures before the tested ref runs; it reads the tested ref's
+    # registry as data from the working directory.
+    $dataRoot = if (Test-Path -LiteralPath (Join-Path $repositoryRoot 'tests\ci\performance-targets.json')) {
+        $repositoryRoot
+    } else {
+        (Get-Location).Path
+    }
+    $registry = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $dataRoot 'tests\ci\performance-targets.json') | ConvertFrom-Json
+    $targetProfiles = @(foreach ($targetName in $focusedTargets) {
+        $target = @($registry.targets | Where-Object { $_.name -ceq $targetName })
+        if ($target.Count -ne 1) { throw "Unknown measured target: $targetName" }
+        $target[0].fixtureProfile
+    })
+    $definition.FixtureProfiles = @(@($(if ($focusedCases.Count) { 'functional-core' })) + $targetProfiles |
+        Where-Object { $_ } | Select-Object -Unique)
+}
 
 if ($ListFixtureProfiles) {
     $definition.FixtureProfiles | ForEach-Object { Write-Output $_ }
@@ -171,6 +205,56 @@ $functionalCommon = @{
     PostgresMajor = $PostgresMajor
     Pgbin = $Pgbin
 }
+function Invoke-MeasuredTargets([string]$TargetList, [string]$FixtureProfile, [string]$ShardName) {
+    $performanceTemp = Join-Path ([IO.Path]::GetTempPath()) "album-haven-$ShardName-performance-$PID"
+    New-Item -ItemType Directory -Force -Path $performanceTemp | Out-Null
+    $env:ALBUM_HAVEN_FIXTURE_PROFILE = $FixtureProfile
+    $env:ALBUM_HAVEN_FIXTURE_ROOT = Get-ProfileRoot $FixtureProfile
+    $env:ALBUM_HAVEN_MEDIA_ROOT = Join-Path $env:ALBUM_HAVEN_FIXTURE_ROOT 'media'
+    Invoke-Checked {
+        & (Join-Path $PSScriptRoot 'ci\run-performance-shard.ps1') `
+            -Targets $TargetList `
+            -FixtureProfile $FixtureProfile `
+            -FixtureMode preloaded-release `
+            -BasePort $PerformanceBasePort `
+            -DatabaseSuffixBase "$($ShardName.Replace('-', '_'))_$PID" `
+            -ExpectedPostgresMajor $PostgresMajor `
+            -Pgbin $Pgbin `
+            -RepositoryRoot $repositoryRoot `
+            -RunnerTemp $performanceTemp `
+            -GithubEnv (Join-Path $performanceTemp 'database.env') `
+            -PythonPath $PythonPath `
+            -ShardName $ShardName `
+            -PerformanceContract local
+    } "Measured targets $TargetList"
+}
+
+if ($Gate -eq 'focused') {
+    # Each case runs in the shard that owns it, with that shard's isolated setup, exactly as in a full gate.
+    $contract = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $repositoryRoot 'tests\ci\functional-shards.json') | ConvertFrom-Json
+    $owned = @(foreach ($shard in $contract.shards) {
+        foreach ($ownedCase in @($shard.invocations | ForEach-Object { $_.cases })) {
+            [pscustomobject]@{ Shard = $shard.name; Title = [string]$ownedCase.case }
+        }
+    })
+    $selected = @(foreach ($selector in $focusedCases) {
+        $found = @($owned | Where-Object { $_.Title -ceq $selector -or $_.Title.StartsWith("$selector ", [StringComparison]::Ordinal) })
+        if ($found.Count -eq 0) { throw "No approved functional case matches: $selector" }
+        $found
+    })
+    foreach ($group in @($selected | Group-Object Shard)) {
+        $titles = @($group.Group | ForEach-Object { $_.Title } | Select-Object -Unique)
+        Invoke-Checked { & $functionalRunner -Shard $group.Name -Cases $titles @functionalCommon } "Functional cases in $($group.Name)"
+    }
+    foreach ($group in @($focusedTargets | Group-Object {
+        $targetName = $_
+        @($registry.targets | Where-Object { $_.name -ceq $targetName })[0].fixtureProfile
+    })) {
+        Invoke-MeasuredTargets ($group.Group -join ',') $group.Name "focused-$($group.Name)"
+    }
+    Complete-Gate
+}
+
 if ($definition.FunctionalShard) {
     Invoke-Checked { & $functionalRunner -Shard $definition.FunctionalShard @functionalCommon } "Functional shard $($definition.FunctionalShard)"
 }
@@ -188,27 +272,7 @@ if ($definition.FunctionalArea) {
 }
 
 if ($definition.Performance) {
-    $performanceTemp = Join-Path ([IO.Path]::GetTempPath()) "album-haven-$Gate-performance-$PID"
-    New-Item -ItemType Directory -Force -Path $performanceTemp | Out-Null
-    $env:ALBUM_HAVEN_FIXTURE_PROFILE = $definition.Performance.Profile
-    $env:ALBUM_HAVEN_FIXTURE_ROOT = Get-ProfileRoot $definition.Performance.Profile
-    $env:ALBUM_HAVEN_MEDIA_ROOT = Join-Path $env:ALBUM_HAVEN_FIXTURE_ROOT 'media'
-    Invoke-Checked {
-        & (Join-Path $PSScriptRoot 'ci\run-performance-shard.ps1') `
-            -Targets $definition.Performance.Targets `
-            -FixtureProfile $definition.Performance.Profile `
-            -FixtureMode preloaded-release `
-            -BasePort $PerformanceBasePort `
-            -DatabaseSuffixBase "$($Gate.Replace('-', '_'))_$PID" `
-            -ExpectedPostgresMajor $PostgresMajor `
-            -Pgbin $Pgbin `
-            -RepositoryRoot $repositoryRoot `
-            -RunnerTemp $performanceTemp `
-            -GithubEnv (Join-Path $performanceTemp 'database.env') `
-            -PythonPath $PythonPath `
-            -ShardName "$Gate-gate" `
-            -PerformanceContract local
-    } "Measured targets $($definition.Performance.Targets)"
+    Invoke-MeasuredTargets $definition.Performance.Targets $definition.Performance.Profile "$Gate-gate"
 }
 
 Complete-Gate

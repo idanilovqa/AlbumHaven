@@ -226,7 +226,10 @@ jobs:
         run: |
           $env:PGPASSWORD = $null
           $env:PLAYWRIGHT_PYTHON = Join-Path $env:pythonLocation "python.exe"
-          .\scripts\run-regression-gate.ps1 -Gate "${{ matrix.gate }}" -Cases $env:FOCUSED_CASES -Targets $env:FOCUSED_TARGETS -PostgresMajor 17
+          # Only the focused gate takes a selection, so refs with an older runner keep working for the others.
+          $selection = @{}
+          if ("${{ matrix.gate }}" -eq "focused") { $selection = @{ Cases = $env:FOCUSED_CASES; Targets = $env:FOCUSED_TARGETS } }
+          .\scripts\run-regression-gate.ps1 -Gate "${{ matrix.gate }}" @selection -PostgresMajor 17
 
       - name: Summarize measured timings
         if: ${{ always() }}

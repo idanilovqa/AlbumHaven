@@ -85,12 +85,13 @@ if ($Gate -eq 'focused') {
         (Get-Location).Path
     }
     $registry = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $dataRoot 'tests\ci\performance-targets.json') | ConvertFrom-Json
-    $targetProfiles = @(foreach ($targetName in $focusedTargets) {
+    $targetProfiles = [ordered]@{}
+    foreach ($targetName in $focusedTargets) {
         $target = @($registry.targets | Where-Object { $_.name -ceq $targetName })
         if ($target.Count -ne 1) { throw "Unknown measured target: $targetName" }
-        $target[0].fixtureProfile
-    })
-    $definition.FixtureProfiles = @(@($(if ($focusedCases.Count) { 'functional-core' })) + $targetProfiles |
+        $targetProfiles[$targetName] = [string]$target[0].fixtureProfile
+    }
+    $definition.FixtureProfiles = @(@($(if ($focusedCases.Count) { 'functional-core' })) + @($targetProfiles.Values) |
         Where-Object { $_ } | Select-Object -Unique)
 }
 
@@ -246,10 +247,7 @@ if ($Gate -eq 'focused') {
         $titles = @($group.Group | ForEach-Object { $_.Title } | Select-Object -Unique)
         Invoke-Checked { & $functionalRunner -Shard $group.Name -Cases $titles @functionalCommon } "Functional cases in $($group.Name)"
     }
-    foreach ($group in @($focusedTargets | Group-Object {
-        $targetName = $_
-        @($registry.targets | Where-Object { $_.name -ceq $targetName })[0].fixtureProfile
-    })) {
+    foreach ($group in @($focusedTargets | Group-Object { $targetProfiles[$_] })) {
         Invoke-MeasuredTargets ($group.Group -join ',') $group.Name "focused-$($group.Name)"
     }
     Complete-Gate

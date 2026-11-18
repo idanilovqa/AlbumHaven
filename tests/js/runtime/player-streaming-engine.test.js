@@ -6740,6 +6740,44 @@ test('a browser cache that never answers does not hold the start of a track', as
   await start;
 });
 
+test('a browser cache that never answers does not hold the next song', async () => {
+  const deadlines = [];
+  const harness = createEngineHarness({
+    setTimeout: (callback, delay) => {
+      if (delay === 500) {
+        deadlines.push(delay);
+        Promise.resolve().then(callback);
+        return 1;
+      }
+      return setTimeout(callback, delay);
+    },
+  });
+  const next = makeTrack('02.flac');
+  Object.assign(harness.context, {
+    streamingTrackCacheKey: (track, quality) => `${track.path}|${quality || 'original'}`,
+    loadStreamingCachedTrack: key => (key.startsWith(next.path) ? new Promise(() => {}) : Promise.resolve(null)),
+    keepStreamingCachedTrack: () => {},
+  });
+  await harness.api.start(makeTrack());
+  const current = harness.sent('open')[0];
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame', generation: current.generation, streamId: current.streamId,
+    renderedFrame: 0, contextTime: 1,
+  });
+  harness.sockets[0].receive({
+    type: 'eos', generation: current.generation, streamId: current.streamId, role: 'current',
+    emittedFrames: 10_000, authoritativeTotalFrames: 10_000,
+  });
+
+  const scheduling = harness.api.continuity(next);
+  await harness.settle();
+
+  assert.deepEqual(deadlines, [500, 500], 'the start and the next song each wait out the same deadline');
+  assert.deepEqual(harness.sent('open').map(({ role }) => role), ['current', 'continuity'],
+    'the next song streams from the server instead');
+  await scheduling;
+});
+
 test('a kept track starts mid-track from its seek table', async () => {
   const { decoders, create } = recordingDecoders();
   const harness = encodedHarness({ createStreamingDecoder: create });

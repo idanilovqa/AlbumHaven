@@ -270,6 +270,7 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
           timingMs: metrics.exactIncidentProbeMaxMs,
           details: {
             phaseTimingsMs: result.payload.phase_timings_ms,
+            postgresCommitStagesMs: result.payload.postgres_commit_stages_ms,
             poolLeaseTimingsMs: result.payload.pool_lease_timings_ms,
             poolLeaseCounts: result.payload.pool_lease_counts,
             posts: exactIncident.posts,

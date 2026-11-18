@@ -312,6 +312,11 @@ def _database_action(setup_database_url: str, action: str) -> None:
             where account_id = (select id from app.accounts where username_normalized = 'rendref')
               and revoked_at is null
         """,
+        "expire-login-tokens": """
+            update app.auth_preflight_tokens set created_at = now() - interval '11 minutes',
+              expires_at = now() - interval '1 minute'
+            where purpose = 'login' and consumed_at is null
+        """,
         "expire-owner-sessions": """
             update app.account_sessions set idle_expires_at = now() - interval '1 second'
             where account_id = (select id from app.accounts where username_normalized = 'rendref')

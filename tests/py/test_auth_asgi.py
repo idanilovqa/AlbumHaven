@@ -1369,33 +1369,98 @@ def test_invalid_and_throttled_are_one_generic_contract_with_fresh_csrf(auth_asg
 
 
 @pytest.mark.parametrize(
-    "headers,form",
+    "headers",
     [
-        ({"cookie": f"{CSRF_COOKIE}={CSRF}"}, _valid_form()),
-        (_valid_headers(origin="https://evil.test"), _valid_form()),
-        (_valid_headers(cookie=f"{CSRF_COOKIE}=wrong"), _valid_form()),
-        (_valid_headers(), _valid_form(csrf_token="wrong")),
+        {"cookie": f"{CSRF_COOKIE}={CSRF}"},
+        _valid_headers(origin="https://evil.test"),
+        _valid_headers(origin="https://evil.test", accept="application/json"),
     ],
 )
-def test_origin_and_cookie_form_csrf_fail_before_consume_or_login(auth_asgi, headers, form):
+def test_cross_origin_login_stays_a_bare_rejection_without_a_token(auth_asgi, headers):
     app, preauth, login = _app(auth_asgi)
-    status, _, body = _request(app, "POST", form=form, headers=headers)
-    assert status == 400 and b"private-password" not in body
-    assert preauth.consumed == [] and login.calls == []
+    status, response_headers, body = _request(app, "POST", form=_valid_form(), headers=headers)
+    assert (status, body) == (400, b"Sign-in request was invalid.")
+    assert _set_cookies(response_headers) == []
+    assert preauth.consumed == [] and login.calls == [] and preauth.issued == [CSRF, NEXT_CSRF]
 
 
-def test_non_ascii_csrf_is_rejected_without_consuming_or_authenticating(auth_asgi):
+# (request headers, form, token still in the store, token consumed by the attempt)
+STALE_LOGIN_TOKENS = [
+    pytest.param(_valid_headers(cookie="other=1"), _valid_form(), True, False, id="missing-cookie"),
+    pytest.param(_valid_headers(cookie=f"{CSRF_COOKIE}=wrong"), _valid_form(), True, False, id="other-tab"),
+    pytest.param(_valid_headers(), _valid_form(csrf_token="wrong"), True, False, id="mismatched-form"),
+    pytest.param(_valid_headers(), _valid_form(csrf_token="snowman-\u2603"), True, False, id="non-ascii"),
+    pytest.param(_valid_headers(), _valid_form(), False, True, id="expired-or-used"),
+]
+
+
+def _stale_login_post(auth_asgi, headers, form, stored, extra_headers=None):
     app, preauth, login = _app(auth_asgi)
+    preauth.issued = [NEXT_CSRF]
+    preauth.consume_result = stored
+    return preauth, login, _request(
+        app, "POST", form=form, headers={**headers, **(extra_headers or {})}
+    )
+
+
+def _assert_fresh_login_token(preauth, login, headers, *, consumed):
+    assert preauth.consumed == ([CSRF] if consumed else []) and login.calls == []
+    cookies = _set_cookies(headers)
+    fresh = next(value for value in cookies if value.startswith(CSRF_COOKIE + "="))
+    assert fresh.startswith(f"{CSRF_COOKIE}={NEXT_CSRF};") and "Max-Age=600" in fresh
+    assert all(flag in fresh for flag in ("HttpOnly", "Secure", "SameSite=lax", "Path=/"))
+    assert not any(value.startswith(SESSION_COOKIE + "=") for value in cookies)
+    assert dict(headers)["cache-control"] == "no-store, max-age=0"
+
+
+@pytest.mark.parametrize("headers,form,stored,consumed", STALE_LOGIN_TOKENS)
+def test_stale_login_token_rerenders_the_form_with_a_fresh_token(
+    auth_asgi, headers, form, stored, consumed
+):
+    preauth, login, (status, response_headers, body) = _stale_login_post(
+        auth_asgi, headers, form, stored
+    )
+
+    assert status == 400 and dict(response_headers)["content-type"].startswith("text/html")
+    page = body.decode()
+    assert f'name="csrf_token" value="{NEXT_CSRF}"' in page
+    assert 'name="return_to" value="/albums?view=grid"' in page
+    assert "This sign-in page expired. Please sign in again." in page
+    assert re.search(r'<section class="[^"]*login-alert"[^>]* hidden', page)
+    assert not re.search(r'<section class="[^"]*login-expired"[^>]* hidden', page)
+    assert "Sign-in request was invalid." not in page and "private-password" not in page
+    _assert_fresh_login_token(preauth, login, response_headers, consumed=consumed)
+
+
+@pytest.mark.parametrize("headers,form,stored,consumed", STALE_LOGIN_TOKENS)
+def test_script_stale_login_token_returns_a_fresh_token_to_retry_with(
+    auth_asgi, headers, form, stored, consumed
+):
+    preauth, login, (status, response_headers, body) = _stale_login_post(
+        auth_asgi, headers, form, stored, {"accept": "application/json"}
+    )
+
+    assert status == 400 and dict(response_headers)["content-type"] == "application/json"
+    assert json.loads(body) == {"csrf_token": NEXT_CSRF, "expired": True}
+    _assert_fresh_login_token(preauth, login, response_headers, consumed=consumed)
+
+
+def test_fresh_token_from_a_stale_post_signs_in(auth_asgi):
+    fresh_token = "A" * 43  # canonical, unlike NEXT_CSRF, so it can be posted back
+    app, preauth, login = _app(auth_asgi, outcome=LoginOutcome.SUCCESS)
+    preauth.issued = [fresh_token]
+    stale = _valid_headers(cookie=f"{CSRF_COOKIE}=other-tab", accept="application/json")
+    status, _, body = _request(app, "POST", form=_valid_form(), headers=stale)
+    assert status == 400 and json.loads(body)["csrf_token"] == fresh_token
 
     status, _, body = _request(
         app,
         "POST",
-        form=_valid_form(csrf_token="snowman-\u2603"),
-        headers=_valid_headers(),
+        form=_valid_form(csrf_token=fresh_token),
+        headers=_valid_headers(cookie=f"{CSRF_COOKIE}={fresh_token}", accept="application/json"),
     )
-
-    assert status == 400 and body == b"Sign-in request was invalid."
-    assert preauth.consumed == [] and login.calls == []
+    assert status == 200 and json.loads(body) == {"redirect": "/albums?view=grid"}
+    assert preauth.consumed == [fresh_token] and len(login.calls) == 1
 
 
 def test_lazy_service_initialization_failure_is_generic_unavailable(auth_asgi, monkeypatch):
@@ -1543,23 +1608,6 @@ def test_script_sign_in_success_returns_safe_target_with_the_same_cookies(
     assert any(value.startswith("__Host-album_haven_csrf=") for value in cookies)
     assert any(value.startswith(CSRF_COOKIE + "=") and "Max-Age=0" in value for value in cookies)
     assert SESSION.encode() not in body
-
-
-@pytest.mark.parametrize(
-    "headers,form",
-    [
-        ({"cookie": f"{CSRF_COOKIE}={CSRF}", **JSON_ACCEPT}, _valid_form()),
-        (_valid_headers(origin="https://evil.test", **JSON_ACCEPT), _valid_form()),
-        (_valid_headers(**JSON_ACCEPT), _valid_form(csrf_token="wrong")),
-    ],
-)
-def test_script_sign_in_keeps_origin_and_csrf_checks_before_consume_or_login(
-    auth_asgi, headers, form
-):
-    app, preauth, login = _app(auth_asgi)
-    status, _, body = _request(app, "POST", form=form, headers=headers)
-    assert (status, body) == (400, b"Sign-in request was invalid.")
-    assert preauth.consumed == [] and login.calls == []
 
 
 def test_browser_form_post_keeps_html_failure_even_when_json_is_acceptable(auth_asgi):

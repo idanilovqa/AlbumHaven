@@ -58,7 +58,7 @@ body {
   object-fit: contain;
 }
 
-.login-alert { margin: 0 0 16px; }
+.login-alert, .login-expired { margin: 0 0 16px; }
 
 .login-field {
   margin-bottom: 22px;

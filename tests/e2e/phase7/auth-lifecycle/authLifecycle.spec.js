@@ -1,3 +1,4 @@
+import { GalleryPage } from '../../poms/galleryPage.js';
 import { AccountPage, LoginPage, RecoveryPage } from '../poms/authPages.js';
 import { OWNER, resetLinkFrom, signIn } from '../actions/authActions.js';
 import {
@@ -95,6 +96,55 @@ test('FTC-PERMISSIONS-004 keeps failures generic and throttles durably', async (
   await expect(secondWorkerPage.getByRole('alert')).toHaveText(
     'Sign-in failed. Check your credentials and try again.',
   );
+});
+
+function loginPostStatuses(page) {
+  const statuses = [];
+  page.on('response', (response) => {
+    if (response.request().method() === 'POST' && new URL(response.url()).pathname === '/login') {
+      statuses.push(response.status());
+    }
+  });
+  return statuses;
+}
+
+async function expectSignedInGallery(page, statuses) {
+  await expect(page).toHaveURL((url) => url.pathname === '/');
+  await expect(new GalleryPage(page).gallerySurface).toBeVisible();
+  await expect(page.getByRole('form', { name: 'Album Haven sign in' })).toHaveCount(0);
+  await expect(page.getByText('Sign-in request was invalid.')).toHaveCount(0);
+  const cookies = await page.context().cookies();
+  expect(cookies.some((cookie) => cookie.name === '__Host-album_haven_session')).toBe(true);
+  // One rejected stale token, then the transparent retry; never a native re-post.
+  expect(statuses).toEqual([400, 200]);
+}
+
+test('a sign-in page left open past its token life still signs in to the gallery', async ({ page }) => {
+  const login = new LoginPage(page);
+  await login.open('/');
+  const statuses = loginPostStatuses(page);
+  await login.username.fill(OWNER.username);
+  await login.password.fill(OWNER.password);
+  await databaseAction('expire-login-tokens');
+
+  await login.submit.click();
+
+  await expectSignedInGallery(page, statuses);
+});
+
+test('signing in from an older sign-in tab after a newer one opened reaches the gallery', async ({ page, context }) => {
+  const first = new LoginPage(page);
+  await first.open('/');
+  const second = new LoginPage(await context.newPage());
+  await second.open('/');
+  await page.bringToFront();
+  const statuses = loginPostStatuses(page);
+
+  await first.username.fill(OWNER.username);
+  await first.password.fill(OWNER.password);
+  await first.submit.click();
+
+  await expectSignedInGallery(page, statuses);
 });
 
 test('FTC-PERMISSIONS-006 completes a token-free, single-use reset and revokes prior sessions', async ({ page, request, freshBrowserSession }) => {

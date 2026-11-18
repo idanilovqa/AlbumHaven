@@ -20,6 +20,7 @@
       <img class="login-mark" src="/static/images/album-haven-cloud-vinyl.png" alt="Album Haven">
 
       {{ on_page_alert('Sign-in failed. Check your credentials and try again.', severity='error', class_name='login-alert', hidden=not failed) }}
+      {{ on_page_alert('This sign-in page expired. Please sign in again.', severity='warning', class_name='login-expired', hidden=not expired) }}
 
       <div class="login-field">
         <label for="login-username">Username</label>

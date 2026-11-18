@@ -1283,11 +1283,11 @@ function applyOptimisticLocalCoverSelection(album, sourcePath) {
     size: 480,
     revision: selectedCandidate?.cover_revision,
   });
-  cacheOptimisticLocalCoverGallery(album, {
-    ...selectedCandidate,
-    path: normalizedSourcePath,
-    preview_url: selectedCandidate?.preview_url || src,
-  });
+  // A listed card keeps the picture address it already showed (its file does not change), so the reopened
+  // lookup paints its loaded image at once; only a card the listing never had borrows the cover's address.
+  cacheOptimisticLocalCoverGallery(album, selectedCandidate
+    ? { ...selectedCandidate, path: normalizedSourcePath }
+    : { path: normalizedSourcePath, preview_url: src });
   state.coverLookup.optimisticAlbumCovers[signature] = { src, coverPath: normalizedSourcePath };
   return src;
 }

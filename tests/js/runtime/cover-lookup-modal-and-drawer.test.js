@@ -6960,6 +6960,8 @@ require('node:test')('local cover selection updates the cached active card befor
     ['N:/Fleet Foxes/new.jpg', true],
     ['N:/Fleet Foxes/old.jpg', false],
   ]);
+  // FTC-COVERS-048 case 4: the reopened card asks for the picture it already showed, not a new address.
+  assert.equal(cached.local_covers[0].preview_url, undefined);
 });
 
 require('node:test')('successful pasted cover seeds the cached LOCAL card before notification reopen', async () => {

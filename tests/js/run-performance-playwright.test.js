@@ -518,9 +518,11 @@ test('resolveRequestedTargets defaults to the approved performance suite when no
     'paired-search-calibration',
     'scan-error',
       'notification-history',
+      'edit-tags-split-merge',
+      'edit-tags-api-consecutive',
     ]
   );
-  assert.equal(targets.length, 29);
+  assert.equal(targets.length, 31);
 });
 test('resolveRequestedTargets rejects an unknown performance group', () => {
   assert.throws(() => _private.resolveRequestedTargets({
@@ -693,7 +695,7 @@ test('summarizePerformanceTargets exposes the Phase 6 coverage classifications',
   assert.equal(classesByTarget['scan-add-album'], 'scanner-index-cache');
   assert.equal(classesByTarget['scan-metadata'], 'scanner-index-cache');
   assert.equal(classesByTarget['scan-page'], 'scanner-index-cache');
-  assert.equal(summary.filter((target) => target.coverageClass === 'real-app-library-browse-load').length, 18);
+  assert.equal(summary.filter((target) => target.coverageClass === 'real-app-library-browse-load').length, 20);
   assert.equal(classesByTarget['paired-search-calibration'], 'real-app-library-browse-load');
 });
 
@@ -2959,7 +2961,7 @@ test('runSequentialPerformanceSuite executes the default approved performance ta
   });
 
   assert.equal(exitCode, 0);
-  assert.equal(calls.length, 29);
+  assert.equal(calls.length, 31);
   assert.equal(calls.every((call) => call.options.windowsHide === true), true);
   assert.equal(
     calls.every((call) => call.options.maxBuffer >= 64 * 1024 * 1024),
@@ -2971,7 +2973,7 @@ test('runSequentialPerformanceSuite executes the default approved performance ta
   );
   assert.deepEqual(
     calls.map((call) => call.args[1]),
-    new Array(29).fill('test'),
+    new Array(31).fill('test'),
   );
   assert.equal(calls[3].args.includes('--real-app-port=5001'), true);
   assert.equal(calls[4].args.includes('--real-app-port=5011'), true);
@@ -3229,7 +3231,7 @@ test('runSequentialPerformanceSuite keeps fixed per-invocation timeouts even aft
   });
 
   assert.equal(exitCode, 0);
-  assert.equal(calls.length, 29);
+  assert.equal(calls.length, 31);
   for (const call of calls) {
     assert.equal(call.args.some((arg) => String(arg).startsWith('--run-timeout-ms=')), false);
   }

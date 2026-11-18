@@ -782,13 +782,18 @@ function streamingSocketConnecting(socket) {
   return socket?.readyState === (Number.isInteger(WebSocket.CONNECTING) ? WebSocket.CONNECTING : 0);
 }
 
+// Closes a socket presumed dead and handles it as lost now, instead of waiting for its close.
+function giveUpStreamingSocket(socket, reason) {
+  streamingEngineState().expectedSocketClose = socket;
+  socket.close();
+  void recoverUnexpectedStreamingSocketClose(socket, { code: 1006, reason });
+}
+
 // Gives up a reconnect attempt that has not opened: it counts as a lost reconnect.
 function abandonStreamingConnectingSocket(socket) {
   const engine = streamingEngineState();
   if (!engine.detached || engine.socket !== socket || !streamingSocketConnecting(socket)) return;
-  engine.expectedSocketClose = socket;
-  socket.close();
-  void recoverUnexpectedStreamingSocketClose(socket, { code: 1006, reason: 'connect timeout' });
+  giveUpStreamingSocket(socket, 'connect timeout');
 }
 
 // After a network change, a socket that owes bytes and has sent none for a while is presumed
@@ -809,15 +814,22 @@ function handleStreamingNetworkChange() {
       || !(wire.creditedBytes > 0)
       || performance.now() - Math.max(wire.lastArrivalMs, wire.creditSentAtMs)
         <= STREAMING_SILENT_SOCKET_MS) return;
-  engine.expectedSocketClose = socket;
-  socket.close();
-  void recoverUnexpectedStreamingSocketClose(socket, { code: 1006, reason: 'network changed' });
+  giveUpStreamingSocket(socket, 'network changed');
+}
+
+// Offline, the open socket can deliver nothing, but with Wi-Fi off it may stay open and silent
+// until the keepalive gives up on it. It is given up at once, so the received audio plays on and a
+// seek past it waits silently at its target until the network is back.
+function handleStreamingOffline() {
+  const socket = streamingEngineState().socket;
+  if (socket?.readyState === WebSocket.OPEN) giveUpStreamingSocket(socket, 'offline');
 }
 
 function watchStreamingNetwork() {
   const engine = streamingEngineState();
   if (engine.networkWatched) return;
   engine.networkWatched = true;
+  window.addEventListener?.('offline', handleStreamingOffline);
   window.addEventListener?.('online', handleStreamingNetworkChange);
   window.navigator?.connection?.addEventListener?.('change', handleStreamingNetworkChange);
 }

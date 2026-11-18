@@ -1246,6 +1246,13 @@
               "test": "tests/e2e/specs/musicbrainzArtistIdentity.spec.js",
               "case": "FTC-MBID-003 an Unconfirmed match and its filter are in the first Problematic Files page",
               "area": "problematic-files"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playbackNetworkOutage.spec.js",
+              "case": "FTC-PLAYBACK-OFFLINE-001 a seek past the received audio offline stays playing silently, resumes by itself when the network returns, and one Play press continues a paused one",
+              "area": "playback"
             }
           ]
         },

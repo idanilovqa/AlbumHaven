@@ -7329,6 +7329,63 @@ test('offline, a seek past the received audio jumps at once and plays from there
   assert.equal(harness.api.snapshot().currentTime, 60);
   assert.equal(harness.api.snapshot().diagnostics.transportState, 'connected');
 });
+
+// Owner retest B-D4 round 4 (2026-11-17): with Wi-Fi off, the socket stays open and silent, so the
+// seek waited on it and the player fell into a paused error at the keepalive.
+test('the browser going offline gives up the open socket at once, so a seek past the received audio waits silently at its target', async () => {
+  const timers = manualTimers();
+  let online = true;
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => count > 1 && !online,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+  });
+  const open = await startLocallySeekable(harness, 100_000);
+
+  online = false;
+  harness.dispatchWindowEvent('offline');
+  await settleTwice(harness);
+  assert.equal(harness.sockets[0].closeCalls, 1, 'the silent socket is not waited on');
+  assert.equal(harness.api.snapshot().diagnostics.transportDetaches, 1);
+
+  await harness.api.seek(60);
+  await settleTwice(harness);
+  const jumped = harness.api.snapshot();
+  assert.equal(jumped.currentTime, 60);
+  assert.equal(jumped.paused, false);
+  assert.notEqual(jumped.mode, 'error');
+  assert.ok(harness.portMessages('configure').at(-1).generation > open.generation, 'the old audio stops at once');
+
+  online = true;
+  harness.dispatchWindowEvent('online');
+  await settleTwice(harness);
+  const opened = harness.sockets.filter(({ readyState }) => readyState === 1);
+  assert.equal(opened.length, 1);
+  assert.deepEqual(
+    opened[0].sent.filter(({ type }) => type === 'open').map(({ role, startFrame }) => [role, startFrame]),
+    [['current', 2_880_000]],
+  );
+  assert.equal(harness.api.snapshot().paused, false);
+  assert.equal(harness.api.snapshot().diagnostics.transportState, 'connected');
+});
+
+test('the browser going offline also gives up a reconnect socket still waiting to join the splice', async () => {
+  const harness = encodedHarness({ createStreamingDecoder: recordingDecoders().create });
+  await startLocallySeekable(harness, 100_000);
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  const first = harness.sockets[1].sent.find(({ type }) => type === 'open');
+
+  harness.dispatchWindowEvent('offline');
+  await settleTwice(harness);
+
+  assert.equal(harness.sockets[1].closeCalls, 1);
+  assert.equal(harness.api.snapshot().diagnostics.transportDetaches, 1, 'still the one outage');
+  assert.notEqual(harness.api.snapshot().mode, 'error');
+  assert.equal(harness.sockets[2].sent.find(({ type }) => type === 'open').startFrame, first.startFrame);
+});
+
 test('losing the next socket before the splice joined opens the splice again on the one after', async () => {
   const harness = encodedHarness({ createStreamingDecoder: recordingDecoders().create });
   await startLocallySeekable(harness, 100_000);

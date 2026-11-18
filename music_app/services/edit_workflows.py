@@ -9,7 +9,6 @@ from time import perf_counter
 import uuid
 
 from music_app.services.edit_tag_timings import EditTagTimingRecorder
-from music_app.services.non_album_view_payloads import album_container_track_paths
 from music_app.services.scan_cache_persistence import (
     StructuralTagEditDestinationConflict,
 )
@@ -59,20 +58,6 @@ _ALLOWED_TAG_EDIT_FIELDS = {
     "exception_type",
     "custom_collection_name",
 }
-
-
-def _album_container_sibling_entries(
-    library_state: StateDict,
-    changed_paths: TrackPathSet,
-) -> FileCache:
-    """The other live entries in the changed tracks' album containers: every
-    entry blank-Album inference weighs, read through the container index."""
-    file_cache = library_state.get("file_cache") or {}
-    return {
-        path: entry
-        for path in album_container_track_paths(library_state, changed_paths) - changed_paths
-        if isinstance(entry := file_cache.get(path), dict)
-    }
 
 
 def _album_log_context(album: JsonDict) -> dict[str, object]:
@@ -908,12 +893,8 @@ def _handle_edit_tags_request_after_reservation(
             task_id=task_id,
             config=config,
             logger=logger,
-            # The changed entries, plus the rest of their album containers: a
-            # blank-Album edit keeps membership only on that sibling evidence.
-            updated_file_cache={
-                **_album_container_sibling_entries(st, set(changed_paths)),
-                **updated_entries,
-            },
+            # The finalizer reads only the changed paths' entries.
+            updated_file_cache=dict(updated_entries),
             previous_file_cache={path: dict(file_cache[path]) for path in changed_paths},
             changed_paths=set(changed_paths),
             requested_track_paths=set(requested_track_paths),

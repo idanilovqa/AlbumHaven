@@ -39,6 +39,7 @@ from music_app.routes.api_rules_helpers import (
 )
 from music_app.services.app_logging import log_app_event
 from music_app.services.album_ratings_postgres import PostgresAlbumRatingsService
+from music_app.services.non_album_view_payloads import album_container_sibling_entries
 from music_app.services.cache import (
     persist_structural_tag_edit_for_config,
     schedule_cache_updates_save_for_config,
@@ -458,6 +459,7 @@ def _bridge_queue_finalize_save_task(**kwargs: Any) -> None:
             ),
             before_commit=before_persistence_commit,
             rebuild_relation_projection=False,
+            blank_album_evidence=lambda paths: album_container_sibling_entries(get_state_provider(), paths),
         )
 
     complete_scoped_persistence = None

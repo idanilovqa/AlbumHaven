@@ -1343,3 +1343,82 @@ def test_structural_save_finalize_contract_resolves_only_the_edited_albums_at_pr
         return counts
 
     measure_scale_pair(run=run, **_registered("py:services/save_tasks.py#finalize_structural_tag_edit_save_task"))
+
+
+@pytest.mark.parametrize("track_count", [60, 5012])
+def test_blank_album_finalize_reads_its_container_evidence_from_one_index_build_per_library_publication(
+    library_app, tmp_path, monkeypatch, track_count,
+):
+    """Blank-Album inference weighs every cached entry in the edited track's
+    album container, as main did. The background finalizer reads them through a
+    container index built from the published cache once, by the first blank-Album
+    edit after a publication: every later edit reads only its own container, and
+    a newly published cache is indexed once again. The request path never
+    indexes (see the utilities_edit_tags contract)."""
+    from music_app.services import edit_state
+    from music_app.services.non_album_view_payloads import infer_blank_album_membership
+    from music_app.services.save_tasks import (
+        create_save_task,
+        finalize_structural_tag_edit_save_task,
+        save_task_result,
+    )
+
+    album_paths, counts = _repairable_library(library_app, tmp_path / f"blank-{track_count}", track_count)
+    state = library_app.state.library_state
+    inferred: list[str | None] = []
+    evidence_sizes: list[int] = []
+
+    def persist_structural_tag_edit(*, changed_paths, updated_file_entries, blank_album_evidence, **_options):
+        # The real blank-Album persistence weighs exactly this evidence.
+        siblings = blank_album_evidence(set(changed_paths))
+        evidence_sizes.append(len(siblings))
+        evidence = {**siblings, **updated_file_entries}
+        inferred.extend(
+            infer_blank_album_membership(updated_file_entries[path], evidence.values()) for path in changed_paths
+        )
+        return {"inventory_mutation_revision": 1, "relation_views": {}, "relations_last_built": 1.0}
+
+    def clear_album(path: str) -> None:
+        previous = {path: dict(dict.__getitem__(state["file_cache"], path))}
+        task_id = create_save_task("edit_tags")
+        finalize_structural_tag_edit_save_task(
+            task_id,
+            config=library_app.state.config,
+            logger=library_app.state.logger,
+            get_state=lambda: state,
+            rebuild_affected_albums_in_state=edit_state.rebuild_affected_albums_in_state,
+            persist_structural_tag_edit=persist_structural_tag_edit,
+            append_log_history=lambda _config, _entry: None,
+            log_app_event=lambda *_args, **_kwargs: None,
+            find_albums_by_track_paths=lambda _paths: [],
+            find_problematic_album_by_track_paths=lambda _paths: None,
+            updated_file_cache={path: {**previous[path], "album": ""}},
+            previous_file_cache=previous,
+            changed_paths={path},
+            requested_track_paths={path},
+            separate_release_keys=set(),
+            changed_field_names={"album"},
+            structural_edit_fields={"album", "album_artist"},
+            log_entry={"action": "Edit tags"},
+        )
+        result = save_task_result(task_id)
+        assert result["status"] == "completed" and not result.get("warnings"), result.get("warnings")
+
+    # Tracks 02-09 of the 12-track album, cleared one save at a time.
+    for path in album_paths[1:9]:
+        clear_album(path)
+        if path == album_paths[1]:
+            assert counts.membership_rows == track_count, "the first blank-Album edit indexes the published cache once"
+    assert counts.membership_rows == track_count, "later edits read only their own container"
+    assert evidence_sizes == [11] * 8, "each edit weighs exactly its album folder's other tracks"
+    assert inferred == ["Tender Buttons"] * 8
+
+    # A newly published cache is indexed once more, by its first blank-Album edit.
+    republished = type(state["file_cache"])(dict(state["file_cache"].items()))
+    republished.counts = counts
+    state["file_cache"] = republished
+    counts.membership_rows = 0
+    clear_album(album_paths[9])
+    assert counts.membership_rows == track_count
+    clear_album(album_paths[10])
+    assert counts.membership_rows == track_count

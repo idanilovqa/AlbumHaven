@@ -172,6 +172,20 @@ def album_container_track_paths(library_state: dict[str, object], track_paths: I
     }
 
 
+def album_container_sibling_entries(
+    library_state: dict[str, object],
+    track_paths: set[str],
+) -> dict[str, dict[str, object]]:
+    """The other live file-cache entries in the album containers of
+    `track_paths`: the sibling evidence blank-Album inference weighs."""
+    file_cache = library_state.get("file_cache") or {}
+    return {
+        path: entry
+        for path in album_container_track_paths(library_state, track_paths) - set(track_paths)
+        if isinstance(entry := file_cache.get(path), dict)
+    }
+
+
 def build_non_album_album_groups(entries: list[dict[str, object]]) -> list[dict[str, object]]:
     buckets: dict[tuple[str, str, str, str], dict[str, object]] = {}
     for entry in entries:

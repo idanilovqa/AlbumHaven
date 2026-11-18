@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
@@ -215,6 +215,7 @@ class ScanCacheAdapter(Protocol):
         commit_guard: Callable[[Callable[[], object]], object] | None = None,
         before_commit: Callable[[Any], object] | None = None,
         rebuild_relation_projection: bool = False,
+        blank_album_evidence: Callable[[set[str]], Mapping[str, dict[str, object]]] | None = None,
     ) -> dict[str, object]:
         ...
 
@@ -988,12 +989,20 @@ class PostgresScanCacheAdapter:
         commit_guard: Callable[[Callable[[], object]], object] | None,
         before_commit: Callable[[Any], object] | None,
         rebuild_relation_projection: bool,
+        blank_album_evidence: Callable[[set[str]], Mapping[str, dict[str, object]]] | None,
     ) -> dict[str, object]:
         source_album_name = str(next(iter(previous_entries.values())).get("album") or "").strip()
+        # Membership is kept only on sibling evidence: every entry sharing an
+        # edited track's album container, the edited tracks' own entries updated.
+        evidence = (
+            {**blank_album_evidence(set(normalized_paths)), **updated_file_entries}
+            if blank_album_evidence is not None
+            else updated_file_entries
+        )
         retained_memberships = {
             path: infer_blank_album_membership(
                 updated_file_entries[path],
-                updated_file_entries.values(),
+                evidence.values(),
             )
             for path in normalized_paths
         }
@@ -1224,6 +1233,7 @@ class PostgresScanCacheAdapter:
         commit_guard: Callable[[Callable[[], object]], object] | None = None,
         before_commit: Callable[[Any], object] | None = None,
         rebuild_relation_projection: bool = False,
+        blank_album_evidence: Callable[[set[str]], Mapping[str, dict[str, object]]] | None = None,
     ) -> dict[str, object]:
         normalized_paths = sorted(
             {str(path or "").strip() for path in changed_paths if str(path or "").strip()}
@@ -1361,6 +1371,7 @@ class PostgresScanCacheAdapter:
                 commit_guard=commit_guard,
                 before_commit=before_commit,
                 rebuild_relation_projection=rebuild_relation_projection,
+                blank_album_evidence=blank_album_evidence,
             )
         if (
             (

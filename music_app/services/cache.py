@@ -1,5 +1,5 @@
 from __future__ import annotations
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import Future
 from dataclasses import dataclass
 import logging
@@ -616,6 +616,7 @@ def persist_structural_tag_edit_for_config(
     commit_guard: Callable[[Callable[[], object]], object] | None = None,
     before_commit: Callable[[object], object] | None = None,
     rebuild_relation_projection: bool = False,
+    blank_album_evidence: Callable[[set[str]], Mapping[str, dict[str, object]]] | None = None,
 ) -> dict[str, object]:
     adapter = _select_runtime_scan_cache_adapter(config)
     persistence_options: dict[str, object] = {}
@@ -625,6 +626,8 @@ def persist_structural_tag_edit_for_config(
         persistence_options["before_commit"] = before_commit
     if rebuild_relation_projection:
         persistence_options["rebuild_relation_projection"] = True
+    if blank_album_evidence is not None:
+        persistence_options["blank_album_evidence"] = blank_album_evidence
     result = adapter.persist_structural_tag_edit(
         changed_paths=set(changed_paths),
         previous_file_entries=previous_file_entries,

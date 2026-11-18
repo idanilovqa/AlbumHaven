@@ -25,6 +25,7 @@ from music_app.services.cache import (
 )
 from music_app.services.library_roots import library_root_cache_identity
 from music_app.services.edit_state import affected_album_track_paths
+from music_app.services.non_album_view_payloads import album_container_sibling_entries
 from music_app.services.edit_tag_timings import EditTagTimingRecorder
 from music_app.services.metadata import normalize_exception_value
 from music_app.services.runtime_shutdown import create_daemon_executor
@@ -931,6 +932,8 @@ def finalize_structural_tag_edit_save_task(
                     previous_file_entries=previous_file_cache,
                     updated_file_entries=updated_file_cache,
                     changed_field_names=set(changed_field_names),
+                    # Read on this background thread, and only by a blank-Album edit.
+                    blank_album_evidence=lambda paths: album_container_sibling_entries(get_state(), paths),
                     **persistence_options,
                 )
             persistence_ms = (perf_counter() - persistence_started) * 1000.0

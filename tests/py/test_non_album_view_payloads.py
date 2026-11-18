@@ -603,10 +603,10 @@ def _container_library(*, filler_albums: int = 0) -> dict[str, dict[str, object]
 
 
 def _blank_album_evidence(library_state: dict[str, object], target_path: str) -> tuple[dict, list]:
-    from music_app.services.edit_workflows import _album_container_sibling_entries
+    from music_app.services.non_album_view_payloads import album_container_sibling_entries
 
     cleared = {**library_state["file_cache"][target_path], "album": ""}
-    evidence = {**_album_container_sibling_entries(library_state, {target_path}), target_path: cleared}
+    evidence = {**album_container_sibling_entries(library_state, {target_path}), target_path: cleared}
     return cleared, list(evidence.values())
 
 

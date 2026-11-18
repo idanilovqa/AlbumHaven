@@ -805,3 +805,55 @@ def test_live_tag_saves_patch_the_cached_problematic_list_to_a_full_rebuild(watc
         for item in after_fix if item["name"] == "Карусель Эпох"
     )
     assert untouched_item in after_fix
+
+
+def _first_problematic_page(config, *, rebuild: bool, limit: int):
+    from music_app.services import library_browse_postgres as browse
+    from tests.e2e.support import isolatedPostgres
+
+    repository = browse.PostgresLibraryBrowseRepository(config, connect=isolatedPostgres._connect)
+    repository._browse_connection_context = lambda: isolatedPostgres._connect(config["ALBUM_HAVEN_APP_DATABASE_URL"])
+    if rebuild:
+        browse.invalidate_postgres_utility_projection_cache(
+            database_url=config["ALBUM_HAVEN_APP_DATABASE_URL"], kinds=("problematic-files",),
+        )
+    return repository.build_problematic_files_page(limit=limit)
+
+
+def test_live_tag_saves_patch_the_cached_first_problematic_page(watcher_repair_inventory):
+    """Owner (11-18): with only the first page cached, every album save dropped it and the
+    next Problematic Files open rebuilt it (24 s on the real library)."""
+    from music_app.services import library_browse_postgres as browse
+    from music_app.services.library_browse_postgres import refresh_postgres_utility_projections_after_edit
+
+    fixture = watcher_repair_inventory
+    entries = []
+    for index, album in enumerate(("Alpha Release", "Beta Release", "Gamma Release", "Delta Release")):
+        entry = fixture.entry(f"Page/{album}/01.flac", artist="Page Artist", album=album)
+        entry.update(album_artist="Page Artist", year=None if index % 2 else 2001)
+        entries.append(entry)
+    fixture.seed(*entries)
+    first = _first_problematic_page(fixture.config, rebuild=True, limit=2)
+    assert first["has_more"] is True
+
+    def save(entry, **changes):
+        updated = {**entry, **changes}
+        fixture.adapter.persist_structural_tag_edit(
+            changed_paths={entry["path"]}, previous_file_entries={entry["path"]: entry},
+            updated_file_entries={entry["path"]: updated}, changed_field_names=set(changes),
+        )
+        refresh_postgres_utility_projections_after_edit(fixture.config, track_paths={entry["path"]})
+        entry.update(updated)
+        cache_key = (fixture.config["ALBUM_HAVEN_APP_DATABASE_URL"], "problematic-files-page")
+        assert cache_key in browse._UTILITY_PROJECTION_CACHE, "A save must patch the cached first page, not drop it."
+        patched = _first_problematic_page(fixture.config, rebuild=False, limit=2)
+        fresh = _first_problematic_page(fixture.config, rebuild=True, limit=4)
+        boundary = max(browse._problematic_summary_sort_key(item) for item in patched["items"])
+        assert patched["items"] == [
+            item for item in fresh["items"] if browse._problematic_summary_sort_key(item) <= boundary
+        ]
+        _first_problematic_page(fixture.config, rebuild=True, limit=2)  # cache a fresh first page again
+
+    save(entries[0], album="Zeta Release")   # leaves the first page
+    save(entries[3], album="Aardvark Release")  # enters the first page
+    save(entries[1], year=1999)  # stays, with one problem fewer

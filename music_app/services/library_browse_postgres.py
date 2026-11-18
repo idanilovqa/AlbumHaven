@@ -3110,32 +3110,39 @@ class PostgresLibraryBrowseRepository:
         return self._build_utility_projection_once(kind, cached, build)
 
     def patch_problematic_files_projection(self, *, track_paths: Iterable[str]) -> bool:
-        """Recompute the cached complete list only for the albums a save touched.
+        """Recompute the cached Problematic Files lists only for the albums a save touched.
 
-        A whole-library rebuild takes minutes on a real library, so a save
-        patches the entries of the edited files' albums and their duplicate
-        identity peers instead. Returns False when there is nothing safe to
-        patch; the caller then invalidates the list as before.
+        A whole-library rebuild takes minutes, and a cold first page about 24 s,
+        on a real library. A save therefore patches the complete list, its stale
+        copy and the cached first pages for the edited files' albums and their
+        duplicate identity peers. Returns False when nothing is cached or it is
+        not safe to patch; the caller then invalidates the lists as before.
         """
-        kind = "problematic-files"
-        cache_key = self._utility_projection_cache_key(kind)
-        if cache_key is None:
+        cache_key = self._utility_projection_cache_key("problematic-files")
+        page_cache_key = self._utility_projection_cache_key(_PROBLEMATIC_FILES_PAGE_KIND)
+        if cache_key is None or page_cache_key is None:
             return False
         with _UTILITY_PROJECTION_CACHE_LOCK:
-            base = _UTILITY_PROJECTION_CACHE.get(cache_key)
-            generation = _UTILITY_PROJECTION_GENERATIONS.get(cache_key, 0)
-        if not isinstance(base, Mapping) or base.get("duplicate_resolution_pending"):
+            complete = _UTILITY_PROJECTION_CACHE.get(cache_key)
+            stale = _UTILITY_PROJECTION_STALE.get(cache_key)
+            pages = _UTILITY_PROJECTION_CACHE.get(page_cache_key)
+            generations = (
+                _UTILITY_PROJECTION_GENERATIONS.get(cache_key, 0),
+                _UTILITY_PROJECTION_GENERATIONS.get(page_cache_key, 0),
+            )
+        page_payloads = [page for page in pages.values() if isinstance(page, Mapping)] if isinstance(pages, Mapping) else []
+        lists = [payload for payload in (complete, stale) if isinstance(payload, Mapping)] + page_payloads
+        if not lists or any(payload.get("duplicate_resolution_pending") for payload in lists):
             return False
         paths = {
             variant for path in track_paths if str(path or "").strip()
             for variant in (str(path), str(Path(path)))
         }
-        base_items = [item for item in base.get("items") or [] if isinstance(item, Mapping)]
         old_identities = [
             {"album_artist": str(item.get("album_artist") or ""), "album": str(item.get("name") or ""),
              "year": str(item.get("year") or "")}
-            for item in base_items
-            if paths.intersection(item.get("track_paths") or [])
+            for payload in lists for item in payload.get("items") or []
+            if isinstance(item, Mapping) and paths.intersection(item.get("track_paths") or [])
         ]
         with self._connect_to_database() as connection:
             connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
@@ -3151,47 +3158,87 @@ class PostgresLibraryBrowseRepository:
             rows = self._load_problematic_file_rows(connection=connection, album_ids=album_ids) if album_ids else []
             partial = self._build_problematic_files_payload_from_rows(
                 connection=connection, rows=rows, missing_rows=[], include_initial_detail=False,
-            ) if rows else {"items": []}
+                cache_albums=True,
+            ) if rows else {"items": [], _PROBLEMATIC_PAGE_ALBUMS_KEY: {}}
         if partial.get("duplicate_resolution_pending") or partial.get(_PROBLEMATIC_LOOSE_GROUP_IDENTITIES_KEY):
             return False
         # Every current track of a recomputed album, and every edited path, now
         # belongs to a recomputed entry (or to none when the album is fixed).
         replaced_paths = paths | {str(value) for value in scope.get("track_paths") or []}
         new_items = list(partial.get("items") or [])
+        new_albums = dict(partial.get(_PROBLEMATIC_PAGE_ALBUMS_KEY) or {})
         replaced_keys = {str(item.get("key") or "") for item in new_items}
-        removed = [
-            item for item in base_items
-            if str(item.get("key") or "") in replaced_keys
-            or replaced_paths.intersection(item.get("track_paths") or [])
-        ]
-        if any(_is_problematic_loose_tracks_key(item.get("key")) for item in removed):
-            return False
-        removed_ids = {id(item) for item in removed}
-        items = [item for item in base_items if id(item) not in removed_ids] + new_items
-        items.sort(key=_problematic_summary_sort_key)
-        patched = {**base, "items": items, "count": len(items)}
-        initial_detail = base.get("initial_detail")
+
+        def patch(payload: Mapping[str, object], *, bounded: bool) -> dict[str, object] | None:
+            base_items = [item for item in payload.get("items") or [] if isinstance(item, Mapping)]
+            removed = [
+                item for item in base_items
+                if str(item.get("key") or "") in replaced_keys
+                or replaced_paths.intersection(item.get("track_paths") or [])
+            ]
+            if any(_is_problematic_loose_tracks_key(item.get("key")) for item in removed):
+                return None
+            removed_ids = {id(item) for item in removed}
+            kept = [item for item in base_items if id(item) not in removed_ids]
+            added = new_items
+            if bounded and payload.get("has_more") and base_items:
+                # A first page holds only the start of the order; later entries
+                # belong to the next pages, which are read from the database.
+                boundary = max(_problematic_summary_sort_key(item) for item in base_items)
+                added = [item for item in new_items if _problematic_summary_sort_key(item) <= boundary]
+            items = sorted(kept + added, key=_problematic_summary_sort_key)
+            patched = {**payload, "items": items, "count": len(items)}
+            removed_keys = {str(item.get("key") or "") for item in removed}
+            initial_detail = payload.get("initial_detail")
+            if (
+                not items or not isinstance(initial_detail, Mapping)
+                or initial_detail.get("key") != items[0].get("key")
+                or str(initial_detail.get("key") or "") in removed_keys
+            ):
+                # The page loads the first album's detail on demand.
+                patched["initial_detail"] = None
+            cached_albums = payload.get(_PROBLEMATIC_PAGE_ALBUMS_KEY)
+            if isinstance(cached_albums, Mapping):
+                albums = {key: album for key, album in cached_albums.items() if key not in removed_keys}
+                albums.update({
+                    key: new_albums[key]
+                    for key in (str(item.get("key") or "") for item in added) if key in new_albums
+                })
+                patched[_PROBLEMATIC_PAGE_ALBUMS_KEY] = albums
+            return patched
+
+        patched_complete = patch(complete, bounded=False) if isinstance(complete, Mapping) else None
+        patched_stale = patch(stale, bounded=False) if isinstance(stale, Mapping) else None
+        patched_pages = (
+            {limit: patch(page, bounded=True) for limit, page in pages.items() if isinstance(page, Mapping)}
+            if isinstance(pages, Mapping) else None
+        )
         if (
-            not items or not isinstance(initial_detail, Mapping)
-            or initial_detail.get("key") != items[0].get("key")
-            or str(initial_detail.get("key") or "") in {str(item.get("key") or "") for item in removed}
+            (isinstance(complete, Mapping) and patched_complete is None)
+            or (isinstance(stale, Mapping) and patched_stale is None)
+            or (patched_pages is not None and any(page is None for page in patched_pages.values()))
         ):
-            # The page loads the first album's detail on demand.
-            patched["initial_detail"] = None
-        page_cache_key = self._utility_projection_cache_key(_PROBLEMATIC_FILES_PAGE_KIND)
+            return False
         with _UTILITY_PROJECTION_CACHE_LOCK:
             if (
-                _UTILITY_PROJECTION_CACHE.get(cache_key) is not base
-                or _UTILITY_PROJECTION_GENERATIONS.get(cache_key, 0) != generation
+                _UTILITY_PROJECTION_CACHE.get(cache_key) is not complete
+                or _UTILITY_PROJECTION_STALE.get(cache_key) is not stale
+                or _UTILITY_PROJECTION_CACHE.get(page_cache_key) is not pages
+                or (
+                    _UTILITY_PROJECTION_GENERATIONS.get(cache_key, 0),
+                    _UTILITY_PROJECTION_GENERATIONS.get(page_cache_key, 0),
+                ) != generations
             ):
                 return False
-            _UTILITY_PROJECTION_GENERATIONS[cache_key] = generation + 1
-            _UTILITY_PROJECTION_CACHE[cache_key] = patched
-            if page_cache_key is not None:
-                _UTILITY_PROJECTION_GENERATIONS[page_cache_key] = (
-                    _UTILITY_PROJECTION_GENERATIONS.get(page_cache_key, 0) + 1
-                )
-                _UTILITY_PROJECTION_CACHE.pop(page_cache_key, None)
+            # Builds that started before the save are discarded, and page cursors restart.
+            _UTILITY_PROJECTION_GENERATIONS[cache_key] = generations[0] + 1
+            _UTILITY_PROJECTION_GENERATIONS[page_cache_key] = generations[1] + 1
+            if patched_complete is not None:
+                _UTILITY_PROJECTION_CACHE[cache_key] = patched_complete
+            if patched_stale is not None:
+                _UTILITY_PROJECTION_STALE[cache_key] = patched_stale
+            if patched_pages is not None:
+                _UTILITY_PROJECTION_CACHE[page_cache_key] = patched_pages
         return True
 
     def _build_problematic_files_payload_uncached(self) -> dict[str, object]:

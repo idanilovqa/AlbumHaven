@@ -856,6 +856,38 @@ def test_targeted_reconciliation_restores_structurally_inherited_cover(tmp_path)
     )
 
 
+def test_targeted_reconciliation_restores_the_split_folder_cover_on_the_album_left_behind(tmp_path):
+    from music_app.services import scan_cache_persistence
+
+    folder = tmp_path / "Artist" / "Shared Folder"
+    folder.mkdir(parents=True)
+    cover_path = folder / "cover.jpg"
+    cover_path.write_bytes(b"image")
+    left_behind, moved = folder / "03.flac", folder / "01.flac"
+    incoming = {
+        str(path): {"path": str(path), "album": album, "cover_path": None}
+        for path, album in ((left_behind, "Source Album"), (moved, "Destination Album"))
+    }
+    persisted = {
+        str(left_behind): {"path": str(left_behind), "album": "Source Album", "cover_path": str(cover_path)},
+        str(moved): {
+            "path": str(moved), "album": "Destination Album", "cover_path": str(cover_path),
+            "cover_inherited_from_structural_edit": True,
+        },
+    }
+
+    restored = scan_cache_persistence._restore_structurally_inherited_covers(incoming, persisted)
+
+    assert restored[str(left_behind)]["cover_path"] == str(cover_path)
+    assert "cover_inherited_from_structural_edit" not in restored[str(left_behind)]
+    assert restored[str(moved)]["cover_inherited_from_structural_edit"] is True
+
+    del persisted[str(moved)]["cover_inherited_from_structural_edit"]
+    unsplit = scan_cache_persistence._restore_structurally_inherited_covers(incoming, persisted)
+
+    assert all(entry["cover_path"] is None for entry in unsplit.values())
+
+
 def test_targeted_surviving_entry_drops_removed_container_cover(tmp_path):
     from music_app.services import scan_cache_persistence
 

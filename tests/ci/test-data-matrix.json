@@ -10559,7 +10559,7 @@
     "expectedContracts": [
       "musicbrainz-same-name-split-country"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.component.config.js",

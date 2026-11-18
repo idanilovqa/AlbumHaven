@@ -62,12 +62,13 @@ class HttpPlaybackClaimApi(private val client: OkHttpClient, private val session
         }
     }
 
-    override fun release(clientId: String, claimToken: String) {
+    override fun release(clientId: String, claimToken: String): Boolean {
         val body = JSONObject().put("protocol", 1).put("clientId", clientId).put("claimToken", claimToken)
-        try {
-            execute("DELETE", body).close()
+        return try {
+            execute("DELETE", body).use { response -> response.code < 500 && response.code != 429 }
         } catch (_: IOException) {
             // The server lease expires on its own.
+            false
         }
     }
 

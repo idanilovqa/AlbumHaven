@@ -17890,8 +17890,10 @@ function mountLoopEditActionControl({
     if (foldTimer !== null) clearTimeout(foldTimer);
     revealTimer = foldTimer = null;
   };
+  // Scissors only slide out when a loop can be cut: creation allowed and a playable track loaded.
+  const usable = () => currentCanCreate && currentEnabled;
   const renderEngagement = (engaged) => {
-    currentEngaged = Boolean(engaged && currentCanCreate && !destroyed);
+    currentEngaged = Boolean(engaged && usable() && !destroyed);
     root.setAttribute?.('data-loop-action-engaged', String(currentEngaged));
     compound.setAttribute?.('data-loop-action-engaged', String(currentEngaged));
     [enter, create, cancel].forEach(button => button?.setAttribute?.('tabindex', currentEngaged ? '0' : '-1'));
@@ -17899,7 +17901,7 @@ function mountLoopEditActionControl({
   const retained = () => Boolean(touchQuery?.matches || (keyboardInput && focusWithin));
   const leave = () => {
     clearTimers();
-    if (!currentCanCreate) return renderEngagement(false);
+    if (!usable()) return renderEngagement(false);
     if (pointerWithin || retained()) return renderEngagement(true);
     if (!currentActive) return renderEngagement(false);
     foldTimer = setTimeout(() => {
@@ -17909,7 +17911,7 @@ function mountLoopEditActionControl({
   };
   const visit = () => {
     clearTimers();
-    if (!currentCanCreate) return renderEngagement(false);
+    if (!usable()) return renderEngagement(false);
     if (currentActive || retained()) return renderEngagement(true);
     if (currentEngaged) return;
     revealTimer = setTimeout(() => {
@@ -17920,20 +17922,20 @@ function mountLoopEditActionControl({
   const update = (next = {}) => {
     if (destroyed) return;
     const wasActive = currentActive;
-    const wasAllowed = currentCanCreate;
+    const wasUsable = usable();
     const contextChanged = Object.prototype.hasOwnProperty.call(next, 'contextKey') && String(next.contextKey || '') !== currentContextKey;
     if (contextChanged) currentContextKey = String(next.contextKey || '');
     if (Object.prototype.hasOwnProperty.call(next, 'enabled')) currentEnabled = Boolean(next.enabled);
     if (Object.prototype.hasOwnProperty.call(next, 'canCreate')) currentCanCreate = Boolean(next.canCreate);
     if (Object.prototype.hasOwnProperty.call(next, 'active')) currentActive = Boolean(next.active);
     if (Object.prototype.hasOwnProperty.call(next, 'busy')) currentBusy = Boolean(next.busy);
-    if (next.reset || contextChanged || !currentCanCreate || (wasActive && !currentActive)) {
+    if (next.reset || contextChanged || !usable() || (wasActive && !currentActive)) {
       clearTimers();
-      renderEngagement(retained() && currentCanCreate);
+      renderEngagement(retained());
       // Start a fresh dwell for the current track after cancelling its predecessor's timer.
       pointerWithin = pointerWithin || Boolean(compound.matches?.(':hover'));
-      if (pointerWithin && currentCanCreate) visit();
-    } else if ((!wasActive && currentActive) || (!wasAllowed && currentCanCreate)) {
+      if (pointerWithin && usable()) visit();
+    } else if ((!wasActive && currentActive) || (!wasUsable && usable())) {
       pointerWithin = pointerWithin || Boolean(compound.matches?.(':hover'));
       focusWithin = focusWithin || Boolean(ownerDocument?.activeElement && compound.contains?.(ownerDocument.activeElement));
       clearTimers();
@@ -45553,11 +45555,11 @@ function updatePlayerUi() {
       : `${formatLoopTime(current)} / ${formatLoopTime(duration)}`;
   }
   els.loopActions?._loopActionController?.update({
-    enabled: Boolean(getPlayerPlaybackSnapshot().src || state.player.current?.src),
+    enabled: Boolean(!lockedByAnotherTab && (getPlayerPlaybackSnapshot().src || state.player.current?.src)),
     canCreate: state.loopCreateAllowed === true,
     contextKey: state.player.current?.path || state.player.current?.src || '',
     active: state.player.loopActive,
-    busy: state.player.saveBusy || lockedByAnotherTab,
+    busy: state.player.saveBusy,
   });
   if (els.play) {
     renderGlobalPlayerPlayGlyph(els.play, playback.paused);

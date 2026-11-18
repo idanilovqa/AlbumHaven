@@ -2,6 +2,7 @@
   "schemaVersion": 1,
   "requiredPaths": [
     "music_app/services/runtime_asset_versions.py",
+    "music_app/services/compressed_static_files.py",
     "music_app/services/app_copy.py",
     "music_app/static/js/app-copy.js",
     "music_app/static/js/app-copy-worker.js",
@@ -78,7 +79,7 @@
   ],
   "rules": [
     {
-      "paths": ["music_app/services/runtime_asset_versions.py"],
+      "paths": ["music_app/services/runtime_asset_versions.py", "music_app/services/compressed_static_files.py"],
       "targets": ["app-open-all-artists", "artist-tree-scroll-navigation", "utility-problematic-files", "problematic-files-focused"]
     },
     {

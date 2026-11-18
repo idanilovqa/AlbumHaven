@@ -10510,7 +10510,7 @@
     "mutationOwnership": {
       "databaseIdentity": "case:musicbrainz-split-artist"
     },
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.config.js",

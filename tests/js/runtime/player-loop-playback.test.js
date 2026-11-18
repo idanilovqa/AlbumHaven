@@ -264,6 +264,8 @@ function loadHelper(overrides = {}) {
       json: async () => ({ ok: true }),
     }),
     console,
+    setTimeout,
+    clearTimeout,
   };
   Object.assign(context, overrides, {
     audio,
@@ -355,6 +357,26 @@ test('mirrored playback keeps metadata unobscured while showing its locked statu
   context.isPlaybackLockedByAnotherTab = () => false;
   context.updatePlayerUi();
   assert.equal(time.textContent, '10 - 20');
+});
+
+test('playback held by another tab or lost to the server disables the scissors for this tab', () => {
+  const updates = [];
+  const loopActions = { _loopActionController: { update: next => updates.push({ ...next }) } };
+  const play = new FakeElement({ tagName: 'BUTTON' });
+  const { context } = loadHelper({
+    getPlayerElements: () => ({ play, loopActions }),
+    isPlaybackLockedByAnotherTab: () => true,
+    getMirroredPlaybackTrack: () => ({ artist: 'Artist', title: 'Song', album: 'Album' }),
+    getPlayerPlaybackSnapshot: () => ({ currentTime: 3, duration: 60, paused: true, ended: false, src: '/track?path=song.flac' }),
+  });
+  context.state.player.current = { src: '/track?path=song.flac', path: 'C:/Music/song.flac' };
+
+  context.updatePlayerUi();
+  assert.equal(updates.at(-1).enabled, false, 'a locked player cannot cut a loop, so its scissors stay folded');
+
+  context.isPlaybackLockedByAnotherTab = () => false;
+  context.updatePlayerUi();
+  assert.equal(updates.at(-1).enabled, true);
 });
 
 test('lease loss renders unavailable status instead of claiming another tab owns playback', () => {
@@ -1530,6 +1552,36 @@ test('streaming first-frame scheduling peeks exactly one queued track', async ()
 
   assert.equal(peekCalls, 1);
   assert.deepEqual(scheduled, [nextTrack]);
+});
+
+test('a first-frame schedule that never settles stops holding its stream, so a later first frame schedules again', async () => {
+  const nextTrack = { path: 'C:\\Music\\Next.flac', durationSeconds: 30 };
+  const timers = [];
+  const scheduled = [];
+  const { context } = loadHelper({
+    peekNextQueuedTrack: () => nextTrack,
+    setTimeout: (callback, delay, ...args) => timers.push({ fire: () => callback(...args), delay }),
+    clearTimeout: () => {},
+    scheduleStreamingContinuity(track) {
+      scheduled.push(track);
+      return scheduled.length === 1 ? new Promise(() => {}) : Promise.resolve();
+    },
+  });
+  const firstFrame = { generation: 1, streamId: 7 };
+
+  const stuck = context.handleStreamingPlaybackFirstFrame(firstFrame);
+  await new Promise(setImmediate);
+  assert.equal(await Promise.race([context.handleStreamingPlaybackFirstFrame(firstFrame).then(() => 'settled'),
+    new Promise(resolve => setImmediate(resolve, 'held'))]), 'held', 'before the deadline the stream stays pending');
+  timers[0].fire();
+  await stuck;
+
+  await context.handleStreamingPlaybackFirstFrame(firstFrame);
+  await context.handleStreamingPlaybackFirstFrame(firstFrame);
+
+  assert.deepEqual(timers.map(({ delay }) => delay), [2000, 2000]);
+  assert.deepEqual(scheduled, [nextTrack, nextTrack],
+    'the stuck schedule is retried once, and the settled retry ends further scheduling');
 });
 
 test('natural queued-next scheduling carries the queue owner consecutive-album qualification', async () => {

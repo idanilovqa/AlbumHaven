@@ -249,11 +249,11 @@ async function updateWaveformAppearance(forceReload = false) {
   if (forceReload) {
     clearWaveformCanvas();
   }
-  const generation = Number(playback.generation ?? state.player.streaming?.generation) || 0;
+  // The peaks belong to the song, not to one stream of it: a restart of the same song (a seek past
+  // the received audio in an outage) keeps its waveform (owner retest B-D4 round 6, 2026-11-18:
+  // "Waveform disappeared, so I am left with no visual where I move it").
   const active = state.player.waveform.compactPeaks;
-  const waveform = active?.path === path && active.generation === generation
-    ? active.data
-    : null;
+  const waveform = active?.path === path ? active.data : null;
   if (state.player.waveform.renderToken !== renderToken) return;
   const duration = Number(playback.duration) || 0;
   const progressRatio = duration > 0 ? (Number(playback.currentTime) || 0) / duration : 0;

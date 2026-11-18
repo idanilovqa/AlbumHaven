@@ -10,14 +10,22 @@ const STREAMING_INITIAL_PLAYBACK_CUSHION_SECONDS = 2;
 const STREAMING_AUTOMATIC_RECONNECT_ATTEMPTS = 1;
 // A lost socket is replaced at once, then after each of these delays, then every last one.
 const STREAMING_RECONNECT_DELAYS_MS = [500, 1000, 2000];
-// A socket that owes bytes and sent none for this long is presumed lost.
-const STREAMING_SILENT_SOCKET_MS = 3000;
-// A seek past the received audio that its socket has not begun to answer by then finds the socket gone.
+// The server sends a heartbeat this often (`/playback/pcm?heartbeat=`), however long its answers
+// take: a socket is judged by what it hears, never by how fast it is answered, because a busy
+// server answers slowly (owner retest B-D4 round 6, 2026-11-18, with the CPU at 100%).
+const STREAMING_HEARTBEAT_MS = 250;
+// A socket that heard nothing at all for this long died without closing; on a slow mobile network
+// one 16 KB frame of audio, and the heartbeats queued behind it, can take a few seconds to arrive.
+const STREAMING_SILENT_SOCKET_MS = 5000;
+// ...or for this long while a seek past the received audio waits on it: it is found sooner.
 const STREAMING_SEEK_ANSWER_MS = 750;
-// A start its socket has not begun to answer by then was sent on a socket that died without closing.
-const STREAMING_START_ANSWER_MS = 5000;
+// How often a socket's silence is checked, whether or not audio plays.
+const STREAMING_LIVENESS_CHECK_MS = 500;
 // A reconnect attempt begun on a network that is gone can hang for tens of seconds; it is given up.
+// Each attempt given up so allows the next one twice as long, up to 16 s: on a loaded machine a
+// connection that is only slow to open must open at last (owner retest B-D4 round 6, CPU at 100%).
 const STREAMING_CONNECT_DEADLINE_MS = 4000;
+const STREAMING_CONNECT_DEADLINE_DOUBLINGS = 2;
 // The server's own refusals: another socket would be refused too.
 const STREAMING_REFUSED_CLOSE_CODES = new Set([4400, 4401, 4403, 4404, 4408, 4409, 4429]);
 const STREAMING_QUEUED_NEXT_PREPARE_SECONDS = 3;
@@ -638,8 +646,6 @@ function detachUnansweredStreamingSeek(code) {
     paused: Boolean(engine.snapshot.paused),
   };
   engine.diagnostics.transportDetaches = (Number(engine.diagnostics.transportDetaches) || 0) + 1;
-  // The old audio stops now, not once the jump has reconfigured the worklet.
-  engine.node?.port.postMessage({ type: 'pause', generation: engine.generation });
   void jumpWhileDetached(track, seek.startFrame / engine.sampleRate);
   if (!engine.detached.paused) connectStreamingSocket();
   publishStreamingDiagnostics();
@@ -805,14 +811,31 @@ function seekStreamingAudioHere(detached, startFrame) {
     && (detached.spliceFrame === null || startFrame < detached.spliceFrame);
 }
 
+// Owner retest B-D4 round 6 (2026-11-18, CPU at 100%): "delay before displaying where I clicked
+// [...] first clicks moves playhead slightly". The restart that opens the song at the place can
+// take a while on a loaded machine, so the head shows the place and the old audio stops at once,
+// and the old audio's last reports do not move the head until the restart replaces it.
 function jumpWhileDetached(track, startSeconds) {
   const engine = streamingEngineState();
   const detached = engine.detached;
   stopStreamingReconnectTimers(detached);
   detached.kind = 'reopen';
   detached.spliceFrame = null;
+  engine.headHeldGeneration = engine.generation;
+  engine.node?.port.postMessage({ type: 'pause', generation: engine.generation });
+  Object.assign(engine.snapshot, {
+    currentTime: startSeconds,
+    requestedStartFrame: streamingFrames(startSeconds),
+  });
   waitForStreamingTransport();
+  refreshPlayerAfterStreamingTransportChange();
   return startStreamingTrack(track, { startSeconds, autoplay: !engine.snapshot.paused, keepDetached: true });
+}
+
+/** The head was put at a place the old audio no longer reports: its reports do not move it. */
+function streamingHeadHeld() {
+  const engine = streamingEngineState();
+  return engine.headHeldGeneration === engine.generation;
 }
 
 function streamingSocketConnecting(socket) {
@@ -827,16 +850,16 @@ function giveUpStreamingSocket(socket, reason) {
 }
 
 // Gives up a reconnect attempt that has not opened: it counts as a lost reconnect.
-function abandonStreamingConnectingSocket(socket) {
+function abandonStreamingConnectingSocket(socket, { timedOut = false } = {}) {
   const engine = streamingEngineState();
   if (!engine.detached || engine.socket !== socket || !streamingSocketConnecting(socket)) return;
+  if (timedOut) engine.detached.abandonedConnects = (Number(engine.detached.abandonedConnects) || 0) + 1;
   giveUpStreamingSocket(socket, 'connect timeout');
 }
 
-// After a network change, a socket that owes bytes and has sent none for a while is presumed
-// lost: it is replaced rather than waited on until TCP gives up. Only Chromium reports a
-// connection change; Firefox and Safari raise `online` only after being fully offline, so there a
-// silent socket is replaced only then.
+// After a network change, a socket that has heard nothing for a moment is presumed lost: it is
+// replaced rather than waited on until TCP gives up. Only Chromium reports a connection change;
+// elsewhere the socket's own silence finds it.
 function handleStreamingNetworkChange() {
   const engine = streamingEngineState();
   if (engine.detached) {
@@ -846,34 +869,54 @@ function handleStreamingNetworkChange() {
     return;
   }
   const socket = engine.socket;
-  if (socket?.readyState !== WebSocket.OPEN || !streamingSocketOwesSilently(performance.now())) return;
-  giveUpStreamingSocket(socket, 'network changed');
-}
-
-/** The current stream is owed bytes its socket has sent none of for a while. */
-function streamingSocketOwesSilently(now) {
-  const wire = streamingEngineState().roles.current?.encoded?.wire;
-  return Boolean(wire && !wire.serverless && !wire.eos && wire.creditedBytes > 0
-    && now - Math.max(wire.lastArrivalMs, wire.creditSentAtMs) > STREAMING_SILENT_SOCKET_MS);
+  if (socket?.readyState === WebSocket.OPEN
+      && performance.now() - socket.lastHeardMs > STREAMING_SEEK_ANSWER_MS) replaceSilentStreamingSocket(socket);
 }
 
 // Owner retest B-D4 round 5 (2026-11-17): a laptop that keeps another network interface (a VPN or
 // a virtual adapter) never reports `offline` when its Wi-Fi goes, and its socket stays open but
-// silent. So while audio renders, a seek the socket has not begun to answer, or bytes it owes and
-// has stopped sending, mean it is gone: it is given up at once instead of waited on until the
-// keepalive, so the received audio plays on, a seek past it waits silently at its target, and the
-// next socket is tried at once.
+// silent. A socket that hears nothing, not even the server's heartbeat, is gone: it is replaced at
+// once instead of waited on until the keepalive, so the received audio plays on, a seek past it
+// waits silently at its target, and the next socket is tried at once. A seek past the received
+// audio finds it sooner. Checked as audio renders and every half second.
 function checkStreamingSocketLiveness() {
   const engine = streamingEngineState();
   const socket = engine.socket;
   if (engine.detached || socket?.readyState !== WebSocket.OPEN) return;
-  const now = performance.now();
+  const silentMs = performance.now() - socket.lastHeardMs;
   const seek = engine.pendingSeek;
   const seekRole = seek && engine.roles.continuity?.streamId === seek.streamId ? engine.roles.continuity : null;
-  const seekUnanswered = Boolean(seekRole && !seekRole.local && !seekRole.metadataAccepted
-    && seek.requestedAtMs > 0 && now - seek.requestedAtMs > STREAMING_SEEK_ANSWER_MS);
-  if (seekUnanswered) giveUpStreamingSocket(socket, 'seek unanswered');
-  else if (streamingSocketOwesSilently(now)) giveUpStreamingSocket(socket, 'socket silent');
+  const seekWaits = Boolean(seekRole && !seekRole.local && !seekRole.metadataAccepted);
+  if (silentMs > (seekWaits ? STREAMING_SEEK_ANSWER_MS : STREAMING_SILENT_SOCKET_MS)) replaceSilentStreamingSocket(socket);
+}
+
+// Audio from a silent socket detaches as from any lost socket; with none, or with a song's rate
+// still asked of it, a new socket simply takes over and what waited goes again on it.
+function replaceSilentStreamingSocket(socket) {
+  const engine = streamingEngineState();
+  if (engine.roles.current && !engine.sampleRateProbes?.size) {
+    giveUpStreamingSocket(socket, 'socket silent');
+    return;
+  }
+  forgetLostStreamingSocket();
+  engine.expectedSocketClose = socket;
+  socket.close();
+  connectStreamingSocket();
+}
+
+function watchStreamingSocketLiveness(socket) {
+  let checkedAtMs = performance.now();
+  const timer = setInterval(() => {
+    if (streamingEngineState().socket !== socket || socket.readyState !== WebSocket.OPEN) {
+      clearInterval(timer);
+      return;
+    }
+    // A check that ran late found a page too busy to have read what arrived: it decides nothing.
+    const now = performance.now();
+    const late = now - checkedAtMs > 2 * STREAMING_LIVENESS_CHECK_MS;
+    checkedAtMs = now;
+    if (!late) checkStreamingSocketLiveness();
+  }, STREAMING_LIVENESS_CHECK_MS);
 }
 
 // Offline, the open socket can deliver nothing, but with Wi-Fi off it may stay open and silent
@@ -882,21 +925,6 @@ function checkStreamingSocketLiveness() {
 function handleStreamingOffline() {
   const socket = streamingEngineState().socket;
   if (socket?.readyState === WebSocket.OPEN) giveUpStreamingSocket(socket, 'offline');
-}
-
-// A start sent on a socket that died without closing is never answered (round 5: "it took me 4
-// or 5 tries"): after a few seconds the socket is given up, and the start goes again, once, on the
-// next one, so one press always starts it.
-function watchStreamingStartAnswer(roleState) {
-  const engine = streamingEngineState();
-  const socket = engine.socket;
-  if (socket?.readyState !== WebSocket.OPEN || roleState.cachedTrack) return;
-  roleState.answerTimer = window.setTimeout(() => {
-    roleState.answerTimer = 0;
-    if (engine.socket !== socket || engine.roles.current !== roleState || roleState.metadataAccepted
-        || socket.readyState !== WebSocket.OPEN) return;
-    giveUpStreamingSocket(socket, 'start unanswered');
-  }, STREAMING_START_ANSWER_MS);
 }
 
 function watchStreamingNetwork() {
@@ -1247,7 +1275,8 @@ function validateStreamingMetadata(message, roleState) {
 
 function handleStreamingControl(message) {
   const engine = streamingEngineState();
-  if (!message || typeof message !== 'object') return;
+  // A heartbeat says only that the socket lives, which its arrival already recorded.
+  if (!message || typeof message !== 'object' || message.type === 'heartbeat') return;
   if (message.type === 'probe-result') {
     settleStreamingSampleRateProbe(message.requestId, Number(message.sampleRate) || 0, {
       fallbackSampleRate: Number(message.fallbackSampleRate) || 0,
@@ -1284,8 +1313,6 @@ function handleStreamingControl(message) {
       return;
     }
     roleState.metadataAccepted = true;
-    if (roleState.answerTimer) window.clearTimeout(roleState.answerTimer);
-    roleState.answerTimer = 0;
     if (message.codec) {
       createStreamingEncodedRole(roleState, message);
       refillStreamingEncodedBytes(roleState);
@@ -1589,7 +1616,6 @@ function createStreamingWire(roleState, message) {
     initialTotal: message.totalFrames,
     nextSequence: 0,
     creditedBytes: Number(message.initialCreditBytes) || 0,
-    creditSentAtMs: performance.now(),
     lastArrivalMs: 0,
     // Counted apart from `size`, which stops at the kept-bytes limit.
     receivedBytes: 0,
@@ -1737,7 +1763,6 @@ function refillStreamingEncodedBytes(roleState) {
     frames,
   })) {
     wire.creditedBytes += frames;
-    wire.creditSentAtMs = performance.now();
   }
 }
 
@@ -2298,7 +2323,7 @@ function handleStreamingWorkletMessage(message) {
     }
     checkStreamingSocketLiveness();
     if (engine.roles.current !== current) return;
-    if (engine.pendingSeek?.currentStreamId === current.streamId) return;
+    if (engine.pendingSeek?.currentStreamId === current.streamId || streamingHeadHeld()) return;
     const timelineFrame = streamingAbsoluteTimelineFrame(current, message.timelineFrame);
     const monotonicTimelineFrame = Math.max(
       timelineFrame,
@@ -2472,7 +2497,7 @@ function handleStreamingWorkletMessage(message) {
       Math.max(0, reconciledBufferedFrames),
       capacityFrames,
     );
-    if (roleState.role === 'current') {
+    if (roleState.role === 'current' && !streamingHeadHeld()) {
       engine.snapshot.currentTime = Math.max(
         0,
         (Number(engine.snapshot.currentTime) || 0) + (message.frames / engine.sampleRate),
@@ -2559,7 +2584,6 @@ function settleStreamingSampleRateProbe(requestId, sampleRate, format = null) {
   const engine = streamingEngineState();
   const probe = engine.sampleRateProbes?.get(requestId);
   if (!probe) return;
-  window.clearTimeout(probe.timer);
   engine.sampleRateProbes.delete(requestId);
   if (sampleRate > 0) rememberStreamingTrackFormat(probe.path, sampleRate, format);
   probe.resolve(sampleRate);
@@ -2573,38 +2597,17 @@ function requestStreamingSampleRate(track) {
   engine.nextSampleRateProbeId = (Number(engine.nextSampleRateProbeId) || 0) + 1;
   const requestId = engine.nextSampleRateProbeId;
   return new Promise((resolve) => {
-    const probe = { path: String(track?.path || ''), resolve, socket: null, timer: 0 };
+    const probe = { path: String(track?.path || ''), resolve, socket: null };
     engine.sampleRateProbes.set(requestId, probe);
     if (!sendStreamingProbe(requestId, probe)) settleStreamingSampleRateProbe(requestId, 0);
   });
 }
 
-// A probe waits a few seconds for its answer on the socket it went to; one that died without
-// closing never answers (round 5: a press on another song after the network returned waited
-// forever), so it is replaced and the probe goes again on the next socket.
+// A probe sent to a socket that died without closing (round 5: a press on another song after the
+// network returned waited forever) goes again on the socket that replaces it.
 function sendStreamingProbe(requestId, probe) {
-  const engine = streamingEngineState();
-  window.clearTimeout(probe.timer);
-  probe.socket = engine.socket;
-  if (!sendStreamingControl({ type: 'probe', requestId, path: probe.path })) return false;
-  probe.timer = window.setTimeout(() => replaceUnansweringStreamingSocket(probe.socket, requestId),
-    STREAMING_START_ANSWER_MS);
-  return true;
-}
-
-function replaceUnansweringStreamingSocket(socket, requestId) {
-  const engine = streamingEngineState();
-  if (!engine.sampleRateProbes?.has(requestId) || engine.socket !== socket
-      || socket?.readyState !== WebSocket.OPEN) return;
-  // Audio playing from it detaches as any lost socket does; otherwise a new socket simply takes over.
-  if (engine.roles.current && !engine.snapshot.paused) {
-    giveUpStreamingSocket(socket, 'probe unanswered');
-    return;
-  }
-  forgetLostStreamingSocket();
-  engine.expectedSocketClose = socket;
-  socket.close();
-  connectStreamingSocket();
+  probe.socket = streamingEngineState().socket;
+  return sendStreamingControl({ type: 'probe', requestId, path: probe.path });
 }
 
 /** Probes still waiting that went to another socket go again on [socket], now open. */
@@ -2631,13 +2634,17 @@ async function retireStreamingAudioGraph() {
 function connectStreamingSocket() {
   const engine = streamingEngineState();
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const socket = new WebSocket(`${protocol}//${window.location.host}/playback/pcm`);
+  const socket = new WebSocket(`${protocol}//${window.location.host}/playback/pcm?heartbeat=${STREAMING_HEARTBEAT_MS}`);
   socket.binaryType = 'arraybuffer';
+  const doublings = Math.min(Number(engine.detached?.abandonedConnects) || 0, STREAMING_CONNECT_DEADLINE_DOUBLINGS);
   const connectDeadline = engine.detached
-    ? window.setTimeout(() => abandonStreamingConnectingSocket(socket), STREAMING_CONNECT_DEADLINE_MS)
+    ? window.setTimeout(() => abandonStreamingConnectingSocket(socket, { timedOut: true }),
+      STREAMING_CONNECT_DEADLINE_MS * 2 ** doublings)
     : 0;
   socket.onopen = () => {
     window.clearTimeout(connectDeadline);
+    socket.lastHeardMs = performance.now();
+    watchStreamingSocketLiveness(socket);
     flushStreamingControls();
     resendStreamingProbes(socket);
     keepStreamingSocketAlive(socket);
@@ -2663,6 +2670,7 @@ function connectStreamingSocket() {
       .catch((error) => console.error('Streaming socket recovery failed', error));
   };
   socket.onmessage = ({ data }) => {
+    socket.lastHeardMs = performance.now();
     if (data instanceof ArrayBuffer) {
       handleStreamingPcm(data);
       return;
@@ -3216,7 +3224,6 @@ async function startBrowserStreamingTrack(track, {
   const current = openStreamingRole('current', track, startFrame);
   if (!current) return null;
   current.transportRecoveryAttempt = Math.max(0, Number(transportRecoveryAttempt) || 0);
-  watchStreamingStartAnswer(current);
   probeStreamingTrackWaveform(track);
   engine.node.port.postMessage({
     type: 'configure',
@@ -3514,8 +3521,6 @@ async function seekBrowserStreaming(seconds) {
     streamId: replacement.streamId,
     startFrame,
     prepareSent: false,
-    // When the server was asked; a seek it does not begin to answer finds the socket gone.
-    requestedAtMs: performance.now(),
   };
   engine.node.port.postMessage({
     type: 'reserve-seek',

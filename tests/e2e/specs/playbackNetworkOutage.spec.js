@@ -1,4 +1,5 @@
 import { expect, test } from '../support/baseFixtures.js';
+import { startCpuLoad } from '../helpers/cpuLoad.js';
 import { startNetworkRelay } from '../helpers/networkRelay.js';
 
 const ARTIST = 'Playback Start Signals';
@@ -251,6 +252,153 @@ test('FTC-PLAYBACK-OFFLINE-002 with no offline event, a seek past the received a
       await expect(player.playButton).toHaveAttribute('aria-label', 'Pause');
     });
   } finally {
+    await relay.restore();
+    await globalPlayerActions.pauseToReleasePlaybackClaim();
+    relay.close();
+  }
+});
+
+// Owner retest B-D4 round 6 (2026-11-18), laptop with the CPU at 100%, verbatim: "1. When I clicked
+// past the moment that was donwloaded click/seek did nto even take. It started to behave as it was
+// lagging 2. Now it has delay before displaying where I clicked + I have to do 2 clicks: first
+// clicks moves playhead slightly, noit relevant ot where I click, second click moves it where I
+// want 2. Waveform disappeared, so I am left with no visual where I move it 3. Play button did not
+// become paused, but the playback did not continue when network came back 4. I had to click into
+// another song 6 TIMES before it started to play after Network came back." On the load: "Long cpu
+// 100% is no execuse".
+test('FTC-PLAYBACK-OFFLINE-003 under full CPU load, each seek past the received audio in an outage shows its place at once with one click and keeps the waveform, playback goes on by itself when the network returns, and one press plays another song', {
+  tag: '@area:playback',
+}, async ({ page, galleryActions, globalPlayerActions, navigationPanelActions, playbackEvidence, settingsModalAppBarActions, stepLogger, trackModalActions, utilityAppearanceActions, utilityTabBarActions }, testInfo) => {
+  test.setTimeout(10 * 60 * 1000);
+  const OTHER_TITLE = 'Medium Cold Signal 07';
+  // A click shows its place within this: at once for a listener, under load included.
+  const SHOWN_WITHIN_MS = 1000;
+  const ONE_PRESS_BUDGET_MS = 8000;
+  const appPort = Number(new URL(testInfo.project.use.baseURL).port);
+  const relay = await startNetworkRelay(appPort, { playbackBytesPerSecond: PLAYBACK_BYTES_PER_SECOND });
+  const player = globalPlayerActions.globalPlayer;
+  const paths = {};
+  let load = null;
+  let durationSeconds = 0;
+
+  // The owner's laptop never reports `offline`; connections made before the outage stay dead.
+  const wifiOff = () => relay.stall();
+  const wifiOn = () => relay.restore({ revive: false });
+  const audibleAfter = async (mark, path) => {
+    const evidence = await playbackEvidence.waitForTrackPlaybackEvidence({ after: mark, path });
+    expect(evidence.nonZeroSamples).toBeGreaterThan(0);
+    expect(evidence.renderedFrameDelta).toBeGreaterThan(0);
+  };
+  const openAlbum = async () => {
+    await galleryActions.clickAlbumDetailsByArtistAndAlbum(ARTIST, ALBUM);
+    await trackModalActions.waitForInteractiveSummary();
+  };
+  // The song's waveform is painted across the seekbar, not only the playhead line.
+  const expectWaveformShown = async (why) => {
+    const shown = await page.evaluate(({ selector, path }) => {
+      const canvas = document.querySelector(selector);
+      const peaks = state.player?.waveform?.compactPeaks;
+      if (!(canvas instanceof HTMLCanvasElement) || canvas.hidden || !canvas.width || !canvas.height
+          || String(peaks?.path || '') !== path || !Array.isArray(peaks?.data?.left)) return false;
+      const pixels = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+      const columns = new Set();
+      for (let pixel = 0; pixel < pixels.length / 4; pixel += 1) {
+        if (pixels[(pixel * 4) + 3] > 0) columns.add(pixel % canvas.width);
+      }
+      return columns.size > canvas.width / 2;
+    }, { selector: player.waveformCanvasSelector, path: paths[TITLE] });
+    expect(shown, `waveform shown ${why}`).toBe(true);
+  };
+  // One click: the head shows the clicked place at once and stays there, silent, with the waveform.
+  const expectOneClickHeldAt = async (target) => {
+    const bounds = await player.timeline.boundingBox();
+    await player.timeline.click({ position: { x: bounds.width * (target / durationSeconds), y: bounds.height / 2 } });
+    const clickedAt = Date.now();
+    await expect.poll(async () => displayedSeconds(await player.time.textContent()), { timeout: SHOWN_WITHIN_MS })
+      .toBeGreaterThanOrEqual(target - 1);
+    expect(Date.now() - clickedAt, 'the place shows at once').toBeLessThan(SHOWN_WITHIN_MS + 500);
+    expect(displayedSeconds(await player.time.textContent())).toBeLessThanOrEqual(target + 1);
+    await expectWaveformShown('right after the click');
+    await page.waitForTimeout(1500);
+    const silentFrom = await playbackEvidence.playbackMark();
+    for (let waited = 0; waited < 6000; waited += 1500) {
+      await page.waitForTimeout(1500);
+      const shownAt = displayedSeconds(await player.time.textContent());
+      expect(shownAt, 'stays where it was put').toBeGreaterThanOrEqual(target - 1);
+      expect(shownAt).toBeLessThanOrEqual(target + 1);
+      await expect(player.playButton).toHaveAttribute('aria-label', 'Pause');
+      await expectWaveformShown('while it waits for the network');
+    }
+    expect((await playbackEvidence.playbackMark()).renderedFrame, 'no old audio after the seek').toBe(silentFrom.renderedFrame);
+  };
+
+  try {
+    await stepLogger.step('Waveform seekbar, and the album through a network that delivers songs slowly', async () => {
+      await page.goto(`${relay.origin}/?surface=albums`);
+      await galleryActions.waitForGalleryReady();
+      await settingsModalAppBarActions.openSettings();
+      await utilityTabBarActions.openTab('appearance');
+      await utilityAppearanceActions.waitForReady();
+      await utilityAppearanceActions.saveSeekbarMode('waveform');
+      await settingsModalAppBarActions.closeSettings();
+      await navigationPanelActions.selectSidebarArtistByName(ARTIST);
+      await navigationPanelActions.waitForSidebarSelection(ARTIST);
+      await openAlbum();
+      for (const title of [TITLE, OTHER_TITLE]) {
+        paths[title] = String(await trackModalActions.trackModal.trackRowByTitle(title).getAttribute('data-track-row-path') || '');
+        expect(paths[title]).not.toBe('');
+      }
+    });
+
+    await stepLogger.step('Under full CPU load the long song plays with its waveform', async () => {
+      load = await startCpuLoad([page]);
+      const mark = await playbackEvidence.playbackMark();
+      await trackModalActions.playTrackByTitle(TITLE);
+      await audibleAfter(mark, paths[TITLE]);
+      await trackModalActions.close();
+      await globalPlayerActions.waitForPlaybackState({ paused: false, minimumCurrentTime: 3 });
+      durationSeconds = (await player.readPlaybackTiming()).duration;
+      expect(durationSeconds).toBeGreaterThan(40);
+      await globalPlayerActions.waitForRenderedWaveform({ path: paths[TITLE] });
+    });
+
+    await stepLogger.step('The network goes: one click past the received audio, at once, shows its place and falls silent', async () => {
+      wifiOff();
+      await expectOneClickHeldAt(Math.floor(durationSeconds * 0.85));
+    });
+
+    await stepLogger.step('Still out, the outage noticed: one more click elsewhere past the received audio moves there at once', async () => {
+      await expectOneClickHeldAt(Math.floor(durationSeconds * 0.6));
+    });
+
+    await stepLogger.step('The network returns: the song plays on from the place by itself, with its waveform', async () => {
+      const heldAt = displayedSeconds(await player.time.textContent());
+      const resumed = await playbackEvidence.playbackMark();
+      wifiOn();
+      await expect.poll(async () => displayedSeconds(await player.time.textContent()), { timeout: ONE_PRESS_BUDGET_MS })
+        .toBeGreaterThan(heldAt);
+      await audibleAfter(resumed, paths[TITLE]);
+      expect(displayedSeconds(await player.time.textContent())).toBeLessThan(heldAt + 20);
+      await expect(player.playButton).toHaveAttribute('aria-label', 'Pause');
+      await expectWaveformShown('after the network returned');
+    });
+
+    await stepLogger.step('Playing through another outage: after the network returns one press plays another song', async () => {
+      wifiOff();
+      await page.waitForTimeout(10_000);
+      wifiOn();
+      await page.waitForTimeout(1000);
+      await openAlbum();
+      const mark = await playbackEvidence.playbackMark();
+      const pressedAt = Date.now();
+      await trackModalActions.playTrackByTitle(OTHER_TITLE);
+      await audibleAfter(mark, paths[OTHER_TITLE]);
+      expect(Date.now() - pressedAt, 'one press starts it promptly').toBeLessThan(ONE_PRESS_BUDGET_MS);
+      await expect(player.title).toContainText(OTHER_TITLE);
+      await expect(player.playButton).toHaveAttribute('aria-label', 'Pause');
+    });
+  } finally {
+    await load?.stop();
     await relay.restore();
     await globalPlayerActions.pauseToReleasePlaybackClaim();
     relay.close();

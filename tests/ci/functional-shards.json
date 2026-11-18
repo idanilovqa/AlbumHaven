@@ -1391,6 +1391,13 @@
               "test": "tests/e2e/specs/playerArtworkSearchContext.spec.js",
               "case": "FTC-PLAYER-015 player artwork reopens the playing album after selecting an unrelated search result",
               "area": "playback"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playbackNetworkOutage.spec.js",
+              "case": "FTC-PLAYBACK-OFFLINE-003 under full CPU load, each seek past the received audio in an outage shows its place at once with one click and keeps the waveform, playback goes on by itself when the network returns, and one press plays another song",
+              "area": "playback"
             }
           ]
         }

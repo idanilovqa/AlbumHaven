@@ -89,11 +89,7 @@ function createEngineHarness(options = {}) {
   let now = options.now ?? 1000;
   const timeOrigin = options.timeOrigin ?? 1_700_000_000_000;
   const dateNow = options.dateNow ?? Math.floor(timeOrigin + now);
-  const givenTimeout = options.setTimeout || setTimeout;
-  // A start's answer deadline (5 s) runs only where a test asks for it: elsewhere it would give up
-  // sockets this harness never answers.
-  const scheduleTimeout = (callback, delay, ...rest) => (
-    delay === 5_000 && !options.watchStartAnswers ? 0 : givenTimeout(callback, delay, ...rest));
+  const scheduleTimeout = options.setTimeout || setTimeout;
   const cancelTimeout = options.clearTimeout || clearTimeout;
 
   class FakeDate extends Date {
@@ -6407,12 +6403,15 @@ test('audio output details are reported once and again only when dropouts grow',
   const context = harness.contexts[0];
   context.baseLatency = 0.05;
   context.playbackStats = { underrunEvents: 0, underrunDuration: 0 };
-  const position = () => harness.nodes[0].port.dispatch({
-    type: 'position',
-    generation: open.generation,
-    streamId: open.streamId,
-    timelineFrame: 48_000,
-  });
+  const position = () => {
+    harness.sockets[0].receive({ type: 'heartbeat' });
+    harness.nodes[0].port.dispatch({
+      type: 'position',
+      generation: open.generation,
+      streamId: open.streamId,
+      timelineFrame: 48_000,
+    });
+  };
 
   harness.setNow(10_000);
   position();
@@ -6568,6 +6567,20 @@ function recordingDecoders() {
     return decoder;
   };
   return { decoders, create };
+}
+
+/** The half-second liveness check of the engine's current socket. */
+function liveness(harness) {
+  const checks = harness.intervals.filter(({ delay }) => delay === 500);
+  return checks.at(-1);
+}
+
+/** Runs the liveness check on time, every half second, from [fromMs] to [untilMs]. */
+function checkLivenessUntil(harness, fromMs, untilMs) {
+  for (let now = fromMs; now <= untilMs; now += 500) {
+    harness.setNow(now);
+    liveness(harness).callback();
+  }
 }
 
 async function startLocallySeekable(harness, receivedBytes) {
@@ -7210,13 +7223,13 @@ test('the browser coming back online tries at once', async () => {
   assert.equal(harness.sockets[2].sent.find(({ type }) => type === 'open').startFrame, 999 * 1_152);
 });
 
-test('a socket that stays open but stopped delivering after a network change is replaced', async () => {
+test('a socket that stays open but heard nothing for a moment after a network change is replaced', async () => {
   const harness = encodedHarness({ createStreamingDecoder: recordingDecoders().create });
   await startLocallySeekable(harness, 100_000);
 
-  harness.setNow(2_000);
+  harness.setNow(1_500);
   harness.dispatchWindowEvent('online');
-  assert.equal(harness.sockets[0].closeCalls, 0, 'bytes arrived a moment ago');
+  assert.equal(harness.sockets[0].closeCalls, 0, 'it was heard a moment ago');
 
   harness.setNow(5_000);
   harness.dispatchWindowEvent('online');
@@ -7334,6 +7347,38 @@ test('offline, a seek past the received audio jumps at once and plays from there
   assert.equal(harness.api.snapshot().diagnostics.transportState, 'connected');
 });
 
+// Owner retest B-D4 round 6 (2026-11-18, CPU at 100%): "delay before displaying where I clicked +
+// I have to do 2 clicks: first clicks moves playhead slightly, noit relevant ot where I click".
+test('offline, a seek past the received audio shows its place and silences the old audio before the slow restart, whose last reports do not move the head', async () => {
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => count > 1,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+  });
+  const open = await startLocallySeekable(harness, 100_000);
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+
+  // Nothing is awaited: on a loaded machine the restart has not run yet.
+  const seek = harness.api.seek(60);
+  assert.equal(harness.api.snapshot().currentTime, 60, 'the place shows at once');
+  assert.ok(harness.portMessages('pause').some(({ generation }) => generation === open.generation),
+    'the old audio stops at once');
+  harness.nodes[0].port.dispatch({ type: 'position', generation: open.generation, streamId: open.streamId, timelineFrame: 480_000 });
+  harness.nodes[0].port.dispatch({
+    type: 'consumed', generation: open.generation, streamId: open.streamId,
+    role: 'current', frames: 24_000, bufferedFrames: 24_000,
+  });
+  assert.equal(harness.api.snapshot().currentTime, 60, 'the old audio\'s reports leave the head at the place');
+
+  await seek;
+  await settleTwice(harness);
+  assert.equal(harness.api.snapshot().currentTime, 60);
+  assert.ok(harness.portMessages('configure').at(-1).generation > open.generation);
+});
+
 // Owner retest B-D4 round 4 (2026-11-17): with Wi-Fi off, the socket stays open and silent, so the
 // seek waited on it and the player fell into a paused error at the keepalive.
 test('the browser going offline gives up the open socket at once, so a seek past the received audio waits silently at its target', async () => {
@@ -7413,15 +7458,15 @@ test('a seek the open socket does not begin to answer jumps to its target silent
     'the jump plays on at its target');
 });
 
-test('a socket that owes bytes and has gone silent is given up while the received audio plays, with no network event', async () => {
+test('a socket that hears nothing, not even a heartbeat, is given up while the received audio plays, with no network event', async () => {
   const harness = encodedHarness({ createStreamingDecoder: recordingDecoders().create });
   const open = await startLocallySeekable(harness, 100_000);
 
-  harness.setNow(2_000);
-  harness.nodes[0].port.dispatch({ type: 'position', generation: open.generation, streamId: open.streamId, timelineFrame: 100 });
-  assert.equal(harness.sockets[0].closeCalls, 0, 'bytes arrived a moment ago');
-
   harness.setNow(5_000);
+  harness.nodes[0].port.dispatch({ type: 'position', generation: open.generation, streamId: open.streamId, timelineFrame: 100 });
+  assert.equal(harness.sockets[0].closeCalls, 0, 'heard a few seconds ago, as a slow network delivers');
+
+  harness.setNow(6_500);
   harness.nodes[0].port.dispatch({ type: 'position', generation: open.generation, streamId: open.streamId, timelineFrame: 200 });
   await settleTwice(harness);
 
@@ -7432,38 +7477,63 @@ test('a socket that owes bytes and has gone silent is given up while the receive
 });
 
 // Round 5: "After network is back I tried to play completely different track and it took me 4 or
-// 5 tries". A start sent on a socket that died silently is never answered: it goes again, once.
-test('a start its socket does not answer is sent again on a new socket, with no second press', async () => {
-  const timers = manualTimers();
-  const harness = encodedHarness({ setTimeout: timers.setTimeout, clearTimeout: timers.clearTimeout, watchStartAnswers: true });
+// 5 tries"; round 6 (2026-11-18): "6 TIMES". A start or a song's rate asked of a socket that died
+// without closing is never answered: the socket, which hears not even the server's heartbeat, is
+// replaced, and what waited on it goes again on the new one, so one press starts the song.
+test('paused, a start asked of a socket that hears nothing goes again on a new socket, with no second press', async () => {
+  const harness = encodedHarness();
   await startEncoded(harness, makeTrack('01.mp3'));
   await harness.api.pause();
   await harness.settle();
 
   void harness.api.start(makeTrack('02.mp3'));
   await settleTwice(harness);
-  const unanswered = harness.sent('open').at(-1);
-  assert.equal(unanswered.path, makeTrack('02.mp3').path);
-  const deadline = timers.pending().find(({ delay }) => delay === 5_000);
-  assert.ok(deadline, 'a start waits a few seconds for its answer');
-  timers.fire(deadline);
+  void harness.api.start(makeTrack('03.mp3'));
+  await settleTwice(harness);
+  checkLivenessUntil(harness, 1_500, 5_500);
+  assert.equal(harness.sockets[0].closeCalls, 0, 'heard a few seconds ago: a busy server is not a dead one');
+  checkLivenessUntil(harness, 6_000, 6_500);
   await settleTwice(harness);
   await settleTwice(harness);
 
   assert.equal(harness.sockets[0].closeCalls, 1);
-  const again = harness.sockets[1].sent.filter(({ type }) => type === 'open');
-  assert.equal(again.at(-1).path, makeTrack('02.mp3').path, 'the same start goes on the new socket');
+  assert.equal(harness.sockets[1].sent.filter(({ type }) => type === 'open').at(-1)?.path, makeTrack('03.mp3').path,
+    'the last press goes on the new socket');
   assert.notEqual(harness.api.snapshot().mode, 'error');
+});
+
+test('a busy server that only beats its heart is waited on, however long it takes to answer', async () => {
+  const harness = encodedHarness();
+  await startEncoded(harness, makeTrack('01.mp3'));
+  await harness.api.pause();
+  await harness.settle();
+
+  void harness.api.start(makeTrack('02.mp3'));
+  await settleTwice(harness);
+  for (let now = 1_500; now <= 30_000; now += 500) {
+    harness.setNow(now);
+    harness.sockets[0].receive({ type: 'heartbeat' });
+    liveness(harness).callback();
+  }
+  assert.equal(harness.sockets[0].closeCalls, 0);
+  assert.equal(harness.sockets.length, 1);
+});
+
+test('a liveness check that ran late, on a page too busy to read what arrived, decides nothing', async () => {
+  const harness = encodedHarness();
+  await startEncoded(harness, makeTrack('01.mp3'));
+  harness.setNow(9_000);
+  liveness(harness).callback();
+  assert.equal(harness.sockets[0].closeCalls, 0, 'the heartbeats may be waiting to be read');
+  harness.setNow(9_500);
+  liveness(harness).callback();
+  assert.equal(harness.sockets[0].closeCalls, 1, 'on time, the silence counts');
 });
 
 // Round 5, hosted FTC-PLAYBACK-OFFLINE-002: paused through the outage, one press on another song
 // asked a dead socket for that song's rate and waited forever.
-test('a rate probe its socket does not answer goes again on a new socket, so one press starts the song', async () => {
-  const timers = manualTimers();
-  const harness = encodedHarness({
-    setTimeout: timers.setTimeout, clearTimeout: timers.clearTimeout, watchStartAnswers: true, holdSampleRateProbes: true,
-    trackSampleRates: new Map(),
-  });
+test('a rate probe asked of a socket that hears nothing goes again on a new socket, so one press starts the song', async () => {
+  const harness = encodedHarness({ holdSampleRateProbes: true, trackSampleRates: new Map() });
   const first = harness.api.start(makeTrack('01.mp3'));
   for (let turn = 0; turn < 20 && !harness.sockets[0]?.probes.length; turn += 1) await harness.settle();
   harness.sockets[0].receive({ type: 'probe-result', requestId: harness.sockets[0].probes[0].requestId, sampleRate: 48_000 });
@@ -7476,12 +7546,10 @@ test('a rate probe its socket does not answer goes again on a new socket, so one
   void harness.api.start(makeTrack('02.mp3'));
   await settleTwice(harness);
   assert.equal(harness.sockets[0].probes.at(-1)?.path, makeTrack('02.mp3').path, 'the new song asks for its rate');
-  const deadline = timers.pending().find(({ delay }) => delay === 5_000);
-  assert.ok(deadline, 'a probe waits a few seconds for its answer');
-  timers.fire(deadline);
+  checkLivenessUntil(harness, 1_500, 6_500);
   await settleTwice(harness);
 
-  assert.equal(harness.sockets[0].closeCalls, 1, 'the unanswering socket is replaced');
+  assert.equal(harness.sockets[0].closeCalls, 1, 'the silent socket is replaced');
   const again = harness.sockets[1].probes.at(-1);
   assert.equal(again?.path, makeTrack('02.mp3').path, 'the probe goes again on the new socket');
   harness.sockets[1].receive({ type: 'probe-result', requestId: again.requestId, sampleRate: 48_000 });
@@ -7551,6 +7619,34 @@ test('a reconnect attempt that hangs is given up after a few seconds and the nex
 
   assert.equal(harness.sockets.length, 3);
   assert.equal(harness.sockets[2].sent.find(({ type }) => type === 'open').startFrame, 999 * 1_152);
+  assert.notEqual(harness.api.snapshot().mode, 'error');
+});
+
+// Owner retest B-D4 round 6 (2026-11-18), CPU at 100%: "the playback did not continue when network
+// came back". On a loaded machine a connection can take longer than the deadline to open.
+test('each reconnect attempt cut off by its deadline allows the next one twice as long, up to 16 s', async () => {
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => (count > 1 ? 'hang' : false),
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+  });
+  await startLocallySeekable(harness, 100_000);
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+
+  const deadlines = [];
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const deadline = timers.pending().find(({ delay }) => delay >= 4_000);
+    deadlines.push(deadline.delay);
+    timers.fire(deadline);
+    await settleTwice(harness);
+    timers.fire(timers.pending().find(({ delay }) => delay <= 2_000));
+    await settleTwice(harness);
+  }
+
+  assert.deepEqual(deadlines, [4_000, 8_000, 16_000, 16_000]);
   assert.notEqual(harness.api.snapshot().mode, 'error');
 });
 

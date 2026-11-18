@@ -1443,33 +1443,55 @@ test('a native-playback shell leaves the claim to Android and reads ownership as
   assert.equal(context.isActivePlaybackOwner(), false);
 });
 
-// Round 6 (hosted FTC-PLAYBACK-OFFLINE-002): after an outage, a press on another song sent its
-// reference or claim request on a connection that died without closing; no answer came, the claim
-// was given up and nothing played. Each is asked again once, so one press plays.
-test('a start whose reference or claim request goes unanswered asks again once and claims playback', async () => {
+// Owner retest B-D4 round 6 (2026-11-18): "I had to click into another song 6 TIMES before it
+// started to play after Network came back". Connections kept from before an outage stay dead for a
+// while after it, so each press's requests went unanswered and the press was given up.
+test('a start whose requests go unanswered plays on and asks again until the server answers', async () => {
   const requests = [];
-  const timeouts = [];
-  let refsAnswered = false;
-  let claimAnswered = false;
+  const timers = [];
+  let unanswered = 3;
   const { context, stopStreamingPlaybackCalls } = loadHelper({
-    setTimeout: (callback, delay) => { timeouts.push(delay); return 0; },
+    setTimeout: (callback, delay) => { timers.push({ callback, delay }); return timers.length; },
     fetch: async (url, init = {}) => {
       requests.push(`${init.method || 'GET'} ${url}`);
+      if (unanswered > 0) { unanswered -= 1; throw new TypeError('Failed to fetch'); }
       if (url === '/playback/refs') {
-        if (!refsAnswered) { refsAnswered = true; throw new TypeError('Failed to fetch'); }
         return jsonResponse({ protocol: 1, expiresAt: '2099-01-01T00:00:00Z', tracks: [{ playbackRef: 'ref-1' }] });
       }
-      if (!claimAnswered) { claimAnswered = true; throw new TypeError('Failed to fetch'); }
       return jsonResponse({ protocol: 1, claimToken: 'claim-1', expiresAt: '2099-01-01T00:00:00Z', leaseMs: 30000 });
     },
   });
+  const askAgain = async () => {
+    const retry = timers.filter(({ delay }) => delay === 2000).at(-1);
+    timers.length = 0;
+    retry.callback();
+    await context.state.player.ownership.pendingOperation;
+  };
 
-  assert.equal(await context.claimPlaybackOwnership(localTrack), true);
+  assert.equal(await context.claimPlaybackOwnership(localTrack), true, 'the song plays on');
+  await askAgain();
+  await askAgain();
+  await askAgain();
 
   assert.deepEqual(requests, [
-    'POST /playback/refs', 'POST /playback/refs', 'PUT /playback/state', 'PUT /playback/state',
+    'POST /playback/refs', 'POST /playback/refs', 'POST /playback/refs', 'POST /playback/refs', 'PUT /playback/state',
   ]);
   assert.equal(context.state.player.ownership.activeClaim.claimToken, 'claim-1');
   assert.equal(stopStreamingPlaybackCalls.length, 0, 'nothing was stopped');
-  assert.ok(timeouts.includes(4000), 'the first try waits only a few seconds for its answer');
+  assert.equal(timers.some(({ delay }) => delay === 2000), false, 'answered, it is not asked again');
+});
+
+test('an unanswered start is not asked again once another press or a pause follows it', async () => {
+  const timers = [];
+  const { context } = loadHelper({
+    setTimeout: (callback, delay) => { timers.push({ callback, delay }); return timers.length; },
+    fetch: async () => { throw new TypeError('Failed to fetch'); },
+  });
+  assert.equal(await context.claimPlaybackOwnership(localTrack), true);
+  const retry = timers.find(({ delay }) => delay === 2000);
+  context.state.player.ownership.requestVersion += 1;
+  timers.length = 0;
+  retry.callback();
+  await context.state.player.ownership.pendingOperation;
+  assert.equal(timers.length, 0, 'the later press or pause decides');
 });

@@ -114,8 +114,12 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   .mobile-settings-drawer.gallery-anchored-menu { position: fixed; left: 0 !important; right: auto !important; width: max-content; min-width: min(190px, 75vw); max-width: min(320px, 75vw) !important; bottom: var(--player-height); max-height: none; border-radius: 0 14px 14px 0; padding: 0 10px 14px; overflow-y: auto; }
   .mobile-drawer-heading { display: flex; align-items: center; gap: 8px; padding: 16px 4px; }
   .mobile-drawer-heading h2 { margin: 0; font-size: 18px; }
-  .mobile-settings-section-button { max-width: 160px; }
-  .mobile-settings-section-button .ui-button__content { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mobile-settings-section-control { width: auto; max-width: 160px; }
+  .mobile-settings-section-control[hidden] { display: none; }
+  .mobile-settings-section-control > .mobile-settings-section-button {
+    box-sizing: border-box; width: 160px; height: 36px; padding: 0 30px 0 12px; font: inherit; font-size: 13px; font-weight: 700;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
   /* Rows are a responsive GalleryCard variant, not a second artwork component. */
   .album-card[data-gallery-display="list"] { display: grid; grid-template-columns: 80px minmax(0, 1fr); align-items: center; min-height: 88px; border-radius: 14px; overflow: hidden; border-left: 3px solid var(--appearance-selected-accent, #34ca78); cursor: pointer; }
   .album-card[data-gallery-display="list"] > .cover { width: 72px; height: 72px; aspect-ratio: 1; margin: 8px; border-radius: 9px; }
@@ -261,7 +265,8 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   .gallery-bar { flex-wrap: wrap; }
   .gallery-bar__actions { margin-left: auto; }
   .shell-layout .toolbar-right { gap: 1px; }
-  .mobile-settings-section-button { max-width: 132px; }
+  .mobile-settings-section-control { max-width: 132px; }
+  .mobile-settings-section-control > .mobile-settings-section-button { width: 132px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .app-bar--library #search-form, .artist-family-panel, .settings-shell .settings-nav { transition: none !important; }

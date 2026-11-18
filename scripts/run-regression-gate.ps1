@@ -86,12 +86,17 @@ if ($Gate -eq 'focused') {
     }
     $registry = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $dataRoot 'tests\ci\performance-targets.json') | ConvertFrom-Json
     $targetProfiles = [ordered]@{}
+    $targetModes = [ordered]@{}
     foreach ($targetName in $focusedTargets) {
         $target = @($registry.targets | Where-Object { $_.name -ceq $targetName })
         if ($target.Count -ne 1) { throw "Unknown measured target: $targetName" }
         $targetProfiles[$targetName] = [string]$target[0].fixtureProfile
+        $targetModes[$targetName] = [string]$target[0].fixtureMode
     }
-    $definition.FixtureProfiles = @(@($(if ($focusedCases.Count) { 'functional-core' })) + @($targetProfiles.Values) |
+    # Generated-isolated targets build their own library, so only preloaded targets need a released fixture.
+    $preloadedProfiles = @($focusedTargets | Where-Object { $targetModes[$_] -ne 'generated-isolated' } |
+        ForEach-Object { $targetProfiles[$_] })
+    $definition.FixtureProfiles = @(@($(if ($focusedCases.Count) { 'functional-core' })) + $preloadedProfiles |
         Where-Object { $_ } | Select-Object -Unique)
 }
 
@@ -206,17 +211,22 @@ $functionalCommon = @{
     PostgresMajor = $PostgresMajor
     Pgbin = $Pgbin
 }
-function Invoke-MeasuredTargets([string]$TargetList, [string]$FixtureProfile, [string]$ShardName) {
+function Invoke-MeasuredTargets([string]$TargetList, [string]$FixtureProfile, [string]$ShardName, [string]$FixtureMode = 'preloaded-release') {
     $performanceTemp = Join-Path ([IO.Path]::GetTempPath()) "album-haven-$ShardName-performance-$PID"
     New-Item -ItemType Directory -Force -Path $performanceTemp | Out-Null
     $env:ALBUM_HAVEN_FIXTURE_PROFILE = $FixtureProfile
-    $env:ALBUM_HAVEN_FIXTURE_ROOT = Get-ProfileRoot $FixtureProfile
-    $env:ALBUM_HAVEN_MEDIA_ROOT = Join-Path $env:ALBUM_HAVEN_FIXTURE_ROOT 'media'
+    if ($FixtureMode -eq 'generated-isolated') {
+        # A generated-isolated target builds its own library and refuses inherited fixture paths, as in PR Gates.
+        Remove-Item Env:ALBUM_HAVEN_FIXTURE_ROOT, Env:ALBUM_HAVEN_MEDIA_ROOT -ErrorAction SilentlyContinue
+    } else {
+        $env:ALBUM_HAVEN_FIXTURE_ROOT = Get-ProfileRoot $FixtureProfile
+        $env:ALBUM_HAVEN_MEDIA_ROOT = Join-Path $env:ALBUM_HAVEN_FIXTURE_ROOT 'media'
+    }
     Invoke-Checked {
         & (Join-Path $PSScriptRoot 'ci\run-performance-shard.ps1') `
             -Targets $TargetList `
             -FixtureProfile $FixtureProfile `
-            -FixtureMode preloaded-release `
+            -FixtureMode $FixtureMode `
             -BasePort $PerformanceBasePort `
             -DatabaseSuffixBase "$($ShardName.Replace('-', '_'))_$PID" `
             -ExpectedPostgresMajor $PostgresMajor `
@@ -247,8 +257,10 @@ if ($Gate -eq 'focused') {
         $titles = @($group.Group | ForEach-Object { $_.Title } | Select-Object -Unique)
         Invoke-Checked { & $functionalRunner -Shard $group.Name -Cases $titles @functionalCommon } "Functional cases in $($group.Name)"
     }
-    foreach ($group in @($focusedTargets | Group-Object { $targetProfiles[$_] })) {
-        Invoke-MeasuredTargets ($group.Group -join ',') $group.Name "focused-$($group.Name)"
+    # One performance shard per fixture profile and mode, each run the way PR Gates runs that kind of target.
+    foreach ($group in @($focusedTargets | Group-Object { "$($targetProfiles[$_])|$($targetModes[$_])" })) {
+        $groupProfile, $groupMode = $group.Name.Split('|')
+        Invoke-MeasuredTargets ($group.Group -join ',') $groupProfile "focused-$groupProfile-$groupMode" $groupMode
     }
     Complete-Gate
 }

@@ -35481,7 +35481,9 @@ const MAX_COVER_LOOKUP_STAGED_IMAGES = 8;
 const MAX_COVER_LOOKUP_IMAGE_BYTES = 32 * 1024 * 1024;
 const COVER_LOOKUP_ALBUM_IMAGE_PRELOAD_TIMEOUT_MS = 2000;
 const COVER_LOOKUP_SHEET_DISMISS_DISTANCE = 72;
-const COVER_LOOKUP_INTERRUPTION_NOTICE_KEY_PREFIX = 'albumhaven.coverLookup.interruptionNotice.';
+// Owner (2026-11-17): the interrupted notice belongs to its card, not to the browser. It shows whenever an
+// interrupted card is open; its X hides it only for that opening.
+const coverLookupDismissedInterruptionNotices = new Set();
 
 function applyCoverLookupTaskModalStatus(task) {
   const modal = state.coverLookup.modal;
@@ -35501,10 +35503,14 @@ function applyCoverLookupTaskModalStatus(task) {
   }
   modal.statusText = '';
   modal.statusTone = 'neutral';
-  const noticeKey = `${COVER_LOOKUP_INTERRUPTION_NOTICE_KEY_PREFIX}${taskId}`;
-  if (getLocalStorageItem(noticeKey)) return;
+  if (coverLookupDismissedInterruptionNotices.has(taskId)) return;
   modal.failureNotice = 'Previous cover lookup was interrupted.';
-  setLocalStorageItem(noticeKey, '1');
+}
+
+function dismissCoverLookupInterruptionNotice() {
+  const taskId = String(state.coverLookup.modal.taskId || '').trim();
+  if (taskId) coverLookupDismissedInterruptionNotices.add(taskId);
+  state.coverLookup.modal.failureNotice = '';
 }
 
 function buildCoverLookupModalStatusHtml(taskRunning) {
@@ -39853,6 +39859,8 @@ async function openCoverLookupModal(album, options = {}) {
   // Slot 1 means the lookup chooses art for the second artbox, not the album cover.
   state.coverLookup.modal.artboxSlot = Number(options.artboxSlot) || 0;
   state.coverLookup.modal.taskId = String(requestedTaskId || matchingTask?.id || '');
+  // A new opening of an interrupted card shows its notice again.
+  coverLookupDismissedInterruptionNotices.delete(state.coverLookup.modal.taskId);
   state.coverLookup.modal.remoteCover = null;
   state.coverLookup.modal.localInventoryLoaded = false;
   state.coverLookup.modal.localCovers = [];
@@ -52179,7 +52187,7 @@ async function handleUtilityBootstrapClick(event) {
 
   if (event.target.closest('[data-dismiss-cover-lookup-notice="1"]')) {
     event.preventDefault();
-    state.coverLookup.modal.failureNotice = '';
+    dismissCoverLookupInterruptionNotice();
     renderCoverLookupModal();
     return;
   }

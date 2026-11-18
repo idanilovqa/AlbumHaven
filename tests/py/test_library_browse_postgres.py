@@ -18567,6 +18567,13 @@ def test_live_targeted_watcher_rebuilds_families_when_artist_changes(
     assert after['relation_projection']['built_from_fingerprint'] != before['relation_projection']['built_from_fingerprint']
 
 
+def _read_real_relation_alias_maps(monkeypatch, real_loader):
+    """These live tests read the published projection, not the module's empty stub."""
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    monkeypatch.setattr(PostgresLibraryBrowseRepository, "_load_relation_alias_maps", real_loader)
+
+
 def _seed_typo_family(fixture):
     """"Rhapsody of Fyre" shares an album folder with the more frequent
     "Rhapsody of Fire", so the relation builder makes it a family alias."""
@@ -18597,7 +18604,7 @@ def _sidebar_counts(payload):
 
 
 def test_live_watcher_event_keeps_last_families_until_background_rebuild_publishes(
-    watcher_repair_inventory, monkeypatch,
+    watcher_repair_inventory, monkeypatch, default_empty_relation_alias_projection,
 ):
     """Keep last families: after a watcher event, browse keeps the published
     family grouped and shows the watcher-found artist at once, ungrouped; the
@@ -18608,6 +18615,7 @@ def test_live_watcher_event_keeps_last_families_until_background_rebuild_publish
     from tests.e2e.support import isolatedPostgres
 
     fixture = watcher_repair_inventory
+    _read_real_relation_alias_maps(monkeypatch, default_empty_relation_alias_projection)
     album, split, repository = _seed_typo_family(fixture)
     # The watcher finds a new artist in the family's album folder.
     found = album('Rhapsody of Fire/Split/03.flac', 'Rhapsody of Fira', 'Fira Album')
@@ -18659,12 +18667,15 @@ def test_live_watcher_event_keeps_last_families_until_background_rebuild_publish
     assert 'Rhapsody of Fira' not in published_sidebar
 
 
-def test_live_album_move_keeps_last_families_until_background_rebuild_publishes(watcher_repair_inventory):
+def test_live_album_move_keeps_last_families_until_background_rebuild_publishes(
+    watcher_repair_inventory, monkeypatch, default_empty_relation_alias_projection,
+):
     """An in-app album move marks relations stale like a watcher event; browse
     keeps the family grouped and the moved album visible until the rebuild."""
     import shutil
 
     fixture = watcher_repair_inventory
+    _read_real_relation_alias_maps(monkeypatch, default_empty_relation_alias_projection)
     album, split, repository = _seed_typo_family(fixture)
     main = Path(fixture.roots[0]['path'])
     source = main / 'Rhapsody of Fire' / 'Split'

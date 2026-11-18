@@ -42,39 +42,49 @@ function syncGalleryCardMetadataMotion(root) {
   if (!mobile) { galleryCardMetadataMotion?.dispose(); galleryCardMetadataMotion = null; return; }
   if (!root?.querySelectorAll || typeof ResizeObserver !== 'function') return;
   if (!galleryCardMetadataMotion) {
-    const rows = new Map();
+    // rows maps each metadata row to its text; texts maps the text back. A frame
+    // refreshes only the rows whose row or text resized (removal resizes to zero).
+    const rows = new Map(), texts = new Map(), dirty = new Set();
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
     let frame = 0, disposed = false;
     const refresh = () => {
       frame = 0;
-      for (const [row, text] of rows) {
-        if (!row.isConnected) { observer.unobserve(row); observer.unobserve(text); rows.delete(row); continue; }
+      for (const row of dirty) {
+        const text = rows.get(row);
+        if (!text) continue;
+        if (!row.isConnected) { observer.unobserve(row); observer.unobserve(text); rows.delete(row); texts.delete(text); continue; }
         const motion = !reduced.matches ? resolveCompactPlayerMetadataRowMotion({ clientWidth: row.clientWidth, scrollWidth: text.scrollWidth }) : { overflowing: false, distance: 0, durationMs: 0 };
         row.classList.toggle('is-card-text-overflowing', motion.overflowing);
         row.style.setProperty('--card-text-distance', `${motion.distance}px`);
         row.style.setProperty('--card-text-duration', `${motion.durationMs}ms`);
       }
+      dirty.clear();
     };
     const schedule = () => { if (!disposed && !frame) frame = requestAnimationFrame(refresh); };
-    const observer = new ResizeObserver(schedule);
-    reduced.addEventListener('change', schedule);
-    document.fonts?.ready.then(schedule);
+    const scheduleAll = () => { rows.forEach((_text, row) => dirty.add(row)); schedule(); };
+    const observer = new ResizeObserver((entries) => {
+      for (const { target } of entries) dirty.add(texts.get(target) || target);
+      schedule();
+    });
+    reduced.addEventListener('change', scheduleAll);
+    document.fonts?.ready.then(scheduleAll);
     galleryCardMetadataMotion = {
       update(root) {
         root.querySelectorAll('.album-card [data-gallery-metadata-text]').forEach(text => {
           const row = text.parentElement, previous = rows.get(row);
           if (previous === text) return;
-          if (previous) observer.unobserve(previous);
-          rows.set(row, text); observer.observe(row); observer.observe(text);
+          if (previous) { observer.unobserve(previous); texts.delete(previous); }
+          rows.set(row, text); texts.set(text, row); dirty.add(row);
+          observer.observe(row); observer.observe(text);
         });
         schedule();
       },
       dispose() {
         disposed = true;
         if (frame) cancelAnimationFrame(frame);
-        observer.disconnect(); reduced.removeEventListener('change', schedule);
+        observer.disconnect(); reduced.removeEventListener('change', scheduleAll);
         for (const row of rows.keys()) row.classList.remove('is-card-text-overflowing');
-        rows.clear();
+        rows.clear(); texts.clear(); dirty.clear();
       },
     };
   }

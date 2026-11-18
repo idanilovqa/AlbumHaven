@@ -22,6 +22,7 @@ _COMPRESSIBLE_MEDIA_TYPES = (
     "image/svg+xml",
 )
 _MIN_COMPRESS_BYTES = 1024
+WARMUP_THREAD_NAME = "static-gzip-warmup"
 
 
 def _is_compressible(media_type: str | None, size: int) -> bool:
@@ -75,7 +76,7 @@ class _GzipCache:
         threading.Thread(
             target=self.warm,
             args=(root,),
-            name="static-gzip-warmup",
+            name=WARMUP_THREAD_NAME,
             daemon=True,
         ).start()
 

@@ -188,7 +188,7 @@ async def update_preview_storage(request: Request) -> Response:
         )
     mode = str(payload["mode"])
     root = str(payload["path"]).strip() or None if mode == "custom" else None
-    if _same_preview_storage_location(current, mode=mode, root=root):
+    if await run_in_threadpool(_same_preview_storage_location, current, mode=mode, root=root):
         return _preview_storage_response(current, unchanged=True)
     if not payload["confirmed"]:
         return JSONResponse(
@@ -200,7 +200,7 @@ async def update_preview_storage(request: Request) -> Response:
                 await run_in_threadpool(
                     validate_custom_root,
                     payload["path"],
-                    configured_library_root_paths_snapshot(_app_config(request)),
+                    await run_in_threadpool(configured_library_root_paths_snapshot, _app_config(request)),
                 )
             )
         except ValueError as exc:

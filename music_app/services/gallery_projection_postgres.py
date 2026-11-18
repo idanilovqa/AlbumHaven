@@ -353,34 +353,46 @@ def ensure_gallery_projection_ready(config, *, connect=None, cancel_requested=No
 
 
 def _ensure_gallery_projection_ready(config, *, connect=None, cancel_requested=None, view_state=None):
-    """Publish each common scope from its own coherent source snapshot."""
+    """Publish each common scope from its own coherent source snapshot.
+
+    While a relation rebuild is pending, the scopes first publish with the last
+    published families, so watcher-found artists show at once (ungrouped until
+    their relations exist); the rebuilt relations then change the source
+    generation and the scopes publish again.
+    """
     from music_app.services import library_browse_postgres as browse
     from music_app.services.relation_projection_postgres import _raise_if_projection_cancelled
     repository = browse.PostgresLibraryBrowseRepository(config, connect=connect)
+    scopes = ([view_state] if view_state is not None else
+              [browse._root_sidebar_view_state(params) for params in ({}, {"gallery_scope": "new_arrivals"})])
+
+    def publish_scopes():
+        built = 0
+        for state in scopes:
+            _raise_if_projection_cancelled(cancel_requested)
+            with repository._connect_to_database() as connection:
+                connection.execute("set transaction isolation level repeatable read, read only")
+                context = gallery_projection_context(connection)
+                if not context:
+                    return built
+                if _ready_header(connection, context, state):
+                    continue
+                aliases = repository._load_relation_alias_maps(connection=connection)
+                if not browse._relation_aliases_servable(aliases):
+                    return built
+                root_aliases = browse._root_browse_alias_to_canonical(aliases["alias_to_canonical"])
+                missing_rows = repository._load_missing_album_rows(connection=connection)
+                rows = connection.execute(browse._root_gallery_membership_sql(), browse._root_sidebar_params(state)).fetchall()
+                missing = browse._missing_album_projection_payloads(missing_rows, view_state=state)
+                snapshot = browse._prepare_root_gallery_snapshot(rows, missing, root_aliases, state)
+            _raise_if_projection_cancelled(cancel_requested)
+            built += int(publish_gallery_projection(config, context, state, snapshot, connect=connect))
+        return built
+
+    built = 0
     if repository._load_relation_alias_maps().get("projection_stale_reason"):
         from music_app.services.relation_projection_postgres import ensure_relation_projection_ready
 
+        built = publish_scopes()
         ensure_relation_projection_ready(config, connect=connect, cancel_requested=cancel_requested)
-    built = 0
-    scopes = ([view_state] if view_state is not None else
-              [browse._root_sidebar_view_state(params) for params in ({}, {"gallery_scope": "new_arrivals"})])
-    for state in scopes:
-        _raise_if_projection_cancelled(cancel_requested)
-        with repository._connect_to_database() as connection:
-            connection.execute("set transaction isolation level repeatable read, read only")
-            context = gallery_projection_context(connection)
-            if not context:
-                return {"built": built}
-            if _ready_header(connection, context, state):
-                continue
-            aliases = repository._load_relation_alias_maps(connection=connection)
-            if aliases.get("projection_stale_reason"):
-                return {"built": built}
-            root_aliases = browse._root_browse_alias_to_canonical(aliases["alias_to_canonical"])
-            missing_rows = repository._load_missing_album_rows(connection=connection)
-            rows = connection.execute(browse._root_gallery_membership_sql(), browse._root_sidebar_params(state)).fetchall()
-            missing = browse._missing_album_projection_payloads(missing_rows, view_state=state)
-            snapshot = browse._prepare_root_gallery_snapshot(rows, missing, root_aliases, state)
-        _raise_if_projection_cancelled(cancel_requested)
-        built += int(publish_gallery_projection(config, context, state, snapshot, connect=connect))
-    return {"built": built}
+    return {"built": built + publish_scopes()}

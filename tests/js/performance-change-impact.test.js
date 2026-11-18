@@ -52,6 +52,12 @@ test('sensitive browse, sidebar, modal, status, and mobile changes select their 
   }
 });
 
+test('structural save finalize and album rebuild changes select the Edit Tags post-save target', () => {
+  for (const changedPath of ['music_app/services/save_tasks.py', 'music_app/services/edit_state.py']) {
+    assert.ok(resolveRequiredPerformanceTargets(contract, [changedPath]).includes('edit-tags-post-edit'), changedPath);
+  }
+});
+
 test('multiple sensitive changes deduplicate required targets in reviewed contract order', () => {
   assert.deepEqual(resolveRequiredPerformanceTargets(contract, [
     'music_app/static/js/runtime/status-ui-helpers.js',

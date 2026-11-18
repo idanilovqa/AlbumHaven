@@ -106,7 +106,9 @@ def apply_scoped_local_cover(album, file_cache: Mapping[str, Mapping[str, object
         try:
             candidates.update(path for path in folder.iterdir() if path.is_file() and path.suffix.lower() in _IMAGE_EXTENSIONS)
         except OSError:
-            continue
+            # An unreadable folder (a dropped drive or share) proves nothing:
+            # leave this album's cover exactly as it is.
+            return
     candidates = {
         path for path in candidates
         if any(path.resolve().is_relative_to(root.resolve()) for root in roots)

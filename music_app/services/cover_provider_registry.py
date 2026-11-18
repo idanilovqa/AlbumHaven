@@ -157,7 +157,7 @@ class CoverLookupProviderRegistry:
             should_cancel=active_should_cancel,
             canonical_album_title=cover_provider_matching.canonical_album_title,
             dedupe_candidates=cover_provider_matching.dedupe_candidates,
-            log_event=log_event or cover_provider_runtime.log_app_event,
+            log_event=log_event or cover_provider_runtime.log_provider_event,
             logger=cover_provider_runtime.LOGGER,
         )
         if callable(active_should_cancel) and active_should_cancel():
@@ -201,7 +201,7 @@ class CoverLookupProviderRegistry:
         )
         archive_candidates: list[dict[str, object]] = []
         discogs_candidates: list[dict[str, object]] = []
-        app_log_event = log_event or cover_provider_runtime.log_app_event
+        app_log_event = log_event or cover_provider_runtime.log_provider_event
         caa_future = (
             _LATER_PROVIDER_EXECUTOR.submit(
                     cover_provider_musicbrainz_caa.search_cover_art_archive_candidates,
@@ -315,7 +315,7 @@ class CoverLookupProviderRegistry:
             probe_match_candidates=cover_provider_runtime.probe_match_candidates,
             dedupe_candidates=cover_provider_matching.dedupe_candidates,
             similarity=cover_provider_matching.similarity,
-            log_event=log_event or cover_provider_runtime.log_app_event,
+            log_event=log_event or cover_provider_runtime.log_provider_event,
             logger=cover_provider_runtime.LOGGER,
             extract_search_links=cover_provider_fallback_web.extract_generic_search_links,
             extract_og_image=cover_provider_fallback_web.extract_og_image,
@@ -347,7 +347,7 @@ def _search_service_cover_candidates(
 ) -> list[dict[str, object]]:
     all_candidates: list[CoverCandidate] = []
     candidates_lock = Lock()
-    app_log_event = log_event or cover_provider_runtime.log_app_event
+    app_log_event = log_event or cover_provider_runtime.log_provider_event
     enabled_service_names = normalize_enabled_music_services(enabled_services)
 
     def service_enabled(service_name: str) -> bool:

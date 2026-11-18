@@ -2308,3 +2308,222 @@ for (const handoff of [false, true]) {
     assert.equal(audio.paused, true);
   });
 }
+
+const loopRangeControlsSource = fs.readFileSync(path.join(path.dirname(helperPath), 'loop-range-controls.js'), 'utf8');
+
+// Saved-loop page with `loopCount` rendered loops; every selector lookup and
+// node mutation the real handlers perform is counted.
+function createCountedSavedLoopPage(counter, loopCount) {
+  const { countedCollection } = require('../helpers/bounded-interaction-counter.js');
+  const { createCountedDom } = require('../helpers/counted-dom.js');
+  const documentListeners = new Map();
+  const { CountedElement: CountedNode, createElement } = createCountedDom(counter);
+  const loops = countedCollection(Array.from({ length: loopCount }, (_value, index) => ({ id: `loop-${index}` })), counter);
+  const selectors = new Map();
+  const body = new CountedNode('BODY');
+  const peaks = Array.from({ length: 280 }, (_value, index) => (index % 10) / 10);
+  const drawingContext = {
+    clearRect() { counter.count('renderCommits'); },
+    fillRect() {},
+    save() {},
+    restore() {},
+    beginPath() {},
+    rect() {},
+    clip() {},
+    fill() {},
+    stroke() {},
+    moveTo() {},
+    lineTo() {},
+    arc() {},
+  };
+  for (let index = 0; index < loopCount; index += 1) {
+    const id = `loop-${index}`;
+    const audio = new CountedNode('AUDIO');
+    Object.assign(audio, { currentTime: 0, duration: 120, paused: true, play: async () => {}, pause() {} });
+    const timeline = new CountedNode('INPUT');
+    const time = new CountedNode('SPAN');
+    const main = new CountedNode();
+    main.querySelector = (selector) => {
+      counter.count('domQueries');
+      return { '[data-loop-timeline]': timeline, '[data-loop-time]': time }[selector] || null;
+    };
+    const canvas = new CountedNode('CANVAS');
+    new CountedNode().appendChild(canvas);
+    Object.assign(canvas, { clientWidth: 560, clientHeight: 48, getContext: () => drawingContext });
+    const trigger = new CountedNode('BUTTON');
+    trigger.closest = () => new CountedNode();
+    const menu = new CountedNode('DIV', { hidden: true });
+    new CountedNode().appendChild(menu);
+    for (let option = 0; option < 8; option += 1) menu.appendChild(new CountedNode('BUTTON'));
+    selectors.set(`[data-loop-audio="${id}"]`, audio);
+    selectors.set(`[data-loop-play="${id}"]`, new CountedNode('BUTTON'));
+    selectors.set(`[data-loop-timeline="${id}"]`, timeline);
+    selectors.set(`[data-loop-stereo-waveform="${id}"]`, canvas);
+    const rangeRoot = new CountedNode();
+    const rangeParts = {
+      '[data-loop-range-surface]': Object.assign(new CountedNode(), {
+        getBoundingClientRect: () => ({ left: 100, width: 600, top: 0, height: 40 }),
+      }),
+      '[data-loop-range-handle="start"]': new CountedNode('BUTTON'),
+      '[data-loop-range-handle="end"]': new CountedNode('BUTTON'),
+      '[data-loop-range-time="start"]': new CountedNode('SPAN'),
+      '[data-loop-range-time="end"]': new CountedNode('SPAN'),
+    };
+    rangeRoot.querySelector = (selector) => { counter.count('domQueries'); return rangeParts[selector] || null; };
+    rangeRoot.parts = rangeParts;
+    const actionRoot = new CountedNode();
+    const actionParts = Object.fromEntries(['enter', 'create', 'cancel']
+      .map(action => [`[data-loop-action="${action}"]`, new CountedNode('BUTTON')]));
+    actionRoot.querySelector = (selector) => { counter.count('domQueries'); return actionParts[selector] || null; };
+    selectors.set(`[data-loop-range-owner="saved-loop-${id}"]`, rangeRoot);
+    selectors.set(`[data-loop-action-owner="saved-loop-${id}"]`, actionRoot);
+    selectors.set(`[data-saved-loop-main-surface="${id}"]`, main);
+    selectors.set(`[data-loop-speed-value-button="${id}"]`, trigger);
+    selectors.set(`[data-loop-speed-menu="${id}"]`, menu);
+  }
+  const document = {
+    body,
+    activeElement: null,
+    createElement,
+    querySelector(selector) { counter.count('domQueries'); return selectors.get(selector) || null; },
+    querySelectorAll() { counter.count('domQueries'); return []; },
+    addEventListener(type, listener, options = {}) {
+      counter.count('listeners');
+      documentListeners.set(type, listener);
+      options.signal?.addEventListener('abort', () => {
+        if (documentListeners.get(type) === listener) documentListeners.delete(type);
+      });
+    },
+  };
+  const fetch = async (url) => {
+    counter.count('requests');
+    assert.match(String(url), /^\/playback\/waveform\?/);
+    return { ok: true, status: 200, json: async () => ({ sampleCount: 280, left: peaks, right: peaks }) };
+  };
+  return { loops, selectors, document, documentListeners, fetch, CountedNode, frames: [] };
+}
+
+function loadCountedSavedLoopPage(counter, loopCount) {
+  const page = createCountedSavedLoopPage(counter, loopCount);
+  const context = loadHelper({
+    HTMLElement: page.CountedNode,
+    document: page.document,
+    fetch: page.fetch,
+    getComputedStyle: () => ({ getPropertyValue: () => '' }),
+    window: { innerWidth: 1280, innerHeight: 800, addEventListener() {} },
+    requestAnimationFrame: (callback) => {
+      counter.count('animationFrames');
+      page.frames.push(callback);
+      return page.frames.length;
+    },
+    cancelAnimationFrame: () => {},
+    state: {
+      player: { streaming: { generation: 0 }, appearance: { seekbarMode: 'waveform' } },
+      utility: {
+        activeTab: 'loops',
+        loops: page.loops,
+        loopsLoaded: true,
+        selectedLoopId: '',
+        loopRepeatEnabled: false,
+        loopKeyboardSeekBound: false,
+        loopEditors: {},
+      },
+    },
+  });
+  vm.runInContext(loopRangeControlsSource, context);
+  return { context, page };
+}
+
+test('bounded interaction: saved-loop timeline input redraws one loop among 1,000 saved loops', async () => {
+  const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const run = async (cardinality) => {
+    const counter = createInteractionCounter();
+    const { context, page } = loadCountedSavedLoopPage(counter, cardinality);
+    const loopId = `loop-${cardinality - 1}`;
+    context.initializeUtilityLoopPlayer({ id: loopId });
+    await new Promise(resolve => setImmediate(resolve));
+    const timeline = page.selectors.get(`[data-loop-timeline="${loopId}"]`);
+    const work = await counter.measure(async () => {
+      for (let step = 1; step <= 10; step += 1) {
+        timeline.value = String(step * 6);
+        timeline.dispatch('input');
+      }
+      await new Promise(resolve => setImmediate(resolve));
+    });
+    assert.equal(page.selectors.get(`[data-loop-audio="${loopId}"]`).currentTime, 60);
+    assert.equal(page.selectors.get(`[data-loop-stereo-waveform="${loopId}"]`).hidden, false);
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:runtime/utility-loop-playback.js#initializeUtilityLoopPlayer',
+    small: 20,
+    large: 1000,
+    run,
+    budgets: { itemsVisited: 0, requests: 0, domQueries: 110, domMutations: 40, renderCommits: 10, listeners: 0 },
+    growth: { metric: 'domQueries', largeMinusSmallMax: 0 },
+  });
+});
+
+test('bounded interaction: page scroll closes a loop speed menu among 1,000 saved loops', async () => {
+  const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const run = async (cardinality) => {
+    const counter = createInteractionCounter();
+    const { context, page } = loadCountedSavedLoopPage(counter, cardinality);
+    const loopId = `loop-${cardinality - 1}`;
+    const menu = page.selectors.get(`[data-loop-speed-menu="${loopId}"]`);
+    const host = menu.parentElement;
+    context.toggleUtilityLoopSettingMenu(loopId, 'speed');
+    assert.equal(menu.hidden, false);
+    const scroll = page.documentListeners.get('scroll');
+    const work = await counter.measure(() => {
+      scroll({ target: page.document.body });
+      scroll({ target: page.document.body });
+    });
+    assert.equal(menu.hidden, true);
+    assert.equal(menu.parentElement, host);
+    assert.equal(menu.childNodes.length, 8);
+    assert.equal(page.documentListeners.has('scroll'), false);
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:runtime/utility-loop-playback.js#toggleUtilityLoopSettingMenu',
+    small: 20,
+    large: 1000,
+    run,
+    budgets: { itemsVisited: 0, requests: 0, domQueries: 0, domMutations: 17, listeners: 0 },
+    growth: { metric: 'domMutations', largeMinusSmallMax: 0 },
+  });
+});
+
+test('bounded interaction: loop range handle drag previews one saved loop among 1,000', async () => {
+  const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const run = async (cardinality) => {
+    const counter = createInteractionCounter();
+    const { context, page } = loadCountedSavedLoopPage(counter, cardinality);
+    const loopId = `loop-${cardinality - 1}`;
+    await context.openSavedLoopCreation(loopId);
+    assert.equal(context.state.utility.loopEditors[loopId].active, true);
+    const range = page.selectors.get(`[data-loop-range-owner="saved-loop-${loopId}"]`);
+    range.parts['[data-loop-range-handle="end"]'].dispatch('pointerdown', { pointerId: 7 });
+    const pointermove = page.documentListeners.get('pointermove');
+    const work = await counter.measure(() => {
+      for (let step = 1; step <= 10; step += 1) {
+        pointermove({ pointerId: 7, clientX: 700 - step * 30 });
+        page.frames.splice(0).forEach(frame => frame());
+      }
+    });
+    assert.deepEqual(
+      { start: context.state.utility.loopEditors[loopId].startSeconds, end: context.state.utility.loopEditors[loopId].endSeconds },
+      { start: 0, end: 60 },
+    );
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:runtime/loop-range-controls.js#attachDocumentDragListeners',
+    small: 20,
+    large: 1000,
+    run,
+    budgets: { itemsVisited: 0, requests: 0, domQueries: 270, domMutations: 130, animationFrames: 10, listeners: 0 },
+    growth: { metric: 'domQueries', largeMinusSmallMax: 0 },
+  });
+});

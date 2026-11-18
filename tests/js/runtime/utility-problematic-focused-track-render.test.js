@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const { loadPendingProjectionFetch } = require('../helpers/pending-projection-fetch');
 
 const rendererPath = path.join(
   __dirname,
@@ -80,6 +81,7 @@ function loadProblematicLoader(fetch) {
     showToast() {},
   };
   vm.createContext(context);
+  loadPendingProjectionFetch(context);
   vm.runInContext(loaderSource, context, { filename: loaderPath });
   return { context, renders };
 }

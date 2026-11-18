@@ -58,8 +58,10 @@ def test_album_details_name_the_group_of_a_proven_split_album_only():
     assert browse._album_musicbrainz_artist(split, 1)["group_label"] == "Amarok (Poland)"
     assert "group_label" not in browse._album_musicbrainz_artist(matched, 2)
     sql = _normalized(split.sql[0])
-    assert "where artist_match.state = 'per_album'" in sql
-    assert "starts_with(artist_groups.group_key, 'musicbrainz:')" in sql
+    # The tree's own labels, read for the album's artist only, never the whole 0192 view.
+    assert "split_match.state = 'per_album'" in sql
+    assert "split_match.local_artist_id = (select artist_id from library.local_albums where id = %(album_id)s)" in sql
+    assert "library.local_album_artist_groups" not in sql
 
 
 def test_a_matched_artist_is_never_split_and_undecided_albums_keep_the_plain_name():

@@ -10545,5 +10545,50 @@
       "a real genre still shows its pill in the gallery header and on a card"
     ],
     "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sameNameSplit.spec.js",
+    "case": "same-name split: each identity shows its full country name, dimmed, and a code with no English name shows as the code",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "musicbrainz-same-name-split-country"
+    ],
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sameNameSplit.spec.js",
+    "case": "same-name split: two identities from one country show Person and Band; the disambiguation only when the type is the same too",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "musicbrainz-same-name-split-type"
+    ],
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sameNameSplit.spec.js",
+    "case": "same-name split: the plain name row lists only the undecided albums and is gone once every album is matched",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "musicbrainz-same-name-split-plain-row"
+    ],
+    "ownerApproval": "pending"
   }
 ]

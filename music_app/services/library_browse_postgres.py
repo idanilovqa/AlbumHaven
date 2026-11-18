@@ -8305,7 +8305,10 @@ def _album_musicbrainz_artist(connection: Any, album_id: object) -> dict[str, ob
     if not album_id:
         return None
     rows = connection.execute(
-        """
+        "with " + _split_album_groups_cte_sql(
+            "select library_id from library.local_albums where id = %(album_id)s",
+            artist_filter_sql=" and split_match.local_artist_id ="
+                              " (select artist_id from library.local_albums where id = %(album_id)s)") + """
         select identity.artist_mbid::text as mbid, artist.canonical_name, artist.disambiguation,
                identity.tag_differs, artist_match.state = 'per_album' as split, artist_group.group_label
         from library.local_albums album
@@ -8314,16 +8317,9 @@ def _album_musicbrainz_artist(connection: Any, album_id: object) -> dict[str, ob
         join integration.musicbrainz_artists artist on artist.mbid = identity.artist_mbid
         left join library.local_artist_musicbrainz_matches artist_match
           on artist_match.library_id = album.library_id and artist_match.local_artist_id = album.artist_id
-        -- The split name's group this album belongs to: "Amarok (Poland)" (D2 S2).
-        left join lateral (
-          select artist_groups.group_label
-          from library.local_album_artist_groups artist_groups
-          where artist_match.state = 'per_album'
-            and artist_groups.library_id = album.library_id
-            and artist_groups.local_artist_id = album.artist_id
-            and artist_groups.album_key = album.album_key
-            and starts_with(artist_groups.group_key, 'musicbrainz:')
-        ) artist_group on true
+        -- The split name's group this album belongs to: "Amarok (Poland)" (D2 S2), labelled
+        -- as the tree labels it; only the album's own artist is read.
+        left join split_album_groups artist_group on artist_group.album_id = album.id
         where album.id = %(album_id)s
         """,
         {"album_id": album_id},
@@ -9116,7 +9112,9 @@ def _root_gallery_membership_sql(*, candidate_albums_only: bool = False) -> str:
     """
 
 
-def _split_album_groups_cte_sql(library_ids_sql: str = "select library_id from bootstrap_context") -> str:
+def _split_album_groups_cte_sql(
+    library_ids_sql: str = "select library_id from bootstrap_context", *, artist_filter_sql: str = "",
+) -> str:
     """Same-name artists MusicBrainz splits per album (D2 S2, "Amarok (Poland)"): each proven
     album's group label, as the 0192 view ``library.local_album_artist_groups`` labels it.
 
@@ -9124,14 +9122,19 @@ def _split_album_groups_cte_sql(library_ids_sql: str = "select library_id from b
     filtering (about 60 ms and 5.5k buffers per query on a 14,851-album library). This starts
     from the few ``per_album`` artists and reads only their albums, so every other artist pays
     one probe of this small set and keeps its name. A Postgres test keeps the labels equal to
-    the view's. ``library_ids_sql`` selects the libraries read (the browse queries' own)."""
+    the view's proven albums; its labels follow the owner's rules below, which the view predates.
+    ``library_ids_sql`` selects the libraries read (the browse queries' own); ``artist_filter_sql``
+    narrows the artists further (album details read only the album's own)."""
+    from music_app.services.country_names import country_names_sql_literal
+
+    country_names = country_names_sql_literal()
     return f"""
         split_album_groups as materialized (
           with split_artists as (
             select split_match.library_id, split_match.local_artist_id as artist_id
             from library.local_artist_musicbrainz_matches split_match
             where split_match.state = 'per_album'
-              and split_match.library_id in ({library_ids_sql})
+              and split_match.library_id in ({library_ids_sql}){artist_filter_sql}
           ), proven as (
             select albums.id as album_id, albums.artist_id, identities.artist_mbid
             from split_artists
@@ -9141,21 +9144,31 @@ def _split_album_groups_cte_sql(library_ids_sql: str = "select library_id from b
               on identities.library_id = albums.library_id and identities.album_key = albums.album_key
           ), described as (
             select distinct proven.artist_id, proven.artist_mbid,
-                   nullif(btrim(remote.disambiguation), '') as disambiguation, country.name as country
+                   nullif(btrim(remote.disambiguation), '') as disambiguation, country.name as country,
+                   case remote.artist_kind
+                     when 'Person' then 'Person' when 'Group' then 'Band' when 'Orchestra' then 'Orchestra'
+                     when 'Choir' then 'Choir' when 'Character' then 'Character'
+                   end as kind
             from proven
             join integration.musicbrainz_artists remote on remote.mbid = proven.artist_mbid
             left join lateral (
-              select coalesce(countries.country_name, countries.country_code) as name
+              select coalesce({country_names} ->> upper(countries.country_code),
+                              countries.country_name, countries.country_code) as name
               from integration.musicbrainz_artist_countries countries
               where countries.artist_mbid = proven.artist_mbid
               order by countries.country_code
               limit 1
             ) country on true
           ), qualified as (
+            -- Owner 2026-11-17 ("Same-name split labels"): the full country name; in the same
+            -- country, the type ("Person", "Band") when it tells them apart; MusicBrainz's
+            -- disambiguation only when the type is the same too.
             select described.artist_id, described.artist_mbid,
                    case
                      when country is not null
                           and count(*) over (partition by artist_id, country) = 1 then country
+                     when kind is not null
+                          and count(*) over (partition by artist_id, kind) = 1 then kind
                      when disambiguation is not null
                           and count(*) over (partition by artist_id, disambiguation) = 1 then disambiguation
                      when country is not null and disambiguation is not null

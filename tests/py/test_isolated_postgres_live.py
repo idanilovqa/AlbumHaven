@@ -6639,25 +6639,96 @@ def test_live_the_tree_and_gallery_show_one_row_per_proven_same_name_artist(watc
         _SPLIT_POLAND, "Poland")
 
 
-def test_live_the_narrow_split_groups_label_every_proven_album_exactly_as_the_0192_view(watcher_repair_inventory):
-    """The browse queries read their own narrow copy of the view (the view costs ~60 ms per
-    query on a full library); its rows must stay the view's proven groups, label for label."""
+def _narrow_split_groups(fixture, library_id):
     from music_app.services.library_browse_postgres import _split_album_groups_cte_sql
 
-    fixture = watcher_repair_inventory
-    albums = _seed_same_name_split(fixture)
-    library_id = albums["Hunt"]["library_id"]
     with isolatedPostgres._connect(fixture.setup_url) as connection:
-        narrow = connection.execute(
+        return connection.execute(
             "with bootstrap_context as (select %s::bigint as library_id), " + _split_album_groups_cte_sql()
             + " select album_id, artist_id, group_label, artist_mbid::text from split_album_groups"
             " order by album_id", (library_id,)).fetchall()
+
+
+def _relabel_split(fixture, labels):
+    """Replace the seeded identities' country, type and disambiguation: {mbid: (code, name, kind, disambiguation)}."""
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        for mbid, (code, name, kind, disambiguation) in labels.items():
+            connection.execute("update integration.musicbrainz_artists set artist_kind = %s, disambiguation = %s"
+                               " where mbid = %s", (kind, disambiguation, mbid))
+            connection.execute("update integration.musicbrainz_artist_countries set country_code = %s, country_name = %s"
+                               " where artist_mbid = %s", (code, name, mbid))
+
+
+def test_live_the_narrow_split_groups_hold_exactly_the_0192_views_proven_albums(watcher_repair_inventory):
+    """The browse queries read their own narrow copy of the view (the view costs ~60 ms per
+    query on a full library); it must hold exactly the view's proven albums and identities."""
+    fixture = watcher_repair_inventory
+    albums = _seed_same_name_split(fixture)
+    library_id = albums["Hunt"]["library_id"]
+    narrow = _narrow_split_groups(fixture, library_id)
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
         view = connection.execute(
-            "select local_album_id as album_id, local_artist_id as artist_id, group_label, artist_mbid::text"
+            "select local_album_id as album_id, local_artist_id as artist_id, artist_mbid::text"
             " from library.local_album_artist_groups where library_id = %s and starts_with(group_key, 'musicbrainz:')"
             " order by local_album_id", (library_id,)).fetchall()
-    assert [tuple(row.values()) for row in narrow] == [tuple(row.values()) for row in view]
+    assert [(row["album_id"], row["artist_id"], row["artist_mbid"]) for row in narrow] == [
+        tuple(row.values()) for row in view]
     assert sorted(row["group_label"] for row in narrow) == ["Owner (Poland)", "Owner (Spain)"]
+
+
+def test_live_split_labels_name_the_full_country_from_its_code_and_keep_a_code_with_no_name(watcher_repair_inventory):
+    """Owner 2026-11-17: "Amarok (ES)" shows as "Amarok (Spain)"; display only, no data change."""
+    fixture = watcher_repair_inventory
+    albums = _seed_same_name_split(fixture)
+    _relabel_split(fixture, {_SPLIT_POLAND: ("PL", None, "Group", None), _SPLIT_SPAIN: ("ES", None, "Group", None)})
+    assert sorted(row["group_label"] for row in _narrow_split_groups(fixture, albums["Hunt"]["library_id"])) == [
+        "Owner (Poland)", "Owner (Spain)"]
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        stored = connection.execute("select country_code, country_name from integration.musicbrainz_artist_countries"
+                                    " where artist_mbid = %s", (_SPLIT_SPAIN,)).fetchone()
+    assert (stored["country_code"], stored["country_name"]) == ("ES", None), "the stored data is unchanged"
+    # Negative: a code with no English name shows as the code.
+    _relabel_split(fixture, {_SPLIT_SPAIN: ("QZ", None, "Group", None)})
+    assert sorted(row["group_label"] for row in _narrow_split_groups(fixture, albums["Hunt"]["library_id"])) == [
+        "Owner (Poland)", "Owner (QZ)"]
+
+
+def test_live_split_labels_in_one_country_name_the_type_and_the_disambiguation_only_for_one_type(
+    watcher_repair_inventory,
+):
+    """Owner 2026-11-17: "Alice Cooper (Person)" and "Alice Cooper (Band)" when the type differs;
+    MusicBrainz's disambiguation only when the type is the same too."""
+    fixture = watcher_repair_inventory
+    albums = _seed_same_name_split(fixture)
+    library_id = albums["Hunt"]["library_id"]
+    _relabel_split(fixture, {_SPLIT_POLAND: ("US", None, "Person", "the singer"),
+                             _SPLIT_SPAIN: ("US", None, "Group", "the band")})
+    assert sorted(row["group_label"] for row in _narrow_split_groups(fixture, library_id)) == [
+        "Owner (Band)", "Owner (Person)"]
+    # Negative: the same country and the same type fall back to the disambiguation.
+    _relabel_split(fixture, {_SPLIT_POLAND: ("US", None, "Group", "the 1969 band"),
+                             _SPLIT_SPAIN: ("US", None, "Group", "the 1990 band")})
+    assert sorted(row["group_label"] for row in _narrow_split_groups(fixture, library_id)) == [
+        "Owner (the 1969 band)", "Owner (the 1990 band)"]
+
+
+def test_live_the_plain_row_holds_only_undecided_albums_and_is_gone_when_every_album_is_matched(
+    watcher_repair_inventory,
+):
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    fixture = watcher_repair_inventory
+    albums = _seed_same_name_split(fixture)
+    repository = PostgresLibraryBrowseRepository(fixture.config)
+    sidebar = {item["artist"]: item["count"] for item in repository.build_root_sidebar_payload()["artists_sidebar"]}
+    assert (sidebar.get("Owner"), sidebar.get("Owner (Poland)"), sidebar.get("Owner (Spain)")) == (1, 1, 1)
+    with isolatedPostgres._connect(fixture.setup_url) as connection:  # The undecided album is matched too.
+        connection.execute(
+            "insert into library.local_album_artist_identities (library_id, album_key, artist_mbid, matcher_version)"
+            " values (%s, %s, %s, 5)", (albums["Open"]["library_id"], albums["Open"]["album_key"], _SPLIT_POLAND))
+    sidebar = {item["artist"]: item["count"] for item in repository.build_root_sidebar_payload()["artists_sidebar"]}
+    assert "Owner" not in sidebar
+    assert (sidebar.get("Owner (Poland)"), sidebar.get("Owner (Spain)")) == (2, 1)
 
 
 def test_live_selecting_a_split_row_shows_only_that_artist_and_the_plain_name_keeps_the_undecided(

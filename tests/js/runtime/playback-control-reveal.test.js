@@ -6,7 +6,7 @@ const vm = require('node:vm');
 
 const source = path.join(__dirname, '../../../music_app/static/js/runtime/loop-range-controls.js');
 
-function harness({ active = false, canCreate = true, touch = false } = {}) {
+function harness({ active = false, canCreate = true, enabled = true, touch = false } = {}) {
   let now = 0, nextId = 0;
   const timers = new Map();
   const document = { activeElement: null };
@@ -60,7 +60,7 @@ function harness({ active = false, canCreate = true, touch = false } = {}) {
   const calls = [];
   let controller;
   controller = context.mountLoopEditActionControl({
-    root, interactionRoot: compound, active, enabled: true, canCreate,
+    root, interactionRoot: compound, active, enabled, canCreate,
     onEnter() { calls.push('enter'); controller.update({ active: true }); },
     onCreate() { calls.push('create'); },
     onCancel() { calls.push('cancel'); range.startSeconds = 0; range.endSeconds = 0; controller.update({ active: false }); },
@@ -177,6 +177,28 @@ test('B06 capability loss hides actions and cancels pending work while Play stay
   assert.equal(h.root.hidden, true); assert.equal(h.revealed(), false); assert.equal(h.timers.size, 0);
   h.enter.dispatch('click'); assert.deepEqual(h.calls, []); assert.equal(h.play.disabled, false);
   h.controller.update({ canCreate: true }); assert.equal(h.root.hidden, false);
+});
+
+test('an unusable player keeps the scissors folded around Play on hover and keyboard focus', () => {
+  const h = harness({ enabled: false });
+  h.compound.dispatch('pointerenter', { target: h.play }); h.tick(1000);
+  assert.equal(h.revealed(), false, 'hovering Play with no playable track must not slide the scissors out');
+  assert.equal(h.timers.size, 0);
+  h.compound.dispatch('keydown'); h.compound.dispatch('focusin'); h.tick(1000);
+  assert.equal(h.revealed(), false);
+  h.compound.dispatch('pointerleave'); h.tick(1000);
+  assert.equal(h.revealed(), false);
+});
+
+test('losing playback folds revealed scissors at once and regaining it starts a fresh dwell', () => {
+  const h = harness(); h.compound.dispatch('pointerenter', { target: h.play }); h.tick(300);
+  assert.equal(h.revealed(), true);
+  h.controller.update({ enabled: false });
+  assert.equal(h.revealed(), false); assert.equal(h.timers.size, 0);
+  h.tick(1000); assert.equal(h.revealed(), false);
+  h.controller.update({ enabled: true });
+  h.tick(299); assert.equal(h.revealed(), false);
+  h.tick(1); assert.equal(h.revealed(), true);
 });
 
 test('B06 real callbacks remain retryable after busy save failure, and cancel resets the edit', () => {

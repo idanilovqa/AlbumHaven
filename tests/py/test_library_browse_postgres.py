@@ -2464,6 +2464,8 @@ def test_postgres_library_browse_builds_root_sidebar_payload_from_rows(monkeypat
             return self
 
         def __exit__(self, exc_type, exc, traceback):
+            # Like psycopg, leaving the connection block closes the connection.
+            self.close()
             return False
 
         def execute(self, sql, params=None):
@@ -21694,3 +21696,113 @@ def test_cover_lookup_track_path_reads_lease_the_shared_browse_pool(monkeypatch)
     assert repository.build_cover_state_entries_by_paths({"N:/Album/01.flac"}) == {}
     assert repository.build_album_payloads_by_track_paths({"N:/Album/01.flac"}) == []
     assert leases == ["browse", "browse"]
+
+
+def _record_browse_connections(monkeypatch):
+    """Route the repository's pool and fresh connections to empty fakes; return the opened kinds."""
+    from contextlib import contextmanager
+
+    import music_app.services.gallery_projection_postgres as gallery_projection
+    import music_app.services.library_browse_postgres as browse
+
+    opened = []
+
+    class _Cursor:
+        def fetchall(self):
+            return []
+
+        def fetchone(self):
+            return None
+
+    class _Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return None
+
+        def execute(self, *_args):
+            return _Cursor()
+
+        def rollback(self):
+            return None
+
+        def close(self):
+            return None
+
+    @contextmanager
+    def pooled(_database_url, *, workload):
+        opened.append(f"pool:{workload}")
+        yield _Connection()
+
+    def fresh(_database_url):
+        opened.append("fresh")
+        return _Connection()
+
+    monkeypatch.setattr(browse, "_pooled_connection", pooled)
+    monkeypatch.setattr(browse, "_connect", fresh)
+    monkeypatch.setattr(gallery_projection, "load_gallery_projection_sidebar", lambda *_a, **_k: ([], 0))
+    monkeypatch.setattr(gallery_projection, "gallery_projection_context", lambda _connection: None)
+    return browse, opened
+
+
+@pytest.mark.parametrize(
+    ("read", "expected"),
+    [
+        # Short request reads: a fresh connection cost 150-500 ms against queries of a few ms.
+        (lambda repo: repo.build_selected_artist_payload(query_params={"artist": "Owner"}), "pool:browse"),
+        (lambda repo: repo.build_projected_root_sidebar_payload(), "pool:browse"),
+        (lambda repo: repo.build_root_sidebar_payload(), "pool:browse"),
+        (lambda repo: repo.build_library_loose_tracks_payload(), "pool:browse"),
+        (lambda repo: repo._load_relation_alias_maps(), "pool:browse"),
+        (lambda repo: repo._load_missing_album_rows(album_key="owner::album"), "pool:browse"),
+        (lambda repo: repo._load_problematic_file_rows(album_key="owner::album"), "pool:browse"),
+        (lambda repo: repo._load_problematic_files_snapshot(), "pool:browse"),
+        (lambda repo: repo._load_utility_rules_rows(), "pool:browse"),
+        # Writes and whole-library reads keep their own connection so they cannot starve the pool.
+        (lambda repo: repo.build_root_sidebar_payload(query_params={"gallery_offset": "50"}), "fresh"),
+        (lambda repo: repo.build_library_loose_tracks_payload(rebuild_missing_snapshot=True), "fresh"),
+        (lambda repo: repo.build_root_counts_payload(), "fresh"),
+        (lambda repo: repo._load_problematic_file_rows(candidate_summary=False), "fresh"),
+        (lambda repo: repo._build_problematic_files_payload_uncached(), "fresh"),
+        (lambda repo: repo._store_problematic_files_snapshot("{}"), "fresh"),
+        (lambda repo: repo._load_root_album_browse_rows({}), "fresh"),
+    ],
+    ids=[
+        "selected-artist", "projected-root-sidebar", "root-sidebar-first-page", "loose-tracks-request",
+        "relation-alias-maps", "missing-album-by-key", "problematic-album-rows", "problematic-snapshot",
+        "utility-rules", "root-sidebar-later-page", "loose-tracks-rebuild", "root-counts",
+        "problematic-whole-library-rows", "problematic-complete-list", "problematic-snapshot-store",
+        "root-album-browse-rows",
+    ],
+)
+def test_short_browse_reads_lease_the_pool_and_long_or_writing_ones_do_not(
+    monkeypatch, read, expected, default_empty_relation_alias_projection, default_empty_missing_album_projection,
+):
+    from uuid import uuid4
+
+    browse, opened = _record_browse_connections(monkeypatch)
+    monkeypatch.setattr(
+        browse.PostgresLibraryBrowseRepository, "_load_relation_alias_maps", default_empty_relation_alias_projection,
+    )
+    monkeypatch.setattr(
+        browse.PostgresLibraryBrowseRepository, "_load_missing_album_rows", default_empty_missing_album_projection,
+    )
+    # Projection caches are keyed by database URL; a fresh one keeps every read uncached.
+    repository = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": f"postgresql://unused/{uuid4().hex}"})
+    monkeypatch.setattr(repository, "queue_utility_projection_prewarm", lambda _kind: None)
+
+    read(repository)
+
+    assert opened and set(opened) == {expected}
+
+
+def test_root_source_totals_keep_their_own_connection(monkeypatch):
+    """Each unprojected source scope recounts the whole library; that must not hold a pooled connection."""
+    browse, opened = _record_browse_connections(monkeypatch)
+    repository = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://unused/totals"})
+
+    with pytest.raises(browse.GalleryProjectionPending):
+        repository.build_root_source_totals_payload()
+
+    assert opened == ["fresh"]

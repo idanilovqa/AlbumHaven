@@ -2232,6 +2232,30 @@
   {
     "config": "playwright.config.js",
     "project": "functional",
+    "test": "tests/e2e/specs/loops.functional.spec.js",
+    "case": "FTC-PLAYER-023 the playing song draws its waveform while a prefetch build is still running",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "databaseScenarios": [
+      "waveform:playing-song-preempts-prefetch"
+    ],
+    "filesystemScenarios": [
+      "audio-copy:waveform-prefetch-priority"
+    ],
+    "expectedContracts": [
+      "playing-waveform-preempts-prefetch"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:waveform-prefetch-priority",
+      "filesystemCopy": "media/cases/waveform-prefetch-priority"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
     "test": "tests/e2e/specs/nonAlbumRarity.spec.js",
     "case": "FTC-TAGS-005 keeps a failed physical tag write visible and records it in Log History",
     "profile": "functional-core",

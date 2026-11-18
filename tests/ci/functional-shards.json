@@ -1056,6 +1056,13 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/loops.functional.spec.js",
+              "case": "FTC-PLAYER-023 the playing song draws its waveform while a prefetch build is still running",
+              "area": "loops"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/nonAlbumRarity.spec.js",
               "case": "FTC-NON-ALBUM-012 renders exception groups as the approved compact track table",
               "area": "album-details"

@@ -329,7 +329,7 @@ def test_waveform_route_resolves_configured_media_path_and_returns_compact_fixed
         def __init__(self) -> None:
             self.calls: list[tuple[Path, int]] = []
 
-        async def run(self, path: Path, *, bins: int) -> WaveformPeaks:
+        async def run(self, path: Path, *, bins: int, current: bool = False) -> WaveformPeaks:
             self.calls.append((path, bins))
             return WaveformPeaks(
                 left=tuple(index / 280 for index in range(280)),
@@ -360,6 +360,43 @@ def test_waveform_route_resolves_configured_media_path_and_returns_compact_fixed
     assert int(headers["content-length"]) == len(body)
 
 
+@pytest.mark.parametrize(
+    ("priority", "expected_current"),
+    [("current", True), ("", False), ("prefetch", False), ("CURRENT", False)],
+)
+def test_waveform_route_marks_only_the_playing_song_request_as_current(
+    playback_app,
+    media_path,
+    priority,
+    expected_current,
+):
+    from music_app.services.waveform_peaks import WaveformPeaks
+
+    class RegistryDouble:
+        def __init__(self) -> None:
+            self.calls: list[tuple[Path, int, bool]] = []
+
+        async def run(self, path: Path, *, bins: int, current: bool = False) -> WaveformPeaks:
+            self.calls.append((path, bins, current))
+            return WaveformPeaks(left=(0.25,) * bins, right=(0.5,) * bins, sample_count=bins)
+
+    registry = RegistryDouble()
+    playback_app.state.waveform_peaks_registry = registry
+    query = {"path": str(media_path), "bins": "720"}
+    if priority:
+        query["priority"] = priority
+
+    status, _headers, _body = run_asgi_request(
+        playback_app,
+        "GET",
+        "/playback/waveform",
+        query=query,
+    )
+
+    assert status == 200
+    assert registry.calls == [(media_path, 720, expected_current)]
+
+
 def test_waveform_route_allows_the_bounded_higher_detail_player_density(
     playback_app,
     media_path,
@@ -370,7 +407,7 @@ def test_waveform_route_allows_the_bounded_higher_detail_player_density(
         def __init__(self) -> None:
             self.calls: list[tuple[Path, int]] = []
 
-        async def run(self, path: Path, *, bins: int) -> WaveformPeaks:
+        async def run(self, path: Path, *, bins: int, current: bool = False) -> WaveformPeaks:
             self.calls.append((path, bins))
             return WaveformPeaks(
                 left=(0.25,) * bins,
@@ -414,7 +451,7 @@ def test_waveform_route_resolves_saved_loop_id_through_media_authority_and_bound
         def __init__(self) -> None:
             self.calls: list[tuple[Path, int]] = []
 
-        async def run(self, path: Path, *, bins: int) -> WaveformPeaks:
+        async def run(self, path: Path, *, bins: int, current: bool = False) -> WaveformPeaks:
             self.calls.append((path, bins))
             return WaveformPeaks(
                 left=(0.25,) * bins,
@@ -534,7 +571,7 @@ def test_waveform_route_persists_generated_saved_loop_peaks_when_file_is_unchang
             return True
 
     class RegistryDouble:
-        async def run(self, path, *, bins):
+        async def run(self, path, *, bins, current=False):
             assert path == saved_loop_path and bins == 280
             return generated
 
@@ -580,7 +617,7 @@ def test_waveform_route_treats_saved_loop_cache_failure_as_rebuildable(
             raise RuntimeError("cache write unavailable")
 
     class RegistryDouble:
-        async def run(self, path, *, bins):
+        async def run(self, path, *, bins, current=False):
             assert path == saved_loop_path and bins == 280
             return WaveformPeaks(left=(0.1,) * bins, right=(0.2,) * bins, sample_count=bins)
 
@@ -662,7 +699,7 @@ def test_waveform_route_skips_cache_write_when_saved_loop_disappears_after_build
         async def get_cached(self, *_args, **_kwargs):
             return None
 
-        async def run(self, _path, *, bins):
+        async def run(self, _path, *, bins, current=False):
             return WaveformPeaks(
                 left=(0.2,) * bins,
                 right=(0.4,) * bins,
@@ -757,7 +794,7 @@ def test_waveform_route_rejects_missing_or_invalid_saved_loop_id_without_startin
         def __init__(self) -> None:
             self.run_calls = 0
 
-        async def run(self, _path: Path, *, bins: int):
+        async def run(self, _path: Path, *, bins: int, current: bool = False):
             self.run_calls += 1
             raise AssertionError(f"unexpected peak job for {bins} bins")
 
@@ -804,7 +841,7 @@ def test_waveform_route_cache_only_probe_returns_hit_or_204_without_starting_job
             self.calls.append((path, bins))
             return cached if len(self.calls) == 1 else None
 
-        async def run(self, _path: Path, *, bins: int):
+        async def run(self, _path: Path, *, bins: int, current: bool = False):
             raise AssertionError(f"cache-only probe must not start peak job for {bins} bins")
 
     registry = RegistryDouble()
@@ -857,7 +894,7 @@ def test_waveform_route_only_literal_one_selects_cache_only_mode(
         async def get_cached(self, _path: Path, *, bins: int):
             raise AssertionError(f"cachedOnly={cached_only} must not probe cache for {bins} bins")
 
-        async def run(self, path: Path, *, bins: int) -> WaveformPeaks:
+        async def run(self, path: Path, *, bins: int, current: bool = False) -> WaveformPeaks:
             self.run_calls.append((path, bins))
             return expected
 
@@ -891,7 +928,7 @@ def test_waveform_route_accepts_media_from_additional_library_categories(
     calls = []
 
     class RegistryDouble:
-        async def run(self, path, *, bins):
+        async def run(self, path, *, bins, current=False):
             calls.append(path)
             return WaveformPeaks(left=(0.25,) * bins, right=(0.5,) * bins, sample_count=bins)
 
@@ -912,7 +949,7 @@ def test_waveform_route_rejects_unconfigured_or_missing_media_without_starting_j
         def __init__(self) -> None:
             self.run_calls = 0
 
-        async def run(self, _path: Path, *, bins: int):
+        async def run(self, _path: Path, *, bins: int, current: bool = False):
             self.run_calls += 1
             raise AssertionError(f"unexpected peak job for {bins} bins")
 
@@ -955,7 +992,7 @@ def test_waveform_route_returns_429_when_application_wide_peak_job_is_occupied(
     from music_app.services.waveform_peaks import WaveformPeaksBusyError
 
     class BusyRegistryDouble:
-        async def run(self, _path: Path, *, bins: int):
+        async def run(self, _path: Path, *, bins: int, current: bool = False):
             assert bins == 280
             raise WaveformPeaksBusyError("waveform peak job already active")
 
@@ -987,7 +1024,7 @@ def test_waveform_route_cache_only_probe_returns_429_when_registry_is_shutting_d
             assert bins == 280
             raise WaveformPeaksBusyError("waveform peak job already active")
 
-        async def run(self, _path: Path, *, bins: int):
+        async def run(self, _path: Path, *, bins: int, current: bool = False):
             self.run_calls += 1
             raise AssertionError(f"cache-only probe must not start peak job for {bins} bins")
 
@@ -1016,7 +1053,7 @@ def test_waveform_busy_response_does_not_wait_for_disconnect_monitor_cancellatio
         def __init__(self, monitor_started: asyncio.Event):
             self.monitor_started = monitor_started
 
-        async def run(self, _path: Path, *, bins: int):
+        async def run(self, _path: Path, *, bins: int, current: bool = False):
             assert bins == 280
             # Raise only once the disconnect monitor is blocked in receive();
             # otherwise the handler can cancel it before it ever starts.
@@ -1106,7 +1143,7 @@ def test_waveform_disconnect_waits_for_exact_peak_cleanup_before_returning_204(
         messages: list[dict[str, object]] = []
 
         class CleanupGatedRegistryDouble:
-            async def run(self, _path: Path, *, bins: int):
+            async def run(self, _path: Path, *, bins: int, current: bool = False):
                 assert bins == 280
                 started.set()
                 try:
@@ -1174,7 +1211,7 @@ def test_waveform_http_disconnect_cancels_active_job_releases_slot_and_admits_ne
         ffmpeg_cancelled = asyncio.Event()
         calls = 0
 
-        async def builder(_path: Path, *, bins: int, cancel_event: asyncio.Event):
+        async def builder(_path: Path, *, bins: int, cancel_event: asyncio.Event, current: bool = False):
             nonlocal calls
             calls += 1
             assert bins == 280

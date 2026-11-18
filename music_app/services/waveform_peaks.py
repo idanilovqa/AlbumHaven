@@ -5,13 +5,17 @@ from contextlib import suppress
 from dataclasses import dataclass
 import logging
 import math
+import os
 from pathlib import Path
 import re
 import subprocess
 import sys
-from typing import Awaitable, Callable
+from typing import TYPE_CHECKING, Awaitable, Callable
 
 from music_app.services.ffmpeg_runtime import resolve_ffmpeg_executable
+
+if TYPE_CHECKING:
+    from music_app.services.mp3_gapless import Mp3GaplessInfo
 
 
 PCM_READ_CHUNK_BYTES = 64 * 1024
@@ -19,6 +23,14 @@ MAX_STDERR_DIAGNOSTIC_BYTES = 64 * 1024
 MAX_AGGREGATE_OUTPUT_BYTES_PER_BIN = 160
 WAVEFORM_ANALYSIS_SAMPLE_RATE = 8_000
 WAVEFORM_ANALYZER_VERSION = "waveform-peaks-v3"
+# The playing song's waveform decodes as parallel time segments, each covering at least
+# this much audio, because the decode itself is the cost of a build.
+CURRENT_SONG_SEGMENT_SECONDS = 30.0
+CURRENT_SONG_MAX_SEGMENTS = 4
+# Distinct playing songs (one per listening device) that may build at the same time.
+CURRENT_SONG_MAX_BUILDS = 2
+SEGMENT_SEEK_PREROLL_SECONDS = 0.25
+_EXACT_SEEK_SUFFIXES = frozenset({".wav", ".wave", ".flac", ".aif", ".aiff"})
 _PEAK_LEVEL_PATTERN = re.compile(
     rb"^lavfi\.astats\.(?P<channel>[12])\.Peak_level=(?P<decibels>[^\r\n]+)$"
 )
@@ -79,7 +91,7 @@ def _peak_from_decibels(value: bytes) -> float:
     return _finite_peak(10 ** (decibels / 20.0))
 
 
-def _parse_aggregate_records(payload: bytes, *, bins: int) -> WaveformPeaks:
+def _parse_aggregate_records(payload: bytes, *, bins: int) -> list[_PeakBin]:
     peak_bins: list[_PeakBin] = []
     active: dict[int, float] = {}
     saw_frame = False
@@ -110,8 +122,7 @@ def _parse_aggregate_records(payload: bytes, *, bins: int) -> WaveformPeaks:
         raise RuntimeError("ffmpeg returned empty waveform aggregate output")
     if len(peak_bins) < bins:
         raise RuntimeError("ffmpeg returned too few waveform metadata frames")
-    left, right = _expand_peak_bins(peak_bins, bins=bins)
-    return WaveformPeaks(left=left, right=right, sample_count=bins)
+    return peak_bins
 
 
 def _expand_peak_bins(
@@ -221,38 +232,81 @@ async def _cancel_active_read(read_task: asyncio.Task[bytes] | None) -> None:
         await read_task
 
 
-async def build_waveform_peaks(
-    path: Path,
-    *,
-    bins: int,
-    cancel_event: asyncio.Event,
-) -> WaveformPeaks:
-    if bins < 1:
-        raise ValueError("waveform bin count must be positive")
-
-    executable = resolve_ffmpeg_executable()
-    if not executable:
-        raise RuntimeError("ffmpeg executable is unavailable")
-    duration_seconds = await asyncio.to_thread(_audio_duration_seconds, path)
-    from music_app.services.mp3_gapless import ignored_mp3_gapless_info
-
-    gapless = await ignored_mp3_gapless_info(path, executable, cancel_event=cancel_event)
-    sample_filter = f"aresample={WAVEFORM_ANALYSIS_SAMPLE_RATE}"
-    if gapless is not None:
-        sample_filter = f"{gapless.decode_filters()[1]},{sample_filter}"
-    frames_per_bin = max(
+def _segment_count(duration_seconds: float, *, bins: int, current: bool) -> int:
+    if not current:
+        return 1
+    return max(
         1,
-        math.ceil(
-            duration_seconds
-            * WAVEFORM_ANALYSIS_SAMPLE_RATE
-            / bins
+        min(
+            CURRENT_SONG_MAX_SEGMENTS,
+            os.cpu_count() or 1,
+            bins,
+            math.ceil(duration_seconds / CURRENT_SONG_SEGMENT_SECONDS),
         ),
     )
-    padded_frames = frames_per_bin * bins
+
+
+def _segment_decode_options(
+    path: Path,
+    *,
+    gapless: Mp3GaplessInfo | None,
+    start_frame: int,
+    end_frame: int | None,
+) -> tuple[tuple[str, ...], str]:
+    """Return input options and leading filters that decode exactly one segment.
+
+    Frames count at the analysis rate; `end_frame` is None for the last segment.
+    """
+    start_seconds = start_frame / WAVEFORM_ANALYSIS_SAMPLE_RATE
+    if gapless is not None:
+        coarse_seconds, filters = gapless.decode_filters(
+            round(start_seconds * gapless.sample_rate)
+        )
+        seek_seconds = float(coarse_seconds)
+        input_options: tuple[str, ...] = ("-ss", str(coarse_seconds)) if coarse_seconds else ()
+        filters = f"{filters},"
+    else:
+        # Same policy as playback seeks: encoded formats seek early, then trim exactly.
+        preroll = (
+            0.0
+            if path.suffix.lower() in _EXACT_SEEK_SUFFIXES
+            else SEGMENT_SEEK_PREROLL_SECONDS
+        )
+        seek_seconds = max(0.0, start_seconds - preroll)
+        trim_seconds = start_seconds - seek_seconds
+        input_options = ("-ss", f"{seek_seconds:.9f}") if seek_seconds else ()
+        filters = (
+            f"atrim=start={trim_seconds:.9f},asetpts=PTS-STARTPTS," if trim_seconds else ""
+        )
+    if end_frame is not None:
+        # Stop decoding shortly past an interior boundary instead of at the end of the file.
+        end_seconds = end_frame / WAVEFORM_ANALYSIS_SAMPLE_RATE
+        input_options = (*input_options, "-t", f"{end_seconds - seek_seconds + 1:.9f}")
+    return input_options, filters
+
+
+async def _build_segment_peak_bins(
+    executable: str,
+    path: Path,
+    *,
+    input_options: tuple[str, ...],
+    source_filters: str,
+    frames_per_bin: int,
+    segment_bins: int,
+    last: bool,
+    current: bool,
+    cancel_event: asyncio.Event,
+) -> list[_PeakBin]:
+    segment_frames = frames_per_bin * segment_bins
+    # Interior segments end at their exact boundary; the last one keeps any audio past
+    # the probed duration, which the final bin expansion folds in.
+    length_filter = f"apad=whole_len={segment_frames},"
+    if not last:
+        length_filter += f"atrim=end_sample={segment_frames},"
     aggregate_filter = (
-        f"{sample_filter},"
+        f"{source_filters}aresample={WAVEFORM_ANALYSIS_SAMPLE_RATE},"
         "aformat=channel_layouts=stereo,"
-        f"apad=whole_len={padded_frames},"
+        f"{length_filter}"
         f"asetnsamples=n={frames_per_bin}:p=1,"
         "astats=metadata=1:reset=1:measure_perchannel=Peak_level:measure_overall=none,"
         "ametadata=print:file=-"
@@ -262,6 +316,7 @@ async def build_waveform_peaks(
         "-nostdin",
         "-v",
         "error",
+        *input_options,
         "-i",
         str(path),
         "-af",
@@ -270,12 +325,13 @@ async def build_waveform_peaks(
         "null",
         "-",
     ]
+    # The playing song decodes at the same priority as playback; only prefetch yields.
     creationflags = 0
     if sys.platform.startswith("win"):
-        creationflags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0)) | int(
-            getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
-        )
-    else:
+        creationflags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        if not current:
+            creationflags |= int(getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0))
+    elif not current:
         command = ["nice", "-n", "10", *command]
 
     process = await asyncio.create_subprocess_exec(
@@ -315,7 +371,7 @@ async def build_waveform_peaks(
             if not chunk:
                 break
             aggregate_output.extend(chunk)
-            if len(aggregate_output) > bins * MAX_AGGREGATE_OUTPUT_BYTES_PER_BIN:
+            if len(aggregate_output) > segment_bins * MAX_AGGREGATE_OUTPUT_BYTES_PER_BIN:
                 raise RuntimeError("ffmpeg waveform aggregate output exceeded its bound")
 
         return_code = await process.wait()
@@ -325,7 +381,7 @@ async def build_waveform_peaks(
             detail = stderr.decode("utf-8", errors="replace").strip()
             suffix = f": {detail}" if detail else ""
             raise RuntimeError(f"ffmpeg exited with code {return_code}{suffix}")
-        return _parse_aggregate_records(bytes(aggregate_output), bins=bins)
+        return _parse_aggregate_records(bytes(aggregate_output), bins=segment_bins)
     except asyncio.CancelledError:
         cancel_event.set()
         await _cancel_active_read(read_task)
@@ -359,13 +415,115 @@ async def build_waveform_peaks(
             await cancel_task
 
 
-WaveformBuilder = Callable[
-    [Path],
-    Awaitable[WaveformPeaks],
-]
+async def _run_segments(
+    segments: list[Awaitable[list[_PeakBin]]],
+    *,
+    cancel_event: asyncio.Event,
+) -> list[_PeakBin]:
+    """Run segments together; a failure or cancellation stops and reaps every decoder."""
+    tasks = [asyncio.ensure_future(segment) for segment in segments]
+    try:
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+    finally:
+        if not all(task.done() for task in tasks):
+            cancel_event.set()
+            await _settle_segment_tasks(tasks)
+    for task in tasks:
+        if not task.cancelled() and task.exception() is not None:
+            raise task.exception()  # type: ignore[misc]
+    if any(task.cancelled() for task in tasks):
+        raise asyncio.CancelledError()
+    return [peak for task in tasks for peak in task.result()]
+
+
+async def _settle_segment_tasks(tasks: list[asyncio.Future[list[_PeakBin]]]) -> None:
+    settled = asyncio.gather(*tasks, return_exceptions=True)
+    while not settled.done():
+        try:
+            await asyncio.shield(settled)
+        except asyncio.CancelledError:
+            # Every decoder is reaped before the build reports its outcome.
+            continue
+
+
+async def build_waveform_peaks(
+    path: Path,
+    *,
+    bins: int,
+    cancel_event: asyncio.Event,
+    current: bool = False,
+) -> WaveformPeaks:
+    """Build stereo peaks; the playing song decodes in parallel at normal priority."""
+    if bins < 1:
+        raise ValueError("waveform bin count must be positive")
+
+    executable = resolve_ffmpeg_executable()
+    if not executable:
+        raise RuntimeError("ffmpeg executable is unavailable")
+    duration_seconds = await asyncio.to_thread(_audio_duration_seconds, path)
+    from music_app.services.mp3_gapless import ignored_mp3_gapless_info
+
+    gapless = await ignored_mp3_gapless_info(path, executable, cancel_event=cancel_event)
+    frames_per_bin = max(
+        1,
+        math.ceil(
+            duration_seconds
+            * WAVEFORM_ANALYSIS_SAMPLE_RATE
+            / bins
+        ),
+    )
+    segment_count = _segment_count(duration_seconds, bins=bins, current=current)
+    boundaries = [index * bins // segment_count for index in range(segment_count + 1)]
+    segments = []
+    for first_bin, end_bin in zip(boundaries, boundaries[1:]):
+        last = end_bin == bins
+        input_options, source_filters = _segment_decode_options(
+            path,
+            gapless=gapless,
+            start_frame=first_bin * frames_per_bin,
+            end_frame=None if last else end_bin * frames_per_bin,
+        )
+        segments.append(
+            _build_segment_peak_bins(
+                executable,
+                path,
+                input_options=input_options,
+                source_filters=source_filters,
+                frames_per_bin=frames_per_bin,
+                segment_bins=end_bin - first_bin,
+                last=last,
+                current=current,
+                cancel_event=cancel_event,
+            )
+        )
+    peak_bins = await _run_segments(segments, cancel_event=cancel_event)
+    left, right = _expand_peak_bins(peak_bins, bins=bins)
+    return WaveformPeaks(left=left, right=right, sample_count=bins)
+
+
+@dataclass(eq=False, slots=True)
+class _BuildJob:
+    key: tuple[str, int]
+    current: bool
+    cancel_event: asyncio.Event
+    task: asyncio.Task[WaveformPeaks] | None = None
+    waiters: int = 0
+    stopping: bool = False
+
+    def stop(self) -> None:
+        """Cancel the build; callers still waiting get a busy answer, not a cancellation."""
+        self.stopping = True
+        self.cancel_event.set()
 
 
 class WaveformPeaksRegistry:
+    """Admit waveform builds so the playing song never waits behind a prefetch.
+
+    A build for the playing song starts at once, joins an identical build in flight,
+    and cancels every prefetch build. A prefetch build starts only when nothing else
+    is building and yields to the next playing-song request.
+    """
+
     def __init__(
         self,
         *,
@@ -376,27 +534,16 @@ class WaveformPeaksRegistry:
         self._builder = builder
         self._cache_repository = cache_repository
         self._analyzer_version = analyzer_version
-        self._lock = asyncio.Lock()
-        self._active_task: asyncio.Task[WaveformPeaks] | None = None
-        self._active_cancel_event: asyncio.Event | None = None
-        self._release_tasks: set[asyncio.Task[None]] = set()
+        self._jobs: set[_BuildJob] = set()
         self._shutting_down = False
-
-    async def _release_completed_task(self, task: asyncio.Task[WaveformPeaks]) -> None:
-        async with self._lock:
-            if self._active_task is task and task.done():
-                self._active_task = None
-                self._active_cancel_event = None
-
-    def _schedule_completed_task_release(self, task: asyncio.Task[WaveformPeaks]) -> None:
-        release_task = asyncio.create_task(self._release_completed_task(task))
-        self._release_tasks.add(release_task)
-        release_task.add_done_callback(self._release_tasks.discard)
 
     @property
     def active_job_count(self) -> int:
-        task = self._active_task
-        return int(task is not None and not task.done())
+        return sum(not job.task.done() for job in self._jobs if job.task is not None)
+
+    def _ensure_open(self) -> None:
+        if self._shutting_down:
+            raise WaveformPeaksBusyError("waveform peak service is shutting down")
 
     def _cache_identity(self, path: Path, *, bins: int) -> dict[str, object]:
         stat = path.stat()
@@ -427,9 +574,7 @@ class WaveformPeaksRegistry:
         return cached if isinstance(cached, WaveformPeaks) else None
 
     async def get_cached(self, path: Path, *, bins: int) -> WaveformPeaks | None:
-        async with self._lock:
-            if self._shutting_down:
-                raise WaveformPeaksBusyError("waveform peak job already active")
+        self._ensure_open()
         try:
             cache_identity = self._cache_identity(path, bins=bins)
         except OSError as error:
@@ -441,9 +586,7 @@ class WaveformPeaksRegistry:
         except OSError as error:
             _LOGGER.warning("Waveform peak cache identity failed: %s", error)
             current_cache_identity = None
-        async with self._lock:
-            if self._shutting_down:
-                raise WaveformPeaksBusyError("waveform peak job already active")
+        self._ensure_open()
         return cached if current_cache_identity == cache_identity else None
 
     async def _build_and_cache(
@@ -451,12 +594,22 @@ class WaveformPeaksRegistry:
         path: Path,
         *,
         bins: int,
-        cancel_event: asyncio.Event,
+        job: _BuildJob,
         cache_identity: dict[str, object] | None,
     ) -> WaveformPeaks:
-        peaks = await self._builder(path, bins=bins, cancel_event=cancel_event)
+        try:
+            peaks = await self._builder(
+                path,
+                bins=bins,
+                cancel_event=job.cancel_event,
+                current=job.current,
+            )
+        except asyncio.CancelledError:
+            if job.stopping:
+                raise WaveformPeaksBusyError("waveform peak build was stopped") from None
+            raise
         repository = self._cache_repository
-        if repository is None or cache_identity is None or cancel_event.is_set():
+        if repository is None or cache_identity is None or job.cancel_event.is_set():
             return peaks
         try:
             if self._cache_identity(path, bins=bins) != cache_identity:
@@ -470,10 +623,46 @@ class WaveformPeaksRegistry:
             _LOGGER.warning("Waveform peak cache write failed: %s", error)
         return peaks
 
-    async def run(self, path: Path, *, bins: int) -> WaveformPeaks:
-        async with self._lock:
-            if self._shutting_down:
+    def _admit(
+        self,
+        path: Path,
+        *,
+        bins: int,
+        current: bool,
+        cache_identity: dict[str, object] | None,
+    ) -> _BuildJob:
+        # Admission never awaits, so it is atomic on the event loop.
+        self._ensure_open()
+        key = (str(path), bins)
+        active = [job for job in self._jobs if not job.task.done()]  # type: ignore[union-attr]
+        for job in active:
+            if job.key == key and not job.stopping and (job.current or not current):
+                return job
+        if current:
+            # A build whose callers all left is only winding down, so it holds no place.
+            if sum(job.current and not job.stopping for job in active) >= CURRENT_SONG_MAX_BUILDS:
                 raise WaveformPeaksBusyError("waveform peak job already active")
+            for job in active:
+                if not job.current:
+                    job.stop()
+        elif active:
+            raise WaveformPeaksBusyError("waveform peak job already active")
+        job = _BuildJob(key=key, current=current, cancel_event=asyncio.Event())
+        job.task = asyncio.create_task(
+            self._build_and_cache(path, bins=bins, job=job, cache_identity=cache_identity)
+        )
+        self._jobs.add(job)
+        job.task.add_done_callback(lambda task, job=job: self._retire(job, task))
+        return job
+
+    def _retire(self, job: _BuildJob, task: asyncio.Task[WaveformPeaks]) -> None:
+        self._jobs.discard(job)
+        if not task.cancelled():
+            # Every caller may have left; consume the outcome so it is never reported unretrieved.
+            task.exception()
+
+    async def run(self, path: Path, *, bins: int, current: bool = False) -> WaveformPeaks:
+        self._ensure_open()
         cache_identity: dict[str, object] | None = None
         if self._cache_repository is not None:
             try:
@@ -490,60 +679,32 @@ class WaveformPeaksRegistry:
                         cache_identity = None
                     else:
                         if current_cache_identity == cache_identity:
-                            async with self._lock:
-                                if self._shutting_down:
-                                    raise WaveformPeaksBusyError(
-                                        "waveform peak job already active"
-                                    )
+                            self._ensure_open()
                             return cached
                         cache_identity = current_cache_identity
-        async with self._lock:
-            if self._active_task is not None and self._active_task.done():
-                self._active_task = None
-                self._active_cancel_event = None
-            if self._shutting_down or self._active_task is not None:
-                raise WaveformPeaksBusyError("waveform peak job already active")
-            cancel_event = asyncio.Event()
-            task = asyncio.create_task(
-                self._build_and_cache(
-                    path,
-                    bins=bins,
-                    cancel_event=cancel_event,
-                    cache_identity=cache_identity,
-                )
-            )
-            self._active_cancel_event = cancel_event
-            self._active_task = task
-            task.add_done_callback(self._schedule_completed_task_release)
+        job = self._admit(path, bins=bins, current=current, cache_identity=cache_identity)
+        task = job.task
+        assert task is not None
+        job.waiters += 1
         try:
             return await asyncio.shield(task)
         except asyncio.CancelledError:
-            cancel_event.set()
-            with suppress(BaseException):
-                await asyncio.shield(task)
+            if job.waiters == 1 and not task.done():
+                # The last caller left, so nobody needs this build any more.
+                job.stop()
+                with suppress(BaseException):
+                    await asyncio.shield(task)
             raise
         finally:
-            if task.done():
-                await asyncio.shield(self._release_completed_task(task))
+            job.waiters -= 1
 
     async def _shutdown_and_release(self) -> None:
-        async with self._lock:
-            self._shutting_down = True
-            task = self._active_task
-            cancel_event = self._active_cancel_event
-            if cancel_event is not None:
-                cancel_event.set()
-        if task is not None:
-            try:
-                await asyncio.shield(task)
-            except asyncio.CancelledError:
-                pass
-            except Exception:
-                pass
-            await asyncio.shield(self._release_completed_task(task))
-        while self._release_tasks:
-            release_tasks = tuple(self._release_tasks)
-            await asyncio.gather(*release_tasks)
+        self._shutting_down = True
+        tasks = [job.task for job in self._jobs if job.task is not None]
+        for job in self._jobs:
+            job.stop()
+        if tasks:
+            await asyncio.wait(tasks)
 
     async def shutdown(self) -> None:
         shutdown_task = asyncio.create_task(self._shutdown_and_release())

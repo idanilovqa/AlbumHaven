@@ -94,6 +94,7 @@ async def playback_waveform(
     loop_id: str = "",
     cachedOnly: str = "",
     bins: int = 280,
+    priority: str = "",
 ) -> Response:
     if bins not in {280, 720}:
         return JSONResponse({"error": "Unsupported waveform sample count"}, status_code=400)
@@ -177,6 +178,8 @@ async def playback_waveform(
         request.app.state.waveform_peaks_registry.run(
             resolved_path,
             bins=bins,
+            # Only the playing song's request may preempt other builds; prefetch yields.
+            current=priority == "current",
         )
     )
     disconnect_task = asyncio.create_task(_wait_for_http_disconnect(request))

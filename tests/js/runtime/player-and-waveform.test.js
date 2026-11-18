@@ -344,6 +344,7 @@ async function run() {
 
     assert.equal(requests.length, 2, 'audio readiness retains the existing waveform build fallback');
     assert.doesNotMatch(requests[1], /(?:\?|&)cachedOnly=1(?:&|$)/);
+    assert.match(requests[1], /(?:\?|&)priority=current(?:&|$)/, 'the playing song builds first');
     assert.equal(context.state.player.waveform.compactPeaks.data.left[0], 0.5);
   }
 

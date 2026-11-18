@@ -2,6 +2,11 @@ import { existsSync, globSync, renameSync } from 'node:fs';
 import path from 'node:path';
 import { InteractionSurfaces, expectCombinedLoopWaveform, expectLoopPauseFirstClick, expectStableButtonHover } from '../poms/interactionSurfaces.js';
 import { expect, test } from '../support/baseFixtures.js';
+import {
+  createLongPrefetchTrack,
+  removeLongPrefetchTrack,
+  startWaveformPrefetch,
+} from '../helpers/waveformPrefetchFixture.js';
 
 const CASE_ID = 'FTC-UTIL-LOOPS-021 / FTC-UTIL-LOOPS-023 / FTC-UTIL-LOOPS-024 / FTC-UTIL-LOOPS-026 / FTC-PLAYER-017 / FTC-PLAYER-011';
 const LOOP_ALBUM_TARGET = {
@@ -1297,4 +1302,57 @@ test('FTC-PLAYER-017 paused reload restores the current waveform', { tag: '@area
   expect(waveform.nonPlayheadPixels).toBeGreaterThan(0);
   expect(waveform.leftBins).toBe(720);
   expect(waveform.rightBins).toBe(720);
+});
+
+test('FTC-PLAYER-023 the playing song draws its waveform while a prefetch build is still running', { tag: '@area:loops' }, async ({
+  galleryActions,
+  globalPlayerActions,
+  page,
+  settingsModalAppBarActions,
+  trackModalActions,
+  utilityAppearanceActions,
+  utilityTabBarActions,
+}) => {
+  test.setTimeout(240000);
+  const longTrackPath = await createLongPrefetchTrack();
+  let prefetch = null;
+  try {
+    await galleryActions.goto();
+    await galleryActions.waitForGalleryReady();
+    await settingsModalAppBarActions.openSettings();
+    await utilityTabBarActions.openTab('appearance');
+    await utilityAppearanceActions.waitForReady();
+    await utilityAppearanceActions.saveSeekbarMode('waveform');
+    await settingsModalAppBarActions.closeSettings();
+    await galleryActions.selectAlbumDetailsByIdentity(LOOP_ALBUM_TARGET);
+
+    // A queued track's waveform starts building first, the way the player prefetches it.
+    prefetch = startWaveformPrefetch(page, longTrackPath);
+    const selectedTrack = await trackModalActions.playTrackByTitle(LOOP_TRACK_TITLE);
+    await globalPlayerActions.waitForCurrentTrack({
+      path: selectedTrack.path,
+      trackTitle: LOOP_TRACK_TITLE,
+      visibleTitle: LOOP_PLAYER_TITLE,
+    });
+    await trackModalActions.close();
+
+    const waveform = await globalPlayerActions.waitForRenderedWaveform({
+      path: selectedTrack.path,
+      timeout: 30000,
+    });
+    const prefetchStatusAtDraw = prefetch.status;
+
+    expect(waveform.path).toBe(selectedTrack.path);
+    expect(waveform.nonPlayheadPixels).toBeGreaterThan(0);
+    expect(waveform.leftBins).toBe(720);
+    expect(waveform.rightBins).toBe(720);
+    // The playing song never waits for the prefetch: that build is still running or it
+    // already yielded with a busy answer, and it never finished first.
+    expect([null, 429]).toContain(prefetchStatusAtDraw);
+    await globalPlayerActions.pauseIfPlaying();
+  } finally {
+    if (prefetch) await prefetch.done;
+    removeLongPrefetchTrack();
+  }
+  expect([200, 429]).toContain(prefetch.status);
 });

@@ -371,6 +371,91 @@ test('non-ok, invalid, and rejected requests are evicted so the same identity ca
   }
 });
 
+test('only the playing song asks the server for current priority', async () => {
+  const requests = [];
+  const context = loadPeaksRuntime(async (url) => {
+    requests.push(new URL(String(url), 'http://album-haven.test'));
+    return { ok: true, json: async () => peakPayload(0.5, 720) };
+  });
+
+  await context.loadWaveformPeaks('C:/Music/playing.flac', 720, 7, { current: true });
+  await context.loadWaveformPeaks('C:/Music/queued-next.flac', 720, 7);
+
+  assert.equal(requests[0].searchParams.get('priority'), 'current');
+  assert.equal(requests[1].searchParams.has('priority'), false, 'a prefetch must yield on the server');
+});
+
+test('a prefetch still building is replaced at current priority once its song plays', async () => {
+  const pending = [];
+  const context = loadPeaksRuntime((url, options) => new Promise((resolve) => {
+    pending.push({ url: new URL(String(url), 'http://album-haven.test'), options, resolve });
+  }));
+
+  const prefetch = context.loadWaveformPeaks('C:/Music/next.flac', 720, 7);
+  const repeatedPrefetch = context.loadWaveformPeaks('C:/Music/next.flac', 720, 7);
+  assert.equal(pending.length, 1, 'a repeated prefetch shares the request in flight');
+  const playing = context.loadWaveformPeaks('C:/Music/next.flac', 720, 7, { current: true });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(pending.length, 2);
+  assert.equal(pending[0].options.signal.aborted, true, 'the low-priority request is withdrawn');
+  assert.equal(pending[1].url.searchParams.get('priority'), 'current');
+  assert.equal(pending[1].options.signal.aborted, false);
+  pending[0].resolve({ ok: true, json: async () => peakPayload(0.125, 720) });
+  pending[1].resolve({ ok: true, json: async () => peakPayload(0.75, 720) });
+
+  assert.equal(await prefetch, null);
+  assert.equal(await repeatedPrefetch, null);
+  assert.equal((await playing).left[0], 0.75);
+  assert.equal(
+    (await context.loadWaveformPeaks('C:/Music/next.flac', 720, 7, { current: true })).left[0],
+    0.75,
+  );
+  assert.equal(pending.length, 2, 'the current peaks stay cached');
+});
+
+test('a generation change aborts every request of the previous generation', async () => {
+  const pending = [];
+  const context = loadPeaksRuntime((url, options) => new Promise((resolve) => {
+    pending.push({ options, resolve });
+  }));
+
+  void context.loadWaveformPeaks('C:/Music/playing.flac', 720, 7, { current: true });
+  void context.loadWaveformPeaks('C:/Music/next.flac', 720, 7);
+  context.state.player.streaming.generation = 8;
+  void context.loadWaveformPeaks('C:/Music/new.flac', 720, 8, { current: true });
+
+  assert.deepEqual(pending.map(({ options }) => options.signal.aborted), [true, true, false]);
+});
+
+test('boundary promotion upgrades the incoming prefetch to current priority', async () => {
+  const pending = [];
+  const context = loadPeaksRuntime((url, options) => new Promise((resolve) => {
+    pending.push({ url: new URL(String(url), 'http://album-haven.test'), options, resolve });
+  }));
+  context.state.player.waveform.compactPeaks = null;
+
+  const prefetch = context.loadWaveformPeaks('C:/Music/incoming.flac', 720, 7);
+  const promotion = context.promoteWaveformPeaks(
+    'C:/Music/outgoing.flac',
+    'C:/Music/incoming.flac',
+    7,
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(pending.length, 2);
+  assert.equal(pending[0].options.signal.aborted, true);
+  assert.equal(pending[1].url.searchParams.get('priority'), 'current');
+  pending[0].resolve({ ok: true, json: async () => peakPayload(0.125, 720) });
+  pending[1].resolve({ ok: true, json: async () => peakPayload(0.625, 720) });
+  const promoted = await promotion;
+
+  assert.equal(await prefetch, null);
+  assert.equal(promoted.left[0], 0.625);
+  assert.equal(context.state.player.waveform.compactPeaks.path, 'C:/Music/incoming.flac');
+  assert.equal(context.state.player.waveform.compactPeaks.data, promoted);
+});
+
 test('boundary promotion publishes prefetched current peaks and evicts the completed source', async () => {
   const requests = [];
   const context = loadPeaksRuntime(async (url) => {

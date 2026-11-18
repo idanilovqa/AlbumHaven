@@ -3,6 +3,42 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/playbackTakeover.spec.js",
+    "case": "FTC-PLAYBACK-TAKEOVER-002 under full CPU load a second tab of the same browser opens promptly beside a playing tab, stays responsive, shows the overlay, and one Play here moves the song to it",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 3,
+    "databaseScenarios": ["playback:second-tab-under-cpu-load"],
+    "filesystemScenarios": ["audio-copy:playback-length-signals"],
+    "expectedContracts": ["second-tab-opens-under-load", "second-tab-responsive", "visible-elsewhere-overlay", "single-press-takeover"],
+    "mutationOwnership": {
+      "databaseIdentity": "case:playback-second-tab-load",
+      "filesystemCopy": "media/Playback Start Signals/Length And Repetition"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/playbackNetworkOutage.spec.js",
+    "case": "FTC-PLAYBACK-OFFLINE-003 under full CPU load, each seek past the received audio in an outage shows its place at once with one click and keeps the waveform, playback goes on by itself when the network returns, and one press plays another song",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "databaseScenarios": ["playback:loaded-outage-seek-waveform-and-one-press"],
+    "filesystemScenarios": ["audio-copy:playback-length-signals"],
+    "expectedContracts": ["seek-place-shown-at-once", "one-click-seek", "waveform-kept-offline", "automatic-resume-on-reconnect", "single-press-starts-another-song", "cpu-load-tolerated"],
+    "mutationOwnership": {
+      "databaseIdentity": "case:playback-loaded-outage",
+      "filesystemCopy": "media/Playback Start Signals/Length And Repetition"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/playbackTakeover.spec.js",
     "case": "FTC-PLAYBACK-TAKEOVER-001 Play on the playing-elsewhere overlay continues the other device's song here at its place and stops the other device",
     "profile": "functional-core",
     "setupScope": "isolated",

@@ -57,10 +57,24 @@ def _quiesce(executor, timeout: float) -> None:
         future.result(timeout)
 
 
+def _join_static_gzip_warmup(timeout: float) -> None:
+    """Waits for the static gzip warm-up an earlier app creation started: it
+    walks the app's static folder once per process, never for a request."""
+    module = sys.modules.get("music_app.services.compressed_static_files")
+    if module is None:
+        return
+    for thread in threading.enumerate():
+        if thread.name == module.WARMUP_THREAD_NAME:
+            thread.join(timeout)
+            if thread.is_alive():
+                raise TimeoutError(f"{thread.name} did not finish within {timeout}s")
+
+
 def quiesce_background_executors(timeout: float = 30.0) -> None:
-    """Drains the app's module-level background executors that are loaded. An
-    admission step may queue renders, so the executors are drained in order,
-    twice."""
+    """Drains the app's module-level background executors that are loaded, and
+    the static gzip warm-up. An admission step may queue renders, so the
+    executors are drained in order, twice."""
+    _join_static_gzip_warmup(timeout)
     for _round in range(2):
         for module_name, names in _BACKGROUND_EXECUTORS:
             module = sys.modules.get(module_name)

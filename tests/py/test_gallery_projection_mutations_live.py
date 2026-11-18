@@ -617,9 +617,10 @@ def test_relation_refresh_and_targeted_publication_use_consistent_lock_order(gal
         finally:
             publish.set()
             release_target.set()
-    # The watcher publication leaves family rows to the queued background refresh.
+    # The watcher publication leaves family rows to the relation refresh, and
+    # the refresh that was already building rebuilds from the published sources
+    # instead of publishing its earlier build as ready.
     assert not target_family_write.is_set()
-    relations.ensure_relation_projection_ready(fixture.config, connect=isolatedPostgres._connect)
     repository = browse.PostgresLibraryBrowseRepository(fixture.config, connect=isolatedPostgres._connect)
     aliases = repository._load_relation_alias_maps()
     assert not aliases["projection_stale_reason"]

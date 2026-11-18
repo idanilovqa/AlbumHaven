@@ -653,13 +653,18 @@ def _ensure_relation_projection_ready(
                     locked_metadata = dict(
                         locked_scan_cache.get(RELATION_PROJECTION_METADATA_KEY) or {}
                     )
+                    # An inventory publication only flips the status to stale,
+                    # which leaves an already-stale identity unchanged; its
+                    # revision tells a projection built before it apart.
                     baseline_publication_identity = (
+                        _int_value(baseline_snapshot_row, "inventory_mutation_revision"),
                         str(baseline_metadata.get("status") or ""),
                         str(baseline_metadata.get("builder_version") or ""),
                         str(baseline_metadata.get("source_fingerprint") or ""),
                         str(baseline_metadata.get("built_from_fingerprint") or ""),
                     )
                     locked_publication_identity = (
+                        _int_value(locked_snapshot_row, "inventory_mutation_revision"),
                         str(locked_metadata.get("status") or ""),
                         str(locked_metadata.get("builder_version") or ""),
                         str(locked_metadata.get("source_fingerprint") or ""),
@@ -1108,6 +1113,7 @@ def _load_scan_cache_sql() -> str:
         )
         select
           library.libraries.metadata -> 'scan_cache' as scan_cache,
+          library.libraries.metadata -> 'inventory_mutation_revision' as inventory_mutation_revision,
           coalesce(
             (
               select jsonb_agg(

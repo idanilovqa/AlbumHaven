@@ -1148,10 +1148,13 @@ export class TagEditorActions {
       const requestBody = request.postDataJSON();
       expect(Object.keys(requestBody || {}).sort()).toEqual([
         'album',
+        'client_request_id',
         'confirmed',
         'updates',
       ]);
       expect(requestBody.confirmed).toBe(true);
+      // Owner (2026-11-17): every save carries its own id so a save without an answer can be sent again safely.
+      expect(requestBody.client_request_id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
       const updateEntries = Object.entries(requestBody.updates || {});
       expect(updateEntries).toHaveLength(expectedFilenames.length);
       const expectedFilenameSet = new Set(expectedFilenames);

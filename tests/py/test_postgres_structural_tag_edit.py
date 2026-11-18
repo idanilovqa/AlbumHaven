@@ -3800,6 +3800,46 @@ def test_live_postgres_split_merge_split_never_strands_the_relation_index(watche
     assert scheduled, "Each structural save must still schedule its background refresh."
 
 
+def test_live_postgres_merge_carries_a_split_half_card_onto_the_whole_merged_album(watcher_repair_inventory, monkeypatch):
+    """Owner (BUGFIX-05, 2026-11-18): a card searched on Ремиксы2 follows the merge into Ремиксы with every one of
+    Ремиксы's tracks, so splitting Ремиксы again opens the split chooser instead of one half's lookup."""
+    from psycopg.types.json import Jsonb
+
+    fixture = watcher_repair_inventory
+    entries, _other, _scheduled = _seed_split_merge_album(fixture, monkeypatch)
+    second_half = sorted(entries)[2:]
+    _save_album_edit(fixture, entries, second_half, "Ремиксы2")
+    _refresh_after_save(fixture, "split")
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        half = connection.execute("""select distinct albums.id, albums.album_key, albums.library_id
+            from library.local_track_files files join library.local_tracks tracks on tracks.id=files.track_id
+            join library.local_albums albums on albums.id=tracks.album_id
+            where files.private_path=any(%s::text[])""", (second_half,)).fetchone()
+        metadata = {"source_family": "runtime_cover_lookup_notifications_adapter", "track_paths": second_half,
+                    "notification_order_at": "2026-01-01T00:00:00Z",
+                    "source_payload": {"track_paths": second_half, "album_payload": {
+                        "id": half["id"], "key": half["album_key"], "name": "Ремиксы2", "track_paths": second_half}}}
+        connection.execute("""insert into ops.cover_lookup_tasks (library_id,task_key,status,album_key,metadata)
+            values(%s,'half-card','completed',%s,%s)""", (half["library_id"], half["album_key"], Jsonb(metadata)))
+        connection.commit()
+
+    _save_album_edit(fixture, entries, second_half, "Ремиксы")
+    _refresh_after_save(fixture, "merge back")
+
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        card = connection.execute("select metadata from ops.cover_lookup_tasks where task_key='half-card'").fetchone()["metadata"]
+        merged_id = connection.execute("""select distinct tracks.album_id from library.local_track_files files
+            join library.local_tracks tracks on tracks.id=files.track_id where files.private_path=any(%s::text[])""",
+            (sorted(entries),)).fetchall()
+    assert len(merged_id) == 1
+    assert card["source_payload"]["album_payload"]["id"] == merged_id[0]["album_id"]
+    assert card["source_payload"]["album_payload"]["name"] == "Ремиксы"
+    assert sorted(card["track_paths"]) == sorted(entries)
+    assert sorted(card["source_payload"]["track_paths"]) == sorted(entries)
+    assert sorted(card["source_payload"]["album_payload"]["track_paths"]) == sorted(entries)
+    assert card["source_payload"]["album_payload"]["track_count"] == len(entries)
+
+
 def test_live_postgres_stale_structural_mark_recovers_on_next_refresh(watcher_repair_inventory, monkeypatch):
     fixture = watcher_repair_inventory
     entries, _other, _scheduled = _seed_split_merge_album(fixture, monkeypatch)

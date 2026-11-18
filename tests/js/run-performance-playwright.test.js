@@ -2466,10 +2466,10 @@ test('artist scroll completion requires all navigation, restoration, presentatio
     'desktop Covers > native wheel input tracks the commanded gesture without reverse movement or layout jitter',
     'real continuation response during held touch keeps gallery coordinates stable',
     'full preserve-scroll response during wheel sequence keeps gallery coordinates stable',
-    'real continuation response during wheel sequence keeps gallery coordinates stable',
+    'real continuation response during wheel sequence keeps gallery coordinates stable',
     ...['cards', 'covers'].map((view) => (
       `${view}: deep midpoint stays visible during pinch, paged continuation stays usable and returning to the top is complete`
-    )),
+    )),
   ];
   const parsedTestResults = titles.map(testName => ({
     status: 'passed', testName, fullName: `FTC-GALLERY-NAV-03 > ${testName}`,

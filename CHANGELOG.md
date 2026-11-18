@@ -1,8 +1,13 @@
 # Changelog
 
-## 0.11.32 - 2026-11-17
+## 0.11.34 - 2026-11-18
 
 - Hosted regression gates can run just the named end-to-end cases or measured targets (`gates=focused`), so one failure is reproduced or checked in minutes instead of a full gate run.
+
+## 0.11.33 - 2026-11-18
+
+- The player's waveform no longer goes missing when another waveform is still being built. The server builds one waveform at a time and answers "busy" meanwhile; the player gave up after about 1.5 s and showed no waveform for that track. It now keeps waiting, every 2 s, for as long as the track stays loaded.
+- The next song is no longer silently skipped when the browser's track cache stops answering. The player looked for the next song in the cache before fetching it ahead, and a cache read that never returned left it waiting with nothing fetched, so playback stopped at the end of the current song. Like the start of a song, it now waits at most 0.5 s for the cache and then streams the next song from the server.
 
 ## 0.11.31 - 2026-11-17
 

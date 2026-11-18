@@ -438,6 +438,9 @@ function queuedNextContinuityOptions(track) {
   };
 }
 
+// A first-frame schedule that has not settled by then stops holding its identity, so a later
+// first frame or reconciliation of the same stream schedules its continuity again.
+const STREAMING_FIRST_FRAME_SCHEDULE_DEADLINE_MS = 2000;
 let handledStreamingFirstFrameIdentity = '';
 let pendingStreamingFirstFrameIdentity = '';
 let pendingStreamingFirstFrameSchedule = null;
@@ -472,10 +475,16 @@ async function handleStreamingPlaybackFirstFrame(event = {}) {
       : nextTrack ? scheduleStreamingContinuity(nextTrack, queuedNextContinuityOptions(nextTrack)) : null;
   });
   pendingStreamingFirstFrameSchedule = scheduling;
+  let deadline = 0;
+  const expired = new Promise((resolve) => {
+    deadline = setTimeout(resolve, STREAMING_FIRST_FRAME_SCHEDULE_DEADLINE_MS, false);
+  });
   try {
-    await scheduling;
-    handledStreamingFirstFrameIdentity = identity;
+    if (await Promise.race([scheduling.then(() => true), expired])) {
+      handledStreamingFirstFrameIdentity = identity;
+    }
   } finally {
+    clearTimeout(deadline);
     if (pendingStreamingFirstFrameSchedule === scheduling) {
       pendingStreamingFirstFrameIdentity = '';
       pendingStreamingFirstFrameSchedule = null;

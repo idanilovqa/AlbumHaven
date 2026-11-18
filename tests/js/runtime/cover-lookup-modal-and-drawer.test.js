@@ -2913,6 +2913,26 @@ require('node:test')('repeated explicit manual lookup finds the matching termina
   ]);
 });
 
+require('node:test')('a new search card is listed first, where the server lists it, so it shows at once', async () => {
+  const album = { album_artist: 'Artist', name: 'New Album', tracks: [{ path: 'C:/music/new/01.flac' }] };
+  const context = loadHelper({
+    mergeCoverLookupTasksWithNotifications: (tasks) => tasks,
+    showToast: () => {},
+    fetch: async () => ({ ok: true, json: async () => ({ ok: true, task: { id: 'brand-new', status: 'pending' } }) }),
+  });
+  context.state.coverLookup.tasks = Array.from({ length: 25 }, (_, index) => ({
+    id: `older-${index}`, status: 'completed', album_payload: { name: `Older ${index}`, tracks: [{ path: `C:/music/o${index}.flac` }] },
+  }));
+  context.renderCoverLookupModal = () => {};
+  context.renderCoverLookupDrawer = () => {};
+  context.loadCoverLookupTasks = async () => {};
+
+  await context.startCoverLookupForAlbum(album, { backgroundOnly: true });
+
+  assert.equal(context.state.coverLookup.tasks[0].id, 'brand-new');
+  assert.equal(context.state.coverLookup.tasks.length, 26);
+});
+
 require('node:test')('gallery notification reuse follows album ownership rather than manual URLs or internal jobs', () => {
   const context = loadHelper();
   const album = { album_artist: 'Artist', name: 'Album', tracks: [{ path: 'C:/music/album/01.flac' }] };

@@ -4663,9 +4663,11 @@ async function startCoverLookupForAlbum(album, options = {}) {
       const acceptedTaskId = String(acceptedTask.id);
       const existingTasks = state.coverLookup.tasks || [];
       const alreadyListed = existingTasks.some((task) => String(task?.id || '') === acceptedTaskId);
+      // Owner (2026-11-18): a new search's card is in the panel at once, on top as the server lists it;
+      // appended last it sat under every other notification until a reload re-sorted the list.
       state.coverLookup.tasks = mergeCoverLookupTasksWithNotifications(alreadyListed
         ? existingTasks.map((task) => String(task?.id || '') === acceptedTaskId ? { ...task, ...acceptedTask } : task)
-        : [...existingTasks, acceptedTask]);
+        : [acceptedTask, ...existingTasks]);
       if (!backgroundOnly) {
         state.coverLookup.modal.taskId = acceptedTaskId;
       }

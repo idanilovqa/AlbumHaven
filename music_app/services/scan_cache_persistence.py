@@ -5703,6 +5703,19 @@ def _rebind_cover_lookup_tasks_after_structural_edit_sql() -> str:
            and library.libraries.library_kind = 'local'
           where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
           limit 1
+        ),
+        -- Owner (BUGFIX-05, 2026-11-18): a card carried into a merged album takes the merged album's whole
+        -- track set, so a later split of that album covers it with two releases and opens the chooser.
+        destination_track_paths as (
+          select coalesce(jsonb_agg(library.local_track_files.private_path
+                   order by library.local_track_files.private_path), '[]'::jsonb) as paths
+          from bootstrap_context
+          join library.local_tracks
+            on library.local_tracks.library_id = bootstrap_context.library_id
+           and library.local_tracks.album_id = %(destination_album_id)s::bigint
+          join library.local_track_files
+            on library.local_track_files.track_id = library.local_tracks.id
+           and library.local_track_files.scan_cache_stale is false
         )
         update ops.cover_lookup_tasks as tasks
         set album_key = %(destination_album_key)s,
@@ -5714,6 +5727,7 @@ def _rebind_cover_lookup_tasks_after_structural_edit_sql() -> str:
                      'artist', %(destination_artist_name)s::text,
                      'album', %(destination_album_title)s::text,
                      'year', %(destination_release_year)s::integer,
+                     'track_paths', destination_track_paths.paths,
                      'album_payload',
                      coalesce(
                        tasks.metadata #> '{source_payload,album_payload}',
@@ -5726,12 +5740,14 @@ def _rebind_cover_lookup_tasks_after_structural_edit_sql() -> str:
                        'album', %(destination_album_title)s::text,
                        'album_artist', %(destination_artist_name)s::text,
                        'artist', %(destination_artist_name)s::text,
-                       'year', %(destination_release_year)s::integer
+                       'year', %(destination_release_year)s::integer,
+                       'track_paths', destination_track_paths.paths,
+                       'track_count', jsonb_array_length(destination_track_paths.paths)
                      )
                    ),
               true
-            )
-        from bootstrap_context
+            ) || jsonb_build_object('track_paths', destination_track_paths.paths)
+        from bootstrap_context, destination_track_paths
         where tasks.library_id = bootstrap_context.library_id
           and (
                 coalesce(

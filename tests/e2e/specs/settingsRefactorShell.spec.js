@@ -246,9 +246,9 @@ test('FTC-SETTINGS-S01 six tabs preserve keyboard wrapping and joined Close hit 
   expect({ y: settings.pageTitle.y, height: settings.pageTitle.height, fontSize: settings.pageTitle.fontSize })
     .toEqual({ y: gallery.title.y, height: gallery.title.height, fontSize: gallery.title.fontSize });
   expect(Math.abs((settings.picker.y + settings.picker.height / 2) - (gallery.hamburger.y + gallery.hamburger.height / 2))).toBeLessThanOrEqual(1);
-  // The hamburger is bare and the section picker is the shared Button.
+  // The hamburger is bare; owner (2026-11-18): the section picker is the shared dropdown control.
   await expect(phone.locator('#mobile-settings-button')).toHaveClass(/action-button--bare/);
-  await expect(phone.locator('#mobile-settings-section-button')).toHaveClass(/\bui-button\b/);
+  await expect(phone.locator('.ui-dropdown-control > #mobile-settings-section-button')).toHaveAttribute('role', 'combobox');
   // Owner (11-09): the phone shows the web device selector, with only Mobile unlocked.
   const devices = phone.locator('#mobile-page-outlet .appearance-device-selector button');
   await expect(devices).toHaveText(['Web / Desktop', 'Mobile', 'TV']);

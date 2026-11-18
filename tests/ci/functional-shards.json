@@ -1246,13 +1246,6 @@
               "test": "tests/e2e/specs/musicbrainzArtistIdentity.spec.js",
               "case": "FTC-MBID-003 an Unconfirmed match and its filter are in the first Problematic Files page",
               "area": "problematic-files"
-            },
-            {
-              "config": "playwright.config.js",
-              "project": "functional",
-              "test": "tests/e2e/specs/playbackTakeover.spec.js",
-              "case": "FTC-PLAYBACK-TAKEOVER-002 under full CPU load a second tab of the same browser opens promptly beside a playing tab, stays responsive, shows the overlay, and one Play here moves the song to it",
-              "area": "playback"
             }
           ]
         },

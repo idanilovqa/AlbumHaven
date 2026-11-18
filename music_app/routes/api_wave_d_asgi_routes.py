@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from music_app.services.log_history import history_scope_for_request
 
+import asyncio
 from collections.abc import Mapping
 from datetime import datetime, timezone
 import logging
@@ -486,6 +487,33 @@ def _is_squareish_cover(width: int, height: int) -> bool:
     return abs(width - height) / max(width, height) <= 0.18
 
 
+# Owner (2026-11-18): a folder the index had never listed answered "not listed yet", and the page asked again a
+# second later. The request waits briefly for the worker's foreground listing instead; it never reads the folder.
+# A folder being re-indexed still answers at once with its previous listing.
+_UNLISTED_INVENTORY_WAIT_SECONDS = 1.5
+_UNLISTED_INVENTORY_POLL_SECONDS = 0.05
+
+
+async def _gallery_local_inventory(inventory_worker, album_root, track_paths: set[str]):
+    deadline = perf_counter() + _UNLISTED_INVENTORY_WAIT_SECONDS
+    repository = inventory_worker.repository
+    if album_root is None:
+        context = await run_in_threadpool(inventory_worker.request_context, track_paths) or {}
+        album_root = Path(context["root_path"]) if context.get("root_path") else None
+        while album_root is None and not context.get("error") and perf_counter() < deadline:
+            await asyncio.sleep(_UNLISTED_INVENTORY_POLL_SECONDS)
+            album_root = await run_in_threadpool(repository.root_for_tracks, track_paths)
+        if album_root is None:
+            return None, {"available": False, "complete": False, "error": context.get("error")}
+    inventory = await run_in_threadpool(repository.get, album_root)
+    if not inventory or not inventory.get("complete"):
+        await run_in_threadpool(inventory_worker.request, album_root)
+    while not (inventory or {}).get("available") and not (inventory or {}).get("error") and perf_counter() < deadline:
+        await asyncio.sleep(_UNLISTED_INVENTORY_POLL_SECONDS)
+        inventory = await run_in_threadpool(repository.get, album_root)
+    return album_root, inventory or {"available": False, "complete": False}
+
+
 async def _serialize_cover_gallery_from_asgi(
     request: Request,
     album_root,
@@ -518,14 +546,7 @@ async def _serialize_cover_gallery_from_asgi(
     local_inventory = None
     inventory_worker = getattr(request.app.state, "local_cover_inventory", None)
     if include_local and inventory_worker is not None:
-        if album_root is None:
-            context_inventory = await run_in_threadpool(inventory_worker.request_context, track_paths)
-            local_inventory = {"available": False, "complete": False, "error": (context_inventory or {}).get("error")}
-        else:
-            local_inventory = await run_in_threadpool(inventory_worker.repository.get, album_root)
-            if not local_inventory or not local_inventory.get("complete"):
-                await run_in_threadpool(inventory_worker.request, album_root)
-        local_inventory = local_inventory or {"available": False, "complete": False}
+        album_root, local_inventory = await _gallery_local_inventory(inventory_worker, album_root, track_paths)
     return await run_in_threadpool(
         serialize_cover_gallery_payload,
         album_root=album_root,

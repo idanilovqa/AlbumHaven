@@ -3584,13 +3584,20 @@ test('FTC-COVERS-048 every Cover Look Up opening shows all of its cards at once'
 
     await stepLogger.step('Case 2: an album without art opens straight into its empty state, with nothing blinking', async () => {
       await openAlbumDetails({ artist: SPLIT_FIXTURE.artist, album: SPLIT_FIXTURE.album, year: SPLIT_FIXTURE.year });
-      const samples = await observeOpening(() => trackModalActions.openCoverLookup());
+      const observation = await lookup.startOpeningObservation();
+      let samples;
+      try {
+        await trackModalActions.openCoverLookup();
+        await coverLookupActions.waitForModalReady();
+        await expect(lookup.localEmptyState).toBeVisible();
+      } finally {
+        samples = await lookup.finishOpeningObservation(observation);
+      }
       expect(samples.at(-1)).toMatchObject({ local: 0, emptyLocal: true });
       const blinking = samples.filter(sample => (
         sample.localPlaceholders || sample.loadingLines || sample.remotePlaceholders
       ));
       expect(blinking, JSON.stringify(blinking.slice(0, 5))).toEqual([]);
-      await expect(lookup.localEmptyState).toBeVisible();
       await coverLookupActions.closeModal();
       await trackModalActions.close();
     });

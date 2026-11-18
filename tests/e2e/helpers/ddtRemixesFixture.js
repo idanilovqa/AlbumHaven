@@ -111,13 +111,16 @@ async function readJson(response, label, { observe } = {}) {
 const DDT_GALLERY_URL = `/view-data?surface=albums&artist=${encodeURIComponent(DDT_ARTIST)}`
   + '&payload_tier=gallery_summary&include_non_album=1';
 
-export async function findDdtAlbums(page, albumName, options = {}) {
+async function readDdtGalleryAlbums(page, options) {
   const response = await authenticatedPageGet(page, DDT_GALLERY_URL, { timeout: REQUEST_TIMEOUT_MS });
   const payload = await readJson(response, 'DDT gallery view-data', options);
-  const albums = flattenAlbums(effectiveArtistGroups(payload));
-  const matches = albums.filter((album) => String(album?.name || '').trim() === albumName);
-  matches.galleryAlbumNames = albums.map((album) => String(album?.name || ''));
-  return matches;
+  return flattenAlbums(effectiveArtistGroups(payload));
+}
+
+const named = (albums, albumName) => albums.filter((album) => String(album?.name || '').trim() === albumName);
+
+export async function findDdtAlbums(page, albumName, options = {}) {
+  return named(await readDdtGalleryAlbums(page, options), albumName);
 }
 
 export function albumRequestKey(album) {
@@ -135,10 +138,11 @@ export async function readAlbumDetails(page, album, options = {}) {
 
 // The full album payload Edit Tags sends, read the way the editor reads it.
 export async function readDdtAlbumPayload(page, albumName, options = {}) {
-  const albums = await findDdtAlbums(page, albumName, options);
+  const gallery = await readDdtGalleryAlbums(page, options);
+  const albums = named(gallery, albumName);
   if (albums.length !== 1) {
     throw new Error(`Expected one DDT «${albumName}» album; the gallery has `
-      + `${JSON.stringify(albums.galleryAlbumNames)}.`);
+      + `${JSON.stringify(gallery.map((album) => album?.name))}.`);
   }
   return readAlbumDetails(page, albums[0], options);
 }

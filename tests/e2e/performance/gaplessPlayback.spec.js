@@ -128,8 +128,8 @@ test('FTC-PLAYER-016 production playback crosses a sample-exact stable-stream bo
       try {
         continuityOpen = await traffic.waitForControl({ type: 'open', role: 'continuity' });
       } catch (error) {
-        const { continuityDrop, pendingContinuityTrack, activeRoles, bufferedFrames, paused } = await readGaplessPlaybackDiagnostics(page);
-        error.message += ` | continuityDrop=${JSON.stringify(continuityDrop)} pendingContinuityTrack=${JSON.stringify(pendingContinuityTrack)}`
+        const { continuityTrace, pendingContinuityTrack, activeRoles, bufferedFrames, paused } = await readGaplessPlaybackDiagnostics(page);
+        error.message += ` | continuityTrace=${JSON.stringify(continuityTrace)} pendingContinuityTrack=${JSON.stringify(pendingContinuityTrack)}`
           + ` activeRoles=${JSON.stringify(activeRoles)} bufferedFrames=${JSON.stringify(bufferedFrames)} paused=${paused}`;
         throw error;
       }

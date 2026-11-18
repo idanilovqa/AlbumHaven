@@ -968,9 +968,8 @@ export async function readGaplessPlaybackDiagnostics(page) {
         current: roleDiagnostics(streaming.roles?.current),
         continuity: roleDiagnostics(streaming.roles?.continuity),
       },
-      continuityDrop: diagnostics.continuityDrop
-        ? { ...diagnostics.continuityDrop, path: String(diagnostics.continuityDrop.path || '').split(/[\\/]/).pop() }
-        : null,
+      continuityTrace: (diagnostics.continuityTrace || []).map(entry => (
+        { ...entry, path: String(entry.path || '').split(/[\\/]/).pop() })),
       pendingContinuityTrack: String(streaming.pendingContinuityTrack?.path || '').split(/[\\/]/).pop(),
       pendingPromotionStreamId: Number(streaming.pendingPromotion?.streamId || 0),
       pendingPromotionPresent: Boolean(streaming.pendingPromotion),

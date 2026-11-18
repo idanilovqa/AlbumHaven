@@ -489,13 +489,16 @@ function streamingContinuityIdentity(track, options) {
   return [String(track?.path || ''), options.kind, options.startSeconds, options.endSeconds].join(':');
 }
 
-// Records why the last continuity request ended without opening or parking, for failure reports.
+// DIAGNOSTIC: the last steps a continuity request took, for failure reports.
+function noteStreamingContinuityStep(step, track) {
+  const diagnostics = streamingEngineState().diagnostics;
+  diagnostics.continuityTrace ??= [];
+  diagnostics.continuityTrace.push({ step, path: String(track?.path || ''), atMs: Math.round(performance.now()) });
+  if (diagnostics.continuityTrace.length > 20) diagnostics.continuityTrace.shift();
+}
+
 function noteStreamingContinuityDrop(reason, track) {
-  streamingEngineState().diagnostics.continuityDrop = {
-    reason,
-    path: String(track?.path || ''),
-    atMs: Math.round(performance.now()),
-  };
+  noteStreamingContinuityStep(`drop:${reason}`, track);
 }
 
 function deferStreamingContinuity(track, options, generation, currentStreamId) {
@@ -535,6 +538,7 @@ function maybeSchedulePendingStreamingContinuity() {
   const options = engine.pendingContinuityOptions
     || normalizeStreamingContinuityOptions();
   if (!protectedQueuedContinuityReady(engine, current, options)) return false;
+  noteStreamingContinuityStep('deferred-retry', track);
   deferStreamingContinuity(track, options, engine.generation, current.streamId);
   return true;
 }
@@ -2996,12 +3000,15 @@ async function seekBrowserStreaming(seconds) {
 
 async function scheduleBrowserStreamingContinuity(track, options = {}) {
   const engine = streamingEngineState();
+  noteStreamingContinuityStep('schedule', track);
   if (!engine.roles.current) {
     noteStreamingContinuityDrop('no-current-role', track);
     return null;
   }
   if (mayPrimeStreamingCachedTrack()) {
+    noteStreamingContinuityStep('prime-start', track);
     await primeStreamingCachedTrack(track);
+    noteStreamingContinuityStep('prime-done', track);
     if (!engine.roles.current) {
       noteStreamingContinuityDrop('no-current-role-after-prime', track);
       return null;
@@ -3012,6 +3019,7 @@ async function scheduleBrowserStreamingContinuity(track, options = {}) {
     // Most albums share one rate, so an unknown track is opened at this rate and
     // the server refuses it if wrong. Only a 320 kbps stream needs its rate first.
     if (!knownStreamingSampleRate(track) && chooseStreamingQuality(track) === '320') {
+      noteStreamingContinuityStep('rate-request', track);
       if (await requestStreamingSampleRate(track)) return scheduleStreamingContinuity(track, normalized);
       noteStreamingContinuityDrop('sample-rate-unknown', track);
       return null;
@@ -3039,17 +3047,20 @@ async function scheduleBrowserStreamingContinuity(track, options = {}) {
     return prepared;
   }
   if (engine.pendingPromotion) {
+    noteStreamingContinuityStep('park:pending-promotion', track);
     engine.pendingContinuityTrack = track;
     engine.pendingContinuityOptions = normalized;
     return null;
   }
   if (!protectedQueuedContinuityReady(engine, engine.roles.current, normalized)) {
+    noteStreamingContinuityStep('park:not-ready', track);
     engine.pendingContinuityTrack = track;
     engine.pendingContinuityOptions = normalized;
     return null;
   }
   if (!engine.diagnostics.firstFrameAtMs
       && engine.roles.current?.boundaryNotified !== true) {
+    noteStreamingContinuityStep('park:before-first-frame', track);
     engine.pendingContinuityTrack = track;
     engine.pendingContinuityOptions = normalized;
     return null;
@@ -3057,6 +3068,7 @@ async function scheduleBrowserStreamingContinuity(track, options = {}) {
   if (engine.roles.continuity
       && normalized.kind === 'queued-next'
       && engine.roles.continuity.continuityOptions?.kind === 'queued-next') {
+    noteStreamingContinuityStep('park:continuity-busy', track);
     engine.pendingContinuityTrack = track;
     engine.pendingContinuityOptions = normalized;
     return null;
@@ -3071,6 +3083,7 @@ async function scheduleBrowserStreamingContinuity(track, options = {}) {
     noteStreamingContinuityDrop('open-refused', track);
     return null;
   }
+  noteStreamingContinuityStep('opened', track);
   if (normalized.kind === 'queued-next') {
     engine.node.port.postMessage({
       type: 'expect-continuity',

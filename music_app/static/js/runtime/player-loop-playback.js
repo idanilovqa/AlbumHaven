@@ -445,9 +445,11 @@ let pendingStreamingFirstFrameSchedule = null;
 async function handleStreamingPlaybackFirstFrame(event = {}) {
   const selectedTrackPath = String(state.player.current?.path || '');
   const renderedTrackPath = String(event.trackPath || '');
-  const noteDrop = (reason, track) => {
-    if (typeof noteStreamingContinuityDrop === 'function') noteStreamingContinuityDrop(reason, track);
+  const noteStep = (step, track) => {
+    if (typeof noteStreamingContinuityStep === 'function') noteStreamingContinuityStep(step, track);
   };
+  const noteDrop = (reason, track) => noteStep(`drop:${reason}`, track);
+  noteStep('first-frame', { path: renderedTrackPath || selectedTrackPath });
   if (renderedTrackPath && renderedTrackPath !== selectedTrackPath) {
     noteDrop('first-frame-path-mismatch', null);
     return;
@@ -457,8 +459,12 @@ async function handleStreamingPlaybackFirstFrame(event = {}) {
     Number(event.streamId) || 0,
     renderedTrackPath || selectedTrackPath,
   ].join(':');
-  if (identity === handledStreamingFirstFrameIdentity) return;
+  if (identity === handledStreamingFirstFrameIdentity) {
+    noteStep('first-frame-already-handled', null);
+    return;
+  }
   if (identity === pendingStreamingFirstFrameIdentity) {
+    noteStep('first-frame-already-pending', null);
     return pendingStreamingFirstFrameSchedule;
   }
   const selectionToken = playerTrackSelectionToken;
@@ -477,6 +483,7 @@ async function handleStreamingPlaybackFirstFrame(event = {}) {
       noteDrop('first-frame-selection-changed', nextTrack);
       return;
     }
+    noteStep('first-frame-dispatch', nextTrack);
     return state.player.loopActive
       ? dispatchActiveStreamingLoop()
       : nextTrack ? scheduleStreamingContinuity(nextTrack, queuedNextContinuityOptions(nextTrack)) : null;

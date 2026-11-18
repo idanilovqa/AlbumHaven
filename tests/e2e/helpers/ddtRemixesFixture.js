@@ -64,7 +64,7 @@ export async function restoreRemixesMedia(snapshot) {
 
 // Physical ID3 tags of every file: TALB is «Ремиксы2» exactly for `splitFilenames`,
 // and TIT2 matches `titles[filename]` where given.
-export async function readRemixesPhysicalState() {
+async function readRemixesPhysicalState() {
   const snapshots = await readGeneratedMp3TagSnapshots({
     artist: DDT_ARTIST,
     album: REMIXES_ALBUM,
@@ -105,16 +105,18 @@ async function readJson(response, label, { observe } = {}) {
   return payload;
 }
 
-// The DDT albums named `albumName` that the Postgres browse projection serves now.
+// The DDT albums named `albumName` in the selected-artist gallery, requested exactly as
+// the page requests it (view-state-helpers.js buildViewDataUrl for a selected artist).
+const DDT_GALLERY_URL = `/view-data?surface=albums&artist=${encodeURIComponent(DDT_ARTIST)}`
+  + '&payload_tier=gallery_summary&include_non_album=1';
+
 export async function findDdtAlbums(page, albumName, options = {}) {
-  const response = await authenticatedPageGet(
-    page,
-    `/view-data?surface=albums&artist=${encodeURIComponent(DDT_ARTIST)}`,
-    { timeout: REQUEST_TIMEOUT_MS },
-  );
-  const payload = await readJson(response, 'DDT view-data', options);
-  return flattenAlbums(payload.artist_groups || [])
-    .filter((album) => String(album?.name || '').trim() === albumName);
+  const response = await authenticatedPageGet(page, DDT_GALLERY_URL, { timeout: REQUEST_TIMEOUT_MS });
+  const payload = await readJson(response, 'DDT gallery view-data', options);
+  const albums = flattenAlbums(payload.artist_groups || []);
+  const matches = albums.filter((album) => String(album?.name || '').trim() === albumName);
+  matches.galleryAlbumNames = albums.map((album) => String(album?.name || ''));
+  return matches;
 }
 
 export function albumRequestKey(album) {
@@ -130,11 +132,13 @@ export async function readAlbumDetails(page, album, options = {}) {
   return (await readJson(response, 'album-details', options)).album;
 }
 
-// The full album payload Edit Tags sends, read the way the editor reads it, or null
-// while the browse projection has no single album of that name.
+// The full album payload Edit Tags sends, read the way the editor reads it.
 export async function readDdtAlbumPayload(page, albumName, options = {}) {
   const albums = await findDdtAlbums(page, albumName, options);
-  if (albums.length !== 1) return null;
+  if (albums.length !== 1) {
+    throw new Error(`Expected one DDT «${albumName}» album; the gallery has `
+      + `${JSON.stringify(albums.galleryAlbumNames)}.`);
+  }
   return readAlbumDetails(page, albums[0], options);
 }
 
@@ -160,7 +164,9 @@ export function albumUpdatesFor(album, filenames, fields) {
 // App-level restore used from `finally`: every track back in «Ремиксы» with its released
 // title, through the real Edit Tags route so Postgres and files stay consistent.
 export async function restoreRemixesThroughApp(page, { titles = {} } = {}) {
-  const split = await readDdtAlbumPayload(page, REMIXES_SPLIT_ALBUM);
+  const split = (await findDdtAlbums(page, REMIXES_SPLIT_ALBUM)).length
+    ? await readDdtAlbumPayload(page, REMIXES_SPLIT_ALBUM)
+    : null;
   if (split) {
     const response = await postEditTags(
       page,
@@ -170,7 +176,6 @@ export async function restoreRemixesThroughApp(page, { titles = {} } = {}) {
     await readJson(response, 'restore merge');
   }
   const source = await readDdtAlbumPayload(page, REMIXES_ALBUM);
-  if (!source) throw new Error(`«${REMIXES_ALBUM}» is not a single album after restore.`);
   const titleUpdates = {};
   for (const track of source.tracks || []) {
     const expected = titles[trackFilename(track)];

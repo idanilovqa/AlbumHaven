@@ -104,7 +104,6 @@ test.describe(`${CASE_ID} synthetic-large consecutive Edit Tags API saves`, () =
 
     const runEdit = async ({ kind, label, albumName, filenames, fields, splitFilenames, title }) => {
       const album = await readDdtAlbumPayload(page, albumName, { observe });
-      expect(album, `${label}: «${albumName}» must be a single album before the edit`).toBeTruthy();
       const updates = albumUpdatesFor(album, filenames, fields);
       const startedAt = performance.now();
       const postPromise = postEditTags(page, album, updates);

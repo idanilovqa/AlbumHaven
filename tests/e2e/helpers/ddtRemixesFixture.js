@@ -5,6 +5,7 @@ import { authenticatedPageGet, authenticatedPagePost } from './authenticatedPage
 import { resolveWritableFixtureMediaRoot } from './fixtureMediaRoot.js';
 import { readGeneratedMp3TagSnapshots } from './physicalTagHelpers.js';
 import { flattenAlbums } from './realAppBenchmarkHelpers.js';
+import { effectiveArtistGroups } from './rendererReconciliationHelpers.js';
 
 // The fake ten-track ДДТ «Ремиксы» album of the synthetic-large-library profile
 // (media/writable/ДДТ/Ремиксы). Timing tests split half of it away and merge it back.
@@ -113,7 +114,7 @@ const DDT_GALLERY_URL = `/view-data?surface=albums&artist=${encodeURIComponent(D
 export async function findDdtAlbums(page, albumName, options = {}) {
   const response = await authenticatedPageGet(page, DDT_GALLERY_URL, { timeout: REQUEST_TIMEOUT_MS });
   const payload = await readJson(response, 'DDT gallery view-data', options);
-  const albums = flattenAlbums(payload.artist_groups || []);
+  const albums = flattenAlbums(effectiveArtistGroups(payload));
   const matches = albums.filter((album) => String(album?.name || '').trim() === albumName);
   matches.galleryAlbumNames = albums.map((album) => String(album?.name || ''));
   return matches;

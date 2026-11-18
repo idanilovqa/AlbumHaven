@@ -7479,29 +7479,38 @@ def _synchronize_album_cover_file_entries_sql(
         else ""
     )
     album_filter = (
-        """(
-          album.id = any(%(album_ids)s::bigint[])
-          or exists (
-            select 1
-            from library.local_tracks as selected_tracks
-            join library.local_track_files as selected_files
-              on selected_files.track_id = selected_tracks.id
-             and selected_files.scan_cache_stale is false
-            where selected_tracks.album_id = album.id
-              and selected_tracks.library_id = album.library_id
-              and selected_files.private_path = any(%(active_paths)s::text[])
-          )
+        """album.id in (
+          select unnest(%(album_ids)s::bigint[])
+          union
+          select selected_tracks.album_id
+          from library.local_track_files as selected_files
+          join library.local_tracks as selected_tracks
+            on selected_tracks.id = selected_files.track_id
+          where selected_files.private_path = any(%(active_paths)s::text[])
+            and selected_files.scan_cache_stale is false
         )"""
         if by_album_ids
         else "album.album_key = any(%(album_keys)s::text[])"
     )
+    # Materialized album and file sets keep the update on the album/track
+    # indexes; the planner otherwise scans every track file's metadata.
     return f"""
-        with repaired_albums as (
+        with repaired_albums as materialized (
           select album.* from library.local_albums album
           join library.libraries lib on lib.id = album.library_id
           join app.bootstrap_owners owner on owner.account_id = lib.owner_account_id
           where owner.owner_key = 'local-bootstrap-owner' and lib.library_kind = 'local'
             and {album_filter}
+        ), repaired_files as materialized (
+          select files.id as file_id, album.*
+          from repaired_albums album
+          join library.local_tracks tracks
+            on tracks.album_id = album.id and album.library_id = tracks.library_id
+          join library.local_track_files files on files.track_id = tracks.id
+          join library.library_roots roots
+            on roots.id = files.library_root_id and roots.library_id = tracks.library_id
+           and roots.is_active is true
+          where files.scan_cache_stale is false and files.scan_file_entry_is_object is true
         )
         update library.local_track_files files
         set metadata = jsonb_set(files.metadata, '{{scan_cache,file_entry}}',
@@ -7509,11 +7518,8 @@ def _synchronize_album_cover_file_entries_sql(
             'album_id', album.id, 'cover_path', album.cover_path,
             {selection_fields}{structural_cover_field}
           ), true)
-        from library.local_tracks tracks
-        join repaired_albums album on album.id = tracks.album_id and album.library_id = tracks.library_id
-        join library.library_roots roots on roots.library_id = tracks.library_id and roots.is_active is true
-        where files.track_id = tracks.id and files.library_root_id = roots.id
-          and files.scan_cache_stale is false and files.scan_file_entry_is_object is true
+        from repaired_files album
+        where files.id = album.file_id
           and coalesce(files.metadata #>> '{{scan_cache,file_entry,local_album_membership_problem}}', '') = ''
           and coalesce(files.metadata #>> '{{scan_cache,file_entry,exception_type}}', '') = ''
         returning files.private_path, files.metadata #> '{{scan_cache,file_entry}}' as file_entry

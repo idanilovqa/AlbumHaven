@@ -125,7 +125,14 @@ test('FTC-PLAYER-016 production playback crosses a sample-exact stable-stream bo
       }
       await initialStartDiagnostics.finish();
       await globalPlayerActions.waitForPlaybackState({ paused: false, minimumCurrentTime: 0.02 });
-      continuityOpen = await traffic.waitForControl({ type: 'open', role: 'continuity' });
+      try {
+        continuityOpen = await traffic.waitForControl({ type: 'open', role: 'continuity' });
+      } catch (error) {
+        const { continuityDrop, pendingContinuityTrack, activeRoles, bufferedFrames, paused } = await readGaplessPlaybackDiagnostics(page);
+        error.message += ` | continuityDrop=${JSON.stringify(continuityDrop)} pendingContinuityTrack=${JSON.stringify(pendingContinuityTrack)}`
+          + ` activeRoles=${JSON.stringify(activeRoles)} bufferedFrames=${JSON.stringify(bufferedFrames)} paused=${paused}`;
+        throw error;
+      }
       const diagnostics = await readGaplessPlaybackDiagnostics(page);
       expect(diagnostics.firstFrameAtEpochMs).toBeGreaterThan(0);
       expect(diagnostics.roleOpenedAtEpochMs.continuity).toBeGreaterThanOrEqual(

@@ -8555,13 +8555,25 @@ function streamingContinuityIdentity(track, options) {
   return [String(track?.path || ''), options.kind, options.startSeconds, options.endSeconds].join(':');
 }
 
+// Records why the last continuity request ended without opening or parking, for failure reports.
+function noteStreamingContinuityDrop(reason, track) {
+  streamingEngineState().diagnostics.continuityDrop = {
+    reason,
+    path: String(track?.path || ''),
+    atMs: Math.round(performance.now()),
+  };
+}
+
 function deferStreamingContinuity(track, options, generation, currentStreamId) {
   Promise.resolve().then(() => {
     const engine = streamingEngineState();
     if (engine.generation !== generation
         || engine.roles.current?.streamId !== currentStreamId
         || engine.pendingContinuityTrack !== track
-        || engine.pendingContinuityOptions !== options) return;
+        || engine.pendingContinuityOptions !== options) {
+      noteStreamingContinuityDrop('deferred-superseded', track);
+      return;
+    }
     engine.pendingContinuityTrack = null;
     engine.pendingContinuityOptions = null;
     return scheduleStreamingContinuity(track, options);
@@ -11050,21 +11062,28 @@ async function seekBrowserStreaming(seconds) {
 
 async function scheduleBrowserStreamingContinuity(track, options = {}) {
   const engine = streamingEngineState();
-  if (!engine.roles.current) return null;
+  if (!engine.roles.current) {
+    noteStreamingContinuityDrop('no-current-role', track);
+    return null;
+  }
   if (mayPrimeStreamingCachedTrack()) {
     await primeStreamingCachedTrack(track);
-    if (!engine.roles.current) return null;
+    if (!engine.roles.current) {
+      noteStreamingContinuityDrop('no-current-role-after-prime', track);
+      return null;
+    }
   }
   const normalized = normalizeStreamingContinuityOptions(options);
   if (normalized.kind === 'queued-next') {
     // Most albums share one rate, so an unknown track is opened at this rate and
     // the server refuses it if wrong. Only a 320 kbps stream needs its rate first.
     if (!knownStreamingSampleRate(track) && chooseStreamingQuality(track) === '320') {
-      return await requestStreamingSampleRate(track)
-        ? scheduleStreamingContinuity(track, normalized)
-        : null;
+      if (await requestStreamingSampleRate(track)) return scheduleStreamingContinuity(track, normalized);
+      noteStreamingContinuityDrop('sample-rate-unknown', track);
+      return null;
     }
     if (knownStreamingSampleRate(track) && streamingPlaybackRate(track) !== engine.sampleRate) {
+      noteStreamingContinuityDrop('rate-change', track);
       leaveStreamingTrackForRateChange(track);
       return null;
     }
@@ -11109,11 +11128,15 @@ async function scheduleBrowserStreamingContinuity(track, options = {}) {
     return null;
   }
   if (engine.roles.continuity && !closeStreamingContinuityRole('continuity-replaced')) {
+    noteStreamingContinuityDrop('continuity-close-refused', track);
     return null;
   }
   const startFrame = streamingFrames(normalized.startSeconds);
   const continuity = openStreamingRole('continuity', track, startFrame, normalized);
-  if (!continuity) return null;
+  if (!continuity) {
+    noteStreamingContinuityDrop('open-refused', track);
+    return null;
+  }
   if (normalized.kind === 'queued-next') {
     engine.node.port.postMessage({
       type: 'expect-continuity',
@@ -45324,7 +45347,13 @@ let pendingStreamingFirstFrameSchedule = null;
 async function handleStreamingPlaybackFirstFrame(event = {}) {
   const selectedTrackPath = String(state.player.current?.path || '');
   const renderedTrackPath = String(event.trackPath || '');
-  if (renderedTrackPath && renderedTrackPath !== selectedTrackPath) return;
+  const noteDrop = (reason, track) => {
+    if (typeof noteStreamingContinuityDrop === 'function') noteStreamingContinuityDrop(reason, track);
+  };
+  if (renderedTrackPath && renderedTrackPath !== selectedTrackPath) {
+    noteDrop('first-frame-path-mismatch', null);
+    return;
+  }
   const identity = [
     Number(event.generation) || 0,
     Number(event.streamId) || 0,
@@ -45339,13 +45368,17 @@ async function handleStreamingPlaybackFirstFrame(event = {}) {
     ? peekNextQueuedTrack()
     : null;
   if ((!nextTrack && !state.player.loopActive) || typeof scheduleStreamingContinuity !== 'function') {
+    if (!nextTrack && !state.player.loopActive) noteDrop('first-frame-no-next-track', null);
     handledStreamingFirstFrameIdentity = identity;
     return;
   }
   pendingStreamingFirstFrameIdentity = identity;
   const scheduling = Promise.resolve().then(() => {
     if (selectionToken !== playerTrackSelectionToken
-      || selectedTrackPath !== String(state.player.current?.path || '')) return;
+      || selectedTrackPath !== String(state.player.current?.path || '')) {
+      noteDrop('first-frame-selection-changed', nextTrack);
+      return;
+    }
     return state.player.loopActive
       ? dispatchActiveStreamingLoop()
       : nextTrack ? scheduleStreamingContinuity(nextTrack, queuedNextContinuityOptions(nextTrack)) : null;

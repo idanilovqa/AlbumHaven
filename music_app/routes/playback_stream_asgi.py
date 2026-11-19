@@ -18,7 +18,10 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from starlette.websockets import WebSocketDisconnect
 
 from music_app.routes.playback_control_asgi import playback_config
-from music_app.services.library_roots import resolve_configured_media_path
+from music_app.services.library_roots import (
+    configured_library_root_paths_snapshot,
+    resolve_configured_media_path,
+)
 from music_app.services.loops import resolve_loop_media_path
 from music_app.services.playback_io import run_playback_io
 from music_app.services.playback_seek_table import flac_seek_table
@@ -88,6 +91,15 @@ def _observe_cancelled_task(task: asyncio.Task[Any]) -> None:
         task.result()
 
 
+def _resolve_waveform_media_path(config: dict[str, object], raw_path: str) -> Path | None:
+    # The root snapshot spares each waveform request a settings read from a possibly busy database.
+    return resolve_configured_media_path(
+        config,
+        raw_path,
+        configured_root_paths=configured_library_root_paths_snapshot(config),
+    )
+
+
 @router.get("/playback/waveform")
 async def playback_waveform(
     request: Request,
@@ -116,7 +128,7 @@ async def playback_waveform(
             **loop_scope,
         )
         if loop_scope is not None
-        else await asyncio.to_thread(resolve_configured_media_path, request.app.state.config, requested_path)
+        else await asyncio.to_thread(_resolve_waveform_media_path, request.app.state.config, requested_path)
     )
     if resolved_path is None:
         return JSONResponse({"error": "Media file not found"}, status_code=404)

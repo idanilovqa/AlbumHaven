@@ -16328,7 +16328,7 @@ def test_problematic_files_stale_snapshot_refills_past_disappeared_items(monkeyp
             return super().execute(sql, params)
 
     repository._browse_connection_context = lambda: Connection()
-    repository._load_problematic_files_snapshot = lambda *, allow_outdated=False: ({
+    repository._load_problematic_files_snapshot = lambda *, allow_outdated=False, **_options: ({
         "items": [
             {"key": "album-1", "name": "Album 1"},
             {"key": "album-2", "name": "Album 2"},
@@ -17388,7 +17388,7 @@ def test_problematic_first_page_after_a_library_change_re_evaluates_the_stored_l
 
     monkeypatch.setattr(repository, "_get_cached_utility_projection", lambda _kind, **_options: None)
     monkeypatch.setattr(repository, "_get_stale_utility_projection", lambda _kind: None)
-    monkeypatch.setattr(repository, "_load_problematic_files_snapshot", lambda allow_outdated=False: {
+    monkeypatch.setattr(repository, "_load_problematic_files_snapshot", lambda allow_outdated=False, **_options: {
         "items": [{"key": "artist::first"}, {"key": "artist::second"}, {"key": "artist::third"}],
     } if allow_outdated else None)
     monkeypatch.setattr(repository, "_browse_connection_context", connection_context)
@@ -17494,7 +17494,7 @@ def test_problematic_first_page_revalidates_replaced_loose_group_by_private_iden
     monkeypatch.setattr(
         repository,
         "_load_problematic_files_snapshot",
-        lambda allow_outdated=False: {
+        lambda allow_outdated=False, **_options: {
             "items": [{"key": loose_key, "track_paths": [r"Artist\Album\old.flac"]}],
             browse._PROBLEMATIC_LOOSE_GROUP_IDENTITIES_KEY: {
                 loose_key: "root-7\x01artist/album",

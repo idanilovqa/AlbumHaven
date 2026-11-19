@@ -107,4 +107,20 @@ def test_a_restarted_server_answers_the_first_page_from_the_stored_last_list():
             where library_kind = 'local' and name = 'Local Library'""")
         connection.commit()
     assert restart_and_open_first_page()["projection_cache_status"] == "revalidated"
+    _drain_background_work()
     browse._UTILITY_PROJECTION_STALE.pop(cache_key, None)
+
+
+def _bump_inventory_revision(connection):
+    connection.execute("""update library.libraries set metadata = jsonb_set(coalesce(metadata, '{}'::jsonb),
+        '{inventory_mutation_revision}', to_jsonb(coalesce((metadata ->> 'inventory_mutation_revision')::bigint, 0) + 1))
+        where library_kind = 'local' and name = 'Local Library'""")
+
+
+def _drain_background_work():
+    from music_app.services import library_browse_postgres as browse
+
+    # A refresh queues its snapshot store behind itself on the same single worker.
+    for _ in range(3):
+        browse._UTILITY_PROJECTION_PREWARM_EXECUTOR.submit(lambda: None).result(timeout=120)
+

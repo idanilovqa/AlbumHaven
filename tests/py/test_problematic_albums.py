@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 import time
 from pathlib import Path
 from threading import Barrier, Event, Thread
@@ -867,3 +868,83 @@ def test_live_tag_saves_patch_the_cached_first_problematic_page(watcher_repair_i
     save(entries[0], album="Zeta Release")   # leaves the first page
     save(entries[3], album="Aardvark Release")  # enters the first page
     save(entries[1], year=1999)  # stays, with one problem fewer
+
+
+def test_a_restarted_server_answers_the_first_page_from_the_stored_first_page(monkeypatch):
+    """sandbox2 (11-18): the complete list is no longer built, so nothing was stored and
+    every restart paid the 22-55 s whole-library candidate query for the first page."""
+    import psycopg
+
+    from music_app.services import library_browse_postgres as browse
+    from tests.py.test_problematic_files_search_postgres import (
+        _MOJIBAKE_TITLE,
+        _bump_inventory_revision,
+        _drain_background_work,
+        _seed_problematic_albums,
+    )
+
+    database_url = _seed_problematic_albums(8)
+    _drain_background_work()
+    page_key = (database_url, browse._PROBLEMATIC_FILES_PAGE_KIND)
+
+    def resolve_duplicates():
+        # A page whose duplicate sources are still resolving is served but neither cached
+        # nor stored; the background warm-up (off in tests) resolves them first.
+        repository = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": database_url})
+        with repository._search_connection_context() as connection:
+            browse._load_duplicate_candidate_album_ids(connection, [], repository=repository)
+
+    def restart_and_open_first_page(*, candidate_query_allowed):
+        for registry in (browse._UTILITY_PROJECTION_CACHE, browse._UTILITY_PROJECTION_STALE):
+            registry.pop(page_key, None)
+            registry.pop((database_url, "problematic-files"), None)
+        browse._PROBLEMATIC_SNAPSHOT_CHECKED.discard((database_url, "problematic-files"))
+        repository = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": database_url})
+        if not candidate_query_allowed:
+            monkeypatch.setattr(repository, "_load_problematic_candidate_ids",
+                                lambda **_options: pytest.fail("the whole-library candidate query must not run"))
+        return repository.build_problematic_files_page(limit=5)
+
+    with psycopg.connect(database_url) as connection:
+        connection.execute("delete from library.problematic_files_snapshots")
+        connection.commit()
+    resolve_duplicates()
+    fresh = restart_and_open_first_page(candidate_query_allowed=True)
+    _drain_background_work()
+    reader = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": database_url})
+    assert fresh["projection_cache_status"] == "bounded"
+    assert reader._load_problematic_files_snapshot(allow_outdated=True, for_first_page=True),         "A freshly built first page is stored for the next restart."
+    assert reader._load_problematic_files_snapshot() is None, "A first page is never served as the complete list."
+    assert reader._load_problematic_files_snapshot(allow_outdated=True) is None, "Search never reads a first page."
+
+    unchanged = restart_and_open_first_page(candidate_query_allowed=False)
+    assert unchanged["projection_cache_status"] == "revalidated"
+    assert [item["key"] for item in unchanged["items"]] == [item["key"] for item in fresh["items"]]
+    assert unchanged["has_more"]
+
+    # While the server was down, a new album sorting first became problematic.
+    with psycopg.connect(database_url) as connection:
+        album = connection.execute("""select library_id, artist_id from library.local_albums
+            where album_key = %s""", (fresh["items"][0]["key"],)).fetchone()
+        root_id = connection.execute("select id from library.library_roots where library_id = %s limit 1",
+                                     (album[0],)).fetchone()[0]
+        token = uuid.uuid4().hex[:12]
+        album_id = connection.execute("""insert into library.local_albums(library_id,artist_id,album_key,title)
+            values(%s,%s,%s,%s) returning id""", (*album, f"{token}::new", f"{_MOJIBAKE_TITLE} -01")).fetchone()[0]
+        track_id = connection.execute("""insert into library.local_tracks(library_id,album_id,artist_id,track_key,title)
+            values(%s,%s,%s,%s,'New') returning id""", (album[0], album_id, album[1], token)).fetchone()[0]
+        connection.execute("""insert into library.local_track_files(track_id,library_root_id,private_path,relative_path)
+            values(%s,%s,%s,%s)""", (track_id, root_id, f"C:/pf-search/{token}/new/01.flac", "new/01.flac"))
+        _bump_inventory_revision(connection)
+        connection.commit()
+    resolve_duplicates()
+
+    outdated = restart_and_open_first_page(candidate_query_allowed=True)
+    assert outdated["projection_cache_status"] == "revalidated"
+    assert f"{token}::new" not in [item["key"] for item in outdated["items"]]
+    _drain_background_work()
+    refreshed = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": database_url}) \
+        .build_problematic_files_page(limit=5)
+    assert refreshed["items"][0]["key"] == f"{token}::new", "The background refresh adds what the snapshot missed."
+    assert restart_and_open_first_page(candidate_query_allowed=False)["items"][0]["key"] == f"{token}::new"
+    _drain_background_work()

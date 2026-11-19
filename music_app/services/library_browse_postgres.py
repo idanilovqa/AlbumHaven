@@ -3342,10 +3342,19 @@ class PostgresLibraryBrowseRepository:
         limit: int,
         generation: int | None,
         after: tuple[str, str, str, str] | None = None,
+        use_snapshot: bool = True,
     ) -> dict[str, object]:
         # Re-evaluating the prior first-page albums avoids a whole-library cold query.
         status = "bounded"
-        outdated_snapshot = self._load_problematic_files_snapshot(allow_outdated=True)
+        outdated_snapshot = (
+            self._load_problematic_files_snapshot(allow_outdated=True, for_first_page=after is None)
+            if use_snapshot else None
+        )
+        # A stored first page lists only its own albums: more may follow, and albums
+        # that became problematic since are found by the background refresh.
+        first_page_snapshot = bool(
+            outdated_snapshot and outdated_snapshot.get(_PROBLEMATIC_SNAPSHOT_SCOPE_KEY)
+        )
         outdated_items = sorted(
             (item for item in (outdated_snapshot or {}).get("items") or [] if isinstance(item, Mapping)),
             key=_problematic_summary_sort_key,
@@ -3428,8 +3437,13 @@ class PostgresLibraryBrowseRepository:
                     )
                     if candidate_page["count"] >= limit:
                         break
-                scan_has_more = snapshot_index < len(outdated_items)
-            else:
+                scan_has_more = snapshot_index < len(outdated_items) or (
+                    first_page_snapshot and bool(outdated_snapshot.get("has_more"))
+                )
+                if first_page_snapshot and not candidate_page["count"] and scan_has_more:
+                    # Every stored album was fixed: only the full pass finds the next ones.
+                    outdated_items, rows, status, scan_has_more = [], [], "bounded", False
+            if not outdated_items:
                 rows = self._load_problematic_loose_file_rows(
                     connection=connection,
                     limit=limit,
@@ -3504,12 +3518,17 @@ class PostgresLibraryBrowseRepository:
                 maximum_sort_prefix=(confirmed_prefix if not outdated_items else None),
                 cache_albums=True,
             )
+            # A fresh first page is stored for the next restart, at its own inventory.
+            fingerprint = (
+                _problematic_inventory_fingerprint(connection)
+                if status == "bounded" and after is None and self._problematic_snapshot_available() else ""
+            )
         payload["complete"] = False
         payload["has_more"] = scan_has_more or int(payload.get("count") or 0) >= limit
         payload["total_candidate_count"] = None
         payload["projection_cache_status"] = status
         if not payload.get("duplicate_resolution_pending"):
-            self._set_cached_utility_projection(
+            cached = self._set_cached_utility_projection(
                 _PROBLEMATIC_FILES_PAGE_KIND,
                 {
                     **(
@@ -3522,9 +3541,36 @@ class PostgresLibraryBrowseRepository:
                 },
                 expected_generation=generation,
             )
+            if cached and fingerprint:
+                self._queue_problematic_files_snapshot_store(payload, fingerprint, first_page=True)
+        if status == "revalidated" and (outdated_snapshot or {}).get(_PROBLEMATIC_SNAPSHOT_OUTDATED_KEY):
+            # Albums outside the snapshot may have become problematic since it was stored.
+            self._queue_problematic_first_page_refresh(limit)
         payload.pop(_PROBLEMATIC_PAGE_ALBUMS_KEY, None)
         payload.pop(_PROBLEMATIC_LOOSE_GROUP_IDENTITIES_KEY, None)
         return payload
+
+    def _queue_problematic_first_page_refresh(self, limit: int) -> None:
+        """Rebuild a revalidated first page from the whole library, once, in the background."""
+        cache_key = self._utility_projection_cache_key(_PROBLEMATIC_FILES_PAGE_KIND)
+        if cache_key is None or not self._problematic_snapshot_available():
+            return
+        with _UTILITY_PROJECTION_CACHE_LOCK:
+            if cache_key in _UTILITY_PROJECTION_PREWARM_INFLIGHT:
+                return
+            generation = _UTILITY_PROJECTION_GENERATIONS.setdefault(cache_key, 0)
+            _UTILITY_PROJECTION_PREWARM_INFLIGHT.add(cache_key)
+
+        def refresh() -> None:
+            try:
+                self._build_problematic_files_first_page(limit=limit, generation=generation, use_snapshot=False)
+            except Exception:
+                logging.getLogger(__name__).warning("Problematic Files first page refresh failed.", exc_info=True)
+            finally:
+                with _UTILITY_PROJECTION_CACHE_LOCK:
+                    _UTILITY_PROJECTION_PREWARM_INFLIGHT.discard(cache_key)
+
+        _UTILITY_PROJECTION_PREWARM_EXECUTOR.submit(refresh)
 
     def build_problematic_files_search(
         self,
@@ -5080,16 +5126,17 @@ class PostgresLibraryBrowseRepository:
         payload: dict[str, object],
         *,
         expected_generation: int | None = None,
-    ) -> None:
+    ) -> bool:
+        """Cache ``payload`` unless the kind was invalidated since ``expected_generation``."""
         cache_key = self._utility_projection_cache_key(kind)
         if cache_key is None:
-            return
+            return False
         with _UTILITY_PROJECTION_CACHE_LOCK:
             if (
                 expected_generation is not None
                 and _UTILITY_PROJECTION_GENERATIONS.get(cache_key, 0) != expected_generation
             ):
-                return
+                return False
             _UTILITY_PROJECTION_CACHE[cache_key] = deepcopy(payload)
             if kind in _STALE_SERVED_UTILITY_KINDS:
                 _UTILITY_PROJECTION_STALE.pop(cache_key, None)
@@ -5104,6 +5151,7 @@ class PostgresLibraryBrowseRepository:
                 _UTILITY_PROJECTION_REWARM[cache_key] = partial(
                     self.queue_utility_projection_prewarm, kind
                 )
+        return True
 
     def _get_stale_utility_projection(self, kind: str) -> dict[str, object] | None:
         cache_key = self._utility_projection_cache_key(kind)
@@ -5134,11 +5182,14 @@ class PostgresLibraryBrowseRepository:
             and self._database_url not in _PROBLEMATIC_SNAPSHOT_UNAVAILABLE_DATABASES
         )
 
-    def _load_problematic_files_snapshot(self, *, allow_outdated: bool = False) -> dict[str, object] | None:
+    def _load_problematic_files_snapshot(
+        self, *, allow_outdated: bool = False, for_first_page: bool = False,
+    ) -> dict[str, object] | None:
         """The last stored list; one from before a later library change only when ``allow_outdated``.
 
         An outdated list is never served as such: it may name albums since merged, split or
-        removed. It may only choose which albums a first page re-evaluates.
+        removed. It may only choose which albums a first page re-evaluates. A stored first
+        page is returned only ``for_first_page``, which also marks an outdated snapshot.
         """
         if not self._problematic_snapshot_available():
             return None
@@ -5162,19 +5213,30 @@ class PostgresLibraryBrowseRepository:
         snapshot_fingerprint = payload.pop(_SNAPSHOT_FINGERPRINT_KEY, None)
         if snapshot_version != _PROBLEMATIC_SNAPSHOT_VERSION:
             return None
+        if payload.get(_PROBLEMATIC_SNAPSHOT_SCOPE_KEY) and not for_first_page:
+            return None
         if snapshot_fingerprint != current_fingerprint or not current_fingerprint:
-            return payload if allow_outdated else None
+            if not allow_outdated:
+                return None
+            if for_first_page:
+                payload[_PROBLEMATIC_SNAPSHOT_OUTDATED_KEY] = True
         return payload
 
-    def _queue_problematic_files_snapshot_store(self, payload: Mapping[str, object], fingerprint: str) -> None:
+    def _queue_problematic_files_snapshot_store(
+        self, payload: Mapping[str, object], fingerprint: str, *, first_page: bool = False,
+    ) -> None:
         # Browse-only instances never write the shared database.
         if self._config.get("SHARED_LIBRARY_BROWSE_ONLY") or not self._problematic_snapshot_available():
             return
         document = json.dumps(
             {
-                **{key: value for key, value in payload.items() if key != "projection_cache_status"},
+                **{
+                    key: value for key, value in payload.items()
+                    if key not in {"projection_cache_status", _PROBLEMATIC_PAGE_ALBUMS_KEY}
+                },
                 _SNAPSHOT_FINGERPRINT_KEY: fingerprint,
                 _PROBLEMATIC_SNAPSHOT_VERSION_KEY: _PROBLEMATIC_SNAPSHOT_VERSION,
+                **({_PROBLEMATIC_SNAPSHOT_SCOPE_KEY: "first-page"} if first_page else {}),
             },
             default=str,
         )
@@ -8069,6 +8131,9 @@ def _problematic_search_album_ids_sql() -> str:
 
 
 _SNAPSHOT_FINGERPRINT_KEY = "_inventory_fingerprint"
+# A stored first page rather than the complete list; the store SQL names the same key.
+_PROBLEMATIC_SNAPSHOT_SCOPE_KEY = "_snapshot_scope"
+_PROBLEMATIC_SNAPSHOT_OUTDATED_KEY = "_snapshot_outdated"
 _PROBLEMATIC_SNAPSHOT_VERSION_KEY = "_snapshot_version"
 _PROBLEMATIC_SNAPSHOT_VERSION = 8
 
@@ -8176,6 +8241,11 @@ def _problematic_files_snapshot_store_sql() -> str:
         where ({_PROBLEMATIC_SNAPSHOT_LIBRARY_SQL}) is not null
         on conflict (library_id) do update
           set payload = excluded.payload, built_at = excluded.built_at
+          -- A first page never replaces a complete list of the same inventory.
+          where not (excluded.payload ? '_snapshot_scope')
+             or problematic_files_snapshots.payload ? '_snapshot_scope'
+             or problematic_files_snapshots.payload ->> '_inventory_fingerprint'
+                is distinct from excluded.payload ->> '_inventory_fingerprint'
     """
 
 

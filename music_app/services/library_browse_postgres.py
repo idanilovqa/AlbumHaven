@@ -54,7 +54,6 @@ from music_app.services.listen_through import (
 from music_app.services.library_roots import (
     build_root_provenance_payload,
     configured_library_root_paths_snapshot,
-    library_category_slug,
     summarize_root_provenance_payloads,
 )
 from music_app.services.postgres_connections import pooled_connection as _pooled_connection
@@ -6707,14 +6706,9 @@ def _missing_album_projection_payloads(
             row.get("file_scan_cache_stale") is True for row in album_rows
         ):
             continue
-        # Transitional arrivals disappear after deletion; permanent sources
-        # retain their missing-album warning until the owner confirms removal.
-        album_rows = [
-            row for row in album_rows
-            if library_category_slug(row.get("file_library_root_category")) != "new_arrivals"
-        ]
-        if not album_rows:
-            continue
+        # Every source, New Arrivals included, keeps the missing-album warning until the owner
+        # confirms removal (owner 2026-11-18). Untouched New Arrivals albums never get here:
+        # missing_album_auto_removal removes them when their files are deleted.
         first = album_rows[0]
         metadata = _problematic_album_metadata_from_row(first)
         artists = metadata.get("artists")
@@ -12802,13 +12796,9 @@ def _missing_album_order_sql(*, after: bool = False) -> str:
           on tracks.album_id = albums.id
          and tracks.library_id = albums.library_id
         join library.local_track_files files on files.track_id = tracks.id
-        join library.library_roots roots
-          on roots.id = files.library_root_id
-         and roots.library_id = albums.library_id
         __EXCEPTION_OVERRIDE__
         group by albums.id, artists.name
         having bool_and(files.scan_cache_stale)
-           and bool_or(roots.root_kind <> 'new_arrivals')
            and bool_or(__REPORTABLE_EXCEPTION__)
            __AFTER__
         order by
@@ -12894,14 +12884,10 @@ def _missing_albums_sql(
            and library.local_tracks.library_id = bootstrap_context.library_id
           join library.local_track_files
             on library.local_track_files.track_id = library.local_tracks.id
-          join library.library_roots missing_roots
-            on missing_roots.id = library.local_track_files.library_root_id
-           and missing_roots.library_id = library.local_albums.library_id
           where (%(album_key)s::text is null or library.local_albums.album_key = %(album_key)s::text)
           __ARTIST_SCOPE__
           group by library.local_albums.id, missing_album_artist.name
           having bool_and(library.local_track_files.scan_cache_stale)
-             and bool_or(missing_roots.root_kind <> 'new_arrivals')
           __BOUNDED_ORDER__
         ),
         missing_album_featured_artists as (

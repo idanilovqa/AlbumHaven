@@ -16501,7 +16501,8 @@ def test_problematic_missing_compact_candidates_aggregate_all_files_before_repor
     assert "stale_album_candidates as materialized" in sql
     assert "from stale_album_candidates join library.local_albums" in sql
     assert "having bool_and(files.scan_cache_stale)" in sql
-    assert "bool_or(roots.root_kind <> 'new_arrivals')" in sql
+    # Owner 2026-11-18: New Arrivals albums are reported missing like every other source.
+    assert "new_arrivals" not in sql and "new_arrivals" not in full_sql
     assert "and bool_or(lower(btrim(coalesce(" in sql
     assert "not in ('interview', 'non-album rarity', 'non album rarity', 'custom collection')" in sql
     assert "order by case when overrides.track_key" in sql
@@ -19985,16 +19986,17 @@ def _missing_browse_row(*, album_id, title, category, artist="Broadcast", stale=
 @pytest.mark.parametrize(
     ("categories", "visible", "expected"),
     [
-        (["new_arrivals"], [], False),
+        # Owner 2026-11-18: a New Arrivals album that reaches this list was touched, so it stays.
+        (["new_arrivals"], [], True),
         (["main_library"], [], True),
         (["hoard"], [], True),
         ([None], [], True),
-        (["new_arrivals", "hoard"], ["new_arrivals"], False),
+        (["new_arrivals", "hoard"], ["new_arrivals"], True),
         (["new_arrivals", "hoard"], ["hoard"], True),
         (["new_arrivals", "hoard"], [], True),
     ],
 )
-def test_missing_album_retention_requires_permanent_source(categories, visible, expected):
+def test_missing_album_retention_in_every_source(categories, visible, expected):
     from music_app.services import library_browse_postgres as library_browse
 
     rows = [
@@ -20166,11 +20168,10 @@ def test_selected_artist_missing_albums_respect_category_with_active_albums(
 
     albums = [album for group in payload["primary_artist_groups"] for album in group["albums"]]
     expected_missing = next(row["album_key"] for row in missing if row["file_library_root_category"] == category)
-    expected = {"active"} if category == "new_arrivals" else {"active", expected_missing}
+    expected = {"active", expected_missing}
     assert {album["key"] for album in albums} == expected
     assert payload["album_count"] == len(expected)
-    if category != "new_arrivals":
-        assert next(album for album in albums if album["key"] == expected_missing)["inventory_status"] == "missing"
+    assert next(album for album in albums if album["key"] == expected_missing)["inventory_status"] == "missing"
 
 
 @pytest.mark.parametrize(

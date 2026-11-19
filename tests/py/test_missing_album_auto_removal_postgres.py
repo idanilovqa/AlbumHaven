@@ -235,9 +235,15 @@ def _user_cover_displaced_by_repair(c, a):
                  where id = %s""", (a.album_id,))
 
 
-@pytest.mark.parametrize("cover", [_folder_art, _automatic_cover, _cover_picked_in_app, _user_cover_displaced_by_repair],
-                         ids=lambda cover: cover.__name__.strip("_"))
-def test_live_a_new_arrivals_album_with_any_cover_is_removed(inventory, cover):
+def _additional_artwork(c, a):
+    c.execute("""insert into library.local_album_additional_artworks (album_id, slot, source_kind, cover_path)
+                 values (%s, 1, 'local', 'booklet.jpg')""", (a.album_id,))
+
+
+@pytest.mark.parametrize("cover", [
+    _folder_art, _automatic_cover, _cover_picked_in_app, _user_cover_displaced_by_repair, _additional_artwork,
+], ids=lambda cover: cover.__name__.strip("_"))
+def test_live_a_new_arrivals_album_with_any_artwork_is_removed(inventory, cover):
     album = _album(inventory, "Cover Album")
     _touched(inventory, album, cover)
 
@@ -245,6 +251,51 @@ def test_live_a_new_arrivals_album_with_any_cover_is_removed(inventory, cover):
 
     assert not _album_exists(inventory, album.album_key)
     assert album.path not in _files(inventory)
+
+
+def _shown_missing(fixture, album_key):
+    """Whether the gallery projection and Problematic Files show this album as "Album not found"."""
+    from music_app.services import library_browse_postgres as browse
+
+    repository = browse.PostgresLibraryBrowseRepository(fixture.config, connect=isolatedPostgres._connect)
+    gallery = browse._missing_album_projection_payloads(repository._load_missing_album_rows(album_keys=[album_key]))
+    problems = repository._build_problematic_files_payload_uncached()["items"]
+    return (
+        [album.get("key") for album in gallery],
+        [item.get("problem_reasons") for item in problems if item.get("key") == album_key],
+    )
+
+
+def test_live_a_touched_new_arrivals_album_shows_album_not_found_in_gallery_and_problematic_files(inventory):
+    album = _album(inventory, "Rated Arrival")
+    _touched(inventory, album, _user_rating)
+
+    _delete_by_watcher(inventory, album)
+
+    assert _album_exists(inventory, album.album_key)
+    assert _shown_missing(inventory, album.album_key) == ([album.album_key], [["Album not found"]])
+
+
+def test_live_a_new_arrivals_album_moved_into_the_library_is_never_missing(inventory):
+    from music_app.services.library_event_coordinator import TargetedMove
+
+    album = _album(inventory, "Moved Arrival")
+    main = Path(next(root for root in inventory.roots if root["id"] == MAIN)["path"])
+    destination = main / "Owner" / "Moved Arrival"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    album.folder.rename(destination)
+    moved = destination / "01.flac"
+    entry = {**inventory.entry("Owner/Moved Arrival/01.flac", album="Moved Arrival"), "path": str(moved)}
+
+    _reconcile(inventory, {str(moved): entry})(SimpleNamespace(
+        root_id=ARRIVALS, paths=(), deleted_paths=(), deleted_subtrees=(),
+        moves=(TargetedMove(album.folder, destination, ARRIVALS, MAIN, is_directory=True),),
+    ))
+
+    files = _files(inventory)
+    assert files[str(moved)][:2] == (False, None)
+    for album_key in {album.album_key, files[str(moved)][2]}:
+        assert _shown_missing(inventory, album_key) == ([], [])
 
 
 def test_live_an_unreachable_untouched_new_arrivals_album_stays_missing(inventory):

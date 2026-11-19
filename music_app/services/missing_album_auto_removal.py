@@ -8,9 +8,11 @@ confirmation": New Arrivals files added by mistake and deleted again leave no tr
 2. Every file is missing with reason "deleted". An "unreachable" file, or any file still
    present, keeps it. A dropped drive or share can never remove anything.
 3. Nothing user-owned refers to it: no user rating, play, play preference, loop, scrobble or love,
-   extra artwork, MusicBrainz/Discogs link, tag edit or text correction, version/split/merge
-   marking, Problematic Files ignore, or "Keep as missing". A cover never counts, whether found
-   in the folder or chosen in the app.
+   MusicBrainz/Discogs link, tag edit or text correction, version/split/merge marking, Problematic
+   Files ignore, or "Keep as missing". Artwork never counts: neither the cover, found in the folder
+   or chosen in the app, nor Additional Artwork.
+
+A touched New Arrivals album stays "Album not found" like any other source.
 
 Albums are removed through library.confirm_missing_album_removal, as a confirmed removal is;
 loose tracks through library.remove_deleted_loose_track (migration 0120). Both functions
@@ -122,7 +124,6 @@ _UNTOUCHED_DELETED_ALBUMS_SQL = f"""
       and not exists (select 1 from app.album_ratings r
                       where r.library_id = albums.library_id and r.album_key = albums.album_key
                         and r.provenance is distinct from 'file_tag_scan')
-      and not exists (select 1 from library.local_album_additional_artworks a where a.album_id = albums.id)
       and not exists (select 1 from library.local_mbid_assertions m where m.album_id = albums.id)
       and not exists (select 1 from library.separate_releases s
                       where s.library_id = albums.library_id and {_KEY_RELATED.format(key='s.release_key')})

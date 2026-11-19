@@ -1037,6 +1037,12 @@ function sendStreamingControl(message) {
     return true;
   }
   if (socket.readyState === WebSocket.OPEN) {
+    // The server knows only the streams opened on this socket: a control naming another one (a
+    // stream closed before its open ever left this page, round 8) is refused with 4400 and stops
+    // the player. Such a stream needs nothing.
+    socket.openedStreamIds ??= new Set();
+    if (message.type === 'open') socket.openedStreamIds.add(message.streamId);
+    else if (message.streamId !== undefined && !socket.openedStreamIds.has(message.streamId)) return true;
     try {
       socket.send(JSON.stringify(message));
       return true;

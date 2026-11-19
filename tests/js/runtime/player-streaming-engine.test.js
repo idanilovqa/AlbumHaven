@@ -5105,6 +5105,36 @@ test('a socket lost while a press on another song is still starting opens only t
   void press;
 });
 
+// Hosted FTC-PLAYBACK-OFFLINE-001/003 (round 8): two restarts in one outage left a close queued for
+// the first restart's stream, whose open never left the page. The server refused that close (4400)
+// on the next socket and the player stopped with an error.
+test('the next socket never gets a control for a stream that was not opened on it', async () => {
+  let online = false;
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => count > 1 && !online,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+  });
+  await startLocallySeekable(harness, 100_000);
+  await harness.api.resume();
+  harness.dispatchWindowEvent('offline');
+  await settleTwice(harness);
+  await harness.api.seek(200);
+  await settleTwice(harness);
+  const unsent = { type: 'close', generation: harness.engine.generation, streamId: harness.engine.nextStreamId + 7, reason: 'replacement' };
+  harness.engine.pendingControls.unshift(unsent);
+
+  online = true;
+  timers.fire(timers.pending().find(({ delay }) => delay <= 2_000));
+  await settleTwice(harness);
+  const sent = harness.sockets.at(-1).sent;
+  assert.deepEqual(sent.filter(({ type }) => type === 'close'), [], 'no close for a stream the server never opened');
+  assert.deepEqual(sent.filter(({ type }) => type === 'open').map(({ startFrame }) => startFrame), [200 * 48_000]);
+  assert.notEqual(harness.api.snapshot().mode, 'error');
+});
+
 test('a refused socket still stops playback with an error', async () => {
   const harness = createEngineHarness();
   await harness.api.start(makeTrack());

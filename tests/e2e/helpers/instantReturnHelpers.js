@@ -76,6 +76,16 @@ export async function slowConnection(page, latency) {
   };
 }
 
+// Same-origin /static/ requests of [page] that fail from now on, by path.
+export function failedStaticRequests(page) {
+  const failed = [];
+  page.on('requestfailed', (request) => {
+    const url = new URL(request.url());
+    if (url.pathname.startsWith('/static/')) failed.push(url.pathname);
+  });
+  return failed;
+}
+
 // The album titles inside the window, as the gallery POM finds them.
 export async function visibleAlbumNames(galleryPage) {
   // parity-check: allow-read-only-measurement-evaluate: reads which album titles are inside the window.

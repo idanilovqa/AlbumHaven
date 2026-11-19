@@ -141,6 +141,27 @@ def test_index_template_loads_the_app_copy_client_before_the_app(asgi_app):
     assert 'id="app-copy-offline-notice"' in text
 
 
+def test_every_stylesheet_and_script_of_the_app_page_can_be_kept_by_the_copy(asgi_app):
+    """Orchestrator round 9: offline, Settings and Account were unstyled. The copy keeps only what
+    the server marks immutable, which takes the current version; an unversioned asset is no-store."""
+    import re
+
+    version = asgi_app.state.runtime_asset_version
+    _status, _headers, body = run_asgi_request(asgi_app, "GET", "/", headers=COPY_REQUEST)
+    text = body.decode("utf-8")
+    assets = set(re.findall(r'<link rel="stylesheet" href="(/static/[^"]+)"', text))
+    assets |= set(re.findall(r'<script src="(/static/[^"]+)"', text))
+    assert {"/static/css/account.css", "/static/css/admin-members.css", "/static/css/settings-navigation.css",
+            "/static/js/selection-accent.js"} <= {asset.split("?")[0] for asset in assets}
+
+    for asset in sorted(assets):
+        path, _, query = asset.partition("?")
+        assert query == f"v={version}", asset
+        status, headers, _body = run_asgi_request(asgi_app, "GET", path, query={"v": version})
+        assert status == 200, asset
+        assert headers["cache-control"] == "public, max-age=31536000, immutable", asset
+
+
 def _signed_in_since(asgi_app, authenticated_at):
     from music_app.services.current_actor import ActorState, CurrentActor, LibraryRelationship
 

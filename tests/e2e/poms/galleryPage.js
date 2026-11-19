@@ -393,6 +393,19 @@ export class GalleryPage extends BasePage {
     return this.albumCard.sectionByArtistHeading(artistHeading);
   }
 
+  get ownStylesheetSelector() {
+    return 'link[rel="stylesheet"][href^="/static/"]';
+  }
+
+  // The page's own stylesheets that did not load (no rules), Settings' and Account's included.
+  async readUnloadedStylesheets() {
+    // parity-check: allow-read-only-measurement-evaluate -- reads which page stylesheets have rules.
+    return this.page.evaluate(selector => [...document.querySelectorAll(selector)]
+      // Same-origin sheets, so reading their rules never throws.
+      .filter(link => !link.sheet || link.sheet.cssRules.length === 0)
+      .map(link => link.getAttribute('href')), this.ownStylesheetSelector);
+  }
+
   // Where the kept-library line's text ends and where the first album card visible in the gallery starts,
   // clipped to the gallery's scroll box: the line must never sit on top of content.
   async readOfflineNoticeClearance() {

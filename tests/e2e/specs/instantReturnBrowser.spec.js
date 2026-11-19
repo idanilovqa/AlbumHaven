@@ -6,7 +6,7 @@ import { defineTimingBudget, expectTimingBudget } from '../helpers/timingBudget.
 import { GalleryActions } from '../actions/index.js';
 import { GalleryPage } from '../poms/index.js';
 import {
-  primeCopy, keptPages, slowConnection, visibleAlbumNames, workerReady, LIBRARY_PATH,
+  failedStaticRequests, primeCopy, keptPages, slowConnection, visibleAlbumNames, workerReady, LIBRARY_PATH,
 } from '../helpers/instantReturnHelpers.js';
 
 test.use({ serviceWorkers: 'allow' });
@@ -37,10 +37,16 @@ test('FTC-IAR-W05 offline, the saved library appears at once, read-only, and rec
   await expect(scanControl).toBeVisible();
 
   await context.setOffline(true);
+  const failedAssets = failedStaticRequests(page);
   const started = Date.now();
   await page.goto(LIBRARY_PATH);
   await galleryActions.waitForGalleryReady();
   expectTimingBudget(expect, Date.now() - started, UNREACHABLE_VIEW_BUDGET, 'saved library view with the server unreachable');
+  // Every stylesheet and script the page loads comes from the copy, Settings' and Account's
+  // included, so those screens are styled offline too (orchestrator round 9).
+  await page.waitForLoadState('load');
+  expect(failedAssets, 'page assets that failed offline').toEqual([]);
+  expect(await galleryPage.readUnloadedStylesheets(), 'page stylesheets without rules offline').toEqual([]);
 
   await expect(galleryPage.appCopyMarker).toHaveAttribute('content', 'cache');
   await expect(galleryPage.appCopyOfflineNotice).toBeVisible();
@@ -130,7 +136,7 @@ test('FTC-IAR-W09 after the first visit, a new tab opened offline shows the save
 // says the server cannot be reached.
 test(`FTC-IAR-W10 an offline reload of an artist opened after the last save names that artist and shows 'Offline. Can't load <artist>, check your network or try again later'`, {
   tag: '@area:gallery-search',
-}, async ({ page, context, galleryActions, navigationPanelActions }) => {
+}, async ({ page, context, galleryActions, navigationPanelActions }, testInfo) => {
   await primeCopy(page, galleryActions);
   const artist = await navigationPanelActions.selectSidebarArtistAt(0);
   await expect.poll(() => new URL(page.url()).search).not.toBe(new URL(LIBRARY_PATH, page.url()).search);
@@ -139,7 +145,9 @@ test(`FTC-IAR-W10 an offline reload of an artist opened after the last save name
 
   await context.setOffline(true);
   const started = Date.now();
-  await page.reload();
+  // The whole page finishes loading, not only its first paint: nothing it asks for may hang.
+  await page.reload({ waitUntil: 'load' });
+  expectTimingBudget(expect, Date.now() - started, UNREACHABLE_VIEW_BUDGET, `page load after reloading ${artist} offline`);
   const { galleryPage } = galleryActions;
   await expect(galleryPage.unreachable).toBeVisible();
   expectTimingBudget(expect, Date.now() - started, UNREACHABLE_VIEW_BUDGET, `unreachable view after reloading ${artist} offline`);
@@ -151,6 +159,13 @@ test(`FTC-IAR-W10 an offline reload of an artist opened after the last save name
   // One message only: the kept-library notice does not show above the artist's own.
   await expect(galleryPage.appCopyOfflineNotice).toBeHidden();
   expect(await visibleAlbumNames(galleryPage), 'no other view stands in for the artist').toEqual([]);
+
+  // The same address in a new tab (orchestrator round 9 saw one never finish loading once).
+  const tab = await page.context().newPage();
+  const tabStarted = Date.now();
+  await tab.goto(artistUrl.href, { waitUntil: 'load' });
+  expectTimingBudget(expect, Date.now() - tabStarted, UNREACHABLE_VIEW_BUDGET, `page load of ${artist} in a new offline tab`);
+  await expect(new GalleryPage(tab, testInfo).unreachable).toHaveText(`Offline. Can't load ${artist}, check your network or try again later`);
 });
 
 // Owner D4, server down: an album's details spun forever and tree entries quietly kept the view

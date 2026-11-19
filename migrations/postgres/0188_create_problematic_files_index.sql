@@ -88,13 +88,33 @@ begin
     first_gallery_generation=least(library.local_relation_dirty_albums.first_gallery_generation,excluded.first_gallery_generation);
 end $$;
 
--- Two more inputs of the list: the app rating compared with the file rating tag,
--- and the Spotify cover-quota outcome of an album.
+-- More inputs of the list: the app rating compared with the file rating tag, the
+-- Spotify cover-quota outcome of an album, Rules exclusions (an album-level key names
+-- its album; any other key starts with the file's path) and separate releases (keyed
+-- by the album key they split off).
 create or replace function library.capture_problematic_input_changes()
 returns trigger language plpgsql security definer set search_path = pg_catalog as $$
 declare selected record;
 begin
-  if tg_table_name = 'album_ratings' then
+  if tg_table_name = 'ignored_repairs' then
+    for selected in
+      select albums.library_id, albums.id from library.local_albums albums
+      where (tg_op <> 'INSERT' and albums.library_id = old.library_id and albums.album_key = old.metadata ->> 'album_key')
+         or (tg_op <> 'DELETE' and albums.library_id = new.library_id and albums.album_key = new.metadata ->> 'album_key')
+      union
+      select tracks.library_id, coalesce(tracks.album_id, 0) from library.local_track_files files
+      join library.local_tracks tracks on tracks.id = files.track_id
+      where (tg_op <> 'INSERT' and tracks.library_id = old.library_id and files.private_path = split_part(old.repair_key, '::', 1))
+         or (tg_op <> 'DELETE' and tracks.library_id = new.library_id and files.private_path = split_part(new.repair_key, '::', 1))
+    loop perform library.mark_problematic_album_dirty(selected.library_id, selected.id); end loop;
+  elsif tg_table_name = 'separate_releases' then
+    for selected in select albums.library_id, albums.id from library.local_albums albums
+      where (tg_op <> 'INSERT' and albums.library_id = old.library_id
+             and (albums.album_key = old.release_key or starts_with(albums.album_key, old.release_key || '::')))
+         or (tg_op <> 'DELETE' and albums.library_id = new.library_id
+             and (albums.album_key = new.release_key or starts_with(albums.album_key, new.release_key || '::')))
+    loop perform library.mark_problematic_album_dirty(selected.library_id, selected.id); end loop;
+  elsif tg_table_name = 'album_ratings' then
     if tg_op = 'UPDATE' and (old.library_id, old.album_key, old.rating, old.account_id)
       is not distinct from (new.library_id, new.album_key, new.rating, new.account_id) then return null; end if;
     for selected in select albums.library_id, albums.id from library.local_albums albums
@@ -116,6 +136,12 @@ end $$;
 
 drop trigger if exists album_ratings_problematic_dirty on app.album_ratings;
 create trigger album_ratings_problematic_dirty after insert or update or delete on app.album_ratings
+  for each row execute function library.capture_problematic_input_changes();
+drop trigger if exists ignored_repairs_problematic_dirty on library.ignored_repairs;
+create trigger ignored_repairs_problematic_dirty after insert or update or delete on library.ignored_repairs
+  for each row execute function library.capture_problematic_input_changes();
+drop trigger if exists separate_releases_problematic_dirty on library.separate_releases;
+create trigger separate_releases_problematic_dirty after insert or update or delete on library.separate_releases
   for each row execute function library.capture_problematic_input_changes();
 drop trigger if exists cover_lookup_tasks_problematic_dirty on ops.cover_lookup_tasks;
 create trigger cover_lookup_tasks_problematic_dirty after insert or update or delete on ops.cover_lookup_tasks

@@ -3390,10 +3390,15 @@ class PostgresLibraryBrowseRepository:
                 _encode_problematic_search_cursor(last, _PROBLEMATIC_INDEX_CURSOR_GENERATION, needle) if needle
                 else _encode_problematic_page_cursor(last, _PROBLEMATIC_INDEX_CURSOR_GENERATION)
             )
+        # The first page opens on its first album's detail (no separate detail request).
+        initial_detail = (
+            self.build_problematic_file_detail_payload(items[0]["key"])
+            if items and after is None and not needle else None
+        )
         return {
             "items": items,
             "count": len(items),
-            "initial_detail": None,
+            "initial_detail": initial_detail,
             "complete": bool(needle) and not has_more,
             "has_more": has_more,
             "next_cursor": next_cursor,

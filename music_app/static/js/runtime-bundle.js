@@ -6240,6 +6240,7 @@ const state = {
     activeTab: 'problematic-files',
     problematicFiles: [],
     problematicLoadError: '',
+    problematicIndexing: null,
     libraryWatchHealthProblems: [],
     selectedProblematicKey: '',
     pendingRepairKey: '',
@@ -30125,6 +30126,27 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
   els.detail.removeAttribute?.('aria-busy');
   els.detail.removeAttribute?.('inert');
 
+  const indexing = state.utility.problematicIndexing;
+  if (indexing) {
+    // Approved 2026-11-19: the shared alert with its progress line; on a phone it takes the list's place.
+    const total = Math.max(0, Number(indexing.total) || 0);
+    const done = Math.min(Math.max(0, Number(indexing.done) || 0), total);
+    const alert = buildOnPageAlertHtml({
+      severity: 'info',
+      role: 'status',
+      title: 'Indexing Problematic Files…',
+      message: 'A one-time step after an update. The list opens by itself when it is ready.',
+      progress: total ? {
+        value: (done / total) * 100,
+        label: `${done.toLocaleString('en-US')} of ${total.toLocaleString('en-US')} albums checked`,
+      } : null,
+    });
+    replaceListContents(mobileIndex ? alert : '<div class="utility-empty-state compact">Indexing…</div>');
+    if (!mobileIndex) els.detail.innerHTML = alert;
+    els.count.textContent = '';
+    return;
+  }
+
   if (state.utility.loading && !state.utility.loaded) {
     replaceListContents('<div class="utility-empty-state compact">Loading...</div>');
     els.detail.innerHTML = '<div class="utility-empty-state">Loading problematic albums...</div>';
@@ -32226,6 +32248,9 @@ function reorderTagEditorTracksByPath(tracks, draggedPath, beforePath = null) {
 
 // BEGIN js/runtime/utility-loaders-and-cover-lookup.js
 
+// How often an open Problematic Files tab asks again while its index fills.
+const PROBLEMATIC_INDEXING_POLL_MS = 2000;
+
 async function loadProblematicFiles(force = false, options = {}) {
   if (force) state.utility.problematicServerSearchCache = {};
   // 'when-open' (a Settings-intent prefetch) paints only once the modal is open.
@@ -32315,11 +32340,18 @@ async function loadProblematicFiles(force = false, options = {}) {
         if (!response.ok) {
           throw new Error(readProblematicPayloadError(data, 'Unable to load problematic files.'));
         }
+        if (data?.indexing) {
+          // The one-time index fill after an update: show its progress, then load the list.
+          const indexing = new Error('Problematic Files is indexing.');
+          indexing.problematicIndexing = data.indexing;
+          throw indexing;
+        }
         return data;
       };
       const commitSummary = (data, preserveSelectedDetail, continuation = false) => {
         const { summaryItems, initialDetail, operationalItems } = validateProblematicSummaryPayload(data);
         const stateCommitStartedAt = getProblematicUtilityNow();
+        state.utility.problematicIndexing = null;
         if (Array.isArray(data.problem_reason_types)) {
           state.utility.completeProblemReasonTypes = data.problem_reason_types
             .map((reason) => String(reason || '').trim())
@@ -32466,6 +32498,16 @@ async function loadProblematicFiles(force = false, options = {}) {
       return state.utility.problematicFiles;
     } catch (error) {
       if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
+      if (error?.problematicIndexing) {
+        state.utility.problematicIndexing = error.problematicIndexing;
+        state.utility.loaded = false;
+        state.utility.problematicLoadError = '';
+        scheduleBrowserTimeout(() => {
+          if (state.utility.problematicIndexing && isUtilityModalOpen()) void loadProblematicFiles(true);
+        }, PROBLEMATIC_INDEXING_POLL_MS);
+        if (shouldRender()) renderUtilityModalContent();
+        return null;
+      }
       loadError = String(error?.message || error || 'Unable to load problematic files.');
       console.error('[AlbumHaven][Utilities] Failed to load problematic files.', error);
       if (!boundedPayloadCommitted) {

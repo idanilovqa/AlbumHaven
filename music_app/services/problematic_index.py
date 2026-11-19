@@ -40,6 +40,8 @@ _EXECUTOR = create_daemon_executor(max_workers=1, thread_name_prefix="albumhaven
 _QUEUED: set[str] = set()
 _QUEUED_LOCK = Lock()
 _UNAVAILABLE_DATABASES: set[str] = set()
+# Albums checked by a running backfill of this process, per database.
+_PROGRESS: dict[str, dict[str, int]] = {}
 
 _LIBRARY_SQL = """
     select libraries.id
@@ -375,6 +377,7 @@ def _backfill(repository: Any, connection: Any, library_id: int) -> None:
             ).fetchall()
         ]
         album_ids = sorted({*candidate_ids, *missing_ids, *marked_ids})
+        _PROGRESS[repository._database_url] = {"done": 0, "total": len(album_ids)}
         index_rows: list[dict[str, object]] = []
         for start in range(0, max(len(album_ids), 1), BACKFILL_BATCH):
             for attempt in range(2):
@@ -388,6 +391,8 @@ def _backfill(repository: Any, connection: Any, library_id: int) -> None:
                     if attempt:
                         raise
             index_rows.extend(rows)
+            _PROGRESS[repository._database_url] = {
+                "done": min(start + BACKFILL_BATCH, len(album_ids)), "total": len(album_ids)}
         connection.execute("delete from library.problematic_index_items where library_id = %s", (library_id,))
         for row in {row["item_key"]: row for row in index_rows}.values():
             connection.execute(_UPSERT_SQL, row)
@@ -416,7 +421,10 @@ def _maintain(repository: Any) -> None:
                 return
             try:
                 if _state(connection, library_id) != "ready":
-                    _backfill(repository, connection, library_id)
+                    try:
+                        _backfill(repository, connection, library_id)
+                    finally:
+                        _PROGRESS.pop(repository._database_url, None)
                 while marks := connection.execute(
                     """select album_id, marked_xid::text as marked_xid from library.problematic_index_dirty_albums
                        where library_id = %s order by album_id limit %s""",
@@ -428,6 +436,16 @@ def _maintain(repository: Any) -> None:
                 _unlock(connection, library_id)
     except Exception:
         _LOGGER.warning("Problematic Files index maintenance failed.", exc_info=True)
+
+
+def indexing_progress(repository: Any) -> dict[str, int] | None:
+    """While no ready index exists: the backfill's progress (zeros until it knows its albums).
+
+    None when this repository does not use the index at all.
+    """
+    if not _available(repository):
+        return None
+    return dict(_PROGRESS.get(repository._database_url) or {"done": 0, "total": 0})
 
 
 def queue_maintenance(repository: Any) -> None:

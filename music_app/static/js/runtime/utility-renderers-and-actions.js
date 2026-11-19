@@ -99,6 +99,27 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
   els.detail.removeAttribute?.('aria-busy');
   els.detail.removeAttribute?.('inert');
 
+  const indexing = state.utility.problematicIndexing;
+  if (indexing) {
+    // Approved 2026-11-19: the shared alert with its progress line; on a phone it takes the list's place.
+    const total = Math.max(0, Number(indexing.total) || 0);
+    const done = Math.min(Math.max(0, Number(indexing.done) || 0), total);
+    const alert = buildOnPageAlertHtml({
+      severity: 'info',
+      role: 'status',
+      title: 'Indexing Problematic Files…',
+      message: 'A one-time step after an update. The list opens by itself when it is ready.',
+      progress: total ? {
+        value: (done / total) * 100,
+        label: `${done.toLocaleString('en-US')} of ${total.toLocaleString('en-US')} albums checked`,
+      } : null,
+    });
+    replaceListContents(mobileIndex ? alert : '<div class="utility-empty-state compact">Indexing…</div>');
+    if (!mobileIndex) els.detail.innerHTML = alert;
+    els.count.textContent = '';
+    return;
+  }
+
   if (state.utility.loading && !state.utility.loaded) {
     replaceListContents('<div class="utility-empty-state compact">Loading...</div>');
     els.detail.innerHTML = '<div class="utility-empty-state">Loading problematic albums...</div>';

@@ -7943,6 +7943,58 @@ test('Problematic Files renders load failure instead of a successful empty state
   assert.doesNotMatch(`${elements.list.innerHTML}${elements.detail.innerHTML}`, /No matching/);
 });
 
+for (const phone of [false, true]) {
+  test(`Problematic Files shows the approved indexing state with its progress line (${phone ? 'phone' : 'desktop'})`, () => {
+    const elements = {
+      overlay: {},
+      list: { innerHTML: '', scrollTop: 0 },
+      detail: { innerHTML: 'previous detail', removeAttribute() {} },
+      count: { textContent: '12' },
+      sidebarLabel: { textContent: '' },
+      search: { disabled: false, placeholder: '', value: '' },
+    };
+    const alerts = [];
+    const context = {
+      console,
+      escapeHtml(value) { return String(value ?? ''); },
+      state: { utility: {
+        problematicFiles: [], libraryWatchHealthProblems: [], selectedProblematicKey: '',
+        selectedProblemFilters: [], searchQuery: '', loaded: false, loading: true,
+        problematicLoadError: '', problematicIndexing: { done: 1226, total: 2665 },
+      } },
+      usesMobilePageLayout: () => phone,
+      getUtilityModalElements() { return elements; },
+      getFilteredProblematicAlbums() { return []; },
+      renderProblemFilterControls() {},
+      buildOnPageAlertHtml(config) {
+        alerts.push(config);
+        return `<section data-alert>${config.title}</section>`;
+      },
+    };
+    vm.createContext(context);
+    vm.runInContext(helperSource, context, { filename: helperPath });
+    vm.runInContext(utilityRendererSource, context, { filename: utilityRendererPath });
+
+    context.renderProblematicFiles();
+
+    assert.deepEqual(JSON.parse(JSON.stringify(alerts)), [{
+      severity: 'info',
+      role: 'status',
+      title: 'Indexing Problematic Files…',
+      message: 'A one-time step after an update. The list opens by itself when it is ready.',
+      progress: { value: (1226 / 2665) * 100, label: '1,226 of 2,665 albums checked' },
+    }]);
+    if (phone) {
+      assert.equal(elements.list.innerHTML, '<section data-alert>Indexing Problematic Files…</section>');
+      assert.equal(elements.detail.innerHTML, 'previous detail');
+    } else {
+      assert.equal(elements.list.innerHTML, '<div class="utility-empty-state compact">Indexing…</div>');
+      assert.equal(elements.detail.innerHTML, '<section data-alert>Indexing Problematic Files…</section>');
+    }
+    assert.equal(elements.count.textContent, '');
+  });
+}
+
 test('watcher warning retains title copy while the status icon stays green beside the separate warning control', () => {
   const context = {
     formatDurationCompact(value) { return String(value); },

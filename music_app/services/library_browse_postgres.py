@@ -3345,11 +3345,33 @@ class PostgresLibraryBrowseRepository:
         page["problem_reason_types"] = _problematic_filter_reason_types(page.get("items") or ())
         return page
 
+    def _problematic_indexing_payload(self) -> dict[str, object] | None:
+        """An empty answer with the backfill's progress while the index first fills."""
+        progress = problematic_index.indexing_progress(self)
+        if progress is None:
+            return None
+        return {
+            "items": [],
+            "count": 0,
+            "initial_detail": None,
+            "complete": False,
+            "has_more": False,
+            "next_cursor": "",
+            "cursor_restarted": False,
+            "total_candidate_count": None,
+            "projection_cache_status": "indexing",
+            "indexing": progress,
+            "problem_reason_types": [],
+            "persistence_backend": PERSISTENCE_BACKEND_POSTGRES,
+            "persistence_seam": _LIBRARY_BROWSE_SEAM_ID,
+            "view_data_source": _SOURCE_TELEMETRY,
+        }
+
     def _indexed_problematic_list(self) -> dict[str, object] | None:
         """The complete list from the persisted index, with the first item's detail."""
         items = problematic_index.read_page(self, limit=None, after=None)
         if items is None:
-            return None
+            return self._problematic_indexing_payload()
         initial_detail = self.build_problematic_file_detail_payload(items[0]["key"]) if items else None
         return {
             "items": items,
@@ -3380,7 +3402,7 @@ class PostgresLibraryBrowseRepository:
                 after, cursor_restarted = None, True
         items = problematic_index.read_page(self, limit=limit, after=after, needle=needle)
         if items is None:
-            return None
+            return self._problematic_indexing_payload()
         has_more = len(items) > limit
         items = items[:limit]
         next_cursor = ""

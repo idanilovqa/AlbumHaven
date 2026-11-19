@@ -18,11 +18,33 @@ function hideAlbumCardContextMenu() {
   if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(menu);
 }
 
+const CONTEXT_MENU_EDGE_GAP_PX = 8;
+
+// Shows a pointer-opened context menu at (x, y), moved up and left only as far as needed to stay inside the window
+// and above the bottom player, which would otherwise cover (and take the clicks of) its lower items.
+function showContextMenuAtPoint(menu, x, y) {
+  menu.style.left = `${x}px`;
+  menu.style.top = `${y}px`;
+  menu.hidden = false;
+  const rect = menu.getBoundingClientRect?.();
+  if (!rect) return;
+  const player = document.querySelector?.('.global-player');
+  const playerTop = player && !player.hidden ? player.getBoundingClientRect?.().top : undefined;
+  const viewportHeight = Number(window.innerHeight) || rect.bottom;
+  const bottomLimit = Math.min(viewportHeight, Number.isFinite(playerTop) && playerTop > 0 ? playerTop : viewportHeight)
+    - CONTEXT_MENU_EDGE_GAP_PX;
+  const rightLimit = (Number(window.innerWidth) || rect.right) - CONTEXT_MENU_EDGE_GAP_PX;
+  if (rect.bottom > bottomLimit) {
+    menu.style.top = `${Math.max(CONTEXT_MENU_EDGE_GAP_PX, y - (rect.bottom - bottomLimit))}px`;
+  }
+  if (rect.right > rightLimit) {
+    menu.style.left = `${Math.max(CONTEXT_MENU_EDGE_GAP_PX, x - (rect.right - rightLimit))}px`;
+  }
+}
+
 function showAlbumCardContextMenu(x, y, album) {
   if (isMobileClient() || usesMobilePageLayout()) { hideAlbumCardContextMenu(); return; }
   const menu = ensureAlbumCardContextMenu();
-  menu.style.left = `${x}px`;
-  menu.style.top = `${y}px`;
   menu.dataset.albumKey = getAlbumIdentity(album);
   const albumKey = String(album?.key || '');
   const manualVersionLinks = state.view?.manual_version_links && typeof state.view.manual_version_links === 'object'
@@ -41,7 +63,7 @@ function showAlbumCardContextMenu(x, y, album) {
       ? '<button type="button" class="album-card-context-menu-item" data-album-card-action="unmark-version">Unmark as a version</button>'
       : '<button type="button" class="album-card-context-menu-item" data-album-card-action="mark-version">Mark as a version</button>',
   ].join('');
-  menu.hidden = false;
+  showContextMenuAtPoint(menu, x, y);
   if (typeof activateTriggerSurface === 'function') {
     activateTriggerSurface(menu, hideAlbumCardContextMenu);
   }
@@ -89,9 +111,7 @@ function showLooseTracksContextMenu(event) {
   if (!path) return false;
   if (!controller.getSelectedPaths().includes(path)) controller.sync([path]);
   const menu = ensureLooseTracksContextMenu();
-  menu.style.left = `${event.clientX}px`;
-  menu.style.top = `${event.clientY}px`;
-  menu.hidden = false;
+  showContextMenuAtPoint(menu, event.clientX, event.clientY);
   if (typeof activateTriggerSurface === 'function') activateTriggerSurface(menu, hideLooseTracksContextMenu);
   return true;
 }
@@ -106,10 +126,8 @@ function hideArtistTreeContextMenu() {
 
 function showArtistTreeContextMenu(x, y, artist) {
   const menu = ensureArtistTreeContextMenu();
-  menu.style.left = `${x}px`;
-  menu.style.top = `${y}px`;
   menu.dataset.artist = String(artist || '');
-  menu.hidden = false;
+  showContextMenuAtPoint(menu, x, y);
   if (!state.ui?.artistsDrawerOpen && typeof activateTriggerSurface === 'function') {
     activateTriggerSurface(menu, hideArtistTreeContextMenu);
   }

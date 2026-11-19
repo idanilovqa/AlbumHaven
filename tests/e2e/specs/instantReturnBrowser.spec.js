@@ -6,7 +6,8 @@ import { defineTimingBudget, expectTimingBudget } from '../helpers/timingBudget.
 import { GalleryActions } from '../actions/index.js';
 import { GalleryPage } from '../poms/index.js';
 import {
-  failedStaticRequests, primeCopy, keptPages, keptStaticPaths, setAppPageHold, slowConnection, visibleAlbumNames, workerReady, LIBRARY_PATH,
+  albumNeverRequested, failedStaticRequests, primeCopy, keptPages, keptStaticPaths, requestedAlbumKeys,
+  setAppPageHold, slowConnection, visibleAlbumNames, workerReady, LIBRARY_PATH,
 } from '../helpers/instantReturnHelpers.js';
 
 test.use({ serviceWorkers: 'allow' });
@@ -173,9 +174,11 @@ test(`FTC-IAR-W10 an offline reload of an artist opened after the last save name
 test(`FTC-IAR-W13 offline, album details show 'Offline. Can't load the details, check your network or try again later' and an artist that cannot load shows 'Offline. Can't load <artist>, …' instead of loading forever`, {
   tag: '@area:gallery-search',
 }, async ({ page, context, galleryActions, navigationPanelActions, trackModalActions }) => {
+  const requested = requestedAlbumKeys(page);
   await primeCopy(page, galleryActions);
   const { galleryPage } = galleryActions;
-  const [album] = await visibleAlbumNames(galleryPage);
+  // Details already asked for (a prewarm included) are kept and open offline (FTC-IAR-W20).
+  const album = await albumNeverRequested(galleryActions, requested);
   // Album Details was never opened online; its close X (a CSS mask image) is kept by the save alone.
   await expect.poll(() => keptStaticPaths(page), { timeout: 15_000 }).toContain('/static/images/icons/tabler-x.svg');
   await context.setOffline(true);

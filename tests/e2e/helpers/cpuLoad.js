@@ -20,7 +20,7 @@ export async function startCpuLoad(pages, { slowdown = 4, threads = os.cpus().le
     throttle,
     async stop() {
       await Promise.all(workers.map((worker) => worker.terminate()));
-      await Promise.all(sessions.map((session) => session.detach().catch(() => {})));
+      await Promise.all(sessions.map((session) => session.detach()));
     },
   };
 }

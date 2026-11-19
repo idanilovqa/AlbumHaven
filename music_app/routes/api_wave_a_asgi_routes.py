@@ -1908,7 +1908,7 @@ async def utilities_edit_tags(request: Request) -> JSONResponse:
         if not updates:
             return _json_response(({
                 "ok": False, "error_code": "tag_edit_files_moved", "moved_files": moved_file_names,
-                # Wording pending the owner (2026-11-18).
+                # Owner-approved wording (2026-11-18).
                 "error": ("These files are no longer in this album, so nothing was changed: "
                           + ", ".join(moved_file_names) + ". Reopen the album to edit them."),
             }, 409))

@@ -139,3 +139,22 @@ class DiagnosedConnection:
             _logger.warning("BROWSE-DIAG plan (%d lines):\n%s", len(plan), "\n".join(plan[:220]))
         except Exception as error:  # noqa: BLE001
             _logger.warning("BROWSE-DIAG explain failed: %r", error)
+
+
+def log_album_covers(connection: Any, where: str, *, album_ids: Any = (), album_keys: Any = (),
+                     planned: Any = None) -> None:
+    """TEMPORARY (FTC-TAGS-009): whether each album has a cover right after a save path wrote
+    it, and the cover presence that path planned to write. Logs presence only, never paths."""
+    if not enabled():
+        return
+    try:
+        with connection.transaction():
+            rows = connection.execute(
+                "select id, album_key, coalesce(cover_path, '') <> '' as has_cover,"
+                " metadata ->> 'cover_selection_origin' as origin from library.local_albums"
+                " where id = any(%s) or album_key = any(%s) order by id",
+                ([int(value) for value in album_ids], [str(value) for value in album_keys])).fetchall()
+        albums = [tuple(row.values()) if isinstance(row, dict) else tuple(row) for row in rows]
+        _logger.warning("BROWSE-DIAG album covers after %s: planned=%s now=%s", where, planned, albums)
+    except Exception as error:  # noqa: BLE001 - diagnostics never fail a save
+        _logger.warning("BROWSE-DIAG album covers after %s unavailable: %r", where, error)

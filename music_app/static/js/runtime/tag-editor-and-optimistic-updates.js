@@ -36,7 +36,8 @@ function getAlbumTrackDisplayNumber(track, index) {
   const filenameTrackNumber = getPositiveAlbumTrackSortNumber(filenameMatch?.[1]);
   if (filenameTrackNumber !== null) return filenameTrackNumber;
 
-  return index + 1;
+  // Owner (11-17): no number rather than the row position, which duplicated real numbers after a split.
+  return '';
 }
 
 // A disc marker in the file's folder name: "CD1", "cd2 (bonus)", "Disc 2", "Adam & Eve CD2".
@@ -885,8 +886,11 @@ async function confirmManualTagEdit() {
   let failedSaveKeptNewTags = false;
   // No server verdict (connection lost, server restarted): the save may have landed.
   let saveOutcomeUnknown = false;
+  // Owner (2026-11-17): the save's own id lets the server recognise it if it is sent again.
+  const clientRequestId = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID() : '';
+  const requestPayload = { confirmed: true, album, updates, ...(clientRequestId ? { client_request_id: clientRequestId } : {}) };
   try {
-    const requestPayload = { confirmed: true, album, updates };
     if (problematicMutationOriginKey) {
       requestPayload.problematic_files_origin = true;
     }
@@ -1049,11 +1053,20 @@ async function confirmManualTagEdit() {
     }
     console.error('[AlbumHaven][Utilities] Failed to apply manual tag edits.', error);
     if (saveOutcomeUnknown) {
+      releaseFailedTagEditViewMutation(tagEditMutationClaim);
+      // Owner (2026-11-17): no answer is not a failure. The edit stays as shown and the save waits in the
+      // Edit Queue until the server confirms or refuses it; it is never rolled back here.
+      if (clientRequestId && typeof window !== 'undefined' && window.AlbumHavenPendingTagEdits) {
+        window.AlbumHavenPendingTagEdits.add({
+          id: clientRequestId, payload: requestPayload, album, trackCount: editedPaths.length,
+        });
+        showToast('Couldn’t reach the server. Your tag edit is kept and will be sent when it answers.', 'info', 5200);
+        return;
+      }
       showRepairAlert(
         'The connection to the server was lost while saving. The tags may already be saved, so the Gallery is reloading to show what the library now holds.',
         'error',
       );
-      releaseFailedTagEditViewMutation(tagEditMutationClaim);
       if (typeof refreshCurrentViewAfterBackgroundCompletion === 'function') {
         await refreshCurrentViewAfterBackgroundCompletion();
       }
@@ -1090,6 +1103,15 @@ async function confirmManualTagEdit() {
       },
     );
     releaseFailedTagEditViewMutation(tagEditMutationClaim);
+    // Owner (2026-11-18): a refused save leaves the Gallery exactly as the library is, without a page reload.
+    // Undoing only the edited album cannot restore an album an optimistic merge or split absorbed
+    // (a refused Ремиксы2 → Ремиксы merge left one "Ремиксы2" card and lost Ремиксы), so the view re-reads it.
+    if (
+      tagEditOriginStillOwnsView(originatingViewStateRevision)
+      && typeof refreshCurrentViewAfterBackgroundCompletion === 'function'
+    ) {
+      await refreshCurrentViewAfterBackgroundCompletion();
+    }
   }
 }
 

@@ -1238,6 +1238,7 @@ html .cover-lookup-drawer {
   background: color-mix(in srgb, var(--appearance-card) 85%, var(--appearance-control));
   color: var(--appearance-ink); border-color: var(--appearance-line);
 }
+/* Owner (11-17): selected rows keep the stripe too, a lighter shade of the selection fill on even rows. */
 :root .tag-editor-track.is-active:nth-child(even) { background: color-mix(in srgb, var(--text, #eee) 7%, var(--tag-editor-selection-fill)) !important; }
 :root .tag-editor-track:not(.is-active):not(:hover):nth-child(odd) { background: var(--appearance-card, var(--panel)); }
 :root .tag-editor-track:not(.is-active):not(:hover):nth-child(even) { background: color-mix(in srgb, var(--text) 7%, var(--appearance-card, var(--panel))); }

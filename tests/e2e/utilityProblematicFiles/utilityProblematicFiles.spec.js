@@ -1,5 +1,9 @@
 import { assertCompactProblematicSummary } from '../helpers/problematicPayloadEvidence.js';
 import { expect, test } from '../support/performanceFixtures.js';
+import { setProblematicCompleteListHeld } from '../helpers/coverLookupProviderHelpers.js';
+import { createWatchedAlbumFixture } from '../helpers/libraryFilesystemWatcherFixture.js';
+import { authenticatedPageGet } from '../helpers/authenticatedPageRequest.js';
+import { queryPersistedAlbumIdentity } from '../helpers/postgresAlbumIdentityHelpers.js';
 
 import {
   expectPostgresLibraryBrowseTelemetry,
@@ -21,9 +25,19 @@ const SUMMARY_PATHNAME = '/utilities/problematic-files';
 const DETAIL_PATHNAME = '/utilities/problematic-files/detail';
 
 test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
+  // The fixture library has no missing album, so the Missing Albums step owns one.
+  let missingAlbumFixture = null;
+  test.afterEach(async ({ context, managedAppLifecycle }) => {
+    const fixture = missingAlbumFixture;
+    missingAlbumFixture = null;
+    if (fixture) await fixture.cleanup({ context, managedAppLifecycle });
+  });
+
 
   test('Problematic Files renders populated Postgres summary and automatic detail', async ({
+    context,
     galleryActions,
+    managedAppLifecycle,
     page,
     problematicFilesFocusedLocalReport,
     settingsModalAppBarActions,
@@ -105,11 +119,53 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
       expect(selectedDetail.title, 'The selected PF detail must render its album title.').not.toBe('');
       expect(selectedDetail.artist, 'The selected PF detail must render its artist.').not.toBe('');
       expect(selectedDetail.problemReasons.length, 'The selected PF detail must render its problems.').toBeGreaterThan(0);
-      expectTimingBudgetOutcome(expect, detailReadinessOutcome, 'Problematic Files selected detail readiness');
     });
 
     await stepLogger.step('Measure Missing Albums and keep its selected row stable', async () => {
-      expect(await utilityProblematicFilesActions.readProblemFilterValues()).toContain('Album not found');
+      // Create a uniquely named album, let the watcher index it, then remove its folder so the
+      // library keeps it as an explicit missing album. Timing starts only once it is listed.
+      const token = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+      missingAlbumFixture = await createWatchedAlbumFixture({
+        artist: `PF Missing Artist ${token}`,
+        album: `PF Missing Album ${token}`,
+        year: 2003,
+        trackTitles: ['PF Missing First', 'PF Missing Second'],
+        ownedDirectoryName: 'problematic-files-missing-album',
+        context,
+        managedAppLifecycle,
+      });
+      const ownedAlbumReasons = async () => {
+        const response = await authenticatedPageGet(
+          page,
+          `/utilities/problematic-files?q=${encodeURIComponent(`PF Missing Album ${token}`)}&limit=50`,
+        );
+        const payload = await response.json();
+        return (payload.items || []).flatMap((item) => item.problem_reasons || []);
+      };
+      // The watcher must persist the album before its folder is removed.
+      await expect.poll(async () => {
+        const identity = await queryPersistedAlbumIdentity({
+          artist: `PF Missing Artist ${token}`, album: `PF Missing Album ${token}`, year: 2003,
+        });
+        return identity.track_counts;
+      }, {
+        message: 'The watcher must index the owned album before it is removed.',
+        timeout: 90000,
+        intervals: [500, 1000, 2000],
+      }).toEqual([2]);
+      // A Main Library album: only New Arrivals removes an untouched deleted album by itself
+      // (owner rule 2026-11-08, corrected 2026-11-18), so this one stays listed as "Album not found".
+      missingAlbumFixture.deleteAlbum();
+      await expect.poll(async () => ownedAlbumReasons(), {
+        message: 'The server must report the removed owned album as Album not found.',
+        timeout: 120000,
+        intervals: [500, 1000, 2000],
+      }).toContain('Album not found');
+      await expect.poll(async () => utilityProblematicFilesActions.readProblemFilterValues(), {
+        message: 'The removed owned album must be listed as Album not found.',
+        timeout: 120000,
+        intervals: [500, 1000, 2000],
+      }).toContain('Album not found');
       const startedAt = performance.now();
       await utilityProblematicFilesActions.applySingleProblemFilter('Album not found');
       await expect(page.locator('#utility-problematic-list [data-problematic-album-key]').first()).toBeVisible();
@@ -117,7 +173,6 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
       const missingDetail = await utilityProblematicFilesActions.readSelectedDetailSummary();
       missingAlbumReadinessOutcome = evaluateTimingBudget(performance.now() - startedAt, READY_BUDGET);
       expect(missingDetail.problemReasons).toContain('Album not found');
-      expectTimingBudgetOutcome(expect, missingAlbumReadinessOutcome, 'Problematic Files Missing Albums readiness');
 
       const activeBefore = await utilityProblematicFilesActions.readActiveListItem();
       expect(activeBefore.key).toBe(missingSelection.key);
@@ -231,7 +286,10 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
         }],
       },
     });
+    // Timing verdicts follow the retained metrics so a hard failure keeps its evidence.
     expectTimingBudgetOutcome(expect, readinessOutcome, 'Problematic Files populated detail readiness');
+    expectTimingBudgetOutcome(expect, detailReadinessOutcome, 'Problematic Files selected detail readiness');
+    expectTimingBudgetOutcome(expect, missingAlbumReadinessOutcome, 'Problematic Files Missing Albums readiness');
   });
 
   test('Problematic Files paints its bounded first page before the complete tree and keeps the filter icon stable', async ({
@@ -239,10 +297,13 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
     page,
     settingsModalAppBarActions,
     utilityProblematicFilesActions,
-  }) => {
+  }, testInfo) => {
     expect(process.env.PLAYWRIGHT_ISOLATED_LIBRARY_APP).toBe('1');
     expect(process.env.ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE).toBe('postgres');
     await galleryActions.goto('/');
+    // The earlier test leaves the complete list warm; holding it makes "bounded first" a
+    // controlled precondition instead of a race the warm list always wins.
+    await setProblematicCompleteListHeld(testInfo, true);
 
     let completeResponseReceived = false;
     const trackCompleteResponse = (response) => {
@@ -309,6 +370,7 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
       await earlyFilterButton.click();
       await expect(earlyFilterMenu).toBeHidden();
       const activeBeforeComplete = await utilityProblematicFilesActions.readActiveListItem();
+      await setProblematicCompleteListHeld(testInfo, false);
 
       await openSettings;
       await utilityProblematicFilesActions.waitForReady({ timeout: 120000, requirePopulated: true });
@@ -385,6 +447,7 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
       }
     } finally {
       page.off('response', trackCompleteResponse);
+      await setProblematicCompleteListHeld(testInfo, false);
     }
   });
 });

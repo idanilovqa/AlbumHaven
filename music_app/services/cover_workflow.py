@@ -348,7 +348,8 @@ def validate_local_cover_source(
     return resolved
 
 
-def save_pasted_image_as_authoritative_cover(data_url: str, album_root: Path) -> Path:
+def save_pasted_image_as_authoritative_cover(data_url: str, album_root: Path) -> LocalCoverPromotion:
+    """Write a pasted image as cover.jpg; the promotion names any backup it created."""
     match = re.match(
         r"^data:(image/[a-z0-9.+-]+);base64,(.+)$",
         str(data_url or "").strip(),
@@ -366,13 +367,21 @@ def save_pasted_image_as_authoritative_cover(data_url: str, album_root: Path) ->
         if mime_type != "image/jpeg":
             raise ValueError("Clipboard image saving requires Pillow for non-JPEG images.")
         target = album_root / "cover.jpg"
-        reserve_existing_cover_variant(album_root, raw_bytes)
+        prior_cover_bytes = target.read_bytes() if target.is_file() else None
+        reserve_artifact = reserve_existing_cover_variant(album_root, raw_bytes)
         _atomic_replace_file_bytes(target, raw_bytes)
-        return target
-    saved = write_remote_cover_bytes_as_authoritative_cover(album_root, raw_bytes)
-    if saved is None:
+        return LocalCoverPromotion(
+            cover_path=target,
+            prior_cover_existed=prior_cover_bytes is not None,
+            prior_cover_bytes=prior_cover_bytes,
+            reserve_artifact=reserve_artifact,
+            promoted_cover_revision=hashlib.sha256(raw_bytes).hexdigest(),
+        )
+    promotion = begin_remote_cover_promotion(album_root, raw_bytes)
+    if promotion is None:
         raise ValueError("Clipboard image could not be processed.")
-    return saved
+    complete_local_image_promotion(promotion)
+    return promotion
 
 
 def decode_image_bytes(raw_bytes: bytes) -> tuple[object, int, int] | None:

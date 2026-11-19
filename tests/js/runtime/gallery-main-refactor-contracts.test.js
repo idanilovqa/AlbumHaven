@@ -835,7 +835,7 @@ test('reusable GalleryBar, switch, panel, divider, and artist heading render acc
   assert.match(artistHeading, /Flying Colors[\s\S]*4 albums/);
 });
 
-test('current GalleryBar owner keeps desktop metadata to two lines and gives mobile genres one third line', () => {
+test('current GalleryBar owner keeps desktop metadata to two lines and lets mobile labels wrap below controls', () => {
   const context = loadRuntime();
   const projection = {
     country: 'Russia',
@@ -856,7 +856,7 @@ test('current GalleryBar owner keeps desktop metadata to two lines and gives mob
   assert.ok(nameAt >= 0 && nameAt < infoAt && infoAt < countryAt && countryAt < countAt && countAt < firstGenreAt);
   assert.match(markup, /gallery-bar__title[\s\S]*data-artist-info-trigger[\s\S]*data-gallery-context-metadata[\s\S]*Russia[\s\S]*<\/div>[\s\S]*<span class="gallery-bar__summary"[\s\S]*4 albums[\s\S]*Heavy Metal/);
   assert.match(markup, /class="ui-metadata-pill ui-metadata-pill--country"[^>]*>Russia</);
-  assert.equal((markup.match(/ui-metadata-pill--genre/g) || []).length, 4);
+  assert.equal((markup.match(/ui-metadata-pill--genre/g) || []).length, 8, 'desktop and mobile projections each own four genres');
   assert.match(markup, />Heavy Metal</);
   assert.match(markup, />Power Metal</);
   assert.match(markup, />Hard Rock</);
@@ -871,16 +871,18 @@ test('current GalleryBar owner keeps desktop metadata to two lines and gives mob
   assert.doesNotMatch(galleryMainCssSource, /ui-metadata-pill--country/, 'no page-local country colour');
   assert.match(markup, /data-gallery-context-metadata><span class="gallery-bar__artist-country"><span class="ui-metadata-pill ui-metadata-pill--country">Russia<\/span><\/span><\/span>/,
     'the first line ends with the country pill');
-  assert.match(markup, /data-gallery-context-mobile-summary>4 albums<span class="gallery-bar__artist-country"><span class="ui-metadata-pill ui-metadata-pill--country">Russia<\/span><\/span><\/span>/,
-    'mobile owns a second row for album count and country');
+  assert.match(markup, /data-gallery-context-mobile-summary><span class="gallery-bar__summary-count">4 albums<\/span><span class="gallery-bar__artist-country"><span class="ui-metadata-pill ui-metadata-pill--country">Russia<\/span><\/span><span class="gallery-bar__artist-genres"><span class="gallery-bar__artist-genre"><span class="ui-metadata-pill ui-metadata-pill--genre">Heavy Metal<\/span>/,
+    'mobile places country before genre labels in one wrapping metadata row');
   assert.match(markup, /data-gallery-context-summary><span class="gallery-bar__summary-count">4 albums<\/span><span class="gallery-bar__artist-genres"><span class="gallery-bar__artist-genre"><span class="ui-metadata-pill ui-metadata-pill--genre">Heavy Metal<\/span>/,
     'desktop keeps count and ranked genres on its second line');
   assert.doesNotMatch(galleryMainCssSource, /\.gallery-bar__artist-country::before\s*\{[^}]*content:/s);
   assert.match(galleryMainCssSource, /\.gallery-bar__artist-genre::before\s*\{[^}]*content:\s*"\\2022"/s);
   assert.match(galleryMainCssSource, /\.gallery-bar__summary\s*\{[^}]*display:\s*flex;[^}]*white-space:\s*nowrap/s);
   assert.doesNotMatch(galleryMainCssSource + mobileLayoutCssSource, /\.gallery-bar__artist-metadata\s*\{[^}]*flex-wrap:\s*wrap/s);
-  assert.equal((markup.match(/data-gallery-context-mobile-summary/g) || []).length, 1, 'mobile count and country have one owner');
-  assert.match(mobileLayoutCssSource, /data-gallery-context-kind="artist"[^}]*grid-template-rows:\s*24px 20px 20px/s);
+  assert.equal((markup.match(/data-gallery-context-mobile-summary/g) || []).length, 1, 'mobile metadata has one owner');
+  assert.match(mobileLayoutCssSource, /data-gallery-context-kind="artist"[^}]*grid-template-rows:\s*24px auto/s);
+  assert.match(mobileLayoutCssSource, /gallery-bar__artist-mobile-summary[^}]*grid-column:\s*2 \/ -1;[^}]*flex-wrap:\s*wrap/s);
+  assert.match(mobileLayoutCssSource, /data-gallery-context-kind="artist"[^}]*\.gallery-bar__summary\s*\{\s*display:\s*none;/s);
   assert.match(galleryMainCssSource, /\.gallery-bar__artist-genres\s*\{[^}]*overflow:\s*hidden/s);
 });
 

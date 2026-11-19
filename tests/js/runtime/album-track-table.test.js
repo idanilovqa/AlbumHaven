@@ -467,3 +467,11 @@ test('AlbumTrackTable shows a later disc rating on its heading only when both ar
     assert.doesNotMatch(html, /album-track-table__disc-rating/, `no disc rating for ${discRating}/${albumRating}/${JSON.stringify(options)}`);
   }
 });
+
+test('AlbumTrackTable leaves the number empty when a track has none, instead of its row position (owner, 11-17)', () => {
+  const context = loadTrackTable();
+  const numbered = context.buildAlbumTrackTableRow({ path: 'a.mp3', title: 'A', trackNumber: 7 }, 0);
+  const unnumbered = context.buildAlbumTrackTableRow({ path: 'b.mp3', title: 'B', trackNumber: '' }, 6);
+  assert.match(numbered.cells.number.content, /album-track-table__number">7</);
+  assert.match(unnumbered.cells.number.content, /album-track-table__number"><\/span>/);
+});

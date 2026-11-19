@@ -1402,9 +1402,10 @@ def test_save_pasted_image_as_authoritative_cover_preserves_distinct_previous_co
     data_url = f"data:image/png;base64,{base64.b64encode(pasted_bytes).decode('ascii')}"
 
     previous_bytes = current_cover.read_bytes()
-    saved = save_pasted_image_as_authoritative_cover(data_url, album_root)
+    promotion = save_pasted_image_as_authoritative_cover(data_url, album_root)
 
-    assert saved == current_cover
+    assert promotion.cover_path == current_cover
+    assert promotion.reserve_artifact == album_root / "cover-existing-1.jpg"
     assert image_dimensions(current_cover) == (24, 24)
     assert (album_root / "cover-existing-1.jpg").read_bytes() == previous_bytes
 

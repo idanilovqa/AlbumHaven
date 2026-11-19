@@ -75,6 +75,8 @@ def test_private_routes_have_explicit_action_classification():
     [
         ("GET", "/status", "app.status.read"),
         ("GET", "/", "app.shell.read"),
+        ("GET", "/albums", "app.shell.read"),
+        ("GET", "/loose-tracks", "app.shell.read"),
         ("GET", "/track", "library.media.read"),
         ("POST", "/refresh-api", "library.refresh"),
         ("POST", "/utilities/edit-tags", "library.files.edit_tags"),

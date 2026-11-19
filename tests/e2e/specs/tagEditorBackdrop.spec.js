@@ -43,7 +43,10 @@ test('FTC-TAGS-016 tag editor backdrop closes only when no tag changes are pendi
       await expect(rows.nth(index)).toHaveCSS('transition-duration', '0s');
       await expect(surfaces.tagSelectionAccents.nth(index)).toBeVisible();
       const selected = await surfaces.readTagSelectionPaint(index);
-      expect(selected.fill).toEqual(selected.expectedFill);
+      // Owner (11-17): selected rows keep alternating shades; an odd row uses the navigation selection
+      // fill and an even row a lighter shade of it.
+      if (index % 2 === 0) expect(selected.fill).toEqual(selected.expectedFill);
+      else expect(selected.fill).not.toEqual(selected.expectedFill);
       expect(selected.accent).toEqual(selected.expectedAccent);
       expect(selected.fillRole).not.toBe('');
       expect(selected.fillRole).toBe(selected.expectedFillRole);

@@ -698,6 +698,7 @@ test('FTC-LIBROOTS-016 / 017 / 018 reconciles filesystem changes and confirms mi
   test.setTimeout(240000);
   const latencySamples = [];
   let fixture;
+  let laterAlbum;
   let originalFailure;
   try {
     await stepLogger.step('Open the production gallery and record the current inventory revision', async () => {
@@ -715,7 +716,7 @@ test('FTC-LIBROOTS-016 / 017 / 018 reconciles filesystem changes and confirms mi
         year: 2001,
         trackTitles: ['Earlier Signal'],
       });
-      await fixture.createSiblingAlbum({
+      laterAlbum = await fixture.createSiblingAlbum({
         album: LATER_ALBUM,
         year: 2009,
         trackTitles: ['Later Signal'],
@@ -892,6 +893,27 @@ test('FTC-LIBROOTS-016 / 017 / 018 reconciles filesystem changes and confirms mi
       await page.reload();
       await galleryActions.waitForGalleryReady();
       await expect(galleryActions.galleryPage.albumCard.cardByAlbumName(TARGET_ALBUM)).toHaveCount(0);
+    });
+
+    // Owner rule (2026-11-08, corrected 2026-11-18): only New Arrivals removes an untouched deleted album
+    // by itself. These albums are in the Main Library, so after a confirmed removal the next deletion
+    // still reconciles live and leaves an "Album not found" card for the owner to confirm.
+    await stepLogger.step('Delete an untouched Main Library album after a removal and show its missing card live', async () => {
+      await searchToolbarActions.search(ARTIST, { submitWithEnter: true });
+      await searchToolbarActions.waitForQuery(ARTIST);
+      await galleryActions.waitForAlbumVisible(LATER_ALBUM, { timeout: 60000 });
+      const previousRevision = (await libraryFilesystemWatcherActions.readStatus()).inventory_mutation_revision;
+      fs.rmSync(laterAlbum.albumDirectory, { recursive: true });
+      status = await libraryFilesystemWatcherActions.waitForRevisionAfter(previousRevision);
+      await expect(galleryActions.galleryPage.albumCard.artboxByAlbumName(LATER_ALBUM))
+        .toHaveAttribute('data-album-artbox-state', 'missing', { timeout: 60000 });
+      const alert = galleryActions.galleryPage.albumCard.missingAlertByAlbumName(LATER_ALBUM);
+      await alert.root.hover();
+      await expect(alert.text).toHaveText('Album not found');
+      await expect(galleryActions.galleryPage.albumCard.cardByAlbumName(EARLIER_ALBUM)).toHaveCount(1);
+      await expect(appBarActions.appBar.errorToasts).toHaveCount(0);
+      const identity = await queryPersistedAlbumIdentity({ artist: ARTIST, album: LATER_ALBUM, year: 2009 });
+      expect(identity.album_ids).toHaveLength(1);
     });
   } catch (error) {
     originalFailure = error;

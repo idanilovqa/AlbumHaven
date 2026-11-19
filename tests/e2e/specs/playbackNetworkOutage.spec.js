@@ -295,6 +295,7 @@ test('FTC-PLAYBACK-OFFLINE-003 under full CPU load, each seek past the received 
   };
   // The song's waveform is painted across the seekbar, not only the playhead line.
   const expectWaveformShown = async (why) => {
+    // parity-check: allow-read-only-measurement-evaluate -- read the painted seekbar waveform's pixels
     const shown = await page.evaluate(({ selector, path }) => {
       const canvas = document.querySelector(selector);
       const peaks = state.player?.waveform?.compactPeaks;
@@ -468,6 +469,7 @@ for (const { id, serverBackAfterMs, outcome } of [
       expect(evidence.renderedFrameDelta).toBeGreaterThan(0);
     };
     // How far the song had arrived when the network went (all of it: Infinity).
+    // parity-check: allow-read-only-measurement-evaluate -- read how much of the song the player received before the outage
     const receivedThroughSeconds = () => page.evaluate(() => {
       const engine = state.player?.streaming;
       const detached = engine?.detached;

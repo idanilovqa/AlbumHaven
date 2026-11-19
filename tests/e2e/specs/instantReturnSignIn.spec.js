@@ -41,6 +41,8 @@ test(`FTC-IAR-W12 signed in and offline at once, a new tab shows the saved libra
   await library.scrollGalleryBy(maxScrollTop);
   await expect(galleryPage.galleryEndOffline).toBeVisible();
   await expect(galleryPage.galleryEndOffline).toHaveText("Offline. Can't load more albums, check your network or try again later");
+  // v004: the small cloud and the text share one centerline.
+  expect(await galleryPage.readOfflineLineCenterOffset(galleryPage.galleryEndOffline), 'cloud and text centerlines apart (px)').toBeLessThanOrEqual(1.5);
 
   // The kept-library line has its own row: scrolled albums pass under a strip of page background,
   // never under the text (orchestrator round 9: the line drew over the first card).

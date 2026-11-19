@@ -7593,7 +7593,7 @@ for (const [cause, fail] of [
     assert.equal(await navigation, false);
     assert.equal(context.state.view.selected_artist, 'Chris Buck', 'the bar names the artist asked for');
     assert.equal(context.state.view.artist_groups.length, 0, 'the previous artist is never left on screen');
-    assert.equal(context.state.ui.galleryUnreachable, "Offline. Can't load Chris Buck, check your network or try again later");
+    assert.equal(context.state.ui.galleryUnreachable, "Can't load Chris Buck, check your network or try again later");
     assert.equal(calls.pushBrowserViewState.at(-1).selected_artist, 'Chris Buck');
     assert.deepEqual(calls.showToast, []);
   });
@@ -7619,7 +7619,7 @@ test('IAR-W10: any view applied replaces one the server could not be reached for
   const failed = context.fetchAndRender('/view-data?artist=Chris+Buck', true);
   pendingRequests[0].rejectWith(new TypeError('Failed to fetch'));
   await failed;
-  assert.equal(context.state.ui.galleryUnreachable, "Offline. Can't load Chris Buck, check your network or try again later");
+  assert.equal(context.state.ui.galleryUnreachable, "Can't load Chris Buck, check your network or try again later");
 
   context.applyViewPayload({ ...context.state.view, selected_artist: 'Mono', artist_groups: [{ artist: 'Mono', albums: [{ key: 'mono::one' }] }] });
 
@@ -7814,4 +7814,34 @@ test('request capture: while the server is unreachable, one /health probe per ti
     assert.equal(surfacesTold, 1, 'each surface is told once');
     return metrics;
   });
+});
+
+// The offline-data follow-up's worker answers some requests from the device copy, marked
+// `X-Album-Haven-App-Copy: cache`: the server was not reached, and those views refresh on recovery.
+const deviceCopyAnswer = body => ({
+  ok: true, status: 200,
+  headers: { get: name => (name === 'X-Album-Haven-App-Copy' ? 'cache' : null) },
+  json: async () => body, clone() { return deviceCopyAnswer(body); },
+});
+
+test('IAR-W15: an answer from the device copy is shown but starts probing, and never counts as the server answering', async () => {
+  const { context } = createContext();
+  context.fetch = async () => deviceCopyAnswer({ artist_groups: [] });
+  const response = await context.fetchRetryingPendingProjection('/view-data?artist=Kept', {});
+
+  assert.equal(response.status, 200, 'the kept data is returned as usual');
+  assert.equal(context.isServerUnreachable(), true);
+});
+
+test('IAR-W15: a view shown from the device copy is brought up to date in place once the server answers', async () => {
+  const { context } = createContext();
+  let refreshed = 0;
+  context.refreshCurrentViewAfterBackgroundCompletion = async () => { refreshed += 1; return true; };
+  context.fetch = async () => deviceCopyAnswer({ artist_groups: [] });
+  await context.fetchRetryingPendingProjection('/view-data?artist=Kept', {});
+
+  context.noteServerReachable();
+  await flushMicrotasks();
+
+  assert.equal(refreshed, 1);
 });

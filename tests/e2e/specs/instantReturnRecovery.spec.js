@@ -27,7 +27,8 @@ async function provesRecovery({ page, galleryActions, navigationPanelActions, tr
   // Album Details.
   await cutOff();
   await galleryActions.clickAlbumDetailsByAlbumName(album);
-  await expect(trackModal.unreachableNotice).toHaveText("Offline. Can't load the details, check your network or try again later");
+  await expect(trackModal.unreachableTitle).toHaveText('Offline');
+  await expect(trackModal.unreachableDetail).toHaveText("Can't load the details, check your network or try again later");
   let loadsBefore = loads;
   let restored = Date.now();
   await restore();
@@ -42,7 +43,8 @@ async function provesRecovery({ page, galleryActions, navigationPanelActions, tr
   await navigationPanelActions.openArtistTree();
   const rendered = await navigationPanelActions.navigationPanel.sidebarArtists.count();
   const artist = await navigationPanelActions.selectSidebarArtistAt(rendered - 1);
-  await expect(galleryPage.unreachable).toHaveText(`Offline. Can't load ${artist}, check your network or try again later`);
+  await expect(galleryPage.unreachableTitle).toHaveText('Offline');
+  await expect(galleryPage.unreachableDetail).toHaveText(`Can't load ${artist}, check your network or try again later`);
   loadsBefore = loads;
   restored = Date.now();
   await restore();

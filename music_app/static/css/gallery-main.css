@@ -199,7 +199,8 @@
 .artist-info-overlay__full-page:disabled { color: color-mix(in srgb, var(--appearance-accent, var(--appearance-player-accent, #55c7ff)) 45%, transparent); cursor: default; }
 .gallery-card-info .album-subtitle { white-space: nowrap; text-overflow: ellipsis; }
 .gallery-empty-selection { min-height: 180px; display: grid; place-items: center; padding: 32px; color: var(--muted); text-align: center; }
-.gallery-unreachable { padding: 48px 16px; max-width: 640px; margin: 0 auto; }
+/* The OfflineNotice message, centered both ways where the albums go (v004). */
+.gallery-unreachable { display: grid; place-items: center; min-height: min(60vh, 460px); padding: 32px 16px; }
 /* The end of a kept gallery when more albums cannot load: the OfflineNotice line, centered. */
 .gallery-end-offline { justify-content: center; padding: 18px 14px 26px; }
 /* The unreachable view is the only message: the kept-library notice does not show above it. */

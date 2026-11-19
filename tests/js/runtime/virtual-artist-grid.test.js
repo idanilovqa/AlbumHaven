@@ -469,6 +469,7 @@ function createRuntimeContext() {
   vm.createContext(context);
   vm.runInContext(alertComponentSource, context, { filename: alertComponentPath });
   vm.runInContext(fs.readFileSync(path.join(path.dirname(alertComponentPath), 'offline-notice.js'), 'utf8'), context);
+  require('../helpers/pending-projection-fetch').loadPendingProjectionFetch(context);
   vm.runInContext(albumArtboxSource, context, { filename: albumArtboxPath });
   vm.runInContext(galleryMainComponentsSource, context, { filename: galleryMainComponentsPath });
   vm.runInContext(galleryCardSource, context, { filename: galleryCardPath });
@@ -4045,7 +4046,7 @@ test('canonical same-artist reconciliation retains mounted cards without an opti
   context.state.view.primary_artist_groups = [];
   context.state.view.artist_groups = [];
   context.state.ui = { ...(context.state.ui || {}), galleryUnreachable: null };
-  context.state.ui.galleryUnreachable = "Offline. Can't load Chris Buck, check your network or try again later";
+  context.state.ui.galleryUnreachable = "Can't load Chris Buck, check your network or try again later";
   virtualGrid.setGroups = () => {
     containerEl.children = [];
     containerEl.innerHTML = '';
@@ -4054,10 +4055,11 @@ test('canonical same-artist reconciliation retains mounted cards without an opti
   context.renderArtistGroups();
 
   assert.match(containerEl.innerHTML, /data-gallery-unreachable/);
-  assert.match(containerEl.innerHTML, /data-offline-notice="block"/);
+  assert.match(containerEl.innerHTML, /data-offline-notice="message"/);
   assert.match(containerEl.innerHTML, /offline-notice__cloud/);
   assert.doesNotMatch(containerEl.innerHTML, /on-page-alert/, 'plain text, never the yellow alert');
-  assert.match(containerEl.innerHTML, /Offline\. Can(&#39;|')t load Chris Buck, check your network or try again later/);
+  assert.match(containerEl.innerHTML, /<p class="offline-notice__title"><span class="offline-notice__cloud">.*<\/span>Offline<\/p>/);
+  assert.match(containerEl.innerHTML, /<p class="offline-notice__text">Can(&#39;|')t load Chris Buck, check your network or try again later<\/p>/);
 }
 
 {

@@ -327,7 +327,10 @@
 }
 
 .track-modal-list li.track-modal-unreachable-row {
-  display: block;
+  /* The OfflineNotice message, centered both ways where the track list goes (v004). */
+  display: grid;
+  place-items: center;
+  min-height: min(50vh, 360px);
   margin-left: -20px;
   padding: 16px 0;
   list-style: none;

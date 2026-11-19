@@ -1060,14 +1060,17 @@ function setGalleryEndOffline(message) {
   notice.hidden = !message;
 }
 
-// The server answers again (onServerReachableAgain): the view that could not load loads, and a
-// gallery that could not load more continues where it stopped (owner round 8).
-function resumeGalleryAfterServerReachable() {
+// The server answers again (onServerReachableAgain): the view that could not load loads, a view
+// shown from the device copy is brought up to date in place, and a gallery that could not load
+// more continues where it stopped (owner round 8).
+function resumeGalleryAfterServerReachable({ copyServed = false } = {}) {
   const notice = typeof document === 'undefined' ? null : document.getElementById?.('gallery-end-offline');
   const endWasOffline = Boolean(notice && !notice.hidden);
   setGalleryEndOffline('');
   if (state.ui?.galleryUnreachable) {
     void fetchAndRender(`${window.location.pathname}${window.location.search}`, false).catch(() => {});
+  } else if (copyServed) {
+    void refreshCurrentViewAfterBackgroundCompletion({ preserveScroll: true }).catch(() => {});
   } else if (endWasOffline) {
     void loadNextRootGalleryPage();
   }
@@ -1201,7 +1204,7 @@ function applyUnreachableView(url) {
     album_count: 0,
     gallery_page: null,
   }, { trackSidebarReveal: false });
-  state.ui.galleryUnreachable = serverUnreachableMessage(subject);
+  state.ui.galleryUnreachable = serverUnreachableDetail(subject);
 }
 
 function showUnreachableView(apiUrl, push) {

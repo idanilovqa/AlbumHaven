@@ -3535,10 +3535,11 @@ for (const [cause, fail] of [
     await flushMicrotasks();
 
     assert.doesNotMatch(elements.list.innerHTML, /Loading album details|library-loader-spinner/);
-    assert.match(elements.list.innerHTML, /data-offline-notice="text"/);
+    assert.match(elements.list.innerHTML, /data-offline-notice="message"/);
     assert.doesNotMatch(elements.list.innerHTML, /on-page-alert/, 'plain text, never the yellow alert');
     assert.match(elements.cover.innerHTML, /data-album-artbox-state="offline"/);
-    assert.match(elements.list.innerHTML, /Offline\. Can(&#39;|')t load the details, check your network or try again later/);
+    assert.match(elements.list.innerHTML, /<p class="offline-notice__title"><span class="offline-notice__cloud">.*<\/span>Offline<\/p>/);
+    assert.match(elements.list.innerHTML, /<p class="offline-notice__text">Can(&#39;|')t load the details, check your network or try again later<\/p>/);
     assert.equal(elements.subtitle.textContent, '');
     assert.doesNotMatch(elements.cover.innerHTML, /Loading cover art/);
     assert.match(elements.title.textContent, /Album Alpha/, 'the album asked for stays named');
@@ -3592,4 +3593,28 @@ test('IAR-W15: a failed load is never reused: reopening an album after recovery 
 
   assert.equal(context.fetchCalls.length, before + 1);
   assert.deepEqual(context.renderTrackModalReleaseCalls, ['beta']);
+});
+
+test('IAR-W15: details answered from the device copy are shown, never kept as loaded, and loaded from the server on recovery', async () => {
+  let fromCopy = true;
+  const album = { key: 'gamma', name: 'Album Gamma', preview_only: true };
+  const { context } = loadHelper({
+    onFetchAlbumDetails: () => ({
+      ok: true, status: 200,
+      headers: { get: name => (name === 'X-Album-Haven-App-Copy' && fromCopy ? 'cache' : null) },
+      json: async () => ({ ok: true, album: { ...album, preview_only: false, tracks: [{ title: 'One', path: 'g.mp3' }] } }),
+    }),
+  });
+  context.openTrackModal(album);
+  await flushMicrotasks();
+  assert.deepEqual(context.renderTrackModalReleaseCalls, ['gamma'], 'the kept details are shown');
+  assert.equal(context.isServerUnreachable(), true);
+  const afterCopy = context.fetchCalls.length;
+
+  fromCopy = false;
+  context.noteServerReachable();
+  await flushMicrotasks();
+
+  assert.equal(context.fetchCalls.length, afterCopy + 1, 'the open details are asked of the server again');
+  assert.equal(context.getCachedHydratedTrackModalAlbum('gamma')?.fromDeviceCopy, undefined, 'only the server answer is kept');
 });

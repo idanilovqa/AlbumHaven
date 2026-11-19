@@ -4,8 +4,13 @@ const isGatewayFailureStatus = status => status === 502 || status === 504 || (st
 
 // What a surface that needs the server says while the server cannot be reached, the device
 // offline or the server down alike (the owner's wording): [subject] names what could not load.
+// The detail stands under an "Offline" title where the message is centered (v004).
+const SERVER_UNREACHABLE_TITLE = 'Offline';
+function serverUnreachableDetail(subject) {
+  return `Can't load ${subject}, check your network or try again later`;
+}
 function serverUnreachableMessage(subject) {
-  return `Offline. Can't load ${subject}, check your network or try again later`;
+  return `${SERVER_UNREACHABLE_TITLE}. ${serverUnreachableDetail(subject)}`;
 }
 
 // Reachability (owner round 8: after the network returned, Offline stayed for minutes). Once a
@@ -15,7 +20,14 @@ function serverUnreachableMessage(subject) {
 // again (onServerReachableAgain).
 const REACHABILITY_PROBE_INTERVAL_MS = 2500;
 const REACHABILITY_PROBE_TIMEOUT_MS = 4000;
-const serverReachability = { unreachable: false, probing: false, timer: 0, listening: false, listeners: new Set() };
+const serverReachability = {
+  unreachable: false, probing: false, timer: 0, listening: false, listeners: new Set(),
+  // Some answer while unreachable came from the device copy, so its views refresh on recovery.
+  copyServed: false,
+};
+
+// The device copy's worker answered in the server's place (app-copy-worker.js marks such answers).
+const isDeviceCopyAnswer = response => response?.headers?.get?.('X-Album-Haven-App-Copy') === 'cache';
 
 function onServerReachableAgain(listener) {
   serverReachability.listeners.add(listener);
@@ -31,9 +43,11 @@ function noteServerReachable() {
   serverReachability.unreachable = false;
   clearTimeout(serverReachability.timer);
   serverReachability.timer = 0;
+  const recovery = { copyServed: serverReachability.copyServed };
+  serverReachability.copyServed = false;
   serverReachability.listeners.forEach((listener) => {
     try {
-      listener();
+      listener(recovery);
     } catch (error) {
       console.error('[AlbumHaven][Reachability] A surface failed to load again.', error);
     }
@@ -101,6 +115,13 @@ async function fetchRetryingPendingProjection(url, init) {
       throw Object.assign(new Error(`Album Haven could not be reached (${response.status}).`), {
         status: response.status, serverUnreachable: true,
       });
+    }
+    // An answer from the device copy means the server was not reached: shown as kept data, and the
+    // server still probed until it answers.
+    if (isDeviceCopyAnswer(response)) {
+      noteServerUnreachable();
+      serverReachability.copyServed = true;
+      return response;
     }
     noteServerReachable();
     if (response.status !== 503) return response;

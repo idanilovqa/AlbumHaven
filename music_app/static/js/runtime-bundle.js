@@ -2096,8 +2096,13 @@ const isGatewayFailureStatus = status => status === 502 || status === 504 || (st
 
 // What a surface that needs the server says while the server cannot be reached, the device
 // offline or the server down alike (the owner's wording): [subject] names what could not load.
+// The detail stands under an "Offline" title where the message is centered (v004).
+const SERVER_UNREACHABLE_TITLE = 'Offline';
+function serverUnreachableDetail(subject) {
+  return `Can't load ${subject}, check your network or try again later`;
+}
 function serverUnreachableMessage(subject) {
-  return `Offline. Can't load ${subject}, check your network or try again later`;
+  return `${SERVER_UNREACHABLE_TITLE}. ${serverUnreachableDetail(subject)}`;
 }
 
 // Reachability (owner round 8: after the network returned, Offline stayed for minutes). Once a
@@ -2107,7 +2112,14 @@ function serverUnreachableMessage(subject) {
 // again (onServerReachableAgain).
 const REACHABILITY_PROBE_INTERVAL_MS = 2500;
 const REACHABILITY_PROBE_TIMEOUT_MS = 4000;
-const serverReachability = { unreachable: false, probing: false, timer: 0, listening: false, listeners: new Set() };
+const serverReachability = {
+  unreachable: false, probing: false, timer: 0, listening: false, listeners: new Set(),
+  // Some answer while unreachable came from the device copy, so its views refresh on recovery.
+  copyServed: false,
+};
+
+// The device copy's worker answered in the server's place (app-copy-worker.js marks such answers).
+const isDeviceCopyAnswer = response => response?.headers?.get?.('X-Album-Haven-App-Copy') === 'cache';
 
 function onServerReachableAgain(listener) {
   serverReachability.listeners.add(listener);
@@ -2123,9 +2135,11 @@ function noteServerReachable() {
   serverReachability.unreachable = false;
   clearTimeout(serverReachability.timer);
   serverReachability.timer = 0;
+  const recovery = { copyServed: serverReachability.copyServed };
+  serverReachability.copyServed = false;
   serverReachability.listeners.forEach((listener) => {
     try {
-      listener();
+      listener(recovery);
     } catch (error) {
       console.error('[AlbumHaven][Reachability] A surface failed to load again.', error);
     }
@@ -2193,6 +2207,13 @@ async function fetchRetryingPendingProjection(url, init) {
       throw Object.assign(new Error(`Album Haven could not be reached (${response.status}).`), {
         status: response.status, serverUnreachable: true,
       });
+    }
+    // An answer from the device copy means the server was not reached: shown as kept data, and the
+    // server still probed until it answers.
+    if (isDeviceCopyAnswer(response)) {
+      noteServerUnreachable();
+      serverReachability.copyServed = true;
+      return response;
     }
     noteServerReachable();
     if (response.status !== 503) return response;
@@ -4730,21 +4751,27 @@ if (typeof module !== 'undefined' && module.exports) {
 
 // BEGIN js/runtime/offline-notice.js
 
-// OfflineNotice (owner-approved v003, unreachable server state): plain text with a muted crossed-out
-// cloud, no box, border or tint. `block` puts a large cloud above one centered line (a view that
-// cannot load), `line` a small cloud before the line (the end of a kept gallery, the kept-library
-// notice), and `text` is the line alone beside an AlbumArtbox showing the same cloud. The Jinja
-// renderer is components/offline-notice.html; both share css/runtime/offline-notice.css.
-const OFFLINE_NOTICE_VARIANTS = new Set(['block', 'line', 'text']);
+// OfflineNotice (owner-approved v004, unreachable server state): plain text with a muted crossed-out
+// cloud, no box, border or tint. `line` is one line with the small cloud before it, both on one
+// centerline (the end of a kept gallery, the kept-library notice). `message` is centered: the small
+// cloud and a bold, larger title on one centerline, then the detail in muted text (Album Details and
+// a gallery view that cannot load). The Jinja renderer is components/offline-notice.html; both share
+// css/runtime/offline-notice.css.
+const OFFLINE_NOTICE_VARIANTS = new Set(['line', 'message']);
 
 function buildOfflineCloudHtml() {
   return '<svg viewBox="0 0 96 96" aria-hidden="true"><path d="M30 66h38a14 14 0 0 0 2-27.9A20 20 0 0 0 31.4 36 15 15 0 0 0 30 66Z"></path><path d="M22 22 74 74"></path></svg>';
 }
 
+// [message] is the line, or the detail under [title] for `message`.
 function buildOfflineNoticeHtml(config = {}) {
   const variant = OFFLINE_NOTICE_VARIANTS.has(config.variant) ? config.variant : 'line';
-  const cloud = variant === 'text' ? '' : `<span class="offline-notice__cloud">${buildOfflineCloudHtml()}</span>`;
-  return `<div class="offline-notice offline-notice--${variant}" role="status" data-offline-notice="${variant}">${cloud}<p class="offline-notice__text">${escapeHtml(String(config.message || ''))}</p></div>`;
+  const cloud = `<span class="offline-notice__cloud">${buildOfflineCloudHtml()}</span>`;
+  const text = `<p class="offline-notice__text">${escapeHtml(String(config.message || ''))}</p>`;
+  const body = variant === 'message'
+    ? `<p class="offline-notice__title">${cloud}${escapeHtml(String(config.title || ''))}</p>${text}`
+    : `${cloud}${text}`;
+  return `<div class="offline-notice offline-notice--${variant}" role="status" data-offline-notice="${variant}">${body}</div>`;
 }
 
 // END js/runtime/offline-notice.js
@@ -5109,9 +5136,10 @@ function buildGalleryEmptySelectionHtml() {
   return '<div class="gallery-empty-selection" data-gallery-empty-selection role="status">Select at least one artist in Artist Family.</div>';
 }
 
-// A view the server could not be reached for: the OfflineNotice block in place of its albums.
-function buildGalleryUnreachableHtml(message) {
-  return `<div class="gallery-unreachable" data-gallery-unreachable>${buildOfflineNoticeHtml({ variant: 'block', message })}</div>`;
+// A view the server could not be reached for: the centered OfflineNotice message in place of its
+// albums, [detail] under the "Offline" title.
+function buildGalleryUnreachableHtml(detail) {
+  return `<div class="gallery-unreachable" data-gallery-unreachable>${buildOfflineNoticeHtml({ variant: 'message', title: SERVER_UNREACHABLE_TITLE, message: detail })}</div>`;
 }
 
 function buildGalleryDividerHtml(config = {}) {
@@ -16393,26 +16421,27 @@ function renderTrackModalUnreachableState(album) {
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
   trackModalUnreachableAlbum = album;
-  const message = serverUnreachableMessage('the details');
+  const detail = serverUnreachableDetail('the details');
   els.subtitle.textContent = '';
   els.cover.innerHTML = `
     <div class="track-modal-cover-shell">
       ${buildAlbumArtboxHtml({ state: 'offline', label: 'Cover art unavailable' })}
     </div>
   `;
-  els.list.innerHTML = `<li class="track-modal-unreachable-row">${buildOfflineNoticeHtml({ variant: 'text', message })}</li>`;
+  els.list.innerHTML = `<li class="track-modal-unreachable-row">${buildOfflineNoticeHtml({ variant: 'message', title: SERVER_UNREACHABLE_TITLE, message: detail })}</li>`;
 }
 
 // The server answers again (onServerReachableAgain): Album Details still showing Offline for the
 // album it is open on loads that album (owner round 8).
 function reloadTrackModalAfterServerReachable() {
-  const album = trackModalUnreachableAlbum;
-  trackModalUnreachableAlbum = null;
   const els = getTrackModalElements();
   const shown = state.modalReleases?.[state.modalReleaseIndex];
+  const album = trackModalUnreachableAlbum || (shown?.fromDeviceCopy ? shown : null);
+  trackModalUnreachableAlbum = null;
   if (!album || !els.overlay || els.overlay.hidden || !shown) return;
   if (String(getAlbumRequestKey(shown) || '') !== String(getAlbumRequestKey(album) || '')) return;
-  openTrackModal(album);
+  // Details shown from the device copy are loaded again from the server, never kept as loaded.
+  openTrackModal({ ...album, preview_only: true, fromDeviceCopy: false });
 }
 if (typeof onServerReachableAgain === 'function') onServerReachableAgain(reloadTrackModalAfterServerReachable);
 
@@ -16806,6 +16835,9 @@ async function fetchTrackModalAlbumDetails(albumKey, options = {}) {
       payload = null;
     }
   }
+  if (response.ok && payload?.ok && payload?.album && isDeviceCopyAnswer(response)) {
+    return { ...payload.album, fromDeviceCopy: true };
+  }
   if (!response.ok || !payload?.ok || !payload?.album) {
     const error = new Error(payload?.error || `Album detail request failed: ${response.status}`);
     error.status = response.status;
@@ -16865,6 +16897,9 @@ function loadTrackModalAlbumDetails(albumKey, options = {}) {
         return loadTrackModalAlbumDetails(normalizedAlbumKey,
           promotedToForeground ? { ...options, speculative: false } : options);
       }
+      // Details from the device copy stand in until the server answers; they are never kept as
+      // loaded, so the next open asks the server again.
+      if (album?.fromDeviceCopy) return album;
       cacheHydratedTrackModalAlbum(normalizedAlbumKey, album);
       getTrackModalAlbumKeyAliases(normalizedAlbumKey, album).forEach((alias) => {
         trackModalAlbumDetailsLoads.set(alias, load);
@@ -20138,14 +20173,17 @@ function setGalleryEndOffline(message) {
   notice.hidden = !message;
 }
 
-// The server answers again (onServerReachableAgain): the view that could not load loads, and a
-// gallery that could not load more continues where it stopped (owner round 8).
-function resumeGalleryAfterServerReachable() {
+// The server answers again (onServerReachableAgain): the view that could not load loads, a view
+// shown from the device copy is brought up to date in place, and a gallery that could not load
+// more continues where it stopped (owner round 8).
+function resumeGalleryAfterServerReachable({ copyServed = false } = {}) {
   const notice = typeof document === 'undefined' ? null : document.getElementById?.('gallery-end-offline');
   const endWasOffline = Boolean(notice && !notice.hidden);
   setGalleryEndOffline('');
   if (state.ui?.galleryUnreachable) {
     void fetchAndRender(`${window.location.pathname}${window.location.search}`, false).catch(() => {});
+  } else if (copyServed) {
+    void refreshCurrentViewAfterBackgroundCompletion({ preserveScroll: true }).catch(() => {});
   } else if (endWasOffline) {
     void loadNextRootGalleryPage();
   }
@@ -20279,7 +20317,7 @@ function applyUnreachableView(url) {
     album_count: 0,
     gallery_page: null,
   }, { trackSidebarReveal: false });
-  state.ui.galleryUnreachable = serverUnreachableMessage(subject);
+  state.ui.galleryUnreachable = serverUnreachableDetail(subject);
 }
 
 function showUnreachableView(apiUrl, push) {

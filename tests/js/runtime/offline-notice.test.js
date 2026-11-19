@@ -18,17 +18,18 @@ function load() {
   return context;
 }
 
-const MESSAGE = "Offline. Can't load more albums, check your network or try again later";
+const LINE = "Offline. Can't load more albums, check your network or try again later";
+const DETAIL = "Can't load the details, check your network or try again later";
 
-test('each variant is plain text with no alert box; only block and line draw the cloud', () => {
-  const { buildOfflineNoticeHtml } = load();
-  for (const variant of ['block', 'line', 'text']) {
-    const html = buildOfflineNoticeHtml({ variant, message: MESSAGE });
-    assert.match(html, new RegExp(`class="offline-notice offline-notice--${variant}" role="status" data-offline-notice="${variant}"`));
-    assert.match(html, /<p class="offline-notice__text">Offline\. Can&#39;t load more albums, check your network or try again later<\/p>/);
-    assert.doesNotMatch(html, /on-page-alert|alert/);
-    assert.equal(html.includes('offline-notice__cloud'), variant !== 'text', variant);
-  }
+test('a line is the small cloud and one plain line; a message is the cloud and a title over the detail; never an alert box', () => {
+  const { buildOfflineNoticeHtml, buildOfflineCloudHtml } = load();
+  const cloud = `<span class="offline-notice__cloud">${buildOfflineCloudHtml()}</span>`;
+
+  assert.equal(buildOfflineNoticeHtml({ variant: 'line', message: LINE }),
+    `<div class="offline-notice offline-notice--line" role="status" data-offline-notice="line">${cloud}<p class="offline-notice__text">Offline. Can&#39;t load more albums, check your network or try again later</p></div>`);
+  assert.equal(buildOfflineNoticeHtml({ variant: 'message', title: 'Offline', message: DETAIL }),
+    `<div class="offline-notice offline-notice--message" role="status" data-offline-notice="message"><p class="offline-notice__title">${cloud}Offline</p><p class="offline-notice__text">Can&#39;t load the details, check your network or try again later</p></div>`);
+  for (const variant of ['line', 'message']) assert.doesNotMatch(buildOfflineNoticeHtml({ variant, message: 'x' }), /alert/);
   assert.match(buildOfflineNoticeHtml({ variant: 'unknown', message: 'x' }), /offline-notice--line/);
   assert.match(buildOfflineNoticeHtml({ message: '<b>' }), /&lt;b>/);
 });
@@ -36,16 +37,17 @@ test('each variant is plain text with no alert box; only block and line draw the
 test('the Jinja renderer draws the same cloud, classes and variants', () => {
   const { buildOfflineCloudHtml } = load();
   const template = fs.readFileSync(templatePath, 'utf8');
-  assert.ok(template.includes(buildOfflineCloudHtml()), 'same crossed-out cloud');
+  assert.ok(template.includes(`<span class="offline-notice__cloud">${buildOfflineCloudHtml()}</span>`), 'same crossed-out cloud');
   assert.match(template, /class="offline-notice offline-notice--\{\{ variant \}\}/);
   assert.match(template, /role="status" data-offline-notice="\{\{ variant \}\}"/);
-  assert.match(template, /variant in \('block', 'line', 'text'\) else 'line'/);
-  assert.match(template, /\{% if variant != 'text' %\}<span class="offline-notice__cloud">/);
-  assert.match(template, /<p class="offline-notice__text">\{\{ message \}\}<\/p>/);
+  assert.match(template, /variant in \('line', 'message'\) else 'line'/);
+  assert.match(template, /\{% if variant == 'message' %\}<p class="offline-notice__title">\{\{ cloud \}\}\{\{ title \}\}<\/p>\{% else %\}\{\{ cloud \}\}\{% endif %\}<p class="offline-notice__text">\{\{ message \}\}<\/p>/);
 });
 
-test('the stylesheet gives no box, border or tint', () => {
+test('the stylesheet gives no box, border or tint, and the cloud the text line\'s height (one centerline)', () => {
   const css = fs.readFileSync(path.join(root, 'static', 'css', 'runtime', 'offline-notice.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
   assert.doesNotMatch(css, /border|background|box-shadow/);
-  assert.match(css, /\.offline-notice__cloud \{[^}]*color: var\(--muted\)/);
+  assert.match(css, /\.offline-notice \{[^}]*align-items: center;[^}]*line-height: 1\.35;/);
+  assert.match(css, /\.offline-notice__cloud \{[^}]*width: 1\.35em; height: 1\.35em;[^}]*color: var\(--muted\)/);
+  assert.match(css, /\.offline-notice--message \.offline-notice__title \{[^}]*align-items: center;[^}]*font-weight: 700;/);
 });

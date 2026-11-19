@@ -154,7 +154,8 @@ test(`FTC-IAR-W10 an offline reload of an artist opened after the last save name
 
   await expect(page).toHaveURL(artistUrl.href);
   await expect(galleryPage.galleryContextName).toHaveText(artist);
-  await expect(galleryPage.unreachable).toHaveText(`Offline. Can't load ${artist}, check your network or try again later`);
+  await expect(galleryPage.unreachableTitle).toHaveText('Offline');
+  await expect(galleryPage.unreachableDetail).toHaveText(`Can't load ${artist}, check your network or try again later`);
   await expect(galleryPage.appCopyMarker).toHaveAttribute('content', 'cache');
   // One message only: the kept-library notice does not show above the artist's own.
   await expect(galleryPage.appCopyOfflineNotice).toBeHidden();
@@ -165,7 +166,9 @@ test(`FTC-IAR-W10 an offline reload of an artist opened after the last save name
   const tabStarted = Date.now();
   await tab.goto(artistUrl.href, { waitUntil: 'load' });
   expectTimingBudget(expect, Date.now() - tabStarted, UNREACHABLE_VIEW_BUDGET, `page load of ${artist} in a new offline tab`);
-  await expect(new GalleryPage(tab, testInfo).unreachable).toHaveText(`Offline. Can't load ${artist}, check your network or try again later`);
+  const tabGallery = new GalleryPage(tab, testInfo);
+  await expect(tabGallery.unreachableTitle).toHaveText('Offline');
+  await expect(tabGallery.unreachableDetail).toHaveText(`Can't load ${artist}, check your network or try again later`);
 });
 
 // Owner D4, server down: an album's details spun forever and tree entries quietly kept the view
@@ -184,7 +187,8 @@ test(`FTC-IAR-W13 offline, album details show 'Offline. Can't load the details, 
   await galleryActions.clickAlbumDetailsByAlbumName(album);
   const { trackModal } = trackModalActions;
   await expect(trackModal.unreachableNotice).toBeVisible();
-  await expect(trackModal.unreachableNotice).toHaveText("Offline. Can't load the details, check your network or try again later");
+  await expect(trackModal.unreachableTitle).toHaveText('Offline');
+  await expect(trackModal.unreachableDetail).toHaveText("Can't load the details, check your network or try again later");
   await expect(trackModal.offlineArtbox, 'the artbox shows the offline cloud').toBeVisible();
   await expect(trackModal.loadingRow).toHaveCount(0);
   await expect(trackModal.title).toContainText(album);
@@ -201,7 +205,8 @@ test(`FTC-IAR-W13 offline, album details show 'Offline. Can't load the details, 
   const artist = await navigationPanelActions.selectSidebarArtistAt(rendered - 1);
   await expect(galleryPage.unreachable).toBeVisible();
   await expect(galleryPage.galleryContextName).toHaveText(artist);
-  await expect(galleryPage.unreachable).toHaveText(`Offline. Can't load ${artist}, check your network or try again later`);
+  await expect(galleryPage.unreachableTitle).toHaveText('Offline');
+  await expect(galleryPage.unreachableDetail).toHaveText(`Can't load ${artist}, check your network or try again later`);
   expect(await visibleAlbumNames(galleryPage), 'the previous view is never left on screen').toEqual([]);
   expect(new URL(page.url()).searchParams.get('artist')).toBe(artist);
 

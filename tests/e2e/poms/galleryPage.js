@@ -268,6 +268,9 @@ export class GalleryPage extends BasePage {
     // A view the server could not be reached for: its OfflineNotice in place of the albums, and the
     // line ending a kept gallery that cannot load more.
     this.unreachable = page.locator('[data-gallery-unreachable] [data-offline-notice]');
+    // v004: the centered message's "Offline" title (with the small cloud) and its detail line.
+    this.unreachableTitle = this.unreachable.locator('.offline-notice__title');
+    this.unreachableDetail = this.unreachable.locator('.offline-notice__text');
     this.galleryEndOffline = page.locator('#gallery-end-offline');
     this.galleryContext = page.locator('[data-gallery-bar-instance="gallery"] .gallery-bar__context');
     this.galleryContextName = this.galleryContext.locator('[data-gallery-context-name]');
@@ -391,6 +394,19 @@ export class GalleryPage extends BasePage {
 
   sectionByArtistHeading(artistHeading) {
     return this.albumCard.sectionByArtistHeading(artistHeading);
+  }
+
+  // How far apart the vertical centers of an OfflineNotice line's cloud and its text's first line
+  // are, in pixels (owner v004: "centerline the line with the cloud").
+  async readOfflineLineCenterOffset(notice) {
+    // parity-check: allow-read-only-measurement-evaluate -- reads the rendered cloud and text boxes.
+    return notice.evaluate((element) => {
+      const cloud = element.querySelector('.offline-notice__cloud').getBoundingClientRect();
+      const text = element.querySelector('.offline-notice__text');
+      const lineHeight = parseFloat(getComputedStyle(text).lineHeight);
+      const top = text.getBoundingClientRect().top;
+      return Math.abs((cloud.top + cloud.height / 2) - (top + lineHeight / 2));
+    });
   }
 
   get ownStylesheetSelector() {

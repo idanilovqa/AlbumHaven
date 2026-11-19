@@ -77,26 +77,27 @@ function renderTrackModalUnreachableState(album) {
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
   trackModalUnreachableAlbum = album;
-  const message = serverUnreachableMessage('the details');
+  const detail = serverUnreachableDetail('the details');
   els.subtitle.textContent = '';
   els.cover.innerHTML = `
     <div class="track-modal-cover-shell">
       ${buildAlbumArtboxHtml({ state: 'offline', label: 'Cover art unavailable' })}
     </div>
   `;
-  els.list.innerHTML = `<li class="track-modal-unreachable-row">${buildOfflineNoticeHtml({ variant: 'text', message })}</li>`;
+  els.list.innerHTML = `<li class="track-modal-unreachable-row">${buildOfflineNoticeHtml({ variant: 'message', title: SERVER_UNREACHABLE_TITLE, message: detail })}</li>`;
 }
 
 // The server answers again (onServerReachableAgain): Album Details still showing Offline for the
 // album it is open on loads that album (owner round 8).
 function reloadTrackModalAfterServerReachable() {
-  const album = trackModalUnreachableAlbum;
-  trackModalUnreachableAlbum = null;
   const els = getTrackModalElements();
   const shown = state.modalReleases?.[state.modalReleaseIndex];
+  const album = trackModalUnreachableAlbum || (shown?.fromDeviceCopy ? shown : null);
+  trackModalUnreachableAlbum = null;
   if (!album || !els.overlay || els.overlay.hidden || !shown) return;
   if (String(getAlbumRequestKey(shown) || '') !== String(getAlbumRequestKey(album) || '')) return;
-  openTrackModal(album);
+  // Details shown from the device copy are loaded again from the server, never kept as loaded.
+  openTrackModal({ ...album, preview_only: true, fromDeviceCopy: false });
 }
 if (typeof onServerReachableAgain === 'function') onServerReachableAgain(reloadTrackModalAfterServerReachable);
 
@@ -490,6 +491,9 @@ async function fetchTrackModalAlbumDetails(albumKey, options = {}) {
       payload = null;
     }
   }
+  if (response.ok && payload?.ok && payload?.album && isDeviceCopyAnswer(response)) {
+    return { ...payload.album, fromDeviceCopy: true };
+  }
   if (!response.ok || !payload?.ok || !payload?.album) {
     const error = new Error(payload?.error || `Album detail request failed: ${response.status}`);
     error.status = response.status;
@@ -549,6 +553,9 @@ function loadTrackModalAlbumDetails(albumKey, options = {}) {
         return loadTrackModalAlbumDetails(normalizedAlbumKey,
           promotedToForeground ? { ...options, speculative: false } : options);
       }
+      // Details from the device copy stand in until the server answers; they are never kept as
+      // loaded, so the next open asks the server again.
+      if (album?.fromDeviceCopy) return album;
       cacheHydratedTrackModalAlbum(normalizedAlbumKey, album);
       getTrackModalAlbumKeyAliases(normalizedAlbumKey, album).forEach((alias) => {
         trackModalAlbumDetailsLoads.set(alias, load);

@@ -710,10 +710,7 @@ test('FTC-LIBROOTS-016 / 017 / 018 reconciles filesystem changes and confirms mi
 
     await stepLogger.step('Copy a three-album burst into the watched root without starting a scan', async () => {
       const startedAt = Date.now();
-      // The target ships local art so the owner can choose its cover in Cover Look Up below.
-      fixture = await createWatchedAlbumFixture({
-        artist: ARTIST, album: TARGET_ALBUM, year: TARGET_YEAR, createLocalArt: true, context, managedAppLifecycle,
-      });
+      fixture = await createWatchedAlbumFixture({ artist: ARTIST, album: TARGET_ALBUM, year: TARGET_YEAR, context, managedAppLifecycle });
       await fixture.createSiblingAlbum({
         album: EARLIER_ALBUM,
         year: 2001,
@@ -795,10 +792,7 @@ test('FTC-LIBROOTS-016 / 017 / 018 reconciles filesystem changes and confirms mi
       expect(response.status()).toBe(200);
       await coverLookupActions.waitForModalResultsReady();
       expect(await coverLookupActions.readModalSubtitle()).toContain(TARGET_ALBUM);
-      // Owner rules (2026-11-08, 2026-11-18): an in-app cover choice is the owner's data, so deleting this
-      // album's files keeps it as "Album not found". An album with only folder art is untouched and is
-      // removed (last step).
-      await coverLookupActions.selectFirstInactiveLocalCoverAndSave();
+      await coverLookupActions.closeModal();
       await trackModalActions.close();
       await galleryActions.clickAlbumDetailsByAlbumName(TARGET_ALBUM);
       await expect(trackModalActions.trackModal.trackRows).toHaveCount(1, { timeout: 15000 });
@@ -901,20 +895,25 @@ test('FTC-LIBROOTS-016 / 017 / 018 reconciles filesystem changes and confirms mi
       await expect(galleryActions.galleryPage.albumCard.cardByAlbumName(TARGET_ALBUM)).toHaveCount(0);
     });
 
-    await stepLogger.step('Delete an untouched album and remove its card live without a missing card', async () => {
+    // Owner rule (2026-11-08, corrected 2026-11-18): only New Arrivals removes an untouched deleted album
+    // by itself. These albums are in the Main Library, so after a confirmed removal the next deletion
+    // still reconciles live and leaves an "Album not found" card for the owner to confirm.
+    await stepLogger.step('Delete an untouched Main Library album after a removal and show its missing card live', async () => {
       await searchToolbarActions.search(ARTIST, { submitWithEnter: true });
       await searchToolbarActions.waitForQuery(ARTIST);
       await galleryActions.waitForAlbumVisible(LATER_ALBUM, { timeout: 60000 });
       const previousRevision = (await libraryFilesystemWatcherActions.readStatus()).inventory_mutation_revision;
       fs.rmSync(laterAlbum.albumDirectory, { recursive: true });
       status = await libraryFilesystemWatcherActions.waitForRevisionAfter(previousRevision);
-      await expect(galleryActions.galleryPage.albumCard.cardByAlbumName(LATER_ALBUM)).toHaveCount(0, { timeout: 60000 });
+      await expect(galleryActions.galleryPage.albumCard.artboxByAlbumName(LATER_ALBUM))
+        .toHaveAttribute('data-album-artbox-state', 'missing', { timeout: 60000 });
+      const alert = galleryActions.galleryPage.albumCard.missingAlertByAlbumName(LATER_ALBUM);
+      await alert.root.hover();
+      await expect(alert.text).toHaveText('Album not found');
       await expect(galleryActions.galleryPage.albumCard.cardByAlbumName(EARLIER_ALBUM)).toHaveCount(1);
       await expect(appBarActions.appBar.errorToasts).toHaveCount(0);
-      await expect.poll(async () => {
-        const identity = await queryPersistedAlbumIdentity({ artist: ARTIST, album: LATER_ALBUM, year: 2009 });
-        return identity.album_ids.length;
-      }, { timeout: 60000, intervals: [250, 500, 1000] }).toBe(0);
+      const identity = await queryPersistedAlbumIdentity({ artist: ARTIST, album: LATER_ALBUM, year: 2009 });
+      expect(identity.album_ids).toHaveLength(1);
     });
   } catch (error) {
     originalFailure = error;

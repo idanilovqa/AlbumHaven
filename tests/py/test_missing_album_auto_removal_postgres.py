@@ -1,6 +1,8 @@
-"""Owner decision 2026-11-08: untouched albums whose files were truly deleted leave no trace.
+"""Owner decision 2026-11-08, corrected 2026-11-18: an untouched New Arrivals album whose files
+were truly deleted leaves no trace.
 
-Anything the user touched, or anything only unreachable, stays as Missing for confirmation.
+Anything the user touched, anything only unreachable, and anything outside New Arrivals stays as
+Missing for confirmation. A cover never counts as a touch.
 """
 import json
 import shutil
@@ -11,13 +13,45 @@ from uuid import uuid4
 import pytest
 
 from tests.e2e.support import isolatedPostgres
-from tests.py.test_isolated_postgres_live import watcher_repair_inventory  # noqa: F401 (fixture)
+from tests.py.test_isolated_postgres_live import _finish_live_startup, watcher_repair_inventory  # noqa: F401
 from tests.py.test_missing_album_reachability_postgres import _files, _reconcile, _scan
 
+ARRIVALS = "repair-arrivals"
+MAIN = "repair-main"
 
-def _album(fixture, name):
-    """Seed one album with one file, then return its ids, key and path."""
-    entry = fixture.entry(f"Owner/{name}/01.flac", album=name)
+
+@pytest.fixture
+def inventory(watcher_repair_inventory, tmp_path):
+    """The watcher repair inventory plus a New Arrivals root, the only source the rule removes from."""
+    from music_app.services.library_roots_postgres import PostgresLibraryRootSettingsStore
+
+    fixture = watcher_repair_inventory
+    arrivals = {"id": ARRIVALS, "path": str(tmp_path / "New Arrivals"), "category": "new_arrivals_roots"}
+    Path(arrivals["path"]).mkdir(parents=True)
+    main, hoard = fixture.roots
+    PostgresLibraryRootSettingsStore(fixture.config).save_settings({
+        "main_library_roots": [main], "hoarding_library_roots": [hoard], "new_arrivals_roots": [arrivals],
+    })
+    fixture.roots.append(arrivals)  # every later scan observes the New Arrivals root too
+    return fixture
+
+
+def _entry(fixture, relative, *, album, root_id=ARRIVALS):
+    if root_id == MAIN:
+        return fixture.entry(relative, album=album)
+    root = next(root for root in fixture.roots if root["id"] == root_id)
+    entry = fixture.entry(relative, album=album)
+    Path(entry["path"]).unlink()
+    path = Path(root["path"]) / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"media fixture")
+    return {**entry, "path": str(path), "mtime": path.stat().st_mtime, "library_root_id": root_id,
+            "library_root_category": "new_arrivals"}
+
+
+def _album(fixture, name, *, root_id=ARRIVALS):
+    """Seed one album with one file, then return its ids, key, path and root."""
+    entry = _entry(fixture, f"Owner/{name}/01.flac", album=name, root_id=root_id)
     fixture.seed(entry)
     with isolatedPostgres._connect(fixture.setup_url) as connection:
         row = connection.execute(
@@ -31,7 +65,7 @@ def _album(fixture, name):
                where files.private_path = %s""",
             (entry["path"],),
         ).fetchone()
-    return SimpleNamespace(**row, path=entry["path"], folder=Path(entry["path"]).parent)
+    return SimpleNamespace(**row, path=entry["path"], folder=Path(entry["path"]).parent, root_id=root_id)
 
 
 def _album_exists(fixture, album_key):
@@ -44,31 +78,52 @@ def _album_exists(fixture, album_key):
 def _delete_by_watcher(fixture, album):
     shutil.rmtree(album.folder)
     _reconcile(fixture, {})(SimpleNamespace(
-        root_id="repair-main", paths=(), deleted_paths=(), deleted_subtrees=(album.folder,), moves=(),
+        root_id=album.root_id, paths=(), deleted_paths=(), deleted_subtrees=(album.folder,), moves=(),
     ))
 
 
-def test_live_untouched_album_whose_files_were_deleted_is_removed_by_the_watcher(watcher_repair_inventory):
-    fixture = watcher_repair_inventory
-    album = _album(fixture, "Added By Mistake")
-
-    _delete_by_watcher(fixture, album)
-
-    assert not _album_exists(fixture, album.album_key)
-    assert album.path not in _files(fixture)
+def _touched(fixture, album, touch):
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        touch(connection, album)
+    _finish_live_startup(fixture.config)
 
 
-def test_live_untouched_album_whose_files_were_deleted_is_removed_by_a_full_scan(watcher_repair_inventory):
-    fixture = watcher_repair_inventory
-    kept = fixture.entry("Owner/Stays/01.flac", album="Stays")
-    album = _album(fixture, "Scanned By Mistake")
-    fixture.seed(kept, {**fixture.entry("Owner/Scanned By Mistake/01.flac", album="Scanned By Mistake")})
+def test_live_untouched_new_arrivals_album_whose_files_were_deleted_is_removed_by_the_watcher(inventory):
+    album = _album(inventory, "Added By Mistake")
+
+    _delete_by_watcher(inventory, album)
+
+    assert not _album_exists(inventory, album.album_key)
+    assert album.path not in _files(inventory)
+
+
+def test_live_untouched_new_arrivals_album_whose_files_were_deleted_is_removed_by_a_full_scan(inventory):
+    kept = _entry(inventory, "Owner/Stays/01.flac", album="Stays")
+    album = _album(inventory, "Scanned By Mistake")
+    inventory.seed(kept, _entry(inventory, "Owner/Scanned By Mistake/01.flac", album="Scanned By Mistake"))
 
     shutil.rmtree(album.folder)
-    _scan(fixture, [kept])
+    _scan(inventory, [kept])
 
-    assert not _album_exists(fixture, album.album_key)
-    assert _files(fixture)[kept["path"]][:2] == (False, None)
+    assert not _album_exists(inventory, album.album_key)
+    assert _files(inventory)[kept["path"]][:2] == (False, None)
+
+
+@pytest.mark.parametrize("root_id", [MAIN, "repair-hoard"])
+def test_live_an_untouched_album_outside_new_arrivals_stays_missing(inventory, root_id):
+    if root_id == MAIN:
+        album = _album(inventory, "Main Library Album", root_id=MAIN)
+    else:
+        entry = inventory.entry("Hoarder/Hoarded/01.flac", root=1, album="Hoarded Album")
+        inventory.seed(entry)
+        files = _files(inventory)
+        album = SimpleNamespace(album_key=files[entry["path"]][2], path=entry["path"],
+                                folder=Path(entry["path"]).parent, root_id=root_id)
+
+    _delete_by_watcher(inventory, album)
+
+    assert _album_exists(inventory, album.album_key)
+    assert _files(inventory)[album.path][:2] == (True, "deleted")
 
 
 def _user_rating(c, a):
@@ -133,26 +188,26 @@ def _ignored_repair(c, a):
               (a.library_id, f"{a.album_key}::problem-album::undecoded-characters"))
 
 
-def _cover_choice(c, a):
-    c.execute("""update library.local_albums set metadata = metadata || '{"cover_selection_origin": "user"}'::jsonb
+def _kept_as_missing(c, a):
+    c.execute("""update library.local_albums set metadata = metadata || '{"missing_kept_at": "now"}'::jsonb
                  where id = %s""", (a.album_id,))
 
 
-def _explicit_cover(c, a):
-    c.execute("""update library.local_albums
-                 set cover_path = 'chosen.jpg', metadata = metadata || '{"cover_selection_provenance": "explicit"}'::jsonb
-                 where id = %s""", (a.album_id,))
+@pytest.mark.parametrize("touch", [
+    _user_rating, _track_preference, _loop, _play, _loved, _override, _written_correction, _tag_edit,
+    _separate_release, _ignored_version, _manual_version, _ignored_repair, _kept_as_missing,
+], ids=lambda touch: touch.__name__.strip("_"))
+def test_live_a_new_arrivals_album_the_user_touched_stays_missing(inventory, touch):
+    album = _album(inventory, "Touched Album")
+    _touched(inventory, album, touch)
+
+    _delete_by_watcher(inventory, album)
+
+    assert _album_exists(inventory, album.album_key)
+    assert _files(inventory)[album.path][:2] == (True, "deleted")
 
 
-def _user_cover_displaced_by_repair(c, a):
-    c.execute("""update library.local_albums
-                 set cover_path = 'repaired.jpg', metadata = metadata
-                   || '{"cover_selection_origin": "automatic",
-                        "cover_selection_repair_previous": {"cover_path": "chosen.jpg", "cover_selection_origin": "user"}}'::jsonb
-                 where id = %s""", (a.album_id,))
-
-
-# Owner 2026-11-18: art the app only found in the folder, or of unknown origin, is not the user's.
+# Owner 2026-11-18: a cover never counts as a touch, wherever it came from.
 def _folder_art(c, a):
     c.execute("""update library.local_albums
                  set cover_path = 'folder.jpg', metadata = metadata - 'cover_selection_origin' - 'cover_selection_provenance'
@@ -165,75 +220,53 @@ def _automatic_cover(c, a):
                  where id = %s""", (a.album_id,))
 
 
-def _folder_art_repaired(c, a):
+def _cover_picked_in_app(c, a):
     c.execute("""update library.local_albums
-                 set cover_path = 'front.jpg', metadata = metadata
+                 set cover_path = 'chosen.jpg', metadata = metadata
+                   || '{"cover_selection_origin": "user", "cover_selection_provenance": "explicit"}'::jsonb
+                 where id = %s""", (a.album_id,))
+
+
+def _user_cover_displaced_by_repair(c, a):
+    c.execute("""update library.local_albums
+                 set cover_path = 'repaired.jpg', metadata = metadata
                    || '{"cover_selection_origin": "automatic",
-                        "cover_selection_repair_previous": {"cover_path": "folder.jpg", "cover_selection_origin": null}}'::jsonb
+                        "cover_selection_repair_previous": {"cover_path": "chosen.jpg", "cover_selection_origin": "user"}}'::jsonb
                  where id = %s""", (a.album_id,))
 
 
-def _kept_as_missing(c, a):
-    c.execute("""update library.local_albums set metadata = metadata || '{"missing_kept_at": "now"}'::jsonb
-                 where id = %s""", (a.album_id,))
-
-
-@pytest.mark.parametrize("touch", [
-    _user_rating, _track_preference, _loop, _play, _loved, _override, _written_correction, _tag_edit,
-    _separate_release, _ignored_version, _manual_version, _ignored_repair, _cover_choice,
-    _explicit_cover, _user_cover_displaced_by_repair, _kept_as_missing,
-], ids=lambda touch: touch.__name__.strip("_"))
-def test_live_an_album_the_user_touched_stays_missing(watcher_repair_inventory, touch):
-    fixture = watcher_repair_inventory
-    album = _album(fixture, "Touched Album")
-    with isolatedPostgres._connect(fixture.setup_url) as connection:
-        touch(connection, album)
-    from tests.py.test_isolated_postgres_live import _finish_live_startup
-    _finish_live_startup(fixture.config)
-
-    _delete_by_watcher(fixture, album)
-
-    assert _album_exists(fixture, album.album_key)
-    assert _files(fixture)[album.path][:2] == (True, "deleted")
-
-
-@pytest.mark.parametrize("cover", [_folder_art, _automatic_cover, _folder_art_repaired],
+@pytest.mark.parametrize("cover", [_folder_art, _automatic_cover, _cover_picked_in_app, _user_cover_displaced_by_repair],
                          ids=lambda cover: cover.__name__.strip("_"))
-def test_live_an_album_with_only_folder_or_automatic_art_is_removed(watcher_repair_inventory, cover):
-    fixture = watcher_repair_inventory
-    album = _album(fixture, "Folder Art Album")
-    with isolatedPostgres._connect(fixture.setup_url) as connection:
-        cover(connection, album)
-    from tests.py.test_isolated_postgres_live import _finish_live_startup
-    _finish_live_startup(fixture.config)
+def test_live_a_new_arrivals_album_with_any_cover_is_removed(inventory, cover):
+    album = _album(inventory, "Cover Album")
+    _touched(inventory, album, cover)
 
-    _delete_by_watcher(fixture, album)
+    _delete_by_watcher(inventory, album)
 
-    assert not _album_exists(fixture, album.album_key)
-    assert album.path not in _files(fixture)
+    assert not _album_exists(inventory, album.album_key)
+    assert album.path not in _files(inventory)
 
 
-def test_live_an_unreachable_untouched_album_stays_missing(watcher_repair_inventory):
-    fixture = watcher_repair_inventory
-    album = _album(fixture, "On A Dropped Drive")
-    root = Path(fixture.roots[0]["path"])
+def test_live_an_unreachable_untouched_new_arrivals_album_stays_missing(inventory):
+    album = _album(inventory, "On A Dropped Drive")
+    root = Path(next(root for root in inventory.roots if root["id"] == ARRIVALS)["path"])
 
     offline = root.with_name(root.name + "-offline")
     root.rename(offline)
     try:
-        _reconcile(fixture, {})(SimpleNamespace(
-            root_id="repair-main", paths=(), deleted_paths=(), deleted_subtrees=(album.folder,), moves=(),
+        _reconcile(inventory, {})(SimpleNamespace(
+            root_id=ARRIVALS, paths=(), deleted_paths=(), deleted_subtrees=(album.folder,), moves=(),
         ))
     finally:
         offline.rename(root)
 
-    assert _album_exists(fixture, album.album_key)
-    assert _files(fixture)[album.path][:2] == (True, "unreachable")
+    assert _album_exists(inventory, album.album_key)
+    assert _files(inventory)[album.path][:2] == (True, "unreachable")
 
 
-def _loose_track(fixture, name):
+def _loose_track(fixture, name, *, root_id=ARRIVALS):
     """Seed one file with no Album tag (a Loose Track), then return its ids and path."""
-    entry = fixture.entry(f"Owner/Loose/{name}.flac", album="")
+    entry = _entry(fixture, f"Owner/Loose/{name}.flac", album="", root_id=root_id)
     fixture.seed(entry)
     with isolatedPostgres._connect(fixture.setup_url) as connection:
         row = connection.execute(
@@ -247,7 +280,7 @@ def _loose_track(fixture, name):
             (entry["path"],),
         ).fetchone()
     assert row["album_id"] is None, "fixture must be a loose track"
-    return SimpleNamespace(**row, path=entry["path"], folder=Path(entry["path"]).parent)
+    return SimpleNamespace(**row, path=entry["path"], folder=Path(entry["path"]).parent, root_id=root_id)
 
 
 def _track_exists(fixture, track_id):
@@ -258,97 +291,95 @@ def _track_exists(fixture, track_id):
 def _delete_loose_by_watcher(fixture, track):
     Path(track.path).unlink()
     _reconcile(fixture, {})(SimpleNamespace(
-        root_id="repair-main", paths=(), deleted_paths=(Path(track.path),), deleted_subtrees=(), moves=(),
+        root_id=track.root_id, paths=(), deleted_paths=(Path(track.path),), deleted_subtrees=(), moves=(),
     ))
 
 
-def test_live_untouched_loose_track_whose_file_was_deleted_is_removed(watcher_repair_inventory):
-    fixture = watcher_repair_inventory
-    track = _loose_track(fixture, "Added By Mistake")
+def test_live_untouched_new_arrivals_loose_track_whose_file_was_deleted_is_removed(inventory):
+    track = _loose_track(inventory, "Added By Mistake")
 
-    _delete_loose_by_watcher(fixture, track)
+    _delete_loose_by_watcher(inventory, track)
 
-    assert not _track_exists(fixture, track.track_id)
-    assert track.path not in _files(fixture)
+    assert not _track_exists(inventory, track.track_id)
+    assert track.path not in _files(inventory)
 
 
-def test_live_a_loose_track_the_user_rated_stays_missing(watcher_repair_inventory):
-    fixture = watcher_repair_inventory
-    track = _loose_track(fixture, "Rated")
-    with isolatedPostgres._connect(fixture.setup_url) as connection:
+def test_live_an_untouched_loose_track_outside_new_arrivals_stays_missing(inventory):
+    track = _loose_track(inventory, "Main Library Loose", root_id=MAIN)
+
+    _delete_loose_by_watcher(inventory, track)
+
+    assert _track_exists(inventory, track.track_id)
+    assert _files(inventory)[track.path][:2] == (True, "deleted")
+
+
+def test_live_a_loose_track_the_user_rated_stays_missing(inventory):
+    track = _loose_track(inventory, "Rated")
+    with isolatedPostgres._connect(inventory.setup_url) as connection:
         _track_preference(connection, track)
 
-    _delete_loose_by_watcher(fixture, track)
+    _delete_loose_by_watcher(inventory, track)
 
-    assert _track_exists(fixture, track.track_id)
-    assert _files(fixture)[track.path][:2] == (True, "deleted")
+    assert _track_exists(inventory, track.track_id)
+    assert _files(inventory)[track.path][:2] == (True, "deleted")
 
 
-def test_live_an_unreachable_loose_track_stays_missing(watcher_repair_inventory):
-    fixture = watcher_repair_inventory
-    track = _loose_track(fixture, "On A Dropped Drive")
-    root = Path(fixture.roots[0]["path"])
+def test_live_an_unreachable_loose_track_stays_missing(inventory):
+    track = _loose_track(inventory, "On A Dropped Drive")
+    root = Path(next(root for root in inventory.roots if root["id"] == ARRIVALS)["path"])
 
     offline = root.with_name(root.name + "-offline")
     root.rename(offline)
     try:
-        _reconcile(fixture, {})(SimpleNamespace(
-            root_id="repair-main", paths=(), deleted_paths=(Path(track.path),), deleted_subtrees=(), moves=(),
+        _reconcile(inventory, {})(SimpleNamespace(
+            root_id=ARRIVALS, paths=(), deleted_paths=(Path(track.path),), deleted_subtrees=(), moves=(),
         ))
     finally:
         offline.rename(root)
 
-    assert _track_exists(fixture, track.track_id)
-    assert _files(fixture)[track.path][:2] == (True, "unreachable")
+    assert _track_exists(inventory, track.track_id)
+    assert _files(inventory)[track.path][:2] == (True, "unreachable")
 
 
-def test_live_keep_as_missing_is_recorded_and_keeps_the_album(watcher_repair_inventory):
+def test_live_keep_as_missing_is_recorded_and_keeps_the_album(inventory):
     from music_app.services.missing_album_removal_postgres import PostgresMissingAlbumRemovalService
 
-    fixture = watcher_repair_inventory
-    album = _album(fixture, "Kept By The User")
-    PostgresMissingAlbumRemovalService(fixture.config, connect=isolatedPostgres._connect).keep_missing(album.album_key)
+    album = _album(inventory, "Kept By The User")
+    PostgresMissingAlbumRemovalService(inventory.config, connect=isolatedPostgres._connect).keep_missing(album.album_key)
 
-    _delete_by_watcher(fixture, album)
+    _delete_by_watcher(inventory, album)
 
-    assert _album_exists(fixture, album.album_key)
+    assert _album_exists(inventory, album.album_key)
 
 
-def test_live_confirmed_removal_keeps_the_gallery_baseline_for_the_next_watcher_event(watcher_repair_inventory):
+def test_live_confirmed_removal_keeps_the_gallery_baseline_for_the_next_watcher_event(inventory):
     """FTC-LIBROOTS-016/018: after the owner removes a missing album, the next deletion still reconciles."""
     from music_app.services.gallery_projection_postgres import ensure_gallery_projection_ready
     from music_app.services.missing_album_removal_postgres import PostgresMissingAlbumRemovalService
-    from tests.py.test_isolated_postgres_live import _finish_live_startup
 
-    fixture = watcher_repair_inventory
-    chosen = fixture.entry("Owner/Chosen Cover/01.flac", album="Chosen Cover")
-    mistake = fixture.entry("Owner/Added By Mistake/01.flac", album="Added By Mistake")
-    fixture.seed(chosen, mistake)
-    files = _files(fixture)
-    chosen_key, mistake_key = files[chosen["path"]][2], files[mistake["path"]][2]
-    with isolatedPostgres._connect(fixture.setup_url) as connection:
-        album_id = connection.execute(
-            "select id from library.local_albums where album_key = %s", (chosen_key,)).fetchone()["id"]
-        _cover_choice(connection, SimpleNamespace(album_id=album_id))
-    _finish_live_startup(fixture.config)
+    kept = _entry(inventory, "Owner/Main Library Album/01.flac", album="Main Library Album", root_id=MAIN)
+    mistake = _entry(inventory, "Owner/Added By Mistake/01.flac", album="Added By Mistake")
+    inventory.seed(kept, mistake)
+    files = _files(inventory)
+    kept_key, mistake_key = files[kept["path"]][2], files[mistake["path"]][2]
 
-    _delete_by_watcher(fixture, SimpleNamespace(folder=Path(chosen["path"]).parent))
-    assert _files(fixture)[chosen["path"]][:2] == (True, "deleted")
+    _delete_by_watcher(inventory, SimpleNamespace(folder=Path(kept["path"]).parent, root_id=MAIN))
+    assert _files(inventory)[kept["path"]][:2] == (True, "deleted")
     PostgresMissingAlbumRemovalService(
-        fixture.config, connect=isolatedPostgres._connect, root_health_check=lambda _root_id: True,
-    ).confirm_removal(chosen_key)
+        inventory.config, connect=isolatedPostgres._connect, root_health_check=lambda _root_id: True,
+    ).confirm_removal(kept_key)
 
     # The removal publishes its own journal: nothing pending, every gallery scope current.
-    with isolatedPostgres._connect(fixture.setup_url) as connection:
+    with isolatedPostgres._connect(inventory.setup_url) as connection:
         assert connection.execute(
             "select count(*) as pending from library.local_relation_dirty_albums").fetchone()["pending"] == 0
         generation = connection.execute("select generation from library.gallery_projection_state").fetchone()["generation"]
         assert {row["source_generation"] for row in connection.execute(
             "select source_generation from library.gallery_membership_headers").fetchall()} == {generation}
     # As the route does after a removal.
-    ensure_gallery_projection_ready(fixture.config, connect=isolatedPostgres._connect)
+    ensure_gallery_projection_ready(inventory.config, connect=isolatedPostgres._connect)
 
-    _delete_by_watcher(fixture, SimpleNamespace(folder=Path(mistake["path"]).parent))
+    _delete_by_watcher(inventory, SimpleNamespace(folder=Path(mistake["path"]).parent, root_id=ARRIVALS))
 
-    assert not _album_exists(fixture, chosen_key)
-    assert not _album_exists(fixture, mistake_key)
+    assert not _album_exists(inventory, kept_key)
+    assert not _album_exists(inventory, mistake_key)

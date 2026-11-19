@@ -1,15 +1,16 @@
 """Remove missing albums the user never touched, when every file was truly deleted.
 
-Owner decision 2026-11-08, the one exception to "nothing is removed without confirmation": files
-added by mistake and deleted again leave no trace. Both conditions must hold:
+Owner decision 2026-11-08, corrected 2026-11-18, the one exception to "nothing is removed without
+confirmation": New Arrivals files added by mistake and deleted again leave no trace. All must hold:
 
-1. Every file of the album is missing with reason "deleted". An "unreachable"
-   file, or any file still present, keeps it. A dropped drive or share can never remove anything.
-2. Nothing user-owned refers to it: no user rating, play, play preference, loop, scrobble or love,
-   in-app cover choice, extra artwork, MusicBrainz/Discogs link, tag edit or text correction,
-   version/split/merge marking, Problematic Files ignore, or "Keep as missing". Owner decision
-   2026-11-18: only a cover recorded as set by the user in the app counts; folder art and covers
-   of unknown origin do not. The rule only reads provenance; it never promotes or clears it.
+1. Every file of the album is in a New Arrivals root. Any other source keeps a deleted album as
+   "Album not found" until the owner confirms its removal.
+2. Every file is missing with reason "deleted". An "unreachable" file, or any file still
+   present, keeps it. A dropped drive or share can never remove anything.
+3. Nothing user-owned refers to it: no user rating, play, play preference, loop, scrobble or love,
+   extra artwork, MusicBrainz/Discogs link, tag edit or text correction, version/split/merge
+   marking, Problematic Files ignore, or "Keep as missing". A cover never counts, whether found
+   in the folder or chosen in the app.
 
 Albums are removed through library.confirm_missing_album_removal, as a confirmed removal is;
 loose tracks through library.remove_deleted_loose_track (migration 0120). Both functions
@@ -89,6 +90,17 @@ _TRACK_TOUCH_CONDITION = """
 
 # An album-key mark relates to the album when the keys are equal or one extends the other
 # (year-split and separate-release keys append "::..." to the album key).
+# Owner 2026-11-18: automatic removal is a New Arrivals rule. A track with any file in another
+# source (Main Library, Hoard, ...) keeps its album as "Album not found" until the owner confirms.
+_OUTSIDE_NEW_ARRIVALS = """
+    exists (
+      select 1 from library.local_track_files files
+      left join library.library_roots roots on roots.id = files.library_root_id
+      where files.track_id = candidate.track_id
+        and roots.root_kind is distinct from 'new_arrivals'
+    )
+"""
+
 _KEY_RELATED = "({key} = albums.album_key or starts_with({key}, albums.album_key || '::') " \
                "or starts_with(albums.album_key, {key} || '::'))"
 
@@ -105,7 +117,7 @@ _UNTOUCHED_DELETED_ALBUMS_SQL = f"""
     where not exists (
         select 1 from (select tracks.id as track_id from library.local_tracks tracks
                        where tracks.album_id = albums.id) candidate
-        where {_TRACK_TOUCH_CONDITION}
+        where {_TRACK_TOUCH_CONDITION} or {_OUTSIDE_NEW_ARRIVALS}
       )
       and not exists (select 1 from app.album_ratings r
                       where r.library_id = albums.library_id and r.album_key = albums.album_key
@@ -123,10 +135,6 @@ _UNTOUCHED_DELETED_ALBUMS_SQL = f"""
                       where i.library_id = albums.library_id
                         and ({_KEY_RELATED.format(key='i.repair_key')} or i.metadata ->> 'album_key' = albums.album_key))
       and not (albums.metadata ? 'missing_kept_at')
-      -- Only a recorded in-app cover choice is the user's, including one a repair displaced.
-      and coalesce(albums.metadata ->> 'cover_selection_origin', '') <> 'user'
-      and coalesce(albums.metadata ->> 'cover_selection_provenance', '') <> 'explicit'
-      and coalesce(albums.metadata #>> '{{cover_selection_repair_previous,cover_selection_origin}}', '') <> 'user'
     order by albums.album_key
 """
 
@@ -139,6 +147,6 @@ _UNTOUCHED_DELETED_LOOSE_TRACKS_SQL = f"""
       join library.local_tracks tracks on tracks.id = files.track_id
       where files.id = any(%(file_ids)s::bigint[]) and tracks.album_id is null
     ) candidate
-    where not ({_TRACK_TOUCH_CONDITION})
+    where not ({_TRACK_TOUCH_CONDITION}) and not {_OUTSIDE_NEW_ARRIVALS}
     order by candidate.track_id
 """

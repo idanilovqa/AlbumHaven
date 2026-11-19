@@ -116,7 +116,7 @@ jobs:
             # synthetic-production-library is synthetic-large-library released at the owner's library size.
             $release = @{ Release = 'fixtures-v1.0.30'; Profile = $profile; ManifestSha256 = '0CBF9D17930C0347B40415A5B367DEBD93EC5CA7D8439CFAB7060A7E0BB13752' }
             if ($profile -eq 'synthetic-production-library') {
-              $release = @{ Release = 'fixtures-v1.0.30-production-calibration'; Profile = 'synthetic-large-library'; ManifestSha256 = 'PRODUCTION_CALIBRATION_MANIFEST_SHA256' }
+              $release = @{ Release = 'fixtures-v1.0.30-production-calibration'; Profile = 'synthetic-large-library'; ManifestSha256 = '8A2D3DF55A3944338D0D2948BFF21C873EC27DB21140527DF62E9F8EA42B5D97' }
             }
             & ".trusted-ci\scripts\ci\fetch-test-fixtures.ps1" @release -GithubEnv $exports
             $prefix = "ALBUM_HAVEN_FIXTURE_ROOT="

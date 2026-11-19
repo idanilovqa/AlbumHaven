@@ -7,6 +7,10 @@
 - The device copy (Android app and browsers) keeps covers by the server's cover reference, is never shown past the end of the signing-in session, cannot be brought back by a save that finishes after signing out, answers pages before writing the copy, and never breaks a page when storage is full. Copies kept by the previous version are deleted once.
 - `ALBUM_HAVEN_APP_COPY=off` switches the device copy off: pages stop loading it and installed copies delete themselves.
 
+## 0.11.39 - 2026-11-18
+
+- Test-only: the large-library performance check now records how long the first artist page and Home take even when they pass, so before/after comparisons no longer need a failing run.
+
 ## 0.11.38 - 2026-11-18
 
 - The app page itself loads faster: the server reads your saved layout preferences over its already-open database connection instead of opening a new one each time. On the hosted test runner the page response dropped from about 110-170 ms to about 55-75 ms on first load, and from about 75-95 ms to about 45-55 ms after browsing.

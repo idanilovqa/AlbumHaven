@@ -3534,6 +3534,99 @@ test('interactive-origin no-match clear restores Home with a bounded albums requ
   );
 });
 
+function noMatchSearchContext(rootRevision, statusRevision) {
+  const cachedRootView = {
+    surface: { active: 'albums' },
+    query: '',
+    selected_artist: '',
+    all_artists_active: true,
+    gallery_scope: 'all',
+    visible_library_categories: ['main_library', 'hoard', 'new_arrivals'],
+    related_filter_artists: [],
+    primary_filter_active: false,
+    artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'broadcast-tender' }] }],
+    artists_sidebar: [{ artist: 'Broadcast', count: 1 }],
+    inventory_mutation_revision: rootRevision,
+  };
+  const { context, calls } = createContext({
+    searchInputValue: '',
+    cachedRootView,
+    status: { inventory_mutation_revision: statusRevision },
+  });
+  context.state.view = {
+    surface: { active: 'albums' },
+    query: 'Album Haven deterministic no-match 7f4c29',
+    selected_artist: '',
+    all_artists_active: false,
+    gallery_scope: 'all',
+    visible_library_categories: ['main_library', 'hoard', 'new_arrivals'],
+    related_filter_artists: [],
+    primary_filter_active: false,
+    primary_artist_groups: [],
+    family_artist_groups: [],
+    artist_groups: [],
+    artists_sidebar: [],
+  };
+  context.state.ui.preSearchViewOrigin = 'canonical_root';
+  return { context, calls, cachedRootView };
+}
+
+test('clearing back to the full gallery shows the remembered gallery with no request when the library is unchanged', () => {
+  const { context, calls, cachedRootView } = noMatchSearchContext(7, 7);
+
+  context.handleGalleryBootstrapSearchSubmit(createSubmitEvent());
+
+  assert.deepEqual(calls.fetchAndRender, []);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.applyViewPayload)), [{
+    payload: cachedRootView,
+    runtimeOptions: { trackSidebarReveal: false },
+  }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.renderArtistGroups)), [{ preserveScroll: true }]);
+});
+
+test('clearing from memory cancels a search still loading so its answer cannot replace the gallery', () => {
+  const { context, calls } = noMatchSearchContext(7, 7);
+  let aborted = 0;
+  context.state.ui.activeViewRequestController = { abort() { aborted += 1; } };
+  const revisionBefore = Number(context.state.ui.viewStateRevision || 0);
+
+  context.handleGalleryBootstrapSearchSubmit(createSubmitEvent());
+
+  assert.equal(aborted, 1);
+  assert.equal(Number(context.state.ui.viewStateRevision), revisionBefore + 1);
+  assert.deepEqual(calls.fetchAndRender, []);
+});
+
+test('clearing back to the full gallery still refreshes when the library changed since it was remembered', () => {
+  const { calls, context } = noMatchSearchContext(7, 8);
+
+  context.handleGalleryBootstrapSearchSubmit(createSubmitEvent());
+
+  assert.equal(calls.fetchAndRender.length, 1);
+});
+
+test('Home shows a current remembered gallery with no request', () => {
+  const cachedRootView = {
+    query: '',
+    selected_artist: '',
+    all_artists_active: false,
+    gallery_scope: 'all',
+    visible_library_categories: ['main_library', 'hoard', 'new_arrivals'],
+    related_filter_artists: [],
+    primary_filter_active: false,
+    artist_groups: [{ artist: 'Broadcast' }],
+    artists_sidebar: [{ artist: 'Broadcast', count: 1 }],
+    inventory_mutation_revision: 3,
+  };
+  const { context, calls } = createContext({ cachedRootView, status: { inventory_mutation_revision: 3 } });
+
+  context.handleGalleryBootstrapClick(createAllArtistsEvent().event);
+
+  assert.equal(calls.applyViewPayload.length, 1);
+  assert.deepEqual(calls.fetchAndRender, []);
+  assert.equal(calls.resumeSelectedArtistCoverLoadsAfterUserAction.length, 1);
+});
+
 test('canonical no-match clear requests a full albums projection for the Home completion', () => {
   const { context, calls } = createContext({ searchInputValue: '' });
   context.state.view = {
@@ -4106,7 +4199,7 @@ test('abandoning an unsubmitted search draft on blur releases every search suspe
   const { context, calls } = createContext();
 
   context.handleGalleryBootstrapSearchInput('Devin');
-  context.handleGalleryBootstrapSearchBlur();
+  context.handleGalleryBootstrapSearchBlur(FOCUS_TO_SEARCH_BUTTON);
   await Promise.resolve();
 
   assert.equal(context.state.ui.albumDetailPrewarmSearchSuspended, false);
@@ -4505,12 +4598,52 @@ test('recordRecentSearchQuery keeps the new query in memory when session storage
   assert.deepEqual(JSON.parse(JSON.stringify(context.readRecentSearchQueries())), ['Joseph']);
 });
 
+// Clicking the search button blurs the input first; that click then submits on its own.
+const FOCUS_TO_SEARCH_BUTTON = Object.freeze({ relatedTarget: Object.freeze({ id: 'search-submit' }) });
+
+test('clicking empty space outside an emptied search box applies the clear', () => {
+  const { context, calls } = createContext({ searchInputValue: '' });
+  context.state.view.query = 'Neal Morse';
+
+  context.syncSearchClear();
+  context.handleGalleryBootstrapSearchBlur({ relatedTarget: null });
+
+  assert.equal(calls.buildApiUrl.length, 1);
+  assert.equal(calls.buildApiUrl[0].query, '');
+  assert.equal(calls.fetchAndRender.length, 1);
+});
+
+test('on the phone layout a blur never applies the clear', () => {
+  const { context, calls } = createContext({ searchInputValue: '' });
+  context.usesMobilePageLayout = () => true;
+  context.state.view.query = 'Neal Morse';
+
+  context.syncSearchClear();
+  context.handleGalleryBootstrapSearchBlur({ relatedTarget: null });
+
+  assert.deepEqual(calls.buildApiUrl, []);
+  assert.deepEqual(calls.fetchAndRender, []);
+});
+
+test('a blur that keeps a typed query or an unchanged search does nothing', () => {
+  const typed = createContext({ searchInputValue: 'Neal' });
+  typed.context.state.view.query = 'Neal Morse';
+  typed.context.handleGalleryBootstrapSearchInput('Neal');
+  typed.context.handleGalleryBootstrapSearchBlur({ relatedTarget: null });
+  assert.deepEqual(typed.calls.fetchAndRender, []);
+  assert.deepEqual(typed.calls.buildApiUrl, []);
+
+  const unsearched = createContext({ searchInputValue: '' });
+  unsearched.context.handleGalleryBootstrapSearchBlur({ relatedTarget: null });
+  assert.deepEqual(unsearched.calls.fetchAndRender, []);
+});
+
 test('native clear changes only the input draft until empty search submission', () => {
   const { context, calls } = createContext({ searchInputValue: '' });
   context.state.view.query = 'Neal Morse';
 
   context.syncSearchClear();
-  context.handleGalleryBootstrapSearchBlur();
+  context.handleGalleryBootstrapSearchBlur(FOCUS_TO_SEARCH_BUTTON);
 
   assert.equal(context.state.ui.searchDraftQuery, '');
   assert.equal(context.state.ui.pendingSearchClearOnBlur, false);
@@ -4660,7 +4793,7 @@ test('empty explicit submission commits the same cleared-search view as Apply', 
   };
   context.state.ui.pendingSearchClearOnBlur = true;
 
-  context.handleGalleryBootstrapSearchBlur();
+  context.handleGalleryBootstrapSearchBlur(FOCUS_TO_SEARCH_BUTTON);
   assert.deepEqual(calls.buildApiUrl, []);
   submitSearch(context, '');
 
@@ -4735,7 +4868,7 @@ test('native clear reloads the full selected-artist gallery when the search has 
   };
   context.state.ui.preSearchViewOrigin = 'canonical_root';
   context.state.ui.pendingSearchClearOnBlur = true;
-  context.handleGalleryBootstrapSearchBlur();
+  context.handleGalleryBootstrapSearchBlur(FOCUS_TO_SEARCH_BUTTON);
   submitSearch(context, '');
 
   assert.deepEqual(calls.applyViewPayload, []);
@@ -4795,7 +4928,7 @@ test('canonical search clear keeps browse scope for a retained artist request bu
   blankClear.context.state.ui.preSearchViewOrigin = 'canonical_root';
   blankClear.context.state.ui.pendingSearchClearOnBlur = true;
 
-  blankClear.context.handleGalleryBootstrapSearchBlur();
+  blankClear.context.handleGalleryBootstrapSearchBlur(FOCUS_TO_SEARCH_BUTTON);
   submitSearch(blankClear.context, '');
 
   assert.deepEqual(blankClear.calls.getReusableRootBrowseView, [{
@@ -4850,7 +4983,7 @@ test('canonical search clear keeps browse scope for a retained artist request bu
   retainedArtistClear.context.state.ui.preSearchViewOrigin = 'canonical_root';
   retainedArtistClear.context.state.ui.pendingSearchClearOnBlur = true;
 
-  retainedArtistClear.context.handleGalleryBootstrapSearchBlur();
+  retainedArtistClear.context.handleGalleryBootstrapSearchBlur(FOCUS_TO_SEARCH_BUTTON);
   submitSearch(retainedArtistClear.context, '');
 
   assert.deepEqual(retainedArtistClear.calls.getReusableRootBrowseView, [{
@@ -4932,7 +5065,7 @@ test('native exact-artist 10/10 clear restores the cached root around the comple
   };
   context.state.ui.preSearchViewOrigin = 'canonical_root';
   context.state.ui.pendingSearchClearOnBlur = true;
-  context.handleGalleryBootstrapSearchBlur();
+  context.handleGalleryBootstrapSearchBlur(FOCUS_TO_SEARCH_BUTTON);
   submitSearch(context, '');
 
   assert.equal(calls.applyViewPayload.length, 1);
@@ -5013,7 +5146,7 @@ test('native exact-artist clear uses the selected-gallery completion denominator
   context.state.ui.preSearchViewOrigin = 'canonical_root';
   context.state.ui.pendingSearchClearOnBlur = true;
 
-  context.handleGalleryBootstrapSearchBlur();
+  context.handleGalleryBootstrapSearchBlur(FOCUS_TO_SEARCH_BUTTON);
   submitSearch(context, '');
 
   assert.equal(calls.applyViewPayload.length, 1);
@@ -5093,7 +5226,7 @@ test('native exact-artist clear restores the captured sidebar preview instead of
   context.state.ui.preSearchViewOrigin = 'canonical_root';
   context.state.ui.pendingSearchClearOnBlur = true;
 
-  context.handleGalleryBootstrapSearchBlur();
+  context.handleGalleryBootstrapSearchBlur(FOCUS_TO_SEARCH_BUTTON);
   submitSearch(context, '');
 
   assert.equal(calls.applyViewPayload.length, 1);
@@ -5169,7 +5302,7 @@ test('native exact-artist clear fetches when a query-scoped denominator understa
   context.state.ui.preSearchViewOrigin = 'canonical_root';
   context.state.ui.pendingSearchClearOnBlur = true;
 
-  context.handleGalleryBootstrapSearchBlur();
+  context.handleGalleryBootstrapSearchBlur(FOCUS_TO_SEARCH_BUTTON);
   submitSearch(context, '');
 
   assert.deepEqual(calls.applyViewPayload, []);
@@ -5252,7 +5385,7 @@ test('native clear does not retain a query-filtered selected-artist group over t
   context.state.ui.preSearchViewOrigin = 'canonical_root';
   context.state.ui.pendingSearchClearOnBlur = true;
 
-  context.handleGalleryBootstrapSearchBlur();
+  context.handleGalleryBootstrapSearchBlur(FOCUS_TO_SEARCH_BUTTON);
   submitSearch(context, '');
 
   assert.equal(context.state.view.query, 'Joseph');
@@ -5341,7 +5474,7 @@ test(`cold direct-loaded Signal 1/1 clear preserves a complete cached root and m
 
   assert.equal(context.state.ui.pendingSearchClearOnBlur, false);
 
-  context.handleGalleryBootstrapSearchBlur();
+  context.handleGalleryBootstrapSearchBlur(FOCUS_TO_SEARCH_BUTTON);
   submitSearch(context, '');
 
   assert.equal(calls.applyViewPayload.length, 1);
@@ -5445,7 +5578,7 @@ test('native clear preserves an intentionally family-filtered mounted gallery an
   context.state.ui.preSearchViewOrigin = 'canonical_root';
 
   context.syncSearchClear();
-  context.handleGalleryBootstrapSearchBlur();
+  context.handleGalleryBootstrapSearchBlur(FOCUS_TO_SEARCH_BUTTON);
   submitSearch(context, '');
 
   assert.equal(calls.applyViewPayload.length, 1);
@@ -5518,7 +5651,7 @@ test('native clear restores the captured pre-search artist tree when no reusable
   calls.fetchAndRender.length = 0;
 
   context.syncSearchClear();
-  context.handleGalleryBootstrapSearchBlur();
+  context.handleGalleryBootstrapSearchBlur(FOCUS_TO_SEARCH_BUTTON);
   submitSearch(context, '');
 
   assert.equal(context.state.view.query, '');
@@ -5580,7 +5713,7 @@ test('syncSearchClear injects the selected artist into a cached preview sidebar 
 
   assert.equal(context.state.ui.pendingSearchClearOnBlur, false);
 
-  context.handleGalleryBootstrapSearchBlur();
+  context.handleGalleryBootstrapSearchBlur(FOCUS_TO_SEARCH_BUTTON);
   submitSearch(context, '');
 
   assert.deepEqual(JSON.parse(JSON.stringify(calls.applyViewPayload)), [{

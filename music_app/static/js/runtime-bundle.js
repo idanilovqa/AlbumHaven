@@ -49756,14 +49756,11 @@ function handleGalleryBootstrapClick(event) {
       ? getReusableRootBrowseView(nextView)
       : null;
     if (reusableRootBrowseView) {
-      applyViewPayload(reusableRootBrowseView, { trackSidebarReveal: false });
-      pushBrowserViewState(nextView);
-      renderSidebar();
-      renderRelated();
-      renderLibraryLoader(state.status);
-      scheduleBrowserAnimationFrame(() => {
-        renderArtistGroups({ preserveScroll: true });
-      });
+      showRememberedRootGallery(reusableRootBrowseView, nextView);
+      if (readCurrentRememberedRootGallery(reusableRootBrowseView)) {
+        resumeCoverLoads();
+        return;
+      }
       Promise.resolve(fetchAndRender(buildApiUrl(
         nextView,
         isLibraryHome ? {} : { omitSidebar: true },
@@ -51091,6 +51088,18 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     const canRestoreCachedClear = Boolean(clearScopeMatches && (
       !retainsSelectedArtist || mountedSelectedGalleryComplete
     ));
+    const currentRootGallery = !retainsSelectedArtist && clearScopeMatches
+      ? readCurrentRememberedRootGallery(reusableRootBrowseView)
+      : null;
+    if (currentRootGallery) {
+      state.ui.pendingSearchClearOnBlur = false;
+      showRememberedRootGallery(currentRootGallery);
+      releaseAlbumDetailPrewarmSearchSuspension(
+        Number(state.ui.albumDetailPrewarmSearchGeneration || 0),
+      );
+      releasePendingSearchWaveformPeakLoadSuspension();
+      return;
+    }
     if (
       canRestoreCachedClear
       && tryRestoreClearedSearchView(next, { reusableRootBrowseView })
@@ -51756,6 +51765,36 @@ function isMountedSelectedGalleryComplete(selectedArtist, reusableRootBrowseView
     && mountedAlbumCount === expectedAlbumCount;
 }
 
+// A remembered full gallery that no library change has outdated, so showing it needs no request.
+function readCurrentRememberedRootGallery(rootView) {
+  if (!rootView || rootView.initial_view_partial
+    || String(rootView.payload_tier || '').trim().toLowerCase() === 'sidebar') {
+    return null;
+  }
+  const rootRevision = Number(rootView.inventory_mutation_revision);
+  return Number.isSafeInteger(rootRevision)
+    && rootRevision === Number(state.status?.inventory_mutation_revision)
+    ? rootView
+    : null;
+}
+
+function showRememberedRootGallery(rootView, historyView = rootView) {
+  // This may send no request of its own, so an earlier gallery request (a search still
+  // loading) must not land on top of the gallery shown here.
+  state.ui.activeViewRequestController?.abort();
+  state.ui.viewStateRevision = Number(state.ui.viewStateRevision || 0) + 1;
+  state.gallery.sidebarArtistsOverride = null;
+  state.gallery.sidebarShowAllArtistsOverride = null;
+  applyViewPayload(rootView, { trackSidebarReveal: false });
+  pushBrowserViewState(historyView);
+  renderSidebar();
+  renderRelated();
+  renderLibraryLoader(state.status);
+  scheduleBrowserAnimationFrame(() => {
+    renderArtistGroups({ preserveScroll: true });
+  });
+}
+
 function tryRestoreClearedSearchView(nextView, options = {}) {
   const preserveHomeBrowseContext = Boolean(
     String(nextView?.surface?.active || '').trim().toLowerCase() === 'home'
@@ -51949,11 +51988,23 @@ function handleGalleryBootstrapFocusOut(event) {
   hideGalleryFocusGlow();
 }
 
-function handleGalleryBootstrapSearchBlur() {
+function handleGalleryBootstrapSearchBlur(event) {
   const input = document.getElementById('search-input');
   if (!input) return;
   closeRecentSearchPopover();
   state.ui.pendingSearchClearOnBlur = false;
+  // Desktop: clicking empty space outside an emptied search box applies the clear. Focus
+  // moving to a control (the search button, an artist, a card) leaves that control's own
+  // action in charge. Phones keep their own empty-search flow; dismissing the keyboard blurs.
+  if (
+    !event?.relatedTarget
+    && !(typeof usesMobilePageLayout === 'function' && usesMobilePageLayout())
+    && !String(state.ui.searchDraftQuery || '').trim()
+    && String(state.view?.query || '').trim()
+  ) {
+    scheduleGallerySearchCommit('', { immediate: true });
+    return;
+  }
   if (String(state.ui.searchDraftQuery || '') !== String(state.view?.query || '')) {
     releasePendingGallerySearchSuspensions();
   }

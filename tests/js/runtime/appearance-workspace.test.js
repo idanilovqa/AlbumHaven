@@ -249,7 +249,7 @@ test('Alerts is a durable aggregate section with three curated families', async 
 
 test('Alerts and Album page expose the approved live-preview contracts', () => {
   const alerts = appearance.alertsMarkup();
-  const album = appearance.albumPageMarkup();
+  const album = appearance.albumPageMarkup({ renderSourceGlyph: () => '', renderCoverBadge: () => '' });
   const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/appearance-backgrounds.css'), 'utf8');
 
   for (const family of ['ember', 'signal', 'quiet']) assert.match(alerts, new RegExp(`data-alert-family="${family}"`));
@@ -275,11 +275,49 @@ test('Alerts and Album page expose the approved live-preview contracts', () => {
   assert.match(album, /Album details unavailable/);
   assert.match(album, /Total Length: 1h 17m 13s/);
   assert.match(css, /\.appearance-album-layout-card/);
-  assert.match(css, /@media\s*\(max-width:\s*760px\)[\s\S]*\.appearance-album-page__workspace/);
+  assert.match(css, /@media\s*\(max-width:\s*760px\)[\s\S]*\.appearance-album-page__panel/);
   const activeTrackRule = css.match(/\.appearance-album-preview__track\.is-playing::after\s*\{([^}]*)\}/s)?.[1] || '';
   assert.match(activeTrackRule, /mask(?:-composite)?\s*:/, 'the animated spectrum is clipped to the active row perimeter');
   assert.doesNotMatch(activeTrackRule, /transform\s*:\s*rotate/, 'the preview must not rotate a rectangle across the table');
   assert.match(css, /@keyframes\s+appearance-track-spectrum\s*\{[^}]*--appearance-track-spectrum-angle/s);
+});
+
+test('Album page groups its switches into panels that each carry their own live preview (owner option B, 2026-11-18)', () => {
+  const glyphs = [];
+  const album = appearance.albumPageMarkup({
+    renderSourceGlyph: category => { glyphs.push(category); return `<svg data-test-glyph="${category}"></svg>`; },
+    renderCoverBadge: source => `<span class="track-modal-cover-source-badge is-${source}"></span>`,
+  });
+  const panels = album.split('class="appearance-album-page__panel"').slice(1);
+  assert.equal(panels.length, 3, 'Album Details, Library sources and Covers each get one panel');
+  for (const panel of panels) {
+    assert.match(panel, /class="appearance-album-page__controls"/);
+    assert.match(panel, /class="appearance-live-preview appearance-album-page__preview"/);
+    assert.ok(panel.indexOf('appearance-album-page__controls') < panel.indexOf('appearance-album-page__preview'), 'switches come before their preview');
+  }
+  assert.match(panels[0], /data-album-details-layout="classic_bar"/);
+  assert.match(panels[0], /data-album-playing-row-animation-switch/);
+  assert.match(panels[0], /data-album-page-live-preview/);
+  for (const field of ['card_colors', 'hover_outline_colors', 'icons']) assert.match(panels[1], new RegExp(`data-library-source-indicator="${field}"`));
+  assert.match(panels[1], /data-library-source-preview[^>]*aria-hidden="true"/);
+  for (const source of ['hoard', 'new_arrivals', 'main']) assert.match(panels[1], new RegExp(`data-library-source-sample="${source}"`));
+  assert.equal((panels[1].match(/data-library-source-sample-hover/g) || []).length, 1, 'one sample card shows the hover outline');
+  assert.deepEqual(glyphs, ['hoard', 'new_arrivals'], 'source icons come from the shared gallery glyphs; Main has none');
+  assert.match(panels[2], /data-library-source-indicator="local_cover_badges"/);
+  assert.match(panels[2], /data-cover-badge-preview[^>]*aria-hidden="true"/);
+  assert.match(panels[2], /data-cover-badge-sample="downloaded"[\s\S]*track-modal-cover-source-badge/);
+  assert.match(panels[2], /data-cover-badge-sample="local"[\s\S]*track-modal-cover-source-badge/);
+  assert.doesNotMatch(album, /appearance-album-page__workspace/, 'the single narrow switch column is gone');
+
+  const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/appearance-backgrounds.css'), 'utf8');
+  for (const selector of ['[data-card-colors="true"]', '[data-hover-outline-colors="true"]', '[data-icons="false"]', '[data-local-cover-badges="false"]']) {
+    assert.ok(css.includes(`.appearance-${selector.includes('local') ? 'cover-badge' : 'source'}-preview${selector}`), `${selector} drives its preview`);
+  }
+  const mobileCss = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/mobile-layout.css'), 'utf8');
+  assert.doesNotMatch(mobileCss, /appearance-album-page__preview/, 'phones show each preview under its switches (owner 2026-11-18)');
+  assert.match(mobileCss, /\.is-mobile-page :is\([^)]*\.appearance-album-page__panel[^)]*\) \{ grid-template-columns: minmax\(0, 1fr\) !important;/);
+  const galleryCss = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/gallery-main.css'), 'utf8');
+  assert.match(galleryCss, /\.album-card\[data-library-sources\],\s*\.appearance-source-preview \{[^}]*--library-source-hoard/, 'the preview shares the gallery source colors');
 });
 
 test('Main elements and Player & Seekbar keep their live previews visible while settings scroll', () => {
@@ -716,6 +754,7 @@ test('unsaved Appearance theme tokens apply only to the five live preview compon
   const source = fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/appearance-backgrounds.js'), 'utf8');
   assert.doesNotMatch(source, /applyDraftEditorTheme\(state\.draft, (?:editor|footerHost)\)/);
   assert.equal((source.match(/applyDraftEditorTheme\(state\.draft, preview\)/g) || []).length, 5);
+  assert.match(source, /for \(const sample of editor\.querySelectorAll\('\[data-album-page-sample\]'\)\) applyDraftEditorTheme\(state\.draft, sample\)/);
   assert.match(source, /const preview = find\('\[data-background-preview\]'\);\s*applyDraftEditorTheme\(state\.draft, preview\)/);
   assert.match(source, /const preview = find\('\[data-player-live-preview\]'\);\s*applyDraftEditorTheme\(state\.draft, preview\)/);
   assert.match(source, /const preview = find\('\.selection-hover-preview'\);\s*applyDraftEditorTheme\(state\.draft, preview\)/);

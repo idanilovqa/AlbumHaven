@@ -149,3 +149,104 @@ test('FTC-PLAYBACK-TAKEOVER-003 after a playing tab closes, one press on a song 
     await second.globalPlayerActions.pauseToReleasePlaybackClaim();
   });
 });
+
+// sandbox5 r13 (2026-11-19), twice at the same step: after a song played, navigating to another artist
+// and pressing Play on a song gave no audio for 30 s; the next song pressed played at once. The page
+// load left the playing page's claim waiting for a reload for 15 s, and the press was refused.
+test('FTC-PLAYBACK-NAV-001 play, open another artist in a new page load, and one press on a song plays it at once', {
+  tag: '@area:playback',
+}, async ({ page, galleryActions, globalPlayerActions, navigationPanelActions, playbackEvidence, stepLogger, trackModalActions }) => {
+  const OTHER_TITLE = 'Medium Cold Signal 07';
+  const OTHER_ARTIST = 'Neal Morse';
+  const PLAYS_WITHIN_MS = 5000;
+  const openAlbum = async () => {
+    await navigationPanelActions.selectSidebarArtistByName(ARTIST);
+    await navigationPanelActions.waitForSidebarSelection(ARTIST);
+    await galleryActions.clickAlbumDetailsByArtistAndAlbum(ARTIST, ALBUM);
+    await trackModalActions.waitForInteractiveSummary();
+  };
+  let otherPath = '';
+
+  await stepLogger.step('A song plays', async () => {
+    await galleryActions.goto();
+    await galleryActions.waitForGalleryReady();
+    await openAlbum();
+    const path = String(await trackModalActions.trackModal.trackRowByTitle(TITLE).getAttribute('data-track-row-path') || '');
+    otherPath = String(await trackModalActions.trackModal.trackRowByTitle(OTHER_TITLE).getAttribute('data-track-row-path') || '');
+    const mark = await playbackEvidence.playbackMark();
+    await trackModalActions.playTrackByTitle(TITLE);
+    const evidence = await playbackEvidence.waitForTrackPlaybackEvidence({ after: mark, path });
+    expect(evidence.nonZeroSamples).toBeGreaterThan(0);
+    await trackModalActions.close();
+    await globalPlayerActions.waitForPlaybackState({ paused: false, minimumCurrentTime: 3 });
+  });
+
+  await stepLogger.step('Another artist opens in a new page load; then one press on a song plays it at once', async () => {
+    await page.goto(`/?surface=albums&artist=${encodeURIComponent(OTHER_ARTIST)}&gallery_scope=all`);
+    await galleryActions.waitForGalleryReady();
+    await openAlbum();
+    const mark = await playbackEvidence.playbackMark();
+    const pressedAt = Date.now();
+    await trackModalActions.playTrackByTitle(OTHER_TITLE);
+    const evidence = await playbackEvidence.waitForTrackPlaybackEvidence({ after: mark, path: otherPath }, { timeout: PLAYS_WITHIN_MS });
+    expect(evidence.nonZeroSamples).toBeGreaterThan(0);
+    expect(evidence.renderedFrameDelta).toBeGreaterThan(0);
+    expect(Date.now() - pressedAt, 'the first press plays it').toBeLessThan(PLAYS_WITHIN_MS);
+    await trackModalActions.close();
+    const player = globalPlayerActions.globalPlayer;
+    await expect(player.title).toContainText(OTHER_TITLE);
+    await expect(player.playButton).toHaveAttribute('aria-label', 'Pause');
+    await expect(page.getByText('Playback is active in another tab.')).toHaveCount(0);
+    await globalPlayerActions.pauseToReleasePlaybackClaim();
+  });
+});
+
+// Owner, 2026-11-19, verbatim: "When I click play on a new song, in the player name of the song blinks
+// and return to the currently playing befoire changing again to the one that I started."
+test('FTC-PLAYBACK-TITLE-001 pressing another song while one plays never shows the playing song again once the pressed one shows', {
+  tag: '@area:playback',
+}, async ({ page, galleryActions, globalPlayerActions, navigationPanelActions, playbackEvidence, stepLogger, trackModalActions }) => {
+  const OTHER_TITLE = 'Medium Cold Signal 07';
+  const player = globalPlayerActions.globalPlayer;
+  const paths = {};
+
+  await stepLogger.step('A song plays', async () => {
+    await galleryActions.goto();
+    await galleryActions.waitForGalleryReady();
+    await navigationPanelActions.selectSidebarArtistByName(ARTIST);
+    await navigationPanelActions.waitForSidebarSelection(ARTIST);
+    await galleryActions.clickAlbumDetailsByArtistAndAlbum(ARTIST, ALBUM);
+    await trackModalActions.waitForInteractiveSummary();
+    for (const title of [TITLE, OTHER_TITLE]) {
+      paths[title] = String(await trackModalActions.trackModal.trackRowByTitle(title).getAttribute('data-track-row-path') || '');
+    }
+    const mark = await playbackEvidence.playbackMark();
+    await trackModalActions.playTrackByTitle(TITLE);
+    await playbackEvidence.waitForTrackPlaybackEvidence({ after: mark, path: paths[TITLE] });
+    await globalPlayerActions.waitForPlaybackState({ paused: false, minimumCurrentTime: 3 });
+    await expect(player.title).toContainText(TITLE);
+  });
+
+  await stepLogger.step('Read continuously from the press until the other song has played a second, the title never goes back', async () => {
+    // The visible title is read back to back, a few milliseconds apart: a flicker a listener sees
+    // lasts several frames, so it cannot fall between two reads.
+    const samples = [];
+    let sampling = true;
+    const sampler = (async () => {
+      while (sampling) samples.push(String(await player.title.textContent() || ''));
+    })();
+    const mark = await playbackEvidence.playbackMark();
+    await trackModalActions.playTrackByTitle(OTHER_TITLE);
+    const evidence = await playbackEvidence.waitForTrackPlaybackEvidence({ after: mark, path: paths[OTHER_TITLE] });
+    expect(evidence.nonZeroSamples).toBeGreaterThan(0);
+    await page.waitForTimeout(1000);
+    sampling = false;
+    await sampler;
+    expect(samples.length, 'read often enough to see a flicker').toBeGreaterThan(50);
+    const firstPressed = samples.findIndex((text) => text.includes(OTHER_TITLE));
+    expect(firstPressed, 'the pressed song shows').toBeGreaterThanOrEqual(0);
+    expect(samples.slice(firstPressed).filter((text) => !text.includes(OTHER_TITLE)), 'never the playing song again').toEqual([]);
+    await trackModalActions.close();
+    await globalPlayerActions.pauseToReleasePlaybackClaim();
+  });
+});

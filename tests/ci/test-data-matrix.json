@@ -57,6 +57,42 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/playbackTakeover.spec.js",
+    "case": "FTC-PLAYBACK-NAV-001 play, open another artist in a new page load, and one press on a song plays it at once",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 4,
+    "databaseScenarios": ["playback:page-load-then-first-press"],
+    "filesystemScenarios": ["audio-copy:playback-length-signals"],
+    "expectedContracts": ["page-load-claim-gives-way", "single-press-plays"],
+    "mutationOwnership": {
+      "databaseIdentity": "case:playback-page-load-press",
+      "filesystemCopy": "media/Playback Start Signals/Length And Repetition"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/playbackTakeover.spec.js",
+    "case": "FTC-PLAYBACK-TITLE-001 pressing another song while one plays never shows the playing song again once the pressed one shows",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 5,
+    "databaseScenarios": ["playback:press-another-song-title"],
+    "filesystemScenarios": ["audio-copy:playback-length-signals"],
+    "expectedContracts": ["pressed-title-never-reverts"],
+    "mutationOwnership": {
+      "databaseIdentity": "case:playback-title-steady",
+      "filesystemCopy": "media/Playback Start Signals/Length And Repetition"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/playbackTakeover.spec.js",
     "case": "FTC-PLAYBACK-TAKEOVER-003 after a playing tab closes, one press on a song in another browser plays it within seconds",
     "profile": "functional-core",
     "setupScope": "isolated",

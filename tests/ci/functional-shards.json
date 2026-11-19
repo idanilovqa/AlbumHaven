@@ -1267,6 +1267,13 @@
               "test": "tests/e2e/specs/playbackNetworkOutage.spec.js",
               "case": "FTC-PLAYBACK-OFFLINE-005 owner round 7 with the server answering 530 for a minute after Wi-Fi returns: a click in the received audio plays at once, the head never jumps to the start, the song plays on by itself when the server is back, one Play continues it, and one press plays another song",
               "area": "playback"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playbackTakeover.spec.js",
+              "case": "FTC-PLAYBACK-NAV-001 play, open another artist in a new page load, and one press on a song plays it at once",
+              "area": "playback"
             }
           ]
         },
@@ -1425,6 +1432,13 @@
               "project": "functional",
               "test": "tests/e2e/specs/playbackTakeover.spec.js",
               "case": "FTC-PLAYBACK-TAKEOVER-003 after a playing tab closes, one press on a song in another browser plays it within seconds",
+              "area": "playback"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playbackTakeover.spec.js",
+              "case": "FTC-PLAYBACK-TITLE-001 pressing another song while one plays never shows the playing song again once the pressed one shows",
               "area": "playback"
             }
           ]

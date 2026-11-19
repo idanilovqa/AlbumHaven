@@ -42,6 +42,8 @@ _QUEUED_LOCK = Lock()
 # After a failed pass, per database: no new pass before this monotonic time.
 _RETRY_NOT_BEFORE: dict[str, float] = {}
 RETRY_AFTER_FAILURE_SECONDS = 300
+# Databases whose first-page detail this process has already built once.
+_WARMED: set[str] = set()
 _UNAVAILABLE_DATABASES: set[str] = set()
 # Albums checked by a running backfill of this process, per database.
 _PROGRESS: dict[str, dict[str, int]] = {}
@@ -283,24 +285,28 @@ def refresh(repository: Any, *, inline_limit: int = INLINE_ALBUM_LIMIT) -> bool:
     if not _available(repository):
         return False
     try:
-        with repository._connect_to_database() as connection:
-            connection.autocommit = True
+        # The checks run on a pooled connection (a new one costs ~250 ms); only evaluating
+        # marked albums needs a connection of its own.
+        with repository._browse_connection_context() as connection:
             library_id = _library_id(connection)
-            if library_id is None:
-                return False
-            if _state(connection, library_id) != "ready":
-                queue_maintenance(repository)
-                return False
+            ready = library_id is not None and _state(connection, library_id) == "ready"
             marks = connection.execute(
                 """select album_id, marked_xid::text as marked_xid from library.problematic_index_dirty_albums
                    where library_id = %s limit %s""",
                 (library_id, inline_limit + 1),
-            ).fetchall()
-            if not marks:
-                return True
-            if len(marks) > inline_limit:
-                queue_maintenance(repository)
-                return True
+            ).fetchall() if ready else []
+        if library_id is None:
+            return False
+        if not ready:
+            queue_maintenance(repository)
+            return False
+        if not marks:
+            return True
+        if len(marks) > inline_limit:
+            queue_maintenance(repository)
+            return True
+        with repository._connect_to_database() as connection:
+            connection.autocommit = True
             if not _locked(connection, library_id):
                 return True  # another evaluator holds the marks; the index stays readable
             try:
@@ -406,8 +412,18 @@ def _maintain(repository: Any) -> None:
                     (library_id, BACKFILL_BATCH),
                 ).fetchall():
                     _drain(repository, connection, library_id, marks)
+                first = connection.execute(
+                    """select item_key from library.problematic_index_items where library_id = %s
+                       order by sort_name, sort_artist, sort_year, sort_key limit 1""",
+                    (library_id,),
+                ).fetchone()
             finally:
                 _unlock(connection, library_id)
+        # The first page opens on this album's detail: building it once per process warms the
+        # connection pool and alias maps a restarted server would otherwise pay on first open.
+        if first is not None and repository._database_url not in _WARMED:
+            _WARMED.add(repository._database_url)
+            repository.build_problematic_file_detail_payload(_value(first, "item_key"))
     except Exception:
         _LOGGER.warning("Problematic Files index maintenance failed; retrying in %d s.", RETRY_AFTER_FAILURE_SECONDS,
                         exc_info=True)
@@ -471,6 +487,25 @@ def read_page(repository: Any, *, limit: int | None, after: tuple[str, str, str,
         for row in rows
         if (item := _value(row, "item")) is not None
     ]
+
+
+def listed_as_missing(repository: Any, item_key: str, connection: Any) -> bool | None:
+    """Whether the index lists ``item_key`` as a missing album; None when it cannot say."""
+    if not _available(repository):
+        return None
+    try:
+        row = connection.execute(
+            f"""select item -> 'problem_reasons' ? 'Album not found' as missing
+                from library.problematic_index_items
+                where library_id = ({_LIBRARY_SQL}) and item_key = %s""",
+            (item_key,),
+        ).fetchone()
+    except Exception as error:
+        if _is_undefined_table(error):
+            _UNAVAILABLE_DATABASES.add(repository._database_url)
+            return None
+        raise
+    return None if row is None else bool(_value(row, "missing"))
 
 
 def loose_group_detail(repository: Any, item_key: str) -> dict[str, object] | None:

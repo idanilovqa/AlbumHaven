@@ -3379,23 +3379,33 @@ class PostgresLibraryBrowseRepository:
             indexed = problematic_index.loose_group_detail(self, normalized_album_key)
             if indexed is not None:
                 return indexed
-        missing_albums = _missing_album_projection_payloads(
-            self._load_missing_album_rows(album_key=normalized_album_key)
-        )
-        if missing_albums:
-            return _problematic_album_detail_payload(missing_albums[0])
-        albums = _problematic_album_projection_payloads(
-            self._load_problematic_file_rows(album_key=normalized_album_key)
-        )
-        requested_keys = set(_problematic_album_key_candidates(normalized_album_key))
-        for album in albums:
-            if str(album.get("key") or "") not in requested_keys:
-                continue
-            album["_suggestion_aliases"] = self._load_relation_alias_maps().get("alias_to_canonical", {})
-            detail = _problematic_album_detail_payload(album)
-            if detail is not None:
+        # One pooled connection for every read (each new connection cost ~250 ms); an album
+        # the index lists as present skips the missing-album query (~225 ms on a real library).
+        with self._browse_connection_context() as connection:
+            listed_missing = problematic_index.listed_as_missing(self, normalized_album_key, connection)
+
+            def missing_detail() -> dict[str, object] | None:
+                missing_albums = _missing_album_projection_payloads(
+                    self._load_missing_album_rows(album_key=normalized_album_key, connection=connection)
+                )
+                return _problematic_album_detail_payload(missing_albums[0]) if missing_albums else None
+
+            if listed_missing is not False and (detail := missing_detail()) is not None:
                 return detail
-        return None
+            albums = _problematic_album_projection_payloads(
+                self._load_problematic_file_rows(album_key=normalized_album_key, connection=connection)
+            )
+            requested_keys = set(_problematic_album_key_candidates(normalized_album_key))
+            for album in albums:
+                if str(album.get("key") or "") not in requested_keys:
+                    continue
+                album["_suggestion_aliases"] = self._load_relation_alias_maps(
+                    connection=connection,
+                ).get("alias_to_canonical", {})
+                detail = _problematic_album_detail_payload(album)
+                if detail is not None:
+                    return detail
+            return missing_detail() if listed_missing is False else None
 
     def build_problem_suggestion_entries_by_paths(self, track_paths: set[str]) -> dict[str, dict[str, object]]:
         """Read original inventory tags, without presentation fallbacks, in this library."""

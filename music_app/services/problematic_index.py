@@ -161,10 +161,15 @@ def _index_rows(repository: Any, connection: Any, library_id: int, album_ids: li
     identities_by_album = {int(_value(row, "album_id")): list(_value(row, "identities") or []) for row in scope}
     album_keys = [str(key) for row in scope if (key := _value(row, "album_key"))]
     existing_ids = [album_id for row in scope if _value(row, "album_key") and (album_id := int(_value(row, "album_id")))]
-    rows = (
-        repository._load_problematic_file_rows(connection=connection, album_ids=existing_ids)
-        if existing_ids else []
-    )
+    rows = [
+        # An album emptied by a move or rename keeps its row without tracks; the list
+        # never shows it (only missing albums are listed without files, from their own rows).
+        row for row in (
+            repository._load_problematic_file_rows(connection=connection, album_ids=existing_ids)
+            if existing_ids else []
+        )
+        if _value(row, "track_id") is not None
+    ]
     if include_loose:
         rows = [*rows, *repository._load_problematic_loose_file_rows(connection=connection, limit=None)]
     missing_rows = (

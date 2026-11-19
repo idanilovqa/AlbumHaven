@@ -1080,10 +1080,112 @@ def test_live_problematic_index_reads_pages_and_search_without_the_whole_library
         "ALBUM_HAVEN_APP_DATABASE_URL": database_url, "ALBUM_HAVEN_PROBLEMATIC_INDEX_ENABLED": "1",
     }).build_problematic_files_page(limit=3)
     assert page["projection_cache_status"] == "indexed"
-    assert page["items"][0]["key"] == "index-new::album"
+    with psycopg.connect(database_url) as connection:
+        marks = connection.execute("select album_id from library.problematic_index_dirty_albums").fetchall()
+        indexed_keys = [row[0] for row in connection.execute(
+            "select item_key from library.problematic_index_items order by sort_name, sort_artist, sort_year, sort_key")]
+    assert page["items"][0]["key"] == "index-new::album", (page["items"][0], marks, indexed_keys)
     after = {item["key"]: item for item in _indexed_problematic_items(database_url, limit=3)}
     assert "index-new::album" in after and second_key not in after
     # The renamed album was evaluated again: gone, or listed under its new title.
     assert first_key not in after or after[first_key]["name"] == "Plain Title"
     assert [item["key"] for item in _indexed_problematic_items(
         database_url, needle=f"{_MOJIBAKE_TITLE} -01".lower())] == ["index-new::album"]
+
+
+def _indexed_by_name(database_url):
+    return {item["name"]: item for item in _indexed_problematic_items(database_url, limit=50)}
+
+
+def _watcher_pass(fixture, *, active=(), deleted=()):
+    """What a watcher pass writes and runs after its commit."""
+    from music_app.services.state import invalidate_targeted_library_projections
+
+    fixture.adapter.persist_targeted_inventory_mutation(
+        root_id="repair-main",
+        active_file_entries={entry["path"]: entry for entry in active},
+        deleted_paths=tuple(deleted),
+    )
+    invalidate_targeted_library_projections(
+        fixture.config, track_paths=[entry["path"] for entry in active] + list(deleted))
+
+
+def _no_whole_library_pass(monkeypatch):
+    from music_app.services import library_browse_postgres as browse
+
+    for name in ("_problematic_candidate_album_ids", "_load_problematic_candidate_ids"):
+        monkeypatch.setattr(browse.PostgresLibraryBrowseRepository, name,
+                            lambda *_args, **_kwargs: pytest.fail("the whole-library candidate pass must not run"))
+
+
+def test_live_problematic_index_follows_watcher_additions_removals_and_fixes(watcher_repair_inventory, monkeypatch):
+    """Owner (11-19): files added to or removed from the library, and problems fixed on disk,
+    reach Problematic Files on the fly through the watcher, never through a full build."""
+    fixture = watcher_repair_inventory
+    database_url = fixture.config["ALBUM_HAVEN_APP_DATABASE_URL"]
+    clean = fixture.entry("Owner/Clean/01.flac", album="Clean Album")
+    fixture.seed(clean)
+    _ready_problematic_index(database_url)
+    assert "Clean Album" not in _indexed_by_name(database_url)
+    _no_whole_library_pass(monkeypatch)
+
+    # 1. The watcher finds a new album with a problem (no year).
+    added = {**fixture.entry("Owner/Added/01.flac", album="Added Album"), "year": None}
+    _watcher_pass(fixture, active=[added])
+    listed = _indexed_by_name(database_url)
+    assert "Missing year" in listed["Added Album"]["problem_reasons"]
+
+    # 3. The problem is fixed on disk (the year is written) and the watcher sees the file again.
+    _watcher_pass(fixture, active=[{**added, "year": 2026}])
+    assert "Added Album" not in _indexed_by_name(database_url)
+
+    # 2. A problematic album's files are removed: it leaves the list or is listed as not found.
+    removed = {**fixture.entry("Owner/Removed/01.flac", album="Removed Album"), "year": None}
+    _watcher_pass(fixture, active=[removed])
+    assert "Removed Album" in _indexed_by_name(database_url)
+    _watcher_pass(fixture, deleted=[removed["path"]])
+    after_removal = _indexed_by_name(database_url).get("Removed Album")
+    assert after_removal is None or after_removal["problem_reasons"] == ["Album not found"]
+    assert _as_served(_indexed_problematic_items(database_url)) == _as_served(
+        _complete_problematic_list(fixture.config, rebuild=True)[1])
+
+
+def test_live_problematic_index_takes_a_large_watcher_batch_in_the_background(watcher_repair_inventory, monkeypatch):
+    """A folder of many albums is evaluated in the background: neither the watcher pass,
+    a save nor a Problematic Files read waits for it."""
+    from music_app.services import problematic_index
+    from tests.e2e.support import isolatedPostgres
+
+    fixture = watcher_repair_inventory
+    database_url = fixture.config["ALBUM_HAVEN_APP_DATABASE_URL"]
+    fixture.seed(fixture.entry("Owner/Clean/01.flac", album="Clean Album"))
+    _ready_problematic_index(database_url)
+    _no_whole_library_pass(monkeypatch)
+    batch = [{**fixture.entry(f"Owner/Batch {index:03d}/01.flac", album=f"Batch {index:03d}"), "year": None}
+             for index in range(problematic_index.INLINE_ALBUM_LIMIT + 10)]
+
+    # The maintainer is busy (its lock is held): writers never wait for it.
+    with isolatedPostgres._connect(database_url) as holder:
+        holder.autocommit = True
+        library_id = holder.execute("select id from library.libraries where library_kind = 'local' limit 1").fetchone()["id"]
+        holder.execute("select pg_advisory_lock(%s, %s::integer)", (problematic_index._LOCK_NAMESPACE, library_id))
+        started = time.perf_counter()
+        _watcher_pass(fixture, active=batch)
+        saved = {**batch[0], "album": "Batch Renamed"}
+        fixture.adapter.persist_structural_tag_edit(
+            changed_paths={saved["path"]}, previous_file_entries={saved["path"]: batch[0]},
+            updated_file_entries={saved["path"]: saved}, changed_field_names={"album"},
+        )
+        _indexed_problematic_items(database_url, limit=50)
+        elapsed = time.perf_counter() - started
+        holder.execute("select pg_advisory_unlock(%s, %s::integer)", (problematic_index._LOCK_NAMESPACE, library_id))
+    assert elapsed < 30, f"The watcher pass, a save and a read waited for the index ({elapsed:.1f} s)."
+
+    problematic_index.queue_maintenance(problematic_index._browse().PostgresLibraryBrowseRepository({
+        "ALBUM_HAVEN_APP_DATABASE_URL": database_url, "ALBUM_HAVEN_PROBLEMATIC_INDEX_ENABLED": "1"}))
+    problematic_index.wait_for_background_work()
+    listed = _indexed_by_name(database_url)
+    assert {f"Batch {index:03d}" for index in range(1, len(batch))} <= set(listed)
+    assert "Batch Renamed" in listed and "Batch 000" not in listed
+    assert _as_served(_indexed_problematic_items(database_url)) == _as_served(
+        _complete_problematic_list(fixture.config, rebuild=True)[1])

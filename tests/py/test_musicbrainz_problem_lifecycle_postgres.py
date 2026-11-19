@@ -1161,7 +1161,7 @@ def test_a_split_name_s_context_carries_relative_folders_and_stores_recordings_a
     path, and an owner's choice stays."""
     setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
     library_id, artist_id = _seed_present_artist(setup_url, "split")
-    root = "C:\Music Library"
+    root = r"C:\Music Library"
     with isolatedPostgres._connect(setup_url) as connection:
         root_id = connection.execute(
             "insert into library.library_roots (library_id, root_path) values (%s, %s) returning id",
@@ -1175,14 +1175,14 @@ def test_a_split_name_s_context_carries_relative_folders_and_stores_recordings_a
             connection.execute(
                 "insert into library.local_tracks (library_id, album_id, artist_id, track_key, title, metadata)"
                 " values (%s, %s, %s, %s, 'Track', '{}'::jsonb)", (library_id, albums[key], artist_id, f"{key}-track"))
-        folders = {"split-album": "Axxis DE\Kingdom of the Night", "split-live": "Axxis DE\Bootleg Live\CD1",
-                   "split-demo": "Axxis Trance\Old Demo"}
+        folders = {"split-album": r"Axxis DE\Kingdom of the Night", "split-live": r"Axxis DE\Bootleg Live\CD1",
+                   "split-demo": r"Axxis Trance\Old Demo"}
         for key, folder in folders.items():
             connection.execute(
                 "insert into library.local_track_files (track_id, private_path, library_root_id, metadata)"
                 " select tracks.id, %s, %s, '{}'::jsonb from library.local_tracks tracks"
                 " where tracks.album_id = %s",
-                (f"{root}\{folder}\01 - Track.mp3", root_id, albums[key]))
+                (rf"{root}\{folder}\01 - Track.mp3", root_id, albums[key]))
         connection.execute(
             "insert into integration.musicbrainz_artists (mbid, canonical_name, refreshed_at) values (%s, 'Axxis', %s)",
             (GERMAN, NOW))
@@ -1232,7 +1232,7 @@ def test_a_split_name_s_context_carries_relative_folders_and_stores_recordings_a
         evidence_summary="Your albums belong to 2 MusicBrainz artists.",
         identity_artists=[{"mbid": GERMAN, "canonical_name": "Axxis"}, {"mbid": TRANCE, "canonical_name": "Axxis"}],
         album_identities=[{"local_album_id": albums["split-live"], "artist_mbid": GERMAN, "method": "folder",
-                           "folder": "C:\Music Library\Axxis DE"}])
+                           "folder": r"C:\Music Library\Axxis DE"}])
     with isolatedPostgres._connect(setup_url) as connection:
         evidence = connection.execute(
             "select evidence from library.local_album_artist_identities where album_key = 'split-live'").fetchone()["evidence"]

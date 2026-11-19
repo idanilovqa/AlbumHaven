@@ -3,6 +3,7 @@
   "requiredPaths": [
     "music_app/services/runtime_asset_versions.py",
     "music_app/services/compressed_static_files.py",
+    "music_app/services/http_compression.py",
     "music_app/services/app_copy.py",
     "music_app/static/js/app-copy.js",
     "music_app/static/js/app-copy-worker.js",
@@ -125,6 +126,7 @@
         "music_app/services/library_browse_postgres.py",
         "migrations/postgres/0192_create_musicbrainz_album_credits_and_artist_groups.sql",
         "music_app/services/track_transliteration.py",
+        "music_app/services/http_compression.py",
         "music_app/services/non_album_view_payloads.py",
         "music_app/services/selected_artist_membership.py",
         "music_app/services/view_payloads.py",
@@ -244,6 +246,7 @@
     {
       "paths": [
         "music_app/services/library_browse_postgres.py",
+        "music_app/services/http_compression.py",
         "music_app/services/problematic_albums.py",
         "migrations/postgres/0112_add_problematic_file_path_projection.sql",
         "music_app/routes/api_problematic_albums.py",

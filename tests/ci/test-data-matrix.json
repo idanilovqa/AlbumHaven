@@ -11234,7 +11234,7 @@
     "mutationOwnership": {
       "databaseIdentity": "case:ftc-tags-031p"
     },
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.synthetic-large-library.config.cjs",
@@ -11260,7 +11260,7 @@
     "mutationOwnership": {
       "databaseIdentity": "case:ftc-tags-032p"
     },
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.synthetic-large-library.config.cjs",

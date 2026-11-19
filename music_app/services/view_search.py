@@ -60,7 +60,13 @@ def split_search_terms(value: str) -> list[str]:
 
 
 def compact_search_key(value: str) -> str:
-    return re.sub(r"[\W_]+", "", str(value or "").casefold(), flags=re.UNICODE)
+    return _compact_search_string(str(value or ""))
+
+
+# Every substring miss compacts the field: a searched Loose Tracks pass made ~10k of these regex calls.
+@lru_cache(maxsize=131072)
+def _compact_search_string(value: str) -> str:
+    return _SEARCH_PUNCT_RE.sub("", value.casefold())
 
 
 def _iter_source_text_variants(source: object) -> list[str]:
@@ -413,6 +419,24 @@ def search_terms_match_fields(terms: list[str], fields: list[str]) -> bool:
     if not terms or not normalized_fields:
         return False
     return all(any(search_term_matches_field(term, field) for field in normalized_fields) for term in terms)
+
+
+_SEARCH_HAYSTACK_SEPARATOR = "\x1f"
+
+
+@lru_cache(maxsize=65536)
+def search_haystack(values: tuple[str, ...]) -> str:
+    """The values' compact keys in one string, built once per distinct values. A normalised term is found in a
+    normalised field exactly when its compact key is in the field's compact key, and no compact key holds the
+    separator, so search_haystack_matches_terms gives search_terms_match_fields' answer with one substring test."""
+    keys = (compact_search_key(normalize_search_text(value)) for value in values)
+    return _SEARCH_HAYSTACK_SEPARATOR.join(key for key in keys if key)
+
+
+def search_haystack_matches_terms(terms: list[str], haystack: str) -> bool:
+    return bool(terms and haystack) and all(
+        (key := compact_search_key(term)) and key in haystack for term in terms
+    )
 
 
 def artist_match_rank(query: str, canonical_artist: str, aliases: set[str]) -> tuple[int, int, str]:

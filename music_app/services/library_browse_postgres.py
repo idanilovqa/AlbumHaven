@@ -113,6 +113,9 @@ _UTILITY_PROJECTION_PREWARM_INFLIGHT: set[tuple[str, str]] = set()
 _UTILITY_PROJECTION_SINGLEFLIGHT: dict[tuple[str, str], Event] = {}
 _UTILITY_PROJECTION_GENERATIONS: dict[tuple[str, str], int] = {}
 _SEARCH_UTF8_FALLBACK_DATABASES: set[str] = set()
+# The decoded stored Loose Tracks list per database, keyed by the row's built_at: each searched
+# catalog and Loose Tracks request re-read and decoded the whole list (1 MB for 814 tracks).
+_NON_ALBUM_TRACK_SNAPSHOT_CACHE: dict[str, tuple[object, object, tuple[dict[str, object], ...]]] = {}
 _UTILITY_PROJECTION_PREWARM_EXECUTOR = create_daemon_executor(
     max_workers=1,
     thread_name_prefix="albumhaven-postgres-utility-prewarm",
@@ -700,16 +703,27 @@ class PostgresLibraryBrowseRepository:
             }
 
     def _load_non_album_track_snapshot(self, connection: Any) -> list[dict[str, object]] | None:
-        row = connection.execute(_non_album_track_snapshot_load_sql()).fetchone()
-        payload = _row_mapping(row).get("payload")
-        if isinstance(payload, str):
-            payload = json.loads(payload)
-        if not isinstance(payload, Mapping):
+        built_at = _row_mapping(connection.execute(_non_album_track_snapshot_built_at_sql()).fetchone()).get("built_at")
+        with _UTILITY_PROJECTION_CACHE_LOCK:
+            cached = _NON_ALBUM_TRACK_SNAPSHOT_CACHE.get(self._database_url)
+        if built_at is None or cached is None or cached[0] != built_at:
+            row = _row_mapping(connection.execute(_non_album_track_snapshot_load_sql()).fetchone())
+            payload = row.get("payload")
+            if isinstance(payload, str):
+                payload = json.loads(payload)
+            tracks = payload.get("tracks") if isinstance(payload, Mapping) else None
+            if not isinstance(tracks, list):
+                return None
+            cached = (row.get("built_at"), payload.get(_SNAPSHOT_FINGERPRINT_KEY), tuple(tracks))
+            with _UTILITY_PROJECTION_CACHE_LOCK:
+                _NON_ALBUM_TRACK_SNAPSHOT_CACHE[self._database_url] = cached
+        if cached[1] != _non_album_inventory_fingerprint(connection):
             return None
-        if payload.get(_SNAPSHOT_FINGERPRINT_KEY) != _non_album_inventory_fingerprint(connection):
-            return None
-        tracks = payload.get("tracks")
-        return [dict(track) for track in tracks] if isinstance(tracks, list) else None
+        # Callers enrich their tracks: each gets its own dicts, and its own nested track_stats.
+        return [
+            {key: dict(value) if isinstance(value, dict) else value for key, value in track.items()}
+            for track in cached[2]
+        ]
 
     def _store_non_album_track_snapshot(
         self,
@@ -4402,7 +4416,7 @@ def _non_album_entry_is_in_artist_scope(
 def _filter_loose_tracks_by_query(tracks: list[dict[str, object]], query: object) -> list[dict[str, object]]:
     """A search's library-wide Loose Tracks: the stored list filtered by the search route's loose-track rule
     (artist, album, title, year, exception type, path), plus the Custom Collection name."""
-    from music_app.services.view_search import normalize_search_text, search_terms_match_fields, split_search_terms
+    from music_app.services.view_search import search_haystack, search_haystack_matches_terms, split_search_terms
 
     query_terms = split_search_terms(str(query or ""))
     if not query_terms:
@@ -4414,13 +4428,13 @@ def _filter_loose_tracks_by_query(tracks: list[dict[str, object]], query: object
         "exception_type", "custom_collection_name",
     )
 
-    def search_fields(track: dict[str, object]) -> list[str]:
-        values = [str(track.get(field) or "") for field in fields]
+    def haystack(track: dict[str, object]) -> str:
         # Without the drive letter: a one-letter "d" word would match every search starting with "d".
-        values.append(ntpath.splitdrive(str(track.get("path") or ""))[1])
-        return [normalize_search_text(value) for value in values if value.strip()]
+        return search_haystack(
+            (*(str(track.get(field) or "") for field in fields), ntpath.splitdrive(str(track.get("path") or ""))[1])
+        )
 
-    return [track for track in tracks if search_terms_match_fields(query_terms, search_fields(track))]
+    return [track for track in tracks if search_haystack_matches_terms(query_terms, haystack(track))]
 
 
 def _filter_non_album_snapshot_tracks(
@@ -6793,7 +6807,15 @@ _NON_ALBUM_SNAPSHOT_LIBRARY_SQL = """
 
 def _non_album_track_snapshot_load_sql() -> str:
     return f"""
-        select snapshots.payload
+        select snapshots.payload, snapshots.built_at
+        from library.non_album_track_snapshots snapshots
+        where snapshots.library_id = ({_NON_ALBUM_SNAPSHOT_LIBRARY_SQL})
+    """
+
+
+def _non_album_track_snapshot_built_at_sql() -> str:
+    return f"""
+        select snapshots.built_at
         from library.non_album_track_snapshots snapshots
         where snapshots.library_id = ({_NON_ALBUM_SNAPSHOT_LIBRARY_SQL})
     """
@@ -9116,25 +9138,7 @@ def _visible_album_clause(album_ref: str) -> str:
     """.strip()
 
 
-def _eligible_album_tracks_cte_sql(
-    *,
-    materialized: bool = True,
-    candidate_albums_only: bool = False,
-    include_track_override_defaults: bool = True,
-    aggregate_tracks: bool = True,
-) -> str:
-    materialization = "materialized" if materialized else "not materialized"
-    candidate_album_join = (
-        """
-          join search_candidate_album_ids
-            on search_candidate_album_ids.library_id = library.local_tracks.library_id
-           and search_candidate_album_ids.album_id = library.local_tracks.album_id
-        """.rstrip()
-        if candidate_albums_only
-        else ""
-    )
-    track_override_defaults = (
-        """
+_TRACK_OVERRIDE_DEFAULTS_CTE_SQL = """
         track_override_defaults as materialized (
           select distinct on (
             library.exception_overrides.library_id,
@@ -9150,9 +9154,48 @@ def _eligible_album_tracks_cte_sql(
             library.exception_overrides.track_id,
             library.exception_overrides.id
         ),
+"""
+_TRACK_OVERRIDE_DEFAULTS_JOIN_SQL = """
+          left join track_override_defaults as track_override
+            on track_override.library_id = library.local_tracks.library_id
+           and track_override.track_id = library.local_tracks.id
+           and path_override.id is null
+"""
+# The lowest-id override of the track, as track_override_defaults keeps it; one index probe per track
+# (owner 2026-11-18 "fields" search: a merge join on library_id alone compared 1,428 tracks with every override).
+_TRACK_OVERRIDE_LOOKUP_JOIN_SQL = """
+          left join lateral (
+            select first_track_override.override_payload
+            from library.exception_overrides as first_track_override
+            where first_track_override.library_id = library.local_tracks.library_id
+              and first_track_override.track_id = library.local_tracks.id
+            order by first_track_override.id
+            limit 1
+          ) as track_override on path_override.id is null
+"""
+
+
+def _eligible_album_tracks_cte_sql(
+    *,
+    materialized: bool = True,
+    candidate_albums_only: bool = False,
+    aggregate_tracks: bool = True,
+) -> str:
+    materialization = "materialized" if materialized else "not materialized"
+    candidate_album_join = (
         """
-        if include_track_override_defaults
+          join search_candidate_album_ids
+            on search_candidate_album_ids.library_id = library.local_tracks.library_id
+           and search_candidate_album_ids.album_id = library.local_tracks.album_id
+        """.rstrip()
+        if candidate_albums_only
         else ""
+    )
+    # A candidate-bounded set looks each track's override up by index; a whole-library pass
+    # hashes the one-per-track override table instead of probing it per track.
+    track_override_defaults = "" if candidate_albums_only else _TRACK_OVERRIDE_DEFAULTS_CTE_SQL
+    track_override_join = (
+        _TRACK_OVERRIDE_LOOKUP_JOIN_SQL if candidate_albums_only else _TRACK_OVERRIDE_DEFAULTS_JOIN_SQL
     )
     duration_column = ", max(library.local_tracks.duration_seconds) as duration_seconds" if aggregate_tracks else ""
     track_grouping = """
@@ -9193,10 +9236,7 @@ def _eligible_album_tracks_cte_sql(
           left join library.exception_overrides as path_override
             on path_override.library_id = library.local_tracks.library_id
            and path_override.track_key = library.local_track_files.private_path
-          left join track_override_defaults as track_override
-            on track_override.library_id = library.local_tracks.library_id
-           and track_override.track_id = library.local_tracks.id
-           and path_override.id is null
+{track_override_join}
           where lower(btrim(coalesce(
             case
               when path_override.override_payload ? 'exception_type'
@@ -10623,21 +10663,6 @@ def _selected_artist_preview_sql(
             library.local_albums.id as album_id
           {candidate_album_source_sql}
         ),
-        track_override_defaults as materialized (
-          select distinct on (
-            library.exception_overrides.library_id,
-            library.exception_overrides.track_id
-          )
-            library.exception_overrides.library_id,
-            library.exception_overrides.track_id,
-            library.exception_overrides.override_payload
-          from library.exception_overrides
-          where library.exception_overrides.track_id is not null
-          order by
-            library.exception_overrides.library_id,
-            library.exception_overrides.track_id,
-            library.exception_overrides.id
-        ),
         eligible_preview_album_ids as materialized (
           select distinct
             library.local_tracks.library_id,
@@ -10652,10 +10677,7 @@ def _selected_artist_preview_sql(
           left join library.exception_overrides as path_override
             on path_override.library_id = library.local_tracks.library_id
            and path_override.track_key = library.local_track_files.private_path
-          left join track_override_defaults as track_override
-            on track_override.library_id = library.local_tracks.library_id
-           and track_override.track_id = library.local_tracks.id
-           and path_override.id is null
+{_TRACK_OVERRIDE_LOOKUP_JOIN_SQL}
           where lower(btrim(coalesce(
             case
               when path_override.override_payload ? 'exception_type'
@@ -10674,7 +10696,6 @@ def _selected_artist_preview_sql(
         ),
         {_eligible_album_tracks_cte_sql(
             candidate_albums_only=True,
-            include_track_override_defaults=False,
         )},
         matched_album_rows as (
           select distinct
@@ -10887,21 +10908,6 @@ def _search_preview_sql(
     )
     preview_eligibility_sql = (
         f"""
-        track_override_defaults as materialized (
-          select distinct on (
-            library.exception_overrides.library_id,
-            library.exception_overrides.track_id
-          )
-            library.exception_overrides.library_id,
-            library.exception_overrides.track_id,
-            library.exception_overrides.override_payload
-          from library.exception_overrides
-          where library.exception_overrides.track_id is not null
-          order by
-            library.exception_overrides.library_id,
-            library.exception_overrides.track_id,
-            library.exception_overrides.id
-        ),
         eligible_preview_album_ids as materialized (
           select distinct
             library.local_tracks.library_id,
@@ -10916,10 +10922,7 @@ def _search_preview_sql(
           left join library.exception_overrides as path_override
             on path_override.library_id = library.local_tracks.library_id
            and path_override.track_key = library.local_track_files.private_path
-          left join track_override_defaults as track_override
-            on track_override.library_id = library.local_tracks.library_id
-           and track_override.track_id = library.local_tracks.id
-           and path_override.id is null
+{_TRACK_OVERRIDE_LOOKUP_JOIN_SQL}
           where lower(btrim(coalesce(
             case
               when path_override.override_payload ? 'exception_type'
@@ -11102,22 +11105,14 @@ def _search_preview_sql(
         ),
         {_eligible_album_tracks_cte_sql(
             candidate_albums_only=True,
-            include_track_override_defaults=not normalized_limit,
         )},
+        -- Eligible tracks only come from visible search candidates of this library, so their
+        -- albums need no second visibility check (one album lookup per track before).
         visible_album_ids as materialized (
           select distinct
-            library.local_albums.library_id,
-            library.local_albums.id as album_id
-          from search_candidate_album_ids
-          join library.local_albums
-            on library.local_albums.library_id = search_candidate_album_ids.library_id
-           and library.local_albums.id = search_candidate_album_ids.album_id
-          join bootstrap_context
-            on bootstrap_context.library_id = library.local_albums.library_id
-          join eligible_album_tracks
-            on eligible_album_tracks.library_id = library.local_albums.library_id
-           and eligible_album_tracks.album_id = library.local_albums.id
-          where ({_visible_album_clause("library.local_albums")})
+            eligible_album_tracks.library_id,
+            eligible_album_tracks.album_id
+          from eligible_album_tracks
         ),
         eligible_matched_track_album_ids as materialized (
           select distinct
@@ -11157,11 +11152,10 @@ def _search_preview_sql(
             on visible_album_ids.library_id = credited_raw_artist_matches.library_id
            and visible_album_ids.album_id = credited_raw_artist_matches.album_id
           union
+          -- Already visible: an eligible track belongs to a visible search candidate. Joining
+          -- visible_album_ids again compared every pair of the two lists ("love": 2.8 M pairs).
           select eligible_matched_track_album_ids.album_id
           from eligible_matched_track_album_ids
-          join visible_album_ids
-            on visible_album_ids.library_id = eligible_matched_track_album_ids.library_id
-           and visible_album_ids.album_id = eligible_matched_track_album_ids.album_id
         ),
         matched_album_rows as (
           select

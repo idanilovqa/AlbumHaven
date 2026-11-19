@@ -660,3 +660,34 @@ def test_search_is_literal_everywhere_with_no_close_spellings():
     assert search_term_matches_field("dragonland", "dragonlands") is True
     assert search_term_matches_field("acdc", "ac dc") is True
     assert artist_match_rank("denin", "Devin Townsend", set())[0] == 5
+
+
+def test_search_haystack_gives_the_literal_field_rule_answer_with_one_substring_test():
+    # A searched Loose Tracks list builds each track's compact keys once; the answer must stay the literal rule's.
+    from music_app.services.view_search import (
+        normalize_search_text,
+        search_haystack,
+        search_haystack_matches_terms,
+    )
+
+    field_sets = [
+        ("AC/DC", "Back in Black", "1980"),
+        ("Dragonland", "Live", ""),
+        ("Женя машина", "Lambada", "Custom Collection"),
+        ("Pink-Floyd", "The Wall", "/Music/Loose/O'Neil - Track.flac"),
+        ("Café Tacvba", "Ré", "Non-Album Rarity"),
+        ("", "  ", "__"),
+    ]
+    queries = [
+        "acdc", "ac/dc", "AC DC", "dragonland live", "dragonland - live", "dragonlands", "live, black",
+        "машина", "женя машина", "pink floyd", "pinkfloyd", "oneil", "o'neil", "cafe", "café", "re",
+        "rarity", "non album", "1980", "d", "zzz", "wall the",
+    ]
+    for fields in field_sets:
+        haystack = search_haystack(fields)
+        normalized_fields = [normalize_search_text(field) for field in fields if field.strip()]
+        for query in queries:
+            terms = split_search_terms(query)
+            assert search_haystack_matches_terms(terms, haystack) is search_terms_match_fields(
+                terms, normalized_fields
+            ), (fields, query)

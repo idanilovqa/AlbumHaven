@@ -1243,6 +1243,43 @@ def test_live_search_missing_partition_is_scoped_to_bootstrap_library(
     assert rows.missing_album_rows == []
 
 
+def test_live_search_uses_each_tracks_lowest_id_override_unless_its_path_has_one(watcher_repair_inventory):
+    # The search's per-track override lookup must keep the precedence of the one-per-track table it replaced:
+    # a path override wins; otherwise the lowest-id track override decides, and one without a type defers
+    # to the file's own classification.
+    from psycopg.types.json import Jsonb
+
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+    from tests.e2e.support import isolatedPostgres
+
+    fixture = watcher_repair_inventory
+    kept = [fixture.entry(f"Owner/Needle Kept/{n}.flac", album="Needle Kept") for n in (1, 2)]
+    path_wins = fixture.entry("Owner/Needle Path/1.flac", album="Needle Path")
+    interview = fixture.entry("Owner/Needle Interview/1.flac", album="Needle Interview")
+    fixture.seed(*kept, path_wins, interview)
+    overrides = (  # in id order
+        (kept[1], {"custom_collection_name": ""}, False),  # lowest id has no type: the file decides
+        (kept[1], {"exception_type": "Interview"}, False),
+        (interview, {"exception_type": "Interview"}, False),
+        (interview, {"exception_type": None}, False),
+        (path_wins, {"exception_type": "Interview"}, False),
+        (path_wins, {"exception_type": None}, True),
+    )
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        for number, (item, payload, by_path) in enumerate(overrides):
+            connection.execute(
+                """insert into library.exception_overrides (library_id, track_key, track_id, override_payload)
+                   select library_id, %s, case when %s then null else id end, %s
+                   from library.local_tracks where track_key = %s""",
+                (item["path"] if by_path else f"track-override-{number}", by_path, Jsonb(payload), item["path"]))
+
+    repository = PostgresLibraryBrowseRepository(fixture.config, connect=isolatedPostgres._connect)
+    view_state = {"visible_library_categories": ["main_library", "hoard", "new_arrivals"]}
+    for include_missing in (True, False):
+        rows = repository._load_search_rows("needle", view_state, include_missing=include_missing)
+        assert {row["album_title"]: row["track_count"] for row in rows} == {"Needle Kept": 2, "Needle Path": 1}
+
+
 def test_live_search_filename_match_requires_the_matching_file_to_be_active(
     watcher_repair_inventory,
 ):
@@ -10999,17 +11036,59 @@ def test_search_deduplicates_visible_albums_and_checks_track_match_eligibility_o
 
     sql = " ".join(_search_preview_sql().split()).lower()
 
+    # Eligible tracks come only from visible candidates, so their albums are the visible albums
+    # without a second album lookup per track.
     assert (
         "visible_album_ids as materialized ( select distinct "
-        "library.local_albums.library_id"
+        "eligible_album_tracks.library_id, eligible_album_tracks.album_id from eligible_album_tracks )"
     ) in sql
     assert "matched_track_album_ids as materialized (" in sql
     assert "eligible_matched_track_album_ids as materialized (" in sql
-    assert sql.count("join eligible_album_tracks") == 2
+    assert sql.count("join eligible_album_tracks") == 1
+    # Owner 2026-11-18 "love" search: joining the eligible matches to visible_album_ids again compared
+    # every pair of the two lists (2.8 M pairs); they are visible already.
     assert (
         "select eligible_matched_track_album_ids.album_id "
-        "from eligible_matched_track_album_ids"
+        "from eligible_matched_track_album_ids )"
     ) in sql
+
+
+def test_bounded_album_eligibility_looks_up_each_tracks_override_by_index():
+    # Owner 2026-11-18 "fields" search: the materialised one-per-track override table was merge-joined on
+    # library_id alone, comparing 1,428 candidate tracks with every override (304k rows removed by the filter).
+    from music_app.services.library_browse_postgres import (
+        _artist_preview_rows_sql,
+        _eligible_album_tracks_cte_sql,
+        _search_preview_sql,
+        _selected_artist_preview_sql,
+    )
+
+    lookup = (
+        "left join lateral ( select first_track_override.override_payload "
+        "from library.exception_overrides as first_track_override "
+        "where first_track_override.library_id = library.local_tracks.library_id "
+        "and first_track_override.track_id = library.local_tracks.id "
+        "order by first_track_override.id limit 1 ) as track_override on path_override.id is null"
+    )
+    for sql in (
+        _eligible_album_tracks_cte_sql(candidate_albums_only=True),
+        _search_preview_sql(),
+        _search_preview_sql(8),
+        _artist_preview_rows_sql(),
+        _selected_artist_preview_sql(),
+        _selected_artist_preview_sql(8, balance_across_artists=True),
+    ):
+        compact_sql = " ".join(sql.split()).lower()
+        assert lookup in compact_sql
+        assert "track_override_defaults" not in compact_sql
+        assert "when track_override.override_payload ? 'exception_type'" in compact_sql
+    assert " ".join(_search_preview_sql(8).split()).lower().count(lookup) == 2
+
+    # A whole-library pass keeps the hashed one-per-track table instead of a probe per track.
+    whole_library = " ".join(_eligible_album_tracks_cte_sql().split()).lower()
+    assert "track_override_defaults as materialized (" in whole_library
+    assert "left join track_override_defaults as track_override" in whole_library
+    assert "first_track_override" not in whole_library
 
 
 def test_related_artist_preview_scopes_album_eligibility_to_the_requested_family():
@@ -19046,6 +19125,148 @@ def test_searched_library_loose_tracks_filter_the_stored_list_by_the_search_rule
     assert [t["title"] for t in _filter_loose_tracks_by_query(tracks, "машина")] == ["Lambada"]
     assert _filter_loose_tracks_by_query(tracks, "") == tracks
     assert _filter_loose_tracks_by_query(tracks, "zzz-no-match") == []
+
+
+def test_searched_loose_tracks_build_each_tracks_search_keys_once():
+    # Owner 2026-11-18 "fields" profile: every searched catalog and Loose Tracks request renormalised and
+    # regex-compacted every stored track's fields (5.3k matcher calls, 0.3-0.55 s for 814 tracks).
+    from uuid import uuid4
+
+    from music_app.services import view_search
+    from music_app.services.library_browse_postgres import _filter_loose_tracks_by_query
+
+    token = uuid4().hex
+    tracks = [
+        {"path": f"D:/Music/Loose/{token}/{number}.flac", "title": f"Song {number} {token}",
+         "artist": f"Artist {number % 50}", "album": "", "year": 2000 + number % 20}
+        for number in range(2000)
+    ]
+    tracks[1234]["title"] = f"Needle {token}"
+    assert _filter_loose_tracks_by_query(tracks, "needle") == [tracks[1234]]
+
+    def misses():
+        return (
+            view_search.search_haystack.cache_info().misses,
+            view_search._normalize_search_string.cache_info().misses,
+            view_search._compact_search_string.cache_info().misses,
+        )
+
+    before = misses()
+    matched = _filter_loose_tracks_by_query(tracks, "artist 7")
+    after = misses()
+
+    assert [track["artist"] for track in matched] == ["Artist 7"] * 40
+    assert after[0] == before[0], "a second search must reuse every track's search keys"
+    assert after[1] - before[1] <= 2 and after[2] - before[2] <= 2, "only the query's own terms are new"
+
+
+class _StoredLooseTrackSnapshotConnection:
+    def __init__(self, stored):
+        self.stored = stored
+        self.payload_loads = 0
+
+    def execute(self, sql, params=None):
+        sql_text = " ".join(str(sql).split()).lower()
+        if sql_text.startswith("select snapshots.payload, snapshots.built_at"):
+            self.payload_loads += 1
+            return _InventoryCursor(row={"payload": json.dumps(self.stored["payload"]),
+                                         "built_at": self.stored["built_at"]})
+        if sql_text.startswith("select snapshots.built_at"):
+            return _InventoryCursor(row={"built_at": self.stored["built_at"]})
+        raise AssertionError(sql_text)
+
+
+def test_searched_loose_tracks_decode_the_stored_list_once_per_stored_version(monkeypatch):
+    # Each searched catalog and Loose Tracks request re-read and decoded the whole stored list (1 MB).
+    from uuid import uuid4
+
+    from music_app.services import library_browse_postgres as browse
+
+    def stored_list(fingerprint, titles):
+        return {"_inventory_fingerprint": fingerprint,
+                "tracks": [{"title": title, "track_stats": {"play_count": 1}} for title in titles]}
+
+    stored = {"built_at": "2026-11-19T01:00:00+00:00", "payload": stored_list("rev-1", ["One", "Two"])}
+    inventory = {"fingerprint": "rev-1"}
+    monkeypatch.setattr(browse, "_non_album_inventory_fingerprint", lambda _connection: inventory["fingerprint"])
+    repository = browse.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": f"postgresql://album_haven_app@localhost/{uuid4().hex}"},
+        connect=lambda _database_url: pytest.fail("the loader uses the given connection"),
+    )
+    connection = _StoredLooseTrackSnapshotConnection(stored)
+
+    first = repository._load_non_album_track_snapshot(connection)
+    first[0]["title"] = "Changed by a caller"
+    first[0]["track_stats"]["play_count"] = 99
+    second = repository._load_non_album_track_snapshot(connection)
+
+    assert [track["title"] for track in second] == ["One", "Two"]
+    assert second[0]["track_stats"] == {"play_count": 1}
+    assert connection.payload_loads == 1
+
+    inventory["fingerprint"] = "rev-2"
+    assert repository._load_non_album_track_snapshot(connection) is None
+    assert connection.payload_loads == 1
+
+    stored.update(built_at="2026-11-19T01:05:00+00:00", payload=stored_list("rev-2", ["Three"]))
+    assert [track["title"] for track in repository._load_non_album_track_snapshot(connection)] == ["Three"]
+    assert connection.payload_loads == 2
+
+
+def test_live_searched_loose_tracks_reuse_the_stored_list_until_it_is_rebuilt(watcher_repair_inventory):
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+    from tests.e2e.support import isolatedPostgres
+
+    fixture = watcher_repair_inventory
+    loose = {**fixture.entry("Loose/needle-one.flac", album=""), "title": "Needle One"}
+    fixture.seed(loose, fixture.entry("Owner/Album/01.flac", album="Album"))
+    executed = []
+
+    class CountingConnection:
+        def __init__(self, connection):
+            self._connection = connection
+
+        def __enter__(self):
+            self._connection.__enter__()
+            return self
+
+        def __exit__(self, *exc_info):
+            return self._connection.__exit__(*exc_info)
+
+        def execute(self, sql, *args, **kwargs):
+            executed.append(" ".join(str(sql).split()).lower())
+            return self._connection.execute(sql, *args, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(self._connection, name)
+
+    repository = PostgresLibraryBrowseRepository(
+        fixture.config, connect=lambda url: CountingConnection(isolatedPostgres._connect(url)),
+    )
+    everything = {"category": ["main_library", "new_arrivals", "hoard"]}
+    repository.build_library_loose_tracks_payload(query_params=everything, rebuild_missing_snapshot=True)
+
+    def searched_titles():
+        catalog = repository.build_custom_collection_catalog_payload(query_params={**everything, "q": "needle"})
+        tracks = repository.build_library_loose_tracks_payload(query_params={**everything, "q": "needle"})
+        titles = sorted(track["title"] for track in tracks["library_non_album_tracks"])
+        assert catalog["loose_tracks_count"] == len(titles)
+        return titles
+
+    def payload_loads():
+        return sum(sql.startswith("select snapshots.payload, snapshots.built_at") for sql in executed)
+
+    assert searched_titles() == ["Needle One"]
+    loads = payload_loads()
+    assert searched_titles() == ["Needle One"]
+    assert payload_loads() == loads, "an unchanged stored list is not read again"
+
+    # A new loose file changes the inventory; the rebuilt list is read once and found by the search.
+    added = {**fixture.entry("Loose/needle-two.flac", album=""), "title": "Needle Two"}
+    fixture.adapter.persist_targeted_inventory_mutation(
+        root_id=fixture.roots[0]["id"], active_file_entries={added["path"]: added}, deleted_paths=())
+    repository.build_library_loose_tracks_payload(query_params=everything, rebuild_missing_snapshot=True)
+    assert searched_titles() == ["Needle One", "Needle Two"]
 
 
 def test_searched_custom_collection_tree_counts_only_matching_tracks(monkeypatch):

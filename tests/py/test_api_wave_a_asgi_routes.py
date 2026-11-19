@@ -26,8 +26,13 @@ def app(tmp_path, monkeypatch):
         def __init__(self, config):
             self.config = config
 
-        def intent_lease(self):
+        received_statuses = {}
+
+        def intent_lease(self, request_id=""):
             return self
+
+        def request_status(self, request_id):
+            return self.received_statuses.get(request_id)
 
         def release(self):
             pass
@@ -5784,3 +5789,54 @@ def test_edit_tag_reservation_releases_intent_and_structural_owners_even_on_fail
         reservation.release()
     reservation.release()
     assert releases == ["intent", "structural"]
+
+
+_RESENT_SAVE_ID = "8b1f6a52-3c4d-4e5f-9a0b-1c2d3e4f5a6b"
+
+
+class _SaveJournal:
+    """Intent journal stand-in that knows which page saves the server received."""
+
+    statuses = {_RESENT_SAVE_ID: "completed"}
+
+    def __init__(self, _config):
+        pass
+
+    def request_status(self, request_id):
+        return self.statuses.get(request_id)
+
+    def intent_lease(self, request_id=""):
+        raise AssertionError("a save the server already received must not start again")
+
+
+def test_a_resent_save_the_server_already_received_is_refused_before_any_work(monkeypatch):
+    """Owner (2026-11-17): a save with no answer is sent again with the same id; it must never apply twice."""
+    from music_app.routes import api_wave_a_asgi_routes as routes
+
+    asgi_app = _make_asgi_app()
+    monkeypatch.setattr(routes, "PostgresTagEditIntentRepository", _SaveJournal)
+    monkeypatch.setattr(routes, "handle_edit_tags_request",
+                        lambda **_kwargs: pytest.fail("the edit pipeline must not run for a resent save"))
+    status, _, body = _run_asgi_request(asgi_app, "POST", "/utilities/edit-tags", json_body={
+        "confirmed": True, "client_request_id": _RESENT_SAVE_ID,
+        "album": {"key": "album-alpha", "name": "Album", "album_artist": "Artist",
+                  "tracks": [{"path": "C:/Music/Artist/Album/01.mp3"}]},
+        "updates": {"C:/Music/Artist/Album/01.mp3": {"title": "New"}},
+    })
+    assert status == 409
+    assert _decode_json(body) == {"ok": False, "code": "duplicate_request", "intent_status": "completed",
+                                  "error": "This save was already received."}
+
+
+def test_save_status_reports_received_unknown_and_invalid_ids(monkeypatch):
+    from music_app.routes import api_wave_a_asgi_routes as routes
+
+    asgi_app = _make_asgi_app()
+    monkeypatch.setattr(routes, "PostgresTagEditIntentRepository", _SaveJournal)
+    status, _, body = _run_asgi_request(asgi_app, "GET", f"/utilities/edit-tags/requests/{_RESENT_SAVE_ID}")
+    assert (status, _decode_json(body)) == (200, {"ok": True, "found": True, "status": "completed"})
+    status, _, body = _run_asgi_request(
+        asgi_app, "GET", "/utilities/edit-tags/requests/0b1f6a52-3c4d-4e5f-9a0b-1c2d3e4f5a6b")
+    assert (status, _decode_json(body)) == (200, {"ok": True, "found": False, "status": None})
+    status, _, _body = _run_asgi_request(asgi_app, "GET", "/utilities/edit-tags/requests/not-a-save-id")
+    assert status == 400

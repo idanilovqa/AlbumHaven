@@ -90,6 +90,7 @@ from music_app.services.save_tasks import (
 from music_app.services.separate_releases import load_separate_release_keys, save_separate_release_keys
 from music_app.services.tag_edit_intents_postgres import (
     PostgresTagEditIntentRepository,
+    normalize_client_request_id,
 )
 from music_app.services.repair_previews import (
     build_problematic_albums_payload as _build_problematic_albums_payload,
@@ -1828,6 +1829,18 @@ async def tag_editor_folder_files(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, **result}, headers={"Cache-Control": "no-store"})
 
 
+@router.get("/utilities/edit-tags/requests/{client_request_id}")
+async def utilities_edit_tags_request_status(request: Request, client_request_id: str) -> JSONResponse:
+    """What happened to a save the page sent but got no answer for (owner, 2026-11-17)."""
+    normalized = normalize_client_request_id(client_request_id)
+    if not normalized:
+        return JSONResponse({"ok": False, "error": "Invalid save id."}, status_code=400)
+    status = await run_in_threadpool(
+        PostgresTagEditIntentRepository(_app_config(request)).request_status, normalized,
+    )
+    return JSONResponse({"ok": True, "found": status is not None, "status": status})
+
+
 @router.post("/utilities/edit-tags")
 async def utilities_edit_tags(request: Request) -> JSONResponse:
     history_scope = await history_scope_for_request(request, required=False)
@@ -1853,6 +1866,15 @@ async def run_edit_tags_payload(request: Request, payload, *, history_scope, sta
         return album_error
     if not isinstance(updates, dict) or not updates:
         return ({"ok": False, "error": "No tag edits were provided"}, 400)
+    # Owner (2026-11-17): a save the page got no answer for is kept and sent again with the same id;
+    # the server never applies it twice, so a save it already received is refused before any work.
+    client_request_id = normalize_client_request_id(payload.get("client_request_id"))
+    intent_repository = PostgresTagEditIntentRepository(_app_config(request))
+    if client_request_id:
+        received_status = await run_in_threadpool(intent_repository.request_status, client_request_id)
+        if received_status is not None:
+            return ({"ok": False, "code": "duplicate_request", "intent_status": received_status,
+                     "error": "This save was already received."}, 409)
 
     album_track_path_set, _track_error = _require_album_track_paths(album)
     requested_track_paths = (album_track_path_set or set()) | {str(path) for path in updates.keys() if str(path)}
@@ -1891,7 +1913,7 @@ async def run_edit_tags_payload(request: Request, payload, *, history_scope, sta
     build_affected_album_dicts = _edit_tags_affected_album_dicts_builder(request, payload)
     if _is_selected_postgres_library_browse_request(request) and _has_edit_tags_media_write_fields(payload):
         build_affected_album_dicts = _empty_affected_album_dicts
-    intent_lease = PostgresTagEditIntentRepository(config).intent_lease()
+    intent_lease = intent_repository.intent_lease(client_request_id)
     handler_options = {
         "album": album,
         "updates": updates,

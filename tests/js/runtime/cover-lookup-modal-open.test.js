@@ -1462,7 +1462,9 @@ test('Cover Lookup loading markup does not invent empty artwork cards and keeps 
 
   assert.equal((markup.match(/cover-lookup-art-card-shell is-loading/g) || []).length, 0);
   assert.doesNotMatch(markup, /data-cover-lookup-loading-section="other-art"/);
-  assert.match(markup, /Resolving available cover art/);
+  // Owner (2026-11-18): until the listing answers, LOCAL is a still heading; nothing blinks.
+  assert.match(markup, /cover-lookup-gallery-resolving[^>]*>\s*<h4 class="cover-lookup-section-title">LOCAL<\/h4>/);
+  assert.doesNotMatch(markup, /cover-lookup-task-loading-line/);
   assert.doesNotMatch(markup, /No local cover art found/);
   assert.match(markup, />MANUAL SEARCH</);
   assert.match(markup, /id="cover-lookup-pasted-urls"/);
@@ -1528,7 +1530,8 @@ test('Cover Lookup loading markup keeps cached remote candidates usable while lo
   });
 
   assert.match(markup, /cached-thumb\.jpg/);
-  assert.match(markup, /Resolving available cover art/);
+  assert.match(markup, /size=480/);
+  assert.match(markup, /cover-lookup-gallery-resolving[^>]*>\s*<h4 class="cover-lookup-section-title">LOCAL<\/h4>/);
   assert.doesNotMatch(markup, /data-cover-lookup-loading-section="local"/);
   assert.equal((markup.match(/data-cover-lookup-loading-section="remote"/g) || []).length, 1);
 });
@@ -2177,3 +2180,169 @@ for (const actions of [{ 'library.covers.lookup': true }, undefined]) {
     assert.equal(new URL(f.location.href).searchParams.get('mobile_page'), 'cover-lookup');
   });
 }
+
+
+test('UI-5: merging a split release back with only its moved tracks known opens the merged album, not the chooser', async () => {
+  const trackPath = (n) => `N:/Music/DDT/Remixes/${String(n).padStart(2, '0')}.flac`;
+  const all = Array.from({ length: 11 }, (_, index) => ({ path: trackPath(index + 1) }));
+  // Keys exactly as sandbox2's page built them (2026-11-15): with and without the year suffix.
+  const original = { album_id: 40, key: 'ддт::ремиксы::year::2000', name: 'Ремиксы', album_artist: 'ДДТ', year: 2000, tracks: all };
+  const remixes = { key: 'ддт::ремиксы::year::2000', name: 'Ремиксы', album_artist: 'ДДТ', year: 2000, tracks: all.slice(5) };
+  const remixes2 = { key: 'ддт::ремиксы2', name: 'Ремиксы2', album_artist: 'ДДТ', year: 2000, tracks: all.slice(0, 5) };
+  const overlay = { hidden: true, classList: { toggle() {} }, toggleAttribute() {}, removeAttribute() {} };
+  const context = {
+    window: {}, URLSearchParams, console, ButtonComponent, HTMLButtonElement: class {},
+    state: { coverLookup: { tasks: [{ id: 't1', album_payload: { ...original } }], modal: { pastedImages: [] } } },
+    getAlbumTrackPaths: album => new Set((album?.tracks || []).map(item => item.path)),
+    mergeCoverLookupTasksWithNotifications: tasks => tasks,
+    document: { body: { classList: { add() {} } }, getElementById: id => (id === 'cover-lookup-modal' ? overlay : null) },
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  const choosers = [];
+  context.presentCoverLookupSplitChoice = async current => choosers.push(current);
+  context.renderCoverLookupModal = () => {};
+  context.refreshCoverLookupGallery = async () => {};
+  context.ensureCoverLookupPolling = () => {};
+
+  context.recordCoverLookupOptimisticSplit(original, [remixes, remixes2]);
+  await context.openCoverLookupModal(context.state.coverLookup.tasks[0].album_payload, { taskId: 't1' });
+  assert.equal(choosers.length, 1, 'right after the split the chooser opens');
+
+  // Merge from a compact gallery card: the edited album only holds the 5 moved tracks.
+  context.recordCoverLookupOptimisticSplit(remixes2, [{ key: 'ддт::ремиксы', name: 'Ремиксы', album_artist: 'ДДТ', year: 2000, tracks: all.slice(0, 5) }]);
+  const task = context.state.coverLookup.tasks[0];
+  await context.openCoverLookupModal(task.album_payload, { taskId: 't1' });
+  assert.equal(choosers.length, 1, 'after merging back no split chooser opens');
+  assert.equal(task.album, 'Ремиксы');
+  assert.equal(new Set(Array.from(task.album_payload.track_paths)).size, 11);
+});
+
+
+test('BUGFIX-05: a search progress poll does not discard the gallery read an open is waiting on', async () => {
+  const resolvers = [];
+  const overlay = { hidden: false, classList: { toggle() {}, contains: () => false }, toggleAttribute() {}, removeAttribute() {}, setAttribute() {}, hasAttribute: () => false };
+  const album = { album_id: 7, key: 'a::b', name: 'B', album_artist: 'A', tracks: [{ path: 'N:/A/B/01.flac' }] };
+  const context = {
+    window: {}, URLSearchParams, console: { ...console, log() {} }, ButtonComponent, HTMLButtonElement: class {},
+    setTimeout: () => 0, clearTimeout() {},
+    state: { coverLookup: { tasks: [], modal: { album, taskId: 't1', pastedImages: [], localCovers: [] } } },
+    getAlbumTrackPaths: value => new Set((value?.tracks || []).map(item => item.path)),
+    mergeCoverLookupTasksWithNotifications: tasks => tasks,
+    showToast() {},
+    fetch: () => new Promise((resolve) => resolvers.push(resolve)),
+    document: { body: { classList: { add() {} } }, getElementById: id => (id === 'cover-lookup-modal' ? overlay : null) },
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  const applied = [];
+  context.applyCoverLookupGalleryPayload = payload => applied.push(payload.marker);
+  context.renderCoverLookupModal = () => {};
+  context.markCoverLookupAutomaticImprovementSeen = async () => {};
+  const answer = marker => ({ ok: true, json: async () => ({ ok: true, marker }) });
+
+  const opening = context.refreshCoverLookupGallery(false);
+  // Two progress polls arrive while the opening read is still running.
+  await context.refreshCoverLookupGallery(false, { coalesce: true });
+  await context.refreshCoverLookupGallery(false, { coalesce: true });
+  assert.equal(resolvers.length, 1, 'the polls join the read in flight');
+  resolvers[0](answer('opening'));
+  await opening;
+  assert.deepEqual(applied, ['opening'], 'the opening read is shown, not discarded');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(resolvers.length, 2, 'one more read follows for the polls');
+  resolvers[1](answer('after-polls'));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(applied, ['opening', 'after-polls']);
+});
+
+
+test('UI-5: a split opens the chooser from a notification the server listed without track paths', async () => {
+  const trackPath = (n) => `N:/Music/DDT/Remixes/${String(n).padStart(2, '0')}.flac`;
+  const all = Array.from({ length: 11 }, (_, index) => ({ path: trackPath(index + 1) }));
+  // The Edit Tags album knows every track; the server's task list drops tracks and spells the key without the year.
+  const original = { album_id: 40, key: 'ддт::ремиксы::year::2000', name: 'Ремиксы', album_artist: 'ДДТ', year: 2000, tracks: all };
+  const listed = { album_id: 40, key: 'ддт::ремиксы', name: 'Ремиксы', album_artist: 'ДДТ', year: 2000 };
+  const remixes = { key: 'ддт::ремиксы::year::2000', name: 'Ремиксы', album_artist: 'ДДТ', year: 2000, tracks: all.slice(5) };
+  const remixes2 = { key: 'ддт::ремиксы2', name: 'Ремиксы2', album_artist: 'ДДТ', year: 2000, tracks: all.slice(0, 5) };
+  const overlay = { hidden: true, classList: { toggle() {} }, toggleAttribute() {}, removeAttribute() {} };
+  const context = {
+    window: {}, URLSearchParams, console, ButtonComponent, HTMLButtonElement: class {},
+    state: { coverLookup: { tasks: [{ id: 't1', album_payload: { ...listed } }], modal: { pastedImages: [] } } },
+    getAlbumTrackPaths: album => new Set((album?.tracks || []).map(item => item.path)),
+    mergeCoverLookupTasksWithNotifications: tasks => tasks,
+    document: { body: { classList: { add() {} } }, getElementById: id => (id === 'cover-lookup-modal' ? overlay : null) },
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  const choosers = [];
+  context.presentCoverLookupSplitChoice = async current => choosers.push(current);
+  context.renderCoverLookupModal = () => {};
+  context.refreshCoverLookupGallery = async () => {};
+  context.ensureCoverLookupPolling = () => {};
+
+  context.recordCoverLookupOptimisticSplit(original, [remixes, remixes2]);
+  await context.openCoverLookupModal(context.state.coverLookup.tasks[0].album_payload, { taskId: 't1' });
+  assert.equal(choosers.length, 1, 'right after the split the notification opens the chooser');
+  assert.equal(choosers[0].length, 2);
+
+  // A later poll returns the same compact task; it must stay split.
+  context.state.coverLookup.tasks = context.reconcileCoverLookupOptimisticIdentityTasks([{ id: 't1', album_payload: { ...listed } }]);
+  await context.openCoverLookupModal(context.state.coverLookup.tasks[0].album_payload, { taskId: 't1' });
+  assert.equal(choosers.length, 2, 'after a task poll the notification still opens the chooser');
+
+  // Merging back from the compact card opens the merged album, never the chooser.
+  context.recordCoverLookupOptimisticSplit(remixes2, [{ key: 'ддт::ремиксы', name: 'Ремиксы', album_artist: 'ДДТ', year: 2000, tracks: all.slice(0, 5) }]);
+  await context.openCoverLookupModal(context.state.coverLookup.tasks[0].album_payload, { taskId: 't1' });
+  assert.equal(choosers.length, 2, 'after merging back no split chooser opens');
+  assert.equal(context.state.coverLookup.tasks[0].album, 'Ремиксы');
+});
+
+
+test('UI-5: a server still reporting the split never opens the chooser over an optimistic merge', async () => {
+  const trackPath = (n) => `N:/Music/DDT/Remixes/${String(n).padStart(2, '0')}.flac`;
+  const all = Array.from({ length: 11 }, (_, index) => ({ path: trackPath(index + 1) }));
+  const original = { album_id: 40, key: 'ддт::ремиксы::year::2000', name: 'Ремиксы', album_artist: 'ДДТ', year: 2000, tracks: all };
+  const remixes = { key: 'ддт::ремиксы::year::2000', name: 'Ремиксы', album_artist: 'ДДТ', year: 2000, tracks: all.slice(5) };
+  const remixes2 = { key: 'ддт::ремиксы2', name: 'Ремиксы2', album_artist: 'ДДТ', year: 2000, tracks: all.slice(0, 5) };
+  const overlay = { hidden: true, classList: { toggle() {}, contains: () => false }, toggleAttribute() {}, removeAttribute() {}, setAttribute() {}, hasAttribute: () => false };
+  const timers = [];
+  const context = {
+    window: {}, URLSearchParams, console, ButtonComponent, HTMLButtonElement: class {},
+    setTimeout: (fn) => { timers.push(fn); return timers.length; }, clearTimeout() {},
+    state: { coverLookup: { tasks: [{ id: 't1', album_payload: { ...original } }], modal: { pastedImages: [] } } },
+    getAlbumTrackPaths: album => new Set((album?.tracks || []).map(item => item.path)),
+    mergeCoverLookupTasksWithNotifications: tasks => tasks,
+    showToast() {},
+    fetch: async () => ({ ok: false, json: async () => ({ ok: false, resolution_kind: 'album_split',
+      current_releases: [{ album_id: 40, key: 'ддт::ремиксы::year::2000', name: 'Ремиксы', track_count: 6 }, { album_id: 41, key: 'ддт::ремиксы2', name: 'Ремиксы2', track_count: 5 }] }) }),
+    document: { body: { classList: { add() {} } }, getElementById: id => (id === 'cover-lookup-modal' ? overlay : null) },
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  const choosers = [];
+  context.presentCoverLookupSplitChoice = async current => choosers.push(current);
+  context.renderCoverLookupModal = () => {};
+  context.renderCoverLookupDrawer = () => {};
+  context.ensureCoverLookupPolling = () => {};
+  context.recordCoverLookupOptimisticSplit(original, [remixes, remixes2]);
+  context.recordCoverLookupOptimisticSplit(remixes2, [{ key: 'ддт::ремиксы', name: 'Ремиксы', album_artist: 'ДДТ', year: 2000, tracks: all.slice(0, 5) }]);
+  context.state.coverLookup.modal.album = context.state.coverLookup.tasks[0].album_payload;
+  context.state.coverLookup.modal.taskId = 't1';
+  await context.refreshCoverLookupGallery(false);
+  assert.equal(choosers.length, 0, 'the merge the page already made wins over the server lagging behind');
+  assert.equal(timers.length, 1, 'the gallery is asked again until the server has the merge');
+});
+
+
+test('BUGFIX-19: the selected cover shows its picture in the first loading card; the rest stay placeholders', () => {
+  const escapeHtml = (value) => String(value).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  const context = { window: {}, URLSearchParams, console, ButtonComponent, HTMLButtonElement: class {}, escapeHtml, document: { body: { classList: { add() {} } }, getElementById: () => null }, state: { coverLookup: { tasks: [], modal: {} } } };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  const markup = context.buildCoverLookupGalleryLoadingCards('local', 3, '/cover?path=a&size=480');
+  const cards = markup.split('cover-lookup-art-card-shell is-loading').slice(1);
+  assert.equal(cards.length, 3);
+  assert.match(cards[0], /<img class="cover-lookup-art-preview-image" src="\/cover\?path=a&amp;size=480"/);
+  assert.ok(cards.slice(1).every((card) => !card.includes('<img')));
+});

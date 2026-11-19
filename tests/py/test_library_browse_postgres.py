@@ -16135,17 +16135,15 @@ def test_problematic_full_payload_materializes_duplicate_sources_only_for_initia
     ]
 
 
-def test_problematic_files_bounded_filter_metadata_includes_complete_reason_taxonomy():
+def test_problematic_files_bounded_filter_metadata_lists_only_present_reasons():
+    """Owner decision (2026-11-16): a problem type no listed album has is never offered."""
     from music_app.services import library_browse_postgres as browse
 
-    assert browse._problematic_filter_reason_types([]) == sorted([
-        *browse._PROBLEM_REASON_IDENTITY_CODES,
-        "Album not found",
-        "Duplicate track outside album folder",
-        "Edition descriptor in album name",
-        "Incomplete track order",
-        "Spotify cover search quota exceeded",
-    ])
+    assert browse._problematic_filter_reason_types([]) == []
+    assert browse._problematic_filter_reason_types([
+        {"problem_reasons": ["Missing year", "Incomplete track order: Disc 1 missing 2"]},
+        {"problem_reasons": ["Missing year"]},
+    ]) == ["Incomplete track order", "Missing year"]
 
 
 def test_problematic_files_page_builds_only_bounded_candidate_rows(monkeypatch):
@@ -16739,6 +16737,31 @@ def _numbered_problematic_rows(count):
     return rows
 
 
+def test_problematic_search_hydrates_selected_albums_with_index_scans():
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    class EmptyCursor:
+        def fetchall(self):
+            return []
+
+    class RecordingConnection:
+        def __init__(self):
+            self.commands = []
+
+        def execute(self, sql, params=None):
+            self.commands.append((str(sql), params))
+            return EmptyCursor()
+
+    repository = PostgresLibraryBrowseRepository({
+        "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app",
+    })
+    connection = RecordingConnection()
+
+    repository._load_problematic_file_rows(connection=connection, album_ids=[101, 102])
+
+    assert connection.commands[0] == ("SET LOCAL enable_seqscan = off", None)
+
+
 def test_problematic_files_search_reaches_albums_beyond_the_first_page_without_the_full_list():
     rows = _numbered_problematic_rows(120)
     rows[96]["album_title"] = "Needle In The Haystack"
@@ -16850,6 +16873,28 @@ def test_problematic_files_search_answers_from_the_last_list_while_a_fresh_one_r
     repository._get_stale_utility_projection = lambda kind: {
         "items": [{"key": "a", "name": "Alpha"}, {"key": "b", "name": "Beta"}],
     } if kind == "problematic-files" else None
+
+    payload = repository.build_problematic_files_search("beta")
+
+    assert [item["key"] for item in payload["items"]] == ["b"]
+    assert payload["complete"] is False
+    assert payload["projection_cache_status"] == "stale"
+
+
+def test_problematic_files_search_answers_from_the_stored_last_list_after_restart():
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    repository = PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: (_ for _ in ()).throw(
+            AssertionError("the stored last list must answer without rebuilding candidates")
+        ),
+    )
+    repository._get_cached_utility_projection = lambda _kind: None
+    repository._get_stale_utility_projection = lambda _kind: None
+    repository._load_problematic_files_snapshot = lambda **_options: {
+        "items": [{"key": "a", "name": "Alpha"}, {"key": "b", "name": "Beta"}],
+    }
 
     payload = repository.build_problematic_files_search("beta")
 
@@ -21592,3 +21637,60 @@ def test_a_display_correction_is_a_problematic_file_until_written():
         "album_artist": {"original": "\u00c3\u00a9", "corrected": "\u00e9", "kind": "decoded"}}})) == [
         "Track artist unreadable \u2014 using album artist", "Encoding problem"]
     assert list(_physical_file_problem_reasons({})) == []
+
+
+def test_loose_track_search_normalizes_the_alias_map_once_per_request_not_per_track():
+    # Owner (11-17): main search took 2-9 s; py-spy showed the loose-tracks filter re-normalizing the whole
+    # artist alias map for every loose track whose artist is not an exact alias key.
+    from music_app.services import library_browse_postgres as browse_module
+
+    aliases = _CountingAliasMap({f"Alias {index}": f"Artist {index}" for index in range(50)})
+    tracks = [
+        {"path": f"C:/Music/Loose/{index}.mp3", "title": f"Song {index}", "artist": f"unlisted artist {index}",
+         "album_artist": "", "library_category": "main_library"}
+        for index in range(300)
+    ]
+
+    browse_module._filter_non_album_snapshot_tracks(
+        tracks,
+        visible_library_categories=["main_library"],
+        alias_to_canonical=aliases,
+        canonical_to_aliases={},
+        query="song",
+    )
+
+    assert aliases.iterations <= 1, f"alias map normalized {aliases.iterations} times"
+
+
+def test_cover_lookup_track_path_reads_lease_the_shared_browse_pool(monkeypatch):
+    """Cover Look Up spent 150-350 ms per open on two fresh connections around queries under 2 ms."""
+    from contextlib import contextmanager
+
+    import music_app.services.library_browse_postgres as browse
+
+    leases = []
+
+    class _Rows:
+        def fetchall(self):
+            return []
+
+    class _Connection:
+        def execute(self, _sql, params):
+            assert params == {"track_paths": ["N:/Album/01.flac"]}
+            return _Rows()
+
+    @contextmanager
+    def pooled(_database_url, *, workload):
+        leases.append(workload)
+        yield _Connection()
+
+    def fresh_connection(_database_url):
+        raise AssertionError("a Cover Look Up read opened a fresh connection")
+
+    monkeypatch.setattr(browse, "_pooled_connection", pooled)
+    monkeypatch.setattr(browse, "_connect", fresh_connection)
+    repository = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://unused/db"})
+
+    assert repository.build_cover_state_entries_by_paths({"N:/Album/01.flac"}) == {}
+    assert repository.build_album_payloads_by_track_paths({"N:/Album/01.flac"}) == []
+    assert leases == ["browse", "browse"]

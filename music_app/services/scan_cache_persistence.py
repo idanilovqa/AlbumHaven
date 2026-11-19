@@ -13,7 +13,9 @@ from typing import Any, Protocol
 from config import PERSISTENCE_BACKEND_POSTGRES
 from music_app.services.album_local_cover_integrity import (
     inferred_local_cover_belongs_to_track,
+    split_folder_covers,
 )
+from music_app.services.album_local_membership import physical_album_folder
 from music_app.services.album_ratings_postgres import PostgresAlbumRatingsService
 from music_app.services.library_reachability import missing_reasons
 from music_app.services.missing_album_auto_removal import remove_untouched_deleted
@@ -2402,7 +2404,6 @@ class PostgresScanCacheAdapter:
                     _scan_missing_candidates_sql(),
                     {
                         "current_paths": current_private_paths,
-                        "current_path_count": len(current_private_paths),
                         "source": _SOURCE,
                         "observed_root_ids": sorted(observed_library_root_ids or set()),
                         "unreachable_root_ids": unreachable_root_ids,
@@ -4699,6 +4700,8 @@ def _restore_structurally_inherited_covers(
     persisted_entries: dict[str, dict[str, object]],
 ) -> dict[str, dict[str, object]]:
     restored_entries = dict(incoming_entries)
+    # A fresh read carries no inheritance marks, so the folder pass dropped the cover of both halves.
+    kept_split_covers = split_folder_covers(persisted_entries)
     for path, incoming_entry in incoming_entries.items():
         persisted_entry = persisted_entries.get(path)
         if not isinstance(persisted_entry, dict):
@@ -4706,15 +4709,16 @@ def _restore_structurally_inherited_covers(
         cover_path = str(persisted_entry.get("cover_path") or "").strip()
         if (
             incoming_entry.get("cover_path")
-            or persisted_entry.get("cover_inherited_from_structural_edit") is not True
             or not cover_path
+            or (physical_album_folder(path), cover_path.casefold()) not in kept_split_covers
             or not Path(cover_path).is_file()
             or not inferred_local_cover_belongs_to_track(cover_path, path)
         ):
             continue
         restored_entry = dict(incoming_entry)
         restored_entry["cover_path"] = cover_path
-        restored_entry["cover_inherited_from_structural_edit"] = True
+        if persisted_entry.get("cover_inherited_from_structural_edit") is True:
+            restored_entry["cover_inherited_from_structural_edit"] = True
         restored_entries[path] = restored_entry
     return restored_entries
 
@@ -5693,6 +5697,19 @@ def _rebind_cover_lookup_tasks_after_structural_edit_sql() -> str:
            and library.libraries.library_kind = 'local'
           where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
           limit 1
+        ),
+        -- Owner (BUGFIX-05, 2026-11-18): a card carried into a merged album takes the merged album's whole
+        -- track set, so a later split of that album covers it with two releases and opens the chooser.
+        destination_track_paths as (
+          select coalesce(jsonb_agg(library.local_track_files.private_path
+                   order by library.local_track_files.private_path), '[]'::jsonb) as paths
+          from bootstrap_context
+          join library.local_tracks
+            on library.local_tracks.library_id = bootstrap_context.library_id
+           and library.local_tracks.album_id = %(destination_album_id)s::bigint
+          join library.local_track_files
+            on library.local_track_files.track_id = library.local_tracks.id
+           and library.local_track_files.scan_cache_stale is false
         )
         update ops.cover_lookup_tasks as tasks
         set album_key = %(destination_album_key)s,
@@ -5704,6 +5721,7 @@ def _rebind_cover_lookup_tasks_after_structural_edit_sql() -> str:
                      'artist', %(destination_artist_name)s::text,
                      'album', %(destination_album_title)s::text,
                      'year', %(destination_release_year)s::integer,
+                     'track_paths', destination_track_paths.paths,
                      'album_payload',
                      coalesce(
                        tasks.metadata #> '{source_payload,album_payload}',
@@ -5716,12 +5734,14 @@ def _rebind_cover_lookup_tasks_after_structural_edit_sql() -> str:
                        'album', %(destination_album_title)s::text,
                        'album_artist', %(destination_artist_name)s::text,
                        'artist', %(destination_artist_name)s::text,
-                       'year', %(destination_release_year)s::integer
+                       'year', %(destination_release_year)s::integer,
+                       'track_paths', destination_track_paths.paths,
+                       'track_count', jsonb_array_length(destination_track_paths.paths)
                      )
                    ),
               true
-            )
-        from bootstrap_context
+            ) || jsonb_build_object('track_paths', destination_track_paths.paths)
+        from bootstrap_context, destination_track_paths
         where tasks.library_id = bootstrap_context.library_id
           and (
                 coalesce(
@@ -5999,8 +6019,9 @@ def _finalize_detached_album_restore_sql() -> str:
         ),
         updated_library as (
           update library.libraries
-          set metadata = jsonb_set(
-                coalesce(library.libraries.metadata, '{}'::jsonb)
+          -- Row triggers journal every changed album. Marking the relation
+          -- index stale here would journal an unknown library-wide change.
+          set metadata = coalesce(library.libraries.metadata, '{}'::jsonb)
                   || jsonb_build_object(
                        'inventory_mutation_revision',
                        coalesce(
@@ -6011,23 +6032,6 @@ def _finalize_detached_album_restore_sql() -> str:
                          0
                        ) + 1
                      ),
-                '{scan_cache}',
-                coalesce(
-                  library.libraries.metadata -> 'scan_cache',
-                  '{}'::jsonb
-                ) || jsonb_build_object(
-                  'relation_projection',
-                  coalesce(
-                    library.libraries.metadata
-                      #> '{scan_cache,relation_projection}',
-                    '{}'::jsonb
-                  ) || jsonb_build_object(
-                    'status', 'stale',
-                    'rebuild_reason', 'structural_tag_edit'
-                  )
-                ),
-                true
-              ),
               updated_at = now()
           from bootstrap_context
           where library.libraries.id = bootstrap_context.library_id
@@ -6874,8 +6878,9 @@ def _persist_structural_album_tag_edit_sql(
         ),
         updated_library as (
           update library.libraries
-          set metadata = jsonb_set(
-                coalesce(library.libraries.metadata, '{}'::jsonb)
+          -- Row triggers journal every changed album. Marking the relation
+          -- index stale here would journal an unknown library-wide change.
+          set metadata = coalesce(library.libraries.metadata, '{}'::jsonb)
                   || jsonb_build_object(
                        'inventory_mutation_revision',
                        coalesce(
@@ -6886,20 +6891,6 @@ def _persist_structural_album_tag_edit_sql(
                          0
                        ) + 1
                      ),
-                '{scan_cache}',
-                coalesce(library.libraries.metadata -> 'scan_cache', '{}'::jsonb)
-                  || jsonb_build_object(
-                       'relation_projection',
-                       coalesce(
-                         library.libraries.metadata #> '{scan_cache,relation_projection}',
-                         '{}'::jsonb
-                       ) || jsonb_build_object(
-                         'status', 'stale',
-                         'rebuild_reason', 'structural_tag_edit'
-                       )
-                     ),
-                true
-              ),
               updated_at = now()
           from bootstrap_context
           where library.libraries.id = bootstrap_context.library_id
@@ -8220,13 +8211,11 @@ def _scan_missing_candidates_sql() -> str:
               library.local_track_files.metadata ->> 'library_root_id'
             ) = any(%(observed_root_ids)s::text[] || %(unreachable_root_ids)s::text[])
             -- A hashed anti-join: comparing each file against the whole path array
-            -- was quadratic for a full library.
-            and (
-              %(current_path_count)s = 0
-              or not exists (
-                select 1 from unnest(%(current_paths)s::text[]) as current_file(private_path)
-                where current_file.private_path = library.local_track_files.private_path
-              )
+            -- was quadratic for a full library. Keep it a bare NOT EXISTS: an OR beside it
+            -- stops Postgres from hashing and rescans the array per file (owner scan, 11-16).
+            and not exists (
+              select 1 from unnest(%(current_paths)s::text[]) as current_file(private_path)
+              where current_file.private_path = library.local_track_files.private_path
             )
     """
 

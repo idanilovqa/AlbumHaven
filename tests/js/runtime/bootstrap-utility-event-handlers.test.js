@@ -56,7 +56,7 @@ test('cancel refresh retains the task until its terminal state is persisted', ()
 test('dismissing an interrupted cover lookup notice clears and rerenders it', () => {
   assert.match(
     helperSource,
-    /data-dismiss-cover-lookup-notice[\s\S]*?failureNotice = '';[\s\S]*?renderCoverLookupModal\(\);/,
+    /data-dismiss-cover-lookup-notice[\s\S]*?dismissCoverLookupInterruptionNotice\(\);[\s\S]*?renderCoverLookupModal\(\);/,
   );
 });
 

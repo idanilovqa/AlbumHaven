@@ -9,7 +9,7 @@ import hashlib
 import io
 import importlib
 from pathlib import Path
-from threading import Event, Timer
+from threading import Event, Thread, Timer
 from types import SimpleNamespace
 from uuid import UUID
 
@@ -286,6 +286,53 @@ def test_indexed_cover_gallery_api_uses_validated_inventory_without_filesystem_r
         assert "local_covers" not in payload
         assert "other_art" not in payload
         assert events.count("queue_context") == 1
+
+
+def test_cover_gallery_waits_for_the_first_listing_of_an_unlisted_folder(app, monkeypatch):
+    """Owner (2026-11-18): an album opened before its folder was listed showed "not listed yet", then asked again."""
+    from music_app.routes import api_wave_d_asgi_routes as routes
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    root = Path(app.config["MUSIC_DIR"]) / "Artist" / "Unlisted Album"
+    track = root / "song.mp3"
+    listing = [{"path": str(root / "front.jpg"), "filename": "front.jpg", "is_squareish": True,
+                "width": 600, "height": 600, "sha256": "b" * 64}]
+    reads = []
+    requested = []
+
+    def get(_root):
+        reads.append(_root)
+        # The worker publishes while the request waits.
+        return {"available": True, "complete": True, "candidates": listing} if len(reads) >= 3 else None
+
+    worker = SimpleNamespace(
+        repository=SimpleNamespace(root_for_tracks=lambda paths: root, get=get),
+        note_foreground_activity=lambda: None,
+        request=requested.append,
+        request_context=lambda paths: pytest.fail("a known folder needs no context request"),
+    )
+    monkeypatch.setattr(routes.AlbumCoverCandidateSnapshotRepository, "resolve_album_track_context",
+                        lambda _self, **_kwargs: {"album_id": 42, "album_key": "artist::unlisted album", "track_paths": [str(track)]},
+                        raising=False)
+    monkeypatch.setattr(routes.AlbumCoverCandidateSnapshotRepository, "resolve_album_id_for_track_paths",
+                        lambda _self, *, track_paths: 42)
+    monkeypatch.setattr(PostgresLibraryBrowseRepository, "build_cover_state_entries_by_paths", lambda *args: {})
+    monkeypatch.setattr(routes, "_UNLISTED_INVENTORY_POLL_SECONDS", 0.001)
+    app.config["_LOCAL_COVER_INVENTORY"] = worker
+    asgi_app = _make_wave_d_app(app)
+    asgi_app.state.local_cover_inventory = worker
+
+    status, _, body = _run_asgi_request(
+        asgi_app, "POST", "/utilities/cover-lookup/gallery",
+        json_body={"album": {"album_id": 42, "name": "Unlisted Album", "tracks": []}},
+    )
+
+    assert status == 200
+    payload = _decode_json(body)
+    assert payload["local_inventory_complete"] is True
+    assert [item["filename"] for item in payload["local_covers"]] == ["front.jpg"]
+    assert requested == [root]
+    assert len(reads) == 3
 
 
 class _FatalFlaskBridge:
@@ -2024,6 +2071,78 @@ def test_asgi_cover_lookup_gallery_offers_split_choice_before_the_split_is_recor
     assert [release["album_id"] for release in _decode_json(body)["current_releases"]] == [41, 42]
 
 
+def test_asgi_cover_lookup_gallery_splits_a_card_listed_without_tracks_by_its_own_tracks(app, monkeypatch):
+    """Owner (BUGFIX-05 case 1, 2026-11-18): the card's album (key only, listed without tracks) was split, keeping
+    its key on one half. Opening the card offers the chooser, never that half's lookup."""
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+    from music_app.services import cover_lookup_tasks
+
+    first_track = (app.config["MUSIC_DIR"] / "ДДТ" / "Ремиксы" / "01.mp3").resolve()
+    second_track = (app.config["MUSIC_DIR"] / "ДДТ" / "Ремиксы" / "04.mp3").resolve()
+    for track_path in (first_track, second_track):
+        track_path.parent.mkdir(parents=True, exist_ok=True)
+        track_path.write_bytes(b"track")
+    reset_cover_lookup_runtime_state()
+    task_id, _cancel = cover_lookup_tasks.create_cover_lookup_task(
+        {**_album_payload(first_track), "name": "Ремиксы", "album_artist": "ДДТ",
+         "tracks": [{"path": str(first_track)}, {"path": str(second_track)}]},
+        {str(first_track), str(second_track)},
+    )
+    listed_card_album = {"key": "ддт::ремиксы", "album_artist": "ДДТ", "name": "Ремиксы", "year": 2000}
+    halves = [
+        {"key": "ддт::ремиксы", "album_artist": "ДДТ", "name": "Ремиксы", "year": 2000, "tracks": [{"path": str(first_track)}]},
+        {"key": "ддт::ремиксы2", "album_artist": "ДДТ", "name": "Ремиксы2", "year": 2000, "tracks": [{"path": str(second_track)}]},
+    ]
+
+    class SnapshotRepository:
+        def __init__(self, _config):
+            pass
+
+        def resolve_album_id_for_track_paths(self, *, track_paths):
+            return {frozenset({str(first_track)}): 41, frozenset({str(second_track)}): 42}.get(frozenset(track_paths), 41)
+
+        def resolve_album_track_context(self, *, album_id, album_key):
+            return {"album_id": 41, "album_key": "ддт::ремиксы", "track_paths": [str(first_track)]}
+
+    class BrowseRepository:
+        def __init__(self, _config):
+            pass
+
+        def build_album_payloads_by_track_paths(self, track_paths):
+            return halves
+
+    class LineageRepository:
+        def __init__(self, _config):
+            pass
+
+        def resolve(self, *, album_id, album_key, track_paths):
+            assert track_paths == {str(first_track), str(second_track)}
+            return {"status": "split", "album": None, "choices": [
+                {"album_id": 41, "album_key": "ддт::ремиксы", "name": "Ремиксы", "album_artist": "ДДТ", "year": 2000, "track_count": 1},
+                {"album_id": 42, "album_key": "ддт::ремиксы2", "name": "Ремиксы2", "album_artist": "ДДТ", "year": 2000, "track_count": 1}]}
+
+    monkeypatch.setattr(asgi_routes, "AlbumCoverCandidateSnapshotRepository", SnapshotRepository)
+    monkeypatch.setattr(asgi_routes, "PostgresLibraryBrowseRepository", BrowseRepository)
+    monkeypatch.setattr(asgi_routes, "AlbumIdentityLineageRepository", LineageRepository)
+    # As on sandbox2, the half that kept the key resolves to a real album folder.
+    monkeypatch.setattr(asgi_routes, "_resolve_cover_album_context", lambda _config, _album: object())
+
+    async def serialize_gallery(*_args, **_kwargs):
+        raise AssertionError("a split card must not open one half's lookup")
+
+    monkeypatch.setattr(asgi_routes, "_serialize_cover_gallery_from_asgi", serialize_gallery)
+
+    status, _headers, body = _run_asgi_request(
+        _make_wave_d_app(app), "POST", "/utilities/cover-lookup/gallery",
+        json_body={"album": listed_card_album, "task_id": task_id},
+    )
+
+    payload = _decode_json(body)
+    assert status == 409, payload
+    assert payload["resolution_kind"] == "album_split"
+    assert [release["name"] for release in payload["current_releases"]] == ["Ремиксы", "Ремиксы2"]
+
+
 def test_asgi_cover_lookup_gallery_returns_safe_current_release_choices_for_split_album(
     app,
     monkeypatch,
@@ -3053,6 +3172,67 @@ def test_asgi_local_cover_selection_log_history_failure_never_masks_persistence_
         assert _decode_json(body)["ok"] is True
 
 
+def test_asgi_pasted_cover_save_names_the_backup_of_the_replaced_cover(app, monkeypatch):
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+
+    track_path = (app.config["MUSIC_DIR"] / "Artist" / "Pasted Backup" / "song.mp3").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    previous_cover = track_path.parent / "cover.jpg"
+    previous_bytes = _jpeg_bytes((200, 30, 30))
+    previous_cover.write_bytes(previous_bytes)
+    _seed_album_state(app.library_state, track_path)
+    asgi_app = _make_wave_d_app(app)
+    asgi_app.state.flask_app = _FatalFlaskBridge()
+    invalidated: list[list[Path]] = []
+    asgi_app.state.local_cover_inventory = type(
+        "Inventory", (), {"invalidate_paths": staticmethod(lambda paths: invalidated.append(list(paths)))},
+    )()
+
+    async def fail_if_pasted_save_rebuilds_gallery(*_args, **_kwargs):
+        raise AssertionError("pasted cover save must not rebuild the gallery")
+
+    monkeypatch.setattr(asgi_routes, "_serialize_cover_gallery_from_asgi", fail_if_pasted_save_rebuilds_gallery)
+    monkeypatch.setattr(asgi_routes, "apply_cover_path_for_tracks", lambda *_args, **_kwargs: ([], None))
+    persist_failures = [RuntimeError("database unavailable"), None]
+
+    def persist(*_args, **_kwargs):
+        failure = persist_failures.pop(0)
+        if failure is not None:
+            raise failure
+
+    monkeypatch.setattr(asgi_routes, "persist_cover_selection_for_tracks", persist)
+    monkeypatch.setattr(
+        asgi_routes, "mark_cover_lookup_notifications_action_taken_for_track_paths", lambda *_a, **_k: [],
+    )
+    backup = track_path.parent / "cover-existing-1.jpg"
+
+    with pytest.raises(RuntimeError):
+        _run_asgi_request(
+            asgi_app, "POST", "/utilities/cover-lookup/pasted-image-save",
+            json_body={"album": _album_payload(track_path), "data_url": _jpeg_data_url((20, 40, 220))},
+        )
+    assert previous_cover.read_bytes() == previous_bytes
+    assert not backup.exists(), "a failed save must not leave a backup card behind"
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app, "POST", "/utilities/cover-lookup/pasted-image-save",
+        json_body={"album": _album_payload(track_path), "data_url": _jpeg_data_url((20, 40, 220))},
+    )
+
+    assert status == 200
+    payload = _decode_json(body)
+    assert payload["selected_cover_path"] == str(previous_cover)
+    assert payload["replaced_cover_backup"] == {
+        "path": str(backup),
+        "filename": "cover-existing-1.jpg",
+        "relative_path": "cover-existing-1.jpg",
+        "sort_relative_path": "cover-existing-1.jpg",
+    }
+    assert backup.read_bytes() == previous_bytes
+    assert invalidated[-1] == [previous_cover, backup]
+
+
 def test_asgi_cover_lookup_local_select_delete_and_pasted_image_validation(app, monkeypatch):
     from music_app.routes import api_wave_d_asgi_routes as asgi_routes
 
@@ -3202,6 +3382,7 @@ def test_asgi_cover_lookup_local_select_delete_and_pasted_image_validation(app, 
     pasted_success_payload = _decode_json(pasted_success_body)
     assert pasted_success_payload["ok"] is True
     assert pasted_success_payload["selected_cover_path"] == str(track_path.parent / "cover.jpg")
+    assert pasted_success_payload["replaced_cover_backup"] is None
     assert "gallery" not in pasted_success_payload
     assert persist_calls[-1]["selected_local_cover_source_path"] == track_path.parent / "cover.jpg"
     assert apply_calls[-1]["selected_local_cover_source_path"] == track_path.parent / "cover.jpg"
@@ -3659,6 +3840,44 @@ def test_asgi_cover_lookup_add_remote_merges_existing_candidates_and_remote_imag
 
     assert failed_status == 502
     assert _decode_json(failed_body) == {"ok": False, "error": "Failed to load remote image"}
+
+
+def test_remote_card_preview_is_downscaled_and_cached_apart_from_the_original(app, monkeypatch):
+    import io
+
+    from PIL import Image
+
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+
+    original = io.BytesIO()
+    Image.new("RGB", (2400, 2400), (10, 120, 200)).save(original, "JPEG", quality=95)
+    fetches = []
+
+    def fetch(image_url, **_kwargs):
+        fetches.append(image_url)
+        return original.getvalue(), "image/jpeg"
+
+    monkeypatch.setattr(asgi_routes, "fetch_remote_cover_bytes", fetch)
+    asgi_app = _make_wave_d_app(app)
+    asgi_app.state.flask_app = _FatalFlaskBridge()
+    url = "https://images.example/apple-3000.jpg"
+
+    def get(**query):
+        return _run_asgi_request(asgi_app, "GET", "/utilities/cover-lookup/remote-image", query={"url": url, **query})
+
+    first_status, first_headers, first_body = get(size="480", key="candidate")
+    again_status, _again_headers, again_body = get(size="480", key="candidate")
+    full_status, _full_headers, full_body = get()
+    unsupported_status, _unsupported_headers, unsupported_body = get(size="4000")
+
+    assert (first_status, again_status, full_status, unsupported_status) == (200, 200, 200, 200)
+    assert first_headers["content-type"] == "image/jpeg"
+    with Image.open(io.BytesIO(first_body)) as preview:
+        assert preview.size == (480, 480)
+    assert again_body == first_body
+    # The lightbox keeps the original, remembered from the card's fetch; only the card edge is ever resized.
+    assert full_body == unsupported_body == original.getvalue()
+    assert fetches == [url]
 
 
 def test_remote_candidate_image_download_does_not_block_cover_lookup_api(app, monkeypatch):
@@ -5382,15 +5601,6 @@ def test_cover_lookup_start_uses_recorded_edit_destination_before_stale_album_lo
     )
     events = []
 
-    class Reservation:
-        def release(self):
-            events.append("released")
-
-    def acquire_reservation(resource_keys, *, cancel_event=None):
-        assert cancel_event is not None
-        events.append(("acquired", resource_keys))
-        return Reservation()
-
     def refresh_album(_self, album_id, *, client_surface_class=None):
         events.append(("refreshed", album_id, client_surface_class))
         if album_id == 14674:
@@ -5408,12 +5618,6 @@ def test_cover_lookup_start_uses_recorded_edit_destination_before_stale_album_lo
         )
         return "task-1"
 
-    monkeypatch.setattr(
-        asgi_routes,
-        "acquire_structural_tag_edit_reservation",
-        acquire_reservation,
-        raising=False,
-    )
     monkeypatch.setattr(
         PostgresLibraryBrowseRepository,
         "build_album_detail_payload_by_id",
@@ -5460,19 +5664,18 @@ def test_cover_lookup_start_uses_recorded_edit_destination_before_stale_album_lo
 
     prepared_album, prepared_paths = queued[4](queued[1], queued[2], Event())
 
-    acquired = events[1]
-    assert acquired[0] == "acquired"
-    assert "album:ovderhead::telepathic minds" in acquired[1]
+    # Owner (11-16): preparing never takes or waits for the tag-edit reservation.
+    reconciled = events[1]
+    assert reconciled[0] == "reconciled"
+    assert "album:ovderhead::telepathic minds" in reconciled[1]
     stale_path_key = next(iter(asgi_routes.structural_tag_edit_resource_keys(
         "",
         {str(stale_path)},
     )))
-    assert stale_path_key in acquired[1]
-    assert events[2][0] == "reconciled"
-    assert events[2][1] == acquired[1]
-    assert events[2][2] > 0
-    assert events[3] == ("refreshed", 24674, None)
-    assert events[4] == "released"
+    assert stale_path_key in reconciled[1]
+    assert reconciled[2] > 0
+    assert events[2] == ("refreshed", 24674, None)
+    assert len(events) == 3
     assert prepared_album["album_artist"] == "Overhead"
     assert prepared_paths == {str(current_path)}
 
@@ -5606,10 +5809,6 @@ def test_cover_lookup_start_recovers_empty_id_projection_by_track_paths(
     }
     queued = []
 
-    class Reservation:
-        def release(self):
-            pass
-
     class Repository:
         def __init__(self, _config):
             pass
@@ -5622,19 +5821,10 @@ def test_cover_lookup_start_recovers_empty_id_projection_by_track_paths(
             assert track_paths == {str(track_path)}
             return [current_album]
 
-    def acquire_reservation(_resource_keys, *, cancel_event=None):
-        assert cancel_event is not None
-        return Reservation()
-
     def queue_lookup(album, track_paths, _manual_urls, **kwargs):
         queued.append((album, track_paths, kwargs.get("prepare")))
         return "task-1"
 
-    monkeypatch.setattr(
-        asgi_routes,
-        "acquire_structural_tag_edit_reservation",
-        acquire_reservation,
-    )
     monkeypatch.setattr(asgi_routes, "PostgresLibraryBrowseRepository", Repository)
     monkeypatch.setattr(
         asgi_routes,
@@ -5796,3 +5986,113 @@ def test_asgi_cover_saves_persist_off_the_event_loop(app, monkeypatch):
             pass
     assert len(persistence_threads) == 2
     assert loop_thread not in persistence_threads
+
+
+def test_cover_lookup_start_prepares_album_split_across_part_folders(app, monkeypatch):
+    # Owner (11-16): Последнее Испытание keeps its tracks in "Часть 1".."Часть 4"; its lookup failed with
+    # "Album does not contain any tracks" because preparing it only accepted a single track folder.
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+
+    album_folder = (app.config["MUSIC_DIR"] / "Artist" / "2009 - Album").resolve()
+    track_paths = [(album_folder / f"Часть {part}" / f"0{part}.mp3").resolve() for part in (1, 2)]
+    for track_path in track_paths:
+        track_path.parent.mkdir(parents=True, exist_ok=True)
+        track_path.write_bytes(b"track")
+    album = {
+        **_album_payload(track_paths[0]),
+        "album_id": 5001,
+        "key": "artist::album",
+        "tracks": [{"path": str(path)} for path in track_paths],
+    }
+    queued = []
+
+    class Repository:
+        def __init__(self, _config):
+            pass
+
+        def build_album_detail_payload_by_id(self, album_id, *, client_surface_class=None):
+            assert album_id == 5001
+            return album
+
+    def queue_lookup(queued_album, queued_paths, _manual_urls, **kwargs):
+        queued.append((queued_album, queued_paths, kwargs.get("prepare")))
+        return "task-1"
+
+    monkeypatch.setattr(asgi_routes, "PostgresLibraryBrowseRepository", Repository)
+    monkeypatch.setattr(asgi_routes, "latest_structural_tag_edit_destination", lambda *_a, **_k: None)
+    monkeypatch.setattr(asgi_routes, "queue_cover_lookup_task", queue_lookup)
+    monkeypatch.setattr(asgi_routes, "cover_lookup_result", lambda task_id: {"id": task_id, "status": "queued"})
+    monkeypatch.setattr(asgi_routes, "serialize_cover_lookup_task_payload", lambda payload: payload)
+    monkeypatch.setattr(asgi_routes, "log_app_event", lambda *_args, **_kwargs: None)
+
+    status, _headers, body = _run_asgi_request(
+        _make_wave_d_app(app),
+        "POST",
+        "/utilities/cover-lookup/start",
+        json_body={"album": album, "manual_urls": []},
+    )
+
+    assert status == 200, body
+    prepared_album, prepared_paths = queued[0][2](queued[0][0], queued[0][1], Event())
+    assert prepared_paths == {str(path) for path in track_paths}
+    assert prepared_album["album_id"] == 5001
+
+
+def test_cover_lookup_prepare_never_waits_for_a_tag_edit_on_the_album(app, monkeypatch):
+    # Owner (11-16): a cover search must not wait while a tag edit on the same album saves; it searches
+    # with what it was started with. A real reservation is held for the album's keys during prepare.
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+    from music_app.services.save_tasks import (
+        acquire_structural_tag_edit_reservation,
+        structural_tag_edit_resource_keys,
+    )
+
+    album_folder = (app.config["MUSIC_DIR"] / "Artist" / "2000 - Held").resolve()
+    track_path = (album_folder / "01.mp3").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    album = {**_album_payload(track_path), "album_id": 5002, "key": "artist::held"}
+    queued = []
+
+    class Repository:
+        def __init__(self, _config):
+            pass
+
+        def build_album_detail_payload_by_id(self, album_id, *, client_surface_class=None):
+            return album
+
+    def queue_lookup(queued_album, queued_paths, _manual_urls, **kwargs):
+        queued.append((queued_album, queued_paths, kwargs.get("prepare")))
+        return "task-held"
+
+    monkeypatch.setattr(asgi_routes, "PostgresLibraryBrowseRepository", Repository)
+    monkeypatch.setattr(asgi_routes, "latest_structural_tag_edit_destination", lambda *_a, **_k: None)
+    monkeypatch.setattr(asgi_routes, "queue_cover_lookup_task", queue_lookup)
+    monkeypatch.setattr(asgi_routes, "cover_lookup_result", lambda task_id: {"id": task_id, "status": "queued"})
+    monkeypatch.setattr(asgi_routes, "serialize_cover_lookup_task_payload", lambda payload: payload)
+    monkeypatch.setattr(asgi_routes, "log_app_event", lambda *_args, **_kwargs: None)
+
+    status, _headers, body = _run_asgi_request(
+        _make_wave_d_app(app), "POST", "/utilities/cover-lookup/start",
+        json_body={"album": album, "manual_urls": []},
+    )
+    assert status == 200, body
+
+    held = acquire_structural_tag_edit_reservation(
+        structural_tag_edit_resource_keys("artist::held", {str(track_path)})
+    )
+    try:
+        result = {}
+        worker = Thread(
+            target=lambda: result.update(prepared=queued[0][2](queued[0][0], queued[0][1], Event())),
+            daemon=True,
+        )
+        worker.start()
+        worker.join(timeout=3)
+        assert not worker.is_alive(), "prepare waited for the tag edit's reservation"
+    finally:
+        held.release()
+        worker.join(timeout=3)
+    prepared_album, prepared_paths = result["prepared"]
+    assert prepared_paths == {str(track_path)}
+    assert prepared_album["album_id"] == 5002

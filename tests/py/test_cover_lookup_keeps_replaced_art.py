@@ -30,7 +30,7 @@ def test_pasting_a_new_cover_keeps_the_replaced_other_art_in_the_gallery(tmp_pat
     (album / "cover.jpg").write_bytes(other_art)
     pasted = "data:image/png;base64," + base64.b64encode(_image_bytes((500, 500), (20, 60, 120), "PNG")).decode()
 
-    saved = save_pasted_image_as_authoritative_cover(pasted, album)
+    saved = save_pasted_image_as_authoritative_cover(pasted, album).cover_path
 
     candidates = iter_local_cover_candidates(
         album, image_extensions={".jpg", ".png"}, image_dimensions=image_dimensions,

@@ -8,6 +8,7 @@ from time import perf_counter, sleep
 import uuid
 
 from music_app.services.edit_tag_timings import EditTagTimingRecorder
+from music_app.services.tag_edit_intents_postgres import DuplicateTagEditRequest
 from music_app.services.scan_cache_persistence import (
     StructuralTagEditDestinationConflict,
 )
@@ -688,6 +689,9 @@ def _handle_edit_tags_request_after_reservation(
                 ).strip()
                 if not tag_edit_intent_id:
                     raise RuntimeError("Tag edit intent persistence returned no intent ID.")
+            except DuplicateTagEditRequest:
+                # A resent save the server already received: the first request finishes it.
+                return {"ok": False, "code": "duplicate_request", "error": "This save was already received."}, 409
             except Exception as exc:
                 failure_payload = _record_tag_edit_failure(
                     album=album,

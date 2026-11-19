@@ -1047,6 +1047,7 @@ function mergeVisibleAlbumWithOptimisticCandidate(visibleAlbum, candidate, optio
     ...visibleAlbum,
     tracks,
   };
+  let compactDurationSeconds = null;
   if (replaceCompactMembership) {
     mergedAlbum.preview_only = false;
     mergedAlbum.track_paths = Array.from(candidateMembershipPaths);
@@ -1060,6 +1061,14 @@ function mergeVisibleAlbumWithOptimisticCandidate(visibleAlbum, candidate, optio
     const candidateAddsDistinctMembership = Array.from(candidateMembershipPaths)
       .filter((path) => !visibleMembershipPaths.has(path)).length;
     mergedAlbum.preview_only = true;
+    // A compact card knows only some tracks: its own duration plus the tracks this edit adds.
+    const visibleDeclaredDuration = Number(visibleAlbum?.total_duration_seconds);
+    if (Number.isFinite(visibleDeclaredDuration) && visibleDeclaredDuration > 0) {
+      const addedDuration = (Array.isArray(candidate?.tracks) ? candidate.tracks : [])
+        .filter((track) => !visibleMembershipPaths.has(String(track?.path || '')))
+        .reduce((sum, track) => sum + Math.max(0, Number(track?.duration_seconds || 0) || 0), 0);
+      compactDurationSeconds = visibleDeclaredDuration + addedDuration;
+    }
     if (mergedMembershipPaths.size) {
       mergedAlbum.track_paths = Array.from(mergedMembershipPaths);
       mergedAlbum.track_count_preview = Math.max(
@@ -1070,9 +1079,13 @@ function mergeVisibleAlbumWithOptimisticCandidate(visibleAlbum, candidate, optio
       );
     }
   }
-  const shouldRecomputeDuration = tracks.some((track) => Number(track?.duration_seconds || 0) > 0)
+  if (compactDurationSeconds !== null) {
+    mergedAlbum.total_duration_seconds = compactDurationSeconds;
+    mergedAlbum.total_duration_display = formatCanonicalAlbumDuration(compactDurationSeconds);
+  }
+  const shouldRecomputeDuration = compactDurationSeconds === null && (tracks.some((track) => Number(track?.duration_seconds || 0) > 0)
     || Object.prototype.hasOwnProperty.call(visibleAlbum || {}, 'total_duration_seconds')
-    || Object.prototype.hasOwnProperty.call(candidate || {}, 'total_duration_seconds');
+    || Object.prototype.hasOwnProperty.call(candidate || {}, 'total_duration_seconds'));
   if (shouldRecomputeDuration) {
     const totalDurationSeconds = tracks.reduce(
       (sum, track) => {
@@ -3149,6 +3162,8 @@ function renderProblemFilterControls(els) {
 function getFilteredProblematicAlbums() {
   const query = (state.utility.searchQuery || '').trim().toLowerCase();
   const serverQuery = String(state.utility.problematicServerSearchSettledQuery || '').trim().toLowerCase();
+  const pendingServerQuery = String(state.utility.problematicServerSearchPendingQuery || '').trim().toLowerCase();
+  if (query.length >= 2 && pendingServerQuery === query && serverQuery !== query) return [];
   const items = query.length >= 2 && serverQuery === query
     ? getAllProblematicItems()
     : getProblematicBaseItems();

@@ -723,18 +723,20 @@ let detachedGalleryBarParent = null;
 let detachedGalleryBarNextSibling = null;
 
 function buildLibraryStatusBarHtml() {
-  return `<section class="gallery-bar gallery-bar--scan" id="library-status-gallery-bar" data-gallery-bar data-gallery-bar-instance="library-status" aria-label="Library Status Page controls">
-    <div class="gallery-bar__context">
-      ${ButtonComponent.renderActionButton({ icon: 'back', presentation: 'bare', ariaLabel: 'Back to previous library view', className: 'gallery-action-button library-loader-back-button', attributes: { id: 'library-loader-back-button', 'data-close-scan-page': '1' } })}
-      <div class="library-scan-gallery-copy">
-        <div class="gallery-bar__title"><span>Library State</span></div>
-        <span class="gallery-bar__summary" id="library-scan-gallery-summary" aria-live="polite">Preparing status...</span>
-      </div>
-    </div>
-    <div class="gallery-bar__actions library-loader-actions" id="library-loader-actions" hidden>
+  return `<section class="gallery-bar page-gallery-bar gallery-bar--scan" id="library-status-gallery-bar" data-gallery-bar data-gallery-bar-instance="library-status" data-gallery-bar-layout="mobile-primary" aria-label="Library Status Page controls">
+    ${buildGalleryBarContentsHtml({
+      leadingHtml: ButtonComponent.renderActionButton({ icon: 'back', presentation: 'bare', ariaLabel: 'Back to previous library view', className: 'gallery-action-button library-loader-back-button page-gallery-bar__back', attributes: { id: 'library-loader-back-button', 'data-close-scan-page': '1' } }),
+      titleHtml: '<span>Library State</span>',
+      summary: 'Preparing status...',
+      summaryId: 'library-scan-gallery-summary',
+      summaryLive: 'polite',
+      actionsClassName: 'library-loader-actions',
+      actionsId: 'library-loader-actions',
+      actionsHidden: true,
+      actionsHtml: `
       <button class="button ui-button ui-button--secondary ui-button--medium library-loader-browse-button" type="button" id="library-loader-browse-button" data-browse-scanned-library="1" hidden>Browse Library</button>
-      <button class="button ui-button ui-button--quiet ui-button--medium library-loader-cancel-button" type="button" id="library-loader-cancel-button" data-cancel-library-scan="1" hidden>Cancel Scan</button>
-    </div>
+      <button class="button ui-button ui-button--quiet ui-button--medium library-loader-cancel-button" type="button" id="library-loader-cancel-button" data-cancel-library-scan="1" hidden>Cancel Scan</button>`,
+    })}
   </section>`;
 }
 

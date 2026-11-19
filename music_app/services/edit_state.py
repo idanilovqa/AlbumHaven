@@ -12,7 +12,6 @@ from pathlib import Path
 from music_app.services.cache import schedule_cache_updates_save_for_config
 from music_app.services.exception_overrides import apply_exception_override, load_exception_overrides
 from music_app.services.library import album_separate_release_key, album_to_dict, build_albums_from_file_cache
-from music_app.services.library_watch_suppression import suppress_library_watch_events
 from music_app.services.metadata import apply_text_repairs_to_file, normalize_exception_value, read_metadata_for_file
 from music_app.services.non_album_view_payloads import is_loose_track_album_value
 from music_app.services.relations import build_relation_views
@@ -181,10 +180,7 @@ def build_affected_album_dicts(
 
 
 def apply_repairs_worker(raw_path: str, repairs: dict[str, str]) -> tuple[str, bool, list[str]]:
-    # The save task persists this app-owned write. A watcher reconcile of its folder republished
-    # the album and rebuilt the Gallery while the user browsed on (FTC-TAGS-015).
-    with suppress_library_watch_events((raw_path,)):
-        changed, changed_fields = apply_text_repairs_to_file(Path(raw_path), repairs)
+    changed, changed_fields = apply_text_repairs_to_file(Path(raw_path), repairs)
     return raw_path, changed, changed_fields
 
 

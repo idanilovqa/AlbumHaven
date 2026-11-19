@@ -233,7 +233,7 @@ updateStatusIndicator({
     : {}),
 });
 state.wasPollingBusy = Boolean(bootstrap.scanInProgress || bootstrap.relationsInProgress);
-if (typeof startLibraryLiveEvents === 'function') startLibraryLiveEvents(bootstrap.liveEventsHead);
+// diagnostic: live events off
 state.wasCoverPollingBusy = Boolean(bootstrap.coversInProgress);
 const shouldAwaitInitialDataRefresh = Boolean(
   shouldStartImmediateHydration

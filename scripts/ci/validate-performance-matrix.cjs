@@ -24,7 +24,8 @@ const CALIBRATION_POLICY = Object.freeze({
   exceptionsRequireOwnerApproval: true,
 });
 const SHARD_DEFINITIONS = Object.freeze([
-  { shard: 'synthetic-large-library', fixtureProfile: 'synthetic-large-library', fixtureMode: 'preloaded-release', harness: 'managed-app', basePort: '4173', targets: 'idle-memory,all-artists,artist-family,search-all-artists,utility-rules,selected-artist,edit-tags-post-edit,cover-lookup,album-title-search,track-title-search,search-browse,root-album-browse,artist-tree-scroll-navigation,app-open-all-artists,notification-history,rules-focused,paired-search-calibration' },
+  { shard: 'synthetic-large-library', fixtureProfile: 'synthetic-large-library', fixtureMode: 'preloaded-release', harness: 'managed-app', basePort: '4173', targets: 'idle-memory,all-artists,utility-rules,album-title-search,track-title-search,root-album-browse,app-open-all-artists,rules-focused,paired-search-calibration' },
+  { shard: 'synthetic-production-library', fixtureProfile: 'synthetic-large-library', fixtureMode: 'preloaded-release', harness: 'managed-app', basePort: '4373', targets: 'artist-family,search-all-artists,selected-artist,edit-tags-post-edit,cover-lookup,search-browse,artist-tree-scroll-navigation,notification-history' },
   { shard: 'utility-problematic-files', fixtureProfile: 'utility-problematic-files', fixtureMode: 'preloaded-release', harness: 'managed-app', basePort: '4253', targets: 'utility-problematic-files,problematic-files-focused' },
   { shard: 'playback-media', fixtureProfile: 'playback-media', fixtureMode: 'generated-isolated', harness: 'managed-app', basePort: '4213', targets: 'playback-start,gapless-playback' },
   { shard: 'scan-library', fixtureProfile: 'scan-library', fixtureMode: 'generated-isolated', harness: 'scan', basePort: '4293', targets: 'scan-cold,scan-cached,scan-add-album,scan-metadata,scan-page,scan-health,scan-error' },
@@ -32,6 +33,7 @@ const SHARD_DEFINITIONS = Object.freeze([
 ]);
 const FIXTURE_DOWNLOAD_PROFILES = Object.freeze({
   'synthetic-large-library': 'synthetic-large-library',
+  'synthetic-production-library': 'synthetic-large-library',
   'utility-problematic-files': 'utility-problematic-files',
   'playback-media': 'synthetic-large-library',
   'scan-library': 'synthetic-large-library',
@@ -109,6 +111,10 @@ function validateRegistry(errors, contract, runnerModule, testDataMatrix) {
   for (const target of targets) {
     if (target.workers !== 1) errors.push(`performance target ${target.name} must use one worker`);
     if (!target.defaultMember) errors.push(`performance target ${target.name} must be a default member`);
+    const runnerScale = runnerModule?.PERFORMANCE_TARGETS?.[target.name]?.env?.ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET;
+    if (target.fixtureScale !== runnerScale) {
+      errors.push(`performance target ${target.name} fixtureScale disagrees with its runner scale preset`);
+    }
     if (target.calibrationState === 'uncalibrated' && target.blocking !== false) {
       errors.push(`uncalibrated performance target ${target.name} must remain nonblocking`);
     }
@@ -121,7 +127,7 @@ function validateRegistry(errors, contract, runnerModule, testDataMatrix) {
 
 function validateShardRows(errors, rawRows, contract) {
   const rows = rawRows.map((row) => Object.fromEntries(MATRIX_FIELDS.map((field) => [field, row[field]])));
-  if (rows.length !== SHARD_DEFINITIONS.length) errors.push('performance matrix must contain exactly five profile runners');
+  if (rows.length !== SHARD_DEFINITIONS.length) errors.push(`performance matrix must contain exactly ${SHARD_DEFINITIONS.length} profile runners`);
   if (JSON.stringify(rows) !== JSON.stringify(expectedRows())) errors.push('performance shard rows disagree with the reviewed compatible allocation');
   const targetsByName = new Map((contract.targets || []).map((target) => [target.name, target]));
   const owned = [];
@@ -141,6 +147,10 @@ function validateShardRows(errors, rawRows, contract) {
       if (target.fixtureProfile !== row.fixtureProfile || target.fixtureMode !== row.fixtureMode || !compatibleHarness) {
         errors.push(`performance shard ${row.shard} contains incompatible fixture or harness target ${name}`);
       }
+      const expectedScale = row.shard === 'synthetic-production-library' ? 'production-calibration' : undefined;
+      if (target.fixtureScale !== expectedScale) {
+        errors.push(`performance shard ${row.shard} contains target ${name} for the wrong library size`);
+      }
     }
     for (let slot = names.length + 1; slot <= PERFORMANCE_ARTIFACT_SLOT_COUNT; slot += 1) {
       if (row[`target${slot}`] !== 'none') errors.push(`performance shard ${row.shard} must fill unused artifact slots with none`);
@@ -149,7 +159,7 @@ function validateShardRows(errors, rawRows, contract) {
   const registered = (contract.targets || []).map((target) => target.name);
   if (owned.length !== registered.length || new Set(owned).size !== registered.length
     || registered.some((name) => !owned.includes(name))) {
-    errors.push('all 29 performance targets must be owned exactly once across five profile runners');
+    errors.push(`all ${EXPECTED_TARGET_COUNT} performance targets must be owned exactly once across ${SHARD_DEFINITIONS.length} profile runners`);
   }
 }
 
@@ -185,6 +195,10 @@ function validateWorkflowContract(workflow, contract, runnerModule, testDataMatr
   if (/\n\s+if:/.test(trustedCheckout) || /\n\s+if:/.test(fixtureFetch)) errors.push('trusted fixture seed must be fetched for every performance shard');
   if (!/github\.event\.pull_request\.base\.sha/.test(job) || !/path:\s*album-haven-trusted-ci/.test(job)) errors.push('performance shards must use a trusted base checkout');
   if (!/-Profile\s+\$\{\{\s*matrix\.shard\s*==\s*'utility-problematic-files'\s*&&\s*'utility-problematic-files'\s*\|\|\s*'synthetic-large-library'\s*\}\}/.test(fixtureFetch)) errors.push('performance fixture fetch must use the static reviewed download-profile mapping');
+  if (!/-Release\s+\$\{\{\s*matrix\.shard\s*==\s*'synthetic-production-library'\s*&&\s*'fixtures-v1\.0\.30-production-calibration'\s*\|\|\s*'fixtures-v1\.0\.30'\s*\}\}/.test(fixtureFetch)
+    || !/-ManifestSha256\s+\$\{\{\s*matrix\.shard\s*==\s*'synthetic-production-library'\s*&&\s*'[0-9A-F]{64}'\s*\|\|\s*'[0-9A-F]{64}'\s*\}\}/.test(fixtureFetch)) {
+    errors.push('performance fixture fetch must pin the reviewed release for each shard library size');
+  }
   if (!/generated-isolated[\s\S]*ALBUM_HAVEN_APPROVED_COVER_ROOT[\s\S]*ALBUM_HAVEN_FIXTURE_ROOT[\s\S]*ALBUM_HAVEN_MEDIA_ROOT/.test(job)) errors.push('generated shards must isolate a verified released cover seed from runtime fixture roots');
   if (job.indexOf('Fetch immutable performance fixture') > job.indexOf('Install Node dependencies')
     || job.indexOf('Fetch immutable performance fixture') > job.indexOf('Resolve performance shard configuration')

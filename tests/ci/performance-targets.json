@@ -134,6 +134,7 @@
     {
       "name": "artist-family",
       "fixtureProfile": "synthetic-large-library",
+      "fixtureScale": "production-calibration",
       "fixtureMode": "preloaded-release",
       "runnerClass": "synthetic",
       "workers": 1,
@@ -161,6 +162,7 @@
     {
       "name": "search-all-artists",
       "fixtureProfile": "synthetic-large-library",
+      "fixtureScale": "production-calibration",
       "fixtureMode": "preloaded-release",
       "runnerClass": "synthetic",
       "workers": 1,
@@ -236,6 +238,7 @@
     {
       "name": "selected-artist",
       "fixtureProfile": "synthetic-large-library",
+      "fixtureScale": "production-calibration",
       "fixtureMode": "preloaded-release",
       "runnerClass": "synthetic",
       "workers": 1,
@@ -269,6 +272,7 @@
     {
       "name": "edit-tags-post-edit",
       "fixtureProfile": "synthetic-large-library",
+      "fixtureScale": "production-calibration",
       "fixtureMode": "preloaded-release",
       "runnerClass": "synthetic",
       "workers": 1,
@@ -290,6 +294,7 @@
     {
       "name": "cover-lookup",
       "fixtureProfile": "synthetic-large-library",
+      "fixtureScale": "production-calibration",
       "fixtureMode": "preloaded-release",
       "runnerClass": "synthetic",
       "workers": 1,
@@ -353,6 +358,7 @@
     {
       "name": "search-browse",
       "fixtureProfile": "synthetic-large-library",
+      "fixtureScale": "production-calibration",
       "fixtureMode": "preloaded-release",
       "runnerClass": "synthetic",
       "workers": 1,
@@ -395,6 +401,7 @@
     {
       "name": "artist-tree-scroll-navigation",
       "fixtureProfile": "synthetic-large-library",
+      "fixtureScale": "production-calibration",
       "fixtureMode": "preloaded-release",
       "runnerClass": "synthetic",
       "workers": 1,
@@ -815,6 +822,7 @@
     {
       "name": "notification-history",
       "fixtureProfile": "synthetic-large-library",
+      "fixtureScale": "production-calibration",
       "fixtureMode": "preloaded-release",
       "runnerClass": "synthetic",
       "workers": 1,

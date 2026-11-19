@@ -113,11 +113,12 @@ jobs:
           New-Item -ItemType Directory -Force -Path (Join-Path $distribution "profiles") | Out-Null
           foreach ($profile in @(.\.trusted-ci\scripts\run-regression-gate.ps1 -Gate "${{ matrix.gate }}" -Cases $env:FOCUSED_CASES -Targets $env:FOCUSED_TARGETS -ListFixtureProfiles)) {
             $exports = Join-Path "${{ runner.temp }}" "fixture-$profile.env"
-            & ".trusted-ci\scripts\ci\fetch-test-fixtures.ps1" `
-              -Release fixtures-v1.0.30 `
-              -Profile $profile `
-              -ManifestSha256 0CBF9D17930C0347B40415A5B367DEBD93EC5CA7D8439CFAB7060A7E0BB13752 `
-              -GithubEnv $exports
+            # synthetic-production-library is synthetic-large-library released at the owner's library size.
+            $release = @{ Release = 'fixtures-v1.0.30'; Profile = $profile; ManifestSha256 = '0CBF9D17930C0347B40415A5B367DEBD93EC5CA7D8439CFAB7060A7E0BB13752' }
+            if ($profile -eq 'synthetic-production-library') {
+              $release = @{ Release = 'fixtures-v1.0.30-production-calibration'; Profile = 'synthetic-large-library'; ManifestSha256 = 'PRODUCTION_CALIBRATION_MANIFEST_SHA256' }
+            }
+            & ".trusted-ci\scripts\ci\fetch-test-fixtures.ps1" @release -GithubEnv $exports
             $prefix = "ALBUM_HAVEN_FIXTURE_ROOT="
             $root = @(Get-Content -LiteralPath $exports | Where-Object { $_.StartsWith($prefix) })[-1].Substring($prefix.Length)
             Move-Item -LiteralPath $root -Destination (Join-Path $distribution "profiles\$profile")

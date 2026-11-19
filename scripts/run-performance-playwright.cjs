@@ -130,18 +130,21 @@ const PERFORMANCE_GROUPS = Object.freeze({
   ],
   'library-browse': [
     'all-artists',
-    'artist-family',
-    'search-all-artists',
     'utility-rules',
-    'selected-artist',
     'album-title-search',
     'track-title-search',
-    'search-browse',
     'root-album-browse',
-    'artist-tree-scroll-navigation',
     'app-open-all-artists',
     'rules-focused',
     'paired-search-calibration',
+  ],
+  // Needs the production-calibration release of synthetic-large-library.
+  'library-browse-production': [
+    'artist-family',
+    'search-all-artists',
+    'selected-artist',
+    'search-browse',
+    'artist-tree-scroll-navigation',
     'notification-history',
   ],
   'idle-memory': [
@@ -251,6 +254,7 @@ const PERFORMANCE_TARGETS = {
     supportsAggregatedThresholdRetries: true,
     env: {
       ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
+      ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET: 'production-calibration',
     },
   },
   'search-all-artists': {
@@ -272,6 +276,7 @@ const PERFORMANCE_TARGETS = {
     metricCasePattern: 'FTC-SEARCH-NAV-003A multi-family search keeps search-scoped All artists',
     env: {
       ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
+      ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET: 'production-calibration',
     },
   },
   'utility-problematic-files': {
@@ -404,6 +409,7 @@ const PERFORMANCE_TARGETS = {
     casePattern: 'FTC-GALLERY-STARTUP-005R',
     env: {
       ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
+      ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET: 'production-calibration',
     },
   },
   'root-album-browse': {
@@ -785,6 +791,42 @@ function assertScanPerformanceDatabaseConfiguration(targets, env) {
   }
 }
 
+const SYNTHETIC_SCALE_PRESET_ENV = 'ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET';
+const PRODUCTION_CALIBRATION_COUNTS = Object.freeze({ artists: 6345, albums: 14673, tracks: 159547 });
+
+function targetSyntheticScale(target) {
+  return String(target?.env?.[SYNTHETIC_SCALE_PRESET_ENV] || '').trim();
+}
+
+// A target labelled production-calibration must get the library of that size, and an unlabelled
+// target must not silently get it: the released manifest beside the fixture says which one loaded.
+function assertSyntheticFixtureScale(target, fixtureRoot, readFile = fs.readFileSync) {
+  const targetName = target.aliasNames?.[0] || target.specPath;
+  const scale = targetSyntheticScale(target);
+  if (scale && scale !== 'production-calibration') {
+    throw new Error(`Performance target ${targetName} names unknown synthetic scale ${scale}.`);
+  }
+  let counts;
+  try {
+    const manifest = JSON.parse(readFile(path.join(fixtureRoot, 'manifest.json'), 'utf8'));
+    counts = manifest?.profiles?.[target.fixtureProfile]?.counts;
+  } catch (error) {
+    throw new Error(`Performance target ${targetName} cannot read the released fixture manifest: ${error.message}`);
+  }
+  if (!counts) {
+    throw new Error(`Performance target ${targetName} fixture manifest has no ${target.fixtureProfile} counts.`);
+  }
+  const calibrated = Object.entries(PRODUCTION_CALIBRATION_COUNTS)
+    .every(([key, value]) => Number(counts[key]) === value);
+  if (Boolean(scale) !== calibrated) {
+    throw new Error(
+      `Performance target ${targetName} requires ${scale ? 'the production-calibration' : 'the standard'} `
+      + `${target.fixtureProfile} fixture, but ALBUM_HAVEN_FIXTURE_ROOT holds ${counts.artists} artists, `
+      + `${counts.albums} albums and ${counts.tracks} tracks.`,
+    );
+  }
+}
+
 function assertPerformanceTargetFixtureConfiguration(targets, env) {
   for (const target of targets) {
     const targetName = target.aliasNames?.[0] || target.specPath;
@@ -821,6 +863,9 @@ function assertPerformanceTargetFixtureConfiguration(targets, env) {
         throw new Error(
           `Performance target ${targetName} requires ALBUM_HAVEN_MEDIA_ROOT to be the exact media directory under ALBUM_HAVEN_FIXTURE_ROOT.`,
         );
+      }
+      if (target.fixtureMode === PRELOADED_RELEASE_FIXTURE_MODE && expectedProfile === 'synthetic-large-library') {
+        assertSyntheticFixtureScale(target, fixtureRoot);
       }
       continue;
     }
@@ -1179,6 +1224,15 @@ function assertSinglePreloadedFixtureProfile(targets) {
       'A grouped performance run cannot combine preloaded fixture profiles '
       + `${fixtureProfiles.join(', ')} without reloading PostgreSQL between targets. `
       + 'Run one --test target at a time or use the cloud performance matrix.',
+    );
+  }
+  const syntheticScales = [...new Set(
+    targets.filter((target) => target.kind === 'synthetic').map(targetSyntheticScale),
+  )];
+  if (syntheticScales.length > 1) {
+    throw new Error(
+      'A grouped performance run cannot combine the standard and production-calibration synthetic libraries. '
+      + 'Run them as separate groups or use the cloud performance matrix.',
     );
   }
   const fixtureModes = [...new Set(
@@ -2709,6 +2763,7 @@ module.exports = {
   _private: {
     applyTargetEnvOverrides,
     assertSinglePreloadedFixtureProfile,
+    assertSyntheticFixtureScale,
     assertNoLiveCoverProviderDomains,
     buildAggregatedThresholdEvaluation,
     classifyPerformanceAttempt,

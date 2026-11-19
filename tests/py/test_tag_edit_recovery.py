@@ -108,10 +108,11 @@ def run_startup_recovery(
         "library_root_cache_identity",
         lambda _config: "active-root",
     )
+    monkeypatch.setattr(library_roots, "iter_library_root_paths", lambda _config: [])
     monkeypatch.setattr(
         library_roots,
-        "resolve_configured_media_path",
-        lambda _config, raw_path, **_kwargs: Path(raw_path),
+        "resolve_media_path_within_roots",
+        lambda raw_path, _root_paths, **_kwargs: Path(raw_path),
     )
     monkeypatch.setattr(
         scan_cache_persistence,
@@ -358,7 +359,7 @@ def test_startup_recovery_uses_generic_persistence_for_album_and_year_change(
     assert structural_calls == []
     assert len(generic_calls) == 1
     args, kwargs = generic_calls[0]
-    assert args[2] == {track_path: resolved_entry}
+    assert args[1] == {track_path: resolved_entry}
     assert kwargs["baseline_file_cache"] == {track_path: previous_entry}
 
 
@@ -433,14 +434,14 @@ def test_startup_recovery_dispatches_from_exact_changed_field_set(
         assert len(structural_calls) == 1
         call = structural_calls[0]
         assert call["changed_field_names"] == {expected_targeted_field}
+        assert call["rebuild_relation_projection"] is True
     else:
         assert structural_calls == []
         assert len(generic_calls) == 1
         args, call = generic_calls[0]
-        assert args[2] == {track_path: resolved_entry}
+        assert args[1] == {track_path: resolved_entry}
         assert call["baseline_file_cache"] == {track_path: previous_entry}
     assert callable(call["before_commit"])
-    assert call["rebuild_relation_projection"] is True
 
 
 def test_startup_recovery_passes_merged_inventory_for_blank_album_change(
@@ -554,7 +555,7 @@ def test_startup_recovery_rejects_journal_paths_outside_configured_media_roots(
         def load_snapshot(self, _cache_path, _root_identity):
             return {}, None, {}, None, None
 
-    def reject_outside_path(_config, raw_path, **_kwargs):
+    def reject_outside_path(raw_path, _root_paths, **_kwargs):
         assert Path(raw_path) == outside_path
         return None
 
@@ -575,9 +576,10 @@ def test_startup_recovery_rejects_journal_paths_outside_configured_media_roots(
         "library_root_cache_identity",
         lambda _config: "active-root",
     )
+    monkeypatch.setattr(library_roots, "iter_library_root_paths", lambda _config: [])
     monkeypatch.setattr(
         library_roots,
-        "resolve_configured_media_path",
+        "resolve_media_path_within_roots",
         reject_outside_path,
     )
     monkeypatch.setattr(

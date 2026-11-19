@@ -280,7 +280,7 @@ def test_finalize_save_task_marks_task_completed(tmp_path, monkeypatch):
         "file_cache": {},
         "relation_views": {"existing": True},
     }
-    scheduled_payloads: list[tuple[object, dict[str, object]]] = []
+    scheduled_payloads: list[dict[str, object]] = []
     log_entries: list[dict[str, object]] = []
     rebuild_calls: list[tuple[set[str], set[str]]] = []
     legacy_relation_build_calls: list[list[object]] = []
@@ -308,8 +308,8 @@ def test_finalize_save_task_marks_task_completed(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(save_tasks_module, "library_root_cache_identity", lambda config: "identity-1")
 
-    def schedule_save(cache_path, payload, _baseline):
-        scheduled_payloads.append((cache_path, payload))
+    def schedule_save(payload, _baseline):
+        scheduled_payloads.append(payload)
         return persistence_future
 
     def legacy_relation_builder(albums, _config):
@@ -350,9 +350,7 @@ def test_finalize_save_task_marks_task_completed(tmp_path, monkeypatch):
     assert legacy_relation_build_calls == []
     assert state_payload["relation_views"] == committed_relation_state["relation_views"]
     assert state_payload["relations_last_built"] == 55.0
-    assert scheduled_payloads == [
-        (config["CACHE_PATH"], {"track-1.mp3": {"path": "track-1.mp3", "title": "Song"}}),
-    ]
+    assert scheduled_payloads == [{"track-1.mp3": {"path": "track-1.mp3", "title": "Song"}}]
     assert log_entries == [{"action": "Library save completed", "artist": "Test Artist"}]
     assert payload["status"] == "completed"
     assert payload["requires_view_refresh"] is True
@@ -385,7 +383,7 @@ def test_finalize_save_task_merges_only_changed_entries_into_live_state(tmp_path
             dict(updated)
         ),
         build_relation_views=lambda albums, config: {},
-        schedule_cache_updates_save=lambda cache_path, payload, _baseline: None,
+        schedule_cache_updates_save=lambda payload, _baseline: None,
         append_log_history=lambda config, entry: None,
         log_app_event=lambda *args, **kwargs: None,
         find_albums_by_track_paths=lambda track_paths: [],
@@ -442,7 +440,7 @@ def test_finalize_save_task_three_way_merges_changed_entry_with_live_cover(
     scheduled_payloads: list[dict[str, dict[str, object]]] = []
     persisted_entries: list[dict[str, object]] = []
 
-    def schedule_request_delta(_cache_path, payload, baseline):
+    def schedule_request_delta(payload, baseline):
         scheduled_payloads.append(
             {
                 path: dict(entry)
@@ -578,7 +576,7 @@ def test_finalize_relation_rebuild_preserves_cover_selected_after_initial_rebase
             }
         )
 
-    def publish_request_delta(_cache_path, payload, baseline):
+    def publish_request_delta(payload, baseline):
         rebased = save_tasks_module._rebase_non_cover_cache_entry_changes(
             baseline_file_cache=baseline,
             changed_entries=payload,
@@ -809,7 +807,7 @@ def test_finalize_save_task_uses_direct_callbacks_without_framework_context(tmp_
             True,
         ),
         build_relation_views=legacy_relation_builder,
-        schedule_cache_updates_save=lambda _cache_path, _payload, _baseline: persistence_future,
+        schedule_cache_updates_save=lambda _payload, _baseline: persistence_future,
         append_log_history=lambda config, entry: None,
         log_app_event=lambda *args, **kwargs: None,
         find_albums_by_track_paths=lambda track_paths: [],
@@ -852,7 +850,7 @@ def test_finalize_save_task_keeps_non_structural_changes_without_view_refresh(tm
         get_state=lambda: state_payload,
         rebuild_affected_albums_in_state=lambda *args, **kwargs: None,
         build_relation_views=lambda albums, config: {"rebuilt": True},
-        schedule_cache_updates_save=lambda cache_path, payload, _baseline: None,
+        schedule_cache_updates_save=lambda payload, _baseline: None,
         append_log_history=lambda config, entry: None,
         log_app_event=lambda *args, **kwargs: None,
         find_albums_by_track_paths=lambda track_paths: [{"key": "album-1"}],
@@ -900,13 +898,12 @@ def test_finalize_save_task_installs_relation_views_from_single_guarded_save(
     persistence_future: Future[dict[str, object]] = Future()
     persistence_future.set_result(committed_relation_state)
     scheduled_saves: list[
-        tuple[Path, dict[str, dict[str, object]], dict[str, dict[str, object]]]
+        tuple[dict[str, dict[str, object]], dict[str, dict[str, object]]]
     ] = []
 
-    def schedule_guarded_save(cache_path, changed_entries, baseline):
+    def schedule_guarded_save(changed_entries, baseline):
         scheduled_saves.append(
             (
-                cache_path,
                 {path: dict(entry) for path, entry in changed_entries.items()},
                 {path: dict(entry) for path, entry in baseline.items()},
             )
@@ -947,7 +944,6 @@ def test_finalize_save_task_installs_relation_views_from_single_guarded_save(
 
     assert scheduled_saves == [
         (
-            config["CACHE_PATH"],
             {"track-1.mp3": {"path": "track-1.mp3", "title": "Song"}},
             {},
         )
@@ -1001,7 +997,7 @@ def test_scoped_postgres_exception_finalizer_avoids_global_cache_publication(
                 "scoped Postgres exception edits must not rebuild global relation views"
             )
         ),
-        schedule_cache_updates_save=lambda _cache_path, payload, _baseline: scheduled_payloads.append(
+        schedule_cache_updates_save=lambda payload, _baseline: scheduled_payloads.append(
             dict(payload)
         ),
         append_log_history=lambda *_args, **_kwargs: None,
@@ -1257,7 +1253,7 @@ def test_finalize_save_task_marks_task_failed_when_rebuild_raises(tmp_path):
         get_state=lambda: {"albums": [], "file_cache": {}, "relation_views": {}},
         rebuild_affected_albums_in_state=lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
         build_relation_views=lambda albums, config: {},
-        schedule_cache_updates_save=lambda cache_path, payload, _baseline: None,
+        schedule_cache_updates_save=lambda payload, _baseline: None,
         append_log_history=lambda config, entry: None,
         log_app_event=lambda *args, **kwargs: None,
         find_albums_by_track_paths=lambda track_paths: [],
@@ -1287,7 +1283,6 @@ def test_finalize_save_task_waits_for_durable_cache_write_before_completing(tmp_
     success_events: list[tuple[str, str]] = []
 
     def schedule_cache_updates_save(
-        _cache_path,
         _changed_entries,
         _baseline_file_cache,
     ):
@@ -1338,7 +1333,7 @@ def test_finalize_save_task_fails_when_durable_cache_write_fails(tmp_path):
         task_id,
         **_durable_save_finalize_kwargs(
             tmp_path,
-            schedule_cache_updates_save=lambda _cache_path, _changed_entries, _baseline: durable_write,
+            schedule_cache_updates_save=lambda _changed_entries, _baseline: durable_write,
         ),
     )
 
@@ -1358,7 +1353,7 @@ def test_finalize_save_task_reports_completed_with_warnings_after_durable_write(
 
     finalize_kwargs = _durable_save_finalize_kwargs(
         tmp_path,
-        schedule_cache_updates_save=lambda _cache_path, _changed_entries, _baseline: durable_write,
+        schedule_cache_updates_save=lambda _changed_entries, _baseline: durable_write,
     )
     finalize_kwargs.update(
         append_log_history=lambda *_args, **_kwargs: (_ for _ in ()).throw(
@@ -1661,8 +1656,9 @@ def test_structural_cover_inheritance_marks_only_affected_album_identities():
         },
     }
 
-    marked = save_tasks_module._mark_structurally_inherited_cover_entries(
+    marked = save_tasks_module._structurally_inherited_cover_entries(
         file_cache=cache,
+        candidate_paths=set(cache),
         previous_file_entries=previous,
         updated_file_entries=updated,
         changed_paths={selected},
@@ -1670,7 +1666,7 @@ def test_structural_cover_inheritance_marks_only_affected_album_identities():
 
     assert marked[selected]["cover_inherited_from_structural_edit"] is True
     assert marked[sibling]["cover_inherited_from_structural_edit"] is True
-    assert "cover_inherited_from_structural_edit" not in marked[unrelated]
+    assert unrelated not in marked
 
 
 def test_structural_tag_edit_reports_auxiliary_warnings_after_canonical_commit(tmp_path):
@@ -2450,3 +2446,65 @@ def test_successful_tag_save_does_not_prewarm_settings_on_the_foreground_browse_
         "problematic-invalidated",
         "rules-invalidated",
     ]
+
+
+@pytest.mark.parametrize("live_file_cache", [None, ["not", "a", "mapping"]])
+def test_merging_committed_entries_never_replaces_a_broken_live_file_cache(live_file_cache):
+    library_state = {"file_cache": live_file_cache}
+
+    with pytest.raises(TypeError):
+        save_tasks_module._merge_file_cache_entries(library_state, {"track.mp3": {"path": "track.mp3"}})
+
+    assert library_state == {"file_cache": live_file_cache}
+
+
+def test_merging_committed_entries_never_changes_the_live_cache_keys_under_a_reader():
+    live_file_cache = {"a.mp3": {"path": "a.mp3", "album": "Old"}, "b.mp3": {"path": "b.mp3"}}
+    library_state = {"file_cache": live_file_cache, "_view_payload_non_album_candidate_cache": object()}
+    reader = iter(live_file_cache.items())
+    next(reader)
+
+    replaced = save_tasks_module._merge_file_cache_entries(
+        library_state, {"a.mp3": {"path": "a.mp3", "album": "New"}})
+    added = save_tasks_module._merge_file_cache_entries(library_state, {"c.mp3": {"path": "c.mp3"}})
+
+    # A replaced entry is merged in place; a new track republishes a copy, so the reader finishes.
+    assert replaced is live_file_cache and live_file_cache["a.mp3"]["album"] == "New"
+    assert added is library_state["file_cache"] is not live_file_cache
+    assert list(reader) == [("b.mp3", {"path": "b.mp3"})]
+    assert sorted(added) == ["a.mp3", "b.mp3", "c.mp3"] and "c.mp3" not in live_file_cache
+    assert "_view_payload_non_album_candidate_cache" not in library_state
+
+
+def test_structural_cover_inheritance_touches_the_filesystem_only_for_the_edited_albums(monkeypatch, tmp_path):
+    # Resolving a cover path asks the (possibly network) filesystem, so a structural save resolves only
+    # the edited albums' cover paths, however many other files the library cache holds.
+    import pathlib
+    from music_app.services import save_tasks as save_tasks_module
+
+    cover = str(tmp_path / "Artist" / "Source" / "cover.jpg")
+    selected = str(tmp_path / "Artist" / "Source" / "01.mp3")
+    previous = {selected: {"path": selected, "album_artist": "Artist", "album": "Source", "cover_path": cover}}
+    updated = {selected: {**previous[selected], "album": "Destination"}}
+    cache = {selected: dict(updated[selected])}
+    for index in range(5000):
+        path = str(tmp_path / "Other" / f"Album {index}" / "01.mp3")
+        cache[path] = {"path": path, "album_artist": "Other", "album": f"Album {index}",
+                       "cover_path": str(tmp_path / "Other" / f"Album {index}" / "cover.jpg")}
+    resolved = []
+    real_resolve = pathlib.Path.resolve
+
+    def counting_resolve(self, *args, **kwargs):
+        resolved.append(str(self))
+        return real_resolve(self, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "resolve", counting_resolve)
+
+    # Even when every cached file is a candidate, only the edited album's files are resolved.
+    marked = save_tasks_module._structurally_inherited_cover_entries(
+        file_cache=cache, candidate_paths=list(cache), previous_file_entries=previous,
+        updated_file_entries=updated, changed_paths={selected},
+    )
+
+    assert marked[selected]["cover_inherited_from_structural_edit"] is True
+    assert len(resolved) <= 4, f"resolved {len(resolved)} cover paths"

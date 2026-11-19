@@ -23,11 +23,53 @@ function notificationSurfaceIsHidden(node) {
   return Boolean(node?.hidden || node?.closest?.('[hidden], [inert], [aria-hidden="true"]'));
 }
 
+// The open modal's controls a notification must not cover. Each control the modal renders joins
+// the set at once; an IntersectionObserver then keeps only those on screen as the modal scrolls, so
+// a placement frame reads them instead of every control of a long modal list.
+let modalControlWatch = null;
+
+function releaseModalControls() {
+  modalControlWatch?.disconnect();
+  modalControlWatch = null;
+}
+
+function watchModalControls(modal) {
+  if (modalControlWatch?.modal === modal) return modalControlWatch.controls;
+  releaseModalControls();
+  const controls = new Set();
+  const onScreen = new IntersectionObserver((entries) => {
+    entries.forEach(({ target, isIntersecting }) => {
+      if (isIntersecting && target.isConnected) controls.add(target);
+      else controls.delete(target);
+    });
+    scheduleFloatingNotificationPlacement();
+  });
+  const isControl = node => Boolean(node.matches?.(NOTIFICATION_MODAL_CONTROL_SELECTOR));
+  const controlsIn = node => [...(isControl(node) ? [node] : []), ...(node.querySelectorAll?.(NOTIFICATION_MODAL_CONTROL_SELECTOR) || [])];
+  // Observing again brings a fresh report, so a control watched twice still leaves once off screen.
+  const watch = (control) => { controls.add(control); onScreen.unobserve(control); onScreen.observe(control); };
+  const unwatch = (control) => { controls.delete(control); onScreen.unobserve(control); };
+  // Rendered, removed, and newly focusable controls change the set by their own nodes only.
+  const rendering = new MutationObserver(records => records.forEach((record) => {
+    record.addedNodes?.forEach(node => controlsIn(node).forEach(watch));
+    record.removedNodes?.forEach(node => controlsIn(node).forEach(unwatch));
+    if (record.type === 'attributes') (isControl(record.target) ? watch : unwatch)(record.target);
+  }));
+  Array.from(modal.querySelectorAll?.(NOTIFICATION_MODAL_CONTROL_SELECTOR) || []).forEach(watch);
+  rendering.observe(modal, {
+    childList: true, subtree: true,
+    attributes: true, attributeFilter: ['tabindex', 'role', 'href', 'type', 'contenteditable', 'data-loop-range-surface'],
+  });
+  modalControlWatch = { modal, controls, disconnect() { onScreen.disconnect(); rendering.disconnect(); } };
+  return controls;
+}
+
 function getNotificationCollisionNodes() {
   const surfaces = Array.from(document.querySelectorAll?.(NOTIFICATION_COLLISION_SURFACE_SELECTOR) || []);
   const fixed = surfaces.filter(node => !isNotificationModalSurface(node) && !notificationSurfaceIsHidden(node));
   const activeModal = surfaces.filter(node => isNotificationModalSurface(node) && !notificationSurfaceIsHidden(node)).at(-1);
-  if (activeModal) fixed.push(...Array.from(activeModal.querySelectorAll?.(NOTIFICATION_MODAL_CONTROL_SELECTOR) || [])
+  if (!activeModal) releaseModalControls();
+  else fixed.push(...Array.from(watchModalControls(activeModal))
     .filter(node => !notificationSurfaceIsHidden(node) && !node.matches?.(':disabled')));
   return fixed;
 }
@@ -102,6 +144,7 @@ function placeFloatingNotifications() {
     const top = Math.max(viewport.top, rect.top), bottom = Math.min(viewport.bottom, rect.bottom);
     return right > left && bottom > top ? [{ left, right, top, bottom }] : [];
   });
+  const waitingBySlot = new Map();
   for (const [node, entry] of floatingNotifications) {
     if (!node.isConnected || node.hidden) { unregisterFloatingNotification(node); continue; }
     const availableWidth = `${Math.max(0, viewport.right - viewport.left - 16)}px`;
@@ -136,6 +179,14 @@ function placeFloatingNotifications() {
     }
     if (!position) {
       node.setAttribute('data-notification-deferred', '');
+      // A discardable notification that has never been shown waits alone in
+      // its lane and severity: only a newer one of the same severity replaces
+      // it, so blocked lanes cannot pile up and errors outlive lesser toasts.
+      if (entry.discard && !entry.presented) {
+        const slot = `${entry.lane}:${entry.severity}`;
+        waitingBySlot.get(slot)?.discard();
+        waitingBySlot.set(slot, entry);
+      }
       continue;
     }
     for (const [key, value] of Object.entries(position)) {
@@ -172,6 +223,7 @@ function registerFloatingNotification(node, options = {}) {
       targets.forEach(([target, event]) => target.removeEventListener(event, scheduleFloatingNotificationPlacement, true));
       if (floatingNotificationFrame !== null) cancelAnimationFrame(floatingNotificationFrame);
       floatingNotificationFrame = null;
+      releaseModalControls();
     } };
   } else floatingNotificationCleanup.resize.observe(node);
   scheduleFloatingNotificationPlacement();
@@ -288,6 +340,10 @@ function syncLibraryWatcherWarning(data = {}) {
   registerFloatingNotification(libraryWatcherWarning, { lane: 'bottom-right' });
 }
 
+function floatingNotificationSeverity(variant) {
+  return variant === 'success' ? 'info' : normalizeAlertSeverity(variant);
+}
+
 function buildFloatingNotificationAlertHtml(
   message,
   variant,
@@ -296,7 +352,7 @@ function buildFloatingNotificationAlertHtml(
   compact = false,
   title = '',
 ) {
-  const severity = variant === 'success' ? 'info' : normalizeAlertSeverity(variant);
+  const severity = floatingNotificationSeverity(variant);
   return buildOnPageAlertHtml({
     severity,
     title: compact
@@ -327,15 +383,16 @@ function showToast(message, variant = 'success', duration = 3600, options = {}) 
   toast.innerHTML = buildFloatingNotificationAlertHtml(message, variant, '', '', true);
   layer.appendChild(toast);
   if (errorKey) activeErrorToasts.set(errorKey, toast);
-  registerFloatingNotification(toast, { lane: options.placement === 'top-center' ? 'top-center' : 'top-right', fixedViewport: options.fixedViewport, onPlaced() {
+  const discard = () => {
+    unregisterFloatingNotification(toast);
+    toast.remove();
+    if (errorKey && activeErrorToasts.get(errorKey) === toast) activeErrorToasts.delete(errorKey);
+  };
+  registerFloatingNotification(toast, { lane: options.placement === 'top-center' ? 'top-center' : 'top-right', fixedViewport: options.fixedViewport, discard, severity: floatingNotificationSeverity(variant), onPlaced() {
     scheduleBrowserAnimationFrame(() => toast.classList.add('is-visible'));
     scheduleBrowserTimeout(() => {
       toast.classList.remove('is-visible');
-      scheduleBrowserTimeout(() => {
-        unregisterFloatingNotification(toast);
-        toast.remove();
-        if (errorKey && activeErrorToasts.get(errorKey) === toast) activeErrorToasts.delete(errorKey);
-      }, 260);
+      scheduleBrowserTimeout(discard, 260);
     }, duration);
   } });
 }

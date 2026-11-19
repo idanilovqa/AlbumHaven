@@ -153,22 +153,25 @@ function renderGlobalPlayerPlayGlyph(button, paused) {
   button.setAttribute('data-player-glyph', icon);
 }
 
-function updatePlayerUi() {
-  const els = getPlayerElements();
-  const playback = getPlayerPlaybackSnapshot();
+function resolvePlayerUiStatus(playback) {
   const lockedByAnotherTab = typeof isPlaybackLockedByAnotherTab === 'function' && isPlaybackLockedByAnotherTab();
   const playbackUnavailable = lockedByAnotherTab && typeof getPlaybackOwnershipState === 'function'
     && getPlaybackOwnershipState().blockedReason === 'playback_unavailable';
-  const blockedLabel = playbackUnavailable ? 'Playback unavailable' : 'Playing in another tab';
   const mirroredTrack = lockedByAnotherTab && typeof getMirroredPlaybackTrack === 'function'
     ? getMirroredPlaybackTrack()
     : null;
   const displayTrack = mirroredTrack || state.player.current;
-  state.player.lastKnownWasPlaying = Boolean(!lockedByAnotherTab && !playback.paused && !playback.ended);
-  const hasTrack = Boolean(displayTrack && (lockedByAnotherTab || playback.src || state.player.current?.src));
-  els.player?.classList?.toggle('is-empty', !hasTrack);
-  const emptyMessage = els.player?.querySelector?.('[data-player-empty-message]');
-  if (emptyMessage) emptyMessage.hidden = hasTrack;
+  return {
+    lockedByAnotherTab,
+    playbackUnavailable,
+    blockedLabel: playbackUnavailable ? 'Playback unavailable' : 'Playing in another tab',
+    displayTrack,
+    hasTrack: Boolean(displayTrack && (lockedByAnotherTab || playback.src || state.player.current?.src)),
+  };
+}
+
+// The seek position and its time label: all that a timeline drag preview changes.
+function renderPlayerTimelinePosition(els, playback, { hasTrack, lockedByAnotherTab, blockedLabel }) {
   const duration = getPlayerDuration();
   const dragPreview = Number(state.player.timelineDragPreviewSeconds);
   const current = state.player.timelineDragging && Number.isFinite(dragPreview)
@@ -188,12 +191,25 @@ function updatePlayerUi() {
       ? `${formatLoopTime(state.player.loopStart, true)} - ${formatLoopTime(state.player.loopEnd, true)}`
       : `${formatLoopTime(current)} / ${formatLoopTime(duration)}`;
   }
+  return { duration, current };
+}
+
+function updatePlayerUi() {
+  const els = getPlayerElements();
+  const playback = getPlayerPlaybackSnapshot();
+  const status = resolvePlayerUiStatus(playback);
+  const { lockedByAnotherTab, playbackUnavailable, blockedLabel, displayTrack, hasTrack } = status;
+  state.player.lastKnownWasPlaying = Boolean(!lockedByAnotherTab && !playback.paused && !playback.ended);
+  els.player?.classList?.toggle('is-empty', !hasTrack);
+  const emptyMessage = els.player?.querySelector?.('[data-player-empty-message]');
+  if (emptyMessage) emptyMessage.hidden = hasTrack;
+  const { duration, current } = renderPlayerTimelinePosition(els, playback, status);
   els.loopActions?._loopActionController?.update({
-    enabled: Boolean(getPlayerPlaybackSnapshot().src || state.player.current?.src),
+    enabled: Boolean(!lockedByAnotherTab && (getPlayerPlaybackSnapshot().src || state.player.current?.src)),
     canCreate: state.loopCreateAllowed === true,
     contextKey: state.player.current?.path || state.player.current?.src || '',
     active: state.player.loopActive,
-    busy: state.player.saveBusy || lockedByAnotherTab,
+    busy: state.player.saveBusy,
   });
   if (els.play) {
     renderGlobalPlayerPlayGlyph(els.play, playback.paused);
@@ -438,6 +454,9 @@ function queuedNextContinuityOptions(track) {
   };
 }
 
+// A first-frame schedule that has not settled by then stops holding its identity, so a later
+// first frame or reconciliation of the same stream schedules its continuity again.
+const STREAMING_FIRST_FRAME_SCHEDULE_DEADLINE_MS = 2000;
 let handledStreamingFirstFrameIdentity = '';
 let pendingStreamingFirstFrameIdentity = '';
 let pendingStreamingFirstFrameSchedule = null;
@@ -472,10 +491,16 @@ async function handleStreamingPlaybackFirstFrame(event = {}) {
       : nextTrack ? scheduleStreamingContinuity(nextTrack, queuedNextContinuityOptions(nextTrack)) : null;
   });
   pendingStreamingFirstFrameSchedule = scheduling;
+  let deadline = 0;
+  const expired = new Promise((resolve) => {
+    deadline = setTimeout(resolve, STREAMING_FIRST_FRAME_SCHEDULE_DEADLINE_MS, false);
+  });
   try {
-    await scheduling;
-    handledStreamingFirstFrameIdentity = identity;
+    if (await Promise.race([scheduling.then(() => true), expired])) {
+      handledStreamingFirstFrameIdentity = identity;
+    }
   } finally {
+    clearTimeout(deadline);
     if (pendingStreamingFirstFrameSchedule === scheduling) {
       pendingStreamingFirstFrameIdentity = '';
       pendingStreamingFirstFrameSchedule = null;
@@ -1272,8 +1297,8 @@ function attachPlayerEvents() {
     if (!state.player.timelineDragging) return;
     const next = getTimelineSecondsFromClientX(event.clientX);
     state.player.timelineDragPreviewSeconds = next;
-    if (els.timeline) els.timeline.value = String(next);
-    updatePlayerUi();
+    const playback = getPlayerPlaybackSnapshot();
+    renderPlayerTimelinePosition(getPlayerElements(), playback, resolvePlayerUiStatus(playback));
   });
   document.addEventListener('pointerup', (event) => {
     if (thinSeekGesture) {

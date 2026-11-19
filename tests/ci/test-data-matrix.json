@@ -38,7 +38,7 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/albumTagRename.spec.js",
-    "case": "FTC-ALBUM-DETAILS-029 stale album references follow merges and require a current release after splits",
+    "case": "FTC-ALBUM-DETAILS-029 stale album references follow merges and return to the gallery after splits",
     "profile": "functional-core",
     "setupScope": "isolated",
     "stateMode": "owned-mutation",
@@ -4080,6 +4080,36 @@
       "databaseIdentity": "case:player-view-modes",
       "filesystemCopy": "media/cases/player-view-modes"
     },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/playerWaveformBusy.spec.js",
+    "case": "the current track draws its waveform after another build keeps the server busy for 3 s",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "waveform-waits-out-busy-builder"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/playerWaveformBusy.spec.js",
+    "case": "a busy wait stops asking once the player moves to another track",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "waveform-busy-wait-ends-on-track-change"
+    ],
     "ownerApproval": "approved"
   },
   {

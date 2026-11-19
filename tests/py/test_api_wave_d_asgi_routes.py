@@ -962,8 +962,10 @@ def test_asgi_cover_lookup_local_cover_actions_update_asgi_state_without_flask_b
     assert pasted_revision
     assert "gallery" not in pasted_payload
     assert pasted_payload["updated_album"]["cover_revision"] == pasted_revision
-    assert asgi_app.state.library_state["file_cache"][str(track_path)]["cover_path"] == selected_cover_path
-    assert asgi_app.state.library_state["file_cache"][str(track_path)]["cover_revision"] == pasted_revision
+    # The selected album is answered request-locally; only inventory owners
+    # publish into the shared state.
+    assert asgi_app.state.library_state["file_cache"] == {}
+    assert asgi_app.state.library_state["albums"] == []
     assert revision_loads == []
     assert snapshot_saves == []
     assert persisted_origins == [
@@ -1727,6 +1729,10 @@ def test_asgi_cover_lookup_gallery_returns_safe_current_release_choices_for_spli
             if track_paths == {str(second_track)}:
                 return 42
             raise AssertionError(track_paths)
+
+        def resolve_album_ids_for_track_path_sets(self, track_path_sets):
+            # One connection for every split choice, never one per album.
+            return [self.resolve_album_id_for_track_paths(track_paths=paths) for paths in track_path_sets]
 
     class BrowseRepository:
         def __init__(self, _config):
@@ -5212,3 +5218,62 @@ def test_cover_lookup_start_recovers_empty_id_projection_by_track_paths(
 
     assert prepared_album["album_artist"] == "Overhead"
     assert prepared_paths == {str(track_path)}
+
+
+def test_selected_cover_inventory_contract_builds_only_the_selected_album_at_production_library_size(tmp_path, monkeypatch):
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+    from music_app.services import library as library_module
+    from music_app.services import library_browse_postgres
+    from tests.py.bounded_interactions import OperationCounts, measure_scale_pair
+    from tests.py.filesystem_operation_counting import count_filesystem_and_media
+
+    selected_paths = {str(tmp_path / "Selected" / "Album" / name) for name in ("01.mp3", "02.mp3")}
+    real_build = library_module.build_albums_from_file_cache
+
+    class FakePostgresLibraryBrowseRepository:
+        def __init__(self, _config):
+            pass
+
+        def build_album_payloads_by_track_paths(self, track_paths):
+            assert track_paths == {min(selected_paths)}
+            return [{"tracks": [{"path": path} for path in sorted(selected_paths)]}]
+
+        def build_track_file_entries_by_paths(self, track_paths):
+            return {path: {"path": path, "title": Path(path).stem, "album": "Album", "album_artist": "Selected"} for path in track_paths}
+
+    monkeypatch.setattr(library_browse_postgres, "PostgresLibraryBrowseRepository", FakePostgresLibraryBrowseRepository)
+
+    def run(album_count: int) -> OperationCounts:
+        counts = OperationCounts()
+
+        def counting_build(file_cache, *args, **kwargs):
+            counts.count("builder_calls")
+            counts.count("candidate_rows", len(file_cache))
+            return real_build(file_cache, *args, **kwargs)
+
+        shared_cache = {
+            f"{tmp_path}/Artist {index}/track.mp3": {"path": f"{tmp_path}/Artist {index}/track.mp3", "title": "t", "album": f"A{index}"}
+            for index in range(album_count * 160)
+        }
+        shared_albums = [object()]
+        library_state = {"file_cache": shared_cache, "albums": shared_albums}
+        monkeypatch.setattr(library_module, "build_albums_from_file_cache", counting_build)
+        with count_filesystem_and_media(monkeypatch, counts):
+            selected = asyncio.run(asgi_routes._selected_cover_inventory_state(
+                {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://fixture"},
+                library_state,
+                {min(selected_paths)},
+            ))
+        assert set(selected["file_cache"]) == selected_paths
+        assert [album.name for album in selected["albums"]] == ["Album"]
+        assert library_state["file_cache"] is shared_cache and library_state["albums"] is shared_albums
+        return counts
+
+    measure_scale_pair(
+        interaction_id="py:routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_pasted_image_save",
+        small=20,
+        large=1_000,
+        run=run,
+        budgets={"builder_calls": 1, "candidate_rows": 2, "filesystem_enumerations": 0, "stat_calls": 0},
+        growth=("candidate_rows", 0),
+    )

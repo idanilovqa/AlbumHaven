@@ -2931,6 +2931,69 @@ def test_run_cover_lookup_save_remote_task_applies_written_local_cover_path(
     ]
 
 
+def test_remote_save_task_contract_writes_only_the_selected_album_folder_at_production_library_size(
+    config, logger, library_state, monkeypatch, tmp_path: Path,
+):
+    from tests.py.bounded_interactions import OperationCounts, measure_scale_pair
+    from tests.py.filesystem_operation_counting import count_filesystem_and_media
+
+    monkeypatch.setattr(
+        cover_lookup_runtime,
+        "download_remote_cover_to_folder",
+        lambda **kwargs: cover_workflow.download_remote_cover_to_folder(
+            **kwargs,
+            fetch_remote_image_func=lambda _url, **_kwargs: SimpleNamespace(payload=_jpeg_bytes()),
+        ),
+    )
+    updates: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        cover_lookup_runtime,
+        "update_cover_lookup_task",
+        lambda task_id, **kwargs: _capture_task_update(updates, task_id, expected_config=config, **kwargs),
+    )
+
+    def run(album_count: int) -> OperationCounts:
+        library = (tmp_path / f"library-{album_count}").resolve()
+        for index in range(album_count):
+            sibling = library / f"Artist {index:04d}" / "Album"
+            sibling.mkdir(parents=True)
+            (sibling / "01.mp3").write_bytes(b"track")
+            (sibling / "cover-existing-1.jpg").write_bytes(b"sibling reserve")
+        album_root = library / "Selected Artist" / "Selected Album"
+        album_root.mkdir(parents=True)
+        tracks = {str(album_root / f"{number:02d}.mp3") for number in range(1, 13)}
+        for track in tracks:
+            Path(track).write_bytes(b"track")
+        save_library_root_settings(config, {
+            "main_library_roots": [{"id": "main-1", "path": str(library), "layout_mode": "artist"}],
+        })
+        updates.clear()
+        counts = OperationCounts()
+        with count_filesystem_and_media(monkeypatch, counts):
+            cover_lookup_runtime._run_cover_lookup_save_remote_task(
+                f"task-save-{album_count}", config, logger, library_state,
+                str(config["MUSICBRAINZ_USER_AGENT"]), album_root, tracks, "candidate-1",
+                SelectedRemoteImage(
+                    id="candidate-1", url="https://images.example/cover.jpg", source="discogs",
+                    source_label="Discogs", width=1500, height=1500, art_kind="cover",
+                ),
+                apply_cover_selection_for_tracks=lambda _paths, **_changes: ([{"key": "album-1"}], None),
+                persist_cover_selection_for_tracks=lambda _paths, **_changes: {"album_rows_updated": 1},
+            )
+        assert [update["status"] for update in updates] == ["completed"]
+        assert (album_root / "cover.jpg").is_file()
+        return counts
+
+    measure_scale_pair(
+        interaction_id="py:services/cover_lookup_runtime.py#_run_cover_lookup_save_remote_task",
+        small=20,
+        large=1_000,
+        run=run,
+        budgets={"filesystem_enumerations": 2, "stat_calls": 61, "open_calls": 2, "media_parses": 0},
+        growth=("stat_calls", 0),
+    )
+
+
 def test_downloaded_cover_persistence_failure_restores_prior_cover_and_removes_only_new_reserve(
     config,
     logger,

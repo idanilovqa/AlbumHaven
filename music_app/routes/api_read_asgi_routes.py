@@ -25,8 +25,7 @@ from music_app.services.log_history import (
 from music_app.services.loops import load_loops
 from music_app.services.state import (
     format_timestamp,
-    hydrate_library_state_for_config,
-    refresh_relation_views_for_state,
+    request_library_hydration_for_state,
 )
 from music_app.services.opinion_read_seams import build_crowd_opinion_modal_payload
 from music_app.services.page_resource_seams import (
@@ -305,20 +304,24 @@ def _request_flag_value(value: object) -> bool:
     }
 
 
-def _hydrate_cached_library_for_asgi(request: Request, *, ensure_relations: bool = False) -> None:
-    library_state = _library_state(request)
-    if library_state.get("scan_in_progress"):
-        return
-    if library_state.get("albums") and not ensure_relations:
-        return
-    hydrate_library_state_for_config(
-        library_state,
-        _app_config(request),
-        ensure_relations=ensure_relations,
-        validate_cache=False,
+def library_hydration_pending_response(
+    library_state: dict[str, object],
+    config: dict[str, object],
+    logger=None,
+) -> JSONResponse | None:
+    """Typed pending answer while the background owner publishes the inventory."""
+    if request_library_hydration_for_state(library_state, config, logger):
+        return None
+    return JSONResponse(
+        {"ok": False, "code": "gallery_projection_pending", "error": "The library is still loading."},
+        status_code=503, headers={"Retry-After": "1", "Cache-Control": "no-store"},
     )
-    if ensure_relations and not (_library_state(request).get("relation_views") or {}).get("artists"):
-        refresh_relation_views_for_state(library_state, _app_config(request))
+
+
+def _library_hydration_pending_for_asgi(request: Request) -> JSONResponse | None:
+    return library_hydration_pending_response(
+        _library_state(request), _app_config(request), _app_logger(request),
+    )
 
 
 def _postgres_browse_library_state(request: Request) -> Mapping[str, object] | None:
@@ -724,7 +727,8 @@ def view_data(request: Request) -> JSONResponse:
         return unsupported_root_album_browse_response
 
     if _should_hydrate_file_backed_view_data(request):
-        _hydrate_cached_library_for_asgi(request)
+        if (pending := _library_hydration_pending_for_asgi(request)) is not None:
+            return pending
     request_started_at = time.perf_counter()
     payload = build_view_payload(
         query_args=_AsgiQueryArgs(request.query_params),
@@ -969,8 +973,9 @@ def _query_requires_file_backed_search_semantics(query: str) -> bool:
 
 
 @router.get("/home-data")
-async def home_data(request: Request) -> JSONResponse:
-    _hydrate_cached_library_for_asgi(request)
+def home_data(request: Request) -> JSONResponse:
+    if (pending := _library_hydration_pending_for_asgi(request)) is not None:
+        return pending
     request_started_at = time.perf_counter()
     library_state = _library_state(request)
     browse_state = resolve_active_scan_browse_state(library_state)
@@ -996,10 +1001,7 @@ async def home_data(request: Request) -> JSONResponse:
                 if omit_sidebar
                 else repository.build_root_sidebar_payload
             )
-            root_sidebar_payload = await run_in_threadpool(
-                payload_builder,
-                query_params=request.query_params,
-            )
+            root_sidebar_payload = payload_builder(query_params=request.query_params)
             authoritative_fields = [
                 "artist_count",
                 "album_count",
@@ -1131,6 +1133,8 @@ async def album_details(request: Request) -> JSONResponse:
                 client_surface_class=client_surface_class,
             )
         if payload is None:
+            # Only a notification for a previous identity asks which split release it meant;
+            # a gallery open still follows a single successor but never gets the chooser.
             if lineage is None:
                 try:
                     lineage = await run_in_threadpool(
@@ -1140,16 +1144,6 @@ async def album_details(request: Request) -> JSONResponse:
                     )
                 except (RuntimeError, OSError):
                     lineage = {"status": "unresolved", "album": None, "choices": []}
-                if lineage["status"] == "split":
-                    return JSONResponse(
-                        {
-                            "ok": False,
-                            "error": "This album was split—choose the current release",
-                            "resolution_kind": "album_split",
-                            "current_releases": lineage["choices"],
-                        },
-                        status_code=409,
-                    )
             current_album = lineage.get("album")
             if isinstance(current_album, Mapping):
                 payload = await run_in_threadpool(
@@ -1167,7 +1161,24 @@ async def album_details(request: Request) -> JSONResponse:
         _project_missing_album_actions_for_request(request, payload)
         return JSONResponse({"ok": True, "album": payload})
 
-    _hydrate_cached_library_for_asgi(request)
+    if (pending := _library_hydration_pending_for_asgi(request)) is not None:
+        return pending
+    return await run_in_threadpool(
+        _file_backed_album_details_response,
+        request,
+        album_key,
+        client_surface_class=client_surface_class,
+        browse_state=browse_state,
+    )
+
+
+def _file_backed_album_details_response(
+    request: Request,
+    album_key: str,
+    *,
+    client_surface_class: str,
+    browse_state: Mapping[str, object],
+) -> JSONResponse:
     payload = build_album_detail_payload(
         album_key,
         client_surface_class=client_surface_class,
@@ -1261,7 +1272,8 @@ def utilities_problematic_files(
             _project_missing_album_actions_for_request(request, payload)
             project_artist_problems_into_problematic_files(request, payload, artist_items.result())
         return JSONResponse(_attach_library_watch_health(request, payload))
-    _hydrate_cached_library_for_asgi(request)
+    if (pending := _library_hydration_pending_for_asgi(request)) is not None:
+        return pending
     payload = build_problematic_albums_payload(
         config=_app_config(request),
         library_state=_library_state(request),
@@ -1285,7 +1297,8 @@ def utilities_problematic_file_detail_query(request: Request) -> JSONResponse:
             )
         _project_missing_album_actions_for_request(request, payload)
         return JSONResponse(payload)
-    _hydrate_cached_library_for_asgi(request)
+    if (pending := _library_hydration_pending_for_asgi(request)) is not None:
+        return pending
     payload = build_problematic_album_detail_payload(
         album_key,
         config=_app_config(request),
@@ -1312,7 +1325,8 @@ def utilities_problematic_file_detail(request: Request, album_key: str) -> JSONR
             )
         _project_missing_album_actions_for_request(request, payload)
         return JSONResponse(payload)
-    _hydrate_cached_library_for_asgi(request)
+    if (pending := _library_hydration_pending_for_asgi(request)) is not None:
+        return pending
     payload = build_problematic_album_detail_payload(
         album_key,
         config=_app_config(request),
@@ -1338,7 +1352,8 @@ async def utilities_loops(request: Request) -> JSONResponse:
     actions = allowed_actions_for_request(request, (
         "library.loops.read", "library.loops.create", "library.loops.delete", "library.loops.reorder",
     ))
-    return JSONResponse({"ok": True, "loops": [project_loop_for_client(item) for item in load_loops(_app_config(request), **(await saved_loop_scope(request)))], "allowed_actions": actions.as_payload()})
+    loops = await run_in_threadpool(load_loops, _app_config(request), **(await saved_loop_scope(request)))
+    return JSONResponse({"ok": True, "loops": [project_loop_for_client(item) for item in loops], "allowed_actions": actions.as_payload()})
 
 
 @router.get("/utilities/log-history")

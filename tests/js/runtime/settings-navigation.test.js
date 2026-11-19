@@ -495,3 +495,32 @@ test('an untracked pop during rollback releases navigation after restoring the d
   assert.equal(await app.navigation.navigate('/account'), true);
   assert.equal(app.outlet.childNodes[0].textContent, 'Account after rollback');
 });
+
+// Request-capture contract (tests/ci/bounded-interactions.json): each accepted Settings
+// navigation fetches exactly its own page; every other route stays off the network.
+const { assertInteractionRequests, measureInteractionContract } = require('../helpers/request-capture');
+
+test('request capture: Settings navigation fetches only its owned pages, once per navigation', async () => {
+  const accepted = [
+    ['/account'], ['/admin/server'], ['/admin/accounts/41'], ['/admin/accounts/new'], ['/admin/members'],
+    ['/account/password', { method: 'POST', body: 'csrf_token=t' }, '/account'],
+  ];
+  const rejected = ['https://outside.example/account', '/logout', '/login', '/api/admin/members', '/view-data?surface=albums', '/home-data', '/news'];
+  await measureInteractionContract('js:settings-navigation.js#navigate', async (members) => {
+    const app = harness();
+    const roster = Array.from({ length: members }, (_, index) => `<tr data-member="${index}"></tr>`).join('');
+    const paths = [];
+    for (const [target, options, landed = target] of accepted) {
+      app.respond(target === '/admin/members' ? roster : `Page ${target}`, `http://localhost:5000${landed}`);
+      const before = app.requests.length;
+      assert.equal(await app.navigation.navigate(target, options), true, target);
+      assert.equal(app.requests.length - before, 1, `${target} issues one request`);
+      paths.push(new URL(app.requests.at(-1).url).pathname);
+    }
+    for (const target of rejected) assert.equal(await app.navigation.navigate(target), false, target);
+    assert.deepEqual(paths, accepted.map(([target]) => target));
+    assert.equal(app.requests.length, accepted.length);
+    assertInteractionRequests('js:settings-navigation.js#navigate', paths);
+    return { requests: app.requests.length };
+  });
+});

@@ -3,6 +3,12 @@ import path from 'node:path';
 
 const EVIDENCE_FILE = 'startup-relation-projection-readiness.json';
 const EVIDENCE_VERSION = 1;
+// The app checks its relation projection a few seconds after startup (deferred
+// so the first gallery paint stays responsive); until then it reports
+// `not_checked`. Startup evidence is the check's outcome, never that placeholder.
+const UNCHECKED_REASON = 'not_checked';
+const DEFAULT_SETTLE_TIMEOUT_MS = 30000;
+const DEFAULT_SETTLE_POLL_MS = 100;
 
 function normalizeReadiness(payload) {
   const projection = payload?.relation_projection || payload || {};
@@ -78,14 +84,24 @@ export async function readStartupRelationProjectionReadiness(options = {}) {
     return readEvidence(evidencePath, origin);
   }
 
-  const response = await fetchFn(statusURL, {
-    headers: { accept: 'application/json' },
-    method: 'GET',
-  });
-  if (!response.ok) {
-    throw new Error(`Startup status request failed with HTTP ${response.status}.`);
+  const nowFn = options.nowFn || Date.now;
+  const sleepFn = options.sleepFn || ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+  const deadline = nowFn() + Number(options.settleTimeoutMs ?? DEFAULT_SETTLE_TIMEOUT_MS);
+  let readiness;
+  for (;;) {
+    const response = await fetchFn(statusURL, {
+      headers: { accept: 'application/json' },
+      method: 'GET',
+    });
+    if (!response.ok) {
+      throw new Error(`Startup status request failed with HTTP ${response.status}.`);
+    }
+    readiness = normalizeReadiness(await response.json());
+    // An unsettled check after the deadline is returned as is, so the
+    // startup assertion reports it instead of a fixture timeout.
+    if (readiness.rebuildReason !== UNCHECKED_REASON || nowFn() >= deadline) break;
+    await sleepFn(Number(options.settlePollMs ?? DEFAULT_SETTLE_POLL_MS));
   }
-  const readiness = normalizeReadiness(await response.json());
   return evidencePath
     ? persistFirstEvidence(evidencePath, origin, readiness)
     : readiness;

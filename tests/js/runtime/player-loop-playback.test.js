@@ -264,6 +264,8 @@ function loadHelper(overrides = {}) {
       json: async () => ({ ok: true }),
     }),
     console,
+    setTimeout,
+    clearTimeout,
   };
   Object.assign(context, overrides, {
     audio,
@@ -355,6 +357,26 @@ test('mirrored playback keeps metadata unobscured while showing its locked statu
   context.isPlaybackLockedByAnotherTab = () => false;
   context.updatePlayerUi();
   assert.equal(time.textContent, '10 - 20');
+});
+
+test('playback held by another tab or lost to the server disables the scissors for this tab', () => {
+  const updates = [];
+  const loopActions = { _loopActionController: { update: next => updates.push({ ...next }) } };
+  const play = new FakeElement({ tagName: 'BUTTON' });
+  const { context } = loadHelper({
+    getPlayerElements: () => ({ play, loopActions }),
+    isPlaybackLockedByAnotherTab: () => true,
+    getMirroredPlaybackTrack: () => ({ artist: 'Artist', title: 'Song', album: 'Album' }),
+    getPlayerPlaybackSnapshot: () => ({ currentTime: 3, duration: 60, paused: true, ended: false, src: '/track?path=song.flac' }),
+  });
+  context.state.player.current = { src: '/track?path=song.flac', path: 'C:/Music/song.flac' };
+
+  context.updatePlayerUi();
+  assert.equal(updates.at(-1).enabled, false, 'a locked player cannot cut a loop, so its scissors stay folded');
+
+  context.isPlaybackLockedByAnotherTab = () => false;
+  context.updatePlayerUi();
+  assert.equal(updates.at(-1).enabled, true);
 });
 
 test('lease loss renders unavailable status instead of claiming another tab owns playback', () => {
@@ -1530,6 +1552,36 @@ test('streaming first-frame scheduling peeks exactly one queued track', async ()
 
   assert.equal(peekCalls, 1);
   assert.deepEqual(scheduled, [nextTrack]);
+});
+
+test('a first-frame schedule that never settles stops holding its stream, so a later first frame schedules again', async () => {
+  const nextTrack = { path: 'C:\\Music\\Next.flac', durationSeconds: 30 };
+  const timers = [];
+  const scheduled = [];
+  const { context } = loadHelper({
+    peekNextQueuedTrack: () => nextTrack,
+    setTimeout: (callback, delay, ...args) => timers.push({ fire: () => callback(...args), delay }),
+    clearTimeout: () => {},
+    scheduleStreamingContinuity(track) {
+      scheduled.push(track);
+      return scheduled.length === 1 ? new Promise(() => {}) : Promise.resolve();
+    },
+  });
+  const firstFrame = { generation: 1, streamId: 7 };
+
+  const stuck = context.handleStreamingPlaybackFirstFrame(firstFrame);
+  await new Promise(setImmediate);
+  assert.equal(await Promise.race([context.handleStreamingPlaybackFirstFrame(firstFrame).then(() => 'settled'),
+    new Promise(resolve => setImmediate(resolve, 'held'))]), 'held', 'before the deadline the stream stays pending');
+  timers[0].fire();
+  await stuck;
+
+  await context.handleStreamingPlaybackFirstFrame(firstFrame);
+  await context.handleStreamingPlaybackFirstFrame(firstFrame);
+
+  assert.deepEqual(timers.map(({ delay }) => delay), [2000, 2000]);
+  assert.deepEqual(scheduled, [nextTrack, nextTrack],
+    'the stuck schedule is retried once, and the settled retry ends further scheduling');
 });
 
 test('natural queued-next scheduling carries the queue owner consecutive-album qualification', async () => {
@@ -3949,4 +4001,179 @@ test('a clicked track shows as playing before streaming starts', async () => {
   finishStart(null);
   await assert.rejects(playing, /did not start/);
   assert.equal(context.state.player.selectedTrack, null, 'a failed switch shows the real track again');
+});
+
+// Global player with an album queue playing, `loopCount` saved loops loaded,
+// and the real persistence, waveform, and saved-loop refresh collaborators.
+function loadCountedPlayer(counter, loopCount) {
+  const { countedCollection } = require('../helpers/bounded-interaction-counter.js');
+  const runtimeDir = path.dirname(helperPath);
+  const documentListeners = new Map();
+  const document = {
+    activeElement: null,
+    documentElement: new FakeElement(),
+    querySelector: () => { counter.count('domQueries'); return null; },
+    querySelectorAll: () => { counter.count('domQueries'); return []; },
+    getElementById: () => null,
+    addEventListener(name, handler) {
+      const handlers = documentListeners.get(name) || [];
+      handlers.push(handler);
+      documentListeners.set(name, handlers);
+    },
+    dispatch(name, event = {}) {
+      for (const handler of documentListeners.get(name) || []) handler(event);
+    },
+  };
+  const timelineParent = new FakeElement();
+  const timeline = new FakeElement({ tagName: 'INPUT', type: 'range', parentElement: timelineParent, rectangle: { left: 0, width: 600 } });
+  timeline.style = { setProperty: () => counter.count('domMutations') };
+  const time = new FakeElement();
+  const queueTracks = countedCollection(Array.from({ length: 12 }, (_value, index) => ({
+    src: `/track?path=album/${index}.flac`, path: `album/${index}.flac`, title: `Track ${index}`, artist: 'Artist', album: 'Album',
+  })), counter);
+  const currentTrack = queueTracks[3];
+  const loops = countedCollection(Array.from({ length: loopCount }, (_value, index) => ({ id: `loop-${index}` })), counter);
+  const playerElements = { player: new FakeElement(), timeline, time };
+  const { context, audio } = loadHelper({
+    document,
+    timeline,
+    getPlayerDuration: () => 300,
+    getTimelineSecondsFromClientX: clientX => clientX / 2,
+    seekStreamingPlayback: (seconds) => { audio.currentTime = seconds; },
+    setLocalStorageItem: () => counter.count('outputEmissions'),
+    removeLocalStorageItem: () => {},
+    getLocalStorageItem: () => null,
+    PLAYER_STATE_STORAGE_KEY: 'albumhaven.playerState.v1',
+    window: {
+      ButtonComponent: require('../../../music_app/static/js/button-component.js'),
+      innerWidth: 1280,
+      addEventListener: () => {},
+    },
+  });
+  for (const name of ['player-state-persistence-helpers.js', 'player-and-waveform.js', 'player-waveform-peaks.js', 'utility-loop-playback.js']) {
+    vm.runInContext(fs.readFileSync(path.join(runtimeDir, name), 'utf8'), context, { filename: name });
+  }
+  // The streaming engine and mounted player chrome stay injected seams.
+  context.getPlayerElements = () => playerElements;
+  context.getPlayerPlaybackSnapshot = () => ({
+    currentTime: Number(audio.currentTime) || 0, duration: 300, paused: false, ended: false, src: currentTrack.src,
+  });
+  Object.assign(context.state.player, {
+    current: currentTrack,
+    playbackQueue: { tracks: queueTracks, currentIndex: 3 },
+    appearance: { seekbarMode: 'default' },
+  });
+  Object.assign(context.state.utility, { loops, loopsLoaded: true, loopEditors: {} });
+  context.attachPlayerEvents();
+  return { context, document, timeline, timelineParent, time };
+}
+
+test('bounded interaction: global seekbar drag and input stay album-bounded with 1,000 saved loops', async () => {
+  const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  // Both hot events measure under the entry's registered budgets; a drag move
+  // additionally proves it visits, queries, and persists nothing.
+  for (const [event, dragMoveLimits] of [
+    ['pointermove', { itemsVisited: 0, domQueries: 0, outputEmissions: 0 }],
+    ['input', null],
+  ]) {
+    const run = async (cardinality) => {
+      const counter = createInteractionCounter();
+      const player = loadCountedPlayer(counter, cardinality);
+      player.context.updatePlayerUi();
+      if (event === 'pointermove') {
+        player.timelineParent.dispatch('pointerdown', { target: player.timeline, clientX: 100, preventDefault() {} });
+      }
+      const work = await counter.measure(() => {
+        for (let step = 1; step <= 10; step += 1) {
+          if (event === 'pointermove') player.document.dispatch('pointermove', { clientX: 100 + step * 20, preventDefault() {} });
+          else {
+            player.timeline.value = String(step * 10);
+            player.timeline.dispatch('input');
+          }
+        }
+      });
+      assert.equal(player.time.textContent, event === 'pointermove' ? '2:30 / 5:00' : '1:40 / 5:00');
+      return work;
+    };
+    const results = await measureScalePair({
+      id: 'js:runtime/player-loop-playback.js#attachPlayerEvents',
+      small: 20,
+      large: 1000,
+      run,
+      budgets: { itemsVisited: 120, domQueries: 10, domMutations: 10, outputEmissions: 10 },
+      growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
+    });
+    for (const [metric, limit] of Object.entries(dragMoveLimits || {})) {
+      for (const work of [results.small, results.large]) assert.ok(work[metric] <= limit, `${event} ${metric}=${work[metric]} exceeds ${limit}`);
+    }
+  }
+});
+
+test('bounded interaction: mobile player metadata motion measures its three rows after 1,000 track changes', async () => {
+  const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const { createCountedDom } = require('../helpers/counted-dom.js');
+  const run = async (trackChanges) => {
+    const counter = createInteractionCounter();
+    const { CountedElement, createElement } = createCountedDom(counter);
+    const ownerDocument = { createElement: tag => Object.assign(createElement(tag), { scrollWidth: 240 }) };
+    const row = () => {
+      const element = new CountedElement('SPAN', { ownerDocument, clientWidth: 100 });
+      element.removeAttribute = name => { delete element.attributes[name]; };
+      element.querySelector = selector => {
+        counter.count('domQueries');
+        return element.children.find(child => child.getAttribute(selector.slice(1, -1)) !== null) || null;
+      };
+      Object.defineProperty(element, 'textContent', {
+        get: () => element.text,
+        set(value) { counter.count('domMutations'); element.children = []; element.text = String(value); },
+      });
+      return element;
+    };
+    const els = { artist: row(), title: row(), albumLink: row() };
+    const frames = [];
+    const listeners = new Map();
+    let observed = null;
+    const { context } = loadHelper({
+      usesMobilePageLayout: () => true,
+      resolveCompactPlayerMetadataRowMotion: ({ scrollWidth, clientWidth }) => {
+        counter.count('itemsVisited');
+        return { overflowing: scrollWidth > clientWidth, distance: scrollWidth - clientWidth, durationMs: 4200 };
+      },
+      ResizeObserver: class {
+        constructor(callback) { counter.count('observers'); observed = callback; }
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    });
+    Object.assign(context.window, {
+      addEventListener: (name, listener) => { counter.count('listeners'); listeners.set(name, listener); },
+      removeEventListener() {},
+      requestAnimationFrame: (callback) => { counter.count('animationFrames'); frames.push(callback); return frames.length; },
+      cancelAnimationFrame() {},
+    });
+    const flushFrames = () => frames.splice(0).forEach(callback => callback());
+    for (let change = 0; change < trackChanges; change += 1) {
+      context.renderGlobalPlayerMetadata(els, { artist: `Artist ${change}`, title: `Title ${change}`, album: `Album ${change}` });
+      flushFrames();
+    }
+    const work = await counter.measure(() => {
+      for (let step = 0; step < 10; step += 1) {
+        listeners.get('resize')();
+        flushFrames();
+        observed([]);
+        flushFrames();
+      }
+    });
+    assert.ok(els.title.classes.has('is-metadata-overflowing'));
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:runtime/player-loop-playback.js#syncGlobalPlayerMetadataMotion',
+    small: 10,
+    large: 1000,
+    run,
+    budgets: { itemsVisited: 60, domMutations: 180, animationFrames: 20, observers: 0, listeners: 0 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
+  });
 });

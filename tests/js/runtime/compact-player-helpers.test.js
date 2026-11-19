@@ -105,6 +105,31 @@ for (const savedMode of [null, 'expanded', 'compact']) {
   });
 }
 
+test('a floating player resize re-clamps only its x/y position, not the drag state', t => {
+  const { context, controls } = loadQueueController(t);
+  const events = new Map();
+  const properties = new Map();
+  const element = () => ({ dataset: {}, hidden: false, style: { setProperty() {} }, classList: { toggle() {}, add() {}, remove() {}, contains() { return false; } }, setAttribute() {}, addEventListener() {}, querySelector() { return null; } });
+  Object.assign(controls, { player: element(), expanded: element(), compact: element(), collapse: element(), expand: element() });
+  controls.player.style.setProperty = (key, value) => properties.set(key, value);
+  controls.previous.addEventListener = controls.next.addEventListener = () => {};
+  context.document = { documentElement: { ...element(), getAttribute: name => (name === 'data-compact-player-style' ? 'floating' : null) }, getElementById: () => null };
+  context.window = { setTimeout, clearTimeout, innerWidth: 1200, innerHeight: 800, localStorage: { getItem: () => 'compact', setItem() {} }, addEventListener: (name, callback) => events.set(name, callback) };
+  context.initCompactPlayer();
+  assert.equal(controls.player.dataset.compactPresentation, 'floating');
+  assert.deepEqual([properties.get('--compact-player-x'), properties.get('--compact-player-y')], ['12px', '687px']);
+
+  const clampInputs = [];
+  const clamp = context.clampCompactPlayerPosition;
+  context.clampCompactPlayerPosition = options => { clampInputs.push(Object.keys(options).sort()); return clamp(options); };
+  context.window.innerHeight = 500;
+  events.get('resize')();
+  assert.deepEqual([properties.get('--compact-player-x'), properties.get('--compact-player-y')], ['12px', '387px']);
+  assert.deepEqual(clampInputs, [[
+    'leftMargin', 'margin', 'playerHeight', 'playerWidth', 'viewportHeight', 'viewportWidth', 'x', 'y',
+  ]]);
+});
+
 for (const [name, initialIndex, offsets, expected] of [
   ['next', 0, [1, 1], ['B.flac', 'C.flac']],
   ['previous', 3, [-1, -1], ['C.flac', 'B.flac']],
@@ -399,8 +424,8 @@ test('floating controller keeps the player within the practical viewport edge', 
 
   assert.match(controller, /const FLOATING_COMPACT_PLAYER_MARGIN = 8/);
   assert.match(controller, /const FLOATING_COMPACT_PLAYER_LEFT_MARGIN = 12/);
-  assert.equal((controller.match(/margin: FLOATING_COMPACT_PLAYER_MARGIN/g) || []).length, 5);
-  assert.equal((controller.match(/leftMargin: FLOATING_COMPACT_PLAYER_LEFT_MARGIN/g) || []).length, 4);
+  assert.equal((controller.match(/margin: FLOATING_COMPACT_PLAYER_MARGIN/g) || []).length, 4);
+  assert.equal((controller.match(/leftMargin: FLOATING_COMPACT_PLAYER_LEFT_MARGIN/g) || []).length, 3);
 });
 
 test('docked queue controls disable previous and next at their respective boundaries', () => {
@@ -613,3 +638,40 @@ for (const enabled of [true, false]) {
     assert.equal(mount().controls.expanded.inert, false);
   });
 }
+
+test('bounded interaction: docked compact player resizes and shell class changes stay constant with a 1,000-track queue', async t => {
+  const { countedCollection, createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const run = async (queueLength) => {
+    const counter = createInteractionCounter();
+    const { context, controls } = loadQueueController(t);
+    const element = () => ({ dataset: {}, hidden: false, style: { setProperty() {} }, classList: { toggle() {}, add() {}, remove() {}, contains() { return false; } }, setAttribute() {}, addEventListener() {}, querySelector() { return null; } });
+    Object.assign(controls, { player: element(), expanded: element(), compact: element(), collapse: element(), expand: element() });
+    controls.previous.addEventListener = controls.next.addEventListener = () => {};
+    const events = new Map();
+    const mutations = [];
+    context.MutationObserver = class { constructor(callback) { counter.count('observers'); mutations.push(callback); } observe() {} };
+    context.document = { body: element(), documentElement: { ...element(), getAttribute: () => 'docked' }, getElementById: () => null };
+    context.window = { setTimeout, clearTimeout, innerWidth: 1200, innerHeight: 800, localStorage: { getItem: () => 'compact', setItem() {} },
+      addEventListener: (name, callback) => { counter.count('listeners'); events.set(name, callback); } };
+    const tracks = countedCollection(Array.from({ length: queueLength }, (_value, index) => ({ path: `${index}.flac`, src: `/track/${index}` })), counter);
+    context.state.player = { current: tracks[queueLength - 1], playbackQueue: { tracks, currentIndex: queueLength - 1 } };
+    context.initCompactPlayer();
+    const work = await counter.measure(() => {
+      for (let step = 0; step < 10; step += 1) {
+        events.get('resize')();
+        mutations.forEach(callback => callback([]));
+      }
+    });
+    assert.equal(controls.next.disabled, true, 'the last queued track has no next track');
+    assert.equal(controls.previous.disabled, false);
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:runtime/compact-player-controller.js#initCompactPlayer',
+    small: 12,
+    large: 1000,
+    run,
+    budgets: { itemsVisited: 20, listeners: 0, observers: 0 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
+  });
+});

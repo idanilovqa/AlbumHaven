@@ -1246,6 +1246,13 @@
               "test": "tests/e2e/specs/musicbrainzArtistIdentity.spec.js",
               "case": "FTC-MBID-003 an Unconfirmed match and its filter are in the first Problematic Files page",
               "area": "problematic-files"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playbackTakeover.spec.js",
+              "case": "FTC-PLAYBACK-NAV-001 play, open another artist in a new page load, and one press on a song plays it at once",
+              "area": "playback"
             }
           ]
         },
@@ -1390,6 +1397,13 @@
               "project": "functional",
               "test": "tests/e2e/specs/playbackTakeover.spec.js",
               "case": "FTC-PLAYBACK-TAKEOVER-003 after a playing tab closes, one press on a song in another browser plays it within seconds",
+              "area": "playback"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playbackTakeover.spec.js",
+              "case": "FTC-PLAYBACK-TITLE-001 pressing another song while one plays never shows the playing song again once the pressed one shows",
               "area": "playback"
             }
           ]

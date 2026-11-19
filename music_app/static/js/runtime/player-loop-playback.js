@@ -167,7 +167,9 @@ function updatePlayerUi() {
   const mirroredTrack = lockedByAnotherTab && typeof getMirroredPlaybackTrack === 'function'
     ? getMirroredPlaybackTrack()
     : null;
-  const displayTrack = mirroredTrack || state.player.current;
+  // A song just pressed shows until it plays or fails: a refresh while it starts never repaints the
+  // song it replaces (owner, 2026-11-19: "name of the song blinks and return to the currently playing").
+  const displayTrack = mirroredTrack || state.player.selectedTrack || state.player.current;
   state.player.lastKnownWasPlaying = Boolean(!lockedByAnotherTab && !playback.paused && !playback.ended);
   const hasTrack = Boolean(displayTrack && (lockedByAnotherTab || playback.src || state.player.current?.src));
   els.player?.classList?.toggle('is-empty', !hasTrack);
@@ -384,15 +386,17 @@ async function playTrackFromPayload(track, options = {}) {
     throw error;
   }
   if (selectionToken !== playerTrackSelectionToken) return false;
-  clearSelectedTrack();
-  if (startedRole === null) {
-    throw new Error('Streaming playback did not start');
-  }
   const startedTrackPath = String(startedRole?.track?.path || '');
-  if (startedTrackPath && startedTrackPath !== String(track.path)) {
-    throw new Error('Streaming playback started an unexpected track identity');
+  if (startedRole === null || (startedTrackPath && startedTrackPath !== String(track.path))) {
+    clearSelectedTrack();
+    throw new Error(startedRole === null
+      ? 'Streaming playback did not start'
+      : 'Streaming playback started an unexpected track identity');
   }
+  // The pressed song becomes the current one before the pending choice clears, so the player never
+  // shows the song it replaced in between.
   setCurrentPlayerTrack(track, { previousPlaybackSnapshot });
+  clearSelectedTrack();
   if (pendingClaim !== true && !await pendingClaim) {
     if (selectionToken === playerTrackSelectionToken) {
       pauseStreamingPlayback();

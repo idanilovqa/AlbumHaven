@@ -375,6 +375,29 @@ test('playback on another device shows the elsewhere overlay over the player and
   assert.equal(time.textContent, '10 - 20');
 });
 
+// Owner, 2026-11-19: "When I click play on a new song, in the player name of the song blinks and
+// return to the currently playing befoire changing again to the one that I started."
+test('a refresh while a pressed song starts keeps showing the pressed song, not the one it replaces', () => {
+  const player = new FakeElement();
+  const timelineWrap = new FakeElement();
+  const timeline = new FakeElement({ tagName: 'INPUT', type: 'range', parentElement: timelineWrap });
+  const time = new FakeElement();
+  const play = new FakeElement({ tagName: 'BUTTON' });
+  const title = new FakeElement();
+  const albumLink = new FakeElement();
+  const { context } = loadHelper({
+    getPlayerElements: () => ({ player, timeline, time, play, title, albumLink }),
+    getPlayerPlaybackSnapshot: () => ({ currentTime: 40, duration: 300, paused: false, ended: false, src: '/track?path=a.mp3' }),
+  });
+  context.state.player.current = { path: 'a.mp3', src: '/track?path=a.mp3', artist: 'Artist', title: 'Playing Song', album: 'Album' };
+  context.updatePlayerUi();
+  assert.equal(title.textContent, 'Artist - Playing Song /');
+
+  context.state.player.selectedTrack = { path: 'b.mp3', src: '/track?path=b.mp3', artist: 'Artist', title: 'Pressed Song', album: 'Album' };
+  context.updatePlayerUi();
+  assert.equal(title.textContent, 'Artist - Pressed Song /', 'the pressed song stays shown while it starts');
+});
+
 test('playback held by another tab or lost to the server disables the scissors for this tab', () => {
   const updates = [];
   const loopActions = { _loopActionController: { update: next => updates.push({ ...next }) } };

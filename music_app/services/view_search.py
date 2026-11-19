@@ -39,12 +39,8 @@ def _normalize_search_string(value: str) -> str:
     text = unicodedata.normalize("NFC", (value or "").strip().casefold())
     text = text.replace("'", "").replace("\u2019", "")
     text = _SEARCH_PUNCT_RE.sub(" ", text)
-    words = []
-    for word in text.split():
-        if len(word) > 3 and word.endswith("s"):
-            word = word[:-1]
-        words.append(word)
-    return " ".join(words)
+    # Search is literal: it finds what the owner wrote, never a singular for a plural (owner 2026-11-18).
+    return " ".join(text.split())
 
 
 def split_search_terms(value: str) -> list[str]:

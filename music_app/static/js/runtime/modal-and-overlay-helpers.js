@@ -281,9 +281,7 @@ function getVisibleNonAlbumTracks(options = {}) {
   // artist identity (for example, "Family_Alias" and "Family Alias").
   const folderKey = (value) => artistKey(value)
     .replace(/ß/g, 'ss').replace(/ς/g, 'σ')
-    .replace(/['’]/g, '').replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
-    .split(/\s+/).map((word) => word.length > 3 && word.endsWith('s') ? word.slice(0, -1) : word)
-    .join(' ');
+    .replace(/['’]/g, '').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
   const artistFolders = new Set([...artists].map(folderKey).filter(Boolean));
   return tracks.filter((track) => (
     artists.has(artistKey(track.album_artist || track.artist))

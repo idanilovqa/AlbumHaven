@@ -12959,7 +12959,7 @@ def test_selected_artist_non_album_read_is_scoped_before_candidate_payloads_are_
             "limit": browse.MAX_NON_ALBUM_CANDIDATE_LIMIT,
             "connection": calls[1]["connection"],
             "artist_names": ["Broadcast"],
-            "query_terms": ["button", "tender"],
+            "query_terms": ["buttons", "tender"],
         },
     ]
     browse.invalidate_postgres_utility_projection_cache()

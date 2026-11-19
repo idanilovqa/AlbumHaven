@@ -51,7 +51,7 @@
   // Library data the page reads: kept as answered, so views already seen open again offline.
   const DATA_PATHS = new Set(['/view-data', '/album-details', '/home-data']);
   // Searches and file-path lookups are never kept (a path must not name a kept entry).
-  const UNKEPT_DATA_PARAMS = ['q', 'track_path', 'path'];
+  const UNKEPT_DATA_PARAMS = ['q', 'track_path'];
   // The server's list of fields whose values are file paths; the worker never stores those values.
   const REDACT_HEADER = 'X-Album-Haven-App-Copy-Redact';
   const DATA_INDEX_PATH = '/__app-copy__/data';
@@ -916,10 +916,11 @@
       const artist = answer ? null : artistPlace(url);
       if (artist) answer = await keptArtistView(target.cache, index, artist);
       if (!answer) return null;
-      // Opened again: the last to go. Recorded in turn, never awaited.
+      // Opened again: the last to go. Recorded in turn, never awaited, and never after a forget.
+      const readIn = generation;
       void quietly(exclusive(async () => {
         const entry = index.entries[answer.key];
-        if (!entry) return;
+        if (!entry || readIn !== generation) return;
         entry.seenAt = now();
         await writeDataIndex(target.cache, index);
       }));
@@ -958,15 +959,18 @@
         }
         return response;
       });
+      const settled = arrived.then(response => ({ response }), error => ({ error }));
       let timer;
-      const outcome = await Promise.race([
-        arrived.then(response => ({ response }), error => ({ error })),
+      let outcome = await Promise.race([
+        settled,
         new Promise((resolve) => { timer = setTimeout(() => resolve(NO_ANSWER), dataCheckMs); }),
       ]);
       clearTimeout(timer);
       if (outcome === NO_ANSWER) {
-        if (await serverReachable()) return arrived;
-        return (await keptData(url)) || arrived;
+        const kept = (await serverReachable()) ? null : await keptData(url);
+        if (kept) return kept;
+        // Reachable (or nothing kept): the server's answer, however late, decides as below.
+        outcome = await settled;
       }
       if (outcome.error) {
         if (outcome.error?.name === 'AbortError' || request.signal?.aborted) throw outcome.error;

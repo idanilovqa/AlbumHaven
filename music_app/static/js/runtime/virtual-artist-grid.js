@@ -510,6 +510,9 @@ class VirtualArtistGrid {
 
   cancelVisibleAlbumDetailPrewarm() {
     this._albumDetailPrewarmGeneration += 1;
+    if (typeof clearQueuedTrackModalAlbumDetailsPrewarms === 'function') {
+      clearQueuedTrackModalAlbumDetailsPrewarms();
+    }
     if (this._albumDetailPrewarmRaf) {
       cancelBrowserAnimationFrame(this._albumDetailPrewarmRaf);
       this._albumDetailPrewarmRaf = 0;
@@ -547,7 +550,7 @@ class VirtualArtistGrid {
           ) {
             return;
           }
-          queueVisibleTrackModalAlbumDetailsPrewarm(this.containerEl, this.scrollEl, 2);
+          queueVisibleTrackModalAlbumDetailsPrewarm(this.containerEl, this.scrollEl);
           if (typeof preloadVisibleAlbumDetailsCovers === 'function') {
             preloadVisibleAlbumDetailsCovers(this.containerEl, this.scrollEl);
           }
@@ -1980,6 +1983,9 @@ class VirtualArtistGrid {
         return;
       }
       if (deferredSetGroups) return;
+      // Renders during the scroll skipped the prefetch; the cards the user stopped on get it now.
+      // A render that changes the range after measuring reschedules it for the new cards.
+      this.scheduleVisibleAlbumDetailPrewarm(this.lastKey, this.scrollEl?.scrollTop);
       this.scheduleMeasureRows(true);
     }, 96);
   }

@@ -1601,6 +1601,11 @@ function refreshCoverLookupAlbumArtwork(originalAlbum, updatedAlbums, options = 
   if (!updatedAlbum) return;
   state.ui = state.ui || {};
   state.ui.albumCoverMutationRevision = Number(state.ui.albumCoverMutationRevision || 0) + 1;
+  // A prefetched Album Details copy would reopen with the old cover. Dropping it first hands its gallery
+  // aliases back to the card objects that the patch below updates.
+  if (typeof invalidateHydratedTrackModalAlbumDetails === 'function') {
+    invalidateHydratedTrackModalAlbumDetails([originalAlbum, updatedAlbum]);
+  }
   const applyRefresh = () => {
     patchVisibleAlbumsByTrackPath(candidates);
     refreshRenderedAlbumCoverOnly(updatedAlbum);

@@ -17493,7 +17493,7 @@ def test_problematic_first_page_revalidates_replaced_loose_group_by_private_iden
     monkeypatch.setattr(
         repository,
         "_load_problematic_files_snapshot",
-        lambda allow_outdated=False: {
+        lambda allow_outdated=False, **_options: {
             "items": [{"key": loose_key, "track_paths": [r"Artist\Album\old.flac"]}],
             browse._PROBLEMATIC_LOOSE_GROUP_IDENTITIES_KEY: {
                 loose_key: "root-7\x01artist/album",

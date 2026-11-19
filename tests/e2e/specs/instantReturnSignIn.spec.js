@@ -10,7 +10,7 @@ import { visibleAlbumNames } from '../helpers/instantReturnHelpers.js';
 
 test.use({ reuseAuthentication: false, serviceWorkers: 'allow', viewport: { width: 1024, height: 480 } });
 
-test('FTC-IAR-W12 signed in and offline at once, a new tab shows the saved library and more albums say why they cannot load', {
+test(`FTC-IAR-W12 signed in and offline at once, a new tab shows the saved library, and more albums show 'Offline. Can't load more albums, check your network or try again later'`, {
   tag: '@area:gallery-search',
 }, async ({ page, context }, testInfo) => {
   await page.goto('/login');
@@ -39,6 +39,6 @@ test('FTC-IAR-W12 signed in and offline at once, a new tab shows the saved libra
   expect(maxScrollTop, 'the saved first page scrolls toward more albums').toBeGreaterThan(0);
   await library.scrollGalleryBy(maxScrollTop);
   await expect(galleryPage.unreachableMoreAlbumsToast).toBeVisible();
-  await expect(galleryPage.unreachableMoreAlbumsToast).toContainText("Offline. Can't load more albums. Check your network or try again later.");
+  await expect(galleryPage.unreachableMoreAlbumsToast).toContainText("Offline. Can't load more albums, check your network or try again later");
   await context.setOffline(false);
 });

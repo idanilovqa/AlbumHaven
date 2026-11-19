@@ -2,13 +2,10 @@
 // 504 or 520-530 with its own page). The app's own 503 means "not ready yet", never unreachable.
 const isGatewayFailureStatus = status => status === 502 || status === 504 || (status >= 520 && status <= 530);
 
-// What a surface that needs the server says while the server cannot be reached: [subject] names
-// what could not be loaded.
-function serverUnreachableNotice(subject) {
-  return {
-    title: globalThis.navigator?.onLine === false ? 'Offline' : "Can't reach Album Haven",
-    message: `Can't load ${subject}. Check your network or try again later.`,
-  };
+// What a surface that needs the server says while the server cannot be reached, the device
+// offline or the server down alike (the owner's wording): [subject] names what could not load.
+function serverUnreachableMessage(subject) {
+  return `Offline. Can't load ${subject}, check your network or try again later`;
 }
 
 // While the server publishes the library, projection-backed requests answer 503

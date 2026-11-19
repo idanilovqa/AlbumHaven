@@ -73,7 +73,7 @@ function renderTrackModalLoadingState(album) {
 function renderTrackModalUnreachableState(album) {
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
-  const { title, message } = serverUnreachableNotice('the details');
+  const message = serverUnreachableMessage('the details');
   els.subtitle.textContent = '';
   els.cover.innerHTML = `
     <div class="track-modal-cover-shell">
@@ -81,7 +81,7 @@ function renderTrackModalUnreachableState(album) {
     </div>
   `;
   els.list.innerHTML = `<li class="track-modal-unreachable-row">${buildOnPageAlertHtml({
-    severity: 'warning', role: 'status', title, message,
+    severity: 'warning', role: 'status', message,
   })}</li>`;
 }
 

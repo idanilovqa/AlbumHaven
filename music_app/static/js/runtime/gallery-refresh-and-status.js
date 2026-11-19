@@ -257,7 +257,7 @@ async function loadNextRootGalleryPage() {
   } catch (error) {
     if (ownsResponse() && error?.name !== 'AbortError') {
       showToast(error?.serverUnreachable
-        ? unreachableToastText('more albums')
+        ? serverUnreachableMessage('more albums')
         : 'Unable to load more albums. Scroll to retry.', 'error', 3200);
     }
     return false;
@@ -340,7 +340,7 @@ async function loadPreviousRootGalleryPage() {
   } catch (error) {
     if (error?.name !== 'AbortError') {
       showToast(error?.serverUnreachable
-        ? unreachableToastText('earlier albums')
+        ? serverUnreachableMessage('earlier albums')
         : error.message || 'Unable to load earlier albums.', 'error', 3200);
     }
     return false;
@@ -1051,12 +1051,6 @@ function dispatchStartupHydrationFollowup(followup, delayMs = 0) {
   Promise.resolve().then(runDispatch);
 }
 
-// One line for a toast: "Offline. Can't load more albums. Check your network or try again later."
-function unreachableToastText(subject) {
-  const { title, message } = serverUnreachableNotice(subject);
-  return `${title}. ${message}`;
-}
-
 function fetchGalleryViewResponse(url, signal) {
   return fetchRetryingPendingProjection(url, { headers: { Accept: 'application/json' }, signal });
 }
@@ -1184,7 +1178,7 @@ function applyUnreachableView(url) {
     album_count: 0,
     gallery_page: null,
   }, { trackSidebarReveal: false });
-  state.ui.galleryUnreachable = serverUnreachableNotice(subject);
+  state.ui.galleryUnreachable = serverUnreachableMessage(subject);
 }
 
 function showUnreachableView(apiUrl, push) {

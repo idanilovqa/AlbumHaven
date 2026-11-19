@@ -128,7 +128,7 @@ test('FTC-IAR-W09 after the first visit, a new tab opened offline shows the save
 // Reloading, offline, an artist opened in the app after the last save: that address was never
 // kept. Owner D4: the page never lands on another kept view; it names the artist asked for and
 // says the server cannot be reached.
-test('FTC-IAR-W10 an offline reload of an artist opened after the last save names that artist and says it cannot load', {
+test(`FTC-IAR-W10 an offline reload of an artist opened after the last save names that artist and shows 'Offline. Can't load the details, check your network or try again later'`, {
   tag: '@area:gallery-search',
 }, async ({ page, context, galleryActions, navigationPanelActions }) => {
   await primeCopy(page, galleryActions);
@@ -146,8 +146,7 @@ test('FTC-IAR-W10 an offline reload of an artist opened after the last save name
 
   await expect(page).toHaveURL(artistUrl.href);
   await expect(galleryPage.galleryContextName).toHaveText(artist);
-  await expect(galleryPage.unreachable).toContainText('Offline');
-  await expect(galleryPage.unreachable).toContainText(`Can't load ${artist}. Check your network or try again later.`);
+  await expect(galleryPage.unreachable).toHaveText(`Offline. Can't load ${artist}, check your network or try again later`);
   await expect(galleryPage.appCopyMarker).toHaveAttribute('content', 'cache');
   // One message only: the kept-library notice does not show above the artist's own.
   await expect(galleryPage.appCopyOfflineNotice).toBeHidden();
@@ -156,7 +155,7 @@ test('FTC-IAR-W10 an offline reload of an artist opened after the last save name
 
 // Owner D4, server down: an album's details spun forever and tree entries quietly kept the view
 // on screen. Offline in an open tab, each says the server cannot be reached and stops loading.
-test('FTC-IAR-W13 offline, album details and an artist that cannot load say so instead of loading forever', {
+test(`FTC-IAR-W13 offline, album details and an artist that cannot load show 'Offline. Can't load the details, check your network or try again later' instead of loading forever`, {
   tag: '@area:gallery-search',
 }, async ({ page, context, galleryActions, navigationPanelActions, trackModalActions }) => {
   await primeCopy(page, galleryActions);
@@ -167,8 +166,7 @@ test('FTC-IAR-W13 offline, album details and an artist that cannot load say so i
   await galleryActions.clickAlbumDetailsByAlbumName(album);
   const { trackModal } = trackModalActions;
   await expect(trackModal.unreachableAlert).toBeVisible();
-  await expect(trackModal.unreachableAlert).toContainText('Offline');
-  await expect(trackModal.unreachableAlert).toContainText("Can't load the details. Check your network or try again later.");
+  await expect(trackModal.unreachableAlert).toHaveText("Offline. Can't load the details, check your network or try again later");
   await expect(trackModal.loadingRow).toHaveCount(0);
   await expect(trackModal.title).toContainText(album);
   await trackModalActions.close();
@@ -179,7 +177,7 @@ test('FTC-IAR-W13 offline, album details and an artist that cannot load say so i
   const artist = await navigationPanelActions.selectSidebarArtistAt(rendered - 1);
   await expect(galleryPage.unreachable).toBeVisible();
   await expect(galleryPage.galleryContextName).toHaveText(artist);
-  await expect(galleryPage.unreachable).toContainText(`Can't load ${artist}. Check your network or try again later.`);
+  await expect(galleryPage.unreachable).toHaveText(`Offline. Can't load ${artist}, check your network or try again later`);
   expect(await visibleAlbumNames(galleryPage), 'the previous view is never left on screen').toEqual([]);
   expect(new URL(page.url()).searchParams.get('artist')).toBe(artist);
 

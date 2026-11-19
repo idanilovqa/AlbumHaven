@@ -285,9 +285,9 @@ function buildGalleryEmptySelectionHtml() {
 }
 
 // A view the server could not be reached for: the shared OnPageAlert in place of its albums.
-function buildGalleryUnreachableHtml(notice) {
+function buildGalleryUnreachableHtml(message) {
   return `<div class="gallery-unreachable" data-gallery-unreachable>${buildOnPageAlertHtml({
-    severity: 'warning', role: 'status', title: notice.title, message: notice.message,
+    severity: 'warning', role: 'status', message,
   })}</div>`;
 }
 

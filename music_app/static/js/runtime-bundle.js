@@ -2092,13 +2092,10 @@ function applyLocalRelatedFilterState(nextRelatedArtists, options = {}) {
 // 504 or 520-530 with its own page). The app's own 503 means "not ready yet", never unreachable.
 const isGatewayFailureStatus = status => status === 502 || status === 504 || (status >= 520 && status <= 530);
 
-// What a surface that needs the server says while the server cannot be reached: [subject] names
-// what could not be loaded.
-function serverUnreachableNotice(subject) {
-  return {
-    title: globalThis.navigator?.onLine === false ? 'Offline' : "Can't reach Album Haven",
-    message: `Can't load ${subject}. Check your network or try again later.`,
-  };
+// What a surface that needs the server says while the server cannot be reached, the device
+// offline or the server down alike (the owner's wording): [subject] names what could not load.
+function serverUnreachableMessage(subject) {
+  return `Offline. Can't load ${subject}, check your network or try again later`;
 }
 
 // While the server publishes the library, projection-backed requests answer 503
@@ -5013,9 +5010,9 @@ function buildGalleryEmptySelectionHtml() {
 }
 
 // A view the server could not be reached for: the shared OnPageAlert in place of its albums.
-function buildGalleryUnreachableHtml(notice) {
+function buildGalleryUnreachableHtml(message) {
   return `<div class="gallery-unreachable" data-gallery-unreachable>${buildOnPageAlertHtml({
-    severity: 'warning', role: 'status', title: notice.title, message: notice.message,
+    severity: 'warning', role: 'status', message,
   })}</div>`;
 }
 
@@ -16294,7 +16291,7 @@ function renderTrackModalLoadingState(album) {
 function renderTrackModalUnreachableState(album) {
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
-  const { title, message } = serverUnreachableNotice('the details');
+  const message = serverUnreachableMessage('the details');
   els.subtitle.textContent = '';
   els.cover.innerHTML = `
     <div class="track-modal-cover-shell">
@@ -16302,7 +16299,7 @@ function renderTrackModalUnreachableState(album) {
     </div>
   `;
   els.list.innerHTML = `<li class="track-modal-unreachable-row">${buildOnPageAlertHtml({
-    severity: 'warning', role: 'status', title, message,
+    severity: 'warning', role: 'status', message,
   })}</li>`;
 }
 
@@ -19225,7 +19222,7 @@ async function loadNextRootGalleryPage() {
   } catch (error) {
     if (ownsResponse() && error?.name !== 'AbortError') {
       showToast(error?.serverUnreachable
-        ? unreachableToastText('more albums')
+        ? serverUnreachableMessage('more albums')
         : 'Unable to load more albums. Scroll to retry.', 'error', 3200);
     }
     return false;
@@ -19308,7 +19305,7 @@ async function loadPreviousRootGalleryPage() {
   } catch (error) {
     if (error?.name !== 'AbortError') {
       showToast(error?.serverUnreachable
-        ? unreachableToastText('earlier albums')
+        ? serverUnreachableMessage('earlier albums')
         : error.message || 'Unable to load earlier albums.', 'error', 3200);
     }
     return false;
@@ -20019,12 +20016,6 @@ function dispatchStartupHydrationFollowup(followup, delayMs = 0) {
   Promise.resolve().then(runDispatch);
 }
 
-// One line for a toast: "Offline. Can't load more albums. Check your network or try again later."
-function unreachableToastText(subject) {
-  const { title, message } = serverUnreachableNotice(subject);
-  return `${title}. ${message}`;
-}
-
 function fetchGalleryViewResponse(url, signal) {
   return fetchRetryingPendingProjection(url, { headers: { Accept: 'application/json' }, signal });
 }
@@ -20152,7 +20143,7 @@ function applyUnreachableView(url) {
     album_count: 0,
     gallery_page: null,
   }, { trackSidebarReveal: false });
-  state.ui.galleryUnreachable = serverUnreachableNotice(subject);
+  state.ui.galleryUnreachable = serverUnreachableMessage(subject);
 }
 
 function showUnreachableView(apiUrl, push) {

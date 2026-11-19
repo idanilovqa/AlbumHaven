@@ -4044,7 +4044,7 @@ test('canonical same-artist reconciliation retains mounted cards without an opti
   context.state.view.primary_artist_groups = [];
   context.state.view.artist_groups = [];
   context.state.ui = { ...(context.state.ui || {}), galleryUnreachable: null };
-  context.state.ui.galleryUnreachable = { title: 'Offline', message: "Can't load Chris Buck. Check your network or try again later." };
+  context.state.ui.galleryUnreachable = "Offline. Can't load Chris Buck, check your network or try again later";
   virtualGrid.setGroups = () => {
     containerEl.children = [];
     containerEl.innerHTML = '';
@@ -4054,8 +4054,7 @@ test('canonical same-artist reconciliation retains mounted cards without an opti
 
   assert.match(containerEl.innerHTML, /data-gallery-unreachable/);
   assert.match(containerEl.innerHTML, /data-on-page-alert="warning"/);
-  assert.match(containerEl.innerHTML, /Offline/);
-  assert.match(containerEl.innerHTML, /Can(&#39;|')t load Chris Buck\. Check your network or try again later\./);
+  assert.match(containerEl.innerHTML, /Offline\. Can(&#39;|')t load Chris Buck, check your network or try again later/);
 }
 
 {

@@ -3536,8 +3536,7 @@ for (const [cause, fail] of [
 
     assert.doesNotMatch(elements.list.innerHTML, /Loading album details|library-loader-spinner/);
     assert.match(elements.list.innerHTML, /data-on-page-alert="warning"/);
-    assert.match(elements.list.innerHTML, /Can&#39;t reach Album Haven|Can't reach Album Haven/);
-    assert.match(elements.list.innerHTML, /Can(&#39;|')t load the details\. Check your network or try again later\./);
+    assert.match(elements.list.innerHTML, /Offline\. Can(&#39;|')t load the details, check your network or try again later/);
     assert.equal(elements.subtitle.textContent, '');
     assert.doesNotMatch(elements.cover.innerHTML, /Loading cover art/);
     assert.match(elements.title.textContent, /Album Alpha/, 'the album asked for stays named');

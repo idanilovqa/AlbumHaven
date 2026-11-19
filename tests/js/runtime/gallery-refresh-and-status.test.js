@@ -7593,24 +7593,11 @@ for (const [cause, fail] of [
     assert.equal(await navigation, false);
     assert.equal(context.state.view.selected_artist, 'Chris Buck', 'the bar names the artist asked for');
     assert.equal(context.state.view.artist_groups.length, 0, 'the previous artist is never left on screen');
-    assert.deepEqual({ ...context.state.ui.galleryUnreachable }, {
-      title: "Can't reach Album Haven", message: "Can't load Chris Buck. Check your network or try again later.",
-    });
+    assert.equal(context.state.ui.galleryUnreachable, "Offline. Can't load Chris Buck, check your network or try again later");
     assert.equal(calls.pushBrowserViewState.at(-1).selected_artist, 'Chris Buck');
     assert.deepEqual(calls.showToast, []);
   });
 }
-
-test('IAR-W10: a device that is offline is told it is offline', async () => {
-  const { context, pendingRequests } = unreachableGallery();
-  context.navigator = { onLine: false };
-
-  const navigation = context.fetchAndRender('/view-data?artist=Chris+Buck', true);
-  pendingRequests[0].rejectWith(new TypeError('Failed to fetch'));
-  await navigation;
-
-  assert.equal(context.state.ui.galleryUnreachable.title, 'Offline');
-});
 
 test('IAR-W10: a background refresh that cannot reach the server leaves the view as it is', async () => {
   const { context, pendingRequests } = unreachableGallery();
@@ -7632,7 +7619,7 @@ test('IAR-W10: any view applied replaces one the server could not be reached for
   const failed = context.fetchAndRender('/view-data?artist=Chris+Buck', true);
   pendingRequests[0].rejectWith(new TypeError('Failed to fetch'));
   await failed;
-  assert.equal(context.state.ui.galleryUnreachable.message, "Can't load Chris Buck. Check your network or try again later.");
+  assert.equal(context.state.ui.galleryUnreachable, "Offline. Can't load Chris Buck, check your network or try again later");
 
   context.applyViewPayload({ ...context.state.view, selected_artist: 'Mono', artist_groups: [{ artist: 'Mono', albums: [{ key: 'mono::one' }] }] });
 
@@ -7654,5 +7641,5 @@ test('IAR-W10: more albums that cannot load say the server cannot be reached', a
   assert.equal(await gallery.context.loadNextRootGalleryPage(), false);
 
   assert.deepEqual(gallery.calls.showToast.map(toast => toast.message),
-    ["Can't reach Album Haven. Can't load more albums. Check your network or try again later."]);
+    ["Offline. Can't load more albums, check your network or try again later"]);
 });

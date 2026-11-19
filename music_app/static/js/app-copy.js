@@ -78,16 +78,10 @@
       location.reload();
     }
 
-    // The notice, shown only while the server cannot be reached, never for a slow answer. Its title
-    // says which: the device offline, or the server not answering while the device is online.
+    // The Offline notice, shown only while the server cannot be reached, never for a slow answer.
     function showNotice(on) {
       const notice = document.getElementById('app-copy-offline-notice');
-      if (!notice) return;
-      if (on) {
-        const title = notice.querySelector?.('.on-page-alert__title');
-        if (title) title.textContent = navigator.onLine === false ? 'Offline' : "Can't reach Album Haven";
-      }
-      notice.hidden = !on;
+      if (notice) notice.hidden = !on;
     }
 
     function setReadOnly(on) {

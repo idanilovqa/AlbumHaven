@@ -28,7 +28,10 @@ const UNRELATED_SEARCH_ARTIST = 'Ария';
 const ARTIST_VIEW_URL = `/?surface=albums&artist=${encodeURIComponent(DDT_ARTIST)}`;
 const REPEATED_CYCLES = 4;
 const SAVED_MESSAGE = /^Saved changes to 5 tracks in “.+”\.$/u;
+const CONFIRM_BUTTON_TEXT = 'Yes, apply tags';
 const BUDGET_KEYS = Object.freeze([
+  'optimisticCardsMs',
+  'confirmedSaveMs',
   'splitSaveMs',
   'mergeSaveMs',
   'cardsReadyMs',
@@ -81,6 +84,15 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags split and merge`, (
     };
 
     const save = async ({ cycle, kind, expectedCards, hiddenAlbum, splitFilenames }) => {
+      // Owner (2026-11-19): the cards show the new track counts as soon as the save is confirmed
+      // in the editor; the server's answer then only confirms them.
+      const cardTimeline = await galleryActions.startAlbumCardTrackCountTimeline({
+        startButtonText: CONFIRM_BUTTON_TEXT,
+        expectedCounts: Object.fromEntries([
+          ...expectedCards.map((card) => [card.album, card.trackCount]),
+          ...(hiddenAlbum ? [[hiddenAlbum, null]] : []),
+        ]),
+      });
       const startedAt = performance.now();
       const result = await tagEditorActions.applyAndWaitForTerminalSavedResponse({ timeout: 120000 });
       const saveMs = record(`${kind}SaveMs`, performance.now() - startedAt);
@@ -99,12 +111,24 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags split and merge`, (
       }
       if (hiddenAlbum) await galleryActions.waitForAlbumHidden(hiddenAlbum, { timeout: 60000 });
       const cardsReadyMs = record('cardsReadyMs', performance.now() - startedAt);
+      const cardCounts = await cardTimeline.finish();
+      expect(cardCounts.expectedCardsMs, `${kind} ${cycle} cards show the new track counts`).not.toBeNull();
+      expect.soft(cardCounts.changedAfterExpected, `${kind} ${cycle} track counts stay put once shown`).toBe(false);
+      record('optimisticCardsMs', cardCounts.expectedCardsMs);
+      const confirmedSaveMs = record(
+        'confirmedSaveMs',
+        Math.min(...successMessages.map((sample) => sample.atMs)) - cardCounts.clickedAtPageMs,
+      );
       await expectRemixesPhysicalState(expect, { splitFilenames });
       const entry = {
         cycle,
         kind,
         saveMs,
         cardsReadyMs,
+        optimisticCardsMs: cardCounts.expectedCardsMs,
+        confirmedSaveMs,
+        cardCountChanges: cardCounts.changes,
+        postSaveTimeline: result.postSaveTimeline || null,
         saveTaskId: result.saveTaskId,
         phaseTimingsMs: result.payload.phase_timings_ms || null,
       };

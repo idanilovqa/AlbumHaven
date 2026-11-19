@@ -13,7 +13,9 @@ from typing import Any, Protocol
 from config import PERSISTENCE_BACKEND_POSTGRES
 from music_app.services.album_local_cover_integrity import (
     inferred_local_cover_belongs_to_track,
+    split_folder_covers,
 )
+from music_app.services.album_local_membership import physical_album_folder
 from music_app.services.album_ratings_postgres import PostgresAlbumRatingsService
 from music_app.services.library_reachability import missing_reasons
 from music_app.services.missing_album_auto_removal import remove_untouched_deleted
@@ -4735,6 +4737,8 @@ def _restore_structurally_inherited_covers(
     persisted_entries: dict[str, dict[str, object]],
 ) -> dict[str, dict[str, object]]:
     restored_entries = dict(incoming_entries)
+    # A fresh read carries no inheritance marks, so the folder pass dropped the cover of both halves.
+    kept_split_covers = split_folder_covers(persisted_entries)
     for path, incoming_entry in incoming_entries.items():
         persisted_entry = persisted_entries.get(path)
         if not isinstance(persisted_entry, dict):
@@ -4742,15 +4746,16 @@ def _restore_structurally_inherited_covers(
         cover_path = str(persisted_entry.get("cover_path") or "").strip()
         if (
             incoming_entry.get("cover_path")
-            or persisted_entry.get("cover_inherited_from_structural_edit") is not True
             or not cover_path
+            or (physical_album_folder(path), cover_path.casefold()) not in kept_split_covers
             or not Path(cover_path).is_file()
             or not inferred_local_cover_belongs_to_track(cover_path, path)
         ):
             continue
         restored_entry = dict(incoming_entry)
         restored_entry["cover_path"] = cover_path
-        restored_entry["cover_inherited_from_structural_edit"] = True
+        if persisted_entry.get("cover_inherited_from_structural_edit") is True:
+            restored_entry["cover_inherited_from_structural_edit"] = True
         restored_entries[path] = restored_entry
     return restored_entries
 

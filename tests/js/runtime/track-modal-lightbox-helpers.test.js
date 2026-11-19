@@ -3527,7 +3527,7 @@ for (const [cause, fail] of [
 ]) {
   test(`IAR-W10: album details that cannot reach the server stop loading and say so (${cause})`, async () => {
     const { context } = loadHelper({ onFetchAlbumDetails: fail });
-    vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'alert-components.js'), 'utf8'), context);
+    vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'offline-notice.js'), 'utf8'), context);
     const elements = context.getTrackModalElements();
 
     context.openTrackModal({ key: 'alpha', name: 'Album Alpha', album_artist: 'Chris Buck', preview_only: true });
@@ -3535,7 +3535,9 @@ for (const [cause, fail] of [
     await flushMicrotasks();
 
     assert.doesNotMatch(elements.list.innerHTML, /Loading album details|library-loader-spinner/);
-    assert.match(elements.list.innerHTML, /data-on-page-alert="warning"/);
+    assert.match(elements.list.innerHTML, /data-offline-notice="text"/);
+    assert.doesNotMatch(elements.list.innerHTML, /on-page-alert/, 'plain text, never the yellow alert');
+    assert.match(elements.cover.innerHTML, /data-album-artbox-state="offline"/);
     assert.match(elements.list.innerHTML, /Offline\. Can(&#39;|')t load the details, check your network or try again later/);
     assert.equal(elements.subtitle.textContent, '');
     assert.doesNotMatch(elements.cover.innerHTML, /Loading cover art/);

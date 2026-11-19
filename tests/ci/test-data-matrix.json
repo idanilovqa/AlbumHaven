@@ -10275,7 +10275,7 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/instantReturnBrowser.spec.js",
-    "case": "FTC-IAR-W10 an offline reload of an artist opened after the last save names that artist and shows 'Offline. Can't load the details, check your network or try again later'",
+    "case": "FTC-IAR-W10 an offline reload of an artist opened after the last save names that artist and shows 'Offline. Can't load <artist>, check your network or try again later'",
     "profile": "functional-core",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -10285,7 +10285,7 @@
     "expectedContracts": [
       "browser-copy-offline-reload-names-unreachable-view"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.config.js",
@@ -10389,7 +10389,7 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/instantReturnBrowser.spec.js",
-    "case": "FTC-IAR-W13 offline, album details and an artist that cannot load show 'Offline. Can't load the details, check your network or try again later' instead of loading forever",
+    "case": "FTC-IAR-W13 offline, album details show 'Offline. Can't load the details, check your network or try again later' and an artist that cannot load shows 'Offline. Can't load <artist>, …' instead of loading forever",
     "profile": "functional-core",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -10400,7 +10400,7 @@
       "unreachable-album-details-stop-loading",
       "unreachable-artist-named-without-other-view"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.config.js",
@@ -10420,6 +10420,6 @@
       "sign-in-keeps-library-before-offline",
       "unreachable-more-albums-message"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   }
 ]

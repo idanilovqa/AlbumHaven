@@ -1,0 +1,13 @@
+/* OfflineNotice (owner-approved v003): plain text and a muted crossed-out cloud, no box, border or
+   tint, in the viewer's theme. Renderers: runtime/offline-notice.js, components/offline-notice.html. */
+.offline-notice { display: flex; align-items: center; gap: 8px; color: inherit; }
+.offline-notice[hidden] { display: none; }
+.offline-notice__text { margin: 0; }
+.offline-notice__cloud { display: inline-grid; flex: none; color: var(--muted); }
+.offline-notice__cloud svg { width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; }
+.offline-notice--block { flex-direction: column; justify-content: center; gap: 14px; text-align: center; }
+.offline-notice--block .offline-notice__cloud { width: 88px; height: 88px; }
+.offline-notice--block .offline-notice__cloud svg { stroke-width: 3; }
+.offline-notice--line { font-size: 13px; }
+.offline-notice--line .offline-notice__cloud { width: 18px; height: 18px; }
+.offline-notice--line .offline-notice__cloud svg { stroke-width: 7; }

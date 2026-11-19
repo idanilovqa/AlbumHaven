@@ -561,7 +561,7 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/instantReturnBrowser.spec.js",
-              "case": "FTC-IAR-W10 an offline reload of an artist opened after the last save names that artist and shows 'Offline. Can't load the details, check your network or try again later'",
+              "case": "FTC-IAR-W10 an offline reload of an artist opened after the last save names that artist and shows 'Offline. Can't load <artist>, check your network or try again later'",
               "area": "gallery-search"
             },
             {
@@ -575,7 +575,7 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/instantReturnBrowser.spec.js",
-              "case": "FTC-IAR-W13 offline, album details and an artist that cannot load show 'Offline. Can't load the details, check your network or try again later' instead of loading forever",
+              "case": "FTC-IAR-W13 offline, album details show 'Offline. Can't load the details, check your network or try again later' and an artist that cannot load shows 'Offline. Can't load <artist>, …' instead of loading forever",
               "area": "gallery-search"
             },
             {

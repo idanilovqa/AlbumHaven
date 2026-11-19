@@ -468,6 +468,7 @@ function createRuntimeContext() {
 
   vm.createContext(context);
   vm.runInContext(alertComponentSource, context, { filename: alertComponentPath });
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(alertComponentPath), 'offline-notice.js'), 'utf8'), context);
   vm.runInContext(albumArtboxSource, context, { filename: albumArtboxPath });
   vm.runInContext(galleryMainComponentsSource, context, { filename: galleryMainComponentsPath });
   vm.runInContext(galleryCardSource, context, { filename: galleryCardPath });
@@ -4053,7 +4054,9 @@ test('canonical same-artist reconciliation retains mounted cards without an opti
   context.renderArtistGroups();
 
   assert.match(containerEl.innerHTML, /data-gallery-unreachable/);
-  assert.match(containerEl.innerHTML, /data-on-page-alert="warning"/);
+  assert.match(containerEl.innerHTML, /data-offline-notice="block"/);
+  assert.match(containerEl.innerHTML, /offline-notice__cloud/);
+  assert.doesNotMatch(containerEl.innerHTML, /on-page-alert/, 'plain text, never the yellow alert');
   assert.match(containerEl.innerHTML, /Offline\. Can(&#39;|')t load Chris Buck, check your network or try again later/);
 }
 

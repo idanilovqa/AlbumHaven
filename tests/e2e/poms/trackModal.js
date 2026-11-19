@@ -17,7 +17,8 @@ export class TrackModal extends BasePage {
     this.dialog = page.locator(this.dialogSelector);
     this.albumTrackTable = new AlbumTrackTable(this.dialog);
     this.loadingRow = page.locator(this.loadingRowSelector);
-    this.unreachableAlert = this.dialog.locator('.track-modal-unreachable-row [data-on-page-alert]');
+    this.unreachableNotice = this.dialog.locator('.track-modal-unreachable-row [data-offline-notice]');
+    this.offlineArtbox = this.dialog.locator('[data-album-artbox-state="offline"]');
     this.trackRows = page.locator(this.trackRowSelector);
     this.closeButton = page.locator(this.closeButtonSelector);
     this.mobilePage = page.locator('#track-modal.is-mobile-page');

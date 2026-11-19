@@ -265,10 +265,10 @@ export class GalleryPage extends BasePage {
     // copy, and the notice shows while the copy is read-only.
     this.appCopyMarker = page.locator('meta[name="album-haven-app-copy"]');
     this.appCopyOfflineNotice = page.locator('#app-copy-offline-notice');
-    // A view the server could not be reached for: its alert in place of the albums, and the toast
-    // when more albums cannot load.
-    this.unreachable = page.locator('[data-gallery-unreachable] [data-on-page-alert]');
-    this.unreachableMoreAlbumsToast = page.locator('#toast-layer .toast').filter({ hasText: "Can't load more albums" });
+    // A view the server could not be reached for: its OfflineNotice in place of the albums, and the
+    // line ending a kept gallery that cannot load more.
+    this.unreachable = page.locator('[data-gallery-unreachable] [data-offline-notice]');
+    this.galleryEndOffline = page.locator('#gallery-end-offline');
     this.galleryContext = page.locator('[data-gallery-bar-instance="gallery"] .gallery-bar__context');
     this.galleryContextName = this.galleryContext.locator('[data-gallery-context-name]');
     this.galleryContextMetadata = this.galleryContext.locator('[data-gallery-context-metadata]');

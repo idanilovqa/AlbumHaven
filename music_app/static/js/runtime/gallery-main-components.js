@@ -284,11 +284,9 @@ function buildGalleryEmptySelectionHtml() {
   return '<div class="gallery-empty-selection" data-gallery-empty-selection role="status">Select at least one artist in Artist Family.</div>';
 }
 
-// A view the server could not be reached for: the shared OnPageAlert in place of its albums.
+// A view the server could not be reached for: the OfflineNotice block in place of its albums.
 function buildGalleryUnreachableHtml(message) {
-  return `<div class="gallery-unreachable" data-gallery-unreachable>${buildOnPageAlertHtml({
-    severity: 'warning', role: 'status', message,
-  })}</div>`;
+  return `<div class="gallery-unreachable" data-gallery-unreachable>${buildOfflineNoticeHtml({ variant: 'block', message })}</div>`;
 }
 
 function buildGalleryDividerHtml(config = {}) {

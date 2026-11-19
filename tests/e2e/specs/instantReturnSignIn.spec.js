@@ -34,11 +34,11 @@ test(`FTC-IAR-W12 signed in and offline at once, a new tab shows the saved libra
   await expect(galleryPage.appCopyOfflineNotice).toContainText('Offline');
   expect((await visibleAlbumNames(galleryPage)).length).toBeGreaterThan(0);
 
-  // Owner D4: scrolling for albums the server cannot send says why, not only "Unable to load".
+  // Owner D4: the end of the kept gallery says why no more albums load, and the line stays.
   const { maxScrollTop } = await library.readGalleryScrollState();
   expect(maxScrollTop, 'the saved first page scrolls toward more albums').toBeGreaterThan(0);
   await library.scrollGalleryBy(maxScrollTop);
-  await expect(galleryPage.unreachableMoreAlbumsToast).toBeVisible();
-  await expect(galleryPage.unreachableMoreAlbumsToast).toContainText("Offline. Can't load more albums, check your network or try again later");
+  await expect(galleryPage.galleryEndOffline).toBeVisible();
+  await expect(galleryPage.galleryEndOffline).toHaveText("Offline. Can't load more albums, check your network or try again later");
   await context.setOffline(false);
 });

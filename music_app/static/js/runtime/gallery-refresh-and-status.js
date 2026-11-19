@@ -206,6 +206,7 @@ async function loadNextRootGalleryPage() {
     const ownsDataResponse = restarted ? ownsRootBrowseIdentity : ownsResponse;
     const data = await readGalleryResponse(response, ownsDataResponse);
     if (!ownsDataResponse()) return false;
+    setGalleryEndOffline('');
     if (!data.gallery_page || !data.gallery_page.revision
       || (!restarted && data.gallery_page.revision !== request.revision)
       || (data.gallery_page.has_more && (!data.gallery_page.next_cursor
@@ -255,11 +256,10 @@ async function loadNextRootGalleryPage() {
     scheduleBrowserAnimationFrame(() => { void loadNextRootGalleryPage(); });
     return true;
   } catch (error) {
-    if (ownsResponse() && error?.name !== 'AbortError') {
-      showToast(error?.serverUnreachable
-        ? serverUnreachableMessage('more albums')
-        : 'Unable to load more albums. Scroll to retry.', 'error', 3200);
-    }
+    if (!ownsResponse() || error?.name === 'AbortError') return false;
+    // The end of the kept gallery says why nothing more loads, and stays until something does.
+    if (error?.serverUnreachable) setGalleryEndOffline(serverUnreachableMessage('more albums'));
+    else showToast('Unable to load more albums. Scroll to retry.', 'error', 3200);
     return false;
   } finally {
     if (rootGalleryPageRequest === request) rootGalleryPageRequest = null;
@@ -1049,6 +1049,15 @@ function dispatchStartupHydrationFollowup(followup, delayMs = 0) {
     return;
   }
   Promise.resolve().then(runDispatch);
+}
+
+// The OfflineNotice line at the end of the gallery: [message] shows it, '' hides it.
+function setGalleryEndOffline(message) {
+  const notice = typeof document === 'undefined' ? null : document.getElementById?.('gallery-end-offline');
+  if (!notice) return;
+  const text = notice.querySelector?.('.offline-notice__text');
+  if (text && message) text.textContent = message;
+  notice.hidden = !message;
 }
 
 function fetchGalleryViewResponse(url, signal) {

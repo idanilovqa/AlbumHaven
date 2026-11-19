@@ -30,6 +30,9 @@
 .album-artbox--empty,
 .album-artbox--missing { color: color-mix(in srgb, var(--muted) 80%, transparent); }
 .album-artbox__missing-mark { display: grid; place-items: center; width: 40%; max-width: 144px; aspect-ratio: 1; }
+/* offline: the OfflineNotice cloud, muted, for art the server could not be reached for. */
+.album-artbox__offline-mark { display: grid; place-items: center; width: 50%; max-width: 144px; aspect-ratio: 1; color: var(--muted); }
+.album-artbox__offline-mark svg { width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
 .album-artbox__missing-mark svg { width: 100%; height: 100%; overflow: visible; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; filter: drop-shadow(0 0 12px color-mix(in srgb, currentColor 16%, transparent)); }
 .album-artbox__missing-disc { stroke-width: 2.4; }
 .album-artbox__missing-groove { stroke-width: 1; opacity: 0.28; }

@@ -56,6 +56,7 @@ const expectedRuntimeOrder = [
   'notification-ui-helpers.js',
   'render-markup-helpers.js',
   'alert-components.js',
+  'offline-notice.js',
   'album-artbox.js',
   'gallery-main-components.js',
   'gallery-main-state.js',

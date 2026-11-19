@@ -1788,8 +1788,10 @@ function findRememberedRuntimeAlbumCoverAuthority(album) {
 }
 
 function applyViewPayload(payload, options = {}) {
-  // Any applied view replaces one the server could not be reached for (applyUnreachableView).
+  // Any applied view replaces one the server could not be reached for (applyUnreachableView),
+  // and the end of a gallery that could not load more (setGalleryEndOffline).
   if (state.ui) state.ui.galleryUnreachable = null;
+  if (typeof setGalleryEndOffline === 'function') setGalleryEndOffline('');
   if (!options.rootGalleryContinuation && typeof cancelRootGalleryPageRequest === 'function') {
     cancelRootGalleryPageRequest();
   }
@@ -4652,6 +4654,27 @@ if (typeof module !== 'undefined' && module.exports) {
 
 // END js/runtime/alert-components.js
 
+// BEGIN js/runtime/offline-notice.js
+
+// OfflineNotice (owner-approved v003, unreachable server state): plain text with a muted crossed-out
+// cloud, no box, border or tint. `block` puts a large cloud above one centered line (a view that
+// cannot load), `line` a small cloud before the line (the end of a kept gallery, the kept-library
+// notice), and `text` is the line alone beside an AlbumArtbox showing the same cloud. The Jinja
+// renderer is components/offline-notice.html; both share css/runtime/offline-notice.css.
+const OFFLINE_NOTICE_VARIANTS = new Set(['block', 'line', 'text']);
+
+function buildOfflineCloudHtml() {
+  return '<svg viewBox="0 0 96 96" aria-hidden="true"><path d="M30 66h38a14 14 0 0 0 2-27.9A20 20 0 0 0 31.4 36 15 15 0 0 0 30 66Z"></path><path d="M22 22 74 74"></path></svg>';
+}
+
+function buildOfflineNoticeHtml(config = {}) {
+  const variant = OFFLINE_NOTICE_VARIANTS.has(config.variant) ? config.variant : 'line';
+  const cloud = variant === 'text' ? '' : `<span class="offline-notice__cloud">${buildOfflineCloudHtml()}</span>`;
+  return `<div class="offline-notice offline-notice--${variant}" role="status" data-offline-notice="${variant}">${cloud}<p class="offline-notice__text">${escapeHtml(String(config.message || ''))}</p></div>`;
+}
+
+// END js/runtime/offline-notice.js
+
 // BEGIN js/runtime/album-artbox.js
 
 function buildMissingAlbumMarkHtml() {
@@ -4669,14 +4692,17 @@ function buildMissingAlbumMarkHtml() {
 
 function buildAlbumArtboxHtml(config = {}) {
   const requestedState = String(config.state || '').trim().toLowerCase();
-  const state = ['ready', 'loading', 'empty', 'missing'].includes(requestedState)
+  const state = ['ready', 'loading', 'empty', 'missing', 'offline'].includes(requestedState)
     ? requestedState
     : 'empty';
   const label = String(config.label || 'Album artwork').trim();
   const coverHtml = String(config.coverHtml || '');
   const overlayHtml = String(config.overlayHtml || '');
   const actionHtml = String(config.actionHtml || '');
-  const content = state === 'missing' || state === 'empty'
+  // offline: the OfflineNotice cloud, for art the server could not be reached for.
+  const content = state === 'offline'
+    ? `<span class="album-artbox__offline-mark">${buildOfflineCloudHtml()}</span>`
+    : state === 'missing' || state === 'empty'
     ? buildMissingAlbumMarkHtml()
     : (coverHtml || (state === 'loading'
       ? '<span class="album-artbox__placeholder" role="status">Loading cover art...</span>'
@@ -5009,11 +5035,9 @@ function buildGalleryEmptySelectionHtml() {
   return '<div class="gallery-empty-selection" data-gallery-empty-selection role="status">Select at least one artist in Artist Family.</div>';
 }
 
-// A view the server could not be reached for: the shared OnPageAlert in place of its albums.
+// A view the server could not be reached for: the OfflineNotice block in place of its albums.
 function buildGalleryUnreachableHtml(message) {
-  return `<div class="gallery-unreachable" data-gallery-unreachable>${buildOnPageAlertHtml({
-    severity: 'warning', role: 'status', message,
-  })}</div>`;
+  return `<div class="gallery-unreachable" data-gallery-unreachable>${buildOfflineNoticeHtml({ variant: 'block', message })}</div>`;
 }
 
 function buildGalleryDividerHtml(config = {}) {
@@ -16286,8 +16310,8 @@ function renderTrackModalLoadingState(album) {
   }
 }
 
-// The open album's details could not be loaded because the server cannot be reached: the loading
-// rows give way to the shared OnPageAlert saying so, and nothing keeps spinning.
+// The open album's details could not be loaded because the server cannot be reached: the artbox
+// shows the offline cloud and the loading rows give way to the OfflineNotice line; nothing spins.
 function renderTrackModalUnreachableState(album) {
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
@@ -16295,12 +16319,10 @@ function renderTrackModalUnreachableState(album) {
   els.subtitle.textContent = '';
   els.cover.innerHTML = `
     <div class="track-modal-cover-shell">
-      ${buildAlbumArtboxHtml({ state: 'empty', label: 'Cover art unavailable' })}
+      ${buildAlbumArtboxHtml({ state: 'offline', label: 'Cover art unavailable' })}
     </div>
   `;
-  els.list.innerHTML = `<li class="track-modal-unreachable-row">${buildOnPageAlertHtml({
-    severity: 'warning', role: 'status', message,
-  })}</li>`;
+  els.list.innerHTML = `<li class="track-modal-unreachable-row">${buildOfflineNoticeHtml({ variant: 'text', message })}</li>`;
 }
 
 function clearTrackModalRenderedState() {
@@ -19171,6 +19193,7 @@ async function loadNextRootGalleryPage() {
     const ownsDataResponse = restarted ? ownsRootBrowseIdentity : ownsResponse;
     const data = await readGalleryResponse(response, ownsDataResponse);
     if (!ownsDataResponse()) return false;
+    setGalleryEndOffline('');
     if (!data.gallery_page || !data.gallery_page.revision
       || (!restarted && data.gallery_page.revision !== request.revision)
       || (data.gallery_page.has_more && (!data.gallery_page.next_cursor
@@ -19220,11 +19243,10 @@ async function loadNextRootGalleryPage() {
     scheduleBrowserAnimationFrame(() => { void loadNextRootGalleryPage(); });
     return true;
   } catch (error) {
-    if (ownsResponse() && error?.name !== 'AbortError') {
-      showToast(error?.serverUnreachable
-        ? serverUnreachableMessage('more albums')
-        : 'Unable to load more albums. Scroll to retry.', 'error', 3200);
-    }
+    if (!ownsResponse() || error?.name === 'AbortError') return false;
+    // The end of the kept gallery says why nothing more loads, and stays until something does.
+    if (error?.serverUnreachable) setGalleryEndOffline(serverUnreachableMessage('more albums'));
+    else showToast('Unable to load more albums. Scroll to retry.', 'error', 3200);
     return false;
   } finally {
     if (rootGalleryPageRequest === request) rootGalleryPageRequest = null;
@@ -20014,6 +20036,15 @@ function dispatchStartupHydrationFollowup(followup, delayMs = 0) {
     return;
   }
   Promise.resolve().then(runDispatch);
+}
+
+// The OfflineNotice line at the end of the gallery: [message] shows it, '' hides it.
+function setGalleryEndOffline(message) {
+  const notice = typeof document === 'undefined' ? null : document.getElementById?.('gallery-end-offline');
+  if (!notice) return;
+  const text = notice.querySelector?.('.offline-notice__text');
+  if (text && message) text.textContent = message;
+  notice.hidden = !message;
 }
 
 function fetchGalleryViewResponse(url, signal) {

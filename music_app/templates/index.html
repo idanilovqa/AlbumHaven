@@ -17,6 +17,7 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/cover-lookup-drawer-and-related.css') }}?v={{ runtime_asset_version }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/compact-data-table.css') }}?v={{ runtime_asset_version }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/alert-components.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/offline-notice.css') }}?v={{ runtime_asset_version }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/album-artbox-and-gallery-card.css') }}?v={{ runtime_asset_version }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/album-details-components.css') }}?v={{ runtime_asset_version }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/album-track-table.css') }}?v={{ runtime_asset_version }}">
@@ -73,6 +74,7 @@
   {% from "partials/gallery-bar.html" import gallery_bar %}
   {% from "partials/playback-control-cluster.html" import playback_control_cluster %}
   {% from "components/on-page-alert.html" import on_page_alert %}
+  {% from "components/offline-notice.html" import offline_notice %}
   <div class="layout shell-layout" id="app-shell" data-shell-kind="{{ shell_layout.kind or 'shared_media_shell' }}">
     {% call app_bar("library") %}
         <form class="toolbar-left" id="search-form" method="get" action="/" data-shell-horizontal-align="gallery-body">
@@ -179,7 +181,7 @@
           </div>
           <button class="gallery-action-button" type="button" data-gallery-bar-action="album-types" aria-label="Album types" aria-controls="gallery-album-types-menu" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true" stroke-linecap="round" stroke-linejoin="round"><path d="M5 17H4a2 2 0 0 1-2-2V6a2 2 0 0 1 1.5-1.94l8-2A2 2 0 0 1 14 4v1"/><path d="M8 20H7a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v1"/><rect x="8" y="8" width="14" height="14" rx="2"/><path fill="currentColor" fill-rule="evenodd" stroke="none" d="M19 15a4 4 0 1 1-8 0 4 4 0 0 1 8 0Zm-3 0a1 1 0 1 0-2 0 1 1 0 0 0 2 0Z"/></svg></button>
       {% endcall %}
-      {{ on_page_alert('This is your library as last seen, so it may be out of date. Changes are off until Album Haven can be reached.', severity='warning', title='Offline', role='status', hidden=true, class_name='app-copy-offline-notice', attributes={'id': 'app-copy-offline-notice'}) }}
+      {{ offline_notice('Offline. Showing your library as last seen, changes are off until Album Haven can be reached', variant='line', hidden=true, element_id='app-copy-offline-notice', class_name='app-copy-offline-notice') }}
 
       <div class="gallery-anchored-menu" id="gallery-album-types-menu" data-anchored-surface="album-types" data-trigger-anchor-context="content" role="group" aria-label="Album types" hidden>
         <span class="gallery-menu-title">Album types</span>
@@ -234,6 +236,7 @@
           <div id="albums-spacer-top"></div>
           <div id="artist-groups" data-startup-preview-mode="{{ startup_preview.mode }}">{{ startup_preview.gallery_html|safe }}</div>
           <div id="albums-spacer-bottom"></div>
+          {{ offline_notice('', variant='line', hidden=true, element_id='gallery-end-offline', class_name='gallery-end-offline') }}
         </div>
       </div>
       {% endif %}

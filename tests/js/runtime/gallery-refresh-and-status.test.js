@@ -7634,12 +7634,27 @@ test('IAR-W10: the app\'s own "not ready yet" (503) is never taken for an unreac
   assert.equal(response.status, 503);
 });
 
-test('IAR-W10: more albums that cannot load say the server cannot be reached', async () => {
-  const gallery = capturedGallery(async () => { throw new TypeError('Failed to fetch'); });
+// Owner D4 (v003 "Change both"): the end of the kept gallery says why nothing more loads, and stays
+// until more albums do; the short-lived error toast is gone for this case.
+test('IAR-W10: more albums that cannot load end the gallery with the offline line until some do', async () => {
+  let online = false;
+  const gallery = capturedGallery(async () => {
+    if (!online) throw new TypeError('Failed to fetch');
+    return jsonResponse(rootPage);
+  });
+  const text = { textContent: '' };
+  const endNotice = { hidden: true, querySelector: selector => (selector === '.offline-notice__text' ? text : null) };
+  const getElementById = gallery.context.document.getElementById;
+  gallery.context.document.getElementById = id => (id === 'gallery-end-offline' ? endNotice : getElementById(id));
   gallery.context.state.view = retainedRootView(3);
 
   assert.equal(await gallery.context.loadNextRootGalleryPage(), false);
 
-  assert.deepEqual(gallery.calls.showToast.map(toast => toast.message),
-    ["Offline. Can't load more albums, check your network or try again later"]);
+  assert.equal(endNotice.hidden, false);
+  assert.equal(text.textContent, "Offline. Can't load more albums, check your network or try again later");
+  assert.deepEqual(gallery.calls.showToast, []);
+
+  online = true;
+  await gallery.context.loadNextRootGalleryPage();
+  assert.equal(endNotice.hidden, true, 'albums that load take the line away');
 });

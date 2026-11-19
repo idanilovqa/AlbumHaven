@@ -128,7 +128,7 @@ test('FTC-IAR-W09 after the first visit, a new tab opened offline shows the save
 // Reloading, offline, an artist opened in the app after the last save: that address was never
 // kept. Owner D4: the page never lands on another kept view; it names the artist asked for and
 // says the server cannot be reached.
-test(`FTC-IAR-W10 an offline reload of an artist opened after the last save names that artist and shows 'Offline. Can't load the details, check your network or try again later'`, {
+test(`FTC-IAR-W10 an offline reload of an artist opened after the last save names that artist and shows 'Offline. Can't load <artist>, check your network or try again later'`, {
   tag: '@area:gallery-search',
 }, async ({ page, context, galleryActions, navigationPanelActions }) => {
   await primeCopy(page, galleryActions);
@@ -155,7 +155,7 @@ test(`FTC-IAR-W10 an offline reload of an artist opened after the last save name
 
 // Owner D4, server down: an album's details spun forever and tree entries quietly kept the view
 // on screen. Offline in an open tab, each says the server cannot be reached and stops loading.
-test(`FTC-IAR-W13 offline, album details and an artist that cannot load show 'Offline. Can't load the details, check your network or try again later' instead of loading forever`, {
+test(`FTC-IAR-W13 offline, album details show 'Offline. Can't load the details, check your network or try again later' and an artist that cannot load shows 'Offline. Can't load <artist>, …' instead of loading forever`, {
   tag: '@area:gallery-search',
 }, async ({ page, context, galleryActions, navigationPanelActions, trackModalActions }) => {
   await primeCopy(page, galleryActions);
@@ -165,8 +165,9 @@ test(`FTC-IAR-W13 offline, album details and an artist that cannot load show 'Of
 
   await galleryActions.clickAlbumDetailsByAlbumName(album);
   const { trackModal } = trackModalActions;
-  await expect(trackModal.unreachableAlert).toBeVisible();
-  await expect(trackModal.unreachableAlert).toHaveText("Offline. Can't load the details, check your network or try again later");
+  await expect(trackModal.unreachableNotice).toBeVisible();
+  await expect(trackModal.unreachableNotice).toHaveText("Offline. Can't load the details, check your network or try again later");
+  await expect(trackModal.offlineArtbox, 'the artbox shows the offline cloud').toBeVisible();
   await expect(trackModal.loadingRow).toHaveCount(0);
   await expect(trackModal.title).toContainText(album);
   await trackModalActions.close();

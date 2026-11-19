@@ -68,8 +68,8 @@ function renderTrackModalLoadingState(album) {
   }
 }
 
-// The open album's details could not be loaded because the server cannot be reached: the loading
-// rows give way to the shared OnPageAlert saying so, and nothing keeps spinning.
+// The open album's details could not be loaded because the server cannot be reached: the artbox
+// shows the offline cloud and the loading rows give way to the OfflineNotice line; nothing spins.
 function renderTrackModalUnreachableState(album) {
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
@@ -77,12 +77,10 @@ function renderTrackModalUnreachableState(album) {
   els.subtitle.textContent = '';
   els.cover.innerHTML = `
     <div class="track-modal-cover-shell">
-      ${buildAlbumArtboxHtml({ state: 'empty', label: 'Cover art unavailable' })}
+      ${buildAlbumArtboxHtml({ state: 'offline', label: 'Cover art unavailable' })}
     </div>
   `;
-  els.list.innerHTML = `<li class="track-modal-unreachable-row">${buildOnPageAlertHtml({
-    severity: 'warning', role: 'status', message,
-  })}</li>`;
+  els.list.innerHTML = `<li class="track-modal-unreachable-row">${buildOfflineNoticeHtml({ variant: 'text', message })}</li>`;
 }
 
 function clearTrackModalRenderedState() {

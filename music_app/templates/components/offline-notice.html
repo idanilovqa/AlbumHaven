@@ -1,0 +1,5 @@
+{# OfflineNotice (owner-approved v003): the Jinja renderer of runtime/offline-notice.js. #}
+{% macro offline_notice(message='', variant='line', hidden=false, element_id='', class_name='') -%}
+{% set variant = variant if variant in ('block', 'line', 'text') else 'line' -%}
+<div class="offline-notice offline-notice--{{ variant }}{% if class_name %} {{ class_name }}{% endif %}" role="status" data-offline-notice="{{ variant }}"{% if element_id %} id="{{ element_id }}"{% endif %}{% if hidden %} hidden{% endif %}>{% if variant != 'text' %}<span class="offline-notice__cloud"><svg viewBox="0 0 96 96" aria-hidden="true"><path d="M30 66h38a14 14 0 0 0 2-27.9A20 20 0 0 0 31.4 36 15 15 0 0 0 30 66Z"></path><path d="M22 22 74 74"></path></svg></span>{% endif %}<p class="offline-notice__text">{{ message }}</p></div>
+{%- endmacro %}

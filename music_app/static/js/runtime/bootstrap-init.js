@@ -333,6 +333,12 @@ window.AlbumHavenAppCopy?.onServerAnswer(() => {
 });
 
 document.addEventListener('contextmenu', (event) => {
+  const sidebarSeries = event.target.closest('[data-sidebar-series]');
+  if (sidebarSeries && typeof canReviewMusicBrainzCorrections === 'function' && canReviewMusicBrainzCorrections()
+      && showSeriesTreeContextMenu(event.clientX, event.clientY, sidebarSeries.getAttribute('data-sidebar-series') || '')) {
+    event.preventDefault();
+    return;
+  }
   const sidebarArtist = event.target.closest('[data-sidebar-artist]');
   if (sidebarArtist) {
     event.preventDefault();

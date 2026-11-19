@@ -178,7 +178,7 @@ test('metadata-conflict persistence is asserted on the family member information
   assert.match(step, /page\.reload\(\)[\s\S]*openArtistInfoPanel\(CONFLICT_ASSIGN\)/);
   assert.match(step, /heading: CONFLICT_ASSIGN/);
   assert.match(step, /countries: \['Finland'\]/);
-  assert.match(step, /genres: \['Genre unavailable'\]/);
+  assert.match(step, /genres: \[\], \/\/ No genre shows no pill or text/);
   assert.match(step, /musicbrainz\.org\/artist\/\$\{MBID\.conflictAssign\}/);
   assert.doesNotMatch(step, /readArtistContextMetadata/);
 });

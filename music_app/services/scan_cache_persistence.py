@@ -11,6 +11,7 @@ import threading
 from typing import Any, Protocol
 
 from config import PERSISTENCE_BACKEND_POSTGRES
+from music_app.services import browse_query_diagnostics  # TEMPORARY diagnostics; remove before PR 80 merges
 from music_app.services.album_local_cover_integrity import (
     inferred_local_cover_belongs_to_track,
 )
@@ -703,6 +704,9 @@ class PostgresScanCacheAdapter:
                             featured_row["artist_key"] = owner_keys[album_key]
                     featured_artist_rows.extend(complete_featured)
                 _execute_pipeline_batches(connection, _update_targeted_album_aggregate_sql(), aggregate_rows)
+                browse_query_diagnostics.log_album_covers(  # TEMPORARY FTC-TAGS-009 diagnostics
+                    connection, "targeted album aggregate", album_keys=[row["album_key"] for row in aggregate_rows],
+                    planned=[(row["album_key"], bool(row["cover_path"])) for row in aggregate_rows])
                 _execute_pipeline_batches(connection, _upsert_local_album_featured_artist_sql(), featured_artist_rows)
                 _seed_missing_tag_ratings(connection, self._config, published_albums)
             connection.execute(
@@ -1594,6 +1598,8 @@ class PostgresScanCacheAdapter:
                         ),
                     },
                 )
+            browse_query_diagnostics.log_album_covers(  # TEMPORARY FTC-TAGS-009 diagnostics
+                connection, "structural tag edit", album_ids=cover_album_ids)
             committed_relation_state = (
                 _patch_structural_relation_projection(
                     connection,

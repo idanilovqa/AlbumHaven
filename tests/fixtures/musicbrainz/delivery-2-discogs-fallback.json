@@ -1,0 +1,1262 @@
+{
+"cases": [
+{
+"case": "3 Crows",
+"context": {
+"albums": [
+{
+"id": 405116,
+"title": "It's A Murder",
+"tracks": [
+{
+"duration_seconds": 200.0,
+"title": "It's A Murder"
+},
+{
+"duration_seconds": 322.0,
+"title": "Raven's Way"
+},
+{
+"duration_seconds": 344.0,
+"title": "Islave"
+},
+{
+"duration_seconds": 225.0,
+"title": "Psychedelic Prelude"
+},
+{
+"duration_seconds": 324.0,
+"title": "Bird"
+},
+{
+"duration_seconds": 375.0,
+"title": "Tres Quervos"
+},
+{
+"duration_seconds": 100.0,
+"title": "The Light"
+},
+{
+"duration_seconds": 292.0,
+"title": "The Rhythm"
+},
+{
+"duration_seconds": 230.0,
+"title": "Franqy"
+}
+],
+"year": 2019
+}
+],
+"local_name": "3 Crows"
+},
+"outcome": {
+"albums": [
+[
+"It's A Murder",
+14603127
+]
+],
+"classification": "found",
+"discogs_artist_id": 7576646,
+"hints": [],
+"remote_info_needed": true
+}
+},
+{
+"case": "Fatal Destiny",
+"context": {
+"albums": [
+{
+"id": 408888,
+"title": "Palindromia",
+"tracks": [
+{
+"duration_seconds": 390.0,
+"title": "Beyond Dreams"
+},
+{
+"duration_seconds": 390.0,
+"title": "Beyond Dreams"
+},
+{
+"duration_seconds": 353.0,
+"title": "Leave Me Here"
+},
+{
+"duration_seconds": 353.0,
+"title": "Leave Me Here"
+},
+{
+"duration_seconds": 272.0,
+"title": "The Gate of Time"
+},
+{
+"duration_seconds": 272.0,
+"title": "The Gate of Time"
+},
+{
+"duration_seconds": 309.0,
+"title": "Feel Alone"
+},
+{
+"duration_seconds": 309.0,
+"title": "Feel Alone"
+},
+{
+"duration_seconds": 324.0,
+"title": "Dear Amy"
+},
+{
+"duration_seconds": 324.0,
+"title": "Dear Amy"
+},
+{
+"duration_seconds": 337.0,
+"title": "Human Factory"
+},
+{
+"duration_seconds": 337.0,
+"title": "Human Factory"
+}
+],
+"year": 2016
+}
+],
+"local_name": "Fatal Destiny"
+},
+"outcome": {
+"albums": [],
+"classification": "not_found",
+"discogs_artist_id": null,
+"hints": [],
+"remote_info_needed": true
+}
+},
+{
+"case": "Keep Rockin'",
+"context": {
+"albums": [
+{
+"id": 2098,
+"title": "Screaming Out Your Name",
+"tracks": [
+{
+"duration_seconds": 384.0,
+"title": "Beyond Reality"
+},
+{
+"duration_seconds": 417.0,
+"title": "Seeking Other Ways"
+},
+{
+"duration_seconds": 373.0,
+"title": "Left Alone Again"
+},
+{
+"duration_seconds": 355.0,
+"title": "A Marionette"
+},
+{
+"duration_seconds": 373.0,
+"title": "No Apologies"
+},
+{
+"duration_seconds": 468.0,
+"title": "At My Fingertips"
+},
+{
+"duration_seconds": 457.0,
+"title": "Don't Go Away"
+},
+{
+"duration_seconds": 365.0,
+"title": "Behind My Mask"
+},
+{
+"duration_seconds": 505.0,
+"title": "Turn Back Time"
+},
+{
+"duration_seconds": 329.0,
+"title": "Screaming Out Your Name"
+},
+{
+"duration_seconds": 405.0,
+"title": "Lost"
+}
+],
+"year": 2017
+}
+],
+"local_name": "Keep Rockin'"
+},
+"outcome": {
+"albums": [
+[
+"Screaming Out Your Name",
+10395128
+]
+],
+"classification": "found",
+"discogs_artist_id": 4693792,
+"hints": [],
+"remote_info_needed": true
+}
+},
+{
+"case": "Ktzat Acheret",
+"context": {
+"albums": [
+{
+"id": 411535,
+"title": "1973 - Ktzat Acheret",
+"tracks": [
+{
+"duration_seconds": 194.0,
+"title": "Travelling"
+},
+{
+"duration_seconds": 275.0,
+"title": "Guru"
+},
+{
+"duration_seconds": 164.0,
+"title": "The Little Prince"
+},
+{
+"duration_seconds": 248.0,
+"title": "Shemi's Place"
+},
+{
+"duration_seconds": 273.0,
+"title": "Pink Skies"
+},
+{
+"duration_seconds": 127.0,
+"title": "Spring"
+},
+{
+"duration_seconds": 227.0,
+"title": "Two Chinese"
+},
+{
+"duration_seconds": 258.0,
+"title": "Quinta"
+},
+{
+"duration_seconds": 195.0,
+"title": "The Echo"
+},
+{
+"duration_seconds": 314.0,
+"title": "204"
+},
+{
+"duration_seconds": 211.0,
+"title": "Sweet Song"
+},
+{
+"duration_seconds": 102.0,
+"title": "Bissalad"
+}
+],
+"year": 1973
+}
+],
+"local_name": "Ktzat Acheret"
+},
+"outcome": {
+"albums": [],
+"classification": "not_found",
+"discogs_artist_id": null,
+"hints": [],
+"remote_info_needed": true
+}
+},
+{
+"case": "Richard Neylon",
+"context": {
+"albums": [
+{
+"id": 3464,
+"title": "Sonda",
+"tracks": [
+{
+"duration_seconds": 266.0,
+"title": "Moving Beauty"
+},
+{
+"duration_seconds": 251.0,
+"title": "Catalina"
+},
+{
+"duration_seconds": 325.0,
+"title": "The Flood"
+},
+{
+"duration_seconds": 320.0,
+"title": "Lucy & Jimmy"
+},
+{
+"duration_seconds": 295.0,
+"title": "B Jigs"
+},
+{
+"duration_seconds": 262.0,
+"title": "The Mystery"
+},
+{
+"duration_seconds": 392.0,
+"title": "An Spéic Seoigheach"
+},
+{
+"duration_seconds": 329.0,
+"title": "Sonda"
+},
+{
+"duration_seconds": 218.0,
+"title": "Independence"
+},
+{
+"duration_seconds": 215.0,
+"title": "Holy Land"
+},
+{
+"duration_seconds": 246.0,
+"title": "Máire's First Slip"
+},
+{
+"duration_seconds": 202.0,
+"title": "Cumha Mhíchíl Breathnaigh"
+}
+],
+"year": 2018
+}
+],
+"local_name": "Richard Neylon"
+},
+"outcome": {
+"albums": [
+[
+"Sonda",
+11963767
+]
+],
+"classification": "found",
+"discogs_artist_id": 5729722,
+"hints": [],
+"remote_info_needed": true
+}
+},
+{
+"case": "Yossi Sassi Band",
+"context": {
+"albums": [
+{
+"id": 4866,
+"title": "Roots and Roads",
+"tracks": [
+{
+"duration_seconds": 297.0,
+"title": "Wings"
+},
+{
+"duration_seconds": 291.0,
+"title": "Palm Dance (feat. Bumblefoot)"
+},
+{
+"duration_seconds": 373.0,
+"title": "Root out (feat. Diana Golbi)"
+},
+{
+"duration_seconds": 135.0,
+"title": "Mr. NoSoul"
+},
+{
+"duration_seconds": 242.0,
+"title": "Madame TwoSouls"
+},
+{
+"duration_seconds": 292.0,
+"title": "The Religion of Music (feat. Zaher Zorgati)"
+},
+{
+"duration_seconds": 500.0,
+"title": "Winter"
+},
+{
+"duration_seconds": 143.0,
+"title": "Thundercloud"
+},
+{
+"duration_seconds": 336.0,
+"title": "Road Less Traveled"
+},
+{
+"duration_seconds": 232.0,
+"title": "Rizes Kai Dromoi"
+},
+{
+"duration_seconds": 235.0,
+"title": "Bird Without a Tree"
+},
+{
+"duration_seconds": 214.0,
+"title": "Stronger Than Ever"
+}
+],
+"year": 2016
+}
+],
+"local_name": "Yossi Sassi Band"
+},
+"outcome": {
+"albums": [],
+"classification": "not_found",
+"discogs_artist_id": null,
+"hints": [],
+"remote_info_needed": true
+}
+}
+],
+"discogs": {
+"/artists/4693792/releases?{\"page\": 1, \"per_page\": 100, \"sort\": \"year\"}": {
+"pagination": {
+"pages": 1
+},
+"releases": [
+{
+"id": 7670457,
+"role": "Main",
+"title": "Into The Unknown",
+"type": "release",
+"year": 2013
+},
+{
+"id": 10395128,
+"role": "Main",
+"title": "Screaming Out Your Name",
+"type": "release",
+"year": 2017
+},
+{
+"id": 16192084,
+"role": "Main",
+"title": "Seismic Shift",
+"type": "release",
+"year": 2020
+},
+{
+"id": 30058930,
+"role": "TrackAppearance",
+"title": "15. Festiwal Rocka Progresywnego",
+"type": "release",
+"year": 2021
+}
+]
+},
+"/artists/4693792?{}": {
+"aliases": [],
+"name": "Keep Rockin'"
+},
+"/artists/5231686/releases?{\"page\": 1, \"per_page\": 100, \"sort\": \"year\"}": {
+"pagination": {
+"pages": 1
+},
+"releases": [
+{
+"id": 8974137,
+"role": "Main",
+"title": "Roots And Roads",
+"type": "release",
+"year": 2016
+},
+{
+"id": 9959636,
+"role": "Main",
+"title": "Live In Satyrblues",
+"type": "release",
+"year": 2016
+},
+{
+"id": 11664448,
+"role": "TrackAppearance",
+"title": "Empire Art Rock 117",
+"type": "release",
+"year": 2016
+},
+{
+"id": 31861391,
+"role": "TrackAppearance",
+"title": "Satyrblues 25 lat",
+"type": "release",
+"year": 2024
+}
+]
+},
+"/artists/5646336/releases?{\"page\": 1, \"per_page\": 100, \"sort\": \"year\"}": {
+"pagination": {
+"pages": 1
+},
+"releases": [
+{
+"id": 10028286,
+"role": "Main",
+"title": "Palindromia",
+"type": "release",
+"year": 2016
+}
+]
+},
+"/artists/5729722/releases?{\"page\": 1, \"per_page\": 100, \"sort\": \"year\"}": {
+"pagination": {
+"pages": 1
+},
+"releases": [
+{
+"id": 11963767,
+"role": "Main",
+"title": "Sonda",
+"type": "release",
+"year": 2017
+},
+{
+"id": 34288699,
+"role": "Appearance",
+"title": "Music At The Crossroads - Music From The Show",
+"type": "release",
+"year": 2006
+},
+{
+"id": 10228475,
+"role": "Appearance",
+"title": "Live At The Black Box Theatre Galway Ireland",
+"type": "release",
+"year": 2007
+},
+{
+"id": 21599947,
+"role": "Appearance",
+"title": "Music At The Crossroads",
+"type": "release",
+"year": 2007
+}
+]
+},
+"/artists/5729722?{}": {
+"aliases": [],
+"name": "Richard Neylon"
+},
+"/artists/7576646/releases?{\"page\": 1, \"per_page\": 100, \"sort\": \"year\"}": {
+"pagination": {
+"pages": 1
+},
+"releases": [
+{
+"id": 14603127,
+"role": "Main",
+"title": "\"It's A Murder...\"",
+"type": "release",
+"year": 2019
+},
+{
+"id": 14764396,
+"role": "Main",
+"title": "\"It's a Murder...\"",
+"type": "release",
+"year": 2019
+}
+]
+},
+"/artists/7576646?{}": {
+"aliases": [],
+"name": "3 Crows"
+},
+"/database/search?{\"per_page\": 10, \"q\": \"3 Crows\", \"type\": \"artist\"}": {
+"results": [
+{
+"id": 2001151,
+"master_id": null,
+"title": "Crows (3)"
+},
+{
+"id": 1557886,
+"master_id": null,
+"title": "The Crows (3)"
+},
+{
+"id": 7576646,
+"master_id": null,
+"title": "3 Crows"
+},
+{
+"id": 2800539,
+"master_id": null,
+"title": "The Murder Of Crows"
+},
+{
+"id": 11551913,
+"master_id": null,
+"title": "Pink Crows"
+},
+{
+"id": 2750282,
+"master_id": null,
+"title": "Murder Of Crows (3)"
+},
+{
+"id": 9648691,
+"master_id": null,
+"title": "A Murder Of Crows (3)"
+},
+{
+"id": 1636769,
+"master_id": null,
+"title": "Haridon Lee"
+},
+{
+"id": 294697,
+"master_id": null,
+"title": "Charles Gillingham"
+},
+{
+"id": 7830671,
+"master_id": null,
+"title": "Feast For Crows"
+}
+]
+},
+"/database/search?{\"per_page\": 10, \"q\": \"Fatal Destiny\", \"type\": \"artist\"}": {
+"results": [
+{
+"id": 13997308,
+"master_id": null,
+"title": "Our Fatal Destiny"
+},
+{
+"id": 5646336,
+"master_id": null,
+"title": "Fatal Destiny"
+},
+{
+"id": 5317878,
+"master_id": null,
+"title": "Skalibur (2)"
+}
+]
+},
+"/database/search?{\"per_page\": 10, \"q\": \"Keep Rockin'\", \"type\": \"artist\"}": {
+"results": [
+{
+"id": 4693792,
+"master_id": null,
+"title": "Keep Rockin'"
+},
+{
+"id": 5220573,
+"master_id": null,
+"title": "Raven's Keep"
+},
+{
+"id": 604287,
+"master_id": null,
+"title": "The Keepers (2)"
+},
+{
+"id": 1335185,
+"master_id": null,
+"title": "Atomic Cocktail"
+},
+{
+"id": 1084465,
+"master_id": null,
+"title": "Close Shave"
+},
+{
+"id": 1050749,
+"master_id": null,
+"title": "Natty Bo"
+},
+{
+"id": 836970,
+"master_id": null,
+"title": "The Deal (3)"
+},
+{
+"id": 2770655,
+"master_id": null,
+"title": "Dale Rocka & The Volcanoes"
+},
+{
+"id": 7842439,
+"master_id": null,
+"title": "Smokin' Aces"
+},
+{
+"id": 1128080,
+"master_id": null,
+"title": "Lou Halmy"
+}
+]
+},
+"/database/search?{\"per_page\": 10, \"q\": \"Ktzat Acheret\", \"type\": \"artist\"}": {
+"results": [
+{
+"id": 3723304,
+"master_id": null,
+"title": "קצת אחרת"
+},
+{
+"id": 1180400,
+"master_id": null,
+"title": "Shem-Tov Levi"
+},
+{
+"id": 3907929,
+"master_id": null,
+"title": "Fourteen Octaves"
+}
+]
+},
+"/database/search?{\"per_page\": 10, \"q\": \"Richard Neylon\", \"type\": \"artist\"}": {
+"results": [
+{
+"id": 5729722,
+"master_id": null,
+"title": "Richard Neylon"
+}
+]
+},
+"/database/search?{\"per_page\": 10, \"q\": \"Yossi Sassi Band\", \"type\": \"artist\"}": {
+"results": [
+{
+"id": 1810306,
+"master_id": null,
+"title": "Yossi Sa'aron Sassi"
+},
+{
+"id": 5231686,
+"master_id": null,
+"title": "Yossi Sassi band"
+},
+{
+"id": 5614812,
+"master_id": null,
+"title": "IGNEA"
+}
+]
+},
+"/releases/10028286?{}": {
+"artists": [
+{
+"anv": "",
+"id": 5646336,
+"join": "",
+"name": "Fatal Destiny"
+}
+],
+"identifiers": [],
+"title": "Palindromia",
+"tracklist": [
+{
+"duration": "",
+"position": "1",
+"title": "Palindromia ",
+"type_": "track"
+},
+{
+"duration": "",
+"position": "2",
+"title": "Beyond Dreams",
+"type_": "track"
+},
+{
+"duration": "",
+"position": "3",
+"title": "Leave Me Here",
+"type_": "track"
+},
+{
+"duration": "",
+"position": "4",
+"title": "The Gate Of Time",
+"type_": "track"
+},
+{
+"duration": "",
+"position": "5",
+"title": "Feel Alone",
+"type_": "track"
+},
+{
+"duration": "",
+"position": "6",
+"title": "Dear Amy",
+"type_": "track"
+},
+{
+"duration": "",
+"position": "7",
+"title": "Human Factory",
+"type_": "track"
+},
+{
+"duration": "",
+"position": "8",
+"title": "No Devil Lived On",
+"type_": "track"
+}
+],
+"year": 2016
+},
+"/releases/10395128?{}": {
+"artists": [
+{
+"anv": "",
+"id": 4693792,
+"join": "",
+"name": "Keep Rockin'"
+}
+],
+"identifiers": [
+{
+"type": "Barcode",
+"value": "5906874511008"
+}
+],
+"title": "Screaming Out Your Name",
+"tracklist": [
+{
+"duration": "6:25",
+"position": "1-1",
+"title": "Beyond Reality",
+"type_": "track"
+},
+{
+"duration": "6:58",
+"position": "1-2",
+"title": "Seeking Other Ways",
+"type_": "track"
+},
+{
+"duration": "6:14",
+"position": "1-3",
+"title": "Left Alone Again",
+"type_": "track"
+},
+{
+"duration": "5:56",
+"position": "1-4",
+"title": "A Marionette",
+"type_": "track"
+},
+{
+"duration": "6:14",
+"position": "1-5",
+"title": "No Apologies",
+"type_": "track"
+},
+{
+"duration": "7:48",
+"position": "1-6",
+"title": "At My Fingertips",
+"type_": "track"
+},
+{
+"duration": "7:37",
+"position": "1-7",
+"title": "Don't Go Away",
+"type_": "track"
+},
+{
+"duration": "6:05",
+"position": "1-8",
+"title": "Behind My Mask",
+"type_": "track"
+},
+{
+"duration": "8:26",
+"position": "1-9",
+"title": "Turn Back Time",
+"type_": "track"
+},
+{
+"duration": "5:30",
+"position": "1-10",
+"title": "Screaming Out Your Name",
+"type_": "track"
+},
+{
+"duration": "6:47",
+"position": "1-11",
+"title": "Lost",
+"type_": "track"
+},
+{
+"duration": "6:25",
+"position": "2-1",
+"title": "Poza Rzeczywistością",
+"type_": "track"
+},
+{
+"duration": "6:58",
+"position": "2-2",
+"title": "Szukam Nowych Dróg",
+"type_": "track"
+},
+{
+"duration": "6:14",
+"position": "2-3",
+"title": "Opuszczony",
+"type_": "track"
+},
+{
+"duration": "5:56",
+"position": "2-4",
+"title": "Marionetka",
+"type_": "track"
+},
+{
+"duration": "6:14",
+"position": "2-5",
+"title": "Nie Będę Przepraszał",
+"type_": "track"
+},
+{
+"duration": "7:48",
+"position": "2-6",
+"title": "Na Wyciągnięcie Ręki",
+"type_": "track"
+},
+{
+"duration": "7:37",
+"position": "2-7",
+"title": "Nie Odchodź",
+"type_": "track"
+},
+{
+"duration": "6:05",
+"position": "2-8",
+"title": "Za Maską",
+"type_": "track"
+},
+{
+"duration": "8:26",
+"position": "2-9",
+"title": "Cofnąć Czas",
+"type_": "track"
+},
+{
+"duration": "5:30",
+"position": "2-10",
+"title": "Wykrzykując Twoje Imię",
+"type_": "track"
+},
+{
+"duration": "6:47",
+"position": "2-11",
+"title": "Zagubiony",
+"type_": "track"
+}
+],
+"year": 2017
+},
+"/releases/11963767?{}": {
+"artists": [
+{
+"anv": "",
+"id": 5729722,
+"join": "",
+"name": "Richard Neylon"
+}
+],
+"identifiers": [
+{
+"type": "Barcode",
+"value": "5060362462057"
+}
+],
+"title": "Sonda",
+"tracklist": [
+{
+"duration": "",
+"position": "1",
+"title": " Moving Beauty ",
+"type_": "track"
+},
+{
+"duration": "",
+"position": "2",
+"title": "Catalina ",
+"type_": "track"
+},
+{
+"duration": "",
+"position": "3",
+"title": "The Flood ",
+"type_": "track"
+},
+{
+"duration": "",
+"position": "4",
+"title": "Lucy & Jimmy",
+"type_": "track"
+},
+{
+"duration": "",
+"position": "5",
+"title": "B Jigs",
+"type_": "track"
+},
+{
+"duration": "",
+"position": "6",
+"title": "The Mystery",
+"type_": "track"
+},
+{
+"duration": "",
+"position": "7",
+"title": "An Spéic Seoigheach",
+"type_": "track"
+},
+{
+"duration": "",
+"position": "8",
+"title": "Sonda ",
+"type_": "track"
+},
+{
+"duration": "",
+"position": "9",
+"title": "Independence",
+"type_": "track"
+},
+{
+"duration": "",
+"position": "10",
+"title": "Holy Land",
+"type_": "track"
+},
+{
+"duration": "",
+"position": "11",
+"title": "Máire's First Slip ",
+"type_": "track"
+},
+{
+"duration": "",
+"position": "12",
+"title": "Cumha Mhíchíl Breathnaigh",
+"type_": "track"
+}
+],
+"year": 2017
+},
+"/releases/14603127?{}": {
+"artists": [
+{
+"anv": "",
+"id": 7576646,
+"join": "",
+"name": "3 Crows"
+}
+],
+"identifiers": [
+{
+"type": "Barcode",
+"value": "88829574663"
+}
+],
+"title": "\"It's A Murder...\"",
+"tracklist": [
+{
+"duration": "",
+"position": "1",
+"title": "It's A Murder",
+"type_": "track"
+},
+{
+"duration": "",
+"position": "2",
+"title": "Raven's Way",
+"type_": "track"
+},
+{
+"duration": "",
+"position": "3",
+"title": "iSlave",
+"type_": "track"
+},
+{
+"duration": "",
+"position": "4",
+"title": "Psychedelic Prelude",
+"type_": "track"
+},
+{
+"duration": "",
+"position": "5",
+"title": "Bird",
+"type_": "track"
+},
+{
+"duration": "",
+"position": "6",
+"title": "Tres Quervos",
+"type_": "track"
+},
+{
+"duration": "",
+"position": "7",
+"title": "The Light",
+"type_": "track"
+},
+{
+"duration": "",
+"position": "8",
+"title": "The Rhythm",
+"type_": "track"
+},
+{
+"duration": "",
+"position": "9",
+"title": "Franqy",
+"type_": "track"
+}
+],
+"year": 2019
+},
+"/releases/8974137?{}": {
+"artists": [
+{
+"anv": "",
+"id": 5231686,
+"join": "",
+"name": "Yossi Sassi Band"
+}
+],
+"identifiers": [
+{
+"type": "Barcode",
+"value": "8 95666 78486 5"
+}
+],
+"title": "Roots And Roads",
+"tracklist": [
+{
+"duration": "4:57",
+"position": "1",
+"title": "Wings",
+"type_": "track"
+},
+{
+"duration": "4:51",
+"position": "2",
+"title": "Palm Dance",
+"type_": "track"
+},
+{
+"duration": "6:13",
+"position": "3",
+"title": "Root Out",
+"type_": "track"
+},
+{
+"duration": "2:15",
+"position": "4",
+"title": "Mr. NoSoul",
+"type_": "track"
+},
+{
+"duration": "4:02",
+"position": "5",
+"title": "Madame TwoSouls",
+"type_": "track"
+},
+{
+"duration": "4:52",
+"position": "6",
+"title": "The Religion Of Music",
+"type_": "track"
+},
+{
+"duration": "8:20",
+"position": "7",
+"title": "Winter",
+"type_": "track"
+},
+{
+"duration": "2:23",
+"position": "8",
+"title": "Thundercloud",
+"type_": "track"
+},
+{
+"duration": "5:36",
+"position": "9",
+"title": "Road Less Traveled",
+"type_": "track"
+},
+{
+"duration": "3:52",
+"position": "10",
+"title": "Rizes Kai Dromoi",
+"type_": "track"
+},
+{
+"duration": "3:55",
+"position": "11",
+"title": "Bird Without A Tree",
+"type_": "track"
+},
+{
+"duration": "3:34",
+"position": "12",
+"title": "Stronger Than Ever",
+"type_": "track"
+},
+{
+"duration": "4:38",
+"position": "13",
+"title": "The Explorientals",
+"type_": "track"
+},
+{
+"duration": "4:17",
+"position": "14",
+"title": "Madame On Steroids",
+"type_": "track"
+},
+{
+"duration": "4:27",
+"position": "15",
+"title": "Quarter To Rizes",
+"type_": "track"
+}
+],
+"year": 2016
+}
+},
+"mirror": {
+"/release/?query=barcode%3A5060362462057&fmt=json&limit=10": {
+"count": 0,
+"created": "2026-11-15T07:08:38.760Z",
+"offset": 0,
+"releases": []
+},
+"/release/?query=barcode%3A5906874511008&fmt=json&limit=10": {
+"count": 0,
+"created": "2026-11-15T07:08:26.102Z",
+"offset": 0,
+"releases": []
+},
+"/release/?query=barcode%3A88829574663&fmt=json&limit=10": {
+"count": 0,
+"created": "2026-11-15T07:08:08.543Z",
+"offset": 0,
+"releases": []
+}
+}
+}

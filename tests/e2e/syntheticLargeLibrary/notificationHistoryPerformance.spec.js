@@ -53,14 +53,15 @@ async function readNotificationState(coverLookup) {
       clientHeight: body?.clientHeight || 0,
       spacerCount: body?.querySelectorAll(selectors.taskSpacer).length || 0,
       totalCount: Number(state.coverLookup?.notificationCounts?.total_count || 0),
-      visibleTitles: [...(body?.querySelectorAll(selectors.taskTitle) || [])]
-        .map(element => element.textContent?.trim() || ''),
+      // Each card's second line names its album first.
+      visibleAlbums: [...(body?.querySelectorAll(selectors.taskByline) || [])]
+        .map(element => (element.textContent || '').split(' · ')[0].trim()),
     };
   }, {
     drawerBody: coverLookup.drawerBodySelector,
     taskCard: coverLookup.taskCardWithinDrawerSelector,
     taskSpacer: coverLookup.taskSpacerWithinDrawerSelector,
-    taskTitle: coverLookup.taskTitleWithinCardSelector,
+    taskByline: coverLookup.taskBylineWithinCardSelector,
   });
 }
 
@@ -187,7 +188,7 @@ test.describe(`${CASE_ID} large notification history`, () => {
 
       expect(notification.loadedTasks).toBe(notificationHistorySize);
       expect(notification.totalCount).toBe(notificationHistorySize);
-      expect(notification.visibleTitles).toContain('Notification Album 0528');
+      expect(notification.visibleAlbums).toContain('Notification Album 0528');
       samples.push(await sampleRenderer(coverLookupActions.coverLookup, cdp, 'history-loaded'));
 
       await stepLogger.step('Keep the visible notification anchored across inserts and cover updates', async () => {

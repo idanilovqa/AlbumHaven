@@ -178,6 +178,8 @@ def test_artist_projection_is_bounded_normalized_and_keeps_all_review_tags_with_
         "artist_type": "Group",
         "disambiguation": None,
         "country_code": "SE",
+        "area_mbid": None,
+        "area_name": None,
         "preferred_native_name": "Änglagård",
         "source_url": f"https://musicbrainz.org/artist/{ARTIST_ID}",
         "aliases": [
@@ -196,6 +198,21 @@ def test_artist_projection_is_bounded_normalized_and_keeps_all_review_tags_with_
         ],
         "discogs_artist_id": None,
     }
+
+
+def test_an_artist_with_only_an_area_carries_its_name_and_mbid_for_the_split_label():
+    """Owner 2026-11-17 (0257): "For those bands put a location identifier that is available
+    from MusicBrainz" - a city or region area stands in where MusicBrainz names no country."""
+    api = _client_api()
+    area_id = "00000000-0000-4000-8000-0000000000c1"
+    projected = api.project_artist({"id": ARTIST_ID, "name": "Amarok", "area": {"id": area_id, "name": " Chico ", "type": "City"}})
+    assert (projected["country_code"], projected["area_name"], projected["area_mbid"]) == (None, "Chico", area_id)
+    candidate = api._candidate({"id": ARTIST_ID, "name": "Amarok", "area": {"id": area_id, "name": "Chico"}})
+    assert (candidate["area_name"], candidate["area_mbid"]) == ("Chico", area_id)
+    # Negative: no area, or an area without a name, carries nothing; a malformed id is dropped.
+    assert api.project_artist({"id": ARTIST_ID, "name": "Amarok"})["area_name"] is None
+    assert "area_name" not in api._candidate({"id": ARTIST_ID, "name": "Amarok", "area": {"id": area_id}})
+    assert api.project_artist({"id": ARTIST_ID, "name": "Amarok", "area": {"id": "nope", "name": "Chico"}})["area_mbid"] is None
 
 
 def test_artist_projection_rejects_wrong_entity_shape():

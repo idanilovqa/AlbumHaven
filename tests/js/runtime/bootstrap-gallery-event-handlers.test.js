@@ -1520,6 +1520,51 @@ test('artist tree context action closes the menu before scrolling the root galle
   assert.deepEqual(JSON.parse(JSON.stringify(calls.closeArtistsDrawer)), [{ restoreFocus: false }]);
 });
 
+// MusicBrainz Delivery 2 (owner 2026-11-17): 4B collapsible group headings, 5B the series menu.
+function seriesTreeClick(context, matches) {
+  let prevented = false;
+  context.handleGalleryBootstrapClick({
+    target: { closest: (selector) => matches[selector] || null },
+    preventDefault() { prevented = true; },
+  });
+  return prevented;
+}
+
+test('4B: a Series tree heading toggles its group, re-renders the tree and keeps focus there', () => {
+  const { context, calls } = createContext();
+  const toggled = [];
+  const focused = [];
+  context.toggleSeriesTreeGroup = (kind) => { toggled.push(kind); return true; };
+  context.document.querySelector = (selector) => (
+    selector === '[data-series-tree-group="featured_in"]' ? { focus: () => focused.push(selector) } : null);
+  const heading = { getAttribute: (name) => (name === 'data-series-tree-group' ? 'featured_in' : null) };
+
+  assert.equal(seriesTreeClick(context, { '[data-series-tree-group]': heading }), true);
+  assert.deepEqual(toggled, ['featured_in']);
+  assert.equal(calls.renderSidebar, 1);
+  assert.deepEqual(focused, ['[data-series-tree-group="featured_in"]']);
+  assert.deepEqual(calls.fetchAndRender, []);
+});
+
+for (const [chosen, saved] of [['featured_in', 'featured_in'], ['series', 'series'], ['', null]]) {
+  test(`5B: the series menu saves "${chosen || 'Use MusicBrainz default'}" for its series and closes`, () => {
+    const { context } = createContext();
+    const saves = [];
+    let hidden = false;
+    context.hideArtistTreeContextMenu = () => { hidden = true; };
+    context.saveSeriesKind = (...args) => { saves.push(args); return Promise.resolve(true); };
+    const menu = { dataset: { series: 'pitchfork', artist: '' } };
+    const choice = {
+      getAttribute: (name) => (name === 'data-series-tree-kind' ? chosen : null),
+      closest: (selector) => (selector === '#artist-tree-context-menu' ? menu : null),
+    };
+
+    assert.equal(seriesTreeClick(context, { '#artist-tree-context-menu [data-series-tree-kind]': choice }), true);
+    assert.equal(hidden, true);
+    assert.deepEqual(saves, [['pitchfork', saved]]);
+  });
+}
+
 test('switching primary artist preserves the active search and requested-artist provenance', () => {
   const { context, calls } = createContext({
     searchInputValue: 'neal morse', useProductionBuildApiUrl: true,

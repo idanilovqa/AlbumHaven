@@ -545,7 +545,7 @@ def test_active_scan_can_render_last_compatible_gallery_snapshot():
             if "source_generation = %(generation)s" in sql:
                 return Cursor([])
             if "order by source_generation desc" in sql:
-                assert params["builder_version"] == "root-gallery-v4"
+                assert params["builder_version"] == "root-gallery-v5"
                 return Cursor([header])
             if "gallery_projection_occurrences" in sql:
                 return Cursor([{"payload": membership("Artist", "album-1")}])

@@ -50,8 +50,16 @@ from music_app.services.library_watch_health import LibraryWatchHealthService
 from music_app.services.library_warning_dismissals import PostgresLibraryWarningDismissals, warning_token
 from music_app.routes.bounded_json import read_bounded_json_object, JSONBodyTooLarge
 from music_app.routes.musicbrainz_enrichment_asgi import (
+    load_problematic_album_items,
     load_problematic_artist_items,
+    project_album_problem_into_problematic_detail,
+    project_album_problems_into_problematic_files,
     project_artist_problems_into_problematic_files,
+)
+from music_app.services.musicbrainz_correction_display import project_correction_display
+from music_app.routes.musicbrainz_corrections_asgi import (
+    project_correction_into_problematic_detail,
+    project_correction_problems_into_problematic_files,
 )
 from music_app.services.policy_asgi import allowed_actions_for_request
 from music_app.services.listen_through import (
@@ -592,6 +600,8 @@ def view_data(request: Request) -> JSONResponse:
         library_state.get("inventory_mutation_revision") or 0
     )
     browse_state = resolve_active_scan_browse_state(library_state)
+    if "series" in request.query_params:
+        return _series_view_response(request, request_inventory_mutation_revision)
     default_root_gallery_page = (
         not _should_use_transient_scan_browse_state(library_state, browse_state)
         and _is_postgres_root_album_browse_request(request)
@@ -635,6 +645,7 @@ def view_data(request: Request) -> JSONResponse:
                                 status_code=409 if restart else 400)
         payload["inventory_mutation_revision"] = request_inventory_mutation_revision
         _project_missing_album_actions_for_request(request, payload)
+        project_correction_display(_app_config(request), payload)
         return JSONResponse(payload)
 
     if _should_use_transient_scan_browse_state(library_state, browse_state):
@@ -646,6 +657,7 @@ def view_data(request: Request) -> JSONResponse:
         )
         payload["inventory_mutation_revision"] = request_inventory_mutation_revision
         _project_missing_album_actions_for_request(request, payload)
+        project_correction_display(_app_config(request), payload)
         return JSONResponse(payload)
     if _is_postgres_selected_artist_request(request):
         repository = PostgresLibraryBrowseRepository(_app_config(request))
@@ -681,6 +693,7 @@ def view_data(request: Request) -> JSONResponse:
             )
         payload["inventory_mutation_revision"] = request_inventory_mutation_revision
         _project_missing_album_actions_for_request(request, payload)
+        project_correction_display(_app_config(request), payload)
         return JSONResponse(compact_selected_artist_wire_payload(payload))
     if _is_postgres_album_search_request(request):
         request_started_at = time.perf_counter()
@@ -708,6 +721,7 @@ def view_data(request: Request) -> JSONResponse:
         payload["inventory_mutation_revision"] = request_inventory_mutation_revision
         _log_view_data_request_from_asgi(request, payload, request_started_at)
         _project_missing_album_actions_for_request(request, payload)
+        project_correction_display(_app_config(request), payload)
         return JSONResponse(compact_selected_artist_wire_payload(payload))
     if _is_postgres_root_album_browse_request(request):
         payload = PostgresLibraryBrowseRepository(_app_config(request)).build_root_album_browse_payload(
@@ -715,6 +729,7 @@ def view_data(request: Request) -> JSONResponse:
         )
         payload["inventory_mutation_revision"] = request_inventory_mutation_revision
         _project_missing_album_actions_for_request(request, payload)
+        project_correction_display(_app_config(request), payload)
         return JSONResponse(payload)
     unsupported_selected_artist_response = _unsupported_postgres_selected_artist_browse_response(request)
     if unsupported_selected_artist_response is not None:
@@ -740,7 +755,42 @@ def view_data(request: Request) -> JSONResponse:
     payload["inventory_mutation_revision"] = request_inventory_mutation_revision
     _log_view_data_request_from_asgi(request, payload, request_started_at)
     _project_missing_album_actions_for_request(request, payload)
+    project_correction_display(_app_config(request), payload)
     return JSONResponse(payload)
+
+
+_SERIES_VIEW_PARAMS = {"series", "surface", "gallery_scope", "gallery_display", "gallery_display_mode",
+                       "gallery_scale_percent", "category"}
+
+
+def _series_view_response(request: Request, inventory_mutation_revision: int) -> JSONResponse:
+    """The Series view (MusicBrainz Delivery 2, S6): ordinary library browsing, from the
+    MusicBrainz data only the Postgres library holds."""
+    if set(request.query_params.keys()) - _SERIES_VIEW_PARAMS \
+            or str(request.query_params.get("surface") or "albums").casefold() != "albums":
+        return JSONResponse({"ok": False, "error": "Invalid series view parameters."}, status_code=400)
+    selection = select_runtime_persistence_adapter("library_browse", _app_config(request))
+    if selection.effective_backend != PERSISTENCE_BACKEND_POSTGRES:
+        return JSONResponse({"ok": False, "error": "Series need the PostgreSQL library."}, status_code=409)
+    payload = PostgresLibraryBrowseRepository(_app_config(request)).build_series_payload(
+        query_params=request.query_params)
+    payload["inventory_mutation_revision"] = inventory_mutation_revision
+    _project_missing_album_actions_for_request(request, payload)
+    project_correction_display(_app_config(request), payload)
+    return JSONResponse(payload)
+
+
+@router.get("/series-tree")
+def series_tree(request: Request) -> JSONResponse:
+    """The Series tree alone, for the rail's Series button: the tree switches while the
+    gallery keeps what it shows (owner 2026-11-17)."""
+    if set(request.query_params.keys()) - {"category"}:
+        return JSONResponse({"ok": False, "error": "Invalid series tree parameters."}, status_code=400)
+    selection = select_runtime_persistence_adapter("library_browse", _app_config(request))
+    if selection.effective_backend != PERSISTENCE_BACKEND_POSTGRES:
+        return JSONResponse({"ok": False, "error": "Series need the PostgreSQL library."}, status_code=409)
+    return JSONResponse({"series_sidebar": PostgresLibraryBrowseRepository(_app_config(request)).build_series_tree(
+        query_params=request.query_params)}, headers={"Cache-Control": "no-store"})
 
 
 def _is_postgres_root_sidebar_request(request: Request) -> bool:
@@ -1261,15 +1311,18 @@ def utilities_problematic_files(
 ) -> JSONResponse:
     if _is_postgres_utility_projection_request(request):
         repository = PostgresLibraryBrowseRepository(_app_config(request))
-        # The owner's Artist rows load beside the page, adding no readiness time.
-        with ThreadPoolExecutor(max_workers=1) as pool:
+        # The owner's MusicBrainz artist and album rows load beside the page, adding no readiness time.
+        with ThreadPoolExecutor(max_workers=2) as pool:
             artist_items = pool.submit(load_problematic_artist_items, request)
+            album_items = pool.submit(load_problematic_album_items, request)
             payload = (
                 repository.build_problematic_files_page(limit=limit)
                 if limit is not None
                 else repository.build_problematic_files_payload()
             )
             _project_missing_album_actions_for_request(request, payload)
+            project_album_problems_into_problematic_files(request, payload, album_items.result())
+            project_correction_problems_into_problematic_files(request, payload)
             project_artist_problems_into_problematic_files(request, payload, artist_items.result())
         return JSONResponse(_attach_library_watch_health(request, payload))
     if (pending := _library_hydration_pending_for_asgi(request)) is not None:
@@ -1296,6 +1349,8 @@ def utilities_problematic_file_detail_query(request: Request) -> JSONResponse:
                 status_code=404,
             )
         _project_missing_album_actions_for_request(request, payload)
+        project_album_problem_into_problematic_detail(request, payload)
+        project_correction_into_problematic_detail(request, payload)
         return JSONResponse(payload)
     if (pending := _library_hydration_pending_for_asgi(request)) is not None:
         return pending
@@ -1324,6 +1379,8 @@ def utilities_problematic_file_detail(request: Request, album_key: str) -> JSONR
                 status_code=404,
             )
         _project_missing_album_actions_for_request(request, payload)
+        project_album_problem_into_problematic_detail(request, payload)
+        project_correction_into_problematic_detail(request, payload)
         return JSONResponse(payload)
     if (pending := _library_hydration_pending_for_asgi(request)) is not None:
         return pending

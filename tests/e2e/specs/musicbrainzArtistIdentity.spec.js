@@ -205,6 +205,7 @@ test('FTC-MBID-001 a matched artist shows its MusicBrainz name, country, genres 
 
 test('FTC-MBID-002 a split name lists each MusicBrainz artist; a person and their band are separate artists', { tag: '@area:album-details' }, async ({
   galleryActions,
+  navigationPanelActions,
   searchToolbarActions,
   stepLogger,
   trackModalActions,
@@ -229,6 +230,16 @@ test('FTC-MBID-002 a split name lists each MusicBrainz artist; a person and thei
     });
 
     await stepLogger.step('MBD1-37: Album Details names which band an album belongs to', async () => {
+      // Owner 2026-11-18: the search lands on the plain name (its undecided albums); the
+      // Swedish band's albums are under its own tree row, so the step switches to it.
+      const band = `${LEAD} (Swedish band)`;
+      await openArtist({ galleryActions, searchToolbarActions }, LEAD);
+      await navigationPanelActions.waitForSidebarSelection(LEAD);
+      expect(await navigationPanelActions.readActiveSidebarArtistName()).toBe(LEAD);
+      await navigationPanelActions.selectSidebarArtistByName(band);
+      await navigationPanelActions.waitForSidebarSelection(band);
+      expect(await navigationPanelActions.readActiveSidebarArtistName()).toBe(band);
+      // The band's own gallery names it "Compilation Signal Lead", its qualifier dimmed beside.
       const tags = await albumDetailsTags({ galleryActions, trackModalActions }, LEAD, 'Functional Fixture Album 250');
       expect(tags).toContain('MusicBrainz: Compilation Signal Lead (Swedish band)');
       await trackModalActions.closeIfOpen();
@@ -269,11 +280,13 @@ test('FTC-MBID-003 an Unconfirmed match and its filter are in the first Problema
     await stepLogger.step('MBD1-10, MBD1-21: the filter and the Artist row arrive with the first page', async () => {
       await galleryActions.goto('/?surface=albums');
       await galleryActions.waitForGalleryReady();
-      await settingsModalAppBarActions.openSettings();
+      // Listen before Settings opens: it opens on Problematic files, whose bounded first page
+      // can otherwise answer before the wait starts (the 60 s flake seen on main, PR 74).
       const boundedPage = utilityProblematicFilesActions.waitForBoundedPageEvidence(
         'MBID: Unconfirmed match',
         UNCONFIRMED,
       );
+      await settingsModalAppBarActions.openSettings();
       await utilityTabBarActions.openTab('problematic-files');
       await utilityProblematicFilesActions.openProblemFilterMenu();
       await boundedPage;
@@ -306,7 +319,7 @@ test('FTC-MBID-003 an Unconfirmed match and its filter are in the first Problema
       await openArtist({ galleryActions, searchToolbarActions }, UNCONFIRMED);
       await expect.poll(() => galleryActions.readArtistContextMetadata(), { timeout: 60000 }).toEqual({
         countries: ['Finland'],
-        genres: ['Genre unavailable'],
+        genres: [], // No genre shows no pill or text (owner 2026-11-16).
       });
     });
 
@@ -328,7 +341,7 @@ test('FTC-MBID-003 an Unconfirmed match and its filter are in the first Problema
       await openArtist({ galleryActions, searchToolbarActions }, CREDITED);
       await expect.poll(() => galleryActions.readArtistContextMetadata(), { timeout: 60000 }).toEqual({
         countries: ['United States'],
-        genres: ['Genre unavailable'],
+        genres: [], // No genre shows no pill or text (owner 2026-11-16).
       });
     });
 
@@ -399,7 +412,7 @@ test('FTC-MBID-003 an Unconfirmed match and its filter are in the first Problema
       await openArtist({ galleryActions, searchToolbarActions }, LEAD);
       await expect.poll(() => galleryActions.readArtistContextMetadata(), { timeout: 60000 }).toEqual({
         countries: ['United Kingdom'],
-        genres: ['Genre unavailable'],
+        genres: [], // No genre shows no pill or text (owner 2026-11-16).
       });
     });
 
@@ -418,7 +431,7 @@ test('FTC-MBID-003 an Unconfirmed match and its filter are in the first Problema
         expect.objectContaining({
           heading: CONFLICT_ASSIGN,
           countries: ['Finland'],
-          genres: ['Genre unavailable'],
+          genres: [], // No genre shows no pill or text (owner 2026-11-16).
           links: expect.arrayContaining([
             `https://musicbrainz.org/artist/${MBID.conflictAssign}`,
           ]),
@@ -441,7 +454,18 @@ test('FTC-MBID-003 an Unconfirmed match and its filter are in the first Problema
       await utilityProblematicFilesActions.retryMusicBrainzIdentity(OUTAGE);
       await utilityProblematicFilesActions.clearProblemFilter('MusicBrainz: Provider unavailable');
       await utilityProblematicFilesActions.search(OUTAGE);
-      await utilityProblematicFilesActions.waitForNoSearchResults(OUTAGE);
+      // The artist's row is gone. Once its identity resolves, Delivery 2 compares its albums with
+      // MusicBrainz, so albums it has no release for stay listed under the artist with their own
+      // album label ("MusicBrainz has no info", owner decision C2, 2026-11-15).
+      await utilityProblematicFilesActions.waitForSearchResults(OUTAGE);
+      const remaining = await utilityProblematicFilesActions.readVisibleListItems();
+      expect(remaining.filter((item) => item.key.startsWith('musicbrainz-artist:'))).toEqual([]);
+      // List rows carry no issue line, so each remaining album's label is read from its detail.
+      expect(remaining.length).toBeGreaterThan(0);
+      for (const item of remaining) {
+        expect(item.meta.startsWith(OUTAGE)).toBe(true);
+        await utilityProblematicFilesActions.expectMusicBrainzHasNoInfo(item);
+      }
       await settingsModalAppBarActions.closeSettings();
       await openArtist({ galleryActions, searchToolbarActions }, OUTAGE);
       await expect.poll(() => galleryActions.readArtistContextMetadata(), { timeout: 60000 }).toEqual({

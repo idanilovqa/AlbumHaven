@@ -695,3 +695,80 @@ def test_owner_shell_status_and_artist_status_together_enable_gallery_warnings(o
                                        "match_state": None, "problem_occurrence_id": 424, "unresolved_reason": "MBID: Not found"}]
     else:
         assert artist_status == 403
+
+
+def test_everyone_who_browses_reads_the_romanized_artist_names(monkeypatch):
+    """J3 (owner 2026-11-15): romanized names show for every viewer of the tree and gallery."""
+    class Names:
+        def list_romanized_artist_names(self):
+            return {"天門": "Tenmon", "久石 譲": "Joe Hisaishi"}
+
+    monkeypatch.setattr(route_api(), "MusicBrainzEnrichmentPostgresRepository", lambda config: Names())
+    assert private_action_for_route("GET", "/api/musicbrainz/artists/romanized-names") == "library.browse.read"
+    assert "/api/musicbrainz/artists/romanized-names" in collect_route_paths(app_for(actor_with(), None))
+
+    status, payload = request(app_for(actor_with("library.browse.read", owner=False), None),
+                              "GET", "/api/musicbrainz/artists/romanized-names")
+    assert (status, payload) == (200, {"names": {"天門": "Tenmon", "久石 譲": "Joe Hisaishi"}})
+
+
+def test_split_same_name_qualifiers_ride_along_only_when_a_name_is_split(monkeypatch):
+    """D2 item 3: the client dims "(Poland)" in "Amarok (Poland)"; nothing is added otherwise."""
+    class Split:
+        def __init__(self, qualifiers):
+            self.qualifiers = qualifiers
+
+        def list_romanized_artist_names(self):
+            return {"天門": "Tenmon"}
+
+        def list_split_artist_qualifiers(self):
+            return self.qualifiers
+
+    app = app_for(actor_with("library.browse.read", owner=False), None)
+    monkeypatch.setattr(route_api(), "MusicBrainzEnrichmentPostgresRepository",
+                        lambda config: Split({"Amarok (Poland)": "Poland"}))
+    assert request(app, "GET", "/api/musicbrainz/artists/romanized-names") == (
+        200, {"names": {"天門": "Tenmon"}, "split_artists": {"Amarok (Poland)": "Poland"}})
+    monkeypatch.setattr(route_api(), "MusicBrainzEnrichmentPostgresRepository", lambda config: Split({}))
+    assert request(app, "GET", "/api/musicbrainz/artists/romanized-names") == (200, {"names": {"天門": "Tenmon"}})
+
+
+def test_the_split_qualifiers_are_read_from_the_narrow_split_groups_for_per_album_artists_only():
+    from music_app.services.musicbrainz_enrichment_postgres import MusicBrainzEnrichmentPostgresRepository
+
+    seen = []
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def execute(self, sql, params=None):
+            seen.append(" ".join(sql.lower().split()))
+            return self
+
+        def fetchall(self):
+            return [{"local_artist_name": "Amarok", "group_label": "Amarok (Poland)"},
+                    {"local_artist_name": "Alice Cooper", "group_label": "Alice Cooper (US band, 1964-1975)"},
+                    {"local_artist_name": "Renamed", "group_label": "Other (Spain)"}]
+
+    repository = MusicBrainzEnrichmentPostgresRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://unused"}, connect=lambda _url: Connection())
+    assert repository.list_split_artist_qualifiers() == {
+        "Amarok (Poland)": "Poland", "Alice Cooper (US band, 1964-1975)": "US band, 1964-1975"}
+    assert "split_match.state = 'per_album'" in seen[0]
+    assert "split_match.library_id in (select library_id from active_library)" in seen[0]
+    assert "library.local_album_artist_groups" not in seen[0], "never the whole 0192 view"
+
+
+def test_romanized_artist_names_fail_safely_to_none(monkeypatch):
+    class Broken:
+        def list_romanized_artist_names(self):
+            raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(route_api(), "MusicBrainzEnrichmentPostgresRepository", lambda config: Broken())
+    status, payload = request(app_for(actor_with("library.browse.read", owner=False), None),
+                              "GET", "/api/musicbrainz/artists/romanized-names")
+    assert (status, payload) == (200, {"names": {}})

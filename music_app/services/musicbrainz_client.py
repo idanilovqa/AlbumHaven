@@ -4,9 +4,10 @@ import re
 import unicodedata
 import urllib.parse
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from functools import partial
 
+from music_app.services.musicbrainz_http import count_json_matches
 from music_app.services.musicbrainz_http import get_json as _shared_get_json
 
 # Identity enrichment never remembers failures: a direct-entity 404 after a
@@ -175,6 +176,7 @@ def project_artist(
         "artist_type": _text(payload.get("type")) or None,
         "disambiguation": _text(payload.get("disambiguation"))[:1024] or None,
         "country_code": country if len(country) == 2 and country.isalpha() else None,
+        **_artist_area(payload),
         "preferred_native_name": preferred_native_name,
         "source_url": artist_url(mbid),
         "aliases": aliases,
@@ -184,23 +186,28 @@ def project_artist(
     }
 
 
-_DISCOGS_ARTIST_URL = re.compile(r"^https?://(?:www\.)?discogs\.com/artist/([1-9][0-9]{0,11})(?:-[^/?#]*)?/?$")
+_DISCOGS_URL = re.compile(r"^https?://(?:www\.)?discogs\.com/(artist|release)/([1-9][0-9]{0,11})(?:-[^/?#]*)?/?$")
 
 
 def discogs_artist_id(relations: object) -> int | None:
-    """The Discogs artist ID from MusicBrainz url-rels.
+    """The Discogs artist ID from MusicBrainz url-rels."""
+    return discogs_link_id(relations, "artist")
 
-    Only current "discogs" URL relations to a discogs.com artist page count. When
-    they name several different Discogs artists, none is chosen.
+
+def discogs_link_id(relations: object, kind: str) -> int | None:
+    """The Discogs ``kind`` ("artist" or "release") ID from MusicBrainz url-rels.
+
+    Only current "discogs" URL relations to a discogs.com page of that kind count. When
+    they name several different Discogs entities, none is chosen.
     """
     found = set()
     for relation in relations if isinstance(relations, list) else []:
         if not isinstance(relation, dict) or relation.get("type") != "discogs" or relation.get("ended"):
             continue
         url = relation.get("url")
-        match = _DISCOGS_ARTIST_URL.match(_text(url.get("resource")) if isinstance(url, dict) else "")
-        if match:
-            found.add(int(match.group(1)))
+        match = _DISCOGS_URL.match(_text(url.get("resource")) if isinstance(url, dict) else "")
+        if match and match.group(1) == kind:
+            found.add(int(match.group(2)))
     return found.pop() if len(found) == 1 else None
 
 
@@ -240,6 +247,96 @@ def _transport_classification(metadata: JsonDict, *, discovered_by_search: bool 
     return "invalid_response"
 
 
+# MusicBrainz's special-purpose "[data]" artist credits a mixed-mode CD's data track.
+_DATA_ARTIST_MBID = "33cf029c-63b0-41a0-9855-be2a3665fb3b"
+
+
+# Video media are not discs of the album (a bonus DVD).
+_VIDEO_FORMATS = frozenset({"dvd", "dvd-video", "blu-ray", "hd-dvd", "vhs", "vcd", "svcd", "umd", "laserdisc"})
+
+
+def _is_audio_medium(medium: JsonDict) -> bool:
+    return _text(medium.get("format")).casefold() not in _VIDEO_FORMATS and _integer(medium.get("track-count")) > 0
+
+
+def _audio_tracks(medium: JsonDict) -> list[JsonDict]:
+    """A medium's tracks without its data tracks ("[data track]" on a mixed-mode CD),
+    which a local rip never has."""
+    return [
+        track for track in medium.get("tracks") or [] if isinstance(track, dict)
+        and _text(track.get("title")).casefold() != "[data track]"
+        and not any(isinstance(credit, dict) and isinstance(credit.get("artist"), dict)
+                    and _valid_mbid(credit["artist"].get("id")) == _DATA_ARTIST_MBID
+                    for credit in track.get("artist-credit") or [])
+    ]
+
+
+def _artist_credit(value: object) -> list[JsonDict]:
+    """An artist credit as MusicBrainz orders it: each credited name, its artist and the
+    join phrase after it ("Alan Menken" " & " "Howard Ashman"), its spaces kept."""
+    return [
+        {"name": _text(credit.get("name")), "artist_mbid": _valid_mbid(credit["artist"].get("id")),
+         "artist_name": _text(credit["artist"].get("name")),
+         "join_phrase": _WHITESPACE.sub(" ", str(credit.get("joinphrase") or ""))}
+        for credit in value or [] if isinstance(credit, dict) and isinstance(credit.get("artist"), dict)
+        and _valid_mbid(credit["artist"].get("id"))
+    ] if isinstance(value, list) else []
+
+
+# A series of this many members or more is "Featured In" (owner 2026-11-15): the exact
+# size beyond it never matters, so a series is counted only up to it.
+SERIES_SIZE_CUTOFF = 50
+# Each release group or release a series lists, as its lookup writes the relationship.
+_SERIES_MEMBER = re.compile(rb'"target-type"\s*:\s*"release(?:_group)?"')
+
+
+def _series_parts(relations: object) -> list[JsonDict]:
+    """The MusicBrainz series a release or release group is "part of", with its number when
+    MusicBrainz gives one ("Colossus Projects", "Release group series", number "18")."""
+    parts: dict[str, JsonDict] = {}
+    for relation in relations if isinstance(relations, list) else []:
+        if not isinstance(relation, dict) or relation.get("target-type") != "series" \
+                or relation.get("type") != "part of" or relation.get("direction") != "forward":
+            continue
+        series = relation.get("series") if isinstance(relation.get("series"), dict) else {}
+        mbid, name = _valid_mbid(series.get("id")), _text(series.get("name"))
+        if not mbid or not name or mbid in parts:
+            continue
+        values = relation.get("attribute-values") if isinstance(relation.get("attribute-values"), dict) else {}
+        ordering_key = relation.get("ordering-key")
+        parts[mbid] = {"mbid": mbid, "name": name, "type": _text(series.get("type")) or None,
+                       "disambiguation": _text(series.get("disambiguation")) or None,
+                       "number": _text(values.get("number")) or None,
+                       "ordering_key": ordering_key if type(ordering_key) is int else None}
+    return list(parts.values())
+
+
+def latin_transliteration_id(release: object) -> str | None:
+    """The pseudo-release a release links to by "transl-tracklisting" whose tracklist is in
+    Latin script (S7). A translation is not a transliteration: one its disambiguation calls a
+    translation ("English translation"), or in another language than the release, never
+    counts. Of several left, one called a transliteration first, then the lowest MBID."""
+    if not isinstance(release, dict):
+        return None
+    representation = release.get("text-representation")
+    language = _text(representation.get("language")) if isinstance(representation, dict) else ""
+    found = []
+    for relation in release.get("relations") or []:
+        if not isinstance(relation, dict) or relation.get("type") != "transl-tracklisting" \
+                or relation.get("direction") != "forward" or not isinstance(relation.get("release"), dict):
+            continue
+        target = relation["release"]
+        mbid = _valid_mbid(target.get("id"))
+        script = target.get("text-representation") if isinstance(target.get("text-representation"), dict) else {}
+        note = _text(target.get("disambiguation")).casefold()
+        other = _text(script.get("language"))
+        if not mbid or script.get("script") != "Latn" or "translation" in note.replace("transliteration", "") \
+                or (language and other and other != language):
+            continue
+        found.append(("transliteration" not in note, mbid))
+    return min(found)[1] if found else None
+
+
 def _candidate(payload: object) -> JsonDict | None:
     if not isinstance(payload, dict) or "title" in payload:
         return None
@@ -266,7 +363,16 @@ def _candidate(payload: object) -> JsonDict | None:
             result[target] = payload[source]
     if isinstance(payload.get("aliases"), list):
         result["aliases"] = _bounded_aliases(payload["aliases"], 24)
+    result.update({key: value for key, value in _artist_area(payload).items() if value})
     return result
+
+
+def _artist_area(payload: Mapping[str, object]) -> JsonDict:
+    """The area MusicBrainz gives an artist (a country, region or city such as "Chico"), with its
+    MBID; where it names no country, a split name's label shows it (owner 2026-11-17, 0257)."""
+    area = payload.get("area") if isinstance(payload.get("area"), Mapping) else {}
+    name = _text(area.get("name"))[:256]
+    return {"area_mbid": _valid_mbid(area.get("id")) if name else None, "area_name": name or None}
 
 
 class MusicBrainzClient:
@@ -276,6 +382,7 @@ class MusicBrainzClient:
         base_url: str = _DEFAULT_BASE_URL,
         user_agent: str,
         get_json: Callable[..., tuple[dict | None, JsonDict]] = default_get_json,
+        count_matches: Callable[..., tuple[int | None, JsonDict]] = count_json_matches,
         search_page_size: int = 25,
         max_search_pages: int = 4,
         max_candidates: int = 25,
@@ -283,6 +390,7 @@ class MusicBrainzClient:
         self.base_url = (_text(base_url) or _DEFAULT_BASE_URL).rstrip("/")
         self.user_agent = _text(user_agent)
         self.get_json = get_json
+        self.count_matches = count_matches
         self.search_page_size = max(1, min(_integer(search_page_size, 25), 100))
         self.max_search_pages = max(1, _integer(max_search_pages, 4))
         self.max_candidates = max(1, _integer(max_candidates, 25))
@@ -400,6 +508,54 @@ class MusicBrainzClient:
             })
         return {"classification": "complete" if releases else "not_found", "releases": releases}
 
+    def search_recordings(self, title: object, artist_mbids: list[object], *, limit: int = 25) -> JsonDict:
+        """Recordings titled like a local track and credited to one of ``artist_mbids``, with
+        each one's credited artists and the releases it is on (a split name's undecided album,
+        owner 2026-11-18)."""
+        query_title = _text(title)
+        artists = [mbid for mbid in (_valid_mbid(value) for value in artist_mbids) if mbid]
+        if not query_title or not artists:
+            return {"classification": "invalid_request", "recordings": []}
+        query_text = (f'recording:"{_escape_phrase(query_title)}" AND ('
+                      + " OR ".join(f"arid:{mbid}" for mbid in artists) + ")")
+        query = urllib.parse.urlencode({"query": query_text, "fmt": "json", "limit": max(1, min(int(limit), 100))})
+        payload, transport = self.get_json(f"{self.base_url}/recording/?{query}", self.user_agent)
+        if not isinstance(payload, dict):
+            return {"classification": _transport_classification(transport), "recordings": [], "transport": transport}
+        recordings: list[JsonDict] = []
+        for raw in payload.get("recordings") or []:
+            if not isinstance(raw, dict):
+                continue
+            recordings.append({
+                "id": _valid_mbid(raw.get("id")), "title": _text(raw.get("title")),
+                "artist_mbids": [mbid for mbid in (
+                    _valid_mbid((credit.get("artist") or {}).get("id"))
+                    for credit in raw.get("artist-credit") or [] if isinstance(credit, dict)) if mbid],
+                "release_mbids": [mbid for mbid in (
+                    _valid_mbid(release.get("id")) for release in raw.get("releases") or []
+                    if isinstance(release, dict)) if mbid],
+            })
+        return {"classification": "complete" if recordings else "not_found", "recordings": recordings}
+
+    def search_releases_by_barcode(self, barcode: object) -> JsonDict:
+        """Releases carrying this barcode (a Discogs release's barcode leads back to MusicBrainz)."""
+        digits = re.sub(r"\D", "", _text(barcode))
+        if not 8 <= len(digits) <= 14:
+            return {"classification": "invalid_request", "releases": []}
+        query = urllib.parse.urlencode({"query": f"barcode:{digits}", "fmt": "json", "limit": 10})
+        payload, transport = self.get_json(f"{self.base_url}/release/?{query}", self.user_agent)
+        if not isinstance(payload, dict):
+            return {"classification": _transport_classification(transport), "releases": [], "transport": transport}
+        releases = [
+            {"id": _valid_mbid(raw.get("id")), "title": _text(raw.get("title")), "barcode": _text(raw.get("barcode")),
+             "release_group_id": _valid_mbid((raw.get("release-group") or {}).get("id"))
+             if isinstance(raw.get("release-group"), dict) else None,
+             "credits": _artist_credit(raw.get("artist-credit"))}
+            for raw in payload.get("releases") or []
+            if isinstance(raw, dict) and _valid_mbid(raw.get("id")) and re.sub(r"\D", "", _text(raw.get("barcode"))) == digits
+        ]
+        return {"classification": "complete" if releases else "not_found", "releases": releases}
+
     def release_group_tracks(self, release_group_id: object, *, track_count: int = 0,
                              exclude: tuple[str, ...] = ()) -> JsonDict:
         """The tracks of the release in a release group closest to ``track_count``.
@@ -434,9 +590,26 @@ class MusicBrainzClient:
         tracks = [
             {"title": _text(track.get("title")), "length": _integer(track.get("length"))}
             for medium in payload.get("media") or [] if isinstance(medium, dict)
-            for track in medium.get("tracks") or [] if isinstance(track, dict)
+            for track in _audio_tracks(medium)
         ]
         return {"classification": "complete", "tracks": tracks, "release_id": release_id, "other_releases": others}
+
+    def release_group_editions(self, release_group_id: object) -> JsonDict:
+        """The group's releases with their audio track counts and dates (the editions the
+        track-order choice compares), from the same browse ``release_group_tracks`` reads."""
+        group = _valid_mbid(release_group_id)
+        if not group:
+            return {"classification": "invalid_request"}
+        query = urllib.parse.urlencode({"release-group": group, "inc": "media", "fmt": "json", "limit": 25})
+        payload, transport = self.get_json(f"{self.base_url}/release?{query}", self.user_agent)
+        if not isinstance(payload, dict):
+            return {"classification": _transport_classification(transport), "transport": transport}
+        return {"classification": "complete", "releases": [
+            {"id": _valid_mbid(release.get("id")), "date": _text(release.get("date")) or None,
+             "track_count": sum(_integer(medium.get("track-count")) for medium in release.get("media") or []
+                                if isinstance(medium, dict) and _is_audio_medium(medium))}
+            for release in payload.get("releases") or []
+            if isinstance(release, dict) and _valid_mbid(release.get("id"))]}
 
     def browse_release_discs(self, mbid: object, *, max_pages: int = 3, page_size: int = 100) -> JsonDict:
         """An artist's releases with their discs (title, position, format, track count),
@@ -493,6 +666,144 @@ class MusicBrainzClient:
                 and _valid_mbid(credit["artist"].get("id"))
             ],
         }}
+
+    def lookup_release_group(self, release_group_mbid: object) -> JsonDict:
+        """A release group's raw types, first-release date, genres (most votes first) and the
+        series it is part of."""
+        normalized = _valid_mbid(release_group_mbid)
+        if not normalized:
+            return {"classification": "invalid_request"}
+        query = urllib.parse.urlencode({"inc": "genres series-rels", "fmt": "json"})
+        payload, transport = self.get_json(f"{self.base_url}/release-group/{normalized}?{query}", self.user_agent)
+        if not isinstance(payload, dict):
+            return {"classification": _transport_classification(transport), "transport": transport}
+        genres = [
+            {"name": _text(genre.get("name")), "count": _integer(genre.get("count"))}
+            for genre in payload.get("genres") or [] if isinstance(genre, dict) and _text(genre.get("name"))
+        ]
+        return {"classification": "complete", "release_group": {
+            "id": normalized, "title": _text(payload.get("title")),
+            "primary_type": _text(payload.get("primary-type")) or None,
+            "secondary_types": [_text(kind) for kind in payload.get("secondary-types") or [] if _text(kind)],
+            "first_release_date": _text(payload.get("first-release-date")) or None,
+            "disambiguation": _text(payload.get("disambiguation")) or None,
+            "genres": sorted(genres, key=lambda genre: (-genre["count"], genre["name"].casefold())),
+            "series": _series_parts(payload.get("relations")),
+        }}
+
+    def lookup_series(self, series_mbid: object) -> JsonDict:
+        """How many release groups and releases MusicBrainz lists in a series, counted up to
+        SERIES_SIZE_CUTOFF: a list or an award names far more albums than a real series.
+
+        The web service has no count and no paged browse for a series' members; its lookup
+        returns every one in a single payload (30 MB for the largest lists). So the response
+        is counted while it streams and closed at the cutoff, never parsed or cached. An
+        album's own series and number come from its release and release group lookups."""
+        normalized = _valid_mbid(series_mbid)
+        if not normalized:
+            return {"classification": "invalid_request"}
+        query = urllib.parse.urlencode({"inc": "release-group-rels release-rels", "fmt": "json"})
+        count, transport = self.count_matches(f"{self.base_url}/series/{normalized}?{query}", self.user_agent,
+                                              pattern=_SERIES_MEMBER, stop_at=SERIES_SIZE_CUTOFF)
+        if count is None:
+            return {"classification": _transport_classification(transport), "transport": transport}
+        return {"classification": "complete", "series": {"id": normalized, "member_count": count}}
+
+    def lookup_series_links(self, series_mbid: object) -> JsonDict:
+        """A series' URL relationships (Wikipedia, Wikidata), for its general information."""
+        normalized = _valid_mbid(series_mbid)
+        if not normalized:
+            return {"classification": "invalid_request"}
+        query = urllib.parse.urlencode({"inc": "url-rels", "fmt": "json"})
+        payload, transport = self.get_json(f"{self.base_url}/series/{normalized}?{query}", self.user_agent)
+        if not isinstance(payload, dict):
+            return {"classification": _transport_classification(transport), "transport": transport}
+        relations = payload.get("relations")
+        return {"classification": "complete", "relations": relations if isinstance(relations, list) else []}
+
+    def original_release_id(self, release_group_mbid: object) -> JsonDict:
+        """The release group's original release: the earliest dated official release
+        (undated and unofficial ones only when nothing else exists), and the fewest audio
+        discs any of its releases has (owner 2026-11-16: that many discs are the main album;
+        None when MusicBrainz lists no media)."""
+        group = _valid_mbid(release_group_mbid)
+        if not group:
+            return {"classification": "invalid_request"}
+        query = urllib.parse.urlencode({"release-group": group, "inc": "media", "fmt": "json", "limit": 100})
+        payload, transport = self.get_json(f"{self.base_url}/release?{query}", self.user_agent)
+        if not isinstance(payload, dict):
+            return {"classification": _transport_classification(transport), "transport": transport}
+        releases = [release for release in payload.get("releases") or []
+                    if isinstance(release, dict) and _valid_mbid(release.get("id"))]
+        if not releases:
+            return {"classification": "not_found"}
+        original = min(releases, key=lambda release: (
+            _text(release.get("status")) != "Official", not _text(release.get("date")),
+            _text(release.get("date")), _valid_mbid(release.get("id"))))
+        discs = [sum(1 for medium in release["media"] if isinstance(medium, dict) and _is_audio_medium(medium))
+                 for release in releases if isinstance(release.get("media"), list)]
+        return {"classification": "complete", "release_id": _valid_mbid(original.get("id")),
+                "fewest_discs": min((count for count in discs if count), default=None)}
+
+    def lookup_release_tracklist(self, release_mbid: object) -> JsonDict:
+        """One release's media with every track and its artist credit, for the main-album
+        end, the track artists shown in place of unreadable tags and the series it is part of."""
+        normalized = _valid_mbid(release_mbid)
+        if not normalized:
+            return {"classification": "invalid_request"}
+        query = urllib.parse.urlencode({"inc": "recordings artist-credits release-groups series-rels", "fmt": "json"})
+        payload, transport = self.get_json(f"{self.base_url}/release/{normalized}?{query}", self.user_agent)
+        if not isinstance(payload, dict):
+            return {"classification": _transport_classification(transport), "transport": transport}
+        group = payload.get("release-group") if isinstance(payload.get("release-group"), dict) else {}
+        media = []
+        for medium in payload.get("media") or []:
+            if not isinstance(medium, dict):
+                continue
+            # Positions count audio tracks only, as a local rip numbers them.
+            tracks = [{"position": index, "title": _text(track.get("title")),
+                       "length": _integer(track.get("length")) or None,
+                       "artist_credit": _artist_credit(track.get("artist-credit"))}
+                      for index, track in enumerate(_audio_tracks(medium), start=1)]
+            media.append({
+                "position": _integer(medium.get("position")), "title": _text(medium.get("title")) or None,
+                "format": _text(medium.get("format")) or None, "track_count": len(tracks), "tracks": tracks,
+            })
+        return {"classification": "complete", "release": {
+            "id": normalized, "title": _text(payload.get("title")), "date": _text(payload.get("date")) or None,
+            "country": _text(payload.get("country")) or None, "barcode": _text(payload.get("barcode")) or None,
+            "status": _text(payload.get("status")) or None, "disambiguation": _text(payload.get("disambiguation")) or None,
+            "release_group_id": _valid_mbid(group.get("id")),
+            "artist_credit": _artist_credit(payload.get("artist-credit")), "media": media,
+            "series": _series_parts(payload.get("relations")),
+        }}
+
+    def lookup_release_discogs_id(self, release_mbid: object) -> JsonDict:
+        """The Discogs release a MusicBrainz release links to, for its tracklist headings (S8)."""
+        normalized = _valid_mbid(release_mbid)
+        if not normalized:
+            return {"classification": "invalid_request"}
+        query = urllib.parse.urlencode({"inc": "url-rels", "fmt": "json"})
+        payload, transport = self.get_json(f"{self.base_url}/release/{normalized}?{query}", self.user_agent)
+        if not isinstance(payload, dict):
+            return {"classification": _transport_classification(transport), "transport": transport}
+        return {"classification": "complete",
+                "discogs_release_id": discogs_link_id(payload.get("relations"), "release")}
+
+    def lookup_release_transliteration(self, release_mbid: object) -> JsonDict:
+        """The Latin pseudo-release holding a release's transliterated tracklist (S7), or None,
+        and the release's MusicBrainz language ("jpn"; "" when it gives none)."""
+        normalized = _valid_mbid(release_mbid)
+        if not normalized:
+            return {"classification": "invalid_request"}
+        query = urllib.parse.urlencode({"inc": "release-rels", "fmt": "json"})
+        payload, transport = self.get_json(f"{self.base_url}/release/{normalized}?{query}", self.user_agent)
+        if not isinstance(payload, dict):
+            return {"classification": _transport_classification(transport), "transport": transport}
+        representation = payload.get("text-representation")
+        language = _text(representation.get("language")) if isinstance(representation, dict) else ""
+        return {"classification": "complete", "transliteration_mbid": latin_transliteration_id(payload),
+                "language": language if re.fullmatch(r"[a-z]{3}", language) else ""}
 
     def search_artists(self, name: object, *, phrase: bool = True, max_pages: int | None = None) -> JsonDict:
         """Search by exact phrase, or with ``phrase=False`` by escaped plain terms.

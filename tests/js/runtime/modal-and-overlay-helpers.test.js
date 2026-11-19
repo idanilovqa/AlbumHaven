@@ -1855,6 +1855,44 @@ test('artist tree context menu retains its artist and exposes the scroll action'
   assert.equal(menu.hidden, false);
 });
 
+// MusicBrainz Delivery 2, 5B (owner 2026-11-17): the Series tree's menu marks a series.
+const SERIES_TREE = [
+  { mbid: 'colossus', name: 'Colossus Projects', count: 4, kind: 'series', owner_kind: null },
+  { mbid: 'pitchfork', name: 'Pitchfork: 10/10', count: 6, kind: 'series', owner_kind: 'series' },
+];
+
+test('5B: a series menu offers Series and Featured In, its current kind disabled, and no Hidden', () => {
+  const { context } = loadHelper();
+  context.resolveSeriesTreeItems = () => SERIES_TREE;
+  assert.equal(context.showSeriesTreeContextMenu(18, 36, 'colossus'), true);
+  const menu = context.document.getElementById('artist-tree-context-menu');
+  assert.equal(menu.dataset.series, 'colossus');
+  assert.equal(menu.dataset.artist, '');
+  assert.equal(menu.hidden, false);
+  assert.match(menu.innerHTML, /data-series-tree-kind="series" disabled aria-disabled="true">Mark as Series</);
+  assert.match(menu.innerHTML, /data-series-tree-kind="featured_in">Mark as Featured In</);
+  assert.doesNotMatch(menu.innerHTML, /MusicBrainz default|Hidden|Hide|scroll-to-artist/);
+});
+
+test('5B: the MusicBrainz default is offered only once the owner has chosen a kind', () => {
+  const { context } = loadHelper();
+  context.resolveSeriesTreeItems = () => SERIES_TREE;
+  context.showSeriesTreeContextMenu(18, 36, 'pitchfork');
+  const menu = context.document.getElementById('artist-tree-context-menu');
+  assert.match(menu.innerHTML, /data-series-tree-kind="">Use MusicBrainz default</);
+  // The same menu then serves an artist again, without the series' choices.
+  context.showArtistTreeContextMenu(18, 36, 'Agalloch');
+  assert.equal(menu.dataset.series, '');
+  assert.doesNotMatch(menu.innerHTML, /data-series-tree-kind/);
+});
+
+test('5B: a series not in the tree opens no menu', () => {
+  const { context } = loadHelper();
+  context.resolveSeriesTreeItems = () => SERIES_TREE;
+  assert.equal(context.showSeriesTreeContextMenu(18, 36, 'unknown'), false);
+  assert.equal(context.document.getElementById('artist-tree-context-menu'), null);
+});
+
 test('artist tree context menu preserves an open mobile artists drawer', () => {
   const { context } = loadHelper();
   context.state.ui.artistsDrawerOpen = true;

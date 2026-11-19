@@ -104,10 +104,12 @@
   }
 
   // External services shown as an icon and plain text, like MusicBrainz's own links list.
-  // Each accepts only its own public artist-page URL shape.
+  // Each accepts only its own public page URL shape (an artist page; any Wikipedia article).
+  // Wikipedia has no favicon in the app, so it is text only (approved D2 batch 3, 4).
   const externalServices = Object.freeze({
     musicbrainz: { label: 'MusicBrainz', href: /^https:\/\/musicbrainz\.org\/artist\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/ },
     discogs: { label: 'Discogs', href: /^https:\/\/www\.discogs\.com\/artist\/[1-9][0-9]{0,11}$/ },
+    wikipedia: { label: 'Wikipedia', href: /^https:\/\/[a-z0-9-]+\.wikipedia\.org\/wiki\/[^\s"<>]+$/, textOnly: true },
   });
 
   function renderExternalServiceLink(options = {}) {
@@ -118,7 +120,7 @@
     const subject = String(options.subject || '').trim();
     const ariaLabel = subject ? `Open ${subject} on ${service.label}` : `Open on ${service.label}`;
     return `<a class="ui-external-link ui-external-link--${escape(options.service)}" href="${escape(href)}" target="_blank" rel="noopener noreferrer" aria-label="${escape(ariaLabel)}">`
-      + '<span class="ui-external-link__icon" aria-hidden="true"></span>'
+      + (service.textOnly ? '' : '<span class="ui-external-link__icon" aria-hidden="true"></span>')
       + `<span class="ui-external-link__text">${escape(service.label)}</span></a>`;
   }
 

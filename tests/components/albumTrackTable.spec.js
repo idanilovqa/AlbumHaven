@@ -289,6 +289,32 @@ test('long album track titles preserve all four usable columns with combined num
   expect(await title.evaluate(element => element.scrollWidth > element.clientWidth)).toBe(true);
 });
 
+test('a non-Latin title shows its Latin form after a dot on the same line, dimmed; Latin and Cyrillic titles show none', async ({ page }) => {
+  await mountAlbumDetailsComponents(page);
+  await page.locator('#table-host').evaluate((host) => {
+    host.innerHTML = buildAlbumTrackTableHtml({
+      groups: [{ discNumber: 1, tracks: [
+        { path: 'one.flac', title: '桜花抄', titleTransliteration: 'Ouka shou', trackNumber: 1, duration: '3:20' },
+        { path: 'two.flac', title: 'Kiss', trackNumber: 2, duration: '2:11' },
+        { path: 'three.flac', title: 'Кино', trackNumber: 3, duration: '4:02' },
+      ] }],
+      totalLength: '9m 33s',
+    });
+  });
+  const title = page.locator('[data-track-row-path="one.flac"] .album-track-table__title');
+  const latin = title.locator('.album-track-table__transliteration');
+  await expect(title).toHaveText('桜花抄•Ouka shou');
+  await expect(latin).toBeVisible();
+  await expect(latin.locator('[aria-hidden="true"]')).toHaveText('•');
+  await expect(latin).toHaveCSS('color', 'rgb(154, 169, 188)');
+  const [titleBox, latinBox] = await Promise.all([title.boundingBox(), latin.boundingBox()]);
+  expect(Math.abs((latinBox.y + latinBox.height / 2) - (titleBox.y + titleBox.height / 2))).toBeLessThanOrEqual(2);
+  expect(latinBox.x + latinBox.width).toBeLessThanOrEqual(titleBox.x + titleBox.width + 1);
+  for (const path of ['two.flac', 'three.flac']) {
+    await expect(page.locator(`[data-track-row-path="${path}"] .album-track-table__transliteration`)).toHaveCount(0);
+  }
+});
+
 test('search-match hover retains its accent treatment through the table cascade', async ({ page }) => {
   await mountAlbumDetailsComponents(page);
   const row = page.locator('[data-track-row-path="two.flac"]');

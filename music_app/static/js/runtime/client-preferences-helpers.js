@@ -4,6 +4,7 @@ const GALLERY_DISPLAY_PREFERENCES_STORAGE_KEY = 'albumhaven.galleryDisplayPrefer
 const GALLERY_PLAYBACK_PREFERENCES_STORAGE_KEY = 'albumhaven.galleryPlaybackPreferences.v1';
 const ALBUM_OPEN_MODE_STORAGE_KEY = 'albumhaven.albumOpenMode.v1';
 const SHELL_LAYOUT_PREFERENCES_STORAGE_KEY = 'albumhaven.shellLayoutPreferences.v1';
+const SERIES_TREE_COLLAPSED_GROUPS_STORAGE_KEY = 'albumhaven.seriesTreeCollapsedGroups.v1';
 
 function loadPersistedJsonObject(key) {
   try {
@@ -166,6 +167,23 @@ function loadShellLayoutPreferences() {
   );
 }
 
+// The Series tree's collapsed groups (owner 2026-11-17, 4B), kept per account and client
+// like the artist tree's fold.
+function loadSeriesTreeCollapsedGroups() {
+  const saved = loadPersistedJsonObject(SERIES_TREE_COLLAPSED_GROUPS_STORAGE_KEY);
+  return { series: saved.series === true, featured_in: saved.featured_in === true };
+}
+
+function toggleSeriesTreeGroup(kind) {
+  const current = state.ui.seriesTreeCollapsedGroups || {};
+  const groups = { series: current.series === true, featured_in: current.featured_in === true };
+  if (!Object.hasOwn(groups, kind)) return false;
+  groups[kind] = !groups[kind];
+  state.ui.seriesTreeCollapsedGroups = groups;
+  setLocalStorageItem(SERIES_TREE_COLLAPSED_GROUPS_STORAGE_KEY, JSON.stringify(groups));
+  return true;
+}
+
 function loadAlbumOpenMode() {
   return normalizeAlbumOpenMode(getLocalStorageItem(ALBUM_OPEN_MODE_STORAGE_KEY));
 }
@@ -275,6 +293,7 @@ function restorePersistedClientPreferences() {
     state.ui = {};
   }
   state.ui.shellLayoutPreferences = loadShellLayoutPreferences();
+  state.ui.seriesTreeCollapsedGroups = loadSeriesTreeCollapsedGroups();
   restorePlayerAppearance();
 }
 

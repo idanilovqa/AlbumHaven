@@ -406,6 +406,9 @@ test('new cover run explicit zero discards previous completed count', () => {
     album_count: 4,
     artist_count: 0,
     query: '123',
+    selected_series: '',
+    series: null,
+    series_sidebar: [],
     playback_context: {
       kind: 'artist_page',
       end_behavior: 'stop',
@@ -700,6 +703,9 @@ test('new cover run explicit zero discards previous completed count', () => {
       album_count: 12,
       artist_count: 0,
       query: '',
+      selected_series: '',
+      series: null,
+      series_sidebar: [],
       search_filters: {
         genre: [],
         mood: [],

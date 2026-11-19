@@ -808,14 +808,25 @@ function buildGalleryMainRootPageGroups(groups) {
 
 function renderGalleryMainContext(bar, context) {
   const name = bar.querySelector('[data-gallery-context-name]');
+  const romanized = galleryContextRomanizedElement(bar);
+  // The info button follows the romanized name, which follows the name (approved J3).
+  const infoAnchor = romanized || name;
   const summary = bar.querySelector('[data-gallery-context-summary]');
   const metadata = bar.querySelector('[data-gallery-context-metadata]');
   const oldInfo = bar.querySelector('[data-artist-info-trigger]');
   const inlineDivider = bar.querySelector('[data-gallery-context-artist-divider]');
   const inlineTotal = bar.querySelector('[data-gallery-context-inline-total]');
   const mobileHome = typeof shouldShowMobileHome === 'function' && shouldShowMobileHome();
-  if (bar.dataset) bar.dataset.galleryContextKind = mobileHome ? 'home' : context.kind;
+  const series = state.view.series || null;
+  // One series owns its header while scrolling; All series follows the artist gallery.
+  const seriesHeader = !mobileHome && Boolean(String(state.view.selected_series || '').trim())
+    && Boolean(series || context.kind === 'gallery');
+  if (bar.dataset) bar.dataset.galleryContextKind = mobileHome ? 'home' : (seriesHeader ? 'series' : context.kind);
   summary.hidden = false;
+  if (romanized) {
+    romanized.hidden = true;
+    romanized.textContent = '';
+  }
   if (metadata) {
     metadata.hidden = true;
     metadata.innerHTML = '';
@@ -829,13 +840,40 @@ function renderGalleryMainContext(bar, context) {
     name.textContent = document.getElementById('mobile-home')?.dataset.accountName || 'My music';
     summary.textContent = '';
     oldInfo?.remove();
+  } else if (seriesHeader) {
+    const content = resolveSeriesGalleryBarContent({
+      series, seriesCount: model.groups.length, albumCount: model.totals.albumCount,
+      mobile: typeof usesMobilePageLayout === 'function' && usesMobilePageLayout(),
+    });
+    name.textContent = content.name;
+    summary.hidden = !content.summary;
+    summary.textContent = content.summary;
+    if (inlineTotal) {
+      inlineTotal.hidden = !content.inlineTotal;
+      inlineTotal.textContent = content.inlineTotal;
+    }
+    if (metadata) {
+      metadata.hidden = !content.metadataHtml;
+      metadata.innerHTML = content.metadataHtml;
+    }
+    if (!gallerySeriesHasInfo(series)) oldInfo?.remove();
+    else if (!oldInfo) infoAnchor.insertAdjacentHTML('afterend', `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(series.name)}" aria-label="Information about ${escapeHtml(series.name)}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`);
+    else {
+      oldInfo.dataset.artist = series.name;
+      oldInfo.setAttribute('aria-label', `Information about ${series.name}`);
+    }
   } else if (context.kind === 'gallery' || context.kind === 'family') {
     name.textContent = context.kind === 'gallery' ? 'Gallery' : `${context.primaryArtist} family`;
     summary.textContent = `${galleryMainPlural(context.artistCount, 'artist')} · ${galleryMainPlural(context.albumCount, 'album')}`;
     oldInfo?.remove();
   } else {
     // Artist: "Name (i) • N albums" on the title line, the pills on the second line.
-    name.textContent = galleryArtistDisplayName(context.artist, context.artist_musicbrainz);
+    const display = galleryArtistDisplayParts(galleryArtistDisplayName(context.artist, context.artist_musicbrainz));
+    name.textContent = display.name;
+    if (romanized) {
+      romanized.textContent = display.secondary;
+      romanized.hidden = !romanized.textContent;
+    }
     summary.hidden = true;
     summary.textContent = '';
     if (inlineTotal) {
@@ -846,7 +884,7 @@ function renderGalleryMainContext(bar, context) {
       metadata.hidden = false;
       metadata.innerHTML = buildGalleryArtistMetadataHtml(context.artist_musicbrainz);
     }
-    if (!oldInfo) name.insertAdjacentHTML('afterend', `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(context.artist)}" aria-label="Information about ${escapeHtml(context.artist)}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`);
+    if (!oldInfo) infoAnchor.insertAdjacentHTML('afterend', `<button class="gallery-info-button" type="button" data-artist-info-trigger="1" data-artist="${escapeHtml(context.artist)}" aria-label="Information about ${escapeHtml(context.artist)}" aria-expanded="false">${buildGalleryInfoGlyphHtml()}</button>`);
     else {
       oldInfo.dataset.artist = context.artist;
       oldInfo.setAttribute('aria-label', `Information about ${context.artist}`);
@@ -953,11 +991,23 @@ function buildGalleryArtistIdentitiesHtml(artistMusicBrainz) {
   return `<div class="artist-info-overlay__identities" data-artist-info-identities><p class="artist-info-overlay__source">${heading}</p><ul>${items}</ul></div>`;
 }
 
+// A series' i (approved D2 batch 3, 4): only its stored Wikipedia introduction and the
+// Wikipedia link. A series has no picture of its own, so there is no art box; a series
+// without a Wikipedia page has no i (gallerySeriesHasInfo).
+function renderGallerySeriesInfo(overlay, series) {
+  const closeAction = ButtonComponent.renderActionButton({ icon: 'close', ariaLabel: 'Close series information', presentation: 'bare', className: 'mobile-artist-info-close', attributes: { 'data-close-mobile-artist-info': '' } });
+  const link = ButtonComponent.renderExternalServiceLink({ service: 'wikipedia', href: series.wikipedia?.url });
+  overlay.setAttribute('aria-label', `Information about ${series.name}`);
+  overlay.innerHTML = `${closeAction}<header><div><h2>${escapeHtml(series.name)}</h2></div></header><div class="artist-info-overlay__body gallery-scrollbar"><p data-series-info-summary>${escapeHtml(series.wikipedia?.extract || '')}</p>${link ? `<div class="artist-info-overlay__links"><div class="ui-external-link-list">${link}</div></div>` : ''}</div>`;
+  return overlay;
+}
+
 function renderGalleryArtistInfo(anchor) {
   const artist = String(anchor.dataset.artist || '').trim();
   const group = findGalleryMainGroup(artist) || {};
   const overlay = document.querySelector('[data-artist-info-overlay]');
   if (!overlay) return null;
+  if (group.series) return renderGallerySeriesInfo(overlay, group.series);
   const { summary, imageUrl, wikipediaUrl, isLongBiography } = resolveGalleryArtistInfo(group, artist);
   overlay.setAttribute('aria-label', `Information about ${artist}`);
   // The text always ends with the full-page control; it stays disabled until artist pages exist.
@@ -1052,7 +1102,48 @@ function openGalleryArtistInfo(anchor) {
   if (overlay) openGalleryMainSurface(`artist:${artist}`, anchor, overlay, 'left');
 }
 
+// A SERIES or FEATURED IN link in album details opens that series' gallery (approved 1B, 4A),
+// in the Series tree.
+function openSeriesGallery(mbid) {
+  state.ui.navigationTree = 'series';
+  const navigate = () => fetchAndRender(buildUrl({
+    surface_request: 'albums',
+    visible_library_categories: state.view?.visible_library_categories || [],
+    selected_series: mbid,
+  }), true);
+  if (document.getElementById('track-modal')?.hidden === false) {
+    closeTrackModal();
+    // A phone's album page closes through history: open the series once it has.
+    if (typeof hasActiveMobilePage === 'function' && hasActiveMobilePage()) {
+      window.addEventListener('popstate', () => setTimeout(navigate, 0), { once: true });
+      return;
+    }
+  }
+  navigate();
+}
+
+// The Series tree menu's choice (owner 2026-11-17, 5B): Series, Featured In, or null for the
+// MusicBrainz default. Once saved the tree regroups in place: a Series view reloads (its
+// header names the kind), any other gallery stays and only the tree is read again.
+async function saveSeriesKind(mbid, kind) {
+  try {
+    const response = await fetch(`/api/musicbrainz/series/${encodeURIComponent(mbid)}/kind`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ kind }),
+    });
+    if (!response.ok) throw new Error((await response.json().catch(() => ({})))?.detail || '');
+  } catch (error) {
+    showToast(error?.message || 'The series could not be saved.', 'error', 3200);
+    return false;
+  }
+  return String(state.view?.selected_series || '')
+    ? refreshCurrentViewAfterBackgroundCompletion({ preserveScroll: true })
+    : loadSeriesTree();
+}
+
 function handleGalleryMainClick(event) {
+  const seriesLink = event.target.closest?.('[data-open-series]');
+  if (seriesLink) { event.preventDefault(); openSeriesGallery(seriesLink.dataset.openSeries); return true; }
   if (event.target.closest?.('[data-close-mobile-artist-info]')) { event.preventDefault(); closeGalleryMainSurface(true); return true; }
   const source = event.target.closest?.('[data-gallery-source]');
   if (source) { event.preventDefault(); transitionGalleryMain({ type: 'toggle-source', source: source.dataset.gallerySource }); return true; }
@@ -1194,6 +1285,15 @@ function initGalleryMain() {
   const recentSearch = document.getElementById('recent-search-popover');
   if (recentSearch) recentSearch.dataset.anchoredSurface = 'search-suggestions';
   updateGalleryMainChrome();
+  // Romanized names and split qualifiers load once here; a changed artist status reloads them.
+  if (typeof refreshRomanizedArtistNames === 'function') void refreshRomanizedArtistNames();
+  // The page renders unsearched browsing first; a Series view URL (reload, shared link)
+  // then opens its series.
+  const locationState = typeof parseBrowserUrlState === 'function' ? parseBrowserUrlState(window.location.href) : {};
+  if (typeof resolveViewSeries === 'function' && resolveViewSeries(locationState) && !state.view.selected_series) {
+    state.ui.navigationTree = 'series';
+    void fetchAndRender(buildUrl(locationState), false);
+  }
 }
 
 function createGalleryFamilyPaintController(toggle) {

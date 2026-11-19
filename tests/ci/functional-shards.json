@@ -933,6 +933,13 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/albumTagRename.spec.js",
+              "case": "FTC-TAGS-028 Edit Tags writes only the files still in the album",
+              "area": "tag-edit"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/albumTagRename.spec.js",
               "case": "FTC-TAGS-015 / FTC-UTIL-PROBLEMS-012 keeps one stable destination through five selected-track moves and restores",
               "area": "problematic-files"
             },

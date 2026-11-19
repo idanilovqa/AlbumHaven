@@ -104,3 +104,23 @@ def test_preloaded_artist_rows_are_merged_without_another_query():
     assert [item["key"] for item in payload["items"]] == [
         "musicbrainz-artist:7", "album-b", "album-k",
     ]
+
+
+def test_an_artist_musicbrainz_lacks_also_carries_the_has_no_info_label():
+    """Owner decision 2026-11-15 (C2): an automatic contribution flag reads "MusicBrainz has no info"."""
+    flagged = [{**ROWS[0], "unresolved_reason": "MBID: Not found", "musicbrainz_has_no_info": True}]
+
+    items = load_problematic_artist_items(_request(flagged))
+
+    assert items[0]["problem_reasons"] == ["MBID: Not found", "MusicBrainz has no info"]
+    assert load_problematic_artist_items(_request(ROWS))[0]["problem_reasons"] == ["MBID: Multiple matches"]
+
+
+def test_the_attention_query_reads_only_automatic_artist_contribution_flags():
+    from music_app.services.musicbrainz_enrichment_postgres import _ATTENTION_FIELDS, _artist_attention_sql
+
+    sql = " ".join(_artist_attention_sql().split())
+    assert "musicbrainz_has_no_info" in _ATTENTION_FIELDS
+    assert "from library.musicbrainz_contribution_flags flags" in sql
+    assert "flags.target_kind = 'artist'" in sql and "flags.source = 'automatic'" in sql
+    assert "flags.local_artist_id = artists.id" in sql

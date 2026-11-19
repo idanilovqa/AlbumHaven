@@ -444,3 +444,62 @@ for (const pendingArtist of ['', 'Latest Artist']) {
   assert.equal(opener.getAttribute('data-search-results'), null);
   assert.equal(opener.getAttribute('aria-description'), null);
 }
+
+// Owner 2026-11-17: the rail's Series and Artist Tree buttons switch the tree only; the gallery,
+// the URL and history stay, and no tree row is newly selected.
+function loadTreeSwitch({ view = { selected_artist: 'Magma', selected_series: '' } } = {}) {
+  const helper = loadHelper({ artistTreeFolded: true });
+  const { context } = helper;
+  const calls = { fetchAndRender: [], renderSidebar: 0, fetch: [], pushState: 0 };
+  context.state.view = { ...view, visible_library_categories: ['main_library', 'hoard'] };
+  context.fetchAndRender = (...args) => calls.fetchAndRender.push(args);
+  context.renderSidebar = () => { calls.renderSidebar += 1; };
+  context.history = { pushState: () => { calls.pushState += 1; }, replaceState: () => { calls.pushState += 1; } };
+  context.URLSearchParams = URLSearchParams;
+  context.fetch = async (url) => {
+    calls.fetch.push(url);
+    return { ok: true, json: async () => ({ series_sidebar: [{ mbid: 's1', name: 'Colossus Projects', kind: 'series' }] }) };
+  };
+  return { ...helper, calls };
+}
+
+(async () => {
+  const { context, calls, foldButton } = loadTreeSwitch();
+  context.openNavigationTree('series');
+  assert.equal(context.state.ui.navigationTree, 'series');
+  assert.equal(context.showsSeriesTree(), true);
+  assert.equal(foldButton.getAttribute('aria-label'), 'Collapse Series Tree');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(calls.fetch, ['/series-tree?category=main_library&category=hoard']);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.state.ui.seriesTree)),
+    [{ mbid: 's1', name: 'Colossus Projects', kind: 'series' }]);
+  // The gallery stays: no navigation, no history entry, the view untouched.
+  assert.deepEqual(calls.fetchAndRender, []);
+  assert.equal(calls.pushState, 0);
+  assert.equal(context.state.view.selected_artist, 'Magma');
+  assert.equal(context.state.view.selected_series, '');
+  assert.ok(calls.renderSidebar >= 2);
+
+  context.openNavigationTree('artists');
+  assert.equal(context.showsSeriesTree(), false);
+  assert.equal(foldButton.getAttribute('aria-label'), 'Collapse Artist Tree');
+  assert.deepEqual(calls.fetchAndRender, []);
+  assert.equal(calls.fetch.length, 1);
+  assert.equal(context.state.view.selected_artist, 'Magma');
+})();
+
+{
+  // A Series view open in the gallery stays open when the artists come back.
+  const { context, calls } = loadTreeSwitch({ view: { selected_series: 's1', series_sidebar: [] } });
+  context.state.ui.navigationTree = 'series';
+  context.openNavigationTree('artists');
+  assert.equal(context.state.view.selected_series, 's1');
+  assert.deepEqual(calls.fetchAndRender, []);
+}
+
+{
+  // A phone keeps its artists drawer whatever was chosen on a desktop.
+  const { context } = loadHelper({ isMobile: true });
+  context.state.ui.navigationTree = 'series';
+  assert.equal(context.showsSeriesTree(), false);
+}

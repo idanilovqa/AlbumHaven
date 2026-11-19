@@ -894,6 +894,34 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/albumTagRename.spec.js",
+    "case": "FTC-TAGS-028 Edit Tags writes only the files still in the album",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "setupGroup": "files-left-album",
+    "appProcessScope": "isolated",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "tag-edit:files-left-album"
+    ],
+    "filesystemScenarios": [
+      "media-copy:files-left-album"
+    ],
+    "expectedContracts": [
+      "moved-file-skipped-and-unchanged",
+      "remaining-files-written",
+      "all-moved-save-writes-nothing"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:files-left-album",
+      "filesystemCopy": "media/cases/files-left-album"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/albumTagRename.spec.js",
     "case": "FTC-TAGS-015 / FTC-UTIL-PROBLEMS-012 keeps one stable destination through five selected-track moves and restores",
     "profile": "functional-core",
     "setupScope": "isolated",
@@ -3553,6 +3581,31 @@
     "expectedContracts": [
       "utility-tabs-responsive-and-populated"
     ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.utility-problematic-files.config.cjs",
+    "project": "utility-problematic-files",
+    "test": "tests/e2e/utilityProblematicFiles/utilityProblematicFiles.spec.js",
+    "case": "FTC-UTIL-PROBLEMS-010 production-path utility problematic-files UI › Problematic Files and the Edits Queue stay ready with 64,000 stored MusicBrainz data corrections",
+    "profile": "utility-problematic-files",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "databaseScenarios": [
+      "utility-problematic-files:musicbrainz-data-corrections-10800-albums-64k-rows"
+    ],
+    "filesystemScenarios": [
+      "media:utility-problematic-files"
+    ],
+    "expectedContracts": [
+      "problematic-files-ready-with-corrections",
+      "correction-rows-outside-list-response",
+      "correction-filter-page-one",
+      "edits-queue-first-page-64k-rows"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "utility-problematic-files:musicbrainz-corrections"
+    },
     "ownerApproval": "approved"
   },
   {
@@ -8983,6 +9036,21 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/albumTrackTable.spec.js",
+    "case": "a non-Latin title shows its Latin form after a dot on the same line, dimmed; Latin and Cyrillic titles show none",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "musicbrainz-track-title-transliteration"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/playerViews.spec.js",
     "case": "mobile thin seek surface keeps touch dragging under player control",
     "profile": null,
@@ -9400,6 +9468,291 @@
     "expectedContracts": [
       "shared-mobile-header-geometry",
       "compact-album-identity-spacing"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/seriesView.spec.js",
+    "case": "1B: web album details show \"Series: <name>\" on one line under the cover; the name links to its gallery",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "musicbrainz-series-album-details-block"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/seriesView.spec.js",
+    "case": "web album details wrap several series left-aligned under the first name, never clipped",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "musicbrainz-series-album-details-block"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/seriesView.spec.js",
+    "case": "4A: on a phone the SERIES block follows the track table, and an album of no series shows none",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "musicbrainz-series-album-details-block"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/seriesView.spec.js",
+    "case": "3A: the folded sidebar stacks the Series button directly below the Artist Tree button",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "musicbrainz-series-sidebar-button"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/seriesView.spec.js",
+    "case": "4B: the Series tree shows Series then Featured In under dimmed collapsible headings, never \"All\" rows",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "musicbrainz-series-tree-groups"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/seriesView.spec.js",
+    "case": "5B: a series menu offers Mark as Series and Mark as Featured In, the current kind disabled, never Hidden",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "musicbrainz-series-tree-kind-menu"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/seriesView.spec.js",
+    "case": "owner 2026-11-17: the Series button switches only the tree; the gallery header, URL and history stay and no row is selected unless the gallery shows that series",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "musicbrainz-series-tree-switch"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/musicbrainzLookups.spec.js",
+    "case": "F1: the album menu ends after its longest item, every item on its own row, in full MusicBrainz wording",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "musicbrainz-lookup-album-menu"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/musicbrainzLookups.spec.js",
+    "case": "G2: Problematic Files adds the lookups beside Assign MBID, and the pasted MBID uses the app field",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "musicbrainz-lookup-problematic-files-actions"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/musicbrainzLookups.spec.js",
+    "case": "G1: an album MusicBrainz has no info on shows its label and the album lookups",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "musicbrainz-lookup-problematic-files-actions"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/musicbrainzLookups.spec.js",
+    "case": "H1: a MusicBrainz lookup batch is the same card as a cover lookup, titled by its kind",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "musicbrainz-lookup-notification-card"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/musicbrainzLookups.spec.js",
+    "case": "H2: the results popup has the modal header and close button, and navigation-tree rows",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "musicbrainz-lookup-results-popup"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/musicbrainzCorrections.spec.js",
+    "case": "D1: a data correction entry shows its label and its changes with their status, and no Add to queue",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "musicbrainz-data-correction-entry"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/musicbrainzCorrections.spec.js",
+    "case": "E1: Applied automatically lists kinds and pages albums with Undo; Auto submit bulks off; Bulk Correction visibly disabled",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "musicbrainz-edits-queue-data-correction"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/musicbrainzCorrections.spec.js",
+    "case": "E3: Waiting for approval offers Approve kind, while artist kinds and whole albums are approved per album only",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "musicbrainz-edits-queue-review-approval"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/musicbrainzCorrections.spec.js",
+    "case": "E2: the MusicBrainz Look Up tab lists queued look ups with when they start, in the same list",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "musicbrainz-edits-queue-lookups"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/musicbrainzCorrections.spec.js",
+    "case": "I1: album details show the a.k.a. title dimmed, at the title size, after the title and before the year",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "musicbrainz-alternative-album-title"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/musicbrainzCorrections.spec.js",
+    "case": "P1: on a phone the applied changes keep the switch, Bulk Correction and Undo within the screen",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "musicbrainz-edits-queue-phone-data-correction"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/musicbrainzCorrections.spec.js",
+    "case": "P2: on a phone the Edits Queue MusicBrainz Look Up list keeps open/remove within the screen",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "musicbrainz-edits-queue-phone-lookups"
     ],
     "ownerApproval": "approved"
   },
@@ -10219,6 +10572,81 @@
     "mutationOwnership": {
       "databaseIdentity": "case:musicbrainz-manual-resolution-workflows"
     },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/galleryGenrePill.spec.js",
+    "case": "no genre shows no genre pill and no placeholder text in the gallery header or on a card",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "no genre shows no genre pill and no placeholder text in the gallery header or on a card"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/galleryGenrePill.spec.js",
+    "case": "a real genre still shows its pill in the gallery header and on a card",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "a real genre still shows its pill in the gallery header and on a card"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sameNameSplit.spec.js",
+    "case": "same-name split: an identity shows its full country name where known, else its MusicBrainz area, dimmed; one with neither shows its type; a code with no English name shows as the code",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "musicbrainz-same-name-split-country"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sameNameSplit.spec.js",
+    "case": "same-name split: two identities from one country show Person and Band; the disambiguation only when the type is the same too",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "musicbrainz-same-name-split-type"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/sameNameSplit.spec.js",
+    "case": "same-name split: the plain name row lists only the undecided albums and is gone once every album is matched",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "musicbrainz-same-name-split-plain-row"
+    ],
     "ownerApproval": "approved"
   }
 ]

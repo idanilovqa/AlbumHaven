@@ -23,6 +23,7 @@ import {
   UtilityIntegrationsActions,
   UtilityLogHistoryActions,
   UtilityLoopsActions,
+  UtilityEditsQueueActions,
   UtilityProblematicFilesActions,
   UtilityRulesActions,
   UtilityTabBarActions,
@@ -46,6 +47,7 @@ import {
   UtilityIntegrationsTab,
   UtilityLogHistoryTab,
   UtilityLoopsTab,
+  UtilityEditsQueueTab,
   UtilityProblematicFilesTab,
   UtilityRulesTab,
   UtilityTabBar,
@@ -660,6 +662,10 @@ export const test = base.extend({
 
   utilityProblematicFilesActions: async ({ page }, use, testInfo) => {
     await use(new UtilityProblematicFilesActions(new UtilityProblematicFilesTab(page, testInfo)));
+  },
+
+  utilityEditsQueueActions: async ({ page }, use, testInfo) => {
+    await use(new UtilityEditsQueueActions(new UtilityEditsQueueTab(page, testInfo)));
   },
 
   utilityRulesActions: async ({ page }, use, testInfo) => {

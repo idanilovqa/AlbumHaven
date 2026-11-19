@@ -1,0 +1,1291 @@
+{
+ "cases": {
+  "release_with_transliteration": "b242128c-42fb-418d-afee-9f3980740fd2",
+  "release_without_transliteration": "678e22f8-c26f-4593-bb76-97971b593d40",
+  "transliteration": "e196b170-d906-4f6c-9a8b-76baccde71dd"
+ },
+ "responses": {
+  "/release/678e22f8-c26f-4593-bb76-97971b593d40?inc=release-rels&fmt=json": {
+   "asin": null,
+   "barcode": "4538182893531",
+   "country": null,
+   "cover-art-archive": {
+    "artwork": false,
+    "back": false,
+    "count": 0,
+    "darkened": false,
+    "front": false
+   },
+   "date": "2007-03-03",
+   "disambiguation": "",
+   "id": "678e22f8-c26f-4593-bb76-97971b593d40",
+   "packaging": "None",
+   "packaging-id": "119eba76-b343-3e02-a292-f0f00644bb9b",
+   "quality": "normal",
+   "relations": [],
+   "release-events": [
+    {
+     "area": null,
+     "date": "2007-03-03"
+    }
+   ],
+   "status": "Official",
+   "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+   "text-representation": {
+    "language": "jpn",
+    "script": "Latn"
+   },
+   "title": "劇場アニメーション 秒速5センチメートル Soundtracks"
+  },
+  "/release/b242128c-42fb-418d-afee-9f3980740fd2?inc=recordings+artist-credits+release-groups+series-rels&fmt=json": {
+   "artist-credit": [
+    {
+     "artist": {
+      "country": "JP",
+      "disambiguation": "",
+      "id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+      "name": "天門",
+      "sort-name": "Tenmon",
+      "type": "Person",
+      "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+     },
+     "joinphrase": "",
+     "name": "天門"
+    }
+   ],
+   "asin": "B000MQCT1U",
+   "barcode": null,
+   "country": "JP",
+   "cover-art-archive": {
+    "artwork": true,
+    "back": false,
+    "count": 1,
+    "darkened": false,
+    "front": true
+   },
+   "date": "2007-07-19",
+   "disambiguation": "",
+   "id": "b242128c-42fb-418d-afee-9f3980740fd2",
+   "media": [
+    {
+     "format": "CD",
+     "format-id": "9712d52a-4509-3d4b-a1a2-67c88c643e31",
+     "id": "201e8cbb-b771-33bc-b7ee-103c141d2fb5",
+     "position": 1,
+     "title": "",
+     "track-count": 11,
+     "track-offset": 0,
+     "tracks": [
+      {
+       "artist-credit": [
+        {
+         "artist": {
+          "country": "JP",
+          "disambiguation": "",
+          "id": "9c98108e-ee2b-4d99-a54c-279e5f32b25b",
+          "name": "山崎まさよし",
+          "sort-name": "Yamazaki, Masayoshi",
+          "type": "Person",
+          "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+         },
+         "joinphrase": "",
+         "name": "山崎まさよし"
+        }
+       ],
+       "id": "05c7512f-ca99-3d73-af1b-38e42ca522cf",
+       "length": 291000,
+       "number": "1",
+       "position": 1,
+       "recording": {
+        "artist-credit": [
+         {
+          "artist": {
+           "country": "JP",
+           "disambiguation": "",
+           "id": "9c98108e-ee2b-4d99-a54c-279e5f32b25b",
+           "name": "山崎まさよし",
+           "sort-name": "Yamazaki, Masayoshi",
+           "type": "Person",
+           "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+          },
+          "joinphrase": "",
+          "name": "山崎まさよし"
+         }
+        ],
+        "disambiguation": "",
+        "id": "01d6a71d-38e0-49e8-87ae-8caa376d9502",
+        "length": 291000,
+        "title": "桜花抄",
+        "video": false
+       },
+       "title": "桜花抄"
+      },
+      {
+       "artist-credit": [
+        {
+         "artist": {
+          "country": "JP",
+          "disambiguation": "",
+          "id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+          "name": "天門",
+          "sort-name": "Tenmon",
+          "type": "Person",
+          "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+         },
+         "joinphrase": "",
+         "name": "天門"
+        }
+       ],
+       "id": "c7f3df48-c973-38b3-aa79-d62af1d53b60",
+       "length": 101000,
+       "number": "2",
+       "position": 2,
+       "recording": {
+        "artist-credit": [
+         {
+          "artist": {
+           "country": "JP",
+           "disambiguation": "",
+           "id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+           "name": "天門",
+           "sort-name": "Tenmon",
+           "type": "Person",
+           "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+          },
+          "joinphrase": "",
+          "name": "天門"
+         }
+        ],
+        "disambiguation": "",
+        "id": "746d9909-ace6-4307-80e3-846a1099f2e3",
+        "length": 101000,
+        "title": "想い出は遠くの日々",
+        "video": false
+       },
+       "title": "想い出は遠くの日々"
+      },
+      {
+       "artist-credit": [
+        {
+         "artist": {
+          "country": "JP",
+          "disambiguation": "",
+          "id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+          "name": "天門",
+          "sort-name": "Tenmon",
+          "type": "Person",
+          "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+         },
+         "joinphrase": "",
+         "name": "天門"
+        }
+       ],
+       "id": "bc8b095f-01ab-3173-bc70-adc1754758b0",
+       "length": 70000,
+       "number": "3",
+       "position": 3,
+       "recording": {
+        "artist-credit": [
+         {
+          "artist": {
+           "country": "JP",
+           "disambiguation": "",
+           "id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+           "name": "天門",
+           "sort-name": "Tenmon",
+           "type": "Person",
+           "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+          },
+          "joinphrase": "",
+          "name": "天門"
+         }
+        ],
+        "disambiguation": "",
+        "id": "bc677b11-f1f2-4422-a7a7-d0efeda1f0e2",
+        "length": 70000,
+        "title": "焦燥",
+        "video": false
+       },
+       "title": "焦燥"
+      },
+      {
+       "artist-credit": [
+        {
+         "artist": {
+          "country": "JP",
+          "disambiguation": "",
+          "id": "9c98108e-ee2b-4d99-a54c-279e5f32b25b",
+          "name": "山崎まさよし",
+          "sort-name": "Yamazaki, Masayoshi",
+          "type": "Person",
+          "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+         },
+         "joinphrase": "",
+         "name": "山崎まさよし"
+        }
+       ],
+       "id": "155d327c-3cca-320c-a2bd-71a6425d30eb",
+       "length": 139000,
+       "number": "4",
+       "position": 4,
+       "recording": {
+        "artist-credit": [
+         {
+          "artist": {
+           "country": "JP",
+           "disambiguation": "",
+           "id": "9c98108e-ee2b-4d99-a54c-279e5f32b25b",
+           "name": "山崎まさよし",
+           "sort-name": "Yamazaki, Masayoshi",
+           "type": "Person",
+           "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+          },
+          "joinphrase": "",
+          "name": "山崎まさよし"
+         }
+        ],
+        "disambiguation": "",
+        "id": "4a18fa60-94a1-488a-9d27-20cdc8bfd658",
+        "length": 139560,
+        "title": "雪の駅 ～One more time, One more chance～",
+        "video": false
+       },
+       "title": "雪の駅"
+      },
+      {
+       "artist-credit": [
+        {
+         "artist": {
+          "country": "JP",
+          "disambiguation": "",
+          "id": "9c98108e-ee2b-4d99-a54c-279e5f32b25b",
+          "name": "山崎まさよし",
+          "sort-name": "Yamazaki, Masayoshi",
+          "type": "Person",
+          "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+         },
+         "joinphrase": "",
+         "name": "山崎まさよし"
+        }
+       ],
+       "id": "776d56dd-60ef-3197-9c2c-3e0e4049d446",
+       "length": 194000,
+       "number": "5",
+       "position": 5,
+       "recording": {
+        "artist-credit": [
+         {
+          "artist": {
+           "country": "JP",
+           "disambiguation": "",
+           "id": "9c98108e-ee2b-4d99-a54c-279e5f32b25b",
+           "name": "山崎まさよし",
+           "sort-name": "Yamazaki, Masayoshi",
+           "type": "Person",
+           "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+          },
+          "joinphrase": "",
+          "name": "山崎まさよし"
+         }
+        ],
+        "disambiguation": "",
+        "id": "002a0e20-f053-402f-a3ea-52051bd2e456",
+        "length": 194000,
+        "title": "Kiss",
+        "video": false
+       },
+       "title": "Kiss"
+      },
+      {
+       "artist-credit": [
+        {
+         "artist": {
+          "country": "JP",
+          "disambiguation": "",
+          "id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+          "name": "天門",
+          "sort-name": "Tenmon",
+          "type": "Person",
+          "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+         },
+         "joinphrase": "",
+         "name": "天門"
+        }
+       ],
+       "id": "7ba2c9c8-1653-3ccf-9513-e52521afcd6d",
+       "length": 107000,
+       "number": "6",
+       "position": 6,
+       "recording": {
+        "artist-credit": [
+         {
+          "artist": {
+           "country": "JP",
+           "disambiguation": "",
+           "id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+           "name": "天門",
+           "sort-name": "Tenmon",
+           "type": "Person",
+           "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+          },
+          "joinphrase": "",
+          "name": "天門"
+         }
+        ],
+        "disambiguation": "",
+        "id": "2e6d7d15-81ee-4bac-b9e9-0ad4f31fde49",
+        "length": 107000,
+        "title": "カナエの気持ち",
+        "video": false
+       },
+       "title": "カナエの気持ち"
+      },
+      {
+       "artist-credit": [
+        {
+         "artist": {
+          "country": "JP",
+          "disambiguation": "",
+          "id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+          "name": "天門",
+          "sort-name": "Tenmon",
+          "type": "Person",
+          "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+         },
+         "joinphrase": "",
+         "name": "天門"
+        }
+       ],
+       "id": "37f123a1-9f8d-3a23-bcf6-c6a9ea8fd903",
+       "length": 100000,
+       "number": "7",
+       "position": 7,
+       "recording": {
+        "artist-credit": [
+         {
+          "artist": {
+           "country": "JP",
+           "disambiguation": "",
+           "id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+           "name": "天門",
+           "sort-name": "Tenmon",
+           "type": "Person",
+           "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+          },
+          "joinphrase": "",
+          "name": "天門"
+         }
+        ],
+        "disambiguation": "",
+        "id": "ddc5e4be-375e-4a2e-b957-c36b0f9e391b",
+        "length": 100000,
+        "title": "夢",
+        "video": false
+       },
+       "title": "夢"
+      },
+      {
+       "artist-credit": [
+        {
+         "artist": {
+          "country": "JP",
+          "disambiguation": "",
+          "id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+          "name": "天門",
+          "sort-name": "Tenmon",
+          "type": "Person",
+          "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+         },
+         "joinphrase": "",
+         "name": "天門"
+        }
+       ],
+       "id": "b15d9983-fa8c-3660-9be8-d2a94bea795b",
+       "length": 120000,
+       "number": "8",
+       "position": 8,
+       "recording": {
+        "artist-credit": [
+         {
+          "artist": {
+           "country": "JP",
+           "disambiguation": "",
+           "id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+           "name": "天門",
+           "sort-name": "Tenmon",
+           "type": "Person",
+           "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+          },
+          "joinphrase": "",
+          "name": "天門"
+         }
+        ],
+        "disambiguation": "",
+        "id": "d21f6364-d308-46fd-acf9-6d27821e5c0e",
+        "length": 120000,
+        "title": "空と海の詩",
+        "video": false
+       },
+       "title": "空と海の詩"
+      },
+      {
+       "artist-credit": [
+        {
+         "artist": {
+          "country": "JP",
+          "disambiguation": "",
+          "id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+          "name": "天門",
+          "sort-name": "Tenmon",
+          "type": "Person",
+          "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+         },
+         "joinphrase": "",
+         "name": "天門"
+        }
+       ],
+       "id": "fad7f4aa-6030-39ed-a267-366532b31a8f",
+       "length": 101000,
+       "number": "9",
+       "position": 9,
+       "recording": {
+        "artist-credit": [
+         {
+          "artist": {
+           "country": "JP",
+           "disambiguation": "",
+           "id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+           "name": "天門",
+           "sort-name": "Tenmon",
+           "type": "Person",
+           "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+          },
+          "joinphrase": "",
+          "name": "天門"
+         }
+        ],
+        "disambiguation": "",
+        "id": "ca6507a2-a95a-4281-828e-bee4bee5f981",
+        "length": 101000,
+        "title": "届かない気持ち",
+        "video": false
+       },
+       "title": "届かない気持ち"
+      },
+      {
+       "artist-credit": [
+        {
+         "artist": {
+          "country": "JP",
+          "disambiguation": "",
+          "id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+          "name": "天門",
+          "sort-name": "Tenmon",
+          "type": "Person",
+          "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+         },
+         "joinphrase": "",
+         "name": "天門"
+        }
+       ],
+       "id": "0166015c-2924-3c5b-89a0-1c8dfb86ed10",
+       "length": 173000,
+       "number": "10",
+       "position": 10,
+       "recording": {
+        "artist-credit": [
+         {
+          "artist": {
+           "country": "JP",
+           "disambiguation": "",
+           "id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+           "name": "天門",
+           "sort-name": "Tenmon",
+           "type": "Person",
+           "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+          },
+          "joinphrase": "",
+          "name": "天門"
+         }
+        ],
+        "disambiguation": "",
+        "id": "565c4667-9e5e-495e-be6f-34f88694b9c7",
+        "length": 173000,
+        "title": "End Theme",
+        "video": false
+       },
+       "title": "End Theme"
+      },
+      {
+       "artist-credit": [
+        {
+         "artist": {
+          "country": "JP",
+          "disambiguation": "",
+          "id": "9c98108e-ee2b-4d99-a54c-279e5f32b25b",
+          "name": "山崎まさよし",
+          "sort-name": "Yamazaki, Masayoshi",
+          "type": "Person",
+          "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+         },
+         "joinphrase": "",
+         "name": "山崎まさよし"
+        }
+       ],
+       "id": "dcf805ee-5545-3da2-9c56-991e56079c94",
+       "length": 300000,
+       "number": "11",
+       "position": 11,
+       "recording": {
+        "artist-credit": [
+         {
+          "artist": {
+           "country": "JP",
+           "disambiguation": "",
+           "id": "9c98108e-ee2b-4d99-a54c-279e5f32b25b",
+           "name": "山崎まさよし",
+           "sort-name": "Yamazaki, Masayoshi",
+           "type": "Person",
+           "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+          },
+          "joinphrase": "",
+          "name": "山崎まさよし"
+         }
+        ],
+        "disambiguation": "",
+        "id": "23df4619-0b96-4c6d-b3ed-3e3f77163ee1",
+        "length": 300000,
+        "title": "One more time, One more chance (piano version)",
+        "video": false
+       },
+       "title": "One more time, One more chance (piano version)"
+      }
+     ]
+    }
+   ],
+   "packaging": null,
+   "packaging-id": null,
+   "quality": "normal",
+   "relations": [],
+   "release-events": [
+    {
+     "area": {
+      "disambiguation": "",
+      "id": "2db42837-c832-3c27-b4a3-08198f75693c",
+      "iso-3166-1-codes": [
+       "JP"
+      ],
+      "name": "Japan",
+      "sort-name": "Japan",
+      "type": null,
+      "type-id": null
+     },
+     "date": "2007-07-19"
+    }
+   ],
+   "release-group": {
+    "artist-credit": [
+     {
+      "artist": {
+       "country": "JP",
+       "disambiguation": "",
+       "id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+       "name": "天門",
+       "sort-name": "Tenmon",
+       "type": "Person",
+       "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+      },
+      "joinphrase": "",
+      "name": "天門"
+     }
+    ],
+    "disambiguation": "",
+    "first-release-date": "2007-03-03",
+    "id": "d058039f-568f-325b-a0f5-a5c477c958f5",
+    "primary-type": "Album",
+    "primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+    "secondary-type-ids": [
+     "22a628ad-c082-3c4f-b1b6-d41665107b88"
+    ],
+    "secondary-types": [
+     "Soundtrack"
+    ],
+    "title": "秒速5センチメートル"
+   },
+   "status": "Official",
+   "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+   "text-representation": {
+    "language": "jpn",
+    "script": "Jpan"
+   },
+   "title": "秒速5センチメートル"
+  },
+  "/release/b242128c-42fb-418d-afee-9f3980740fd2?inc=release-rels&fmt=json": {
+   "asin": "B000MQCT1U",
+   "barcode": null,
+   "country": "JP",
+   "cover-art-archive": {
+    "artwork": true,
+    "back": false,
+    "count": 1,
+    "darkened": false,
+    "front": true
+   },
+   "date": "2007-07-19",
+   "disambiguation": "",
+   "id": "b242128c-42fb-418d-afee-9f3980740fd2",
+   "packaging": null,
+   "packaging-id": null,
+   "quality": "normal",
+   "relations": [
+    {
+     "attribute-ids": {},
+     "attribute-values": {},
+     "attributes": [],
+     "begin": null,
+     "direction": "forward",
+     "end": null,
+     "ended": false,
+     "release": {
+      "barcode": null,
+      "disambiguation": "English transliteration",
+      "id": "e196b170-d906-4f6c-9a8b-76baccde71dd",
+      "packaging": null,
+      "packaging-id": null,
+      "quality": "normal",
+      "status": null,
+      "status-id": null,
+      "text-representation": {
+       "language": "jpn",
+       "script": "Latn"
+      },
+      "title": "Byousoku 5 Centimeter"
+     },
+     "source-credit": "",
+     "target-credit": "",
+     "target-type": "release",
+     "type": "transl-tracklisting",
+     "type-id": "fc399d47-23a7-4c28-bfcf-0607a562b644"
+    },
+    {
+     "attribute-ids": {},
+     "attribute-values": {},
+     "attributes": [],
+     "begin": null,
+     "direction": "forward",
+     "end": null,
+     "ended": false,
+     "release": {
+      "barcode": null,
+      "disambiguation": "English translation",
+      "id": "24a66e8a-e8fc-4abd-9419-cf4510b40138",
+      "packaging": null,
+      "packaging-id": null,
+      "quality": "normal",
+      "status": null,
+      "status-id": null,
+      "text-representation": {
+       "language": "jpn",
+       "script": "Latn"
+      },
+      "title": "5 Centimeters Per Second"
+     },
+     "source-credit": "",
+     "target-credit": "",
+     "target-type": "release",
+     "type": "transl-tracklisting",
+     "type-id": "fc399d47-23a7-4c28-bfcf-0607a562b644"
+    }
+   ],
+   "release-events": [
+    {
+     "area": {
+      "disambiguation": "",
+      "id": "2db42837-c832-3c27-b4a3-08198f75693c",
+      "iso-3166-1-codes": [
+       "JP"
+      ],
+      "name": "Japan",
+      "sort-name": "Japan",
+      "type": null,
+      "type-id": null
+     },
+     "date": "2007-07-19"
+    }
+   ],
+   "status": "Official",
+   "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+   "text-representation": {
+    "language": "jpn",
+    "script": "Jpan"
+   },
+   "title": "秒速5センチメートル"
+  },
+  "/release/e196b170-d906-4f6c-9a8b-76baccde71dd?inc=recordings+artist-credits+release-groups+series-rels&fmt=json": {
+   "artist-credit": [
+    {
+     "artist": {
+      "country": "JP",
+      "disambiguation": "",
+      "id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+      "name": "天門",
+      "sort-name": "Tenmon",
+      "type": "Person",
+      "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+     },
+     "joinphrase": "",
+     "name": "天門"
+    }
+   ],
+   "asin": null,
+   "barcode": null,
+   "cover-art-archive": {
+    "artwork": true,
+    "back": false,
+    "count": 1,
+    "darkened": false,
+    "front": true
+   },
+   "disambiguation": "English transliteration",
+   "id": "e196b170-d906-4f6c-9a8b-76baccde71dd",
+   "media": [
+    {
+     "format": null,
+     "format-id": null,
+     "id": "fe096974-3c1a-3117-bf5b-a10906b3fcd6",
+     "position": 1,
+     "title": "",
+     "track-count": 11,
+     "track-offset": 0,
+     "tracks": [
+      {
+       "artist-credit": [
+        {
+         "artist": {
+          "country": "JP",
+          "disambiguation": "",
+          "id": "9c98108e-ee2b-4d99-a54c-279e5f32b25b",
+          "name": "山崎まさよし",
+          "sort-name": "Yamazaki, Masayoshi",
+          "type": "Person",
+          "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+         },
+         "joinphrase": "",
+         "name": "山崎まさよし"
+        }
+       ],
+       "id": "68aa4eb6-e1d9-36d6-9d5e-8ce016366301",
+       "length": 291000,
+       "number": "1",
+       "position": 1,
+       "recording": {
+        "artist-credit": [
+         {
+          "artist": {
+           "country": "JP",
+           "disambiguation": "",
+           "id": "9c98108e-ee2b-4d99-a54c-279e5f32b25b",
+           "name": "山崎まさよし",
+           "sort-name": "Yamazaki, Masayoshi",
+           "type": "Person",
+           "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+          },
+          "joinphrase": "",
+          "name": "山崎まさよし"
+         }
+        ],
+        "disambiguation": "",
+        "id": "01d6a71d-38e0-49e8-87ae-8caa376d9502",
+        "length": 291000,
+        "title": "桜花抄",
+        "video": false
+       },
+       "title": "Oukashou"
+      },
+      {
+       "artist-credit": [
+        {
+         "artist": {
+          "country": "JP",
+          "disambiguation": "",
+          "id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+          "name": "天門",
+          "sort-name": "Tenmon",
+          "type": "Person",
+          "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+         },
+         "joinphrase": "",
+         "name": "天門"
+        }
+       ],
+       "id": "0817b59e-5765-364c-8b7a-ca91ee78d37b",
+       "length": 101000,
+       "number": "2",
+       "position": 2,
+       "recording": {
+        "artist-credit": [
+         {
+          "artist": {
+           "country": "JP",
+           "disambiguation": "",
+           "id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+           "name": "天門",
+           "sort-name": "Tenmon",
+           "type": "Person",
+           "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+          },
+          "joinphrase": "",
+          "name": "天門"
+         }
+        ],
+        "disambiguation": "",
+        "id": "746d9909-ace6-4307-80e3-846a1099f2e3",
+        "length": 101000,
+        "title": "想い出は遠くの日々",
+        "video": false
+       },
+       "title": "Omoide wa Tooku no Hibi"
+      },
+      {
+       "artist-credit": [
+        {
+         "artist": {
+          "country": "JP",
+          "disambiguation": "",
+          "id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+          "name": "天門",
+          "sort-name": "Tenmon",
+          "type": "Person",
+          "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+         },
+         "joinphrase": "",
+         "name": "天門"
+        }
+       ],
+       "id": "de768acd-fde7-3319-afe7-aa87753a6f08",
+       "length": 69000,
+       "number": "3",
+       "position": 3,
+       "recording": {
+        "artist-credit": [
+         {
+          "artist": {
+           "country": "JP",
+           "disambiguation": "",
+           "id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+           "name": "天門",
+           "sort-name": "Tenmon",
+           "type": "Person",
+           "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+          },
+          "joinphrase": "",
+          "name": "天門"
+         }
+        ],
+        "disambiguation": "",
+        "id": "bc677b11-f1f2-4422-a7a7-d0efeda1f0e2",
+        "length": 70000,
+        "title": "焦燥",
+        "video": false
+       },
+       "title": "Shousou"
+      },
+      {
+       "artist-credit": [
+        {
+         "artist": {
+          "country": "JP",
+          "disambiguation": "",
+          "id": "9c98108e-ee2b-4d99-a54c-279e5f32b25b",
+          "name": "山崎まさよし",
+          "sort-name": "Yamazaki, Masayoshi",
+          "type": "Person",
+          "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+         },
+         "joinphrase": "",
+         "name": "山崎まさよし"
+        }
+       ],
+       "id": "f37155b7-05a1-3733-8585-7892377bff5a",
+       "length": 139000,
+       "number": "4",
+       "position": 4,
+       "recording": {
+        "artist-credit": [
+         {
+          "artist": {
+           "country": "JP",
+           "disambiguation": "",
+           "id": "9c98108e-ee2b-4d99-a54c-279e5f32b25b",
+           "name": "山崎まさよし",
+           "sort-name": "Yamazaki, Masayoshi",
+           "type": "Person",
+           "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+          },
+          "joinphrase": "",
+          "name": "山崎まさよし"
+         }
+        ],
+        "disambiguation": "",
+        "id": "4a18fa60-94a1-488a-9d27-20cdc8bfd658",
+        "length": 139560,
+        "title": "雪の駅 ～One more time, One more chance～",
+        "video": false
+       },
+       "title": "Yuki no Eki"
+      },
+      {
+       "artist-credit": [
+        {
+         "artist": {
+          "country": "JP",
+          "disambiguation": "",
+          "id": "9c98108e-ee2b-4d99-a54c-279e5f32b25b",
+          "name": "山崎まさよし",
+          "sort-name": "Yamazaki, Masayoshi",
+          "type": "Person",
+          "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+         },
+         "joinphrase": "",
+         "name": "山崎まさよし"
+        }
+       ],
+       "id": "4d4c4689-2ff0-3252-87af-06b193f34a1f",
+       "length": 193000,
+       "number": "5",
+       "position": 5,
+       "recording": {
+        "artist-credit": [
+         {
+          "artist": {
+           "country": "JP",
+           "disambiguation": "",
+           "id": "9c98108e-ee2b-4d99-a54c-279e5f32b25b",
+           "name": "山崎まさよし",
+           "sort-name": "Yamazaki, Masayoshi",
+           "type": "Person",
+           "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+          },
+          "joinphrase": "",
+          "name": "山崎まさよし"
+         }
+        ],
+        "disambiguation": "",
+        "id": "002a0e20-f053-402f-a3ea-52051bd2e456",
+        "length": 194000,
+        "title": "Kiss",
+        "video": false
+       },
+       "title": "Kiss"
+      },
+      {
+       "artist-credit": [
+        {
+         "artist": {
+          "country": "JP",
+          "disambiguation": "",
+          "id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+          "name": "天門",
+          "sort-name": "Tenmon",
+          "type": "Person",
+          "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+         },
+         "joinphrase": "",
+         "name": "天門"
+        }
+       ],
+       "id": "2d5c61ab-98c7-318f-89fe-abcc583fdc48",
+       "length": 107000,
+       "number": "6",
+       "position": 6,
+       "recording": {
+        "artist-credit": [
+         {
+          "artist": {
+           "country": "JP",
+           "disambiguation": "",
+           "id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+           "name": "天門",
+           "sort-name": "Tenmon",
+           "type": "Person",
+           "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+          },
+          "joinphrase": "",
+          "name": "天門"
+         }
+        ],
+        "disambiguation": "",
+        "id": "2e6d7d15-81ee-4bac-b9e9-0ad4f31fde49",
+        "length": 107000,
+        "title": "カナエの気持ち",
+        "video": false
+       },
+       "title": "Kanae no Kimochi"
+      },
+      {
+       "artist-credit": [
+        {
+         "artist": {
+          "country": "JP",
+          "disambiguation": "",
+          "id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+          "name": "天門",
+          "sort-name": "Tenmon",
+          "type": "Person",
+          "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+         },
+         "joinphrase": "",
+         "name": "天門"
+        }
+       ],
+       "id": "b65e73b0-4f56-3d82-90ba-a39c6c177c67",
+       "length": 100000,
+       "number": "7",
+       "position": 7,
+       "recording": {
+        "artist-credit": [
+         {
+          "artist": {
+           "country": "JP",
+           "disambiguation": "",
+           "id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+           "name": "天門",
+           "sort-name": "Tenmon",
+           "type": "Person",
+           "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+          },
+          "joinphrase": "",
+          "name": "天門"
+         }
+        ],
+        "disambiguation": "",
+        "id": "ddc5e4be-375e-4a2e-b957-c36b0f9e391b",
+        "length": 100000,
+        "title": "夢",
+        "video": false
+       },
+       "title": "Yume"
+      },
+      {
+       "artist-credit": [
+        {
+         "artist": {
+          "country": "JP",
+          "disambiguation": "",
+          "id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+          "name": "天門",
+          "sort-name": "Tenmon",
+          "type": "Person",
+          "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+         },
+         "joinphrase": "",
+         "name": "天門"
+        }
+       ],
+       "id": "ffaf96f5-90cb-36da-a0d8-c87358fc4d83",
+       "length": 120000,
+       "number": "8",
+       "position": 8,
+       "recording": {
+        "artist-credit": [
+         {
+          "artist": {
+           "country": "JP",
+           "disambiguation": "",
+           "id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+           "name": "天門",
+           "sort-name": "Tenmon",
+           "type": "Person",
+           "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+          },
+          "joinphrase": "",
+          "name": "天門"
+         }
+        ],
+        "disambiguation": "",
+        "id": "d21f6364-d308-46fd-acf9-6d27821e5c0e",
+        "length": 120000,
+        "title": "空と海の詩",
+        "video": false
+       },
+       "title": "Sora to Umi no Shi"
+      },
+      {
+       "artist-credit": [
+        {
+         "artist": {
+          "country": "JP",
+          "disambiguation": "",
+          "id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+          "name": "天門",
+          "sort-name": "Tenmon",
+          "type": "Person",
+          "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+         },
+         "joinphrase": "",
+         "name": "天門"
+        }
+       ],
+       "id": "ce67ca68-9432-3de0-a048-c90cf5180baa",
+       "length": 101000,
+       "number": "9",
+       "position": 9,
+       "recording": {
+        "artist-credit": [
+         {
+          "artist": {
+           "country": "JP",
+           "disambiguation": "",
+           "id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+           "name": "天門",
+           "sort-name": "Tenmon",
+           "type": "Person",
+           "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+          },
+          "joinphrase": "",
+          "name": "天門"
+         }
+        ],
+        "disambiguation": "",
+        "id": "ca6507a2-a95a-4281-828e-bee4bee5f981",
+        "length": 101000,
+        "title": "届かない気持ち",
+        "video": false
+       },
+       "title": "Todoke Kanai Kimochi"
+      },
+      {
+       "artist-credit": [
+        {
+         "artist": {
+          "country": "JP",
+          "disambiguation": "",
+          "id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+          "name": "天門",
+          "sort-name": "Tenmon",
+          "type": "Person",
+          "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+         },
+         "joinphrase": "",
+         "name": "天門"
+        }
+       ],
+       "id": "322bb0d9-5946-388d-808c-899004697e97",
+       "length": 172000,
+       "number": "10",
+       "position": 10,
+       "recording": {
+        "artist-credit": [
+         {
+          "artist": {
+           "country": "JP",
+           "disambiguation": "",
+           "id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+           "name": "天門",
+           "sort-name": "Tenmon",
+           "type": "Person",
+           "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+          },
+          "joinphrase": "",
+          "name": "天門"
+         }
+        ],
+        "disambiguation": "",
+        "id": "565c4667-9e5e-495e-be6f-34f88694b9c7",
+        "length": 173000,
+        "title": "End Theme",
+        "video": false
+       },
+       "title": "End Theme"
+      },
+      {
+       "artist-credit": [
+        {
+         "artist": {
+          "country": "JP",
+          "disambiguation": "",
+          "id": "9c98108e-ee2b-4d99-a54c-279e5f32b25b",
+          "name": "山崎まさよし",
+          "sort-name": "Yamazaki, Masayoshi",
+          "type": "Person",
+          "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+         },
+         "joinphrase": "",
+         "name": "山崎まさよし"
+        }
+       ],
+       "id": "2e32e9ee-8a40-3624-a073-9ee165b9f43b",
+       "length": 300000,
+       "number": "11",
+       "position": 11,
+       "recording": {
+        "artist-credit": [
+         {
+          "artist": {
+           "country": "JP",
+           "disambiguation": "",
+           "id": "9c98108e-ee2b-4d99-a54c-279e5f32b25b",
+           "name": "山崎まさよし",
+           "sort-name": "Yamazaki, Masayoshi",
+           "type": "Person",
+           "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+          },
+          "joinphrase": "",
+          "name": "山崎まさよし"
+         }
+        ],
+        "disambiguation": "",
+        "id": "23df4619-0b96-4c6d-b3ed-3e3f77163ee1",
+        "length": 300000,
+        "title": "One more time, One more chance (piano version)",
+        "video": false
+       },
+       "title": "One more time, One more chance (piano version)"
+      }
+     ]
+    }
+   ],
+   "packaging": null,
+   "packaging-id": null,
+   "quality": "normal",
+   "relations": [],
+   "release-group": {
+    "artist-credit": [
+     {
+      "artist": {
+       "country": "JP",
+       "disambiguation": "",
+       "id": "30b485e2-3317-4dc5-8d4c-a35f17a8e547",
+       "name": "天門",
+       "sort-name": "Tenmon",
+       "type": "Person",
+       "type-id": "b6e035f4-3ce9-331c-97df-83397230b0df"
+      },
+      "joinphrase": "",
+      "name": "天門"
+     }
+    ],
+    "disambiguation": "",
+    "first-release-date": "2007-03-03",
+    "id": "d058039f-568f-325b-a0f5-a5c477c958f5",
+    "primary-type": "Album",
+    "primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+    "secondary-type-ids": [
+     "22a628ad-c082-3c4f-b1b6-d41665107b88"
+    ],
+    "secondary-types": [
+     "Soundtrack"
+    ],
+    "title": "秒速5センチメートル"
+   },
+   "status": "Pseudo-Release",
+   "status-id": "41121bb9-3413-3818-8a9a-9742318349aa",
+   "text-representation": {
+    "language": "jpn",
+    "script": "Latn"
+   },
+   "title": "Byousoku 5 Centimeter"
+  }
+ },
+ "source": "local MusicBrainz mirror (ws/2), recorded 2026-11-17"
+}

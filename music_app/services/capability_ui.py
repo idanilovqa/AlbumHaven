@@ -14,6 +14,8 @@ from music_app.services.cover_provider_candidates import PROVIDER_LOOKUP_GROUPS
 
 UTILITY_TAB_ACTIONS = MappingProxyType({
     "problematic-files": "library.problems.read",
+    # MusicBrainz corrections and lookups waiting for the owner (Delivery 2, S4).
+    "edits-queue": "library.metadata_matches.review",
     "rules": "library.rules.read",
     "loops": "library.loops.read",
     "log-history": "library.logs.read",

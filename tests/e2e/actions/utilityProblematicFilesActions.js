@@ -776,6 +776,19 @@ export class UtilityProblematicFilesActions {
     return this.utilityProblematicFilesTab.excludeProblemButton.isEnabled();
   }
 
+  async waitForMusicBrainzCorrectionRows(options = {}) {
+    await this.utilityProblematicFilesTab.musicBrainzCorrectionListItems.first()
+      .waitFor({ state: 'visible', timeout: options.timeout || 60000 });
+  }
+
+  async expectMusicBrainzHasNoInfo({ key, title }) {
+    // An album listed only for this has no detail to load (its detail is built from the row).
+    await this.utilityProblematicFilesTab.listItemByKey(key).click();
+    await expect(this.utilityProblematicFilesTab.listItemByKey(key)).toHaveClass(/is-active/, { timeout: 60000 });
+    await expect(this.utilityProblematicFilesTab.detailTitle).toHaveText(title, { timeout: 60000 });
+    await expect(this.utilityProblematicFilesTab.detailMusicBrainzHasNoInfoLabel).toBeVisible({ timeout: 60000 });
+  }
+
   async readAlbumProblemReasons() {
     return (await this.utilityProblematicFilesTab.albumProblemPills.allTextContents())
       .map((value) => String(value || '').trim()).filter(Boolean);

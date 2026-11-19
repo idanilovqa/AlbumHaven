@@ -10,6 +10,24 @@ function handleGalleryBootstrapClick(event) {
     void scrollRootGalleryToArtist(artist);
     return;
   }
+  const seriesKind = event.target.closest('#artist-tree-context-menu [data-series-tree-kind]');
+  if (seriesKind) {
+    event.preventDefault();
+    const mbid = seriesKind.closest('#artist-tree-context-menu').dataset.series || '';
+    hideArtistTreeContextMenu();
+    void saveSeriesKind(mbid, seriesKind.getAttribute('data-series-tree-kind') || null);
+    return;
+  }
+  const seriesGroup = event.target.closest('[data-series-tree-group]');
+  if (seriesGroup) {
+    event.preventDefault();
+    const kind = seriesGroup.getAttribute('data-series-tree-group');
+    if (toggleSeriesTreeGroup(kind)) {
+      renderSidebar();
+      document.querySelector(`[data-series-tree-group="${kind}"]`)?.focus({ preventScroll: true });
+    }
+    return;
+  }
   const removeMissingAlbumButton = event.target.closest('[data-remove-missing-album="1"]');
   if (removeMissingAlbumButton) {
     event.preventDefault();
@@ -140,6 +158,8 @@ function handleGalleryBootstrapClick(event) {
       unmarkAlbumVersion(album?.key || '');
       return;
     }
+
+    if (typeof runAlbumMenuMusicBrainzAction === 'function') runAlbumMenuMusicBrainzAction(action, album);
 
     return;
   }
@@ -569,7 +589,9 @@ function stabilizeRootGalleryArtistAlignment(artist) {
     );
     const aligned = Boolean(scroll && rows)
       && Math.abs(rows.getBoundingClientRect().top - scroll.getBoundingClientRect().top) <= 1
-      && String(chromeName?.textContent || '').trim() === targetArtist;
+      // A split group's chrome shows "Amarok" with the "(Poland)" beside it.
+      && String(chromeName?.textContent || '').trim() === (typeof galleryArtistDisplayParts === 'function'
+        ? galleryArtistDisplayParts(targetArtist).name.trim() : targetArtist);
     if (aligned) stableFrames += 1;
     else {
       stableFrames = 0;

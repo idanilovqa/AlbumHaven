@@ -96,6 +96,8 @@ function loadGallery(artistCount) {
     vm.runInContext(fs.readFileSync(sourcePath, 'utf8'), context, { filename: sourcePath });
   }
   context.updateGalleryMainControls = () => {};
+  // The start-up romanized-names load is its own request; scrolling never repeats it.
+  context.refreshRomanizedArtistNames = () => Promise.resolve(false);
   context.initGalleryMain();
   assert.equal(scrollListeners.length, 1, 'initGalleryMain installs one gallery scroll listener');
   // A browser scroll event, then the animation frame it requested.

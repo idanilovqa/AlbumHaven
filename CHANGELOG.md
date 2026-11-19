@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.37 - 2026-11-18
+
+- Large data responses (artist pages, search, gallery pages, Problematic Files) are now sent compressed to browsers that accept it. Selecting an artist on a large library downloads about 40 KB instead of about 1 MB, and search about 22 KB instead of about 275 KB, which makes these steps faster over a network (about 0.3 s faster for an artist page at 20 Mbps). Audio, streaming, partial (Range) and small responses are unchanged.
+
 ## 0.11.36 - 2026-11-18
 
 - A new early CI gate, the bounded-interaction freeze guard, fails any change that makes a click, request or background step do work that grows with the whole library: whole-library loops, repeated identical requests, or blocking file and database work on the server's event loop. It measures each registered interaction at a small and a large size and fails when the counts outgrow their budget.

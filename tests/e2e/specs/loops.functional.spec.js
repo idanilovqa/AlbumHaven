@@ -5,6 +5,7 @@ import { expect, test } from '../support/baseFixtures.js';
 import { GlobalPlayerActions, SettingsModalAppBarActions, UtilityAppearanceActions, UtilityTabBarActions } from '../actions/index.js';
 import { GlobalPlayer, SettingsModalAppBar, UtilityAppearanceTab, UtilityTabBar } from '../poms/index.js';
 import { LoginPage } from '../phase7/poms/authPages.js';
+import { expectTimingBudget } from '../helpers/timingBudget.js';
 import { PERFORMANCE_AUTH_PASSWORD, PERFORMANCE_AUTH_USERNAME } from '../support/performanceAuthentication.js';
 import {
   createLongPrefetchTrack,
@@ -21,6 +22,8 @@ const LOOP_ALBUM_TARGET = {
 const LOOP_TRACK_TITLE = 'Fake Loop Source';
 const LOOP_PLAYER_TITLE = 'Album Haven Last.fm Fixture - Fake Loop Source /';
 const MEDIA_DURATION_TOLERANCE_SECONDS = 0.15;
+// The owner's bar: the playing song's waveform appears about a second after its audio starts.
+const FIRST_SONG_WAVEFORM_BUDGET = Object.freeze({ targetMaximum: 1100, graceMs: 400 });
 const HANDLE_POSITION_TOLERANCE_SECONDS = 0.25;
 
 function resolveOwnedLoopFixtureMedia(loopId) {
@@ -1356,7 +1359,7 @@ test.describe('a browser that has just signed in', () => {
     expect(waveform.firstFrameAtMs).toBeGreaterThan(0);
     const afterAudioMs = Math.max(0, waveform.renderedAtMs - waveform.firstFrameAtMs);
     testInfo.annotations.push({ type: 'waveform after first audio frame (ms)', description: String(Math.round(afterAudioMs)) });
-    expect(afterAudioMs).toBeLessThan(1500);
+    expectTimingBudget(expect, afterAudioMs, FIRST_SONG_WAVEFORM_BUDGET, 'First song waveform after its first audio frame');
     await globalPlayerActions.waitForPlaybackState({ paused: false, minimumCurrentTime: 0.02 });
     await globalPlayerActions.pauseIfPlaying();
   });

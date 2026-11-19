@@ -2273,7 +2273,7 @@
     "mutationOwnership": {
       "databaseIdentity": "case:first-song-after-sign-in"
     },
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.config.js",

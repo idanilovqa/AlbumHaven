@@ -108,7 +108,6 @@ _STARTUP_PREVIEW_ARTIST_LIMIT = 6
 _UTILITY_PROJECTION_CACHE_LOCK = Lock()
 # Built Problematic Files first pages, by limit, until the complete list is cached.
 _PROBLEMATIC_LOOSE_TRACKS_KEY_PREFIX = "loose-source::"
-_PROBLEMATIC_LOOSE_GROUP_IDENTITIES_KEY = "_loose_group_identities"
 _PROBLEMATIC_PAGE_ALBUMS_KEY = "_page_albums"
 # Databases without migration 0112's stored path projection (same pattern as
 # the pre-prefilter search fallback): use the inline expressions there.
@@ -3059,7 +3058,6 @@ class PostgresLibraryBrowseRepository:
                 connection=connection,
                 rows=self._load_problematic_file_rows(connection=connection),
             )
-        payload.pop(_PROBLEMATIC_LOOSE_GROUP_IDENTITIES_KEY, None)
         return payload
 
     def build_problematic_files_page(self, *, limit: int, cursor: str = "") -> dict[str, object]:
@@ -3230,17 +3228,12 @@ class PostgresLibraryBrowseRepository:
     ) -> dict[str, object]:
         albums = _problematic_album_projection_payloads(rows)
         duplicate_candidates = [album for album in albums if album.get("_duplicate_candidate")]
-        duplicate_resolution_complete = True
         if duplicate_candidates:
-            duplicate_resolution_complete = self._attach_duplicate_sources(
+            self._attach_duplicate_sources(
                 duplicate_candidates,
                 connection=connection,
                 defer_source_payloads=True,
-            ) is not False
-            if not duplicate_resolution_complete:
-                for album in duplicate_candidates:
-                    if album.get("_duplicate_candidate"):
-                        album["has_duplicate_files"] = True
+            )
         projected_items = [
             (item, album)
             for album in albums
@@ -3279,31 +3272,10 @@ class PostgresLibraryBrowseRepository:
             "persistence_seam": _LIBRARY_BROWSE_SEAM_ID,
             "view_data_source": _SOURCE_TELEMETRY,
         }
-        loose_group_identities = {
-            str(item.get("key") or ""): identity
-            for item, album in projected_items
-            if (identity := album.get("_loose_group_identity"))
-            and str(item.get("key") or "")
-        }
-        if loose_group_identities:
-            payload[_PROBLEMATIC_LOOSE_GROUP_IDENTITIES_KEY] = loose_group_identities
-        if not duplicate_resolution_complete:
-            payload["duplicate_resolution_pending"] = True
         if cache_albums:
             payload[_PROBLEMATIC_PAGE_ALBUMS_KEY] = {
                 str(album.get("key") or ""): album
-                for album in (
-                    *(
-                        albums
-                        if duplicate_resolution_complete
-                        else [
-                            album
-                            for album in albums
-                            if _is_problematic_loose_tracks_key(album.get("key"))
-                        ]
-                    ),
-                    *missing_albums,
-                )
+                for album in (*albums, *missing_albums)
                 if str(album.get("key") or "")
             }
         return payload

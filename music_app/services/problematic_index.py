@@ -116,10 +116,6 @@ _UPSERT_SQL = """
 """
 
 
-class _Retry(Exception):
-    """Duplicate sources were not resolved; evaluate again later."""
-
-
 def _browse():
     from music_app.services import library_browse_postgres as browse
     return browse
@@ -186,8 +182,6 @@ def _index_rows(repository: Any, connection: Any, library_id: int, album_ids: li
         include_initial_detail=False,
         cache_albums=True,
     )
-    if payload.get("duplicate_resolution_pending"):
-        raise _Retry()
     album_id_by_key: dict[str, int] = {}
     album_id_by_path: dict[str, int] = {}
     for row in [*rows, *missing_rows]:
@@ -236,8 +230,8 @@ def _write(connection: Any, library_id: int, index_rows: list[dict[str, object]]
              and (album_id = any(%(album_ids)s::bigint[]) or (%(loose)s and album_id is null))""",
         {"library_id": library_id, "album_ids": replaced_album_ids, "loose": replace_loose},
     )
-    for row in index_rows:
-        connection.execute(_UPSERT_SQL, row)
+    if index_rows:
+        connection.cursor().executemany(_UPSERT_SQL, index_rows)
 
 
 def _library_id(connection: Any) -> int | None:
@@ -318,21 +312,15 @@ def refresh(repository: Any, *, inline_limit: int = INLINE_ALBUM_LIMIT) -> bool:
         return False
 
 
-def _drain(repository: Any, connection: Any, library_id: int, marks: list[object]) -> bool:
-    """Evaluate ``marks`` and clear exactly those marks (a later mark survives).
-
-    False when duplicate sources were not resolved yet: the marks stay for a later pass.
-    """
+def _drain(repository: Any, connection: Any, library_id: int, marks: list[object]) -> None:
+    """Evaluate ``marks`` and clear exactly those marks (a later mark survives)."""
     album_ids = sorted({int(_value(row, "album_id")) for row in marks} - {0})
     include_loose = any(int(_value(row, "album_id")) == 0 for row in marks)
     with connection.transaction():
         connection.execute("set transaction isolation level repeatable read")
         connection.execute("set local work_mem = '16MB'")
         connection.execute("set local jit = off")
-        try:
-            index_rows, replaced = _index_rows(repository, connection, library_id, album_ids, include_loose)
-        except _Retry:
-            return False
+        index_rows, replaced = _index_rows(repository, connection, library_id, album_ids, include_loose)
         _write(connection, library_id, index_rows, sorted({*replaced, *album_ids}), replace_loose=include_loose)
     connection.execute(
         """delete from library.problematic_index_dirty_albums dirty
@@ -345,7 +333,6 @@ def _drain(repository: Any, connection: Any, library_id: int, marks: list[object
             "xids": [str(_value(row, "marked_xid")) for row in marks],
         },
     )
-    return True
 
 
 def _backfill(repository: Any, connection: Any, library_id: int) -> None:
@@ -367,34 +354,19 @@ def _backfill(repository: Any, connection: Any, library_id: int) -> None:
             int(album_id) for row in repository._load_missing_album_rows(connection=connection)
             if (album_id := _value(row, "album_id")) is not None
         })
-        # Marked albums too: the candidate ids may be cached from before their change,
-        # and the marks this snapshot sees are cleared below.
-        marked_ids = [
-            int(_value(row, "album_id")) for row in connection.execute(
-                "select album_id from library.problematic_index_dirty_albums where library_id = %s and album_id > 0",
-                (library_id,),
-            ).fetchall()
-        ]
-        album_ids = sorted({*candidate_ids, *missing_ids, *marked_ids})
+        album_ids = sorted({*candidate_ids, *missing_ids})
         _PROGRESS[repository._database_url] = {"done": 0, "total": len(album_ids)}
         index_rows: list[dict[str, object]] = []
         for start in range(0, max(len(album_ids), 1), BACKFILL_BATCH):
-            for attempt in range(2):
-                try:
-                    rows, _replaced = _index_rows(
-                        repository, connection, library_id, album_ids[start:start + BACKFILL_BATCH],
-                        include_loose=start == 0,
-                    )
-                    break
-                except _Retry:
-                    if attempt:
-                        raise
+            rows, _replaced = _index_rows(
+                repository, connection, library_id, album_ids[start:start + BACKFILL_BATCH],
+                include_loose=start == 0,
+            )
             index_rows.extend(rows)
             _PROGRESS[repository._database_url] = {
                 "done": min(start + BACKFILL_BATCH, len(album_ids)), "total": len(album_ids)}
         connection.execute("delete from library.problematic_index_items where library_id = %s", (library_id,))
-        for row in {row["item_key"]: row for row in index_rows}.values():
-            connection.execute(_UPSERT_SQL, row)
+        connection.cursor().executemany(_UPSERT_SQL, list({row["item_key"]: row for row in index_rows}.values()))
         connection.execute(
             """update library.problematic_index_state set status = 'ready', updated_at = now()
                where library_id = %s and builder_version = %s""",
@@ -429,8 +401,7 @@ def _maintain(repository: Any) -> None:
                        where library_id = %s order by album_id limit %s""",
                     (library_id, BACKFILL_BATCH),
                 ).fetchall():
-                    if not _drain(repository, connection, library_id, marks):
-                        break  # duplicate sources still resolving; a later read or save retries
+                    _drain(repository, connection, library_id, marks)
             finally:
                 _unlock(connection, library_id)
     except Exception:

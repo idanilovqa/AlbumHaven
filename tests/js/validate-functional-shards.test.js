@@ -920,6 +920,8 @@ validatorTest('playback restores three wave baselines and isolates conflicting e
     [
       'FTC-LIBROOTS-016 / 017 / 018 reconciles filesystem changes and confirms missing-album removal',
       'FTC-UTIL-PROBLEMS-001 rolls back failed exclusion creation and reversion',
+      'FTC-PLAYBACK-OFFLINE-004 owner round 7 with Wi-Fi off and on: a click in the received audio plays at once, the head never jumps to the start, the song plays on by itself when the server is back, one Play continues it, and one press plays another song',
+      'FTC-PLAYBACK-OFFLINE-005 owner round 7 with the server answering 530 for a minute after Wi-Fi returns: a click in the received audio plays at once, the head never jumps to the start, the song plays on by itself when the server is back, one Play continues it, and one press plays another song',
     ].sort(),
   );
   assert.deepEqual(waveInvocations(4).flatMap((invocation) => invocation.cases.map(({ case: name }) => name)), [
@@ -984,8 +986,8 @@ validatorTest('all eight shards use explicit effect-compatible wave budgets', ()
     ['cover-providers-2', { cases: 15, waves: [1, 2] }],
     ['metadata-mutations', { cases: 16, waves: [1, 2, 3] }],
     ['playback-utilities-1', { cases: 14, waves: [1, 2, 3, 4] }],
-    ['playback-utilities-2', { cases: 20, waves: [1, 2, 5] }],
-    ['playback-utilities-3', { cases: 16, waves: [1, 2] }],
+    ['playback-utilities-2', { cases: 20, waves: [1, 2, 3, 5] }],
+    ['playback-utilities-3', { cases: 16, waves: [1, 2, 3] }],
   ]);
   const matrixByCase = new Map(matrix.map((row) => [row.case, row]));
 

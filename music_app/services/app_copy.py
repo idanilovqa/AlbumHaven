@@ -7,6 +7,11 @@ until, and revalidated instead of no-store. Every other response keeps its own p
 worker never keeps admin, account or no-store pages. The worker removes every file path before it
 stores the page.
 
+The library data the page reads (``APP_COPY_DATA_PATHS``) is answered the same way when the worker
+asks with the same header: a successful JSON answer for a signed-in account is marked as a copy,
+and ``X-Album-Haven-App-Copy-Redact`` lists the fields whose values are file paths, which the worker
+replaces before it keeps the answer (it keeps nothing that still looks like a path).
+
 ``ALBUM_HAVEN_APP_COPY=off`` switches the copy off: pages stop loading its client, and the worker
 URL serves a worker that deletes every copy and unregisters itself.
 """
@@ -14,7 +19,7 @@ URL serves a worker that deletes every copy and unregisters itself.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import hashlib
 import os
 from typing import Any
@@ -24,6 +29,28 @@ from music_app.services.auth_config import SESSION_ABSOLUTE_SECONDS, SESSION_IDL
 APP_COPY_HEADER = "X-Album-Haven-App-Copy"
 ASSET_VERSION_HEADER = "X-Album-Haven-Asset-Version"
 EXPIRES_HEADER = "X-Album-Haven-App-Copy-Expires"
+REDACT_HEADER = "X-Album-Haven-App-Copy-Redact"
+APP_COPY_DATA_PATHS = frozenset({"/view-data", "/album-details", "/home-data"})
+# Every field of the data answers whose value is a file path, a URL naming one, or a list of them
+# (cover paths already leave as references, cover_reference_boundary.py). The worker also replaces
+# any other value equal to one of them (a track's `key` is its path). A contract test holds real
+# answers to this list.
+APP_COPY_REDACTED_KEYS = (
+    "path",
+    "src",
+    "track_path",
+    "trackPath",
+    "track_ref",
+    "track_paths",
+    "file_paths",
+    "problematic_track_paths",
+    "open_directory_paths",
+    "folder",
+    "music_dir",
+    "source_path",
+    "file_private_path",
+    "scan_current_path",
+)
 APP_COPY_CACHE_CONTROL = "private, no-cache"
 MAX_COPY_AGE = timedelta(days=7)
 
@@ -63,3 +90,32 @@ def mark_app_copy(response: Any, account: str, asset_version: str, expires: date
     response.headers[APP_COPY_HEADER] = account
     response.headers[ASSET_VERSION_HEADER] = asset_version
     response.headers[EXPIRES_HEADER] = str(int(expires.timestamp() * 1000))
+
+
+def install_app_copy_data(app: Any) -> None:
+    """Marks the library data the copy's worker asks for, so it can be kept for that account."""
+
+    @app.middleware("http")
+    async def mark_app_copy_data(request, call_next):
+        response = await call_next(request)
+        if (
+            request.url.path in APP_COPY_DATA_PATHS
+            and response.status_code == 200
+            and app_copy_requested(request)
+            and app_copy_enabled()
+            and str(response.headers.get("content-type") or "").startswith("application/json")
+        ):
+            actor = getattr(request.state, "current_actor", None)
+            if getattr(actor, "account_id", None) is not None:
+                mark_app_copy(
+                    response,
+                    app_copy_account(actor),
+                    request.app.state.runtime_asset_version,
+                    app_copy_expires(
+                        actor,
+                        (getattr(request.app.state, "auth_policy_config", None) or {}).get("session") or {},
+                        datetime.now(timezone.utc),
+                    ),
+                )
+                response.headers[REDACT_HEADER] = ",".join(APP_COPY_REDACTED_KEYS)
+        return response

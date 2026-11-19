@@ -1978,10 +1978,24 @@ class PostgresScanCacheAdapter:
                                  if isinstance(previous_file_entries.get(path), dict)}
         updated_file_entries = {path: dict(updated_file_entries[path]) for path in changed_paths
                                 if isinstance(updated_file_entries.get(path), dict)}
-        from music_app.services.scoped_relation_projection import tag_edit_baseline_ready
+        from music_app.services.scoped_relation_projection import (
+            ensure_pending_relation_projection_ready,
+            tag_edit_baseline_ready,
+        )
         with self._connect_to_database() as connection:
-            if not tag_edit_baseline_ready(self._config, connect=lambda _url: nullcontext(connection),
-                                           track_paths=changed_paths):
+            baseline_ready = tag_edit_baseline_ready(
+                self._config, connect=lambda _url: nullcontext(connection), track_paths=changed_paths)
+            if not baseline_ready:
+                # The previous save's albums are still journaled (a split followed at
+                # once by a merge). Publish them now, waiting behind a publication
+                # already running, instead of refusing the owner's next save.
+                try:
+                    ensure_pending_relation_projection_ready(self._config, connect=self._connect)
+                except Exception:
+                    _LOGGER.exception("Pending relation publication before a tag edit failed")
+                baseline_ready = tag_edit_baseline_ready(
+                    self._config, connect=lambda _url: nullcontext(connection), track_paths=changed_paths)
+            if not baseline_ready:
                 from music_app.services.gallery_projection_postgres import schedule_gallery_projection_refresh
                 schedule_gallery_projection_refresh(self._config, incremental_membership=True)
                 deadline = perf_counter() + 1.0

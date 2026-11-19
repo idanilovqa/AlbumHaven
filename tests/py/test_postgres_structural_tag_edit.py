@@ -2231,18 +2231,24 @@ def test_tag_edit_prevalidation_rejects_dirty_baseline_and_schedules_replay(monk
     connection = StructuralTagEditConnection(_successful_result())
     adapter = _adapter(monkeypatch, connection)
     scheduled = []
+    published = []
     monkeypatch.setattr(scoped_relation_projection, "tag_edit_baseline_ready", lambda *a, **k: False)
+    monkeypatch.setattr(scoped_relation_projection, "ensure_pending_relation_projection_ready",
+                        lambda *a, **k: published.append(k) or {"initialized": True})
     monkeypatch.setattr(gallery_projection_postgres, "schedule_gallery_projection_refresh",
                         lambda *a, **k: scheduled.append(k))
     paths, previous, updated = _entries()
     with pytest.raises(RuntimeError, match="still being reconciled"):
         adapter.validate_structural_tag_edit(changed_paths=set(paths), previous_file_entries=previous,
             updated_file_entries=updated, changed_field_names={"album"})
+    # The pending publication runs first; only a baseline that stays dirty is refused.
+    assert len(published) == 1
     assert scheduled == [{"incremental_membership": True}]
     assert connection.executed == []
 
 
-def test_tag_edit_prevalidation_waits_for_scheduled_replay(monkeypatch):
+def test_tag_edit_prevalidation_publishes_the_previous_save_instead_of_refusing(monkeypatch):
+    """Owner (11-18): a merge right after a split was refused with "still being reconciled"."""
     from music_app.services import (
         gallery_projection_postgres,
         scan_cache_persistence,
@@ -2253,10 +2259,16 @@ def test_tag_edit_prevalidation_waits_for_scheduled_replay(monkeypatch):
     adapter = _adapter(monkeypatch, connection)
     readiness = iter((False, True))
     scheduled = []
+    published = []
     monkeypatch.setattr(
         scoped_relation_projection,
         "tag_edit_baseline_ready",
         lambda *a, **k: next(readiness),
+    )
+    monkeypatch.setattr(
+        scoped_relation_projection,
+        "ensure_pending_relation_projection_ready",
+        lambda *a, **k: published.append(k) or {"initialized": True},
     )
     monkeypatch.setattr(
         gallery_projection_postgres,
@@ -2278,7 +2290,8 @@ def test_tag_edit_prevalidation_waits_for_scheduled_replay(monkeypatch):
         changed_field_names={"album"},
     )
 
-    assert scheduled == [{"incremental_membership": True}]
+    assert len(published) == 1
+    assert scheduled == []
     assert connection.executed
 
 
@@ -3790,9 +3803,10 @@ def test_live_postgres_split_merge_split_never_strands_the_relation_index(watche
 
     _save_album_edit(fixture, entries, second_half, "Ремиксы2")
     _assert_save_left_only_album_journal(fixture, "split again")
-    _refresh_after_save(fixture, "split again")
 
-    # Selecting both halves saves two source albums in one transaction.
+    # Merge both halves at once, before any background refresh ran: the save
+    # publishes the split's journal itself instead of refusing. Selecting both
+    # halves saves two source albums in one transaction.
     _save_album_edit(fixture, entries, sorted(entries), "Ремиксы")
     _assert_save_left_only_album_journal(fixture, "merge both halves")
     _refresh_after_save(fixture, "merge both halves")

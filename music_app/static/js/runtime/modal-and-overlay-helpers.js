@@ -438,6 +438,7 @@ async function fetchNonAlbumPayload(url) {
   if (!response.ok || payload?.ok === false) {
     throw new Error(payload?.error || `Loose tracks request failed: ${response.status}`);
   }
+  if (typeof rememberSearchHighlights === 'function') rememberSearchHighlights(payload?.search_highlights);
   return payload;
 }
 
@@ -619,6 +620,9 @@ function buildNonAlbumTrackRowsMarkup(items, startingIndex, problematicIndex = b
     const secondaryArtist = metadataArtist && metadataArtist.toLocaleLowerCase() !== 'unknown artist'
       ? metadataArtist
       : '';
+    // Owner 2026-11-18: a title shows its matched characters; a track found by its artist is highlighted whole.
+    const highlightRanges = typeof searchHighlightRanges === 'function' ? searchHighlightRanges : () => null;
+    const titleHighlightRanges = highlightRanges(title);
     return {
       path: trackPath,
       mediaRef,
@@ -649,6 +653,8 @@ function buildNonAlbumTrackRowsMarkup(items, startingIndex, problematicIndex = b
       isCurrent: isCurrentTrack,
       isPlaying: isActivelyPlaying,
       isProblematic: Boolean(problematicAlbum || item.is_problematic),
+      titleHighlightRanges,
+      isSearchMatch: Boolean(highlightRanges(metadataArtist)),
     };
   });
 }

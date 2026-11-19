@@ -1520,3 +1520,59 @@ test('scan stage elapsed detail uses independent stage and cover timers', () => 
   assert.equal(scanStageElapsedDetail({ covers_elapsed_seconds: 3661 }, 'covers'), 'elapsed 1h 01m');
   assert.equal(scanStageElapsedDetail({}, 'relations'), '');
 });
+
+test('search highlights mark the server ranges by code point and escape every part', () => {
+  const { buildHighlightedTextHtml } = loadHelpers();
+  assert.equal(
+    buildHighlightedTextHtml('<b>Sal</b> & Sal', [[3, 6], [13, 16]]),
+    '&lt;b&gt;<mark class="search-match-highlight">Sal</mark>&lt;/b&gt; &amp; <mark class="search-match-highlight">Sal</mark>',
+  );
+  assert.equal(buildHighlightedTextHtml('🎵 Ālap', [[2, 6]]), '🎵 <mark class="search-match-highlight">Ālap</mark>');
+  assert.equal(buildHighlightedTextHtml('Spark', [[3, 'x'], [9, 12], [2, 1]]), 'Spark');
+  assert.equal(buildHighlightedTextHtml('Spark', null), 'Spark');
+});
+
+test('the artist tree marks the characters the active search matched, never an older search', () => {
+  const context = loadHelpers();
+  const view = {
+    query: 'sal',
+    search_highlights: { query: 'sal', texts: { 'Alas de Sal': [[8, 11]] } },
+  };
+  context.state.view = view;
+  const artists = [{ artist: 'Alas de Sal', artist_display: 'Alas de Sal', count: 1 }, { artist: 'Argovia', count: 1 }];
+  const html = context.buildSidebarHtml(view, artists, { showAllArtistsOverride: false });
+  assert.match(html, /title="Alas de Sal"/);
+  assert.match(html, />Alas de <mark class="search-match-highlight">Sal<\/mark></);
+  assert.doesNotMatch(html, /Argovia<\/mark>|<mark[^>]*>Argovia/);
+
+  context.state.view = { ...view, query: 'alas' };
+  assert.doesNotMatch(context.buildSidebarHtml(context.state.view, artists, { showAllArtistsOverride: false }), /<mark/);
+});
+
+test('texts shown outside a search response are asked once, and misses are remembered', async () => {
+  const context = loadHelpers();
+  const requests = [];
+  context.state.view = { query: 'sal' };
+  context.fetch = async (url, init) => {
+    requests.push({ url, body: JSON.parse(init.body) });
+    return { ok: true, json: async () => ({ ok: true, search_highlights: { query: 'sal', texts: { 'Alas de Sal': [[8, 11]] } } }) };
+  };
+  assert.equal(await context.requestSearchHighlights(['Alas de Sal', 'Spark', 'Spark', '']), true);
+  assert.deepEqual(requests, [{ url: '/search/highlights', body: { q: 'sal', texts: ['Alas de Sal', 'Spark'] } }]);
+  assert.deepEqual(context.searchHighlightRanges('Alas de Sal'), [[8, 11]]);
+  assert.equal(context.searchHighlightRanges('Spark'), null);
+  assert.equal(await context.requestSearchHighlights(['Spark', 'Alas de Sal']), false);
+  assert.equal(requests.length, 1);
+});
+
+test('a new search keeps highlights that arrived before its view replaced the previous search', () => {
+  const context = loadHelpers();
+  context.state.view = { query: 'old', search_highlights: { query: 'old', texts: { Oldies: [[0, 3]] } } };
+  assert.deepEqual(context.searchHighlightRanges('Oldies'), [[0, 3]]);
+  context.rememberSearchHighlights({ query: 'sal', texts: { 'Salt and Sal': [[0, 3], [9, 12]] } });
+  assert.equal(context.searchHighlightRanges('Salt and Sal'), null);
+  context.state.view = { query: 'sal', search_highlights: { query: 'sal', texts: { 'Alas de Sal': [[8, 11]] } } };
+  assert.deepEqual(context.searchHighlightRanges('Salt and Sal'), [[0, 3], [9, 12]]);
+  assert.deepEqual(context.searchHighlightRanges('Alas de Sal'), [[8, 11]]);
+  assert.equal(context.searchHighlightRanges('Oldies'), null);
+});

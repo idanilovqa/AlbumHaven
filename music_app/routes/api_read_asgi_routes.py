@@ -51,6 +51,7 @@ from music_app.services.library_browse_postgres import (
 from music_app.services.library_watch_health import LibraryWatchHealthService
 from music_app.services.library_warning_dismissals import PostgresLibraryWarningDismissals, warning_token
 from music_app.routes.bounded_json import read_bounded_json_object, JSONBodyTooLarge
+from music_app.services.view_search import build_search_highlights, collect_search_highlight_texts
 from music_app.routes.musicbrainz_enrichment_asgi import (
     load_problematic_artist_items,
     project_artist_problems_into_problematic_files,
@@ -767,6 +768,37 @@ def _build_transient_scan_view_payload(
     return payload
 
 
+def _with_search_highlights(request: Request, payload: object) -> object:
+    """A search response names the characters of its display texts that the search matched."""
+    query = str(request.query_params.get("q") or "").strip()
+    if query and isinstance(payload, dict):
+        texts = build_search_highlights(query, collect_search_highlight_texts(payload))
+        payload = {**payload, "search_highlights": {"query": query, "texts": texts}}
+    return payload
+
+
+_SEARCH_HIGHLIGHT_REQUEST_TEXTS = 1000
+_SEARCH_HIGHLIGHT_REQUEST_BYTES = 256 * 1024
+
+
+@router.post("/search/highlights")
+async def search_highlights(request: Request) -> JSONResponse:
+    """Highlights for texts a client shows outside a search response (Album Details tracks)."""
+    try:
+        body = await read_bounded_json_object(request, max_bytes=_SEARCH_HIGHLIGHT_REQUEST_BYTES)
+    except JSONBodyTooLarge:
+        body = None
+    texts = body.get("texts") if body else None
+    query = body.get("q") if body else None
+    if not isinstance(query, str) or not isinstance(texts, list) or len(texts) > _SEARCH_HIGHLIGHT_REQUEST_TEXTS:
+        return JSONResponse({"ok": False, "error": "Send q and at most 1000 texts."}, status_code=400)
+    highlights = await run_in_threadpool(build_search_highlights, query, texts)
+    return JSONResponse(
+        {"ok": True, "search_highlights": {"query": query.strip(), "texts": highlights}},
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
 @router.get("/library/loose-tracks")
 def library_loose_tracks(request: Request) -> JSONResponse:
     """Loose Tracks without the gallery the full view-data response carries."""
@@ -776,7 +808,7 @@ def library_loose_tracks(request: Request) -> JSONResponse:
         query_params=request.query_params,
     )
     payload["inventory_mutation_revision"] = int(_library_state(request).get("inventory_mutation_revision") or 0)
-    return JSONResponse(_project_non_album_tracks_for_request(request, payload))
+    return JSONResponse(_with_search_highlights(request, _project_non_album_tracks_for_request(request, payload)))
 
 
 @router.get("/library/custom-collections")
@@ -785,9 +817,9 @@ def library_custom_collections(request: Request) -> JSONResponse:
     if not is_library_browse_postgres_available(_app_config(request)):
         return JSONResponse({"ok": False, "error": "Custom Collections need the Postgres library."}, status_code=409)
     return JSONResponse(
-        PostgresLibraryBrowseRepository(_app_config(request)).build_custom_collection_catalog_payload(
+        _with_search_highlights(request, PostgresLibraryBrowseRepository(_app_config(request)).build_custom_collection_catalog_payload(
             query_params=request.query_params,
-        ),
+        )),
         headers={"Cache-Control": "private, no-store"},
     )
 
@@ -801,6 +833,7 @@ async def view_data(request: Request) -> JSONResponse:
     # uses the same worker pool; a sync-to-async bridge can deadlock that pool.
     await require_action("library.browse.read", refresh_actor=True)(request)
     payload = await run_in_threadpool(_project_album_payload_for_request, request, payload)
+    payload = await run_in_threadpool(_with_search_highlights, request, payload)
     return await run_in_threadpool(
         JSONResponse, compact_selected_artist_wire_payload(payload),
         headers={"Cache-Control": "private, no-store"},

@@ -144,7 +144,9 @@ function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
     html += `<div class="sidebar-virtual-spacer" data-sidebar-virtual-spacer="before" aria-hidden="true" style="height:${virtualWindow.before}px"></div>`;
   }
   html += visibleArtists.map((item, offset) => renderItem({
-    label: item.artist_display || item.artist, key: 'artist:' + item.artist,
+    label: item.artist_display || item.artist,
+    labelHtml: typeof searchHighlightedLabelHtml === 'function' ? searchHighlightedLabelHtml(item.artist_display || item.artist) : '',
+    key: 'artist:' + item.artist,
     count: item.count, selected: item.artist === selectedArtist,
     href: buildUrl({
       ...view,
@@ -178,7 +180,9 @@ function buildSidebarStructureSignature(sidebarArtists = [], options = {}) {
   const virtualWindow = options.virtualWindow?.virtualized
     ? `${options.virtualWindow.start}:${options.virtualWindow.end}`
     : 'all';
-  return `${showAllArtistsLink}\u001d${artistSignature}\u001c${virtualWindow}`;
+  // Rows carry the active search's highlights, so another search redraws them.
+  const highlightQuery = typeof activeSearchHighlightQuery === 'function' ? activeSearchHighlightQuery() : '';
+  return `${showAllArtistsLink}\u001d${artistSignature}\u001c${virtualWindow}\u001b${highlightQuery}`;
 }
 
 function applySidebarSelectionMarkup(container, options = {}) {

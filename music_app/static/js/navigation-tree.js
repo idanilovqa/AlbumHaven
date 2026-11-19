@@ -4,7 +4,7 @@
   if (window.NavigationTree) return;
   const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
   // HTML slots contain component-rendered markup; resource text uses escaped fields.
-  function renderItem({ label, href = '#', key = '', selected = false, icon = '', count = null, variant = 'artists', attributes = {}, action = false, artworkHtml = '', subtitle = '', year = '', countHidden = false, trailingHtml = '', draggable = false, className = '' } = {}) {
+  function renderItem({ label, labelHtml = '', href = '#', key = '', selected = false, icon = '', count = null, variant = 'artists', attributes = {}, action = false, artworkHtml = '', subtitle = '', year = '', countHidden = false, trailingHtml = '', draggable = false, className = '' } = {}) {
     const template = document.getElementById('navigation-tree-item-template')?.textContent;
     if (!template) throw new Error('NavigationTreeItem template is missing.');
     const settings = variant === 'settings';
@@ -27,7 +27,9 @@
     // Rows keep one line and truncate (owner 2026-11-18); the full name shows on hover.
     if (!wide && String(label || '').trim()) values.title = String(label);
     const attrs = Object.entries(values).map(([name, value]) => name + '="' + escape(value) + '"').join(' ');
-    const identity = wide || (panel && (subtitle || year)) ? '<span class="utility-list-item-title">' + escape(label) + '</span><span class="utility-list-item-meta">' + (subtitle ? '<span class="utility-list-item-subtitle">' + escape(subtitle) + '</span>' : '') + (year ? '<span class="utility-list-item-year">' + escape(year) + '</span>' : '') + '</span>' : escape(label);
+    // labelHtml: the label already escaped by its caller, e.g. with search highlights (owner 2026-11-18).
+    const labelMarkup = labelHtml || escape(label);
+    const identity = wide || (panel && (subtitle || year)) ? '<span class="utility-list-item-title">' + labelMarkup + '</span><span class="utility-list-item-meta">' + (subtitle ? '<span class="utility-list-item-subtitle">' + escape(subtitle) + '</span>' : '') + (year ? '<span class="utility-list-item-year">' + escape(year) + '</span>' : '') + '</span>' : labelMarkup;
     const slots = [tag, attrs, wide ? '<span class="navigation-tree-artwork">' + artworkHtml + '</span>' : icon ? '<span class="navigation-tree-icon" aria-hidden="true">' + escape(icon) + '</span>' : '', identity,
       (count === null ? '' : '<span class="navigation-tree-count artist-count"' + (countHidden ? ' hidden' : '') + '>' + escape(count) + '</span>') + (wide ? trailingHtml : ''), tag];
     let index = 0;

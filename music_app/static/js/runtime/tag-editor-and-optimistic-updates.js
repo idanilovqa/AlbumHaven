@@ -2458,6 +2458,9 @@ function renderTrackModalRelease(album) {
     : '';
   els.list.innerHTML = albumMissing ? '' : buildTrackListHtml(tracks, album, totalLength) + duplicateReview;
   if (typeof syncAlbumTrackCreditMotion === 'function') syncAlbumTrackCreditMotion(els.list);
+  if (!albumMissing && typeof requestSearchHighlights === 'function') {
+    refreshAlbumTrackSearchHighlights(els.list, tracks, album, totalLength);
+  }
   if (els.footer) {
     els.footer.textContent = '';
     els.footer.hidden = true;
@@ -2593,6 +2596,24 @@ function groupAlbumTracks(tracks) {
 }
 
 
+// Album Details tracks are not in a search response: during a search, ask the server which of their titles and
+// artists it matched, then redraw this album's table if it is still the one shown.
+function refreshAlbumTrackSearchHighlights(list, tracks, album, totalLength) {
+  const query = activeSearchHighlightQuery();
+  const render = {};
+  list.albumTrackSearchHighlightRender = render;
+  if (!query) return;
+  const rows = Array.isArray(album?.track_rows) ? album.track_rows : [];
+  const texts = [...(tracks || []), ...rows].flatMap((track) => [track?.title, track?.secondary_artist]);
+  void requestSearchHighlights(texts).then((answered) => {
+    if (!answered || list.albumTrackSearchHighlightRender !== render || activeSearchHighlightQuery() !== query) return;
+    const table = list.querySelector('.album-track-table');
+    if (!table) return;
+    table.outerHTML = buildTrackListHtml(tracks, album, totalLength);
+    if (typeof syncAlbumTrackCreditMotion === 'function') syncAlbumTrackCreditMotion(list);
+  }).catch(() => {});
+}
+
 function buildTrackListHtml(tracks, album = null, totalLength = null) {
   const grouped = groupAlbumTracks(tracks);
   const playback = getPlayerPlaybackSnapshot();
@@ -2607,8 +2628,8 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
       .filter(Boolean)
   );
 
-  const query = String(state.view?.query || '').trim().toLocaleLowerCase();
   const albumPreference = album?.album_preference || {};
+  const highlightRanges = typeof searchHighlightRanges === 'function' ? searchHighlightRanges : () => null;
   const discRatingByKey = new Map(
     (Array.isArray(albumPreference.disc_ratings) ? albumPreference.disc_ratings : [])
       .map((discRating) => [discRating?.disc_key, discRating?.rating])
@@ -2658,7 +2679,10 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
         isCurrent: Boolean(isCurrentTrack),
         isPlaying: Boolean(isActivelyPlaying),
         isProblematic: Boolean(track.is_problematic),
-        isSearchMatch: Boolean(query && displayTitle.toLocaleLowerCase().includes(query)),
+        // The server's search matcher marks the title's matched characters; a match in the title or the
+        // track's own artist marks the row (owner 2026-11-18).
+        titleHighlightRanges: highlightRanges(displayTitle),
+        isSearchMatch: Boolean(highlightRanges(displayTitle) || highlightRanges(secondaryArtist)),
       };
     });
     return {

@@ -38,7 +38,11 @@ function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
   const mobileTitleSupplement = typeof config.mobileTitleSupplement === 'function'
     ? String(config.mobileTitleSupplement(track, index) || '')
     : '';
-  const titleHtml = `<span class="album-track-table__title">${escapeHtml(track.title || '')}${secondary ? `<span class="album-track-table__secondary">${escapeHtml(secondary)}</span>` : ''}${mobileTitleSupplement ? `<span class="album-track-table__mobile-meta">${mobileTitleSupplement}</span>` : ''}</span>`;
+  // Search highlights (owner 2026-11-18): the matched characters of the title.
+  const titleTextHtml = track.titleHighlightRanges?.length
+    ? buildHighlightedTextHtml(track.title || '', track.titleHighlightRanges)
+    : escapeHtml(track.title || '');
+  const titleHtml = `<span class="album-track-table__title">${titleTextHtml}${secondary ? `<span class="album-track-table__secondary">${escapeHtml(secondary)}</span>` : ''}${mobileTitleSupplement ? `<span class="album-track-table__mobile-meta">${mobileTitleSupplement}</span>` : ''}</span>`;
   const problemHtml = track.isProblematic
     ? `<button class="track-problem-link" type="button" data-open-track-problematic="1" data-track-path="${escapeHtml(trackPath)}" title="Open this track in Problematic Files" aria-label="Open this track in Problematic Files">!</button>`
     : '';

@@ -814,6 +814,48 @@ def test_asgi_custom_collection_catalog_returns_names_and_counts_only(asgi_app, 
         b"private, no-store", "private, no-store")
 
 
+def test_asgi_search_catalog_and_loose_tracks_carry_search_highlights(asgi_app, monkeypatch):
+    from music_app.routes import api_read_asgi_routes as asgi_read_routes
+
+    class FakePostgresBrowseRepository:
+        def __init__(self, _config):
+            pass
+
+        def build_custom_collection_catalog_payload(self, *, query_params):
+            return {"custom_collections": [{"name": "Salt and Sal", "count": 2}, {"name": "Road trip", "count": 1}]}
+
+        def build_library_loose_tracks_payload(self, *, query_params):
+            return {"library_non_album_tracks": [{"title": "Alas de Sal", "artist": "Argovia", "path": "sal.mp3"}]}
+
+    monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FakePostgresBrowseRepository)
+    monkeypatch.setattr(asgi_read_routes, "is_library_browse_postgres_available", lambda _config: True)
+
+    _status, _headers, catalog = _run_asgi_request(
+        asgi_app, "GET", "/library/custom-collections", query={"q": "sal"},
+    )
+    _status, _headers, loose = _run_asgi_request(asgi_app, "GET", "/library/loose-tracks", query={"q": "sal"})
+    _status, _headers, unsearched = _run_asgi_request(asgi_app, "GET", "/library/custom-collections")
+
+    assert _decode_json(catalog)["search_highlights"] == {"query": "sal", "texts": {"Salt and Sal": [[0, 3], [9, 12]]}}
+    assert _decode_json(loose)["search_highlights"] == {"query": "sal", "texts": {"Alas de Sal": [[8, 11]]}}
+    assert "search_highlights" not in _decode_json(unsearched)
+
+
+def test_asgi_search_highlights_route_answers_only_bounded_requests(app):
+    asgi_app = _make_asgi_app()
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app, "POST", "/search/highlights", json_body={"q": "sal", "texts": ["Alas de Sal", "Spark"]},
+    )
+    too_many_status, _headers, _body = _run_asgi_request(
+        asgi_app, "POST", "/search/highlights", json_body={"q": "sal", "texts": ["x"] * 1001},
+    )
+
+    assert status == 200
+    assert _decode_json(body) == {"ok": True, "search_highlights": {"query": "sal", "texts": {"Alas de Sal": [[8, 11]]}}}
+    assert too_many_status == 400
+
+
 def test_asgi_search_preview_uses_postgres_without_file_backed_hydration(
     app,
     asgi_app,

@@ -476,6 +476,19 @@ test('AlbumTrackTable splits a main disc and bonus disc into separate tables wit
   assert.match(html, /album-track-table__row--search-match/);
 });
 
+test('AlbumTrackTable marks the characters a search matched in a title and keeps the rest escaped', () => {
+  const context = loadTrackTable();
+  context.buildHighlightedTextHtml = (value, ranges) => `${value.slice(0, ranges[0][0])}<mark>${value.slice(ranges[0][0], ranges[0][1])}</mark>${value.slice(ranges[0][1])}`;
+  const html = context.buildAlbumTrackTableHtml({
+    groups: [{ tracks: [
+      { path: 'one', title: 'Alas de Sal', trackNumber: 1, titleHighlightRanges: [[8, 11]] },
+      { path: 'two', title: '<Spark>', trackNumber: 2 },
+    ] }],
+  });
+  assert.match(html, /album-track-table__title">Alas de <mark>Sal<\/mark>/);
+  assert.match(html, /album-track-table__title">&lt;Spark&gt;/);
+});
+
 test('AlbumTrackTable retains aggregate and explicit main and bonus duration summaries in its shared frame', () => {
   const html = loadTrackTable().buildAlbumTrackTableHtml({
     groups: [

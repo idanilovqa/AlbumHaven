@@ -87,6 +87,10 @@ function albumCardHtml(album, options = {}) {
     openLabel: `Open ${displayName} tracklist${albumMissing ? '. Album not found' : ''}`,
     title: displayName,
     artist: album.album_artist,
+    ...(typeof searchHighlightRanges === 'function' ? {
+      titleHighlightRanges: searchHighlightRanges(displayName),
+      artistHighlightRanges: searchHighlightRanges(album.album_artist),
+    } : {}),
     year: displayYear,
     ratingHtml: ratingMarkup,
     trackCount: summary.trackCount,
@@ -129,6 +133,7 @@ function getAlbumCardRenderKey(album) {
     albumHasDisplayCover(album) ? buildAlbumDisplayCoverUrl(album) : '',
     String(album?.cover_ref || '').trim(),
     String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim(),
+    typeof activeSearchHighlightQuery === 'function' ? activeSearchHighlightQuery() : '',
     String(album?.inventory_status || ''),
     String(album?.missing_since || ''),
     getAlbumCardSourceCategories(album),

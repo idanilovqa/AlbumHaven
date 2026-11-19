@@ -490,6 +490,127 @@ def search_terms_match_fields(terms: list[str], fields: list[str]) -> bool:
     return all(any(search_term_matches_field(term, field) for field in normalized_fields) for term in terms)
 
 
+# Search highlighting: the characters of a displayed text that search matched, found with the same
+# normalization and word rules as search_term_matches_field so a highlight never disagrees with a result.
+# Ranges are [start, end) code-point offsets into the original text.
+_SEARCH_APOSTROPHES = frozenset("'’")
+_SEARCH_HIGHLIGHT_TEXT_KEYS = frozenset({
+    "name", "title", "filename", "artist", "artist_display", "album_artist", "display_artist", "secondary_artist",
+})
+_SEARCH_HIGHLIGHT_TEXT_LIMIT = 4000
+
+
+def _search_highlight_words(text: str) -> list[tuple[str, list[tuple[int, int]]]]:
+    """Each normalized word of text with the original span of every one of its characters."""
+    clusters: list[tuple[str, int, int]] = []
+    for index, char in enumerate(text):
+        if clusters and unicodedata.combining(char):
+            cluster, start, _ = clusters[-1]
+            clusters[-1] = (cluster + char, start, index + 1)
+        else:
+            clusters.append((char, index, index + 1))
+    words: list[tuple[str, list[tuple[int, int]]]] = []
+    raw_word = ""
+    folded_chars: list[tuple[str, tuple[int, int]]] = []
+
+    def finish_word() -> None:
+        nonlocal raw_word, folded_chars
+        normalized = _normalize_search_string(raw_word) if raw_word else ""
+        folded = "".join(char for char, _ in folded_chars)
+        if normalized:
+            if folded.startswith(normalized):
+                spans = [span for _, span in folded_chars[: len(normalized)]]
+            else:
+                whole = (folded_chars[0][1][0], folded_chars[-1][1][1])
+                spans = [whole] * len(normalized)
+            words.append((normalized, spans))
+        raw_word, folded_chars = "", []
+
+    for cluster, start, end in clusters:
+        if cluster in _SEARCH_APOSTROPHES:
+            raw_word += cluster
+            continue
+        composed = unicodedata.normalize("NFC", cluster).casefold()
+        if not _SEARCH_PUNCT_RE.fullmatch(composed):
+            raw_word += cluster
+            folded_chars.extend((char, (start, end)) for char in composed)
+        else:
+            finish_word()
+    finish_word()
+    return words
+
+
+def _merge_search_ranges(ranges: list[tuple[int, int]]) -> list[list[int]]:
+    merged: list[list[int]] = []
+    for start, end in sorted(ranges):
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    return merged
+
+
+def search_match_ranges(query: str, text: str) -> list[list[int]]:
+    """The [start, end) ranges of text that the search for query matched, merged and in order."""
+    terms = split_search_terms(str(query or ""))
+    words = _search_highlight_words(str(text or ""))
+    if not terms or not words:
+        return []
+    field = " ".join(word for word, _ in words)
+    position_spans: list[tuple[int, int] | None] = []
+    for word_index, (_, spans) in enumerate(words):
+        if word_index:
+            position_spans.append(None)
+        position_spans.extend(spans)
+    ranges: list[tuple[int, int]] = []
+    for term in terms:
+        if not search_term_matches_field(term, field):
+            continue
+        found = field.find(term)
+        while found >= 0:
+            ranges.append((position_spans[found][0], position_spans[found + len(term) - 1][1]))
+            found = field.find(term, found + len(term))
+        word_matched = False
+        for word, spans in words:
+            if term not in word and search_word_matches(term, word):
+                ranges.append((spans[0][0], spans[-1][1]))
+                word_matched = True
+        if not word_matched and term not in field:
+            # Matched as one compact key (e.g. "acdc" for "AC/DC"): the whole text is the match.
+            ranges.append((words[0][1][0][0], words[-1][1][-1][1]))
+    return _merge_search_ranges(ranges)
+
+
+def collect_search_highlight_texts(payload: object) -> list[str]:
+    """The display strings of a search response (names, titles, artists) that may carry highlights."""
+    texts: list[str] = []
+    pending = [payload]
+    while pending and len(texts) < _SEARCH_HIGHLIGHT_TEXT_LIMIT:
+        value = pending.pop()
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if isinstance(item, str):
+                    if key in _SEARCH_HIGHLIGHT_TEXT_KEYS and item.strip():
+                        texts.append(item)
+                elif isinstance(item, (dict, list)):
+                    pending.append(item)
+        elif isinstance(value, list):
+            pending.extend(item for item in value if isinstance(item, (dict, list)))
+    return texts
+
+
+def build_search_highlights(query: str, texts) -> dict[str, list[list[int]]]:
+    """Highlight ranges keyed by display text, for the texts the search matched."""
+    if not split_search_terms(str(query or "")):
+        return {}
+    highlights: dict[str, list[list[int]]] = {}
+    for text in dict.fromkeys(text for text in texts if isinstance(text, str) and text.strip()):
+        ranges = search_match_ranges(query, text)
+        if ranges:
+            highlights[text] = ranges
+    return highlights
+
+
 def artist_match_rank(query: str, canonical_artist: str, aliases: set[str]) -> tuple[int, int, str]:
     normalized_query = normalize_search_text(query)
     candidates = {normalize_search_text(canonical_artist), *{normalize_search_text(value) for value in aliases if value}}

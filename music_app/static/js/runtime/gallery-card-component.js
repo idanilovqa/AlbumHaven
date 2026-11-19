@@ -24,7 +24,7 @@ function buildGalleryCardHtml(config = {}) {
       ${sourceActions ? `<div class="gallery-card__source-actions gallery-card__source-actions--artwork">${sourceActions}</div>` : ''}
       ${releaseYear ? `<span class="gallery-card__hover-year" aria-hidden="true">${escapeHtml(releaseYear)}</span>` : ''}
       ${displayMode === 'covers'
-        ? `<span class="gallery-card__focus-title">${escapeHtml(config.title || '')}</span>`
+        ? `<span class="gallery-card__focus-title">${config.titleHighlightRanges?.length ? buildHighlightedTextHtml(config.title || '', config.titleHighlightRanges) : escapeHtml(config.title || '')}</span>`
         : buildGalleryCardInfoHtml({
             ...config,
             openAttributes,

@@ -32,6 +32,11 @@ async function mount(page, method, options = {}) {
   if (options.appChrome) cssFiles.splice(cssFiles.indexOf('appearance-backgrounds.css'), 0, 'app-chrome.css');
   for (const file of cssFiles) await page.addStyleTag({ path: path.join(staticRoot, 'css', file) });
   for (const file of ['button-component.js', 'runtime/alert-components.js', 'editor-page.js', 'appearance-palettes.js', 'appearance-device-profiles.js', 'appearance-backgrounds.js']) await page.addScriptTag({ path: path.join(staticRoot, 'js', file) });
+  // Any editor can switch to the Album page, whose previews reuse the runtime gallery's source glyphs and cover badges.
+  for (const file of ['gallery-main-components.js', 'cover-lookup-modal-and-drawer.js']) await page.addScriptTag({ path: path.join(staticRoot, 'js/runtime', file) });
+  if (method === 'mountAlbumPage') {
+    for (const file of ['gallery-main.css', 'runtime/track-modal-and-lightbox.css']) await page.addStyleTag({ path: path.join(staticRoot, 'css', file) });
+  }
   await page.evaluate(async method => {
     const instance = window.AlbumHavenAppearance.instance;
     if (!await instance.load()) throw new Error('Component appearance setup must load successfully.');
@@ -133,25 +138,62 @@ test('Appearance detail remains vertical-only when its content fits the availabl
 });
 
 for (const width of [900, 901, 1024, 1280]) {
-  test(`Album page workspace fits the production Utilities shell at ${width}px`, async ({ page }) => {
+  test(`Album page group panels fit the production Utilities shell at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     await mount(page, 'mountAlbumPage', { utilityShell: true });
     const detail = page.locator('#editor');
-    const workspace = page.locator('.appearance-album-page__workspace');
-    const controls = page.locator('.appearance-album-page__controls');
-    const preview = page.locator('.appearance-album-page__preview');
     const geometry = await detail.evaluate((element) => ({ client: element.clientWidth, scroll: element.scrollWidth }));
     expect(geometry.scroll).toBeLessThanOrEqual(geometry.client + 1);
-    const [detailBox, workspaceBox, controlsBox, previewBox] = await Promise.all([detail, workspace, controls, preview].map(item => item.boundingBox()));
-    for (const box of [detailBox, workspaceBox, controlsBox, previewBox]) expect(box).not.toBeNull();
-    for (const box of [controlsBox, previewBox]) {
-      expect(box.x).toBeGreaterThanOrEqual(workspaceBox.x - 1);
-      expect(box.x + box.width).toBeLessThanOrEqual(detailBox.x + detailBox.width + 1);
+    const panels = page.locator('.appearance-album-page__panel');
+    await expect(panels).toHaveCount(3);
+    const detailBox = await detail.boundingBox();
+    for (let index = 0; index < 3; index += 1) {
+      const [panelBox, controlsBox, previewBox] = await Promise.all([
+        panels.nth(index), panels.nth(index).locator('.appearance-album-page__controls'), panels.nth(index).locator('.appearance-album-page__preview'),
+      ].map(item => item.boundingBox()));
+      for (const box of [panelBox, controlsBox, previewBox]) {
+        expect(box).not.toBeNull();
+        expect(box.x).toBeGreaterThanOrEqual(panelBox.x - 1);
+        expect(box.x + box.width).toBeLessThanOrEqual(detailBox.x + detailBox.width + 1);
+      }
+      // Wide panels put each preview beside its switches; narrow ones stack it underneath.
+      if (width === 900 || width === 1280) expect(previewBox.x).toBeGreaterThanOrEqual(controlsBox.x + controlsBox.width - 1);
+      else expect(previewBox.y).toBeGreaterThanOrEqual(controlsBox.y + controlsBox.height - 1);
     }
-    if (width === 900 || width === 1280) expect(previewBox.x).toBeGreaterThan(controlsBox.x);
-    else expect(previewBox.y).toBeGreaterThanOrEqual(controlsBox.y + controlsBox.height);
   });
 }
+
+test('Album page library source and cover switches redraw their own panel previews', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await mount(page, 'mountAlbumPage', { utilityShell: true });
+  const hoard = page.locator('[data-library-source-sample="hoard"]');
+  const hovered = page.locator('[data-library-source-sample-hover] .appearance-source-preview__art');
+  const icons = page.locator('[data-library-source-preview] .appearance-source-preview__icon');
+  const localBadge = page.locator('[data-cover-badge-sample="local"] .track-modal-cover-source-badge');
+  const downloadedBadge = page.locator('[data-cover-badge-sample="downloaded"] .track-modal-cover-source-badge');
+  await expect(icons).toHaveCount(2);
+  await expect(icons.first().locator('svg')).toBeVisible();
+  await expect(downloadedBadge).toBeVisible();
+  await expect(localBadge).toBeVisible();
+
+  const neutralBorder = await hoard.evaluate(element => getComputedStyle(element).borderTopColor);
+  await page.locator('[data-library-source-indicator="card_colors"]').click();
+  await expect(hoard).not.toHaveCSS('border-top-color', neutralBorder);
+
+  const coloredOutline = await hovered.evaluate(element => getComputedStyle(element).boxShadow);
+  await page.locator('[data-library-source-indicator="hover_outline_colors"]').click();
+  await expect(hovered).not.toHaveCSS('box-shadow', coloredOutline);
+
+  await page.locator('[data-library-source-indicator="icons"]').click();
+  await expect(icons.first()).toBeHidden();
+
+  await page.locator('[data-library-source-indicator="local_cover_badges"]').click();
+  await expect(localBadge).toBeHidden();
+  await expect(downloadedBadge).toBeVisible();
+  for (const panel of await page.locator('.appearance-album-page__panel').all()) {
+    await expect(panel.locator('.appearance-album-page__preview')).toBeVisible();
+  }
+});
 
 test('tables resolve their surface locally inside dark panels on a light page', async ({ page }) => {
   await page.setContent(`<html style="--appearance-card:#fff7e5;--appearance-ink:#202124">

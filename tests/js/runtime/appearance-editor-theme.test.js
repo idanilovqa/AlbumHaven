@@ -38,6 +38,9 @@ async function mounted(method, initial = preference(), saveResponse, client = {}
     getElementById: id => id === 'appearance-bootstrap' ? { textContent: JSON.stringify(initial) } : null,
   };
   const window = {
+    // The runtime gallery owns these glyphs; the Album page previews receive them from the window.
+    buildLibrarySourceGlyphHtml: category => `<svg data-glyph="${category}"></svg>`,
+    buildTrackModalCoverSourceBadge: source => `<span class="track-modal-cover-source-badge is-${source}"></span>`,
     ...client,
     location: { href: 'https://music.test/', origin: 'https://music.test' },
     addEventListener() {}, confirm: () => true,

@@ -621,7 +621,8 @@ def test_stage_handoff_requires_exact_private_web_predecessor(playback_inventory
     assert getattr(failure.value, "status_code", None) == 403
 
 
-def test_live_pending_handoff_blocks_null_acquire_until_it_expires(playback_inventory):
+# sandbox5 (2026-11-18): closing a playing tab, then Play in another browser, was refused for 15-30 s.
+def test_an_unloaded_tabs_pending_handoff_gives_way_to_the_first_fresh_acquire(playback_inventory):
     fixture = playback_inventory
     started_at = datetime(2026, 10, 25, tzinfo=timezone.utc)
     clock = [started_at]
@@ -653,14 +654,12 @@ def test_live_pending_handoff_blocks_null_acquire_until_it_expires(playback_inve
     )
     assert datetime.fromisoformat(staged["expiresAt"].replace("Z", "+00:00")) == started_at + timedelta(seconds=44)
 
-    clock[0] = started_at + timedelta(seconds=31)
-    with pytest.raises(ValueError) as failure:
-        service.acquire(fixture.actor, client_id=str(uuid4()), client_surface="private_web", track=track)
-    assert getattr(failure.value, "status_code", None) == 409
-
-    clock[0] = started_at + timedelta(seconds=45)
-    acquired = service.acquire(fixture.actor, client_id=str(uuid4()), client_surface="private_web", track=track)
+    clock[0] = started_at + timedelta(seconds=29, milliseconds=500)
+    other_client = str(uuid4())
+    acquired = service.acquire(fixture.actor, client_id=other_client, client_surface="private_web", track=track)
     assert acquired["claimToken"]
+    assert service.get(fixture.actor, other_client)["is_playing_here"] is True
+    assert service.get(fixture.actor, client_id)["is_playing_elsewhere"] is True
 
 
 def test_live_handoff_consumes_after_predecessor_lease_expires(playback_inventory):

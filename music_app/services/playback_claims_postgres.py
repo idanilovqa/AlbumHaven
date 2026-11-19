@@ -171,6 +171,10 @@ class PostgresPlaybackClaims:
                         (expires, json.dumps(stored_track), account_id, library_id,
                          client_id, digest, now)).fetchone()
             elif issued:
+                # A tab that closed (or reloaded) while playing staged a handoff on its way out: its
+                # claim gives way to the first fresh claim, so one Play press elsewhere plays at once
+                # (sandbox5, 2026-11-18: Play after closing a playing tab was refused for 15-30 s). A
+                # reload that comes back first takes its handoff as before.
                 row = connection.execute("""insert into app.playback_claims
                     (account_id, library_id, client_id, client_surface, token_digest, expires_at, track)
                     values (%s, %s, %s, %s, %s, %s, %s::jsonb)
@@ -180,12 +184,11 @@ class PostgresPlaybackClaims:
                       track = excluded.track, pending_handoff_id = null,
                       pending_handoff_digest = null, pending_completion_digest = null,
                       pending_handoff_expires_at = null
-                    where %s or (app.playback_claims.expires_at <= %s
-                      and (app.playback_claims.pending_handoff_expires_at is null
-                        or app.playback_claims.pending_handoff_expires_at <= %s))
+                    where %s or app.playback_claims.pending_handoff_id is not null
+                      or app.playback_claims.expires_at <= %s
                     returning client_id, client_surface, expires_at, track""",
                     (account_id, library_id, client_id, client_surface, digest, expires,
-                     json.dumps(stored_track), takeover, now, now)).fetchone()
+                     json.dumps(stored_track), takeover, now)).fetchone()
             else:
                 # The token renews its claim even past the lease, as for a client that played on
                 # without a network: until another client's acquire replaces the row or its release

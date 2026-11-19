@@ -2107,7 +2107,18 @@ function serverUnreachableMessage(subject) {
 // again (onServerReachableAgain).
 const REACHABILITY_PROBE_INTERVAL_MS = 2500;
 const REACHABILITY_PROBE_TIMEOUT_MS = 4000;
-const serverReachability = { unreachable: false, probing: false, timer: 0, listening: false, listeners: new Set() };
+const serverReachability = {
+  unreachable: false, probing: false, timer: 0, listening: false, listeners: new Set(), keptShown: false,
+};
+// The device copy's worker answers with what it kept when the server cannot be reached
+// (app-copy-worker.js): such an answer is not the server's, and what it showed reloads on return.
+const DEVICE_COPY_HEADER = 'X-Album-Haven-App-Copy';
+
+// Whether a surface showed data kept on the device since the server was last reachable; listeners
+// of onServerReachableAgain reload it from the server.
+function keptDataShownWhileUnreachable() {
+  return serverReachability.keptShown;
+}
 
 function onServerReachableAgain(listener) {
   serverReachability.listeners.add(listener);
@@ -2130,6 +2141,7 @@ function noteServerReachable() {
       console.error('[AlbumHaven][Reachability] A surface failed to load again.', error);
     }
   });
+  serverReachability.keptShown = false;
 }
 
 function noteServerUnreachable() {
@@ -2193,6 +2205,11 @@ async function fetchRetryingPendingProjection(url, init) {
       throw Object.assign(new Error(`Album Haven could not be reached (${response.status}).`), {
         status: response.status, serverUnreachable: true,
       });
+    }
+    if (response.headers?.get?.(DEVICE_COPY_HEADER) === 'cache') {
+      serverReachability.keptShown = true;
+      noteServerUnreachable();
+      return response;
     }
     noteServerReachable();
     if (response.status !== 503) return response;
@@ -16410,7 +16427,12 @@ function reloadTrackModalAfterServerReachable() {
   trackModalUnreachableAlbum = null;
   const els = getTrackModalElements();
   const shown = state.modalReleases?.[state.modalReleaseIndex];
-  if (!album || !els.overlay || els.overlay.hidden || !shown) return;
+  if (!els.overlay || els.overlay.hidden || !shown) return;
+  // Details kept on the device reload from the server too.
+  if (!album) {
+    if (typeof keptDataShownWhileUnreachable === 'function' && keptDataShownWhileUnreachable()) openTrackModal(shown);
+    return;
+  }
   if (String(getAlbumRequestKey(shown) || '') !== String(getAlbumRequestKey(album) || '')) return;
   openTrackModal(album);
 }
@@ -20146,6 +20168,9 @@ function resumeGalleryAfterServerReachable() {
   setGalleryEndOffline('');
   if (state.ui?.galleryUnreachable) {
     void fetchAndRender(`${window.location.pathname}${window.location.search}`, false).catch(() => {});
+  } else if (keptDataShownWhileUnreachable()) {
+    // The view came from the device copy: the server's own replaces it where it stands.
+    void fetchAndRender(`${window.location.pathname}${window.location.search}`, false, { preserveScroll: true }).catch(() => {});
   } else if (endWasOffline) {
     void loadNextRootGalleryPage();
   }

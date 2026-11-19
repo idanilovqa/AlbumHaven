@@ -1068,6 +1068,9 @@ function resumeGalleryAfterServerReachable() {
   setGalleryEndOffline('');
   if (state.ui?.galleryUnreachable) {
     void fetchAndRender(`${window.location.pathname}${window.location.search}`, false).catch(() => {});
+  } else if (keptDataShownWhileUnreachable()) {
+    // The view came from the device copy: the server's own replaces it where it stands.
+    void fetchAndRender(`${window.location.pathname}${window.location.search}`, false, { preserveScroll: true }).catch(() => {});
   } else if (endWasOffline) {
     void loadNextRootGalleryPage();
   }

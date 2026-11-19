@@ -199,6 +199,7 @@ function createGalleryRefreshContext() {
             resolve({
               ok: payload?.responseOk ?? (payload?.ok !== false),
               status: payload?.status || 200,
+              headers: { get: name => payload?.headers?.[String(name).toLowerCase()] ?? null },
               clone() {
                 return { json: async () => payload };
               },

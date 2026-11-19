@@ -7703,6 +7703,30 @@ test('IAR-W15: an artist that could not load loads by itself once the server ans
   assert.equal(calls.applyViewPayload.at(-1).artist_groups.length, 1);
 });
 
+test('IAR-W25: a view answered from the device copy starts the probe and reloads from the server on its return', async () => {
+  const { context, pendingRequests, calls, settle, probeAt } = recoveringGallery();
+  const shown = context.fetchAndRender('/view-data?artist=Chris+Buck', true);
+  pendingRequests[0].resolveWith({
+    headers: { 'x-album-haven-app-copy': 'cache' },
+    selected_artist: 'Chris Buck', artist_groups: [{ artist: 'Chris Buck', albums: [{ key: 'buck::kept' }] }],
+  });
+  await shown;
+  assert.equal(calls.applyViewPayload.at(-1).artist_groups[0].albums[0].key, 'buck::kept');
+  assert.equal(context.state.ui.galleryUnreachable, undefined, 'kept data is shown, not the Offline line');
+
+  probeAt(2500).callback();
+  await settle();
+  assert.equal(pendingRequests[1].url, '/health');
+  pendingRequests[1].resolveWith({ healthy: true });
+  await settle();
+
+  const reload = pendingRequests[2];
+  assert.match(reload.url, /^\/view-data\?.*artist=Chris\+Buck/);
+  reload.resolveWith({ selected_artist: 'Chris Buck', artist_groups: [{ artist: 'Chris Buck', albums: [{ key: 'buck::fresh' }] }] });
+  await settle();
+  assert.equal(calls.applyViewPayload.at(-1).artist_groups[0].albums[0].key, 'buck::fresh');
+});
+
 test('IAR-W15: the browser coming back online probes at once instead of waiting', async () => {
   const { context, pendingRequests, windowListeners, settle } = recoveringGallery();
   const failed = context.fetchAndRender('/view-data?artist=Chris+Buck', true);

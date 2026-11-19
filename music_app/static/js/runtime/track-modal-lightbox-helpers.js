@@ -94,7 +94,12 @@ function reloadTrackModalAfterServerReachable() {
   trackModalUnreachableAlbum = null;
   const els = getTrackModalElements();
   const shown = state.modalReleases?.[state.modalReleaseIndex];
-  if (!album || !els.overlay || els.overlay.hidden || !shown) return;
+  if (!els.overlay || els.overlay.hidden || !shown) return;
+  // Details kept on the device reload from the server too.
+  if (!album) {
+    if (typeof keptDataShownWhileUnreachable === 'function' && keptDataShownWhileUnreachable()) openTrackModal(shown);
+    return;
+  }
   if (String(getAlbumRequestKey(shown) || '') !== String(getAlbumRequestKey(album) || '')) return;
   openTrackModal(album);
 }

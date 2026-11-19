@@ -41969,13 +41969,6 @@ async function confirmManualTagEdit() {
   updateOpenTrackModalAfterTagEdit(album, reconciledOptimisticAlbums, {
     tagEditMutationClaim,
   });
-  renderView(renderOptions);
-  showRepairAlert(
-    tagEditAlert.savingMessage,
-    'info',
-    2000,
-    { title: 'Saving tags', dismissible: false },
-  );
   let failedLogHistoryEntryId = '';
   let failedSaveTaskError = '';
   let failedSaveKeptNewTags = false;
@@ -41984,22 +41977,34 @@ async function confirmManualTagEdit() {
   // Owner (2026-11-17): the save's own id lets the server recognise it if it is sent again.
   const clientRequestId = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
     ? crypto.randomUUID() : '';
-  const requestPayload = { confirmed: true, album, updates, ...(clientRequestId ? { client_request_id: clientRequestId } : {}) };
+  const requestPayload = {
+    confirmed: true,
+    album,
+    updates,
+    ...(clientRequestId ? { client_request_id: clientRequestId } : {}),
+    ...(problematicMutationOriginKey ? { problematic_files_origin: true } : {}),
+  };
+  if (typeof rememberLocallyEditedAlbum === 'function') {
+    [album, ...reconciledOptimisticAlbums].forEach(rememberLocallyEditedAlbum);
+  }
+  // The save is sent before the optimistic Gallery is drawn, so the server starts on it at once.
+  const responsePromise = fetch('/utilities/edit-tags', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(requestPayload),
+  }).catch((error) => {
+    saveOutcomeUnknown = true;
+    throw error;
+  });
+  renderView(renderOptions);
+  showRepairAlert(
+    tagEditAlert.savingMessage,
+    'info',
+    2000,
+    { title: 'Saving tags', dismissible: false },
+  );
   try {
-    if (problematicMutationOriginKey) {
-      requestPayload.problematic_files_origin = true;
-    }
-    if (typeof rememberLocallyEditedAlbum === 'function') {
-      [album, ...reconciledOptimisticAlbums].forEach(rememberLocallyEditedAlbum);
-    }
-    const response = await fetch('/utilities/edit-tags', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestPayload),
-    }).catch((error) => {
-      saveOutcomeUnknown = true;
-      throw error;
-    });
+    const response = await responsePromise;
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.ok) {
       saveOutcomeUnknown = typeof data.ok !== 'boolean';

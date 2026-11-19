@@ -7,7 +7,6 @@ const STREAMING_PROCESSOR_NAME = 'album-haven-gapless-playback';
 const STREAMING_MAX_CREDIT_SECONDS = 1;
 const STREAMING_CREDIT_LOW_WATER_SECONDS = 0.25;
 const STREAMING_INITIAL_PLAYBACK_CUSHION_SECONDS = 2;
-const STREAMING_AUTOMATIC_RECONNECT_ATTEMPTS = 1;
 // A lost socket is replaced at once, then after each of these delays, then every last one.
 const STREAMING_RECONNECT_DELAYS_MS = [500, 1000, 2000];
 // The server sends a heartbeat this often (`/playback/pcm?heartbeat=`), however long its answers
@@ -454,54 +453,22 @@ async function recoverUnexpectedStreamingSocketClose(socket, event) {
     return;
   }
   if (detachStreamingTransport(event?.code)) return;
-  if (detachUnansweredStreamingSeek(event?.code)) return;
+  if (detachAtStreamingPlace(event?.code)) return;
+  // Refused, failed, or past the song's end: playback stops, and the next Play starts again at the
+  // place it stopped.
   const current = engine.roles.current;
   const startRequestId = engine.startRequestId;
-  // A restart lost before its stream opened keeps the place it was restarting from.
   const recovery = current ? {
     track: current.track,
     startSeconds: Math.max(0, Number(engine.snapshot.currentTime) || 0),
-    attempt: Math.max(0, Number(current.transportRecoveryAttempt) || 0),
   } : engine.pendingTransportRecovery;
-  const wasPlaying = Boolean(current && !engine.snapshot.paused && !engine.snapshot.ended);
   const detail = [event?.code, event?.reason]
     .filter((value) => value !== undefined && value !== '')
     .join(' ');
-  const cleanupError = await stopStreamingForLostTransport(
-    detail || 'Playback socket closed unexpectedly',
-    { socketAlreadyClosed: true },
-  );
-
-  if (!recovery || engine.startRequestId !== startRequestId) {
-    refreshPlayerAfterStreamingTransportChange();
-    return;
-  }
-  holdStreamingTransportRecovery(recovery);
-  if (cleanupError
-      || !wasPlaying
-      || STREAMING_REFUSED_CLOSE_CODES.has(event?.code)
-      || recovery.attempt >= STREAMING_AUTOMATIC_RECONNECT_ATTEMPTS) {
+  await stopStreamingForLostTransport(detail || 'Playback socket closed unexpectedly', { socketAlreadyClosed: true });
+  if (recovery && engine.startRequestId === startRequestId) {
+    holdStreamingTransportRecovery(recovery);
     engine.mode = 'error';
-    refreshPlayerAfterStreamingTransportChange();
-    return;
-  }
-
-  engine.pendingTransportRecovery = { ...recovery, attempt: recovery.attempt + 1 };
-  delete engine.diagnostics.lastError;
-  try {
-    const recovered = await startStreamingTrack(recovery.track, {
-      startSeconds: recovery.startSeconds,
-      autoplay: true,
-      transportRecoveryAttempt: recovery.attempt + 1,
-    });
-    if (recovered) {
-      engine.diagnostics.transportReconnects =
-        (Number(engine.diagnostics.transportReconnects) || 0) + 1;
-    }
-  } catch (error) {
-    engine.pendingTransportRecovery = recovery;
-    setStreamingError('socket', error);
-    engine.snapshot.paused = true;
   }
   refreshPlayerAfterStreamingTransportChange();
 }
@@ -627,15 +594,23 @@ function forgetLostStreamingSocket() {
   engine.pendingControls = [];
 }
 
-// The socket was lost under a seek that asked the server for audio past what arrived: the head
-// jumps to the seek's target and waits there, silent, in the state the listener chose, and the
-// stream opens there on the next socket, as an offline seek past the received audio does.
-function detachUnansweredStreamingSeek(code) {
+// The socket was lost under a stream whose received audio cannot play on: a seek or a song start
+// still waiting for the server, or audio with no seek table to splice at. The head stays at the
+// place (a seek's or start's target) and waits there, silent, in the state the listener chose, and
+// the song opens there on the next socket, however long the server takes to answer again, as an
+// offline seek past the received audio does. Owner retest B-D4 round 7 (2026-11-18): "Then
+// playhead is being reset into the beginning of the track. The song does not restart when network
+// is back." Stopping, with one retry while the network was still gone, lost the place and the play.
+function detachAtStreamingPlace(code) {
   const engine = streamingEngineState();
   const seek = engine.pendingSeek;
-  const track = engine.roles.current?.track;
-  if (!seek || seek.kind === 'replacement' || !track || STREAMING_REFUSED_CLOSE_CODES.has(code)
-      || engine.mode === 'error' || engine.snapshot.ended) return false;
+  const track = (seek?.kind === 'replacement' ? engine.roles.continuity?.track : null) || engine.roles.current?.track;
+  if (!track || STREAMING_REFUSED_CLOSE_CODES.has(code) || engine.mode === 'error' || engine.snapshot.ended) return false;
+  const startSeconds = seek
+    ? seek.startFrame / engine.sampleRate
+    : Math.max(0, Number(engine.snapshot.currentTime) || 0);
+  // A start on its way to playing is playing, though its snapshot says paused until it plays.
+  const starting = engine.mode === 'starting' && engine.roles.current?.autoplay === true;
   forgetLostStreamingSocket();
   engine.pendingPromotion = null;
   engine.detached = {
@@ -643,11 +618,12 @@ function detachUnansweredStreamingSeek(code) {
     spliceFrame: null,
     failures: 0,
     timer: 0,
-    paused: Boolean(engine.snapshot.paused),
+    paused: Boolean(engine.snapshot.paused) && !starting,
   };
   engine.diagnostics.transportDetaches = (Number(engine.diagnostics.transportDetaches) || 0) + 1;
-  void jumpWhileDetached(track, seek.startFrame / engine.sampleRate);
+  // Connected first: the restart then asks this socket instead of opening one of its own.
   if (!engine.detached.paused) connectStreamingSocket();
+  void jumpWhileDetached(track, startSeconds);
   publishStreamingDiagnostics();
   return true;
 }
@@ -784,7 +760,7 @@ async function failDetachedStreamingTransport() {
   endStreamingDetach();
   await stopStreamingForLostTransport('Playback connection lost');
   if (!track) return;
-  holdStreamingTransportRecovery({ track, startSeconds, attempt: STREAMING_AUTOMATIC_RECONNECT_ATTEMPTS });
+  holdStreamingTransportRecovery({ track, startSeconds });
   engine.mode = 'error';
   refreshPlayerAfterStreamingTransportChange();
 }
@@ -829,7 +805,7 @@ function jumpWhileDetached(track, startSeconds) {
   });
   waitForStreamingTransport();
   refreshPlayerAfterStreamingTransportChange();
-  return startStreamingTrack(track, { startSeconds, autoplay: !engine.snapshot.paused, keepDetached: true });
+  return startStreamingTrack(track, { startSeconds, autoplay: !detached.paused, keepDetached: true });
 }
 
 /** The head was put at a place the old audio no longer reports: its reports do not move it. */
@@ -2410,10 +2386,7 @@ function handleStreamingWorkletMessage(message) {
       return;
     }
     roleState.firstFrameNotified = true;
-    if (roleState.role === 'current') {
-      roleState.transportRecoveryAttempt = 0;
-      engine.pendingTransportRecovery = null;
-    }
+    if (roleState.role === 'current') engine.pendingTransportRecovery = null;
     if (!engine.diagnostics.firstFrameAtMs) {
       engine.diagnostics.firstFrameAtMs = performance.now();
     }
@@ -3053,16 +3026,26 @@ async function startBrowserStreamingTrack(track, {
   autoplay = true,
   allowSuspendedAutoplayFallback = false,
   onAutoplayStarted = null,
-  transportRecoveryAttempt = null,
+  keepTransportRecovery = false,
   keepDetached = false,
 } = {}) {
   const engine = streamingEngineState();
   settlePendingBufferedSeek('superseded', { retainForAcknowledgement: true });
-  if (transportRecoveryAttempt === null) engine.pendingTransportRecovery = null;
+  if (!keepTransportRecovery) engine.pendingTransportRecovery = null;
   engine.startRequestId = (Number(engine.startRequestId) || 0) + 1;
   const startRequestId = engine.startRequestId;
-  // Any start but an offline seek's leaves the lost socket's audio behind.
-  if (!keepDetached) endStreamingDetach();
+  // A start while the network is still gone (or the server not yet back) waits for the next socket
+  // as an offline seek past the received audio does: it opens on whichever socket connects next,
+  // with no second press (owner retest B-D4 round 7, 2026-11-18: "it took 6 clicks for another
+  // song to try"). Any other start leaves the lost socket's audio behind.
+  const detached = engine.detached;
+  if (detached && !keepDetached && engine.socket?.readyState !== WebSocket.OPEN) {
+    detached.kind = 'reopen';
+    detached.spliceFrame = null;
+    if (autoplay) resumeStreamingReconnect();
+  } else if (!keepDetached) {
+    endStreamingDetach();
+  }
   settleStreamingReplacementCushionWaiter(false);
   if (mayPrimeStreamingCachedTrack()) {
     let primeDeadline = 0;
@@ -3223,7 +3206,7 @@ async function startBrowserStreamingTrack(track, {
   });
   const current = openStreamingRole('current', track, startFrame);
   if (!current) return null;
-  current.transportRecoveryAttempt = Math.max(0, Number(transportRecoveryAttempt) || 0);
+  current.autoplay = autoplay;
   probeStreamingTrackWaveform(track);
   engine.node.port.postMessage({
     type: 'configure',
@@ -3350,7 +3333,7 @@ async function resumeBrowserStreaming(
       startSeconds: pendingRecovery.startSeconds,
       autoplay: true,
       onAutoplayStarted: onPlaybackStarted,
-      transportRecoveryAttempt: 0,
+      keepTransportRecovery: true,
     });
     return Boolean(recovered && !engine.snapshot.paused);
   }

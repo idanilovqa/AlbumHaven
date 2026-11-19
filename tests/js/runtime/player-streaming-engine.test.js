@@ -4984,109 +4984,89 @@ test('paused metadata and consumption update accounting without credit until exp
   assert.ok(diagnostics.inFlightFrames.continuity <= 5 * 48_000);
 });
 
-test('unexpected socket close reconnects once from the rendered position and leaves an explicit retry after a second loss', async () => {
-  let uiUpdates = 0;
-  const failed = createEngineHarness({ updatePlayerUi: () => { uiUpdates += 1; } });
-  const track = makeTrack();
-  await failed.api.start(track);
-  const first = failed.sent('open')[0];
-  failed.nodes[0].port.dispatch({
-    type: 'position',
-    generation: first.generation,
-    streamId: first.streamId,
-    timelineFrame: 3 * 48_000,
+// Owner retest B-D4 round 7 (2026-11-18): "Then playhead is being reset into the beginning of the
+// track. The song does not restart when network is back." The owner's laptop serves the app through
+// a tunnel that answers 530 for about a minute after its Wi-Fi returns: every attempt in that
+// minute fails. A lost socket under audio that cannot play on waits at the heard place, still
+// playing, and reopens there on the first socket the server answers, with nothing pressed.
+test('a lost socket waits playing at the heard place and reopens there once the server answers, however many attempts fail first', async () => {
+  let serverBack = false;
+  const timers = manualTimers();
+  const harness = createEngineHarness({
+    refuseConnection: (count) => count > 1 && !serverBack,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
   });
-  failed.sockets[0].fail(new Error('transport gone'));
-  const errorSnapshot = failed.api.snapshot();
-  assert.notEqual(errorSnapshot.mode, 'error');
-  assert.match(errorSnapshot.diagnostics.lastSocketError.message, /transport gone/);
-  assert.equal(failed.nodes[0].disconnectCalls, 0);
-  assert.equal(failed.contexts[0].closeCalls, 0);
-  failed.sockets[0].unexpectedClose({ code: 1006, reason: 'network disappeared' });
-  await failed.settle();
-  await failed.settle();
-
-  assert.equal(failed.sockets.length, 2);
-  const recovered = failed.sockets[1].sent.find(({ type }) => type === 'open');
-  assert.equal(recovered.path, track.path);
-  assert.equal(recovered.startFrame, 3 * 48_000);
-  assert.equal(failed.api.snapshot().diagnostics.lastError, undefined);
-  assert.equal(failed.nodes[0].disconnectCalls, 1);
-  assert.equal(failed.contexts[0].closeCalls, 1);
-
-  failed.sockets[1].unexpectedClose({ code: 1006, reason: 'network disappeared again' });
-  await failed.settle();
-  await failed.settle();
-
-  const failedSnapshot = failed.api.snapshot();
-  assert.equal(failed.sockets.length, 2, 'automatic recovery is bounded to one attempt');
-  assert.equal(failedSnapshot.mode, 'error');
-  assert.equal(failedSnapshot.paused, true);
-  assert.equal(failedSnapshot.diagnostics.lastError.source, 'socket');
-  assert.match(failedSnapshot.diagnostics.lastError.message, /1006|network disappeared again/);
-  assert.ok(uiUpdates > 0, 'transport failure refreshes the visible player state');
-
-  assert.equal(await failed.api.resume(), true);
-  await failed.settle();
-  assert.equal(failed.sockets.length, 3, 'an explicit play retries after automatic recovery is exhausted');
-  const retried = failed.sockets[2].sent.find(({ type }) => type === 'open');
-  assert.equal(retried.path, track.path);
-  assert.equal(retried.startFrame, 3 * 48_000);
-
-  const stopped = createEngineHarness();
-  await stopped.api.start(makeTrack());
-  await stopped.api.stop('owner-stop');
-
-  const stoppedSnapshot = stopped.api.snapshot();
-  assert.equal(stoppedSnapshot.mode, 'stopped');
-  assert.equal(stoppedSnapshot.diagnostics.lastError, undefined);
-});
-
-test('audible socket recovery restores the automatic reconnect allowance', async () => {
-  const harness = createEngineHarness();
   const track = makeTrack();
   await harness.api.start(track);
   const first = harness.sent('open')[0];
   harness.nodes[0].port.dispatch({
-    type: 'position',
-    generation: first.generation,
-    streamId: first.streamId,
-    timelineFrame: 3 * 48_000,
+    type: 'position', generation: first.generation, streamId: first.streamId, timelineFrame: 3 * 48_000,
   });
 
-  harness.sockets[0].unexpectedClose({ code: 1006, reason: 'first network loss' });
-  await harness.settle();
-  await harness.settle();
+  harness.sockets[0].unexpectedClose({ code: 1006, reason: 'network disappeared' });
+  await settleTwice(harness);
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    timers.fire(timers.pending().find(({ delay }) => delay <= 2_000));
+    await settleTwice(harness);
+  }
+  const waiting = harness.api.snapshot();
+  assert.notEqual(waiting.mode, 'error', 'failed attempts never end the wait');
+  assert.equal(waiting.paused, false, 'the player stays on play');
+  assert.equal(waiting.currentTime, 3, 'the head stays at the heard place, never the start');
+  assert.equal(harness.contexts[0].closeCalls, 0);
 
-  const recovered = harness.sockets[1].sent.find(({ type }) => type === 'open');
-  assert.ok(recovered);
-  harness.nodes[1].port.dispatch({
-    type: 'first-frame',
-    generation: recovered.generation,
-    streamId: recovered.streamId,
-    renderedFrame: 0,
-    contextTime: 4,
+  serverBack = true;
+  timers.fire(timers.pending().find(({ delay }) => delay <= 2_000));
+  await settleTwice(harness);
+  const reopened = harness.sockets.at(-1).sent.find(({ type }) => type === 'open');
+  assert.equal(reopened.path, track.path);
+  assert.equal(reopened.startFrame, 3 * 48_000);
+  assert.equal(harness.api.snapshot().paused, false);
+});
+
+// Owner retest B-D4 round 7 (2026-11-18): "it took 6 clicks for another song to try". Each press
+// in the minute the tunnel answered 530 failed and needed another; one press now waits for the server.
+test('another song pressed once while the server is still away opens on the first socket it answers', async () => {
+  let serverBack = false;
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => count > 1 && !serverBack,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
   });
-  harness.nodes[1].port.dispatch({
-    type: 'position',
-    generation: recovered.generation,
-    streamId: recovered.streamId,
-    timelineFrame: 48_000,
-  });
+  await startLocallySeekable(harness, 100_000);
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
 
-  harness.sockets[1].unexpectedClose({ code: 1006, reason: 'later network loss' });
-  await harness.settle();
-  await harness.settle();
+  let failure = null;
+  const started = harness.api.start(makeTrack('02.mp3')).catch((error) => { failure = error; });
+  await settleTwice(harness);
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    timers.fire(timers.pending().find(({ delay }) => delay <= 2_000));
+    await settleTwice(harness);
+  }
+  assert.equal(failure, null, 'the press is not refused while the server is away');
+  assert.notEqual(harness.api.snapshot().mode, 'error');
 
-  assert.equal(harness.sockets.length, 3);
-  const recoveredAgain = harness.sockets[2].sent.find(({ type }) => type === 'open');
-  assert.ok(recoveredAgain);
-  assert.equal(recoveredAgain.path, track.path);
-  assert.equal(recoveredAgain.startFrame, 4 * 48_000);
-  const snapshot = harness.api.snapshot();
-  assert.notEqual(snapshot.mode, 'error');
-  assert.equal(snapshot.diagnostics.lastError, undefined);
-  assert.equal(snapshot.diagnostics.transportReconnects, 2);
+  serverBack = true;
+  timers.fire(timers.pending().find(({ delay }) => delay <= 2_000));
+  await settleTwice(harness);
+  await settleTwice(harness);
+  const opened = harness.sockets.at(-1).sent.filter(({ type }) => type === 'open').at(-1);
+  assert.equal(opened?.path, makeTrack('02.mp3').path, 'the one press opens the song');
+  assert.equal(opened.startFrame, 0);
+  void started;
+});
+
+test('a refused socket still stops playback with an error', async () => {
+  const harness = createEngineHarness();
+  await harness.api.start(makeTrack());
+  harness.sockets[0].unexpectedClose({ code: 4401, reason: 'unauthenticated' });
+  await settleTwice(harness);
+  assert.equal(harness.sockets.length, 1);
+  assert.equal(harness.api.snapshot().mode, 'error');
 });
 
 test('concurrent prepare calls share one in-flight context, worklet, node, and socket', async () => {
@@ -7006,7 +6986,7 @@ test('the received stream cut at the splice frame delivers exactly its frames an
   assert.equal(harness.api.snapshot().duration, duration);
 });
 
-test('a lost socket with no seek table still restarts from the heard position', async () => {
+test('a lost socket with no seek table waits at the heard position and reopens there on the next socket', async () => {
   const harness = encodedHarness();
   const open = await startEncoded(harness, makeTrack('01.mp3'), { totalFrames: 2_000_000, initialCreditBytes: 4_000 });
   harness.sockets[0].receive(encodedFrame(open, 0, new Uint8Array(1_000)));
@@ -7015,10 +6995,10 @@ test('a lost socket with no seek table still restarts from the heard position', 
   harness.sockets[0].unexpectedClose();
   await settleTwice(harness);
 
-  assert.equal(harness.contexts[0].closeCalls, 1);
+  assert.equal(harness.contexts[0].closeCalls, 0);
   const restarted = harness.sockets[1].sent.find(({ type }) => type === 'open');
   assert.equal(restarted.startFrame, 96_000);
-  assert.equal(harness.api.snapshot().diagnostics.transportDetaches, undefined);
+  assert.equal(harness.api.snapshot().currentTime, 2);
 });
 
 test('a refused socket is an error, not a network change', async () => {
@@ -7173,33 +7153,32 @@ test('offline and paused, a seek past the received audio places the head there a
   assert.equal(harness.api.snapshot().paused, false);
 });
 
-test('stopped by a lost connection, a seek moves the held place and Play while still offline keeps it', async () => {
+test('offline after a lost socket, a seek moves the waiting place and the song opens there once the network is back', async () => {
   let online = false;
-  const harness = encodedHarness({ refuseConnection: (count) => count > 1 && !online });
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    refuseConnection: (count) => count > 1 && !online,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+  });
   const open = await startEncoded(harness, makeTrack('01.mp3'), { totalFrames: 2_000_000, initialCreditBytes: 4_000 });
   harness.sockets[0].receive(encodedFrame(open, 0, new Uint8Array(1_000)));
   harness.nodes[0].port.dispatch({ type: 'position', generation: open.generation, streamId: open.streamId, timelineFrame: 96_000 });
   harness.sockets[0].unexpectedClose();
   await settleTwice(harness);
-  await settleTwice(harness);
-  assert.equal(harness.api.snapshot().mode, 'error');
   assert.equal(harness.api.snapshot().currentTime, 2);
 
   await harness.api.seek(40);
+  await settleTwice(harness);
   assert.equal(harness.api.snapshot().currentTime, 40);
-  assert.equal(harness.engine.pendingTransportRecovery.startSeconds, 40);
-
-  await harness.api.resume();
-  await settleTwice(harness);
-  await settleTwice(harness);
-  assert.equal(harness.api.snapshot().currentTime, 40, 'a failed play does not reset the head');
-  assert.equal(harness.engine.pendingTransportRecovery.startSeconds, 40);
+  assert.notEqual(harness.api.snapshot().mode, 'error');
 
   online = true;
-  await harness.api.resume();
+  timers.fire(timers.pending().find(({ delay }) => delay <= 2_000));
   await settleTwice(harness);
-  const reopened = harness.sockets.at(-1).sent.find(({ type }) => type === 'open');
+  const reopened = harness.sockets.at(-1).sent.filter(({ type }) => type === 'open').at(-1);
   assert.equal(reopened.startFrame, 40 * 48_000);
+  assert.equal(harness.api.snapshot().paused, false);
 });
 
 test('the browser coming back online tries at once', async () => {

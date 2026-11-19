@@ -24,8 +24,8 @@ const EXPECTED_SHARD_COUNTS = new Map([
   ['cover-providers-2', 15],
   ['metadata-mutations', 16],
   ['playback-utilities-1', 14],
-  ['playback-utilities-2', 19],
-  ['playback-utilities-3', 16],
+  ['playback-utilities-2', 20],
+  ['playback-utilities-3', 17],
 ]);
 const EXPECTED_SHARD_DISPLAY_NAMES = new Map([
   ['gallery-search-visual-1', 'Gallery, Search & Visual 1'],
@@ -124,7 +124,7 @@ function functionalJobSource() {
   return { workflow, job: workflow.slice(start, end) };
 }
 
-test('functional shard contract pins the approved eight-way 169-case assignment', () => {
+test('functional shard contract pins the approved eight-way 171-case assignment', () => {
   const contract = readJson(shardContractPath);
   assert.equal(contract.browser, 'chrome');
   assert.equal(contract.workersPerInvocation, 1);
@@ -138,7 +138,7 @@ test('functional shard contract pins the approved eight-way 169-case assignment'
     assert.ok(shard.invocations.length > 0, `${shard.name} must not be empty`);
     assert.ok(shard.suitePrerequisites.length > 0, `${shard.name} must declare prerequisites`);
   }
-  assert.equal(total, 169);
+  assert.equal(total, 171);
   for (const ownedCase of ownedCases(contract)) {
     assert.match(ownedCase.area, /^[a-z]+(?:-[a-z]+)*$/, ownedCase.case);
   }
@@ -921,6 +921,8 @@ validatorTest('playback restores three wave baselines and isolates conflicting e
     [
       'FTC-LIBROOTS-016 / 017 / 018 reconciles filesystem changes and confirms missing-album removal',
       'FTC-UTIL-PROBLEMS-001 rolls back failed exclusion creation and reversion',
+      'FTC-PLAYBACK-OFFLINE-004 owner round 7 with Wi-Fi off and on: a click in the received audio plays at once, the head never jumps to the start, the song plays on by itself when the server is back, one Play continues it, and one press plays another song',
+      'FTC-PLAYBACK-OFFLINE-005 owner round 7 with the server answering 530 for a minute after Wi-Fi returns: a click in the received audio plays at once, the head never jumps to the start, the song plays on by itself when the server is back, one Play continues it, and one press plays another song',
     ].sort(),
   );
   assert.deepEqual(waveInvocations(4).flatMap((invocation) => invocation.cases.map(({ case: name }) => name)), [
@@ -985,8 +987,8 @@ validatorTest('all eight shards use explicit effect-compatible wave budgets', ()
     ['cover-providers-2', { cases: 15, waves: [1, 2] }],
     ['metadata-mutations', { cases: 16, waves: [1, 2, 3] }],
     ['playback-utilities-1', { cases: 14, waves: [1, 2, 3, 4] }],
-    ['playback-utilities-2', { cases: 19, waves: [1, 2, 5] }],
-    ['playback-utilities-3', { cases: 16, waves: [1, 2] }],
+    ['playback-utilities-2', { cases: 20, waves: [1, 2, 3, 5] }],
+    ['playback-utilities-3', { cases: 17, waves: [1, 2, 3] }],
   ]);
   const matrixByCase = new Map(matrix.map((row) => [row.case, row]));
 

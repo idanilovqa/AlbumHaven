@@ -241,20 +241,32 @@
     }
 
     // The kept copy of [url] when it may still be shown, marked as the version now running.
-    async function freshCopy(url) {
+    // The kept copy of [url] when it may still be shown, read without changing anything; null otherwise.
+    async function readCopy(url) {
       const target = await accountCache();
       if (!target) return null;
       const meta = await readMeta(target.cache);
       const page = meta.pages[pageKey(url)];
-      const copy = isFresh(page) ? await target.cache.match(url.href) : null;
-      if (copy && meta.served !== page.version) {
-        await quietly(exclusive(async () => {
-          const current = await readMeta(target.cache);
-          current.served = page.version;
-          await writeMeta(target.cache, current);
+      const response = isFresh(page) ? await target.cache.match(url.href) : null;
+      return response ? { response, version: page.version, served: meta.served, cache: target.cache } : null;
+    }
+
+    // [copy] is shown: its version is now the one running. Recorded in turn with the other writes,
+    // never awaited: on a busy computer that turn can take seconds (round 10).
+    function shown(copy) {
+      if (copy.served !== copy.version) {
+        void quietly(exclusive(async () => {
+          const current = await readMeta(copy.cache);
+          current.served = copy.version;
+          await writeMeta(copy.cache, current);
         }));
       }
-      return copy;
+      return copy.response;
+    }
+
+    async function freshCopy(url) {
+      const copy = await readCopy(url);
+      return copy ? shown(copy) : null;
     }
 
     // With the server unreachable, an address never kept (an artist opened after the last save) is
@@ -285,6 +297,13 @@
     async function serverFirst(url, event) {
       const network = fetchPage(url, { running: true }, event);
       const answered = network.catch(() => null);
+      // The answer for no answer, prepared while waiting so it is ready the moment the wait ends:
+      // on a busy computer reading the cache alone took seconds (round 10).
+      const ready = (async () => {
+        const kept = await readCopy(url);
+        const copy = kept ? kept.response : await standInCopy(url);
+        return copy ? { kept, response: await marked(copy, 'data-unanswered') } : null;
+      })().catch(() => null);
       let timer;
       const answer = await Promise.race([
         answered,
@@ -292,8 +311,10 @@
       ]);
       clearTimeout(timer);
       if (answer === NO_ANSWER) {
-        const copy = (await freshCopy(url)) || (await standInCopy(url));
-        return copy ? marked(copy, 'data-unanswered') : network;
+        const prepared = await ready;
+        if (!prepared) return network;
+        if (prepared.kept) shown(prepared.kept);
+        return prepared.response;
       }
       if (answer && answer.status < 500) return answer;
       await keptSoFar();

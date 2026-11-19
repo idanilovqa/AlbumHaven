@@ -1083,6 +1083,25 @@ test('IAR-W14: a navigation with no answer within the wait shows the copy, marke
   assert.match(await kept.text(), /Later/, 'the answer that came after the wait is kept');
 });
 
+// Round 10 on the owner's busy computer: reading the copy took seconds after the wait had ended.
+test('IAR-W14: the copy is prepared while waiting, so it is ready the moment the wait ends', async () => {
+  const server = heldServer();
+  const caches = fakeCaches();
+  const { worker, event } = setup({ mode: 'web', caches, respond: server.respond, noAnswerMs: 300 });
+  await worker.message({ type: 'save', url: `${ORIGIN}/` });
+  const cache = caches.stores.get(`${CACHE_PREFIX}acct-a`);
+  const match = cache.match.bind(cache);
+  cache.match = async (...args) => { await new Promise(resolve => setTimeout(resolve, 120)); return match(...args); };
+  server.hold();
+
+  const started = Date.now();
+  const response = await worker.handle('page', navigation('/'), event);
+
+  assert.match(await response.text(), /data-unanswered="1"/);
+  assert.ok(Date.now() - started < 450, `answered after ${Date.now() - started} ms, not after the wait plus the read`);
+  server.release(page('acct-a'));
+});
+
 test('IAR-W14: a slow answer within the wait is the page, never the copy', async () => {
   let slow = false;
   const respond = () => (slow ? new Promise(resolve => setTimeout(() => resolve(page('acct-a')), 20)) : page('acct-a'));

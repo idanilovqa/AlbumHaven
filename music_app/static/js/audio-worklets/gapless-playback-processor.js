@@ -30,6 +30,8 @@
       emittedFrames: 0,
       authoritativeTotalFrames: 0,
       firstFrameReported: false,
+      // The engine already buffered this stream's start, so it plays without the startup cushion.
+      primed: false,
       boundaryTailDecided: false,
     };
   }
@@ -45,6 +47,7 @@
     ring.emittedFrames = 0;
     ring.authoritativeTotalFrames = 0;
     ring.firstFrameReported = false;
+    ring.primed = false;
     ring.boundaryTailDecided = false;
   }
 
@@ -422,7 +425,8 @@
           || this.continuity.streamId !== message.streamId
           || this.continuity.bufferedFrames <= 0) return;
       this.pendingSeek = { ...this.pendingSeek, streamId: message.streamId,
-        timelineStartFrame: message.timelineStartFrame, ready: true };
+        timelineStartFrame: message.timelineStartFrame, ready: true,
+        primed: message.primed === true };
     }
 
     reserveSeek(message) {
@@ -639,6 +643,7 @@
       this.boundaryIncomingLeft[0] = this.continuity.samples[incomingSource];
       this.boundaryIncomingRight[0] = this.continuity.samples[incomingSource + 1];
       this.promoteContinuity();
+      this.current.primed = pending.primed === true;
       this.timelineFrame = pending.timelineStartFrame;
       this.pendingSeek = null;
       this.port.postMessage({
@@ -761,7 +766,7 @@
       this.commitPreparedSeek();
       this.commitBufferedSeek(left.length);
       if (!this.playing || !this.configured) return true;
-      if (!this.current.firstFrameReported && !this.current.eos
+      if (!this.current.firstFrameReported && !this.current.primed && !this.current.eos
           && this.current.bufferedFrames < this.startupBufferFrames) return true;
       if (this.rebuffering) {
         const refillReady = this.current.bufferedFrames >= this.startupBufferFrames

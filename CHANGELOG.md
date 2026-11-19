@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.40 - 2026-11-19
+
+- Test-only: the Python test suite runs as three parallel CI jobs, so its results arrive in about 14 minutes instead of 33, and four tests no longer wait out a 30-second database timeout.
+
 ## 0.11.39 - 2026-11-18
 
 - Test-only: the large-library performance check now records how long the first artist page and Home take even when they pass, so before/after comparisons no longer need a failing run.

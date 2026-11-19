@@ -210,7 +210,7 @@ function validateFunctionalShardContract(contract, discoveredCases) {
   for (const key of ownedKeys) {
     if (!discoveredKeys.has(key)) errors.push(`orphan or unknown owned functional case: ${key.replaceAll('\u0000', ' | ')}`);
   }
-  if (owned.length !== 192) errors.push(`functional contract owns ${owned.length} cases; expected 192`);
+  if (owned.length !== 193) errors.push(`functional contract owns ${owned.length} cases; expected 193`);
   return errors;
 }
 

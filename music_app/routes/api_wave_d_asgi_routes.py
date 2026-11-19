@@ -13,7 +13,8 @@ from time import perf_counter
 from uuid import UUID
 from urllib.parse import urlencode
 
-from anyio import from_thread
+import asyncio
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
@@ -46,9 +47,11 @@ from music_app.services.cover_state import (
     serialize_cover_gallery_payload,
 )
 from music_app.services.cover_lookup_runtime import (
+    REMOTE_COVER_PREVIEW_EDGE,
     fetch_remote_cover_bytes,
     merge_lookup_matches,
     queue_cover_lookup_task,
+    remote_cover_preview,
 )
 from music_app.services.cover_lookup_tasks import (
     cancel_cover_lookup_task_payload,
@@ -1495,11 +1498,13 @@ async def albums_selected_covers_save(request: Request, album_ref: str) -> JSONR
                                      resource=resource)(request)
 
         await authorize_current_selection()
+        loop = asyncio.get_running_loop()
         track_paths = set(context["track_paths"])
         album_root = await run_in_threadpool(resolve_album_write_root_from_track_paths, config, track_paths)
 
         def commit_and_publish(commit):
-            from_thread.run(authorize_current_selection)
+            # This thread holds the album's database and folder locks: every wait from here is bounded.
+            _run_on_loop_within(loop, authorize_current_selection, _COVER_SAVE_AUTHORIZATION_WAIT_SECONDS)
 
             def publish():
                 committed = commit()
@@ -1525,6 +1530,7 @@ async def albums_selected_covers_save(request: Request, album_ref: str) -> JSONR
                 state_service.invalidate_targeted_library_projections(
                     library_state, config, revision=committed["inventory_mutation_revision"],
                     affected_album_keys=(context["album_key"],),
+                    lock_timeout_seconds=state_service.COVER_COMMIT_RUNTIME_LOCK_WAIT_SECONDS,
                 )
 
         downloads = await run_in_threadpool(
@@ -1536,8 +1542,11 @@ async def albums_selected_covers_save(request: Request, album_ref: str) -> JSONR
                 track_paths=track_paths, album_root=album_root, expected_album_id=album_id,
                 **payload, commit_guard=commit_and_publish, downloads=downloads.paths,
             )
-        except (HTTPException, OrderedCoverSelectionConflict, InvalidOrderedCoverSelection, ValueError, FileNotFoundError):
-            # Definitely not saved: the album folder returns to how it was.
+        except (CoverMutationCommitUncertainError, CoverMutationFinalizationError):
+            raise  # The selection may name these downloads: keep them.
+        except Exception:
+            # Definitely not saved: the album folder returns to how it was, so a cover that
+            # never committed cannot stand in for the saved one.
             await run_in_threadpool(downloads.undo)
             raise
         # A replay saved nothing new, so this request's downloads are not referenced.
@@ -1633,6 +1642,19 @@ async def _answer_cover_lookup_with_ordered_save(
             lookup_task_id, config=config, selected_candidate_id=chosen,
         ),
     )
+
+
+_COVER_SAVE_AUTHORIZATION_WAIT_SECONDS = 10.0
+
+
+def _run_on_loop_within(loop, coroutine_function, timeout_seconds: float):
+    """Run a coroutine on the request's loop from a worker thread, waiting at most `timeout_seconds`."""
+    future = asyncio.run_coroutine_threadsafe(coroutine_function(), loop)
+    try:
+        return future.result(timeout=timeout_seconds)
+    except FutureTimeoutError:
+        future.cancel()
+        raise TimeoutError("The cover save could not be confirmed in time.") from None
 
 
 class OnlineCoverDownloadFailed(RuntimeError):
@@ -2107,6 +2129,8 @@ async def utilities_cover_lookup_remote_image(request: Request) -> Response:
     )
     if payload is None:
         return _json_response(({"ok": False, "error": "Failed to load remote image"}, 502))
+    if request.query_params.get("size") == str(REMOTE_COVER_PREVIEW_EDGE):
+        payload, mime_type = await run_in_threadpool(remote_cover_preview, payload, mime_type)
     return Response(payload, media_type=mime_type, headers={"Cache-Control": "public, max-age=3600"})
 
 

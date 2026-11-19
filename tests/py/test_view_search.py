@@ -403,7 +403,7 @@ def test_build_search_query_contract_exposes_shared_hybrid_grammar_direction():
             "supports_negation": True,
             "supports_quoted_values": True,
             "supports_comparison_operators": True,
-            "supports_fuzzy_commit_matching": True,
+            "supports_fuzzy_commit_matching": False,
             "shortcut_tokens": [
                 {
                     "token": ":loved",
@@ -442,27 +442,27 @@ def test_build_search_query_contract_exposes_shared_hybrid_grammar_direction():
                 "artist": {
                     "value_type": "string",
                     "supports_quotes": True,
-                    "supports_fuzzy_commit": True,
+                    "supports_fuzzy_commit": False,
                     "availability": "shared",
                 },
                 "genre": {
                     "value_type": "string",
                     "supports_quotes": True,
-                    "supports_fuzzy_commit": True,
+                    "supports_fuzzy_commit": False,
                     "supports_structured_suggestions": True,
                     "availability": "shared",
                 },
                 "mood": {
                     "value_type": "string",
                     "supports_quotes": True,
-                    "supports_fuzzy_commit": True,
+                    "supports_fuzzy_commit": False,
                     "supports_structured_suggestions": True,
                     "availability": "shared",
                 },
                 "style": {
                     "value_type": "string",
                     "supports_quotes": True,
-                    "supports_fuzzy_commit": True,
+                    "supports_fuzzy_commit": False,
                     "supports_structured_suggestions": True,
                     "availability": "shared",
                 },
@@ -489,14 +489,14 @@ def test_build_search_query_contract_exposes_shared_hybrid_grammar_direction():
                 "persons": {
                     "value_type": "csv_string",
                     "match_mode": "all_of",
-                    "supports_fuzzy_commit": True,
+                    "supports_fuzzy_commit": False,
                     "availability": "local_library_only",
                 },
             },
         },
         "structured_suggestions": {
             "value_fields": ["genre", "mood", "style"],
-            "fuzzy_commit_without_exact_suggestion": True,
+            "fuzzy_commit_without_exact_suggestion": False,
         },
         "committed_matching": {
             "priority_order": [
@@ -505,7 +505,6 @@ def test_build_search_query_contract_exposes_shared_hybrid_grammar_direction():
                 "phrase",
                 "prefix",
                 "distributed",
-                "fuzzy",
             ],
             "numeric_terms_are_near_exact": True,
         },
@@ -615,25 +614,20 @@ def test_build_legacy_search_context_ignores_malformed_people_search_shell_synta
 
 def test_a_short_field_word_inside_the_query_is_not_a_match():
     # Owner 2026-11-16: "dragonland" matched 28 A-ha tracks in Женя музыка ("a ha": "a" is inside the query).
-    from music_app.services.view_search import search_term_matches_field, search_word_matches
+    from music_app.services.view_search import search_term_matches_field
 
-    assert not search_word_matches("dragonland", "a")
-    assert not search_word_matches("dragonland", "land")
+    assert not search_term_matches_field("dragonland", "a")
+    assert not search_term_matches_field("dragonland", "land")
     assert not search_term_matches_field("dragonland", "a ha")
-    assert search_word_matches("dragonlands", "dragonland")
-    assert search_word_matches("dragonland", "dragonlands")
     assert search_term_matches_field("dragonland", "dragonland s rivers")
 
 
 def test_short_words_are_not_typos_of_the_query():
     # Owner 2026-11-18: "Alas" (normalized "ala") listed every loose track with the word "La" in it.
-    from music_app.services.view_search import search_terms_match_fields, search_word_matches, split_search_terms
+    from music_app.services.view_search import search_term_matches_field, search_terms_match_fields, split_search_terms
 
-    assert search_word_matches("ala", "la") is False
+    assert search_term_matches_field("ala", "la") is False
     assert search_terms_match_fields(split_search_terms("Alas"), ["la isla bonita", "madonna"]) is False
-    # Real typos in longer words still match.
-    assert search_word_matches("madona", "madonna") is True
-    assert search_word_matches("beatls", "beatles") is True
 
 
 def test_search_is_literal_and_never_drops_a_plural_s():
@@ -649,3 +643,20 @@ def test_search_is_literal_and_never_drops_a_plural_s():
     assert search_terms_match_fields(split_search_terms("Alas"), ["galasphere"]) is True
     assert search_terms_match_fields(split_search_terms("Alas"), ["falaschi"]) is True
     assert search_terms_match_fields(split_search_terms("Alas"), ["alas and alack"]) is True
+
+
+def test_search_is_literal_everywhere_with_no_close_spellings():
+    # Owner 2026-11-18: "Yes, literal everywhere". Only case, punctuation and apostrophes are normalised;
+    # a term matches when its letters appear in the field as written.
+    from music_app.services.view_search import (
+        artist_match_rank,
+        search_term_matches_field,
+    )
+
+    assert search_term_matches_field("denin", "devin townsend") is False
+    assert search_term_matches_field("madona", "madonna") is False
+    assert search_term_matches_field("beatls", "the beatles") is False
+    assert search_term_matches_field("dragonlands", "dragonland") is False
+    assert search_term_matches_field("dragonland", "dragonlands") is True
+    assert search_term_matches_field("acdc", "ac dc") is True
+    assert artist_match_rank("denin", "Devin Townsend", set())[0] == 5

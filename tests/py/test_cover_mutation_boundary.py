@@ -425,6 +425,17 @@ def test_local_preparation_rejects_bytes_changed_during_dimension_decode(tmp_pat
         cover_workflow.prepare_local_cover_image(path, dimensions)
 
 
+def test_every_lock_wait_in_a_cover_transaction_is_bounded_from_its_first_statement(boundary):
+    # The mutation holds its locks while it waits for the runtime lock, so no database lock
+    # wait in its transaction may be endless: the bound is set before the first lock is taken.
+    b = boundary
+    b.run(commit_guard=lambda commit, _effect: commit())
+    first_sql = " ".join(b.connection.operations[0][0].lower().split())
+    assert first_sql.startswith("select pg_advisory_xact_lock_shared(")
+    assert (f"from (select set_config('lock_timeout', '{persistence.COVER_MUTATION_LOCK_WAIT_MS}ms', true))"
+            in first_sql), "the timeout is set (transaction-local) before the shared lock is requested"
+
+
 def test_album_cover_lock_allows_foreign_key_checks_without_releasing_writer_serialization():
     sql = " ".join(persistence._load_legacy_cover_mutation_scope_sql(lock=True).lower().split())
     assert sql.endswith("for no key update of albums")

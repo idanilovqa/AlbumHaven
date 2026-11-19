@@ -287,7 +287,7 @@ def build_search_query_contract() -> dict[str, object]:
             "supports_negation": True,
             "supports_quoted_values": True,
             "supports_comparison_operators": True,
-            "supports_fuzzy_commit_matching": True,
+            "supports_fuzzy_commit_matching": False,
             "shortcut_tokens": [
                 {
                     "token": ":loved",
@@ -326,27 +326,27 @@ def build_search_query_contract() -> dict[str, object]:
                 "artist": {
                     "value_type": "string",
                     "supports_quotes": True,
-                    "supports_fuzzy_commit": True,
+                    "supports_fuzzy_commit": False,
                     "availability": "shared",
                 },
                 "genre": {
                     "value_type": "string",
                     "supports_quotes": True,
-                    "supports_fuzzy_commit": True,
+                    "supports_fuzzy_commit": False,
                     "supports_structured_suggestions": True,
                     "availability": "shared",
                 },
                 "mood": {
                     "value_type": "string",
                     "supports_quotes": True,
-                    "supports_fuzzy_commit": True,
+                    "supports_fuzzy_commit": False,
                     "supports_structured_suggestions": True,
                     "availability": "shared",
                 },
                 "style": {
                     "value_type": "string",
                     "supports_quotes": True,
-                    "supports_fuzzy_commit": True,
+                    "supports_fuzzy_commit": False,
                     "supports_structured_suggestions": True,
                     "availability": "shared",
                 },
@@ -373,14 +373,14 @@ def build_search_query_contract() -> dict[str, object]:
                 "persons": {
                     "value_type": "csv_string",
                     "match_mode": "all_of",
-                    "supports_fuzzy_commit": True,
+                    "supports_fuzzy_commit": False,
                     "availability": "local_library_only",
                 },
             },
         },
         "structured_suggestions": {
             "value_fields": ["genre", "mood", "style"],
-            "fuzzy_commit_without_exact_suggestion": True,
+            "fuzzy_commit_without_exact_suggestion": False,
         },
         "committed_matching": {
             "priority_order": [
@@ -389,94 +389,23 @@ def build_search_query_contract() -> dict[str, object]:
                 "phrase",
                 "prefix",
                 "distributed",
-                "fuzzy",
             ],
             "numeric_terms_are_near_exact": True,
         },
     }
 
 
-def bounded_edit_distance(left: str, right: str, max_distance: int = 2) -> int:
-    if left == right:
-        return 0
-    if not left:
-        return len(right)
-    if not right:
-        return len(left)
-    if abs(len(left) - len(right)) > max_distance:
-        return max_distance + 1
-    if len(left) > len(right):
-        left, right = right, left
-    previous = list(range(len(right) + 1))
-    for left_index, left_char in enumerate(left, start=1):
-        current = [left_index]
-        row_min = current[0]
-        for right_index, right_char in enumerate(right, start=1):
-            cost = 0 if left_char == right_char else 1
-            current_value = min(
-                previous[right_index] + 1,
-                current[right_index - 1] + 1,
-                previous[right_index - 1] + cost,
-            )
-            current.append(current_value)
-            if current_value < row_min:
-                row_min = current_value
-        if row_min > max_distance:
-            return max_distance + 1
-        previous = current
-    return previous[-1]
-
-
-def search_word_matches(query_word: str, candidate_word: str) -> bool:
-    return _search_word_matches(str(query_word or "").strip(), str(candidate_word or "").strip())
-
-
-@lru_cache(maxsize=262144)
-def _search_word_matches(query_text: str, candidate_text: str) -> bool:
-    if not query_text or not candidate_text:
-        return False
-    if query_text == candidate_text:
-        return True
-    if len(query_text) >= 3 and query_text in candidate_text:
-        return True
-    # A field word inside the query counts only when it is nearly the whole query ("dragonland" vs
-    # "dragonlands"): short words such as "a" or "land" made "dragonland" match A-ha (owner 2026-11-16).
-    if len(candidate_text) >= 4 and len(query_text) - len(candidate_text) <= 2 and candidate_text in query_text:
-        return True
-    # A typo is allowed only between words of four letters or more: "ala" and "la" are one letter apart, so every
-    # track with the word "la" matched the search "Alas" (owner 2026-11-18).
-    if min(len(query_text), len(candidate_text)) < 4:
-        return False
-    if query_text[0] != candidate_text[0]:
-        return False
-    max_distance = 1 if min(len(query_text), len(candidate_text)) <= 5 else 2
-    return bounded_edit_distance(query_text, candidate_text, max_distance) <= max_distance
-
-
 def search_term_matches_field(term: str, field: str) -> bool:
+    # Search is literal (owner 2026-11-18, "literal everywhere"): the term's letters must appear in the field as
+    # written. Only case, punctuation and spacing are normalised ("acdc" finds "AC/DC"); no close spellings.
     normalized_term = str(term or "").strip()
     normalized_field = str(field or "").strip()
     if not normalized_term or not normalized_field:
         return False
     if normalized_term in normalized_field:
         return True
-    field_words = [word for word in normalized_field.split() if word]
-    if any(search_word_matches(normalized_term, word) for word in field_words):
-        return True
     compact_term = compact_search_key(normalized_term)
-    compact_field = compact_search_key(normalized_field)
-    if not compact_term or not compact_field:
-        return False
-    if compact_term == compact_field:
-        return True
-    if len(compact_term) < 5 or len(compact_field) < 5:
-        return False
-    if compact_term[0] != compact_field[0]:
-        return False
-    if abs(len(compact_term) - len(compact_field)) > 2:
-        return False
-    max_distance = 1 if min(len(compact_term), len(compact_field)) <= 8 else 2
-    return bounded_edit_distance(compact_term, compact_field, max_distance) <= max_distance
+    return bool(compact_term) and compact_term in compact_search_key(normalized_field)
 
 
 def search_terms_match_fields(terms: list[str], fields: list[str]) -> bool:
@@ -622,8 +551,6 @@ def artist_match_rank(query: str, canonical_artist: str, aliases: set[str]) -> t
             rank = (2, candidate.find(normalized_query), candidate)
         elif normalized_query in candidate:
             rank = (3, candidate.find(normalized_query), candidate)
-        elif search_term_matches_field(normalized_query, candidate):
-            rank = (4, abs(len(candidate) - len(normalized_query)), candidate)
         else:
             rank = (5, len(candidate), candidate)
         if rank < best_rank:

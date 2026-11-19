@@ -2718,3 +2718,30 @@ def test_cover_lookup_start_recovers_empty_id_projection_by_track_paths(
 
     assert prepared_album["album_artist"] == "Overhead"
     assert prepared_paths == {str(track_path)}
+
+
+def test_remote_card_preview_is_downscaled_and_the_lightbox_keeps_the_original(app, monkeypatch):
+    from PIL import Image
+
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+
+    original = io.BytesIO()
+    Image.new("RGB", (2400, 2400), (10, 120, 200)).save(original, "JPEG", quality=95)
+    monkeypatch.setattr(asgi_routes, "fetch_remote_cover_bytes", lambda _url, **_kwargs: (original.getvalue(), "image/jpeg"))
+    asgi_app = _make_wave_d_app(app)
+    asgi_app.state.flask_app = _FatalFlaskBridge()
+    url = "https://images.example/apple-3000.jpg"
+
+    def get(**query):
+        return _run_asgi_request(asgi_app, "GET", "/utilities/cover-lookup/remote-image", query={"url": url, **query})
+
+    preview_status, preview_headers, preview_body = get(size="480", key="candidate")
+    full_status, _full_headers, full_body = get()
+    unsupported_status, _unsupported_headers, unsupported_body = get(size="4000")
+
+    assert (preview_status, full_status, unsupported_status) == (200, 200, 200)
+    assert preview_headers["content-type"] == "image/jpeg"
+    with Image.open(io.BytesIO(preview_body)) as preview:
+        assert preview.size == (480, 480)
+    # The lightbox keeps the original; only the one card edge is ever resized.
+    assert full_body == unsupported_body == original.getvalue()

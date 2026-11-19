@@ -395,6 +395,24 @@ def test_actual_inventory_exclusive_barrier_blocks_save_until_release(saved_pg):
 
 
 
+def test_actual_save_blocked_past_its_lock_bound_rolls_back_instead_of_waiting(saved_pg, monkeypatch):
+    import psycopg
+    from music_app.services import scan_cache_persistence
+    from music_app.services.relation_projection_postgres import inventory_publication_advisory_lock_sql
+    s = saved_pg
+    monkeypatch.setattr(scan_cache_persistence, "COVER_MUTATION_LOCK_WAIT_MS", 300)
+    with s.connect("ordered-save-endless-blocker") as blocker:
+        blocker.execute(inventory_publication_advisory_lock_sql())
+        try:
+            started = time.monotonic()
+            with pytest.raises(psycopg.errors.LockNotAvailable):
+                s.save(label="ordered-save-bounded-waiter")
+            assert time.monotonic() - started < 5
+        finally:
+            blocker.rollback()
+    assert s.state()["albums"][0][2] == s.original
+
+
 def _spawned_save_worker(target, root_text, track_text, label, mutation_id, result_queue):
     """Spawn entrypoint: constructs its own genuine driver and product adapter."""
     try:

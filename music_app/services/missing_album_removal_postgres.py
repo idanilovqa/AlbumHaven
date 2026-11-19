@@ -34,6 +34,7 @@ class PostgresMissingAlbumRemovalService:
         connect: Callable[[str], Any] | None = None,
         root_health_check: Callable[[str], bool] | None = None,
     ) -> None:
+        self._config = config
         self._database_url = str(
             config.get("ALBUM_HAVEN_APP_DATABASE_URL") or ""
         ).strip()
@@ -56,15 +57,24 @@ class PostgresMissingAlbumRemovalService:
             raise ValueError("Invalid album key")
         if not self._database_url:
             raise RuntimeError("ALBUM_HAVEN_APP_DATABASE_URL is required")
+        from music_app.services.gallery_projection_postgres import gallery_projection_context
+        from music_app.services.relation_projection_postgres import (
+            inventory_publication_advisory_lock_sql,
+            relation_projection_advisory_lock_sql,
+        )
+        from music_app.services.scoped_relation_projection import publish_affected_relation_projection
+
         with self._connect(self._database_url) as connection:
             with connection.transaction():
+                # The same locks and publication as every other inventory writer:
+                # resolve ownership after publication is locked, then publish the
+                # removal's relation journal before commit, so the gallery baseline
+                # never trails a removed album.
+                connection.execute(inventory_publication_advisory_lock_sql())
+                connection.execute(relation_projection_advisory_lock_sql())
+                gallery_context_before = gallery_projection_context(connection)
                 root_ids: list[str] = []
                 if self._root_health_check is not None:
-                    # Resolve ownership in a fresh statement after publication is
-                    # locked; the removal function takes the same transaction lock.
-                    connection.execute(
-                        "select pg_advisory_xact_lock(hashtext('album-haven:local-inventory-publication'));"
-                    )
                     root_ids = [
                         str(_row_mapping(root).get("root_id") or "").strip()
                         for root in connection.execute(
@@ -110,6 +120,11 @@ class PostgresMissingAlbumRemovalService:
                     if not healthy:
                         # This also rolls back changes made by the SQL function.
                         raise MissingAlbumRootUnavailable()
+                publish_affected_relation_projection(
+                    connection, album_keys=(normalized_key,), reason="missing_album_removal",
+                    config=self._config,
+                    expected_gallery_generation=(gallery_context_before or {}).get("generation"),
+                )
                 return {
                     "removed_album_key": str(result.get("removed_album_key") or ""),
                     "library_revision": int(

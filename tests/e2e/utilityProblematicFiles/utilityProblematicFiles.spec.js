@@ -1,9 +1,8 @@
-import path from 'node:path';
 import { assertCompactProblematicSummary } from '../helpers/problematicPayloadEvidence.js';
 import { expect, test } from '../support/performanceFixtures.js';
 import { setProblematicCompleteListHeld } from '../helpers/coverLookupProviderHelpers.js';
 import { createWatchedAlbumFixture } from '../helpers/libraryFilesystemWatcherFixture.js';
-import { authenticatedPageGet, authenticatedPagePost } from '../helpers/authenticatedPageRequest.js';
+import { authenticatedPageGet } from '../helpers/authenticatedPageRequest.js';
 import { queryPersistedAlbumIdentity } from '../helpers/postgresAlbumIdentityHelpers.js';
 
 import {
@@ -131,7 +130,6 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
         album: `PF Missing Album ${token}`,
         year: 2003,
         trackTitles: ['PF Missing First', 'PF Missing Second'],
-        createLocalArt: true,
         ownedDirectoryName: 'problematic-files-missing-album',
         context,
         managedAppLifecycle,
@@ -155,19 +153,8 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
         timeout: 90000,
         intervals: [500, 1000, 2000],
       }).toEqual([2]);
-      // Owner rule (2026-11-08): an untouched album whose files are deleted is removed outright. An in-app
-      // cover choice is the owner's data, so this album stays listed as "Album not found".
-      const coverChoice = await authenticatedPagePost(page, '/utilities/cover-lookup/local-select', {
-        data: {
-          album: {
-            name: `PF Missing Album ${token}`,
-            album_artist: `PF Missing Artist ${token}`,
-            tracks: missingAlbumFixture.tracks.map((track) => ({ path: track.path })),
-          },
-          source_path: path.join(missingAlbumFixture.albumDirectory, 'booklet-page.jpg'),
-        },
-      });
-      expect(coverChoice.status(), await coverChoice.text()).toBe(200);
+      // A Main Library album: only New Arrivals removes an untouched deleted album by itself
+      // (owner rule 2026-11-08, corrected 2026-11-18), so this one stays listed as "Album not found".
       missingAlbumFixture.deleteAlbum();
       await expect.poll(async () => ownedAlbumReasons(), {
         message: 'The server must report the removed owned album as Album not found.',

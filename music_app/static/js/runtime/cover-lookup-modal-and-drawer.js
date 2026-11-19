@@ -1153,32 +1153,6 @@ function orderedCoverAlbumId(album) {
   return Number.isInteger(albumId) && albumId > 0 ? albumId : 0;
 }
 
-function orderedCoverSlotsFromSelections(album, selections) {
-  const existing = new Map((Array.isArray(album?.selected_covers) ? album.selected_covers : [])
-    .map((slot) => [String(slot?.selection_id || slot?.selectionId || ''), slot]));
-  return (Array.isArray(selections) ? selections : []).map((entry, index) => {
-    const reference = entry?.reference || {};
-    const selectionId = String(reference.selection_id || `pending-${index + 1}`);
-    const retained = existing.get(selectionId);
-    const candidate = (state.coverLookup.modal.possibleMatches || [])
-      .find((item) => String(item?.id || '') === String(reference.candidate_id || ''));
-    const imageUrl = String(
-      retained?.image_url
-      || retained?.imageUrl
-      || (reference.kind === 'local' && reference.candidate_cover_ref ? buildCoverUrl(reference.candidate_cover_ref) : '')
-      || candidate?.url
-      || candidate?.thumbnail_url
-      || '',
-    );
-    return {
-      ...(retained || {}),
-      selection_id: selectionId,
-      image_url: imageUrl,
-      unavailable: !imageUrl,
-    };
-  });
-}
-
 function applyOrderedCoverSlotsToAlbum(album, slots, revision, loaded = true) {
   if (!album) return;
   const albumId = orderedCoverAlbumId(album);
@@ -1272,18 +1246,21 @@ async function saveOrderedCoverSelection() {
   const mutationId = String(modal.orderedCoverMutationId || crypto.randomUUID());
   // The lookup that published the chosen online cover, else the one Cover Look Up was opened from.
   const lookupTaskId = String(modal.remoteSelectionOverrideGeneration || modal.taskId || '').trim();
-  const previousSlots = Array.isArray(album.selected_covers)
-    ? album.selected_covers.map((slot) => ({ ...slot })) : [];
-  const previousLoaded = album.selected_covers_loaded === true;
-  const previousRevision = album.selected_covers_revision;
+  // Closing or reopening Cover Look Up starts a new session: this save then updates the album only.
+  const session = coverLookupModalSession;
+  const ownsModal = () => session === coverLookupModalSession && modal.album === album;
   modal.orderedCoverMutationId = mutationId;
   modal.saving = true;
-  applyOrderedCoverSlotsToAlbum(album, orderedCoverSlotsFromSelections(album, selections), modal.orderedCoversRevision);
+  // The album keeps its saved covers until the server confirms this choice: a cover that is still
+  // downloading or saving never shows as the album's selection, even after Cover Look Up reopens.
   syncCoverLookupSaveButton();
+  const deadline = typeof AbortController === 'function' ? new AbortController() : null;
+  const deadlineTimer = deadline ? setTimeout(() => deadline.abort(), ORDERED_COVER_SAVE_DEADLINE_MS) : null;
   try {
     const response = await fetch(`/albums/${albumId}/selected-covers`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
+      ...(deadline ? { signal: deadline.signal } : {}),
       body: JSON.stringify({
         expected_revision: Math.max(0, Number(modal.orderedCoversRevision || 0) || 0),
         mutation_id: mutationId,
@@ -1303,12 +1280,19 @@ async function saveOrderedCoverSelection() {
     }));
     applyOrderedCoverSlotsToAlbum(album, saved, data.selected_covers_revision);
     album.selected_covers_album_id = albumId;
-    if (!saved.length && typeof refreshCoverLookupAlbumArtwork === 'function') {
-      // The explicit "no cover" choice: the album shows no artwork at once, not after a reload.
-      refreshCoverLookupAlbumArtwork(album, [{
-        ...album, cover_path: null, cover_revision: null, remote_cover_url: null, remote_cover_thumbnail_url: null,
-      }]);
+    try {
+      showSavedOrderedCoverEverywhere(album, saved);
+    } catch (error) {
+      // The save is confirmed; a view that could not refresh catches up on its next render.
+      console.warn('[AlbumHaven][CoverLookup] Saved cover could not refresh every view.', error);
     }
+    // The server answered the lookup notification this choice came from.
+    const answeredTaskId = String(data.lookup_task?.id || '').trim();
+    if (answeredTaskId) {
+      markCoverLookupTaskActionTaken(answeredTaskId, album, { persist: false });
+      renderCoverLookupDrawer({ taskIds: [answeredTaskId] });
+    }
+    if (!ownsModal()) return true;
     modal.orderedCoversRevision = album.selected_covers_revision;
     modal.orderedCoverSelections = selections.map((entry, index) => ({
       key: entry.key,
@@ -1316,25 +1300,55 @@ async function saveOrderedCoverSelection() {
     }));
     modal.orderedCoverBaseline = orderedCoverSelectionSignature(modal.orderedCoverSelections);
     modal.orderedCoverMutationId = '';
-    // The server answered the lookup notification this choice came from.
-    const answeredTaskId = String(data.lookup_task?.id || '').trim();
-    if (answeredTaskId) {
-      markCoverLookupTaskActionTaken(answeredTaskId, album, { persist: false });
-      renderCoverLookupDrawer({ taskIds: [answeredTaskId] });
-    }
     closeCoverLookupModal();
     return true;
   } catch (error) {
-    applyOrderedCoverSlotsToAlbum(album, previousSlots, previousRevision, previousLoaded);
     console.error('[AlbumHaven][CoverLookup] Failed to save ordered cover selection.', error);
-    if (typeof showToast === 'function') {
-      showToast(error.message || 'Failed to save cover selection.', 'error', 3200);
+    const message = deadline?.signal.aborted
+      ? ORDERED_COVER_SAVE_DEADLINE_MESSAGE
+      : (error.message || 'Failed to save cover selection.');
+    if (typeof showToast === 'function') showToast(message, 'error', 6000);
+    if (ownsModal()) {
+      modal.statusText = message;
+      modal.statusTone = 'error';
+      if (typeof renderCoverLookupModal === 'function') renderCoverLookupModal();
     }
     return false;
   } finally {
-    modal.saving = false;
-    syncCoverLookupSaveButton();
+    if (deadlineTimer !== null) clearTimeout(deadlineTimer);
+    if (ownsModal()) {
+      modal.saving = false;
+      syncCoverLookupSaveButton();
+    }
   }
+}
+
+// Longer than every server bound on a save (downloads, lock waits), so a slow but working save
+// still finishes; past it the dialog stops "Saving" and says what to do.
+const ORDERED_COVER_SAVE_DEADLINE_MS = 60000;
+const ORDERED_COVER_SAVE_DEADLINE_MESSAGE = 'Saving the cover took too long and was stopped. '
+  + 'Reopen Cover Look Up to see whether it was saved, then save again if needed.';
+
+// After a confirmed save, the gallery card, Album Details and every other view of the album show
+// the saved primary cover at once. Saved-cover URLs are never cached, so they show the committed file.
+function showSavedOrderedCoverEverywhere(album, saved) {
+  if (typeof refreshCoverLookupAlbumArtwork !== 'function') return;
+  const signature = getAlbumPathSignature(album) || `${album?.key || ''}::${album?.name || ''}::${album?.album_artist || ''}`;
+  const primarySrc = String(saved[0]?.image_url || '').trim();
+  if (!saved.length) {
+    // The explicit "no cover" choice: the album shows no artwork at once, not after a reload.
+    delete state.coverLookup.optimisticAlbumCovers[signature];
+    refreshCoverLookupAlbumArtwork(album, [{
+      ...album, cover_ref: null, cover_preview_url: null, cover_path: null, cover_revision: null,
+      remote_cover_url: null, remote_cover_thumbnail_url: null,
+    }]);
+    return;
+  }
+  if (typeof invalidateCoverLookupGalleryCache === 'function') invalidateCoverLookupGalleryCache(album);
+  if (primarySrc) state.coverLookup.optimisticAlbumCovers[signature] = { src: primarySrc, coverRef: '' };
+  // A cover.jpg rewritten by this save must not be served from a cached URL anywhere else either.
+  if (typeof markAlbumCoverRefsFresh === 'function') markAlbumCoverRefsFresh([album]);
+  refreshCoverLookupAlbumArtwork(album, [{ ...album, cover_preview_url: null }]);
 }
 
 function syncCoverLookupSelectionUi() {

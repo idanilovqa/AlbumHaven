@@ -25,6 +25,11 @@ function loadRuntime() {
     escapeHtml: (value) => String(value ?? ''),
     buildCoverUrl: (value) => `/cover?path=${encodeURIComponent(value)}`,
     ButtonComponent: { renderActionButton: () => '' },
+    setTimeout,
+    clearTimeout,
+    AbortController,
+    getAlbumPathSignature: (album) => String(album?.album_id || ''),
+    markAlbumCoverRefsFresh: () => {},
   };
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(sourcePath, 'utf8'), context, { filename: sourcePath });
@@ -177,8 +182,8 @@ require('node:test')('ordered Save sends revision and reuses its mutation UUID a
   };
   context.fetch = async (url, options) => {
     calls.push({ url, body: JSON.parse(options.body) });
-    assert.equal(context.state.coverLookup.modal.album.selected_covers_loaded, true);
-    assert.equal(context.state.coverLookup.modal.album.selected_covers.length, 2);
+    // Until the server confirms, the album keeps its saved covers (owner 2026-11-18).
+    assert.equal(context.state.coverLookup.modal.album.selected_covers, undefined);
     attempt += 1;
     if (attempt === 1) {
       return {
@@ -204,8 +209,7 @@ require('node:test')('ordered Save sends revision and reuses its mutation UUID a
   };
 
   assert.equal(await context.saveOrderedCoverSelection(), false);
-  assert.equal(context.state.coverLookup.modal.album.selected_covers_loaded, false);
-  assert.deepEqual(JSON.parse(JSON.stringify(context.state.coverLookup.modal.album.selected_covers)), []);
+  assert.equal(context.state.coverLookup.modal.album.selected_covers, undefined);
   assert.equal(context.state.coverLookup.modal.orderedCoverMutationId, calls[0].body.mutation_id);
   assert.equal(await context.saveOrderedCoverSelection(), true);
 
@@ -693,4 +697,131 @@ require('node:test')('a saved selection stays on the exact file even when anothe
   context.applyCoverLookupSelectionIntent({ key: 'local:ref-cover', reference: {} });
   assert.deepEqual(modal.orderedCoverSelections.map((item) => item.key),
     ['local:ref-cover-existing-1']);
+});
+
+// Owner 2026-11-18: a Save that hung, then a closed and reopened Cover Look Up, showed an empty
+// cover as selected, and the gallery card and Album Details never changed after a real save.
+function savingRuntime() {
+  const context = loadRuntime();
+  const views = { patched: [], cards: [], details: [], toasts: [], closed: 0, timers: [] };
+  context.crypto = { randomUUID: () => '7c1d2a8e-1d0b-4c43-9b8e-2f6a3c5d4e10' };
+  context.showToast = (message) => views.toasts.push(message);
+  context.closeCoverLookupModal = () => { views.closed += 1; };
+  context.renderCoverLookupModal = () => {};
+  context.state.coverLookup.optimisticAlbumCovers = {};
+  context.getAlbumTrackPaths = (album) => new Set((album?.tracks || []).map((track) => track.path));
+  context.getUpdatedAlbumForTrackPaths = (albums) => albums[0];
+  context.patchVisibleAlbumsByTrackPath = (albums) => views.patched.push(albums[0]);
+  context.refreshRenderedAlbumCoverOnly = (album) => views.cards.push(album);
+  context.updateTrackModalIfStillShowingAlbum = (_original, albums) => views.details.push(albums[0]);
+  context.setTimeout = (callback, ms) => { views.timers.push({ callback, ms }); return views.timers.length; };
+  context.clearTimeout = () => {};
+  const saved = [{ selection_id: 'old-front', kind: 'local', image_url: '/cover?library_id=23&album_id=72&selection_id=old-front' }];
+  const album = {
+    album_id: 72, selected_covers_album_id: 72, selected_covers_library_id: 23,
+    selected_covers_loaded: true, selected_covers_revision: 4,
+    selected_covers: saved.map((slot) => ({ ...slot })),
+    tracks: [{ path: 'synthetic/track-1.flac' }],
+  };
+  context.state.coverLookup.modal = {
+    album,
+    orderedCoversRevision: 4,
+    orderedSelectionLoaded: true,
+    orderedCoverBaseline: JSON.stringify([{ selection_id: 'old-front' }]),
+    orderedCoverSelections: [{
+      key: 'remote:candidate-2',
+      reference: { kind: 'remote', candidate_id: 'candidate-2', candidate_generation: 'lookup-1' },
+    }],
+    saving: false,
+  };
+  const reopen = () => vm.runInContext('coverLookupModalSession += 1', context);
+  return { context, views, album, saved, reopen };
+}
+
+require('node:test')('an unconfirmed save never becomes the selected cover, even after Cover Look Up reopens', async () => {
+  const { context, views, album, saved, reopen } = savingRuntime();
+  let answer;
+  context.fetch = () => new Promise((resolve) => { answer = resolve; });
+
+  const saving = context.saveOrderedCoverSelection();
+  assert.equal(context.state.coverLookup.modal.saving, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(album.selected_covers)), saved, 'still the saved cover while saving');
+
+  // The owner closes and reopens Cover Look Up while the save is still running.
+  reopen();
+  context.state.coverLookup.modal.saving = false;
+  assert.equal(context.seedOrderedCoverSelectionFromAlbum(album), true);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.state.coverLookup.modal.orderedCoverSelections.map((item) => item.reference))),
+    [{ selection_id: 'old-front' }],
+    'the reopened dialog selects the saved cover, not the unfinished one',
+  );
+
+  answer({ ok: false, json: async () => ({ ok: false, error: 'Cover selection is temporarily unavailable. Retry the same request.' }) });
+  assert.equal(await saving, false);
+  assert.deepEqual(JSON.parse(JSON.stringify(album.selected_covers)), saved);
+  assert.deepEqual(views.cards, [], 'no view shows a cover that was not saved');
+  assert.equal(views.closed, 0, 'the reopened dialog stays open');
+  assert.deepEqual(views.toasts, ['Cover selection is temporarily unavailable. Retry the same request.']);
+});
+
+require('node:test')('a save that never answers stops at its deadline with a readable failure', async () => {
+  const { context, views, album, saved } = savingRuntime();
+  let signal;
+  context.fetch = (_url, options) => new Promise((_resolve, reject) => {
+    signal = options.signal;
+    signal.addEventListener('abort', () => reject(new Error('The operation was aborted.')));
+  });
+
+  const saving = context.saveOrderedCoverSelection();
+  assert.equal(views.timers.length, 1);
+  assert.ok(views.timers[0].ms >= 30000, 'slow but working saves still finish');
+  views.timers[0].callback();
+  assert.equal(await saving, false);
+
+  const modal = context.state.coverLookup.modal;
+  assert.equal(signal.aborted, true);
+  assert.equal(modal.saving, false, 'the dialog no longer says Saving');
+  assert.match(modal.statusText, /took too long.*Reopen Cover Look Up to see whether it was saved/);
+  assert.equal(modal.statusTone, 'error');
+  assert.deepEqual(views.toasts, [modal.statusText]);
+  assert.ok(modal.orderedCoverMutationId, 'a retry can replay the same request');
+  assert.deepEqual(JSON.parse(JSON.stringify(album.selected_covers)), saved);
+});
+
+require('node:test')('a confirmed save shows the saved cover on the gallery card, Album Details and every view at once', async () => {
+  const { context, views, album } = savingRuntime();
+  context.fetch = async () => ({
+    ok: true,
+    json: async () => ({ ok: true, selected_covers_revision: 5, selected_covers: [{ selection_id: 'new-front', kind: 'local' }] }),
+  });
+
+  assert.equal(await context.saveOrderedCoverSelection(), true);
+  const shown = '/cover?library_id=23&album_id=72&selection_id=new-front';
+  assert.equal(album.selected_covers[0].image_url, shown);
+  assert.equal(context.state.coverLookup.optimisticAlbumCovers['72'].src, shown, 'every cover view draws the saved file');
+  assert.equal(views.cards.length, 1, 'gallery card');
+  assert.equal(views.details.length, 1, 'Album Details');
+  assert.equal(views.patched.length, 1, 'gallery groups and other views of the album');
+  assert.equal(views.closed, 1);
+});
+
+require('node:test')('a save confirmed after Cover Look Up reopened updates the album and leaves the new dialog alone', async () => {
+  const { context, views, album, reopen } = savingRuntime();
+  let answer;
+  context.fetch = () => new Promise((resolve) => { answer = resolve; });
+  const saving = context.saveOrderedCoverSelection();
+  reopen();
+  const reopened = { ...context.state.coverLookup.modal, saving: false, orderedCoversRevision: 4 };
+  context.state.coverLookup.modal = reopened;
+  answer({
+    ok: true,
+    json: async () => ({ ok: true, selected_covers_revision: 5, selected_covers: [{ selection_id: 'new-front', kind: 'local' }] }),
+  });
+
+  assert.equal(await saving, true);
+  assert.equal(album.selected_covers_revision, 5);
+  assert.equal(views.cards.length, 1, 'the gallery card still updates');
+  assert.equal(views.closed, 0, 'the reopened dialog is not closed by the earlier save');
+  assert.equal(reopened.orderedCoversRevision, 4);
 });

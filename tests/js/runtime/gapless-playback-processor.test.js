@@ -912,6 +912,40 @@ test('initial playback waits for its configured PCM cushion before rendering the
   assert.equal(fixture.events('underrun').length, 0);
 });
 
+function primedSeekFixture() {
+  const fixture = createProcessor({
+    currentCapacityFrames: 512,
+    continuityCapacityFrames: 512,
+    startupBufferFrames: QUANTUM_FRAMES * 3,
+  });
+  enqueue(fixture, { streamId: 41, role: 'current', sequence: 0, left: Array(QUANTUM_FRAMES * 3).fill(0.25) });
+  play(fixture);
+  renderQuantum(fixture);
+  fixture.send({ type: 'reserve-seek', generation: fixture.generation, streamId: 42, timelineStartFrame: 0 });
+  enqueue(fixture, { streamId: 42, role: 'continuity', sequence: 0, left: Array(QUANTUM_FRAMES).fill(-0.5) });
+  return fixture;
+}
+
+test('a primed replacement plays at its cutover without waiting for the startup cushion', () => {
+  const fixture = primedSeekFixture();
+  fixture.send({
+    type: 'prepare-seek', generation: fixture.generation, streamId: 42, timelineStartFrame: 0, primed: true,
+  });
+
+  assert.deepEqual(renderQuantum(fixture).left, Array(QUANTUM_FRAMES).fill(-0.5));
+  assert.equal(fixture.events('seek-boundary').length, 1);
+  assert.equal(fixture.events('first-frame').length, 2);
+});
+
+test('an unprimed seek target still waits for the startup cushion after its cutover', () => {
+  const fixture = primedSeekFixture();
+  fixture.send({ type: 'prepare-seek', generation: fixture.generation, streamId: 42, timelineStartFrame: 0 });
+
+  assertRenderedSilence(fixture);
+  assert.equal(fixture.events('seek-boundary').length, 1);
+  assert.equal(fixture.events('first-frame').length, 1);
+});
+
 test('reserved seek retains the outgoing window from seek intent while preparation catches up', () => {
   const fixture = createProcessor({ currentCapacityFrames: 512, continuityCapacityFrames: 512 });
   enqueue(fixture, {

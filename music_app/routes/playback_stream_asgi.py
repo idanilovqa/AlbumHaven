@@ -18,6 +18,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from music_app.routes.playback_control_asgi import playback_config
 from music_app.services.library_roots import resolve_configured_media_path
+from music_app.services.mp3_stream_map import mp3_stream_map
 from music_app.services.loops import resolve_loop_media_path
 from music_app.services.playback_io import run_playback_io
 from music_app.services.playback_seek_table import flac_seek_table
@@ -703,9 +704,37 @@ class _PlaybackPcmConnection:
         finally:
             self._pending_opens.discard(task)
 
+    def _scan_while_authorizing(self, control: dict[str, Any]) -> None:
+        """Starts an MP3 open's whole-file frame scan before the actor refresh answers.
+
+        Both take a database or disk round trip under load; side by side, the open waits for the
+        slower one instead of both. The socket was authorized when it connected, nothing is sent
+        before the refresh passes, and the scan only fills the frame-map cache the open reads.
+        """
+        raw_path = control.get("path")
+        codecs = control.get("codecs")
+        if (
+            not isinstance(raw_path, str)
+            or not raw_path.lower().endswith(".mp3")
+            or len(raw_path) > MAX_TRACK_PATH_CHARACTERS
+            or not isinstance(codecs, list)
+            or "mp3" not in codecs
+        ):
+            return
+        resolved_path = resolve_configured_media_path(self._websocket.app.state.config, raw_path)
+        if resolved_path is None:
+            return
+        scan = asyncio.ensure_future(run_playback_io(mp3_stream_map, resolved_path))
+        self._pending_credit_tasks.add(scan)
+        scan.add_done_callback(self._pending_credit_tasks.discard)
+        scan.add_done_callback(lambda done: done.cancelled() or done.exception())
+
     async def _open_tracked(self, control: dict[str, Any]) -> bool:
         received_at = time.monotonic()
-        if self._closed or not await self._authorize_media_read():
+        if self._closed:
+            return False
+        self._scan_while_authorizing(control)
+        if not await self._authorize_media_read():
             return False
         generation = _bounded_integer(
             control.get("generation"), minimum=1, maximum=_MAX_PROTOCOL_INTEGER

@@ -8462,6 +8462,11 @@ const STREAMING_ENCODED_BUFFER_MIN_BYTES = 1024 * 1024;
 const STREAMING_ENCODED_BUFFER_MAX_BYTES = 16 * 1024 * 1024;
 const STREAMING_FALLBACK_BYTES_PER_SECOND = 40_000;
 const STREAMING_ENCODED_CREDIT_BYTES = 64 * 1024;
+// Several credits stay in flight, so a start's cushion does not wait one round trip per credit.
+const STREAMING_ENCODED_CREDIT_WINDOW_BYTES = 4 * STREAMING_ENCODED_CREDIT_BYTES;
+// A start opens at the rate already playing (or this one) instead of asking first; the server
+// answers a wrong guess with the track's rate and the start runs again at it.
+const STREAMING_GUESSED_SAMPLE_RATE = 44_100;
 // The bytes of a stream kept for seeks inside it; a longer stream seeks through the server.
 const STREAMING_KEPT_INITIAL_BYTES = 256 * 1024;
 const STREAMING_KEPT_MAX_BYTES = 64 * 1024 * 1024;
@@ -9397,6 +9402,22 @@ function leaveStreamingTrackForRateChange(track) {
   });
 }
 
+// The server opened nothing for a start at a guessed rate; once that start has returned, the
+// same track starts again at the rate the server reported.
+function restartStreamingStartAtTrackRate(roleState) {
+  const engine = streamingEngineState();
+  const { startSeconds, autoplay } = roleState.guessedStart;
+  void Promise.resolve(engine.startInFlight).catch(() => {}).then(() => {
+    if (engine.roles.current !== roleState) return null;
+    engine.roles.current = null;
+    refreshStreamingActiveRoles();
+    return startStreamingTrack(roleState.track, {
+      startSeconds,
+      autoplay: autoplay && engine.mode !== 'paused',
+    });
+  }).catch((error) => failStreamingEngine('socket', error, 'rate-mismatch'));
+}
+
 function handleStreamingRateMismatch(roleState, message) {
   const engine = streamingEngineState();
   rememberStreamingTrackFormat(String(roleState.track?.path || ''), message.sampleRate, {
@@ -9410,6 +9431,10 @@ function handleStreamingRateMismatch(roleState, message) {
     refreshStreamingActiveRoles();
     startStreamingTrack(roleState.track, { startSeconds: roleState.continuityOptions.startSeconds })
       .then(replacement.resolve, replacement.reject);
+    return;
+  }
+  if (roleState.role === 'current' && roleState.guessedStart && engine.roles.current === roleState) {
+    restartStreamingStartAtTrackRate(roleState);
     return;
   }
   if (roleState.role !== 'continuity' || roleState.continuityOptions?.kind !== 'queued-next') {
@@ -9467,6 +9492,8 @@ function maybePrepareStreamingSeek(roleState) {
     generation: roleState.generation,
     streamId: roleState.streamId,
     timelineStartFrame: pendingSeek.startFrame,
+    // A switched-to track is buffered to its prepare target; it should not wait for more.
+    primed: pendingSeek.kind === 'replacement',
   });
   publishStreamingDiagnostics();
 }
@@ -9699,17 +9726,17 @@ function refillStreamingEncodedBytes(roleState) {
   if (streamingEngineState().pendingSeek?.currentStreamId === roleState.streamId) return;
   const { wire } = encoded;
   if (wire.eos) return;
-  const missingBytes = streamingEncodedBufferBytes(roleState)
-    - encoded.queuedBytes - wire.creditedBytes;
-  if (missingBytes < STREAMING_ENCODED_CREDIT_BYTES
-      || wire.creditedBytes >= STREAMING_ENCODED_CREDIT_BYTES) return;
   const frames = STREAMING_ENCODED_CREDIT_BYTES;
-  if (sendStreamingControl({
-    type: 'credit',
-    generation: roleState.generation,
-    streamId: wire.streamId,
-    frames,
-  })) wire.creditedBytes += frames;
+  while (streamingEncodedBufferBytes(roleState) - encoded.queuedBytes - wire.creditedBytes >= frames
+      && wire.creditedBytes + frames <= STREAMING_ENCODED_CREDIT_WINDOW_BYTES) {
+    if (!sendStreamingControl({
+      type: 'credit',
+      generation: roleState.generation,
+      streamId: wire.streamId,
+      frames,
+    })) return;
+    wire.creditedBytes += frames;
+  }
 }
 
 function appendStreamingDecodedAudio(encoded, decoded) {
@@ -10574,6 +10601,49 @@ async function prepareStreamingPlaybackEngine(sampleRate = 0) {
     let node = null;
     let socket = null;
     try {
+      // The socket connects while the audio graph is built.
+      if (!engine.socket) {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        socket = new WebSocket(`${protocol}//${window.location.host}/playback/pcm`);
+        socket.binaryType = 'arraybuffer';
+        socket.onopen = () => {
+          flushStreamingControls();
+          keepStreamingSocketAlive(socket);
+        };
+        socket.onerror = (event) => {
+          if (engine.socket !== socket) return;
+          const detail = event?.error?.message || event?.message || 'Playback socket error';
+          engine.diagnostics.lastSocketError = {
+            message: String(detail),
+            atMs: performance.now(),
+          };
+          publishStreamingDiagnostics();
+        };
+        socket.onclose = (event) => {
+          if (engine.expectedSocketClose === socket) {
+            engine.expectedSocketClose = null;
+            return;
+          }
+          if (engine.socket !== socket) return;
+          void recoverUnexpectedStreamingSocketClose(socket, event)
+            .catch((error) => console.error('Streaming socket recovery failed', error));
+        };
+        socket.onmessage = ({ data }) => {
+          if (data instanceof ArrayBuffer) {
+            handleStreamingPcm(data);
+            return;
+          }
+          if (typeof data !== 'string') return;
+          try {
+            handleStreamingControl(JSON.parse(data));
+          } catch (error) {
+            failStreamingEngine('socket', error, 'json-protocol-error');
+          }
+        };
+        engine.socket = socket;
+        engine.pendingControls = [];
+        engine.nextStreamId ??= 1;
+      }
       if (!audioGraphReady) {
         await retireStreamingAudioGraph();
         // 'playback' asks for large output buffers; the default suits games and calls.
@@ -10598,48 +10668,7 @@ async function prepareStreamingPlaybackEngine(sampleRate = 0) {
         engine.node = node;
         engine.backingCapacityFrames = initialStreamingBackingCapacities();
       }
-      if (engine.socket) return;
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      socket = new WebSocket(`${protocol}//${window.location.host}/playback/pcm`);
-      socket.binaryType = 'arraybuffer';
-      socket.onopen = () => {
-        flushStreamingControls();
-        keepStreamingSocketAlive(socket);
-      };
-      socket.onerror = (event) => {
-        if (engine.socket !== socket) return;
-        const detail = event?.error?.message || event?.message || 'Playback socket error';
-        engine.diagnostics.lastSocketError = {
-          message: String(detail),
-          atMs: performance.now(),
-        };
-        publishStreamingDiagnostics();
-      };
-      socket.onclose = (event) => {
-        if (engine.expectedSocketClose === socket) {
-          engine.expectedSocketClose = null;
-          return;
-        }
-        if (engine.socket !== socket) return;
-        void recoverUnexpectedStreamingSocketClose(socket, event)
-          .catch((error) => console.error('Streaming socket recovery failed', error));
-      };
-      socket.onmessage = ({ data }) => {
-        if (data instanceof ArrayBuffer) {
-          handleStreamingPcm(data);
-          return;
-        }
-        if (typeof data !== 'string') return;
-        try {
-          handleStreamingControl(JSON.parse(data));
-        } catch (error) {
-          failStreamingEngine('socket', error, 'json-protocol-error');
-        }
-      };
-      engine.socket = socket;
-      engine.pendingControls = [];
-      engine.nextStreamId ??= 1;
-      engine.mode = 'prepared';
+      if (socket) engine.mode = 'prepared';
     } catch (error) {
       if (engine.socket === socket) engine.socket = null;
       if (engine.node === node) engine.node = null;
@@ -10964,7 +10993,14 @@ function probeStreamingTrackWaveform(track) {
   }
 }
 
-async function startBrowserStreamingTrack(track, {
+function startBrowserStreamingTrack(track, options = {}) {
+  const engine = streamingEngineState();
+  const start = startBrowserStreamingTrackNow(track, options);
+  engine.startInFlight = start;
+  return start;
+}
+
+async function startBrowserStreamingTrackNow(track, {
   startSeconds = 0,
   autoplay = true,
   allowSuspendedAutoplayFallback = false,
@@ -11071,11 +11107,16 @@ async function startBrowserStreamingTrack(track, {
   engine.lifecycleEpoch ??= 0;
   const lifecycleEpoch = engine.lifecycleEpoch;
   let sampleRate = 0;
+  const guessedSampleRate = !knownStreamingSampleRate(track) && chooseStreamingQuality(track) === 'original';
   try {
-    await prepareStreamingPlaybackEngine();
     if (typeof ensureStreamingDecoders === 'function') void ensureStreamingDecoders();
-    await requestStreamingSampleRate(track);
-    sampleRate = streamingPlaybackRate(track);
+    if (guessedSampleRate) {
+      sampleRate = engine.sampleRate || STREAMING_GUESSED_SAMPLE_RATE;
+    } else {
+      await prepareStreamingPlaybackEngine();
+      await requestStreamingSampleRate(track);
+      sampleRate = streamingPlaybackRate(track);
+    }
     if (engine.startRequestId === startRequestId && !sampleRate) {
       throw new Error('The track sample rate could not be read');
     }
@@ -11130,6 +11171,7 @@ async function startBrowserStreamingTrack(track, {
   const current = openStreamingRole('current', track, startFrame);
   if (!current) return null;
   current.transportRecoveryAttempt = Math.max(0, Number(transportRecoveryAttempt) || 0);
+  if (guessedSampleRate) current.guessedStart = { startSeconds: Math.max(0, startSeconds), autoplay };
   probeStreamingTrackWaveform(track);
   engine.node.port.postMessage({
     type: 'configure',

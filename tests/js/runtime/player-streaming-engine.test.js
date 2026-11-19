@@ -5060,6 +5060,28 @@ test('another song pressed once while the server is still away opens on the firs
   void started;
 });
 
+test('a socket lost while another song waits to replace the playing one opens that song on the next socket, and the press completes', async () => {
+  const harness = encodedHarness({ createStreamingDecoder: recordingDecoders().create });
+  await startLocallySeekable(harness, 100_000);
+  await harness.api.resume();
+  await settleTwice(harness);
+
+  let pressed;
+  const press = harness.api.start(makeTrack('02.mp3')).then((role) => { pressed = role; });
+  await settleTwice(harness);
+  assert.equal(harness.engine.pendingSeek?.kind, 'replacement', 'the song is prepared beside the playing one');
+
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  await settleTwice(harness);
+  const opened = harness.sockets.at(-1).sent.filter(({ type }) => type === 'open').at(-1);
+  assert.equal(opened?.path, makeTrack('02.mp3').path);
+  assert.equal(opened.startFrame, 0);
+  await press;
+  assert.equal(pressed?.track.path, makeTrack('02.mp3').path, 'the press settles with the reopened song');
+  assert.notEqual(harness.api.snapshot().mode, 'error');
+});
+
 test('a refused socket still stops playback with an error', async () => {
   const harness = createEngineHarness();
   await harness.api.start(makeTrack());

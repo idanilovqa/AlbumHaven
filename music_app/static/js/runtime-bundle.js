@@ -26299,6 +26299,7 @@ async function watchSaveTask(taskId, context = {}) {
       ).trim().toLowerCase(),
     }
     : null;
+  let completionAnnounced = false;
   for (let attempt = 0; attempt < 120; attempt += 1) {
     const consumesProvidedTerminalPayload = Boolean(
       providedTerminalPayload
@@ -26322,6 +26323,26 @@ async function watchSaveTask(taskId, context = {}) {
         continue;
       }
       if (data.status === 'completed') {
+        const completionMessage = String(
+          context.tagEditAlert?.completionMessage || '',
+        ).trim();
+        // Owner (2026-11-19): "Saved" shows once the server has accepted the save; the Gallery
+        // refetch below still runs and corrects the cards.
+        if (completionMessage && !completionAnnounced) {
+          completionAnnounced = true;
+          const completionWarnings = (Array.isArray(data.warnings) ? data.warnings : [])
+            .map((warning) => String(warning || '').trim())
+            .filter(Boolean);
+          const hasCompletionWarning = completionWarnings.length > 0;
+          showRepairAlert(
+            [completionMessage, ...completionWarnings].join(' '),
+            hasCompletionWarning ? 'warning' : 'success',
+            hasCompletionWarning ? 8000 : 2000,
+            {
+              title: hasCompletionWarning ? 'Tags saved with warning' : 'Tags updated',
+            },
+          );
+        }
         const committedInventoryMutationRevision = Number(data.inventory_mutation_revision);
         const responseContainsCommittedInventoryMutation = (responseData) => (
           !Number.isSafeInteger(committedInventoryMutationRevision)
@@ -26589,24 +26610,7 @@ async function watchSaveTask(taskId, context = {}) {
             );
           }
         }
-        // The committed view is on screen; the open album's details may still be reloading.
-        const completionMessage = String(
-          context.tagEditAlert?.completionMessage || '',
-        ).trim();
-        if (completionMessage) {
-          const completionWarnings = (Array.isArray(data.warnings) ? data.warnings : [])
-            .map((warning) => String(warning || '').trim())
-            .filter(Boolean);
-          const hasCompletionWarning = completionWarnings.length > 0;
-          showRepairAlert(
-            [completionMessage, ...completionWarnings].join(' '),
-            hasCompletionWarning ? 'warning' : 'success',
-            hasCompletionWarning ? 8000 : 2000,
-            {
-              title: hasCompletionWarning ? 'Tags saved with warning' : 'Tags updated',
-            },
-          );
-        } else if (!consumesProvidedTerminalPayload) {
+        if (!completionMessage && !consumesProvidedTerminalPayload) {
           showRepairAlert('Library view updated from saved files.', 'success', 1000);
         }
         await Promise.all(openTrackModalRefreshes);

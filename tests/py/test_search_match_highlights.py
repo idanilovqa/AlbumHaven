@@ -23,11 +23,13 @@ def _marked(text: str, query: str) -> str:
 @pytest.mark.parametrize(
     ("query", "text", "expected"),
     [
-        # Queries avoid a trailing "s": the plural rule is being retired separately.
-        ("sal", "Alas de Sal", "Alas de [Sal]"),
-        ("lasch", "Edu Falaschi", "Edu Fa[lasch]i"),
-        ("GALA", "Galasphere 347", "[Gala]sphere 347"),
-        # A typo match highlights the whole word it matched.
+        # Search is literal (owner 2026-11-18): "alas" is never singularised to "ala".
+        ("alas", "Alas de Sal", "[Alas] de Sal"),
+        ("alas", "Edu Falaschi", "Edu F[alas]chi"),
+        ("ALAS", "Galasphere 347", "G[alas]phere 347"),
+        ("alas", "Wache, Wala! Wala! Erwach!", "Wache, Wala! Wala! Erwach!"),
+        # A close-spelling match highlights the whole word it matched. Pending the owner's decision whether
+        # literal search also removes close-spelling matches; this case goes with that rule.
         ("metalica", "Metallica", "[Metallica]"),
         # The full query and its separated parts each highlight where they match.
         ("river - love", "River of Endless Love", "[River] of Endless [Love]"),
@@ -43,8 +45,8 @@ def test_search_match_ranges_mark_the_matched_characters(query, text, expected):
 
 def test_ranges_agree_with_the_search_matcher():
     cases = [
-        ("wala", "Wache, Wala! Wala! Erwach!"),
-        ("sal", "Alas de Sal"),
+        ("alas", "Wache, Wala! Wala! Erwach!"),
+        ("alas", "Alas de Sal"),
         ("metalica", "Metallica"),
         ("dragonland", "A-ha"),
         ("la", "Ala"),

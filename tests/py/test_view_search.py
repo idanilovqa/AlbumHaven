@@ -30,8 +30,8 @@ def test_split_search_terms_keeps_full_query_and_distinct_parts():
 
 def test_split_search_terms_normalizes_curly_apostrophes_and_long_dashes():
     assert split_search_terms("Neal Morse\u2019s \u2013 Portnoy") == [
-        "neal morse portnoy",
-        "neal morse",
+        "neal morses portnoy",
+        "neal morses",
         "portnoy",
     ]
 
@@ -634,3 +634,18 @@ def test_short_words_are_not_typos_of_the_query():
     # Real typos in longer words still match.
     assert search_word_matches("madona", "madonna") is True
     assert search_word_matches("beatls", "beatles") is True
+
+
+def test_search_is_literal_and_never_drops_a_plural_s():
+    # Owner 2026-11-18: "so far our search is literal, should find what i write". "Alas" was searched as "ala"
+    # and found Falaschi, Galasphere and "Wache, Wala! Wala!".
+    from music_app.services.view_search import normalize_search_text, search_terms_match_fields, split_search_terms
+
+    assert normalize_search_text("Alas") == "alas"
+    assert normalize_search_text("The Beatles") == "the beatles"
+    assert split_search_terms("Alas") == ["alas"]
+    assert search_terms_match_fields(split_search_terms("Alas"), ["wache wala wala"]) is False
+    # A literal substring inside a word still matches ("galasphere" does contain "alas").
+    assert search_terms_match_fields(split_search_terms("Alas"), ["galasphere"]) is True
+    assert search_terms_match_fields(split_search_terms("Alas"), ["falaschi"]) is True
+    assert search_terms_match_fields(split_search_terms("Alas"), ["alas and alack"]) is True

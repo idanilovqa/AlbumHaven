@@ -2906,3 +2906,14 @@ test('right-clicking Loose Tracks rows offers Edit Tags for the selection, only 
   assert.equal(context.showLooseTracksContextMenu(rightClick('a')), false);
   assert.equal(menu.hidden, true);
 });
+
+test('non-album artist folder match is literal and never drops a plural s', () => {
+  // Owner 2026-11-18: search is literal; "Beatle" is not the folder "Beatles".
+  const { context } = loadHelper();
+  const tracks = [
+    { artist: 'Unknown', display_path: 'Rock/Beatles/song.mp3' },
+    { artist: 'Unknown', display_path: 'Rock/Beatle/song.mp3' },
+  ];
+  context.state.view = { selected_artist: 'Beatle', non_album_tracks: tracks };
+  assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks()), [tracks[1]]);
+});

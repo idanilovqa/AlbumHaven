@@ -18,7 +18,10 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from starlette.websockets import WebSocketDisconnect
 
 from music_app.routes.playback_control_asgi import playback_config
-from music_app.services.library_roots import resolve_configured_media_path
+from music_app.services.library_roots import (
+    configured_library_root_paths_snapshot,
+    resolve_configured_media_path,
+)
 from music_app.services.mp3_stream_map import mp3_stream_map
 from music_app.services.loops import resolve_loop_media_path
 from music_app.services.playback_io import run_playback_io
@@ -363,6 +366,16 @@ def _encoded_fields(decoder: object) -> dict[str, object] | None:
         "totalFrames": decoder.total_frames,
         "initialCreditBytes": INITIAL_ENCODED_CREDIT_BYTES,
     }
+
+
+def _resolve_socket_media_path(config: dict[str, object], raw_path: str) -> Path | None:
+    """Resolves a client path against the roots snapshot root saves keep current, so a start
+    never reads the root settings from the database again."""
+    return resolve_configured_media_path(
+        config,
+        raw_path,
+        configured_root_paths=configured_library_root_paths_snapshot(config),
+    )
 
 
 def _decoder_name(decoder: object) -> str:
@@ -734,7 +747,9 @@ class _PlaybackPcmConnection:
             await self.reject(CLOSE_INVALID_CONTROL)
             return False
         resolved_path = (
-            resolve_configured_media_path(self._websocket.app.state.config, raw_path)
+            await run_playback_io(
+                _resolve_socket_media_path, self._websocket.app.state.config, raw_path
+            )
             if raw_path
             else None
         )
@@ -767,36 +782,37 @@ class _PlaybackPcmConnection:
         finally:
             self._pending_opens.discard(task)
 
-    def _scan_while_authorizing(self, control: dict[str, Any]) -> None:
-        """Starts an MP3 open's whole-file frame scan before the actor refresh answers.
+    def _resolve_while_authorizing(self, control: dict[str, Any]) -> asyncio.Future[Path | None] | None:
+        """Resolves an open's path, and scans an MP3's frames, while the actor refresh runs.
 
-        Both take a database or disk round trip under load; side by side, the open waits for the
+        Under load each waits on the database or the disk; side by side, the open waits for the
         slower one instead of both. The socket was authorized when it connected, nothing is sent
         before the refresh passes, and the scan only fills the frame-map cache the open reads.
         """
         raw_path = control.get("path")
+        if not isinstance(raw_path, str) or not raw_path or len(raw_path) > MAX_TRACK_PATH_CHARACTERS:
+            return None
+        config = self._websocket.app.state.config
         codecs = control.get("codecs")
-        if (
-            not isinstance(raw_path, str)
-            or not raw_path.lower().endswith(".mp3")
-            or len(raw_path) > MAX_TRACK_PATH_CHARACTERS
-            or not isinstance(codecs, list)
-            or "mp3" not in codecs
-        ):
-            return
-        resolved_path = resolve_configured_media_path(self._websocket.app.state.config, raw_path)
-        if resolved_path is None:
-            return
-        scan = asyncio.ensure_future(run_playback_io(mp3_stream_map, resolved_path))
-        self._pending_credit_tasks.add(scan)
-        scan.add_done_callback(self._pending_credit_tasks.discard)
-        scan.add_done_callback(lambda done: done.cancelled() or done.exception())
+        scan_mp3 = raw_path.lower().endswith(".mp3") and isinstance(codecs, list) and "mp3" in codecs
+
+        def resolve() -> Path | None:
+            resolved = _resolve_socket_media_path(config, raw_path)
+            if resolved is not None and scan_mp3:
+                with suppress(Exception):  # The open scans again and reports its own failure.
+                    mp3_stream_map(resolved)
+            return resolved
+
+        resolution = asyncio.ensure_future(run_playback_io(resolve))
+        self._pending_credit_tasks.add(resolution)
+        resolution.add_done_callback(self._pending_credit_tasks.discard)
+        return resolution
 
     async def _open_tracked(self, control: dict[str, Any]) -> bool:
         received_at = time.monotonic()
         if self._closed:
             return False
-        self._scan_while_authorizing(control)
+        resolution = self._resolve_while_authorizing(control)
         if not await self._authorize_media_read():
             return False
         generation = _bounded_integer(
@@ -855,10 +871,7 @@ class _PlaybackPcmConnection:
                 return await self._reject_open(CLOSE_MEDIA_NOT_FOUND)
             if len(raw_path) > MAX_TRACK_PATH_CHARACTERS:
                 return await self._reject_open(CLOSE_INVALID_CONTROL)
-            resolved_path = resolve_configured_media_path(
-                self._websocket.app.state.config,
-                raw_path,
-            )
+            resolved_path = await resolution
         if resolved_path is None:
             return await self._reject_open(CLOSE_MEDIA_NOT_FOUND)
         timing.resolved_at = time.monotonic()

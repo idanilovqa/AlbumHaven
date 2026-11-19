@@ -25,7 +25,7 @@ const EXPECTED_SHARD_COUNTS = new Map([
   ['metadata-mutations', 16],
   ['playback-utilities-1', 14],
   ['playback-utilities-2', 17],
-  ['playback-utilities-3', 15],
+  ['playback-utilities-3', 16],
 ]);
 const EXPECTED_SHARD_DISPLAY_NAMES = new Map([
   ['gallery-search-visual-1', 'Gallery, Search & Visual 1'],
@@ -124,7 +124,7 @@ function functionalJobSource() {
   return { workflow, job: workflow.slice(start, end) };
 }
 
-test('functional shard contract pins the approved eight-way 166-case assignment', () => {
+test('functional shard contract pins the approved eight-way 167-case assignment', () => {
   const contract = readJson(shardContractPath);
   assert.equal(contract.browser, 'chrome');
   assert.equal(contract.workersPerInvocation, 1);
@@ -138,7 +138,7 @@ test('functional shard contract pins the approved eight-way 166-case assignment'
     assert.ok(shard.invocations.length > 0, `${shard.name} must not be empty`);
     assert.ok(shard.suitePrerequisites.length > 0, `${shard.name} must declare prerequisites`);
   }
-  assert.equal(total, 166);
+  assert.equal(total, 167);
   for (const ownedCase of ownedCases(contract)) {
     assert.match(ownedCase.area, /^[a-z]+(?:-[a-z]+)*$/, ownedCase.case);
   }
@@ -924,6 +924,7 @@ validatorTest('playback restores three wave baselines and isolates conflicting e
   );
   assert.deepEqual(waveInvocations(4).flatMap((invocation) => invocation.cases.map(({ case: name }) => name)), [
     'FTC-SETTINGS-I01 real folder picking preserves Cancel and validates saved root membership',
+    'FTC-PLAYBACK-TAKEOVER-003 after a playing tab closes, one press on a song in another browser plays it within seconds',
   ]);
   assert.deepEqual(waveInvocations(5).flatMap((invocation) => invocation.cases.map(({ case: name }) => name)), [
     'FTC-PREVIEW-STORAGE-001 / 002 relocates generated previews safely and denies non-owner access',
@@ -985,7 +986,7 @@ validatorTest('all eight shards use explicit effect-compatible wave budgets', ()
     ['metadata-mutations', { cases: 16, waves: [1, 2, 3] }],
     ['playback-utilities-1', { cases: 14, waves: [1, 2, 3, 4] }],
     ['playback-utilities-2', { cases: 17, waves: [1, 2, 5] }],
-    ['playback-utilities-3', { cases: 15, waves: [1, 2] }],
+    ['playback-utilities-3', { cases: 16, waves: [1, 2, 4] }],
   ]);
   const matrixByCase = new Map(matrix.map((row) => [row.case, row]));
 

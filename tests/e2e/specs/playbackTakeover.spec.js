@@ -93,3 +93,59 @@ test('FTC-PLAYBACK-TAKEOVER-001 Play on the playing-elsewhere overlay continues 
     await second.globalPlayerActions.expectPlayingElsewhereOverlay({ artist: ARTIST, album: ALBUM, title: TITLE });
   });
 });
+
+// sandbox5 (2026-11-18): closing a browser tab that was playing and pressing Play in another browser
+// right after was refused (409, "Playback unavailable", then "Playing in another tab") for 15-30 s:
+// the closed tab's claim waited for its reload. The owner closes playing tabs and plays elsewhere.
+test('FTC-PLAYBACK-TAKEOVER-003 after a playing tab closes, one press on a song in another browser plays it within seconds', {
+  tag: '@area:playback',
+}, async ({ playbackOwnershipSessions, stepLogger }) => {
+  const [first, second] = playbackOwnershipSessions;
+  const OTHER_TITLE = 'Medium Cold Signal 07';
+  const PLAYS_WITHIN_MS = 5000;
+  const paths = {};
+
+  await stepLogger.step('The first browser plays a song; the second has the album open', async () => {
+    for (const session of [first, second]) {
+      await session.galleryActions.goto();
+      await session.galleryActions.waitForGalleryReady();
+      await session.navigationPanelActions.selectSidebarArtistByName(ARTIST);
+      await session.navigationPanelActions.waitForSidebarSelection(ARTIST);
+      await session.galleryActions.clickAlbumDetailsByArtistAndAlbum(ARTIST, ALBUM);
+      await session.trackModalActions.waitForInteractiveSummary();
+    }
+    for (const title of [TITLE, OTHER_TITLE]) {
+      paths[title] = String(await second.trackModalActions.trackModal.trackRowByTitle(title).getAttribute('data-track-row-path') || '');
+      expect(paths[title]).not.toBe('');
+    }
+    const mark = await first.playbackEvidence.playbackMark();
+    await first.trackModalActions.playTrackByTitle(TITLE);
+    const evidence = await first.playbackEvidence.waitForTrackPlaybackEvidence({ after: mark, path: paths[TITLE] });
+    expect(evidence.nonZeroSamples).toBeGreaterThan(0);
+    await first.globalPlayerActions.waitForPlaybackState({ paused: false, minimumCurrentTime: 3 });
+  });
+
+  await stepLogger.step('The playing tab closes, as the owner closes it', async () => {
+    const closed = first.page.waitForEvent('close');
+    await first.page.close({ runBeforeUnload: true });
+    await closed;
+  });
+
+  await stepLogger.step('Right after, one press on a song in the second browser plays it within seconds', async () => {
+    const player = second.globalPlayerActions.globalPlayer;
+    const mark = await second.playbackEvidence.playbackMark();
+    const pressedAt = Date.now();
+    await second.trackModalActions.playTrackByTitle(OTHER_TITLE);
+    const evidence = await second.playbackEvidence.waitForTrackPlaybackEvidence(
+      { after: mark, path: paths[OTHER_TITLE] }, { timeout: PLAYS_WITHIN_MS });
+    expect(evidence.nonZeroSamples).toBeGreaterThan(0);
+    expect(evidence.renderedFrameDelta).toBeGreaterThan(0);
+    expect(Date.now() - pressedAt, 'one press plays it within seconds').toBeLessThan(PLAYS_WITHIN_MS);
+    await second.trackModalActions.close();
+    await expect(player.elsewhereOverlay).toBeHidden();
+    await expect(player.playButton).toHaveAttribute('aria-label', 'Pause');
+    await expect(player.title).toContainText(OTHER_TITLE);
+    await expect(second.page.getByText('Playback is active in another tab.')).toHaveCount(0);
+    await second.globalPlayerActions.pauseToReleasePlaybackClaim();
+  });
+});

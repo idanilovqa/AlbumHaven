@@ -1427,7 +1427,11 @@ class PostgresScanCacheAdapter:
             before_commit=before_commit, rebuild_relation_projection=rebuild_relation_projection)
         try:
             from music_app.services.gallery_projection_postgres import schedule_gallery_projection_refresh
-            schedule_gallery_projection_refresh(self._config, connect=self._connect, incremental_membership=True)
+            schedule_gallery_projection_refresh(
+                self._config, connect=self._connect,
+                # A publication that could not patch membership rebuilds it in full.
+                incremental_membership=not result.get("gallery_rebuild_required"),
+            )
         except Exception:
             _LOGGER.exception("Unable to schedule scoped gallery refresh after tag edit")
         return result
@@ -1991,6 +1995,12 @@ class PostgresScanCacheAdapter:
                 # already running, instead of refusing the owner's next save.
                 try:
                     ensure_pending_relation_projection_ready(self._config, connect=self._connect)
+                    if not tag_edit_baseline_ready(self._config, connect=lambda _url: nullcontext(connection),
+                                                   track_paths=changed_paths):
+                        # Membership built at another generation (a restored database, an
+                        # interrupted startup) is rebuilt in full rather than refusing the save.
+                        from music_app.services.gallery_projection_postgres import ensure_gallery_projection_ready
+                        ensure_gallery_projection_ready(self._config, connect=self._connect)
                 except Exception:
                     _LOGGER.exception("Pending relation publication before a tag edit failed")
                 baseline_ready = tag_edit_baseline_ready(

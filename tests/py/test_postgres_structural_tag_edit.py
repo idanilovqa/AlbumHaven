@@ -2233,16 +2233,21 @@ def test_tag_edit_prevalidation_rejects_dirty_baseline_and_schedules_replay(monk
     scheduled = []
     published = []
     monkeypatch.setattr(scoped_relation_projection, "tag_edit_baseline_ready", lambda *a, **k: False)
+    rebuilt = []
     monkeypatch.setattr(scoped_relation_projection, "ensure_pending_relation_projection_ready",
                         lambda *a, **k: published.append(k) or {"initialized": True})
+    monkeypatch.setattr(gallery_projection_postgres, "ensure_gallery_projection_ready",
+                        lambda *a, **k: rebuilt.append(k))
     monkeypatch.setattr(gallery_projection_postgres, "schedule_gallery_projection_refresh",
                         lambda *a, **k: scheduled.append(k))
     paths, previous, updated = _entries()
     with pytest.raises(RuntimeError, match="still being reconciled"):
         adapter.validate_structural_tag_edit(changed_paths=set(paths), previous_file_entries=previous,
             updated_file_entries=updated, changed_field_names={"album"})
-    # The pending publication runs first; only a baseline that stays dirty is refused.
+    # Pending changes are published and membership rebuilt first; only a
+    # baseline that stays dirty after both is refused.
     assert len(published) == 1
+    assert len(rebuilt) == 1
     assert scheduled == [{"incremental_membership": True}]
     assert connection.executed == []
 
@@ -2257,7 +2262,7 @@ def test_tag_edit_prevalidation_publishes_the_previous_save_instead_of_refusing(
 
     connection = StructuralTagEditConnection(_successful_result())
     adapter = _adapter(monkeypatch, connection)
-    readiness = iter((False, True))
+    readiness = iter((False, True, True))
     scheduled = []
     published = []
     monkeypatch.setattr(
@@ -3852,3 +3857,21 @@ def test_live_postgres_failed_refresh_retries_without_blocking_other_saves(watch
     _save_album_edit(fixture, other, list(other), "Другой2")
     _assert_save_left_only_album_journal(fixture, "save after failed refresh")
     _refresh_after_save(fixture, "retried refresh")
+
+
+def test_live_postgres_stale_gallery_baseline_never_refuses_a_save(watcher_repair_inventory, monkeypatch):
+    """Hosted runs (11-18): after a restored database, membership stayed at an older generation,
+    every pending publication failed and the first save was refused with a 500."""
+    fixture = watcher_repair_inventory
+    entries, _other, _scheduled = _seed_split_merge_album(fixture, monkeypatch)
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute(
+            "update library.gallery_membership_headers set source_generation = source_generation - 1")
+
+    _save_album_edit(fixture, entries, sorted(entries)[2:], "Ремиксы2")
+    _assert_save_left_only_album_journal(fixture, "save on a stale gallery baseline")
+    _refresh_after_save(fixture, "save on a stale gallery baseline")
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        assert connection.execute("""select bool_and(header.source_generation = state.generation) as current
+            from library.gallery_membership_headers header
+            join library.gallery_projection_state state using (library_id)""").fetchone()["current"]

@@ -836,7 +836,10 @@ def _finish_publication(connection, context, metadata, result, *, reason, config
                        (library_id, result['processed_relation_album_ids']))
     result['relation_compatibility_bridge_ms'] = (perf_counter() - bridge_started) * 1000
     if config is not None:
-        from music_app.services.gallery_projection_postgres import patch_gallery_membership_in_transaction
+        from music_app.services.gallery_projection_postgres import (
+            gallery_membership_baseline_ready,
+            patch_gallery_membership_in_transaction,
+        )
         if result['first_gallery_generation'] is None:
             raise RuntimeError('Affected library changes have no gallery publication journal.')
         target_generation = None
@@ -851,13 +854,19 @@ def _finish_publication(connection, context, metadata, result, *, reason, config
                 and target_generation == start + 1
             ):
                 raise RuntimeError('Library sources changed during scoped publication; retry reconciliation.')
-        patch_gallery_membership_in_transaction(
-            connection, config, affected_album_ids=result['affected_relation_album_ids'],
-            affected_album_keys=result['affected_relation_album_keys'],
-            alias_to_canonical=result['affected_relation_aliases'],
-            expected_generation=result['first_gallery_generation'],
-            expected_target_generation=target_generation,
-        )
+        if gallery_membership_baseline_ready(connection, result['first_gallery_generation']):
+            patch_gallery_membership_in_transaction(
+                connection, config, affected_album_ids=result['affected_relation_album_ids'],
+                affected_album_keys=result['affected_relation_album_keys'],
+                alias_to_canonical=result['affected_relation_aliases'],
+                expected_generation=result['first_gallery_generation'],
+                expected_target_generation=target_generation,
+            )
+        else:
+            # Membership predates these changes (a restored database, an interrupted
+            # startup). Failing here blocked every later publication and save, so the
+            # relations are published and the caller rebuilds membership from them.
+            result['gallery_rebuild_required'] = True
     return result
 
 

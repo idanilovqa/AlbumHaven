@@ -115,9 +115,12 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags split and merge`, (
       expect(cardCounts.expectedCardsMs, `${kind} ${cycle} cards show the new track counts`).not.toBeNull();
       expect.soft(cardCounts.changedAfterExpected, `${kind} ${cycle} track counts stay put once shown`).toBe(false);
       record('optimisticCardsMs', cardCounts.expectedCardsMs);
+      // The previous save's notice can still be showing when this one is confirmed.
       const confirmedSaveMs = record(
         'confirmedSaveMs',
-        Math.min(...successMessages.map((sample) => sample.atMs)) - cardCounts.clickedAtPageMs,
+        Math.min(...successMessages
+          .map((sample) => sample.atMs)
+          .filter((atMs) => atMs > cardCounts.clickedAtPageMs)) - cardCounts.clickedAtPageMs,
       );
       await expectRemixesPhysicalState(expect, { splitFilenames });
       const entry = {

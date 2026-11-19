@@ -93,6 +93,11 @@ operate, or contribute to the application.
   `requestOwnership.allowed` or inside `forbidden`, a dynamic request target
   without a request-capture contract, or a dedicated surface routed through a
   generic endpoint.
+- A request-capture contract (a contract entry with `requestOwnership`) is a
+  JavaScript test measured by `measureInteractionContract`
+  (`tests/js/helpers/request-capture.js`). It performs the interaction twice
+  in one state and fails when the repeat sends more requests than the first
+  pass or sends an identical GET more often than the first pass did.
 - Rejected outright: direct broad work in a high-frequency JavaScript handler;
   a route reaching registered library-scale work or enumerating a directory
   directly; event-loop blocking (BI-08) in an `async def` route, websocket, or

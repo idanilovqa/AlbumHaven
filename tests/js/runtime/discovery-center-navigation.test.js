@@ -162,29 +162,34 @@ test('failed Discovery Center history navigation restores the displayed entry', 
 
 // Request-capture contract (tests/ci/bounded-interactions.json): every Discovery Center tab
 // click or history step fetches its own /news page once; other links stay off the network.
-const { assertInteractionRequests, measureInteractionContract } = require('../helpers/request-capture');
+const { measureInteractionContract } = require('../helpers/request-capture');
 
 test('request capture: Discovery Center tabs fetch only /news, once per navigation', async () => {
   const click = (app, href) => app.documentListeners.get('click')({
     target: { closest: selector => (selector === '[data-discovery-center-page-kind] a[href]' ? { href, hasAttribute: () => false, target: '' } : null) },
     preventDefault() {}, defaultPrevented: false, button: 0, ctrlKey: false, metaKey: false, shiftKey: false, altKey: false,
   });
-  await measureInteractionContract('js:runtime/discovery-center-navigation.js#navigate', async (items) => {
-    const app = harness();
-    app.replacement.items = Array.from({ length: items }, (_, index) => ({ index }));
-    for (const href of [
-      'https://albumhaven.test/news?tab=history', 'https://albumhaven.test/news?tab=releases',
-      'https://albumhaven.test/?artist=Broadcast', 'https://albumhaven.test/view-data?surface=home',
-      'https://albumhaven.test/home-data', 'https://outside.test/news?tab=inbox',
-    ]) {
-      click(app, href);
-      await settle();
-    }
-    app.location.href = 'https://albumhaven.test/news?tab=inbox';
-    await app.windowListeners.get('popstate')({ stopImmediatePropagation() {} });
-    const paths = app.requests.map(([url]) => `${new URL(url).pathname}${new URL(url).search}`);
-    assert.deepEqual(paths, ['/news?tab=history', '/news?tab=releases', '/news?tab=inbox']);
-    assertInteractionRequests('js:runtime/discovery-center-navigation.js#navigate', paths);
-    return { requests: app.requests.length };
+  await measureInteractionContract('js:runtime/discovery-center-navigation.js#navigate', {
+    setup(items) {
+      const app = harness();
+      app.replacement.items = Array.from({ length: items }, (_, index) => ({ index }));
+      return app;
+    },
+    async act(app) {
+      const before = app.requests.length;
+      for (const href of [
+        'https://albumhaven.test/news?tab=history', 'https://albumhaven.test/news?tab=releases',
+        'https://albumhaven.test/?artist=Broadcast', 'https://albumhaven.test/view-data?surface=home',
+        'https://albumhaven.test/home-data', 'https://outside.test/news?tab=inbox',
+      ]) {
+        click(app, href);
+        await settle();
+      }
+      app.location.href = 'https://albumhaven.test/news?tab=inbox';
+      await app.windowListeners.get('popstate')({ stopImmediatePropagation() {} });
+      const paths = app.requests.slice(before).map(([url]) => `${new URL(url).pathname}${new URL(url).search}`);
+      assert.deepEqual(paths, ['/news?tab=history', '/news?tab=releases', '/news?tab=inbox']);
+      return { requests: paths };
+    },
   });
 });

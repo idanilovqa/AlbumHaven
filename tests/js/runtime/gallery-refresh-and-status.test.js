@@ -7063,9 +7063,7 @@ test('status changes that only add or remove actions never refetch Problematic F
 // real view URL helpers, records every request; each must hit its owned endpoint, once per action.
 const { assertRequestOwnership } = require('../helpers/bounded-interaction-counter');
 const { useRealViewUrls } = require('../helpers/gallery-refresh-context');
-const {
-  assertInteractionRequests, createRequestCapture, jsonResponse, measureInteractionContract,
-} = require('../helpers/request-capture');
+const { createRequestCapture, jsonResponse, measureInteractionContract } = require('../helpers/request-capture');
 
 const settleRequests = async () => { for (let turn = 0; turn < 20; turn += 1) await new Promise(setImmediate); };
 const requestShape = (url) => {
@@ -7088,6 +7086,13 @@ function capturedGallery(respond) {
   return { ...fixture, timers, capture };
 }
 
+// One contract pass: the requests `action` sent and the work it measured.
+async function capturedPass(gallery, action) {
+  const before = gallery.capture.requests.length;
+  const metrics = await gallery.capture.counter.measure(action);
+  return { requests: gallery.capture.urls().slice(before), metrics };
+}
+
 function retainedRootView(albums) {
   return {
     surface_request: 'albums', query: '', selected_artist: '',
@@ -7100,62 +7105,73 @@ const rootPage = { artist_groups: [{ artist: 'Zed', albums: [{ key: 'zed' }] }],
 
 test('request capture: gallery navigation fetches its own endpoint once and dispatches one queued view', async () => {
   const id = 'js:runtime/gallery-refresh-and-status.js#fetchAndRender';
-  await measureInteractionContract(id, async (repeats) => {
-    let pendingAnswers = 0;
-    const gallery = capturedGallery(url => (new URL(url, 'http://localhost').searchParams.get('q') === 'pending' && pendingAnswers++ === 0
-      ? jsonResponse({ code: 'search_projection_pending' }, { status: 503 })
-      : jsonResponse({ artist_groups: [], payload_tier: 'full' })));
-    const { context, timers } = gallery;
-    await context.fetchAndRender('/');
-    const artist = context.fetchAndRender('/?artist=Neal+Morse');
-    const duplicates = Array.from({ length: repeats }, () => context.fetchAndRender('/?artist=Neal+Morse'));
-    const queued = context.fetchAndRender('/?q=queued', true, { interruptCurrent: false });
-    await Promise.all([artist, ...duplicates, queued]);
-    await settleRequests();
-    const pending = context.fetchAndRender('/?q=pending');
-    await settleRequests();
-    timers.shift()();
-    await pending;
-    const urls = gallery.capture.urls();
-    assert.deepEqual(urls.map(requestShape), [
-      ['/home-data', null, null, null, null], ['/view-data', 'Neal Morse', null, null, null],
-      ['/view-data', null, 'queued', null, null], ['/view-data', null, 'pending', null, null], ['/view-data', null, 'pending', null, null],
-    ]);
-    assertRequestOwnership(urls.slice(0, 1), { allowed: ['/home-data'], forbidden: ['/view-data'] }, 'Home');
-    assertInteractionRequests(id, urls);
-    return gallery.capture.counter.snapshot();
+  await measureInteractionContract(id, {
+    setup(repeats) {
+      const session = { repeats, pendingAnswers: 0 };
+      session.gallery = capturedGallery(url => (new URL(url, 'http://localhost').searchParams.get('q') === 'pending' && session.pendingAnswers++ === 0
+        ? jsonResponse({ code: 'search_projection_pending' }, { status: 503 })
+        : jsonResponse({ artist_groups: [], payload_tier: 'full' })));
+      return session;
+    },
+    async act(session) {
+      const { gallery, repeats } = session;
+      const { context, timers } = gallery;
+      session.pendingAnswers = 0;
+      const pass = await capturedPass(gallery, async () => {
+        await context.fetchAndRender('/');
+        const artist = context.fetchAndRender('/?artist=Neal+Morse');
+        const duplicates = Array.from({ length: repeats }, () => context.fetchAndRender('/?artist=Neal+Morse'));
+        const queued = context.fetchAndRender('/?q=queued', true, { interruptCurrent: false });
+        await Promise.all([artist, ...duplicates, queued]);
+        await settleRequests();
+        const pending = context.fetchAndRender('/?q=pending');
+        await settleRequests();
+        timers.shift()();
+        await pending;
+      });
+      assert.deepEqual(pass.requests.map(requestShape), [
+        ['/home-data', null, null, null, null], ['/view-data', 'Neal Morse', null, null, null],
+        ['/view-data', null, 'queued', null, null], ['/view-data', null, 'pending', null, null], ['/view-data', null, 'pending', null, null],
+      ]);
+      assertRequestOwnership(pass.requests.slice(0, 1), { allowed: ['/home-data'], forbidden: ['/view-data'] }, 'Home');
+      return pass;
+    },
   });
 });
 
 test('request capture: startup hydration follow-ups dispatch one request after busy retries', async () => {
   const id = 'js:runtime/gallery-refresh-and-status.js#runDispatch';
-  await measureInteractionContract(id, async (busyRetries) => {
-    const gallery = capturedGallery(() => jsonResponse({ artist_groups: [], payload_tier: 'full' }));
-    const { context } = gallery;
-    const retries = [];
-    context.scheduleBrowserTimeout = (callback) => { retries.push(callback); return retries.length; };
-    for (const [endpoint, view] of [['/home-data', {}], ['/view-data?payload_tier=sidebar&artist=Broadcast', { selected_artist: 'Broadcast' }]]) {
-      context.state.view = { ...context.state.view, query: '', selected_artist: '', ...view };
-      context.queueStartupHydrationFollowup(endpoint, {
-        startupHydrationTier: view.selected_artist ? 'sidebar' : 'full',
-        ...(view.selected_artist ? { retainMountedSelectedViewState: { ...context.state.view } } : {}),
+  await measureInteractionContract(id, {
+    setup(busyRetries) {
+      const gallery = capturedGallery(() => jsonResponse({ artist_groups: [], payload_tier: 'full' }));
+      const retries = [];
+      gallery.context.scheduleBrowserTimeout = (callback) => { retries.push(callback); return retries.length; };
+      return { busyRetries, gallery, retries };
+    },
+    async act({ busyRetries, gallery, retries }) {
+      const { context } = gallery;
+      const pass = await capturedPass(gallery, async () => {
+        for (const [endpoint, view] of [['/home-data', {}], ['/view-data?payload_tier=sidebar&artist=Broadcast', { selected_artist: 'Broadcast' }]]) {
+          context.state.view = { ...context.state.view, query: '', selected_artist: '', ...view };
+          context.queueStartupHydrationFollowup(endpoint, {
+            startupHydrationTier: view.selected_artist ? 'sidebar' : 'full',
+            ...(view.selected_artist ? { retainMountedSelectedViewState: { ...context.state.view } } : {}),
+          });
+          context.state.busy = true;
+          context.dispatchStartupHydrationFollowup(context.state.ui.pendingStartupHydrationFollowup);
+          await settleRequests();
+          for (let retry = 1; retry < busyRetries; retry += 1) {
+            retries.shift()();
+            await settleRequests();
+          }
+          context.state.busy = false;
+          retries.shift()();
+          await settleRequests();
+        }
       });
-      context.state.busy = true;
-      context.dispatchStartupHydrationFollowup(context.state.ui.pendingStartupHydrationFollowup);
-      await settleRequests();
-      for (let retry = 1; retry < busyRetries; retry += 1) {
-        retries.shift()();
-        await settleRequests();
-      }
-      context.state.busy = false;
-      retries.shift()();
-      await settleRequests();
-    }
-    const urls = gallery.capture.urls();
-    assert.deepEqual(urls, ['/home-data', '/view-data?payload_tier=sidebar&artist=Broadcast']);
-    assertRequestOwnership(urls.slice(0, 1), { allowed: ['/home-data'], forbidden: ['/view-data'] }, 'Home');
-    assertInteractionRequests(id, urls);
-    return gallery.capture.counter.snapshot();
+      assert.deepEqual(pass.requests, ['/home-data', '/view-data?payload_tier=sidebar&artist=Broadcast']);
+      return pass;
+    },
   });
 });
 
@@ -7164,17 +7180,17 @@ test('request capture: root gallery scrolling requests one /view-data cursor pag
     ['js:runtime/gallery-refresh-and-status.js#loadNextRootGalleryPage', 'loadNextRootGalleryPage', 'next-1', null],
     ['js:runtime/gallery-refresh-and-status.js#loadPreviousRootGalleryPage', 'loadPreviousRootGalleryPage', 'previous-1', 'previous'],
   ]) {
-    await measureInteractionContract(id, async (albums) => {
-      const gallery = capturedGallery(() => jsonResponse(rootPage));
-      gallery.context.state.view = retainedRootView(albums);
-      await Promise.all(Array.from({ length: 5 }, () => gallery.context[load]()));
-      const urls = gallery.capture.urls();
-      assert.deepEqual(urls.map(requestShape), [['/view-data', null, null, cursor, direction]], load);
-      const params = new URL(urls[0], 'http://localhost').searchParams;
-      assert.equal(params.get('gallery_page_size'), '50');
-      assert.equal(params.get('omit_sidebar'), '1');
-      assertInteractionRequests(id, urls);
-      return gallery.capture.counter.snapshot();
+    await measureInteractionContract(id, {
+      setup: albums => ({ albums, gallery: capturedGallery(() => jsonResponse(rootPage)) }),
+      async act({ albums, gallery }) {
+        gallery.context.state.view = retainedRootView(albums);
+        const pass = await capturedPass(gallery, () => Promise.all(Array.from({ length: 5 }, () => gallery.context[load]())));
+        assert.deepEqual(pass.requests.map(requestShape), [['/view-data', null, null, cursor, direction]], load);
+        const params = new URL(pass.requests[0], 'http://localhost').searchParams;
+        assert.equal(params.get('gallery_page_size'), '50');
+        assert.equal(params.get('omit_sidebar'), '1');
+        return pass;
+      },
     });
   }
 });
@@ -7184,30 +7200,37 @@ test('request capture: a pending gallery projection retries the same page once p
     'js:runtime/gallery-refresh-and-status.js#fetchGalleryViewResponse',
     'js:runtime/pending-projection-fetch.js#fetchRetryingPendingProjection',
   ]) {
-    await measureInteractionContract(id, async (albums) => {
-      let answers = 0;
-      const gallery = capturedGallery(() => (answers++ < 2
-        ? jsonResponse({ code: 'gallery_projection_pending' }, { status: 503 })
-        : jsonResponse(rootPage)));
-      gallery.context.state.view = retainedRootView(albums);
-      const load = gallery.context.loadNextRootGalleryPage();
-      await settleRequests();
-      gallery.timers.shift()();
-      await settleRequests();
-      gallery.timers.shift()();
-      assert.equal(await load, true);
-      const [first, ...retries] = gallery.capture.urls();
-      assert.deepEqual(retries, [first, first], 'retries repeat the same page request');
-      // A cancelled continuation stops retrying without another request.
-      gallery.context.state.view = retainedRootView(albums);
-      answers = 0;
-      const cancelled = gallery.context.loadNextRootGalleryPage();
-      await settleRequests();
-      gallery.context.cancelRootGalleryPageRequest();
-      assert.equal(await cancelled, false);
-      assert.equal(gallery.timers.length, 1, 'the cancelled retry timer never fires');
-      assertInteractionRequests(id, gallery.capture.urls());
-      return gallery.capture.counter.snapshot();
+    await measureInteractionContract(id, {
+      setup(albums) {
+        const session = { albums, answers: 0 };
+        session.gallery = capturedGallery(() => (session.answers++ < 2
+          ? jsonResponse({ code: 'gallery_projection_pending' }, { status: 503 })
+          : jsonResponse(rootPage)));
+        return session;
+      },
+      act: session => capturedPass(session.gallery, async () => {
+        const { albums, gallery } = session;
+        gallery.timers.length = 0;
+        session.answers = 0;
+        gallery.context.state.view = retainedRootView(albums);
+        const before = gallery.capture.requests.length;
+        const load = gallery.context.loadNextRootGalleryPage();
+        await settleRequests();
+        gallery.timers.shift()();
+        await settleRequests();
+        gallery.timers.shift()();
+        assert.equal(await load, true);
+        const [first, ...retries] = gallery.capture.urls().slice(before);
+        assert.deepEqual(retries, [first, first], 'retries repeat the same page request');
+        // A cancelled continuation stops retrying without another request.
+        gallery.context.state.view = retainedRootView(albums);
+        session.answers = 0;
+        const cancelled = gallery.context.loadNextRootGalleryPage();
+        await settleRequests();
+        gallery.context.cancelRootGalleryPageRequest();
+        assert.equal(await cancelled, false);
+        assert.equal(gallery.timers.length, 1, 'the cancelled retry timer never fires');
+      }),
     });
   }
 });
@@ -7320,60 +7343,74 @@ test('a superseded root window refresh neither applies nor repaints', async () =
 
 test('request capture: catalog-change recovery requests one window at any scroll depth', async () => {
   const id = 'js:runtime/gallery-refresh-and-status.js#fetchArtist';
-  const recover = async (albums) => {
-    const visible = Math.floor(albums * 0.6);
-    let cursorConflict = true;
-    const gallery = deepRootRefresh(albums, visible, (url) => {
-      if (cursorConflict && new URL(url, 'http://localhost').searchParams.has('gallery_cursor')) {
-        cursorConflict = false;
-        return jsonResponse({ restart_required: true }, { status: 409 });
-      }
-      return jsonResponse(rootWindowPayload(visible, gallery.capture.counter));
-    });
-    gallery.context.virtualGrid.getUserScrollIntentGeneration = () => 0;
-    assert.equal(await gallery.context.loadNextRootGalleryPage(), true, 'continuation conflict recovers');
-    gallery.context.state.view = { ...retainedRootView(albums), gallery_scope: 'all' };
-    assert.equal(await gallery.context.fetchAndRender(rootRefreshUrl, false, { preserveScroll: true }), true);
-    assert.deepEqual(gallery.capture.urls().map(anchorOf), [null, viewportArtist(visible), viewportArtist(visible)]);
-    assertInteractionRequests(id, gallery.capture.urls());
-    return gallery.capture.counter.snapshot();
+  const recovery = {
+    setup(albums) {
+      const session = { albums, visible: Math.floor(albums * 0.6) };
+      session.gallery = deepRootRefresh(albums, session.visible, (url) => {
+        if (session.cursorConflict && new URL(url, 'http://localhost').searchParams.has('gallery_cursor')) {
+          session.cursorConflict = false;
+          return jsonResponse({ restart_required: true }, { status: 409 });
+        }
+        return jsonResponse(rootWindowPayload(session.visible, session.gallery.capture.counter));
+      });
+      session.gallery.context.virtualGrid.getUserScrollIntentGeneration = () => 0;
+      return session;
+    },
+    async act(session) {
+      const { albums, gallery, visible } = session;
+      const { context } = gallery;
+      session.cursorConflict = true;
+      const pass = await capturedPass(gallery, async () => {
+        context.state.view = { ...retainedRootView(albums), gallery_scope: 'all' };
+        assert.equal(await context.loadNextRootGalleryPage(), true, 'continuation conflict recovers');
+        context.state.view = { ...retainedRootView(albums), gallery_scope: 'all' };
+        assert.equal(await context.fetchAndRender(rootRefreshUrl, false, { preserveScroll: true }), true);
+      });
+      assert.deepEqual(pass.requests.map(anchorOf), [null, viewportArtist(visible), viewportArtist(visible)]);
+      return pass;
+    },
   };
-  const midsize = await recover(2000);
-  assert.deepEqual([midsize.requests, midsize.responseRows], [3, 100]);
-  await measureInteractionContract(id, recover);
+  const midsize = await recovery.act(recovery.setup(2000));
+  assert.deepEqual([midsize.requests.length, midsize.metrics.responseRows], [3, 100]);
+  await measureInteractionContract(id, recovery);
 });
 
 // A completed tag save whose canonical albums must come from the server refreshes the root window
 // on screen once, whatever the scroll depth, and asks the gallery to hold the scroll offset.
 test('request capture: a post-save root refresh requests one window and holds the scroll at any scroll depth', async () => {
   const id = 'js:runtime/utility-list-builders.js#watchSaveTask';
-  const saveAndRefresh = async (albums) => {
-    const visible = Math.floor(albums * 0.6);
-    const gallery = deepRootRefresh(albums, visible, () => jsonResponse({
-      ...rootWindowPayload(visible, gallery.capture.counter), inventory_mutation_revision: 7,
-    }));
-    const { context } = gallery;
-    const renderView = context.renderView;
-    vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'tag-editor-and-optimistic-updates.js'), 'utf8'), context);
-    vm.runInContext(tagMutationSource, context);
-    context.renderView = renderView;
-    context.rememberCurrentRuntimeAlbumCoverAuthority = () => {};
-    const originalAlbum = { key: `album-${visible}`, name: 'Album', album_artist: viewportArtist(visible), tracks: [] };
-    await context.watchSaveTask('saved-tags', {
-      originalAlbum,
-      terminalPayload: {
-        ok: true, task_id: 'saved-tags', status: 'completed',
-        requires_view_refresh: true, updated_albums: [], inventory_mutation_revision: 7,
-      },
-    });
-    assert.deepEqual(gallery.capture.urls().map(anchorOf), [viewportArtist(visible)]);
-    assert.equal(gallery.calls.renderView.length, 1);
-    assert.equal(gallery.calls.renderView[0].holdGalleryScrollTop, true);
-    assert.equal(context.state.view.artist_groups.length, 50, 'only the refreshed window is applied');
-    assertInteractionRequests(id, gallery.capture.urls());
-    return gallery.capture.counter.snapshot();
-  };
-  await measureInteractionContract(id, saveAndRefresh);
+  await measureInteractionContract(id, {
+    setup(albums) {
+      const visible = Math.floor(albums * 0.6);
+      const gallery = deepRootRefresh(albums, visible, () => jsonResponse({
+        ...rootWindowPayload(visible, gallery.capture.counter), inventory_mutation_revision: 7,
+      }));
+      const { context } = gallery;
+      const renderView = context.renderView;
+      vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'tag-editor-and-optimistic-updates.js'), 'utf8'), context);
+      vm.runInContext(tagMutationSource, context);
+      context.renderView = renderView;
+      context.rememberCurrentRuntimeAlbumCoverAuthority = () => {};
+      return { gallery, visible };
+    },
+    async act({ gallery, visible }, pass) {
+      const { context } = gallery;
+      const renders = gallery.calls.renderView.length;
+      const originalAlbum = { key: `album-${visible}`, name: 'Album', album_artist: viewportArtist(visible), tracks: [] };
+      const saved = await capturedPass(gallery, () => context.watchSaveTask(`saved-tags-${pass}`, {
+        originalAlbum,
+        terminalPayload: {
+          ok: true, task_id: `saved-tags-${pass}`, status: 'completed',
+          requires_view_refresh: true, updated_albums: [], inventory_mutation_revision: 7,
+        },
+      }));
+      assert.deepEqual(saved.requests.map(anchorOf), [viewportArtist(visible)]);
+      assert.equal(gallery.calls.renderView.length, renders + 1);
+      assert.equal(gallery.calls.renderView.at(-1).holdGalleryScrollTop, true);
+      assert.equal(context.state.view.artist_groups.length, 50, 'only the refreshed window is applied');
+      return saved;
+    },
+  });
 });
 
 const { countedCollection, measureScalePair } = require('../helpers/bounded-interaction-counter');

@@ -1218,6 +1218,60 @@ def test_asgi_cover_lookup_local_cover_actions_update_asgi_state_without_flask_b
     ]
 
 
+def test_asgi_cover_lookup_gallery_labels_a_renamed_notification_with_its_current_album(app, monkeypatch):
+    """FTC-COVERS-044: a saved card whose album was renamed answers its first gallery request with the current name."""
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+    from music_app.services import cover_lookup_tasks
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    track_path = (app.config["MUSIC_DIR"] / "Artist" / "Current Album" / "song.mp3").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    saved_album = {"id": 2147483646, "key": "artist::saved name", "name": "Saved Name", "album_artist": "Artist", "year": 2026}
+    reset_cover_lookup_runtime_state()
+    task_id, _cancel = cover_lookup_tasks.create_cover_lookup_task(saved_album, {str(track_path)})
+    current = {"album_id": 41, "album_key": "artist::current album", "name": "Current Album",
+               "album_artist": "Artist", "year": 2001}
+    monkeypatch.setattr(PostgresLibraryBrowseRepository, "build_cover_state_entries_by_paths", lambda _self, _paths: {})
+    monkeypatch.setattr(PostgresLibraryBrowseRepository, "build_album_payloads_by_track_paths",
+                        lambda _self, _paths: [{"key": "artist::current album", "name": "Current Album",
+                                                "tracks": [{"path": str(track_path)}]}])
+
+    class SnapshotRepository:
+        def __init__(self, _config):
+            pass
+
+        def resolve_album_track_context(self, *, album_id, album_key):
+            assert album_id == 41
+            return {"album_id": 41, "album_key": "artist::current album", "track_paths": [str(track_path)]}
+
+        def resolve_album_id_for_track_paths(self, *, track_paths):
+            assert track_paths == {str(track_path)}
+            return 41
+
+        def get_for_album_context(self, *, album_id):
+            return None
+
+    class LineageRepository:
+        def __init__(self, _config):
+            pass
+
+        def resolve(self, *, album_id, album_key, track_paths):
+            assert (album_id, album_key, track_paths) == (41, "artist::current album", {str(track_path)})
+            return {"status": "current", "album": current, "choices": []}
+
+    monkeypatch.setattr(asgi_routes, "AlbumCoverCandidateSnapshotRepository", SnapshotRepository)
+    monkeypatch.setattr(asgi_routes, "AlbumIdentityLineageRepository", LineageRepository)
+
+    status, _headers, body = _run_asgi_request(
+        _make_wave_d_app(app), "POST", "/utilities/cover-lookup/gallery",
+        json_body={"album": saved_album, "task_id": task_id},
+    )
+
+    assert status == 200, body
+    album = _decode_json(body)["album"]
+    assert (album["album_id"], album["key"], album["name"], album["year"]) == (41, "artist::current album", "Current Album", 2001)
+
 def test_asgi_cover_lookup_gallery_rehydrates_compact_notification_album(app, monkeypatch):
     from music_app.routes import api_wave_d_asgi_routes as asgi_routes
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
@@ -1569,6 +1623,11 @@ def test_asgi_cover_lookup_save_remote_rehydrates_compact_notification_album(
         asgi_routes,
         "queue_cover_lookup_save_remote_task",
         lambda *args, **_kwargs: queued_calls.append(args),
+    )
+    monkeypatch.setattr(
+        asgi_routes,
+        "AlbumIdentityLineageRepository",
+        lambda _config: SimpleNamespace(resolve=lambda **_kwargs: {"status": "unresolved", "album": None, "choices": []}),
     )
     reset_cover_lookup_runtime_state()
     task_id, _cancel = cover_lookup_tasks.create_cover_lookup_task(
@@ -5109,6 +5168,11 @@ def test_asgi_cover_lookup_gallery_rebinds_persisted_notification_after_album_id
             return None
 
     monkeypatch.setattr(asgi_routes, "AlbumCoverCandidateSnapshotRepository", FakeRepository)
+    monkeypatch.setattr(
+        asgi_routes,
+        "AlbumIdentityLineageRepository",
+        lambda _config: SimpleNamespace(resolve=lambda **_kwargs: {"status": "unresolved", "album": None, "choices": []}),
+    )
     monkeypatch.setattr(asgi_routes, "cover_lookup_result", lambda _task_id: {})
     monkeypatch.setattr(
         asgi_routes,

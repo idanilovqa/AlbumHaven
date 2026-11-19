@@ -393,6 +393,22 @@ async def _resolve_album_payload_context(
                     for path in list(track_context.get("track_paths") or [])
                     if str(path or "").strip()
                 ]
+                # The saved payload's name and artist are history; the current album's identity labels the lookup.
+                try:
+                    lineage = await run_in_threadpool(
+                        AlbumIdentityLineageRepository(config).resolve,
+                        album_id=normalized_album["album_id"],
+                        album_key=normalized_album["key"],
+                        track_paths=fallback_paths,
+                    )
+                except Exception:  # Only the labels depend on it; the saved ones stay.
+                    lineage = {}
+                current_album = lineage.get("album")
+                if (lineage.get("status") == "current" and isinstance(current_album, Mapping)
+                        and current_album.get("album_id") == normalized_album["album_id"]):
+                    normalized_album.update({
+                        key: current_album[key] for key in ("name", "album_artist", "year") if key in current_album
+                    })
                 resolved_context = (
                     await resolve_context(distributed=True)
                 )

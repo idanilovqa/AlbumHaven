@@ -5,6 +5,7 @@ from music_app.services.log_history import resolve_media_host_history_scope
 import threading
 import time
 from collections.abc import Callable, Mapping
+from contextlib import contextmanager
 from datetime import datetime
 from os.path import normcase
 from pathlib import Path
@@ -67,6 +68,8 @@ from music_app.services.relation_projection_postgres import (
 )
 
 _CACHE_LOCK = threading.Lock()
+# How long a cover commit, holding its database and folder locks, may wait for the runtime lock.
+COVER_COMMIT_RUNTIME_LOCK_WAIT_SECONDS = 20.0
 _SCAN_EXECUTOR = create_daemon_executor(max_workers=1, thread_name_prefix="albumhaven-scan")
 _HYDRATE_EXECUTOR = create_daemon_executor(max_workers=1, thread_name_prefix="albumhaven-hydrate")
 _COVER_EXECUTOR = create_daemon_executor(max_workers=1, thread_name_prefix="albumhaven-cover")
@@ -77,6 +80,25 @@ _RELATION_REBUILD_REQUEST_GENERATION = 0
 _BULK_COVER_JOB_WORKERS = 1
 _WATCHER_COVER_REFRESH_MAX_ATTEMPTS = 3
 _SCAN_FILE_ERROR_HISTORY_LIMIT = 50
+
+
+class RuntimeStateBusy(TimeoutError):
+    """The runtime state lock stayed held longer than a request may wait."""
+
+
+@contextmanager
+def _runtime_state_lock(timeout_seconds: float | None):
+    """Hold `_CACHE_LOCK`; a bounded caller fails readably instead of waiting forever."""
+    if timeout_seconds is None:
+        with _CACHE_LOCK:
+            yield
+        return
+    if not _CACHE_LOCK.acquire(timeout=timeout_seconds):
+        raise RuntimeStateBusy("The library is busy. Retry the same request.")
+    try:
+        yield
+    finally:
+        _CACHE_LOCK.release()
 
 
 def run_runtime_state_mutation_for_state(
@@ -93,9 +115,10 @@ def invalidate_targeted_library_projections(
     *,
     revision: int,
     affected_album_keys: tuple[str, ...],
+    lock_timeout_seconds: float | None = None,
 ) -> None:
     """Invalidate only live projections affected by a committed watcher event."""
-    with _CACHE_LOCK:
+    with _runtime_state_lock(lock_timeout_seconds):
         browse_cache = library_state.get("_view_payload_root_browse_cache")
         if isinstance(browse_cache, dict):
             browse_cache.clear()
@@ -1387,8 +1410,14 @@ def run_authoritative_cover_commit_for_state(
     *,
     should_supersede_scan: Callable[[object], bool] | None = None,
 ) -> object:
-    """Commit under the runtime lock, superseding scans only for mutations."""
-    with _CACHE_LOCK:
+    """Commit under the runtime lock, superseding scans only for mutations.
+
+    The caller still holds its database and folder locks here, and other
+    threads hold the runtime lock across unbounded work (snapshot hydration,
+    relation builds). Waiting is therefore bounded: on timeout nothing has
+    committed and the caller's transaction rolls back.
+    """
+    with _runtime_state_lock(COVER_COMMIT_RUNTIME_LOCK_WAIT_SECONDS):
         interrupted_scan = bool(library_state.get("scan_in_progress"))
         interrupted_mode = str(library_state.get("scan_mode") or "background")
         result = commit_action()

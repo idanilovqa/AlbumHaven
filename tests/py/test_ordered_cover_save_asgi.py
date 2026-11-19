@@ -2,6 +2,8 @@
 import asyncio
 import json
 from pathlib import Path
+import threading
+import time
 from types import SimpleNamespace
 
 from fastapi import FastAPI
@@ -471,6 +473,62 @@ def test_commit_outcomes_expose_only_safe_recovery_status(api, monkeypatch, kind
     assert status == 503 and body["persisted"] is persisted
     assert "/private/" not in json.dumps(body)
     assert not any(name == "invalidate" for name, _ in api.calls)
+
+
+def test_save_never_waits_forever_for_a_runtime_lock_held_elsewhere(api, monkeypatch):
+    # Owner 2026-11-18: "Saving" never ended. The save holds the album's database and folder
+    # locks while it waits for the runtime lock, so that wait must end in a readable failure,
+    # commit nothing, and leave no downloaded cover standing in for the saved one.
+    api.resolver.user = actor("library.covers.write", "library.covers.remote.read")
+    api.candidates[:] = [provider("apple-1", "apple", "Apple Music")]
+    previous = jpeg((200, 0, 0))
+    (api.album_root / "cover.jpg").write_bytes(previous)
+    api.downloaded_image["bytes"] = jpeg((0, 0, 200))
+    committed = []
+    def persist(config, **kwargs):
+        api.calls.append(("save", kwargs))
+        kwargs["commit_guard"](lambda: committed.append(True))
+    monkeypatch.setattr(routes, "persist_ordered_cover_selection_for_config", persist)
+    monkeypatch.setattr(routes.state_service, "COVER_COMMIT_RUNTIME_LOCK_WAIT_SECONDS", 0.2)
+    started = time.monotonic()
+    with routes.state_service._CACHE_LOCK:  # e.g. a snapshot hydration that never finishes
+        status, body = api.request({**BODY, "references": [online("apple-1")]})
+    assert time.monotonic() - started < 5
+    assert status == 503
+    assert body == {"ok": False, "error": "Cover selection is temporarily unavailable. Retry the same request."}
+    assert committed == []
+    assert sorted(path.name for path in api.album_root.iterdir()) == ["cover.jpg", "track.flac"]
+    assert (api.album_root / "cover.jpg").read_bytes() == previous
+    assert next(iter(api.app.state.library_state["file_cache"].values()))["cover_path"] is None
+
+
+def test_save_never_waits_forever_to_reconfirm_permission_while_holding_album_locks(api, monkeypatch):
+    blocked = threading.Event()
+    released = threading.Event()
+    resolve = api.resolver.resolve
+    def stalled_refresh(token):
+        if any(name == "save" for name, _ in api.calls):
+            blocked.set()
+            released.wait(10)  # a thread pool or event loop that cannot answer
+        return resolve(token)
+    monkeypatch.setattr(api.resolver, "resolve", stalled_refresh)
+    monkeypatch.setattr(routes, "_COVER_SAVE_AUTHORIZATION_WAIT_SECONDS", 0.2)
+    started = time.monotonic()
+    try:
+        status, body = api.request()
+    finally:
+        released.set()
+    assert blocked.is_set()
+    assert time.monotonic() - started < 5
+    assert status == 503 and body["ok"] is False
+    assert not any(name in {"commit", "invalidate"} for name, _ in api.calls)
+
+
+def test_post_commit_refresh_waits_for_the_runtime_lock_only_within_its_bound(api):
+    status, _ = api.request()
+    assert status == 200
+    invalidation = next(args for name, args in api.calls if name == "invalidate")
+    assert invalidation["lock_timeout_seconds"] == routes.state_service.COVER_COMMIT_RUNTIME_LOCK_WAIT_SECONDS
 
 
 @pytest.fixture

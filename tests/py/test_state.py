@@ -5568,3 +5568,31 @@ def test_relation_projection_rebuild_scheduler_repeats_for_request_arriving_duri
 
     assert rebuilt == ["rebuild", "rebuild"]
     assert len(submitted) == 1
+
+
+def test_cover_commit_gives_up_on_a_runtime_lock_held_elsewhere_without_committing(monkeypatch):
+    # The committing thread already holds the album's database and folder locks; waiting
+    # forever here kept Cover Look Up on "Saving" (owner 2026-11-18).
+    monkeypatch.setattr(state_module, "COVER_COMMIT_RUNTIME_LOCK_WAIT_SECONDS", 0.05)
+    library_state = {"scan_generation": 4, "scan_in_progress": True}
+    committed = []
+    with state_module._CACHE_LOCK:
+        with pytest.raises(state_module.RuntimeStateBusy):
+            state_module.run_authoritative_cover_commit_for_state(
+                library_state, lambda: committed.append(True),
+            )
+    assert committed == []
+    assert library_state == {"scan_generation": 4, "scan_in_progress": True}
+    assert state_module._CACHE_LOCK.acquire(blocking=False)
+    state_module._CACHE_LOCK.release()
+
+
+def test_bounded_projection_invalidation_gives_up_on_a_held_runtime_lock(config):
+    library_state = {"inventory_mutation_revision": 3}
+    with state_module._CACHE_LOCK:
+        with pytest.raises(state_module.RuntimeStateBusy):
+            state_module.invalidate_targeted_library_projections(
+                library_state, config, revision=9, affected_album_keys=("album",),
+                lock_timeout_seconds=0.05,
+            )
+    assert library_state == {"inventory_mutation_revision": 3}

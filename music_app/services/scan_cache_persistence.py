@@ -1360,7 +1360,7 @@ class PostgresScanCacheAdapter:
         identities = {path: cover_source_keys(path) for path in declared}
         keys = sorted(set().union(*identities.values())) if identities else []
         with self._connect_to_database() as connection:
-            connection.execute(_inventory_publication_advisory_lock_sql(shared=True))
+            connection.execute(_bounded_cover_mutation_inventory_lock_sql())
             _ensure_bootstrap_context(connection)
             for key in keys:
                 connection.execute(
@@ -2926,6 +2926,20 @@ def _first_row(cursor: object) -> object | None:
     fetchall = getattr(cursor, "fetchall", None)
     rows = list(fetchall()) if callable(fetchall) else []
     return rows[0] if rows else None
+
+
+# A cover mutation holds its locks while it waits for the runtime lock, so every
+# database lock wait in its transaction is bounded too (a timeout rolls back).
+COVER_MUTATION_LOCK_WAIT_MS = 10000
+
+
+def _bounded_cover_mutation_inventory_lock_sql() -> str:
+    """The shared inventory lock, with lock waits bounded for the rest of the transaction."""
+    lock = _inventory_publication_advisory_lock_sql(shared=True).strip().rstrip(";")
+    return (
+        f"{lock} from (select set_config('lock_timeout', "
+        f"'{int(COVER_MUTATION_LOCK_WAIT_MS)}ms', true)) as bounded_lock_wait;"
+    )
 
 
 def _ensure_bootstrap_context(connection: Any) -> None:

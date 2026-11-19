@@ -817,7 +817,15 @@ def _first_problematic_page(config, *, rebuild: bool, limit: int):
         browse.invalidate_postgres_utility_projection_cache(
             database_url=config["ALBUM_HAVEN_APP_DATABASE_URL"], kinds=("problematic-files",),
         )
-    return repository.build_problematic_files_page(limit=limit)
+    page = repository.build_problematic_files_page(limit=limit)
+    cache_key = (config["ALBUM_HAVEN_APP_DATABASE_URL"], "problematic-files-page")
+    for _attempt in range(3):
+        # A cold page whose duplicate sources are still resolving is served but not
+        # cached; the next request, with the duplicate index warm, caches it.
+        if str(limit) in (browse._UTILITY_PROJECTION_CACHE.get(cache_key) or {}):
+            break
+        page = repository.build_problematic_files_page(limit=limit)
+    return page
 
 
 def test_live_tag_saves_patch_the_cached_first_problematic_page(watcher_repair_inventory):
@@ -835,6 +843,8 @@ def test_live_tag_saves_patch_the_cached_first_problematic_page(watcher_repair_i
     fixture.seed(*entries)
     first = _first_problematic_page(fixture.config, rebuild=True, limit=2)
     assert first["has_more"] is True
+    page_key = (fixture.config["ALBUM_HAVEN_APP_DATABASE_URL"], "problematic-files-page")
+    assert "2" in browse._UTILITY_PROJECTION_CACHE[page_key], "The first page must be cached before the save."
 
     def save(entry, **changes):
         updated = {**entry, **changes}

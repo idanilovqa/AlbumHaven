@@ -27,7 +27,7 @@ _LOGGER = logging.getLogger(__name__)
 # version backfills the index again.
 BUILDER_VERSION = "1"
 # More marked albums than this are evaluated in the background, not by a read.
-INLINE_ALBUM_LIMIT = 200
+INLINE_ALBUM_LIMIT = 50
 # Albums evaluated per transaction by the backfill.
 BACKFILL_BATCH = 500
 _IDENTITY_SEPARATOR = "\x1f"
@@ -312,8 +312,11 @@ def refresh(repository: Any, *, inline_limit: int = INLINE_ALBUM_LIMIT) -> bool:
         return False
 
 
-def _drain(repository: Any, connection: Any, library_id: int, marks: list[object]) -> None:
-    """Evaluate ``marks`` and clear exactly those marks (a later mark survives)."""
+def _drain(repository: Any, connection: Any, library_id: int, marks: list[object]) -> bool:
+    """Evaluate ``marks`` and clear exactly those marks (a later mark survives).
+
+    False when duplicate sources were not resolved yet: the marks stay for a later pass.
+    """
     album_ids = sorted({int(_value(row, "album_id")) for row in marks} - {0})
     include_loose = any(int(_value(row, "album_id")) == 0 for row in marks)
     with connection.transaction():
@@ -323,7 +326,7 @@ def _drain(repository: Any, connection: Any, library_id: int, marks: list[object
         try:
             index_rows, replaced = _index_rows(repository, connection, library_id, album_ids, include_loose)
         except _Retry:
-            return
+            return False
         _write(connection, library_id, index_rows, sorted({*replaced, *album_ids}), replace_loose=include_loose)
     connection.execute(
         """delete from library.problematic_index_dirty_albums dirty
@@ -336,6 +339,7 @@ def _drain(repository: Any, connection: Any, library_id: int, marks: list[object
             "xids": [str(_value(row, "marked_xid")) for row in marks],
         },
     )
+    return True
 
 
 def _backfill(repository: Any, connection: Any, library_id: int) -> None:
@@ -357,7 +361,15 @@ def _backfill(repository: Any, connection: Any, library_id: int) -> None:
             int(album_id) for row in repository._load_missing_album_rows(connection=connection)
             if (album_id := _value(row, "album_id")) is not None
         })
-        album_ids = sorted({*candidate_ids, *missing_ids})
+        # Marked albums too: the candidate ids may be cached from before their change,
+        # and the marks this snapshot sees are cleared below.
+        marked_ids = [
+            int(_value(row, "album_id")) for row in connection.execute(
+                "select album_id from library.problematic_index_dirty_albums where library_id = %s and album_id > 0",
+                (library_id,),
+            ).fetchall()
+        ]
+        album_ids = sorted({*candidate_ids, *missing_ids, *marked_ids})
         index_rows: list[dict[str, object]] = []
         for start in range(0, max(len(album_ids), 1), BACKFILL_BATCH):
             for attempt in range(2):
@@ -404,7 +416,8 @@ def _run(repository: Any, work: str) -> None:
                        where library_id = %s order by album_id limit %s""",
                     (library_id, BACKFILL_BATCH),
                 ).fetchall():
-                    _drain(repository, connection, library_id, marks)
+                    if not _drain(repository, connection, library_id, marks):
+                        break  # duplicate sources still resolving; a later read or save retries
             finally:
                 _unlock(connection, library_id)
     except Exception:

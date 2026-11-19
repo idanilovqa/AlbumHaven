@@ -22,8 +22,8 @@ from music_app.services.library_roots import (
     configured_library_root_paths_snapshot,
     resolve_configured_media_path,
 )
-from music_app.services.mp3_stream_map import mp3_stream_map
 from music_app.services.loops import resolve_loop_media_path
+from music_app.services.mp3_stream_map import mp3_stream_map
 from music_app.services.playback_io import run_playback_io
 from music_app.services.playback_seek_table import flac_seek_table
 from music_app.services.playback_encoded import (
@@ -720,7 +720,9 @@ class _PlaybackPcmConnection:
         finally:
             self._pending_opens.discard(task)
 
-    def _resolve_while_authorizing(self, control: dict[str, Any]) -> asyncio.Future[Path | None] | None:
+    def _resolve_while_authorizing(
+        self, control: dict[str, Any]
+    ) -> asyncio.Future[Path | None] | None:
         """Resolves an open's path, and scans an MP3's frames, while the actor refresh runs.
 
         Under load each waits on the database or the disk; side by side, the open waits for the
@@ -728,11 +730,17 @@ class _PlaybackPcmConnection:
         before the refresh passes, and the scan only fills the frame-map cache the open reads.
         """
         raw_path = control.get("path")
-        if not isinstance(raw_path, str) or not raw_path or len(raw_path) > MAX_TRACK_PATH_CHARACTERS:
+        if (
+            not isinstance(raw_path, str)
+            or not raw_path
+            or len(raw_path) > MAX_TRACK_PATH_CHARACTERS
+        ):
             return None
         config = self._websocket.app.state.config
         codecs = control.get("codecs")
-        scan_mp3 = raw_path.lower().endswith(".mp3") and isinstance(codecs, list) and "mp3" in codecs
+        scan_mp3 = (
+            raw_path.lower().endswith(".mp3") and isinstance(codecs, list) and "mp3" in codecs
+        )
 
         def resolve() -> Path | None:
             resolved = _resolve_socket_media_path(config, raw_path)

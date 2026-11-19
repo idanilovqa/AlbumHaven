@@ -9493,7 +9493,7 @@ function maybePrepareStreamingSeek(roleState) {
     streamId: roleState.streamId,
     timelineStartFrame: pendingSeek.startFrame,
     // A switched-to track is buffered to its prepare target; it should not wait for more.
-    primed: pendingSeek.kind === 'replacement',
+    ...(pendingSeek.kind === 'replacement' ? { primed: true } : {}),
   });
   publishStreamingDiagnostics();
 }
@@ -10530,6 +10530,17 @@ function chooseStreamingQuality(track) {
     : 'original';
 }
 
+// A FLAC choosing its quality from the measured connection needs its size, which the probe reads.
+function streamingQualityNeedsTrackSize(track) {
+  const engine = streamingEngineState();
+  const path = String(track?.path || '');
+  return path.toLowerCase().endsWith('.flac')
+    && Boolean(engine.encodedCodecs?.includes('mp3'))
+    && engine.qualityPreference !== 'original' && engine.qualityPreference !== '320'
+    && Number(engine.transferMs) > 0 && Number(track.durationSeconds) > 0
+    && !(Number(engine.trackFormats?.get(path)?.sizeBytes) > 0);
+}
+
 function streamingPlaybackRate(track) {
   const engine = streamingEngineState();
   const nativeRate = knownStreamingSampleRate(track);
@@ -11107,7 +11118,8 @@ async function startBrowserStreamingTrackNow(track, {
   engine.lifecycleEpoch ??= 0;
   const lifecycleEpoch = engine.lifecycleEpoch;
   let sampleRate = 0;
-  const guessedSampleRate = !knownStreamingSampleRate(track) && chooseStreamingQuality(track) === 'original';
+  const guessedSampleRate = !knownStreamingSampleRate(track)
+    && chooseStreamingQuality(track) === 'original' && !streamingQualityNeedsTrackSize(track);
   try {
     if (typeof ensureStreamingDecoders === 'function') void ensureStreamingDecoders();
     if (guessedSampleRate) {

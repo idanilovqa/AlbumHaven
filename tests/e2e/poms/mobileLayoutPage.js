@@ -378,6 +378,13 @@ export class MobileLayoutPage {
     await this.page.mouse.click(x, y);
   }
 
+  // A phone search opens the Artists drawer over its results by design; close it to reach the gallery.
+  async closeArtistDrawerIfOpen() {
+    if ((await this.artistRail.getAttribute('aria-hidden')) !== 'false') return;
+    await this.dismissArtistDrawerThroughBackdrop();
+    await expect(this.artistRail).toHaveAttribute('aria-hidden', 'true');
+  }
+
   async scrollArtistTreeToEnd() {
     await this.artistList.hover();
     await this.page.mouse.wheel(0, 100_000);

@@ -25,7 +25,10 @@ async function verifyColdAlbumTransition({
  await expect(mobileLayout.home).toBeHidden();
  }
  await galleryActions.waitForGalleryReady();
- if (mobile) await mobileLayout.search(FIRST_ALBUM);
+ if (mobile) {
+ await mobileLayout.search(FIRST_ALBUM);
+ await mobileLayout.closeArtistDrawerIfOpen();
+ }
  else await searchToolbarActions.search(FIRST_ALBUM, { submitWithEnter: true });
       await searchToolbarActions.waitForQuery(FIRST_ALBUM);
       await galleryActions.waitForAlbumVisible(FIRST_ALBUM);
@@ -37,7 +40,10 @@ async function verifyColdAlbumTransition({
       if (mobile) await trackModalActions.backFromMobilePage();
       else await trackModalActions.close();
 
- if (mobile) await mobileLayout.search(SECOND_ALBUM);
+ if (mobile) {
+ await mobileLayout.search(SECOND_ALBUM);
+ await mobileLayout.closeArtistDrawerIfOpen();
+ }
  else await searchToolbarActions.search(SECOND_ALBUM, { submitWithEnter: true });
       await searchToolbarActions.waitForQuery(SECOND_ALBUM);
       await galleryActions.waitForAlbumVisible(SECOND_ALBUM);

@@ -18,7 +18,8 @@ test('FTC-NON-ALBUM-017 returns from Loose Tracks through bounded Home navigatio
     page.waitForResponse(response => response.request().isNavigationRequest() && response.ok()),
     mobile.signInButton.click(),
   ]);
-  await galleryActions.waitForGalleryReady();
+  // Phones open on Home after sign-in (mobile Home start page since 2026-10-23), not the gallery.
+  await expect(mobile.home).toBeVisible();
 
   await mobile.libraryButton.click();
   await mobile.artistRail.getByRole('button', { name: 'Custom Collections', exact: true }).click();
@@ -54,7 +55,7 @@ test('FTC-NON-ALBUM-017 returns from Loose Tracks through bounded Home navigatio
 
 test('FTC-NON-ALBUM-019 direct Custom Collection URL repaints its tree after deferred projection hydration', {
   tag: '@area:gallery-search',
-}, async ({ page, galleryActions }) => {
+}, async ({ page }) => {
   await page.goto('/login');
   await page.getByLabel('Username').fill(PERFORMANCE_AUTH_USERNAME);
   await page.getByLabel('Password', { exact: true }).fill(PERFORMANCE_AUTH_PASSWORD);
@@ -62,7 +63,8 @@ test('FTC-NON-ALBUM-019 direct Custom Collection URL repaints its tree after def
     page.waitForResponse(response => response.request().isNavigationRequest() && response.ok()),
     page.getByRole('button', { name: 'Sign in', exact: true }).click(),
   ]);
-  await galleryActions.waitForGalleryReady();
+  // Phones open on Home after sign-in, not the gallery.
+  await expect(page.locator('#mobile-home')).toBeVisible();
 
   let requests = 0;
   await page.route('**/library/loose-tracks*', async (route) => {
@@ -141,6 +143,9 @@ test.describe('desktop library navigation inactivity', () => {
     await page.clock.fastForward(30_001);
     await expect(edge).toBeHidden();
     await expect(rail).not.toHaveClass(/is-library-mode-rail-hidden/);
+    // The fold is an account preference: restore it so later tests for this account start unfolded.
+    await page.locator('#artist-tree-navigation-button').click();
+    await expect(page.locator('#app-shell')).not.toHaveClass(/is-artist-tree-folded/);
   });
 
   test('FTC-GALLERY-NAV-038 keeps the hidden view rail closed at the left edge while a modal covers the gallery', {
@@ -157,6 +162,11 @@ test.describe('desktop library navigation inactivity', () => {
       page.getByRole('button', { name: 'Sign in' }).click(),
     ]);
     await galleryActions.waitForGalleryReady();
+    // The Artist Tree fold is saved per account; this case needs the expanded tree whatever an earlier test left.
+    if (await page.locator('#app-shell.is-artist-tree-folded').count()) {
+      await page.locator('#artist-tree-navigation-button').click();
+      await expect(page.locator('#app-shell')).not.toHaveClass(/is-artist-tree-folded/);
+    }
 
     const rail = page.locator('#shell-navigation-rail');
     const viewBar = rail.locator('.library-navigation-mode-rail');
@@ -196,6 +206,16 @@ test.describe('desktop library navigation inactivity', () => {
       page.getByRole('button', { name: 'Sign in', exact: true }).click(),
     ]);
     await galleryActions.waitForGalleryReady();
+
+    // The released functional fixtures seed no track the server counts as loose, so this case supplies its own rows.
+    const looseTracks = ['One', 'Two', 'Three', 'Four'].map((title, index) => ({
+      path: `C:/Music/Loose/0${index + 1} - ${title}.flac`, artist: 'Loose Artist', title, exception_type: '',
+    }));
+    await page.route('**/library/loose-tracks*', route => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ library_non_album_tracks: looseTracks, non_album_tracks_deferred: false }),
+    }));
 
     await page.getByRole('button', { name: 'Custom Collections', exact: true }).click();
     await page.getByRole('button', { name: 'All Loose Tracks', exact: true }).click();

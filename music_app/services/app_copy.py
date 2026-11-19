@@ -92,7 +92,6 @@ def mark_app_copy(response: Any, account: str, asset_version: str, expires: date
     response.headers[EXPIRES_HEADER] = str(int(expires.timestamp() * 1000))
 
 
-
 def mark_app_copy_data(request: Any, response: Any) -> None:
     """Marks library data the copy's worker asked for, so it can be kept for the signed-in account."""
     if (

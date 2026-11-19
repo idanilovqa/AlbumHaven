@@ -258,9 +258,11 @@ if ($Gate -eq 'focused') {
         Invoke-Checked { & $functionalRunner -Shard $group.Name -Cases $titles @functionalCommon } "Functional cases in $($group.Name)"
     }
     # One performance shard per fixture profile and mode, each run the way PR Gates runs that kind of target.
-    foreach ($group in @($focusedTargets | Group-Object { "$($targetProfiles[$_])|$($targetModes[$_])" })) {
-        $groupProfile, $groupMode = $group.Name.Split('|')
-        Invoke-MeasuredTargets ($group.Group -join ',') $groupProfile "focused-$groupProfile-$groupMode" $groupMode
+    # Shard names are numbered: they also name the shard's databases, whose suffix is capped at 39 characters.
+    $targetGroups = @($focusedTargets | Group-Object { "$($targetProfiles[$_])|$($targetModes[$_])" })
+    for ($index = 0; $index -lt $targetGroups.Count; $index++) {
+        $groupProfile, $groupMode = $targetGroups[$index].Name.Split('|')
+        Invoke-MeasuredTargets ($targetGroups[$index].Group -join ',') $groupProfile "focused-$($index + 1)" $groupMode
     }
     Complete-Gate
 }

@@ -67,17 +67,21 @@
   background: var(--alert-tint);
   color: var(--alert-ink);
   box-shadow: 0 0 16px color-mix(in srgb, var(--alert-edge) 20%, transparent);
+  /* Lets the width animate to the text's own width. */
+  interpolate-size: allow-keywords;
   transition: width 180ms ease, box-shadow 180ms ease;
 }
 
 .small-alert:hover,
 .small-alert:focus-visible,
 .album-card__artbox-trigger:focus-visible .small-alert {
-  width: min(154px, 100%);
+  /* Owner 2026-11-18: an opened alert is as wide as its text, never a fixed width with dead space after it. */
+  width: max-content;
+  max-width: 100%;
   box-shadow: 0 0 20px color-mix(in srgb, var(--alert-edge) 34%, transparent);
   outline: none;
 }
-.small-alert.small-alert--fit-content:is(:hover, :focus, :focus-visible) { width: max-content; }
+.small-alert.small-alert--fit-content:focus { width: max-content; max-width: 100%; }
 
 .alert-label {
   box-sizing: border-box;
@@ -149,14 +153,16 @@ button.alert-label:disabled { cursor: default; opacity: .72; }
 .small-alert__icon { width: 28px; height: 28px; }
 .small-alert__icon svg { width: 16px; height: 16px; }
 .small-alert__text {
+  min-width: 0;
   padding: 0 14px 0 4px;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-size: 0.72rem;
   font-weight: 750;
 }
 /* An interactive SmallAlert (it opens its exact problem) is the same compact alert. */
 button.small-alert { padding: 0; font: inherit; cursor: pointer; }
-button.small-alert:is(:hover, :focus-visible) { width: 200px; }
 /* The app-wide button hover fill and border never repaint an alert: it keeps its own tint as it expands (owner 2026-11-18). */
 :root button.small-alert:is(:hover, :active, :focus-visible) { background: var(--alert-tint) !important; border-color: color-mix(in srgb, var(--alert-edge) 72%, transparent) !important; }
 .small-alert svg,

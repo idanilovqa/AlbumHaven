@@ -828,6 +828,8 @@ function renderLibraryLoader(data = {}, options = {}) {
   setDomPropertyIfChanged(loader, 'hidden', !shouldShow);
   loader.classList?.toggle('is-scan-page', scanPageVisible);
   loader.classList?.toggle('is-searching', searching);
+  // Owner 2026-11-18: whichever tree is shown says "Loading" while a search runs, instead of keeping the old results.
+  document.getElementById('artist-tree-expanded')?.classList?.toggle('is-search-loading', searching);
   document.getElementById('shell-main-surface')?.classList.toggle('has-library-loader', shouldShow);
   if (typeof syncMobileHome === 'function') syncMobileHome();
   const galleryWasHidden = scroll.hidden;

@@ -6560,6 +6560,8 @@ function renderLibraryLoader(data = {}, options = {}) {
   setDomPropertyIfChanged(loader, 'hidden', !shouldShow);
   loader.classList?.toggle('is-scan-page', scanPageVisible);
   loader.classList?.toggle('is-searching', searching);
+  // Owner 2026-11-18: whichever tree is shown says "Loading" while a search runs, instead of keeping the old results.
+  document.getElementById('artist-tree-expanded')?.classList?.toggle('is-search-loading', searching);
   document.getElementById('shell-main-surface')?.classList.toggle('has-library-loader', shouldShow);
   if (typeof syncMobileHome === 'function') syncMobileHome();
   const galleryWasHidden = scroll.hidden;
@@ -11720,6 +11722,16 @@ function setDesktopLibraryModeRailVisible(visible) {
   return show;
 }
 
+// Owner 2026-11-18: when the view rail hides or shows on its own, the gallery refits its cards to the width the
+// side bar gives back or takes, as it does after a fold; it used to only shift and leave dead space on the right.
+function setDesktopLibraryModeRailVisibleAndRefit(visible) {
+  const rail = document.getElementById('shell-navigation-rail');
+  const wasHidden = Boolean(rail?.classList?.contains?.('is-library-mode-rail-hidden'));
+  const shown = setDesktopLibraryModeRailVisible(visible);
+  if (wasHidden === shown && !state.ui.artistTreeFolded) scheduleArtistTreeResizeAfterTransition();
+  return shown;
+}
+
 function startDesktopLibraryModeRailHideTimer(rail) {
   desktopLibraryModeRailHideTimer = setTimeout(() => {
     desktopLibraryModeRailHideTimer = null;
@@ -11728,7 +11740,7 @@ function startDesktopLibraryModeRailHideTimer(rail) {
       return;
     }
     const focused = rail?.contains?.(document.activeElement);
-    setDesktopLibraryModeRailVisible(Boolean(focused));
+    setDesktopLibraryModeRailVisibleAndRefit(Boolean(focused));
   }, DESKTOP_LIBRARY_MODE_RAIL_HIDE_DELAY_MS);
 }
 
@@ -11814,7 +11826,7 @@ function installMobileLibraryModeRailGestures() {
       || state.ui.artistTreeFolded
       || !rail.classList?.contains?.('is-library-mode-rail-hidden')
     ) return;
-    setDesktopLibraryModeRailVisible(true);
+    setDesktopLibraryModeRailVisibleAndRefit(true);
   }, { passive: true });
 }
 
@@ -11838,9 +11850,26 @@ function customCollectionCatalogUrl(view = state.view || {}) {
   // A search narrows the tree to collections with a matching track (owner 2026-11-17).
   const query = String(view.query || '').trim();
   if (query) url.searchParams.set('q', query);
-  (view.visible_library_categories || []).forEach((category) => url.searchParams.append('category', category));
+  // Sorted, so the same sources in another order reuse the loaded catalog instead of asking again.
+  [...(view.visible_library_categories || [])].sort()
+    .forEach((category) => url.searchParams.append('category', category));
   if (view.gallery_scope) url.searchParams.set('gallery_scope', view.gallery_scope);
   return url;
+}
+
+// Owner 2026-11-18: the Artists tree arrives with the page, the collections tree used to wait for its own request
+// on first open (a skeleton for up to 2 s). It is loaded once the page is idle, so opening it paints at once.
+let customCollectionCatalogPrefetch = 0;
+function prefetchCustomCollectionCatalogWhenIdle() {
+  if (customCollectionCatalogPrefetch || customCollectionCatalog.request
+    || (customCollectionCatalog.key === customCollectionCatalogUrl().search
+      && Array.isArray(customCollectionCatalog.collections))) return;
+  const run = () => {
+    customCollectionCatalogPrefetch = 0;
+    void loadCustomCollectionCatalog().catch(() => {});
+  };
+  if (typeof requestIdleCallback === 'function') customCollectionCatalogPrefetch = requestIdleCallback(run, { timeout: 4000 });
+  else if (typeof scheduleBrowserTimeout === 'function') customCollectionCatalogPrefetch = scheduleBrowserTimeout(run, 1500);
 }
 
 // Owner 2026-11-17: a blue dot on the Custom Collections button while the search matches any loose track.
@@ -11854,7 +11883,15 @@ async function syncCustomCollectionSearchIndicator() {
     });
   if (!query) {
     mark(false);
+    prefetchCustomCollectionCatalogWhenIdle();
     return;
+  }
+  // Owner 2026-11-18: the side bar keeps its tree while a search runs and moves to the one holding the best match
+  // once the results are in: an artist match shows the Artists tree at once, a collection match below.
+  if (state.ui.customCollectionSearchAutoOpenQuery === query && !state.ui.pendingViewTransition
+    && Array.isArray(state.view?.artists_sidebar) && state.view.artists_sidebar.length) {
+    state.ui.customCollectionSearchAutoOpenQuery = '';
+    if (state.ui.libraryNavigationMode !== 'artists') void setLibraryNavigationMode('artists');
   }
   try {
     await loadCustomCollectionCatalog();
@@ -12028,7 +12065,9 @@ async function setLibraryNavigationMode(mode) {
   setDesktopLibraryModeRailVisible(true);
   try {
     const collections = await loadCustomCollectionCatalog({ fresh: true });
-    if (state.ui.libraryNavigationMode === normalized) renderCustomCollectionNavigation(collections);
+    // The refreshed list replaces the drawn one only when it differs: redrawing the same rows made them blink.
+    const unchanged = cached !== null && JSON.stringify(cached) === JSON.stringify(collections);
+    if (state.ui.libraryNavigationMode === normalized && !unchanged) renderCustomCollectionNavigation(collections);
   } catch (error) {
     if (state.ui.libraryNavigationMode === normalized && cached === null) {
       renderCustomCollectionNavigation(null, { failure: error?.message || 'Unable to load Custom Collections.' });
@@ -53867,7 +53906,8 @@ function scheduleGallerySearchCommit(nextQuery, options = {}) {
 }
 
 function revealArtistTreeForSearch() {
-  if (typeof setLibraryNavigationMode === 'function') setLibraryNavigationMode('artists');
+  // The tree is not switched here: where the best match is (an artist or a collection) is known only once the
+  // results arrive (owner 2026-11-18), so the side bar keeps its tree until then.
   // The search leaves an open Loose Tracks page for the gallery, so its best match shows as selected in the
   // tree (owner 2026-11-18); the page's own "no artist selected" state ends here.
   state.ui.suppressSidebarSelection = false;

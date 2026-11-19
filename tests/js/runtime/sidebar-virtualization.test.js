@@ -136,9 +136,9 @@ test('deep windows keep exact spacer geometry for long artist names', () => {
   assert.match(css, /\.artist-list\[data-sidebar-virtualized='true'\] \.artist-link\s*\{[^}]*height:\s*41px/s);
   // The list is a flex column; a shrinking row breaks the fixed extent the reveal scroll relies on.
   assert.match(css, /\.artist-list\[data-sidebar-virtualized='true'\] \.artist-link\s*\{[^}]*flex-shrink:\s*0/s);
- assert.match(css, /\.artist-list\[data-sidebar-virtualized='true'\] \.artist-link \.artist-name-label\s*\{[^}]*white-space:\s*nowrap[^}]*text-overflow:\s*ellipsis/s);
+ // Owner 2026-11-18: every tree row truncates, a search's short (unvirtualized) tree like the full one.
  assert.doesNotMatch(css, /(?<!virtualized='true'\] )\.artist-link\s*\{[^}]*height:\s*41px/s);
- assert.match(css, /\.artist-link \.artist-name-label\s*\{[^}]*white-space:\s*normal[^}]*overflow-wrap:\s*anywhere/s);
+ assert.match(css, /\.artist-link \.artist-name-label\s*\{[^}]*white-space:\s*nowrap[^}]*text-overflow:\s*ellipsis/s);
   assert.match(html, new RegExp(`data-sidebar-virtual-spacer="before"[^>]*height:${windowRange.start * 47 - 6}px`));
   assert.match(html, new RegExp(`data-sidebar-virtual-spacer="after"[^>]*height:${(source.length - windowRange.end) * 47 - 6}px`));
   assert.match(html, /A very long artist name that remains complete for assistive technology/);

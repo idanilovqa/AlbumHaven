@@ -63,11 +63,13 @@ body {
   background: transparent;
   min-width: 0;
 }
+/* Owner 2026-11-18: every tree row keeps one line and truncates, a search's short tree like the full one. */
 .artist-link .artist-name-label {
   flex: 1 1 auto;
   min-width: 0;
-  white-space: normal;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   line-height: 1.2;
 }
 .artist-link:hover, .artist-link.active { background: var(--panel); border-color: var(--border); }

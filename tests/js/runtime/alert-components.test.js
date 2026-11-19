@@ -75,7 +75,7 @@ test('SmallAlert accepts a trusted shared-component icon without changing its ac
     path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'alert-components.css'),
     'utf8',
   );
-  assert.match(css, /small-alert--fit-content:is\(:hover,\s*:focus,\s*:focus-visible\)[^}]*width:\s*max-content/s);
+  assert.match(css, /small-alert--fit-content:focus\s*\{[^}]*width:\s*max-content/s);
 });
 
 test('the separator alert keeps its own column so the divider line stops at it', () => {
@@ -90,7 +90,8 @@ test('the separator alert keeps its own column so the divider line stops at it',
   assert.doesNotMatch(alertCss, /triangle-only/, 'the owner asked for the regular compact alert');
   assert.match(alertCss, /button\.small-alert\s*\{[^}]*padding:\s*0[^}]*cursor:\s*pointer/s);
   // The longest artist label must fit when the alert expands.
-  assert.match(alertCss, /button\.small-alert:is\(:hover,\s*:focus-visible\)\s*\{[^}]*width:\s*200px/s);
+  // Owner 2026-11-18: no fixed opened width; every alert fits its text (see the SmallAlert CSS test).
+  assert.doesNotMatch(alertCss, /button\.small-alert:is\(:hover,\s*:focus-visible\)\s*\{[^}]*width:\s*200px/s);
   assert.match(alertCss, /@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*\.small-alert[^}]*transition:\s*none/s);
   // Name, i, alert, line, count: the alert is a grid column of its own.
   assert.match(galleryCss, /\.family-artist-header:has\(\.artist-musicbrainz-status:not\(:empty\)\)\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*auto\)\s+auto\s+auto\s+minmax\(0,\s*1fr\)\s+auto/s);
@@ -166,7 +167,9 @@ test('shared alert CSS uses the same tinted surface family and honors reduced mo
   assert.match(css, /\.small-alert:focus-visible/);
   assert.doesNotMatch(css, /\.album-card__artbox-trigger:hover \.small-alert/);
   assert.match(css, /\.album-card__artbox-trigger:focus-visible \.small-alert/);
-  assert.match(css, /\.small-alert:hover[^}]*width:\s*min\(154px,\s*100%\)/s);
+  // Owner 2026-11-18: an opened alert is as wide as its text, capped by its container, with no dead space.
+  assert.match(css, /\.small-alert:hover[^}]*width:\s*max-content;[^}]*max-width:\s*100%/s);
+  assert.match(css, /\.small-alert__text\s*\{[^}]*text-overflow:\s*ellipsis/s);
   assert.match(css, /\.small-alert__text\s*\{[^}]*padding:\s*0 14px 0 4px/s);
   assert.match(css, /\.on-page-alert__actions \.ui-button--primary\s*\{[^}]*background:\s*var\(--alert-edge\)/s);
   assert.match(css, /\.on-page-alert__actions \.ui-button--secondary\s*\{[^}]*border-color:\s*color-mix\([^;]*var\(--alert-edge\)/s);

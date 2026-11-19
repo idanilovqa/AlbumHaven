@@ -238,7 +238,15 @@
   stroke-linejoin: round;
 }
 .shell-navigation-rail h2 { margin-left: 12px; }
-#artist-tree-expanded { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+#artist-tree-expanded { position: relative; display: flex; flex-direction: column; height: 100%; min-height: 0; }
+/* Owner 2026-11-18: while a search runs the tree (Artists or Custom Collections) is covered by "Loading"; the */
+/* rail buttons stay usable. */
+#artist-tree-expanded.is-search-loading #sidebar-list { visibility: hidden; }
+#artist-tree-expanded.is-search-loading .library-navigation-body::after {
+  content: 'Loading…'; position: absolute; inset: 0 0 0 59px; display: grid; place-items: start center; padding-top: 48px;
+  color: var(--appearance-muted, var(--muted)); font-size: 13px; pointer-events: none;
+}
+.library-navigation-body { position: relative; }
 .library-navigation-body { display: grid; flex: 1 1 auto; grid-template-columns: 51px minmax(0, 1fr); gap: 8px; min-height: 0; overflow: hidden; transition: grid-template-columns var(--compact-motion-duration) var(--compact-motion-easing), gap var(--compact-motion-duration) var(--compact-motion-easing); }
 .library-navigation-mode-rail { display: flex; min-width: 0; flex-direction: column; align-items: center; gap: 8px; overflow: hidden; padding-right: 8px; border-right: 1px solid color-mix(in srgb, var(--app-muted) 24%, transparent); transition: opacity var(--compact-motion-duration) var(--compact-motion-easing), visibility 0s; }
 /* Owner 2026-11-18: every search-results marker uses the selection accent chosen in Settings, else the player's colour. */

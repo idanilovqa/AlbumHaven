@@ -283,7 +283,8 @@ border-color: var(--muted, var(--appearance-muted, #9ca3af)) !important;
 box-shadow: none !important;
 }
 
-/* Text Switch (owner 2026-11-18): full is an On/Off pair, compact one button naming its state. On is solid green;
+/* Text Switch (owner 2026-11-18): full is an On/Off pair, compact one button naming its state. On uses the main
+   action button's colours (owner: "the same color as main action button");
    the app-wide button hover never refills either. */
 .ui-text-switch--full {
 display: inline-flex;
@@ -310,9 +311,9 @@ cursor: pointer;
 :root .ui-text-switch--compact { flex: 0 0 auto; border: 1px solid var(--appearance-line, var(--border)) !important; }
 :root :is(.ui-text-switch__option, .ui-text-switch--compact):not(:disabled):not([aria-pressed="true"]):hover { color: var(--appearance-ink, var(--text)); }
 :root :is(.ui-text-switch__option--on, .ui-text-switch--compact)[aria-pressed="true"] {
-background: var(--ui-text-switch-on, var(--appearance-success, var(--success, #2eba70))) !important;
-border-color: var(--ui-text-switch-on, var(--appearance-success, var(--success, #2eba70))) !important;
-color: var(--ui-text-switch-on-ink, #04210f);
+background: var(--appearance-primary-button, var(--accent)) !important;
+border-color: var(--appearance-primary-button, var(--accent)) !important;
+color: var(--appearance-primary-button-ink, #fff);
 }
 :root .ui-text-switch__option--off[aria-pressed="true"] {
 background: var(--appearance-control, color-mix(in srgb, var(--text) 12%, transparent)) !important;

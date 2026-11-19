@@ -1601,7 +1601,8 @@ function scheduleGallerySearchCommit(nextQuery, options = {}) {
 }
 
 function revealArtistTreeForSearch() {
-  if (typeof setLibraryNavigationMode === 'function') setLibraryNavigationMode('artists');
+  // The tree is not switched here: where the best match is (an artist or a collection) is known only once the
+  // results arrive (owner 2026-11-18), so the side bar keeps its tree until then.
   // The search leaves an open Loose Tracks page for the gallery, so its best match shows as selected in the
   // tree (owner 2026-11-18); the page's own "no artist selected" state ends here.
   state.ui.suppressSidebarSelection = false;

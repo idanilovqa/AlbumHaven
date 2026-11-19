@@ -24,6 +24,8 @@
       if (/^data-[a-z0-9-]+$/.test(name) && !name.startsWith('data-navigation-tree-')) values[name] = value;
     }
     if (selected) values['aria-current'] = settings ? 'page' : 'true';
+    // Rows keep one line and truncate (owner 2026-11-18); the full name shows on hover.
+    if (!wide && String(label || '').trim()) values.title = String(label);
     const attrs = Object.entries(values).map(([name, value]) => name + '="' + escape(value) + '"').join(' ');
     const identity = wide || (panel && (subtitle || year)) ? '<span class="utility-list-item-title">' + escape(label) + '</span><span class="utility-list-item-meta">' + (subtitle ? '<span class="utility-list-item-subtitle">' + escape(subtitle) + '</span>' : '') + (year ? '<span class="utility-list-item-year">' + escape(year) + '</span>' : '') + '</span>' : escape(label);
     const slots = [tag, attrs, wide ? '<span class="navigation-tree-artwork">' + artworkHtml + '</span>' : icon ? '<span class="navigation-tree-icon" aria-hidden="true">' + escape(icon) + '</span>' : '', identity,

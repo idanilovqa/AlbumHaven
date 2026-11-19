@@ -966,7 +966,9 @@ for (const query of ['', 'Scan Artist 00']) {
 }
 
 test('searching loader hides previous gallery until the search settles', () => {
-  const { context, loader, spinner, title, scroll } = createLoaderRenderFixture();
+  const { context, elements, loader, spinner, title, scroll } = createLoaderRenderFixture();
+  const treeClasses = new Set();
+  elements['artist-tree-expanded'] = { classList: { toggle: (name, on) => (on ? treeClasses.add(name) : treeClasses.delete(name)) } };
   vm.runInContext(`
     state.ui.pendingViewTransition = true;
     state.ui.pendingGallerySearch = true;
@@ -977,6 +979,8 @@ test('searching loader hides previous gallery until the search settles', () => {
   assert.equal(title.textContent, 'Searching');
   assert.equal(scroll.hidden, true, 'previous results must not remain visible during submitted search');
   assert.equal(loader.classList.contains('is-searching'), true);
+  // Owner 2026-11-18: the side tree shows "Loading" while the search runs.
+  assert.equal(treeClasses.has('is-search-loading'), true);
   vm.runInContext(`
     state.ui.pendingViewTransition = false;
     state.ui.pendingGallerySearch = false;
@@ -985,4 +989,5 @@ test('searching loader hides previous gallery until the search settles', () => {
   assert.equal(loader.hidden, true);
   assert.equal(scroll.hidden, false);
   assert.equal(loader.classList.contains('is-searching'), false);
+  assert.equal(treeClasses.has('is-search-loading'), false);
 });

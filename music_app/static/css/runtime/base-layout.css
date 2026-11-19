@@ -59,20 +59,17 @@ body {
   background: transparent;
   min-width: 0;
 }
+/* Owner 2026-11-18: every tree row keeps one line and truncates, a search's short tree like the full one. */
 .artist-link .artist-name-label {
   flex: 1 1 auto;
   min-width: 0;
-  white-space: normal;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   line-height: 1.2;
 }
 /* Rows must keep the fixed extent the virtual window counts on; a shrinking row drifts the reveal. */
 .artist-list[data-sidebar-virtualized='true'] .artist-link { height: 41px; flex-shrink: 0; }
-.artist-list[data-sidebar-virtualized='true'] .artist-link .artist-name-label {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 .artist-link:hover, .artist-link.active { background: var(--panel); border-color: var(--border); }
 .artist-count { color: var(--muted); font-size: 0.9rem; flex: 0 0 auto; white-space: nowrap; align-self: flex-start; }
 .title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }

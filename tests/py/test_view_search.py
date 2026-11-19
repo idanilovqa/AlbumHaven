@@ -623,3 +623,14 @@ def test_a_short_field_word_inside_the_query_is_not_a_match():
     assert search_word_matches("dragonlands", "dragonland")
     assert search_word_matches("dragonland", "dragonlands")
     assert search_term_matches_field("dragonland", "dragonland s rivers")
+
+
+def test_short_words_are_not_typos_of_the_query():
+    # Owner 2026-11-18: "Alas" (normalized "ala") listed every loose track with the word "La" in it.
+    from music_app.services.view_search import search_terms_match_fields, search_word_matches, split_search_terms
+
+    assert search_word_matches("ala", "la") is False
+    assert search_terms_match_fields(split_search_terms("Alas"), ["la isla bonita", "madonna"]) is False
+    # Real typos in longer words still match.
+    assert search_word_matches("madona", "madonna") is True
+    assert search_word_matches("beatls", "beatles") is True

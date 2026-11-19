@@ -5934,7 +5934,7 @@ for (const [mountedCount, loadedCategories, sidebarCategories = ['main_library',
   });
 }
 
-test('nonempty mobile search resets navigation and opens Artists', () => {
+test('nonempty mobile search opens the drawer but keeps its tree until results pick one', () => {
   const { context, calls } = createContext({ searchInputValue: 'Devin' });
   const button = { attributes: {}, setAttribute(name, value) { this.attributes[name] = value; } };
   const originalGetElementById = context.document.getElementById.bind(context.document);
@@ -5949,8 +5949,9 @@ test('nonempty mobile search resets navigation and opens Artists', () => {
   };
   context.openArtistsDrawer = () => { opens += 1; };
   context.handleGalleryBootstrapSearchSubmit({ preventDefault() {} });
-  assert.deepEqual(navigationModes, ['artists']);
-  assert.equal(context.state.ui.libraryNavigationMode, 'artists');
+  // Owner 2026-11-18: the best match may be a collection, so submitting does not switch to Artists.
+  assert.deepEqual(navigationModes, []);
+  assert.equal(context.state.ui.libraryNavigationMode, 'custom-collections');
   assert.equal(opens, 1);
   assert.equal(calls.buildApiUrl[0].query, 'Devin');
 });
@@ -5962,7 +5963,7 @@ test('empty submitted search restores the gallery without opening the mobile Art
   context.handleGalleryBootstrapSearchSubmit({ preventDefault() {} });
 });
 
-test('search reveal resets navigation and expands only a folded desktop Artists tree', () => {
+test('search reveal keeps the tree mode and expands only a folded desktop tree', () => {
   const { context } = createContext();
   let folded = true;
   let toggles = 0;
@@ -5983,8 +5984,8 @@ test('search reveal resets navigation and expands only a folded desktop Artists 
   assert.equal(toggles, 1);
   // Owner 2026-11-15: results must not render before the panel finishes opening.
   assert.deepEqual(JSON.parse(JSON.stringify(toggleOptions)), [{ instant: true }]);
-  assert.deepEqual(navigationModes, ['artists', 'artists']);
-  assert.equal(context.state.ui.libraryNavigationMode, 'artists');
+  assert.deepEqual(navigationModes, []);
+  assert.equal(context.state.ui.libraryNavigationMode, 'custom-collections');
   // Owner 2026-11-18: a search from the Loose Tracks page leaves it, so the best match shows selected.
   assert.equal(context.state.ui.suppressSidebarSelection, false);
 });

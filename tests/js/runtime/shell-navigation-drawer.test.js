@@ -267,7 +267,7 @@ test('custom collections tree loads its bounded catalog, not Loose Tracks, and i
   const pending = context.setLibraryNavigationMode('custom-collections');
 
   assert.equal(requests.length, 1);
-  assert.equal(requests[0].path, '/library/custom-collections?category=main_library&category=hoard');
+  assert.equal(requests[0].path, '/library/custom-collections?category=hoard&category=main_library');
   assert.equal(navigationHeading.textContent, 'Custom Collections');
   assert.match(artistList.innerHTML, /^<button data-open-loose-tracks="1">All Loose Tracks<\/button><div class="navigation-tree-separator"[^>]*><\/div><div data-navigation-tree-skeleton="3"><\/div>$/);
   requests[0].respond([{ name: 'Night', count: 2 }, { name: 'Женя машина', count: 85 }]);
@@ -361,7 +361,7 @@ test('a failed catalog request keeps a cached tree and explains an empty one', a
 
 test('desktop library mode rail hides after 30 seconds idle, then reveals at the left edge', () => {
   const {
-    context, drawerRail, modeRailAnchor, artistList, pendingTimers, rootStyles,
+    context, documentElement, drawerRail, modeRailAnchor, artistList, pendingTimers, rootStyles, settledEvents,
   } = loadHelper({ isMobile: false });
   context.syncArtistsDrawerVisibility();
 
@@ -373,6 +373,10 @@ test('desktop library mode rail hides after 30 seconds idle, then reveals at the
   assert.equal(drawerRail.classList.contains('is-library-mode-rail-hidden'), true);
   assert.equal(modeRailAnchor.hidden, false);
   assert.equal(rootStyles.get('--compact-rail-width'), '261px');
+  // Owner 2026-11-18: once the narrower side bar settles, the gallery refits its cards to the freed width.
+  const settledBefore = settledEvents.length;
+  documentElement.dispatchEvent({ type: 'transitionend', target: documentElement, propertyName: '--compact-rail-width' });
+  assert.equal(settledEvents.length, settledBefore + 1);
 
   modeRailAnchor.dispatchEvent({ type: 'pointerenter', target: modeRailAnchor });
   assert.equal(
@@ -1154,8 +1158,11 @@ test('a search with no artist opens the collection holding the most matching tra
   context.state.view.query = 'ace again';
   context.state.ui.customCollectionSearchAutoOpenQuery = 'ace again';
   context.state.view.artists_sidebar = [{ artist: 'Ace Of Base' }];
+  context.renderSidebar = () => {};
   await context.syncCustomCollectionSearchIndicator();
   assert.deepEqual(opened, ['Disco', '']);
+  // Owner 2026-11-18: the tree changes only once results are in, to the one holding the best match.
+  assert.equal(context.state.ui.libraryNavigationMode, 'artists');
 });
 
 test('a tag edit recounts the open collections tree at once, then takes the saved catalog', async () => {
@@ -1196,4 +1203,25 @@ test('a tag edit recounts the open collections tree at once, then takes the save
   context.syncCustomCollectionsAfterTagEdit({ fresh: true });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(fetches, 1);
+});
+
+test('reopening the collections tree draws its cached list once when the refreshed list is the same', async () => {
+  // Owner 2026-11-18: "the custom collection items still blink before loading".
+  const { context, artistList } = loadHelper();
+  stubCollectionTree(context);
+  context.URL = URL;
+  context.escapeHtml = value => String(value);
+  context.fetch = () => Promise.resolve({ ok: true, status: 200, json: async () => ({
+    custom_collections: [{ name: 'Night', count: 2 }], loose_tracks_count: 2,
+  }) });
+  await context.setLibraryNavigationMode('custom-collections');
+  let writes = 0;
+  const html = artistList.innerHTML;
+  Object.defineProperty(artistList, 'innerHTML', {
+    get: () => html,
+    set: () => { writes += 1; },
+    configurable: true,
+  });
+  await context.setLibraryNavigationMode('custom-collections');
+  assert.equal(writes, 1, 'the cached rows are drawn once; the identical refresh does not redraw them');
 });

@@ -447,7 +447,11 @@ def _search_word_matches(query_text: str, candidate_text: str) -> bool:
     # "dragonlands"): short words such as "a" or "land" made "dragonland" match A-ha (owner 2026-11-16).
     if len(candidate_text) >= 4 and len(query_text) - len(candidate_text) <= 2 and candidate_text in query_text:
         return True
-    if query_text[0] != candidate_text[0] and min(len(query_text), len(candidate_text)) >= 4:
+    # A typo is allowed only between words of four letters or more: "ala" and "la" are one letter apart, so every
+    # track with the word "la" matched the search "Alas" (owner 2026-11-18).
+    if min(len(query_text), len(candidate_text)) < 4:
+        return False
+    if query_text[0] != candidate_text[0]:
         return False
     max_distance = 1 if min(len(query_text), len(candidate_text)) <= 5 else 2
     return bounded_edit_distance(query_text, candidate_text, max_distance) <= max_distance

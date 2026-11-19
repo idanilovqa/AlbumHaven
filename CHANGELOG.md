@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.42 - 2026-11-19
+
+- Docs-only: contributor guidance now says that rerunning a failing gate to diagnose it or to verify a fix is expected; only rerunning unchanged code for a lucky pass is ruled out.
+
 ## 0.11.41 - 2026-11-19
 
 - Test-only: the Python test suite runs as three parallel CI jobs, so its results arrive in about 14 minutes instead of 33, and four tests no longer wait out a 30-second database timeout.

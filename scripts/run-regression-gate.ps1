@@ -93,10 +93,7 @@ if ($Gate -eq 'focused') {
         $targetProfiles[$targetName] = [string]$target[0].fixtureProfile
         $targetModes[$targetName] = [string]$target[0].fixtureMode
     }
-    # Generated-isolated targets build their own library, so only preloaded targets need a released fixture.
-    $preloadedProfiles = @($focusedTargets | Where-Object { $targetModes[$_] -ne 'generated-isolated' } |
-        ForEach-Object { $targetProfiles[$_] })
-    $definition.FixtureProfiles = @(@($(if ($focusedCases.Count) { 'functional-core' })) + $preloadedProfiles |
+    $definition.FixtureProfiles = @(@($(if ($focusedCases.Count) { 'functional-core' })) + @($targetProfiles.Values) |
         Where-Object { $_ } | Select-Object -Unique)
 }
 
@@ -216,7 +213,13 @@ function Invoke-MeasuredTargets([string]$TargetList, [string]$FixtureProfile, [s
     New-Item -ItemType Directory -Force -Path $performanceTemp | Out-Null
     $env:ALBUM_HAVEN_FIXTURE_PROFILE = $FixtureProfile
     if ($FixtureMode -eq 'generated-isolated') {
-        # A generated-isolated target builds its own library and refuses inherited fixture paths, as in PR Gates.
+        # As in PR Gates: a generated-isolated target builds its own library from the released profile's approved
+        # covers and refuses inherited fixture paths.
+        $approvedCoverRoot = Join-Path (Get-ProfileRoot $FixtureProfile) 'media\covers\approved'
+        if (-not (Test-Path -LiteralPath $approvedCoverRoot -PathType Container)) {
+            throw "Generated performance targets require the verified released approved-cover seed ($FixtureProfile)."
+        }
+        $env:ALBUM_HAVEN_APPROVED_COVER_ROOT = $approvedCoverRoot
         Remove-Item Env:ALBUM_HAVEN_FIXTURE_ROOT, Env:ALBUM_HAVEN_MEDIA_ROOT -ErrorAction SilentlyContinue
     } else {
         $env:ALBUM_HAVEN_FIXTURE_ROOT = Get-ProfileRoot $FixtureProfile

@@ -207,16 +207,6 @@ test.describe('desktop library navigation inactivity', () => {
     ]);
     await galleryActions.waitForGalleryReady();
 
-    // The released functional fixtures seed no track the server counts as loose, so this case supplies its own rows.
-    const looseTracks = ['One', 'Two', 'Three', 'Four'].map((title, index) => ({
-      path: `C:/Music/Loose/0${index + 1} - ${title}.flac`, artist: 'Loose Artist', title, exception_type: '',
-    }));
-    await page.route('**/library/loose-tracks*', route => route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ library_non_album_tracks: looseTracks, non_album_tracks_deferred: false }),
-    }));
-
     await page.getByRole('button', { name: 'Custom Collections', exact: true }).click();
     await page.getByRole('button', { name: 'All Loose Tracks', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Loose Tracks', exact: true })).toBeVisible();

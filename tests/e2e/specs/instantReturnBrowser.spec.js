@@ -6,7 +6,7 @@ import { defineTimingBudget, expectTimingBudget } from '../helpers/timingBudget.
 import { GalleryActions } from '../actions/index.js';
 import { GalleryPage } from '../poms/index.js';
 import {
-  failedStaticRequests, primeCopy, keptPages, setAppPageHold, slowConnection, visibleAlbumNames, workerReady, LIBRARY_PATH,
+  failedStaticRequests, primeCopy, keptPages, keptStaticPaths, setAppPageHold, slowConnection, visibleAlbumNames, workerReady, LIBRARY_PATH,
 } from '../helpers/instantReturnHelpers.js';
 
 test.use({ serviceWorkers: 'allow' });
@@ -176,7 +176,10 @@ test(`FTC-IAR-W13 offline, album details show 'Offline. Can't load the details, 
   await primeCopy(page, galleryActions);
   const { galleryPage } = galleryActions;
   const [album] = await visibleAlbumNames(galleryPage);
+  // Album Details was never opened online; its close X (a CSS mask image) is kept by the save alone.
+  await expect.poll(() => keptStaticPaths(page), { timeout: 15_000 }).toContain('/static/images/icons/tabler-x.svg');
   await context.setOffline(true);
+  const failedAssets = failedStaticRequests(page);
 
   await galleryActions.clickAlbumDetailsByAlbumName(album);
   const { trackModal } = trackModalActions;
@@ -185,7 +188,12 @@ test(`FTC-IAR-W13 offline, album details show 'Offline. Can't load the details, 
   await expect(trackModal.offlineArtbox, 'the artbox shows the offline cloud').toBeVisible();
   await expect(trackModal.loadingRow).toHaveCount(0);
   await expect(trackModal.title).toContainText(album);
+  // Owner round 8: the close button shows its X and works offline (it was an empty square).
+  await expect(trackModal.closeButton).toBeVisible();
+  await expect(trackModal.closeButton).toBeEnabled();
+  expect(failedAssets, 'Album Details assets that failed offline, the close X included').toEqual([]);
   await trackModalActions.close();
+  await expect(trackModal.dialog, 'the close button closes Album Details offline').toBeHidden();
 
   // An artist further down the tree than the loaded albums: nothing on the device shows it.
   await navigationPanelActions.openArtistTree();

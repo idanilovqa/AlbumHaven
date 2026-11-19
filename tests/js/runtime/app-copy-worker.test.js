@@ -1126,6 +1126,58 @@ test('IAR-W14: with nothing kept, a navigation keeps waiting for the server howe
   assert.match(await (await navigationDone).text(), /content="network"/);
 });
 
+// Owner round 8: offline, Album Details' close button was an empty square. Its X is a CSS mask
+// image that loads only when the button first appears, so a copy never shown details lacked it.
+function styledServer({ online = () => true } = {}) {
+  const requests = [];
+  const respond = (request) => {
+    const url = new URL(request.url);
+    requests.push(url.pathname);
+    if (!online()) return new TypeError('Failed to fetch');
+    if (url.pathname === '/') {
+      return page('acct-a', { body: '<link rel="stylesheet" href="/static/css/details.css?v=v1">' });
+    }
+    if (url.pathname === '/static/css/details.css') {
+      return new Response(".close{mask:url('/static/images/icons/tabler-x.svg') center/18px no-repeat}.far{background:url(https://example.org/x.png)}", {
+        headers: { 'Content-Type': 'text/css', 'Cache-Control': 'public, max-age=31536000, immutable' },
+      });
+    }
+    if (url.pathname === '/static/images/icons/tabler-x.svg') return new Response('<svg>x</svg>', { headers: { 'Content-Type': 'image/svg+xml' } });
+    return new Response('missing', { status: 404 });
+  };
+  return { respond, requests };
+}
+
+test('IAR-W13: images a kept stylesheet draws (icon masks) are kept, so they show offline in views never opened online', async () => {
+  let up = true;
+  const server = styledServer({ online: () => up });
+  const { worker, handle } = setup({ mode: 'web', respond: server.respond });
+  await worker.message({ type: 'save', url: `${ORIGIN}/` });
+  assert.ok(server.requests.includes('/static/images/icons/tabler-x.svg'), 'the X is fetched while online');
+  assert.ok(!server.requests.some(path => path.includes('example.org')), 'only same-origin images');
+  up = false;
+
+  const icon = await handle(resource('/static/images/icons/tabler-x.svg'));
+
+  assert.equal(await icon.text(), '<svg>x</svg>');
+});
+
+test('IAR-W13: a stylesheet kept before is read for its images once per worker, on the next save', async () => {
+  const server = styledServer();
+  const caches = fakeCaches();
+  const first = setup({ mode: 'web', caches, respond: server.respond });
+  await first.worker.message({ type: 'save', url: `${ORIGIN}/` });
+  await caches.stores.get(`${CACHE_PREFIX}acct-a`).delete(`${ORIGIN}/static/images/icons/tabler-x.svg`);
+  server.requests.length = 0;
+
+  const restarted = setup({ mode: 'web', caches, respond: server.respond });
+  await restarted.worker.message({ type: 'save', url: `${ORIGIN}/` });
+  await restarted.worker.message({ type: 'save', url: `${ORIGIN}/` });
+
+  assert.equal(server.requests.filter(path => path === '/static/images/icons/tabler-x.svg').length, 1);
+  assert.ok(!server.requests.includes('/static/css/details.css'), 'the kept stylesheet is read from the copy');
+});
+
 // Request-capture contracts (tests/ci/bounded-interactions.json): the real worker routes every
 // kind of browser request; only its owned endpoints may reach the network, each at most once.
 const { assertInteractionRequests, createRequestCapture, measureInteractionContract } = require('../helpers/request-capture');

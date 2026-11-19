@@ -56,6 +56,7 @@
   const isAppPage = url => url.pathname === '/';
   const pageKey = url => `${url.pathname}${url.search}`;
   const quietly = promise => promise.catch(() => {});
+  const STYLE_URL = /url\(\s*(['"]?)(\/static\/[^'")\s]+)\1\s*\)/g;
   const NO_ANSWER = Symbol('no answer');
 
   function createAppCopyWorker({
@@ -71,6 +72,8 @@
     // Versioned assets kept pages load, to fetch once while online: a page kept by a save may be of
     // a build no page has run here yet. Held in memory only.
     const unseenAssets = new Set();
+    // Kept stylesheets already read for the images they draw (icons as CSS masks), once per worker.
+    const readStyles = new Set();
     // Every change to the copy runs alone, in order, so tabs saving at once cannot lose a page.
     let queue = Promise.resolve();
     const exclusive = (task) => {
@@ -120,6 +123,7 @@
       keptIndex = null;
       unseenCovers.clear();
       unseenAssets.clear();
+      readStyles.clear();
       const names = (await caches.keys()).filter(key => key.startsWith(COPY_FAMILY));
       await Promise.all(names.map(name => caches.delete(name)));
     }
@@ -479,13 +483,39 @@
     async function fillAssets() {
       const target = await accountCache();
       if (!target) return;
+      const images = new Set();
       for (const href of Array.from(unseenAssets)) {
         unseenAssets.delete(href);
+        let style = await target.cache.match(href);
+        if (!style) {
+          const fetchedIn = generation;
+          const response = await fetch(new Request(href, { credentials: 'same-origin' }));
+          if (response.status !== 200 || !immutable(response)) continue;
+          style = response.clone();
+          await storeAsset(target.cache, href, response, fetchedIn);
+        }
+        if (!href.split('?')[0].endsWith('.css') || readStyles.has(href)) continue;
+        readStyles.add(href);
+        for (const image of styleImages(await style.text())) images.add(image);
+      }
+      // Images a stylesheet draws (the close X and other icons are CSS masks) load only when their
+      // button first appears; kept now, so a view never opened online still has them offline.
+      for (const href of images) {
         if (await target.cache.match(href)) continue;
         const fetchedIn = generation;
         const response = await fetch(new Request(href, { credentials: 'same-origin' }));
-        if (response.status === 200 && immutable(response)) await storeAsset(target.cache, href, response, fetchedIn);
+        if (response.status === 200 && !noStore(response)) await storeAsset(target.cache, href, response, fetchedIn);
       }
+    }
+
+    // Same-origin /static/ images a stylesheet refers to with url(...), as absolute URLs.
+    function styleImages(css) {
+      const found = [];
+      for (const [, , raw] of css.matchAll(STYLE_URL)) {
+        const url = new URL(raw, origin);
+        if (url.origin === origin && url.pathname.startsWith('/static/')) found.push(url.href);
+      }
+      return found;
     }
 
     // The kept pages' covers not yet kept, fetched once while online, top of the page first.

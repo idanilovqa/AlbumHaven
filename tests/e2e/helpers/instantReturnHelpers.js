@@ -77,6 +77,21 @@ export async function slowConnection(page, latency) {
   };
 }
 
+// The /static/ paths the copy keeps, read from the browser's own storage.
+export async function keptStaticPaths(page) {
+  // parity-check: allow-read-only-measurement-evaluate: lists the copy's static files without changing the storage.
+  return page.evaluate(async () => {
+    const paths = [];
+    for (const name of (await caches.keys()).filter(key => key.startsWith('album-haven-app-copy-'))) {
+      for (const request of await (await caches.open(name)).keys()) {
+        const url = new URL(request.url);
+        if (url.pathname.startsWith('/static/')) paths.push(url.pathname);
+      }
+    }
+    return paths;
+  });
+}
+
 // Holds ('hold') or lets answer ('release') the app page and the copy's account check on the
 // fixture-owned app process, as a tunnel holds requests for its stopped server (FTC-IAR-W14).
 export async function setAppPageHold(testInfo, action) {

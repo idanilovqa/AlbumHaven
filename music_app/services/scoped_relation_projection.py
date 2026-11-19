@@ -14,6 +14,7 @@ from music_app.services.relation_projection_builder import (
     _album_facts, _display_choice, _is_va_name, _low_value_artist_key,
     _normalize_key, build_postgres_relation_views, serialized_family_key,
 )
+from music_app.services.edit_tag_timings import persistence_stage
 from music_app.services.relation_projection_postgres import _first_row
 
 _LIST_KEYS = {'artists': None, 'artists_sidebar': 'artist', 'sidebar_families': 'family'}
@@ -824,10 +825,11 @@ def _finish_publication(connection, context, metadata, result, *, reason, config
     bridge_started = perf_counter()
     if copy_legacy_views:
         # Older writers need the cached summary, never a rebuild of album/track sources.
-        connection.execute("""update library.libraries set metadata=jsonb_set(jsonb_set(metadata,
-            '{scan_cache,relation_projection}',%(metadata)s::jsonb),
-            '{scan_cache,relation_views}',library.local_relation_compatibility_views(id)),updated_at=now() where id=%(library_id)s""",
-            {'library_id': library_id, 'metadata': _jsonb(metadata)})
+        with persistence_stage('relation_publication.legacy_views_copy'):
+            connection.execute("""update library.libraries set metadata=jsonb_set(jsonb_set(metadata,
+                '{scan_cache,relation_projection}',%(metadata)s::jsonb),
+                '{scan_cache,relation_views}',library.local_relation_compatibility_views(id)),updated_at=now() where id=%(library_id)s""",
+                {'library_id': library_id, 'metadata': _jsonb(metadata)})
     else:
         connection.execute("""update library.libraries set metadata=jsonb_set(metadata,
             '{scan_cache,relation_projection}',%(metadata)s::jsonb),updated_at=now() where id=%(library_id)s""",
@@ -851,13 +853,14 @@ def _finish_publication(connection, context, metadata, result, *, reason, config
                 and target_generation == start + 1
             ):
                 raise RuntimeError('Library sources changed during scoped publication; retry reconciliation.')
-        patch_gallery_membership_in_transaction(
-            connection, config, affected_album_ids=result['affected_relation_album_ids'],
-            affected_album_keys=result['affected_relation_album_keys'],
-            alias_to_canonical=result['affected_relation_aliases'],
-            expected_generation=result['first_gallery_generation'],
-            expected_target_generation=target_generation,
-        )
+        with persistence_stage('relation_publication.gallery_membership'):
+            patch_gallery_membership_in_transaction(
+                connection, config, affected_album_ids=result['affected_relation_album_ids'],
+                affected_album_keys=result['affected_relation_album_keys'],
+                alias_to_canonical=result['affected_relation_aliases'],
+                expected_generation=result['first_gallery_generation'],
+                expected_target_generation=target_generation,
+            )
     return result
 
 

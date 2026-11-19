@@ -56,6 +56,9 @@ const CONCURRENT_PROBE_BUDGET = defineTimingBudget({
   targetMaximum: 800,
   graceMs: 400,
 });
+// Server-side stages of the typo-artist save (5 files); measured 442 ms and 71 ms.
+const SAVE_COMMIT_BUDGET = defineTimingBudget({ targetMaximum: 600, graceMs: 300 });
+const SAVE_GALLERY_PATCH_BUDGET = defineTimingBudget({ targetMaximum: 200, graceMs: 200 });
 const BUDGETS = Object.freeze(Object.fromEntries([
   'tagEditorOpenMs',
   'searchGalleryReadyMs',
@@ -270,6 +273,7 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
           timingMs: metrics.exactIncidentProbeMaxMs,
           details: {
             phaseTimingsMs: result.payload.phase_timings_ms,
+            postgresCommitStagesMs: result.payload.postgres_commit_stages_ms,
             poolLeaseTimingsMs: result.payload.pool_lease_timings_ms,
             poolLeaseCounts: result.payload.pool_lease_counts,
             posts: exactIncident.posts,
@@ -288,6 +292,22 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
             `${probe.name} during Edit Tags`,
           );
         }
+        // A save costs its albums, not the library: the gallery patch once rewrote
+        // every scope's whole membership copy (706 ms here, minutes on a real library).
+        const commitStages = result.payload.postgres_commit_stages_ms;
+        expect(commitStages, 'The save task must report its Postgres stages.').toBeTruthy();
+        expectTimingBudget(
+          expect,
+          result.payload.phase_timings_ms?.postgres_commit,
+          SAVE_COMMIT_BUDGET,
+          'Edit Tags Postgres commit',
+        );
+        expectTimingBudget(
+          expect,
+          commitStages['relation_publication.gallery_membership'],
+          SAVE_GALLERY_PATCH_BUDGET,
+          'Edit Tags gallery membership patch',
+        );
         const reconciledView = await readRuntimeView(page);
         const [sourceIdentity, destinationIdentity] = await Promise.all([
           queryPersistedAlbumIdentity({

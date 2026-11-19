@@ -2563,7 +2563,7 @@ def test_postgres_partial_album_move_publishes_only_destination_cover_authority(
     cover_publications = [
         (sql, params)
         for sql, params in connection.executed
-        if "album.id = any(%(album_ids)s::bigint[])" in _normalized_sql(sql)
+        if "select unnest(%(album_ids)s::bigint[])" in _normalized_sql(sql)
     ]
     assert len(cover_publications) == 1
     publication_sql, publication_params = cover_publications[0]
@@ -2573,7 +2573,7 @@ def test_postgres_partial_album_move_publishes_only_destination_cover_authority(
         "active_paths": [paths[0]],
         "cover_inherited_from_structural_edit": True,
     }
-    assert "join repaired_albums album on album.id = tracks.album_id" in (
+    assert "from repaired_albums album join library.local_tracks tracks on tracks.album_id = album.id" in (
         normalized_publication_sql
     )
     assert "'cover_path', album.cover_path" in normalized_publication_sql
@@ -2605,7 +2605,7 @@ def test_postgres_partial_album_move_cover_sync_follows_post_reconciliation_owne
     publication_sql, publication_params = next(
         (sql, params)
         for sql, params in connection.executed
-        if "album.id = any(%(album_ids)s::bigint[])" in _normalized_sql(sql)
+        if "select unnest(%(album_ids)s::bigint[])" in _normalized_sql(sql)
     )
     normalized_publication_sql = _normalized_sql(publication_sql)
     assert publication_params == {
@@ -2614,7 +2614,9 @@ def test_postgres_partial_album_move_cover_sync_follows_post_reconciliation_owne
         "cover_inherited_from_structural_edit": True,
     }
     assert "selected_files.private_path = any(%(active_paths)s::text[])" in normalized_publication_sql
-    assert "selected_tracks.album_id = album.id" in normalized_publication_sql
+    assert "album.id in ( select unnest(%(album_ids)s::bigint[]) union select selected_tracks.album_id" in (
+        normalized_publication_sql
+    )
 
 
 def test_postgres_album_rename_payload_excludes_cover_state_owned_by_current_rows(
@@ -3878,3 +3880,59 @@ def test_live_postgres_failed_refresh_retries_without_blocking_other_saves(watch
     _save_album_edit(fixture, other, list(other), "Другой2")
     _assert_save_left_only_album_journal(fixture, "save after failed refresh")
     _refresh_after_save(fixture, "retried refresh")
+
+
+def _gallery_publication_state(fixture):
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        occurrences = connection.execute("""select scope_key, revision, count(*) as rows, max(staged_at) as staged_at
+            from library.gallery_projection_occurrences group by scope_key, revision order by 1, 2""").fetchall()
+        memberships = connection.execute("""select scope_key, album_key from library.gallery_membership_entries
+            order by 1, 2""").fetchall()
+    return occurrences, {(row["scope_key"], row["album_key"]) for row in memberships}
+
+
+def test_live_postgres_album_saves_patch_membership_without_rewriting_the_library_copy(
+        watcher_repair_inventory, monkeypatch):
+    """A save costs its albums: the legacy ordinal copy of every gallery scope stays untouched."""
+    fixture = watcher_repair_inventory
+    entries, _other, _scheduled = _seed_split_merge_album(fixture, monkeypatch)
+    occurrences_before, memberships_before = _gallery_publication_state(fixture)
+    assert occurrences_before, "The fixture's full gallery seed must publish the legacy copy once."
+
+    _save_album_edit(fixture, entries, sorted(entries)[2:], "Ремиксы2")
+    _refresh_after_save(fixture, "split")
+    occurrences_after, memberships_after = _gallery_publication_state(fixture)
+
+    assert occurrences_after == occurrences_before
+    split_keys = {album_key for _scope, album_key in memberships_after - memberships_before}
+    assert split_keys and all("ремиксы2" in key for key in split_keys), (
+        "The scoped membership patch must still publish the new album to every scope.")
+
+    _save_album_edit(fixture, entries, sorted(entries)[2:], "Ремиксы")
+    _refresh_after_save(fixture, "merge back")
+    assert _gallery_publication_state(fixture) == (occurrences_before, memberships_before)
+
+
+def test_live_postgres_journaled_album_merges_keys_and_keeps_its_first_revision(watcher_repair_inventory):
+    fixture = watcher_repair_inventory
+    entry = fixture.entry("Journal/2001 - Album/01. Track.flac", artist="Journal", album="Album")
+    fixture.seed(entry)
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        album = connection.execute("""select albums.id, albums.library_id, albums.album_key
+            from library.local_albums albums where albums.title='Album'""").fetchone()
+        connection.execute("select library.mark_relation_album_dirty(%s,%s,'old-key')",
+                           (album["library_id"], album["id"]))
+        first = connection.execute("""select first_inventory_revision, first_gallery_generation
+            from library.local_relation_dirty_albums where album_id=%s""", (album["id"],)).fetchone()
+        connection.execute("""update library.libraries set metadata=jsonb_set(metadata,
+            '{inventory_mutation_revision}', to_jsonb(coalesce((metadata->>'inventory_mutation_revision')::bigint,0)+5))
+            where id=%s""", (album["library_id"],))
+        connection.execute("select library.mark_relation_album_dirty(%s,%s,'older-key')",
+                           (album["library_id"], album["id"]))
+        journaled = connection.execute("""select album_keys, first_inventory_revision, first_gallery_generation
+            from library.local_relation_dirty_albums where album_id=%s""", (album["id"],)).fetchone()
+        connection.rollback()
+
+    assert sorted(journaled["album_keys"]) == sorted({"old-key", "older-key", album["album_key"]})
+    assert journaled["first_inventory_revision"] == first["first_inventory_revision"]
+    assert journaled["first_gallery_generation"] == first["first_gallery_generation"]

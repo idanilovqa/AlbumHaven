@@ -4,6 +4,46 @@ import { acknowledgeSavedNotification, deliverSavedNotificationThroughStatus } f
 const TAG_EDIT_RUNNING_MESSAGE = /^Updating \d+ tracks? in “.+”\.$/u;
 const TAG_EDIT_SAVED_MESSAGE = /^Saved changes to \d+ tracks? in “.+”\.$/u;
 
+// Page-clock timeline from the Edit Tags POST response to the visible saved notification.
+function buildPostSaveTimeline(requestTimeline, notificationSamples, viewDataResponses) {
+  const post = requestTimeline.find((entry) => (
+    new URL(entry.url).pathname === '/utilities/edit-tags'
+  ));
+  const saved = notificationSamples.find((sample) => (
+    sample.visible && TAG_EDIT_SAVED_MESSAGE.test(sample.text)
+  ));
+  if (!post || !saved) return null;
+  const viewData = [...viewDataResponses];
+  const lastGalleryResponseMs = Math.max(post.endMs, ...requestTimeline
+    .filter((entry) => (
+      new URL(entry.url).pathname === '/view-data' && entry.endMs <= saved.atMs
+    ))
+    .map((entry) => entry.endMs));
+  return {
+    responseToSavedMs: saved.atMs - post.endMs,
+    // Browser-only wait: the saved notice after the last gallery response it needed.
+    galleryToSavedMs: saved.atMs - lastGalleryResponseMs,
+    requests: requestTimeline
+      .filter((entry) => entry.endMs >= post.endMs && entry.startMs <= saved.atMs)
+      .map((entry) => {
+        const { pathname, search } = new URL(entry.url);
+        const index = viewData.findIndex((response) => response.url === entry.url);
+        const freshness = pathname === '/view-data' && index >= 0
+          ? viewData.splice(index, 1)[0]
+          : null;
+        return {
+          path: `${pathname}${search}`,
+          startMs: Math.round(entry.startMs - post.endMs),
+          durationMs: Math.round(entry.endMs - entry.startMs),
+          ...(freshness ? {
+            inventoryMutationRevision: freshness.inventoryMutationRevision,
+            projectionStale: freshness.projectionStale,
+          } : {}),
+        };
+      }),
+  };
+}
+
 export class TagEditorActions {
   constructor(tagEditor) {
     this.tagEditor = tagEditor;
@@ -1020,7 +1060,18 @@ export class TagEditorActions {
         saveTaskPollCount += 1;
       }
     };
+    const viewDataResponses = [];
+    const observeViewDataResponse = (response) => {
+      if (new URL(response.url()).pathname !== '/view-data') return;
+      viewDataResponses.push(response.json().then((data) => ({
+        url: response.url(),
+        inventoryMutationRevision: data?.inventory_mutation_revision ?? null,
+        projectionStale: data?.gallery_page?.projection_stale === true,
+      }), () => ({ url: response.url(), unreadable: true })));
+    };
+    const requestTimelineObservation = await this.tagEditor.startRequestTimelineObservation();
     this.tagEditor.page.on('request', observeSaveTaskPoll);
+    this.tagEditor.page.on('response', observeViewDataResponse);
     try {
       const editResponsePromise = this.tagEditor.page.waitForResponse((response) => (
         response.request().method() === 'POST'
@@ -1053,8 +1104,14 @@ export class TagEditorActions {
       await expect(this.tagEditor.confirmOverlay).toBeHidden({ timeout });
       await expect(this.tagEditor.repairAlertMessage).toHaveText(TAG_EDIT_SAVED_MESSAGE, { timeout });
       await expect(this.tagEditor.repairAlert).toBeVisible({ timeout });
+      const requestTimeline = await requestTimelineObservation.finish();
       const notificationSamples = await notificationObservation.finish();
       notificationObservation = null;
+      const postSaveTimeline = buildPostSaveTimeline(
+        requestTimeline,
+        notificationSamples,
+        await Promise.all(viewDataResponses),
+      );
       const visibleSamples = notificationSamples.filter((sample) => sample.visible);
       expect(visibleSamples.some((sample) => (
       TAG_EDIT_RUNNING_MESSAGE.test(sample.text)
@@ -1066,9 +1123,11 @@ export class TagEditorActions {
       ))).toBe(false);
       expect(visibleSamples.some((sample) => TAG_EDIT_SAVED_MESSAGE.test(sample.text))).toBe(true);
       expect(saveTaskPollCount).toBe(0);
-      return { notificationSamples, payload, saveTaskId };
+      return { notificationSamples, payload, postSaveTimeline, saveTaskId };
     } finally {
       this.tagEditor.page.off('request', observeSaveTaskPoll);
+      this.tagEditor.page.off('response', observeViewDataResponse);
+      await requestTimelineObservation.finish();
       if (notificationObservation) await notificationObservation.finish();
     }
   }

@@ -195,6 +195,32 @@ test('Album page library source and cover switches redraw their own panel previe
   }
 });
 
+test('Album page on a phone stacks each group: switches first, the group live preview directly below', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mount(page, 'mountAlbumPage', { utilityShell: true });
+  await page.addStyleTag({ path: path.join(staticRoot, 'css', 'mobile-layout.css') });
+  await page.locator('#utility-modal').evaluate(modal => modal.classList.add('is-mobile-page'));
+  const detail = page.locator('#editor');
+  const geometry = await detail.evaluate(element => ({ client: element.clientWidth, scroll: element.scrollWidth }));
+  expect(geometry.scroll).toBeLessThanOrEqual(geometry.client + 1);
+  const panels = page.locator('.appearance-album-page__panel');
+  await expect(panels).toHaveCount(3);
+  let previousBottom = -Infinity;
+  for (let index = 0; index < 3; index += 1) {
+    const controls = panels.nth(index).locator('.appearance-album-page__controls');
+    const preview = panels.nth(index).locator('.appearance-album-page__preview');
+    await expect(preview).toBeVisible();
+    const [controlsBox, previewBox] = await Promise.all([controls.boundingBox(), preview.boundingBox()]);
+    expect(controlsBox.y).toBeGreaterThanOrEqual(previousBottom);
+    expect(Math.abs(previewBox.y - (controlsBox.y + controlsBox.height))).toBeLessThanOrEqual(2);
+    expect(Math.abs(previewBox.x - controlsBox.x)).toBeLessThanOrEqual(1);
+    expect(previewBox.width).toBeGreaterThan(controlsBox.width - 2);
+    previousBottom = previewBox.y + previewBox.height;
+  }
+  await expect(page.locator('[data-library-source-preview] .appearance-source-preview__icon svg').first()).toBeVisible();
+  await expect(page.locator('[data-cover-badge-sample="local"] .track-modal-cover-source-badge')).toBeVisible();
+});
+
 test('tables resolve their surface locally inside dark panels on a light page', async ({ page }) => {
   await page.setContent(`<html style="--appearance-card:#fff7e5;--appearance-ink:#202124">
     <div class="compact-data-table" data-cdt-frame="outline">Light content table</div>

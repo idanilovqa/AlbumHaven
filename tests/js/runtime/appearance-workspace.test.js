@@ -314,7 +314,8 @@ test('Album page groups its switches into panels that each carry their own live 
     assert.ok(css.includes(`.appearance-${selector.includes('local') ? 'cover-badge' : 'source'}-preview${selector}`), `${selector} drives its preview`);
   }
   const mobileCss = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/mobile-layout.css'), 'utf8');
-  assert.match(mobileCss, /\.is-mobile-page :is\([^)]*\.appearance-album-page__preview[^)]*\) \{ display: none; \}/, 'phones keep hiding the previews until the owner decides');
+  assert.doesNotMatch(mobileCss, /appearance-album-page__preview/, 'phones show each preview under its switches (owner 2026-11-18)');
+  assert.match(mobileCss, /\.is-mobile-page :is\([^)]*\.appearance-album-page__panel[^)]*\) \{ grid-template-columns: minmax\(0, 1fr\) !important;/);
   const galleryCss = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/gallery-main.css'), 'utf8');
   assert.match(galleryCss, /\.album-card\[data-library-sources\],\s*\.appearance-source-preview \{[^}]*--library-source-hoard/, 'the preview shares the gallery source colors');
 });

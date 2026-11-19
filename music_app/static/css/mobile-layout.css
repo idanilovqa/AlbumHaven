@@ -201,7 +201,7 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   .is-mobile-page :is(.background-editor-columns, .appearance-album-page__panel, .selection-hover-workspace, .player-style-workspace) { grid-template-columns: minmax(0, 1fr) !important; min-width: 0; }
   .is-mobile-page :is(input, select, textarea) { max-width: 100%; font-size: 16px; box-sizing: border-box; }
   .is-mobile-page :is(.background-intro, .background-editor-heading > span, .appearance-section-heading > span) { display: none; }
-  .is-mobile-page :is(.player-compact-setting, .player-loop-style-setting, .appearance-album-page__preview) { display: none; }
+  .is-mobile-page :is(.player-compact-setting, .player-loop-style-setting) { display: none; }
   .is-mobile-page .appearance-interaction-row:has([data-interaction-color="item_hover"], [data-interaction-color="button_hover_background"]) { display: none; }
   .is-mobile-page :is(.background-player-modes, .appearance-segmented, .background-companions, .background-palette-grid) { row-gap: 12px; }
   .is-mobile-page .background-choices > section:last-of-type { border-bottom: none; padding-bottom: 0; }

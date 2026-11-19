@@ -292,7 +292,7 @@ function validatePerformanceTargets(contract, expectedCases, expectedNames) {
 
   const defaults = contract.targets.filter((target) => target.defaultMember === true);
   const omissions = contract.targets.filter((target) => target.defaultMember === false);
-  if (defaults.length !== 29) errors.push('default performance group must expose all 29 targets');
+  if (defaults.length !== 31) errors.push('default performance group must expose all 31 targets');
   if (omissions.length !== 0) errors.push('default performance group must not omit a reviewed target');
   return errors;
 }
@@ -541,7 +541,7 @@ test('functional shard contract owns all 192 browser-functional cases exactly on
   assert.equal(contract.workersPerInvocation, 1);
 });
 
-test('performance target contract owns all 61 performance cases across 29 targets', () => {
+test('performance target contract owns all 63 performance cases across 31 targets', () => {
   const matrix = readJson(testDataMatrixPath);
   const expectedCases = new Set(
     matrix
@@ -582,14 +582,16 @@ test('performance target contract owns all 61 performance cases across 29 target
     'scan-metadata',
     'scan-page',
     'scan-health', 'scan-error',
+    'edit-tags-split-merge',
+    'edit-tags-api-consecutive',
   ]);
   const contract = readJson(performanceTargetsPath);
   const errors = validatePerformanceTargets(contract, expectedCases, expectedNames);
 
-  assert.equal(expectedCases.size, 61);
+  assert.equal(expectedCases.size, 63);
   assert.deepEqual(errors, []);
-  assert.equal(contract.targets.length, 29);
-  assert.equal(contract.targets.filter((target) => target.defaultMember).length, 29);
+  assert.equal(contract.targets.length, 31);
+  assert.equal(contract.targets.filter((target) => target.defaultMember).length, 31);
   assert.equal(
     contract.targets
       .filter((target) => target.calibrationState !== 'approved')

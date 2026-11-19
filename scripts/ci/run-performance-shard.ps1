@@ -78,7 +78,9 @@ $failedTargets = [System.Collections.Generic.List[string]]::new()
 $databaseMutatingTargets = @(
     'edit-tags-post-edit',
     'cover-lookup',
-    'notification-history'
+    'notification-history',
+    'edit-tags-split-merge',
+    'edit-tags-api-consecutive'
 )
 $restorePreparedDatabaseBeforeNextTarget = $false
 $targetIndex = 0

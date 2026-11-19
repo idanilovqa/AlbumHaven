@@ -1,6 +1,11 @@
 {
   "schemaVersion": 1,
   "requiredPaths": [
+    "music_app/routes/api_wave_a_asgi_routes.py",
+    "music_app/services/edit_state.py",
+    "music_app/services/edit_tag_timings.py",
+    "music_app/services/tag_edit_intents_postgres.py",
+    "music_app/services/tag_edit_recovery.py",
     "migrations/postgres/0108_add_scoped_relation_projection.sql",
     "music_app/services/scoped_relation_projection.py",
     "migrations/postgres/0109_add_incremental_gallery_membership.sql",
@@ -353,6 +358,24 @@
       "targets": [
         "cover-lookup"
       ]
+    },
+    {
+      "paths": [
+        "music_app/routes/api_wave_a_asgi_routes.py",
+        "music_app/services/save_tasks.py",
+        "music_app/services/edit_workflows.py",
+        "music_app/services/edit_state.py",
+        "music_app/services/edit_tag_timings.py",
+        "music_app/services/tag_edit_intents_postgres.py",
+        "music_app/services/tag_edit_recovery.py",
+        "music_app/static/js/runtime/tag-editor-and-optimistic-updates.js",
+        "music_app/static/js/runtime/pending-tag-edits.js",
+        "tests/e2e/helpers/ddtRemixesFixture.js",
+        "tests/e2e/helpers/timingComparability.js",
+        "tests/e2e/syntheticLargeLibrary/editTagsSplitMergePerformance.spec.js",
+        "tests/e2e/syntheticLargeLibrary/editTagsApiConsecutivePerformance.spec.js"
+      ],
+      "targets": ["edit-tags-split-merge", "edit-tags-api-consecutive"]
     }
   ]
 }

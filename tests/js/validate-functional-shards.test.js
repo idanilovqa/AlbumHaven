@@ -21,7 +21,7 @@ const EXPECTED_SHARD_COUNTS = new Map([
   ['gallery-search-visual-1', 32],
   ['gallery-search-visual-2', 35],
   ['cover-providers-1', 22],
-  ['cover-providers-2', 15],
+  ['cover-providers-2', 16],
   ['metadata-mutations', 16],
   ['playback-utilities-1', 14],
   ['playback-utilities-2', 17],
@@ -124,7 +124,7 @@ function functionalJobSource() {
   return { workflow, job: workflow.slice(start, end) };
 }
 
-test('functional shard contract pins the approved eight-way 165-case assignment', () => {
+test('functional shard contract pins the approved eight-way 166-case assignment', () => {
   const contract = readJson(shardContractPath);
   assert.equal(contract.browser, 'chrome');
   assert.equal(contract.workersPerInvocation, 1);
@@ -138,7 +138,7 @@ test('functional shard contract pins the approved eight-way 165-case assignment'
     assert.ok(shard.invocations.length > 0, `${shard.name} must not be empty`);
     assert.ok(shard.suitePrerequisites.length > 0, `${shard.name} must declare prerequisites`);
   }
-  assert.equal(total, 165);
+  assert.equal(total, 166);
   for (const ownedCase of ownedCases(contract)) {
     assert.match(ownedCase.area, /^[a-z]+(?:-[a-z]+)*$/, ownedCase.case);
   }
@@ -980,7 +980,7 @@ validatorTest('all eight shards use explicit effect-compatible wave budgets', ()
     ['gallery-search-visual-1', { cases: 32, waves: [1, 2] }],
     ['gallery-search-visual-2', { cases: 35, waves: [1, 2, 3, 4] }],
     ['cover-providers-1', { cases: 22, waves: [1, 2, 4] }],
-    ['cover-providers-2', { cases: 15, waves: [1, 2] }],
+    ['cover-providers-2', { cases: 16, waves: [1, 2] }],
     ['metadata-mutations', { cases: 16, waves: [1, 2, 3] }],
     ['playback-utilities-1', { cases: 14, waves: [1, 2, 3, 4] }],
     ['playback-utilities-2', { cases: 17, waves: [1, 2, 5] }],

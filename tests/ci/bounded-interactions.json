@@ -8237,22 +8237,6 @@
       "proof": "static"
     },
     {
-      "id": "py:app_copy.py#install_app_copy_data.<locals>.mark_app_copy_data",
-      "action": "Mark library data the copy's worker asked for as a copy for the signed-in account",
-      "entrypoints": [
-        "py:music_app/services/app_copy.py#install_app_copy_data.<locals>.mark_app_copy_data:middleware:MIDDLEWARE http"
-      ],
-      "owners": [
-        "music_app/services/app_copy.py"
-      ],
-      "rules": [
-        "BI-03",
-        "BI-08"
-      ],
-      "workClass": "constant",
-      "proof": "static"
-    },
-    {
       "id": "py:__init__.py#_start_library_warmup.<locals>.warm_library_state",
       "action": "Warm the connection pool and hydrate library state on a startup thread",
       "entrypoints": [

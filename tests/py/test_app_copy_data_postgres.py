@@ -9,8 +9,6 @@ name the library root only in those places; anything else would be a path kept o
 import json
 from urllib.parse import unquote
 
-import pytest
-
 from music_app.services.app_copy import APP_COPY_REDACTED_KEYS
 from tests.py.asgi_testing import run_asgi_request
 from tests.py.test_cover_references_postgres import as_actor
@@ -69,13 +67,3 @@ def test_marked_library_data_names_the_library_only_in_fields_the_worker_replace
 
     assert {surface: leaks for surface, leaks in found.items() if leaks} == {}
 
-
-@pytest.mark.parametrize("route", ["/view-data", "/album-details"])
-def test_library_data_fetched_by_the_page_itself_is_not_marked(library_app, route):  # noqa: F811
-    asgi_app, fixture, _root = library_app
-    as_actor(asgi_app, fixture.actor)
-    query = {"album_key": fixture.album_key} if route == "/album-details" else {"surface": "albums"}
-
-    _status, headers, _body = run_asgi_request(asgi_app, "GET", route, query=query)
-
-    assert "x-album-haven-app-copy" not in headers

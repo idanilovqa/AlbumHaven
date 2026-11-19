@@ -77,8 +77,8 @@
   // An artist view narrowed further than the artist (a search or a filter) is never made up.
   const NARROWING_PARAMS = ['q', 'related_artist', 'primary_filter', 'genre', 'mood', 'style', 'duration_min', 'duration_max'];
   // A file path that escaped the server's list, alone or as a URL parameter: the answer is then not
-  // kept at all.
-  const FILE_PATH = /(?:^|[?&=])(?:[A-Za-z]:[\\/]|\\\\[^\\]|\/(?:home|mnt|media|Users|Volumes|srv|data|music|var|opt|tmp|run|net|nas|share|storage|library)\/)/i;
+  // kept at all. A POSIX path needs two folders, so app links like /home/recent-albums are not one.
+  const FILE_PATH = /(?:^|[?&=])(?:[A-Za-z]:[\\/]|\\\\[^\\]|\/(?:home|mnt|media|Users|Volumes|srv|data|music|var|opt|tmp|run|net|nas|share|storage|library)\/[^/?#\s]+\/)/i;
   const namesFilePath = (text) => {
     if (FILE_PATH.test(text)) return true;
     try {
@@ -874,11 +874,10 @@
     // (no family, no tracks outside albums).
     async function keptArtistView(cache, index, place) {
       const wanted = place.artist.toLocaleLowerCase();
-      // This gallery's pages first, then the first block of a kept app page.
-      const rank = entry => (entry.gallery.base === place.base ? 0 : 1);
+      // This gallery's pages first, then the first block of a kept app page, then any other gallery.
+      const rank = entry => (entry.gallery.base === place.base ? 0 : entry.gallery.base === null ? 1 : 2);
       const pages = Object.entries(index.entries)
         .filter(([, entry]) => isFresh(entry) && entry.gallery
-          && (entry.gallery.base === place.base || entry.gallery.base === null)
           && entry.gallery.artists.some(artist => artist.toLocaleLowerCase() === wanted))
         .sort(([, a], [, b]) => rank(a) - rank(b) || b.savedAt - a.savedAt);
       for (const [key] of pages) {

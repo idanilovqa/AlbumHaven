@@ -1,3 +1,6 @@
+// How often an open Problematic Files tab asks again while its index fills.
+const PROBLEMATIC_INDEXING_POLL_MS = 2000;
+
 async function loadProblematicFiles(force = false, options = {}) {
   if (force) state.utility.problematicServerSearchCache = {};
   // 'when-open' (a Settings-intent prefetch) paints only once the modal is open.
@@ -87,11 +90,18 @@ async function loadProblematicFiles(force = false, options = {}) {
         if (!response.ok) {
           throw new Error(readProblematicPayloadError(data, 'Unable to load problematic files.'));
         }
+        if (data?.indexing) {
+          // The one-time index fill after an update: show its progress, then load the list.
+          const indexing = new Error('Problematic Files is indexing.');
+          indexing.problematicIndexing = data.indexing;
+          throw indexing;
+        }
         return data;
       };
       const commitSummary = (data, preserveSelectedDetail, continuation = false) => {
         const { summaryItems, initialDetail, operationalItems } = validateProblematicSummaryPayload(data);
         const stateCommitStartedAt = getProblematicUtilityNow();
+        state.utility.problematicIndexing = null;
         if (Array.isArray(data.problem_reason_types)) {
           state.utility.completeProblemReasonTypes = data.problem_reason_types
             .map((reason) => String(reason || '').trim())
@@ -238,6 +248,16 @@ async function loadProblematicFiles(force = false, options = {}) {
       return state.utility.problematicFiles;
     } catch (error) {
       if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
+      if (error?.problematicIndexing) {
+        state.utility.problematicIndexing = error.problematicIndexing;
+        state.utility.loaded = false;
+        state.utility.problematicLoadError = '';
+        scheduleBrowserTimeout(() => {
+          if (state.utility.problematicIndexing && isUtilityModalOpen()) void loadProblematicFiles(true);
+        }, PROBLEMATIC_INDEXING_POLL_MS);
+        if (shouldRender()) renderUtilityModalContent();
+        return null;
+      }
       loadError = String(error?.message || error || 'Unable to load problematic files.');
       console.error('[AlbumHaven][Utilities] Failed to load problematic files.', error);
       if (!boundedPayloadCommitted) {

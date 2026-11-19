@@ -4545,7 +4545,11 @@ function buildOnPageAlertHtml(config = {}) {
   const severity = normalizeAlertSeverity(config.severity);
   const title = String(config.title || '').trim();
   const message = String(config.message || '').trim();
-  const className = [config.actionsPlacement === 'inline' ? 'on-page-alert--inline-actions' : '', String(config.className || '').trim()]
+  const className = [
+    config.actionsPlacement === 'inline' ? 'on-page-alert--inline-actions' : '',
+    config.flat === true ? 'on-page-alert--flat' : '',
+    String(config.className || '').trim(),
+  ]
     .filter(Boolean).join(' ');
   const actionsHtml = String(config.actionsHtml || '');
   const role = config.role === 'status' ? 'status' : 'alert';
@@ -6240,6 +6244,7 @@ const state = {
     activeTab: 'problematic-files',
     problematicFiles: [],
     problematicLoadError: '',
+    problematicIndexing: null,
     libraryWatchHealthProblems: [],
     selectedProblematicKey: '',
     pendingRepairKey: '',
@@ -30109,6 +30114,8 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     els.problemFilterButton.hidden = false;
   }
   renderProblemFilterControls(els);
+  const indexing = state.utility.problematicIndexing;
+  blockProblematicListWhileIndexing(els, Boolean(indexing), mobileIndex);
 
   const mutation = state.utility.problematicMutation;
   if (
@@ -30124,6 +30131,27 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
   }
   els.detail.removeAttribute?.('aria-busy');
   els.detail.removeAttribute?.('inert');
+
+  if (indexing) {
+    // Approved 2026-11-19: the flat shared alert with its progress line; on a phone it takes the list's place.
+    const total = Math.max(0, Number(indexing.total) || 0);
+    const done = Math.min(Math.max(0, Number(indexing.done) || 0), total);
+    const alert = buildOnPageAlertHtml({
+      severity: 'info',
+      role: 'status',
+      flat: true,
+      title: 'Indexing Problematic Files…',
+      message: 'A one-time step after an update. The list opens by itself when it is ready.',
+      progress: total ? {
+        value: (done / total) * 100,
+        label: `${done.toLocaleString('en-US')} of ${total.toLocaleString('en-US')} albums checked`,
+      } : null,
+    });
+    replaceListContents(mobileIndex ? alert : '');
+    if (!mobileIndex) els.detail.innerHTML = alert;
+    els.count.textContent = '';
+    return;
+  }
 
   if (state.utility.loading && !state.utility.loaded) {
     replaceListContents('<div class="utility-empty-state compact">Loading...</div>');
@@ -30333,6 +30361,46 @@ function bindProblematicFocusUserInput(els) {
       if (event.key === ' ' && event.target?.closest?.('button, a[href], [role="button"], [role="checkbox"], [role="switch"]')) return;
       relinquish();
     });
+  }
+}
+
+// While the index first fills (owner, 2026-11-19): on desktop the whole left panel is inert under
+// the shared overlay, labelled "Under construction"; a phone only disables its filter field.
+function blockProblematicListWhileIndexing(els, indexing, mobile) {
+  const filterButtons = Array.from(els.search?.closest?.('.search-field')?.querySelectorAll?.('button') || []);
+  for (const button of filterButtons) {
+    if (indexing && mobile) {
+      if (!button.disabled) button.setAttribute('data-indexing-disabled', '');
+      button.disabled = true;
+    } else if (button.hasAttribute?.('data-indexing-disabled')) {
+      button.removeAttribute('data-indexing-disabled');
+      button.disabled = false;
+    }
+  }
+  if (indexing && mobile) {
+    if (els.search) els.search.disabled = true;
+    if (els.problemFilterButton) els.problemFilterButton.disabled = true;
+  }
+  const sidebar = els.list?.closest?.('.utility-sidebar');
+  if (!sidebar) return;
+  const blocked = indexing && !mobile;
+  let overlay = sidebar.querySelector?.(':scope > [data-problematic-indexing-overlay]') || null;
+  sidebar.classList?.toggle('is-indexing', blocked);
+  if (blocked) {
+    sidebar.setAttribute('inert', '');
+    sidebar.setAttribute('aria-hidden', 'true');
+  } else {
+    sidebar.removeAttribute?.('inert');
+    sidebar.removeAttribute?.('aria-hidden');
+  }
+  if (blocked && !overlay) {
+    overlay = (sidebar.ownerDocument || document).createElement('div');
+    overlay.className = 'problematic-mutation-overlay';
+    overlay.setAttribute('data-problematic-indexing-overlay', '');
+    overlay.textContent = 'Under construction';
+    sidebar.appendChild(overlay);
+  } else if (!blocked && overlay) {
+    overlay.remove();
   }
 }
 
@@ -32226,6 +32294,9 @@ function reorderTagEditorTracksByPath(tracks, draggedPath, beforePath = null) {
 
 // BEGIN js/runtime/utility-loaders-and-cover-lookup.js
 
+// How often an open Problematic Files tab asks again while its index fills.
+const PROBLEMATIC_INDEXING_POLL_MS = 2000;
+
 async function loadProblematicFiles(force = false, options = {}) {
   if (force) state.utility.problematicServerSearchCache = {};
   // 'when-open' (a Settings-intent prefetch) paints only once the modal is open.
@@ -32315,11 +32386,18 @@ async function loadProblematicFiles(force = false, options = {}) {
         if (!response.ok) {
           throw new Error(readProblematicPayloadError(data, 'Unable to load problematic files.'));
         }
+        if (data?.indexing) {
+          // The one-time index fill after an update: show its progress, then load the list.
+          const indexing = new Error('Problematic Files is indexing.');
+          indexing.problematicIndexing = data.indexing;
+          throw indexing;
+        }
         return data;
       };
       const commitSummary = (data, preserveSelectedDetail, continuation = false) => {
         const { summaryItems, initialDetail, operationalItems } = validateProblematicSummaryPayload(data);
         const stateCommitStartedAt = getProblematicUtilityNow();
+        state.utility.problematicIndexing = null;
         if (Array.isArray(data.problem_reason_types)) {
           state.utility.completeProblemReasonTypes = data.problem_reason_types
             .map((reason) => String(reason || '').trim())
@@ -32466,6 +32544,16 @@ async function loadProblematicFiles(force = false, options = {}) {
       return state.utility.problematicFiles;
     } catch (error) {
       if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
+      if (error?.problematicIndexing) {
+        state.utility.problematicIndexing = error.problematicIndexing;
+        state.utility.loaded = false;
+        state.utility.problematicLoadError = '';
+        scheduleBrowserTimeout(() => {
+          if (state.utility.problematicIndexing && isUtilityModalOpen()) void loadProblematicFiles(true);
+        }, PROBLEMATIC_INDEXING_POLL_MS);
+        if (shouldRender()) renderUtilityModalContent();
+        return null;
+      }
       loadError = String(error?.message || error || 'Unable to load problematic files.');
       console.error('[AlbumHaven][Utilities] Failed to load problematic files.', error);
       if (!boundedPayloadCommitted) {

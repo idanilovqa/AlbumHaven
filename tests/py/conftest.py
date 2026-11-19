@@ -26,6 +26,8 @@ _SAFE_PYTEST_ENV = {
     "LASTFM_SESSION_KEY": "",
     "LASTFM_USERNAME": "",
     "ALBUM_HAVEN_APP_DATABASE_URL": "",
+    # Its background backfill must not race other tests' database resets.
+    "ALBUM_HAVEN_PROBLEMATIC_INDEX_ENABLED": "0",
 }
 _LASTFM_SENSITIVE_ENV_KEYS = tuple(key for key in _SAFE_PYTEST_ENV if key.startswith("LASTFM_"))
 _SAFE_RUNTIME_CONFIG = {

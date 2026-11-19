@@ -148,6 +148,7 @@ const state = {
     activeTab: 'problematic-files',
     problematicFiles: [],
     problematicLoadError: '',
+    problematicIndexing: null,
     libraryWatchHealthProblems: [],
     selectedProblematicKey: '',
     pendingRepairKey: '',

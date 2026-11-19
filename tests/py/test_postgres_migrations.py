@@ -578,6 +578,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0182_create_custom_collection_artwork.sql",
         "0186_keep_tag_saves_scoped.sql",
         "0187_index_physical_album_root.sql",
+        "0188_create_problematic_files_index.sql",
     ]
 
 

@@ -34,6 +34,7 @@ from music_app.services.library_hydration import (
 )
 from music_app.services.library_indexing import ScanCancelled, scan_library_file_cache
 from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+from music_app.services import problematic_index
 from music_app.services.gallery_projection_postgres import (
     schedule_gallery_projection_refresh,
 )
@@ -136,7 +137,7 @@ def invalidate_targeted_library_projections(
         invalidate_utility_rules_payload_cache(library_state)
         invalidate_postgres_utility_projection_cache(
             database_url=config.get("ALBUM_HAVEN_APP_DATABASE_URL"),
-            kinds=("problematic-files", "rules", "loose-tracks"),
+            kinds=("rules", "loose-tracks"),
         )
     if config.get("ALBUM_HAVEN_APP_DATABASE_URL") and library_browse_postgres_is_effective(config):
         # As after a scan: rebuild the dropped projections in the background
@@ -1292,7 +1293,7 @@ def refresh_unsuccessful_cover_artwork_for_state(
 def _queue_problematic_albums_prewarm_for_state(library_state, config, logger) -> None:
     if library_browse_postgres_is_effective(config):
         repository = PostgresLibraryBrowseRepository(config)
-        repository.queue_utility_projection_prewarm("problematic-files")
+        problematic_index.queue_maintenance(repository)
         repository.queue_utility_projection_prewarm("duplicate-identities")
         return
     __import__(

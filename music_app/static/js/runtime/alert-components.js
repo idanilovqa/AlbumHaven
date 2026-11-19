@@ -97,7 +97,11 @@ function buildOnPageAlertHtml(config = {}) {
   const severity = normalizeAlertSeverity(config.severity);
   const title = String(config.title || '').trim();
   const message = String(config.message || '').trim();
-  const className = [config.actionsPlacement === 'inline' ? 'on-page-alert--inline-actions' : '', String(config.className || '').trim()]
+  const className = [
+    config.actionsPlacement === 'inline' ? 'on-page-alert--inline-actions' : '',
+    config.flat === true ? 'on-page-alert--flat' : '',
+    String(config.className || '').trim(),
+  ]
     .filter(Boolean).join(' ');
   const actionsHtml = String(config.actionsHtml || '');
   const role = config.role === 'status' ? 'status' : 'alert';

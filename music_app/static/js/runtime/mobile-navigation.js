@@ -30,7 +30,7 @@ function syncMobilePageShell() {
   header.hidden = !active;
   outlet.hidden = !active;
   outlet.dataset.mobilePageKind = active?.kind || '';
-  header.dataset.galleryBarLayout = ['cover-lookup', 'non-album'].includes(active?.kind) ? 'mobile-primary' : '';
+  header.dataset.galleryBarLayout = active ? 'mobile-primary' : '';
   document.getElementById('mobile-back-button').hidden = !active;
   document.getElementById('mobile-library-button').hidden = Boolean(active);
   for (const kind of mobilePageState.originals.keys()) {

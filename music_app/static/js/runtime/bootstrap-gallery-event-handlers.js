@@ -154,7 +154,7 @@ function handleGalleryBootstrapClick(event) {
     }
 
     if (action === 'edit-tags') {
-      if (album?.allowed_actions?.['library.files.edit_tags']) {
+      if (canEditAlbumTags(album)) {
         openTagEditor(album, { tracksMode: 'all' });
       }
       return;

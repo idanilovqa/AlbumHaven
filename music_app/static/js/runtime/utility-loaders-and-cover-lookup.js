@@ -1,3 +1,15 @@
+// PF-NEW-PROBLEMS (owner): an album fixed by a save must leave the list, so the complete list
+// may not be older than the newest library edit this page has seen.
+function buildCompleteProblematicFilesUrl() {
+  const revision = Math.max(
+    Number(state.status?.inventory_mutation_revision) || 0,
+    Number(state.utility.problematicMinInventoryRevision) || 0,
+  );
+  return revision > 0
+    ? `/utilities/problematic-files?min_inventory_revision=${revision}`
+    : '/utilities/problematic-files';
+}
+
 async function loadProblematicFiles(force = false, options = {}) {
   if (force) state.utility.problematicServerSearchCache = {};
   // 'when-open' (a Settings-intent prefetch) paints only once the modal is open.
@@ -47,7 +59,8 @@ async function loadProblematicFiles(force = false, options = {}) {
   state.utility.loading = true;
   state.utility.problematicFilesComplete = false;
   state.utility.problematicArtistItems = [];
-  state.utility.problematicArtistHasMore = true;
+  // The complete list carries every Artist problem, so the paint before it must not page Artists.
+  state.utility.problematicArtistHasMore = options.completeOnly !== true;
   state.utility.problematicArtistNextCursor = '';
   const requestToken = Number(state.utility.problematicSummaryRequestToken || 0) + 1;
   state.utility.problematicSummaryRequestToken = requestToken;
@@ -68,6 +81,7 @@ async function loadProblematicFiles(force = false, options = {}) {
     let loadSucceeded = false;
     let loadError = '';
     let boundedPayloadCommitted = false;
+    let awaitsOpenReconcile = false;
     let previousSummaryItems = [];
     try {
       const fetchSummary = async (url) => {
@@ -145,20 +159,52 @@ async function loadProblematicFiles(force = false, options = {}) {
           refreshChangedSelection };
       };
 
-      let data = await fetchSummary('/utilities/problematic-files?limit=50');
-      if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
-      let committedSelection = commitSummary(
-        data,
-        options.preserveSelectedDetail === true || data.complete === false,
-      );
-      boundedPayloadCommitted = data.complete === false;
-      state.utility.problematicHasMore = data.has_more === true
-        || (data.has_more === undefined && data.complete === false);
-      state.utility.problematicNextCursor = String(data.next_cursor || '');
-      settleInitialSummary(state.utility.problematicFiles);
+      const commitCompleteList = (completeData) => {
+        // A bounded page's reason catalog served paging; the complete list's own reasons replace it.
+        if (!Array.isArray(completeData?.problem_reason_types)) state.utility.completeProblemReasonTypes = [];
+        const committed = commitSummary(completeData, true, true);
+        state.utility.problematicHasMore = false;
+        state.utility.problematicNextCursor = '';
+        state.utility.problematicArtistHasMore = false;
+        state.utility.problematicListOutdated = false;
+        return committed;
+      };
+      let data;
+      let committedSelection;
+      if (options.completeOnly === true) {
+        // The tab opened on a list loaded in the background: its bounded page is already on screen.
+        data = await fetchSummary(buildCompleteProblematicFilesUrl());
+        if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
+        committedSelection = commitCompleteList(data);
+        settleInitialSummary(state.utility.problematicFiles);
+      } else {
+        data = await fetchSummary('/utilities/problematic-files?limit=50');
+        if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
+        committedSelection = commitSummary(
+          data,
+          options.preserveSelectedDetail === true || data.complete === false,
+        );
+        boundedPayloadCommitted = data.complete === false;
+        state.utility.problematicHasMore = data.has_more === true
+          || (data.has_more === undefined && data.complete === false);
+        state.utility.problematicNextCursor = String(data.next_cursor || '');
+        state.utility.problematicListOutdated = ['stale', 'revalidated']
+          .includes(String(data?.projection_cache_status || ''));
+        settleInitialSummary(state.utility.problematicFiles);
+      }
       if (boundedPayloadCommitted) {
         state.utility.problematicFilesComplete = false;
         scheduleProblematicServerSearch();
+        // Only an open tab reconciles with the complete list (a whole-library read); background
+        // reloads after tag edits keep paging. The complete list then supersedes paging, so
+        // reaching the bounded list's end must not request more pages.
+        const reconcile = problematicFilesTabOnScreen();
+        // A Settings-intent prefetch is reconciled by the tab about to open; paging first would only be superseded.
+        awaitsOpenReconcile = !reconcile && options.render === 'when-open';
+        if (reconcile || awaitsOpenReconcile) {
+          state.utility.problematicHasMore = false;
+          state.utility.problematicArtistHasMore = false;
+        }
         if (state.utility.loadPromise === requestPromise) {
           state.utility.loading = false;
           state.utility.loadPromise = null;
@@ -169,9 +215,17 @@ async function loadProblematicFiles(force = false, options = {}) {
           renderUtilityModalContent();
           await waitForProblematicUtilityRenderFrame();
         }
-        scheduleBrowserTimeout(() => { void loadNextProblematicArtistPage(); }, 0);
+        if (reconcile) {
+          // Requested only after the bounded page has painted, so it can never arrive first.
+          data = await fetchSummary(buildCompleteProblematicFilesUrl());
+          if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
+          committedSelection = commitCompleteList(data);
+        } else if (!awaitsOpenReconcile) {
+          // The complete list already carries Artist problems; only a paged list pages them.
+          scheduleBrowserTimeout(() => { void loadNextProblematicArtistPage(); }, 0);
+        }
       }
-      state.utility.problematicFilesComplete = !state.utility.problematicHasMore;
+      state.utility.problematicFilesComplete = !state.utility.problematicHasMore && !awaitsOpenReconcile;
       loadSucceeded = true;
       const { selectedKey, selectedDetail, selectedSummary, refreshChangedSelection } = committedSelection;
       if (selectedSummary || refreshChangedSelection) {
@@ -361,6 +415,10 @@ async function loadProblematicPagesUntilLocalQueryMatch(query) {
   return typeof getFilteredProblematicAlbums === 'function'
     ? getFilteredProblematicAlbums()
     : [];
+}
+
+function problematicFilesTabOnScreen() {
+  return typeof getUtilityModalElements === 'function' && isUtilityModalOpen();
 }
 
 // Search the server so every album is covered, including matches beyond the
@@ -1541,7 +1599,17 @@ function loadActiveUtilityTab(force = false) {
   }
   const freshPrefetch = state.utility.loaded
     && Date.now() - Number(state.utility.problematicPrefetchedAt || 0) < PROBLEMATIC_PREFETCH_FRESH_MS;
-  return loadProblematicFiles(force && !freshPrefetch);
+  // A list loaded in the background (bounded, or from an outdated stored copy) reconciles
+  // with the complete list once its tab is open.
+  const reconcileOpenedList = (result) => {
+    const needsCompleteList = state.utility.loaded === true
+      && (state.utility.problematicFilesComplete === false || state.utility.problematicListOutdated === true)
+      && !state.utility.loading
+      && !state.utility.completeLoadPromise
+      && problematicFilesTabOnScreen();
+    return needsCompleteList ? loadProblematicFiles(true, { completeOnly: true }) : result;
+  };
+  return Promise.resolve(loadProblematicFiles(force && !freshPrefetch)).then(reconcileOpenedList);
 }
 
 function scheduleUtilityOpenLoad(force = false, delay = 0) {

@@ -29,11 +29,12 @@ function loadContext() {
       stored.set(key, String(value));
       return true;
     },
-    buildSmallAlertHtml: ({ message }) => `<span class="small-alert">${message}</span>`,
     escapeHtml: value => String(value || ''),
   });
   context.window = context;
   vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), '..', 'button-component.js'), 'utf8'), context);
+  // The real SmallAlert: the notice's close X is part of the component.
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'alert-components.js'), 'utf8'), context);
   vm.runInContext(helperSource, context, { filename: helperPath });
   return { context, stored };
 }
@@ -57,18 +58,38 @@ test('interrupted lookup shows one compact dismissible notice and never replays 
     'Previous cover lookup was interrupted.',
   );
   const markup = context.buildCoverLookupModalStatusHtml(false);
-  assert.match(markup, /class="cover-lookup-inline-notice"/);
-  assert.match(markup, /data-dismiss-cover-lookup-notice="1"/);
+  assert.match(markup, /class="small-alert small-alert--warning cover-lookup-inline-notice"/);
+  // Owner (2026-11-17): the close X is part of the alert, inside it, not a separate button beside it.
+  assert.match(markup, /^<span class="small-alert[^"]*"[^>]*>.*small-alert__text.*data-dismiss-cover-lookup-notice="1".*<\/span>$/s);
+  assert.equal((markup.match(/data-dismiss-cover-lookup-notice/g) || []).length, 1);
   assert.doesNotMatch(markup, /on-page-alert/);
   assert.doesNotMatch(markup, /Starting cover search/);
 
-  context.state.coverLookup.modal.failureNotice = '';
+  // Owner (2026-11-17): the notice belongs to the card. Its X hides it for this opening; task polls keep it hidden.
+  context.state.coverLookup.modal.taskId = 'eden-interrupted';
+  context.dismissCoverLookupInterruptionNotice();
   context.state.coverLookup.modal.statusText = 'Starting cover search…';
   context.applyCoverLookupTaskModalStatus(interrupted);
 
   assert.equal(context.state.coverLookup.modal.failureNotice, '');
   assert.equal(context.state.coverLookup.modal.statusText, '');
   assert.equal(context.buildCoverLookupModalStatusHtml(false), '');
+});
+
+test('the interrupted notice belongs to the card, not the browser: each card shows its own', () => {
+  const { context, stored } = loadContext();
+  const interrupted = (id) => ({ id, status: 'failed', result_kind: 'interrupted' });
+
+  context.applyCoverLookupTaskModalStatus(interrupted('first-card'));
+  assert.equal(context.state.coverLookup.modal.failureNotice, 'Previous cover lookup was interrupted.');
+  context.state.coverLookup.modal.taskId = 'first-card';
+  context.dismissCoverLookupInterruptionNotice();
+
+  context.applyCoverLookupTaskModalStatus(interrupted('second-card'));
+  assert.equal(context.state.coverLookup.modal.failureNotice, 'Previous cover lookup was interrupted.',
+    'dismissing one card leaves the others');
+  context.applyCoverLookupTaskModalStatus(interrupted('first-card'));
+  assert.equal(stored.size, 0, 'nothing is remembered in the browser');
 });
 
 test('only an active lookup may publish its current progress copy', () => {

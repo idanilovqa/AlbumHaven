@@ -304,6 +304,17 @@ def _album_image_has_bytes(folder: Path, excluded: Path, data: bytes) -> bool:
     return False
 
 
+def planned_cover_backup_name(folder: Path) -> str | None:
+    """Name reserve_existing_cover_variant would give the current cover.jpg, or None when a save keeps no backup."""
+    current_cover = folder / "cover.jpg"
+    if not current_cover.is_file() or _album_image_has_bytes(folder, current_cover, current_cover.read_bytes()):
+        return None
+    index = 1
+    while (folder / f"cover-existing-{index}.jpg").exists():
+        index += 1
+    return f"cover-existing-{index}.jpg"
+
+
 def reserve_existing_cover_variant(folder: Path, raw_bytes: bytes) -> Path | None:
     current_cover = folder / "cover.jpg"
     if not current_cover.is_file():

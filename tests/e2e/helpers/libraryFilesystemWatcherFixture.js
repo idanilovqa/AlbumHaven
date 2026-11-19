@@ -9,13 +9,14 @@ import { resolveWritableFixtureMediaRoot } from './fixtureMediaRoot.js';
 const require = createRequire(import.meta.url);
 const { resolvePlaywrightPython } = require('../../../scripts/playwright-python.cjs');
 const execFileAsync = promisify(execFile);
-const WATCHER_FIXTURE_PROFILES = ['functional-core', 'synthetic-large-library'];
+const WATCHER_FIXTURE_PROFILES = ['functional-core', 'synthetic-large-library', 'utility-problematic-files'];
 const WATCHER_FIXTURE_DIRECTORIES = [
   'watcher-reconciliation',
   'watcher-artist-collation-curly',
   'watcher-grouped-feature-credit',
   'gallery-native-response-overlap',
   'generated-preview-storage',
+  'problematic-files-missing-album',
 ];
 
 function resolveWatcherFixtureMediaRoot(environment = process.env) {

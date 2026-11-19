@@ -43,7 +43,7 @@ def test_blocking_postgres_utility_reads_do_not_block_the_asgi_event_loop(
             started.set()
             assert release.wait(2), "test release timer did not unblock the repository"
 
-        def build_problematic_files_payload(self):
+        def build_problematic_files_payload(self, *, min_inventory_revision=0):
             self._block()
             return {"ok": True, "items": [], "initial_detail": None}
 

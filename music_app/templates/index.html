@@ -145,10 +145,7 @@
 
       {% if shell_main.content_kind == 'discovery_center_page' and discovery_center_page %}
       <section class="discovery-center-page" id="discovery-center-page" data-discovery-center-page-kind="{{ discovery_center_page.page_kind or 'discovery_center' }}" data-discovery-center-active-tab="{{ discovery_center_page.active_tab or 'inbox' }}" data-discovery-center-active-source="{{ discovery_center_page.active_source or 'all' }}">
-        <header class="discovery-center-page-header">
-          <h1>{{ discovery_center_page.page_title or 'Discovery Center' }}</h1>
-          <p>{{ discovery_center_page.page_subtitle or '' }}</p>
-        </header>
+        {{ gallery_bar(discovery_center_page.page_title or 'Discovery Center', discovery_center_page.page_subtitle or '', class_name='page-gallery-bar', instance='page', mobile_layout='mobile-primary', aria_label='Discovery Center') }}
         <nav class="discovery-center-page-tabs" aria-label="Discovery Center tabs">
           {% for tab in discovery_center_page.supported_tabs or [] %}
           <a href="/news?tab={{ tab }}" {% if discovery_center_page.active_tab == tab %}aria-current="page"{% endif %}>{{ tab|title }}</a>

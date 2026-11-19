@@ -21,7 +21,10 @@ test('Gallery, Album Details, and Settings use one header component; primary bar
   assert.match(index, /gallery_bar\([^)]*mobile_layout='mobile-primary'[^)]*gallery_context=true/s);
   assert.doesNotMatch(index, /<section class="mobile-page-header gallery-bar"/);
   assert.match(mobileCss, /\[data-gallery-bar-layout="mobile-primary"\]/);
-  assert.match(mobileNavigation, /\['cover-lookup', 'non-album'\]\.includes\(active\?\.kind\)\s*\?\s*'mobile-primary'/);
+  // Owner (2026-11-16): every phone page header uses the one GalleryBar layout.
+  assert.match(mobileNavigation, /header\.dataset\.galleryBarLayout = active \? 'mobile-primary' : ''/);
+  assert.doesNotMatch(mobileCss, /\.mobile-page-header \{ display: flex/, 'the page header has no second phone layout');
+  assert.match(mobileCss, /grid-template-columns: \[menu\] auto \[back\] auto \[art\] auto \[text\] minmax\(0, 1fr\) \[actions\] auto \[end\]/);
   assert.doesNotMatch(
     mobileCss,
     /\.settings-outlet \.page-gallery-bar\s*\{[^}]*(?:padding|margin|top):/s,

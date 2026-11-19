@@ -73,6 +73,8 @@ function createContext(options = {}) {
     hidden: options.trackModalHidden ?? true,
   };
   const context = {
+    // Owned and tested by modal-and-overlay-helpers.js.
+    canEditAlbumTags: album => Boolean(album?.allowed_actions?.['library.files.edit_tags']),
     window: {
       location: new URL(options.currentUrl || 'http://localhost/?surface=albums&artist=A.C.T'),
     },

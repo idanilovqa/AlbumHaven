@@ -21,17 +21,21 @@ async function mountStatusComponent(page, status) {
     </main>
   </body></html>`);
   for (const file of [
-    'app-chrome.css', 'button-component.css',
+    'app-chrome.css', 'button-component.css', 'gallery-main.css', 'mobile-layout.css',
     'runtime/cover-lookup-drawer-and-related.css', 'runtime/alert-components.css',
   ]) {
     await page.addStyleTag({ path: path.join(root, 'music_app/static/css', file) });
   }
   await page.addScriptTag({ path: path.join(root, 'music_app/static/js/button-component.js') });
   await page.evaluate(() => {
+    window.escapeHtml = value => String(value ?? '')
+      .replaceAll('&', '&amp;').replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;').replaceAll('"', '&quot;');
     window.appBootstrap = {
       getInitialView: () => ({ album_count: 1, query: '', selected_artist: '' }),
     };
   });
+  await page.addScriptTag({ path: path.join(root, 'music_app/static/js/runtime/gallery-main-components.js') });
   for (const file of [
     'core-state-and-helpers.js', 'view-value-helpers.js', 'loader-status-helpers.js',
     'markup-format-helpers.js', 'alert-components.js',

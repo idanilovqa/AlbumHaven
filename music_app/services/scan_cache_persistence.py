@@ -2402,7 +2402,6 @@ class PostgresScanCacheAdapter:
                     _scan_missing_candidates_sql(),
                     {
                         "current_paths": current_private_paths,
-                        "current_path_count": len(current_private_paths),
                         "source": _SOURCE,
                         "observed_root_ids": sorted(observed_library_root_ids or set()),
                         "unreachable_root_ids": unreachable_root_ids,
@@ -8220,13 +8219,11 @@ def _scan_missing_candidates_sql() -> str:
               library.local_track_files.metadata ->> 'library_root_id'
             ) = any(%(observed_root_ids)s::text[] || %(unreachable_root_ids)s::text[])
             -- A hashed anti-join: comparing each file against the whole path array
-            -- was quadratic for a full library.
-            and (
-              %(current_path_count)s = 0
-              or not exists (
-                select 1 from unnest(%(current_paths)s::text[]) as current_file(private_path)
-                where current_file.private_path = library.local_track_files.private_path
-              )
+            -- was quadratic for a full library. Keep it a bare NOT EXISTS: an OR beside it
+            -- stops Postgres from hashing and rescans the array per file (owner scan, 11-16).
+            and not exists (
+              select 1 from unnest(%(current_paths)s::text[]) as current_file(private_path)
+              where current_file.private_path = library.local_track_files.private_path
             )
     """
 

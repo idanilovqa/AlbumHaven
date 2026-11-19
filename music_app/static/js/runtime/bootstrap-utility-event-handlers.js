@@ -870,7 +870,7 @@ async function handleUtilityBootstrapClick(event) {
 
   if (event.target.closest('[data-dismiss-cover-lookup-notice="1"]')) {
     event.preventDefault();
-    state.coverLookup.modal.failureNotice = '';
+    dismissCoverLookupInterruptionNotice();
     renderCoverLookupModal();
     return;
   }

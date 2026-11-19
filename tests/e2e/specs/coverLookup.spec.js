@@ -1,13 +1,14 @@
 import { expect, test } from '../support/baseFixtures.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createSameAlbumArtwork, createUndersizedAlbumArtwork } from '../helpers/albumSourceOwnershipFixture.js';
 import {
   buildFixtureManualUrls,
   COVER_LOOKUP_TEST_TARGETS,
   findFixtureCoverBySubtitle,
 } from '../helpers/coverLookupFixtureData.js';
+import { setPastedCoverSaveHeld } from '../helpers/coverLookupProviderHelpers.js';
 import { MobileLayoutPage } from '../poms/mobileLayoutPage.js';
 
 const {
@@ -25,7 +26,7 @@ const {
   providerStoragePolicy: PROVIDER_STORAGE_POLICY_TARGET,
 } = COVER_LOOKUP_TEST_TARGETS;
 
-const COVER_LOOKUP_FILTERED_URL = `/?surface=albums&q=${encodeURIComponent(COVER_LOOKUP_TARGET.artist.toLowerCase())}&artist=${encodeURIComponent(COVER_LOOKUP_TARGET.artist)}&gallery_scope=all&category=main_library&category=hoard&category=new_arrivals`;
+const COVER_LOOKUP_FILTERED_URL = `/albums?q=${encodeURIComponent(COVER_LOOKUP_TARGET.artist.toLowerCase())}&artist=${encodeURIComponent(COVER_LOOKUP_TARGET.artist)}&gallery_scope=all&category=main_library&category=hoard&category=new_arrivals`;
 const SPLIT_FIXTURE = Object.freeze({
   artist: 'ДДТ',
   album: 'Студийные записи',
@@ -183,6 +184,8 @@ test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, an
   stepLogger,
   trackModalActions,
 }) => {
+  // Six owner flows in one case: the default 4-minute budget ends before the delete/fallback step.
+  test.setTimeout(480_000);
   const lookup = coverLookupActions.coverLookup;
   const mobileLayout = new MobileLayoutPage(page);
   const pickerName = 'album-haven-cloud-vinyl.png';
@@ -227,6 +230,9 @@ test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, an
     const previousSelectedSource = String(
       await previousSelectedImage.getAttribute('data-production-cover-src')
       || await previousSelectedImage.getAttribute('src')
+      // The fixture's saved remote cover is unreachable by design; a failed image drops its src,
+      // so fall back to the card's own preview address, which names the same cover.
+      || await previousSelectedCard.getAttribute('data-cover-preview-src')
       || '',
     ).trim();
     previousSelectedIdentity = previousSelectedSource
@@ -273,6 +279,7 @@ test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, an
     await lookup.saveRemoteButton.click();
     await saveRequestPromise;
     await expect(lookup.drawer).toBeVisible();
+    const firstReopenOrderObservation = await lookup.startLocalCoverOrderObservation();
     await trackModalActions.openCoverLookup();
     await expect(lookup.modal).toBeVisible();
     const immediateLocalCard = lookup.activeLocalCoverCard;
@@ -283,8 +290,15 @@ test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, an
       lookup.localCoverImageWithin(immediateLocalCard),
       'immediate reopened pasted LOCAL cover',
     );
-    expect(immediateLocalEvidence.sha256).toBe(stagedCoverEvidence.sha256);
+    // Owner (2026-11-15): the temporary card is replaced in place by the saved file as soon as it exists,
+    // so the reopened card shows either the pasted bytes or the stored cover.jpg (checked after the response).
     expect(immediateLocalEvidence.src).not.toBe(previousSelectedIdentity);
+    const firstReopenOrders = await lookup.finishLocalCoverOrderObservation(firstReopenOrderObservation);
+    expect(firstReopenOrders.length).toBeGreaterThan(0);
+    for (const sample of firstReopenOrders) {
+      expect(new Set(sample.paths).size).toBe(sample.paths.length);
+      expect(sample.activeIndexes).toEqual([sample.paths.length - 1]);
+    }
     const immediateDeleteButtons = lookup.localCoverCards.locator('[data-delete-local-cover]');
     await expect(immediateDeleteButtons).toHaveCount(await lookup.localCoverCards.count());
     for (let index = 0; index < await immediateDeleteButtons.count(); index += 1) {
@@ -306,9 +320,14 @@ test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, an
     expect(savedCoverRevision).toMatch(/^[a-f0-9]{64}$/i);
     expect(payload.updated_album?.cover_path).toBe(savedCoverPath);
     expect(payload.updated_album?.cover_revision).toBe(savedCoverRevision);
+    expect([stagedCoverEvidence.sha256, savedCoverRevision.toUpperCase()],
+      'the reopened pasted card shows the pasted picture or its stored file')
+      .toContain(immediateLocalEvidence.sha256);
 
+    const secondReopenOrderObservation = await lookup.startLocalCoverOrderObservation();
     await trackModalActions.openCoverLookup();
     await coverLookupActions.waitForModalResultsReady();
+    const secondReopenOrders = await lookup.finishLocalCoverOrderObservation(secondReopenOrderObservation);
     const authoritativeLocalCard = lookup.activeLocalCoverCard;
     await expect(authoritativeLocalCard).toHaveClass(/\bis-active\b/);
     await expect(authoritativeLocalCard).toContainText('cover.jpg');
@@ -328,6 +347,12 @@ test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, an
       candidate.image.sha256 === authoritativeLocalEvidence.sha256
     ))).toHaveLength(1);
     expect(authoritativeCandidates.map((candidate) => candidate.name)).not.toContain(pickerName);
+    const authoritativePaths = authoritativeCandidates.map(candidate => candidate.sourcePath);
+    expect(secondReopenOrders.length).toBeGreaterThan(0);
+    for (const sample of secondReopenOrders) {
+      expect(sample.paths).toEqual(authoritativePaths);
+      expect(sample.activeIndexes).toEqual([sample.paths.length - 1]);
+    }
     await coverLookupActions.closeModal();
     await expect(lookup.modal).toBeHidden();
     // The notification must update while Album Details remains open.
@@ -441,6 +466,211 @@ test('FTC-COVERS-028 pasted cover revision reconciles album details, gallery, an
     expect(replacement.isActive).toBe(false);
     await coverLookupActions.selectLocalCoverByNameAndSave(replacement.name);
     await expect(lookup.modal).toBeHidden();
+  });
+
+  // Owner, 2026-11-15 (sandbox2): a slow, non-square pasted image showed twice (cover.jpg and image.png),
+  // deleting it did nothing on disk, Album Details and the gallery kept it, and the fallback card loaded forever.
+  await stepLogger.step('A slow non-square paste is one cover.jpg card at once; deleting it falls back everywhere', async () => {
+    const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex').toUpperCase();
+    const pastedSize = /^547\s*[x×]\s*365$/;
+    const imagePath = path.join(test.info().outputPath('owner-paste'), 'image.png');
+    fs.mkdirSync(path.dirname(imagePath), { recursive: true });
+    const pngBase64 = await page.evaluate(() => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 547;
+      canvas.height = 365;
+      const context = canvas.getContext('2d');
+      context.fillStyle = '#7a1f2b';
+      context.fillRect(0, 0, 547, 365);
+      context.fillStyle = '#f0c040';
+      context.fillRect(40, 40, 200, 120);
+      return canvas.toDataURL('image/png').split(',')[1];
+    });
+    fs.writeFileSync(imagePath, Buffer.from(pngBase64, 'base64'));
+    const assertOnePastedCover = (cards, stage) => {
+      expect(cards.map(card => card.name), stage).not.toContain('image.png');
+      expect(new Set(cards.map(card => card.sourcePath)).size,
+        `${stage}: ${JSON.stringify(cards.map(card => [card.name, card.sourcePath, card.resolution, card.isActive]))}`)
+        .toBe(cards.length);
+      const pasted = cards.filter(card => pastedSize.test(card.resolution));
+      expect(pasted.map(card => card.name), stage).toEqual(['cover.jpg']);
+      expect(cards.filter(card => card.isActive).map(card => card.name), stage).toEqual(['cover.jpg']);
+      return pasted[0];
+    };
+    const otherArtNames = () => lookup.modalBody
+      .locator('.cover-lookup-subsection-title', { hasText: 'Other art' })
+      .locator('xpath=following-sibling::div[contains(concat(" ", normalize-space(@class), " "), " cover-lookup-gallery ")][1]')
+      .locator('[data-cover-lookup-item-key]')
+      .allInnerTexts();
+
+    await page.setViewportSize(test.info().project.use.viewport || { width: 1440, height: 900 });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await galleryActions.waitForGalleryReady();
+    expect(await galleryActions.selectAlbumDetailsByIdentity(USER_OWNED_IMPROVEMENT_TARGET))
+      .toEqual(USER_OWNED_IMPROVEMENT_TARGET);
+    await trackModalActions.waitForLoadedSummary();
+    await trackModalActions.openCoverLookup();
+    await coverLookupActions.waitForModalResultsReady();
+    const before = await coverLookupActions.readLocalSectionCoverCandidates();
+    const priorActive = before.find(card => card.isActive);
+    expect(priorActive).toBeTruthy();
+
+    // Sandbox2 saves slowly: hold the real save on the server so the reopen happens before it lands.
+    await setPastedCoverSaveHeld(test.info(), true);
+    const releaseSave = () => setPastedCoverSaveHeld(test.info(), false);
+    await coverLookupActions.chooseComposerImages([imagePath]);
+    await lookup.manualExtractButton.click();
+    const staged = lookup.stagedCoverCardByName('image.png');
+    await expect(staged).toBeVisible();
+    await coverLookupActions.selectOnlyCover(staged);
+    const saveResponse = page.waitForResponse(response => (
+      response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/utilities/cover-lookup/pasted-image-save'
+    ));
+    await lookup.saveRemoteButton.click();
+    await expect(lookup.modal).toBeHidden();
+
+    // Owner: every frame from Save until after the real write shows the same cards, names and order.
+    const saveFrames = await lookup.startLocalCoverOrderObservation();
+    await trackModalActions.openCoverLookup();
+    await expect(lookup.modal).toBeVisible();
+    const pendingCards = await coverLookupActions.readLocalSectionCoverCandidates();
+    assertOnePastedCover(pendingCards, 'reopened before the save is acknowledged');
+    expect(pendingCards.some(card => card.image.sha256 === priorActive.image.sha256 && card.name !== 'cover.jpg'),
+      'the replaced cover keeps a card under its backup name').toBe(true);
+    expect(await otherArtNames()).not.toContain('image.png');
+    await coverLookupActions.closeModal();
+
+    await releaseSave();
+    const saved = await (await saveResponse).json();
+    expect(saved.ok).toBe(true);
+    await trackModalActions.openCoverLookup();
+    await coverLookupActions.waitForModalResultsReady();
+    const savedCards = await coverLookupActions.readLocalSectionCoverCandidates();
+    const savedPasted = assertOnePastedCover(savedCards, 'reopened after the save');
+    expect(savedPasted.sourcePath).toBe(saved.selected_cover_path);
+    expect(savedCards.map(card => card.name), 'nothing moves or is renamed once the save lands')
+      .toEqual(pendingCards.map(card => card.name));
+    const savedPaths = savedCards.map(card => card.sourcePath);
+    const pastedIndex = savedPaths.indexOf(savedPasted.sourcePath);
+    const frames = await lookup.finishLocalCoverOrderObservation(saveFrames);
+    expect(frames.length).toBeGreaterThan(0);
+    for (const frame of frames) {
+      expect(frame.paths, 'every rendered frame shows the final cards in the final order').toEqual(savedPaths);
+      expect(frame.activeIndexes, 'every rendered frame selects only the pasted cover').toEqual([pastedIndex]);
+    }
+
+    const deleteFrames = await lookup.startLocalCoverOrderObservation();
+    const { payload: deleted } = await coverLookupActions.deleteLocalCoverBySourcePath(savedPasted.sourcePath);
+    // Every remaining card must finish loading: reading candidates waits for each decoded image.
+    const afterDelete = await coverLookupActions.readLocalSectionCoverCandidates();
+    const remainingPaths = savedPaths.filter(sourcePath => sourcePath !== savedPasted.sourcePath);
+    for (const frame of await lookup.finishLocalCoverOrderObservation(deleteFrames)) {
+      expect([JSON.stringify(savedPaths), JSON.stringify(remainingPaths)],
+        'a delete only ever removes the deleted card').toContain(JSON.stringify(frame.paths));
+      expect(frame.activeIndexes, 'one selected card in every frame').toHaveLength(1);
+    }
+    expect(afterDelete.map(card => card.sourcePath), 'only the deleted card leaves the gallery')
+      .toEqual(savedCards.map(card => card.sourcePath).filter(sourcePath => sourcePath !== savedPasted.sourcePath));
+    expect(afterDelete.filter(card => pastedSize.test(card.resolution))).toHaveLength(0);
+    const fallback = afterDelete.find(card => card.isActive);
+    expect(fallback?.sourcePath, 'the first remaining cover becomes the selection').toBe(afterDelete[0]?.sourcePath);
+    const fallbackBytes = sha256(fs.readFileSync(fallback.sourcePath));
+
+    await coverLookupActions.closeModal();
+    const deletedAlbum = deleted.updated_album || (deleted.updated_albums || [])[0];
+    expect(deletedAlbum?.cover_path).toBeTruthy();
+    const fallbackFullSize = await coverLookupActions.readFullSizeCoverEvidence({
+      coverPath: deletedAlbum.cover_path,
+      coverRevision: deletedAlbum.cover_revision,
+      label: 'fallback cover after delete',
+    });
+    expect(fallbackFullSize.sha256).toBe(fallbackBytes);
+    await coverLookupActions.readDisplayedImageEvidence(
+      trackModalActions.trackModal.detailedCoverImage,
+      'Album Details cover after delete',
+      { expectedCoverPath: deletedAlbum.cover_path, expectedCoverRevision: deletedAlbum.cover_revision },
+    );
+    await trackModalActions.close();
+    await galleryActions.scrollToAlbumUnderHeading(
+      USER_OWNED_IMPROVEMENT_TARGET.artist,
+      USER_OWNED_IMPROVEMENT_TARGET.album,
+    );
+    await coverLookupActions.readDisplayedImageEvidence(
+      galleryActions.albumCoverByName(USER_OWNED_IMPROVEMENT_TARGET.album),
+      'gallery card cover after delete',
+      { expectedCoverPath: deletedAlbum.cover_path, expectedCoverRevision: deletedAlbum.cover_revision },
+    );
+
+    expect(await galleryActions.selectAlbumDetailsByIdentity(USER_OWNED_IMPROVEMENT_TARGET))
+      .toEqual(USER_OWNED_IMPROVEMENT_TARGET);
+    await trackModalActions.waitForLoadedSummary();
+    await trackModalActions.openCoverLookup();
+    await coverLookupActions.waitForModalResultsReady();
+    const reopened = await coverLookupActions.readLocalSectionCoverCandidates();
+    expect(reopened.map(card => card.sourcePath)).toEqual(afterDelete.map(card => card.sourcePath));
+    expect(reopened.find(card => card.isActive)?.sourcePath).toBe(fallback.sourcePath);
+    await expect(page.locator('.toast, [role="alert"]').filter({ hasText: /delete|failed/i })).toHaveCount(0);
+  });
+
+  // Owner, 2026-11-15: most problems happen right after Save, before the write lands. Deleting the pasted
+  // cover in that window must work at once and stay deleted once the save completes.
+  await stepLogger.step('Deleting a pasted cover before its save lands removes it at once and for good', async () => {
+    const pastedSize = /^547\s*[x×]\s*365$/;
+    const imagePath = path.join(test.info().outputPath('owner-paste'), 'image.png');
+    const before = await coverLookupActions.readLocalSectionCoverCandidates();
+    const beforePaths = before.map(card => card.sourcePath);
+    await setPastedCoverSaveHeld(test.info(), true);
+    const releaseSave = () => setPastedCoverSaveHeld(test.info(), false);
+    await coverLookupActions.chooseComposerImages([imagePath]);
+    await lookup.manualExtractButton.click();
+    const staged = lookup.stagedCoverCardByName('image.png');
+    await expect(staged).toBeVisible();
+    await coverLookupActions.selectOnlyCover(staged);
+    const saveResponse = page.waitForResponse(response => (
+      response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/utilities/cover-lookup/pasted-image-save'
+    ));
+    await lookup.saveRemoteButton.click();
+    await expect(lookup.modal).toBeHidden();
+    await trackModalActions.openCoverLookup();
+    await expect(lookup.modal).toBeVisible();
+    const pendingCards = await coverLookupActions.readLocalSectionCoverCandidates();
+    const pasted = pendingCards.filter(card => pastedSize.test(card.resolution));
+    expect(pasted.map(card => card.name)).toEqual(['cover.jpg']);
+
+    const deleteResponse = page.waitForResponse(response => (
+      response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/utilities/cover-lookup/local-delete'
+    ), { timeout: 60_000 });
+    const card = await lookup.localCoverCards.evaluateAll((cards, sourcePath) => cards.findIndex(
+      item => item.getAttribute('data-select-local-cover') === sourcePath,
+    ), pasted[0].sourcePath);
+    expect(card).toBeGreaterThanOrEqual(0);
+    await lookup.localCoverDeleteWithin(lookup.localCoverCards.nth(card)).click();
+    await expect(lookup.deleteConfirm).toBeVisible();
+    await lookup.deleteConfirmButton.click();
+    await expect(lookup.deleteConfirm).toBeHidden();
+    // Immediately, while the save is still unacknowledged: the card is gone and the previous cards stay put.
+    await expect.poll(async () => (await coverLookupActions.readLocalSectionCoverCandidates())
+      .filter(item => pastedSize.test(item.resolution)).length, { timeout: 5_000 }).toBe(0);
+    const immediately = await coverLookupActions.readLocalSectionCoverCandidates();
+    expect(immediately.map(item => item.sourcePath).sort()).toEqual(beforePaths.slice().sort());
+    expect(immediately.filter(item => item.isActive)).toHaveLength(1);
+
+    await releaseSave();
+    expect((await (await saveResponse).json()).ok).toBe(true);
+    expect((await (await deleteResponse).json()).ok).toBe(true);
+    const settled = await coverLookupActions.readLocalSectionCoverCandidates();
+    expect(settled.filter(item => pastedSize.test(item.resolution)), 'the deleted paste never comes back').toHaveLength(0);
+    expect(settled.map(item => item.name)).toEqual(immediately.map(item => item.name));
+    await coverLookupActions.closeModal();
+    await trackModalActions.openCoverLookup();
+    await coverLookupActions.waitForModalResultsReady();
+    const reopened = await coverLookupActions.readLocalSectionCoverCandidates();
+    expect(reopened.filter(item => pastedSize.test(item.resolution))).toHaveLength(0);
+    expect(reopened.map(item => item.name)).toEqual(immediately.map(item => item.name));
+    await expect(page.locator('.toast, [role="alert"]').filter({ hasText: /delete|failed/i })).toHaveCount(0);
   });
 
 });
@@ -2940,8 +3170,9 @@ test('FTC-COVERS-018 automatic lookup applies the first acceptable cover and sto
     expect(neutralCandidate.selected).toBe(false);
     await expect(coverLookupActions.coverLookup.suggestedCoverCards).toHaveCount(0);
     const neutralCandidateEvidence = await coverLookupActions.readRemoteCandidateEvidence(neutralCandidate.id);
-    expect(neutralCandidateEvidence.naturalWidth).toBe(600);
-    expect(neutralCandidateEvidence.naturalHeight).toBe(600);
+    // The card shows the proxy's 480 px preview of the 600 px original (owner, 2026-11-18).
+    expect(neutralCandidateEvidence.naturalWidth).toBe(480);
+    expect(neutralCandidateEvidence.naturalHeight).toBe(480);
     expect(neutralCandidateEvidence.src).toContain('automatic-coverless-neutral');
     const providerEvidence = await coverLookupActions.readProviderFixtureEvidence();
     expect(providerEvidence.fixture_neutral_original_source_sha256).toBe(
@@ -3295,4 +3526,173 @@ test('FTC-COVERS-019 manual lookup leaves the user-owned cover unchanged before 
     expect(evidence.musicbrainz_started).toBeGreaterThan(0);
     expect(thirdPartyRequestEvidence.snapshot()).toEqual([]);
   });
+});
+
+// Owner (2026-11-18): Cover Look Up was slow and blinking on every open. Every card of an opening shows at
+// once; only an image still loading inside its own card may blink, and an album without art never blinks.
+test('FTC-COVERS-048 every Cover Look Up opening shows all of its cards at once', { tag: '@area:cover-providers' }, async ({
+  coverLookupActions,
+  galleryActions,
+  page,
+  stepLogger,
+  trackModalActions,
+}) => {
+  test.setTimeout(240_000);
+  const lookup = coverLookupActions.coverLookup;
+  let ownedPath = '';
+  const observeOpening = async (open) => {
+    const observation = await lookup.startOpeningObservation();
+    let samples;
+    try {
+      await open();
+      await coverLookupActions.waitForModalReady();
+      await coverLookupActions.waitForModalResultsReady();
+    } finally {
+      samples = await lookup.finishOpeningObservation(observation);
+    }
+    return samples;
+  };
+  // The first painted state holding any LOCAL card already holds the settled set, each card with its own
+  // preview, and LOCAL never shows more placeholders than the album's one known cover.
+  const expectLocalCardsAtOnce = (samples, label) => {
+    const settled = samples.at(-1);
+    expect(settled?.local, `${label}: settled LOCAL cards`).toBeGreaterThan(0);
+    const first = samples.find(sample => sample.local > 0);
+    expect(first, `${label}: ${JSON.stringify(samples.slice(0, 6))}`).toMatchObject({
+      local: settled.local,
+      localPreviews: settled.local,
+    });
+    expect(samples.filter(sample => sample.localPlaceholders > 1), label).toEqual([]);
+    expect(samples.filter(sample => sample.emptyLocal), label).toEqual([]);
+    return { first, settled };
+  };
+  const openAlbumDetails = async (target, url) => {
+    await galleryActions.goto(url);
+    await galleryActions.waitForGalleryReady();
+    expect(await galleryActions.selectAlbumDetailsByIdentity(target)).toEqual(target);
+    await trackModalActions.waitForLoadedSummary();
+  };
+
+  try {
+    await stepLogger.step('Case 1: every LOCAL card appears in the first painted listing', async () => {
+      await openAlbumDetails(COVER_LOOKUP_TARGET, COVER_LOOKUP_FILTERED_URL);
+      const samples = await observeOpening(() => trackModalActions.openCoverLookup());
+      expectLocalCardsAtOnce(samples, 'first opening');
+      await coverLookupActions.closeModal();
+      await trackModalActions.close();
+    });
+
+    await stepLogger.step('Case 2: an album without art opens straight into its empty state, with nothing blinking', async () => {
+      await openAlbumDetails({ artist: SPLIT_FIXTURE.artist, album: SPLIT_FIXTURE.album, year: SPLIT_FIXTURE.year });
+      const observation = await lookup.startOpeningObservation();
+      let samples;
+      try {
+        await trackModalActions.openCoverLookup();
+        await coverLookupActions.waitForModalReady();
+        await expect(lookup.localEmptyState).toBeVisible();
+      } finally {
+        samples = await lookup.finishOpeningObservation(observation);
+      }
+      expect(samples.at(-1)).toMatchObject({ local: 0, emptyLocal: true });
+      const blinking = samples.filter(sample => (
+        sample.localPlaceholders || sample.loadingLines || sample.remotePlaceholders
+      ));
+      expect(blinking, JSON.stringify(blinking.slice(0, 5))).toEqual([]);
+      await coverLookupActions.closeModal();
+      await trackModalActions.close();
+    });
+
+    await stepLogger.step('Case 3: a notification opens with every REMOTE card its search found', async () => {
+      await openAlbumDetails(PROVIDER_STORAGE_POLICY_TARGET);
+      await trackModalActions.openCoverLookup();
+      await coverLookupActions.waitForModalReady();
+      await coverLookupActions.setProviderFixtureMode('normal');
+      const taskId = String((await coverLookupActions.startSearch()).task?.id || '').trim();
+      expect(taskId).not.toBe('');
+      await coverLookupActions.waitForModalSearchCompleted();
+      const remoteIds = await coverLookupActions.readRemoteCandidateIds();
+      expect(remoteIds.length).toBeGreaterThan(0);
+      await coverLookupActions.closeModal();
+      await trackModalActions.close();
+      // A fresh page holds no gallery of this album; the notification's own match count is all it knows.
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await galleryActions.waitForGalleryReady();
+      await coverLookupActions.openDrawer();
+      const samples = await observeOpening(() => coverLookupActions.openTaskById(taskId));
+      const first = samples.find(sample => sample.remote + sample.remotePlaceholders > 0);
+      expect(first?.remote + first?.remotePlaceholders, JSON.stringify(samples.slice(0, 6)))
+        .toBeGreaterThanOrEqual(remoteIds.length);
+      expect(await coverLookupActions.readRemoteCandidateIds()).toEqual(remoteIds);
+      await coverLookupActions.closeModal();
+      await coverLookupActions.openDrawer();
+      const taskCard = lookup.taskCardById(taskId);
+      await taskCard.getByRole('button', { name: 'Delete notification', exact: true }).click();
+      await expect(taskCard).toHaveCount(0);
+      await coverLookupActions.closeDrawer();
+    });
+
+    await stepLogger.step("Case 4: after a cover change the reopened lookup shows the new cover's picture at once", async () => {
+      await openAlbumDetails(COVER_LOOKUP_TARGET, COVER_LOOKUP_FILTERED_URL);
+      await trackModalActions.openCoverLookup();
+      await coverLookupActions.waitForModalReady();
+      const source = (await coverLookupActions.readLocalCoverCandidates()).find(item => (
+        !item.isActive && /[\\/]Art[\\/]Back\.jpg$/i.test(item.sourcePath)
+      ));
+      expect(source).not.toBeUndefined();
+      ownedPath = path.join(path.dirname(source.sourcePath), `instant-open-e2e-${process.pid}.jpg`);
+      fs.copyFileSync(source.sourcePath, ownedPath);
+      await coverLookupActions.closeModal();
+      await expect.poll(async () => {
+        await trackModalActions.openCoverLookup();
+        await coverLookupActions.waitForModalResultsReady();
+        const paths = (await coverLookupActions.readLocalCoverCandidates()).map(item => item.sourcePath);
+        if (!paths.includes(ownedPath)) await coverLookupActions.closeModal();
+        return paths;
+      }, { message: 'Expected the owned copy to be listed in LOCAL.', timeout: 30_000 }).toContain(ownedPath);
+      await coverLookupActions.selectLocalCoverBySourcePathAndSave(ownedPath);
+      const samples = await observeOpening(() => trackModalActions.openCoverLookup());
+      const { first } = expectLocalCardsAtOnce(samples, 'reopening after a cover change');
+      expect(first).toMatchObject({ activeLocal: ownedPath, selectedImageComplete: true });
+      expect(samples.filter(sample => sample.loadingLines), 'no placeholder cards after a change').toEqual([]);
+    });
+
+    await stepLogger.step('Case 6: deleting a cover inside the lookup shows the remaining cards at once', async () => {
+      const before = (await coverLookupActions.readLocalCoverCandidates()).map(item => item.sourcePath);
+      const observation = await lookup.startOpeningObservation();
+      let samples;
+      try {
+        await coverLookupActions.deleteLocalCoverBySourcePath(ownedPath);
+        await coverLookupActions.waitForModalResultsReady();
+      } finally {
+        samples = await lookup.finishOpeningObservation(observation);
+      }
+      expect(fs.existsSync(ownedPath)).toBe(false);
+      const afterDelete = samples.filter(sample => sample.local !== before.length);
+      expect(afterDelete[0]?.local, JSON.stringify(samples.slice(0, 6))).toBe(before.length - 1);
+      expect(afterDelete.filter(sample => (
+        sample.local !== before.length - 1 || sample.localPlaceholders || sample.loadingLines
+      ))).toEqual([]);
+      expect((await coverLookupActions.readLocalCoverCandidates()).map(item => item.sourcePath)).not.toContain(ownedPath);
+      const saved = page.waitForResponse(response => (
+        response.request().method() === 'POST'
+        && new URL(response.url()).pathname === '/utilities/cover-lookup/local-select'
+      ));
+      await lookup.saveRemoteButton.click();
+      expect((await (await saved).json()).ok).toBe(true);
+      await expect(lookup.modal).toBeHidden();
+    });
+
+    await stepLogger.step('Case 5: after a delete the reopened lookup shows every remaining card at once', async () => {
+      const samples = await observeOpening(() => trackModalActions.openCoverLookup());
+      const { settled } = expectLocalCardsAtOnce(samples, 'reopening after a delete');
+      expect(samples.filter(sample => sample.loadingLines), 'no placeholder cards after a delete').toEqual([]);
+      expect((await coverLookupActions.readLocalCoverCandidates()).map(item => item.sourcePath)).not.toContain(ownedPath);
+      expect(settled.activeLocal).not.toBe('');
+      await coverLookupActions.closeModal();
+      await trackModalActions.close();
+    });
+  } finally {
+    await coverLookupActions.setProviderFixtureMode('normal');
+    if (ownedPath && fs.existsSync(ownedPath)) fs.unlinkSync(ownedPath);
+  }
 });

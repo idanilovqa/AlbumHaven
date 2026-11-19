@@ -25,3 +25,17 @@ test('a selected suggested cover keeps the green suggestion ring around the blue
   expect(frames.both.outline).toBe(blue);
   expect(frames.both.shadow).toContain(green);
 });
+
+// Owner (11-09, reconfirmed 11-15): the suggested cover glows with a pulse; reduced motion keeps it still.
+test('a suggested cover pulses unless the user asks for reduced motion', async ({ page }) => {
+  const animations = async (reducedMotion) => {
+    await page.emulateMedia({ reducedMotion });
+    await page.setContent(`<!doctype html><html><body style="padding:40px">
+      <button class="cover-lookup-art-card is-suggested" id="suggested">Suggested</button>
+      <button class="cover-lookup-art-card is-suggested is-active" id="both">Both</button></body></html>`);
+    await page.addStyleTag({ path: path.join(root, 'music_app/static/css/runtime/cover-lookup-modal.css') });
+    return page.evaluate(() => ['suggested', 'both'].map((id) => getComputedStyle(document.getElementById(id)).animationName));
+  };
+  expect(await animations('no-preference')).toEqual(['cover-lookup-suggested-pulse', 'cover-lookup-suggested-active-pulse']);
+  expect(await animations('reduce')).toEqual(['none', 'none']);
+});

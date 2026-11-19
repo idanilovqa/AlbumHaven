@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from music_app.services.log_history import history_scope_for_request
 
+import asyncio
 from collections.abc import Mapping
 from datetime import datetime, timezone
 import logging
+from pathlib import Path
 from threading import Event
 from time import perf_counter
 from uuid import UUID, uuid4
@@ -40,12 +42,14 @@ from music_app.services.cover_state import (
 from music_app.services.cover_lookup_jobs import build_cover_lookup_job_contract
 from music_app.services.cover_lookup_runtime import (
     CoverLookupFinishingError,
+    REMOTE_COVER_PREVIEW_EDGE,
     cached_remote_cover_image,
     fetch_remote_cover_bytes,
     merge_lookup_matches,
     queue_cover_lookup_save_remote_task,
     queue_cover_lookup_task,
     remember_remote_cover_image,
+    remote_cover_preview,
 )
 from music_app.services.cover_lookup_tasks import (
     cancel_cover_lookup_task_payload,
@@ -86,7 +90,6 @@ from music_app.services.covers import image_dimensions, score_image
 from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 from music_app.services.repair_previews import build_problematic_album_detail_payload
 from music_app.services.save_tasks import (
-    acquire_structural_tag_edit_reservation,
     latest_structural_tag_edit_destination,
     structural_tag_edit_resource_keys,
 )
@@ -237,6 +240,14 @@ def _resolve_distributed_album_context(
     )
 
 
+def _resolve_cover_album_context(
+    config: Mapping[str, object],
+    album: Mapping[str, object],
+) -> CoverAlbumContext | None:
+    # Owner (11-16): an album whose tracks sit in part folders ("Часть 1".."Часть 4") is still one album.
+    return resolve_album_context(config, album) or _resolve_distributed_album_context(config, album)
+
+
 async def _resolve_album_payload_context(
     config: Mapping[str, object],
     album: Mapping[str, object],
@@ -254,9 +265,9 @@ async def _resolve_album_payload_context(
             paths = _album_track_paths(normalized_album)
             root = await run_in_threadpool(inventory.repository.root_for_tracks, paths)
             return CoverAlbumContext(root, paths) if paths else None
-        return resolve_album_context(config, normalized_album) or (
-            _resolve_distributed_album_context(config, normalized_album) if distributed else None
-        )
+        if distributed:
+            return _resolve_cover_album_context(config, normalized_album)
+        return resolve_album_context(config, normalized_album)
 
     repository = AlbumCoverCandidateSnapshotRepository(config)
     fallback_paths = {
@@ -382,6 +393,22 @@ async def _resolve_album_payload_context(
                     for path in list(track_context.get("track_paths") or [])
                     if str(path or "").strip()
                 ]
+                # The saved payload's name and artist are history; the current album's identity labels the lookup.
+                try:
+                    lineage = await run_in_threadpool(
+                        AlbumIdentityLineageRepository(config).resolve,
+                        album_id=normalized_album["album_id"],
+                        album_key=normalized_album["key"],
+                        track_paths=fallback_paths,
+                    )
+                except Exception:  # Only the labels depend on it; the saved ones stay.
+                    lineage = {}
+                current_album = lineage.get("album")
+                if (lineage.get("status") == "current" and isinstance(current_album, Mapping)
+                        and current_album.get("album_id") == normalized_album["album_id"]):
+                    normalized_album.update({
+                        key: current_album[key] for key in ("name", "album_artist", "year") if key in current_album
+                    })
                 resolved_context = (
                     await resolve_context(distributed=True)
                 )
@@ -476,6 +503,33 @@ def _is_squareish_cover(width: int, height: int) -> bool:
     return abs(width - height) / max(width, height) <= 0.18
 
 
+# Owner (2026-11-18): a folder the index had never listed answered "not listed yet", and the page asked again a
+# second later. The request waits briefly for the worker's foreground listing instead; it never reads the folder.
+# A folder being re-indexed still answers at once with its previous listing.
+_UNLISTED_INVENTORY_WAIT_SECONDS = 1.5
+_UNLISTED_INVENTORY_POLL_SECONDS = 0.05
+
+
+async def _gallery_local_inventory(inventory_worker, album_root, track_paths: set[str]):
+    deadline = perf_counter() + _UNLISTED_INVENTORY_WAIT_SECONDS
+    repository = inventory_worker.repository
+    if album_root is None:
+        context = await run_in_threadpool(inventory_worker.request_context, track_paths) or {}
+        album_root = Path(context["root_path"]) if context.get("root_path") else None
+        while album_root is None and not context.get("error") and perf_counter() < deadline:
+            await asyncio.sleep(_UNLISTED_INVENTORY_POLL_SECONDS)
+            album_root = await run_in_threadpool(repository.root_for_tracks, track_paths)
+        if album_root is None:
+            return None, {"available": False, "complete": False, "error": context.get("error")}
+    inventory = await run_in_threadpool(repository.get, album_root)
+    if not inventory or not inventory.get("complete"):
+        await run_in_threadpool(inventory_worker.request, album_root)
+    while not (inventory or {}).get("available") and not (inventory or {}).get("error") and perf_counter() < deadline:
+        await asyncio.sleep(_UNLISTED_INVENTORY_POLL_SECONDS)
+        inventory = await run_in_threadpool(repository.get, album_root)
+    return album_root, inventory or {"available": False, "complete": False}
+
+
 async def _serialize_cover_gallery_from_asgi(
     request: Request,
     album_root,
@@ -508,14 +562,7 @@ async def _serialize_cover_gallery_from_asgi(
     local_inventory = None
     inventory_worker = getattr(request.app.state, "local_cover_inventory", None)
     if include_local and inventory_worker is not None:
-        if album_root is None:
-            context_inventory = await run_in_threadpool(inventory_worker.request_context, track_paths)
-            local_inventory = {"available": False, "complete": False, "error": (context_inventory or {}).get("error")}
-        else:
-            local_inventory = await run_in_threadpool(inventory_worker.repository.get, album_root)
-            if not local_inventory or not local_inventory.get("complete"):
-                await run_in_threadpool(inventory_worker.request, album_root)
-        local_inventory = local_inventory or {"available": False, "complete": False}
+        album_root, local_inventory = await _gallery_local_inventory(inventory_worker, album_root, track_paths)
     return await run_in_threadpool(
         serialize_cover_gallery_payload,
         album_root=album_root,
@@ -1039,7 +1086,7 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
         _album_track_paths(album)
         or _cover_lookup_task_track_paths(task_payload)
     )
-    album_context = resolve_album_context(config, queued_album)
+    album_context = _resolve_cover_album_context(config, queued_album)
     if task_payload:
         queued_album, album_context = await _resolve_album_payload_context(
             config,
@@ -1099,49 +1146,43 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
         current_track_paths: set[str],
         cancel_event: Event,
     ) -> tuple[dict[str, object], set[str]]:
-        reservation = acquire_structural_tag_edit_reservation(
-            reservation_resource_keys,
-            cancel_event=cancel_event,
-        )
-        if reservation is None:
-            return current_album, current_track_paths
+        # Owner (11-16): a cover search never waits for a tag edit on the album. It searches with the
+        # album's stored record as it is now; a tag save in progress has nothing to do with the search.
+        del cancel_event
         prepared_album = current_album
-        try:
-            album_context = resolve_album_context(config, prepared_album)
-            album_id = _album_id(prepared_album)
-            repository = PostgresLibraryBrowseRepository(config)
-            if album_id is not None:
-                reconciliation = latest_structural_tag_edit_destination(
-                    reservation_resource_keys,
-                    completed_after_monotonic=reconciliation_started_at,
-                )
-                destination_album_id = int(
-                    (reconciliation or {}).get("destination_album_id") or 0
-                )
-                refreshed_album = repository.build_album_detail_payload_by_id(
-                    destination_album_id or album_id
-                )
-                if refreshed_album is not None:
-                    prepared_album = _album_with_context_tracks(refreshed_album)
-                    album_context = resolve_album_context(config, prepared_album)
-                elif destination_album_id > 0:
-                    album_context = None
-            if album_context is None and current_track_paths:
-                current_albums = repository.build_album_payloads_by_track_paths(
-                    current_track_paths
-                )
-                for refreshed_album in current_albums:
-                    candidate = _album_with_context_tracks(refreshed_album)
-                    candidate_context = resolve_album_context(config, candidate)
-                    if (
-                        candidate_context is not None
-                        and current_track_paths <= candidate_context.track_paths
-                    ):
-                        prepared_album = candidate
-                        album_context = candidate_context
-                        break
-        finally:
-            reservation.release()
+        album_context = _resolve_cover_album_context(config, prepared_album)
+        album_id = _album_id(prepared_album)
+        repository = PostgresLibraryBrowseRepository(config)
+        if album_id is not None:
+            reconciliation = latest_structural_tag_edit_destination(
+                reservation_resource_keys,
+                completed_after_monotonic=reconciliation_started_at,
+            )
+            destination_album_id = int(
+                (reconciliation or {}).get("destination_album_id") or 0
+            )
+            refreshed_album = repository.build_album_detail_payload_by_id(
+                destination_album_id or album_id
+            )
+            if refreshed_album is not None:
+                prepared_album = _album_with_context_tracks(refreshed_album)
+                album_context = _resolve_cover_album_context(config, prepared_album)
+            elif destination_album_id > 0:
+                album_context = None
+        if album_context is None and current_track_paths:
+            current_albums = repository.build_album_payloads_by_track_paths(
+                current_track_paths
+            )
+            for refreshed_album in current_albums:
+                candidate = _album_with_context_tracks(refreshed_album)
+                candidate_context = _resolve_cover_album_context(config, candidate)
+                if (
+                    candidate_context is not None
+                    and current_track_paths <= candidate_context.track_paths
+                ):
+                    prepared_album = candidate
+                    album_context = candidate_context
+                    break
         if album_context is None:
             raise ValueError("Album does not contain any tracks")
         return prepared_album, album_context.track_paths
@@ -1188,6 +1229,18 @@ async def utilities_cover_lookup_cancel(request: Request, task_id: str) -> JSONR
     if task_payload is None:
         return _json_response(_task_not_found_response("Lookup task"))
     return JSONResponse({"ok": True, "task": task_payload})
+
+
+def _replaced_cover_backup_payload(backup_path: Path | None) -> dict[str, str] | None:
+    """Name the cover-existing-N.jpg that now holds the replaced cover.jpg, so clients rename its card."""
+    if backup_path is None:
+        return None
+    return {
+        "path": str(backup_path),
+        "filename": backup_path.name,
+        "relative_path": backup_path.name,
+        "sort_relative_path": backup_path.name.casefold(),
+    }
 
 
 @router.post("/utilities/cover-lookup/local-select")
@@ -1501,6 +1554,7 @@ async def utilities_cover_lookup_local_select(request: Request) -> JSONResponse:
                 "ok": True,
                 "selected_cover_path": str(authoritative_cover),
                 "cover_revision": cover_revision,
+                "replaced_cover_backup": _replaced_cover_backup_payload(promotion.reserve_artifact),
                 "updated_albums": updated_albums,
                 "updated_album": updated_albums[0] if updated_albums else None,
                 "updated_problematic_album": updated_problematic_album,
@@ -1749,18 +1803,13 @@ async def utilities_cover_lookup_pasted_image_save(request: Request) -> JSONResp
         library_state["albums"] = albums
     def persist_pasted_cover():
         # Synchronous file write, hash and persistence must not block the loop.
-        authoritative_cover_path = album_context.album_root / "cover.jpg"
-        prior_cover_bytes = (
-            authoritative_cover_path.read_bytes()
-            if authoritative_cover_path.is_file()
-            else None
-        )
         try:
-            saved_cover_path = save_pasted_image_as_authoritative_cover(data_url, album_context.album_root)
+            promotion = save_pasted_image_as_authoritative_cover(data_url, album_context.album_root)
         except ValueError as exc:
             return _json_response(({"ok": False, "error": str(exc)}, 400)), None
         except Exception as exc:
             return _json_response(({"ok": False, "error": str(exc or "Failed to save pasted image.")}, 500)), None
+        saved_cover_path = promotion.cover_path
         cover_revision = cover_revision_for_path(saved_cover_path)
         try:
             persist_cover_selection_for_tracks(
@@ -1774,13 +1823,11 @@ async def utilities_cover_lookup_pasted_image_save(request: Request) -> JSONResp
                 explicit_selection=True,
             )
         except Exception:
-            if prior_cover_bytes is None:
-                saved_cover_path.unlink(missing_ok=True)
-            else:
-                saved_cover_path.write_bytes(prior_cover_bytes)
+            rollback_local_image_promotion(promotion)
             raise
         return None, (
             saved_cover_path,
+            promotion.reserve_artifact,
             cover_revision,
             *apply_cover_path_for_tracks(
                 album_context.track_paths,
@@ -1797,11 +1844,12 @@ async def utilities_cover_lookup_pasted_image_save(request: Request) -> JSONResp
     error_response, persisted = await run_in_threadpool(persist_pasted_cover)
     if error_response is not None:
         return error_response
-    saved_cover_path, cover_revision, updated_albums, updated_problematic_album = persisted
+    saved_cover_path, created_backup_path, cover_revision, updated_albums, updated_problematic_album = persisted
+    written_paths = [saved_cover_path, *([created_backup_path] if created_backup_path else [])]
     inventory_worker = getattr(request.app.state, "local_cover_inventory", None)
     if inventory_worker is not None:
         try:
-            await run_in_threadpool(inventory_worker.invalidate_paths, [saved_cover_path])
+            await run_in_threadpool(inventory_worker.invalidate_paths, written_paths)
         except Exception:
             logger.exception(
                 "Local cover inventory invalidation failed after pasted cover save committed"
@@ -1813,7 +1861,7 @@ async def utilities_cover_lookup_pasted_image_save(request: Request) -> JSONResp
             )
             if callable(schedule_retry):
                 try:
-                    await run_in_threadpool(schedule_retry, [saved_cover_path])
+                    await run_in_threadpool(schedule_retry, written_paths)
                 except Exception:
                     logger.exception(
                         "Failed to schedule local cover inventory invalidation retry"
@@ -1847,6 +1895,7 @@ async def utilities_cover_lookup_pasted_image_save(request: Request) -> JSONResp
             "ok": True,
             "selected_cover_path": str(saved_cover_path),
             "cover_revision": cover_revision,
+            "replaced_cover_backup": _replaced_cover_backup_payload(created_backup_path),
             "updated_albums": updated_albums,
             "updated_album": updated_albums[0] if updated_albums else None,
             "updated_problematic_album": updated_problematic_album,
@@ -2190,11 +2239,13 @@ async def utilities_cover_lookup_remote_image(request: Request) -> Response:
     if not image_url:
         return _json_response(({"ok": False, "error": "Missing remote image URL"}, 400))
     config = _app_config(request)
-    cached = cached_remote_cover_image(image_url)
+    preview = request.query_params.get("size") == str(REMOTE_COVER_PREVIEW_EDGE)
+    cached = cached_remote_cover_image(image_url, preview=preview)
     if cached is not None:
         payload, mime_type = cached
     else:
-        payload, mime_type = await run_in_threadpool(
+        original = cached_remote_cover_image(image_url) if preview else None
+        payload, mime_type = original or await run_in_threadpool(
             fetch_remote_cover_bytes,
             image_url,
             config=config,
@@ -2202,7 +2253,12 @@ async def utilities_cover_lookup_remote_image(request: Request) -> Response:
         )
         if payload is None:
             return _json_response(({"ok": False, "error": "Failed to load remote image"}, 502))
-        remember_remote_cover_image(image_url, payload, mime_type)
+        if original is None:
+            # The lightbox opens this original after its card, so it stays remembered too.
+            remember_remote_cover_image(image_url, payload, mime_type)
+        if preview:
+            payload, mime_type = await run_in_threadpool(remote_cover_preview, payload, mime_type)
+            remember_remote_cover_image(image_url, payload, mime_type, preview=True)
     return Response(payload, media_type=mime_type, headers={"Cache-Control": "public, max-age=3600"})
 
 

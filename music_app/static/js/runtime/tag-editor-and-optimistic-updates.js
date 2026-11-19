@@ -36,7 +36,8 @@ function getAlbumTrackDisplayNumber(track, index) {
   const filenameTrackNumber = getPositiveAlbumTrackSortNumber(filenameMatch?.[1]);
   if (filenameTrackNumber !== null) return filenameTrackNumber;
 
-  return index + 1;
+  // Owner (11-17): no number rather than the row position, which duplicated real numbers after a split.
+  return '';
 }
 
 // A disc marker in the file's folder name: "CD1", "cd2 (bonus)", "Disc 2", "Adam & Eve CD2".
@@ -885,8 +886,11 @@ async function confirmManualTagEdit() {
   let failedSaveKeptNewTags = false;
   // No server verdict (connection lost, server restarted): the save may have landed.
   let saveOutcomeUnknown = false;
+  // Owner (2026-11-17): the save's own id lets the server recognise it if it is sent again.
+  const clientRequestId = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID() : '';
+  const requestPayload = { confirmed: true, album, updates, ...(clientRequestId ? { client_request_id: clientRequestId } : {}) };
   try {
-    const requestPayload = { confirmed: true, album, updates };
     if (problematicMutationOriginKey) {
       requestPayload.problematic_files_origin = true;
     }
@@ -924,6 +928,11 @@ async function confirmManualTagEdit() {
     const updatedAlbums = Array.isArray(data.updated_albums)
       ? data.updated_albums
       : [data.updated_album].filter(Boolean);
+    // PF-NEW-PROBLEMS (owner): Problematic Files must not show a list from before this save.
+    state.utility.problematicMinInventoryRevision = Math.max(
+      Number(state.utility.problematicMinInventoryRevision) || 0,
+      Number(data.inventory_mutation_revision) || 0,
+    );
     const saveTaskCompleted = Boolean(data.save_task_id)
       && String(data.save_task_status || '').trim().toLowerCase() === 'completed';
     const responseIsTerminal = !data.save_task_id || saveTaskCompleted;
@@ -1049,11 +1058,20 @@ async function confirmManualTagEdit() {
     }
     console.error('[AlbumHaven][Utilities] Failed to apply manual tag edits.', error);
     if (saveOutcomeUnknown) {
+      releaseFailedTagEditViewMutation(tagEditMutationClaim);
+      // Owner (2026-11-17): no answer is not a failure. The edit stays as shown and the save waits in the
+      // Edit Queue until the server confirms or refuses it; it is never rolled back here.
+      if (clientRequestId && typeof window !== 'undefined' && window.AlbumHavenPendingTagEdits) {
+        window.AlbumHavenPendingTagEdits.add({
+          id: clientRequestId, payload: requestPayload, album, trackCount: editedPaths.length,
+        });
+        showToast('Couldn’t reach the server. Your tag edit is kept and will be sent when it answers.', 'info', 5200);
+        return;
+      }
       showRepairAlert(
         'The connection to the server was lost while saving. The tags may already be saved, so the Gallery is reloading to show what the library now holds.',
         'error',
       );
-      releaseFailedTagEditViewMutation(tagEditMutationClaim);
       if (typeof refreshCurrentViewAfterBackgroundCompletion === 'function') {
         await refreshCurrentViewAfterBackgroundCompletion();
       }

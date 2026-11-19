@@ -667,8 +667,7 @@ export class TagEditorActions {
     const response = await editResponsePromise;
     const payload = await response.json();
     await expect(this.tagEditor.repairAlertMessage).toHaveText(message, { timeout });
-    await expect(this.tagEditor.repairAlert.locator('[data-on-page-alert]')).toHaveAttribute(
-      'data-on-page-alert', severity, { timeout });
+    await expect(this.tagEditor.repairAlertSeverity).toHaveAttribute('data-on-page-alert', severity, { timeout });
     return { payload, status: response.status() };
   }
 

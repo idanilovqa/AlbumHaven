@@ -152,6 +152,8 @@ export class TagEditor extends BasePage {
     this.repairAlert = page.locator('#repair-alert');
     this.repairAlertMessage = page.locator(this.repairAlertMessageSelector);
     this.repairAlertLogHistory = page.locator(this.repairAlertLogHistorySelector);
+    // The on-page alert inside the repair alert carries its severity (warning, error, success).
+    this.repairAlertSeverity = this.repairAlert.locator('[data-on-page-alert]');
     this.repairAlertDismiss = this.repairAlert.getByRole('button', { name: 'Dismiss repair alert', exact: true });
   }
 

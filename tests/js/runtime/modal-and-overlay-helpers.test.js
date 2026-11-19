@@ -2822,6 +2822,37 @@ test('opening Loose Tracks by any route selects its Custom Collections row', () 
   assert.equal(visibleWhenSynced, 'Night');
 });
 
+test('a loading collection page shows its tree count, and All Loose Tracks only its own search total', () => {
+  // Audit 2026-11-18 #5/#7: a collection said "0 tracks" while its rows loaded, next to a tree row saying 85.
+  const { context } = loadHelper();
+  const overlay = new FakeElement('non-album-modal');
+  overlay.hidden = true;
+  overlay.addEventListener = () => {};
+  for (const element of [new FakeElement('shell-main-surface'), overlay,
+    new FakeElement('non-album-modal-header'), new FakeElement('non-album-modal-table')]) {
+    context.document.body.appendChild(element);
+  }
+  context.document.querySelectorAll = () => [];
+  context.document.addEventListener = () => {};
+  context.document.removeEventListener = () => {};
+  const subtitles = [];
+  context.buildLooseTracksPageHeaderHtml = ({ subtitle }) => { subtitles.push(subtitle); return ''; };
+  context.buildLooseTracksHeaderActionsHtml = () => '';
+  context.URL = URL;
+  context.syncLibraryNavigationAfterPageChange = () => {};
+  context.hydrateDeferredNonAlbumTracks = () => new Promise(() => {});
+  const catalogCounts = { Night: 85 };
+  context.customCollectionCatalogTrackCount = (name = '') => catalogCounts[name];
+
+  context.openNonAlbumModal({ libraryWide: true, collectionName: 'Night' });
+  context.openNonAlbumModal({ libraryWide: true, collectionName: 'Unknown' });
+  context.openNonAlbumModal({ libraryWide: true, collectionName: '' });
+  catalogCounts[''] = 814;
+  context.openNonAlbumModal({ libraryWide: true, collectionName: '' });
+
+  assert.deepEqual(subtitles, ['85 tracks', '', 'Non-album tracks found in the selected library sources.', '814 tracks']);
+});
+
 for (const mobile of [false, true]) {
   test(`${mobile ? 'phone' : 'desktop'}: the logo closes Loose Tracks in place`, () => {
     // Owner 2026-11-15: the logo selected All artists but left Loose Tracks on screen.

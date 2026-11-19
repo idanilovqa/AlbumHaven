@@ -2891,6 +2891,41 @@ test('manual tag edit does not restore its previous snapshot after navigation du
   assert.deepEqual(restoredDrafts, [], 'navigation must not reopen a stale editor draft');
 });
 
+test('a save refused for files that left the album shows the server\'s reason', async () => {
+  const trackPath = 'C:\\Music\\Artist\\Album\\02 - Moved.flac';
+  const album = { key: 'artist::album', name: 'Album', album_artist: 'Artist',
+    tracks: [{ path: trackPath, album: 'Album' }] };
+  const error = 'These files are no longer in this album, so nothing was saved: 02 - Moved.flac. Reopen the album and edit again.';
+  const alerts = [];
+  const closedModal = { hidden: true };
+  const context = loadHelper([album], {
+    document: { body: { classList: { add() {}, remove() {} } }, getElementById() { return closedModal; } },
+    getTagEditConfirmElements() { return { overlay: closedModal }; },
+    getTagEditorElements() { return { overlay: closedModal }; },
+    buildChangedTagEditorUpdates() { return { [trackPath]: { album: 'Renamed' } }; },
+    buildOptimisticUpdatedAlbumsFromEdits() { return [{ ...album, name: 'Renamed' }]; },
+    deepCloneJson(value) { return JSON.parse(JSON.stringify(value)); },
+    applyUpdatedAlbumsToCurrentView() { return []; },
+    updateOpenTrackModalAfterTagEdit() {},
+    renderView() {},
+    showRepairAlert(...args) { alerts.push(args); },
+    claimTagEditViewMutation() { return { id: 'moved-claim' }; },
+    releaseFailedTagEditViewMutation() {},
+    restoreTagEditorDraftAfterFailedSave() {},
+    async fetch() {
+      return { ok: false, status: 409,
+        async json() { return { ok: false, error_code: 'tag_edit_files_moved', error }; } };
+    },
+  });
+  context.state.ui = { viewStateRevision: 5 };
+  context.state.tagEditor = { album, tracks: album.tracks, values: {} };
+
+  await context.confirmManualTagEdit();
+
+  assert.equal(alerts.at(-1)[0], error);
+  assert.equal(alerts.at(-1)[1], 'error');
+});
+
 test('manual tag edit preserves the editor draft for retry after an immediate failed POST', async () => {
   const trackPath = 'C:\\Music\\Axxis\\Black Edition\\01 - Kingdom.mp3';
   const album = {

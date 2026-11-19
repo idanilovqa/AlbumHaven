@@ -39795,6 +39795,8 @@ async function confirmManualTagEdit() {
       ) {
         failedSaveTaskError = String(data.error || '').trim();
       }
+      // The server refused files that left this album since it was opened: say which.
+      if (data.error_code === 'tag_edit_files_moved') failedSaveTaskError = String(data.error || '').trim();
       if (data.log_entry) {
         failedLogHistoryEntryId = String(data.log_entry.id || '');
         try {

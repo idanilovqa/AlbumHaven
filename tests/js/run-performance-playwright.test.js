@@ -9,6 +9,16 @@ const { _private } = performanceRunner;
 const REAL_APP_ENV = {
   ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
 };
+const STANDARD_SYNTHETIC_COUNTS = Object.freeze({ artists: 2081, albums: 5346, tracks: 57980 });
+const CALIBRATED_SYNTHETIC_COUNTS = Object.freeze({ artists: 6345, albums: 14673, tracks: 159547 });
+
+function writeSyntheticManifest(fixtureRoot, counts) {
+  fs.mkdirSync(fixtureRoot, { recursive: true });
+  fs.writeFileSync(path.join(fixtureRoot, 'manifest.json'), JSON.stringify({
+    profiles: { 'synthetic-large-library': { counts } },
+  }));
+}
+
 const CALIBRATED_REAL_APP_ENV = {
   ...REAL_APP_ENV,
   ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET: 'production-calibration',
@@ -288,6 +298,7 @@ test('configured suite rejects mixed preloaded fixture profiles before setup or 
 
 test('configured suite default entry selects a fixture-compatible released library group', () => {
   const fixtureRoot = path.resolve(__dirname, '..', '..', '.tmp', 'default-performance-fixture');
+  writeSyntheticManifest(fixtureRoot, STANDARD_SYNTHETIC_COUNTS);
   let receivedOptions = null;
 
   const exitCode = _private.runConfiguredPerformanceSuite(
@@ -1113,14 +1124,14 @@ test('buildRunnerArgs preserves search browse target metadata when selected by s
   const target = _private.resolvePerformanceTarget('tests/e2e/syntheticLargeLibrary/searchBrowse.spec.js');
 
   assert.equal(target.aliasNames[0], 'search-browse');
-  assert.deepEqual(target.env, REAL_APP_ENV);
+  assert.deepEqual(target.env, CALIBRATED_REAL_APP_ENV);
 });
 
 test('buildRunnerArgs preserves artist-family target metadata when selected by spec path', () => {
   const target = _private.resolvePerformanceTarget('tests/e2e/syntheticLargeLibrary/artistFamilyResponsiveness.spec.js');
 
   assert.equal(target.aliasNames[0], 'artist-family');
-  assert.deepEqual(target.env, REAL_APP_ENV);
+  assert.deepEqual(target.env, CALIBRATED_REAL_APP_ENV);
 });
 
 test('buildRunnerArgs preserves selected-artist target metadata when selected by spec path', () => {
@@ -1222,7 +1233,7 @@ test('every real-app target forces the browse selector', () => {
     assert.equal(target.coverageClass, 'real-app-library-browse-load');
     assert.deepEqual(
       target.env,
-      ['artist-tree-scroll-navigation', 'selected-artist'].includes(targetName)
+      ['artist-tree-scroll-navigation', 'selected-artist', 'artist-family', 'search-all-artists', 'search-browse'].includes(targetName)
         ? CALIBRATED_REAL_APP_ENV
         : targetName === 'problematic-files-focused'
           ? FOCUSED_PROBLEMATIC_FILES_REAL_APP_ENV
@@ -1243,14 +1254,14 @@ test('broad All Artists target forces the Postgres browse selector', () => {
 test('broad search All Artists target forces the Postgres browse selector', () => {
   assert.deepEqual(
     performanceRunner.PERFORMANCE_TARGETS['search-all-artists'].env,
-    REAL_APP_ENV
+    CALIBRATED_REAL_APP_ENV
   );
 });
 
 test('artist-family target forces Postgres browse without pre-app artist-family seed setup', () => {
   assert.deepEqual(
     performanceRunner.PERFORMANCE_TARGETS['artist-family'].env,
-    REAL_APP_ENV
+    CALIBRATED_REAL_APP_ENV
   );
 });
 
@@ -1292,7 +1303,7 @@ test('selected-artist target forces the browse selector', () => {
 test('search browse target forces the browse selector', () => {
   assert.deepEqual(
     performanceRunner.PERFORMANCE_TARGETS['search-browse'].env,
-    REAL_APP_ENV
+    CALIBRATED_REAL_APP_ENV
   );
 });
 
@@ -3235,4 +3246,34 @@ test('runSequentialPerformanceSuite keeps fixed per-invocation timeouts even aft
   }
   assert.equal(calls[24].options.env.PLAYWRIGHT_PORT, '4178');
   assert.equal(calls[24].args.includes('--timeout=240000'), true);
+});
+
+test('a production-calibration target refuses the standard synthetic library', () => {
+  const fixtureRoot = path.resolve(__dirname, '..', '..', '.tmp', 'standard-scale-fixture');
+  writeSyntheticManifest(fixtureRoot, STANDARD_SYNTHETIC_COUNTS);
+  assert.throws(
+    () => _private.assertSyntheticFixtureScale(performanceRunner.PERFORMANCE_TARGETS['search-browse'], fixtureRoot),
+    /requires the production-calibration synthetic-large-library fixture, but .* holds 2081 artists/,
+  );
+  _private.assertSyntheticFixtureScale(performanceRunner.PERFORMANCE_TARGETS['all-artists'], fixtureRoot);
+});
+
+test('a standard target refuses the production-calibration synthetic library', () => {
+  const fixtureRoot = path.resolve(__dirname, '..', '..', '.tmp', 'calibrated-scale-fixture');
+  writeSyntheticManifest(fixtureRoot, CALIBRATED_SYNTHETIC_COUNTS);
+  assert.throws(
+    () => _private.assertSyntheticFixtureScale(performanceRunner.PERFORMANCE_TARGETS['all-artists'], fixtureRoot),
+    /requires the standard synthetic-large-library fixture/,
+  );
+  _private.assertSyntheticFixtureScale(performanceRunner.PERFORMANCE_TARGETS['search-browse'], fixtureRoot);
+});
+
+test('one grouped run never mixes the standard and production-calibration libraries', () => {
+  assert.throws(
+    () => _private.assertSinglePreloadedFixtureProfile([
+      performanceRunner.PERFORMANCE_TARGETS['all-artists'],
+      performanceRunner.PERFORMANCE_TARGETS['search-browse'],
+    ]),
+    /cannot combine the standard and production-calibration synthetic libraries/,
+  );
 });

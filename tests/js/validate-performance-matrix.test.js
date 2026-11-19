@@ -22,7 +22,8 @@ const FIXTURE_RELEASE = 'fixtures-v1.0.30';
 const FIXTURE_MANIFEST_SHA256 = '0CBF9D17930C0347B40415A5B367DEBD93EC5CA7D8439CFAB7060A7E0BB13752';
 const ARTWORK_GENERATOR_COMMIT = 'b7ffc6b586fd5b25a049617c5e95fbdcccfddc11';
 const EXPECTED_SHARDS = [
-  { shard: 'synthetic-large-library', fixtureProfile: 'synthetic-large-library', fixtureMode: 'preloaded-release', harness: 'managed-app', basePort: '4173', targets: 'idle-memory,all-artists,artist-family,search-all-artists,utility-rules,selected-artist,edit-tags-post-edit,cover-lookup,album-title-search,track-title-search,search-browse,root-album-browse,artist-tree-scroll-navigation,app-open-all-artists,notification-history,rules-focused,paired-search-calibration' },
+  { shard: 'synthetic-large-library', fixtureProfile: 'synthetic-large-library', fixtureMode: 'preloaded-release', harness: 'managed-app', basePort: '4173', targets: 'idle-memory,all-artists,utility-rules,album-title-search,track-title-search,root-album-browse,app-open-all-artists,rules-focused,paired-search-calibration' },
+  { shard: 'synthetic-production-library', fixtureProfile: 'synthetic-large-library', fixtureMode: 'preloaded-release', harness: 'managed-app', basePort: '4373', targets: 'artist-family,search-all-artists,selected-artist,edit-tags-post-edit,cover-lookup,search-browse,artist-tree-scroll-navigation,notification-history' },
   { shard: 'utility-problematic-files', fixtureProfile: 'utility-problematic-files', fixtureMode: 'preloaded-release', harness: 'managed-app', basePort: '4253', targets: 'utility-problematic-files,problematic-files-focused' },
   { shard: 'playback-media', fixtureProfile: 'playback-media', fixtureMode: 'generated-isolated', harness: 'managed-app', basePort: '4213', targets: 'playback-start,gapless-playback' },
   { shard: 'scan-library', fixtureProfile: 'scan-library', fixtureMode: 'generated-isolated', harness: 'scan', basePort: '4293', targets: 'scan-cold,scan-cached,scan-add-album,scan-metadata,scan-page,scan-health,scan-error' },
@@ -157,7 +158,7 @@ test('performance validator and shard runner exist', () => {
   assert.equal(fs.existsSync(shardRunnerPath), true, 'Missing scripts/ci/run-performance-shard.ps1');
 });
 
-test('workflow has five selectable fixture-profile runners owning all 29 targets once', () => {
+test('workflow has six selectable fixture-profile runners owning all 29 targets once', () => {
   const job = performanceJobSource();
   const rows = validator.parseStaticPerformanceMatrix(workflow);
   assert.deepEqual(rows, EXPECTED_SHARDS);
@@ -173,9 +174,9 @@ test('workflow has five selectable fixture-profile runners owning all 29 targets
   assert.match(job, /max-parallel:\s*4/);
   assert.deepEqual(
     rows.map((row) => row.fixtureProfile),
-    ['synthetic-large-library', 'utility-problematic-files', 'playback-media', 'scan-library', 'synthetic-large-library'],
+    ['synthetic-large-library', 'synthetic-large-library', 'utility-problematic-files', 'playback-media', 'scan-library', 'synthetic-large-library'],
   );
-  assert.equal(rows[0].targets.split(',').length, 17, 'synthetic-large-library must own all seventeen compatible targets');
+  assert.equal(rows[1].targets.split(',').length, 8, 'the production-size shard owns every production-calibration target');
   assert.doesNotMatch(job, /timeout-minutes:/, 'a multi-target shard must not squeeze later targets into a shared wall-clock budget');
 });
 
@@ -288,8 +289,8 @@ test('each shard fetches an immutable profile or cover seed before pull-request 
   assert.doesNotMatch(fixtureFetch, /\n\s+if:/);
   assert.match(trustedCheckout, /persist-credentials:\s*false/);
   assert.match(fixtureFetch, /-Profile\s+\$\{\{\s*matrix\.shard\s*==\s*'utility-problematic-files'\s*&&\s*'utility-problematic-files'\s*\|\|\s*'synthetic-large-library'\s*\}\}/);
-  assert.match(fixtureFetch, new RegExp(`-Release\\s+${FIXTURE_RELEASE.replaceAll('.', '\\.')}`));
-  assert.match(fixtureFetch, new RegExp(`-ManifestSha256\\s+${FIXTURE_MANIFEST_SHA256}`));
+  assert.ok(fixtureFetch.includes(`'${FIXTURE_RELEASE}-production-calibration' || '${FIXTURE_RELEASE}'`));
+  assert.ok(fixtureFetch.includes(`|| '${FIXTURE_MANIFEST_SHA256}'`));
   assert.ok(job.indexOf('Fetch immutable performance fixture') < job.indexOf('Install Node dependencies'));
   assert.ok(job.indexOf('Fetch immutable performance fixture') < job.indexOf('Resolve performance shard configuration'));
   assert.ok(job.indexOf('Fetch immutable performance fixture') < job.indexOf('Validate performance matrix ownership'));

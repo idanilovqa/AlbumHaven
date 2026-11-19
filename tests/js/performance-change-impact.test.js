@@ -77,7 +77,7 @@ test('focused CI automatically includes required performance targets and shards'
     'gallery-artwork-diversity',
   ]);
   assert.deepEqual(result.focusedPerformanceShards, [
-    'synthetic-large-library', 'scan-library', 'gallery-artwork-diversity',
+    'synthetic-large-library', 'synthetic-production-library', 'scan-library', 'gallery-artwork-diversity',
   ]);
 });
 

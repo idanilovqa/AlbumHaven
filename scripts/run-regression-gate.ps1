@@ -26,7 +26,8 @@ $repositoryRoot = Split-Path -Parent $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($Pgbin)) { $Pgbin = "C:\PostgreSQL\$PostgresMajor\bin" }
 
 $gates = @{
-    'search' = @{ FixtureProfiles = @('functional-core', 'synthetic-large-library') }
+    # synthetic-production-library is the synthetic-large-library profile at the owner's library size.
+    'search' = @{ FixtureProfiles = @('functional-core', 'synthetic-production-library') }
     'problematic-files' = @{
         FixtureProfiles = @('functional-core', 'utility-problematic-files')
         RequiredEnvironment = @('ALBUM_HAVEN_SCAN_PERFORMANCE_DATABASE_URL')
@@ -46,19 +47,19 @@ $gates = @{
         Performance = @{ Profile = 'utility-problematic-files'; Targets = 'utility-problematic-files,problematic-files-focused' }
     }
     'html-reload' = @{
-        FixtureProfiles = @('synthetic-large-library')
+        FixtureProfiles = @('synthetic-production-library')
         Pytest = @(, @('tests/py/test_web_bootstrap.py', 'tests/py/test_runtime_asset_versions.py',
                 'tests/py/test_runtime_shutdown.py'))
-        Performance = @{ Profile = 'synthetic-large-library'; Targets = 'artist-tree-scroll-navigation' }
+        Performance = @{ Profile = 'synthetic-production-library'; Targets = 'artist-tree-scroll-navigation' }
     }
     'edit-tags' = @{
-        FixtureProfiles = @('functional-core', 'synthetic-large-library')
+        FixtureProfiles = @('functional-core', 'synthetic-large-library', 'synthetic-production-library')
         Pytest = @(, @('tests/py/test_edit_workflows.py', 'tests/py/test_save_tasks.py', 'tests/py/test_edit_state.py',
                 'tests/py/test_tag_edit_recovery.py', 'tests/py/test_tag_edit_intents_postgres.py',
                 'tests/py/test_postgres_structural_tag_edit.py'))
         Node = @('tests/js/runtime/tag-editor-*.test.js', 'tests/js/runtime/utility-tag-edit-optimistic.test.js')
         FunctionalShard = 'metadata-mutations'
-        Performance = @{ Profile = 'synthetic-large-library'; Targets = 'edit-tags-post-edit' }
+        Performance = @{ Profile = 'synthetic-production-library'; Targets = 'edit-tags-post-edit' }
     }
     'bounded-interactions' = @{ FixtureProfiles = @() }
     'focused' = @{ FixtureProfiles = @() }
@@ -89,7 +90,11 @@ if ($Gate -eq 'focused') {
     foreach ($targetName in $focusedTargets) {
         $target = @($registry.targets | Where-Object { $_.name -ceq $targetName })
         if ($target.Count -ne 1) { throw "Unknown measured target: $targetName" }
-        $targetProfiles[$targetName] = [string]$target[0].fixtureProfile
+        $targetProfiles[$targetName] = if ($target[0].fixtureScale -eq 'production-calibration') {
+            'synthetic-production-library'
+        } else {
+            [string]$target[0].fixtureProfile
+        }
     }
     $definition.FixtureProfiles = @(@($(if ($focusedCases.Count) { 'functional-core' })) + @($targetProfiles.Values) |
         Where-Object { $_ } | Select-Object -Unique)
@@ -153,7 +158,8 @@ if ($Gate -eq 'search') {
     Invoke-Checked {
         & (Join-Path $PSScriptRoot 'run-search-regressions.ps1') `
             -PythonPath $PythonPath `
-            -FixtureRoot (Get-ProfileRoot 'synthetic-large-library') `
+            -FixtureRoot (Get-ProfileRoot 'synthetic-production-library') `
+            -SyntheticScalePreset production-calibration `
             -FunctionalFixtureDistribution $FixtureDistribution `
             -Pgbin $Pgbin `
             -ChromeExecutable $ChromeExecutable `
@@ -209,13 +215,15 @@ $functionalCommon = @{
 function Invoke-MeasuredTargets([string]$TargetList, [string]$FixtureProfile, [string]$ShardName) {
     $performanceTemp = Join-Path ([IO.Path]::GetTempPath()) "album-haven-$ShardName-performance-$PID"
     New-Item -ItemType Directory -Force -Path $performanceTemp | Out-Null
-    $env:ALBUM_HAVEN_FIXTURE_PROFILE = $FixtureProfile
+    $loaderProfile = if ($FixtureProfile -eq 'synthetic-production-library') { 'synthetic-large-library' } else { $FixtureProfile }
+    $env:ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET = if ($loaderProfile -ne $FixtureProfile) { 'production-calibration' } else { '' }
+    $env:ALBUM_HAVEN_FIXTURE_PROFILE = $loaderProfile
     $env:ALBUM_HAVEN_FIXTURE_ROOT = Get-ProfileRoot $FixtureProfile
     $env:ALBUM_HAVEN_MEDIA_ROOT = Join-Path $env:ALBUM_HAVEN_FIXTURE_ROOT 'media'
     Invoke-Checked {
         & (Join-Path $PSScriptRoot 'ci\run-performance-shard.ps1') `
             -Targets $TargetList `
-            -FixtureProfile $FixtureProfile `
+            -FixtureProfile $loaderProfile `
             -FixtureMode preloaded-release `
             -BasePort $PerformanceBasePort `
             -DatabaseSuffixBase "$($ShardName.Replace('-', '_'))_$PID" `

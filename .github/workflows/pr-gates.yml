@@ -1077,9 +1077,9 @@ jobs:
           ALBUM_HAVEN_FIXTURES_TOKEN: ${{ secrets.ALBUM_HAVEN_FIXTURES_TOKEN }}
         run: |
           & "${{ github.workspace }}\album-haven-trusted-ci\scripts\ci\fetch-test-fixtures.ps1" `
-            -Release fixtures-v1.0.30 `
+            -Release ${{ matrix.shard == 'synthetic-production-library' && 'fixtures-v1.0.30-production-calibration' || 'fixtures-v1.0.30' }} `
             -Profile ${{ matrix.shard == 'utility-problematic-files' && 'utility-problematic-files' || 'synthetic-large-library' }} `
-            -ManifestSha256 0CBF9D17930C0347B40415A5B367DEBD93EC5CA7D8439CFAB7060A7E0BB13752
+            -ManifestSha256 ${{ matrix.shard == 'synthetic-production-library' && 'PRODUCTION_CALIBRATION_MANIFEST_SHA256' || '0CBF9D17930C0347B40415A5B367DEBD93EC5CA7D8439CFAB7060A7E0BB13752' }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4

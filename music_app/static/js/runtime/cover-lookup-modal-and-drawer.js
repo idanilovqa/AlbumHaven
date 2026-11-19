@@ -805,109 +805,226 @@ function getCoverLookupActiveLocalRef() {
   );
 }
 
-function buildSpotifyGlyph() {
-  return `
-    <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
-      <circle cx="12" cy="12" r="10" fill="currentColor"></circle>
-      <path d="M7.2 9.3c3.3-1 6.8-.7 9.8.8" fill="none" stroke="#0b1411" stroke-width="1.6" stroke-linecap="round"></path>
-      <path d="M8.1 12.1c2.5-.7 5.2-.5 7.5.6" fill="none" stroke="#0b1411" stroke-width="1.45" stroke-linecap="round"></path>
-      <path d="M9 14.8c1.8-.4 3.7-.3 5.3.4" fill="none" stroke="#0b1411" stroke-width="1.3" stroke-linecap="round"></path>
-    </svg>
-  `;
-}
-
-function buildAppleMusicGlyph() {
-  return `
-    <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
-      <path d="M15.8 5.2v9.4a2.8 2.8 0 1 1-1.6-2.53V7.83l-5.2 1.18v7.09a2.8 2.8 0 1 1-1.6-2.53V7.75c0-.74.51-1.37 1.23-1.53l5.94-1.35a1.3 1.3 0 0 1 1.6 1.27Z" fill="currentColor"></path>
-    </svg>
-  `;
-}
-
-function buildDeezerGlyph() {
-  // The compact Deezer treatment uses the approved purple heart.
-  return `
-    <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
-      <path d="M12 20.2 4.8 13A4.7 4.7 0 0 1 11.4 6.3l.6.7.6-.7A4.7 4.7 0 0 1 19.2 13Z" fill="currentColor"></path>
-    </svg>
-  `;
-}
-
-function buildCaaGlyph() {
-  return '<span aria-hidden="true">CAA</span>';
-}
+// CoverSourceBadge: a provider's bare mark on Album Details and Cover Look Up cards; hover, focus or tap opens
+// its legal line and one link back to the release page (approved mockup cover-source-badges v003, owner
+// 2026-11-19). Marks are inline stand-ins until the provider artwork files are approved for download.
+const COVER_SOURCE_NEUTRAL_MARK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><circle cx="12" cy="12" r="2.4"></circle><path d="M12 3a9 9 0 0 1 9 9"></path></svg>';
+const COVER_SOURCE_PROVIDERS = Object.freeze({
+  apple: Object.freeze({
+    label: 'Apple Music',
+    legal: ['Cover art from Apple Music.', 'Apple and Apple Music are trademarks of Apple Inc., registered in the U.S. and other countries.'],
+    linkLabel: 'Listen on Apple Music',
+    search: (query) => `https://music.apple.com/search?term=${query}`,
+    mark: '<svg viewBox="0 0 24 24"><rect width="24" height="24" rx="5.4" fill="#FA2D48"></rect><path d="M15.8 5.2v9.4a2.8 2.8 0 1 1-1.6-2.53V7.83l-5.2 1.18v7.09a2.8 2.8 0 1 1-1.6-2.53V7.75c0-.74.51-1.37 1.23-1.53l5.94-1.35a1.3 1.3 0 0 1 1.6 1.27Z" fill="#fff"></path></svg>',
+  }),
+  spotify: Object.freeze({
+    label: 'SPOTIFY',
+    legal: ['Cover art from Spotify.'],
+    linkLabel: 'Open on Spotify',
+    search: (query) => `https://open.spotify.com/search/${query}`,
+    // Spotify forbids its mark on top of artwork, so Album Details shows it beneath the cover.
+    beneathArt: true,
+    mark: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="12" fill="#1ED760"></circle><path d="M6 8.9c4-1.2 8.6-.9 12.2 1.1M6.9 12.3c3.3-.9 6.9-.6 9.8.9M7.7 15.5c2.6-.6 5.2-.4 7.5.7" fill="none" stroke="#000" stroke-width="1.7" stroke-linecap="round"></path></svg>',
+  }),
+  deezer: Object.freeze({
+    label: 'Deezer',
+    legal: ['Cover art from Deezer.'],
+    linkLabel: 'Open on Deezer',
+    search: (query) => `https://www.deezer.com/search/${query}`,
+    mark: '<svg viewBox="0 0 24 24"><path d="M12 21.4 3.4 13a5.4 5.4 0 0 1 7.7-7.7l.9.9.9-.9a5.4 5.4 0 0 1 7.7 7.7Z" fill="#A238FF"></path></svg>',
+  }),
+  bandcamp: Object.freeze({
+    label: 'Bandcamp',
+    legal: ['Cover art from Bandcamp.'],
+    linkLabel: 'Open on Bandcamp',
+    search: (query) => `https://bandcamp.com/search?q=${query}&item_type=a`,
+    mark: '<svg viewBox="0 0 24 24"><path d="M2 18.5 8.2 5.5H22l-6.2 13Z" fill="#1DA0C3"></path></svg>',
+  }),
+  discogs: Object.freeze({
+    label: 'Discogs',
+    legal: ['Data provided by Discogs.', 'Album Haven uses Discogs’ API but is not affiliated with, sponsored or endorsed by Discogs. ‘Discogs’ is a trademark of Zink Media, LLC.'],
+    linkLabel: 'Data provided by Discogs',
+    search: (query) => `https://www.discogs.com/search/?q=${query}&type=release`,
+    // Black or white by the cover's brightness under the mark (owner accepted the brand risk 2026-11-19).
+    toneAware: true,
+    mark: '<svg viewBox="0 0 24 24"><path fill="currentColor" fill-rule="evenodd" d="M12 .5a11.5 11.5 0 1 1 0 23 11.5 11.5 0 0 1 0-23Zm0 3.3a8.2 8.2 0 1 0 0 16.4 8.2 8.2 0 0 0 0-16.4Zm0 .8a7.4 7.4 0 1 1 0 14.8 7.4 7.4 0 0 1 0-14.8Zm0 1.8a5.6 5.6 0 1 0 0 11.2 5.6 5.6 0 0 0 0-11.2Zm0 .8a4.8 4.8 0 1 1 0 9.6 4.8 4.8 0 0 1 0-9.6Zm0 2.8a2 2 0 1 0 0 4 2 2 0 0 0 0-4Z"></path></svg>',
+  }),
+  cover_art_archive: Object.freeze({
+    label: 'Cover Art Archive',
+    legal: ['Cover art from the Cover Art Archive.', 'Image © its copyright owner.'],
+    linkLabel: 'Open release on MusicBrainz',
+    search: (query) => `https://musicbrainz.org/search?query=${query}&type=release`,
+    mark: '<svg viewBox="0 0 24 24"><rect width="24" height="24" rx="4" fill="#BA478F"></rect><path d="M5 17V7l7 4v10Z" fill="#EB743B"></path><path d="M19 17V7l-7 4v10Z" fill="#fff" opacity=".9"></path></svg>',
+  }),
+  youtube_music: Object.freeze({
+    label: 'YouTube Music',
+    legal: ['Cover art from YouTube Music.'],
+    linkLabel: 'Open on YouTube Music',
+    search: (query) => `https://music.youtube.com/search?q=${query}`,
+    mark: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="12" fill="#FF0000"></circle><circle cx="12" cy="12" r="6.4" fill="none" stroke="#fff" stroke-width="1.3"></circle><path d="M10.2 9.2 15 12l-4.8 2.8Z" fill="#fff"></path></svg>',
+  }),
+  genius: Object.freeze({
+    label: 'Genius',
+    legal: ['Cover art from Genius.'],
+    linkLabel: 'Open on Genius',
+    search: (query) => `https://genius.com/search?q=${query}`,
+    // No published brand guidelines: neutral mark until the owner clears Genius' own mark.
+    mark: COVER_SOURCE_NEUTRAL_MARK,
+    neutral: true,
+  }),
+});
 
 function getRemoteCoverSourceLabel(source, fallback = '') {
-  return ({
-    apple: 'Apple Music',
-    spotify: 'SPOTIFY',
-    deezer: 'Deezer',
-    bandcamp: 'Bandcamp',
-    discogs: 'Discogs',
-    cover_art_archive: 'Cover Art Archive',
-    youtube_music: 'YouTube Music',
-  })[String(source || '').trim().toLowerCase()] || String(fallback || source || '').trim();
+  return COVER_SOURCE_PROVIDERS[String(source || '').trim().toLowerCase()]?.label
+    || String(fallback || source || '').trim();
 }
 
-function buildYouTubeMusicGlyph() {
-  return `
-    <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
-      <circle cx="12" cy="12" r="10" fill="currentColor"></circle>
-      <path d="M9.9 8.3 16.5 12l-6.6 3.7Z" fill="#ffffff"></path>
-    </svg>
-  `;
+function coverSourceReleasePageUrl(value) {
+  const text = String(value || '').trim();
+  if (!/^https?:\/\//i.test(text)) return '';
+  try {
+    const url = new URL(text);
+    // A release page, never the picture itself.
+    return /\.(?:jpe?g|png|gif|webp|avif|bmp)$/i.test(url.pathname) ? '' : url.href;
+  } catch (_error) {
+    return '';
+  }
 }
 
-function buildBandcampGlyph() {
-  return `
-    <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
-      <path d="M6 16.8 10.9 7.2H18l-4.9 9.6Z" fill="currentColor"></path>
-    </svg>
-  `;
+function coverArtArchiveReleaseMbid(imageUrl) {
+  const match = String(imageUrl || '').match(
+    /(?:coverartarchive\.org\/release\/|archive\.org\/(?:download|details)\/mbid-)([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i,
+  );
+  return match ? match[1].toLowerCase() : '';
 }
 
-function buildDiscogsGlyph() {
-  return `
-    <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
-      <circle cx="12" cy="12" r="9" fill="currentColor"></circle>
-      <circle cx="12" cy="12" r="5.1" fill="#0b0b0d"></circle>
-      <circle cx="12" cy="12" r="2.1" fill="currentColor"></circle>
-      <path d="M17.1 8.9a6 6 0 0 1 0 6.2" fill="none" stroke="currentColor" stroke-width="1.15" stroke-linecap="round"></path>
-      <path d="M6.9 15.1a6 6 0 0 1 0-6.2" fill="none" stroke="currentColor" stroke-width="1.15" stroke-linecap="round"></path>
-    </svg>
-  `;
+// The page a badge links to: the stored release page, a MusicBrainz release built from a Cover Art Archive
+// image's MBID, or else the provider's search for artist and album.
+function resolveCoverSourceReleaseUrl({ source, albumUrl, imageUrl, artist, album } = {}) {
+  const key = String(source || '').trim().toLowerCase();
+  const provider = COVER_SOURCE_PROVIDERS[key];
+  if (!provider) return '';
+  const stored = coverSourceReleasePageUrl(albumUrl);
+  if (stored) return stored;
+  if (key === 'cover_art_archive') {
+    const mbid = coverArtArchiveReleaseMbid(imageUrl);
+    if (mbid) return `https://musicbrainz.org/release/${mbid}`;
+  }
+  const query = [artist, album].map((part) => String(part || '').trim()).filter(Boolean).join(' ');
+  return provider.search(encodeURIComponent(query));
 }
 
-function buildRemoteCoverSourceBadge(source, className = 'cover-lookup-art-source-badge') {
-  const normalizedSource = String(source || '').trim();
-  if (normalizedSource === 'apple') {
-    return `<span class="${className} is-apple" aria-hidden="true">${buildAppleMusicGlyph()}</span>`;
-  }
-  if (normalizedSource === 'deezer') {
-    return `<span class="${className} is-deezer" aria-hidden="true">${buildDeezerGlyph()}</span>`;
-  }
-  if (normalizedSource === 'spotify') {
-    return `<span class="${className} is-spotify" aria-hidden="true">${buildSpotifyGlyph()}</span>`;
-  }
-  if (normalizedSource === 'youtube_music') {
-    return `<span class="${className} is-youtube-music" aria-hidden="true">${buildYouTubeMusicGlyph()}</span>`;
-  }
-  if (normalizedSource === 'bandcamp') {
-    return `<span class="${className} is-bandcamp" aria-hidden="true">${buildBandcampGlyph()}</span>`;
-  }
-  if (normalizedSource === 'discogs') {
-    return `<span class="${className} is-discogs" aria-hidden="true">${buildDiscogsGlyph()}</span>`;
-  }
-  if (normalizedSource === 'cover_art_archive') {
-    return `<span class="${className} is-caa" aria-hidden="true">${buildCaaGlyph()}</span>`;
-  }
-  return '';
+// placement: 'over' (Album Details, on the art), 'beneath' (Album Details, under the art) or 'inline' (cards).
+function buildCoverSourceBadgeHtml(config = {}) {
+  const key = String(config.source || '').trim().toLowerCase();
+  const provider = COVER_SOURCE_PROVIDERS[key];
+  if (!provider) return '';
+  const placement = ['over', 'beneath', 'inline'].includes(config.placement) ? config.placement : 'inline';
+  const href = resolveCoverSourceReleaseUrl({ ...config, source: key });
+  const legalHtml = provider.legal
+    .map((line) => `<span class="cover-source-badge__legal">${escapeHtml(line)}</span>`)
+    .join('');
+  const classes = [
+    'cover-source-badge',
+    `cover-source-badge--${placement}`,
+    `is-${key.replaceAll('_', '-')}`,
+    provider.neutral ? 'is-neutral' : '',
+  ].filter(Boolean).join(' ');
+  const toneAttr = provider.toneAware && placement === 'over' ? ' data-cover-source-tone="dark"' : '';
+  return `<span class="${classes}" data-cover-source-badge="${escapeHtml(key)}"${toneAttr}>`
+    + `<button type="button" class="cover-source-badge__trigger" aria-expanded="false" aria-label="${escapeHtml(`${provider.legal[0]} ${provider.linkLabel}`)}">`
+    + `<span class="cover-source-badge__mark" aria-hidden="true">${provider.mark}</span></button>`
+    + `<span class="cover-source-badge__popover" role="tooltip" data-trigger-anchor-context="content">${legalHtml}`
+    + `<a class="cover-source-badge__link" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(provider.linkLabel)} ↗</a>`
+    + '</span></span>';
 }
 
-function buildTrackModalCoverSourceBadge(source) {
-  const normalizedSource = String(source || '').trim();
-  if (!normalizedSource) return '';
-  return buildRemoteCoverSourceBadge(normalizedSource, 'track-modal-cover-source-badge');
+function coverSourceBadgeSitsBeneathArt(source) {
+  return COVER_SOURCE_PROVIDERS[String(source || '').trim().toLowerCase()]?.beneathArt === true;
+}
+
+// Album Details: the badge for the shown cover, over the art or (Spotify) beneath it.
+function buildTrackModalCoverSourceBadge(source, context = {}) {
+  const key = String(source || '').trim().toLowerCase();
+  if (!key) return '';
+  return buildCoverSourceBadgeHtml({
+    ...context,
+    source: key,
+    placement: coverSourceBadgeSitsBeneathArt(key) ? 'beneath' : 'over',
+  });
+}
+
+// Mean Rec. 709 luma of RGBA pixels, 0..255; transparent pixels are skipped.
+function coverSourceToneFromPixels(data) {
+  let total = 0;
+  let count = 0;
+  for (let index = 0; index + 3 < (data?.length || 0); index += 4) {
+    if (data[index + 3] < 16) continue;
+    total += (0.2126 * data[index]) + (0.7152 * data[index + 1]) + (0.0722 * data[index + 2]);
+    count += 1;
+  }
+  if (!count) return 'dark';
+  return total / count >= 150 ? 'light' : 'dark';
+}
+
+// Samples the cover area under an over-art mark once per loaded image (a 12x12 draw of its top-left
+// corner); a cover the canvas may not read keeps the default white mark.
+function applyCoverSourceBadgeTone(root) {
+  const badge = root?.querySelector?.('.cover-source-badge--over[data-cover-source-tone]');
+  const image = root?.querySelector?.('.track-modal-cover-visual img');
+  if (!badge || !image) return;
+  const sample = () => {
+    if (!image.naturalWidth || !image.naturalHeight) return;
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = 12;
+      canvas.height = 12;
+      const context = canvas.getContext('2d', { willReadFrequently: true });
+      const side = Math.max(1, Math.round(Math.min(image.naturalWidth, image.naturalHeight) * 0.16));
+      context.drawImage(image, 0, 0, side, side, 0, 0, 12, 12);
+      badge.setAttribute('data-cover-source-tone', coverSourceToneFromPixels(context.getImageData(0, 0, 12, 12).data));
+    } catch (_error) {
+      badge.setAttribute('data-cover-source-tone', 'dark');
+    }
+  };
+  if (image.complete && image.naturalWidth) sample();
+  else image.addEventListener('load', sample, { once: true });
+}
+
+let openCoverSourceBadge = null;
+function setCoverSourceBadgeOpen(badge, open) {
+  badge.classList.toggle('is-open', open);
+  badge.querySelector('.cover-source-badge__trigger')?.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+
+function closeCoverSourceBadge() {
+  if (openCoverSourceBadge) setCoverSourceBadgeOpen(openCoverSourceBadge, false);
+  openCoverSourceBadge = null;
+}
+
+// Touch opens a badge with a tap; neither the tap nor its link selects the card or opens the lightbox.
+function handleCoverSourceBadgeClick(event) {
+  const badge = event.target?.closest?.('.cover-source-badge');
+  if (!badge) {
+    closeCoverSourceBadge();
+    return false;
+  }
+  event.stopPropagation();
+  if (event.target.closest('.cover-source-badge__link')) return true;
+  event.preventDefault();
+  const open = openCoverSourceBadge !== badge;
+  closeCoverSourceBadge();
+  if (open) {
+    setCoverSourceBadgeOpen(badge, true);
+    openCoverSourceBadge = badge;
+  }
+  return true;
+}
+
+function handleCoverSourceBadgeKeyDown(event) {
+  if (event.key !== 'Escape' || !openCoverSourceBadge) return false;
+  closeCoverSourceBadge();
+  return true;
 }
 
 function coverLookupHasManualLinks() {
@@ -2464,7 +2581,14 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
   const isOtherRemoteArt = isRemoteKind && String(item?.art_kind || 'cover') !== 'cover';
   const isSelectableOtherRemoteArt = isOtherRemoteArt && isSelectableRemoteCoverCandidate(item);
   const previewFallbackImageUrl = '/static/images/remote-preview-unavailable.png';
-  const sourceBadge = buildRemoteCoverSourceBadge(item?.source);
+  const sourceBadge = isRemoteKind ? buildCoverSourceBadgeHtml({
+    source: item?.source,
+    placement: 'inline',
+    albumUrl: item?.album_url,
+    imageUrl: item?.url,
+    artist: item?.artist || state.coverLookup.modal.album?.album_artist,
+    album: item?.album || state.coverLookup.modal.album?.name,
+  }) : '';
   const remoteSourceLabel = getRemoteCoverSourceLabel(item?.source, item?.source_label);
   const selectionKey = kind === 'local'
     ? `local:${String(item?.candidate_cover_ref || '')}`
@@ -2553,9 +2677,8 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
   const previewSourceAttr = kind === 'remote' && !prioritizeRemotePreview
     ? `data-cover-lookup-deferred-src="${escapeHtml(imageUrl)}"`
     : `src="${escapeHtml(imageUrl)}"`;
-  const actionLabel = kind === 'saved-remote'
-    ? (isActive ? 'Selected' : 'Linked remote cover')
-    : (isActive ? 'Selected' : 'Select');
+  // Remote cards carry the source badge instead of a Select word (owner 2026-11-19).
+  const actionLabel = isActive ? 'Selected' : 'Select';
   const selectionLimited = orderedLimitReached && !isActive;
   const roleAttr = isOtherRemoteArt && !isSelectableOtherRemoteArt
     ? 'role="group"'
@@ -2580,7 +2703,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
           <span class="cover-lookup-art-name">${escapeHtml(item.relative_path || item.filename || item.album || (isPastedKind ? 'Pasted image' : 'Cover art'))}</span>
           <span class="cover-lookup-art-resolution">${escapeHtml(resolution)}</span>
           ${isRemoteKind ? `<span class="cover-lookup-art-source-row">${sourceBadge}<span class="cover-lookup-art-source">${escapeHtml(remoteSourceLabel)}</span></span>` : ''}
-          ${isOtherRemoteArt && !isSelectableOtherRemoteArt ? '' : `<span class="cover-lookup-art-action-label">${actionLabel}</span>`}
+          ${isRemoteKind || (isOtherRemoteArt && !isSelectableOtherRemoteArt) ? '' : `<span class="cover-lookup-art-action-label">${actionLabel}</span>`}
         </span>
       </div>
     </div>

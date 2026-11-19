@@ -24,6 +24,12 @@ function createContext({
     consumeAlbumCardLongPressClick() {
       return albumLongPressClickConsumed;
     },
+    handleCoverSourceBadgeClick() {
+      return false;
+    },
+    handleCoverSourceBadgeKeyDown() {
+      return false;
+    },
     document: {
       addEventListener(name, callback) {
         listeners[name] = callback;

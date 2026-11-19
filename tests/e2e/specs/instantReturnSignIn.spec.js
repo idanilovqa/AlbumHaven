@@ -6,7 +6,6 @@ import { expect, test } from '../support/baseFixtures.js';
 import { GalleryActions } from '../actions/index.js';
 import { GalleryPage } from '../poms/index.js';
 import { PERFORMANCE_AUTH_USERNAME, PERFORMANCE_AUTH_PASSWORD } from '../support/performanceAuthentication.js';
-import { visibleAlbumNames } from '../helpers/instantReturnHelpers.js';
 
 test.use({ reuseAuthentication: false, serviceWorkers: 'allow', viewport: { width: 1024, height: 480 } });
 
@@ -32,7 +31,9 @@ test(`FTC-IAR-W12 signed in and offline at once, a new tab shows the saved libra
   await expect(galleryPage.appCopyMarker).toHaveAttribute('content', 'cache');
   await expect(galleryPage.appCopyOfflineNotice).toBeVisible();
   await expect(galleryPage.appCopyOfflineNotice).toContainText('Offline');
-  expect((await visibleAlbumNames(galleryPage)).length).toBeGreaterThan(0);
+  // The saved albums are on screen. At this 480 px height the titles under the covers sit below the
+  // fold, so the first card's own box is checked against the window.
+  await expect(galleryPage.albumCards.first()).toBeInViewport();
 
   // Owner D4: the end of the kept gallery says why no more albums load, and the line stays.
   const { maxScrollTop } = await library.readGalleryScrollState();

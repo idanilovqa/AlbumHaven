@@ -21,6 +21,16 @@ function inject(overrides, file, anchor, replacement) {
 
 const DEFECTS = [
   {
+    // Owner, 11-18 (PR #107): navigation that reloads the view already on screen. A request whose own
+    // function records the view in history navigates, and navigation needs the already-shown proof.
+    id: 'navigation: a status poll that records its view in history becomes navigation without an already-shown contract',
+    language: 'js',
+    file: 'music_app/static/js/runtime/gallery-refresh-and-status.js',
+    anchor: 'async function pollStatus() {\n',
+    replacement: 'async function pollStatus() {\n  pushBrowserViewState(state.view);\n',
+    expected: /^js:runtime\/gallery-refresh-and-status\.js#pollStatus: navigation entrypoint js:music_app\/static\/js\/runtime\/gallery-refresh-and-status\.js#pollStatus:request:fetch needs a request-capture contract with alreadyShown: /,
+  },
+  {
     id: 'BI-H01 direct row scan inside a registered scroll handler',
     language: 'js',
     file: 'music_app/static/js/runtime/problematic-files-virtual-list.js',
@@ -444,6 +454,25 @@ const DEFECTS = [
     prelude: '_SEEDED_QUEUE_POOL = ThreadPoolExecutor(max_workers=1)\n\n\ndef _seeded_queue(config, key, action):\n    return _SEEDED_QUEUE_POOL.submit(action)\n\n\n'
       + 'def _seeded_rebuild_gallery(config):\n    return None\n',
     expected: /^unregistered entrypoint py:music_app\/routes\/api_read_asgi_routes\.py#_seeded_rebuild_gallery:background:executor$/,
+  },
+  {
+    // Owner, 11-18 (PR #107): every page render read layout settings through a new connection, 112-590 ms each.
+    id: 'BI-15 page render whose layout repository opens its own Postgres connection instead of leasing the pool',
+    language: 'py',
+    file: 'music_app/services/client_layout_preferences.py',
+    anchor: 'def _connect(database_url: str):\n    return _leased_connection(database_url)\n',
+    replacement: 'def _connect(database_url: str):\n    return _seeded_psycopg.connect(database_url)\n',
+    prelude: 'import psycopg as _seeded_psycopg\n',
+    expected: /^rejected BI-15 database-connect-per-request:psycopg\.connect at music_app\/services\/client_layout_preferences\.py:\d+ from py:music_app\/[^ ]+:route:GET \/ via .*_connect$/,
+  },
+  {
+    // Owner, 11-18 (PR #107): the preview storage state, polled every 60 s (every 2 s during a move), opened a connection per tick.
+    id: 'BI-15 polled preview storage read that opens its own Postgres connection per tick',
+    language: 'py',
+    file: 'music_app/services/generated_preview_storage_postgres.py',
+    anchor: 'def _connect(database_url: str):\n    return _leased_connection(database_url)\n',
+    replacement: 'def _connect(database_url: str):\n    return _lock_session_connect(database_url)\n',
+    expected: /^rejected BI-15 database-connect-per-request:psycopg\.connect at music_app\/services\/generated_preview_storage_postgres\.py:\d+ from py:music_app\/routes\/admin_asgi\.py#get_preview_storage:route:GET \/admin\/server\/preview-storage via /,
   },
   {
     id: 'BI-04 background reconciler that rebuilds every relation view without a batching contract',
@@ -874,6 +903,56 @@ test('the repeated-request rule rejects a repeat that fans out into distinct req
   await assert.rejects(
     () => measureInteractionContract(ALBUM_DETAILS_CONTRACT, seededAlbumOpens({ extraOnRepeat: '/album-details?album_key=beta' })),
     { message: `${ALBUM_DETAILS_CONTRACT}: the repeated interaction fanned out from 1 to 2 requests` },
+  );
+});
+
+// The already-shown rule. The registered gallery-link contract navigates; seeded handlers stand in
+// for the real one. PR #107's defect: Back to the gallery from a freshly loaded root gallery reloaded
+// it, because the loaded view reports all_artists_active: false although it is the library Home.
+const GALLERY_LINK_CONTRACT = 'js:runtime/bootstrap-gallery-event-handlers.js#handleGalleryBootstrapClick';
+
+function seededGalleryLinks({ reloadsShownHome }) {
+  const { createRequestCapture, jsonResponse } = require('./helpers/request-capture');
+  const backToGallery = (capture, view) => {
+    const alreadyAtHome = reloadsShownHome ? view.all_artists_active !== false : view.surface === 'albums';
+    if (!alreadyAtHome) return capture.fetch('/view-data?surface=albums&all_artists=1');
+    return null;
+  };
+  return {
+    async alreadyShown() {
+      const capture = createRequestCapture(() => jsonResponse({}));
+      await backToGallery(capture, { surface: 'albums', all_artists_active: false });
+      return { requests: capture.urls() };
+    },
+    setup: () => ({ capture: createRequestCapture(() => jsonResponse({})) }),
+    async act({ capture }) {
+      const before = capture.requests.length;
+      await backToGallery(capture, { surface: 'home', all_artists_active: false });
+      return { requests: capture.urls().slice(before) };
+    },
+  };
+}
+
+test('the already-shown rule rejects navigation that reloads the view on screen (PR #107 Back to gallery)', async () => {
+  const { measureInteractionContract } = require('./helpers/request-capture');
+  await measureInteractionContract(GALLERY_LINK_CONTRACT, seededGalleryLinks({ reloadsShownHome: false }));
+  await assert.rejects(
+    () => measureInteractionContract(GALLERY_LINK_CONTRACT, seededGalleryLinks({ reloadsShownHome: true })),
+    { message: `${GALLERY_LINK_CONTRACT}: navigating to the view already shown sent 1 request(s): /view-data?surface=albums&all_artists=1` },
+  );
+});
+
+test('a navigation contract cannot be proved without navigating to the view already shown', async () => {
+  const { measureInteractionContract } = require('./helpers/request-capture');
+  const { alreadyShown, ...withoutAlreadyShown } = seededGalleryLinks({ reloadsShownHome: false });
+  assert.equal(typeof alreadyShown, 'function');
+  await assert.rejects(
+    () => measureInteractionContract(GALLERY_LINK_CONTRACT, withoutAlreadyShown),
+    { message: `${GALLERY_LINK_CONTRACT}: a navigation contract must navigate from a fresh page toward the view already shown (alreadyShown)` },
+  );
+  await assert.rejects(
+    () => measureInteractionContract(ALBUM_DETAILS_CONTRACT, { ...seededAlbumOpens({}), alreadyShown: async () => ({ requests: [] }) }),
+    { message: `${ALBUM_DETAILS_CONTRACT}: alreadyShown is only for entries registered with alreadyShown` },
   );
 });
 

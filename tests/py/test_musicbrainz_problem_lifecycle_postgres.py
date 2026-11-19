@@ -1151,3 +1151,89 @@ def test_a_person_and_their_same_named_band_split_per_album_and_a_stale_merge_is
         assert (match["state"], match["artist_mbid"], match["associated_artist_mbids"]) == ("per_album", None, None)
         assert _identities(connection, library_id) == {
             "alice-album": (GERMAN, "automatic", False), "alice-killer": (TRANCE, "automatic", False)}
+
+
+def test_a_split_name_s_context_carries_relative_folders_and_stores_recordings_and_folder_evidence(
+        monkeypatch: pytest.MonkeyPatch):
+    """Owner 2026-11-18: a split name's undecided albums are matched by recordings, then by the
+    folder they share with decided albums. The context names each album's stored identity, the
+    folders come apart from it relative to their library root; the evidence keeps no absolute
+    path, and an owner's choice stays."""
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    library_id, artist_id = _seed_present_artist(setup_url, "split")
+    root = "C:\Music Library"
+    with isolatedPostgres._connect(setup_url) as connection:
+        root_id = connection.execute(
+            "insert into library.library_roots (library_id, root_path) values (%s, %s) returning id",
+            (library_id, root)).fetchone()["id"]
+        albums = {"split-album": connection.execute(
+            "select id from library.local_albums where album_key = 'split-album'").fetchone()["id"]}
+        for key, title in (("split-live", "Bootleg Live"), ("split-demo", "Old Demo")):
+            albums[key] = connection.execute(
+                "insert into library.local_albums (library_id, artist_id, album_key, title, metadata)"
+                " values (%s, %s, %s, %s, '{}'::jsonb) returning id", (library_id, artist_id, key, title)).fetchone()["id"]
+            connection.execute(
+                "insert into library.local_tracks (library_id, album_id, artist_id, track_key, title, metadata)"
+                " values (%s, %s, %s, %s, 'Track', '{}'::jsonb)", (library_id, albums[key], artist_id, f"{key}-track"))
+        folders = {"split-album": "Axxis DE\Kingdom of the Night", "split-live": "Axxis DE\Bootleg Live\CD1",
+                   "split-demo": "Axxis Trance\Old Demo"}
+        for key, folder in folders.items():
+            connection.execute(
+                "insert into library.local_track_files (track_id, private_path, library_root_id, metadata)"
+                " select tracks.id, %s, %s, '{}'::jsonb from library.local_tracks tracks"
+                " where tracks.album_id = %s",
+                (f"{root}\{folder}\01 - Track.mp3", root_id, albums[key]))
+        connection.execute(
+            "insert into integration.musicbrainz_artists (mbid, canonical_name, refreshed_at) values (%s, 'Axxis', %s)",
+            (GERMAN, NOW))
+        connection.execute(
+            "insert into library.local_album_artist_identities (library_id, album_key, artist_mbid, decision_source,"
+            " matcher_version) values (%s, 'split-demo', %s, 'manual', 5)", (library_id, GERMAN))
+    repository = MusicBrainzEnrichmentPostgresRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": runtime_url}, connect=lambda _url: isolatedPostgres._connect(runtime_url))
+    repository.enqueue_eligible_artists(reason="startup_backfill", observed_at=NOW)
+    job = repository.claim_due_job(worker_id="worker-a", now=NOW, lease_duration=timedelta(minutes=5))
+    context = repository.load_artist_context(job_id=job["id"], worker_id="worker-a")
+
+    by_id = {album["id"]: album for album in context["albums"]}
+    assert by_id[albums["split-demo"]]["identity"] == {"mbid": GERMAN, "source": "manual"}
+    assert by_id[albums["split-live"]]["identity"] is None
+    folders = repository.load_album_folders(job_id=job["id"], worker_id="worker-a")
+    assert folders[albums["split-album"]] == [f"{root_id}:Axxis DE/Kingdom of the Night"]
+    assert folders[albums["split-live"]] == [f"{root_id}:Axxis DE/Bootleg Live/CD1"]
+    assert not any(root.casefold() in folder.casefold() for album_folders in folders.values() for folder in album_folders)
+    assert repository.load_album_folders(job_id=job["id"], worker_id="another-worker") == {}, "the lease guards it"
+
+    repository.record_automatic_outcome(
+        local_artist_id=artist_id, state="per_album", artist=None, confidence=1, observed_at=NOW,
+        evidence_summary="Your albums belong to 2 MusicBrainz artists.",
+        identity_artists=[{"mbid": GERMAN, "canonical_name": "Axxis"}, {"mbid": TRANCE, "canonical_name": "Axxis"}],
+        album_identities=[
+            {"local_album_id": albums["split-album"], "artist_mbid": GERMAN, "method": "recordings",
+             "sampled_titles": ["Dawn", "Harbour", "Home"], "found": {GERMAN: 2, TRANCE: 0}},
+            {"local_album_id": albums["split-live"], "artist_mbid": GERMAN, "method": "folder", "folder": "Axxis DE"},
+            # An owner's choice is never replaced, whatever a re-check says.
+            {"local_album_id": albums["split-demo"], "artist_mbid": TRANCE, "method": "folder", "folder": "Axxis Trance"},
+        ])
+
+    with isolatedPostgres._connect(setup_url) as connection:
+        stored = {row["album_key"]: row for row in connection.execute(
+            "select album_key, artist_mbid::text, decision_source, evidence from library.local_album_artist_identities"
+            " where library_id = %s", (library_id,)).fetchall()}
+    assert stored["split-album"]["evidence"]["method"] == "recordings"
+    assert stored["split-album"]["evidence"]["found"] == {GERMAN: 2, TRANCE: 0}
+    assert (stored["split-live"]["evidence"]["method"], stored["split-live"]["evidence"]["folder"]) == (
+        "folder", "Axxis DE")
+    assert (stored["split-demo"]["artist_mbid"], stored["split-demo"]["decision_source"]) == (GERMAN, "manual")
+
+    # An absolute folder never reaches the evidence.
+    repository.record_automatic_outcome(
+        local_artist_id=artist_id, state="per_album", artist=None, confidence=1, observed_at=NOW,
+        evidence_summary="Your albums belong to 2 MusicBrainz artists.",
+        identity_artists=[{"mbid": GERMAN, "canonical_name": "Axxis"}, {"mbid": TRANCE, "canonical_name": "Axxis"}],
+        album_identities=[{"local_album_id": albums["split-live"], "artist_mbid": GERMAN, "method": "folder",
+                           "folder": "C:\Music Library\Axxis DE"}])
+    with isolatedPostgres._connect(setup_url) as connection:
+        evidence = connection.execute(
+            "select evidence from library.local_album_artist_identities where album_key = 'split-live'").fetchone()["evidence"]
+    assert evidence["method"] == "folder" and "folder" not in evidence

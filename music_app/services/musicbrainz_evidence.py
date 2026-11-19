@@ -607,3 +607,94 @@ def _decide_on_evidence(candidates: list[dict[str, object]], local_name: object 
     if named:
         return {"classification": "ambiguous", "candidates": named}
     return {"classification": "not_found", "candidates": []}
+
+
+# A split name's undecided albums (owner, 2026-11-18): first by a sample of their recordings,
+# then, only without recordings evidence, by the folder they share with decided albums.
+_GENERIC_TRACK = re.compile(
+    r"^(?:intro|outro|interlude|untitled|bonus(?: track)?|hidden track|skit|reprise|"
+    r"(?:track|part|chapter) \d+|\d+)$")
+_RECORDING_SAMPLE = 3
+_DISC_FOLDER = re.compile(r"^(?:cd|disc|disk|side)\s*\d+\b", re.IGNORECASE)
+
+
+def recording_sample(tracks: list[dict[str, object]]) -> list[str]:
+    """Up to three of an album's most distinctive track titles: generic titles and titles of
+    fewer than four letters are skipped, longer titles first. Fewer than two means no sample."""
+    usable: dict[str, str] = {}
+    for track in tracks or []:
+        title = str((track or {}).get("title") or "").strip()
+        folded = fold(title)
+        if not folded or folded in usable or _GENERIC_TRACK.match(folded) \
+                or sum(ch.isalpha() for ch in folded) < 4:
+            continue
+        usable[folded] = title
+    ranked = sorted(usable.values(), key=lambda title: (-len(fold(title)), fold(title)))[:_RECORDING_SAMPLE]
+    return ranked if len(ranked) >= 2 else []
+
+
+def decide_by_recordings(sample: list[str], results: dict[str, list[dict[str, object]]],
+                         candidates: list[str]) -> dict[str, object]:
+    """``results`` maps each sampled title to the recordings a search returned. Exactly one
+    candidate with two or more sampled titles takes the album; when several do, the one with a
+    release holding two or more of the sample takes it. ``outcome`` is "decided", "tie" (several
+    qualify: stops here, no folder fallback), "weak" (some recordings evidence, under two) or
+    "none" (nothing found)."""
+    found: dict[str, set[str]] = {mbid: set() for mbid in candidates}
+    releases: dict[str, dict[str, set[str]]] = {mbid: {} for mbid in candidates}
+    for title in sample:
+        forms = _track_title_forms(title)
+        for recording in results.get(title) or []:
+            if not forms & _track_title_forms(recording.get("title")):
+                continue
+            for mbid in recording.get("artist_mbids") or []:
+                if mbid in found:
+                    found[mbid].add(title)
+                    for release in recording.get("release_mbids") or []:
+                        releases[mbid].setdefault(release, set()).add(title)
+    counts = {mbid: len(titles) for mbid, titles in found.items()}
+    shared = {mbid: next((release for release, titles in sorted(held.items()) if len(titles) >= 2), None)
+              for mbid, held in releases.items()}
+    qualified = [mbid for mbid in candidates if counts[mbid] >= 2]
+    if len(qualified) > 1:
+        sharing = [mbid for mbid in qualified if shared[mbid]]
+        qualified = sharing if len(sharing) == 1 else qualified
+    if len(qualified) == 1:
+        artist = qualified[0]
+        return {"outcome": "decided", "artist_mbid": artist, "found": counts,
+                "method": "release" if shared[artist] else "recordings", "release_mbid": shared[artist]}
+    if qualified:
+        return {"outcome": "tie", "found": counts}
+    return {"outcome": "weak" if any(counts.values()) else "none", "found": counts}
+
+
+def album_folders(folders: list[str]) -> tuple[str, str] | None:
+    """An album's (album folder, artist folder) from its files' "<root id>:<path under root>"
+    folders: the deepest folder holding all of them, one up from a disc folder ("CD1"), and that
+    folder's parent. None when the files span roots or the album has no artist folder."""
+    roots, paths = set(), []
+    for folder in folders or []:
+        root, _, path = str(folder).partition(":")
+        roots.add(root)
+        paths.append([part for part in path.split("/") if part])
+    if len(roots) != 1 or not paths:
+        return None
+    common = paths[0]
+    for parts in paths[1:]:
+        length = 0
+        while length < min(len(common), len(parts)) and common[length].casefold() == parts[length].casefold():
+            length += 1
+        common = common[:length]
+    if common and _DISC_FOLDER.match(common[-1]):
+        common = common[:-1]
+    if len(common) < 2:  # an album directly under the root, or the root itself: no artist folder
+        return None
+    root = next(iter(roots))
+    return f"{root}:{'/'.join(common)}", f"{root}:{'/'.join(common[:-1])}"
+
+
+def decide_by_folder(artist_folder: str, decided: dict[str, set[str]]) -> str | None:
+    """The one candidate whose decided albums share this artist folder; None when two or more
+    do (one general folder) or none does. ``decided`` maps artist MBIDs to artist folders."""
+    owners = [mbid for mbid, folders in decided.items() if artist_folder in folders]
+    return owners[0] if len(owners) == 1 else None

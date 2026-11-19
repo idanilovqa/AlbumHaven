@@ -9,6 +9,10 @@ from typing import Any
 
 from music_app.services.musicbrainz_evidence import (
     SPECIAL_PURPOSE_ARTISTS,
+    album_folders,
+    decide_by_folder,
+    decide_by_recordings,
+    recording_sample,
     album_level,
     album_rank,
     TITLE_RANK,
@@ -145,6 +149,12 @@ class MusicBrainzArtistEnrichmentProcessor:
         )
         if not context:
             raise RuntimeError("Claimed MusicBrainz job has no accessible artist context.")
+        # A split name's folder fallback reads where each album's files sit, relative to its root.
+        load_folders = getattr(self._repository, "load_album_folders", None)
+        if callable(load_folders) and context.get("albums"):
+            folders = load_folders(job_id=job_id, worker_id=worker_id)
+            context["albums"] = [{**album, "folders": folders.get(int(album.get("id") or 0), [])}
+                                 for album in context["albums"]]
 
         if context.get("manual_decision") and context.get("projection_is_fresh"):
             self._repository.complete_job(
@@ -641,7 +651,8 @@ def _resolve_artist(context: dict[str, object], mirror: _Mirror) -> dict[str, ob
         # member of are separate artists with their own MBIDs (Alice Cooper and his 1969-73
         # band), split per album like any other same-named artists.
         return {"classification": "per_album", "artists": artists, "confidence": 1,
-                "album_identities": _album_identities(decision["certain"], albums),
+                "album_identities": _album_identities(decision["certain"], albums)
+                + _undecided_album_identities(decision, albums, mirror),
                 "evidence_summary": f"Your albums belong to {len(artists)} MusicBrainz artists."}
     if classification == "not_found":
         return {"classification": "not_found",
@@ -688,6 +699,76 @@ def _album_identities(certain: dict[int, dict[str, object]], albums: list[dict[s
             "release_mbid": evidence.get("release_id"), "disc_position": evidence.get("disc"),
             "signals": sorted(evidence.get("signals") or ()), "tag_differs": not owner.get("name_agrees"),
         })
+    return identities
+
+
+# A split name's undecided albums looked up by recordings, at most this many per artist and run.
+_UNDECIDED_ALBUM_LIMIT = 20
+
+
+def _undecided_album_identities(decision: dict[str, object], albums: list[dict[str, object]],
+                                mirror: _Mirror) -> list[dict[str, object]]:
+    """Owner 2026-11-18: an album no candidate certainly holds goes to the candidate a sample
+    of its recordings leads to; only an album with no recordings evidence falls back to the
+    folder it shares with one candidate's decided albums. Recordings and folder that disagree,
+    or several candidates holding the sample, leave it undecided. An owner's choice is kept."""
+    owners = {str(owner["mbid"]): owner for owner in decision.get("candidates") or []}
+    candidates = list(owners)
+    certain = decision.get("certain") or {}
+    decided_folders: dict[str, set[str]] = {mbid: set() for mbid in candidates}
+
+    def note_decided(index: int, mbid: str) -> None:
+        folders = album_folders(albums[index].get("folders") or [])
+        if folders and mbid in decided_folders:
+            decided_folders[mbid].add(folders[1].casefold())
+
+    kept = set(certain)
+    for index, owner in certain.items():
+        note_decided(index, str(owner["mbid"]))
+    for index, album in enumerate(albums):
+        identity = album.get("identity") or {}
+        if identity.get("source") == "manual":
+            kept.add(index)
+            note_decided(index, str(identity.get("mbid") or ""))
+    undecided = [index for index in range(len(albums)) if index not in kept][:_UNDECIDED_ALBUM_LIMIT]
+    mirror.remaining = max(mirror.remaining, 3 * len(undecided))
+
+    def identity_for(index: int, mbid: str, evidence: dict[str, object]) -> dict[str, object]:
+        return {"local_album_id": albums[index].get("id"), "local_title": albums[index].get("title"),
+                "artist_mbid": mbid, "tag_differs": not owners[mbid].get("name_agrees"), **evidence}
+
+    identities, fallback = [], []
+    for index in undecided:
+        sample = recording_sample(albums[index].get("tracks") or [])
+        results: dict[str, list[dict[str, object]]] = {}
+        for title in sample:
+            try:
+                found = mirror.call("search_recordings", title, candidates,
+                                    accept=("complete", "not_found", "invalid_request"))
+            except _ProviderFailure:
+                found = None
+            if found is None:  # budget spent or the mirror failed: this album stays unchecked
+                results = {}
+                break
+            results[title] = found.get("recordings") or []
+        if sample and len(results) < len(sample):
+            continue
+        outcome = decide_by_recordings(sample, results, candidates) if sample else {"outcome": "none", "found": {}}
+        if outcome["outcome"] == "decided":
+            mbid = str(outcome["artist_mbid"])
+            identities.append(identity_for(index, mbid, {
+                "method": outcome["method"], "sampled_titles": sample, "found": outcome["found"],
+                "release_mbid": outcome.get("release_mbid")}))
+            note_decided(index, mbid)
+        elif outcome["outcome"] != "tie":
+            fallback.append((index, {mbid for mbid, count in outcome["found"].items() if count}))
+    for index, weak_artists in fallback:
+        folders = album_folders(albums[index].get("folders") or [])
+        owner = decide_by_folder(folders[1].casefold(), decided_folders) if folders else None
+        if owner is None or (weak_artists and weak_artists != {owner}):
+            continue
+        # The artist folder relative to its library root; never an absolute path.
+        identities.append(identity_for(index, owner, {"method": "folder", "folder": folders[1].partition(":")[2]}))
     return identities
 
 

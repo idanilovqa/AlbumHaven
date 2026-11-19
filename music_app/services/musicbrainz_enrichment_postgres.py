@@ -296,6 +296,42 @@ class MusicBrainzEnrichmentPostgresRepository:
         row = self._execute_one(sql, params)
         return row or None
 
+    def load_album_folders(self, *, job_id: int, worker_id: str) -> dict[int, list[str]]:
+        """Each album of the leased job's artist: the folders holding its files, as "<root id>:
+        <path under that root>" with forward slashes, for a split name's folder fallback (owner
+        2026-11-18). Kept apart from the artist context, which carries no file paths; this
+        returns no absolute path either."""
+        params = {
+            "job_id": _positive_id(job_id),
+            "worker_id": _bounded_text(worker_id, 128, required=True),
+        }
+        with self._connect(self._database_url) as connection:
+            rows = connection.execute(_active_library_cte() + """
+                select album_tracks.album_id,
+                       json_agg(distinct roots.id::text || ':' || case
+                         when strpos(under_root.rest, '/') > 0
+                         then regexp_replace(under_root.rest, '/[^/]*$', '') else '' end) as folders
+                from active_library
+                join ops.metadata_enrichment_jobs jobs
+                  on jobs.library_id = active_library.library_id and jobs.id = %(job_id)s
+                 and jobs.target_kind = 'artist' and jobs.state = 'leased' and jobs.lease_owner = %(worker_id)s
+                join library.local_albums albums
+                  on albums.library_id = jobs.library_id and albums.artist_id = jobs.local_artist_id
+                join library.local_tracks album_tracks
+                  on album_tracks.library_id = albums.library_id and album_tracks.album_id = albums.id
+                join library.local_track_files files
+                  on files.track_id = album_tracks.id and files.scan_cache_stale is false
+                join library.library_roots roots on roots.id = files.library_root_id
+                cross join lateral (
+                  select substr(translate(files.private_path, chr(92), '/'),
+                                length(rtrim(translate(roots.root_path, chr(92), '/'), '/')) + 2) as rest
+                ) under_root
+                where starts_with(lower(translate(files.private_path, chr(92), '/')),
+                                  lower(rtrim(translate(roots.root_path, chr(92), '/'), '/')) || '/')
+                group by album_tracks.album_id
+            """, params).fetchall()
+        return {int(_row_mapping(row)["album_id"]): list(_row_mapping(row)["folders"] or []) for row in rows}
+
     def load_artist_context(
         self,
         *,
@@ -351,9 +387,16 @@ class MusicBrainzEnrichmentPostgresRepository:
               select json_agg(json_build_object(
                        'id', album_rows.id, 'title', album_rows.title, 'year', album_rows.release_year,
                        'lastfm_release_mbid', album_rows.lastfm_release_mbid,
-                       'tracks', album_rows.tracks) order by album_rows.title) as albums
+                       'tracks', album_rows.tracks,
+                       'identity', album_rows.identity) order by album_rows.title) as albums
               from (
                 select local_albums.id, local_albums.title, local_albums.release_year,
+                       -- The album's stored artist identity, so an owner's choice is kept and counts
+                       -- as a decided neighbour.
+                       (select json_build_object('mbid', identity.artist_mbid::text, 'source', identity.decision_source)
+                        from library.local_album_artist_identities identity
+                        where identity.library_id = local_albums.library_id
+                          and identity.album_key = local_albums.album_key) as identity,
                        -- An album-level identifier counts only once its title agrees.
                        case when local_albums.evidence_source = 'lastfm.public.albums'
                             then local_albums.mbid::text end as lastfm_release_mbid,
@@ -1457,9 +1500,33 @@ def _album_identities(identities: object) -> str:
                 "release_mbid": _optional_mbid(item.get("release_mbid")),
                 "disc_position": _integer(item.get("disc_position")) or None,
                 "signals": sorted({str(signal) for signal in item.get("signals") or () if str(signal) in _ALBUM_SIGNALS}),
+                # A split name's undecided album (owner 2026-11-18): how it was decided.
+                **_undecided_album_evidence(item),
             },
         })
     return json.dumps(rows)
+
+
+_UNDECIDED_ALBUM_METHODS = frozenset({"recordings", "release", "folder"})
+
+
+def _undecided_album_evidence(item: Mapping[str, object]) -> dict[str, object]:
+    """The recordings sample and the counts it found, or the artist folder relative to its
+    library root (never an absolute path)."""
+    method = str(item.get("method") or "")
+    if method not in _UNDECIDED_ALBUM_METHODS:
+        return {}
+    evidence: dict[str, object] = {"method": method}
+    if method == "folder":
+        folder = _bounded_text(item.get("folder"), 512)
+        if folder and not (folder.startswith(("/", "\\")) or ":" in folder[:3]):
+            evidence["folder"] = folder
+        return evidence
+    found = item.get("found") if isinstance(item.get("found"), Mapping) else {}
+    evidence["sampled_titles"] = [_bounded_text(title, 512) for title in list(item.get("sampled_titles") or [])[:3]]
+    evidence["found"] = {mbid: int(count) for mbid, count in
+                         ((_optional_mbid(key), _integer(value)) for key, value in found.items()) if mbid}
+    return evidence
 
 
 def _optional_mbid(value: object) -> str | None:

@@ -644,3 +644,22 @@ def test_albums_of_several_musicbrainz_artists_store_each_album_s_identity():
     assert (stored["state"], stored["artist"], stored["album_identities"], stored["identity_artists"]) == (
         "per_album", None, identities, artists)
     assert repository.candidate_replacements == []
+
+
+def test_each_album_reaches_the_matcher_with_its_root_relative_folders():
+    """A split name's folder fallback (owner 2026-11-18): the worker adds the folders, loaded
+    apart from the path-free artist context, to each album."""
+    api = enrichment_api()
+    repository = Repository()
+    repository.claims.append({"id": 19, "local_artist_id": 42, "attempt_count": 0})
+    repository.contexts[19] = {"local_artist_id": 42, "local_name": "Amarok", "manual_decision": False,
+                               "albums": [{"id": 1, "title": "Hope"}, {"id": 2, "title": "Live"}]}
+    repository.load_album_folders = lambda *, job_id, worker_id: (
+        {1: ["3:Amarok PL/Hope"]} if (job_id, worker_id) == (19, "worker-a") else {})
+    resolver = Resolver({"classification": "not_found", "evidence_summary": "No MusicBrainz artist has this name."})
+    processor = api.MusicBrainzArtistEnrichmentProcessor(
+        repository=repository, client=object(), resolve_artist=resolver, now=lambda: NOW)
+
+    processor.process_next(worker_id="worker-a")
+
+    assert [album["folders"] for album in resolver.calls[0][0]["albums"]] == [["3:Amarok PL/Hope"], []]

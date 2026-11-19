@@ -508,6 +508,35 @@ class MusicBrainzClient:
             })
         return {"classification": "complete" if releases else "not_found", "releases": releases}
 
+    def search_recordings(self, title: object, artist_mbids: list[object], *, limit: int = 25) -> JsonDict:
+        """Recordings titled like a local track and credited to one of ``artist_mbids``, with
+        each one's credited artists and the releases it is on (a split name's undecided album,
+        owner 2026-11-18)."""
+        query_title = _text(title)
+        artists = [mbid for mbid in (_valid_mbid(value) for value in artist_mbids) if mbid]
+        if not query_title or not artists:
+            return {"classification": "invalid_request", "recordings": []}
+        query_text = (f'recording:"{_escape_phrase(query_title)}" AND ('
+                      + " OR ".join(f"arid:{mbid}" for mbid in artists) + ")")
+        query = urllib.parse.urlencode({"query": query_text, "fmt": "json", "limit": max(1, min(int(limit), 100))})
+        payload, transport = self.get_json(f"{self.base_url}/recording/?{query}", self.user_agent)
+        if not isinstance(payload, dict):
+            return {"classification": _transport_classification(transport), "recordings": [], "transport": transport}
+        recordings: list[JsonDict] = []
+        for raw in payload.get("recordings") or []:
+            if not isinstance(raw, dict):
+                continue
+            recordings.append({
+                "id": _valid_mbid(raw.get("id")), "title": _text(raw.get("title")),
+                "artist_mbids": [mbid for mbid in (
+                    _valid_mbid((credit.get("artist") or {}).get("id"))
+                    for credit in raw.get("artist-credit") or [] if isinstance(credit, dict)) if mbid],
+                "release_mbids": [mbid for mbid in (
+                    _valid_mbid(release.get("id")) for release in raw.get("releases") or []
+                    if isinstance(release, dict)) if mbid],
+            })
+        return {"classification": "complete" if recordings else "not_found", "recordings": recordings}
+
     def search_releases_by_barcode(self, barcode: object) -> JsonDict:
         """Releases carrying this barcode (a Discogs release's barcode leads back to MusicBrainz)."""
         digits = re.sub(r"\D", "", _text(barcode))

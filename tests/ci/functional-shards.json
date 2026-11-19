@@ -1063,6 +1063,13 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/loops.functional.spec.js",
+              "case": "FTC-PLAYER-025 the first song played right after sign-in draws its own waveform about a second after it starts",
+              "area": "loops"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/nonAlbumRarity.spec.js",
               "case": "FTC-NON-ALBUM-012 renders exception groups as the approved compact track table",
               "area": "album-details"

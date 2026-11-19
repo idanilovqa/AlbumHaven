@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import threading
 from pathlib import Path
 
 import pytest
@@ -995,6 +996,139 @@ def test_waveform_registry_rejects_cache_hit_when_file_identity_changes_during_l
         assert cache.put_calls[0]["peaks"] is built
         assert cache.put_calls[0]["file_size_bytes"] == current_stat.st_size
         assert cache.put_calls[0]["modified_at_ns"] == current_stat.st_mtime_ns
+
+    asyncio.run(scenario())
+
+
+def test_waveform_registry_playing_song_build_does_not_wait_for_a_slow_cache_read(tmp_path):
+    async def scenario() -> None:
+        path = tmp_path / "playing.flac"
+        path.write_bytes(b"playing-source")
+        built = WaveformPeaks(left=(0.5,) * BIN_COUNT, right=(0.5,) * BIN_COUNT, sample_count=BIN_COUNT)
+        release_read = threading.Event()
+        writes: list[WaveformPeaks] = []
+
+        class SlowCacheDouble:
+            def get_for_path(self, **_kwargs):
+                release_read.wait(5)
+                return None
+
+            def put_for_path(self, **kwargs):
+                writes.append(kwargs["peaks"])
+                return True
+
+        async def builder(_path: Path, *, bins: int, cancel_event: asyncio.Event, current: bool = False):
+            return built
+
+        registry = WaveformPeaksRegistry(builder=builder, cache_repository=SlowCacheDouble())
+        try:
+            assert await asyncio.wait_for(
+                registry.run(path, bins=BIN_COUNT, current=True), timeout=1
+            ) is built
+        finally:
+            release_read.set()
+        assert writes == [built]
+
+    asyncio.run(scenario())
+
+
+def test_waveform_registry_cache_hit_answers_playing_song_and_stops_its_build(tmp_path):
+    async def scenario() -> None:
+        path = tmp_path / "cached-playing.flac"
+        path.write_bytes(b"cached-source")
+        cached = WaveformPeaks(left=(0.25,) * BIN_COUNT, right=(0.25,) * BIN_COUNT, sample_count=BIN_COUNT)
+        entered = asyncio.Event()
+        stopped: list[bool] = []
+        loop = asyncio.get_running_loop()
+
+        class CacheDouble:
+            def get_for_path(self, **_kwargs):
+                asyncio.run_coroutine_threadsafe(entered.wait(), loop).result(5)
+                return cached
+
+            def put_for_path(self, **_kwargs):
+                raise AssertionError("a cache hit must not be rewritten")
+
+        async def builder(_path: Path, *, bins: int, cancel_event: asyncio.Event, current: bool = False):
+            entered.set()
+            await cancel_event.wait()
+            stopped.append(True)
+            raise asyncio.CancelledError()
+
+        registry = WaveformPeaksRegistry(builder=builder, cache_repository=CacheDouble())
+        assert await asyncio.wait_for(
+            registry.run(path, bins=BIN_COUNT, current=True), timeout=1
+        ) is cached
+        for _ in range(20):
+            if registry.active_job_count == 0:
+                break
+            await asyncio.sleep(0.01)
+        assert stopped == [True]
+        assert registry.active_job_count == 0
+
+    asyncio.run(scenario())
+
+
+def test_waveform_registry_failed_playing_song_build_still_answers_from_the_cache(tmp_path):
+    async def scenario() -> None:
+        path = tmp_path / "cached-broken-build.flac"
+        path.write_bytes(b"cached-source")
+        cached = WaveformPeaks(left=(0.25,) * BIN_COUNT, right=(0.25,) * BIN_COUNT, sample_count=BIN_COUNT)
+        release_read = threading.Event()
+
+        class SlowHitDouble:
+            def get_for_path(self, **_kwargs):
+                release_read.wait(5)
+                return cached
+
+            def put_for_path(self, **_kwargs):
+                raise AssertionError("a failed build must not write")
+
+        async def builder(_path: Path, *, bins: int, cancel_event: asyncio.Event, current: bool = False):
+            release_read.set()
+            raise RuntimeError("decoder unavailable")
+
+        registry = WaveformPeaksRegistry(builder=builder, cache_repository=SlowHitDouble())
+        assert await asyncio.wait_for(
+            registry.run(path, bins=BIN_COUNT, current=True), timeout=2
+        ) is cached
+
+    asyncio.run(scenario())
+
+
+def test_waveform_registry_shows_finished_peaks_before_the_cache_write(tmp_path):
+    async def scenario() -> None:
+        path = tmp_path / "slow-write.flac"
+        path.write_bytes(b"slow-write-source")
+        built = WaveformPeaks(left=(0.75,) * BIN_COUNT, right=(0.75,) * BIN_COUNT, sample_count=BIN_COUNT)
+        release_write = threading.Event()
+        shown: list[WaveformPeaks] = []
+
+        class SlowWriteDouble:
+            def get_for_path(self, **_kwargs):
+                return None
+
+            def put_for_path(self, **_kwargs):
+                release_write.wait(5)
+                return True
+
+        async def builder(_path: Path, *, bins: int, cancel_event: asyncio.Event, current: bool = False):
+            return built
+
+        registry = WaveformPeaksRegistry(builder=builder, cache_repository=SlowWriteDouble())
+        run = asyncio.create_task(
+            registry.run(path, bins=BIN_COUNT, current=True, on_progress=shown.append)
+        )
+        try:
+            for _ in range(100):
+                if shown:
+                    break
+                await asyncio.sleep(0.01)
+            assert shown == [built]
+            assert not run.done()
+        finally:
+            release_write.set()
+        assert await asyncio.wait_for(run, timeout=1) is built
 
     asyncio.run(scenario())
 

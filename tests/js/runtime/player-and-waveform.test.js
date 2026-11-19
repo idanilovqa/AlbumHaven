@@ -298,8 +298,10 @@ async function run() {
 
     context.setCurrentPlayerTrack(track);
 
-    assert.equal(requests.length, 1, 'track selection probes Postgres waveform cache immediately');
-    assert.match(requests[0].url, /(?:\?|&)cachedOnly=1(?:&|$)/);
+    assert.equal(requests.length, 1, 'track selection asks for the playing song waveform at once');
+    assert.match(requests[0].url, /(?:\?|&)priority=current(?:&|$)/);
+    assert.match(requests[0].url, /(?:\?|&)progressive=1(?:&|$)/);
+    assert.doesNotMatch(requests[0].url, /cachedOnly/);
     const readiness = context.handleStreamingPlaybackWaveformReady({
       generation: 7,
       currentPath: track.path,
@@ -308,7 +310,7 @@ async function run() {
     assert.equal(
       requests.length,
       1,
-      'audio readiness must await the in-flight cache-only probe instead of starting a duplicate build request',
+      'audio readiness joins the request already in flight instead of asking again',
     );
     cachedHit.resolve({ ok: true, status: 200, json: async () => peakPayload(0.75) });
     await readiness;
@@ -325,16 +327,13 @@ async function run() {
     const requests = [];
     const { context } = loadWaveformSelectionRuntime(async (url) => {
       requests.push(String(url));
-      if (requests.length === 1) return { ok: false, status: 204 };
       return { ok: true, status: 200, json: async () => peakPayload(0.5) };
     });
     const track = { path: 'C:/Music/uncached.flac', title: 'Uncached' };
 
     context.setCurrentPlayerTrack(track);
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(context.state.player.waveform.compactPeaks, null);
-    assert.equal(requests.length, 1, 'a cache miss does not start waveform generation during selection');
-    assert.match(requests[0], /(?:\?|&)cachedOnly=1(?:&|$)/);
+    assert.equal(requests.length, 1, 'an uncached song starts building as it starts playing');
+    assert.match(requests[0], /(?:\?|&)priority=current(?:&|$)/, 'the playing song builds first');
 
     await context.handleStreamingPlaybackWaveformReady({
       generation: 7,
@@ -342,9 +341,7 @@ async function run() {
       continuityPath: '',
     });
 
-    assert.equal(requests.length, 2, 'audio readiness retains the existing waveform build fallback');
-    assert.doesNotMatch(requests[1], /(?:\?|&)cachedOnly=1(?:&|$)/);
-    assert.match(requests[1], /(?:\?|&)priority=current(?:&|$)/, 'the playing song builds first');
+    assert.equal(requests.length, 1, 'audio readiness never asks for the playing song twice');
     assert.equal(context.state.player.waveform.compactPeaks.data.left[0], 0.5);
   }
 
@@ -365,7 +362,7 @@ async function run() {
 
     assert.equal(requests.length, 1);
     assert.equal(context.state.player.waveform.compactPeaks, null,
-      'a stale cache-only response never publishes into a newer path or generation');
+      'a stale response never publishes into a newer path or generation');
   }
 
   {

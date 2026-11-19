@@ -884,6 +884,24 @@ class WaveformPeaksRegistry:
             return None
         return cached if isinstance(cached, WaveformPeaks) else None
 
+    async def _get_stable_cached(
+        self,
+        path: Path,
+        *,
+        bins: int,
+        identity: dict[str, object],
+    ) -> WaveformPeaks | None:
+        """A cache hit counts only if the file did not change while it was read."""
+        cached = await self._get_cached(identity)
+        if cached is None:
+            return None
+        try:
+            current_identity = self._cache_identity(path, bins=bins)
+        except OSError as error:
+            _LOGGER.warning("Waveform peak cache identity failed: %s", error)
+            return None
+        return cached if current_identity == identity else None
+
     async def get_cached(self, path: Path, *, bins: int) -> WaveformPeaks | None:
         self._ensure_open()
         if self._decoder_pool is not None:
@@ -894,14 +912,9 @@ class WaveformPeaksRegistry:
         except OSError as error:
             _LOGGER.warning("Waveform peak cache identity failed: %s", error)
             return None
-        cached = await self._get_cached(cache_identity)
-        try:
-            current_cache_identity = self._cache_identity(path, bins=bins)
-        except OSError as error:
-            _LOGGER.warning("Waveform peak cache identity failed: %s", error)
-            current_cache_identity = None
+        cached = await self._get_stable_cached(path, bins=bins, identity=cache_identity)
         self._ensure_open()
-        return cached if current_cache_identity == cache_identity else None
+        return cached
 
     async def _build_and_cache(
         self,
@@ -930,6 +943,8 @@ class WaveformPeaksRegistry:
         repository = self._cache_repository
         if repository is None or cache_identity is None or job.cancel_event.is_set():
             return peaks
+        # Show the finished waveform now; the cache write can wait on a busy database.
+        job.publish(peaks)
         try:
             if self._cache_identity(path, bins=bins) != cache_identity:
                 return peaks
@@ -992,7 +1007,11 @@ class WaveformPeaksRegistry:
         current: bool = False,
         on_progress: Callable[[WaveformPeaks], None] | None = None,
     ) -> WaveformPeaks:
-        """Return the song's peaks; `on_progress` sees the waveform built so far."""
+        """Return the song's peaks; `on_progress` sees the waveform built so far.
+
+        The playing song's build starts without waiting for the cache read, which can take
+        seconds on a busy database; a cache hit that arrives first answers and stops it.
+        """
         self._ensure_open()
         cache_identity: dict[str, object] | None = None
         if self._cache_repository is not None:
@@ -1000,20 +1019,28 @@ class WaveformPeaksRegistry:
                 cache_identity = self._cache_identity(path, bins=bins)
             except OSError as error:
                 _LOGGER.warning("Waveform peak cache identity failed: %s", error)
-            if cache_identity is not None:
-                cached = await self._get_cached(cache_identity)
-                if cached is not None:
-                    try:
-                        current_cache_identity = self._cache_identity(path, bins=bins)
-                    except OSError as error:
-                        _LOGGER.warning("Waveform peak cache identity failed: %s", error)
-                        cache_identity = None
-                    else:
-                        if current_cache_identity == cache_identity:
-                            self._ensure_open()
-                            return cached
-                        cache_identity = current_cache_identity
-        job = self._admit(path, bins=bins, current=current, cache_identity=cache_identity)
+        cache_read: asyncio.Task[WaveformPeaks | None] | None = None
+        if cache_identity is not None and current:
+            cache_read = asyncio.create_task(
+                self._get_stable_cached(path, bins=bins, identity=cache_identity)
+            )
+        elif cache_identity is not None:
+            cached = await self._get_stable_cached(path, bins=bins, identity=cache_identity)
+            self._ensure_open()
+            if cached is not None:
+                return cached
+            try:
+                # The file may have changed while the cache was read.
+                cache_identity = self._cache_identity(path, bins=bins)
+            except OSError as error:
+                _LOGGER.warning("Waveform peak cache identity failed: %s", error)
+                cache_identity = None
+        try:
+            job = self._admit(path, bins=bins, current=current, cache_identity=cache_identity)
+        except BaseException:
+            if cache_read is not None:
+                cache_read.cancel()
+            raise
         task = job.task
         assert task is not None
         job.waiters += 1
@@ -1022,6 +1049,17 @@ class WaveformPeaksRegistry:
             if job.partial is not None:
                 on_progress(job.partial)
         try:
+            if cache_read is not None:
+                await asyncio.wait({cache_read, task}, return_when=asyncio.FIRST_COMPLETED)
+                if task.done() and not task.cancelled() and task.exception() is not None:
+                    # A failed build still answers from the cache when the cache has it.
+                    await asyncio.wait({cache_read})
+                cached = cache_read.result() if cache_read.done() else None
+                if cached is not None:
+                    self._ensure_open()
+                    if job.waiters == 1 and not task.done():
+                        job.stop()
+                    return cached
             return await asyncio.shield(task)
         except asyncio.CancelledError:
             if job.waiters == 1 and not task.done():
@@ -1037,6 +1075,8 @@ class WaveformPeaksRegistry:
                         await asyncio.shield(task)
             raise
         finally:
+            if cache_read is not None:
+                cache_read.cancel()
             job.waiters -= 1
             job.listeners.discard(on_progress)
 

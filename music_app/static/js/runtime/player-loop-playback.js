@@ -247,13 +247,13 @@ function setCurrentPlayerTrack(track, options = {}) {
   state.player.current = track;
   state.player.timelineDragging = false;
   state.player.timelineDragPreviewSeconds = null;
-  if (typeof probeCachedWaveformPeaks === 'function') {
-    const cachedWaveformProbe = probeCachedWaveformPeaks(
+  if (typeof loadPlayingWaveformPeaks === 'function') {
+    const playingWaveform = loadPlayingWaveformPeaks(
       String(track?.path || ''),
       Number(state.player.streaming?.generation) || 0,
     );
-    if (cachedWaveformProbe && typeof cachedWaveformProbe.catch === 'function') {
-      void cachedWaveformProbe.catch(() => {});
+    if (playingWaveform && typeof playingWaveform.catch === 'function') {
+      void playingWaveform.catch(() => {});
     }
   }
   state.player.waveform.renderToken += 1;

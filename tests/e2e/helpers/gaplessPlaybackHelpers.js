@@ -431,6 +431,7 @@ export function observeWaveformTraffic(page) {
   const matches = (record, criteria) => (
     (!criteria.path || record.path === criteria.path)
     && (criteria.cachedOnly === undefined || record.cachedOnly === criteria.cachedOnly)
+    && (criteria.priority === undefined || record.priority === criteria.priority)
     && (criteria.status === undefined || record.response?.status === criteria.status)
   );
   const notifyWaiters = (record) => {
@@ -448,6 +449,7 @@ export function observeWaveformTraffic(page) {
     if (request.method() !== 'GET' || url.pathname !== '/playback/waveform') return;
     requests.push({
       cachedOnly: url.searchParams.get('cachedOnly') === '1',
+      priority: url.searchParams.get('priority') || '',
       path: String(url.searchParams.get('path') || ''),
       requestedAtEpochMs: Date.now(),
       request,
@@ -461,7 +463,9 @@ export function observeWaveformTraffic(page) {
     const receivedAtEpochMs = Date.now();
     let payload = null;
     try {
-      payload = await response.json();
+      // A playing song's build streams NDJSON lines; its last line is the complete waveform.
+      const lines = (await response.text()).split('\n').filter((line) => line.trim());
+      payload = lines.length ? JSON.parse(lines.at(-1)) : null;
     } catch {
       payload = null;
     }
@@ -498,6 +502,7 @@ export function observeWaveformTraffic(page) {
           waiters.delete(waiter);
           const seen = requests.slice(afterMark).map((record) => ({
             cachedOnly: record.cachedOnly,
+            priority: record.priority,
             status: record.response?.status ?? 'no response',
           }));
           reject(new Error(
@@ -867,8 +872,9 @@ export function assertPersistentWaveformCacheContract(expect, {
   requests,
   response,
 }) {
+  // The playing song asks once, and a persisted waveform answers that request from the cache.
   expect(requests).toHaveLength(1);
-  expect(requests[0].cachedOnly).toBe(true);
+  expect(requests[0].priority).toBe('current');
   expect(requests[0].response?.status).toBe(200);
   expect(response.response.status).toBe(200);
   expect(response.response.payload?.sampleCount).toBe(720);

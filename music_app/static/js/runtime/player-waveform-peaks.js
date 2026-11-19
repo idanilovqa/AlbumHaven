@@ -7,7 +7,6 @@ const PLAYER_WAVEFORM_BUSY_RETRY_MAX_DELAY_MS = 2000;
 const playerWaveformPeakCache = new Map();
 // Pending peak requests: whether each is for the playing song, and how to stop it.
 const playerWaveformPeakRequests = new WeakMap();
-const playerWaveformPeakProbes = new Map();
 const savedLoopWaveformPeakCache = new Map();
 let playerWaveformPeakGeneration = null;
 let playerWaveformPeakController = null;
@@ -30,9 +29,6 @@ function cancelWaveformPeakLoads(generation) {
   const prefix = `${generation}\u0000`;
   for (const identity of playerWaveformPeakCache.keys()) {
     if (identity.startsWith(prefix)) playerWaveformPeakCache.delete(identity);
-  }
-  for (const identity of playerWaveformPeakProbes.keys()) {
-    if (identity.startsWith(prefix)) playerWaveformPeakProbes.delete(identity);
   }
   if (playerWaveformPeakCurrentIdentity?.startsWith(prefix)) {
     playerWaveformPeakCurrentIdentity = null;
@@ -214,18 +210,6 @@ async function loadWaveformPeaks(
     // This song is playing now: stop its prefetch and ask again at the playing song's priority.
     pending.controller.abort();
   }
-  const pendingProbe = playerWaveformPeakProbes.get(identity);
-  if (pendingProbe) {
-    let probed = null;
-    try {
-      probed = await pendingProbe;
-    } catch (_error) {
-      probed = null;
-    }
-    if (probed) return probed;
-    if (playerWaveformPeakController?.signal.aborted
-        || state.player.streaming.generation !== generation) return null;
-  }
   const generationSignal = playerWaveformPeakController.signal;
   const controller = new AbortController();
   const abortWithGeneration = () => controller.abort();
@@ -277,71 +261,23 @@ async function loadWaveformPeaks(
   return request;
 }
 
-async function probeCachedWaveformPeaks(path, generation = 0) {
+// Starting a song asks for its waveform with the stream: the server answers a cached one at
+// once and otherwise builds it while playback starts, drawing it as it builds.
+async function loadPlayingWaveformPeaks(path, generation = 0) {
   const rawPath = String(path || '');
   if (!rawPath) return null;
-  if (playerWaveformPeakGeneration !== generation) {
-    playerWaveformPeakController?.abort();
-    playerWaveformPeakController = new AbortController();
-    playerWaveformPeakGeneration = generation;
-    playerWaveformPeakCurrentIdentity = null;
-  } else if (!playerWaveformPeakController) {
-    playerWaveformPeakController = new AbortController();
-  }
-  const identity = `${generation}\u0000${PLAYER_WAVEFORM_DETAIL_PEAK_COUNT}\u0000${rawPath}`;
-  let peaks = null;
-  if (playerWaveformPeakCache.has(identity)) {
-    const cached = playerWaveformPeakCache.get(identity);
-    playerWaveformPeakCache.delete(identity);
-    playerWaveformPeakCache.set(identity, cached);
-    try {
-      peaks = await cached;
-    } catch (_error) {
-      return null;
-    }
-  } else if (playerWaveformPeakProbes.has(identity)) {
-    try {
-      peaks = await playerWaveformPeakProbes.get(identity);
-    } catch (_error) {
-      return null;
-    }
-  } else {
-    const controller = playerWaveformPeakController;
-    let probe;
-    try {
-      probe = (async () => {
-        const query = new URLSearchParams({
-          path: rawPath,
-          bins: String(PLAYER_WAVEFORM_DETAIL_PEAK_COUNT),
-          cachedOnly: '1',
-        });
-        const response = await fetch(`/playback/waveform?${query}`, { signal: controller.signal });
-        if (!response.ok || response.status !== 200) return null;
-        const cachedPeaks = validateWaveformPeakPayload(
-          await response.json(),
-          PLAYER_WAVEFORM_DETAIL_PEAK_COUNT,
-        );
-        if (!cachedPeaks || controller.signal.aborted
-            || state.player.streaming.generation !== generation) return null;
-        return cachedPeaks;
-      })();
-      playerWaveformPeakProbes.set(identity, probe);
-      peaks = await probe;
-      if (!peaks) return null;
-      playerWaveformPeakCache.delete(identity);
-      playerWaveformPeakCache.set(identity, Promise.resolve(peaks));
-      trimWaveformPeakCache();
-    } catch (_error) {
-      return null;
-    } finally {
-      if (playerWaveformPeakProbes.get(identity) === probe) {
-        playerWaveformPeakProbes.delete(identity);
-      }
-    }
-  }
+  const shown = state.player.waveform.compactPeaks;
+  // A seek or replay of the same song keeps its finished peaks.
+  const peaks = shown?.path === rawPath && shown.data && !shown.partial
+    ? shown.data
+    : await loadWaveformPeaks(rawPath, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, generation, {
+      current: true,
+    });
   if (!peaks || state.player.streaming.generation !== generation
       || String(state.player.current?.path || '') !== rawPath) return null;
-  playerWaveformPeakCurrentIdentity = identity;
+  const active = state.player.waveform.compactPeaks;
+  if (active?.path === rawPath && active.generation === generation && active.data === peaks) return peaks;
+  playerWaveformPeakCurrentIdentity = `${generation}\u0000${PLAYER_WAVEFORM_DETAIL_PEAK_COUNT}\u0000${rawPath}`;
   trimWaveformPeakCache();
   state.player.waveform.compactPeaks = { path: rawPath, generation, data: peaks };
   try {

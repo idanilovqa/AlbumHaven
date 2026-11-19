@@ -70,9 +70,13 @@ function renderTrackModalLoadingState(album) {
 
 // The open album's details could not be loaded because the server cannot be reached: the artbox
 // shows the offline cloud and the loading rows give way to the OfflineNotice line; nothing spins.
+// The album Album Details shows as unreachable, loaded again once the server answers.
+let trackModalUnreachableAlbum = null;
+
 function renderTrackModalUnreachableState(album) {
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
+  trackModalUnreachableAlbum = album;
   const message = serverUnreachableMessage('the details');
   els.subtitle.textContent = '';
   els.cover.innerHTML = `
@@ -82,6 +86,19 @@ function renderTrackModalUnreachableState(album) {
   `;
   els.list.innerHTML = `<li class="track-modal-unreachable-row">${buildOfflineNoticeHtml({ variant: 'text', message })}</li>`;
 }
+
+// The server answers again (onServerReachableAgain): Album Details still showing Offline for the
+// album it is open on loads that album (owner round 8).
+function reloadTrackModalAfterServerReachable() {
+  const album = trackModalUnreachableAlbum;
+  trackModalUnreachableAlbum = null;
+  const els = getTrackModalElements();
+  const shown = state.modalReleases?.[state.modalReleaseIndex];
+  if (!album || !els.overlay || els.overlay.hidden || !shown) return;
+  if (String(getAlbumRequestKey(shown) || '') !== String(getAlbumRequestKey(album) || '')) return;
+  openTrackModal(album);
+}
+if (typeof onServerReachableAgain === 'function') onServerReachableAgain(reloadTrackModalAfterServerReachable);
 
 function clearTrackModalRenderedState() {
   const els = getTrackModalElements();

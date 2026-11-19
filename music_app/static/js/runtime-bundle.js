@@ -2100,6 +2100,75 @@ function serverUnreachableMessage(subject) {
   return `Offline. Can't load ${subject}, check your network or try again later`;
 }
 
+// Reachability (owner round 8: after the network returned, Offline stayed for minutes). Once a
+// request finds the server unreachable, it is probed every few seconds, each probe given up after a
+// few more so a tunnel holding requests cannot stall it, and at once on the browser's `online`
+// event; the first answer, or any answered request, tells every surface showing Offline to load
+// again (onServerReachableAgain).
+const REACHABILITY_PROBE_INTERVAL_MS = 2500;
+const REACHABILITY_PROBE_TIMEOUT_MS = 4000;
+const serverReachability = { unreachable: false, probing: false, timer: 0, listening: false, listeners: new Set() };
+
+function onServerReachableAgain(listener) {
+  serverReachability.listeners.add(listener);
+  return () => serverReachability.listeners.delete(listener);
+}
+
+function isServerUnreachable() {
+  return serverReachability.unreachable;
+}
+
+function noteServerReachable() {
+  if (!serverReachability.unreachable) return;
+  serverReachability.unreachable = false;
+  clearTimeout(serverReachability.timer);
+  serverReachability.timer = 0;
+  serverReachability.listeners.forEach((listener) => {
+    try {
+      listener();
+    } catch (error) {
+      console.error('[AlbumHaven][Reachability] A surface failed to load again.', error);
+    }
+  });
+}
+
+function noteServerUnreachable() {
+  if (!serverReachability.listening && typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    serverReachability.listening = true;
+    window.addEventListener('online', () => {
+      if (serverReachability.unreachable) void probeServerReachability();
+    });
+  }
+  if (serverReachability.unreachable) return;
+  serverReachability.unreachable = true;
+  scheduleReachabilityProbe();
+}
+
+function scheduleReachabilityProbe() {
+  clearTimeout(serverReachability.timer);
+  serverReachability.timer = setTimeout(() => { void probeServerReachability(); }, REACHABILITY_PROBE_INTERVAL_MS);
+}
+
+async function probeServerReachability() {
+  if (!serverReachability.unreachable || serverReachability.probing) return;
+  serverReachability.probing = true;
+  clearTimeout(serverReachability.timer);
+  const controller = new AbortController();
+  const giveUp = setTimeout(() => controller.abort(), REACHABILITY_PROBE_TIMEOUT_MS);
+  let answered = false;
+  try {
+    const response = await fetch('/health', { cache: 'no-store', headers: { Accept: 'application/json' }, signal: controller.signal });
+    answered = response.status < 500;
+  } catch (_error) {
+    answered = false;
+  } finally {
+    clearTimeout(giveUp);
+    serverReachability.probing = false;
+  }
+  if (answered) noteServerReachable();
+  else if (serverReachability.unreachable) scheduleReachabilityProbe();
+}
+
 // While the server publishes the library, projection-backed requests answer 503
 // with a pending code. The same request repeats once per second for up to 60 s;
 // aborting init.signal cancels the wait without another request. No answer at all,
@@ -2113,14 +2182,19 @@ async function fetchRetryingPendingProjection(url, init) {
       response = await fetch(url, init);
     } catch (error) {
       // fetch rejects with a TypeError when no answer arrives; an abort is the caller's own.
-      if (error?.name === 'TypeError') error.serverUnreachable = true;
+      if (error?.name === 'TypeError') {
+        error.serverUnreachable = true;
+        noteServerUnreachable();
+      }
       throw error;
     }
     if (isGatewayFailureStatus(response.status)) {
+      noteServerUnreachable();
       throw Object.assign(new Error(`Album Haven could not be reached (${response.status}).`), {
         status: response.status, serverUnreachable: true,
       });
     }
+    noteServerReachable();
     if (response.status !== 503) return response;
     const pending = await response.clone().json().catch(() => null);
     if (!['search_projection_pending', 'gallery_projection_pending'].includes(pending?.code) || Date.now() >= deadline) return response;
@@ -16312,9 +16386,13 @@ function renderTrackModalLoadingState(album) {
 
 // The open album's details could not be loaded because the server cannot be reached: the artbox
 // shows the offline cloud and the loading rows give way to the OfflineNotice line; nothing spins.
+// The album Album Details shows as unreachable, loaded again once the server answers.
+let trackModalUnreachableAlbum = null;
+
 function renderTrackModalUnreachableState(album) {
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
+  trackModalUnreachableAlbum = album;
   const message = serverUnreachableMessage('the details');
   els.subtitle.textContent = '';
   els.cover.innerHTML = `
@@ -16324,6 +16402,19 @@ function renderTrackModalUnreachableState(album) {
   `;
   els.list.innerHTML = `<li class="track-modal-unreachable-row">${buildOfflineNoticeHtml({ variant: 'text', message })}</li>`;
 }
+
+// The server answers again (onServerReachableAgain): Album Details still showing Offline for the
+// album it is open on loads that album (owner round 8).
+function reloadTrackModalAfterServerReachable() {
+  const album = trackModalUnreachableAlbum;
+  trackModalUnreachableAlbum = null;
+  const els = getTrackModalElements();
+  const shown = state.modalReleases?.[state.modalReleaseIndex];
+  if (!album || !els.overlay || els.overlay.hidden || !shown) return;
+  if (String(getAlbumRequestKey(shown) || '') !== String(getAlbumRequestKey(album) || '')) return;
+  openTrackModal(album);
+}
+if (typeof onServerReachableAgain === 'function') onServerReachableAgain(reloadTrackModalAfterServerReachable);
 
 function clearTrackModalRenderedState() {
   const els = getTrackModalElements();
@@ -20046,6 +20137,20 @@ function setGalleryEndOffline(message) {
   if (text && message) text.textContent = message;
   notice.hidden = !message;
 }
+
+// The server answers again (onServerReachableAgain): the view that could not load loads, and a
+// gallery that could not load more continues where it stopped (owner round 8).
+function resumeGalleryAfterServerReachable() {
+  const notice = typeof document === 'undefined' ? null : document.getElementById?.('gallery-end-offline');
+  const endWasOffline = Boolean(notice && !notice.hidden);
+  setGalleryEndOffline('');
+  if (state.ui?.galleryUnreachable) {
+    void fetchAndRender(`${window.location.pathname}${window.location.search}`, false).catch(() => {});
+  } else if (endWasOffline) {
+    void loadNextRootGalleryPage();
+  }
+}
+if (typeof onServerReachableAgain === 'function') onServerReachableAgain(resumeGalleryAfterServerReachable);
 
 function fetchGalleryViewResponse(url, signal) {
   return fetchRetryingPendingProjection(url, { headers: { Accept: 'application/json' }, signal });

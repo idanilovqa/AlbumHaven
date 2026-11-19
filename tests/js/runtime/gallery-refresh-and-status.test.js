@@ -7658,3 +7658,160 @@ test('IAR-W10: more albums that cannot load end the gallery with the offline lin
   await gallery.context.loadNextRootGalleryPage();
   assert.equal(endNotice.hidden, true, 'albums that load take the line away');
 });
+
+// ---- Recovery (owner round 8: after the network returned, Offline stayed for minutes) ----
+
+// [fixture] with timers that run only when the test says, and a window that records listeners.
+function recoveringGallery() {
+  const fixture = unreachableGallery();
+  const { context } = fixture;
+  const timers = [];
+  const windowListeners = new Map();
+  context.setTimeout = (callback, delay) => { timers.push({ callback, delay }); return timers.length; };
+  context.clearTimeout = () => {};
+  context.window.addEventListener = (name, listener) => windowListeners.set(name, listener);
+  context.window.location.pathname = '/';
+  context.window.location.search = '?artist=Chris+Buck';
+  const settle = async () => { for (let turn = 0; turn < 10; turn += 1) await flushMicrotasks(); };
+  const probeAt = delay => timers.filter(timer => timer.delay === delay).at(-1);
+  return { ...fixture, timers, windowListeners, settle, probeAt };
+}
+
+test('IAR-W15: an artist that could not load loads by itself once the server answers again', async () => {
+  const { context, pendingRequests, calls, settle, probeAt } = recoveringGallery();
+  const failed = context.fetchAndRender('/view-data?artist=Chris+Buck', true);
+  pendingRequests[0].rejectWith(new TypeError('Failed to fetch'));
+  await failed;
+
+  probeAt(2500).callback();
+  await settle();
+  assert.equal(pendingRequests[1].url, '/health');
+  assert.equal(pendingRequests[1].options.cache, 'no-store');
+  pendingRequests[1].resolveWith({ status: 502, ok: false });
+  await settle();
+  assert.equal(pendingRequests.length, 2, 'a gateway answer is not the server: no reload yet');
+
+  probeAt(2500).callback();
+  await settle();
+  pendingRequests[2].resolveWith({ healthy: true });
+  await settle();
+
+  const reload = pendingRequests[3];
+  assert.match(reload.url, /^\/view-data\?.*artist=Chris\+Buck/);
+  reload.resolveWith({ selected_artist: 'Chris Buck', artist_groups: [{ artist: 'Chris Buck', albums: [{ key: 'buck::one' }] }] });
+  await settle();
+  assert.equal(calls.applyViewPayload.at(-1).artist_groups.length, 1);
+});
+
+test('IAR-W15: the browser coming back online probes at once instead of waiting', async () => {
+  const { context, pendingRequests, windowListeners, settle } = recoveringGallery();
+  const failed = context.fetchAndRender('/view-data?artist=Chris+Buck', true);
+  pendingRequests[0].rejectWith(new TypeError('Failed to fetch'));
+  await failed;
+
+  windowListeners.get('online')();
+  await settle();
+
+  assert.equal(pendingRequests[1].url, '/health');
+});
+
+test('IAR-W15: a probe that gets no answer is given up after 4 s, so a held request never stalls recovery', async () => {
+  const { context, pendingRequests, settle, timers } = recoveringGallery();
+  const failed = context.fetchAndRender('/view-data?artist=Chris+Buck', true);
+  pendingRequests[0].rejectWith(new TypeError('Failed to fetch'));
+  await failed;
+
+  timers.filter(timer => timer.delay === 2500).at(-1).callback();
+  await settle();
+  const giveUp = timers.filter(timer => timer.delay === 4000).at(-1);
+  assert.ok(giveUp, 'the probe has a 4 s limit');
+  giveUp.callback();
+  await settle();
+
+  assert.ok(timers.filter(timer => timer.delay === 2500).length >= 2, 'the next probe is scheduled');
+});
+
+test('IAR-W15: the end of a gallery that could not load more continues by itself once the server answers', async () => {
+  let online = false;
+  const gallery = capturedGallery(async (url) => {
+    if (new URL(url, 'http://localhost').pathname === '/health') return online ? jsonResponse({ status: 'ok' }) : Promise.reject(new TypeError('Failed to fetch'));
+    if (!online) throw new TypeError('Failed to fetch');
+    return jsonResponse(rootPage);
+  });
+  const text = { textContent: '' };
+  const endNotice = { hidden: true, querySelector: selector => (selector === '.offline-notice__text' ? text : null) };
+  const getElementById = gallery.context.document.getElementById;
+  gallery.context.document.getElementById = id => (id === 'gallery-end-offline' ? endNotice : getElementById(id));
+  gallery.context.state.view = retainedRootView(3);
+  assert.equal(await gallery.context.loadNextRootGalleryPage(), false);
+  assert.equal(endNotice.hidden, false);
+
+  online = true;
+  const probe = gallery.timers.at(-1);
+  probe();
+  await settleRequests();
+
+  assert.equal(endNotice.hidden, true, 'the line goes');
+  const pages = gallery.capture.urls().filter(url => new URL(url, 'http://localhost').searchParams.get('gallery_cursor'));
+  assert.equal(pages.length, 2, 'the next page is asked for again without a scroll');
+});
+
+// Request-capture contracts for recovery (tests/ci/bounded-interactions.json).
+function unreachableCapturedGallery() {
+  let up = false;
+  const gallery = capturedGallery(async (url) => {
+    if (!up) throw new TypeError('Failed to fetch');
+    return new URL(url, 'http://localhost').pathname === '/health' ? jsonResponse({ status: 'ok' }) : jsonResponse({ artist_groups: [], payload_tier: 'full' });
+  });
+  gallery.context.window.location.search = '?artist=Chris+Buck';
+  return { ...gallery, bringUp: () => { up = true; } };
+}
+
+test('request capture: once the server answers again, a view that could not load reloads once, however many failed', async () => {
+  const id = 'js:runtime/gallery-refresh-and-status.js#resumeGalleryAfterServerReachable';
+  await measureInteractionContract(id, async (failedNavigations) => {
+    const gallery = unreachableCapturedGallery();
+    for (let index = 0; index < failedNavigations; index += 1) {
+      await gallery.context.fetchAndRender('/view-data?artist=Chris+Buck', true);
+    }
+    assert.ok(gallery.context.state.ui.galleryUnreachable);
+    gallery.bringUp();
+    const before = gallery.capture.urls().length;
+    const metrics = await gallery.capture.counter.measure(async () => {
+      gallery.timers.at(-1)();
+      await settleRequests();
+    });
+    const urls = gallery.capture.urls().slice(before);
+    assert.deepEqual(urls.map(url => new URL(url, 'http://localhost').pathname), ['/health', '/view-data']);
+    assertInteractionRequests(id, urls.slice(1));
+    return metrics;
+  });
+});
+
+test('request capture: while the server is unreachable, one /health probe per tick, however many requests failed', async () => {
+  const id = 'js:runtime/pending-projection-fetch.js#serverReachability';
+  await measureInteractionContract(id, async (failedRequests) => {
+    const gallery = unreachableCapturedGallery();
+    let surfacesTold = 0;
+    gallery.context.onServerReachableAgain(() => { surfacesTold += 1; });
+    for (let index = 0; index < failedRequests; index += 1) {
+      await gallery.context.fetchRetryingPendingProjection('/view-data', {}).catch(() => {});
+    }
+    const timersBefore = gallery.timers.length;
+    const before = gallery.capture.urls().length;
+    const metrics = await gallery.capture.counter.measure(async () => {
+      gallery.timers.at(-1)();
+      await settleRequests();
+      gallery.bringUp();
+      gallery.timers.at(-1)();
+      await settleRequests();
+      gallery.capture.counter.count('timers', gallery.timers.length - timersBefore);
+      gallery.capture.counter.count('outputEmissions', surfacesTold);
+    });
+    const urls = gallery.capture.urls().slice(before);
+    assert.deepEqual(urls, ['/health', '/health']);
+    assertInteractionRequests(id, urls);
+    assert.equal(surfacesTold, 1, 'each surface is told once');
+    return metrics;
+  });
+});

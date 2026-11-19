@@ -8,6 +8,75 @@ function serverUnreachableMessage(subject) {
   return `Offline. Can't load ${subject}, check your network or try again later`;
 }
 
+// Reachability (owner round 8: after the network returned, Offline stayed for minutes). Once a
+// request finds the server unreachable, it is probed every few seconds, each probe given up after a
+// few more so a tunnel holding requests cannot stall it, and at once on the browser's `online`
+// event; the first answer, or any answered request, tells every surface showing Offline to load
+// again (onServerReachableAgain).
+const REACHABILITY_PROBE_INTERVAL_MS = 2500;
+const REACHABILITY_PROBE_TIMEOUT_MS = 4000;
+const serverReachability = { unreachable: false, probing: false, timer: 0, listening: false, listeners: new Set() };
+
+function onServerReachableAgain(listener) {
+  serverReachability.listeners.add(listener);
+  return () => serverReachability.listeners.delete(listener);
+}
+
+function isServerUnreachable() {
+  return serverReachability.unreachable;
+}
+
+function noteServerReachable() {
+  if (!serverReachability.unreachable) return;
+  serverReachability.unreachable = false;
+  clearTimeout(serverReachability.timer);
+  serverReachability.timer = 0;
+  serverReachability.listeners.forEach((listener) => {
+    try {
+      listener();
+    } catch (error) {
+      console.error('[AlbumHaven][Reachability] A surface failed to load again.', error);
+    }
+  });
+}
+
+function noteServerUnreachable() {
+  if (!serverReachability.listening && typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    serverReachability.listening = true;
+    window.addEventListener('online', () => {
+      if (serverReachability.unreachable) void probeServerReachability();
+    });
+  }
+  if (serverReachability.unreachable) return;
+  serverReachability.unreachable = true;
+  scheduleReachabilityProbe();
+}
+
+function scheduleReachabilityProbe() {
+  clearTimeout(serverReachability.timer);
+  serverReachability.timer = setTimeout(() => { void probeServerReachability(); }, REACHABILITY_PROBE_INTERVAL_MS);
+}
+
+async function probeServerReachability() {
+  if (!serverReachability.unreachable || serverReachability.probing) return;
+  serverReachability.probing = true;
+  clearTimeout(serverReachability.timer);
+  const controller = new AbortController();
+  const giveUp = setTimeout(() => controller.abort(), REACHABILITY_PROBE_TIMEOUT_MS);
+  let answered = false;
+  try {
+    const response = await fetch('/health', { cache: 'no-store', headers: { Accept: 'application/json' }, signal: controller.signal });
+    answered = response.status < 500;
+  } catch (_error) {
+    answered = false;
+  } finally {
+    clearTimeout(giveUp);
+    serverReachability.probing = false;
+  }
+  if (answered) noteServerReachable();
+  else if (serverReachability.unreachable) scheduleReachabilityProbe();
+}
+
 // While the server publishes the library, projection-backed requests answer 503
 // with a pending code. The same request repeats once per second for up to 60 s;
 // aborting init.signal cancels the wait without another request. No answer at all,
@@ -21,14 +90,19 @@ async function fetchRetryingPendingProjection(url, init) {
       response = await fetch(url, init);
     } catch (error) {
       // fetch rejects with a TypeError when no answer arrives; an abort is the caller's own.
-      if (error?.name === 'TypeError') error.serverUnreachable = true;
+      if (error?.name === 'TypeError') {
+        error.serverUnreachable = true;
+        noteServerUnreachable();
+      }
       throw error;
     }
     if (isGatewayFailureStatus(response.status)) {
+      noteServerUnreachable();
       throw Object.assign(new Error(`Album Haven could not be reached (${response.status}).`), {
         status: response.status, serverUnreachable: true,
       });
     }
+    noteServerReachable();
     if (response.status !== 503) return response;
     const pending = await response.clone().json().catch(() => null);
     if (!['search_projection_pending', 'gallery_projection_pending'].includes(pending?.code) || Date.now() >= deadline) return response;

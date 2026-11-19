@@ -92,8 +92,10 @@ export async function keptStaticPaths(page) {
   });
 }
 
-// Holds ('hold') or lets answer ('release') the app page and the copy's account check on the
-// fixture-owned app process, as a tunnel holds requests for its stopped server (FTC-IAR-W14).
+// On the fixture-owned app process: 'hold' or 'release' the app page and the copy's account check,
+// as a tunnel holds requests for its stopped server (FTC-IAR-W14); 'down' answers every request but
+// static files with a gateway's 502, as a tunnel does for its stopped server, and 'up' ends that
+// (FTC-IAR-W16).
 export async function setAppPageHold(testInfo, action) {
   const response = await fetch(coverLookupFixtureEndpoint(testInfo, '/app-page-fixture/control'), {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action }),

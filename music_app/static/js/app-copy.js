@@ -18,7 +18,10 @@
   const WORKER_URL = '/app-copy-worker.js';
   const ACCOUNT_URL = '/app-copy/account';
   const WEB_WORKER_URL = `${WORKER_URL}?mode=web`;
-  const RETRY_DELAYS_MS = [3000, 10000, 30000];
+  // While the server cannot be reached, it is asked again every few seconds, each check given up
+  // after a few more, so a tunnel holding the request never stalls the return (owner round 8).
+  const RETRY_DELAY_MS = 2500;
+  const ACCOUNT_CHECK_TIMEOUT_MS = 4000;
   const WEB_SAVE_INTERVAL_MS = 10 * 60 * 1000;
 
   function createAppCopyClient({
@@ -36,7 +39,6 @@
     let shell = null;
     let readOnly = false;
     let answered = false;
-    let retries = 0;
     let retryTimer = 0;
     // A browser's last save; a page the worker loaded from the server is already kept.
     let lastSave = marker?.getAttribute('content') === 'network' && navigator.serviceWorker?.controller
@@ -95,19 +97,23 @@
 
     async function confirmAccount() {
       clearTimeout(retryTimer);
+      const controller = new AbortController();
+      const giveUp = setTimeout(() => controller.abort(), ACCOUNT_CHECK_TIMEOUT_MS);
       let response;
       try {
         response = await fetch(ACCOUNT_URL, {
           credentials: 'same-origin', cache: 'no-store', redirect: 'manual', headers: { Accept: 'application/json' },
+          signal: controller.signal,
         });
       } catch (_error) {
         response = null;
+      } finally {
+        clearTimeout(giveUp);
       }
       if (!response || response.status >= 500) {
         setReadOnly(true);
         showNotice(true);
-        retryTimer = setTimeout(confirmAccount, RETRY_DELAYS_MS[Math.min(retries, RETRY_DELAYS_MS.length - 1)]);
-        retries += 1;
+        retryTimer = setTimeout(confirmAccount, RETRY_DELAY_MS);
         return;
       }
       const account = response.ok ? (await response.json().catch(() => null))?.account : null;
@@ -115,7 +121,6 @@
         await leaveCopy();
         return;
       }
-      retries = 0;
       answered = true;
       setReadOnly(false);
       answerListeners.forEach(listener => listener());

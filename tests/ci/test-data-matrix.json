@@ -10438,5 +10438,37 @@
       "held-answer-goes-live-in-place"
     ],
     "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/instantReturnRecovery.spec.js",
+    "case": "FTC-IAR-W15 offline, album details, an artist and more albums say Offline, and each loads again by itself within 5 s of the network returning, without a reload",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "offline-surfaces-recover-without-reload"
+    ],
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/instantReturnRecovery.spec.js",
+    "case": "FTC-IAR-W16 with the server down behind its tunnel (502), album details, an artist and more albums say Offline, and each loads again by itself within 5 s of the server answering, without a reload",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "server-down-surfaces-recover-without-reload"
+    ],
+    "ownerApproval": "pending"
   }
 ]

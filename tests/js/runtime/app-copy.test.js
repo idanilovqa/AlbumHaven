@@ -139,10 +139,12 @@ test('IAR-005: unreachable, the copy is read-only with its notice until the serv
   assert.equal(reconciled, 0);
   assert.ok(timers.length >= 1);
 
-  // A retry that still fails waits longer; the next one succeeds without a reload.
+  // Owner round 8: the server is asked again every 2.5 s, not after a growing wait; each check is
+  // given up after 4 s. The next one that succeeds needs no reload.
   await timers.at(-1).callback();
-  const delays = timers.map(timer => timer.delay);
-  assert.ok(delays[1] > delays[0]);
+  const retries = timers.filter(timer => timer.delay !== 4000).map(timer => timer.delay);
+  assert.deepEqual(retries, [2500, 2500]);
+  assert.ok(timers.some(timer => timer.delay === 4000), 'each check has a 4 s limit');
   online = true;
   listeners.get('window:online')();
   await settle();
@@ -337,7 +339,7 @@ test('bounded interaction: an unreachable copy retries one account check per tic
     });
     assert.equal(client.isReadOnly(), true);
     assert.deepEqual(env.readOnlyCalls, [true], 'the read-only state is set once, not per retry');
-    assert.equal(timers.at(-1).delay, 30000, 'retries back off to the longest delay');
+    assert.equal(timers.filter(timer => timer.delay !== 4000).at(-1).delay, 2500, 'retries stay at 2.5 s, never a growing wait');
     assert.equal(env.lastProbe.url, '/app-copy/account');
     assert.equal(reconciled, 0);
     return work;
@@ -347,7 +349,8 @@ test('bounded interaction: an unreachable copy retries one account check per tic
     small: 3,
     large: 1000,
     run,
-    budgets: { requests: 10, timers: 10, renderCommits: 0 },
+    // Per check: its 4 s limit and the next 2.5 s retry.
+    budgets: { requests: 10, timers: 20, renderCommits: 0 },
     growth: { metric: 'requests', largeMinusSmallMax: 0 },
   });
 });

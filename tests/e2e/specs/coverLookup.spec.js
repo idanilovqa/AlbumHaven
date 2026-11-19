@@ -2022,6 +2022,98 @@ test('FTC-COVERS-041 unhydrated notification opens the optimistic split chooser 
   }
 });
 
+// UI-5 (owner, 11-17): search the album, trigger a cover search, split it in Edit Tags, open the notification:
+// the split chooser must show, not Cover Look Up. The owner repeats it after merging the split back.
+test('FTC-COVERS-049 an in-app split from search results opens the split chooser from the notification', { tag: '@area:cover-providers' }, async ({
+  coverLookupActions,
+  galleryActions,
+  tagEditorActions,
+  trackModalActions,
+}) => {
+  test.setTimeout(300_000);
+  const lookup = coverLookupActions.coverLookup;
+  const splitFilenames = [12, 13, 14, 15, 16].map(
+    (number) => `${String(number).padStart(2, '0')}. Студийная запись ${number}.mp3`,
+  );
+  const searchUrl = `/?surface=albums&q=${encodeURIComponent(SPLIT_FIXTURE.album)}`;
+  const identity = { album: SPLIT_FIXTURE.album, artist: SPLIT_FIXTURE.artist, year: SPLIT_FIXTURE.year };
+  const editAlbum = async ({ album, trackCount, filenames, newName }) => {
+    await tagEditorActions.openForAlbum({
+      ...identity, album, expectedTrackCount: trackCount, galleryActions, trackModalActions,
+    });
+    if (filenames) await tagEditorActions.selectTracksByFilenames(filenames);
+    else await tagEditorActions.selectAllTracks();
+    await tagEditorActions.setAlbumName(newName);
+    await tagEditorActions.applyAndWaitForSavedFiles();
+    await trackModalActions.closeIfOpen();
+  };
+  const expectChooserFromNotification = async () => {
+    await coverLookupActions.openDrawer();
+    await coverLookupActions.waitForDrawerOpen();
+    await coverLookupActions.openTask(SPLIT_FIXTURE.album);
+    await expect(lookup.splitReleaseChooser).toBeVisible({ timeout: 10_000 });
+    await expect(lookup.modal).toBeHidden();
+    await expect(lookup.splitReleaseChoices).toHaveCount(2);
+    const names = (await lookup.splitReleaseChoices.allTextContents()).join(' ');
+    expect(names).toContain(SPLIT_FIXTURE.album);
+    expect(names).toContain(SPLIT_FIXTURE.splitAlbum);
+    await lookup.splitReleaseChooser.getByRole('button', { name: 'Close', exact: true }).click();
+    await expect(lookup.splitReleaseChooser).toBeHidden();
+    await coverLookupActions.closeDrawer();
+  };
+  let split = false;
+  let taskId = '';
+  try {
+    await galleryActions.goto(searchUrl);
+    await galleryActions.waitForGalleryReady();
+    await galleryActions.selectAlbumDetailsByIdentity(identity);
+    await trackModalActions.waitForLoadedSummary();
+    await trackModalActions.openCoverLookup();
+    await coverLookupActions.waitForModalResultsReady();
+    await coverLookupActions.setProviderFixtureMode('split-identity');
+    await coverLookupActions.holdLaterProviderFixture();
+    const task = await coverLookupActions.startSearch();
+    taskId = String(task.task?.id || '').trim();
+    expect(taskId).not.toBe('');
+    await coverLookupActions.closeModal();
+    await trackModalActions.closeIfOpen();
+
+    for (const round of ['first split', 'split after merging back']) {
+      await test.step(round, async () => {
+        await editAlbum({
+          album: SPLIT_FIXTURE.album, trackCount: 16, filenames: splitFilenames, newName: SPLIT_FIXTURE.splitAlbum,
+        });
+        split = true;
+        await expectChooserFromNotification();
+        if (round === 'first split') {
+          await editAlbum({
+            album: SPLIT_FIXTURE.splitAlbum, trackCount: splitFilenames.length, newName: SPLIT_FIXTURE.album,
+          });
+          split = false;
+        }
+      });
+    }
+  } finally {
+    await coverLookupActions.releaseLaterProviderFixture();
+    if (await lookup.splitReleaseChooser.isVisible()) {
+      await lookup.splitReleaseChooser.getByRole('button', { name: 'Close', exact: true }).click();
+    }
+    if (await lookup.modal.isVisible()) await coverLookupActions.closeModal();
+    await coverLookupActions.closeDrawer();
+    await trackModalActions.closeIfOpen();
+    if (split) {
+      await editAlbum({
+        album: SPLIT_FIXTURE.splitAlbum, trackCount: splitFilenames.length, newName: SPLIT_FIXTURE.album,
+      });
+    }
+    if (taskId) {
+      await coverLookupActions.openDrawer();
+      await coverLookupActions.clearTask(SPLIT_FIXTURE.album);
+      await coverLookupActions.closeDrawer();
+    }
+  }
+});
+
 for (const chooseSplitRelease of [false, true]) {
   const flowLabel = chooseSplitRelease ? 'chosen split release' : 'unanswered split chooser';
   test(`FTC-COVERS-047 split re-merge redirects ${flowLabel} notification to the survivor`, {

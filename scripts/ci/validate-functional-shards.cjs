@@ -14,7 +14,7 @@ const EXPECTED_SHARDS = Object.freeze([
   ['gallery-search-visual-1', 36],
   ['gallery-search-visual-2', 47],
   ['cover-providers-1', 27],
-  ['cover-providers-2', 18],
+  ['cover-providers-2', 19],
   ['metadata-mutations', 18],
   ['playback-utilities-1', 15],
   ['playback-utilities-2', 17],

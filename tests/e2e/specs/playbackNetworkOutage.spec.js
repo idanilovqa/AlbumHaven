@@ -105,6 +105,11 @@ test('FTC-PLAYBACK-OFFLINE-001 a seek past the received audio offline stays play
     });
 
     await stepLogger.step('Paused: the network goes, a seek past the received audio waits, and one Play continues it', async () => {
+    const dump = async (label) => console.log(`[DIAG001 ${label}] ` + await page.evaluate(() => JSON.stringify({
+      snap: (() => { const x = getStreamingPlaybackSnapshot(); return { mode: x.mode, paused: x.paused, t: x.currentTime, transport: x.transport, diag: { detaches: x.diagnostics?.transportDetaches, resumes: x.diagnostics?.transportResumes, lastError: x.diagnostics?.lastError, lastSocketError: x.diagnostics?.lastSocketError } }; })(),
+      engine: { detached: state.player.streaming.detached && { ...state.player.streaming.detached }, socket: state.player.streaming.socket?.readyState ?? null, gen: state.player.streaming.generation, startId: state.player.streaming.startRequestId, pendingStart: Boolean(state.player.streaming.pendingStart), controls: (state.player.streaming.pendingControls || []).map((m) => m.type), roles: Object.fromEntries(Object.entries(state.player.streaming.roles).map(([k, v]) => [k, v && { stream: v.streamId, gen: v.generation, path: String(v.track?.path || '').slice(-12), meta: v.metadataAccepted, local: v.local }])) },
+      own: (() => { const o = state.player.ownership || {}; return { lock: o.lockStatus, reason: o.blockedReason, claimed: Boolean(o.activeClaim), releaseUnanswered: Boolean(o.activeClaim?.releaseUnanswered) }; })(),
+    })));
       // The song still plays on from step 1: back near its start online, so only that part has arrived.
       const startBounds = await player.timeline.boundingBox();
       await player.timeline.click({ position: { x: startBounds.width * 0.02, y: startBounds.height / 2 } });
@@ -118,13 +123,19 @@ test('FTC-PLAYBACK-OFFLINE-001 a seek past the received audio offline stays play
       const bounds = await player.timeline.boundingBox();
       await player.timeline.click({ position: { x: bounds.width * (target / durationSeconds), y: bounds.height / 2 } });
       const heldAt = await expectHeldSilentlyAt('Play', target);
+      await dump('held');
 
       await wifiOn();
       await page.waitForTimeout(3000);
+      await dump('online');
       expect(displayedSeconds(await player.time.textContent())).toBe(heldAt);
       await expect(player.playButton).toHaveAttribute('aria-label', 'Play');
       // One press, once: it is never ignored or needs repeating.
       await player.playButton.click();
+      for (let second = 1; second <= 8; second += 1) {
+        await page.waitForTimeout(1000);
+        await dump(`after-play-${second}s`);
+      }
       await expectPlayingOnFrom(heldAt);
     });
   } finally {

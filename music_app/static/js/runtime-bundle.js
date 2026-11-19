@@ -8680,6 +8680,9 @@ function detachAtStreamingPlace(code) {
   // Another song's prepared start is restarted on the next socket; its press settles with that.
   const press = seek?.kind === 'replacement' ? { resolve: seek.resolve, reject: seek.reject } : null;
   if (press) Object.assign(seek, { resolve: null, reject: null });
+  // A start still on its way opens its song on the next socket itself: restarting the old song here
+  // would supersede it (hosted FTC-PLAYBACK-OFFLINE-002, round 8).
+  const inFlight = !press && engine.pendingStart;
   forgetLostStreamingSocket();
   engine.pendingPromotion = null;
   engine.detached = {
@@ -8687,11 +8690,15 @@ function detachAtStreamingPlace(code) {
     spliceFrame: null,
     failures: 0,
     timer: 0,
-    paused: Boolean(engine.snapshot.paused) && !starting,
+    paused: inFlight ? !inFlight.autoplay : Boolean(engine.snapshot.paused) && !starting,
   };
   engine.diagnostics.transportDetaches = (Number(engine.diagnostics.transportDetaches) || 0) + 1;
   // Connected first: the restart then asks this socket instead of opening one of its own.
   if (!engine.detached.paused) connectStreamingSocket();
+  if (inFlight) {
+    publishStreamingDiagnostics();
+    return true;
+  }
   const restart = jumpWhileDetached(track, startSeconds);
   if (press) void restart.then(press.resolve, press.reject);
   publishStreamingDiagnostics();
@@ -11091,14 +11098,26 @@ function probeStreamingTrackWaveform(track) {
   }
 }
 
-async function startBrowserStreamingTrack(track, {
+// A start until its song's role opens: a socket lost meanwhile leaves the start to open it there.
+async function startBrowserStreamingTrack(track, options = {}) {
+  const engine = streamingEngineState();
+  const pending = { autoplay: options.autoplay !== false };
+  engine.pendingStart = pending;
+  try {
+    return await openBrowserStreamingTrack(track, options, pending);
+  } finally {
+    if (engine.pendingStart === pending) engine.pendingStart = null;
+  }
+}
+
+async function openBrowserStreamingTrack(track, {
   startSeconds = 0,
   autoplay = true,
   allowSuspendedAutoplayFallback = false,
   onAutoplayStarted = null,
   keepTransportRecovery = false,
   keepDetached = false,
-} = {}) {
+} = {}, pending = null) {
   const engine = streamingEngineState();
   settlePendingBufferedSeek('superseded', { retainForAcknowledgement: true });
   if (!keepTransportRecovery) engine.pendingTransportRecovery = null;
@@ -11274,9 +11293,16 @@ async function startBrowserStreamingTrack(track, {
     requestedStartFrame: startFrame,
     timelineStartFrame: startFrame,
   });
+  // A socket lost while this start was on its way left the old song's splice behind: this song
+  // opens whole, on whichever socket connects next.
+  if (engine.detached && !keepDetached) {
+    engine.detached.kind = 'reopen';
+    engine.detached.spliceFrame = null;
+  }
   const current = openStreamingRole('current', track, startFrame);
   if (!current) return null;
   current.autoplay = autoplay;
+  if (engine.pendingStart === pending) engine.pendingStart = null;
   probeStreamingTrackWaveform(track);
   engine.node.port.postMessage({
     type: 'configure',

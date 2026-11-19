@@ -629,6 +629,8 @@ def test_asgi_view_data_uses_generation_owned_preview_during_active_scan(
     assert _decode_json(body) == {
         "view_data_source": "transient_scan_state",
         "album_count": 1,
+        # A search response carries its highlights (none here: the payload has no display text).
+        **({"search_highlights": {"query": query["q"], "texts": {}}} if "q" in query else {}),
     }
     assert len(build_calls) == 1
     assert asgi_app.state.library_state["albums"] == []
@@ -738,6 +740,7 @@ def test_asgi_active_scan_album_search_prefers_postgres_committed_library_over_t
         "album_count": 1,
         "view_data_source": "postgres_library_browse",
         "inventory_mutation_revision": 0,
+        "search_highlights": {"query": "tender", "texts": {}},
     }
     assert len(postgres_calls) == 1
 
@@ -812,6 +815,48 @@ def test_asgi_custom_collection_catalog_returns_names_and_counts_only(asgi_app, 
     assert calls == [{"category": "hoard"}]
     assert dict(headers).get(b"cache-control", dict(headers).get("cache-control")) in (
         b"private, no-store", "private, no-store")
+
+
+def test_asgi_search_catalog_and_loose_tracks_carry_search_highlights(asgi_app, monkeypatch):
+    from music_app.routes import api_read_asgi_routes as asgi_read_routes
+
+    class FakePostgresBrowseRepository:
+        def __init__(self, _config):
+            pass
+
+        def build_custom_collection_catalog_payload(self, *, query_params):
+            return {"custom_collections": [{"name": "Salt and Sal", "count": 2}, {"name": "Road trip", "count": 1}]}
+
+        def build_library_loose_tracks_payload(self, *, query_params):
+            return {"library_non_album_tracks": [{"title": "Alas de Sal", "artist": "Argovia", "path": "sal.mp3"}]}
+
+    monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FakePostgresBrowseRepository)
+    monkeypatch.setattr(asgi_read_routes, "is_library_browse_postgres_available", lambda _config: True)
+
+    _status, _headers, catalog = _run_asgi_request(
+        asgi_app, "GET", "/library/custom-collections", query={"q": "sal"},
+    )
+    _status, _headers, loose = _run_asgi_request(asgi_app, "GET", "/library/loose-tracks", query={"q": "sal"})
+    _status, _headers, unsearched = _run_asgi_request(asgi_app, "GET", "/library/custom-collections")
+
+    assert _decode_json(catalog)["search_highlights"] == {"query": "sal", "texts": {"Salt and Sal": [[0, 3], [9, 12]]}}
+    assert _decode_json(loose)["search_highlights"] == {"query": "sal", "texts": {"Alas de Sal": [[8, 11]]}}
+    assert "search_highlights" not in _decode_json(unsearched)
+
+
+def test_asgi_search_highlights_route_answers_only_bounded_requests(app):
+    asgi_app = _make_asgi_app()
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app, "POST", "/search/highlights", json_body={"q": "sal", "texts": ["Alas de Sal", "Spark"]},
+    )
+    too_many_status, _headers, _body = _run_asgi_request(
+        asgi_app, "POST", "/search/highlights", json_body={"q": "sal", "texts": ["x"] * 1001},
+    )
+
+    assert status == 200
+    assert _decode_json(body) == {"ok": True, "search_highlights": {"query": "sal", "texts": {"Alas de Sal": [[8, 11]]}}}
+    assert too_many_status == 400
 
 
 def test_asgi_search_preview_uses_postgres_without_file_backed_hydration(
@@ -899,6 +944,7 @@ def test_asgi_search_preview_uses_postgres_without_file_backed_hydration(
         "payload_tier": "search_preview",
         "view_data_source": "postgres_library_browse",
         "inventory_mutation_revision": 0,
+        "search_highlights": {"query": "Neal Morse", "texts": {}},
     }
     assert len(postgres_calls) == 1
 
@@ -1281,6 +1327,7 @@ def test_asgi_view_and_home_routes_hydrate_and_log_through_explicit_asgi_depende
         "album_count": 3,
         "artist_count": 2,
         "inventory_mutation_revision": 0,
+        "search_highlights": {"query": "mono", "texts": {}},
     }
     assert home_payload == {
         "kind": "home",
@@ -1293,8 +1340,9 @@ def test_asgi_view_and_home_routes_hydrate_and_log_through_explicit_asgi_depende
     assert build_view_kwargs["query_args"].get("q") == "mono"
     assert build_view_kwargs["query_args"].getlist("q") == ["mono", "ignored-last-query-value"]
     assert build_view_kwargs["query_args"].get("artist") == "Mono"
+    # The request log sees the payload before the response adds its search highlights.
     assert logged_calls == [
-        (view_payload, 10.0),
+        ({key: value for key, value in view_payload.items() if key != "search_highlights"}, 10.0),
         (home_payload, 20.0),
     ]
 
@@ -5847,6 +5895,8 @@ def test_asgi_gallery_pending_projection_returns_retryable_response(app, asgi_ap
 
 
 def test_library_loose_tracks_applies_request_privacy_projection(monkeypatch):
+    from starlette.datastructures import QueryParams
+
     from music_app.routes import api_read_asgi_routes as routes
 
     raw_payload = {"library_non_album_tracks": [{"path": r"C:\Music\private.flac"}]}
@@ -5855,7 +5905,7 @@ def test_library_loose_tracks_applies_request_privacy_projection(monkeypatch):
             config={},
             library_state={"inventory_mutation_revision": 9},
         )),
-        query_params={},
+        query_params=QueryParams(),
     )
 
     class FakeRepository:
@@ -5863,7 +5913,7 @@ def test_library_loose_tracks_applies_request_privacy_projection(monkeypatch):
             pass
 
         def build_library_loose_tracks_payload(self, *, query_params):
-            assert query_params == {}
+            assert not query_params
             return raw_payload
 
     monkeypatch.setattr(routes, "is_library_browse_postgres_available", lambda _config: True)

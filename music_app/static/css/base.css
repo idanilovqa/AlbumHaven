@@ -399,3 +399,13 @@ input[type='search'] {
   color: var(--muted);
   font-size: 0.88rem;
 }
+
+/* Search match highlight (owner 2026-11-18): the matched characters of a result, in a neutral tint of the
+   surrounding text colour so it reads on every palette, light or dark, selected or not. */
+mark.search-match-highlight {
+  color: inherit;
+  background: color-mix(in srgb, currentColor 24%, transparent);
+  border-radius: 3px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}

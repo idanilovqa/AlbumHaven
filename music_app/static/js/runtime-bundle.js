@@ -2288,6 +2288,75 @@ function parseUrlState(url) {
   return parseUrlStateFromUrl(url, window.location.origin);
 }
 
+// The highlight ranges the server reported, by search and display text. Search responses (view-data, Loose
+// Tracks, the Custom Collections catalog) carry them; /search/highlights answers for texts shown elsewhere. A
+// text the server was asked about and did not match is known, with no ranges. The latest few searches are kept:
+// a new search's catalog can arrive while the previous search's view is still shown.
+function searchHighlightState() {
+  state.searchHighlights ||= { byQuery: new Map(), viewSource: null };
+  return state.searchHighlights;
+}
+
+function searchHighlightTexts(query, create = false) {
+  const { byQuery } = searchHighlightState();
+  if (!byQuery.has(query) && create) {
+    byQuery.set(query, new Map());
+    while (byQuery.size > 3) byQuery.delete(byQuery.keys().next().value);
+  }
+  return byQuery.get(query) || null;
+}
+
+function activeSearchHighlightQuery() {
+  return String(state?.view?.query || '').trim();
+}
+
+function rememberSearchHighlights(highlights, askedTexts = []) {
+  const query = String(highlights?.query || '').trim();
+  const texts = highlights?.texts;
+  if (!query || !texts || typeof texts !== 'object') return;
+  const known = searchHighlightTexts(query, true);
+  for (const text of askedTexts) known.set(String(text), []);
+  for (const [text, ranges] of Object.entries(texts)) {
+    if (Array.isArray(ranges)) known.set(text, ranges);
+  }
+}
+
+function searchHighlightRanges(value) {
+  const query = activeSearchHighlightQuery();
+  if (!query) return null;
+  const viewHighlights = state.view?.search_highlights;
+  if (viewHighlights && viewHighlights !== searchHighlightState().viewSource) {
+    searchHighlightState().viewSource = viewHighlights;
+    rememberSearchHighlights(viewHighlights);
+  }
+  const ranges = searchHighlightTexts(query)?.get(String(value ?? ''));
+  return ranges?.length ? ranges : null;
+}
+
+async function requestSearchHighlights(values) {
+  const query = activeSearchHighlightQuery();
+  const known = searchHighlightTexts(query);
+  const texts = [...new Set((values || []).map((value) => String(value ?? '')).filter(Boolean))]
+    .filter((text) => !known?.has(text))
+    .slice(0, 1000);
+  if (!query || !texts.length) return false;
+  const response = await fetch('/search/highlights', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ q: query, texts }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || !payload?.ok || payload.search_highlights?.query !== query) return false;
+  rememberSearchHighlights(payload.search_highlights, texts);
+  return true;
+}
+
+// Markup for a label the active search matched, or '' when nothing in it matched.
+function searchHighlightedLabelHtml(value) {
+  const ranges = searchHighlightRanges(value);
+  return ranges ? buildHighlightedTextHtml(value, ranges) : '';
+}
+
 // END js/runtime/view-state-helpers.js
 
 // BEGIN js/runtime/browser-navigation-helpers.js
@@ -3146,6 +3215,24 @@ function renderStars(rating) {
       : '<span class="star">&#9734;</span>';
   }
   return html;
+}
+
+// Owner 2026-11-18: a search result shows, in a neutral highlight, the characters the search matched.
+// The ranges come from the server's search matcher as [start, end) code-point offsets; every part stays escaped.
+function buildHighlightedTextHtml(value, ranges) {
+  const text = String(value ?? '');
+  if (!Array.isArray(ranges) || !ranges.length) return escapeHtml(text);
+  const chars = Array.from(text);
+  let html = '';
+  let cursor = 0;
+  for (const range of ranges) {
+    const start = Math.max(cursor, Number(range?.[0]));
+    const end = Math.min(chars.length, Number(range?.[1]));
+    if (!Number.isInteger(start) || !Number.isInteger(end) || end <= start) continue;
+    html += `${escapeHtml(chars.slice(cursor, start).join(''))}<mark class="search-match-highlight">${escapeHtml(chars.slice(start, end).join(''))}</mark>`;
+    cursor = end;
+  }
+  return html + escapeHtml(chars.slice(cursor).join(''));
 }
 
 // END js/runtime/markup-format-helpers.js
@@ -4288,7 +4375,9 @@ function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
     html += `<div class="sidebar-virtual-spacer" data-sidebar-virtual-spacer="before" aria-hidden="true" style="height:${virtualWindow.before}px"></div>`;
   }
   html += visibleArtists.map((item, offset) => renderItem({
-    label: item.artist_display || item.artist, key: 'artist:' + item.artist,
+    label: item.artist_display || item.artist,
+    labelHtml: typeof searchHighlightedLabelHtml === 'function' ? searchHighlightedLabelHtml(item.artist_display || item.artist) : '',
+    key: 'artist:' + item.artist,
     count: item.count, selected: item.artist === selectedArtist,
     href: buildUrl({
       ...view,
@@ -4314,10 +4403,13 @@ function buildSidebarStructureSignature(sidebarArtists = [], options = {}) {
     && options.showAllArtistsOverride !== null
     ? (options.showAllArtistsOverride ? '1' : '0')
     : String(options.view?.show_all_artists_sidebar_link !== false ? '1' : '0');
+  const highlightRanges = typeof searchHighlightRanges === 'function' ? searchHighlightRanges : () => null;
   const artistSignature = sidebarArtists.map((item) => [
     String(item?.artist || ''),
     String(item?.artist_display || item?.artist || ''),
     String(item?.count ?? ''),
+    // A row redraws when its search highlight changes.
+    JSON.stringify(highlightRanges(item?.artist_display || item?.artist) || ''),
   ].join('\u001f')).join('\u001e');
   const virtualWindow = options.virtualWindow?.virtualized
     ? `${options.virtualWindow.start}:${options.virtualWindow.end}`
@@ -4923,12 +5015,20 @@ function buildGalleryRatingHtml(config = {}) {
 
 function buildGalleryCardInfoHtml(config = {}) {
   const count = Math.max(0, Number(config.trackCount || 0));
-  const metadata = [config.artist, config.year].map(value => String(value ?? '').trim()).filter(Boolean).join(' · ');
+  // Search highlights (owner 2026-11-18) mark the matched characters of the title and artist.
+  const highlighted = (value, ranges) => (ranges?.length ? buildHighlightedTextHtml(value, ranges) : escapeHtml(value));
+  const artist = String(config.artist ?? '').trim();
+  const year = String(config.year ?? '').trim();
+  const metadataHtml = [
+    artist ? highlighted(artist, config.artistHighlightRanges) : '',
+    escapeHtml(year),
+  ].filter(Boolean).join(' · ');
   const statusHtml = `${String(config.sourceActionsHtml || '')}${String(config.ratingHtml || '')}`;
+  const titleHtml = highlighted(config.title || '', config.titleHighlightRanges);
   const title = config.openAttributes
-    ? `<button class="album-open-trigger album-title-button" type="button" aria-label="${escapeHtml(config.title || '')}" ${config.openAttributes}><span data-gallery-metadata-text>${escapeHtml(config.title || '')}</span></button>`
-    : escapeHtml(config.title || '');
-  return `<div class="album-body gallery-card-info"><h3 class="album-title">${title}</h3><div class="album-meta-row"><div class="album-subtitle"><span data-gallery-metadata-text>${escapeHtml(metadata)}</span></div></div>${statusHtml ? `<div class="gallery-card__status-group">${statusHtml}</div>` : ''}<div class="chip-row"><span class="track-count">${count} track${count === 1 ? '' : 's'}</span><span class="album-length">${escapeHtml(config.lengthDisplay || '')}</span></div></div>`;
+    ? `<button class="album-open-trigger album-title-button" type="button" aria-label="${escapeHtml(config.title || '')}" ${config.openAttributes}><span data-gallery-metadata-text>${titleHtml}</span></button>`
+    : titleHtml;
+  return `<div class="album-body gallery-card-info"><h3 class="album-title">${title}</h3><div class="album-meta-row"><div class="album-subtitle"><span data-gallery-metadata-text>${metadataHtml}</span></div></div>${statusHtml ? `<div class="gallery-card__status-group">${statusHtml}</div>` : ''}<div class="chip-row"><span class="track-count">${count} track${count === 1 ? '' : 's'}</span><span class="album-length">${escapeHtml(config.lengthDisplay || '')}</span></div></div>`;
 }
 
 // END js/runtime/gallery-main-components.js
@@ -5214,7 +5314,7 @@ function buildGalleryCardHtml(config = {}) {
       ${sourceActions ? `<div class="gallery-card__source-actions gallery-card__source-actions--artwork">${sourceActions}</div>` : ''}
       ${releaseYear ? `<span class="gallery-card__hover-year" aria-hidden="true">${escapeHtml(releaseYear)}</span>` : ''}
       ${displayMode === 'covers'
-        ? `<span class="gallery-card__focus-title">${escapeHtml(config.title || '')}</span>`
+        ? `<span class="gallery-card__focus-title">${config.titleHighlightRanges?.length ? buildHighlightedTextHtml(config.title || '', config.titleHighlightRanges) : escapeHtml(config.title || '')}</span>`
         : buildGalleryCardInfoHtml({
             ...config,
             openAttributes,
@@ -12034,6 +12134,7 @@ function loadCustomCollectionCatalog({ fresh = false, view = state.view || {} } 
     if (!response.ok || payload?.ok === false) {
       throw new Error(payload?.error || `Custom Collections request failed: ${response.status}`);
     }
+    if (typeof rememberSearchHighlights === 'function') rememberSearchHighlights(payload.search_highlights);
     const collections = (Array.isArray(payload.custom_collections) ? payload.custom_collections : [])
       .map(({ name, count }) => ({ name: String(name || '').trim(), count: Number(count) || 0 }))
       .filter(({ name }) => name)
@@ -12157,6 +12258,7 @@ function renderCustomCollectionNavigation(collections, { failure = '' } = {}) {
         variant: 'panel',
         key: name,
         label: name,
+        labelHtml: typeof searchHighlightedLabelHtml === 'function' ? searchHighlightedLabelHtml(name) : '',
         count,
         selected: name === activeCollectionName,
         attributes: { 'data-open-custom-collection': name },
@@ -15637,6 +15739,7 @@ async function fetchNonAlbumPayload(url) {
   if (!response.ok || payload?.ok === false) {
     throw new Error(payload?.error || `Loose tracks request failed: ${response.status}`);
   }
+  if (typeof rememberSearchHighlights === 'function') rememberSearchHighlights(payload?.search_highlights);
   return payload;
 }
 
@@ -15818,6 +15921,9 @@ function buildNonAlbumTrackRowsMarkup(items, startingIndex, problematicIndex = b
     const secondaryArtist = metadataArtist && metadataArtist.toLocaleLowerCase() !== 'unknown artist'
       ? metadataArtist
       : '';
+    // Owner 2026-11-18: a title shows its matched characters; a track found by its artist is highlighted whole.
+    const highlightRanges = typeof searchHighlightRanges === 'function' ? searchHighlightRanges : () => null;
+    const titleHighlightRanges = highlightRanges(title);
     return {
       path: trackPath,
       mediaRef,
@@ -15848,6 +15954,8 @@ function buildNonAlbumTrackRowsMarkup(items, startingIndex, problematicIndex = b
       isCurrent: isCurrentTrack,
       isPlaying: isActivelyPlaying,
       isProblematic: Boolean(problematicAlbum || item.is_problematic),
+      titleHighlightRanges,
+      isSearchMatch: Boolean(highlightRanges(metadataArtist)),
     };
   });
 }
@@ -23727,7 +23835,11 @@ function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
   const mobileTitleSupplement = typeof config.mobileTitleSupplement === 'function'
     ? String(config.mobileTitleSupplement(track, index) || '')
     : '';
-  const titleHtml = `<span class="album-track-table__title">${escapeHtml(track.title || '')}${secondary ? `<span class="album-track-table__secondary">${escapeHtml(secondary)}</span>` : ''}${mobileTitleSupplement ? `<span class="album-track-table__mobile-meta">${mobileTitleSupplement}</span>` : ''}</span>`;
+  // Search highlights (owner 2026-11-18): the matched characters of the title.
+  const titleTextHtml = track.titleHighlightRanges?.length
+    ? buildHighlightedTextHtml(track.title || '', track.titleHighlightRanges)
+    : escapeHtml(track.title || '');
+  const titleHtml = `<span class="album-track-table__title">${titleTextHtml}${secondary ? `<span class="album-track-table__secondary">${escapeHtml(secondary)}</span>` : ''}${mobileTitleSupplement ? `<span class="album-track-table__mobile-meta">${mobileTitleSupplement}</span>` : ''}</span>`;
   const problemHtml = track.isProblematic
     ? `<button class="track-problem-link" type="button" data-open-track-problematic="1" data-track-path="${escapeHtml(trackPath)}" title="Open this track in Problematic Files" aria-label="Open this track in Problematic Files">!</button>`
     : '';
@@ -42665,6 +42777,9 @@ function renderTrackModalRelease(album) {
     : '';
   els.list.innerHTML = albumMissing ? '' : buildTrackListHtml(tracks, album, totalLength) + duplicateReview;
   if (typeof syncAlbumTrackCreditMotion === 'function') syncAlbumTrackCreditMotion(els.list);
+  if (!albumMissing && typeof requestSearchHighlights === 'function') {
+    refreshAlbumTrackSearchHighlights(els.list, tracks, album);
+  }
   if (els.footer) {
     els.footer.textContent = '';
     els.footer.hidden = true;
@@ -42800,6 +42915,36 @@ function groupAlbumTracks(tracks) {
 }
 
 
+// Album Details tracks are not in a search response: during a search, ask the server which of their titles and
+// artists it matched, then mark them in the table on screen. Rows are updated in place, never redrawn, so a play
+// click that lands while the answer arrives still reaches its button.
+function refreshAlbumTrackSearchHighlights(list, tracks, album) {
+  const query = activeSearchHighlightQuery();
+  const render = {};
+  list.albumTrackSearchHighlightRender = render;
+  if (!query) return;
+  const rows = Array.isArray(album?.track_rows) ? album.track_rows : [];
+  const texts = [...(tracks || []), ...rows].flatMap((track) => [track?.title, track?.secondary_artist]);
+  void requestSearchHighlights(texts).then((answered) => {
+    if (!answered || list.albumTrackSearchHighlightRender !== render || activeSearchHighlightQuery() !== query) return;
+    list.querySelectorAll('.album-track-table__row').forEach((row) => {
+      const title = row.querySelector('.album-track-table__title');
+      const titleText = title?.firstChild;
+      if (!titleText || titleText.nodeType !== Node.TEXT_NODE) return;
+      const ranges = searchHighlightRanges(titleText.textContent);
+      const secondary = title.querySelector('.album-track-table__secondary')?.textContent || '';
+      if (!ranges && !searchHighlightRanges(secondary)) return;
+      if (ranges) {
+        const markup = document.createElement('template');
+        markup.innerHTML = buildHighlightedTextHtml(titleText.textContent, ranges);
+        titleText.replaceWith(markup.content);
+      }
+      row.classList.add('album-track-table__row--search-match');
+      row.dataset.trackSearchMatch = 'true';
+    });
+  }).catch(() => {});
+}
+
 function buildTrackListHtml(tracks, album = null, totalLength = null) {
   const grouped = groupAlbumTracks(tracks);
   const playback = getPlayerPlaybackSnapshot();
@@ -42814,8 +42959,8 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
       .filter(Boolean)
   );
 
-  const query = String(state.view?.query || '').trim().toLocaleLowerCase();
   const albumPreference = album?.album_preference || {};
+  const highlightRanges = typeof searchHighlightRanges === 'function' ? searchHighlightRanges : () => null;
   const discRatingByKey = new Map(
     (Array.isArray(albumPreference.disc_ratings) ? albumPreference.disc_ratings : [])
       .map((discRating) => [discRating?.disc_key, discRating?.rating])
@@ -42865,7 +43010,10 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
         isCurrent: Boolean(isCurrentTrack),
         isPlaying: Boolean(isActivelyPlaying),
         isProblematic: Boolean(track.is_problematic),
-        isSearchMatch: Boolean(query && displayTitle.toLocaleLowerCase().includes(query)),
+        // The server's search matcher marks the title's matched characters; a match in the title or the
+        // track's own artist marks the row (owner 2026-11-18).
+        titleHighlightRanges: highlightRanges(displayTitle),
+        isSearchMatch: Boolean(highlightRanges(displayTitle) || highlightRanges(secondaryArtist)),
       };
     });
     return {
@@ -45861,6 +46009,7 @@ function albumCardHtml(album, options = {}) {
     openLabel: `Open ${displayName} tracklist${albumMissing ? '. Album not found' : ''}`,
     title: displayName,
     artist: album.album_artist,
+    ...getAlbumCardHighlightRanges(album),
     year: displayYear,
     ratingHtml: ratingMarkup,
     trackCount: summary.trackCount,
@@ -45887,6 +46036,16 @@ function getAlbumCardSourceCategories(album) {
   return ['main', 'hoard', 'new_arrivals'].filter((category) => normalized.includes(category));
 }
 
+function getAlbumCardHighlightRanges(album) {
+  if (typeof searchHighlightRanges !== 'function') return {};
+  const titleHighlightRanges = searchHighlightRanges(album?.display_name || album?.name || '');
+  const artistHighlightRanges = searchHighlightRanges(album?.album_artist);
+  return {
+    ...(titleHighlightRanges ? { titleHighlightRanges } : {}),
+    ...(artistHighlightRanges ? { artistHighlightRanges } : {}),
+  };
+}
+
 function getAlbumCardRenderKey(album) {
   const summary = getAlbumCardSummary(album);
   return JSON.stringify([
@@ -45903,6 +46062,8 @@ function getAlbumCardRenderKey(album) {
     albumHasDisplayCover(album) ? buildAlbumDisplayCoverUrl(album) : '',
     String(album?.cover_ref || '').trim(),
     String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim(),
+    // Only a card whose own highlights change is rebuilt: leaving a search keeps unmatched cards and covers.
+    JSON.stringify(getAlbumCardHighlightRanges(album)),
     String(album?.inventory_status || ''),
     String(album?.missing_since || ''),
     getAlbumCardSourceCategories(album),

@@ -393,6 +393,21 @@ export class GalleryPage extends BasePage {
     return this.albumCard.sectionByArtistHeading(artistHeading);
   }
 
+  // Where the kept-library line's text ends and where the first album card visible in the gallery starts,
+  // clipped to the gallery's scroll box: the line must never sit on top of content.
+  async readOfflineNoticeClearance() {
+    // parity-check: allow-read-only-measurement-evaluate -- reads the rendered line and card boxes.
+    return this.page.evaluate(({ noticeSelector, cardSelector }) => {
+      const notice = document.querySelector(`${noticeSelector} .offline-notice__text`).getBoundingClientRect();
+      const scroll = document.getElementById('albums-scroll').getBoundingClientRect();
+      const visibleTops = [...document.querySelectorAll(cardSelector)]
+        .map(card => card.getBoundingClientRect())
+        .filter(box => box.height > 0 && box.bottom > scroll.top && box.top < scroll.bottom)
+        .map(box => Math.max(box.top, scroll.top));
+      return { noticeBottom: notice.bottom, firstVisibleCardTop: Math.min(...visibleTops), partlyScrolled: visibleTops.some(top => top === scroll.top) };
+    }, { noticeSelector: '#app-copy-offline-notice', cardSelector: this.albumCard.cardSelector });
+  }
+
   headingByArtistName(artistName) {
     return this.artistHeadings.filter({ hasText: exactNormalizedText(artistName) }).first();
   }

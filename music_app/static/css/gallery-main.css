@@ -204,6 +204,9 @@
 .gallery-end-offline { justify-content: center; padding: 18px 14px 26px; }
 /* The unreachable view is the only message: the kept-library notice does not show above it. */
 body:has([data-gallery-unreachable]) #app-copy-offline-notice { display: none; }
+/* Its own row above the gallery: the albums scroll under a strip of the page background, never
+   right up to the text (owner v003, plain text without a box). */
+#app-copy-offline-notice.app-copy-offline-notice { padding-bottom: 10px; }
 .album-card[data-gallery-display="covers"] .gallery-card__focus-title { position: absolute; z-index: 4; inset: auto 0 0; padding: 26px 10px 10px; overflow: hidden; background: linear-gradient(transparent, #000d); color: white; font-weight: 750; opacity: 0; pointer-events: none; text-overflow: ellipsis; white-space: nowrap; transition: opacity 150ms ease; }
 .album-card[data-gallery-display="covers"]:hover .gallery-card__focus-title, .album-card[data-gallery-display="covers"]:focus-within .gallery-card__focus-title { opacity: 1; }
 @media (hover: hover) and (pointer: fine) {

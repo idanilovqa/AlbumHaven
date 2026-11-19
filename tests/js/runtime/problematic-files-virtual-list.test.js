@@ -369,3 +369,52 @@ test('utility navigation ownership avoids mutation records for an unchanged owne
   context.renderUtilityModalContent();
   assert.deepEqual(writes, [['utilityNavigationOwner', 'problematic-files'], ['utilityNavigationOwner', 'loops']]);
 });
+
+test('bounded interaction: list scroll mounts only the next window of 706 Problematic Files rows', async () => {
+  const { countedCollection, createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const run = async (cardinality) => {
+    const counter = createInteractionCounter();
+    const { api, frames } = loadVirtualList();
+    const list = createList();
+    const createElement = list.ownerDocument.createElement;
+    list.ownerDocument.createElement = (tagName) => {
+      counter.count('nodesCreated');
+      return createElement(tagName);
+    };
+    for (const method of ['insertBefore', 'replaceChildren']) {
+      const original = list[method].bind(list);
+      list[method] = (...args) => {
+        counter.count('domMutations');
+        return original(...args);
+      };
+    }
+    const virtualList = api.create({
+      list,
+      renderRow: (item) => {
+        const markup = `<button data-problematic-album-key="${item.key}"></button>`;
+        counter.count('renderCommits');
+        counter.count('markupBytes', markup.length);
+        return markup;
+      },
+    });
+    virtualList.render(countedCollection(makeItems(cardinality), counter), '');
+    const work = await counter.measure(() => {
+      list.scrollTop = 30 * 68;
+      list.emit('scroll');
+      list.emit('scroll');
+      counter.count('animationFrames', frames.length);
+      frames.splice(0).forEach(frame => frame());
+    });
+    assert.deepEqual(mountedKeys(list.innerHTML), Array.from({ length: 17 }, (_value, index) => `album-${index + 24}`));
+    virtualList.dispose();
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:runtime/problematic-files-virtual-list.js#create',
+    small: 50,
+    large: 706,
+    run,
+    budgets: { itemsVisited: 17, renderCommits: 17, nodesCreated: 17, domMutations: 17, markupBytes: 935, animationFrames: 1 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
+  });
+});

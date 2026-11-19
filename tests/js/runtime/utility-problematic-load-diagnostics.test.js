@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const test = require('node:test');
+const { loadPendingProjectionFetch } = require('../helpers/pending-projection-fetch');
 
 const helperPath = path.join(
   __dirname,
@@ -241,6 +242,7 @@ function loadHelper(overrides = {}) {
   };
   Object.assign(context, overrides);
   vm.createContext(context);
+  loadPendingProjectionFetch(context);
   vm.runInContext(helperSource, context, { filename: helperPath });
   return { context, calls };
 }
@@ -1119,6 +1121,7 @@ test('loadProblematicFiles rejects a JSON HTTP error without committing empty su
       return {
         ok: false,
         status: 503,
+        clone() { return this; },
         async json() {
           return {
             error: 'Problematic-file projection is temporarily unavailable.',

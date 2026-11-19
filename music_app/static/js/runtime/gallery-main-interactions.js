@@ -152,11 +152,54 @@ let galleryMainScrollFrame = 0;
 let galleryFamilyPanelObserver = null;
 let galleryFamilyDragHandlersBound = false;
 
-function getGalleryMainGroups() {
+function galleryMainGroupLists() {
   const primary = Array.isArray(state.view.primary_artist_groups) ? state.view.primary_artist_groups : [];
   const family = Array.isArray(state.view.family_artist_groups) ? state.view.family_artist_groups : [];
   const fallback = Array.isArray(state.view.artist_groups) ? state.view.artist_groups : [];
-  return primary.length || family.length ? [...primary, ...family] : fallback;
+  return primary.length || family.length ? [primary, family] : [fallback];
+}
+
+function getGalleryMainGroups() {
+  const [first, second] = galleryMainGroupLists();
+  return second ? [...first, ...second] : first;
+}
+
+// First loaded group per artist label, rebuilt only when the view or one of its
+// group lists is replaced or resized, so hover and focus prefetches stay
+// constant work. A hit is rechecked in place because groups can be replaced
+// inside an unchanged list.
+let galleryMainGroupIndex = null;
+
+function galleryMainGroupIndexToken() {
+  const view = state.view;
+  return [
+    view,
+    view.primary_artist_groups, view.primary_artist_groups?.length,
+    view.family_artist_groups, view.family_artist_groups?.length,
+    view.artist_groups, view.artist_groups?.length,
+  ];
+}
+
+function indexGalleryMainGroups() {
+  const byArtist = new Map();
+  for (const list of galleryMainGroupLists()) {
+    list.forEach((group, position) => {
+      const artist = String(group.artist_display || group.artist || '');
+      if (!byArtist.has(artist)) byArtist.set(artist, { group, list, position });
+    });
+  }
+  return byArtist;
+}
+
+function findGalleryMainGroup(artist) {
+  const token = galleryMainGroupIndexToken();
+  const current = galleryMainGroupIndex?.token.every((part, index) => part === token[index]);
+  let entry = current ? galleryMainGroupIndex.byArtist.get(artist) : null;
+  if (entry === null || (entry && entry.list[entry.position] !== entry.group)) {
+    galleryMainGroupIndex = { token, byArtist: indexGalleryMainGroups() };
+    entry = galleryMainGroupIndex.byArtist.get(artist);
+  }
+  return entry?.group;
 }
 
 function galleryMainGroupArtist(group = {}) {
@@ -583,6 +626,103 @@ function syncGalleryBarSearchVisibility() {
     : Boolean(draftQuery || committedQuery);
 }
 
+// Scroll-independent bar inputs from the last full chrome update, keyed by the
+// view, its group lists, and each filter field, so a scroll frame never
+// re-filters or re-counts the loaded gallery. Filter fields are compared one by
+// one because they are assigned in place; their arrays are always replaced.
+let galleryMainChromeInputs = null;
+
+function galleryMainChromeToken() {
+  const view = state.view || {};
+  const filters = ensureGalleryMainState();
+  return [
+    view, view.artist_groups, view.artist_groups?.length,
+    view.primary_artist_groups?.length, view.family_artist_groups?.length,
+    filters, filters.sources?.main_library, filters.sources?.new_arrivals, filters.sources?.hoard,
+    filters.view, filters.showFeaturedOn, filters.showSplitAlbums, filters.familySelectionExplicit,
+    filters.albumTypes, filters.familyArtists, filters.familyArtistOrder,
+  ];
+}
+
+function galleryMainChromeTokenMatches(token) {
+  const current = galleryMainChromeToken();
+  return token.length === current.length && token.every((part, index) => part === current[index]);
+}
+
+// Sections are laid out top-down, so the artist whose label the viewport has
+// passed is found by binary search over the grid's live section positions.
+function findGalleryMainContextSection(threshold) {
+  const sections = typeof virtualGrid !== 'undefined' && Array.isArray(virtualGrid?.sections)
+    ? virtualGrid.sections
+    : [];
+  let low = 0;
+  let high = sections.length - 1;
+  let index = -1;
+  while (low <= high) {
+    const middle = (low + high) >> 1;
+    if (Number(sections[middle]?.top || 0) <= threshold) {
+      index = middle;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  const scroll = document.getElementById('albums-scroll');
+  const viewportTop = scroll?.getBoundingClientRect?.().top || 0;
+  // A rendered label's position comes from the page, which can run ahead of the
+  // modelled section tops until the rows are measured; it decides whenever it exists.
+  const labelPosition = (section) => {
+    if (section?.kind !== 'artist' && !section?.group) return null;
+    const artist = galleryMainGroupArtist(section.group);
+    if (!artist) return null;
+    const label = scroll?.querySelector?.(`[data-scroll-artist="${cssEscape(artist)}"] .artist-name`);
+    return {
+      artist,
+      rendered: Boolean(label),
+      labelBottom: label
+        ? label.getBoundingClientRect().bottom - viewportTop + scroll.scrollTop
+        : Number(section.top || 0) + Number(virtualGrid?.sectionHeaderHeight || 0),
+    };
+  };
+  // Rendered labels that the viewport has passed although their modelled top is still below it.
+  for (let next = index + 1; next < sections.length; next += 1) {
+    const position = labelPosition(sections[next]);
+    if (!position) continue;
+    if (!position.rendered || position.labelBottom > threshold) break;
+    index = next;
+  }
+  for (; index >= 0; index -= 1) {
+    const section = sections[index];
+    const position = labelPosition(section);
+    if (position && position.labelBottom <= threshold) {
+      return {
+        artist: position.artist,
+        albumCount: Array.isArray(section.group?.albums) ? section.group.albums.length : 0,
+        artist_musicbrainz: section.group?.artist_musicbrainz || null,
+        top: Number(section.top || 0),
+        labelBottom: position.labelBottom,
+      };
+    }
+  }
+  return null;
+}
+
+function updateGalleryMainScrollContext() {
+  const bar = document.querySelector('[data-gallery-bar-instance="gallery"]');
+  const scroll = document.getElementById('albums-scroll');
+  if (!bar || !scroll) return;
+  if (!galleryMainChromeInputs || !galleryMainChromeTokenMatches(galleryMainChromeInputs.token)) {
+    updateGalleryMainChrome();
+    return;
+  }
+  const current = findGalleryMainContextSection(scroll.scrollTop);
+  renderGalleryMainContext(bar, resolveGalleryBarContext({
+    ...galleryMainChromeInputs.context,
+    scrollTop: scroll.scrollTop,
+    groups: current ? [current] : [],
+  }));
+}
+
 function updateGalleryMainChrome() {
   const bar = document.querySelector('[data-gallery-bar-instance="gallery"]');
   const scroll = document.getElementById('albums-scroll');
@@ -593,16 +733,80 @@ function updateGalleryMainChrome() {
   const primaryArtist = String(state.view.selected_artist || '').trim();
   const sections = getGalleryMainContextSections();
   const hasFamily = hasGalleryArtistFamily();
-  const summaryTotals = resolveGallerySummaryTotals(state.view, model.totals, state.gallery.mainState, model.groups);
-  const context = resolveGalleryBarContext({
-    scrollTop: scroll.scrollTop,
+  // Without a selected artist the summary counts distinct loaded albums; those
+  // counts are kept so a root page append can extend them.
+  const loadedTotals = primaryArtist
+    ? null
+    : countGalleryLoadedAlbums({ artistCount: 0, albumKeys: new Map(), unkeyedCount: 0 }, model.groups, 1);
+  const summaryTotals = loadedTotals
+    ? resolveGalleryLoadedSummaryTotals(loadedTotals)
+    : resolveGallerySummaryTotals(state.view, model.totals, state.gallery.mainState, model.groups);
+  const contextInputs = {
     primaryArtist,
     artistCount: summaryTotals.artistCount,
     albumCount: summaryTotals.albumCount,
-    groups: sections,
     hasFamily,
     artist_musicbrainz: model.groups.find((group) => galleryMainGroupArtist(group) === primaryArtist)?.artist_musicbrainz || null,
-  });
+  };
+  galleryMainChromeInputs = { token: galleryMainChromeToken(), context: contextInputs, loadedTotals };
+  renderGalleryMainContext(bar, resolveGalleryBarContext({ ...contextInputs, scrollTop: scroll.scrollTop, groups: sections }));
+  updateGalleryFamilyPanelChrome(primaryArtist);
+}
+
+function countGalleryLoadedAlbums(totals, groups, step) {
+  for (const group of groups) {
+    for (const album of group.albums || []) {
+      const key = String(album.key || '').trim();
+      if (!key) {
+        totals.unkeyedCount += step;
+        continue;
+      }
+      const count = (totals.albumKeys.get(key) || 0) + step;
+      if (count > 0) totals.albumKeys.set(key, count);
+      else totals.albumKeys.delete(key);
+    }
+  }
+  totals.artistCount += step * groups.length;
+  return totals;
+}
+
+function resolveGalleryLoadedSummaryTotals(loadedTotals) {
+  return resolveGallerySummaryTotals(state.view, {
+    artistCount: loadedTotals.artistCount,
+    albumCount: loadedTotals.albumKeys.size + loadedTotals.unkeyedCount,
+  }, state.gallery.mainState);
+}
+
+function isGalleryMainChromeCurrent() {
+  return Boolean(galleryMainChromeInputs && galleryMainChromeTokenMatches(galleryMainChromeInputs.token));
+}
+
+// A root page append replaces `removedGroups` (an artist split across the page
+// boundary) and adds `addedGroups` to the counted bar inputs instead of
+// re-filtering and re-counting the loaded gallery. Inputs that were not current
+// before the append (`wasCurrent`) take a full chrome update.
+function appendGalleryMainChromeGroups(wasCurrent, removedGroups, addedGroups) {
+  const inputs = galleryMainChromeInputs;
+  if (!wasCurrent || !inputs?.loadedTotals) {
+    updateGalleryMainChrome();
+    return;
+  }
+  countGalleryLoadedAlbums(inputs.loadedTotals, removedGroups, -1);
+  countGalleryLoadedAlbums(inputs.loadedTotals, addedGroups, 1);
+  const summaryTotals = resolveGalleryLoadedSummaryTotals(inputs.loadedTotals);
+  inputs.context = { ...inputs.context, artistCount: summaryTotals.artistCount, albumCount: summaryTotals.albumCount };
+  inputs.token = galleryMainChromeToken();
+  updateGalleryMainScrollContext();
+}
+
+// Root continuation groups as the gallery model shows them: filtering and
+// display splitting work per artist group, so a page's share of the root model
+// is built from that page alone.
+function buildGalleryMainRootPageGroups(groups) {
+  return buildDisplayGroups(filterGalleryModel({ groups, filterState: ensureGalleryMainState() }).groups);
+}
+
+function renderGalleryMainContext(bar, context) {
   const name = bar.querySelector('[data-gallery-context-name]');
   const summary = bar.querySelector('[data-gallery-context-summary]');
   const metadata = bar.querySelector('[data-gallery-context-metadata]');
@@ -648,6 +852,10 @@ function updateGalleryMainChrome() {
       oldInfo.setAttribute('aria-label', `Information about ${context.artist}`);
     }
   }
+  positionGalleryFamilyPanel(bar);
+}
+
+function updateGalleryFamilyPanelChrome(primaryArtist) {
   const panelBody = document.querySelector('[data-gallery-family-panel-body]');
   if (panelBody) {
     const panelSignature = JSON.stringify({
@@ -670,6 +878,9 @@ function updateGalleryMainChrome() {
     const total = galleryMainPlural(getGalleryFamilyPanelModel().totals.albumCount, 'album');
     if (panelTotal.textContent !== total) panelTotal.textContent = total;
   }
+}
+
+function positionGalleryFamilyPanel(bar) {
   const panel = document.querySelector('[data-artist-family-panel]');
   if (panel) {
     panel.style.top = `${Math.round(bar.getBoundingClientRect().bottom)}px`;
@@ -744,7 +955,7 @@ function buildGalleryArtistIdentitiesHtml(artistMusicBrainz) {
 
 function renderGalleryArtistInfo(anchor) {
   const artist = String(anchor.dataset.artist || '').trim();
-  const group = getGalleryMainGroups().find((candidate) => String(candidate.artist_display || candidate.artist || '') === artist) || {};
+  const group = findGalleryMainGroup(artist) || {};
   const overlay = document.querySelector('[data-artist-info-overlay]');
   if (!overlay) return null;
   const { summary, imageUrl, wikipediaUrl, isLongBiography } = resolveGalleryArtistInfo(group, artist);
@@ -903,7 +1114,7 @@ function initGalleryMain() {
         && (scroll.scrollTop !== active.openingScrollPosition.top
           || scroll.scrollLeft !== active.openingScrollPosition.left)) closeGalleryMainSurface(false, { reason: 'gallery-scroll' });
     if (galleryMainScrollFrame) return;
-    galleryMainScrollFrame = requestAnimationFrame(() => { galleryMainScrollFrame = 0; updateGalleryMainChrome(); });
+    galleryMainScrollFrame = requestAnimationFrame(() => { galleryMainScrollFrame = 0; updateGalleryMainScrollContext(); });
   }, { passive: true });
   window.addEventListener('resize', () => {
     updateGalleryMainChrome();
@@ -919,7 +1130,7 @@ function initGalleryMain() {
       const anchor = event.target.closest?.('[data-artist-info-trigger]');
       if (!anchor) return;
       const artist = anchor.dataset.artist;
-      const group = getGalleryMainGroups().find(candidate => String(candidate.artist_display || candidate.artist || '') === artist) || {};
+      const group = findGalleryMainGroup(artist) || {};
       const { imageUrl } = resolveGalleryArtistInfo(group, artist);
       if (!imageUrl || prefetchedPortraits.has(imageUrl)) return;
       prefetchedPortraits.add(imageUrl);

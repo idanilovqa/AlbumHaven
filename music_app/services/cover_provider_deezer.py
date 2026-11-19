@@ -5,7 +5,9 @@ import re
 import urllib.parse
 from collections.abc import Callable
 
-from music_app.services.app_logging import log_app_event
+# Provider calls log per query, candidate and probe: application log only,
+# never a log-history write (one database connection each).
+from music_app.services.app_logging import log_app_message_event as log_provider_event
 from music_app.services.cover_provider_candidates import CoverCandidate, dedupe_cover_candidates, normalize_remote_image_url
 from music_app.services import cover_provider_http
 from music_app.services.cover_provider_deadline import AutomaticCoverSearchFailed
@@ -187,7 +189,7 @@ def search_deezer_cover_candidates(
     parse_year: ParseYear,
     probe_match_candidates: ProbeCandidates,
     dedupe_candidates: DedupeCandidates = dedupe_cover_candidates,
-    log_event: LogEvent | None = log_app_event,
+    log_event: LogEvent | None = log_provider_event,
     logger=None,
 ) -> list[CoverCandidate]:
     getter = http_get_json or cover_provider_http._http_get_json

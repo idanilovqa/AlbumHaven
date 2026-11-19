@@ -31,7 +31,7 @@ def fake_listen_history_adapter(monkeypatch):
         def save_items(self, items):
             stored[:] = [dict(item) for item in items]
 
-        def load_pending_entries(self, *, limit):
+        def load_pending_entries(self, *, limit, eligible=None, connection=None, include_unverified=False):
             entries = [PendingListenEntry(dict(item), account_id=7, library_id=9, row_id=index + 1)
                        for index, item in enumerate(stored)
                        if listen_history.is_pending_scrobble_entry(item)]
@@ -172,7 +172,7 @@ def test_selected_postgres_listen_history_append_update_pending_leaves_stale_jso
         def save_items(self, items):
             stored[:] = [dict(item) for item in items]
 
-        def load_pending_entries(self, *, limit):
+        def load_pending_entries(self, *, limit, eligible=None, connection=None, include_unverified=False):
             entries = [PendingListenEntry(dict(item), account_id=7, library_id=9, row_id=index + 1)
                        for index, item in enumerate(stored)
                        if listen_history.is_pending_scrobble_entry(item)]

@@ -220,8 +220,10 @@ test('notification lanes inspect and observe only the header, player, and active
   Object.assign(context, {
     requestAnimationFrame: callback => { callbacks.push(callback); return callbacks.length; }, cancelAnimationFrame() {},
     getComputedStyle: () => ({ getPropertyValue: () => '0px' }),
-    MutationObserver: class { constructor(callback) { mutations = callback; } observe(target) { observed.push(target); } disconnect() { disconnected++; } },
+    // The first mutation observer watches the lanes; the active modal's control watch adds its own.
+    MutationObserver: class { constructor(callback) { mutations ??= callback; } observe(target) { observed.push(target); } disconnect() { disconnected++; } },
     ResizeObserver: class { constructor(callback) { resizes = callback; } observe(target) { observed.push(target); } unobserve() {} disconnect() { disconnected++; } },
+    IntersectionObserver: class { observe() {} unobserve() {} disconnect() {} },
   });
   context.registerFloatingNotification(node, { lane: 'bottom-right', onPlaced: () => shown++ });
   callbacks.shift()();
@@ -244,7 +246,7 @@ test('notification lanes inspect and observe only the header, player, and active
   assert.match(baseLayoutSource, /#toast-layer > \.toast\.floating-notification-positioned\s*\{[^}]*min-width:\s*0/u);
   context.unregisterFloatingNotification(node);
   assert.equal(attributes.has('data-notification-lane'), false);
-  assert.equal(disconnected, 2);
+  assert.equal(disconnected, 4, 'both lane observers and the control watch of each active modal disconnect');
   assert.equal(listeners.size, 0);
 });
 
@@ -902,3 +904,343 @@ for (const opacity of ['1', '0']) for (const reflowHeight of [230, 650]) {
     context.unregisterFloatingNotification(node);
   });
 }
+
+test('bounded interaction: notification lane observers place only the visible notifications after 500 shown toasts', async () => {
+  const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const { createCountedDom } = require('../helpers/counted-dom.js');
+  const run = async (shownToasts) => {
+    const counter = createInteractionCounter();
+    const { CountedElement } = createCountedDom(counter);
+    const { context } = createContext();
+    const frames = [];
+    let mutations = null;
+    const notification = () => {
+      const node = new CountedElement('DIV', { offsetHeight: 40, rect: { left: 0, top: 0, right: 240, bottom: 40, width: 240, height: 40 } });
+      node.removeAttribute = name => { delete node.attributes[name]; };
+      Object.defineProperty(node, 'offsetWidth', { get: () => { counter.count('itemsVisited'); return 240; } });
+      return node;
+    };
+    const header = new CountedElement('HEADER', { rect: { left: 0, top: 0, right: 1200, bottom: 48, width: 1200, height: 48 } });
+    Object.assign(context.window, { innerWidth: 1200, innerHeight: 800, addEventListener() {}, removeEventListener() {} });
+    Object.assign(context.document, {
+      body: {}, documentElement: {}, addEventListener() {}, removeEventListener() {},
+      querySelectorAll: () => { counter.count('domQueries'); return [header]; },
+    });
+    Object.assign(context, {
+      requestAnimationFrame: callback => { counter.count('animationFrames'); frames.push(callback); return frames.length; },
+      cancelAnimationFrame() {},
+      getComputedStyle: () => ({ getPropertyValue: () => '0px' }),
+      MutationObserver: class { constructor(callback) { counter.count('observers'); mutations = callback; } observe() {} disconnect() {} },
+      ResizeObserver: class { constructor() { counter.count('observers'); } observe() {} unobserve() {} disconnect() {} },
+    });
+    const flushFrames = () => frames.splice(0).forEach(callback => callback());
+    const visible = [notification(), notification()];
+    visible.forEach(node => context.registerFloatingNotification(node, { lane: 'top-right' }));
+    flushFrames();
+    for (let toast = 0; toast < shownToasts; toast += 1) {
+      const node = notification();
+      context.registerFloatingNotification(node, { lane: 'top-right' });
+      flushFrames();
+      context.unregisterFloatingNotification(node);
+      flushFrames();
+    }
+    const work = await counter.measure(() => {
+      for (let change = 0; change < 10; change += 1) {
+        mutations([{ target: header }]);
+        flushFrames();
+      }
+    });
+    assert.ok(visible.every(node => node.attributes['data-notification-deferred'] === undefined), 'both visible notifications stay placed');
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:runtime/notification-ui-helpers.js#registerFloatingNotification',
+    small: 5,
+    large: 500,
+    run,
+    budgets: { itemsVisited: 20, domQueries: 10, animationFrames: 10, observers: 0 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
+  });
+});
+
+const MODAL_CONTROL_COUNT = 12;
+
+// Real showToast and placement while an open modal leaves no room: toasts are
+// shown one at a time, each frame running as it would in the browser.
+function blockedToastLanes(counter) {
+  const { createCountedDom } = require('../helpers/counted-dom.js');
+  const { CountedElement } = createCountedDom(counter);
+  const { context, scheduledTimeouts, toasts } = createContext();
+  const frames = [];
+  // The lanes' mutation observer, then the open modal's control watch.
+  const mutationCallbacks = [];
+  const controlSelector = vm.runInContext('NOTIFICATION_MODAL_CONTROL_SELECTOR', context);
+  const counted = (tagName, rect, properties = {}) => {
+    const node = new CountedElement(tagName, { rect, ...properties });
+    const read = node.getBoundingClientRect.bind(node);
+    node.getBoundingClientRect = () => { counter.count('itemsVisited'); return read(); };
+    node.removeAttribute = name => { delete node.attributes[name]; };
+    return node;
+  };
+  const viewport = { left: 0, top: 0, right: 1200, bottom: 800, width: 1200, height: 800 };
+  const header = counted('HEADER', { ...viewport, bottom: 48, height: 48 });
+  // A full-screen control blocks every lane until the modal closes.
+  const controls = [counted('BUTTON', viewport, { matching: [controlSelector] }), ...Array.from({ length: MODAL_CONTROL_COUNT - 1 }, (_, index) => (
+    counted('BUTTON', { left: 40 * index, top: 100, right: 40 * index + 32, bottom: 132, width: 32, height: 32 }, { matching: [controlSelector] })
+  ))];
+  const modal = counted('SECTION', viewport);
+  modal.setAttribute('aria-modal', 'true');
+  modal.querySelectorAll = () => { counter.count('domQueries'); return controls; };
+  context.document.createElement = () => {
+    const toast = counted('DIV', { left: 0, top: 0, right: 240, bottom: 40, width: 240, height: 40 }, { offsetHeight: 40 });
+    Object.defineProperty(toast, 'offsetWidth', { get: () => { counter.count('itemsVisited'); return 240; } });
+    toast.remove = () => toasts.splice(toasts.indexOf(toast), 1);
+    return toast;
+  };
+  Object.assign(context.window, { innerWidth: 1200, innerHeight: 800, addEventListener() {}, removeEventListener() {} });
+  Object.assign(context.document, {
+    body: {}, documentElement: {}, addEventListener() {}, removeEventListener() {},
+    querySelectorAll: () => { counter.count('domQueries'); return [header, modal]; },
+  });
+  Object.assign(context, {
+    requestAnimationFrame: callback => { counter.count('animationFrames'); frames.push(callback); return frames.length; },
+    cancelAnimationFrame() {},
+    getComputedStyle: () => ({ getPropertyValue: () => '0px' }),
+    MutationObserver: class { constructor(callback) { mutationCallbacks.push(callback); } observe() {} disconnect() {} },
+    ResizeObserver: class { observe() {} unobserve() {} disconnect() {} },
+    IntersectionObserver: class { observe() {} unobserve() {} disconnect() {} },
+  });
+  const flushFrames = () => { while (frames.length) frames.shift()(); };
+  const showToast = (index) => {
+    context.showToast(`Update ${index}`, 'success', 3600);
+    flushFrames();
+  };
+  const layoutChange = () => {
+    mutationCallbacks[0]([{ target: modal }]);
+    flushFrames();
+  };
+  // The modal removes its blocking control, as its rendering reports it.
+  const removeBlockingControl = () => {
+    const [removed] = controls.splice(0, 1);
+    mutationCallbacks.at(-1)([{ type: 'childList', target: modal, addedNodes: [], removedNodes: [removed] }]);
+  };
+  return { context, layoutChange, removeBlockingControl, scheduledTimeouts, showToast, toasts };
+}
+
+test('BI a blocked notification lane keeps one waiting toast and constant placement work at production scale', async () => {
+  const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const run = async (shownToasts) => {
+    const counter = createInteractionCounter();
+    const { context, layoutChange, removeBlockingControl, scheduledTimeouts, showToast, toasts } = blockedToastLanes(counter);
+    for (let index = 0; index < shownToasts; index += 1) showToast(index);
+    assert.equal(toasts.length, 1, 'never-shown toasts are replaced, not piled up');
+    const [waiting] = toasts;
+    assert.equal(waiting.attributes['data-notification-deferred'], '');
+    assert.equal(scheduledTimeouts.length, 0, 'a waiting toast has not started its lifetime');
+    const work = await counter.measure(layoutChange);
+    removeBlockingControl();
+    layoutChange();
+    assert.equal(waiting.attributes['data-notification-deferred'], undefined, 'the newest toast shows once the lane clears');
+    assert.equal(scheduledTimeouts.length, 1, 'and starts its lifetime');
+    assert.match(waiting.markup, new RegExp(`Update ${shownToasts - 1}`));
+    return work;
+  };
+  // One frame reads the header, the open modal's controls and the one waiting toast.
+  const { small, large } = await measureScalePair({
+    id: 'js:runtime/notification-ui-helpers.js#scheduleFloatingNotificationPlacement',
+    small: 20,
+    large: 14000,
+    run,
+    budgets: { itemsVisited: MODAL_CONTROL_COUNT + 2, domQueries: 4, animationFrames: 1 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
+  });
+  assert.deepEqual(large, small);
+});
+
+test('a blocked lane never lets a newer lesser toast discard a waiting error or warning', () => {
+  const { createInteractionCounter } = require('../helpers/bounded-interaction-counter.js');
+  const { context, layoutChange, removeBlockingControl, showToast, toasts } = blockedToastLanes(createInteractionCounter());
+  const show = (message, variant) => {
+    context.showToast(message, variant, 3600);
+    layoutChange();
+  };
+  show('Save failed', 'error');
+  show('Cover lookup slow', 'warning');
+  for (let index = 0; index < 5; index += 1) showToast(index);
+  show('Tag write failed', 'error');
+  assert.deepEqual(
+    toasts.map(toast => toast.markup.match(/Save failed|Tag write failed|Cover lookup slow|Update \d/)[0]),
+    ['Cover lookup slow', 'Update 4', 'Tag write failed'],
+    'each severity keeps its newest waiting toast',
+  );
+  removeBlockingControl();
+  layoutChange();
+  assert.ok(toasts.every(toast => toast.attributes['data-notification-deferred'] === undefined), 'every waiting toast shows once the lane clears');
+});
+
+test('bounded interaction: scrolling a 2,000-control modal places a notification from its on-screen controls only', async () => {
+  const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const { createCountedDom } = require('../helpers/counted-dom.js');
+  const ON_SCREEN_CONTROLS = 12;
+  const run = async (modalControls) => {
+    const counter = createInteractionCounter();
+    const { CountedElement } = createCountedDom(counter);
+    const { context } = createContext();
+    const frames = [];
+    const documentListeners = new Map();
+    let reportIntersections = null;
+    const controlSelector = vm.runInContext('NOTIFICATION_MODAL_CONTROL_SELECTOR', context);
+    const counted = (tagName, rect, properties = {}) => {
+      const node = new CountedElement(tagName, { rect, ...properties });
+      const read = node.getBoundingClientRect.bind(node);
+      node.getBoundingClientRect = () => { counter.count('itemsVisited'); return read(); };
+      node.removeAttribute = name => { delete node.attributes[name]; };
+      return node;
+    };
+    const viewport = { left: 0, top: 0, right: 1200, bottom: 800, width: 1200, height: 800 };
+    const header = counted('HEADER', { ...viewport, bottom: 48, height: 48 });
+    // A long modal list: one row of controls on screen, the rest scrolled below the viewport.
+    const controls = Array.from({ length: modalControls }, (_, index) => {
+      const top = index < ON_SCREEN_CONTROLS ? 400 : 900 + 40 * index;
+      const left = 40 * (index % ON_SCREEN_CONTROLS);
+      return counted('BUTTON', { left, top, right: left + 32, bottom: top + 32, width: 32, height: 32 }, { matching: [controlSelector] });
+    });
+    const modal = counted('SECTION', viewport);
+    modal.setAttribute('aria-modal', 'true');
+    modal.querySelectorAll = () => { counter.count('domQueries'); return controls; };
+    const notification = counted('DIV', { left: 0, top: 0, right: 240, bottom: 40, width: 240, height: 40 }, { offsetHeight: 40 });
+    Object.defineProperty(notification, 'offsetWidth', { get: () => { counter.count('itemsVisited'); return 240; } });
+    Object.assign(context.window, { innerWidth: 1200, innerHeight: 800, addEventListener() {}, removeEventListener() {} });
+    Object.assign(context.document, {
+      body: {}, documentElement: {}, removeEventListener() {},
+      addEventListener: (type, listener) => documentListeners.set(type, listener),
+      querySelectorAll: () => { counter.count('domQueries'); return [header, modal]; },
+    });
+    Object.assign(context, {
+      requestAnimationFrame: callback => { counter.count('animationFrames'); frames.push(callback); return frames.length; },
+      cancelAnimationFrame() {},
+      getComputedStyle: () => ({ getPropertyValue: () => '0px' }),
+      MutationObserver: class { observe() {} disconnect() {} },
+      ResizeObserver: class { observe() {} unobserve() {} disconnect() {} },
+      // As a browser reports the observed controls: on screen when they meet the viewport.
+      IntersectionObserver: class {
+        constructor(callback) {
+          const observed = new Set();
+          this.observe = target => observed.add(target);
+          this.unobserve = target => observed.delete(target);
+          this.disconnect = () => observed.clear();
+          reportIntersections = () => callback([...observed].map(target => ({
+            target, isIntersecting: target.rect.top < viewport.bottom && target.rect.bottom > viewport.top,
+          })));
+        }
+      },
+    });
+    const flushFrames = () => { while (frames.length) frames.shift()(); };
+    context.registerFloatingNotification(notification, { lane: 'top-right' });
+    flushFrames();
+    reportIntersections?.();
+    flushFrames();
+    assert.equal(notification.attributes['data-notification-deferred'], undefined, 'the notification is placed');
+    const work = await counter.measure(() => {
+      for (let scroll = 0; scroll < 10; scroll += 1) {
+        documentListeners.get('scroll')({ type: 'scroll', target: modal });
+        flushFrames();
+      }
+    });
+    assert.equal(notification.style.getPropertyValue('--notification-top'), '56px', 'it stays just below the header');
+    context.unregisterFloatingNotification(notification);
+    return work;
+  };
+  // Each scroll frame reads the header, the on-screen row and the notification.
+  await measureScalePair({
+    id: 'js:runtime/notification-ui-helpers.js#registerFloatingNotification#2',
+    small: ON_SCREEN_CONTROLS,
+    large: 2000,
+    run,
+    budgets: { itemsVisited: 10 * (ON_SCREEN_CONTROLS + 2), domQueries: 10, animationFrames: 10 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
+  });
+});
+
+test('bounded interaction: the modal control watch handles one scrolled and one rendered row of a 2,000-control modal', async () => {
+  const { countedCollection, createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const { createCountedDom } = require('../helpers/counted-dom.js');
+  const ROW = 12;
+  const run = async (modalControls) => {
+    const counter = createInteractionCounter();
+    const { CountedElement } = createCountedDom(counter);
+    const { context } = createContext();
+    const frames = [];
+    const mutationCallbacks = [];
+    let intersection = null;
+    const controlSelector = vm.runInContext('NOTIFICATION_MODAL_CONTROL_SELECTOR', context);
+    const counted = (tagName, rect, properties = {}) => {
+      const node = new CountedElement(tagName, { rect, ...properties });
+      node.removeAttribute = name => { delete node.attributes[name]; };
+      return node;
+    };
+    const control = (index, top) => counted('BUTTON',
+      { left: 40 * (index % ROW), top, right: 40 * (index % ROW) + 32, bottom: top + 32, width: 32, height: 32 },
+      { matching: [controlSelector] });
+    const viewport = { left: 0, top: 0, right: 1200, bottom: 800, width: 1200, height: 800 };
+    const controls = Array.from({ length: modalControls }, (_, index) => control(index, index < ROW ? 400 : 900 + 40 * index));
+    const modal = counted('SECTION', viewport);
+    modal.setAttribute('aria-modal', 'true');
+    modal.querySelectorAll = () => { counter.count('domQueries'); return controls; };
+    const notification = counted('DIV', { left: 0, top: 0, right: 240, bottom: 40, width: 240, height: 40 }, { offsetHeight: 40, offsetWidth: 240 });
+    Object.assign(context.window, { innerWidth: 1200, innerHeight: 800, addEventListener() {}, removeEventListener() {} });
+    Object.assign(context.document, {
+      body: {}, documentElement: {}, addEventListener() {}, removeEventListener() {},
+      querySelectorAll: () => { counter.count('domQueries'); return [modal]; },
+    });
+    Object.assign(context, {
+      requestAnimationFrame: callback => { counter.count('animationFrames'); frames.push(callback); return frames.length; },
+      cancelAnimationFrame() {},
+      getComputedStyle: () => ({ getPropertyValue: () => '0px' }),
+      MutationObserver: class { constructor(callback) { mutationCallbacks.push(callback); } observe() {} disconnect() {} },
+      ResizeObserver: class { observe() {} unobserve() {} disconnect() {} },
+      IntersectionObserver: class {
+        constructor(callback) {
+          this.callback = callback;
+          intersection = this;
+        }
+        observe() { counter.count('subscriptions'); }
+        unobserve() { counter.count('subscriptions'); }
+        disconnect() {}
+      },
+    });
+    const flushFrames = () => { while (frames.length) frames.shift()(); };
+    const report = (targets, isIntersecting) => targets.map(target => ({ target, isIntersecting }));
+    context.registerFloatingNotification(notification, { lane: 'top-right' });
+    flushFrames();
+    // The browser's first report: the first row on screen, every other control below it.
+    intersection.callback([...report(controls.slice(0, ROW), true), ...report(controls.slice(ROW), false)]);
+    flushFrames();
+    const leaving = controls.slice(0, ROW), entering = controls.slice(ROW, 2 * ROW);
+    const renderedRow = counted('DIV', viewport, { selectors: {
+      [`all:${controlSelector}`]: countedCollection(Array.from({ length: ROW }, (_, index) => control(index, 600)), counter),
+    } });
+    const removedRow = counted('DIV', viewport, { selectors: { [`all:${controlSelector}`]: countedCollection(leaving, counter) } });
+    const work = await counter.measure(() => {
+      // One row scrolls off screen while the next scrolls on.
+      intersection.callback([...report(leaving, false), ...report(entering, true)]);
+      flushFrames();
+      // The modal renders one row and removes another.
+      mutationCallbacks.at(-1)([{ type: 'childList', target: modal, addedNodes: [renderedRow], removedNodes: [removedRow] }]);
+      flushFrames();
+    });
+    assert.equal(notification.attributes['data-notification-deferred'], undefined, 'the notification stays placed');
+    context.unregisterFloatingNotification(notification);
+    return work;
+  };
+  // The callbacks touch only the two changed rows: each rendered control is observed afresh, each
+  // removed one unobserved, and one frame re-places the notification.
+  await measureScalePair({
+    id: 'js:runtime/notification-ui-helpers.js#watchModalControls',
+    small: 2 * ROW,
+    large: 2000,
+    run,
+    budgets: { itemsVisited: 2 * ROW, domQueries: 3, subscriptions: 3 * ROW, animationFrames: 1 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
+  });
+});

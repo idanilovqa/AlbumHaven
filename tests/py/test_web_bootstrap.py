@@ -1081,6 +1081,25 @@ def test_build_initial_view_preview_preserves_compact_album_track_count():
     assert "16 tracks" in markup
 
 
+@pytest.mark.parametrize("public_safe", [False, True])
+def test_build_initial_view_preview_keeps_each_release_album_id(public_safe):
+    """Releases sharing one key open by id; a key alone cannot tell them apart."""
+    preview = startup_bootstrap.build_initial_view_preview(
+        {
+            "artist_groups": [{
+                "artist": "ДДТ",
+                "albums": [
+                    {"album_id": 501, "key": "ддт::студийные записи", "name": "Студийные записи", "year": 1990},
+                    {"album_id": 502, "key": "ддт::студийные записи", "name": "Студийные записи", "year": 1991},
+                ],
+            }],
+        },
+        public_safe=public_safe,
+    )
+
+    assert [album["album_id"] for album in preview["artist_groups"][0]["albums"]] == [501, 502]
+
+
 def test_build_initial_view_preview_preserves_featured_artist_relationship():
     preview = startup_bootstrap.build_initial_view_preview(
         {

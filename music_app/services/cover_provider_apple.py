@@ -10,7 +10,9 @@ from html import unescape
 from config import Config
 from music_app.services import cover_provider_http, cover_provider_matching
 from music_app.services import music_identity_matching
-from music_app.services.app_logging import log_app_event
+# Provider calls log per query, candidate and probe: application log only,
+# never a log-history write (one database connection each).
+from music_app.services.app_logging import log_app_message_event as log_provider_event
 from music_app.services.cover_provider_deadline import AutomaticCoverSearchFailed, automatic_cover_budget_active
 from music_app.services.cover_provider_candidates import (
     CoverCandidate,
@@ -163,7 +165,7 @@ def _default_http_get_json(url: str, user_agent: str, *, service: str = "remote"
         user_agent,
         service=service,
         context=context,
-        app_event_logger=log_app_event,
+        app_event_logger=log_provider_event,
         append_apple_request_trace=append_apple_request_trace,
         **kwargs,
     )
@@ -175,7 +177,7 @@ def _default_http_get_text(url: str, user_agent: str, *, service: str = "remote"
         user_agent=user_agent,
         service=service,
         context=context,
-        app_event_logger=log_app_event,
+        app_event_logger=log_provider_event,
         append_apple_request_trace=append_apple_request_trace,
     )
 
@@ -186,7 +188,7 @@ def _default_http_get_text_with_url(url: str, user_agent: str, *, service: str =
         user_agent=user_agent,
         service=service,
         context=context,
-        app_event_logger=log_app_event,
+        app_event_logger=log_provider_event,
         append_apple_request_trace=append_apple_request_trace,
     )
 
@@ -518,7 +520,7 @@ def discover_apple_album_urls_via_web_search(
     *,
     http_get_text_with_url: HttpGetTextWithUrl | None = None,
     should_cancel: ShouldCancel | None = None,
-    log_event: LogEvent | None = log_app_event,
+    log_event: LogEvent | None = log_provider_event,
     logger=None,
 ) -> list[str]:
     getter = http_get_text_with_url or _default_http_get_text_with_url
@@ -682,7 +684,7 @@ def collect_apple_artist_lookup_matches(
     parse_year: ParseYear,
     similarity: Similarity,
     should_cancel: ShouldCancel | None = None,
-    log_event: LogEvent | None = log_app_event,
+    log_event: LogEvent | None = log_provider_event,
     logger=None,
 ) -> tuple[list[tuple[float, str, dict]], list[dict]]:
     getter = http_get_json or _default_http_get_json
@@ -784,7 +786,7 @@ def collect_apple_web_matches(
     extract_og_image: ExtractOgImage,
     album_name_in_alt: AlbumNameInAlt,
     should_cancel: ShouldCancel | None = None,
-    log_event: LogEvent | None = log_app_event,
+    log_event: LogEvent | None = log_provider_event,
     logger=None,
 ) -> list[tuple[float, str, dict]]:
     text_getter = http_get_text or _default_http_get_text
@@ -1066,7 +1068,7 @@ def log_apple_miss(
     raw_results: list[dict] | None = None,
     *,
     parse_year: ParseYear,
-    log_event: LogEvent | None = log_app_event,
+    log_event: LogEvent | None = log_provider_event,
     logger=None,
 ) -> None:
     active_logger = logger or _LOGGER
@@ -1116,7 +1118,7 @@ def search_apple(
     collect_artist_lookup_matches: Callable[..., tuple[list[tuple[float, str, dict]], list[dict]]] | None = None,
     collect_web_matches: Callable[..., list[tuple[float, str, dict]]] | None = None,
     log_miss: Callable[..., None] | None = None,
-    log_event: LogEvent | None = log_app_event,
+    log_event: LogEvent | None = log_provider_event,
     logger=None,
 ) -> CoverCandidate | None:
     if collect_matches is None:
@@ -1337,7 +1339,7 @@ def search_apple_candidates(
     collect_artist_lookup_matches: Callable[..., tuple[list[tuple[float, str, dict]], list[dict]]] | None = None,
     collect_web_matches: Callable[..., list[tuple[float, str, dict]]] | None = None,
     log_miss: Callable[..., None] | None = None,
-    log_event: LogEvent | None = log_app_event,
+    log_event: LogEvent | None = log_provider_event,
     logger=None,
 ) -> list[CoverCandidate]:
     json_getter = http_get_json or _default_http_get_json

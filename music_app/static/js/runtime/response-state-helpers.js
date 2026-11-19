@@ -1419,6 +1419,17 @@ function rememberCurrentRuntimeAlbumCoverAuthority(view = state.view) {
   return state.ui.tagEditAlbumCoverAuthority;
 }
 
+// Fills cover fields an incoming view lacks from the authority retained for
+// the current cover mutation revision; a stale authority is dropped.
+function applyRetainedRuntimeAlbumCoverAuthority(view) {
+  const retainedCoverAuthority = state.ui?.tagEditAlbumCoverAuthority;
+  if (retainedCoverAuthority?.coverMutationRevision === Number(state.ui.albumCoverMutationRevision || 0)) {
+    preserveMissingRuntimeAlbumCoverAuthority(view, retainedCoverAuthority.albumsByKey);
+  } else if (retainedCoverAuthority) {
+    delete state.ui.tagEditAlbumCoverAuthority;
+  }
+}
+
 function findRememberedRuntimeAlbumCoverAuthority(album) {
   const retainedCoverAuthority = state.ui?.tagEditAlbumCoverAuthority;
   if (
@@ -1461,19 +1472,10 @@ function applyViewPayload(payload, options = {}) {
   const nextView = (options.retainFullAlbums || viewShouldRetainFullRuntimeAlbums(normalizedNextView))
     ? normalizedNextView
     : compactRuntimeViewPayload(normalizedNextView);
-  let retainedCoverAuthority = state.ui?.tagEditAlbumCoverAuthority;
   if (options.preserveMissingAlbumCoverAuthority === true) {
-    retainedCoverAuthority = rememberCurrentRuntimeAlbumCoverAuthority(mountedPreviousView);
+    rememberCurrentRuntimeAlbumCoverAuthority(mountedPreviousView);
   }
-  if (
-    retainedCoverAuthority
-    && retainedCoverAuthority.coverMutationRevision
-      === Number(state.ui.albumCoverMutationRevision || 0)
-  ) {
-    preserveMissingRuntimeAlbumCoverAuthority(nextView, retainedCoverAuthority.albumsByKey);
-  } else if (retainedCoverAuthority) {
-    delete state.ui.tagEditAlbumCoverAuthority;
-  }
+  applyRetainedRuntimeAlbumCoverAuthority(nextView);
   // Sidebar counts retain the source scope of their own response when album-only
   // hydration preserves the navigation tree.
   const sidebarCategories = options.preserveSidebarState
@@ -1558,6 +1560,11 @@ function applyViewPayload(payload, options = {}) {
       cacheState.relatedFilterBaseQuery = String(nextView.query || '');
     }
   }
+  return commitViewPayload(previousView, nextView, options);
+}
+
+// Mounts a normalized view and reconciles the browse state that follows it.
+function commitViewPayload(previousView, nextView, options = {}) {
   const previousViewWasReusableRootBrowse = isReusableRootBrowseViewCandidate(previousView);
   const nextViewIsReusableRootBrowse = isReusableRootBrowseViewCandidate(nextView);
   const syncSearchDraftQuery = shouldSyncSearchDraftQuery(previousView, nextView);
@@ -1631,6 +1638,24 @@ function applyViewPayload(payload, options = {}) {
     resetPreSearchViewState();
   }
   return nextView;
+}
+
+// A root gallery continuation appends one page to the mounted, already
+// normalized root view: only the page's groups are compacted and given the
+// retained cover authority, and the loaded group list is extended in place
+// instead of being copied. `mergedLastGroup` replaces the last loaded group
+// when the page continues that artist. Returns the mounted page groups.
+function commitRootGalleryContinuation({ mergedLastGroup = null, appendedGroups = [], galleryPage }) {
+  const previousView = state.view;
+  const page = { artist_groups: [...(mergedLastGroup ? [mergedLastGroup] : []), ...appendedGroups].map(compactRuntimeArtistGroupPayload) };
+  applyRetainedRuntimeAlbumCoverAuthority(page);
+  const groups = previousView.artist_groups;
+  if (mergedLastGroup) groups[groups.length - 1] = page.artist_groups[0];
+  groups.push(...page.artist_groups.slice(mergedLastGroup ? 1 : 0));
+  commitViewPayload(previousView, { ...previousView, gallery_page: { ...galleryPage }, initial_view_partial: false }, {
+    trackSidebarReveal: false,
+  });
+  return page.artist_groups;
 }
 
 function mergeViewPayload(patch, options = {}) {

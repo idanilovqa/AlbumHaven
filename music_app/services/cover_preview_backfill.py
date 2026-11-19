@@ -11,6 +11,7 @@ from music_app.services.covers import (
     display_cover_variant_cache_root,
     display_variant_awaits_relocation,
     find_existing_cover_display_variant,
+    image_dimensions,
     resolve_cover_display_variant,
 )
 from music_app.services.postgres_connections import pooled_connection
@@ -57,6 +58,11 @@ class CoverPreviewBackfill:
         self._activity_lock = threading.Lock()
         self._last_foreground_activity = 0.0
         self._worker: threading.Thread | None = None
+        # Covers whose preview this process saw published, or that need none.
+        # Later passes skip them and retry only failed covers and new covers,
+        # revisions or storage roots; a preview removed afterwards is
+        # regenerated on demand by /cover.
+        self._settled: set[tuple[Path, str | None, Path]] = set()
 
     @property
     def is_running(self) -> bool:
@@ -99,15 +105,25 @@ class CoverPreviewBackfill:
 
     def run_once(self) -> int:
         generated = 0
+        listed: set[tuple[Path, str | None, Path]] = set()
         for source_path, cover_revision in self._load_cover_paths():
-            if not self._wait_until_idle():
-                break
             # Only a revisioned preview follows the storage policy; any other stays in app data.
             storage_policy = (
                 self._config.get("_GENERATED_PREVIEW_STORAGE_POLICY")
                 if cover_revision or not self._data_dir
                 else None
             )
+            cache_root = display_cover_variant_cache_root(
+                source_path,
+                data_dir=self._data_dir,
+                storage_policy=storage_policy,
+            )
+            settled_key = (source_path, cover_revision, cache_root)
+            listed.add(settled_key)
+            if settled_key in self._settled:
+                continue
+            if not self._wait_until_idle():
+                break
             if not display_variant_awaits_relocation(
                 source_path,
                 storage_policy=storage_policy,
@@ -118,21 +134,27 @@ class CoverPreviewBackfill:
                 recorder = self._config.get("_GENERATED_PREVIEW_INVENTORY_RECORDER")
                 if recorder is not None and storage_policy is not None:
                     generation_options["on_published"] = recorder
-                self._generate(
+                preview_path = self._generate(
                     source_path,
-                    cache_root=display_cover_variant_cache_root(
-                        source_path,
-                        data_dir=self._data_dir,
-                        storage_policy=storage_policy,
-                    ),
+                    cache_root=cache_root,
                     max_size=_DISPLAY_COVER_SIZE,
                     priority="background",
                     revision=cover_revision,
                     **generation_options,
                 )
+                # The generator answers with the source itself when the source is
+                # missing, the render failed or no preview is needed. Only the
+                # last is final; the others are retried on the next pass.
+                if (
+                    preview_path is not None and Path(preview_path) != source_path
+                ) or 0 < max(image_dimensions(source_path)) <= _DISPLAY_COVER_SIZE:
+                    self._settled.add(settled_key)
                 generated += 1
             if self._stop_requested.wait(self._throttle_seconds):
                 break
+        else:
+            # Covers no longer in the library stop occupying memory.
+            self._settled &= listed
         return generated
 
     def inventory_existing_previews(self) -> int:

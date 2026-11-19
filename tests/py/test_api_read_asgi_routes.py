@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from pathlib import Path
 from threading import Event, Thread
 from types import ModuleType
 from types import SimpleNamespace
 
 import pytest
+from starlette.concurrency import run_in_threadpool
 from tests.py.asgi_testing import create_test_asgi_app
 from tests.py.asgi_testing import configure_test_bootstrap_actor
 from tests.py.asgi_testing import decode_json as _decode_json
@@ -19,6 +21,11 @@ from tests.py.asgi_testing import runtime_app_from_asgi_app
 @pytest.fixture
 def app(tmp_path, monkeypatch):
     return runtime_app_from_asgi_app(create_test_asgi_app(tmp_path, monkeypatch))
+
+
+def _assert_off_event_loop() -> None:
+    with pytest.raises(RuntimeError):
+        asyncio.get_running_loop()
 
 
 def _make_asgi_app():
@@ -618,8 +625,7 @@ def test_asgi_view_data_uses_generation_owned_preview_during_active_scan(
         assert {key: query_args.get(key) for key in expected_query} == expected_query
         return {"album_count": len(kwargs["library_state"]["albums"])}
 
-    monkeypatch.setattr(asgi_read_routes, "hydrate_library_state_for_config", fail_hydrate)
-    monkeypatch.setattr(asgi_read_routes, "refresh_relation_views_for_state", fail_hydrate)
+    monkeypatch.setattr("music_app.services.state._HYDRATE_EXECUTOR.submit", fail_hydrate)
     monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FailPostgresBrowseRepository)
     monkeypatch.setattr(asgi_read_routes, "build_view_payload", fake_build_view_payload)
 
@@ -706,9 +712,7 @@ def test_asgi_active_scan_album_search_prefers_postgres_committed_library_over_t
                 "view_data_source": "postgres_library_browse",
             }
 
-    monkeypatch.setattr(asgi_read_routes, "_hydrate_cached_library_for_asgi", fail_hydrate)
-    monkeypatch.setattr(asgi_read_routes, "hydrate_library_state_for_config", fail_hydrate)
-    monkeypatch.setattr(asgi_read_routes, "refresh_relation_views_for_state", fail_hydrate)
+    monkeypatch.setattr("music_app.services.state._HYDRATE_EXECUTOR.submit", fail_hydrate)
     monkeypatch.setattr(asgi_read_routes, "build_view_payload", fail_build_view_payload)
     monkeypatch.setattr(
         asgi_read_routes,
@@ -780,17 +784,7 @@ def test_asgi_search_preview_uses_postgres_without_file_backed_hydration(
 
     monkeypatch.setattr(
         asgi_read_routes,
-        "_hydrate_cached_library_for_asgi",
-        fail_file_backed_path,
-    )
-    monkeypatch.setattr(
-        asgi_read_routes,
-        "hydrate_library_state_for_config",
-        fail_file_backed_path,
-    )
-    monkeypatch.setattr(
-        asgi_read_routes,
-        "refresh_relation_views_for_state",
+        "request_library_hydration_for_state",
         fail_file_backed_path,
     )
     monkeypatch.setattr(asgi_read_routes, "build_view_payload", fail_file_backed_path)
@@ -1087,8 +1081,7 @@ def test_asgi_view_data_scan_guard_preserves_postgres_root_sidebar_routing(
         "music_app.services.library_browse_postgres.psycopg",
         type("FakePsycopg", (), {"connect": lambda self, *args, **kwargs: None})(),
     )
-    monkeypatch.setattr(asgi_read_routes, "hydrate_library_state_for_config", fail_hydrate)
-    monkeypatch.setattr(asgi_read_routes, "refresh_relation_views_for_state", fail_hydrate)
+    monkeypatch.setattr("music_app.services.state._HYDRATE_EXECUTOR.submit", fail_hydrate)
     monkeypatch.setattr(asgi_read_routes, "build_view_payload", fail_build_view_payload)
     monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FakePostgresBrowseRepository)
 
@@ -1121,17 +1114,12 @@ def test_asgi_view_and_home_routes_hydrate_and_log_through_explicit_asgi_depende
     def fail_test_request_context(*_args, **_kwargs):
         raise AssertionError("ASGI view-data fallback must not enter Flask test_request_context")
 
-    def fake_hydrate_library_from_disk(*, ensure_relations=False, validate_cache=False):
-        hydrate_calls.append(f"{ensure_relations}:{validate_cache}")
-        return False
-
-    def fake_hydrate_library_state_for_config(library_state, config, *, ensure_relations=False, validate_cache=False):
-        assert library_state is not None
+    def fake_request_library_hydration(library_state, config, logger):
+        assert library_state is asgi_app.state.library_state
         assert config is app.config
-        return fake_hydrate_library_from_disk(
-            ensure_relations=ensure_relations,
-            validate_cache=validate_cache,
-        )
+        assert logger is not None
+        hydrate_calls.append("published")
+        return True
 
     def fake_build_view_payload(**kwargs) -> dict[str, object]:
         build_view_kwargs.update(kwargs)
@@ -1163,7 +1151,7 @@ def test_asgi_view_and_home_routes_hydrate_and_log_through_explicit_asgi_depende
     # The Flask compatibility app no longer exists; the ASGI route contract above
     # is now the direct proof that no bridge context is entered.
     assert not hasattr(asgi_read_routes, "_flask_app")
-    monkeypatch.setattr(asgi_read_routes, "hydrate_library_state_for_config", fake_hydrate_library_state_for_config)
+    monkeypatch.setattr(asgi_read_routes, "request_library_hydration_for_state", fake_request_library_hydration)
     monkeypatch.setattr(
         asgi_read_routes,
         "select_runtime_persistence_adapter",
@@ -1217,7 +1205,7 @@ def test_asgi_view_and_home_routes_hydrate_and_log_through_explicit_asgi_depende
         "album_count": 0,
         "artist_count": 0,
     }
-    assert hydrate_calls == ["False:False", "False:False"]
+    assert hydrate_calls == ["published", "published"]
     assert build_view_kwargs["query_args"].get("q") == "mono"
     assert build_view_kwargs["query_args"].getlist("q") == ["mono", "ignored-last-query-value"]
     assert build_view_kwargs["query_args"].get("artist") == "Mono"
@@ -1288,22 +1276,14 @@ def test_asgi_home_data_uses_asgi_state_without_flask_bridge(app, asgi_app, monk
             "artist_count": 0,
         }
 
-    def fake_hydrate_library_state_for_config(
-        library_state,
-        config,
-        *,
-        ensure_relations=False,
-        validate_cache=False,
-    ):
+    def fake_request_library_hydration(library_state, config, _logger):
         assert library_state is asgi_app.state.library_state
         assert config is app.config
-        assert ensure_relations is False
-        assert validate_cache is False
         hydrate_calls.append(True)
-        return False
+        return True
 
     assert not hasattr(asgi_read_routes, "_flask_app")
-    monkeypatch.setattr(asgi_read_routes, "hydrate_library_state_for_config", fake_hydrate_library_state_for_config)
+    monkeypatch.setattr(asgi_read_routes, "request_library_hydration_for_state", fake_request_library_hydration)
     monkeypatch.setattr(
         asgi_read_routes,
         "select_runtime_persistence_adapter",
@@ -1326,7 +1306,73 @@ def test_asgi_home_data_uses_asgi_state_without_flask_bridge(app, asgi_app, monk
     assert logged_calls == [(payload, 30.0)]
 
 
-def test_asgi_home_data_hydrates_empty_state_with_explicit_config(app, asgi_app, monkeypatch):
+def _assert_off_event_loop() -> None:
+    with pytest.raises(RuntimeError):
+        asyncio.get_running_loop()
+
+
+def test_asgi_home_data_builds_the_payload_off_the_event_loop(asgi_app, monkeypatch):
+    # A slow Home builder must leave the event loop free, so other requests are
+    # served meanwhile (the ASGI test client fails any request blocking it > 250 ms).
+    from music_app.routes import api_read_asgi_routes as asgi_read_routes
+
+    def slow_build_home_payload(**_kwargs) -> dict[str, object]:
+        _assert_off_event_loop()
+        time.sleep(0.3)
+        return {"kind": "home"}
+
+    _memory_home_data_route(monkeypatch, asgi_read_routes)
+    monkeypatch.setattr(asgi_read_routes, "build_home_payload", slow_build_home_payload)
+    monkeypatch.setattr(asgi_read_routes, "_library_hydration_pending_for_asgi", lambda _request: None)
+
+    status, _headers, body = _run_asgi_request(asgi_app, "GET", "/home-data")
+
+    assert status == 200
+    assert _decode_json(body)["kind"] == "home"
+
+
+def test_asgi_saved_loops_read_runs_off_the_event_loop(asgi_app, monkeypatch):
+    from music_app.routes import api_read_asgi_routes as asgi_read_routes
+
+    def slow_load_loops(_config, **_scope) -> list[dict[str, object]]:
+        _assert_off_event_loop()
+        time.sleep(0.3)
+        return []
+
+    monkeypatch.setattr(asgi_read_routes, "load_loops", slow_load_loops)
+
+    status, _headers, body = _run_asgi_request(asgi_app, "GET", "/utilities/loops")
+
+    assert status == 200
+    assert _decode_json(body)["loops"] == []
+
+
+def _recording_hydrate_executor(monkeypatch, state_service):
+    queued: list[tuple[object, tuple, dict]] = []
+
+    class RecordingExecutor:
+        def submit(self, function, *args, **kwargs):
+            queued.append((function, args, kwargs))
+
+    monkeypatch.setattr(state_service, "_HYDRATE_EXECUTOR", RecordingExecutor())
+    return queued
+
+
+def _memory_home_data_route(monkeypatch, asgi_read_routes):
+    monkeypatch.setattr(
+        asgi_read_routes,
+        "select_runtime_persistence_adapter",
+        lambda seam_id, _config: type("Selection", (), {"seam_id": seam_id, "effective_backend": "memory"})(),
+    )
+    monkeypatch.setattr(asgi_read_routes, "_log_view_data_request_from_asgi", lambda *_args: None)
+    monkeypatch.setattr(
+        asgi_read_routes,
+        "build_home_payload",
+        lambda **kwargs: {"kind": "home", "album_count": len(kwargs["library_state"]["albums"])},
+    )
+
+
+def test_asgi_home_data_queues_background_hydration_and_answers_pending_until_published(app, asgi_app, monkeypatch):
     from music_app.routes import api_read_asgi_routes as asgi_read_routes
     from music_app.services import state as state_service
 
@@ -1335,88 +1381,78 @@ def test_asgi_home_data_hydrates_empty_state_with_explicit_config(app, asgi_app,
         "albums": [],
         "file_cache": {},
         "scan_in_progress": False,
+        "hydrate_in_progress": False,
+        "hydration_settled": False,
     }
     asgi_app.state.library_state = asgi_library_state
-    hydrate_calls: list[tuple[dict[str, object], dict[str, object], bool, bool, bool, bool]] = []
+    queued = _recording_hydrate_executor(monkeypatch, state_service)
+    hydrate_calls: list[tuple[bool, bool]] = []
 
-    def fail_flask_app(_request):
-        raise AssertionError("ASGI home-data route must not enter the Flask bridge")
-
-    def fail_test_request_context(*_args, **_kwargs):
-        raise AssertionError("ASGI home-data route must not enter Flask test_request_context")
-
-    def fake_hydrate_library_state_from_disk(
-        library_state,
-        config,
-        *,
-        ensure_relations=True,
-        validate_cache=True,
-        ensure_relation_views=None,
-        load_exception_overrides=None,
-        queue_problematic_albums_prewarm=None,
-        queue_utility_rules_prewarm=None,
-    ):
-        hydrate_calls.append(
-            (
-                library_state,
-                config,
-                ensure_relations,
-                validate_cache,
-                ensure_relation_views is not None,
-                queue_problematic_albums_prewarm is not None or queue_utility_rules_prewarm is not None,
-            )
-        )
-        assert load_exception_overrides is not None
+    def fake_hydrate_library_state_from_disk(library_state, config, *, ensure_relations, validate_cache, **_kwargs):
+        assert library_state is asgi_library_state
+        assert config is app.config
+        hydrate_calls.append((ensure_relations, validate_cache))
         library_state["albums"] = [{"key": "album-1"}]
         return True
 
-    def fake_build_home_payload(**kwargs) -> dict[str, object]:
-        assert kwargs["config"] is app.config
-        assert kwargs["library_state"] is asgi_library_state
-        return {
-            "kind": "home",
-            "query": "",
-            "selected_artist": "",
-            "album_count": len(kwargs["library_state"]["albums"]),
-            "artist_count": 0,
-        }
-
-    assert not hasattr(asgi_read_routes, "_flask_app")
     monkeypatch.setattr(state_service, "hydrate_library_state_from_disk", fake_hydrate_library_state_from_disk)
-    monkeypatch.setattr(
-        asgi_read_routes,
-        "select_runtime_persistence_adapter",
-        lambda seam_id, _config: type(
-            "Selection",
-            (),
-            {"seam_id": seam_id, "effective_backend": "memory"},
-        )(),
-    )
-    monkeypatch.setattr(asgi_read_routes, "_log_view_data_request_from_asgi", lambda *_args: None)
-    monkeypatch.setattr(asgi_read_routes, "build_home_payload", fake_build_home_payload)
+    _memory_home_data_route(monkeypatch, asgi_read_routes)
 
-    status, _headers, body = _run_asgi_request(asgi_app, "GET", "/home-data")
+    first_status, first_headers, first_body = _run_asgi_request(asgi_app, "GET", "/home-data")
+    repeat_status, _repeat_headers, _repeat_body = _run_asgi_request(asgi_app, "GET", "/home-data")
 
-    assert status == 200
-    assert _decode_json(body)["album_count"] == 1
-    assert hydrate_calls == [(asgi_library_state, app.config, False, False, False, False)]
+    assert (first_status, repeat_status) == (503, 503)
+    assert _decode_json(first_body) == {
+        "ok": False,
+        "code": "gallery_projection_pending",
+        "error": "The library is still loading.",
+    }
+    assert first_headers["retry-after"] == "1"
+    assert hydrate_calls == []
+    assert len(queued) == 1
+
+    function, args, kwargs = queued.pop()
+    function(*args, **kwargs)
+    published_status, _published_headers, published_body = _run_asgi_request(asgi_app, "GET", "/home-data")
+
+    assert hydrate_calls == [(False, False)]
+    assert published_status == 200
+    assert _decode_json(published_body) == {"kind": "home", "album_count": 1}
+    assert asgi_library_state["hydrate_in_progress"] is False
+    assert queued == []
+
+
+def test_asgi_home_data_reads_empty_state_once_hydration_settles_without_a_snapshot(app, asgi_app, monkeypatch):
+    from music_app.routes import api_read_asgi_routes as asgi_read_routes
+    from music_app.services import state as state_service
+
+    asgi_library_state = {
+        **app.library_state,
+        "albums": [],
+        "scan_in_progress": False,
+        "hydrate_in_progress": False,
+        "hydration_settled": False,
+    }
+    asgi_app.state.library_state = asgi_library_state
+    queued = _recording_hydrate_executor(monkeypatch, state_service)
+    monkeypatch.setattr(state_service, "hydrate_library_state_from_disk", lambda *_args, **_kwargs: False)
+    _memory_home_data_route(monkeypatch, asgi_read_routes)
+
+    pending_status, _headers, _body = _run_asgi_request(asgi_app, "GET", "/home-data")
+    function, args, kwargs = queued.pop()
+    function(*args, **kwargs)
+    settled_status, _settled_headers, settled_body = _run_asgi_request(asgi_app, "GET", "/home-data")
+
+    assert pending_status == 503
+    assert settled_status == 200
+    assert _decode_json(settled_body) == {"kind": "home", "album_count": 0}
+    assert queued == []
 
 
 def test_asgi_home_data_uses_postgres_root_sidebar_as_authoritative_state(app, asgi_app, monkeypatch):
     from music_app.routes import api_read_asgi_routes as asgi_read_routes
 
     repository_calls: list[dict[str, object]] = []
-    threadpool_calls: list[tuple[object, tuple[object, ...], dict[str, object]]] = []
-    threadpool_active = False
-
-    async def fake_run_in_threadpool(function, *args, **kwargs):
-        nonlocal threadpool_active
-        threadpool_calls.append((function, args, kwargs))
-        threadpool_active = True
-        try:
-            return function(*args, **kwargs)
-        finally:
-            threadpool_active = False
 
     def fake_build_home_payload(**_kwargs) -> dict[str, object]:
         return {
@@ -1435,7 +1471,7 @@ def test_asgi_home_data_uses_postgres_root_sidebar_as_authoritative_state(app, a
             assert config is app.config
 
         def build_root_sidebar_payload(self, *, query_params=None):
-            assert threadpool_active is True
+            _assert_off_event_loop()
             repository_calls.append(
                 {
                     "gallery_display": query_params.get("gallery_display"),
@@ -1454,15 +1490,9 @@ def test_asgi_home_data_uses_postgres_root_sidebar_as_authoritative_state(app, a
                 "view_data_source": "postgres_library_browse",
             }
 
-    monkeypatch.setattr(asgi_read_routes, "_hydrate_cached_library_for_asgi", lambda _request: None)
+    monkeypatch.setattr(asgi_read_routes, "_library_hydration_pending_for_asgi", lambda _request: None)
     monkeypatch.setattr(asgi_read_routes, "build_home_payload", fake_build_home_payload)
     monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FakePostgresSidebarRepository)
-    monkeypatch.setattr(
-        asgi_read_routes,
-        "run_in_threadpool",
-        fake_run_in_threadpool,
-        raising=False,
-    )
     monkeypatch.setattr(
         asgi_read_routes,
         "select_runtime_persistence_adapter",
@@ -1501,11 +1531,6 @@ def test_asgi_home_data_uses_postgres_root_sidebar_as_authoritative_state(app, a
             "categories": ["main_library", "new_arrivals"],
         }
     ]
-    assert len(threadpool_calls) == 1
-    threadpool_function, threadpool_args, threadpool_kwargs = threadpool_calls[0]
-    assert threadpool_function.__name__ == "build_root_sidebar_payload"
-    assert threadpool_args == ()
-    assert threadpool_kwargs["query_params"].get("gallery_display") == "covers"
 
 
 def test_asgi_home_data_omit_sidebar_keeps_postgres_counts_without_readding_sidebar(
@@ -1516,11 +1541,6 @@ def test_asgi_home_data_omit_sidebar_keeps_postgres_counts_without_readding_side
     from music_app.routes import api_read_asgi_routes as asgi_read_routes
 
     repository_queries: list[dict[str, object]] = []
-    threadpool_functions: list[str] = []
-
-    async def fake_run_in_threadpool(function, *args, **kwargs):
-        threadpool_functions.append(function.__name__)
-        return function(*args, **kwargs)
 
     def fake_build_home_payload(**kwargs) -> dict[str, object]:
         assert kwargs["query_args"].get("omit_sidebar") == "1"
@@ -1539,6 +1559,7 @@ def test_asgi_home_data_omit_sidebar_keeps_postgres_counts_without_readding_side
             raise AssertionError("omit_sidebar must not build the full Postgres sidebar payload")
 
         def build_root_counts_payload(self, *, query_params=None):
+            _assert_off_event_loop()
             repository_queries.append(
                 {
                     "omit_sidebar": query_params.get("omit_sidebar"),
@@ -1552,15 +1573,9 @@ def test_asgi_home_data_omit_sidebar_keeps_postgres_counts_without_readding_side
                 "show_all_artists_sidebar_link": True,
             }
 
-    monkeypatch.setattr(asgi_read_routes, "_hydrate_cached_library_for_asgi", lambda _request: None)
+    monkeypatch.setattr(asgi_read_routes, "_library_hydration_pending_for_asgi", lambda _request: None)
     monkeypatch.setattr(asgi_read_routes, "build_home_payload", fake_build_home_payload)
     monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FakePostgresSidebarRepository)
-    monkeypatch.setattr(
-        asgi_read_routes,
-        "run_in_threadpool",
-        fake_run_in_threadpool,
-        raising=False,
-    )
     monkeypatch.setattr(
         asgi_read_routes,
         "select_runtime_persistence_adapter",
@@ -1596,7 +1611,6 @@ def test_asgi_home_data_omit_sidebar_keeps_postgres_counts_without_readding_side
             "categories": ["main_library", "new_arrivals"],
         }
     ]
-    assert threadpool_functions == ["build_root_counts_payload"]
 
 
 def test_asgi_home_data_preserves_transient_sidebar_while_scan_is_active(app, asgi_app, monkeypatch):
@@ -1707,7 +1721,7 @@ def test_asgi_sidebar_root_uses_postgres_browse_without_flask_bridge(app, asgi_a
     app.config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://album_haven_app@localhost/app"
     app.config["PERSISTENCE_BACKENDS"] = {"library_browse": "postgres"}
     monkeypatch.setattr("music_app.services.library_browse_postgres.psycopg", type("FakePsycopg", (), {"connect": lambda self: None})())
-    monkeypatch.setattr(asgi_read_routes, "hydrate_library_state_for_config", fail_hydrate)
+    monkeypatch.setattr("music_app.services.state._HYDRATE_EXECUTOR.submit", fail_hydrate)
     monkeypatch.setattr(asgi_read_routes, "build_view_payload", fail_build_view_payload)
     assert not hasattr(asgi_read_routes, "_flask_app")
     monkeypatch.setattr(
@@ -1752,21 +1766,13 @@ def test_asgi_selected_artist_uses_postgres_browse_without_flask_bridge(app, asg
         "relation_views": {},
     }
 
-    def fake_hydrate_library_state_for_config(
-        library_state,
-        config,
-        *,
-        ensure_relations=False,
-        validate_cache=False,
-    ):
+    def fake_hydrate_library_state_for_config(library_state, config, _logger=None):
         assert library_state is asgi_app.state.library_state
         assert config is app.config
-        assert ensure_relations is True
-        assert validate_cache is False
         library_state["relation_views"] = {"artists": ["Broadcast"]}
         library_state["relations_last_built"] = 123.0
         hydrate_calls.append(True)
-        return False
+        return True
 
     def fail_build_view_payload():
         raise AssertionError("Postgres selected artist path must not call build_view_payload")
@@ -1813,7 +1819,7 @@ def test_asgi_selected_artist_uses_postgres_browse_without_flask_bridge(app, asg
     app.config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://album_haven_app@localhost/app"
     app.config["PERSISTENCE_BACKENDS"] = {"library_browse": "postgres"}
     monkeypatch.setattr("music_app.services.library_browse_postgres.psycopg", type("FakePsycopg", (), {"connect": lambda self: None})())
-    monkeypatch.setattr(asgi_read_routes, "hydrate_library_state_for_config", fake_hydrate_library_state_for_config)
+    monkeypatch.setattr(asgi_read_routes, "request_library_hydration_for_state", fake_hydrate_library_state_for_config)
     monkeypatch.setattr(asgi_read_routes, "build_view_payload", fail_build_view_payload)
     assert not hasattr(asgi_read_routes, "_flask_app")
     monkeypatch.setattr(
@@ -1855,20 +1861,12 @@ def test_asgi_selected_artist_without_omit_sidebar_uses_postgres_browse(app, asg
         "inventory_mutation_revision": 13,
     }
 
-    def fake_hydrate_library_state_for_config(
-        library_state,
-        config,
-        *,
-        ensure_relations=False,
-        validate_cache=False,
-    ):
+    def fake_hydrate_library_state_for_config(library_state, config, _logger=None):
         assert library_state is asgi_app.state.library_state
         assert config is app.config
-        assert ensure_relations is True
-        assert validate_cache is False
         library_state["relation_views"] = {"artists": ["Broadcast"]}
         hydrate_calls.append(True)
-        return False
+        return True
 
     def fail_build_view_payload(*args, **kwargs):
         raise AssertionError("Ordinary Postgres selected artist requests must not fall back to build_view_payload")
@@ -1907,7 +1905,7 @@ def test_asgi_selected_artist_without_omit_sidebar_uses_postgres_browse(app, asg
         "music_app.services.library_browse_postgres.psycopg",
         type("FakePsycopg", (), {"connect": lambda self: None})(),
     )
-    monkeypatch.setattr(asgi_read_routes, "hydrate_library_state_for_config", fake_hydrate_library_state_for_config)
+    monkeypatch.setattr(asgi_read_routes, "request_library_hydration_for_state", fake_hydrate_library_state_for_config)
     monkeypatch.setattr(asgi_read_routes, "build_view_payload", fail_build_view_payload)
     monkeypatch.setattr(
         asgi_read_routes,
@@ -2096,20 +2094,12 @@ def test_asgi_selected_artist_query_context_uses_postgres_browse(app, asgi_app, 
         "relation_views": {},
     }
 
-    def fake_hydrate_library_state_for_config(
-        library_state,
-        config,
-        *,
-        ensure_relations=False,
-        validate_cache=False,
-    ):
+    def fake_hydrate_library_state_for_config(library_state, config, _logger=None):
         assert library_state is asgi_app.state.library_state
         assert config is app.config
-        assert ensure_relations is True
-        assert validate_cache is False
         library_state["relation_views"] = {"artists": ["Broadcast"]}
         hydrate_calls.append(True)
-        return False
+        return True
 
     def fail_build_view_payload(*args, **kwargs):
         raise AssertionError("Postgres selected artist query-context requests must not fall back to build_view_payload")
@@ -2146,7 +2136,7 @@ def test_asgi_selected_artist_query_context_uses_postgres_browse(app, asgi_app, 
         "music_app.services.library_browse_postgres.psycopg",
         type("FakePsycopg", (), {"connect": lambda self: None})(),
     )
-    monkeypatch.setattr(asgi_read_routes, "hydrate_library_state_for_config", fake_hydrate_library_state_for_config)
+    monkeypatch.setattr(asgi_read_routes, "request_library_hydration_for_state", fake_hydrate_library_state_for_config)
     monkeypatch.setattr(asgi_read_routes, "build_view_payload", fail_build_view_payload)
     monkeypatch.setattr(
         asgi_read_routes,
@@ -2186,19 +2176,11 @@ def test_asgi_selected_artist_family_display_uses_postgres_browse(app, asgi_app,
         "relation_views": {},
     }
 
-    def fake_hydrate_library_state_for_config(
-        library_state,
-        config,
-        *,
-        ensure_relations=False,
-        validate_cache=False,
-    ):
+    def fake_hydrate_library_state_for_config(library_state, config, _logger=None):
         assert library_state is asgi_app.state.library_state
         assert config is app.config
-        assert ensure_relations is True
-        assert validate_cache is False
         hydrate_calls.append(True)
-        return False
+        return True
 
     def fail_build_view_payload(*args, **kwargs):
         raise AssertionError("Selected-artist family-display requests must not fall back to build_view_payload")
@@ -2235,7 +2217,7 @@ def test_asgi_selected_artist_family_display_uses_postgres_browse(app, asgi_app,
         "music_app.services.library_browse_postgres.psycopg",
         type("FakePsycopg", (), {"connect": lambda self: None})(),
     )
-    monkeypatch.setattr(asgi_read_routes, "hydrate_library_state_for_config", fake_hydrate_library_state_for_config)
+    monkeypatch.setattr(asgi_read_routes, "request_library_hydration_for_state", fake_hydrate_library_state_for_config)
     monkeypatch.setattr(asgi_read_routes, "build_view_payload", fail_build_view_payload)
     monkeypatch.setattr(
         asgi_read_routes,
@@ -2272,19 +2254,11 @@ def test_asgi_selected_artist_related_artist_filter_uses_postgres_browse(app, as
         "relation_views": {},
     }
 
-    def fake_hydrate_library_state_for_config(
-        library_state,
-        config,
-        *,
-        ensure_relations=False,
-        validate_cache=False,
-    ):
+    def fake_hydrate_library_state_for_config(library_state, config, _logger=None):
         assert library_state is asgi_app.state.library_state
         assert config is app.config
-        assert ensure_relations is True
-        assert validate_cache is False
         hydrate_calls.append(True)
-        return False
+        return True
 
     def fail_build_view_payload(*args, **kwargs):
         raise AssertionError("Selected-artist related-artist requests must not fall back to build_view_payload")
@@ -2322,7 +2296,7 @@ def test_asgi_selected_artist_related_artist_filter_uses_postgres_browse(app, as
         "music_app.services.library_browse_postgres.psycopg",
         type("FakePsycopg", (), {"connect": lambda self: None})(),
     )
-    monkeypatch.setattr(asgi_read_routes, "hydrate_library_state_for_config", fake_hydrate_library_state_for_config)
+    monkeypatch.setattr(asgi_read_routes, "request_library_hydration_for_state", fake_hydrate_library_state_for_config)
     monkeypatch.setattr(asgi_read_routes, "build_view_payload", fail_build_view_payload)
     monkeypatch.setattr(
         asgi_read_routes,
@@ -2360,19 +2334,11 @@ def test_asgi_selected_artist_primary_filter_uses_postgres_browse(app, asgi_app,
         "relation_views": {},
     }
 
-    def fake_hydrate_library_state_for_config(
-        library_state,
-        config,
-        *,
-        ensure_relations=False,
-        validate_cache=False,
-    ):
+    def fake_hydrate_library_state_for_config(library_state, config, _logger=None):
         assert library_state is asgi_app.state.library_state
         assert config is app.config
-        assert ensure_relations is True
-        assert validate_cache is False
         hydrate_calls.append(True)
-        return False
+        return True
 
     def fail_build_view_payload(*args, **kwargs):
         raise AssertionError("Selected-artist primary-filter requests must not fall back to build_view_payload")
@@ -2410,7 +2376,7 @@ def test_asgi_selected_artist_primary_filter_uses_postgres_browse(app, asgi_app,
         "music_app.services.library_browse_postgres.psycopg",
         type("FakePsycopg", (), {"connect": lambda self: None})(),
     )
-    monkeypatch.setattr(asgi_read_routes, "hydrate_library_state_for_config", fake_hydrate_library_state_for_config)
+    monkeypatch.setattr(asgi_read_routes, "request_library_hydration_for_state", fake_hydrate_library_state_for_config)
     monkeypatch.setattr(asgi_read_routes, "build_view_payload", fail_build_view_payload)
     monkeypatch.setattr(
         asgi_read_routes,
@@ -2448,21 +2414,13 @@ def test_asgi_album_search_uses_postgres_browse_without_flask_bridge(app, asgi_a
         "relation_views": {},
     }
 
-    def fake_hydrate_library_state_for_config(
-        library_state,
-        config,
-        *,
-        ensure_relations=False,
-        validate_cache=False,
-    ):
+    def fake_hydrate_library_state_for_config(library_state, config, _logger=None):
         assert library_state is asgi_app.state.library_state
         assert config is app.config
-        assert ensure_relations is True
-        assert validate_cache is False
         library_state["relation_views"] = {"artists": ["Broadcast"]}
         library_state["relations_last_built"] = 123.0
         hydrate_calls.append(True)
-        return False
+        return True
 
     def fail_build_view_payload():
         raise AssertionError("Postgres album search path must not call build_view_payload")
@@ -2509,7 +2467,7 @@ def test_asgi_album_search_uses_postgres_browse_without_flask_bridge(app, asgi_a
     app.config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://album_haven_app@localhost/app"
     app.config["PERSISTENCE_BACKENDS"] = {"library_browse": "postgres"}
     monkeypatch.setattr("music_app.services.library_browse_postgres.psycopg", type("FakePsycopg", (), {"connect": lambda self: None})())
-    monkeypatch.setattr(asgi_read_routes, "hydrate_library_state_for_config", fake_hydrate_library_state_for_config)
+    monkeypatch.setattr(asgi_read_routes, "request_library_hydration_for_state", fake_hydrate_library_state_for_config)
     monkeypatch.setattr(asgi_read_routes, "build_view_payload", fail_build_view_payload)
     assert not hasattr(asgi_read_routes, "_flask_app")
     monkeypatch.setattr(
@@ -2575,20 +2533,12 @@ def test_asgi_album_search_all_artists_without_omit_sidebar_uses_postgres_browse
         "relation_views": {},
     }
 
-    def fake_hydrate_library_state_for_config(
-        library_state,
-        config,
-        *,
-        ensure_relations=False,
-        validate_cache=False,
-    ):
+    def fake_hydrate_library_state_for_config(library_state, config, _logger=None):
         assert library_state is asgi_app.state.library_state
         assert config is app.config
-        assert ensure_relations is True
-        assert validate_cache is False
         library_state["relation_views"] = {"artists": ["Broadcast"]}
         hydrate_calls.append(True)
-        return False
+        return True
 
     def fail_build_view_payload(*args, **kwargs):
         raise AssertionError("Ordinary Postgres all-artists search requests must not fall back to build_view_payload")
@@ -2627,7 +2577,7 @@ def test_asgi_album_search_all_artists_without_omit_sidebar_uses_postgres_browse
         "music_app.services.library_browse_postgres.psycopg",
         type("FakePsycopg", (), {"connect": lambda self: None})(),
     )
-    monkeypatch.setattr(asgi_read_routes, "hydrate_library_state_for_config", fake_hydrate_library_state_for_config)
+    monkeypatch.setattr(asgi_read_routes, "request_library_hydration_for_state", fake_hydrate_library_state_for_config)
     monkeypatch.setattr(asgi_read_routes, "build_view_payload", fail_build_view_payload)
     monkeypatch.setattr(
         asgi_read_routes,
@@ -2666,10 +2616,10 @@ def test_postgres_browse_library_state_does_not_hydrate_when_postgres_family_loo
     asgi_app.state.library_state = {}
     app.config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://album_haven_app@localhost/app"
 
-    def fake_hydrate_cached_library_for_asgi(request, *, ensure_relations=False):
+    def fake_hydrate_cached_library_for_asgi(_request):
         raise AssertionError("Postgres browse state should not hydrate cached relation views during read routing")
 
-    monkeypatch.setattr(asgi_read_routes, "_hydrate_cached_library_for_asgi", fake_hydrate_cached_library_for_asgi)
+    monkeypatch.setattr(asgi_read_routes, "_library_hydration_pending_for_asgi", fake_hydrate_cached_library_for_asgi)
 
     request = Request(
         {
@@ -2901,7 +2851,7 @@ def test_asgi_full_root_album_browse_uses_postgres_browse_without_flask_bridge(a
     app.config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://album_haven_app@localhost/app"
     app.config["PERSISTENCE_BACKENDS"] = {"library_browse": "postgres"}
     monkeypatch.setattr("music_app.services.library_browse_postgres.psycopg", type("FakePsycopg", (), {"connect": lambda self: None})())
-    monkeypatch.setattr(asgi_read_routes, "hydrate_library_state_for_config", fail_hydrate)
+    monkeypatch.setattr("music_app.services.state._HYDRATE_EXECUTOR.submit", fail_hydrate)
     monkeypatch.setattr(asgi_read_routes, "build_view_payload", fail_build_view_payload)
     assert not hasattr(asgi_read_routes, "_flask_app")
     monkeypatch.setattr(
@@ -3072,21 +3022,9 @@ def test_asgi_sidebar_postgres_selection_requires_exact_root_sidebar_request(
 
     hydrate_calls: list[str] = []
 
-    def fake_hydrate_library_from_disk(*, ensure_relations=False, validate_cache=False):
-        hydrate_calls.append(f"{ensure_relations}:{validate_cache}")
-        return False
-
-    def fake_hydrate_library_state_for_config(
-        _library_state,
-        _config,
-        *,
-        ensure_relations=False,
-        validate_cache=False,
-    ):
-        return fake_hydrate_library_from_disk(
-            ensure_relations=ensure_relations,
-            validate_cache=validate_cache,
-        )
+    def fake_hydrate_library_state_for_config(_library_state, _config, _logger=None):
+        hydrate_calls.append("requested")
+        return True
 
     def fake_build_view_payload(**kwargs) -> dict[str, object]:
         query_args = kwargs["query_args"]
@@ -3099,7 +3037,7 @@ def test_asgi_sidebar_postgres_selection_requires_exact_root_sidebar_request(
     app.config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://album_haven_app@localhost/app"
     app.config["PERSISTENCE_BACKENDS"] = {"library_browse": "postgres"}
     monkeypatch.setattr("music_app.services.library_browse_postgres.psycopg", type("FakePsycopg", (), {"connect": lambda self: None})())
-    monkeypatch.setattr(asgi_read_routes, "hydrate_library_state_for_config", fake_hydrate_library_state_for_config)
+    monkeypatch.setattr(asgi_read_routes, "request_library_hydration_for_state", fake_hydrate_library_state_for_config)
     monkeypatch.setattr(asgi_read_routes, "build_view_payload", fake_build_view_payload)
 
     status, _headers, body = _run_asgi_request(
@@ -3138,7 +3076,7 @@ def test_asgi_selected_artist_postgres_selection_rejects_unsupported_browse_requ
         "music_app.services.library_browse_postgres.psycopg",
         type("FakePsycopg", (), {"connect": lambda self, *args, **kwargs: None})(),
     )
-    monkeypatch.setattr(asgi_read_routes, "hydrate_library_state_for_config", fail_hydrate_library_state_for_config)
+    monkeypatch.setattr(asgi_read_routes, "request_library_hydration_for_state", fail_hydrate_library_state_for_config)
     monkeypatch.setattr(asgi_read_routes, "build_view_payload", fail_build_view_payload)
 
     unsupported_queries = [
@@ -3174,19 +3112,11 @@ def test_asgi_selected_artist_page_shapes_without_surface_use_postgres_browse(
 
     hydrate_calls: list[bool] = []
 
-    def fake_hydrate_library_state_for_config(
-        library_state,
-        config,
-        *,
-        ensure_relations=False,
-        validate_cache=False,
-    ):
+    def fake_hydrate_library_state_for_config(library_state, config, _logger=None):
         assert library_state is asgi_app.state.library_state
         assert config is app.config
-        assert ensure_relations is True
-        assert validate_cache is False
         hydrate_calls.append(True)
-        return False
+        return True
 
     def fail_build_view_payload(**_kwargs):
         raise AssertionError("Selected-artist page-shape requests must not hydrate file-backed view payloads")
@@ -3220,7 +3150,7 @@ def test_asgi_selected_artist_page_shapes_without_surface_use_postgres_browse(
         "music_app.services.library_browse_postgres.psycopg",
         type("FakePsycopg", (), {"connect": lambda self, *args, **kwargs: None})(),
     )
-    monkeypatch.setattr(asgi_read_routes, "hydrate_library_state_for_config", fake_hydrate_library_state_for_config)
+    monkeypatch.setattr(asgi_read_routes, "request_library_hydration_for_state", fake_hydrate_library_state_for_config)
     monkeypatch.setattr(asgi_read_routes, "build_view_payload", fail_build_view_payload)
     monkeypatch.setattr(
         asgi_read_routes,
@@ -3272,7 +3202,7 @@ def test_asgi_album_search_postgres_selection_rejects_unsupported_search_request
     app.config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://album_haven_app@localhost/app"
     app.config["PERSISTENCE_BACKENDS"] = {"library_browse": "postgres"}
     monkeypatch.setattr("music_app.services.library_browse_postgres.psycopg", type("FakePsycopg", (), {"connect": lambda self: None})())
-    monkeypatch.setattr(asgi_read_routes, "hydrate_library_state_for_config", fail_hydrate_library_state_for_config)
+    monkeypatch.setattr(asgi_read_routes, "request_library_hydration_for_state", fail_hydrate_library_state_for_config)
     monkeypatch.setattr(asgi_read_routes, "build_view_payload", fail_build_view_payload)
 
     complex_queries = [
@@ -3319,7 +3249,7 @@ def test_asgi_root_album_browse_postgres_selection_rejects_unsupported_requests(
     app.config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://album_haven_app@localhost/app"
     app.config["PERSISTENCE_BACKENDS"] = {"library_browse": "postgres"}
     monkeypatch.setattr("music_app.services.library_browse_postgres.psycopg", type("FakePsycopg", (), {"connect": lambda self: None})())
-    monkeypatch.setattr(asgi_read_routes, "hydrate_library_state_for_config", fail_hydrate_library_state_for_config)
+    monkeypatch.setattr(asgi_read_routes, "request_library_hydration_for_state", fail_hydrate_library_state_for_config)
     monkeypatch.setattr(asgi_read_routes, "build_view_payload", fail_build_view_payload)
 
     complex_queries = [
@@ -3352,17 +3282,9 @@ def test_asgi_album_details_preserves_statuses_and_client_surface(app, monkeypat
     hydrate_calls: list[bool] = []
     detail_calls: list[tuple[str, object]] = []
 
-    def fake_hydrate_library_state_for_config(
-        _library_state,
-        _config,
-        *,
-        ensure_relations=False,
-        validate_cache=False,
-    ):
-        assert ensure_relations is False
-        assert validate_cache is False
+    def fake_hydrate_library_state_for_config(_library_state, _config, _logger=None):
         hydrate_calls.append(True)
-        return False
+        return True
 
     def fake_build_album_detail_payload(album_key, *, client_surface_class, config, library_state):
         assert config["MUSIC_DIR"] == app.config["MUSIC_DIR"]
@@ -3372,7 +3294,7 @@ def test_asgi_album_details_preserves_statuses_and_client_surface(app, monkeypat
             return None
         return {"album_key": album_key, "surface": str(client_surface_class)}
 
-    monkeypatch.setattr(asgi_read_routes, "hydrate_library_state_for_config", fake_hydrate_library_state_for_config)
+    monkeypatch.setattr(asgi_read_routes, "request_library_hydration_for_state", fake_hydrate_library_state_for_config)
     monkeypatch.setattr(asgi_read_routes, "build_album_detail_payload", fake_build_album_detail_payload)
     monkeypatch.setattr(
         asgi_read_routes,
@@ -3428,7 +3350,7 @@ def test_asgi_album_details_uses_postgres_repository_when_library_browse_is_post
 
     async def fake_run_in_threadpool(function, *args, **kwargs):
         worker_calls.append(function)
-        return function(*args, **kwargs)
+        return await run_in_threadpool(function, *args, **kwargs)
 
     def fail_hydrate(*_args, **_kwargs):
         raise AssertionError("Postgres album-details should not hydrate file-backed library state first")
@@ -3446,7 +3368,6 @@ def test_asgi_album_details_uses_postgres_repository_when_library_browse_is_post
                 return None
             return {"key": album_key, "surface": client_surface_class, "detail_loaded": True}
 
-    monkeypatch.setattr(asgi_read_routes, "_hydrate_cached_library_for_asgi", fail_hydrate)
     monkeypatch.setattr(asgi_read_routes, "build_album_detail_payload", fail_build_album_detail_payload)
     monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FakeRepository)
     monkeypatch.setattr(asgi_read_routes, "run_in_threadpool", fake_run_in_threadpool)
@@ -3496,7 +3417,7 @@ def test_asgi_album_details_finds_the_playing_album_by_its_track_file(
     built: list[int] = []
 
     async def fake_run_in_threadpool(function, *args, **kwargs):
-        return function(*args, **kwargs)
+        return await run_in_threadpool(function, *args, **kwargs)
 
     class FakeSnapshotRepository:
         def __init__(self, _config):
@@ -3565,7 +3486,6 @@ def test_asgi_album_details_unknown_query_parameter_never_falls_back_to_full_hyd
             postgres_calls.append(album_key)
             return {"key": album_key, "source": "postgres_repo"}
 
-    monkeypatch.setattr(asgi_read_routes, "_hydrate_cached_library_for_asgi", fail_hydrate)
     monkeypatch.setattr(asgi_read_routes, "build_album_detail_payload", fail_file_backed_detail)
     monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FakeRepository)
     monkeypatch.setattr(asgi_read_routes, "_repair_album_detail_cover_identity", lambda *_args: None)
@@ -3608,7 +3528,7 @@ def test_asgi_album_details_resolves_a_stale_identity_through_shared_lineage(
     detail_calls = []
 
     async def fake_run_in_threadpool(function, *args, **kwargs):
-        return function(*args, **kwargs)
+        return await run_in_threadpool(function, *args, **kwargs)
 
     class FakeLineageRepository:
         def __init__(self, config):
@@ -3688,7 +3608,7 @@ def test_asgi_album_details_accepts_matching_current_id_and_key_before_lineage(
     from music_app.routes import api_read_asgi_routes as asgi_read_routes
 
     async def fake_run_in_threadpool(function, *args, **kwargs):
-        return function(*args, **kwargs)
+        return await run_in_threadpool(function, *args, **kwargs)
 
     class FakeBrowseRepository:
         def __init__(self, _config):
@@ -3752,7 +3672,7 @@ def test_asgi_album_details_resolves_lineage_first_for_a_known_stale_client_iden
     from music_app.routes import api_read_asgi_routes as asgi_read_routes
 
     async def fake_run_in_threadpool(function, *args, **kwargs):
-        return function(*args, **kwargs)
+        return await run_in_threadpool(function, *args, **kwargs)
 
     choices = [
         {
@@ -3839,7 +3759,7 @@ def test_asgi_album_details_uses_valid_key_when_numeric_id_is_stale(
     detail_calls = []
 
     async def fake_run_in_threadpool(function, *args, **kwargs):
-        return function(*args, **kwargs)
+        return await run_in_threadpool(function, *args, **kwargs)
 
     class FakeBrowseRepository:
         def __init__(self, _config):
@@ -3904,14 +3824,24 @@ def test_asgi_album_details_uses_valid_key_when_numeric_id_is_stale(
     ]
 
 
-def test_asgi_album_details_returns_current_release_choices_for_a_stale_split(
+@pytest.mark.parametrize(
+    "query",
+    [
+        {"album_key": "artist::old", "album_id": "17"},
+        {"album_key": "artist::old"},
+    ],
+    ids=["card-with-id", "key-only"],
+)
+def test_asgi_album_details_never_offers_the_split_chooser_without_lineage_request(
     asgi_app,
     monkeypatch,
+    query,
 ):
+    """Gallery opens show both split results as cards, so only a notification asks."""
     from music_app.routes import api_read_asgi_routes as asgi_read_routes
 
     async def fake_run_in_threadpool(function, *args, **kwargs):
-        return function(*args, **kwargs)
+        return await run_in_threadpool(function, *args, **kwargs)
 
     choices = [
         {
@@ -3974,16 +3904,11 @@ def test_asgi_album_details_returns_current_release_choices_for_a_stale_split(
         asgi_app,
         "GET",
         "/album-details",
-        query={"album_key": "artist::old", "album_id": "17"},
+        query=query,
     )
 
-    assert status == 409
-    assert _decode_json(body) == {
-        "ok": False,
-        "error": "This album was split—choose the current release",
-        "resolution_kind": "album_split",
-        "current_releases": choices,
-    }
+    assert status == 404
+    assert _decode_json(body) == {"ok": False, "error": "Album not found"}
 
 
 def test_asgi_album_details_uses_transient_runtime_album_during_active_scan(
@@ -4033,7 +3958,7 @@ def test_asgi_album_details_uses_transient_runtime_album_during_active_scan(
         return {"key": album_key, "surface": client_surface_class, "source": "transient_runtime"}
 
     monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FailPostgresBrowseRepository)
-    monkeypatch.setattr(asgi_read_routes, "hydrate_library_state_for_config", fail_hydrate)
+    monkeypatch.setattr("music_app.services.state._HYDRATE_EXECUTOR.submit", fail_hydrate)
     monkeypatch.setattr(asgi_read_routes, "build_album_detail_payload", fake_build_album_detail_payload)
     monkeypatch.setattr(
         asgi_read_routes,
@@ -4122,7 +4047,6 @@ def test_asgi_active_scan_album_details_prefers_postgres_for_existing_committed_
                 "source": "postgres_repo",
             }
 
-    monkeypatch.setattr(asgi_read_routes, "_hydrate_cached_library_for_asgi", fail_hydrate)
     monkeypatch.setattr(
         asgi_read_routes,
         "build_album_detail_payload",
@@ -4290,7 +4214,6 @@ def test_asgi_album_details_uses_postgres_repository_for_regular_album_keys_with
             postgres_calls.append((album_key, client_surface_class))
             return {"key": album_key, "surface": client_surface_class, "source": "postgres_repo"}
 
-    monkeypatch.setattr(asgi_read_routes, "_hydrate_cached_library_for_asgi", fail_hydrate)
     monkeypatch.setattr(asgi_read_routes, "build_album_detail_payload", fail_build_album_detail_payload)
     monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FakeRepository)
     monkeypatch.setattr(
@@ -4342,7 +4265,6 @@ def test_asgi_album_details_postgres_selection_rejects_non_album_requests(
         def build_album_detail_payload(self, *_args, **_kwargs):
             raise AssertionError("Non-album album-details requests must not use the Postgres detail repository")
 
-    monkeypatch.setattr(asgi_read_routes, "_hydrate_cached_library_for_asgi", fail_hydrate)
     monkeypatch.setattr(asgi_read_routes, "build_album_detail_payload", fail_build_album_detail_payload)
     monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FakeRepository)
     monkeypatch.setattr(
@@ -4389,22 +4311,14 @@ def test_asgi_album_details_uses_query_inputs_without_flask_bridge(app, asgi_app
         detail_calls.append((album_key, client_surface_class))
         return {"album_key": album_key, "surface": client_surface_class}
 
-    def fake_hydrate_library_state_for_config(
-        library_state,
-        config,
-        *,
-        ensure_relations=False,
-        validate_cache=False,
-    ):
+    def fake_hydrate_library_state_for_config(library_state, config, _logger=None):
         assert library_state is asgi_app.state.library_state
         assert config is app.config
-        assert ensure_relations is False
-        assert validate_cache is False
         hydrate_calls.append(True)
-        return False
+        return True
 
     assert not hasattr(asgi_read_routes, "_flask_app")
-    monkeypatch.setattr(asgi_read_routes, "hydrate_library_state_for_config", fake_hydrate_library_state_for_config)
+    monkeypatch.setattr(asgi_read_routes, "request_library_hydration_for_state", fake_hydrate_library_state_for_config)
     monkeypatch.setattr(
         asgi_read_routes,
         "select_runtime_persistence_adapter",
@@ -5085,7 +4999,7 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
     app.config["PERSISTENCE_BACKENDS"] = {"library_browse": "postgres"}
     monkeypatch.delenv("ALBUM_HAVEN_E2E_PROBLEMATIC_SEED_KEY", raising=False)
     monkeypatch.delenv("ALBUM_HAVEN_E2E_PROBLEMATIC_FIXTURE_PATH", raising=False)
-    monkeypatch.setattr(asgi_read_routes, "_hydrate_cached_library_for_asgi", fail_runtime_fallback)
+    monkeypatch.setattr(asgi_read_routes, "_library_hydration_pending_for_asgi", fail_runtime_fallback)
     monkeypatch.setattr(asgi_read_routes, "build_problematic_albums_payload", fail_runtime_fallback)
     monkeypatch.setattr(asgi_read_routes, "build_problematic_album_detail_payload", fail_runtime_fallback)
     monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FakePostgresRepository)
@@ -5724,3 +5638,56 @@ def test_asgi_gallery_pending_projection_returns_retryable_response(app, asgi_ap
     assert _decode_json(body)["code"] == "gallery_projection_pending"
     assert headers["retry-after"] == "1"
     assert headers["cache-control"] == "no-store"
+
+
+@pytest.mark.parametrize(
+    ("path", "query", "builder_name"),
+    [
+        ("/home-data", None, "build_home_payload"),
+        ("/album-details", {"album_key": "non-album::Synthetic Artist"}, "build_album_detail_payload"),
+    ],
+)
+def test_asgi_runtime_payload_builds_keep_health_responsive(app, asgi_app, monkeypatch, path, query, builder_name):
+    from music_app.routes import api_read_asgi_routes as asgi_read_routes
+    from tests.py.asgi_testing import run_asgi_request_async
+
+    entered = Event()
+    release = Event()
+    finished = Event()
+
+    def blocked_builder(*_args, **_kwargs):
+        _assert_off_event_loop()
+        entered.set()
+        try:
+            release.wait(timeout=3)
+            return {"kind": "home", "key": "non-album::Synthetic Artist"}
+        finally:
+            finished.set()
+
+    asgi_app.state.library_state = {**app.library_state, "albums": [], "scan_in_progress": False}
+    # The library is hydrated, so the route builds instead of answering 'still loading'.
+    monkeypatch.setattr(asgi_read_routes, "_library_hydration_pending_for_asgi", lambda _request: None)
+    monkeypatch.setattr(asgi_read_routes, builder_name, blocked_builder)
+    monkeypatch.setattr(
+        asgi_read_routes,
+        "select_runtime_persistence_adapter",
+        lambda seam_id, _config: SimpleNamespace(seam_id=seam_id, effective_backend="memory"),
+    )
+
+    async def exercise():
+        request_task = asyncio.create_task(run_asgi_request_async(asgi_app, "GET", path, query=query))
+        try:
+            assert await asyncio.to_thread(entered.wait, 3), "Payload build did not start"
+            status, _headers, _body = await asyncio.wait_for(
+                run_asgi_request_async(asgi_app, "GET", "/health"), timeout=1,
+            )
+            assert status == 200
+            assert not finished.is_set(), "Health could not respond until the payload build finished"
+        finally:
+            release.set()
+            response = await asyncio.wait_for(request_task, timeout=5)
+        return response
+
+    status, _headers, _body = asyncio.run(exercise())
+
+    assert status == 200

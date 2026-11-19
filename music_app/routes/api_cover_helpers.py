@@ -132,10 +132,7 @@ def apply_cover_selection_for_tracks(
     resolved_state = library_state
 
     def find_updated_albums(updated_track_paths: set[str]) -> list[dict[str, object]]:
-        return find_albums_by_track_paths_in_albums(
-            resolved_state.get("albums", []) if isinstance(resolved_state, dict) else [],
-            updated_track_paths,
-        )
+        return find_albums_by_track_paths_in_albums(resolved_state, updated_track_paths)
 
     def find_problematic_album(updated_track_paths: set[str]) -> dict[str, object] | None:
         if not include_problematic_album:
@@ -154,12 +151,10 @@ def apply_cover_selection_for_tracks(
     return apply_cover_selection_service(
         library_state=resolved_state,
         track_paths=track_paths,
-        schedule_cache_updates_save=lambda cache_path, payload: schedule_cache_updates_save_for_config(
+        schedule_cache_updates_save=lambda payload: schedule_cache_updates_save_for_config(
             resolved_config,
-            cache_path,
             payload,
         ),
-        cache_path=resolved_config["CACHE_PATH"],
         find_updated_albums=find_updated_albums,
         find_problematic_album=find_problematic_album,
         cover_path=cover_path,

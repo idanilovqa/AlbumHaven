@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.11.37 - 2026-11-18
+
+- Large data responses (artist pages, search, gallery pages, Problematic Files) are now sent compressed to browsers that accept it. Selecting an artist on a large library downloads about 40 KB instead of about 1 MB, and search about 22 KB instead of about 275 KB, which makes these steps faster over a network (about 0.3 s faster for an artist page at 20 Mbps). Audio, streaming, partial (Range) and small responses are unchanged.
+
+## 0.11.36 - 2026-11-18
+
+- A new early CI gate, the bounded-interaction freeze guard, fails any change that makes a click, request or background step do work that grows with the whole library: whole-library loops, repeated identical requests, or blocking file and database work on the server's event loop. It measures each registered interaction at a small and a large size and fails when the counts outgrow their budget.
+- Covers are never cleared when a library drive is offline or a chosen cover file is missing. Cover Refresh skips albums on an unreachable drive and reports them as "library root unavailable"; a missing cover file is reported instead of being removed. App startup and the album cover integrity repair keep recorded choices too.
+- Last.fm scrobbles that failed to send are retried with no limit on attempts, with holds kept per account, and are checked 30 minutes later: a scrobble counts as confirmed when its time matches and either its artist or its title does. One Last.fm entry confirms only one listen.
+- After saving tags, the gallery stays where it was: the artists above no longer drop out, and a jump from the artist bar is immediate again.
+- Artist relationships now update when the watcher finds a change while they are being rebuilt; that change could be lost before.
+- Cover fetching, the MusicBrainz review status and other large reads no longer freeze the server for other requests.
+
+## 0.11.35 - 2026-11-18
+
+- The hosted Problematic Files regression gate runs its end-to-end cases again; since 0.11.34 it failed before running them.
+
+## 0.11.34 - 2026-11-18
+
+- Hosted regression gates can run just the named end-to-end cases or measured targets (`gates=focused`), so one failure is reproduced or checked in minutes instead of a full gate run.
+
+## 0.11.33 - 2026-11-18
+
+- The player's waveform no longer goes missing when another waveform is still being built. The server builds one waveform at a time and answers "busy" meanwhile; the player gave up after about 1.5 s and showed no waveform for that track. It now keeps waiting, every 2 s, for as long as the track stays loaded.
+- The next song is no longer silently skipped when the browser's track cache stops answering. The player looked for the next song in the cache before fetching it ahead, and a cache read that never returned left it waiting with nothing fetched, so playback stopped at the end of the current song. Like the start of a song, it now waits at most 0.5 s for the cache and then streams the next song from the server.
+
+## 0.11.31 - 2026-11-17
+
+- Android: the app keeps playing through a network outage of any length. Losing Wi-Fi no longer stops playback at once with "Playback unavailable": the received audio plays on, reconnects retry with a growing delay of up to 5 seconds, and when the network returns the rest of the song continues from exactly where it was. Pausing while offline keeps the received audio, and Play while still offline plays it on while the app keeps asking the server for playback every 2 seconds, instead of failing with "Playback ownership is unavailable". Only another device taking over playback stops it. Offline, a seek into the audio already received plays there at once, playing or paused; a seek past it puts the head where it was placed, makes no sound and does not advance (Play keeps it there), and when the network is back it plays from there. A paused seek offline no longer unloads the song. The server now renews a claim past its 30-second lease for the device that held it, until another device claims playback, so a phone that played on offline keeps playing when it reconnects.
+
+## 0.11.30 - 2026-11-17
+
+- Hovering Play no longer slides the loop scissors out when the player cannot cut a loop: with no track loaded, while another tab holds playback ("Playing in another tab"), or when playback is unavailable. The scissors stay folded beside Play. If playback is lost while they are open, they fold at once.
+
+## 0.11.27 - 2026-11-17
+
+- The server sends JavaScript, CSS and other text files gzip-compressed to browsers that accept it, so a first visit downloads about 0.6 MB of scripts and styles instead of about 2.9 MB. Images and audio are sent as before.
+
+## 0.11.26 - 2026-11-17
+
+- The server no longer freezes while it builds the library home view (`/home-data`, opened by the phone layout's library home and by the Android app). It read the library root settings from the database twice for every loose or non-album track; it now reads them once per build, and the home, News and file-backed album-detail payloads are built off the server's event loop, so other requests keep being answered meanwhile.
+
+## 0.11.25 - 2026-11-17
+
+- Opening an album from a gallery card no longer shows the "This album was split" chooser; it appears only from a notification about a split album. If an album opened from the gallery changed elsewhere, the gallery refreshes in place, Album Details closes, and a toast says "This album changed—choose it again in the gallery." An album you just split yourself opens the matching release.
+
 ## 0.11.24 - 2026-11-17
 
 - Android app: the library offers once to set Battery to Unrestricted, so battery saving stops closing the app in the background and reloading the library on return; any answer is final.

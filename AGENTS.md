@@ -52,6 +52,16 @@ operate, or contribute to the application.
   The controlled visual cases must retain a continuous trigger-to-panel outline
   and unchanged trigger/icon geometry for both Artist Info invocations, Album
   Types, and Artist Family.
+- Indexed reads for library-wide data (owner rule, 2026-11-19): any surface that
+  lists, searches, filters, counts or pages over library-wide data reads a
+  persisted, indexed projection, kept current album by album by the save,
+  watcher and scan paths (through the database change journal). A request,
+  startup, deploy, save or watcher pass never computes such data from the whole
+  library; only a one-time backfill, shown with a visible progress state, or an
+  explicit Full Rescan may. In-memory caches may sit in front of the persisted
+  projection but never replace it. A new surface adds its projection, journal
+  marks and backfill in the same change. The Problematic Files index
+  (`music_app/services/problematic_index.py`, migration 0188) is the reference.
 - Postgres migrations (owner rule, 2026-11-10): every file in `migrations/postgres`
   has a unique four-digit number. Numbers may leave gaps and may be applied out
   of order, but a new migration never reuses a number that main or any open pull

@@ -4512,7 +4512,7 @@
       "databaseIdentity": "case:watcher-problematic-live",
       "filesystemCopy": "media/cases/watcher-problematic-live"
     },
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.config.js",

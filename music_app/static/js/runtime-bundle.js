@@ -42533,7 +42533,7 @@ function renderTrackModalRelease(album) {
   els.list.innerHTML = albumMissing ? '' : buildTrackListHtml(tracks, album, totalLength) + duplicateReview;
   if (typeof syncAlbumTrackCreditMotion === 'function') syncAlbumTrackCreditMotion(els.list);
   if (!albumMissing && typeof requestSearchHighlights === 'function') {
-    refreshAlbumTrackSearchHighlights(els.list, tracks, album, totalLength);
+    refreshAlbumTrackSearchHighlights(els.list, tracks, album);
   }
   if (els.footer) {
     els.footer.textContent = '';
@@ -42671,8 +42671,9 @@ function groupAlbumTracks(tracks) {
 
 
 // Album Details tracks are not in a search response: during a search, ask the server which of their titles and
-// artists it matched, then redraw this album's table if it is still the one shown.
-function refreshAlbumTrackSearchHighlights(list, tracks, album, totalLength) {
+// artists it matched, then mark them in the table on screen. Rows are updated in place, never redrawn, so a play
+// click that lands while the answer arrives still reaches its button.
+function refreshAlbumTrackSearchHighlights(list, tracks, album) {
   const query = activeSearchHighlightQuery();
   const render = {};
   list.albumTrackSearchHighlightRender = render;
@@ -42681,10 +42682,21 @@ function refreshAlbumTrackSearchHighlights(list, tracks, album, totalLength) {
   const texts = [...(tracks || []), ...rows].flatMap((track) => [track?.title, track?.secondary_artist]);
   void requestSearchHighlights(texts).then((answered) => {
     if (!answered || list.albumTrackSearchHighlightRender !== render || activeSearchHighlightQuery() !== query) return;
-    const table = list.querySelector('.album-track-table');
-    if (!table) return;
-    table.outerHTML = buildTrackListHtml(tracks, album, totalLength);
-    if (typeof syncAlbumTrackCreditMotion === 'function') syncAlbumTrackCreditMotion(list);
+    list.querySelectorAll('.album-track-table__row').forEach((row) => {
+      const title = row.querySelector('.album-track-table__title');
+      const titleText = title?.firstChild;
+      if (!titleText || titleText.nodeType !== Node.TEXT_NODE) return;
+      const ranges = searchHighlightRanges(titleText.textContent);
+      const secondary = title.querySelector('.album-track-table__secondary')?.textContent || '';
+      if (!ranges && !searchHighlightRanges(secondary)) return;
+      if (ranges) {
+        const markup = document.createElement('template');
+        markup.innerHTML = buildHighlightedTextHtml(titleText.textContent, ranges);
+        titleText.replaceWith(markup.content);
+      }
+      row.classList.add('album-track-table__row--search-match');
+      row.dataset.trackSearchMatch = 'true';
+    });
   }).catch(() => {});
 }
 

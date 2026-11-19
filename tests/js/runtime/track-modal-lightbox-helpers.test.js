@@ -3561,6 +3561,9 @@ test('gallery album details with other tracks than the open album never replace 
   assert.equal(context.fetchCalls.length, 1);
   assert.equal(context.renderTrackModalReleaseAlbums.length, renders, 'nothing is redrawn');
   assert.deepEqual(Array.from(context.state.modalReleases[context.state.modalReleaseIndex].tracks, (track) => track.path), ['a']);
+  // Edit Tags takes the open album's tracks: the moved track is never edited from here.
+  const editButton = { dataset: {}, getAttribute: () => null, closest: () => null };
+  assert.deepEqual(Array.from(context.resolveTrackModalActionAlbum(editButton).tracks, (track) => track.path), ['a']);
 });
 
 test('gallery album details that arrive after the modal closed or moved on are dropped', async () => {

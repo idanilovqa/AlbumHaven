@@ -404,3 +404,180 @@ test('FTC-PLAYBACK-OFFLINE-003 under full CPU load, each seek past the received 
     relay.close();
   }
 });
+
+// Owner retest B-D4 round 7 (2026-11-18), verbatim: "Even first click into the zone that supposedly
+// was dowloaded leaves player without audip. Then playhead is being reset into the beginning of the
+// track. The song does not restart when network is back. A track that was playing does not even want
+// to start playing after network restart when I click on PLAY button in the player. And it took 6
+// clicks for another song to try." The owner's laptop serves the app through a Cloudflare tunnel:
+// Wi-Fi off cuts the browser and the server alike, and for about a minute after it returns the
+// tunnel answers every request with a 530 error page.
+for (const { id, serverBackAfterMs, outcome } of [
+  { id: '004', serverBackAfterMs: 0, outcome: 'with Wi-Fi off and on' },
+  { id: '005', serverBackAfterMs: 60_000, outcome: 'with the server answering 530 for a minute after Wi-Fi returns' },
+]) {
+  test(`FTC-PLAYBACK-OFFLINE-${id} owner round 7 ${outcome}: a click in the received audio plays at once, the head never jumps to the start, the song plays on by itself when the server is back, one Play continues it, and one press plays another song`, {
+    tag: '@area:playback',
+  }, async ({ page, galleryActions, globalPlayerActions, navigationPanelActions, playbackEvidence, settingsModalAppBarActions, stepLogger, trackModalActions, utilityAppearanceActions, utilityTabBarActions }, testInfo) => {
+    test.setTimeout(12 * 60 * 1000);
+    const OTHER_TITLE = 'Medium Cold Signal 07';
+    const SHOWN_WITHIN_MS = 1000;
+    const AUDIBLE_WITHIN_MS = 3000;
+    const ONE_PRESS_BUDGET_MS = 8000;
+    const appPort = Number(new URL(testInfo.project.use.baseURL).port);
+    const relay = await startNetworkRelay(appPort);
+    const player = globalPlayerActions.globalPlayer;
+    const paths = {};
+    let load = null;
+    let durationSeconds = 0;
+    let stopWatching = null;
+
+    const shownSeconds = async () => displayedSeconds(await player.time.textContent());
+    // The head is watched all along: it may never show a place before the one the listener put it at.
+    const watchHead = () => {
+      let lowest = Number.POSITIVE_INFINITY;
+      let stopped = false;
+      const loop = (async () => {
+        while (!stopped) {
+          const shown = await shownSeconds().catch(() => Number.NaN);
+          if (Number.isFinite(shown)) lowest = Math.min(lowest, shown);
+          await page.waitForTimeout(250);
+        }
+      })();
+      stopWatching = async () => {
+        stopped = true;
+        stopWatching = null;
+        await loop;
+        return lowest;
+      };
+    };
+    const lowestShown = () => stopWatching();
+    const wifiOff = async () => {
+      await page.context().setOffline(true);
+      relay.stall();
+    };
+    const wifiOn = async () => {
+      await page.context().setOffline(false);
+      if (serverBackAfterMs) await relay.serverUnreachable();
+      else await relay.restore({ revive: false });
+    };
+    const serverBack = () => relay.restore({ revive: false });
+    const audibleWithin = async (mark, path, timeout) => {
+      const evidence = await playbackEvidence.waitForTrackPlaybackEvidence({ after: mark, path }, { timeout });
+      expect(evidence.nonZeroSamples).toBeGreaterThan(0);
+      expect(evidence.renderedFrameDelta).toBeGreaterThan(0);
+    };
+    // How far the song had arrived when the network went (all of it: Infinity).
+    const receivedThroughSeconds = () => page.evaluate(() => {
+      const engine = state.player?.streaming;
+      const detached = engine?.detached;
+      if (!detached) return null;
+      if (detached.kind === 'offline') return Number.POSITIVE_INFINITY;
+      return Number.isFinite(detached.spliceFrame) ? detached.spliceFrame / engine.sampleRate : 0;
+    });
+    const clickAt = async (target) => {
+      const bounds = await player.timeline.boundingBox();
+      await player.timeline.click({ position: { x: bounds.width * (target / durationSeconds), y: bounds.height / 2 } });
+    };
+    const clickOnceOffline = async (target, settleMs) => {
+      const received = await receivedThroughSeconds();
+      const mark = await playbackEvidence.playbackMark();
+      await clickAt(target);
+      watchHead();
+      await expect.poll(shownSeconds, { timeout: SHOWN_WITHIN_MS }).toBeGreaterThanOrEqual(target - 1);
+      if (target < received) await audibleWithin(mark, paths[TITLE], AUDIBLE_WITHIN_MS);
+      await page.waitForTimeout(settleMs);
+      expect(await lowestShown(), 'the head never went back before the clicked place').toBeGreaterThanOrEqual(target - 1);
+      await expect(player.playButton).toHaveAttribute('aria-label', 'Pause');
+    };
+
+    try {
+      await stepLogger.step('Waveform seekbar; the long song plays half a minute', async () => {
+        await page.goto(`${relay.origin}/?surface=albums`);
+        await galleryActions.waitForGalleryReady();
+        await settingsModalAppBarActions.openSettings();
+        await utilityTabBarActions.openTab('appearance');
+        await utilityAppearanceActions.waitForReady();
+        await utilityAppearanceActions.saveSeekbarMode('waveform');
+        await settingsModalAppBarActions.closeSettings();
+        await navigationPanelActions.selectSidebarArtistByName(ARTIST);
+        await navigationPanelActions.waitForSidebarSelection(ARTIST);
+        await galleryActions.clickAlbumDetailsByArtistAndAlbum(ARTIST, ALBUM);
+        await trackModalActions.waitForInteractiveSummary();
+        for (const title of [TITLE, OTHER_TITLE]) {
+          paths[title] = String(await trackModalActions.trackModal.trackRowByTitle(title).getAttribute('data-track-row-path') || '');
+          expect(paths[title]).not.toBe('');
+        }
+        if (process.env.CI) load = await startCpuLoad([page]);
+        const mark = await playbackEvidence.playbackMark();
+        await trackModalActions.playTrackByTitle(TITLE);
+        await audibleWithin(mark, paths[TITLE], 60_000);
+        await trackModalActions.close();
+        durationSeconds = (await player.readPlaybackTiming()).duration;
+        expect(durationSeconds).toBeGreaterThan(180);
+        await expect.poll(shownSeconds, { timeout: 60_000 }).toBeGreaterThanOrEqual(30);
+      });
+
+      await stepLogger.step('Wi-Fi off; one click a minute before the end plays at once if received, else waits there; 40 s on the head never went back', async () => {
+        await wifiOff();
+        await expect.poll(receivedThroughSeconds, { timeout: 10_000 }).not.toBeNull();
+        await clickOnceOffline(Math.floor(durationSeconds - 60), 40_000);
+      });
+
+      await stepLogger.step('Still off: one click two minutes before the end does the same', async () => {
+        await clickOnceOffline(Math.floor(durationSeconds - 120), 5000);
+      });
+
+      await stepLogger.step('Wi-Fi on: once the server answers again the song plays on by itself, nothing pressed', async () => {
+        const heldAt = await shownSeconds();
+        watchHead();
+        await wifiOn();
+        if (serverBackAfterMs) {
+          await page.waitForTimeout(serverBackAfterMs);
+          await expect(player.playButton, 'still on play while the server is away').toHaveAttribute('aria-label', 'Pause');
+          await serverBack();
+        }
+        const mark = await playbackEvidence.playbackMark();
+        await audibleWithin(mark, paths[TITLE], ONE_PRESS_BUDGET_MS);
+        expect(await lowestShown(), 'the head never went back').toBeGreaterThanOrEqual(heldAt - 1);
+        await expect(player.playButton).toHaveAttribute('aria-label', 'Pause');
+      });
+
+      await stepLogger.step('After the network returned, Pause then one Play continues the song from its place', async () => {
+        await player.playButton.click();
+        await expect(player.playButton).toHaveAttribute('aria-label', 'Play');
+        const pausedAt = await shownSeconds();
+        const mark = await playbackEvidence.playbackMark();
+        await player.playButton.click();
+        await audibleWithin(mark, paths[TITLE], ONE_PRESS_BUDGET_MS);
+        await expect(player.playButton).toHaveAttribute('aria-label', 'Pause');
+        expect(await shownSeconds()).toBeGreaterThanOrEqual(pausedAt);
+      });
+
+      await stepLogger.step('Wi-Fi off 10 s and on; one press on another song plays it once the server answers', async () => {
+        await galleryActions.clickAlbumDetailsByArtistAndAlbum(ARTIST, ALBUM);
+        await trackModalActions.waitForInteractiveSummary();
+        await wifiOff();
+        await page.waitForTimeout(10_000);
+        await wifiOn();
+        await page.waitForTimeout(1000);
+        const mark = await playbackEvidence.playbackMark();
+        await trackModalActions.playTrackByTitle(OTHER_TITLE);
+        if (serverBackAfterMs) {
+          await page.waitForTimeout(serverBackAfterMs);
+          await serverBack();
+        }
+        await audibleWithin(mark, paths[OTHER_TITLE], ONE_PRESS_BUDGET_MS);
+        await expect(player.title).toContainText(OTHER_TITLE);
+        await expect(player.playButton).toHaveAttribute('aria-label', 'Pause');
+      });
+    } finally {
+      await stopWatching?.();
+      await load?.stop();
+      await page.context().setOffline(false);
+      await relay.restore();
+      await globalPlayerActions.pauseToReleasePlaybackClaim();
+      relay.close();
+    }
+  });
+}

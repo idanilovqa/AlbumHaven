@@ -1711,6 +1711,7 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
   }
   // Only a search the owner just submitted may open its best collection; redraws never do.
   state.ui.customCollectionSearchAutoOpenQuery = String(nextQuery || '').trim();
+  if (typeof prefetchCustomCollectionCatalogForSearch === 'function') prefetchCustomCollectionCatalogForSearch(nextQuery);
   clearPendingSelectedArtistReconcile();
   clearPendingGallerySearchCommit();
   if (

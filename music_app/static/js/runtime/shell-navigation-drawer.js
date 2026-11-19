@@ -274,8 +274,17 @@ function syncCustomCollectionsAfterTagEdit({ fresh = false } = {}) {
   redraw(collections);
 }
 
-function loadCustomCollectionCatalog({ fresh = false } = {}) {
-  const url = customCollectionCatalogUrl();
+// Owner 2026-11-18 (profile of a slow "fields" search): a submitted search asks for its collections catalog at
+// once, beside its gallery request, instead of after the gallery has rendered; the redraw then finds it loaded
+// or in flight under the same key.
+function prefetchCustomCollectionCatalogForSearch(query) {
+  const normalized = String(query || '').trim();
+  if (!normalized) return;
+  void loadCustomCollectionCatalog({ view: { ...(state.view || {}), query: normalized } }).catch(() => {});
+}
+
+function loadCustomCollectionCatalog({ fresh = false, view = state.view || {} } = {}) {
+  const url = customCollectionCatalogUrl(view);
   const key = url.search;
   if (customCollectionCatalog.request?.key === key) return customCollectionCatalog.request.promise;
   // A loaded catalog answers again: every sidebar redraw during a search used to refetch it and its artwork.

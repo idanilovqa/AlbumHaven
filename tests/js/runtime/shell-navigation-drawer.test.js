@@ -1245,3 +1245,22 @@ test('reopening the collections tree draws its cached list once when the refresh
   await context.setLibraryNavigationMode('custom-collections');
   assert.equal(writes, 1, 'the cached rows are drawn once; the identical refresh does not redraw them');
 });
+
+test('a submitted search asks for its collections catalog at once, and the redraw reuses that request', async () => {
+  // Profile 2026-11-18: the catalog waited for the rendered gallery, adding a full round trip to a searched collection.
+  const { context } = loadHelper();
+  stubCollectionTree(context);
+  context.URL = URL;
+  context.escapeHtml = value => String(value);
+  const requests = [];
+  context.fetch = (path) => {
+    requests.push(path);
+    return Promise.resolve({ ok: true, status: 200, json: async () => ({ custom_collections: [], loose_tracks_count: 0 }) });
+  };
+  context.state.view.query = '';
+  context.prefetchCustomCollectionCatalogForSearch('fields');
+  assert.deepEqual(requests, ['/library/custom-collections?q=fields'], 'requested before the gallery answers');
+  context.state.view.query = 'fields';
+  await context.syncCustomCollectionSearchIndicator();
+  assert.equal(requests.length, 1, 'the redraw after the gallery answers reuses it');
+});

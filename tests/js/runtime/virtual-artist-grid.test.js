@@ -7181,3 +7181,18 @@ for (const mode of ['cards', 'covers']) {
     });
   }
 }
+
+test('a card is rebuilt only when its own search highlight changes', () => {
+  const { context } = createRuntimeContext();
+  const ranges = new Map([['Pinta Tu Aldea', [[9, 14]]]]);
+  let searching = true;
+  context.searchHighlightRanges = (text) => (searching ? ranges.get(String(text)) || null : null);
+  const matched = { key: 'alas::pinta', name: 'Pinta Tu Aldea', album_artist: 'Alas', year: 1983 };
+  const unmatched = { key: 'argovia::primal', name: 'Primal Repetition', album_artist: 'Argovia', year: 2026 };
+  const renderKey = vm.runInContext('getAlbumCardRenderKey', context);
+  const before = [matched, unmatched].map((album) => renderKey(album));
+  searching = false;
+  const after = [matched, unmatched].map((album) => renderKey(album));
+  assert.notEqual(after[0], before[0]);
+  assert.equal(after[1], before[1]);
+});

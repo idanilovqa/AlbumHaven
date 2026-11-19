@@ -172,17 +172,18 @@ function buildSidebarStructureSignature(sidebarArtists = [], options = {}) {
     && options.showAllArtistsOverride !== null
     ? (options.showAllArtistsOverride ? '1' : '0')
     : String(options.view?.show_all_artists_sidebar_link !== false ? '1' : '0');
+  const highlightRanges = typeof searchHighlightRanges === 'function' ? searchHighlightRanges : () => null;
   const artistSignature = sidebarArtists.map((item) => [
     String(item?.artist || ''),
     String(item?.artist_display || item?.artist || ''),
     String(item?.count ?? ''),
+    // A row redraws when its search highlight changes.
+    JSON.stringify(highlightRanges(item?.artist_display || item?.artist) || ''),
   ].join('\u001f')).join('\u001e');
   const virtualWindow = options.virtualWindow?.virtualized
     ? `${options.virtualWindow.start}:${options.virtualWindow.end}`
     : 'all';
-  // Rows carry the active search's highlights, so another search redraws them.
-  const highlightQuery = typeof activeSearchHighlightQuery === 'function' ? activeSearchHighlightQuery() : '';
-  return `${showAllArtistsLink}\u001d${artistSignature}\u001c${virtualWindow}\u001b${highlightQuery}`;
+  return `${showAllArtistsLink}\u001d${artistSignature}\u001c${virtualWindow}`;
 }
 
 function applySidebarSelectionMarkup(container, options = {}) {

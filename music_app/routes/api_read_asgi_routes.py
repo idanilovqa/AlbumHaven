@@ -770,7 +770,8 @@ def _build_transient_scan_view_payload(
 
 def _with_search_highlights(request: Request, payload: object) -> object:
     """A search response names the characters of its display texts that the search matched."""
-    query = str(request.query_params.get("q") or "").strip()
+    # The first q, as the search itself reads it (_AsgiQueryArgs).
+    query = str(_AsgiQueryArgs(request.query_params).get("q") or "").strip()
     if query and isinstance(payload, dict):
         texts = build_search_highlights(query, collect_search_highlight_texts(payload))
         payload = {**payload, "search_highlights": {"query": query, "texts": texts}}

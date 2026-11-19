@@ -87,10 +87,7 @@ function albumCardHtml(album, options = {}) {
     openLabel: `Open ${displayName} tracklist${albumMissing ? '. Album not found' : ''}`,
     title: displayName,
     artist: album.album_artist,
-    ...(typeof searchHighlightRanges === 'function' ? {
-      titleHighlightRanges: searchHighlightRanges(displayName),
-      artistHighlightRanges: searchHighlightRanges(album.album_artist),
-    } : {}),
+    ...getAlbumCardHighlightRanges(album),
     year: displayYear,
     ratingHtml: ratingMarkup,
     trackCount: summary.trackCount,
@@ -117,6 +114,16 @@ function getAlbumCardSourceCategories(album) {
   return ['main', 'hoard', 'new_arrivals'].filter((category) => normalized.includes(category));
 }
 
+function getAlbumCardHighlightRanges(album) {
+  if (typeof searchHighlightRanges !== 'function') return {};
+  const titleHighlightRanges = searchHighlightRanges(album?.display_name || album?.name || '');
+  const artistHighlightRanges = searchHighlightRanges(album?.album_artist);
+  return {
+    ...(titleHighlightRanges ? { titleHighlightRanges } : {}),
+    ...(artistHighlightRanges ? { artistHighlightRanges } : {}),
+  };
+}
+
 function getAlbumCardRenderKey(album) {
   const summary = getAlbumCardSummary(album);
   return JSON.stringify([
@@ -133,7 +140,8 @@ function getAlbumCardRenderKey(album) {
     albumHasDisplayCover(album) ? buildAlbumDisplayCoverUrl(album) : '',
     String(album?.cover_ref || '').trim(),
     String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim(),
-    typeof activeSearchHighlightQuery === 'function' ? activeSearchHighlightQuery() : '',
+    // Only a card whose own highlights change is rebuilt: leaving a search keeps unmatched cards and covers.
+    JSON.stringify(getAlbumCardHighlightRanges(album)),
     String(album?.inventory_status || ''),
     String(album?.missing_since || ''),
     getAlbumCardSourceCategories(album),

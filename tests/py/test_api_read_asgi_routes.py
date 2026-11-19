@@ -629,6 +629,8 @@ def test_asgi_view_data_uses_generation_owned_preview_during_active_scan(
     assert _decode_json(body) == {
         "view_data_source": "transient_scan_state",
         "album_count": 1,
+        # A search response carries its highlights (none here: the payload has no display text).
+        **({"search_highlights": {"query": query["q"], "texts": {}}} if "q" in query else {}),
     }
     assert len(build_calls) == 1
     assert asgi_app.state.library_state["albums"] == []
@@ -738,6 +740,7 @@ def test_asgi_active_scan_album_search_prefers_postgres_committed_library_over_t
         "album_count": 1,
         "view_data_source": "postgres_library_browse",
         "inventory_mutation_revision": 0,
+        "search_highlights": {"query": "tender", "texts": {}},
     }
     assert len(postgres_calls) == 1
 
@@ -941,6 +944,7 @@ def test_asgi_search_preview_uses_postgres_without_file_backed_hydration(
         "payload_tier": "search_preview",
         "view_data_source": "postgres_library_browse",
         "inventory_mutation_revision": 0,
+        "search_highlights": {"query": "Neal Morse", "texts": {}},
     }
     assert len(postgres_calls) == 1
 
@@ -1323,6 +1327,7 @@ def test_asgi_view_and_home_routes_hydrate_and_log_through_explicit_asgi_depende
         "album_count": 3,
         "artist_count": 2,
         "inventory_mutation_revision": 0,
+        "search_highlights": {"query": "mono", "texts": {}},
     }
     assert home_payload == {
         "kind": "home",
@@ -1335,8 +1340,9 @@ def test_asgi_view_and_home_routes_hydrate_and_log_through_explicit_asgi_depende
     assert build_view_kwargs["query_args"].get("q") == "mono"
     assert build_view_kwargs["query_args"].getlist("q") == ["mono", "ignored-last-query-value"]
     assert build_view_kwargs["query_args"].get("artist") == "Mono"
+    # The request log sees the payload before the response adds its search highlights.
     assert logged_calls == [
-        (view_payload, 10.0),
+        ({key: value for key, value in view_payload.items() if key != "search_highlights"}, 10.0),
         (home_payload, 20.0),
     ]
 
@@ -5889,6 +5895,8 @@ def test_asgi_gallery_pending_projection_returns_retryable_response(app, asgi_ap
 
 
 def test_library_loose_tracks_applies_request_privacy_projection(monkeypatch):
+    from starlette.datastructures import QueryParams
+
     from music_app.routes import api_read_asgi_routes as routes
 
     raw_payload = {"library_non_album_tracks": [{"path": r"C:\Music\private.flac"}]}
@@ -5897,7 +5905,7 @@ def test_library_loose_tracks_applies_request_privacy_projection(monkeypatch):
             config={},
             library_state={"inventory_mutation_revision": 9},
         )),
-        query_params={},
+        query_params=QueryParams(),
     )
 
     class FakeRepository:
@@ -5905,7 +5913,7 @@ def test_library_loose_tracks_applies_request_privacy_projection(monkeypatch):
             pass
 
         def build_library_loose_tracks_payload(self, *, query_params):
-            assert query_params == {}
+            assert not query_params
             return raw_payload
 
     monkeypatch.setattr(routes, "is_library_browse_postgres_available", lambda _config: True)

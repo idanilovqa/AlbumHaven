@@ -4403,17 +4403,18 @@ function buildSidebarStructureSignature(sidebarArtists = [], options = {}) {
     && options.showAllArtistsOverride !== null
     ? (options.showAllArtistsOverride ? '1' : '0')
     : String(options.view?.show_all_artists_sidebar_link !== false ? '1' : '0');
+  const highlightRanges = typeof searchHighlightRanges === 'function' ? searchHighlightRanges : () => null;
   const artistSignature = sidebarArtists.map((item) => [
     String(item?.artist || ''),
     String(item?.artist_display || item?.artist || ''),
     String(item?.count ?? ''),
+    // A row redraws when its search highlight changes.
+    JSON.stringify(highlightRanges(item?.artist_display || item?.artist) || ''),
   ].join('\u001f')).join('\u001e');
   const virtualWindow = options.virtualWindow?.virtualized
     ? `${options.virtualWindow.start}:${options.virtualWindow.end}`
     : 'all';
-  // Rows carry the active search's highlights, so another search redraws them.
-  const highlightQuery = typeof activeSearchHighlightQuery === 'function' ? activeSearchHighlightQuery() : '';
-  return `${showAllArtistsLink}\u001d${artistSignature}\u001c${virtualWindow}\u001b${highlightQuery}`;
+  return `${showAllArtistsLink}\u001d${artistSignature}\u001c${virtualWindow}`;
 }
 
 function applySidebarSelectionMarkup(container, options = {}) {
@@ -45751,10 +45752,7 @@ function albumCardHtml(album, options = {}) {
     openLabel: `Open ${displayName} tracklist${albumMissing ? '. Album not found' : ''}`,
     title: displayName,
     artist: album.album_artist,
-    ...(typeof searchHighlightRanges === 'function' ? {
-      titleHighlightRanges: searchHighlightRanges(displayName),
-      artistHighlightRanges: searchHighlightRanges(album.album_artist),
-    } : {}),
+    ...getAlbumCardHighlightRanges(album),
     year: displayYear,
     ratingHtml: ratingMarkup,
     trackCount: summary.trackCount,
@@ -45781,6 +45779,16 @@ function getAlbumCardSourceCategories(album) {
   return ['main', 'hoard', 'new_arrivals'].filter((category) => normalized.includes(category));
 }
 
+function getAlbumCardHighlightRanges(album) {
+  if (typeof searchHighlightRanges !== 'function') return {};
+  const titleHighlightRanges = searchHighlightRanges(album?.display_name || album?.name || '');
+  const artistHighlightRanges = searchHighlightRanges(album?.album_artist);
+  return {
+    ...(titleHighlightRanges ? { titleHighlightRanges } : {}),
+    ...(artistHighlightRanges ? { artistHighlightRanges } : {}),
+  };
+}
+
 function getAlbumCardRenderKey(album) {
   const summary = getAlbumCardSummary(album);
   return JSON.stringify([
@@ -45797,7 +45805,8 @@ function getAlbumCardRenderKey(album) {
     albumHasDisplayCover(album) ? buildAlbumDisplayCoverUrl(album) : '',
     String(album?.cover_ref || '').trim(),
     String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim(),
-    typeof activeSearchHighlightQuery === 'function' ? activeSearchHighlightQuery() : '',
+    // Only a card whose own highlights change is rebuilt: leaving a search keeps unmatched cards and covers.
+    JSON.stringify(getAlbumCardHighlightRanges(album)),
     String(album?.inventory_status || ''),
     String(album?.missing_since || ''),
     getAlbumCardSourceCategories(album),

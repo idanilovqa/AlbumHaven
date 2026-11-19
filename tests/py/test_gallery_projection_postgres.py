@@ -239,7 +239,7 @@ def test_gallery_page_reads_only_the_ready_header_revision():
                 self.occurrence_params.append(params)
             if "select min(ordinal) as ordinal" in normalized:
                 return Cursor([{"ordinal": 0}])
-            if "select min(occurrence.ordinal) as first_ordinal" in normalized:
+            if "select min(ordinal) as first_ordinal" in normalized:
                 return Cursor([{"first_ordinal": 0, "end_ordinal": 1}])
             if "select payload from library.gallery_projection_occurrences" in normalized:
                 return Cursor([{"payload": membership("Artist", "album")}])

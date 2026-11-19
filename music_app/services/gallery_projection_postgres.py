@@ -112,6 +112,23 @@ def load_gallery_projection_sidebar(connection, view_state, *, context=None):
     )
 
 
+# Statistics predate a just-published revision, so the planner expects 1 row for it. The scalar
+# subquery runs once as an InitPlan, so the artist range stays one index scan instead of a
+# nested loop that repeats the target lookup for every occurrence in the revision.
+_ARTIST_BOUNDS_SQL = """
+    select min(ordinal) as first_ordinal, max(ordinal) + 1 as end_ordinal
+    from library.gallery_projection_occurrences
+    where library_id = %(library_id)s and scope_key = %(scope_key)s
+      and revision = %(revision)s
+      and payload->>'artist_id' = (
+        select payload->>'artist_id'
+        from library.gallery_projection_occurrences
+        where library_id = %(library_id)s and scope_key = %(scope_key)s
+          and revision = %(revision)s and ordinal = %(ordinal)s
+      )
+"""
+
+
 def load_gallery_projection_page(connection, view_state, params, *, context=None, allow_stale=False):
     from music_app.services.library_browse_postgres import (
         _root_gallery_anchor_metadata, _root_gallery_cursor, _root_gallery_page_bounds,
@@ -164,22 +181,7 @@ def load_gallery_projection_page(connection, view_state, params, *, context=None
     def artist_bounds(ordinal):
         if not count:
             return 0, 0
-        boundary = _first(connection.execute("""
-            with target as (
-                select payload->>'artist_id' as artist_id
-                from library.gallery_projection_occurrences
-                where library_id = %(library_id)s and scope_key = %(scope_key)s
-                  and revision = %(revision)s
-                  and ordinal = %(ordinal)s
-            )
-            select min(occurrence.ordinal) as first_ordinal,
-                   max(occurrence.ordinal) + 1 as end_ordinal
-            from library.gallery_projection_occurrences occurrence
-            cross join target
-            where occurrence.library_id = %(library_id)s and occurrence.scope_key = %(scope_key)s
-              and occurrence.revision = %(revision)s
-              and occurrence.payload->>'artist_id' = target.artist_id
-        """, {
+        boundary = _first(connection.execute(_ARTIST_BOUNDS_SQL, {
             "library_id": context["library_id"],
             "scope_key": scope_key,
             "revision": header["revision"],

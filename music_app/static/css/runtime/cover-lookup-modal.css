@@ -594,23 +594,25 @@
   outline-offset: 3px;
 }
 .cover-source-badge__mark,
-.cover-source-badge__mark svg {
+.cover-source-badge__mark :is(svg, img) {
   display: block;
   width: 22px;
   height: 22px;
+  object-fit: contain;
 }
-.cover-source-badge--over .cover-source-badge__mark,
-.cover-source-badge--over .cover-source-badge__mark svg,
-.cover-source-badge--beneath .cover-source-badge__mark,
-.cover-source-badge--beneath .cover-source-badge__mark svg {
+.cover-source-badge:is(.cover-source-badge--over, .cover-source-badge--beneath) .cover-source-badge__mark,
+.cover-source-badge:is(.cover-source-badge--over, .cover-source-badge--beneath) .cover-source-badge__mark :is(svg, img) {
   width: 24px;
   height: 24px;
 }
-.cover-source-badge.is-discogs,
 .cover-source-badge.is-neutral { color: var(--text); }
-.cover-source-badge--over.is-discogs { color: #fff; }
-.cover-source-badge--over.is-discogs[data-cover-source-tone='light'] { color: #000; }
 .cover-source-badge--over.is-neutral { color: #fff; }
+/* Discogs' black record turns white with the D2 external-link treatment: on dark themes, and over the art
+   unless the cover under it is light. */
+:root:not([data-appearance-mode='light']) .cover-source-badge.is-discogs:not(.cover-source-badge--over) img,
+.cover-source-badge--over.is-discogs:not([data-cover-source-tone='light']) img {
+  filter: invert(1);
+}
 .cover-source-badge__popover {
   position: absolute;
   z-index: 30;

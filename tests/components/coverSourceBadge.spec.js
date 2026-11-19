@@ -152,14 +152,21 @@ test('Spotify sits centred beneath the cover, never on it', async ({ page }) => 
   expect(popover.y).toBeGreaterThan(mark.y + mark.height);
 });
 
-for (const [hex, expected] of [['#f5efe2', 'rgb(0, 0, 0)'], ['#14151a', 'rgb(255, 255, 255)']]) {
-  test(`the Discogs mark over a ${hex} cover is ${expected === 'rgb(0, 0, 0)' ? 'black' : 'white'}`, async ({ page }) => {
+for (const [hex, tone, filter] of [['#f5efe2', 'light', 'none'], ['#14151a', 'dark', 'invert(1)']]) {
+  test(`the Discogs record over a ${tone} cover is ${filter === 'none' ? 'black' : 'white'}`, async ({ page }) => {
     await mount(page);
     await page.evaluate((image) => window.renderAlbumDetails('discogs', image), solidImage(hex));
-    await expect(page.locator('.cover-source-badge--over.is-discogs')).toHaveCSS('color', expected);
-    await expect(page.locator('.cover-source-badge--over.is-discogs')).toHaveAttribute(
-      'data-cover-source-tone', expected === 'rgb(0, 0, 0)' ? 'light' : 'dark',
-    );
+    const badge = page.locator('.cover-source-badge--over.is-discogs');
+    await expect(badge).toHaveAttribute('data-cover-source-tone', tone);
+    await expect(badge.locator('img')).toHaveCSS('filter', filter);
+  });
+}
+
+for (const [theme, filter] of [['light', 'none'], ['dark', 'invert(1)']]) {
+  test(`a Discogs card badge is ${filter === 'none' ? 'black' : 'white'} in the ${theme} theme`, async ({ page }) => {
+    await mount(page, { theme });
+    await page.evaluate(() => window.renderCard('discogs'));
+    await expect(page.locator('.cover-source-badge.is-discogs img')).toHaveCSS('filter', filter);
   });
 }
 

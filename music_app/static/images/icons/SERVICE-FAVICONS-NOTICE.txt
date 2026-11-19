@@ -18,3 +18,31 @@ these two files. MusicBrainz is a trademark of the MetaBrainz Foundation, and Di
 is a trademark of its owner. Album Haven uses each mark only to identify a link to
 that service's public page for the artist, as MusicBrainz itself does. This use does
 not imply endorsement by either service.
+
+Cover source badges (added 2026-11-19)
+
+The cover source badge on Album Details and Cover Look Up cards shows the provider whose
+cover was used, beside that provider's attribution and a link to its release page.
+discogs-favicon-32.png above is reused there unchanged.
+
+From the same musicbrainz-server external-favicons set (master, root/static/images/
+external-favicons/, downloaded 2026-11-19), unmodified; same GPL-2.0-or-later repository
+terms as above. The marks remain trademarks of Deezer and Google:
+  deezer-favicon-32.png        deezer-32.png
+  youtubemusic-favicon-32.png  youtubemusic-32.png
+
+Official provider artwork, downloaded 2026-11-19 from each provider's own brand page:
+  spotify-icon-green.svg       Primary_Logo_Green_RGB.svg from
+                               https://developer.spotify.com/images/guidelines/design/2024-spotify-logo-icon.zip
+                               (Spotify Design & Branding Guidelines), unmodified
+  applemusic-icon-color.png    colour icon preview from the Apple Music Identity Guidelines,
+                               https://marketing.services.apple/mdsa/assets/storage/blobs/images/640a26dd7251da00075dc811/en-us-large@1x.png;
+                               cropped from its grey preview tile to the icon, corners masked
+  bandcamp-button-circle-aqua-64.png
+                               from https://bandcamp.com/img/buttons/bandcamp-button-circle-aqua.zip
+                               (bandcamp.com/buttons), unmodified
+  coverartarchive-icon.svg     the two hexagon halves of
+                               https://coverartarchive.org/img/navbar_caa_logo.svg, without the wordmark
+
+Spotify, Apple Music, Bandcamp and Cover Art Archive are trademarks of their owners. Each mark
+only identifies where a cover came from and links to that service's page for the release.

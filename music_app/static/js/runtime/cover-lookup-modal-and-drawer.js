@@ -807,7 +807,7 @@ function getCoverLookupActiveLocalRef() {
 
 // CoverSourceBadge: a provider's bare mark on Album Details and Cover Look Up cards; hover, focus or tap opens
 // its legal line and one link back to the release page (approved mockup cover-source-badges v003, owner
-// 2026-11-19). Marks are inline stand-ins until the provider artwork files are approved for download.
+// 2026-11-19). Icons are the providers' own files; sources and terms in static/images/icons/ notices.
 const COVER_SOURCE_NEUTRAL_MARK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><circle cx="12" cy="12" r="2.4"></circle><path d="M12 3a9 9 0 0 1 9 9"></path></svg>';
 const COVER_SOURCE_PROVIDERS = Object.freeze({
   apple: Object.freeze({
@@ -815,7 +815,7 @@ const COVER_SOURCE_PROVIDERS = Object.freeze({
     legal: ['Cover art from Apple Music.', 'Apple and Apple Music are trademarks of Apple Inc., registered in the U.S. and other countries.'],
     linkLabel: 'Listen on Apple Music',
     search: (query) => `https://music.apple.com/search?term=${query}`,
-    mark: '<svg viewBox="0 0 24 24"><rect width="24" height="24" rx="5.4" fill="#FA2D48"></rect><path d="M15.8 5.2v9.4a2.8 2.8 0 1 1-1.6-2.53V7.83l-5.2 1.18v7.09a2.8 2.8 0 1 1-1.6-2.53V7.75c0-.74.51-1.37 1.23-1.53l5.94-1.35a1.3 1.3 0 0 1 1.6 1.27Z" fill="#fff"></path></svg>',
+    icon: '/static/images/icons/applemusic-icon-color.png',
   }),
   spotify: Object.freeze({
     label: 'SPOTIFY',
@@ -824,21 +824,21 @@ const COVER_SOURCE_PROVIDERS = Object.freeze({
     search: (query) => `https://open.spotify.com/search/${query}`,
     // Spotify forbids its mark on top of artwork, so Album Details shows it beneath the cover.
     beneathArt: true,
-    mark: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="12" fill="#1ED760"></circle><path d="M6 8.9c4-1.2 8.6-.9 12.2 1.1M6.9 12.3c3.3-.9 6.9-.6 9.8.9M7.7 15.5c2.6-.6 5.2-.4 7.5.7" fill="none" stroke="#000" stroke-width="1.7" stroke-linecap="round"></path></svg>',
+    icon: '/static/images/icons/spotify-icon-green.svg',
   }),
   deezer: Object.freeze({
     label: 'Deezer',
     legal: ['Cover art from Deezer.'],
     linkLabel: 'Open on Deezer',
     search: (query) => `https://www.deezer.com/search/${query}`,
-    mark: '<svg viewBox="0 0 24 24"><path d="M12 21.4 3.4 13a5.4 5.4 0 0 1 7.7-7.7l.9.9.9-.9a5.4 5.4 0 0 1 7.7 7.7Z" fill="#A238FF"></path></svg>',
+    icon: '/static/images/icons/deezer-favicon-32.png',
   }),
   bandcamp: Object.freeze({
     label: 'Bandcamp',
     legal: ['Cover art from Bandcamp.'],
     linkLabel: 'Open on Bandcamp',
     search: (query) => `https://bandcamp.com/search?q=${query}&item_type=a`,
-    mark: '<svg viewBox="0 0 24 24"><path d="M2 18.5 8.2 5.5H22l-6.2 13Z" fill="#1DA0C3"></path></svg>',
+    icon: '/static/images/icons/bandcamp-button-circle-aqua-64.png',
   }),
   discogs: Object.freeze({
     label: 'Discogs',
@@ -847,21 +847,21 @@ const COVER_SOURCE_PROVIDERS = Object.freeze({
     search: (query) => `https://www.discogs.com/search/?q=${query}&type=release`,
     // Black or white by the cover's brightness under the mark (owner accepted the brand risk 2026-11-19).
     toneAware: true,
-    mark: '<svg viewBox="0 0 24 24"><path fill="currentColor" fill-rule="evenodd" d="M12 .5a11.5 11.5 0 1 1 0 23 11.5 11.5 0 0 1 0-23Zm0 3.3a8.2 8.2 0 1 0 0 16.4 8.2 8.2 0 0 0 0-16.4Zm0 .8a7.4 7.4 0 1 1 0 14.8 7.4 7.4 0 0 1 0-14.8Zm0 1.8a5.6 5.6 0 1 0 0 11.2 5.6 5.6 0 0 0 0-11.2Zm0 .8a4.8 4.8 0 1 1 0 9.6 4.8 4.8 0 0 1 0-9.6Zm0 2.8a2 2 0 1 0 0 4 2 2 0 0 0 0-4Z"></path></svg>',
+    icon: '/static/images/icons/discogs-favicon-32.png',
   }),
   cover_art_archive: Object.freeze({
     label: 'Cover Art Archive',
     legal: ['Cover art from the Cover Art Archive.', 'Image © its copyright owner.'],
     linkLabel: 'Open release on MusicBrainz',
     search: (query) => `https://musicbrainz.org/search?query=${query}&type=release`,
-    mark: '<svg viewBox="0 0 24 24"><rect width="24" height="24" rx="4" fill="#BA478F"></rect><path d="M5 17V7l7 4v10Z" fill="#EB743B"></path><path d="M19 17V7l-7 4v10Z" fill="#fff" opacity=".9"></path></svg>',
+    icon: '/static/images/icons/coverartarchive-icon.svg',
   }),
   youtube_music: Object.freeze({
     label: 'YouTube Music',
     legal: ['Cover art from YouTube Music.'],
     linkLabel: 'Open on YouTube Music',
     search: (query) => `https://music.youtube.com/search?q=${query}`,
-    mark: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="12" fill="#FF0000"></circle><circle cx="12" cy="12" r="6.4" fill="none" stroke="#fff" stroke-width="1.3"></circle><path d="M10.2 9.2 15 12l-4.8 2.8Z" fill="#fff"></path></svg>',
+    icon: '/static/images/icons/youtubemusic-favicon-32.png',
   }),
   genius: Object.freeze({
     label: 'Genius',
@@ -933,7 +933,8 @@ function buildCoverSourceBadgeHtml(config = {}) {
   const toneAttr = provider.toneAware && placement === 'over' ? ' data-cover-source-tone="dark"' : '';
   return `<span class="${classes}" data-cover-source-badge="${escapeHtml(key)}"${toneAttr}>`
     + `<button type="button" class="cover-source-badge__trigger" aria-expanded="false" aria-label="${escapeHtml(`${provider.legal[0]} ${provider.linkLabel}`)}">`
-    + `<span class="cover-source-badge__mark" aria-hidden="true">${provider.mark}</span></button>`
+    + `<span class="cover-source-badge__mark" aria-hidden="true">${provider.icon
+      ? `<img src="${provider.icon}" alt="" width="24" height="24" decoding="async">` : provider.mark}</span></button>`
     + `<span class="cover-source-badge__popover" role="tooltip" data-trigger-anchor-context="content">${legalHtml}`
     + `<a class="cover-source-badge__link" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(provider.linkLabel)} ↗</a>`
     + '</span></span>';

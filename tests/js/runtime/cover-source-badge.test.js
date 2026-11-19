@@ -36,7 +36,7 @@ test('every provider badge is a bare mark with its legal line and one link to th
     });
     assert.match(html, /^<span class="cover-source-badge cover-source-badge--inline /, source);
     assert.match(html, /<button type="button" class="cover-source-badge__trigger" aria-expanded="false" aria-label="[^"]+">/);
-    assert.match(html, /class="cover-source-badge__mark" aria-hidden="true"><svg/);
+    assert.match(html, /class="cover-source-badge__mark" aria-hidden="true">(?:<img src="\/static\/images\/icons\/[^"]+" alt=""|<svg)/);
     assert.match(html, /class="cover-source-badge__popover" role="tooltip"/);
     assert.equal((html.match(/<a /g) || []).length, 1, `${source} has exactly one link`);
     assert.match(html, new RegExp(`href="https://example.test/${source}/release/1" target="_blank" rel="noopener noreferrer"`));
@@ -91,12 +91,20 @@ test('a badge never links to the image file or a non-web address', () => {
   assert.equal(context.buildCoverSourceBadgeHtml({ source: 'unknown' }), '');
 });
 
-test('YouTube Music shows its own mark; Genius keeps the neutral mark', () => {
+test('each provider shows its own icon file; Genius keeps the neutral mark', () => {
   const context = loadBadge();
+  const staticRoot = path.join(__dirname, '..', '..', '..', 'music_app');
+  for (const source of ['apple', 'spotify', 'deezer', 'bandcamp', 'discogs', 'cover_art_archive', 'youtube_music']) {
+    const html = context.buildCoverSourceBadgeHtml({ source });
+    const icon = html.match(/<img src="([^"]+)" alt="" width="24" height="24"/);
+    assert.ok(icon, source);
+    assert.ok(fs.existsSync(path.join(staticRoot, icon[1])), `${icon[1]} exists`);
+    assert.doesNotMatch(html, /is-neutral/);
+  }
   const youtube = context.buildCoverSourceBadgeHtml({ source: 'youtube_music' });
   const genius = context.buildCoverSourceBadgeHtml({ source: 'genius' });
-  assert.doesNotMatch(youtube, /is-neutral/);
-  assert.match(youtube, /fill="#FF0000"/);
+  assert.match(youtube, /src="\/static\/images\/icons\/youtubemusic-favicon-32\.png"/);
+  assert.doesNotMatch(genius, /<img/);
   assert.match(genius, /class="cover-source-badge cover-source-badge--inline is-genius is-neutral"/);
   assert.match(genius, /stroke="currentColor"/);
 });

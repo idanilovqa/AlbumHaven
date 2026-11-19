@@ -350,6 +350,13 @@ function syncLibraryNavigationToMainPanel() {
   // Mid-transition states (a view loading, history closing one page and opening another) are not the main panel.
   if (state.ui.pendingViewTransition) return false;
   if (typeof mobilePageState !== 'undefined' && mobilePageState.restoring) return false;
+  // A failed search leaves the main panel as it was: stop waiting for its view.
+  if (state.ui.failedGallerySearch) state.ui.libraryNavigationAwaitingQuery = null;
+  const awaitingQuery = state.ui.libraryNavigationAwaitingQuery;
+  if (typeof awaitingQuery === 'string') {
+    if (String(state.view?.query || '').trim() !== awaitingQuery) return false;
+    state.ui.libraryNavigationAwaitingQuery = null;
+  }
   const key = libraryNavigationMainPanelKey();
   if (key === state.ui.libraryNavigationMainPanelKey) return false;
   const previousKey = String(state.ui.libraryNavigationMainPanelKey || '');

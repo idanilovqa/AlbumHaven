@@ -1264,3 +1264,18 @@ test('a submitted search asks for its collections catalog at once, and the redra
   await context.syncCustomCollectionSearchIndicator();
   assert.equal(requests.length, 1, 'the redraw after the gallery answers reuses it');
 });
+
+test('a submitted search closing a collection page moves the tree only once its view arrives', () => {
+  // Owner 2026-11-18: "when I hit search I see that side bar immediately selects artist button. That's wrong."
+  const { context } = loadHelper({ isMobile: false });
+  const modes = [];
+  context.setLibraryNavigationMode = async (mode) => { modes.push(mode); context.state.ui.libraryNavigationMode = mode; };
+  context.state.ui.libraryNavigationMode = 'custom-collections';
+  context.state.view = { query: '', selected_artist: '', artists_sidebar: [] };
+  context.state.ui.libraryNavigationAwaitingQuery = 'rhapsody';
+  assert.equal(context.syncLibraryNavigationToMainPanel(), false, 'the page closed but the old gallery is not the answer');
+  context.state.view = { query: 'rhapsody', selected_artist: 'Rhapsody', artists_sidebar: [{ artist: 'Rhapsody' }] };
+  assert.equal(context.syncLibraryNavigationToMainPanel(), true);
+  assert.deepEqual(modes, ['artists']);
+  assert.equal(context.state.ui.libraryNavigationAwaitingQuery, null);
+});

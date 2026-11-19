@@ -12046,6 +12046,13 @@ function syncLibraryNavigationToMainPanel() {
   // Mid-transition states (a view loading, history closing one page and opening another) are not the main panel.
   if (state.ui.pendingViewTransition) return false;
   if (typeof mobilePageState !== 'undefined' && mobilePageState.restoring) return false;
+  // A failed search leaves the main panel as it was: stop waiting for its view.
+  if (state.ui.failedGallerySearch) state.ui.libraryNavigationAwaitingQuery = null;
+  const awaitingQuery = state.ui.libraryNavigationAwaitingQuery;
+  if (typeof awaitingQuery === 'string') {
+    if (String(state.view?.query || '').trim() !== awaitingQuery) return false;
+    state.ui.libraryNavigationAwaitingQuery = null;
+  }
   const key = libraryNavigationMainPanelKey();
   if (key === state.ui.libraryNavigationMainPanelKey) return false;
   const previousKey = String(state.ui.libraryNavigationMainPanelKey || '');
@@ -54157,6 +54164,9 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
   // keeps that page, now unfiltered, and its tree; only a new search leaves it for its best match.
   const keepsLibraryPage = !String(nextQuery || '').trim()
     && typeof libraryLooseTracksPageOpen === 'function' && libraryLooseTracksPageOpen();
+  // Until this search's view arrives the main panel is in between: closing a page for it must not move the tree
+  // (owner 2026-11-18: "when I hit search the side bar immediately selects the Artists button. That's wrong").
+  state.ui.libraryNavigationAwaitingQuery = String(nextQuery || '').trim();
   if (!keepsLibraryPage && typeof prepareMobileGallerySearch === 'function'
     && !prepareMobileGallerySearch(() => commitGallerySearchQuery(nextQuery, { ...options, mobileLeaveConfirmed: true }), mobileLeaveConfirmed)) {
     releasePendingGallerySearchSuspensions();

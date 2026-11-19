@@ -199,3 +199,13 @@ def test_reader_must_resync_when_its_cursor_cannot_be_replayed(pg):
     assert pg.repository.read_since(library_id=library, account_id=account, since=since).resync is True
     page = pg.repository.read_since(library_id=library, account_id=account, since=head - 1)
     assert (page.resync, [event.revision for event in page.events]) == (False, [head])
+
+
+def test_a_transaction_that_suppresses_change_events_records_none(pg):
+    with pg.connect() as writer:
+        writer.execute("select set_config('album_haven.suppress_change_events', 'on', true)")
+        _bump_inventory(writer, pg.libraries[0])
+        _save_preference(writer, pg.accounts[0], pg.libraries[0], "restored")
+    with pg.connect(setup=True) as reader:
+        assert _events(pg, reader) == []
+        assert reader.execute("select count(*) as n from library.change_event_pending").fetchone()["n"] == 0

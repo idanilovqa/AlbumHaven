@@ -59,6 +59,10 @@ declare
     entry jsonb;
     merged jsonb;
 begin
+    -- Bulk fixture restores (CI checkpoints) change no user-visible state worth announcing.
+    if current_setting('album_haven.suppress_change_events', true) = 'on' then
+        return;
+    end if;
     if p_library_id is null and p_account_id is null then
         raise exception 'A change needs a library or an account.';
     end if;

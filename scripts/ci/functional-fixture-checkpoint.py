@@ -369,6 +369,9 @@ def suspend_gallery_restore_triggers(connection: Any, tables: Iterable[tuple[str
         f"{host}/{quote(connection.info.dbname, safe='')}"
     )
     validate_connected_identity(connection, database_url)
+    # Restoring a fixture is not a library change; announcing it on the live change stream would
+    # refresh the pages the next test opens while they load. Transaction-local, like the DDL below.
+    connection.execute("select set_config('album_haven.suppress_change_events', 'on', true)")
     table_set = set(tables)
     rows = connection.execute(
         """

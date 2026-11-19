@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- While another device or tab plays, the player shows "Playing in another tab" centred over the whole player, dimmed most behind the text and less toward the edges, with the other device's song still visible underneath. Play stays above the dimming, bright and pressable, on the web and on the phone. Pressing it moves playback here: the other device's song continues on this one from where it was, and the other device stops and shows "Playing in another tab" in turn. Web and Android now report where their song is each time they renew playback, so it continues within a second or two of the right place. Starting a song from a track list while another device plays still shows "Playback is active in another tab".
+- While another device or tab plays, the player shows "Playing in another tab" centred over the whole player, dimmed most behind the text and less toward the edges, with the other device's song still visible underneath. Play stays above the dimming, bright and pressable, on the web and on the phone. Pressing it moves playback here: the other device's song continues on this one from where it was, and the other device stops and shows "Playing in another tab" in turn. Web and Android now report where their song is each time they renew playback, so it continues within a second or two of the right place. Starting a song from a track list while another device plays still shows "Playback is active in another tab". The "Playing in another tab" status is larger and in the same golden shade as "Nothing is playing", and hovering Play over it says "Play in this tab instead".
 
 ## 0.11.32 - 2026-11-17
 

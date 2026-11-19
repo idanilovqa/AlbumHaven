@@ -948,14 +948,15 @@ background: radial-gradient(ellipse 70% 150% at 50% 50%, rgba(3, 9, 12, 0.95) 0%
 .global-player.is-compact .player-elsewhere-overlay {
 display: none;
 }
+/* Owner, round 7 (2026-11-18): golden like "Nothing is playing" (the idle label's ink, which the
+   appearance ink overrides for both), and larger. */
 .player-elsewhere-label {
 color: #d9f99d;
-font-size: 0.68rem;
+font-size: 0.95rem;
 font-weight: 900;
 letter-spacing: 0.12em;
 text-transform: uppercase;
 white-space: nowrap;
-text-shadow: 0 1px 6px rgba(0, 0, 0, 0.7);
 }
 .global-player.is-playing-elsewhere:not(.is-compact) #player-play {
 position: relative;

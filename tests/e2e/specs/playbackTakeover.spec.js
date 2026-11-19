@@ -44,8 +44,19 @@ test('FTC-PLAYBACK-TAKEOVER-001 Play on the playing-elsewhere overlay continues 
     await first.globalPlayerActions.waitForPlaybackState({ paused: false, minimumCurrentTime: 60 });
   });
 
-  await stepLogger.step('The second device shows the song under the overlay, with Play pressable above it', async () => {
+  // Owner, round 7 (2026-11-18): "Make Playing in another tab slightly golden in shade, like NOTHING
+  // IS PLAYING. And increase the font size. Add hover on play button \"Play in this tab instead\"".
+  await stepLogger.step('The second device shows the song under a larger golden status, and hovering Play says it plays here instead', async () => {
     await second.globalPlayerActions.expectPlayingElsewhereOverlay({ artist: ARTIST, album: ALBUM, title: TITLE });
+    const secondPlayer = second.globalPlayerActions.globalPlayer;
+    const label = secondPlayer.elsewhereOverlay.getByText('Playing in another tab');
+    await expect(label).toBeVisible();
+    await expect(label).toHaveCSS('color', 'rgb(217, 249, 157)');
+    // parity-check: allow-read-only-measurement-evaluate -- read the visible status label's rendered font size
+    const fontSize = Number.parseFloat(await label.evaluate((element) => getComputedStyle(element).fontSize));
+    expect(fontSize, 'larger than the 0.68rem idle label').toBeGreaterThanOrEqual(15);
+    await secondPlayer.playButton.hover();
+    await expect(secondPlayer.playButton).toHaveAttribute('title', 'Play in this tab instead');
   });
 
   await stepLogger.step('One Play press continues the song here at about its place; the first device stops', async () => {
@@ -60,6 +71,7 @@ test('FTC-PLAYBACK-TAKEOVER-001 Play on the playing-elsewhere overlay continues 
     expect(evidence.renderedFrameDelta).toBeGreaterThan(0);
     await expect(secondPlayer.elsewhereOverlay).toBeHidden();
     await expect(secondPlayer.playButton).toHaveAttribute('aria-label', 'Pause');
+    await expect(secondPlayer.playButton).toHaveAttribute('title', '');
     await expect(secondPlayer.title).toContainText(TITLE);
     const startedAt = displayedSeconds(await secondPlayer.time.textContent());
     expect(startedAt, 'continues where the first device was, not from the start').toBeGreaterThanOrEqual(heardAt - 3);

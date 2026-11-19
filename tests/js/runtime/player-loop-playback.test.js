@@ -352,6 +352,7 @@ test('playback on another device shows the elsewhere overlay over the player and
   assert.equal(time.hidden, true, 'the overlay carries the status');
   assert.equal(play.disabled, false);
   assert.equal(play.getAttribute('aria-label'), 'Play here');
+  assert.equal(play.title, 'Play in this tab instead', 'hovering Play says what it does');
   assert.equal(timeline.disabled, true);
 
   context.state.player.loopActive = true;
@@ -362,6 +363,7 @@ test('playback on another device shows the elsewhere overlay over the player and
   context.updatePlayerUi();
   assert.equal(elsewhere.hidden, true, 'unavailable playback is not playback elsewhere');
   assert.equal(player.classList.contains('is-playing-elsewhere'), false);
+  assert.equal(play.title, '', 'only playback elsewhere offers to play here instead');
   assert.equal(time.textContent, 'Playback unavailable');
   assert.equal(play.disabled, true);
 

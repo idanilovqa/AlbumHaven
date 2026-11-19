@@ -204,6 +204,7 @@ function updatePlayerUi() {
     els.play.setAttribute('aria-label', playingElsewhere ? 'Play here'
       : lockedByAnotherTab ? blockedLabel
       : (playback.paused ? 'Play' : 'Pause'));
+    els.play.title = playingElsewhere ? 'Play in this tab instead' : '';
     els.play.disabled = playbackUnavailable || !hasTrack;
   }
   if (typeof syncCompactPlayerUi === 'function') syncCompactPlayerUi({ displayTrack, playback, hasTrack, lockedByAnotherTab });

@@ -5788,3 +5788,80 @@ def test_edit_tag_reservation_releases_intent_and_structural_owners_even_on_fail
         reservation.release()
     reservation.release()
     assert releases == ["intent", "structural"]
+
+
+# An album shown from details loaded before a move still lists the moved file. A save from it
+# must not write that file: the server checks each edited file against the album's current
+# members, grouped as the gallery groups them.
+def _membership_repository(albums):
+    class Repository:
+        def __init__(self, config):
+            pass
+
+        def build_album_payloads_by_track_paths(self, paths):
+            return [album for album in albums
+                    if {track["path"] for track in album["tracks"]} & set(paths)]
+
+    return Repository
+
+
+def test_tag_save_refuses_a_file_that_moved_to_another_album_and_writes_nothing(
+    app, asgi_app, monkeypatch, tmp_path,
+):
+    from music_app.routes import api_wave_a_asgi_routes as routes
+
+    stays, moved = tmp_path / "01 - Stays.mp3", tmp_path / "02 - Moved.mp3"
+    for path in (stays, moved):
+        path.write_bytes(b"original tags")
+    source = {"key": "artist::source", "album_id": 55, "tracks": [{"path": str(stays)}]}
+    destination = {"key": "artist::source 2", "album_id": 56, "tracks": [{"path": str(moved)}]}
+    app.config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://album_haven_app@localhost/app"
+    app.config["PERSISTENCE_BACKENDS"] = {"library_browse": "postgres"}
+    monkeypatch.setattr(routes, "PostgresLibraryBrowseRepository", _membership_repository([source, destination]))
+    monkeypatch.setattr(routes, "_apply_repairs_worker", lambda *_args: pytest.fail("a moved file is never written"))
+    monkeypatch.setattr(routes, "create_save_task", lambda *_args: pytest.fail("a refused save queues nothing"))
+
+    stale = {**source, "name": "Source", "tracks": [{"path": str(stays)}, {"path": str(moved)}]}
+    status, _, body = _run_asgi_request(asgi_app, "POST", "/utilities/edit-tags", json_body={
+        "confirmed": True, "album": stale,
+        "updates": {str(stays): {"album": "Renamed"}, str(moved): {"album": "Renamed"}},
+    })
+
+    payload = _decode_json(body)
+    assert status == 409
+    assert payload["ok"] is False
+    assert payload["error_code"] == "tag_edit_files_moved"
+    assert "02 - Moved.mp3" in payload["error"] and str(tmp_path) not in payload["error"]
+    assert moved.read_bytes() == stays.read_bytes() == b"original tags"
+
+
+def test_tag_save_membership_check_keeps_combined_optimistic_and_unknown_albums():
+    from music_app.routes import api_wave_a_asgi_routes as routes
+
+    combined = {"key": "artist::album", "album_id": 7,
+                "tracks": [{"path": "C:/a/01.mp3"}, {"path": "C:/b/02.mp3"}]}
+    other = {"key": "artist::other", "album_id": 9, "tracks": [{"path": "C:/c/03.mp3"}]}
+    repository = _membership_repository([combined, other])(None)
+
+    def check(album, paths):
+        current = repository.build_album_payloads_by_track_paths(
+            set(paths) | {track["path"] for track in album.get("tracks", [])})
+        return routes._edit_tags_files_outside_album(album, set(paths), current)
+
+    # One gallery album made of two stored rows: both files are its own.
+    assert check({"key": "artist::album", "album_id": 7}, ["C:/a/01.mp3", "C:/b/02.mp3"]) == []
+    # An optimistic album carries its source's id under its own key: the key decides.
+    assert check({"key": "artist::other", "album_id": 7}, ["C:/c/03.mp3"]) == []
+    # Matched by id alone when the key is unknown.
+    assert check({"album_id": 9}, ["C:/c/03.mp3"]) == []
+    assert check({"album_id": 9, "tracks": [{"path": "C:/c/03.mp3"}, {"path": "C:/a/01.mp3"}]},
+                 ["C:/a/01.mp3"]) == ["01.mp3"]
+    # Two current albums answering to the opened key both count as the opened album.
+    twin = {"key": "artist::album", "album_id": 8, "tracks": [{"path": "C:/d/04.mp3"}]}
+    twins = _membership_repository([combined, twin, other])(None)
+    assert routes._edit_tags_files_outside_album(
+        {"key": "artist::album", "album_id": 7}, {"C:/d/04.mp3"},
+        twins.build_album_payloads_by_track_paths({"C:/d/04.mp3", "C:/a/01.mp3"})) == []
+    # No identity, or an album that no longer exists: left to the save's own checks.
+    assert check({}, ["C:/a/01.mp3"]) == []
+    assert check({"key": "artist::gone", "album_id": 99}, ["C:/a/01.mp3"]) == []

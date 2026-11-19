@@ -3198,3 +3198,85 @@ def test_full_snapshot_prepared_before_targeted_rename_is_rejected_by_inventory_
         and "insert into library.local_track_files" not in _normalized_sql(sql)
         for sql, _params in connection.executed
     )
+
+
+def test_live_postgres_tag_save_refuses_a_file_that_moved_to_another_album():
+    """Details loaded before a move still list the moved file; a save from them is refused
+    for that file (real inventory, grouped as the gallery groups it), and allowed from the
+    album that now holds it."""
+    database_url = _isolated_runtime_database_url_or_skip()
+    if not _ISOLATED_SETUP_DATABASE_URL:
+        pytest.skip("Isolated setup is required for the tag-save membership contract.")
+    isolatedPostgres.prepare_isolated_database(_ISOLATED_SETUP_DATABASE_URL, database_url)
+    from music_app.routes.api_wave_a_asgi_routes import _edit_tags_files_outside_album
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    token = uuid4().hex
+    artist = f"Membership Artist {token}"
+    root = f"C:/__tag_save_membership__/{token}"
+    layout = {"Source": [f"{root}/Source/01 - Stays.mp3", f"{root}/Source/02 - Moved.mp3"],
+              "Source 2": []}
+    moved_path = layout["Source"][1]
+    with psycopg.connect(database_url) as connection:
+        library_id = connection.execute(
+            """select libraries.id from app.bootstrap_owners owners
+               join library.libraries libraries on libraries.owner_account_id=owners.account_id
+               where owners.owner_key='local-bootstrap-owner'
+                 and libraries.name='Local Library' and libraries.library_kind='local'"""
+        ).fetchone()[0]
+        artist_id = connection.execute(
+            """insert into library.local_artists(library_id,artist_key,name,metadata)
+               values(%s,%s,%s,'{}'::jsonb) returning id""",
+            (library_id, artist.casefold(), artist),
+        ).fetchone()[0]
+        album_ids = {}
+        for title in layout:
+            album_ids[title] = connection.execute(
+                """insert into library.local_albums
+                   (library_id,artist_id,album_key,title,release_year,metadata)
+                   values(%s,%s,%s,%s,2026,%s::jsonb) returning id""",
+                (library_id, artist_id, f"{artist.casefold()}::{title.casefold()}", title,
+                 json.dumps({"album_artist": artist})),
+            ).fetchone()[0]
+        for index, path in enumerate(layout["Source"], start=1):
+            # The second file has moved: its track now belongs to "Source 2".
+            title = "Source 2" if path == moved_path else "Source"
+            entry = {"path": path, "album": title, "album_artist": artist, "artist": artist,
+                     "title": f"Track {index}", "track_number": str(index), "disc_number": "1",
+                     "year": 2026}
+            track_id = connection.execute(
+                """insert into library.local_tracks
+                   (library_id,album_id,artist_id,track_key,title,track_number,metadata)
+                   values(%s,%s,%s,%s,%s,%s,%s::jsonb) returning id""",
+                (library_id, album_ids[title], artist_id, f"membership-{token}-{index}",
+                 entry["title"], index, json.dumps({"album": title})),
+            ).fetchone()[0]
+            connection.execute(
+                """insert into library.local_track_files(track_id,private_path,metadata)
+                   values(%s,%s,jsonb_build_object('scan_cache',jsonb_build_object(
+                     'source','scan_cache','stale',false,'file_entry',%s::jsonb)))""",
+                (track_id, path, json.dumps(entry)),
+            )
+        connection.commit()
+
+    config = {"ALBUM_HAVEN_APP_DATABASE_URL": database_url}
+    current = PostgresLibraryBrowseRepository(config).build_album_payloads_by_track_paths(
+        set(layout["Source"]))
+    source = next(album for album in current if album.get("album_id") == album_ids["Source"])
+    destination = next(album for album in current if album.get("album_id") == album_ids["Source 2"])
+    assert {track["path"] for track in source["tracks"]} == {layout["Source"][0]}
+
+    repository = PostgresLibraryBrowseRepository(config)
+
+    def outside(album, edited):
+        current = repository.build_album_payloads_by_track_paths(
+            set(edited) | {track["path"] for track in album["tracks"]})
+        return _edit_tags_files_outside_album(album, set(edited), current)
+
+    # The stale album still lists the moved file: that file is refused, the other is not.
+    stale = {**source, "tracks": [{"path": path} for path in layout["Source"]]}
+    assert outside(stale, layout["Source"]) == ["02 - Moved.mp3"]
+    assert outside(stale, [moved_path]) == ["02 - Moved.mp3"]
+    assert outside(stale, [layout["Source"][0]]) == []
+    # From the album that holds it now, the moved file saves.
+    assert outside(destination, [moved_path]) == []

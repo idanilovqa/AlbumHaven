@@ -90,16 +90,25 @@
       event?.waitUntil?.(work);
       return work;
     };
+    // Pages and versioned assets being written to the copy (covers are not waited for).
+    const writing = new Set();
+    const written = (work) => {
+      writing.add(work);
+      void quietly(work).then(() => writing.delete(work));
+      return work;
+    };
     // What was already arriving when the server became unreachable is kept before the copy is
     // read: a connection lost just after the page loaded still leaves that page for a new tab.
-    // Downloads get a short wait, so one that hangs rather than fails never holds the copy up;
-    // what has arrived is then being written, which touches only storage and is waited for in full.
+    // Downloads get a short wait, so one that hangs rather than fails never holds the copy up; the
+    // pages and assets that arrived are then being written, which touches only storage and is waited
+    // for in full. Covers kept meanwhile are not: right after a page loads they are many, and
+    // waiting for them held an offline tab for up to 30 s on a busy computer (sandbox5, round 10).
     const keptSoFar = async () => {
       await Promise.race([
         Promise.all(Array.from(keeping)),
         new Promise(resolve => setTimeout(resolve, KEEP_WAIT_MS)),
       ]);
-      await queue;
+      await Promise.all(Array.from(writing, quietly));
     };
 
     async function accountCache() {
@@ -177,7 +186,7 @@
     async function keepPage(url, response, page, fetchedIn) {
       const text = await response.text();
       if (PATH_COVER_URL.test(text)) return;
-      await exclusive(async () => {
+      await written(exclusive(async () => {
         if (fetchedIn !== generation) return;
         const html = withoutPaths(text.replace(NETWORK_MARKER, COPY_MARKER));
         const account = response.headers.get(COPY_HEADER);
@@ -206,7 +215,7 @@
         }
         await writeMeta(cache, meta);
         await pruneAssets(cache, meta);
-      });
+      }));
     }
 
     // The app page as a copy request, answered as soon as it arrives; [page.kept] settles once the
@@ -302,12 +311,12 @@
     // an offline page waiting on it).
     async function storeAsset(cache, request, response, fetchedIn) {
       const kept = new Response(await response.arrayBuffer(), { headers: response.headers });
-      await exclusive(async () => {
+      await written(exclusive(async () => {
         if (fetchedIn !== generation) return;
         await cache.put(request, kept);
         const url = new URL(typeof request === 'string' ? request : request.url, origin);
         if (url.pathname.startsWith('/static/') && url.searchParams.has('v')) (await listedIndex())?.assets.add(url.href);
-      });
+      }));
     }
 
     // Keeps [response] for [request] after the answer.

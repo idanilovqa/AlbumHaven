@@ -1015,6 +1015,46 @@ test('IAR-W12: a page that arrived is there for a new tab however long writing i
   assert.match(await (await worker.handle('page', navigation('/'), event)).text(), /content="cache"/);
 });
 
+// Round 10 on sandbox5: right after sign-in an offline tab waited 8-33 s for every cover the page
+// had just loaded to be written, though it needed only the page.
+test('IAR-W12: an offline navigation waits for the page being written, not for covers being written', async () => {
+  const caches = fakeCaches();
+  const open = caches.open.bind(caches);
+  caches.open = async (name) => {
+    const cache = await open(name);
+    if (!cache.slowCovers) {
+      const put = cache.put.bind(cache);
+      cache.put = async (request, response) => {
+        const key = typeof request === 'string' ? request : request.url;
+        if (key.includes('/__album-haven-cover/')) await new Promise(resolve => setTimeout(resolve, 300));
+        return put(request, response);
+      };
+      cache.slowCovers = true;
+    }
+    return cache;
+  };
+  let online = true;
+  const { worker, event, settled } = setup({
+    mode: 'web', caches,
+    respond: request => (!online ? new TypeError('Failed to fetch')
+      : new URL(request.url).pathname === '/' ? page('acct-a') : coverResponse(10)),
+  });
+  await worker.handle('page', navigation('/'), event);
+  await settled();
+  for (let index = 0; index < 10; index += 1) {
+    void worker.handle('cover', resource(`/cover/${String(index).padStart(22, 'C')}?size=480`), event);
+  }
+  // The covers have arrived and are queued for writing when the connection drops.
+  for (let turn = 0; turn < 50; turn += 1) await new Promise(resolve => setImmediate(resolve));
+  online = false;
+
+  const started = Date.now();
+  const response = await worker.handle('page', navigation('/'), event);
+
+  assert.match(await response.text(), /content="cache"/);
+  assert.ok(Date.now() - started < 1000, `answered after ${Date.now() - started} ms, not after the covers' 3 s of writes`);
+});
+
 // Owner round 10 ("B: wait 10 s"): a tunnel held the first request after its server stopped for
 // 20-60 s, and the tab stayed blank all that time.
 function heldServer() {

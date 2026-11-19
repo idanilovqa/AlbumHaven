@@ -3584,6 +3584,19 @@ test('clearing back to the full gallery shows the remembered gallery with no req
   assert.deepEqual(JSON.parse(JSON.stringify(calls.renderArtistGroups)), [{ preserveScroll: true }]);
 });
 
+test('clearing from memory cancels a search still loading so its answer cannot replace the gallery', () => {
+  const { context, calls } = noMatchSearchContext(7, 7);
+  let aborted = 0;
+  context.state.ui.activeViewRequestController = { abort() { aborted += 1; } };
+  const revisionBefore = Number(context.state.ui.viewStateRevision || 0);
+
+  context.handleGalleryBootstrapSearchSubmit(createSubmitEvent());
+
+  assert.equal(aborted, 1);
+  assert.equal(Number(context.state.ui.viewStateRevision), revisionBefore + 1);
+  assert.deepEqual(calls.fetchAndRender, []);
+});
+
 test('clearing back to the full gallery still refreshes when the library changed since it was remembered', () => {
   const { calls, context } = noMatchSearchContext(7, 8);
 
@@ -4598,6 +4611,18 @@ test('clicking empty space outside an emptied search box applies the clear', () 
   assert.equal(calls.buildApiUrl.length, 1);
   assert.equal(calls.buildApiUrl[0].query, '');
   assert.equal(calls.fetchAndRender.length, 1);
+});
+
+test('on the phone layout a blur never applies the clear', () => {
+  const { context, calls } = createContext({ searchInputValue: '' });
+  context.usesMobilePageLayout = () => true;
+  context.state.view.query = 'Neal Morse';
+
+  context.syncSearchClear();
+  context.handleGalleryBootstrapSearchBlur({ relatedTarget: null });
+
+  assert.deepEqual(calls.buildApiUrl, []);
+  assert.deepEqual(calls.fetchAndRender, []);
 });
 
 test('a blur that keeps a typed query or an unchanged search does nothing', () => {

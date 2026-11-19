@@ -2440,6 +2440,10 @@ function readCurrentRememberedRootGallery(rootView) {
 }
 
 function showRememberedRootGallery(rootView, historyView = rootView) {
+  // This may send no request of its own, so an earlier gallery request (a search still
+  // loading) must not land on top of the gallery shown here.
+  state.ui.activeViewRequestController?.abort();
+  state.ui.viewStateRevision = Number(state.ui.viewStateRevision || 0) + 1;
   state.gallery.sidebarArtistsOverride = null;
   state.gallery.sidebarShowAllArtistsOverride = null;
   applyViewPayload(rootView, { trackSidebarReveal: false });
@@ -2650,10 +2654,12 @@ function handleGalleryBootstrapSearchBlur(event) {
   if (!input) return;
   closeRecentSearchPopover();
   state.ui.pendingSearchClearOnBlur = false;
-  // Clicking empty space outside an emptied search box applies the clear. Focus moving to a
-  // control (the search button, an artist, a card) leaves that control's own action in charge.
+  // Desktop: clicking empty space outside an emptied search box applies the clear. Focus
+  // moving to a control (the search button, an artist, a card) leaves that control's own
+  // action in charge. Phones keep their own empty-search flow; dismissing the keyboard blurs.
   if (
     !event?.relatedTarget
+    && !(typeof usesMobilePageLayout === 'function' && usesMobilePageLayout())
     && !String(state.ui.searchDraftQuery || '').trim()
     && String(state.view?.query || '').trim()
   ) {

@@ -1073,7 +1073,7 @@
     },
     {
       "id": "js:runtime/bootstrap-event-handlers.js#<top-level>",
-      "action": "blur/change/click/copy/dblclick/dragend/dragover/dragstart/drop/focus/focusin/focusout/input/keydown/mousedown/mousemove/mouseout/mouseover/mouseup/paste/pointercancel/pointerdown/pointermove/pointerup/popstate/resize/scroll/search/submit/wheel listeners installed by <top-level>",
+      "action": "blur/change/click/copy/dblclick/dragend/dragover/dragstart/drop/focus/focusin/focusout/input/keydown/mousedown/mousemove/mouseout/mouseover/mouseup/paste/pointercancel/pointerdown/pointermove/pointerup/resize/scroll/search/submit/wheel listeners installed by <top-level>",
       "entrypoints": [
         "js:music_app/static/js/runtime/bootstrap-event-handlers.js#<top-level>:event:blur",
         "js:music_app/static/js/runtime/bootstrap-event-handlers.js#<top-level>:event:change",
@@ -1099,7 +1099,6 @@
         "js:music_app/static/js/runtime/bootstrap-event-handlers.js#<top-level>:event:pointerdown",
         "js:music_app/static/js/runtime/bootstrap-event-handlers.js#<top-level>:event:pointermove",
         "js:music_app/static/js/runtime/bootstrap-event-handlers.js#<top-level>:event:pointerup",
-        "js:music_app/static/js/runtime/bootstrap-event-handlers.js#<top-level>:event:popstate",
         "js:music_app/static/js/runtime/bootstrap-event-handlers.js#<top-level>:event:resize",
         "js:music_app/static/js/runtime/bootstrap-event-handlers.js#<top-level>:event:scroll",
         "js:music_app/static/js/runtime/bootstrap-event-handlers.js#<top-level>:event:search",
@@ -1260,9 +1259,10 @@
     },
     {
       "id": "js:runtime/bootstrap-gallery-event-handlers.js#commitGallerySearchQuery",
-      "action": "fetchAndRender requests installed by commitGallerySearchQuery",
+      "action": "Commit a search repeatedly and clear it; from a fresh page, commit the search already shown",
       "entrypoints": [
-        "js:music_app/static/js/runtime/bootstrap-gallery-event-handlers.js#commitGallerySearchQuery:request:fetchAndRender"
+        "js:music_app/static/js/runtime/bootstrap-gallery-event-handlers.js#commitGallerySearchQuery:request:fetchAndRender",
+        "js:music_app/static/js/runtime/bootstrap-gallery-event-handlers.js#tryRestoreClearedSearchView:request:fetchAndRender"
       ],
       "owners": [
         "music_app/static/js/runtime/bootstrap-gallery-event-handlers.js"
@@ -1272,20 +1272,40 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static",
+      "proof": "contract",
       "requestOwnership": {
         "allowed": [
           "/home-data",
           "/view-data"
         ],
         "forbidden": []
-      }
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 20
+      },
+      "budgets": {
+        "requests": 2
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/bootstrap-gallery-event-handlers.test.js",
+      "testIdentity": "request capture: a committed search requests its results once, and clearing it refreshes the restored gallery once",
+      "performanceTargets": [
+        "search-all-artists",
+        "search-browse"
+      ],
+      "rollback": "Test-only request-capture contract; search requests are unchanged. Reverting returns the entry to a static proof, which the guard rejects for a navigation entrypoint.",
+      "alreadyShown": true
     },
     {
       "id": "js:runtime/bootstrap-gallery-event-handlers.js#handleGalleryBootstrapClick",
-      "action": "Click Home and artist gallery links and a similar-artist chip, each repeatedly",
+      "action": "Click Home and artist gallery links and a similar-artist chip, each repeatedly; from a fresh page, go Home or reselect the artist already shown",
       "entrypoints": [
-        "js:music_app/static/js/runtime/bootstrap-gallery-event-handlers.js#handleGalleryBootstrapClick:request:fetchAndRender"
+        "js:music_app/static/js/runtime/bootstrap-gallery-event-handlers.js#handleGalleryBootstrapClick:request:fetchAndRender",
+        "js:music_app/static/js/runtime/bootstrap-gallery-event-handlers.js#tryRenderOptimisticSidebarArtistSelection:request:fetchAndRender"
       ],
       "owners": [
         "music_app/static/js/runtime/bootstrap-gallery-event-handlers.js"
@@ -1330,7 +1350,8 @@
         "search-browse",
         "gallery-artwork-diversity"
       ],
-      "rollback": "Test-only request-capture contract; gallery navigation is unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
+      "rollback": "Reselecting a shown solo artist reuses the mounted gallery. Reverting that reloads the artist on screen, which this contract's alreadyShown pass rejects; keep the contract.",
+      "alreadyShown": true
     },
     {
       "id": "js:runtime/bootstrap-gallery-event-handlers.js#handleGalleryBootstrapClick#2",
@@ -1351,10 +1372,12 @@
       "id": "js:runtime/bootstrap-gallery-event-handlers.js#handleGalleryBootstrapPopState",
       "action": "Step back to Home, to a search, and to an anchored root gallery, each step repeated",
       "entrypoints": [
-        "js:music_app/static/js/runtime/bootstrap-gallery-event-handlers.js#handleGalleryBootstrapPopState:request:fetchAndRender"
+        "js:music_app/static/js/runtime/bootstrap-gallery-event-handlers.js#handleGalleryBootstrapPopState:request:fetchAndRender",
+        "js:music_app/static/js/runtime/bootstrap-event-handlers.js#<top-level>:event:popstate"
       ],
       "owners": [
-        "music_app/static/js/runtime/bootstrap-gallery-event-handlers.js"
+        "music_app/static/js/runtime/bootstrap-gallery-event-handlers.js",
+        "music_app/static/js/runtime/bootstrap-event-handlers.js"
       ],
       "rules": [
         "BI-03",
@@ -1395,7 +1418,8 @@
         "search-browse",
         "gallery-artwork-diversity"
       ],
-      "rollback": "Test-only request-capture contract; gallery navigation is unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
+      "rollback": "A history step onto the address of the view shown keeps that view. Reverting reloads it, which this contract's alreadyShown pass rejects; keep the contract.",
+      "alreadyShown": true
     },
     {
       "id": "js:runtime/bootstrap-gallery-event-handlers.js#handleSidebarArtistSelectionClick",
@@ -1628,52 +1652,6 @@
       ],
       "workClass": "constant",
       "proof": "static"
-    },
-    {
-      "id": "js:runtime/bootstrap-gallery-event-handlers.js#tryRenderOptimisticSidebarArtistSelection",
-      "action": "fetchAndRender requests installed by tryRenderOptimisticSidebarArtistSelection",
-      "entrypoints": [
-        "js:music_app/static/js/runtime/bootstrap-gallery-event-handlers.js#tryRenderOptimisticSidebarArtistSelection:request:fetchAndRender"
-      ],
-      "owners": [
-        "music_app/static/js/runtime/bootstrap-gallery-event-handlers.js"
-      ],
-      "rules": [
-        "BI-03",
-        "BI-13"
-      ],
-      "workClass": "constant",
-      "proof": "static",
-      "requestOwnership": {
-        "allowed": [
-          "/home-data",
-          "/view-data"
-        ],
-        "forbidden": []
-      }
-    },
-    {
-      "id": "js:runtime/bootstrap-gallery-event-handlers.js#tryRestoreClearedSearchView",
-      "action": "fetchAndRender requests installed by tryRestoreClearedSearchView",
-      "entrypoints": [
-        "js:music_app/static/js/runtime/bootstrap-gallery-event-handlers.js#tryRestoreClearedSearchView:request:fetchAndRender"
-      ],
-      "owners": [
-        "music_app/static/js/runtime/bootstrap-gallery-event-handlers.js"
-      ],
-      "rules": [
-        "BI-03",
-        "BI-13"
-      ],
-      "workClass": "constant",
-      "proof": "static",
-      "requestOwnership": {
-        "allowed": [
-          "/home-data",
-          "/view-data"
-        ],
-        "forbidden": []
-      }
     },
     {
       "id": "js:runtime/bootstrap-init.js#<top-level>",
@@ -2822,10 +2800,9 @@
     },
     {
       "id": "js:runtime/discovery-center-navigation.js#create",
-      "action": "click/popstate listeners installed by create",
+      "action": "click listeners installed by create",
       "entrypoints": [
-        "js:music_app/static/js/runtime/discovery-center-navigation.js#create:event:click",
-        "js:music_app/static/js/runtime/discovery-center-navigation.js#create:event:popstate"
+        "js:music_app/static/js/runtime/discovery-center-navigation.js#create:event:click"
       ],
       "owners": [
         "music_app/static/js/runtime/discovery-center-navigation.js"
@@ -2840,7 +2817,8 @@
       "id": "js:runtime/discovery-center-navigation.js#navigate",
       "action": "Switch Discovery Center tabs by click and history, ignoring links outside /news",
       "entrypoints": [
-        "js:music_app/static/js/runtime/discovery-center-navigation.js#navigate:request:fetch"
+        "js:music_app/static/js/runtime/discovery-center-navigation.js#navigate:request:fetch",
+        "js:music_app/static/js/runtime/discovery-center-navigation.js#create:event:popstate"
       ],
       "owners": [
         "music_app/static/js/runtime/discovery-center-navigation.js"
@@ -2879,7 +2857,8 @@
         "app-open-all-artists",
         "artist-tree-scroll-navigation"
       ],
-      "rollback": "Test-only request-capture contract; Discovery Center navigation is unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
+      "rollback": "Navigating to the Discovery Center tab already shown loads nothing. Reverting reloads it, which this contract's alreadyShown pass rejects; keep the contract.",
+      "alreadyShown": true
     },
     {
       "id": "js:runtime/gallery-card-component.js#schedule",
@@ -3156,7 +3135,7 @@
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#browseScannedLibrarySnapshot",
-      "action": "fetchAndRender requests installed by browseScannedLibrarySnapshot",
+      "action": "Press Browse scanned results repeatedly; from a fresh page, press it while the scanned gallery is already shown",
       "entrypoints": [
         "js:music_app/static/js/runtime/gallery-refresh-and-status.js#browseScannedLibrarySnapshot:request:fetchAndRender",
         "js:music_app/static/js/runtime/gallery-refresh-and-status.js#browseScannedLibrarySnapshot:timer:scheduleBrowserTimeout"
@@ -3169,14 +3148,33 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static",
+      "proof": "contract",
       "requestOwnership": {
         "allowed": [
           "/home-data",
           "/view-data"
         ],
         "forbidden": []
-      }
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 20
+      },
+      "budgets": {
+        "requests": 1
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-refresh-and-status.test.js",
+      "testIdentity": "request capture: browsing scanned results requests the root gallery once, however often it is pressed",
+      "performanceTargets": [
+        "all-artists",
+        "root-album-browse"
+      ],
+      "rollback": "Test-only request-capture contract; scanned-results browsing is unchanged. Reverting returns the entry to a static proof, which the guard rejects for a navigation entrypoint.",
+      "alreadyShown": true
     },
     {
       "id": "js:runtime/gallery-refresh-and-status.js#cancelLibraryScan",
@@ -7740,12 +7738,11 @@
     },
     {
       "id": "js:settings-navigation.js#create",
-      "action": "album-haven:surface-opening/click/keydown/popstate/resize/submit listeners installed by create",
+      "action": "album-haven:surface-opening/click/keydown/resize/submit listeners installed by create",
       "entrypoints": [
         "js:music_app/static/js/settings-navigation.js#create:event:album-haven:surface-opening",
         "js:music_app/static/js/settings-navigation.js#create:event:click",
         "js:music_app/static/js/settings-navigation.js#create:event:keydown",
-        "js:music_app/static/js/settings-navigation.js#create:event:popstate",
         "js:music_app/static/js/settings-navigation.js#create:event:resize",
         "js:music_app/static/js/settings-navigation.js#create:event:submit"
       ],
@@ -7762,7 +7759,8 @@
       "id": "js:settings-navigation.js#navigate",
       "action": "Navigate between Settings pages, submit an account form, and reject non-Settings routes",
       "entrypoints": [
-        "js:music_app/static/js/settings-navigation.js#navigate:request:fetch"
+        "js:music_app/static/js/settings-navigation.js#navigate:request:fetch",
+        "js:music_app/static/js/settings-navigation.js#create:event:popstate"
       ],
       "owners": [
         "music_app/static/js/settings-navigation.js"
@@ -7803,7 +7801,8 @@
       "command": "node --test --test-concurrency=1 tests/js/runtime/settings-navigation.test.js",
       "testIdentity": "request capture: Settings navigation fetches only its owned pages, once per navigation",
       "performanceTargets": [],
-      "rollback": "Test-only request-capture contract; Settings navigation is unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
+      "rollback": "Navigating to the Settings page already shown loads nothing. Reverting reloads it, which this contract's alreadyShown pass rejects; keep the contract.",
+      "alreadyShown": true
     },
     {
       "id": "js:startup-progress.js#<top-level>",

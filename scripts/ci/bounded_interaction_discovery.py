@@ -8,7 +8,9 @@ contract; any interactive path that reaches a registered library-scale
 operation is rejected at any depth; an `async def` route, websocket or
 middleware whose event-loop call chain reaches blocking I/O is rejected
 (BI-08); a database connection opened per loop item is rejected in an
-interactive path and needs a contract elsewhere (BI-05); and filesystem, media
+interactive path and needs a contract elsewhere (BI-05); a new database
+connection opened anywhere a route, middleware, poller, scheduler or watcher
+reaches, instead of a lease from the shared pool, is rejected (BI-15); and filesystem, media
 or database work done per item of a loop over the whole library state
 (`library-state-scan-io`, BI-04) is reported at the loop, which the validator
 rejects in any background entry narrower than background-batch.
@@ -101,6 +103,11 @@ BLOCKING_CALLS = {
 DATABASE_METHODS = frozenset({"execute", "executemany", "fetchone", "fetchall", "fetchmany", "getconn", "connection"})
 DATABASE_DRIVERS = ("psycopg", "psycopg2", "psycopg_pool")
 POOLED_CONNECTION_MODULE = "music_app.services.postgres_connections"
+# Entries that run per request or per tick: a new connection there costs a TCP
+# and TLS handshake and authentication every time (hundreds of milliseconds),
+# so they lease from the shared pool. Background workers may hold their own.
+POOLED_ENTRY_KINDS = frozenset({"route", "middleware", "poller", "scheduler", "watcher"})
+POOL_LEASES = frozenset(f"{POOLED_CONNECTION_MODULE}.{name}" for name in ("pooled_connection", "leased_connection"))
 # Methods that open, lease or wrap a connection: `with store._connect(url) as
 # connection`, `with pool.connection() as connection`, `with connection.cursor() as cursor`.
 CONNECTION_FACTORY_METHODS = frozenset({"connection", "_connect", "_connect_to_database", "getconn", "cursor"})
@@ -799,6 +806,12 @@ def _database_connect(node: ast.Call, module: Module) -> str | None:
     return name if name in DATABASE_CONNECTS else None
 
 
+def _pool_lease(node: ast.Call, module: Module) -> str | None:
+    """A connection leased from the shared pool."""
+    name = _qualified_name(node.func, module)
+    return name if name in POOL_LEASES else None
+
+
 def _blocking_operation(node: ast.Call, module: Module, owner: Definition) -> tuple[str, str] | None:
     """(family, operation) for a call that blocks its thread until I/O or
     another thread completes."""
@@ -959,19 +972,25 @@ def _filesystem_operation(node: ast.Call) -> str | None:
 def _direct_hazards(definition: Definition, looped: bool, module: Module | None = None) -> list[dict[str, object]]:
     """Directory enumeration always counts. A single stat/open/media parse of a
     selected file is bounded; the same probe repeated per item is not. A new
-    database connection opened per item (BI-05) is an N+1 connection storm."""
+    database connection opened or leased per item (BI-05) is an N+1 round-trip
+    storm, and one opened once is a per-request handshake outside the shared
+    pool (BI-15)."""
     hazards = []
+    pooled = module is not None and module.name == POOLED_CONNECTION_MODULE
     for node, in_loop in _facts(definition).calls:
-        connect = _database_connect(node, module) if module is not None else None
-        if connect is not None and (in_loop or looped):
+        per_item = in_loop or looped
+        connect = _database_connect(node, module) if module is not None and not pooled else None
+        if connect is None and per_item and module is not None:
+            connect = _pool_lease(node, module)
+        if connect is not None:
             hazards.append({
-                "rule": "BI-05",
-                "operation": f"database-connect-per-item:{connect}",
+                "rule": "BI-05" if per_item else "BI-15",
+                "operation": f"database-connect-per-{'item' if per_item else 'request'}:{connect}",
                 "path": definition.path,
                 "function": definition.qualname,
                 "line": node.lineno,
                 "enumeration": False,
-                "per_item_connect": True,
+                "per_item_connect" if per_item else "fresh_connect": True,
             })
             continue
         operation = _filesystem_operation(node)
@@ -1916,6 +1935,7 @@ def analyze_python_repository(
     for entry, definition in _all_entrypoints(modules, index):
         entrypoints.append(entry)
         interactive = entry["kind"] in {"route", "middleware"}
+        pooled_entry = entry["kind"] in POOLED_ENTRY_KINDS
         hazards.extend(event_loop.hazards(entry, definition))
         queue = deque([(definition, [], None, None, None)])
         seen = set()
@@ -1957,6 +1977,16 @@ def analyze_python_repository(
                     *library_state.scans(current, bound),
                 ]
             for hazard in hazard_cache[cache_key]:
+                if hazard.get("fresh_connect"):
+                    if pooled_entry:
+                        hazards.append({
+                            **{key: value for key, value in hazard.items() if key not in {"enumeration", "fresh_connect"}},
+                            "entrypoint": entry["key"],
+                            "depth": depth,
+                            "via": via,
+                            "reject": True,
+                        })
+                    continue
                 record = {key: value for key, value in hazard.items() if key not in {"enumeration", "per_item_connect"}}
                 if hazard.get("per_item_connect"):
                     # Reported at the loop that repeats the connection: the

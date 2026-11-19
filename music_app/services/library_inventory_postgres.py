@@ -4,13 +4,12 @@ from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
 from music_app.services.album_local_membership import local_album_membership_ctes_sql
+from music_app.services.postgres_connections import leased_connection as _leased_connection
 
 try:  # pragma: no cover - exercised only when the optional runtime driver exists.
     import psycopg
-    from psycopg.rows import dict_row
 except ImportError:  # pragma: no cover - keeps the module importable without psycopg.
     psycopg = None
-    dict_row = None
 
 
 _APP_DATABASE_URL_KEY = "ALBUM_HAVEN_APP_DATABASE_URL"
@@ -145,9 +144,7 @@ class PostgresLibraryInventoryRepository:
 
 
 def _connect(database_url: str) -> Any:
-    if psycopg is None:
-        raise RuntimeError("psycopg is required for Postgres library inventory.")
-    return psycopg.connect(database_url, row_factory=dict_row)
+    return _leased_connection(database_url)
 
 
 def _row_mapping(

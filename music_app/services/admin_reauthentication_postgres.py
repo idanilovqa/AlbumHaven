@@ -17,13 +17,7 @@ from music_app.services.auth_audit_postgres import (
 )
 from music_app.services.auth_passwords import PasswordVerification, verify_password
 from music_app.services.auth_credential_attempts_postgres import PostgresCredentialAttempts, shared_verification_capacity
-
-try:  # pragma: no cover - exercised with the optional runtime driver.
-    import psycopg
-    from psycopg.rows import dict_row
-except ImportError:  # pragma: no cover
-    psycopg = None
-    dict_row = None
+from music_app.services.postgres_connections import leased_connection as _leased_connection
 
 
 _REQUEST_REFERENCE = re.compile(r"[A-Za-z0-9._:-]{1,128}")
@@ -264,6 +258,4 @@ def _aware_utc(value: object) -> datetime:
 
 
 def _connect(database_url: str):
-    if psycopg is None:
-        raise RuntimeError("psycopg is required for administrator reauthentication.")
-    return psycopg.connect(database_url, row_factory=dict_row)
+    return _leased_connection(database_url)

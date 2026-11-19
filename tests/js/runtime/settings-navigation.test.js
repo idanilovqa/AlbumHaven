@@ -200,8 +200,8 @@ test('external, logout, API and unrelated routes are not fetched as settings con
 
 test('a rejected protected-page response leaves the current content and history intact', async () => {
   const app = harness();
-  app.respond('Access denied', 'http://localhost:5000/admin/members', 403);
-  assert.equal(await app.navigation.navigate('/admin/members'), false);
+  app.respond('Access denied', 'http://localhost:5000/admin/server', 403);
+  assert.equal(await app.navigation.navigate('/admin/server'), false);
   const error = app.document.querySelector('[data-settings-navigation-error]');
   assert.equal(error.hidden, false);
   assert.equal(error.querySelector('.on-page-alert__message').textContent, 'This page could not be loaded. Please try again.');
@@ -502,11 +502,25 @@ const { measureInteractionContract } = require('../helpers/request-capture');
 
 test('request capture: Settings navigation fetches only its owned pages, once per navigation', async () => {
   const accepted = [
-    ['/account'], ['/admin/server'], ['/admin/accounts/41'], ['/admin/accounts/new'], ['/admin/members'],
+    // Each pass starts where the previous one landed (/account), so every target differs from the page shown.
+    ['/admin/server'], ['/account'], ['/admin/accounts/41'], ['/admin/accounts/new'], ['/admin/members'],
     ['/account/password', { method: 'POST', body: 'csrf_token=t' }, '/account'],
   ];
   const rejected = ['https://outside.example/account', '/logout', '/login', '/api/admin/members', '/view-data?surface=albums', '/home-data', '/news'];
   await measureInteractionContract('js:settings-navigation.js#navigate', {
+    // A freshly loaded Settings page navigating to itself, and a history step that stays on it, load nothing.
+    async alreadyShown(members) {
+      const requests = [];
+      for (const page of ['/admin/members', '/account']) {
+        const app = harness({ initialPath: page });
+        app.respond(Array.from({ length: members }, (_, index) => `<tr data-member="${index}"></tr>`).join(''), `http://localhost:5000${page}`);
+        assert.equal(await app.navigation.navigate(page), true, page);
+        app.listeners.get('window:popstate')({ state: app.window.history.state, stopImmediatePropagation() {} });
+        await settleNavigation();
+        requests.push(...app.requests.map(({ url }) => url));
+      }
+      return { requests };
+    },
     setup: members => ({ app: harness(), roster: Array.from({ length: members }, (_, index) => `<tr data-member="${index}"></tr>`).join('') }),
     async act({ app, roster }) {
       const requests = [];

@@ -2088,6 +2088,19 @@ function buildOptimisticSidebarArtistSelectionGroups(artist) {
       : []
     ).some((album) => String(album?.name || '').toLocaleLowerCase().includes(normalizedQuery))
   );
+  // Clicking the artist already shown, who has no family to resolve, reuses the mounted gallery:
+  // it is what the fetch would return (owner, 11-18: navigation never reloads the view on screen).
+  const isMountedSoloSelectedArtist = Boolean(
+    !query
+    && currentSelectedArtist === normalizedArtist
+    && currentPrimaryGroups.length === 1
+    && !currentFamilyGroups.length
+    && !currentRelatedArtists.length
+    && !Boolean(state.view?.initial_view_partial)
+    && String(state.view?.payload_tier || '').trim().toLowerCase() !== 'sidebar'
+    && !Boolean(state.view?.primary_filter_active)
+    && !(Array.isArray(state.view?.related_filter_artists) && state.view.related_filter_artists.length)
+  );
   const canReuseCurrentSelectedArtistFamilyContext = query
     ? Boolean(
       currentSelectedArtist
@@ -2105,7 +2118,7 @@ function buildOptimisticSidebarArtistSelectionGroups(artist) {
         )
       )
     )
-    : hasAuthoritativeMountedFamilyContext;
+    : hasAuthoritativeMountedFamilyContext || isMountedSoloSelectedArtist;
   if (matchedSelectedArtistGroupIndex >= 0) {
     const optimisticMatchedSelectedArtistGroup = deepCloneJson(matchedSelectedArtistGroup);
     const selectedAlbumKeys = new Set(
@@ -2642,7 +2655,17 @@ function syncSearchClear() {
   if (!normalizedQuery.trim()) closeRecentSearchPopover();
 }
 
+// A history step onto the address of the view already shown (a duplicate history entry) keeps
+// that view: reloading it is navigation that changes nothing (owner, 11-18).
+function historyStepShowsCurrentView(href) {
+  if (state.ui?.activeViewRequestController || state.ui?.pendingViewRequest) return false;
+  if (state.view?.initial_view_partial) return false;
+  if (String(state.view?.payload_tier || '').trim().toLowerCase() === 'sidebar') return false;
+  return buildUrl(parseBrowserUrlState(href)) === buildUrl(state.view || {});
+}
+
 function handleGalleryBootstrapPopState(options = {}) {
+  if (!options.parentViewUrl && !options.galleryAnchorArtist && historyStepShowsCurrentView(getBrowserLocationHref())) return;
   const parentViewUrl = options.parentViewUrl || getBrowserLocationHref();
   if (typeof syncGalleryMainStateFromLocation === 'function') syncGalleryMainStateFromLocation(options.parentViewUrl);
   const requestUrl = options.galleryAnchorArtist

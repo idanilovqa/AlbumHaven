@@ -29,6 +29,7 @@ const TOP_LEVEL_KEYS = new Set(['schemaVersion', 'allowedWorkClasses', 'libraryS
 const INTERACTION_KEYS = new Set([
   'id', 'action', 'entrypoints', 'owners', 'rules', 'workClass', 'proof', 'requestOwnership',
   'cardinalities', 'budgets', 'growth', 'command', 'testIdentity', 'measures', 'performanceTargets', 'rollback',
+  'alreadyShown',
 ]);
 const REQUIRED_KEYS = ['id', 'action', 'entrypoints', 'owners', 'rules', 'workClass', 'proof'];
 const CONTRACT_KEYS = ['cardinalities', 'budgets', 'growth', 'command', 'testIdentity', 'rollback'];
@@ -240,6 +241,19 @@ function validateInventory(registry, discovery) {
   }
   for (const key of discovered.keys()) {
     if (!registeredBy.has(key)) errors.push(`unregistered entrypoint ${key}`);
+  }
+  // Navigation toward the view already on screen must send no request: an
+  // entry owning a navigation entrypoint is a request-capture contract that
+  // proves it from a freshly loaded page (`alreadyShown`, enforced by
+  // measureInteractionContract), and only such an entry declares it.
+  for (const entry of registry.interactions || []) {
+    const navigation = (entry.entrypoints || []).filter(key => discovered.get(key)?.navigation);
+    if (navigation.length && !(entry.proof === 'contract' && entry.requestOwnership && entry.alreadyShown === true)) {
+      errors.push(`${entry.id}: navigation entrypoint ${navigation[0]} needs a request-capture contract with alreadyShown: `
+        + 'performed from a freshly loaded page toward the view it already shows, it must send no request');
+    } else if (!navigation.length && entry.alreadyShown !== undefined) {
+      errors.push(`${entry.id}: alreadyShown is declared but no entrypoint navigates`);
+    }
   }
   for (const hazard of discovery.hazards.filter(item => item.reject)) {
     if (hazard.operation === 'unresolved-trigger') {

@@ -8,7 +8,7 @@ from __future__ import annotations
 import atexit
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
-from threading import Lock
+from threading import Lock, get_ident
 from time import perf_counter
 
 try:  # Keep schema-independent tooling importable.
@@ -21,6 +21,14 @@ except ImportError:  # pragma: no cover
 
 _pools = {}
 _lock = Lock()
+# Leases each thread holds right now, by thread id. A lease taken while the thread already holds one
+# comes from a pool one level deeper, so nested repository calls never wait on a connection their own
+# request is holding: waits only ever go deeper, so pool exhaustion cannot deadlock. A lease released
+# on another thread (a shared connection handed between workers) still unwinds its own thread's count.
+_held: dict[int, int] = {}
+# The default workload carries every request-path repository; the others keep their small pools.
+_DEFAULT_WORKLOAD_MAX_SIZE = 8
+_MAX_SIZE = 4
 
 
 def _observe_pool_lease(
@@ -59,13 +67,14 @@ def pooled_connection(
         raise RuntimeError("Postgres pool workload is required.")
     if ConnectionPool is None:
         raise RuntimeError("psycopg pool support is required; install the application requirements.")
-    pool_key = (database_url, normalized_workload)
+    depth = _held.get(get_ident(), 0)
+    pool_key = (database_url, normalized_workload) if depth == 0 else (database_url, normalized_workload, depth)
     with _lock:
         pool = _pools.get(pool_key)
         if pool is None:
             pool = ConnectionPool(
                 conninfo=database_url,
-                min_size=0, max_size=4, max_waiting=32,
+                min_size=0, max_size=_DEFAULT_WORKLOAD_MAX_SIZE if depth == 0 and normalized_workload == "default" else _MAX_SIZE, max_waiting=32,
                 timeout=30, max_idle=120, max_lifetime=600,
                 kwargs={"row_factory": dict_row, "connect_timeout": 15},
                 open=True,
@@ -110,6 +119,8 @@ def _lease_connection(
         with checkout as connection:
             acquired_at = perf_counter()
             acquired = True
+            holder = get_ident()
+            _held[holder] = _held.get(holder, 0) + 1
             _observe_pool_lease(
                 lease_observer,
                 "acquired",
@@ -130,6 +141,10 @@ def _lease_connection(
         raise
     finally:
         if acquired:
+            if _held[holder] > 1:
+                _held[holder] -= 1
+            else:
+                del _held[holder]
             _observe_pool_lease(
                 lease_observer,
                 "released",
@@ -137,6 +152,44 @@ def _lease_connection(
                 elapsed_ms=(perf_counter() - acquired_at) * 1000,
                 pool=pool,
             )
+
+
+class _LeasedConnection:
+    """A pool lease used like a `psycopg.connect()` connection.
+
+    `with` commits on success and rolls back on error, then returns the
+    connection to the pool; `close()` rolls back what was not committed and
+    returns it. Everything else is the leased connection itself."""
+
+    def __init__(self, database_url: str, workload: str):
+        self._lease = pooled_connection(database_url, workload=workload)
+        self._connection = self._lease.__enter__()
+
+    def __getattr__(self, name: str):
+        return getattr(self._connection, name)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        self._release(exc_type, exc, traceback)
+
+    def close(self) -> None:
+        try:
+            if self._lease is not None:
+                self._connection.rollback()
+        finally:
+            self._release(None, None, None)
+
+    def _release(self, exc_type, exc, traceback) -> None:
+        lease, self._lease = self._lease, None
+        if lease is not None:
+            lease.__exit__(exc_type, exc, traceback)
+
+
+def leased_connection(database_url: str, *, workload: str = "default") -> _LeasedConnection:
+    """A shared-pool connection for repositories written against `psycopg.connect()`."""
+    return _LeasedConnection(database_url, workload)
 
 
 def prewarm_connection_pool(database_url: str) -> None:

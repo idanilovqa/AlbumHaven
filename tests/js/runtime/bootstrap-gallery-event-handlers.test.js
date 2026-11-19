@@ -5839,7 +5839,7 @@ const {
   createRequestCapture, jsonResponse, measureInteractionContract,
 } = require('../helpers/request-capture');
 
-function capturedGalleryHandlers() {
+function capturedGalleryHandlers(respond = () => ({ artist_groups: [], payload_tier: 'full' })) {
   const { context } = createGalleryRefreshContext();
   useRealViewUrls(context);
   context.state.gallery = {};
@@ -5849,7 +5849,7 @@ function capturedGalleryHandlers() {
     overlayClickStartedOnOverlay: () => false,
     applyLocalRelatedArtistFilter: () => false,
   });
-  const capture = createRequestCapture(() => jsonResponse({ artist_groups: [], payload_tier: 'full' }));
+  const capture = createRequestCapture(url => jsonResponse(respond(url)));
   context.fetch = capture.fetch;
   return { context, capture };
 }
@@ -5864,9 +5864,55 @@ const clickEvent = matches => ({
   preventDefault() {},
 });
 
+const NAVIGATION_UI_STUBS = ['closeArtistsDrawer'];
+
+// A freshly loaded page already showing `view` at `href`: navigating to that same view must send nothing.
+function freshlyLoadedGallery(href, view, respond) {
+  const handlers = capturedGalleryHandlers(respond);
+  for (const name of NAVIGATION_UI_STUBS) handlers.context[name] ??= () => {};
+  handlers.context.deepCloneJson ??= value => JSON.parse(JSON.stringify(value));
+  handlers.context.withActiveGallerySources ??= view => view;
+  handlers.context.window.location.href = href;
+  handlers.context.state.view = {
+    ...handlers.context.state.view,
+    surface: { active: 'albums' },
+    query: '',
+    selected_artist: '',
+    all_artists_active: false,
+    related_filter_artists: [],
+    primary_filter_active: false,
+    gallery_page: { has_previous: false },
+    ...view,
+  };
+  return handlers;
+}
+
 test('request capture: gallery links and similar-artist chips request their own view once per click', async () => {
   const id = 'js:runtime/bootstrap-gallery-event-handlers.js#handleGalleryBootstrapClick';
   await measureInteractionContract(id, {
+    async alreadyShown(repeatedClicks) {
+      const requests = [];
+      const perform = async ({ context, capture }, navigate) => {
+        for (let click = 0; click < repeatedClicks; click += 1) navigate(context);
+        await settleGallery();
+        requests.push(...capture.urls());
+      };
+      // Owner, 11-18 (PR #107): Back to the gallery from a freshly loaded root gallery reloaded it, because the
+      // loaded view reports all_artists_active: false although it is exactly the library Home gallery.
+      await perform(freshlyLoadedGallery('http://localhost/albums', {}), context => (
+        context.handleGalleryBootstrapClick(createAllArtistsEvent({ libraryHome: true }).event)));
+      const shownArtist = {
+        selected_artist: 'Broadcast',
+        artists_sidebar: [{ artist: 'Broadcast', count: 1 }],
+        primary_artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'broadcast-tender-buttons', name: 'Tender Buttons' }] }],
+        payload_tier: 'full',
+      };
+      await perform(freshlyLoadedGallery('http://localhost/?artist=Broadcast', shownArtist), context => (
+        context.handleSidebarArtistSelectionClick(clickEvent({
+          '[data-sidebar-artist]': { getAttribute: () => 'Broadcast' },
+        }))));
+      return { requests };
+    },
     setup: repeatedClicks => ({ ...capturedGalleryHandlers(), repeatedClicks }),
     async act({ context, capture, repeatedClicks }) {
       const before = capture.requests.length;
@@ -5890,10 +5936,88 @@ test('request capture: gallery links and similar-artist chips request their own 
   });
 });
 
+// The root gallery as the server sends it, kept by the browse cache.
+const ROOT_GALLERY = Object.freeze({
+  surface: { active: 'albums' },
+  query: '',
+  selected_artist: '',
+  all_artists_active: true,
+  artists_sidebar: [{ artist: 'Broadcast', count: 1 }],
+  artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'broadcast-tender-buttons', name: 'Tender Buttons' }] }],
+  payload_tier: 'full',
+});
+
+// The server answers a search with its results and an unsearched request with the root gallery.
+const searchResponse = (url) => {
+  const query = new URL(url, 'http://localhost').searchParams.get('q') || '';
+  return { ...JSON.parse(JSON.stringify(ROOT_GALLERY)), query };
+};
+
+function searchableRootGallery() {
+  const handlers = freshlyLoadedGallery('http://localhost/', { ...ROOT_GALLERY }, searchResponse);
+  handlers.context.getReusableRootBrowseView = () => JSON.parse(JSON.stringify(ROOT_GALLERY));
+  return handlers;
+}
+
+test('request capture: a committed search requests its results once, and clearing it refreshes the restored gallery once', async () => {
+  const id = 'js:runtime/bootstrap-gallery-event-handlers.js#commitGallerySearchQuery';
+  // Search input and Enter commit through the scheduler, which owns the already-committed check.
+  const commitRepeatedly = async ({ context }, query, repeatedCommits) => {
+    for (let commit = 0; commit < repeatedCommits; commit += 1) context.scheduleGallerySearchCommit(query, { immediate: true });
+    await settleGallery();
+  };
+  await measureInteractionContract(id, {
+    async alreadyShown(repeatedCommits) {
+      const requests = [];
+      // The unsearched gallery committing an empty search, and search results committing their own query.
+      const unsearched = searchableRootGallery();
+      await commitRepeatedly(unsearched, '', repeatedCommits);
+      requests.push(...unsearched.capture.urls());
+      const searched = freshlyLoadedGallery('http://localhost/?q=broadcast', { ...ROOT_GALLERY, query: 'broadcast' }, searchResponse);
+      await commitRepeatedly(searched, 'broadcast', repeatedCommits);
+      requests.push(...searched.capture.urls());
+      return { requests };
+    },
+    setup: repeatedCommits => ({ ...searchableRootGallery(), repeatedCommits }),
+    async act(handlers) {
+      const before = handlers.capture.requests.length;
+      await commitRepeatedly(handlers, 'broadcast', handlers.repeatedCommits);
+      await commitRepeatedly(handlers, '', handlers.repeatedCommits);
+      const urls = handlers.capture.urls().slice(before);
+      assert.deepEqual(urls.map(galleryRequestShape), [
+        ['/view-data', null, 'broadcast', null, null],
+        ['/view-data', null, null, null, null],
+      ]);
+      return { requests: urls };
+    },
+  });
+});
+
 test('request capture: history steps request the restored view once, Home through /home-data', async () => {
   const id = 'js:runtime/bootstrap-gallery-event-handlers.js#handleGalleryBootstrapPopState';
   await measureInteractionContract(id, {
-    setup: repeatedSteps => ({ ...capturedGalleryHandlers(), repeatedSteps }),
+    // A history step that lands on the address the freshly loaded page already shows.
+    async alreadyShown(repeatedSteps) {
+      const requests = [];
+      const stepInPlace = async (href, view) => {
+        const { context, capture } = freshlyLoadedGallery(href, { gallery_scope: 'all', ...view });
+        // The duplicate entry holds the address the app recorded for the shown view.
+        context.window.location.href = new URL(context.buildUrl(context.state.view), 'http://localhost').href;
+        for (let repeat = 0; repeat < repeatedSteps; repeat += 1) context.handleGalleryBootstrapPopState();
+        await settleGallery();
+        requests.push(...capture.urls());
+      };
+      await stepInPlace('http://localhost/?artist=Broadcast', {
+        selected_artist: 'Broadcast',
+        artists_sidebar: [{ artist: 'Broadcast', count: 1 }],
+        primary_artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'broadcast-tender-buttons', name: 'Tender Buttons' }] }],
+        payload_tier: 'full',
+      });
+      await stepInPlace('http://localhost/?q=broadcast', { ...ROOT_GALLERY, query: 'broadcast' });
+      return { requests };
+    },
+    // Steps start from an artist page, so each lands on a view other than the one shown.
+    setup: repeatedSteps => ({ ...freshlyLoadedGallery('http://localhost/?artist=Stereolab', { selected_artist: 'Stereolab' }), repeatedSteps }),
     async act({ context, capture, repeatedSteps }) {
       const before = capture.requests.length;
       const step = async (href, options) => {

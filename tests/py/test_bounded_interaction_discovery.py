@@ -1340,3 +1340,69 @@ def start(pool, jobs):
 """)
     keys = [item["key"].split("#")[1] for item in discovery.discover_python_entrypoints(tmp_path)]
     assert keys == ["cover_job:background:executor"]
+
+
+def test_a_request_path_opening_its_own_connection_instead_of_leasing_the_pool_is_rejected(tmp_path: Path):
+    # Owner, 11-18 (PR #107): every page render read layout settings through a repository whose
+    # default connect opened a new Postgres connection per call (112-590 ms each), and the preview
+    # storage state polled every 60 s did the same per tick.
+    _write(tmp_path, "music_app/services/postgres_connections.py", """
+from psycopg_pool import ConnectionPool
+
+def pooled_connection(url):
+    return ConnectionPool(url).connection()
+""")
+    _write(tmp_path, "music_app/services/layout.py", """
+import psycopg
+from music_app.services.postgres_connections import pooled_connection
+
+def _connect(url):
+    return psycopg.connect(url)
+
+class LayoutPreferences:
+    def __init__(self, config, *, connect=None):
+        self._url = config["url"]
+        self._connect = connect or _connect
+
+    def load(self):
+        with self._connect(self._url) as connection:
+            return connection.execute("select 1").fetchone()
+
+def load_pooled(config):
+    with pooled_connection(config["url"]) as connection:
+        return connection.execute("select 1").fetchone()
+
+def move_previews(config):
+    with psycopg.connect(config["url"]) as connection:
+        connection.execute("select pg_advisory_lock(1)")
+""")
+    _write(tmp_path, "music_app/routes/pages.py", """
+import threading
+from music_app.services.layout import LayoutPreferences, load_pooled, move_previews
+
+@router.get('/')
+def gallery(request):
+    return LayoutPreferences(request.app.state.config).load()
+
+@router.get('/pooled')
+def pooled(request):
+    return load_pooled(request.app.state.config)
+
+def poll_preview_storage(config):
+    return LayoutPreferences(config).load()
+
+@router.post('/move')
+def move(request):
+    threading.Thread(target=move_previews, args=(request.app.state.config,)).start()
+""")
+    hazards = _hazards(tmp_path, "BI-15")
+    assert sorted(hazard["entrypoint"].split("#")[1] for hazard in hazards) == [
+        "gallery:route:GET /",
+        "poll_preview_storage:poller:name",
+    ]
+    for hazard in hazards:
+        assert hazard["reject"] is True
+        assert hazard["operation"] == "database-connect-per-request:psycopg.connect"
+        assert (hazard["path"], hazard["function"]) == ("music_app/services/layout.py", "_connect")
+    # A background worker may hold a connection of its own; the pool's own module is the pool.
+    assert not _hazards(tmp_path, "BI-05")

@@ -4,12 +4,7 @@ from collections.abc import Callable, Iterable, Mapping
 from contextlib import nullcontext
 from typing import Any
 
-try:  # pragma: no cover - exercised only when the optional runtime driver exists.
-    import psycopg
-    from psycopg.rows import dict_row
-except ImportError:  # pragma: no cover - allows import-time diagnostics without the Postgres driver.
-    psycopg = None
-    dict_row = None
+from music_app.services.postgres_connections import leased_connection as _leased_connection
 
 
 _APP_DATABASE_URL_KEY = "ALBUM_HAVEN_APP_DATABASE_URL"
@@ -166,9 +161,7 @@ class _NoopTransaction:
 
 
 def _connect(database_url: str) -> Any:
-    if psycopg is None:
-        raise RuntimeError("psycopg is required for Postgres album ratings.")
-    return psycopg.connect(database_url, row_factory=dict_row)
+    return _leased_connection(database_url)
 
 
 def _transaction(connection: Any) -> Any:

@@ -66,6 +66,13 @@ operate, or contribute to the application.
 
 ## Mandatory bounded-interaction gate
 
+- Mandatory for every agent and chat (owner rule, 2026-11-18): after any
+  implementation or refactor of new or changed code, run
+  `npm run test:bounded-interactions` (or with `--changed-paths <file>`) and
+  get it green before calling the work done, reporting it complete, handing
+  it off, or opening a pull request. This is not optional and not deferred to
+  CI or feature completion. A skipped, failing, or not-yet-run guard means the
+  work is not done.
 - Every interaction entrypoint (listener, timer, observer, request, route,
   watcher, poller, background loop) is declared in
   `tests/ci/bounded-interactions.json`. After adding, moving, or removing one,
@@ -98,24 +105,37 @@ operate, or contribute to the application.
   (`tests/js/helpers/request-capture.js`). It performs the interaction twice
   in one state and fails when the repeat sends more requests than the first
   pass or sends an identical GET more often than the first pass did.
+- Navigation never reloads the view already on screen. Discovery marks as
+  navigation a history step (`popstate`, `hashchange`) that reaches a request,
+  and a GET whose own function records its view in history
+  (`history.pushState`, directly or through a helper it calls). The registry
+  entry owning one is a request-capture contract with `alreadyShown: true`,
+  and its test passes `alreadyShown(cardinality)`: from a freshly loaded page
+  in the state the app starts in, navigate to the view that page already
+  shows; it must send no request. Decide "already shown" in the handler that
+  chooses the target, not in a shared loader such as `fetchAndRender`.
 - Rejected outright: direct broad work in a high-frequency JavaScript handler;
   a route reaching registered library-scale work or enumerating a directory
   directly; event-loop blocking (BI-08) in an `async def` route, websocket, or
-  middleware; a database connection opened per loop item (BI-05) in a
-  route or middleware; and filesystem, media or database work per item of a
+  middleware; a database connection opened or leased per loop item (BI-05) in a
+  route or middleware; a new database connection (`psycopg.connect`) anywhere
+  a route, middleware, poller, scheduler, or watcher reaches, instead of a
+  lease from the shared pool (BI-15); and filesystem, media or database work per item of a
   loop over the whole library state (`library-state-scan-io`) in a save,
   finalize, watcher or reconciler entry narrower than `background-batch`. Fix BI-08 by making a route that awaits nothing a plain
   `def`, or by handing the blocking part to `run_in_threadpool` after
   authorization. Fix BI-05 at the owning boundary: load once and pass the
   snapshot down, or write a batch in one transaction; do not add a
-  process-wide cache without an invalidation owner.
+  process-wide cache without an invalidation owner. Fix BI-15 by leasing from
+  `music_app/services/postgres_connections.py`: `pooled_connection` for new
+  code, `leased_connection` where a repository is written against a
+  `psycopg.connect()` connection. Only a background worker that keeps session
+  state (a session advisory lock, `LISTEN`) holds a connection of its own.
 - The ASGI test client (`tests/py/asgi_testing.py`) fails any request that
   blocks the event loop for more than 250 ms outside a module's first import,
   and has no opt-out.
-- Before calling an interaction implemented, run
-  `npm run test:bounded-interactions` (or with `--changed-paths <file>`). A
-  functional pass, mocked helper, small fixture, or elapsed time alone does
-  not prove bounded work. Report the interaction IDs, cardinalities, measured
+- A functional pass, mocked helper, small fixture, or elapsed time alone does
+  not prove bounded work. With the guard result, report the interaction IDs, cardinalities, measured
   operation counts and work class, the command and result, and any browser
   performance target deferred to CI.
 - When unbounded work escapes the guard, first add it to

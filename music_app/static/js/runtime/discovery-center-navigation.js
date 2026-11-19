@@ -36,6 +36,8 @@
     async function navigate(value, { historyMode = 'push' } = {}) {
       const url = resolveUrl(value);
       if (!url) return false;
+      // The tab already shown, with no other tab loading: nothing to load (owner, 11-18).
+      if (url.href === currentUrl && !pending) return true;
       const ownSequence = ++sequence;
       pending?.abort();
       pending = new AbortController();

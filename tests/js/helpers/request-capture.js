@@ -92,8 +92,18 @@ function repeatedRequestViolations(id, first, second) {
 // entry's owned endpoints. `act` returns `{ requests, metrics }`: the requests
 // it sent and any other budgeted metrics; `requests` is measured as their count,
 // and a counted `metrics.requests` must agree with it.
-function measureInteractionContract(id, { setup, act }) {
-  const { cardinalities, budgets, growth, requestOwnership } = contractEntry(id);
+//
+// The already-shown rule: an entry registered with `alreadyShown` navigates,
+// so `alreadyShown(cardinality)` must also load a fresh page in the state the
+// app starts in, perform the navigation toward the view that page already
+// shows, and return `{ requests }`, which must be empty.
+async function measureInteractionContract(id, { setup, act, alreadyShown }) {
+  const { cardinalities, budgets, growth, requestOwnership, alreadyShown: navigates } = contractEntry(id);
+  if (Boolean(navigates) !== (typeof alreadyShown === 'function')) {
+    throw new Error(navigates
+      ? `${id}: a navigation contract must navigate from a fresh page toward the view already shown (alreadyShown)`
+      : `${id}: alreadyShown is only for entries registered with alreadyShown`);
+  }
   const pass = async (context, number) => {
     const { requests, metrics = {} } = await act(context, number) || {};
     if (!Array.isArray(requests)) throw new Error(`${id}: pass ${number} did not return the requests it sent`);
@@ -104,6 +114,13 @@ function measureInteractionContract(id, { setup, act }) {
     return { requests, metrics: { ...metrics, requests: requests.length } };
   };
   const run = async (cardinality) => {
+    if (alreadyShown) {
+      const { requests } = await alreadyShown(cardinality) || {};
+      if (!Array.isArray(requests)) throw new Error(`${id}: alreadyShown did not return the requests it sent`);
+      if (requests.length) {
+        throw new Error(`${id}: navigating to the view already shown sent ${requests.length} request(s): ${requests.map(capturedUrl).join(', ')}`);
+      }
+    }
     const context = await setup(cardinality);
     const first = await pass(context, 1);
     const second = await pass(context, 2);

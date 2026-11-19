@@ -7139,6 +7139,31 @@ test('request capture: gallery navigation fetches its own endpoint once and disp
   });
 });
 
+test('request capture: browsing scanned results requests the root gallery once, however often it is pressed', async () => {
+  const id = 'js:runtime/gallery-refresh-and-status.js#browseScannedLibrarySnapshot';
+  const scannedRoot = { surface: { active: 'albums' }, artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'tender-buttons' }] }], album_count: 1 };
+  const pressRepeatedly = async ({ context }, presses) => {
+    await Promise.all(Array.from({ length: presses }, () => context.browseScannedLibrarySnapshot()));
+    await settleRequests();
+  };
+  await measureInteractionContract(id, {
+    // The scanned gallery is already shown from the browse cache while scan work continues: nothing to load.
+    async alreadyShown(presses) {
+      const gallery = capturedGallery(() => jsonResponse(scannedRoot));
+      gallery.context.getReusableRootBrowseView = () => JSON.parse(JSON.stringify(scannedRoot));
+      gallery.context.state.status = { ...gallery.context.state.status, scan_in_progress: true };
+      await pressRepeatedly(gallery, presses);
+      return { requests: gallery.capture.urls() };
+    },
+    setup: presses => ({ gallery: capturedGallery(() => jsonResponse(scannedRoot)), presses }),
+    async act({ gallery, presses }) {
+      const pass = await capturedPass(gallery, () => pressRepeatedly(gallery, presses));
+      assert.deepEqual(pass.requests.map(url => new URL(url, 'http://localhost').pathname), ['/view-data']);
+      return pass;
+    },
+  });
+});
+
 test('request capture: startup hydration follow-ups dispatch one request after busy retries', async () => {
   const id = 'js:runtime/gallery-refresh-and-status.js#runDispatch';
   await measureInteractionContract(id, {

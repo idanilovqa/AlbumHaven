@@ -844,6 +844,9 @@
   }
 }
 
+/* The left panel while the Problematic Files index first fills hosts the shared overlay. */
+.utility-sidebar.is-indexing { position: relative; }
+
 .problematic-mutation-overlay {
   position: absolute;
   inset: 0;
@@ -853,8 +856,8 @@
   justify-content: center;
   gap: 13px;
   padding: 24px;
-  color: var(--text);
-  background: rgba(14, 22, 33, 0.76);
+  color: var(--appearance-panel-ink, var(--text));
+  background: color-mix(in srgb, var(--appearance-panel-background, var(--panel)) 78%, transparent);
   backdrop-filter: blur(2px);
   font-weight: 650;
 }

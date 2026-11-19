@@ -7943,57 +7943,149 @@ test('Problematic Files renders load failure instead of a successful empty state
   assert.doesNotMatch(`${elements.list.innerHTML}${elements.detail.innerHTML}`, /No matching/);
 });
 
-for (const phone of [false, true]) {
-  test(`Problematic Files shows the approved indexing state with its progress line (${phone ? 'phone' : 'desktop'})`, () => {
-    const elements = {
-      overlay: {},
-      list: { innerHTML: '', scrollTop: 0 },
-      detail: { innerHTML: 'previous detail', removeAttribute() {} },
-      count: { textContent: '12' },
-      sidebarLabel: { textContent: '' },
-      search: { disabled: false, placeholder: '', value: '' },
-    };
-    const alerts = [];
-    const context = {
-      console,
-      escapeHtml(value) { return String(value ?? ''); },
-      state: { utility: {
-        problematicFiles: [], libraryWatchHealthProblems: [], selectedProblematicKey: '',
-        selectedProblemFilters: [], searchQuery: '', loaded: false, loading: true,
-        problematicLoadError: '', problematicIndexing: { done: 1226, total: 2665 },
-      } },
-      usesMobilePageLayout: () => phone,
-      getUtilityModalElements() { return elements; },
-      getFilteredProblematicAlbums() { return []; },
-      renderProblemFilterControls() {},
-      buildOnPageAlertHtml(config) {
-        alerts.push(config);
-        return `<section data-alert>${config.title}</section>`;
-      },
-    };
-    vm.createContext(context);
-    vm.runInContext(helperSource, context, { filename: helperPath });
-    vm.runInContext(utilityRendererSource, context, { filename: utilityRendererPath });
-
-    context.renderProblematicFiles();
-
-    assert.deepEqual(JSON.parse(JSON.stringify(alerts)), [{
-      severity: 'info',
-      role: 'status',
-      title: 'Indexing Problematic Files…',
-      message: 'A one-time step after an update. The list opens by itself when it is ready.',
-      progress: { value: (1226 / 2665) * 100, label: '1,226 of 2,665 albums checked' },
-    }]);
-    if (phone) {
-      assert.equal(elements.list.innerHTML, '<section data-alert>Indexing Problematic Files…</section>');
-      assert.equal(elements.detail.innerHTML, 'previous detail');
-    } else {
-      assert.equal(elements.list.innerHTML, '<div class="utility-empty-state compact">Indexing…</div>');
-      assert.equal(elements.detail.innerHTML, '<section data-alert>Indexing Problematic Files…</section>');
-    }
-    assert.equal(elements.count.textContent, '');
-  });
+function fakeIndexingElement(tag = 'div') {
+  const attributes = new Map();
+  const classes = new Set();
+  const children = [];
+  const element = {
+    tagName: tag.toUpperCase(),
+    className: '',
+    textContent: '',
+    disabled: false,
+    children,
+    ownerDocument: { createElement: (childTag) => fakeIndexingElement(childTag) },
+    classList: {
+      toggle(name, on) { if (on) classes.add(name); else classes.delete(name); },
+      contains: (name) => classes.has(name),
+    },
+    setAttribute(name, value) { attributes.set(name, String(value)); },
+    removeAttribute(name) { attributes.delete(name); },
+    hasAttribute(name) { return attributes.has(name); },
+    getAttribute(name) { return attributes.has(name) ? attributes.get(name) : null; },
+    appendChild(child) { children.push(child); child.parent = element; return child; },
+    remove() {
+      const siblings = element.parent?.children;
+      if (siblings) siblings.splice(siblings.indexOf(element), 1);
+    },
+    querySelector(selector) {
+      return selector === ':scope > [data-problematic-indexing-overlay]'
+        ? children.find((child) => child.hasAttribute('data-problematic-indexing-overlay')) || null
+        : null;
+    },
+  };
+  return element;
 }
+
+function renderIndexingState({ phone, indexing }) {
+  const sidebar = fakeIndexingElement('aside');
+  const filterButtons = [fakeIndexingElement('button'), fakeIndexingElement('button')];
+  const searchField = { querySelectorAll: () => filterButtons };
+  const elements = {
+    overlay: {},
+    list: { innerHTML: '', scrollTop: 0, closest: (selector) => (selector === '.utility-sidebar' ? sidebar : null) },
+    detail: { innerHTML: 'previous detail', removeAttribute() {} },
+    count: { textContent: '12' },
+    sidebarLabel: { textContent: '' },
+    search: {
+      disabled: false, placeholder: '', value: '',
+      closest: (selector) => (selector === '.search-field' ? searchField : null),
+    },
+    problemFilterButton: fakeIndexingElement('button'),
+  };
+  const alerts = [];
+  const context = {
+    console,
+    document: { createElement: (tag) => fakeIndexingElement(tag) },
+    escapeHtml(value) { return String(value ?? ''); },
+    state: { utility: {
+      problematicFiles: [], libraryWatchHealthProblems: [], selectedProblematicKey: '',
+      selectedProblemFilters: [], searchQuery: '', loaded: false, loading: true,
+      problematicLoadError: '', problematicIndexing: indexing,
+    } },
+    usesMobilePageLayout: () => phone,
+    getUtilityModalElements() { return elements; },
+    getFilteredProblematicAlbums() { return []; },
+    renderProblemFilterControls() {},
+    buildOnPageAlertHtml(config) {
+      alerts.push(config);
+      return `<section data-alert>${config.title}</section>`;
+    },
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  vm.runInContext(utilityRendererSource, context, { filename: utilityRendererPath });
+  context.renderProblematicFiles();
+  return { context, elements, sidebar, filterButtons, alerts };
+}
+
+function finishIndexing(context) {
+  context.state.utility.problematicIndexing = null;
+  context.state.utility.loading = false;
+  context.state.utility.loaded = true;
+  context.renderProblematicFiles();
+}
+
+const APPROVED_INDEXING_ALERT = {
+  severity: 'info',
+  role: 'status',
+  flat: true,
+  title: 'Indexing Problematic Files…',
+  message: 'A one-time step after an update. The list opens by itself when it is ready.',
+  progress: { value: (1226 / 2665) * 100, label: '1,226 of 2,665 albums checked' },
+};
+
+test('Problematic Files indexing on desktop: the left panel is inert under the Under construction overlay', () => {
+  const { context, elements, sidebar, alerts } = renderIndexingState({ phone: false, indexing: { done: 1226, total: 2665 } });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(alerts)), [APPROVED_INDEXING_ALERT]);
+  assert.equal(elements.detail.innerHTML, '<section data-alert>Indexing Problematic Files…</section>');
+  assert.equal(elements.list.innerHTML, '', 'The list shows no Indexing text.');
+  assert.equal(sidebar.hasAttribute('inert'), true);
+  assert.equal(sidebar.getAttribute('aria-hidden'), 'true');
+  assert.equal(sidebar.classList.contains('is-indexing'), true);
+  const overlays = sidebar.children.filter((child) => child.hasAttribute('data-problematic-indexing-overlay'));
+  assert.equal(overlays.length, 1);
+  assert.equal(overlays[0].className, 'problematic-mutation-overlay', 'The shared overlay, not a page-local copy.');
+  assert.equal(overlays[0].textContent, 'Under construction');
+  assert.equal(elements.search.disabled, false, 'Desktop blocks the panel, not the field.');
+  assert.equal(elements.count.textContent, '');
+
+  finishIndexing(context);
+  assert.equal(sidebar.hasAttribute('inert'), false);
+  assert.equal(sidebar.hasAttribute('aria-hidden'), false);
+  assert.equal(sidebar.children.length, 0, 'The overlay leaves when the list opens.');
+});
+
+test('Problematic Files indexing on a phone: only the filter is disabled, with no overlay', () => {
+  const { context, elements, sidebar, filterButtons, alerts } = renderIndexingState({ phone: true, indexing: { done: 1226, total: 2665 } });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(alerts)), [APPROVED_INDEXING_ALERT]);
+  assert.equal(elements.list.innerHTML, '<section data-alert>Indexing Problematic Files…</section>');
+  assert.equal(elements.detail.innerHTML, 'previous detail');
+  assert.equal(elements.search.disabled, true);
+  assert.equal(elements.problemFilterButton.disabled, true);
+  assert.deepEqual(filterButtons.map((button) => button.disabled), [true, true]);
+  assert.equal(sidebar.hasAttribute('inert'), false);
+  assert.equal(sidebar.children.length, 0, 'No overlay on a phone.');
+
+  finishIndexing(context);
+  // The field is usable again; the filter button follows its own rule (enabled once reasons exist).
+  assert.equal(elements.search.disabled, false);
+  assert.deepEqual(filterButtons.map((button) => button.disabled), [false, false]);
+});
+
+test('Problematic Files indexing styles: plain mobile page body, flat alert, themed overlay, disabled search input', () => {
+  const cssRoot = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'css');
+  const css = (relative) => fs.readFileSync(path.join(cssRoot, ...relative.split('/')), 'utf8');
+  // The filter and the card are separate elements on the plain page background: no shared band.
+  assert.match(css('mobile-layout.css'), /#utility-modal\.is-mobile-page \.utility-modal-body \{ background: transparent; \}/);
+  assert.match(css('runtime/alert-components.css'), /\.on-page-alert\.on-page-alert--flat \{ box-shadow: none; \}/);
+  const overlay = css('runtime/utilities.css').match(/\.problematic-mutation-overlay \{[^}]*\}/)[0];
+  assert.match(overlay, /background: color-mix\(in srgb, var\(--appearance-panel-background, var\(--panel\)\) 78%, transparent\);/);
+  assert.match(overlay, /color: var\(--appearance-panel-ink, var\(--text\)\);/);
+  assert.doesNotMatch(overlay, /rgba\(14, 22, 33/);
+  assert.match(css('button-component.css'), /\.ui-input-action:has\(> input:disabled\) \{ opacity: \.45; cursor: not-allowed; \}/);
+});
 
 test('watcher warning retains title copy while the status icon stays green beside the separate warning control', () => {
   const context = {

@@ -83,6 +83,8 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     els.problemFilterButton.hidden = false;
   }
   renderProblemFilterControls(els);
+  const indexing = state.utility.problematicIndexing;
+  blockProblematicListWhileIndexing(els, Boolean(indexing), mobileIndex);
 
   const mutation = state.utility.problematicMutation;
   if (
@@ -99,14 +101,14 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
   els.detail.removeAttribute?.('aria-busy');
   els.detail.removeAttribute?.('inert');
 
-  const indexing = state.utility.problematicIndexing;
   if (indexing) {
-    // Approved 2026-11-19: the shared alert with its progress line; on a phone it takes the list's place.
+    // Approved 2026-11-19: the flat shared alert with its progress line; on a phone it takes the list's place.
     const total = Math.max(0, Number(indexing.total) || 0);
     const done = Math.min(Math.max(0, Number(indexing.done) || 0), total);
     const alert = buildOnPageAlertHtml({
       severity: 'info',
       role: 'status',
+      flat: true,
       title: 'Indexing Problematic Files…',
       message: 'A one-time step after an update. The list opens by itself when it is ready.',
       progress: total ? {
@@ -114,7 +116,7 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
         label: `${done.toLocaleString('en-US')} of ${total.toLocaleString('en-US')} albums checked`,
       } : null,
     });
-    replaceListContents(mobileIndex ? alert : '<div class="utility-empty-state compact">Indexing…</div>');
+    replaceListContents(mobileIndex ? alert : '');
     if (!mobileIndex) els.detail.innerHTML = alert;
     els.count.textContent = '';
     return;
@@ -328,6 +330,46 @@ function bindProblematicFocusUserInput(els) {
       if (event.key === ' ' && event.target?.closest?.('button, a[href], [role="button"], [role="checkbox"], [role="switch"]')) return;
       relinquish();
     });
+  }
+}
+
+// While the index first fills (owner, 2026-11-19): on desktop the whole left panel is inert under
+// the shared overlay, labelled "Under construction"; a phone only disables its filter field.
+function blockProblematicListWhileIndexing(els, indexing, mobile) {
+  const filterButtons = Array.from(els.search?.closest?.('.search-field')?.querySelectorAll?.('button') || []);
+  for (const button of filterButtons) {
+    if (indexing && mobile) {
+      if (!button.disabled) button.setAttribute('data-indexing-disabled', '');
+      button.disabled = true;
+    } else if (button.hasAttribute?.('data-indexing-disabled')) {
+      button.removeAttribute('data-indexing-disabled');
+      button.disabled = false;
+    }
+  }
+  if (indexing && mobile) {
+    if (els.search) els.search.disabled = true;
+    if (els.problemFilterButton) els.problemFilterButton.disabled = true;
+  }
+  const sidebar = els.list?.closest?.('.utility-sidebar');
+  if (!sidebar) return;
+  const blocked = indexing && !mobile;
+  let overlay = sidebar.querySelector?.(':scope > [data-problematic-indexing-overlay]') || null;
+  sidebar.classList?.toggle('is-indexing', blocked);
+  if (blocked) {
+    sidebar.setAttribute('inert', '');
+    sidebar.setAttribute('aria-hidden', 'true');
+  } else {
+    sidebar.removeAttribute?.('inert');
+    sidebar.removeAttribute?.('aria-hidden');
+  }
+  if (blocked && !overlay) {
+    overlay = (sidebar.ownerDocument || document).createElement('div');
+    overlay.className = 'problematic-mutation-overlay';
+    overlay.setAttribute('data-problematic-indexing-overlay', '');
+    overlay.textContent = 'Under construction';
+    sidebar.appendChild(overlay);
+  } else if (!blocked && overlay) {
+    overlay.remove();
   }
 }
 

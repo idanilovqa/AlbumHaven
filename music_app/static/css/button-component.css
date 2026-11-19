@@ -316,6 +316,9 @@ outline-offset: -3px !important;
 }
 
 :root .ui-input-action > input:focus { outline: none !important; box-shadow: none !important; }
+/* Disabled: the same visible state as PathInput (owner, 2026-11-19). */
+.ui-input-action:has(> input:disabled) { opacity: .45; cursor: not-allowed; }
+.ui-input-action:has(> input:disabled) :is(input, button) { cursor: not-allowed; }
 
 /* Text-entry controls share the calendar's muted inset focus edge. */
 :root :is(input, textarea, select):not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="button"], [type="submit"], [type="reset"], [type="image"], [type="file"], [type="hidden"]):not(.ui-input-action > input):focus {

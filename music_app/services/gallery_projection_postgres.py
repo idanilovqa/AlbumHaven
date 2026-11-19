@@ -112,7 +112,7 @@ def load_gallery_projection_sidebar(connection, view_state, *, context=None):
     )
 
 
-def load_gallery_projection_page(connection, view_state, params, *, context=None, allow_stale=False):
+def _load_gallery_projection_page_impl(connection, view_state, params, *, context=None, allow_stale=False):
     from music_app.services.library_browse_postgres import (
         _root_gallery_anchor_metadata, _root_gallery_cursor, _root_gallery_page_bounds,
         _root_gallery_page_metadata,
@@ -396,3 +396,77 @@ def _ensure_gallery_projection_ready(config, *, connect=None, cancel_requested=N
         built = publish_scopes()
         ensure_relation_projection_ready(config, connect=connect, cancel_requested=cancel_requested)
     return {"built": built + publish_scopes()}
+
+
+# AUDIT DIAGNOSTICS ONLY (branch audit/gallery-stall-diagnostics, never merged).
+import threading as _audit_threading
+import time as _audit_time
+
+_AUDIT_WATCHDOG = {"started": False}
+
+
+class _AuditTimedConnection:
+    def __init__(self, connection, steps):
+        self._connection = connection
+        self._steps = steps
+
+    def execute(self, sql, *args, **kwargs):
+        started = _audit_time.perf_counter()
+        try:
+            return self._connection.execute(sql, *args, **kwargs)
+        finally:
+            text = " ".join(str(sql).split())[:90]
+            self._steps.append((round((_audit_time.perf_counter() - started) * 1000, 1), text))
+
+    def __getattr__(self, name):
+        return getattr(self._connection, name)
+
+
+def _audit_start_watchdog(dsn):
+    if _AUDIT_WATCHDOG["started"]:
+        return
+    _AUDIT_WATCHDOG["started"] = True
+
+    def watch():
+        import psycopg
+        from psycopg.rows import dict_row
+        while True:
+            _audit_time.sleep(2)
+            try:
+                with psycopg.connect(dsn, autocommit=True, row_factory=dict_row) as watcher:
+                    rows = watcher.execute("""
+                        select pid, state, wait_event_type, wait_event,
+                               round(extract(epoch from clock_timestamp() - query_start) * 1000) as running_ms,
+                               round(extract(epoch from clock_timestamp() - xact_start) * 1000) as xact_ms,
+                               pg_blocking_pids(pid) as blocked_by, backend_type,
+                               left(regexp_replace(query, '\s+', ' ', 'g'), 220) as query
+                        from pg_stat_activity
+                        where datname = current_database() and pid <> pg_backend_pid()
+                          and (state <> 'idle' or xact_start is not null)
+                          and clock_timestamp() - coalesce(query_start, xact_start) > interval '5 seconds'
+                    """).fetchall()
+                for row in rows:
+                    _LOGGER.warning("AUDIT long backend %s", json.dumps(row, default=str))
+            except Exception as error:  # diagnostics must never break the app
+                _LOGGER.warning("AUDIT watchdog error %s", error)
+
+    _audit_threading.Thread(target=watch, name="audit-pg-watchdog", daemon=True).start()
+
+
+def load_gallery_projection_page(connection, view_state, params, *, context=None, allow_stale=False):
+    try:
+        _audit_start_watchdog(connection.info.dsn)
+    except Exception:
+        pass
+    steps = []
+    started = _audit_time.perf_counter()
+    try:
+        return _load_gallery_projection_page_impl(
+            _AuditTimedConnection(connection, steps), view_state, params,
+            context=context, allow_stale=allow_stale)
+    finally:
+        total = (_audit_time.perf_counter() - started) * 1000
+        if total > 1000:
+            _LOGGER.warning("AUDIT slow gallery page lookup %s", json.dumps({
+                "total_ms": round(total, 1), "anchor": str(params.get("gallery_anchor_artist") or ""),
+                "cursor": bool(params.get("gallery_cursor")), "steps": steps}))

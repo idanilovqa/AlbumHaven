@@ -2212,7 +2212,27 @@ async function watchSaveTask(taskId, context = {}) {
       ? claimTagEditViewMutation(originalAlbum)
       : null
   );
-  const originStillOwnsView = () => (
+  // Owner (2026-11-19): after "Saved" the person may search or navigate at once. The save's own
+  // Gallery requests must not abort that request or take the view back, so before each one the save
+  // waits for a request in flight and, if someone else started it, follows the view it shows.
+  let viewRequestIdAtCompletion = null;
+  const ownViewRequestIds = new Set();
+  let navigatedAfterCompletion = false;
+  const latestViewRequestId = () => Number(state.ui?.activeViewRequestId || 0);
+  const yieldToNavigationAfterCompletion = async () => {
+    for (let waitedMs = 0; state.busy && waitedMs < 10000; waitedMs += 100) {
+      await waitForBrowserTimeout(100);
+    }
+    const latestId = latestViewRequestId();
+    if (latestId !== viewRequestIdAtCompletion && !ownViewRequestIds.has(latestId)) {
+      navigatedAfterCompletion = true;
+    }
+  };
+  const ownViewRequest = (request) => {
+    ownViewRequestIds.add(latestViewRequestId());
+    return request;
+  };
+  const originStillOwnsView = () => !navigatedAfterCompletion && (
     !hasOriginatingViewStateRevision
     || Number(state.ui?.viewStateRevision || 0) === originatingViewStateRevision
   );
@@ -2370,6 +2390,7 @@ async function watchSaveTask(taskId, context = {}) {
             },
           );
         }
+        viewRequestIdAtCompletion ??= latestViewRequestId();
         const committedInventoryMutationRevision = Number(data.inventory_mutation_revision);
         const responseContainsCommittedInventoryMutation = (responseData) => (
           !Number.isSafeInteger(committedInventoryMutationRevision)
@@ -2383,10 +2404,11 @@ async function watchSaveTask(taskId, context = {}) {
         const openTrackModalRefreshes = [];
         const deferOpenTrackModalRefresh = (refresh) => openTrackModalRefreshes.push(refresh);
         await refreshLoadedProblematicFilesAfterSaveCompletion();
+        await yieldToNavigationAfterCompletion();
         let destinationViewReconciled = false;
         if (data.destination_artist && canReconcileOriginView()) {
           try {
-            destinationViewReconciled = await reconcileCommittedTagEditDestination(
+            destinationViewReconciled = await ownViewRequest(reconcileCommittedTagEditDestination(
               data,
               {
                 renderOptions: { ...currentViewRenderOptions(), deferOpenTrackModalRefresh },
@@ -2395,7 +2417,7 @@ async function watchSaveTask(taskId, context = {}) {
                   && responseContainsCommittedInventoryMutation(responseData)
                 ),
               },
-            );
+            ));
           } catch (destinationError) {
             console.warn(
               '[AlbumHaven][SaveTask] Saved tags, but failed to open the committed destination artist.',
@@ -2457,6 +2479,7 @@ async function watchSaveTask(taskId, context = {}) {
             })
           ));
         };
+        await yieldToNavigationAfterCompletion();
         if (data.requires_view_refresh) {
           if (
             !viewRefreshed
@@ -2524,7 +2547,7 @@ async function watchSaveTask(taskId, context = {}) {
                 refreshView = { ...state.view, selected_artist: '', all_artists_active: true };
               }
               rememberCurrentRuntimeAlbumCoverAuthority(state.view);
-              viewRefreshed = await fetchAndRender(
+              viewRefreshed = await ownViewRequest(fetchAndRender(
                 buildApiUrl(refreshView, { rootFullPayload: true }),
                 false,
                 {
@@ -2541,7 +2564,7 @@ async function watchSaveTask(taskId, context = {}) {
                     && responseContainsCommittedInventoryMutation(responseData)
                   ),
                 },
-              );
+              ));
               if (
                 !viewRefreshed
                 && Number.isSafeInteger(committedInventoryMutationRevision)

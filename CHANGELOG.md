@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.38 - 2026-11-18
+
+- The app page itself loads faster: the server reads your saved layout preferences over its already-open database connection instead of opening a new one each time. On the hosted test runner the page response dropped from about 110-170 ms to about 55-75 ms on first load, and from about 75-95 ms to about 45-55 ms after browsing.
+
 ## 0.11.37 - 2026-11-18
 
 - Large data responses (artist pages, search, gallery pages, Problematic Files) are now sent compressed to browsers that accept it. Selecting an artist on a large library downloads about 40 KB instead of about 1 MB, and search about 22 KB instead of about 275 KB, which makes these steps faster over a network (about 0.3 s faster for an artist page at 20 Mbps). Audio, streaming, partial (Range) and small responses are unchanged.

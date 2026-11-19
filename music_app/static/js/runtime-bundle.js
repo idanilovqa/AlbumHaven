@@ -26185,7 +26185,27 @@ async function watchSaveTask(taskId, context = {}) {
       ? claimTagEditViewMutation(originalAlbum)
       : null
   );
-  const originStillOwnsView = () => (
+  // Owner (2026-11-19): after "Saved" the person may search or navigate at once. The save's own
+  // Gallery requests must not abort that request or take the view back, so before each one the save
+  // waits for a request in flight and, if someone else started it, follows the view it shows.
+  let viewRequestIdAtCompletion = null;
+  const ownViewRequestIds = new Set();
+  let navigatedAfterCompletion = false;
+  const latestViewRequestId = () => Number(state.ui?.activeViewRequestId || 0);
+  const yieldToNavigationAfterCompletion = async () => {
+    for (let waitedMs = 0; state.busy && waitedMs < 10000; waitedMs += 100) {
+      await waitForBrowserTimeout(100);
+    }
+    const latestId = latestViewRequestId();
+    if (latestId !== viewRequestIdAtCompletion && !ownViewRequestIds.has(latestId)) {
+      navigatedAfterCompletion = true;
+    }
+  };
+  const ownViewRequest = (request) => {
+    ownViewRequestIds.add(latestViewRequestId());
+    return request;
+  };
+  const originStillOwnsView = () => !navigatedAfterCompletion && (
     !hasOriginatingViewStateRevision
     || Number(state.ui?.viewStateRevision || 0) === originatingViewStateRevision
   );
@@ -26299,6 +26319,7 @@ async function watchSaveTask(taskId, context = {}) {
       ).trim().toLowerCase(),
     }
     : null;
+  let completionAnnounced = false;
   for (let attempt = 0; attempt < 120; attempt += 1) {
     const consumesProvidedTerminalPayload = Boolean(
       providedTerminalPayload
@@ -26322,6 +26343,27 @@ async function watchSaveTask(taskId, context = {}) {
         continue;
       }
       if (data.status === 'completed') {
+        const completionMessage = String(
+          context.tagEditAlert?.completionMessage || '',
+        ).trim();
+        // Owner (2026-11-19): "Saved" shows once the server has accepted the save; the Gallery
+        // refetch below still runs and corrects the cards.
+        if (completionMessage && !completionAnnounced) {
+          completionAnnounced = true;
+          const completionWarnings = (Array.isArray(data.warnings) ? data.warnings : [])
+            .map((warning) => String(warning || '').trim())
+            .filter(Boolean);
+          const hasCompletionWarning = completionWarnings.length > 0;
+          showRepairAlert(
+            [completionMessage, ...completionWarnings].join(' '),
+            hasCompletionWarning ? 'warning' : 'success',
+            hasCompletionWarning ? 8000 : 2000,
+            {
+              title: hasCompletionWarning ? 'Tags saved with warning' : 'Tags updated',
+            },
+          );
+        }
+        viewRequestIdAtCompletion ??= latestViewRequestId();
         const committedInventoryMutationRevision = Number(data.inventory_mutation_revision);
         const responseContainsCommittedInventoryMutation = (responseData) => (
           !Number.isSafeInteger(committedInventoryMutationRevision)
@@ -26335,10 +26377,11 @@ async function watchSaveTask(taskId, context = {}) {
         const openTrackModalRefreshes = [];
         const deferOpenTrackModalRefresh = (refresh) => openTrackModalRefreshes.push(refresh);
         await refreshLoadedProblematicFilesAfterSaveCompletion();
+        await yieldToNavigationAfterCompletion();
         let destinationViewReconciled = false;
         if (data.destination_artist && canReconcileOriginView()) {
           try {
-            destinationViewReconciled = await reconcileCommittedTagEditDestination(
+            destinationViewReconciled = await ownViewRequest(reconcileCommittedTagEditDestination(
               data,
               {
                 renderOptions: { ...currentViewRenderOptions(), deferOpenTrackModalRefresh },
@@ -26347,7 +26390,7 @@ async function watchSaveTask(taskId, context = {}) {
                   && responseContainsCommittedInventoryMutation(responseData)
                 ),
               },
-            );
+            ));
           } catch (destinationError) {
             console.warn(
               '[AlbumHaven][SaveTask] Saved tags, but failed to open the committed destination artist.',
@@ -26409,6 +26452,7 @@ async function watchSaveTask(taskId, context = {}) {
             })
           ));
         };
+        await yieldToNavigationAfterCompletion();
         if (data.requires_view_refresh) {
           if (
             !viewRefreshed
@@ -26476,7 +26520,7 @@ async function watchSaveTask(taskId, context = {}) {
                 refreshView = { ...state.view, selected_artist: '', all_artists_active: true };
               }
               rememberCurrentRuntimeAlbumCoverAuthority(state.view);
-              viewRefreshed = await fetchAndRender(
+              viewRefreshed = await ownViewRequest(fetchAndRender(
                 buildApiUrl(refreshView, { rootFullPayload: true }),
                 false,
                 {
@@ -26493,7 +26537,7 @@ async function watchSaveTask(taskId, context = {}) {
                     && responseContainsCommittedInventoryMutation(responseData)
                   ),
                 },
-              );
+              ));
               if (
                 !viewRefreshed
                 && Number.isSafeInteger(committedInventoryMutationRevision)
@@ -26589,24 +26633,7 @@ async function watchSaveTask(taskId, context = {}) {
             );
           }
         }
-        // The committed view is on screen; the open album's details may still be reloading.
-        const completionMessage = String(
-          context.tagEditAlert?.completionMessage || '',
-        ).trim();
-        if (completionMessage) {
-          const completionWarnings = (Array.isArray(data.warnings) ? data.warnings : [])
-            .map((warning) => String(warning || '').trim())
-            .filter(Boolean);
-          const hasCompletionWarning = completionWarnings.length > 0;
-          showRepairAlert(
-            [completionMessage, ...completionWarnings].join(' '),
-            hasCompletionWarning ? 'warning' : 'success',
-            hasCompletionWarning ? 8000 : 2000,
-            {
-              title: hasCompletionWarning ? 'Tags saved with warning' : 'Tags updated',
-            },
-          );
-        } else if (!consumesProvidedTerminalPayload) {
+        if (!completionMessage && !consumesProvidedTerminalPayload) {
           showRepairAlert('Library view updated from saved files.', 'success', 1000);
         }
         await Promise.all(openTrackModalRefreshes);
@@ -41969,13 +41996,6 @@ async function confirmManualTagEdit() {
   updateOpenTrackModalAfterTagEdit(album, reconciledOptimisticAlbums, {
     tagEditMutationClaim,
   });
-  renderView(renderOptions);
-  showRepairAlert(
-    tagEditAlert.savingMessage,
-    'info',
-    2000,
-    { title: 'Saving tags', dismissible: false },
-  );
   let failedLogHistoryEntryId = '';
   let failedSaveTaskError = '';
   let failedSaveKeptNewTags = false;
@@ -41984,22 +42004,34 @@ async function confirmManualTagEdit() {
   // Owner (2026-11-17): the save's own id lets the server recognise it if it is sent again.
   const clientRequestId = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
     ? crypto.randomUUID() : '';
-  const requestPayload = { confirmed: true, album, updates, ...(clientRequestId ? { client_request_id: clientRequestId } : {}) };
+  const requestPayload = {
+    confirmed: true,
+    album,
+    updates,
+    ...(clientRequestId ? { client_request_id: clientRequestId } : {}),
+    ...(problematicMutationOriginKey ? { problematic_files_origin: true } : {}),
+  };
+  if (typeof rememberLocallyEditedAlbum === 'function') {
+    [album, ...reconciledOptimisticAlbums].forEach(rememberLocallyEditedAlbum);
+  }
+  // The save is sent before the optimistic Gallery is drawn, so the server starts on it at once.
+  const responsePromise = fetch('/utilities/edit-tags', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(requestPayload),
+  }).catch((error) => {
+    saveOutcomeUnknown = true;
+    throw error;
+  });
+  renderView(renderOptions);
+  showRepairAlert(
+    tagEditAlert.savingMessage,
+    'info',
+    2000,
+    { title: 'Saving tags', dismissible: false },
+  );
   try {
-    if (problematicMutationOriginKey) {
-      requestPayload.problematic_files_origin = true;
-    }
-    if (typeof rememberLocallyEditedAlbum === 'function') {
-      [album, ...reconciledOptimisticAlbums].forEach(rememberLocallyEditedAlbum);
-    }
-    const response = await fetch('/utilities/edit-tags', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestPayload),
-    }).catch((error) => {
-      saveOutcomeUnknown = true;
-      throw error;
-    });
+    const response = await responsePromise;
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.ok) {
       saveOutcomeUnknown = typeof data.ok !== 'boolean';

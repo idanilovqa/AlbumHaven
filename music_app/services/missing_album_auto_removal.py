@@ -7,8 +7,9 @@ added by mistake and deleted again leave no trace. Both conditions must hold:
    file, or any file still present, keeps it. A dropped drive or share can never remove anything.
 2. Nothing user-owned refers to it: no user rating, play, play preference, loop, scrobble or love,
    in-app cover choice, extra artwork, MusicBrainz/Discogs link, tag edit or text correction,
-   version/split/merge marking, Problematic Files ignore, or "Keep as missing". A cover whose
-   origin is unknown counts as chosen (AGENTS.md: ambiguous provenance is never "untouched").
+   version/split/merge marking, Problematic Files ignore, or "Keep as missing". Owner decision
+   2026-11-18: only a cover recorded as set by the user in the app counts; folder art and covers
+   of unknown origin do not. The rule only reads provenance; it never promotes or clears it.
 
 Albums are removed through library.confirm_missing_album_removal, as a confirmed removal is;
 loose tracks through library.remove_deleted_loose_track (migration 0120). Both functions
@@ -122,13 +123,10 @@ _UNTOUCHED_DELETED_ALBUMS_SQL = f"""
                       where i.library_id = albums.library_id
                         and ({_KEY_RELATED.format(key='i.repair_key')} or i.metadata ->> 'album_key' = albums.album_key))
       and not (albums.metadata ? 'missing_kept_at')
-      -- An in-app cover choice, or any cover whose origin is unknown, is the user's.
+      -- Only a recorded in-app cover choice is the user's, including one a repair displaced.
       and coalesce(albums.metadata ->> 'cover_selection_origin', '') <> 'user'
-      and not (albums.metadata ? 'cover_selection_repair_previous')
-      and (albums.metadata ->> 'cover_selection_origin' = 'automatic'
-           or (nullif(albums.cover_path, '') is null
-               and nullif(albums.metadata ->> 'remote_cover_url', '') is null
-               and nullif(albums.metadata ->> 'cover_selection_provenance', '') is null))
+      and coalesce(albums.metadata ->> 'cover_selection_provenance', '') <> 'explicit'
+      and coalesce(albums.metadata #>> '{{cover_selection_repair_previous,cover_selection_origin}}', '') <> 'user'
     order by albums.album_key
 """
 

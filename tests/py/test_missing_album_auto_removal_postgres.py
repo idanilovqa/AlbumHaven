@@ -138,9 +138,38 @@ def _cover_choice(c, a):
                  where id = %s""", (a.album_id,))
 
 
-def _cover_of_unknown_origin(c, a):
+def _explicit_cover(c, a):
     c.execute("""update library.local_albums
-                 set cover_path = 'legacy-cover.jpg', metadata = metadata - 'cover_selection_origin'
+                 set cover_path = 'chosen.jpg', metadata = metadata || '{"cover_selection_provenance": "explicit"}'::jsonb
+                 where id = %s""", (a.album_id,))
+
+
+def _user_cover_displaced_by_repair(c, a):
+    c.execute("""update library.local_albums
+                 set cover_path = 'repaired.jpg', metadata = metadata
+                   || '{"cover_selection_origin": "automatic",
+                        "cover_selection_repair_previous": {"cover_path": "chosen.jpg", "cover_selection_origin": "user"}}'::jsonb
+                 where id = %s""", (a.album_id,))
+
+
+# Owner 2026-11-18: art the app only found in the folder, or of unknown origin, is not the user's.
+def _folder_art(c, a):
+    c.execute("""update library.local_albums
+                 set cover_path = 'folder.jpg', metadata = metadata - 'cover_selection_origin' - 'cover_selection_provenance'
+                 where id = %s""", (a.album_id,))
+
+
+def _automatic_cover(c, a):
+    c.execute("""update library.local_albums
+                 set cover_path = 'front.jpg', metadata = metadata || '{"cover_selection_origin": "automatic"}'::jsonb
+                 where id = %s""", (a.album_id,))
+
+
+def _folder_art_repaired(c, a):
+    c.execute("""update library.local_albums
+                 set cover_path = 'front.jpg', metadata = metadata
+                   || '{"cover_selection_origin": "automatic",
+                        "cover_selection_repair_previous": {"cover_path": "folder.jpg", "cover_selection_origin": null}}'::jsonb
                  where id = %s""", (a.album_id,))
 
 
@@ -152,7 +181,7 @@ def _kept_as_missing(c, a):
 @pytest.mark.parametrize("touch", [
     _user_rating, _track_preference, _loop, _play, _loved, _override, _written_correction, _tag_edit,
     _separate_release, _ignored_version, _manual_version, _ignored_repair, _cover_choice,
-    _cover_of_unknown_origin, _kept_as_missing,
+    _explicit_cover, _user_cover_displaced_by_repair, _kept_as_missing,
 ], ids=lambda touch: touch.__name__.strip("_"))
 def test_live_an_album_the_user_touched_stays_missing(watcher_repair_inventory, touch):
     fixture = watcher_repair_inventory
@@ -166,6 +195,22 @@ def test_live_an_album_the_user_touched_stays_missing(watcher_repair_inventory, 
 
     assert _album_exists(fixture, album.album_key)
     assert _files(fixture)[album.path][:2] == (True, "deleted")
+
+
+@pytest.mark.parametrize("cover", [_folder_art, _automatic_cover, _folder_art_repaired],
+                         ids=lambda cover: cover.__name__.strip("_"))
+def test_live_an_album_with_only_folder_or_automatic_art_is_removed(watcher_repair_inventory, cover):
+    fixture = watcher_repair_inventory
+    album = _album(fixture, "Folder Art Album")
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        cover(connection, album)
+    from tests.py.test_isolated_postgres_live import _finish_live_startup
+    _finish_live_startup(fixture.config)
+
+    _delete_by_watcher(fixture, album)
+
+    assert not _album_exists(fixture, album.album_key)
+    assert album.path not in _files(fixture)
 
 
 def test_live_an_unreachable_untouched_album_stays_missing(watcher_repair_inventory):

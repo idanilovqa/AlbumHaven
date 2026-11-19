@@ -19218,8 +19218,11 @@ def test_live_searched_loose_tracks_reuse_the_stored_list_until_it_is_rebuilt(wa
     from tests.e2e.support import isolatedPostgres
 
     fixture = watcher_repair_inventory
-    loose = {**fixture.entry("Loose/needle-one.flac", album=""), "title": "Needle One"}
-    fixture.seed(loose, fixture.entry("Owner/Album/01.flac", album="Album"))
+
+    def loose(name):
+        return {**fixture.entry(f"Loose/{name}.flac", album=""), "artist": "", "album_artist": ""}
+
+    fixture.seed(loose("needle-one"), fixture.entry("Owner/Album/01.flac", album="Album"))
     executed = []
 
     class CountingConnection:
@@ -19249,24 +19252,24 @@ def test_live_searched_loose_tracks_reuse_the_stored_list_until_it_is_rebuilt(wa
     def searched_titles():
         catalog = repository.build_custom_collection_catalog_payload(query_params={**everything, "q": "needle"})
         tracks = repository.build_library_loose_tracks_payload(query_params={**everything, "q": "needle"})
-        titles = sorted(track["title"] for track in tracks["library_non_album_tracks"])
-        assert catalog["loose_tracks_count"] == len(titles)
-        return titles
+        names = sorted(Path(track["path"]).name for track in tracks["library_non_album_tracks"])
+        assert catalog["loose_tracks_count"] == len(names)
+        return names
 
     def payload_loads():
         return sum(sql.startswith("select snapshots.payload, snapshots.built_at") for sql in executed)
 
-    assert searched_titles() == ["Needle One"]
+    assert searched_titles() == ["needle-one.flac"]
     loads = payload_loads()
-    assert searched_titles() == ["Needle One"]
+    assert searched_titles() == ["needle-one.flac"]
     assert payload_loads() == loads, "an unchanged stored list is not read again"
 
     # A new loose file changes the inventory; the rebuilt list is read once and found by the search.
-    added = {**fixture.entry("Loose/needle-two.flac", album=""), "title": "Needle Two"}
+    added = loose("needle-two")
     fixture.adapter.persist_targeted_inventory_mutation(
         root_id=fixture.roots[0]["id"], active_file_entries={added["path"]: added}, deleted_paths=())
     repository.build_library_loose_tracks_payload(query_params=everything, rebuild_missing_snapshot=True)
-    assert searched_titles() == ["Needle One", "Needle Two"]
+    assert searched_titles() == ["needle-one.flac", "needle-two.flac"]
 
 
 def test_searched_custom_collection_tree_counts_only_matching_tracks(monkeypatch):

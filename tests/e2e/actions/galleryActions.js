@@ -865,6 +865,34 @@ export class GalleryActions {
     return this.galleryPage.readArtistDiscographySections(artistName);
   }
 
+  // expectedCounts maps each album title to its card's track count, or null for no card.
+  // finish() reports, on the page clock from the click on startButtonText, when the cards first
+  // showed expectedCounts and whether any later render changed them again.
+  async startAlbumCardTrackCountTimeline({ startButtonText, expectedCounts }) {
+    const observation = await this.galleryPage.startAlbumCardTrackCountObservation({
+      albums: Object.keys(expectedCounts),
+      startButtonText,
+    });
+    const matches = (counts) => Object.entries(expectedCounts)
+      .every(([album, count]) => counts[album] === count);
+    return {
+      async finish() {
+        const { startMs, changes } = await observation.finish();
+        const firstIndex = changes.findIndex((change) => change.atMs >= startMs && matches(change.counts));
+        const relative = changes.map((change) => ({
+          atMs: startMs === null ? null : Math.round(change.atMs - startMs),
+          counts: change.counts,
+        }));
+        return {
+          expectedCardsMs: startMs === null || firstIndex < 0 ? null : relative[firstIndex].atMs,
+          changedAfterExpected: firstIndex >= 0 && changes.slice(firstIndex + 1).some((change) => !matches(change.counts)),
+          clickedAtPageMs: startMs,
+          changes: relative,
+        };
+      },
+    };
+  }
+
   async waitForPositiveRenderedAlbumCardTrackCounts(expected, options = {}) {
     const artist = String(expected.artist || '').trim();
     const album = String(expected.album || '').trim();

@@ -4293,7 +4293,9 @@ test('pollStatus preserves mutation-owned hydrated membership and reconciles it 
   pendingRequests[0].resolveWith({ ...status, inventory_mutation_revision: 13 });
   await first;
   assert.equal(context.getCachedHydratedTrackModalAlbum(albumKey), optimistic);
-  assert.equal(context.getIndexedAlbum(albumKey), optimistic);
+  // The pending edit's membership (17) disagrees with the card's own count (18), so the gallery
+  // card keeps the server's version until the save settles (multiroot acceptance, 2026-11-14).
+  assert.equal(context.getIndexedAlbum(albumKey), preview);
   assert.equal(context.getCachedHydratedTrackModalAlbum('unclaimed'), null);
   assert.equal(context.state.ui.pendingInventoryMutationViewRefresh, true);
   assert.equal(calls.fetchRequests.length, 1);

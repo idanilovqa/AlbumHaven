@@ -174,8 +174,8 @@ test('Load all tracks from the folder sits under the path only while the album f
   );
   assert.match(
     css,
-    /\.tag-editor-folder-load\.ui-button\s*\{[^}]*font-size:\s*0\.84rem[^}]*line-height:\s*1\.25/s,
-    'the action matches the editor header subtitle instead of the larger Button default',
+    /\.tag-editor-folder-load\.ui-button\s*\{[^}]*font-size:\s*0\.76rem[^}]*line-height:\s*1\.35[^}]*text-decoration-line:\s*underline/s,
+    'the action matches the folder path line above it (acceptance correction 2026-11-14), not the larger Button default',
   );
   assert.match(
     css,

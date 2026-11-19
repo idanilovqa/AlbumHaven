@@ -780,6 +780,51 @@ test('opening a tag editor immediately supersedes an older album mutation claim 
   );
 });
 
+test('confirming a tag edit sends the save before drawing the optimistic Gallery', async () => {
+  const trackPath = 'C:\\Music\\Artist\\Album\\01 - Selected.flac';
+  const album = {
+    key: 'artist-album',
+    name: 'Album',
+    album_artist: 'Artist',
+    tracks: [{ path: trackPath, album: 'Album', title: 'Selected' }],
+  };
+  const events = [];
+  const overlay = { hidden: true };
+  const context = loadHelper([album], {
+    document: { body: { classList: { add() {}, remove() {} } }, getElementById: () => overlay },
+    getTagEditorElements: () => ({ overlay }),
+    bindOverlayPointerOrigin() {},
+    getTagEditConfirmElements: () => ({ overlay }),
+    getTagEditorTracks: () => album.tracks,
+    getTrackTagInitialValues: (track) => ({ title: track.title }),
+    renderTagEditor() {},
+    showRepairAlert(message) {
+      events.push(`alert:${message}`);
+    },
+    claimTagEditViewMutation: () => ({ id: 'claim' }),
+    tagEditViewMutationStillOwnsResources: () => true,
+    settleTagEditViewMutation() {},
+    buildChangedTagEditorUpdates: () => ({ [trackPath]: { album: 'Album Two' } }),
+    deepCloneJson: (value) => JSON.parse(JSON.stringify(value)),
+    buildOptimisticUpdatedAlbumsFromEdits: () => [album],
+    applyUpdatedAlbumsToCurrentView: () => [album],
+    updateOpenTrackModalAfterTagEdit() {},
+    renderView() {
+      events.push('render');
+    },
+    watchSaveTask() {},
+    async fetch(url, init) {
+      events.push(`fetch:${url}:${JSON.parse(init.body).updates[trackPath].album}`);
+      return { ok: true, json: async () => ({ ok: true, updated_albums: [] }) };
+    },
+  });
+
+  context.openTagEditor(album, { tracksMode: 'all' });
+  await context.confirmManualTagEdit();
+
+  assert.deepEqual(events.slice(0, 2), ['fetch:/utilities/edit-tags:Album Two', 'render']);
+});
+
 test('closing the tag editor hides before deferred reorder cleanup', () => {
   const scheduledFrames = [];
   const scheduledIdle = [];

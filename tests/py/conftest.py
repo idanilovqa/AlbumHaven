@@ -358,6 +358,23 @@ def pytest_configure(config: pytest.Config) -> None:
     )
 
 
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    from tests.py import pytest_shards
+
+    selection = os.environ.get(pytest_shards.SHARD_ENV, "").strip()
+    if not selection:
+        return
+    try:
+        index, count = pytest_shards.parse_shard(selection)
+    except ValueError as error:
+        raise pytest.UsageError(str(error)) from None
+    files = {item: item.path.relative_to(config.rootpath).as_posix() for item in items}
+    owners = pytest_shards.shard_owners(files.values(), pytest_shards.load_weights(), count)
+    deselected = [item for item in items if owners[files[item]] != index]
+    config.hook.pytest_deselected(items=deselected)
+    items[:] = [item for item in items if owners[files[item]] == index]
+
+
 @pytest.hookimpl(trylast=True)
 def pytest_sessionstart(session: pytest.Session) -> None:
     config = session.config

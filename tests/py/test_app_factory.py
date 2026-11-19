@@ -1198,7 +1198,7 @@ def test_empty_postgres_startup_submits_one_scan_and_keeps_root_and_status_avail
     from config import Config
     from music_app import create_asgi_app
     from music_app.routes import web_asgi
-    from music_app.services import lastfm_retry, runtime_shutdown, state
+    from music_app.services import lastfm_retry, postgres_connections, runtime_shutdown, state
     from music_app.services.library_roots import normalize_persisted_library_root_settings
 
     class MissingSnapshotAdapter:
@@ -1241,6 +1241,8 @@ def test_empty_postgres_startup_submits_one_scan_and_keeps_root_and_status_avail
         "postgresql://album_haven_app@localhost/app",
     )
     monkeypatch.setattr("music_app.services.library_roots_postgres.psycopg", FakePsycopg())
+    # The placeholder database is unreachable, so prewarming would wait out the pool timeout.
+    monkeypatch.setattr(postgres_connections, "prewarm_connection_pool", lambda _database_url: None)
     monkeypatch.setattr(
         "music_app.services.library_roots.PostgresLibraryRootSettingsStore",
         FakePostgresLibraryRootSettingsStore,

@@ -13,8 +13,23 @@ const TIMING_BUDGETS = Object.freeze(Object.fromEntries([
   'candidateReadyMs',
   'candidateSelectionMs',
   'saveAcceptedMs',
+  'localCardsShownMs',
+  'reopenAllCardsShownMs',
 ].map((key) => [key, Object.freeze(performanceTimingBudget(`cover-lookup.${key}`))])));
 const MAX_INTERACTION_LONG_TASK_MS = 200;
+
+// Owner (2026-11-18, see FTC-COVERS-048): the first painted state that already holds the settled cards; LOCAL
+// counts its cards, or its empty state when the album has none, and REMOTE counts cards plus placeholders.
+function allCardsShownAtMs(samples, { includeRemote }) {
+  const settled = samples.at(-1);
+  expect(settled, 'Cover Lookup never painted its gallery.').toBeTruthy();
+  const shown = samples.find(sample => (
+    (settled.local > 0 ? sample.local === settled.local : sample.emptyLocal)
+    && (!includeRemote || sample.remote + sample.remotePlaceholders >= settled.remote)
+  ));
+  expect(shown, JSON.stringify(samples.slice(0, 6))).toBeTruthy();
+  return shown.atMs;
+}
 
 test.describe(`${CASE_ID} Cover Lookup interaction timing`, () => {
   test('opens, renders a candidate, selects it, and accepts Save within the interaction budgets', async ({
@@ -35,6 +50,7 @@ test.describe(`${CASE_ID} Cover Lookup interaction timing`, () => {
     });
 
     await trackModalActions.prepareCoverLookup();
+    const firstOpening = await coverLookupActions.coverLookup.startOpeningObservation();
     const lookupStartedAt = performance.now();
     const modalVisible = await stepLogger.step('Measure the Cover Lookup modal becoming interactive', async () => (
       measureInteractionToPaint(
@@ -55,6 +71,12 @@ test.describe(`${CASE_ID} Cover Lookup interaction timing`, () => {
       candidateReadyMs = performance.now() - lookupStartedAt;
       const image = await coverLookupActions.readRemoteCandidateEvidence(readyCandidate.id);
       expect(image.sha256).not.toBe('');
+    });
+
+    const localCardsShownMs = await stepLogger.step('Measure every LOCAL card of the first opening', async () => {
+      await coverLookupActions.waitForModalResultsReady();
+      const samples = await coverLookupActions.coverLookup.finishOpeningObservation(firstOpening);
+      return allCardsShownAtMs(samples, { includeRemote: false });
     });
 
     let selectedCandidate = null;
@@ -93,6 +115,21 @@ test.describe(`${CASE_ID} Cover Lookup interaction timing`, () => {
     expect(savePayload?.optimistic_remote_source).toBe('spotify');
     expect(thirdPartyRequestEvidence.snapshot()).toEqual([]);
 
+    const reopenAllCardsShownMs = await stepLogger.step('Measure every card of the reopening after Save', async () => {
+      await trackModalActions.prepareCoverLookup();
+      const reopening = await coverLookupActions.coverLookup.startOpeningObservation();
+      let samples;
+      try {
+        await trackModalActions.activateCoverLookup();
+        await coverLookupActions.waitForModalReady();
+        await coverLookupActions.waitForModalResultsReady();
+      } finally {
+        samples = await coverLookupActions.coverLookup.finishOpeningObservation(reopening);
+      }
+      await coverLookupActions.closeModal();
+      return allCardsShownAtMs(samples, { includeRemote: true });
+    });
+
     const reopened = await stepLogger.step(
       'Verify the saved Spotify link remains active after reopening Cover Lookup',
       async () => coverLookupActions.reopenUntilSavedRemoteCoverIsActive(
@@ -112,6 +149,8 @@ test.describe(`${CASE_ID} Cover Lookup interaction timing`, () => {
       candidateReadyMs,
       candidateSelectionMs: candidateSelection.durationMs,
       saveAcceptedMs: saveAccepted.durationMs,
+      localCardsShownMs,
+      reopenAllCardsShownMs,
       selectedCandidateId: selectedCandidate.id,
       selectedCandidateSource: selectedCandidate.source,
       targetArtist: TARGET.artist,

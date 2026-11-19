@@ -78,6 +78,9 @@ test('FTC-TAGS-022 derives Start at from filename then deterministic editor posi
     await utilityTabBarActions.openTab('problematic-files');
     await utilityProblematicFilesActions.waitForReady({ requirePopulated: true });
     await utilityProblematicFilesActions.search(NATURAL_ORDER_ALBUM);
+    // The list re-renders for the query. Walking it before the results settle scrolls a list that shrinks under the
+    // wheel, so its offset never reaches the target; in a full gate run the results land late enough to hit that.
+    await utilityProblematicFilesActions.waitForSearchResults(NATURAL_ORDER_ALBUM);
     const detail = await utilityProblematicFilesActions.selectAlbumByTitle(NATURAL_ORDER_ALBUM);
     expect(detail.title).toBe(NATURAL_ORDER_ALBUM);
     expect([...new Set(

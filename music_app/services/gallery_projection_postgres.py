@@ -87,6 +87,30 @@ def _membership_header(connection, context, view_state, *, allow_stale=False):
     return {**header, "incremental_membership": True}
 
 
+def _membership_headers(connection, params):
+    return connection.execute("""
+        select scope_key, view_state, revision, source_generation
+        from library.gallery_membership_headers
+        where library_id = %(library_id)s
+          and builder_version = %(builder_version)s
+    """, params).fetchall()
+
+
+def gallery_membership_baseline_ready(connection, expected_generation):
+    """Whether journaled changes from ``expected_generation`` can be patched into membership.
+
+    False when membership was never built or was built at another generation (a
+    restored database, an interrupted startup): only a full preparation rebuilds it.
+    """
+    if expected_generation is None or not _membership_installed(connection):
+        return True
+    context = gallery_projection_context(connection)
+    if not context:
+        return True
+    headers = _membership_headers(connection, {**context, "builder_version": BUILDER_VERSION})
+    return bool(headers) and all(header["source_generation"] == expected_generation for header in headers)
+
+
 def patch_gallery_membership_in_transaction(
     connection, config, *, affected_album_ids, affected_album_keys,
     alias_to_canonical, expected_generation, expected_target_generation=None,
@@ -104,12 +128,7 @@ def patch_gallery_membership_in_transaction(
     keys = sorted({str(key) for key in affected_album_keys if str(key)})
     params = {**context, "expected_generation": expected_generation,
               "builder_version": BUILDER_VERSION, "affected_album_keys": keys}
-    headers = connection.execute("""
-        select scope_key, view_state, revision, source_generation
-        from library.gallery_membership_headers
-        where library_id = %(library_id)s
-          and builder_version = %(builder_version)s
-    """, params).fetchall()
+    headers = _membership_headers(connection, params)
     if not headers or any(header["source_generation"] != expected_generation for header in headers):
         raise RuntimeError("Gallery membership baseline is unavailable; initialize or reconcile it before editing.")
     repository = browse.PostgresLibraryBrowseRepository(config)
@@ -541,6 +560,9 @@ def schedule_gallery_projection_refresh(config, *, connect=None, view_state=None
         if incremental_membership:
             if not result.get("initialized"):
                 raise RuntimeError("Incremental gallery membership requires startup initialization.")
+            if result.get("gallery_rebuild_required"):
+                # The relations are published; membership is rebuilt from them in full.
+                return ensure_gallery_projection_ready(config, connect=connect)
             if "view_state" in options:
                 from music_app.services.library_browse_postgres import _connect
 

@@ -1103,6 +1103,15 @@ async function confirmManualTagEdit() {
       },
     );
     releaseFailedTagEditViewMutation(tagEditMutationClaim);
+    // Owner (2026-11-18): a refused save leaves the Gallery exactly as the library is, without a page reload.
+    // Undoing only the edited album cannot restore an album an optimistic merge or split absorbed
+    // (a refused Ремиксы2 → Ремиксы merge left one "Ремиксы2" card and lost Ремиксы), so the view re-reads it.
+    if (
+      tagEditOriginStillOwnsView(originatingViewStateRevision)
+      && typeof refreshCurrentViewAfterBackgroundCompletion === 'function'
+    ) {
+      await refreshCurrentViewAfterBackgroundCompletion();
+    }
   }
 }
 

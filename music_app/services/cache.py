@@ -664,10 +664,13 @@ def persist_structural_tag_edit_for_config(
         refresh_postgres_utility_projections_after_edit,
     )
 
-    refresh_postgres_utility_projections_after_edit(
-        config,
-        track_paths=_edited_track_paths(changed_paths, updated_file_entries),
-    )
+    from music_app.services.edit_tag_timings import persistence_stage
+
+    with persistence_stage("problematic_files_patch"):
+        refresh_postgres_utility_projections_after_edit(
+            config,
+            track_paths=_edited_track_paths(changed_paths, updated_file_entries),
+        )
     return result
 
 

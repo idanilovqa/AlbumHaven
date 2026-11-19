@@ -39,6 +39,7 @@ export class CoverLookup extends BasePage {
     this.sectionTitles = this.modalBody.locator('.cover-lookup-section-title');
     this.subsectionTitles = this.modalBody.locator('.cover-lookup-subsection-title');
     this.localCoverCards = this.modalBody.locator('[data-select-local-cover]');
+    this.localEmptyState = this.modalBody.locator('.cover-lookup-empty', { hasText: 'No local cover art found' });
     this.localSectionCoverCards = this.modalBody
       .locator('.cover-lookup-section')
       .filter({ has: this.page.getByRole('heading', { name: /^LOCAL(?: · \d+ images?)?$/ }) })
@@ -593,6 +594,53 @@ export class CoverLookup extends BasePage {
       sample();
       return observation;
     }, expectedCount);
+  }
+
+  // FTC-COVERS-048 (owner, 2026-11-18): an opening paints every card at once; only an image still loading
+  // inside its own card may blink. Armed before the click, sampled on every DOM change until finished.
+  async startOpeningObservation() {
+    // parity-check: allow-read-only-measurement-evaluate -- time rendered Cover Lookup cards, never application state.
+    return this.page.evaluateHandle(() => {
+      const modal = document.getElementById('cover-lookup-modal');
+      const body = document.getElementById('cover-lookup-modal-body');
+      const startedAt = performance.now();
+      const observation = { samples: [] };
+      const count = selector => body.querySelectorAll(selector).length;
+      const sample = () => {
+        if (!modal || modal.hidden || modal.hasAttribute('data-awaiting-identity') || !body.getClientRects().length) return;
+        const selectedImage = body.querySelector('[data-cover-lookup-local-active] img.cover-lookup-art-preview-image');
+        observation.samples.push({
+          atMs: Math.round(performance.now() - startedAt),
+          local: count('[data-select-local-cover]'),
+          localPreviews: count('[data-select-local-cover] img.cover-lookup-art-preview-image'),
+          localPlaceholders: count('[data-cover-lookup-loading-section="local"]'),
+          remote: count('[data-select-remote-cover]'),
+          remotePlaceholders: count('[data-cover-lookup-loading-section="remote"]'),
+          loadingLines: count('.cover-lookup-task-loading-line'),
+          emptyLocal: Array.from(body.querySelectorAll('.cover-lookup-empty'))
+            .some(element => element.textContent.includes('No local cover art')),
+          activeLocal: String(body.querySelector('[data-cover-lookup-local-active]')
+            ?.getAttribute('data-select-local-cover') || ''),
+          selectedImageComplete: Boolean(selectedImage?.complete && selectedImage.naturalWidth > 0),
+        });
+      };
+      observation.observer = new MutationObserver(sample);
+      observation.observer.observe(modal, { attributes: true, childList: true, subtree: true });
+      sample();
+      return observation;
+    });
+  }
+
+  async finishOpeningObservation(handle) {
+    try {
+      // parity-check: allow-read-only-measurement-evaluate -- stop and read the armed opening observer.
+      return await handle.evaluate((observation) => {
+        observation.observer.disconnect();
+        return observation.samples;
+      });
+    } finally {
+      await handle.dispose();
+    }
   }
 
   async startLocalCoverOrderObservation() {

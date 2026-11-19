@@ -24,7 +24,7 @@ from music_app.services.cache import (
     save_cache_to_disk_for_config,
 )
 from music_app.services.library_roots import library_root_cache_identity
-from music_app.services.edit_tag_timings import EditTagTimingRecorder
+from music_app.services.edit_tag_timings import EditTagTimingRecorder, collect_persistence_stages
 from music_app.services.metadata import normalize_exception_value
 from music_app.services.runtime_shutdown import create_daemon_executor
 
@@ -886,14 +886,18 @@ def finalize_structural_tag_edit_save_task(
                 timing_recorder.measure("postgres_commit")
                 if timing_recorder is not None
                 else nullcontext()
-            ):
-                persistence_result = persist_structural_tag_edit(
-                    changed_paths=set(changed_paths),
-                    previous_file_entries=previous_file_cache,
-                    updated_file_entries=updated_file_cache,
-                    changed_field_names=set(changed_field_names),
-                    **persistence_options,
-                )
+            ), collect_persistence_stages() as persistence_stages:
+                try:
+                    persistence_result = persist_structural_tag_edit(
+                        changed_paths=set(changed_paths),
+                        previous_file_entries=previous_file_cache,
+                        updated_file_entries=updated_file_cache,
+                        changed_field_names=set(changed_field_names),
+                        **persistence_options,
+                    )
+                finally:
+                    if timing_recorder is not None:
+                        timing_recorder.record_postgres_commit_stages(persistence_stages)
             persistence_ms = (perf_counter() - persistence_started) * 1000.0
         except Exception as exc:
             compensation_succeeded = False
@@ -1165,6 +1169,14 @@ def finalize_structural_tag_edit_save_task(
             completion["_structural_resource_keys"] = reservation_resource_keys
             completion["_structural_completed_monotonic"] = perf_counter()
         update_save_task(task_id, **completion)
+        log_info = getattr(logger, "info", None)
+        if timing_recorder is not None and callable(log_info):
+            snapshot = timing_recorder.snapshot()
+            log_info(
+                "Edit Tags save timings files=%d phases=%s postgres_commit_stages=%s",
+                len(changed_paths), snapshot["phase_timings_ms"],
+                snapshot["postgres_commit_stages_ms"],
+            )
     finally:
         release = getattr(structural_tag_edit_reservation, "release", None)
         if callable(release):

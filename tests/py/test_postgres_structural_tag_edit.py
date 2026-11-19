@@ -2231,18 +2231,29 @@ def test_tag_edit_prevalidation_rejects_dirty_baseline_and_schedules_replay(monk
     connection = StructuralTagEditConnection(_successful_result())
     adapter = _adapter(monkeypatch, connection)
     scheduled = []
+    published = []
     monkeypatch.setattr(scoped_relation_projection, "tag_edit_baseline_ready", lambda *a, **k: False)
+    rebuilt = []
+    monkeypatch.setattr(scoped_relation_projection, "ensure_pending_relation_projection_ready",
+                        lambda *a, **k: published.append(k) or {"initialized": True})
+    monkeypatch.setattr(gallery_projection_postgres, "ensure_gallery_projection_ready",
+                        lambda *a, **k: rebuilt.append(k))
     monkeypatch.setattr(gallery_projection_postgres, "schedule_gallery_projection_refresh",
                         lambda *a, **k: scheduled.append(k))
     paths, previous, updated = _entries()
     with pytest.raises(RuntimeError, match="still being reconciled"):
         adapter.validate_structural_tag_edit(changed_paths=set(paths), previous_file_entries=previous,
             updated_file_entries=updated, changed_field_names={"album"})
+    # Pending changes are published and membership rebuilt first; only a
+    # baseline that stays dirty after both is refused.
+    assert len(published) == 1
+    assert len(rebuilt) == 1
     assert scheduled == [{"incremental_membership": True}]
     assert connection.executed == []
 
 
-def test_tag_edit_prevalidation_waits_for_scheduled_replay(monkeypatch):
+def test_tag_edit_prevalidation_publishes_the_previous_save_instead_of_refusing(monkeypatch):
+    """Owner (11-18): a merge right after a split was refused with "still being reconciled"."""
     from music_app.services import (
         gallery_projection_postgres,
         scan_cache_persistence,
@@ -2251,12 +2262,18 @@ def test_tag_edit_prevalidation_waits_for_scheduled_replay(monkeypatch):
 
     connection = StructuralTagEditConnection(_successful_result())
     adapter = _adapter(monkeypatch, connection)
-    readiness = iter((False, True))
+    readiness = iter((False, True, True))
     scheduled = []
+    published = []
     monkeypatch.setattr(
         scoped_relation_projection,
         "tag_edit_baseline_ready",
         lambda *a, **k: next(readiness),
+    )
+    monkeypatch.setattr(
+        scoped_relation_projection,
+        "ensure_pending_relation_projection_ready",
+        lambda *a, **k: published.append(k) or {"initialized": True},
     )
     monkeypatch.setattr(
         gallery_projection_postgres,
@@ -2278,7 +2295,8 @@ def test_tag_edit_prevalidation_waits_for_scheduled_replay(monkeypatch):
         changed_field_names={"album"},
     )
 
-    assert scheduled == [{"incremental_membership": True}]
+    assert len(published) == 1
+    assert scheduled == []
     assert connection.executed
 
 
@@ -2563,7 +2581,7 @@ def test_postgres_partial_album_move_publishes_only_destination_cover_authority(
     cover_publications = [
         (sql, params)
         for sql, params in connection.executed
-        if "album.id = any(%(album_ids)s::bigint[])" in _normalized_sql(sql)
+        if "select unnest(%(album_ids)s::bigint[])" in _normalized_sql(sql)
     ]
     assert len(cover_publications) == 1
     publication_sql, publication_params = cover_publications[0]
@@ -2573,7 +2591,7 @@ def test_postgres_partial_album_move_publishes_only_destination_cover_authority(
         "active_paths": [paths[0]],
         "cover_inherited_from_structural_edit": True,
     }
-    assert "join repaired_albums album on album.id = tracks.album_id" in (
+    assert "from repaired_albums album join library.local_tracks tracks on tracks.album_id = album.id" in (
         normalized_publication_sql
     )
     assert "'cover_path', album.cover_path" in normalized_publication_sql
@@ -2605,7 +2623,7 @@ def test_postgres_partial_album_move_cover_sync_follows_post_reconciliation_owne
     publication_sql, publication_params = next(
         (sql, params)
         for sql, params in connection.executed
-        if "album.id = any(%(album_ids)s::bigint[])" in _normalized_sql(sql)
+        if "select unnest(%(album_ids)s::bigint[])" in _normalized_sql(sql)
     )
     normalized_publication_sql = _normalized_sql(publication_sql)
     assert publication_params == {
@@ -2614,7 +2632,9 @@ def test_postgres_partial_album_move_cover_sync_follows_post_reconciliation_owne
         "cover_inherited_from_structural_edit": True,
     }
     assert "selected_files.private_path = any(%(active_paths)s::text[])" in normalized_publication_sql
-    assert "selected_tracks.album_id = album.id" in normalized_publication_sql
+    assert "album.id in ( select unnest(%(album_ids)s::bigint[]) union select selected_tracks.album_id" in (
+        normalized_publication_sql
+    )
 
 
 def test_postgres_album_rename_payload_excludes_cover_state_owned_by_current_rows(
@@ -3790,14 +3810,55 @@ def test_live_postgres_split_merge_split_never_strands_the_relation_index(watche
 
     _save_album_edit(fixture, entries, second_half, "Ремиксы2")
     _assert_save_left_only_album_journal(fixture, "split again")
-    _refresh_after_save(fixture, "split again")
 
-    # Selecting both halves saves two source albums in one transaction.
+    # Merge both halves at once, before any background refresh ran: the save
+    # publishes the split's journal itself instead of refusing. Selecting both
+    # halves saves two source albums in one transaction.
     _save_album_edit(fixture, entries, sorted(entries), "Ремиксы")
     _assert_save_left_only_album_journal(fixture, "merge both halves")
     _refresh_after_save(fixture, "merge both halves")
     assert set(_album_titles_by_track(fixture, entries).values()) == {"Ремиксы"}
     assert scheduled, "Each structural save must still schedule its background refresh."
+
+
+def test_live_postgres_merge_carries_a_split_half_card_onto_the_whole_merged_album(watcher_repair_inventory, monkeypatch):
+    """Owner (BUGFIX-05, 2026-11-18): a card searched on Ремиксы2 follows the merge into Ремиксы with every one of
+    Ремиксы's tracks, so splitting Ремиксы again opens the split chooser instead of one half's lookup."""
+    from psycopg.types.json import Jsonb
+
+    fixture = watcher_repair_inventory
+    entries, _other, _scheduled = _seed_split_merge_album(fixture, monkeypatch)
+    second_half = sorted(entries)[2:]
+    _save_album_edit(fixture, entries, second_half, "Ремиксы2")
+    _refresh_after_save(fixture, "split")
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        half = connection.execute("""select distinct albums.id, albums.album_key, albums.library_id
+            from library.local_track_files files join library.local_tracks tracks on tracks.id=files.track_id
+            join library.local_albums albums on albums.id=tracks.album_id
+            where files.private_path=any(%s::text[])""", (second_half,)).fetchone()
+        metadata = {"source_family": "runtime_cover_lookup_notifications_adapter", "track_paths": second_half,
+                    "notification_order_at": "2026-01-01T00:00:00Z",
+                    "source_payload": {"track_paths": second_half, "album_payload": {
+                        "id": half["id"], "key": half["album_key"], "name": "Ремиксы2", "track_paths": second_half}}}
+        connection.execute("""insert into ops.cover_lookup_tasks (library_id,task_key,status,album_key,metadata)
+            values(%s,'half-card','completed',%s,%s)""", (half["library_id"], half["album_key"], Jsonb(metadata)))
+        connection.commit()
+
+    _save_album_edit(fixture, entries, second_half, "Ремиксы")
+    _refresh_after_save(fixture, "merge back")
+
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        card = connection.execute("select metadata from ops.cover_lookup_tasks where task_key='half-card'").fetchone()["metadata"]
+        merged_id = connection.execute("""select distinct tracks.album_id from library.local_track_files files
+            join library.local_tracks tracks on tracks.id=files.track_id where files.private_path=any(%s::text[])""",
+            (sorted(entries),)).fetchall()
+    assert len(merged_id) == 1
+    assert card["source_payload"]["album_payload"]["id"] == merged_id[0]["album_id"]
+    assert card["source_payload"]["album_payload"]["name"] == "Ремиксы"
+    assert sorted(card["track_paths"]) == sorted(entries)
+    assert sorted(card["source_payload"]["track_paths"]) == sorted(entries)
+    assert sorted(card["source_payload"]["album_payload"]["track_paths"]) == sorted(entries)
+    assert card["source_payload"]["album_payload"]["track_count"] == len(entries)
 
 
 def test_live_postgres_stale_structural_mark_recovers_on_next_refresh(watcher_repair_inventory, monkeypatch):
@@ -3838,3 +3899,114 @@ def test_live_postgres_failed_refresh_retries_without_blocking_other_saves(watch
     _save_album_edit(fixture, other, list(other), "Другой2")
     _assert_save_left_only_album_journal(fixture, "save after failed refresh")
     _refresh_after_save(fixture, "retried refresh")
+
+
+def test_live_postgres_stale_gallery_baseline_never_refuses_a_save(watcher_repair_inventory, monkeypatch):
+    """Hosted runs (11-18): after a restored database, membership stayed at an older generation,
+    every pending publication failed and the first save was refused with a 500."""
+    fixture = watcher_repair_inventory
+    entries, _other, _scheduled = _seed_split_merge_album(fixture, monkeypatch)
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute(
+            "update library.gallery_membership_headers set source_generation = source_generation - 1")
+
+    _save_album_edit(fixture, entries, sorted(entries)[2:], "Ремиксы2")
+    _assert_save_left_only_album_journal(fixture, "save on a stale gallery baseline")
+    _refresh_after_save(fixture, "save on a stale gallery baseline")
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        assert connection.execute("""select bool_and(header.source_generation = state.generation) as current
+            from library.gallery_membership_headers header
+            join library.gallery_projection_state state using (library_id)""").fetchone()["current"]
+
+
+def _gallery_publication_state(fixture):
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        occurrences = connection.execute("""select scope_key, revision, count(*) as rows, max(staged_at) as staged_at
+            from library.gallery_projection_occurrences group by scope_key, revision order by 1, 2""").fetchall()
+        memberships = connection.execute("""select scope_key, album_key from library.gallery_membership_entries
+            order by 1, 2""").fetchall()
+    return occurrences, {(row["scope_key"], row["album_key"]) for row in memberships}
+
+
+def test_live_postgres_album_saves_patch_membership_without_rewriting_the_library_copy(
+        watcher_repair_inventory, monkeypatch):
+    """A save costs its albums: the legacy ordinal copy of every gallery scope stays untouched."""
+    fixture = watcher_repair_inventory
+    entries, _other, _scheduled = _seed_split_merge_album(fixture, monkeypatch)
+    occurrences_before, memberships_before = _gallery_publication_state(fixture)
+    assert occurrences_before, "The fixture's full gallery seed must publish the legacy copy once."
+
+    _save_album_edit(fixture, entries, sorted(entries)[2:], "Ремиксы2")
+    _refresh_after_save(fixture, "split")
+    occurrences_after, memberships_after = _gallery_publication_state(fixture)
+
+    assert occurrences_after == occurrences_before
+    split_keys = {album_key for _scope, album_key in memberships_after - memberships_before}
+    assert split_keys and all("ремиксы2" in key for key in split_keys), (
+        "The scoped membership patch must still publish the new album to every scope.")
+
+    _save_album_edit(fixture, entries, sorted(entries)[2:], "Ремиксы")
+    _refresh_after_save(fixture, "merge back")
+    assert _gallery_publication_state(fixture) == (occurrences_before, memberships_before)
+
+
+def test_live_postgres_journaled_album_merges_keys_and_keeps_its_first_revision(watcher_repair_inventory):
+    fixture = watcher_repair_inventory
+    entry = fixture.entry("Journal/2001 - Album/01. Track.flac", artist="Journal", album="Album")
+    fixture.seed(entry)
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        album = connection.execute("""select albums.id, albums.library_id, albums.album_key
+            from library.local_albums albums where albums.title='Album'""").fetchone()
+        connection.execute("select library.mark_relation_album_dirty(%s,%s,'old-key')",
+                           (album["library_id"], album["id"]))
+        first = connection.execute("""select first_inventory_revision, first_gallery_generation
+            from library.local_relation_dirty_albums where album_id=%s""", (album["id"],)).fetchone()
+        connection.execute("""update library.libraries set metadata=jsonb_set(metadata,
+            '{inventory_mutation_revision}', to_jsonb(coalesce((metadata->>'inventory_mutation_revision')::bigint,0)+5))
+            where id=%s""", (album["library_id"],))
+        connection.execute("select library.mark_relation_album_dirty(%s,%s,'older-key')",
+                           (album["library_id"], album["id"]))
+        journaled = connection.execute("""select album_keys, first_inventory_revision, first_gallery_generation
+            from library.local_relation_dirty_albums where album_id=%s""", (album["id"],)).fetchone()
+        connection.rollback()
+
+    assert sorted(journaled["album_keys"]) == sorted({"old-key", "older-key", album["album_key"]})
+    assert journaled["first_inventory_revision"] == first["first_inventory_revision"]
+    assert journaled["first_gallery_generation"] == first["first_gallery_generation"]
+
+
+
+def test_live_watcher_membership_context_uses_indexes_and_keeps_every_physical_sibling(
+        watcher_repair_inventory, monkeypatch):
+    """A watcher batch reads its albums' context by index, never the whole library."""
+    from music_app.services import scan_cache_persistence as persistence
+    from music_app.services.album_local_membership import physical_album_root_sql
+
+    fixture = watcher_repair_inventory
+    disc_one = fixture.entry("Owner/Context Album/CD 1/01. One.flac", album="Context Album")
+    disc_two = fixture.entry("Owner/Context Album/CD 2/01. Two.flac", album="Retagged Elsewhere")
+    same_identity = fixture.entry("Owner/Loose Folder/03. Three.flac", album="Context Album")
+    unrelated = fixture.entry("Owner/Unrelated Album/01. Other.flac", album="Unrelated Album")
+    fixture.seed(disc_one, disc_two, same_identity, unrelated)
+
+    captured = []
+    restore = persistence._restore_structurally_inherited_covers
+
+    def capture(file_cache, membership_context):
+        captured.append(set(membership_context))
+        return restore(file_cache, membership_context)
+
+    monkeypatch.setattr(persistence, "_restore_structurally_inherited_covers", capture)
+    # A progressive scan batch can hold one disc folder only.
+    fixture.adapter.persist_targeted_inventory_mutation(
+        root_id=fixture.roots[0]["id"], active_file_entries={disc_one["path"]: dict(disc_one, title="One edited")},
+    )
+    assert captured and {disc_one["path"], disc_two["path"], same_identity["path"]} <= captured[0]
+    assert unrelated["path"] not in captured[0]
+
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute("set local enable_seqscan = off")
+        plan = "\n".join(row["QUERY PLAN"] for row in connection.execute(
+            "explain select id from library.local_track_files candidate where candidate.scan_cache_stale is false and "
+            f"{physical_album_root_sql('candidate.private_path')} = any(%s::text[])", (["x"],)).fetchall())
+    assert "local_track_files_active_physical_album_root_idx" in plan

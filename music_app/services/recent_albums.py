@@ -4,7 +4,8 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from music_app.services.client_layout_preferences import _connect, _owner
+from music_app.services.client_layout_preferences import _owner
+from music_app.services.postgres_connections import pooled_connection as _connect
 
 _RECENT_ALBUMS_SQL = """
 with recent as (

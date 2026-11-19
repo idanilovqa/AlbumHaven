@@ -100,6 +100,19 @@ class AlbumIdentityLineageRepository:
             if candidate.get("path_set_complete")
             and int(candidate.get("matched_path_count") or 0) > 0
         ]
+        # Owner (BUGFIX-05, 2026-11-18): the card's tracks decide a split, not its saved id. A split may keep
+        # the original album row for the half that keeps the name; matching that id first opened that half's
+        # lookup instead of the chooser. Two or more albums holding only the card's tracks, and together all of
+        # them, are its split releases. A chosen release's card carries only that release's tracks.
+        requested_path_count = len(normalized_paths)
+        if (
+            requested_path_count
+            and len(path_owners) >= 2
+            and sum(int(candidate.get("matched_path_count") or 0) for candidate in path_owners)
+            == requested_path_count
+        ):
+            choices = sorted((_album(candidate) for candidate in path_owners), key=lambda item: item["album_id"])
+            return {"status": "split", "album": None, "choices": choices}
         if not identity_matches:
             live = path_owners
 

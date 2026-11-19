@@ -1712,10 +1712,15 @@ async function fetchAndRender(url, push = true, options = {}) {
       invalidateAllHydratedTrackModalAlbumDetails();
       if (typeof refreshOpenTrackModalAfterInventoryMutation === 'function') {
         // An open album that no longer exists must not leave the applied gallery half-finished.
-        try {
-          await refreshOpenTrackModalAfterInventoryMutation();
-        } catch (modalRefreshError) {
-          console.error('[AlbumHaven][Watcher] Failed to refresh the open album.', modalRefreshError);
+        const openTrackModalRefresh = refreshOpenTrackModalAfterInventoryMutation()
+          .catch((modalRefreshError) => {
+            console.error('[AlbumHaven][Watcher] Failed to refresh the open album.', modalRefreshError);
+          });
+        // A caller that reports the applied gallery first takes the open album's reload instead.
+        if (typeof requestOptions.deferOpenTrackModalRefresh === 'function') {
+          requestOptions.deferOpenTrackModalRefresh(openTrackModalRefresh);
+        } else {
+          await openTrackModalRefresh;
         }
       }
     }

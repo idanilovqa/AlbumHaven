@@ -29,8 +29,11 @@ test('FTC-CAP-AUDIT-014 TV selects real provider artwork while hiding retained m
   const local = tvLookup.localCandidate(desktop.localPath);
   await expect(local).toHaveCount(1);
   await expect(local).toBeHidden();
-  const selectedImage = await coverLookupActions.readRemoteCandidateEvidence(desktop.providerId);
-  const selected = await decodedArtworkEvidence(page, selectedImage.src);
+  await coverLookupActions.readRemoteCandidateEvidence(desktop.providerId);
+  // The card shows a 480 px preview; the artwork it saves is the original its lightbox opens.
+  const selected = await decodedArtworkEvidence(
+    page, await lookup.remoteCoverCardById(desktop.providerId).getAttribute('data-cover-src'),
+  );
   const saved = await coverLookupActions.selectRemoteCandidateByIdAndSave(desktop.providerId);
   expect(saved.ok).toBe(true);
   expect(saved.optimistic_cover_path).toBeTruthy();

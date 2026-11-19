@@ -4187,6 +4187,36 @@ test('pollStatus refreshes an open Album Details after applying an inventory mut
   assert.equal(modalRefreshes, 1);
 });
 
+test('fetchAndRender hands the open album reload to a caller that reports the gallery first', async () => {
+  const { context, pendingRequests } = createContext();
+  context.state.modalReleases = [{ key: 'saved-album' }];
+  context.state.modalReleaseIndex = 0;
+  context.state.ui.appliedViewInventoryMutationRevision = 12;
+  let finishModalRefresh;
+  context.refreshOpenTrackModalAfterInventoryMutation = () => new Promise((resolve) => {
+    finishModalRefresh = resolve;
+  });
+  const deferredRefreshes = [];
+
+  const render = context.fetchAndRender('/view-data?surface=albums', false, {
+    deferOpenTrackModalRefresh: (refresh) => deferredRefreshes.push(refresh),
+  });
+  for (let attempt = 0; attempt < 10 && !pendingRequests.length; attempt += 1) {
+    await flushMicrotasks();
+  }
+  pendingRequests[0].resolveWith({ artist_groups: [], inventory_mutation_revision: 13 });
+
+  assert.equal(await render, true);
+  assert.equal(deferredRefreshes.length, 1);
+  let modalRefreshSettled = false;
+  deferredRefreshes[0].then(() => { modalRefreshSettled = true; });
+  await flushMicrotasks();
+  assert.equal(modalRefreshSettled, false);
+  finishModalRefresh();
+  await deferredRefreshes[0];
+  assert.equal(modalRefreshSettled, true);
+});
+
 test('pollStatus defers an inventory refresh while a tag edit owns gallery resources', async () => {
   const { context, calls, pendingRequests } = createContext();
   context.scheduleBrowserTimeout = () => {};

@@ -7,8 +7,9 @@
   <img class="mobile-page-cover" id="mobile-page-cover" alt="" hidden>
   <div class="gallery-bar__context"><h1 class="gallery-bar__title" id="mobile-page-title">{{ title }}</h1><p class="gallery-bar__summary" id="mobile-page-summary">{{ summary }}</p></div>
   <div class="gallery-bar__actions" id="mobile-settings-actions" hidden>
-    {# Owner (11-09): the section picker is the shared Button that opens the shared anchored menu, like Settings' other dropdowns. #}
-    {{ ui_button('Sections', class_name='mobile-settings-section-button', attributes={'id': 'mobile-settings-section-button', 'data-mobile-settings-subsections': true, 'aria-haspopup': 'menu', 'aria-controls': 'mobile-settings-subsection-menu', 'aria-expanded': 'false'}) }}
+    {# Owner (2026-11-18): the section picker is the shared dropdown control (read-only combobox with the shared
+       chevron) that opens the shared anchored menu, not a generic button. #}
+    <div class="ui-dropdown-control mobile-settings-section-control"><input id="mobile-settings-section-button" class="mobile-settings-section-button" type="text" value="Sections" readonly role="combobox" aria-label="Settings section" aria-haspopup="menu" aria-controls="mobile-settings-subsection-menu" aria-expanded="false" autocomplete="off" data-mobile-settings-subsections></div>
   </div>
   {% else %}
   {% if settings_navigation %}{% call action_button('Account navigation', class_name='mobile-bar-action', presentation='bare', attributes={'data-settings-nav-toggle': '1', 'aria-expanded': 'false'}) %}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>{% endcall %}{% endif %}

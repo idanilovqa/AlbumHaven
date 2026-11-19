@@ -64,6 +64,24 @@ class Connection:
         return Cursor([self.result] if self.result is not None else [])
 
 
+@pytest.fixture(autouse=True)
+def published_removals(monkeypatch):
+    """Fake connections cannot run the relation publication; record its call instead."""
+    from music_app.services import gallery_projection_postgres, scoped_relation_projection
+
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(gallery_projection_postgres, "gallery_projection_context", lambda _connection: {"generation": 7})
+    monkeypatch.setattr(
+        scoped_relation_projection, "publish_affected_relation_projection",
+        lambda connection, **options: calls.append({"events": list(connection.events), **options}),
+    )
+    return calls
+
+
+def _removal_operation(connection):
+    return next(operation for operation in connection.operations if "confirm_missing_album_removal" in operation[0])
+
+
 def _service(connection):
     from music_app.services.missing_album_removal_postgres import (
         PostgresMissingAlbumRemovalService,
@@ -75,7 +93,7 @@ def _service(connection):
     )
 
 
-def test_confirm_removal_deletes_only_missing_album_inventory_and_advances_revision():
+def test_confirm_removal_deletes_only_missing_album_inventory_and_advances_revision(published_removals):
     connection = Connection(
         {
             "album_found": True,
@@ -93,10 +111,17 @@ def test_confirm_removal_deletes_only_missing_album_inventory_and_advances_revis
         "library_revision": 18,
     }
     assert connection.events == ["begin", "commit"]
-    assert len(connection.operations) == 1
-    sql, params = connection.operations[0]
-    assert sql == "select * from library.confirm_missing_album_removal(%(album_key)s);"
-    assert ALBUM_KEY in _flatten_values(params)
+    assert [sql for sql, _params in connection.operations] == [
+        "select pg_advisory_xact_lock(hashtext('album-haven:local-inventory-publication'));",
+        "select pg_advisory_xact_lock( hashtextextended('album-haven:local-relation-projection', 0) );",
+        "select * from library.confirm_missing_album_removal(%(album_key)s);",
+    ]
+    assert ALBUM_KEY in _flatten_values(connection.operations[2][1])
+    # The removal publishes its own relation journal before commit, as every inventory writer does.
+    assert published_removals == [{
+        "events": ["begin"], "album_keys": (ALBUM_KEY,), "reason": "missing_album_removal",
+        "config": {"ALBUM_HAVEN_APP_DATABASE_URL": DATABASE_URL}, "expected_gallery_generation": 7,
+    }]
 
 
 def test_confirm_removal_returns_domain_conflict_when_any_file_reappeared():
@@ -163,7 +188,7 @@ def test_confirm_removal_preserves_album_when_owning_root_is_unavailable(tmp_pat
         _service(connection).confirm_removal(ALBUM_KEY)
 
     assert connection.events == ["begin", "rollback"]
-    sql, params = connection.operations[0]
+    sql, params = _removal_operation(connection)
     assert sql == "select * from library.confirm_missing_album_removal(%(album_key)s);"
     assert ALBUM_KEY in _flatten_values(params)
 
@@ -206,7 +231,7 @@ def test_confirm_removal_reports_unknown_album_without_cross_library_delete():
     with pytest.raises(MissingAlbumNotFound):
         _service(connection).confirm_removal("other-library-album")
 
-    sql, params = connection.operations[0]
+    sql, params = _removal_operation(connection)
     assert sql == "select * from library.confirm_missing_album_removal(%(album_key)s);"
     assert "other-library-album" in _flatten_values(params)
     assert connection.events == ["begin", "rollback"]
@@ -280,8 +305,8 @@ def test_confirm_removal_route_checks_pending_health_after_database_recovers(
         assert connection.events == ["begin", "commit"]
         assert decode_json(body)["removed_album_key"] == ALBUM_KEY
     assert "pg_advisory_xact_lock" in connection.operations[0][0]
-    assert "library.local_track_files" in connection.operations[1][0]
-    assert ALBUM_KEY in _flatten_values(connection.operations[1][1])
+    assert "library.local_track_files" in connection.operations[2][0]
+    assert ALBUM_KEY in _flatten_values(connection.operations[2][1])
 
 
 def test_confirm_removal_route_is_registered_and_owner_can_remove(monkeypatch, tmp_path):

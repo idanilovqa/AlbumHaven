@@ -5,6 +5,8 @@ from contextlib import contextmanager, nullcontext
 from typing import Any
 from uuid import UUID
 
+from music_app.services.postgres_connections import pooled_connection
+
 try:  # pragma: no cover - optional outside the Postgres runtime.
     import psycopg
     from psycopg.rows import dict_row
@@ -42,9 +44,12 @@ class PostgresGeneratedPreviewStorageRepository:
     ) -> None:
         self._database_url = str(config.get(_DATABASE_URL_KEY) or "").strip()
         self._connect = connect or _connect
+        # The Server page and every library page poll this read; the relocation worker keeps its own
+        # connections because it holds a session advisory lock for a whole move.
+        self._read_connect = connect or pooled_connection
 
     def load(self) -> dict[str, object]:
-        with self._connect_to_database() as connection:
+        with self._connect_to_database(self._read_connect) as connection:
             row = _first_row(connection.execute(_load_sql()))
         if row is None:
             raise RuntimeError("Generated preview storage singleton is missing.")
@@ -292,10 +297,10 @@ class PostgresGeneratedPreviewStorageRepository:
             raise PreviewStorageConflict(conflict_message)
         return _row_mapping(row)
 
-    def _connect_to_database(self):
+    def _connect_to_database(self, connect: Callable[[str], Any] | None = None):
         if not self._database_url:
             raise RuntimeError("ALBUM_HAVEN_APP_DATABASE_URL is required for preview storage.")
-        return self._connect(self._database_url)
+        return (connect or self._connect)(self._database_url)
 
 
 def serialize_preview_storage(

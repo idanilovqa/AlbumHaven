@@ -11,6 +11,9 @@ from copy import deepcopy
 import re
 from typing import Any
 
+# Every page render reads these; a pooled lease avoids opening a new Postgres connection per request.
+from music_app.services.postgres_connections import pooled_connection as _connect
+
 PROFILES = ("web_desktop", "mobile", "tv")
 _DEFAULTS = {
     "galleryDisplayPreferences": {"defaultGalleryDisplayMode": "cards", "defaultGalleryScalePercent": 100},
@@ -114,12 +117,6 @@ def _owner(value: object) -> int:
     if type(value) is not int or value <= 0:
         raise ValueError("An authenticated account is required.")
     return value
-
-
-def _connect(database_url: str):
-    import psycopg
-    from psycopg.rows import dict_row
-    return psycopg.connect(database_url, row_factory=dict_row)
 
 
 class PostgresClientLayoutPreferences:

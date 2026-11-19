@@ -1462,7 +1462,9 @@ test('Cover Lookup loading markup does not invent empty artwork cards and keeps 
 
   assert.equal((markup.match(/cover-lookup-art-card-shell is-loading/g) || []).length, 0);
   assert.doesNotMatch(markup, /data-cover-lookup-loading-section="other-art"/);
-  assert.match(markup, /Resolving available cover art/);
+  // Owner (2026-11-18): until the listing answers, LOCAL is a still heading; nothing blinks.
+  assert.match(markup, /cover-lookup-gallery-resolving[^>]*>\s*<h4 class="cover-lookup-section-title">LOCAL<\/h4>/);
+  assert.doesNotMatch(markup, /cover-lookup-task-loading-line/);
   assert.doesNotMatch(markup, /No local cover art found/);
   assert.match(markup, />MANUAL SEARCH</);
   assert.match(markup, /id="cover-lookup-pasted-urls"/);
@@ -1528,7 +1530,8 @@ test('Cover Lookup loading markup keeps cached remote candidates usable while lo
   });
 
   assert.match(markup, /cached-thumb\.jpg/);
-  assert.match(markup, /Resolving available cover art/);
+  assert.match(markup, /size=480/);
+  assert.match(markup, /cover-lookup-gallery-resolving[^>]*>\s*<h4 class="cover-lookup-section-title">LOCAL<\/h4>/);
   assert.doesNotMatch(markup, /data-cover-lookup-loading-section="local"/);
   assert.equal((markup.match(/data-cover-lookup-loading-section="remote"/g) || []).length, 1);
 });

@@ -98,6 +98,27 @@ def test_load_returns_the_singleton_storage_state():
     assert "item.status = 'skipped' and item.actual_sha256 is not null" in connection.calls[0][0]
 
 
+def test_polled_state_reads_lease_the_shared_pool_while_the_move_lock_keeps_its_own_connection(monkeypatch):
+    # Every library page and the Server page poll load(); a fresh connection per poll costs 100+ ms.
+    # The move's session advisory lock must never sit on a pooled connection.
+    from music_app.services import generated_preview_storage_postgres as module
+
+    leased, opened = [], []
+    read = FakeConnection([FakeCursor(row=storage_row())])
+    lock = FakeConnection([FakeCursor(row={"acquired": True}), FakeCursor(row={"unlocked": True})])
+    monkeypatch.setattr(module, "pooled_connection", lambda url: leased.append(url) or nullcontext(read))
+    monkeypatch.setattr(module, "_connect", lambda url: opened.append(url) or nullcontext(lock))
+    repository = PostgresGeneratedPreviewStorageRepository({"ALBUM_HAVEN_APP_DATABASE_URL": DATABASE_URL})
+
+    assert repository.load()["mode"] == "album_folders"
+    with repository.operation_lock() as acquired:
+        assert acquired is True
+
+    assert leased == [DATABASE_URL]
+    assert opened == [DATABASE_URL]
+    assert "pg_advisory_unlock" in lock.calls[-1][0]
+
+
 def test_request_location_is_revision_guarded_and_records_requested_target():
     connection = FakeConnection(
         [FakeCursor(row=storage_row(requested_mode="custom", requested_root="D:/previews", revision=4))]

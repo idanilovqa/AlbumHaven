@@ -3234,6 +3234,90 @@ test('watchSaveTask routes a committed typo rename through destination reconcili
   );
 });
 
+test('watchSaveTask reports a saved rename once its destination shows, before the open album reloads', async () => {
+  const context = loadHelpers();
+  const trackPath = 'D:\\Synthetic Music\\Ovderhead\\Telepathic Minds\\01.flac';
+  const originalAlbum = {
+    key: 'ovderhead::telepathic minds',
+    name: 'Telepathic Minds',
+    album_artist: 'Ovderhead',
+    tracks: [{ path: trackPath }],
+  };
+  const destinationAlbum = {
+    ...originalAlbum,
+    key: 'overhead::telepathic minds',
+    identity_key: 'overhead::telepathic minds',
+    album_artist: 'Overhead',
+  };
+  const sourceGroup = { artist: 'Ovderhead', albums: [originalAlbum] };
+  Object.assign(context.state, {
+    ui: { viewStateRevision: 7 },
+    view: {
+      ...context.state.view,
+      selected_artist: 'Ovderhead',
+      artists_sidebar: [{ artist: 'Ovderhead', count: 1 }],
+      artist_groups: [sourceGroup],
+      primary_artist_groups: [sourceGroup],
+      family_artist_groups: [],
+    },
+  });
+  context.buildApiUrl = (view) => `/view-data?artist=${encodeURIComponent(view.selected_artist || '')}`;
+  context.buildUrl = (view) => `/?artist=${encodeURIComponent(view.selected_artist || '')}`;
+  const historyUrls = [];
+  context.window.history = { state: {}, replaceState: (_state, _title, url) => historyUrls.push(url) };
+  let finishOpenAlbumReload;
+  context.fetchAndRender = async (_url, _push, options) => {
+    if (!options.shouldApplyResponse({ inventory_mutation_revision: 2 })) return false;
+    const destinationGroup = { artist: 'Overhead', albums: [destinationAlbum] };
+    context.state.view = {
+      ...context.state.view,
+      selected_artist: 'Overhead',
+      artists_sidebar: [{ artist: 'Ovderhead', count: 1 }, { artist: 'Overhead', count: 1 }],
+      artist_groups: [destinationGroup],
+      primary_artist_groups: [destinationGroup],
+      family_artist_groups: [],
+    };
+    options.deferOpenTrackModalRefresh(new Promise((resolve) => {
+      finishOpenAlbumReload = resolve;
+    }));
+    return true;
+  };
+  const events = [];
+  context.showRepairAlert = (message) => events.push(`alert:${message}`);
+  context.updateOpenTrackModalAfterTagEdit = () => events.push('modal');
+
+  const watch = context.watchSaveTask('typo-rename-task', {
+    originalAlbum,
+    originatingViewStateRevision: 7,
+    tagEdits: { [trackPath]: { artist: 'Overhead', album_artist: 'Overhead' } },
+    tagEditAlert: { completionMessage: 'Saved changes to 1 track in “Telepathic Minds”.' },
+    terminalPayload: {
+      ok: true,
+      save_task_id: 'typo-rename-task',
+      save_task_status: 'completed',
+      requires_view_refresh: true,
+      inventory_mutation_revision: 2,
+      destination_artist: 'Overhead',
+      destination_album_key: destinationAlbum.identity_key,
+      orphaned_source_artists: ['Ovderhead'],
+      updated_albums: [],
+    },
+  });
+  for (let attempt = 0; attempt < 20 && !events.length; attempt += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+
+  assert.deepEqual(events, ['alert:Saved changes to 1 track in “Telepathic Minds”.']);
+  assert.deepEqual(
+    Array.from(context.state.view.artists_sidebar, (item) => item.artist),
+    ['Overhead'],
+  );
+  assert.deepEqual(historyUrls, ['/?artist=Overhead']);
+  finishOpenAlbumReload();
+  await watch;
+  assert.deepEqual(events.slice(1), ['modal']);
+});
+
 test('watchSaveTask reconciles an open destination modal locally after a structural merge', async () => {
   const context = loadHelpers();
   const destinationTrackPath = 'D:\\Synthetic Music\\Merge Artist\\Destination\\01 Existing.mp3';

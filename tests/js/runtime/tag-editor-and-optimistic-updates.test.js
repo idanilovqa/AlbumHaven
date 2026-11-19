@@ -3002,6 +3002,39 @@ test('manual tag edit does not restore its previous snapshot after navigation du
   );
 });
 
+test('a refused save re-reads the Gallery so an album an optimistic merge absorbed comes back', async () => {
+  // Owner (2026-11-18): a refused Ремиксы2 → Ремиксы merge left one Ремиксы2 card and lost Ремиксы; the Gallery must
+  // show both again at once, without a page reload.
+  const trackPath = 'C:\\Music\\ДДТ\\Ремиксы\\04. Храм.mp3';
+  const album = { key: 'ддт::ремиксы2', name: 'Ремиксы2', album_artist: 'ДДТ', tracks: [{ path: trackPath, album: 'Ремиксы2' }] };
+  const closedModal = { hidden: true };
+  let refreshes = 0;
+  const context = loadHelper([album], {
+    document: { body: { classList: { add() {}, remove() {} } }, getElementById() { return closedModal; } },
+    getTagEditConfirmElements() { return { overlay: closedModal }; },
+    getTagEditorElements() { return { overlay: closedModal }; },
+    buildChangedTagEditorUpdates() { return { [trackPath]: { album: 'Ремиксы' } }; },
+    buildOptimisticUpdatedAlbumsFromEdits() { return [{ ...album, name: 'Ремиксы' }]; },
+    deepCloneJson(value) { return JSON.parse(JSON.stringify(value)); },
+    applyUpdatedAlbumsToCurrentView() { return []; },
+    updateOpenTrackModalAfterTagEdit() {},
+    renderView() {},
+    showRepairAlert() {},
+    claimTagEditViewMutation() { return { id: 'refused-merge' }; },
+    releaseFailedTagEditViewMutation() {},
+    async refreshCurrentViewAfterBackgroundCompletion() { refreshes += 1; return true; },
+    async fetch() {
+      return { ok: false, status: 500, async json() { return { ok: false, error: 'Library changes are still being reconciled.' }; } };
+    },
+  });
+  context.state.ui = { viewStateRevision: 7 };
+  context.state.tagEditor = { album, tracks: album.tracks, values: {} };
+
+  await context.confirmManualTagEdit();
+
+  assert.equal(refreshes, 1);
+});
+
 test('manual tag edit keeps the editor closed after an immediate rolled-back persistence failure', async () => {
   const trackPath = 'C:\\Music\\Axxis\\Black Edition\\01 - Kingdom.mp3';
   const album = {

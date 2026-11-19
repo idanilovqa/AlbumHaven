@@ -6,7 +6,10 @@ from uuid import uuid4
 import pytest
 
 from music_app.services.album_identity_lineage_postgres import AlbumIdentityLineageRepository
-from music_app.services.cover_lookup_tasks_postgres import _current_notification_album_joins_sql
+from music_app.services.cover_lookup_tasks_postgres import (
+    _current_notification_album_joins_sql,
+    _notification_document_sql,
+)
 from tests.e2e.support import isolatedPostgres
 from tests.py.test_album_identity_lineage_postgres import _candidate, _repository
 
@@ -126,7 +129,8 @@ def test_live_notification_and_detail_resolve_saved_paths_without_recreating_tas
                                         (token + "%",)).fetchall()
             rows = connection.execute("""select ops.cover_lookup_tasks.task_key,
                 current_album.album_id, current_album.cover_path, current_album.has_active_tracks
-                from ops.cover_lookup_tasks """ + _current_notification_album_joins_sql() +
+                from ops.cover_lookup_tasks """ + _notification_document_sql()
+                + _current_notification_album_joins_sql() +
                 " where ops.cover_lookup_tasks.task_key like %s", (token + "%",)).fetchall()
             projected = {row["task_key"]: row for row in rows}
             for label, (saved_paths, expected_status, visible, expected_album) in cases.items():

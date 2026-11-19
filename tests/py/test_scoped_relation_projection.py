@@ -72,6 +72,7 @@ def test_scoped_publication_rejects_concurrent_legacy_generation_changes(
     publications = []
     monkeypatch.setattr(gallery, 'patch_gallery_membership_in_transaction',
                         lambda *args, **kwargs: publications.append(kwargs))
+    monkeypatch.setattr(gallery, 'gallery_membership_baseline_ready', lambda *args: True)
 
     class Cursor:
         def fetchone(self):
@@ -493,3 +494,27 @@ def test_atomic_multigroup_delta_with_wrong_base_still_reloads_current_state(mon
         }, config={'owner': 'test'})
         assert calls == [{'owner': 'test'}]
         assert state['relation_views'] == {'artists': ['Authoritative']}
+
+
+def test_scoped_publication_flags_a_full_gallery_rebuild_for_a_stale_baseline(monkeypatch):
+    """A restored database left membership at another generation; failing there blocked every save."""
+    from music_app.services import gallery_projection_postgres as gallery
+    publications = []
+    monkeypatch.setattr(gallery, 'patch_gallery_membership_in_transaction',
+                        lambda *args, **kwargs: publications.append(kwargs))
+    monkeypatch.setattr(gallery, 'gallery_membership_baseline_ready', lambda *args: False)
+
+    class Connection:
+        def execute(self, statement, params):
+            return type('Cursor', (), {'fetchone': lambda self: {'generation': 4, 'owned': False}})()
+
+    result = scoped._finish_publication(Connection(), {
+        'library_id': 1, 'gallery_generation': 4, 'gallery_owned': False,
+    }, {'source_fingerprint': 'version'}, {
+        'processed_relation_album_ids': [1], 'affected_relation_album_ids': [1],
+        'affected_relation_album_keys': ['one'], 'affected_relation_aliases': {},
+        'first_gallery_generation': 3, 'relations_last_built': 123.0,
+    }, reason='test', config={}, copy_legacy_views=False)
+
+    assert publications == []
+    assert result['gallery_rebuild_required'] is True

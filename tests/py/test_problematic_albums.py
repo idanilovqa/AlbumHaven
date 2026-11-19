@@ -948,3 +948,133 @@ def test_a_restarted_server_answers_the_first_page_from_the_stored_first_page(mo
     assert refreshed["items"][0]["key"] == f"{token}::new", "The background refresh adds what the snapshot missed."
     assert restart_and_open_first_page(candidate_query_allowed=False)["items"][0]["key"] == f"{token}::new"
     _drain_background_work()
+
+
+def _indexed_problematic_items(database_url, *, limit=2, needle=""):
+    """Every item the persisted index serves, page by page (keyset cursors)."""
+    from music_app.services import library_browse_postgres as browse
+
+    repository = browse.PostgresLibraryBrowseRepository({
+        "ALBUM_HAVEN_APP_DATABASE_URL": database_url,
+        "ALBUM_HAVEN_PROBLEMATIC_INDEX_ENABLED": "1",
+    })
+    items, cursor = [], ""
+    while True:
+        page = (repository.build_problematic_files_search(needle, limit=limit, cursor=cursor) if needle
+                else repository.build_problematic_files_page(limit=limit, cursor=cursor))
+        assert page["projection_cache_status"] == "indexed"
+        assert not page["cursor_restarted"]
+        items += page["items"]
+        cursor = page["next_cursor"]
+        if not page["has_more"]:
+            return sorted(items, key=lambda item: (item["key"], item["track_paths"]))
+
+
+def _ready_problematic_index(database_url):
+    from music_app.services import library_browse_postgres as browse
+    from music_app.services import problematic_index
+
+    repository = browse.PostgresLibraryBrowseRepository({
+        "ALBUM_HAVEN_APP_DATABASE_URL": database_url,
+        "ALBUM_HAVEN_PROBLEMATIC_INDEX_ENABLED": "1",
+    })
+    # Duplicate sources resolve before the backfill evaluates them (the warm-up is off in tests).
+    with repository._search_connection_context() as connection:
+        browse._load_duplicate_candidate_album_ids(connection, [], repository=repository)
+    if not problematic_index.refresh(repository):
+        problematic_index.wait_for_background_work()
+    assert problematic_index.refresh(repository), "The backfill makes the index readable."
+
+
+def _as_served(items):
+    return json.loads(json.dumps(items, default=str))
+
+
+def test_live_problematic_index_equals_a_full_rebuild_through_tag_saves(watcher_repair_inventory):
+    """Owner (11-19): the first Problematic Files page took 22-55 s because every restart,
+    deploy and first open ran the whole-library candidate pass. The persisted index must
+    serve exactly what a full rebuild lists, before and after each kind of save."""
+    from music_app.services import problematic_index
+    from music_app.services.library_browse_postgres import refresh_postgres_utility_projections_after_edit
+
+    fixture = watcher_repair_inventory
+    database_url = fixture.config["ALBUM_HAVEN_APP_DATABASE_URL"]
+    erased = fixture.entry("Drozd/Karusel/01.flac", artist="R.D.", album="Карусель Эпох")
+    erased["album_artist"] = "R.D."
+    first = fixture.entry("Twin/One/01.flac", artist="Twin", album="Same Release")
+    second = fixture.entry("Twin/Two/01.flac", artist="Twin", album="Same Release")
+    for entry in (first, second):
+        entry["album_artist"] = "Twin"
+    untouched = fixture.entry("Other/Album/01.flac", artist="Other", album="Untouched")
+    fixture.seed(erased, first, second, untouched)
+    _ready_problematic_index(database_url)
+    assert _indexed_problematic_items(database_url) == _as_served(
+        _complete_problematic_list(fixture.config, rebuild=True)[1])
+
+    def save(entry, **changes):
+        updated = {**entry, **changes}
+        fixture.adapter.persist_structural_tag_edit(
+            changed_paths={entry["path"]}, previous_file_entries={entry["path"]: entry},
+            updated_file_entries={entry["path"]: updated}, changed_field_names=set(changes),
+        )
+        refresh_postgres_utility_projections_after_edit(fixture.config, track_paths={entry["path"]})
+        entry.update(updated)
+        problematic_index.wait_for_background_work()
+        indexed = _indexed_problematic_items(database_url)
+        assert indexed == _as_served(_complete_problematic_list(fixture.config, rebuild=True)[1])
+        return indexed
+
+    after_erase = save(erased, year=None)
+    assert "Missing year" in next(item for item in after_erase if item["name"] == "Карусель Эпох")["problem_reasons"]
+    # Renaming one twin changes the other twin's duplicate state through the index as well.
+    save(second, album="Renamed Release")
+    save(second, album="Same Release")
+    after_fix = save(erased, year=2006)
+    assert all("Missing year" not in item["problem_reasons"]
+               for item in after_fix if item["name"] == "Карусель Эпох")
+
+
+def test_live_problematic_index_reads_pages_and_search_without_the_whole_library_pass(monkeypatch):
+    """An album that becomes problematic, one that is fixed and one that is removed reach the
+    first page and search through the marked albums alone."""
+    import psycopg
+
+    from music_app.services import library_browse_postgres as browse
+    from tests.py.test_problematic_files_search_postgres import _MOJIBAKE_TITLE, _seed_problematic_albums
+
+    database_url = _seed_problematic_albums(8)
+    _ready_problematic_index(database_url)
+    before = _indexed_problematic_items(database_url, limit=3)
+    assert len(before) == 8
+    monkeypatch.setattr(browse.PostgresLibraryBrowseRepository, "_problematic_candidate_album_ids",
+                        lambda *_args, **_kwargs: pytest.fail("the whole-library candidate pass must not run"))
+    monkeypatch.setattr(browse.PostgresLibraryBrowseRepository, "_load_problematic_candidate_ids",
+                        lambda *_args, **_kwargs: pytest.fail("the whole-library candidate pass must not run"))
+
+    with psycopg.connect(database_url) as connection:
+        first_key, second_key = (item["key"] for item in sorted(before, key=browse._problematic_summary_sort_key)[:2])
+        album = connection.execute("select library_id, artist_id from library.local_albums where album_key = %s",
+                                   (first_key,)).fetchone()
+        root_id = connection.execute("select id from library.library_roots where library_id = %s limit 1",
+                                     (album[0],)).fetchone()[0]
+        new_id = connection.execute("""insert into library.local_albums(library_id,artist_id,album_key,title)
+            values(%s,%s,'index-new::album',%s) returning id""", (*album, f"{_MOJIBAKE_TITLE} -01")).fetchone()[0]
+        track_id = connection.execute("""insert into library.local_tracks(library_id,album_id,artist_id,track_key,title)
+            values(%s,%s,%s,'index-new-track','Fresh Needle') returning id""", (album[0], new_id, album[1])).fetchone()[0]
+        connection.execute("""insert into library.local_track_files(track_id,library_root_id,private_path,relative_path)
+            values(%s,%s,'C:/pf-search/index-new/01.flac','index-new/01.flac')""", (track_id, root_id))
+        connection.execute("update library.local_albums set title = 'Plain Title' where album_key = %s", (first_key,))
+        connection.execute("delete from library.local_albums where album_key = %s", (second_key,))
+        connection.commit()
+
+    page = browse.PostgresLibraryBrowseRepository({
+        "ALBUM_HAVEN_APP_DATABASE_URL": database_url, "ALBUM_HAVEN_PROBLEMATIC_INDEX_ENABLED": "1",
+    }).build_problematic_files_page(limit=3)
+    assert page["projection_cache_status"] == "indexed"
+    assert page["items"][0]["key"] == "index-new::album"
+    after = {item["key"]: item for item in _indexed_problematic_items(database_url, limit=3)}
+    assert "index-new::album" in after and second_key not in after
+    # The renamed album was evaluated again: gone, or listed under its new title.
+    assert first_key not in after or after[first_key]["name"] == "Plain Title"
+    assert [item["key"] for item in _indexed_problematic_items(
+        database_url, needle=f"{_MOJIBAKE_TITLE} -01".lower())] == ["index-new::album"]

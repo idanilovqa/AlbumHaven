@@ -77,6 +77,7 @@ from music_app.services.non_album_view_payloads import (
     has_meaningful_album_name,
     is_loose_track_album_value,
 )
+from music_app.services import problematic_index
 from music_app.services.runtime_shutdown import create_daemon_executor
 from music_app.services.utility_rule_fallbacks import fallback_version_album_payload
 from music_app.services.utils import (
@@ -267,6 +268,8 @@ def refresh_postgres_utility_projections_after_edit(
         )
         if patched:
             remaining.discard("problematic-files")
+    if database_url:
+        problematic_index.queue_refresh(PostgresLibraryBrowseRepository(dict(config)))
     invalidate_postgres_utility_projection_cache(database_url=database_url or None, kinds=remaining)
 
 
@@ -3257,6 +3260,9 @@ class PostgresLibraryBrowseRepository:
     def build_problematic_files_page(self, *, limit: int, cursor: str = "") -> dict[str, object]:
         if limit < 1 or limit > 200:
             raise ValueError("Problematic Files page limit must be between 1 and 200.")
+        indexed = self._indexed_problematic_page(limit=limit, cursor=cursor)
+        if indexed is not None:
+            return indexed
         cache_key = self._utility_projection_cache_key(_PROBLEMATIC_FILES_PAGE_KIND)
         with _UTILITY_PROJECTION_CACHE_LOCK:
             generation = _UTILITY_PROJECTION_GENERATIONS.setdefault(cache_key, 0) if cache_key else 0
@@ -3335,6 +3341,45 @@ class PostgresLibraryBrowseRepository:
         page = window(page)
         page["problem_reason_types"] = _problematic_filter_reason_types(page.get("items") or ())
         return page
+
+    def _indexed_problematic_page(self, *, limit: int, cursor: str, needle: str = "") -> dict[str, object] | None:
+        """A page (or search page) read from the persisted index; None until it is ready."""
+        after: tuple[str, str, str, str] | None = None
+        cursor_restarted = False
+        if cursor:
+            after, cursor_generation = (
+                _decode_problematic_search_cursor(cursor, needle) if needle
+                else _decode_problematic_page_cursor(cursor)
+            )
+            if cursor_generation != _PROBLEMATIC_INDEX_CURSOR_GENERATION:
+                after, cursor_restarted = None, True
+        items = problematic_index.read_page(self, limit=limit, after=after, needle=needle)
+        if items is None:
+            return None
+        has_more = len(items) > limit
+        items = items[:limit]
+        next_cursor = ""
+        if has_more and items:
+            last = _problematic_summary_sort_key(items[-1])
+            next_cursor = (
+                _encode_problematic_search_cursor(last, _PROBLEMATIC_INDEX_CURSOR_GENERATION, needle) if needle
+                else _encode_problematic_page_cursor(last, _PROBLEMATIC_INDEX_CURSOR_GENERATION)
+            )
+        return {
+            "items": items,
+            "count": len(items),
+            "initial_detail": None,
+            "complete": bool(needle) and not has_more,
+            "has_more": has_more,
+            "next_cursor": next_cursor,
+            "cursor_restarted": cursor_restarted,
+            "total_candidate_count": None,
+            "projection_cache_status": "indexed",
+            "problem_reason_types": _problematic_filter_reason_types(items),
+            "persistence_backend": PERSISTENCE_BACKEND_POSTGRES,
+            "persistence_seam": _LIBRARY_BROWSE_SEAM_ID,
+            "view_data_source": _SOURCE_TELEMETRY,
+        }
 
     def _build_problematic_files_first_page(
         self,
@@ -3594,6 +3639,10 @@ class PostgresLibraryBrowseRepository:
             raise ValueError("Problematic Files search needs a query.")
         if limit < 1 or limit > 200:
             raise ValueError("Problematic Files search limit must be between 1 and 200.")
+        indexed = self._indexed_problematic_page(limit=limit, cursor=cursor, needle=needle)
+        if indexed is not None:
+            indexed.update(query=query, search_truncated=False)
+            return indexed
         page_cache_key = self._utility_projection_cache_key(_PROBLEMATIC_FILES_PAGE_KIND)
         with _UTILITY_PROJECTION_CACHE_LOCK:
             generation = (
@@ -8073,9 +8122,11 @@ _PROBLEMATIC_OPTIONAL_SUMMARY_FIELDS = frozenset(
 
 def _problematic_summary_matches_query(album: Mapping[str, object], needle: str) -> bool:
     """The Problematic Files list filter (getFilteredProblematicAlbums), server side."""
-    def texts(values: object) -> list[str]:
-        return [str(value or "") for value in values] if isinstance(values, list) else []
+    return needle in _problematic_summary_search_text(album)
 
+
+def _problematic_summary_search_text(album: Mapping[str, object]) -> str:
+    """The lowered text the list filter searches (also stored by the persisted index)."""
     haystack = [
         str(album.get(key) or "")
         for key in ("name", "raw_name", "album_artist", "raw_album_artist", "year")
@@ -8085,7 +8136,7 @@ def _problematic_summary_matches_query(album: Mapping[str, object], needle: str)
     for row in album.get("repair_preview_rows") or []:
         if isinstance(row, Mapping):
             haystack += [str(row.get(key) or "") for key in ("track_title", "original", "repaired")]
-    return needle in "\n".join(haystack).lower()
+    return "\n".join(haystack).lower()
 
 
 def _problematic_search_album_ids_sql() -> str:
@@ -8131,6 +8182,9 @@ def _problematic_search_album_ids_sql() -> str:
 
 
 _SNAPSHOT_FINGERPRINT_KEY = "_inventory_fingerprint"
+# Cursors of pages read from the persisted index stay valid across its updates
+# (keyset by sort key); in-memory generations never reach this value.
+_PROBLEMATIC_INDEX_CURSOR_GENERATION = -1
 # A stored first page rather than the complete list; the store SQL names the same key.
 _PROBLEMATIC_SNAPSHOT_SCOPE_KEY = "_snapshot_scope"
 _PROBLEMATIC_SNAPSHOT_OUTDATED_KEY = "_snapshot_outdated"

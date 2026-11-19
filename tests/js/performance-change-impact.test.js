@@ -60,7 +60,13 @@ test('multiple sensitive changes deduplicate required targets in reviewed contra
     'music_app/static/js/runtime/status-ui-helpers.js',
     'music_app/static/js/runtime/notification-ui-helpers.js',
     'music_app/static/js/runtime/tag-editor-and-optimistic-updates.js',
-  ]), ['idle-memory', 'selected-artist', 'artist-tree-scroll-navigation']);
+  ]), [
+    'idle-memory',
+    'selected-artist',
+    'artist-tree-scroll-navigation',
+    'edit-tags-split-merge',
+    'edit-tags-api-consecutive',
+  ]);
 });
 
 test('focused CI automatically includes required performance targets and shards', () => {

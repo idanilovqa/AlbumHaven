@@ -43,7 +43,7 @@ const PERFORMANCE_SHARDS = Object.freeze({
     targets: [
       'idle-memory', 'all-artists', 'artist-family', 'search-all-artists', 'utility-rules',
       'selected-artist', 'edit-tags-post-edit', 'cover-lookup', 'album-title-search', 'track-title-search', 'search-browse', 'root-album-browse', 'artist-tree-scroll-navigation', 'app-open-all-artists', 'notification-history',
-      'rules-focused', 'paired-search-calibration',
+      'rules-focused', 'paired-search-calibration', 'edit-tags-split-merge', 'edit-tags-api-consecutive',
     ],
   },
   'utility-problematic-files': {
@@ -129,7 +129,7 @@ function outputEntries(kind, config) {
     ['base_port', config.basePort],
     ['targets', config.targets.join(',')],
   ];
-  for (let index = 0; index < 17; index += 1) {
+  for (let index = 0; index < 19; index += 1) {
     entries.push([`target${index + 1}`, config.targets[index] || 'none']);
   }
   return entries;

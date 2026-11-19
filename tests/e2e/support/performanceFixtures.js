@@ -415,6 +415,36 @@ function buildEditTagsPostEditSummaryCards(_checkpoints, metricsPayload) {
   }));
 }
 
+function buildTimingSummaryCards(metricsPayload, cards) {
+  return cards.map(([label, key, note]) => ({
+    label,
+    value: Number.isFinite(metricsPayload?.[key]) ? `${Math.round(metricsPayload[key])} ms` : 'Not recorded',
+    note,
+  }));
+}
+
+function buildEditTagsSplitMergeSummaryCards(_checkpoints, metricsPayload) {
+  return buildTimingSummaryCards(metricsPayload, [
+    ['Slowest Split Save', 'splitSaveMs', 'Click to terminal success, five cycles'],
+    ['Slowest Merge Save', 'mergeSaveMs', 'Click to terminal success, five cycles'],
+    ['Slowest Cards Ready', 'cardsReadyMs', 'Click to both album cards with exact track counts'],
+    ['Slowest Album Details', 'albumDetailsOpenMs', 'Card to loaded track table'],
+    ['Slowest Editor Open', 'tagEditorOpenMs', 'Edit Tags opened with every track'],
+    ['Unrelated Search', 'unrelatedSearchGalleryReadyMs', 'Exact artist search between saves'],
+    ['Album Search', 'albumSearchVisibleMs', 'Album search to the restored ten-track card'],
+  ]);
+}
+
+function buildEditTagsApiConsecutiveSummaryCards(_checkpoints, metricsPayload) {
+  return buildTimingSummaryCards(metricsPayload, [
+    ['Slowest HTTP 200', 'acceptedMs', 'POST /utilities/edit-tags answered'],
+    ['Slowest Completed Save', 'completedMs', 'POST to completed save task'],
+    ['Slowest Browse Consistency', 'browseConsistentMs', 'POST to edit visible in browse payloads'],
+    ['Slowest /status', 'statusProbeMs', 'Between and after saves'],
+    ['Slowest Concurrent /status', 'concurrentStatusProbeMs', 'While a save was in flight'],
+  ]);
+}
+
 function buildAlbumTitleSearchSummaryCards(_checkpoints, metricsPayload) {
   return [{
     label: 'Album Visible',
@@ -1202,6 +1232,44 @@ export const test = base.extend({
         'edit-tags-post-edit.albumDetailsCoverMs',
         'edit-tags-post-edit.artistJumpAlignedMs',
         'edit-tags-post-edit.rootContinuationCommittedMs',
+      ],
+    });
+  },
+
+  editTagsSplitMergeLocalReport: async ({ page, performanceReport }, use) => {
+    await useSyntheticPerformanceReportFixture({ page, performanceReport }, use, {
+      runLabel: 'edit-tags-split-merge-local',
+      reportId: 'editTagsSplitMergeLocal',
+      caseId: 'FTC-TAGS-031P',
+      title: 'Repeated Edit Tags Split And Merge Benchmark',
+      intro: 'This synthetic performance report records five Edit Tags cycles that move five «Ремиксы» tracks to «Ремиксы2» and merge them back, each save from click to terminal success with its server phase timings, plus album search and unrelated search between and after the saves.',
+      buildSummaryCards: buildEditTagsSplitMergeSummaryCards,
+      expectedTimingMetricIds: [
+        'edit-tags-split-merge.splitSaveMs',
+        'edit-tags-split-merge.mergeSaveMs',
+        'edit-tags-split-merge.cardsReadyMs',
+        'edit-tags-split-merge.albumDetailsOpenMs',
+        'edit-tags-split-merge.tagEditorOpenMs',
+        'edit-tags-split-merge.unrelatedSearchGalleryReadyMs',
+        'edit-tags-split-merge.albumSearchVisibleMs',
+      ],
+    });
+  },
+
+  editTagsApiConsecutiveLocalReport: async ({ page, performanceReport }, use) => {
+    await useSyntheticPerformanceReportFixture({ page, performanceReport }, use, {
+      runLabel: 'edit-tags-api-consecutive-local',
+      reportId: 'editTagsApiConsecutiveLocal',
+      caseId: 'FTC-TAGS-032P',
+      title: 'Consecutive Edit Tags API Saves Benchmark',
+      intro: 'This synthetic performance report records eight consecutive authenticated Edit Tags saves on «Ремиксы» (three split and merge cycles plus a title edit and its restore): time to HTTP 200, to the completed save task and to browse consistency, with /status probes during, between and after the saves.',
+      buildSummaryCards: buildEditTagsApiConsecutiveSummaryCards,
+      expectedTimingMetricIds: [
+        'edit-tags-api-consecutive.acceptedMs',
+        'edit-tags-api-consecutive.completedMs',
+        'edit-tags-api-consecutive.browseConsistentMs',
+        'edit-tags-api-consecutive.statusProbeMs',
+        'edit-tags-api-consecutive.concurrentStatusProbeMs',
       ],
     });
   },

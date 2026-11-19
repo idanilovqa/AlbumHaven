@@ -148,7 +148,7 @@ for (const [source, label] of [['apple', 'Apple Music'], ['cover_art_archive', '
     const labelMatch = markup.match(/<span class="cover-lookup-art-source">([^]*?)<\/span>/);
     assert.ok(labelMatch);
     assert.equal(labelMatch[1], label);
-    assert.match(markup, /<span class="cover-lookup-art-source-badge [^"]+" aria-hidden="true">/);
+    assert.match(markup, /<span class="cover-source-badge cover-source-badge--inline [^"]+" data-cover-source-badge="[^"]+">/);
     assert.doesNotMatch(labelMatch[1], /<|>/);
     const saved = context.buildCoverLookupCard({ id: source, source, album: 'Provider fixture' }, 'saved-remote');
     assert.equal(saved.match(/<span class="cover-lookup-art-source">([^]*?)<\/span>/)[1], label);
@@ -3517,7 +3517,6 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
       buildCoverUrlCalls.push({ coverRef, revision, size });
       return `/cover/${encodeURIComponent(coverRef)}?${size ? `size=${size}&` : ''}v=${revision || 'session-fallback'}`;
     },
-    buildRemoteCoverSourceBadge: () => '',
     escapeHtml: (value) => String(value || ''),
     getCoverLookupActiveLocalRef: () => '',
   });

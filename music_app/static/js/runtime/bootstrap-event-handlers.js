@@ -2,6 +2,7 @@
 // feature-owned bootstrap handler files rather than accumulating here.
 document.addEventListener('click', (event) => {
   if (consumeArtistTreeLongPressClick(event) || consumeAlbumCardLongPressClick(event)) return;
+  if (handleCoverSourceBadgeClick(event)) return;
   const closeScanPageButton = event.target?.closest?.('[data-close-scan-page]') || null;
   if (closeScanPageButton) {
     event.preventDefault();
@@ -69,6 +70,7 @@ document.addEventListener('mousedown', (event) => {
 });
 
 document.addEventListener('keydown', (event) => {
+  if (handleCoverSourceBadgeKeyDown(event)) return;
   handleUtilityBootstrapKeyDown(event);
 });
 

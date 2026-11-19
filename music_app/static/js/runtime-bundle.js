@@ -11946,7 +11946,40 @@ function syncLibraryNavigationModePresentation(mode) {
 
 // The tree lists collection names and counts from their own bounded request. It never
 // waits for the library-wide Loose Tracks payload and never depends on the Artist tree.
-let customCollectionCatalog = { key: null, collections: null, request: null };
+// Each answer, with its All Loose Tracks total, is kept under the search it was asked for, so a late answer for
+// an older search can never stand in for the current one (audit 2026-11-18). A few recent searches are kept.
+const CUSTOM_COLLECTION_CATALOGS_KEPT = 8;
+const customCollectionCatalogs = new Map();
+const customCollectionCatalogRequests = new Map();
+let customCollectionCatalogGeneration = 0;
+
+function customCollectionInventoryRevision() {
+  const revision = Number(state.status?.inventory_mutation_revision);
+  return Number.isSafeInteger(revision) ? revision : null;
+}
+
+function currentCustomCollectionCatalog(view = state.view || {}) {
+  return customCollectionCatalogs.get(customCollectionCatalogUrl(view).search) || null;
+}
+
+function storeCustomCollectionCatalog(key, catalog) {
+  customCollectionCatalogs.delete(key);
+  customCollectionCatalogs.set(key, catalog);
+  while (customCollectionCatalogs.size > CUSTOM_COLLECTION_CATALOGS_KEPT) {
+    customCollectionCatalogs.delete(customCollectionCatalogs.keys().next().value);
+  }
+}
+
+// The current search's track total for a collection, or for All Loose Tracks without a name; undefined while
+// that search's catalog is not loaded, so no other search's number is shown.
+function customCollectionCatalogTrackCount(collectionName = '') {
+  const catalog = currentCustomCollectionCatalog();
+  if (!catalog) return undefined;
+  const count = collectionName
+    ? catalog.collections.find(({ name }) => name === collectionName)?.count
+    : catalog.looseTracksCount;
+  return Number.isInteger(count) ? count : undefined;
+}
 
 function customCollectionCatalogUrl(view = state.view || {}) {
   const url = new URL('/library/custom-collections', 'http://localhost');
@@ -11964,9 +11997,7 @@ function customCollectionCatalogUrl(view = state.view || {}) {
 // on first open (a skeleton for up to 2 s). It is loaded once the page is idle, so opening it paints at once.
 let customCollectionCatalogPrefetch = 0;
 function prefetchCustomCollectionCatalogWhenIdle() {
-  if (customCollectionCatalogPrefetch || customCollectionCatalog.request
-    || (customCollectionCatalog.key === customCollectionCatalogUrl().search
-      && Array.isArray(customCollectionCatalog.collections))) return;
+  if (customCollectionCatalogPrefetch || customCollectionCatalogRequests.size || currentCustomCollectionCatalog()) return;
   const run = () => {
     customCollectionCatalogPrefetch = 0;
     void loadCustomCollectionCatalog().catch(() => {});
@@ -12001,7 +12032,7 @@ async function syncCustomCollectionSearchIndicator() {
     return;
   }
   if (String(state.view?.query || '').trim() !== query) return;
-  mark(Number(state.ui?.libraryLooseTracksCount) > 0);
+  mark(Number(customCollectionCatalogTrackCount()) > 0);
   openBestCustomCollectionForSearch(query);
   if (deciding) setLibraryTreeSearchLoading(false);
 }
@@ -12019,10 +12050,10 @@ function openBestCustomCollectionForSearch(query) {
   if (pending && pending !== query && !state.ui.pendingViewTransition) state.ui.customCollectionSearchAutoOpenQuery = '';
   if (pending !== query || state.ui.pendingViewTransition) return;
   state.ui.customCollectionSearchAutoOpenQuery = '';
-  const collections = Array.isArray(customCollectionCatalog.collections) ? customCollectionCatalog.collections : [];
+  const collections = currentCustomCollectionCatalog()?.collections || [];
   const view = state.view || {};
   if (
-    !(Number(state.ui?.libraryLooseTracksCount) > 0)
+    !(Number(customCollectionCatalogTrackCount()) > 0)
     || (Array.isArray(view.artists_sidebar) && view.artists_sidebar.length)
     || (typeof isEffectivelyEmptyView === 'function' && !isEffectivelyEmptyView(view))
     || document.querySelector?.('#non-album-modal:not([hidden])')
@@ -12041,7 +12072,10 @@ function syncCustomCollectionsAfterTagEdit({ fresh = false } = {}) {
     if (state.ui.libraryNavigationMode === 'custom-collections') renderCustomCollectionNavigation(collections);
   };
   if (fresh) {
-    customCollectionCatalog = { ...customCollectionCatalog, collections: null, request: null };
+    // The saved library outdates every search's catalog, and any answer still on its way.
+    customCollectionCatalogs.clear();
+    customCollectionCatalogRequests.clear();
+    customCollectionCatalogGeneration += 1;
     // Only a tree on screen asks the server now; otherwise the next open fetches it, so a save never adds
     // a catalog query to the browsing that follows it.
     if (state.ui.libraryNavigationMode === 'custom-collections') {
@@ -12065,8 +12099,13 @@ function syncCustomCollectionsAfterTagEdit({ fresh = false } = {}) {
   const collections = [...counts.entries()]
     .map(([name, count]) => ({ name, count }))
     .sort((left, right) => left.name.localeCompare(right.name));
-  customCollectionCatalog = { ...customCollectionCatalog, key: customCollectionCatalogUrl().search, collections };
-  state.ui.libraryLooseTracksCount = tracks.length;
+  const key = customCollectionCatalogUrl().search;
+  // The recount keeps the loaded catalog's revision: it is a local estimate, not a newer server answer.
+  storeCustomCollectionCatalog(key, {
+    revision: customCollectionCatalogs.get(key)?.revision ?? null,
+    collections,
+    looseTracksCount: tracks.length,
+  });
   redraw(collections);
 }
 
@@ -12082,12 +12121,13 @@ function prefetchCustomCollectionCatalogForSearch(query) {
 function loadCustomCollectionCatalog({ fresh = false, view = state.view || {} } = {}) {
   const url = customCollectionCatalogUrl(view);
   const key = url.search;
-  if (customCollectionCatalog.request?.key === key) return customCollectionCatalog.request.promise;
+  const pending = customCollectionCatalogRequests.get(key);
+  if (pending) return pending;
   // A loaded catalog answers again: every sidebar redraw during a search used to refetch it and its artwork.
-  // Opening the Custom Collections tree still asks for a fresh one.
-  if (!fresh && customCollectionCatalog.key === key && Array.isArray(customCollectionCatalog.collections)) {
-    return Promise.resolve(customCollectionCatalog.collections);
-  }
+  const cached = customCollectionCatalogs.get(key);
+  if (!fresh && cached) return Promise.resolve(cached.collections);
+  const generation = customCollectionCatalogGeneration;
+  const revision = customCollectionInventoryRevision();
   const promise = (async () => {
     const response = await fetch(`${url.pathname}${url.search}`, { headers: { Accept: 'application/json' } });
     const payload = await response.json().catch(() => ({}));
@@ -12101,17 +12141,19 @@ function loadCustomCollectionCatalog({ fresh = false, view = state.view || {} } 
       .sort((left, right) => left.name.localeCompare(right.name));
     // null while the server's Loose Tracks snapshot is not current: show no number rather than a wrong one.
     const looseTracksCount = Number.isInteger(payload.loose_tracks_count) ? payload.loose_tracks_count : null;
-    state.ui.libraryLooseTracksCount = looseTracksCount;
-    customCollectionCatalog = { key, collections, request: null };
+    if (generation === customCollectionCatalogGeneration) {
+      storeCustomCollectionCatalog(key, { revision, collections, looseTracksCount });
+    }
     if (typeof prefetchCustomCollectionArtwork === 'function') {
       void prefetchCustomCollectionArtwork(collections.map(({ name }) => name));
     }
     return collections;
   })();
-  customCollectionCatalog.request = { key, promise };
-  promise.catch(() => {
-    if (customCollectionCatalog.request?.promise === promise) customCollectionCatalog.request = null;
-  });
+  customCollectionCatalogRequests.set(key, promise);
+  const release = () => {
+    if (customCollectionCatalogRequests.get(key) === promise) customCollectionCatalogRequests.delete(key);
+  };
+  promise.then(release, release);
   return promise;
 }
 
@@ -12178,8 +12220,8 @@ function syncLibraryNavigationAfterPageChange() {
 // Redraws the Custom Collections selection after its page opens or closes.
 function syncCustomCollectionNavigationSelection() {
   if (state.ui?.libraryNavigationMode !== 'custom-collections') return;
-  if (customCollectionCatalog.key !== customCollectionCatalogUrl().search) return;
-  renderCustomCollectionNavigation(customCollectionCatalog.collections);
+  const catalog = currentCustomCollectionCatalog();
+  if (catalog) renderCustomCollectionNavigation(catalog.collections);
 }
 
 // collections === null renders placeholders where the named rows will appear.
@@ -12190,8 +12232,9 @@ function renderCustomCollectionNavigation(collections, { failure = '' } = {}) {
   const activeCollectionName = pageOpen ? String(state.ui?.nonAlbumCollectionName || '').trim() : '';
   const allLooseTracksSelected = pageOpen && !activeCollectionName;
   list.dataset.navigationTree = 'custom-collections';
-  // Which search this tree shows, so a new search or a cleared one redraws it.
-  list.dataset.customCollectionsSearch = collections === null ? '' : customCollectionCatalogUrl().search;
+  // Which search this tree is for, so a new search or a cleared one redraws it. A loading or failed tree is stamped
+  // too: its own request redraws it, and status-poll redraws must not retry a failure (audit 2026-11-18).
+  list.dataset.customCollectionsSearch = customCollectionCatalogUrl().search;
   list.dataset.sidebarVirtualized = 'false';
   delete list.dataset.sidebarStructureSignature;
   const allLooseTracks = window.NavigationTree.renderItem({
@@ -12199,7 +12242,7 @@ function renderCustomCollectionNavigation(collections, { failure = '' } = {}) {
     variant: 'panel',
     key: 'all-loose-tracks',
     label: 'All Loose Tracks',
-    count: Number.isInteger(state.ui?.libraryLooseTracksCount) ? state.ui.libraryLooseTracksCount : undefined,
+    count: customCollectionCatalogTrackCount(),
     selected: allLooseTracksSelected,
     attributes: { 'data-open-loose-tracks': '1' },
   });
@@ -12225,6 +12268,7 @@ function renderCustomCollectionNavigation(collections, { failure = '' } = {}) {
 
 async function setLibraryNavigationMode(mode) {
   const normalized = mode === 'custom-collections' ? mode : 'artists';
+  const switched = state.ui.libraryNavigationMode !== normalized;
   state.ui.libraryNavigationMode = normalized;
   syncLibraryNavigationModePresentation(normalized);
   if (normalized === 'artists') {
@@ -12233,18 +12277,25 @@ async function setLibraryNavigationMode(mode) {
     renderSidebar();
     return normalized;
   }
-  const cached = customCollectionCatalog.key === customCollectionCatalogUrl().search
-    ? customCollectionCatalog.collections
-    : null;
-  renderCustomCollectionNavigation(cached);
-  setDesktopLibraryModeRailVisible(true);
+  const key = customCollectionCatalogUrl().search;
+  const cached = customCollectionCatalogs.get(key) || null;
+  renderCustomCollectionNavigation(cached ? cached.collections : null);
+  // Only a switch to this tree shows the auto-hidden view rail; redraws leave it as it is (audit 2026-11-18).
+  if (switched) setDesktopLibraryModeRailVisible(true);
+  // The server is asked again only when this search has no catalog or the library changed since it was loaded.
+  if (cached && cached.revision === customCollectionInventoryRevision()) return normalized;
+  // A newer search or the other tree owns the side bar once this answer arrives; its own redraw shows it.
+  const stillShown = () => state.ui.libraryNavigationMode === normalized && customCollectionCatalogUrl().search === key;
   try {
-    const collections = await loadCustomCollectionCatalog({ fresh: true });
+    await loadCustomCollectionCatalog({ fresh: true });
+    const loaded = customCollectionCatalogs.get(key);
     // The refreshed list replaces the drawn one only when it differs: redrawing the same rows made them blink.
-    const unchanged = cached !== null && JSON.stringify(cached) === JSON.stringify(collections);
-    if (state.ui.libraryNavigationMode === normalized && !unchanged) renderCustomCollectionNavigation(collections);
+    const unchanged = cached !== null && loaded !== undefined
+      && JSON.stringify([cached.collections, cached.looseTracksCount])
+        === JSON.stringify([loaded.collections, loaded.looseTracksCount]);
+    if (stillShown() && loaded && !unchanged) renderCustomCollectionNavigation(loaded.collections);
   } catch (error) {
-    if (state.ui.libraryNavigationMode === normalized && cached === null) {
+    if (stillShown() && cached === null) {
       renderCustomCollectionNavigation(null, { failure: error?.message || 'Unable to load Custom Collections.' });
     }
   }
@@ -15252,11 +15303,33 @@ function hideAlbumCardContextMenu() {
   if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(menu);
 }
 
+const CONTEXT_MENU_EDGE_GAP_PX = 8;
+
+// Shows a pointer-opened context menu at (x, y), moved up and left only as far as needed to stay inside the window
+// and above the bottom player, which would otherwise cover (and take the clicks of) its lower items.
+function showContextMenuAtPoint(menu, x, y) {
+  menu.style.left = `${x}px`;
+  menu.style.top = `${y}px`;
+  menu.hidden = false;
+  const rect = menu.getBoundingClientRect?.();
+  if (!rect) return;
+  const player = document.querySelector?.('.global-player');
+  const playerTop = player && !player.hidden ? player.getBoundingClientRect?.().top : undefined;
+  const viewportHeight = Number(window.innerHeight) || rect.bottom;
+  const bottomLimit = Math.min(viewportHeight, Number.isFinite(playerTop) && playerTop > 0 ? playerTop : viewportHeight)
+    - CONTEXT_MENU_EDGE_GAP_PX;
+  const rightLimit = (Number(window.innerWidth) || rect.right) - CONTEXT_MENU_EDGE_GAP_PX;
+  if (rect.bottom > bottomLimit) {
+    menu.style.top = `${Math.max(CONTEXT_MENU_EDGE_GAP_PX, y - (rect.bottom - bottomLimit))}px`;
+  }
+  if (rect.right > rightLimit) {
+    menu.style.left = `${Math.max(CONTEXT_MENU_EDGE_GAP_PX, x - (rect.right - rightLimit))}px`;
+  }
+}
+
 function showAlbumCardContextMenu(x, y, album) {
   if (isMobileClient() || usesMobilePageLayout()) { hideAlbumCardContextMenu(); return; }
   const menu = ensureAlbumCardContextMenu();
-  menu.style.left = `${x}px`;
-  menu.style.top = `${y}px`;
   menu.dataset.albumKey = getAlbumIdentity(album);
   const albumKey = String(album?.key || '');
   const manualVersionLinks = state.view?.manual_version_links && typeof state.view.manual_version_links === 'object'
@@ -15275,7 +15348,7 @@ function showAlbumCardContextMenu(x, y, album) {
       ? '<button type="button" class="album-card-context-menu-item" data-album-card-action="unmark-version">Unmark as a version</button>'
       : '<button type="button" class="album-card-context-menu-item" data-album-card-action="mark-version">Mark as a version</button>',
   ].join('');
-  menu.hidden = false;
+  showContextMenuAtPoint(menu, x, y);
   if (typeof activateTriggerSurface === 'function') {
     activateTriggerSurface(menu, hideAlbumCardContextMenu);
   }
@@ -15323,9 +15396,7 @@ function showLooseTracksContextMenu(event) {
   if (!path) return false;
   if (!controller.getSelectedPaths().includes(path)) controller.sync([path]);
   const menu = ensureLooseTracksContextMenu();
-  menu.style.left = `${event.clientX}px`;
-  menu.style.top = `${event.clientY}px`;
-  menu.hidden = false;
+  showContextMenuAtPoint(menu, event.clientX, event.clientY);
   if (typeof activateTriggerSurface === 'function') activateTriggerSurface(menu, hideLooseTracksContextMenu);
   return true;
 }
@@ -15340,10 +15411,8 @@ function hideArtistTreeContextMenu() {
 
 function showArtistTreeContextMenu(x, y, artist) {
   const menu = ensureArtistTreeContextMenu();
-  menu.style.left = `${x}px`;
-  menu.style.top = `${y}px`;
   menu.dataset.artist = String(artist || '');
-  menu.hidden = false;
+  showContextMenuAtPoint(menu, x, y);
   if (!state.ui?.artistsDrawerOpen && typeof activateTriggerSurface === 'function') {
     activateTriggerSurface(menu, hideArtistTreeContextMenu);
   }
@@ -16341,13 +16410,15 @@ function openNonAlbumModal(options = {}) {
   if (typeof syncAlbumHavenDocumentTitle === 'function') syncAlbumHavenDocumentTitle();
   const hydrationPending = needsNonAlbumHydration({ libraryWide });
   const looseTracks = getVisibleNonAlbumTracks({ libraryWide, collectionName });
-  // All Loose Tracks shows its total like a collection (owner 2026-11-16); before its rows load, the tree
-  // catalog's total stands in when it is known.
-  const trackTotal = libraryWide && !collectionName && hydrationPending
-    ? state.ui?.libraryLooseTracksCount
+  // All Loose Tracks shows its total like a collection (owner 2026-11-16). Before the rows load, the current
+  // search's tree catalog total stands in when it is known, and no number otherwise (audit 2026-11-18).
+  const trackTotal = libraryWide && hydrationPending
+    ? (typeof customCollectionCatalogTrackCount === 'function' ? customCollectionCatalogTrackCount(collectionName) : undefined)
     : looseTracks.length;
-  const subtitle = collectionName || (libraryWide && Number.isInteger(trackTotal))
+  const subtitle = (collectionName || libraryWide) && Number.isInteger(trackTotal)
     ? `${trackTotal} ${trackTotal === 1 ? 'track' : 'tracks'}`
+    : collectionName
+    ? ''
     : !libraryWide && state.view.selected_artist
     ? `Non-album tracks found in ${state.view.selected_artist} and family artist folders.`
     : 'Non-album tracks found in the selected library sources.';
@@ -36417,109 +36488,227 @@ function getCoverLookupActiveLocalRef() {
   );
 }
 
-function buildSpotifyGlyph() {
-  return `
-    <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
-      <circle cx="12" cy="12" r="10" fill="currentColor"></circle>
-      <path d="M7.2 9.3c3.3-1 6.8-.7 9.8.8" fill="none" stroke="#0b1411" stroke-width="1.6" stroke-linecap="round"></path>
-      <path d="M8.1 12.1c2.5-.7 5.2-.5 7.5.6" fill="none" stroke="#0b1411" stroke-width="1.45" stroke-linecap="round"></path>
-      <path d="M9 14.8c1.8-.4 3.7-.3 5.3.4" fill="none" stroke="#0b1411" stroke-width="1.3" stroke-linecap="round"></path>
-    </svg>
-  `;
-}
-
-function buildAppleMusicGlyph() {
-  return `
-    <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
-      <path d="M15.8 5.2v9.4a2.8 2.8 0 1 1-1.6-2.53V7.83l-5.2 1.18v7.09a2.8 2.8 0 1 1-1.6-2.53V7.75c0-.74.51-1.37 1.23-1.53l5.94-1.35a1.3 1.3 0 0 1 1.6 1.27Z" fill="currentColor"></path>
-    </svg>
-  `;
-}
-
-function buildDeezerGlyph() {
-  // The compact Deezer treatment uses the approved purple heart.
-  return `
-    <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
-      <path d="M12 20.2 4.8 13A4.7 4.7 0 0 1 11.4 6.3l.6.7.6-.7A4.7 4.7 0 0 1 19.2 13Z" fill="currentColor"></path>
-    </svg>
-  `;
-}
-
-function buildCaaGlyph() {
-  return '<span aria-hidden="true">CAA</span>';
-}
+// CoverSourceBadge: a provider's bare mark on Album Details and Cover Look Up cards; hover, focus or tap opens
+// its legal line and one link back to the release page (approved mockup cover-source-badges v003, owner
+// 2026-11-19). Icons are the providers' own files; sources and terms in static/images/icons/ notices.
+const COVER_SOURCE_NEUTRAL_MARK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><circle cx="12" cy="12" r="2.4"></circle><path d="M12 3a9 9 0 0 1 9 9"></path></svg>';
+const COVER_SOURCE_PROVIDERS = Object.freeze({
+  apple: Object.freeze({
+    label: 'Apple Music',
+    legal: ['Cover art from Apple Music.', 'Apple and Apple Music are trademarks of Apple Inc., registered in the U.S. and other countries.'],
+    linkLabel: 'Listen on Apple Music',
+    search: (query) => `https://music.apple.com/search?term=${query}`,
+    icon: '/static/images/icons/applemusic-icon-color.png',
+  }),
+  spotify: Object.freeze({
+    label: 'SPOTIFY',
+    legal: ['Cover art from Spotify.'],
+    linkLabel: 'Open on Spotify',
+    search: (query) => `https://open.spotify.com/search/${query}`,
+    // Spotify forbids its mark on top of artwork, so Album Details shows it beneath the cover.
+    beneathArt: true,
+    icon: '/static/images/icons/spotify-icon-green.svg',
+  }),
+  deezer: Object.freeze({
+    label: 'Deezer',
+    legal: ['Cover art from Deezer.'],
+    linkLabel: 'Open on Deezer',
+    search: (query) => `https://www.deezer.com/search/${query}`,
+    icon: '/static/images/icons/deezer-favicon-32.png',
+  }),
+  bandcamp: Object.freeze({
+    label: 'Bandcamp',
+    legal: ['Cover art from Bandcamp.'],
+    linkLabel: 'Open on Bandcamp',
+    search: (query) => `https://bandcamp.com/search?q=${query}&item_type=a`,
+    icon: '/static/images/icons/bandcamp-button-circle-aqua-64.png',
+  }),
+  discogs: Object.freeze({
+    label: 'Discogs',
+    legal: ['Data provided by Discogs.', 'Album Haven uses Discogs’ API but is not affiliated with, sponsored or endorsed by Discogs. ‘Discogs’ is a trademark of Zink Media, LLC.'],
+    linkLabel: 'Data provided by Discogs',
+    search: (query) => `https://www.discogs.com/search/?q=${query}&type=release`,
+    // Black or white by the cover's brightness under the mark (owner accepted the brand risk 2026-11-19).
+    toneAware: true,
+    icon: '/static/images/icons/discogs-favicon-32.png',
+  }),
+  cover_art_archive: Object.freeze({
+    label: 'Cover Art Archive',
+    legal: ['Cover art from the Cover Art Archive.', 'Image © its copyright owner.'],
+    linkLabel: 'Open release on MusicBrainz',
+    search: (query) => `https://musicbrainz.org/search?query=${query}&type=release`,
+    icon: '/static/images/icons/coverartarchive-icon.svg',
+  }),
+  youtube_music: Object.freeze({
+    label: 'YouTube Music',
+    legal: ['Cover art from YouTube Music.'],
+    linkLabel: 'Open on YouTube Music',
+    search: (query) => `https://music.youtube.com/search?q=${query}`,
+    icon: '/static/images/icons/youtubemusic-favicon-32.png',
+  }),
+  genius: Object.freeze({
+    label: 'Genius',
+    legal: ['Cover art from Genius.'],
+    linkLabel: 'Open on Genius',
+    search: (query) => `https://genius.com/search?q=${query}`,
+    // No published brand guidelines: neutral mark until the owner clears Genius' own mark.
+    mark: COVER_SOURCE_NEUTRAL_MARK,
+    neutral: true,
+  }),
+});
 
 function getRemoteCoverSourceLabel(source, fallback = '') {
-  return ({
-    apple: 'Apple Music',
-    spotify: 'SPOTIFY',
-    deezer: 'Deezer',
-    bandcamp: 'Bandcamp',
-    discogs: 'Discogs',
-    cover_art_archive: 'Cover Art Archive',
-    youtube_music: 'YouTube Music',
-  })[String(source || '').trim().toLowerCase()] || String(fallback || source || '').trim();
+  return COVER_SOURCE_PROVIDERS[String(source || '').trim().toLowerCase()]?.label
+    || String(fallback || source || '').trim();
 }
 
-function buildYouTubeMusicGlyph() {
-  return `
-    <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
-      <circle cx="12" cy="12" r="10" fill="currentColor"></circle>
-      <path d="M9.9 8.3 16.5 12l-6.6 3.7Z" fill="#ffffff"></path>
-    </svg>
-  `;
+function coverSourceReleasePageUrl(value) {
+  const text = String(value || '').trim();
+  if (!/^https?:\/\//i.test(text)) return '';
+  try {
+    const url = new URL(text);
+    // A release page, never the picture itself.
+    return /\.(?:jpe?g|png|gif|webp|avif|bmp)$/i.test(url.pathname) ? '' : url.href;
+  } catch (_error) {
+    return '';
+  }
 }
 
-function buildBandcampGlyph() {
-  return `
-    <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
-      <path d="M6 16.8 10.9 7.2H18l-4.9 9.6Z" fill="currentColor"></path>
-    </svg>
-  `;
+function coverArtArchiveReleaseMbid(imageUrl) {
+  const match = String(imageUrl || '').match(
+    /(?:coverartarchive\.org\/release\/|archive\.org\/(?:download|details)\/mbid-)([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i,
+  );
+  return match ? match[1].toLowerCase() : '';
 }
 
-function buildDiscogsGlyph() {
-  return `
-    <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
-      <circle cx="12" cy="12" r="9" fill="currentColor"></circle>
-      <circle cx="12" cy="12" r="5.1" fill="#0b0b0d"></circle>
-      <circle cx="12" cy="12" r="2.1" fill="currentColor"></circle>
-      <path d="M17.1 8.9a6 6 0 0 1 0 6.2" fill="none" stroke="currentColor" stroke-width="1.15" stroke-linecap="round"></path>
-      <path d="M6.9 15.1a6 6 0 0 1 0-6.2" fill="none" stroke="currentColor" stroke-width="1.15" stroke-linecap="round"></path>
-    </svg>
-  `;
+// The page a badge links to: the stored release page, a MusicBrainz release built from a Cover Art Archive
+// image's MBID, or else the provider's search for artist and album.
+function resolveCoverSourceReleaseUrl({ source, albumUrl, imageUrl, artist, album } = {}) {
+  const key = String(source || '').trim().toLowerCase();
+  const provider = COVER_SOURCE_PROVIDERS[key];
+  if (!provider) return '';
+  const stored = coverSourceReleasePageUrl(albumUrl);
+  if (stored) return stored;
+  if (key === 'cover_art_archive') {
+    const mbid = coverArtArchiveReleaseMbid(imageUrl);
+    if (mbid) return `https://musicbrainz.org/release/${mbid}`;
+  }
+  const query = [artist, album].map((part) => String(part || '').trim()).filter(Boolean).join(' ');
+  return provider.search(encodeURIComponent(query));
 }
 
-function buildRemoteCoverSourceBadge(source, className = 'cover-lookup-art-source-badge') {
-  const normalizedSource = String(source || '').trim();
-  if (normalizedSource === 'apple') {
-    return `<span class="${className} is-apple" aria-hidden="true">${buildAppleMusicGlyph()}</span>`;
-  }
-  if (normalizedSource === 'deezer') {
-    return `<span class="${className} is-deezer" aria-hidden="true">${buildDeezerGlyph()}</span>`;
-  }
-  if (normalizedSource === 'spotify') {
-    return `<span class="${className} is-spotify" aria-hidden="true">${buildSpotifyGlyph()}</span>`;
-  }
-  if (normalizedSource === 'youtube_music') {
-    return `<span class="${className} is-youtube-music" aria-hidden="true">${buildYouTubeMusicGlyph()}</span>`;
-  }
-  if (normalizedSource === 'bandcamp') {
-    return `<span class="${className} is-bandcamp" aria-hidden="true">${buildBandcampGlyph()}</span>`;
-  }
-  if (normalizedSource === 'discogs') {
-    return `<span class="${className} is-discogs" aria-hidden="true">${buildDiscogsGlyph()}</span>`;
-  }
-  if (normalizedSource === 'cover_art_archive') {
-    return `<span class="${className} is-caa" aria-hidden="true">${buildCaaGlyph()}</span>`;
-  }
-  return '';
+// placement: 'over' (Album Details, on the art), 'beneath' (Album Details, under the art) or 'inline' (cards).
+function buildCoverSourceBadgeHtml(config = {}) {
+  const key = String(config.source || '').trim().toLowerCase();
+  const provider = COVER_SOURCE_PROVIDERS[key];
+  if (!provider) return '';
+  const placement = ['over', 'beneath', 'inline'].includes(config.placement) ? config.placement : 'inline';
+  const href = resolveCoverSourceReleaseUrl({ ...config, source: key });
+  const legalHtml = provider.legal
+    .map((line) => `<span class="cover-source-badge__legal">${escapeHtml(line)}</span>`)
+    .join('');
+  const classes = [
+    'cover-source-badge',
+    `cover-source-badge--${placement}`,
+    `is-${key.replaceAll('_', '-')}`,
+    provider.neutral ? 'is-neutral' : '',
+  ].filter(Boolean).join(' ');
+  const toneAttr = provider.toneAware && placement === 'over' ? ' data-cover-source-tone="dark"' : '';
+  return `<span class="${classes}" data-cover-source-badge="${escapeHtml(key)}"${toneAttr}>`
+    + `<button type="button" class="cover-source-badge__trigger" aria-expanded="false" aria-label="${escapeHtml(`${provider.legal[0]} ${provider.linkLabel}`)}">`
+    + `<span class="cover-source-badge__mark" aria-hidden="true">${provider.icon
+      ? `<img src="${provider.icon}" alt="" width="24" height="24" decoding="async">` : provider.mark}</span></button>`
+    + `<span class="cover-source-badge__popover" role="tooltip" data-trigger-anchor-context="content">${legalHtml}`
+    + `<a class="cover-source-badge__link" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(provider.linkLabel)} ↗</a>`
+    + '</span></span>';
 }
 
-function buildTrackModalCoverSourceBadge(source) {
-  const normalizedSource = String(source || '').trim();
-  if (!normalizedSource) return '';
-  return buildRemoteCoverSourceBadge(normalizedSource, 'track-modal-cover-source-badge');
+function coverSourceBadgeSitsBeneathArt(source) {
+  return COVER_SOURCE_PROVIDERS[String(source || '').trim().toLowerCase()]?.beneathArt === true;
+}
+
+// Album Details: the badge for the shown cover, over the art or (Spotify) beneath it.
+function buildTrackModalCoverSourceBadge(source, context = {}) {
+  const key = String(source || '').trim().toLowerCase();
+  if (!key) return '';
+  return buildCoverSourceBadgeHtml({
+    ...context,
+    source: key,
+    placement: coverSourceBadgeSitsBeneathArt(key) ? 'beneath' : 'over',
+  });
+}
+
+// Mean Rec. 709 luma of RGBA pixels, 0..255; transparent pixels are skipped.
+function coverSourceToneFromPixels(data) {
+  let total = 0;
+  let count = 0;
+  for (let index = 0; index + 3 < (data?.length || 0); index += 4) {
+    if (data[index + 3] < 16) continue;
+    total += (0.2126 * data[index]) + (0.7152 * data[index + 1]) + (0.0722 * data[index + 2]);
+    count += 1;
+  }
+  if (!count) return 'dark';
+  return total / count >= 150 ? 'light' : 'dark';
+}
+
+// Samples the cover area under an over-art mark once per loaded image (a 12x12 draw of its top-left
+// corner); a cover the canvas may not read keeps the default white mark.
+function applyCoverSourceBadgeTone(root) {
+  const badge = root?.querySelector?.('.cover-source-badge--over[data-cover-source-tone]');
+  const image = root?.querySelector?.('.track-modal-cover-visual img');
+  if (!badge || !image) return;
+  const sample = () => {
+    if (!image.naturalWidth || !image.naturalHeight) return;
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = 12;
+      canvas.height = 12;
+      const context = canvas.getContext('2d', { willReadFrequently: true });
+      const side = Math.max(1, Math.round(Math.min(image.naturalWidth, image.naturalHeight) * 0.16));
+      context.drawImage(image, 0, 0, side, side, 0, 0, 12, 12);
+      badge.setAttribute('data-cover-source-tone', coverSourceToneFromPixels(context.getImageData(0, 0, 12, 12).data));
+    } catch (_error) {
+      badge.setAttribute('data-cover-source-tone', 'dark');
+    }
+  };
+  if (image.complete && image.naturalWidth) sample();
+  else image.addEventListener('load', sample, { once: true });
+}
+
+let openCoverSourceBadge = null;
+function setCoverSourceBadgeOpen(badge, open) {
+  badge.classList.toggle('is-open', open);
+  badge.querySelector('.cover-source-badge__trigger')?.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+
+function closeCoverSourceBadge() {
+  if (openCoverSourceBadge) setCoverSourceBadgeOpen(openCoverSourceBadge, false);
+  openCoverSourceBadge = null;
+}
+
+// Touch opens a badge with a tap; neither the tap nor its link selects the card or opens the lightbox.
+function handleCoverSourceBadgeClick(event) {
+  const badge = event.target?.closest?.('.cover-source-badge');
+  if (!badge) {
+    closeCoverSourceBadge();
+    return false;
+  }
+  event.stopPropagation();
+  if (event.target.closest('.cover-source-badge__link')) return true;
+  event.preventDefault();
+  const open = openCoverSourceBadge !== badge;
+  closeCoverSourceBadge();
+  if (open) {
+    setCoverSourceBadgeOpen(badge, true);
+    openCoverSourceBadge = badge;
+  }
+  return true;
+}
+
+function handleCoverSourceBadgeKeyDown(event) {
+  if (event.key !== 'Escape' || !openCoverSourceBadge) return false;
+  closeCoverSourceBadge();
+  return true;
 }
 
 function coverLookupHasManualLinks() {
@@ -38091,7 +38280,14 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
   const isOtherRemoteArt = isRemoteKind && String(item?.art_kind || 'cover') !== 'cover';
   const isSelectableOtherRemoteArt = isOtherRemoteArt && isSelectableRemoteCoverCandidate(item);
   const previewFallbackImageUrl = '/static/images/remote-preview-unavailable.png';
-  const sourceBadge = buildRemoteCoverSourceBadge(item?.source);
+  const sourceBadge = isRemoteKind ? buildCoverSourceBadgeHtml({
+    source: item?.source,
+    placement: 'inline',
+    albumUrl: item?.album_url,
+    imageUrl: item?.url,
+    artist: item?.artist || state.coverLookup.modal.album?.album_artist,
+    album: item?.album || state.coverLookup.modal.album?.name,
+  }) : '';
   const remoteSourceLabel = getRemoteCoverSourceLabel(item?.source, item?.source_label);
   const selectionKey = kind === 'local'
     ? `local:${String(item?.candidate_cover_ref || '')}`
@@ -38180,9 +38376,8 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
   const previewSourceAttr = kind === 'remote' && !prioritizeRemotePreview
     ? `data-cover-lookup-deferred-src="${escapeHtml(imageUrl)}"`
     : `src="${escapeHtml(imageUrl)}"`;
-  const actionLabel = kind === 'saved-remote'
-    ? (isActive ? 'Selected' : 'Linked remote cover')
-    : (isActive ? 'Selected' : 'Select');
+  // Remote cards carry the source badge instead of a Select word (owner 2026-11-19).
+  const actionLabel = isActive ? 'Selected' : 'Select';
   const selectionLimited = orderedLimitReached && !isActive;
   const roleAttr = isOtherRemoteArt && !isSelectableOtherRemoteArt
     ? 'role="group"'
@@ -38207,7 +38402,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
           <span class="cover-lookup-art-name">${escapeHtml(item.relative_path || item.filename || item.album || (isPastedKind ? 'Pasted image' : 'Cover art'))}</span>
           <span class="cover-lookup-art-resolution">${escapeHtml(resolution)}</span>
           ${isRemoteKind ? `<span class="cover-lookup-art-source-row">${sourceBadge}<span class="cover-lookup-art-source">${escapeHtml(remoteSourceLabel)}</span></span>` : ''}
-          ${isOtherRemoteArt && !isSelectableOtherRemoteArt ? '' : `<span class="cover-lookup-art-action-label">${actionLabel}</span>`}
+          ${isRemoteKind || (isOtherRemoteArt && !isSelectableOtherRemoteArt) ? '' : `<span class="cover-lookup-art-action-label">${actionLabel}</span>`}
         </span>
       </div>
     </div>
@@ -42240,10 +42435,10 @@ function browseTrackModalSelectedCover(value, options = {}) {
 
 // A selected local cover that a save downloaded keeps its provider's badge, unless the album page setting
 // "Display provider badge for local covers" is off (owner 2026-11-17).
-function buildAlbumDetailsLocalCoverSourceBadge(slot) {
+function buildAlbumDetailsLocalCoverSourceBadge(slot, context = {}) {
   if (slot?.kind !== 'local' || !slot.source || typeof buildTrackModalCoverSourceBadge !== 'function') return '';
   if (document.documentElement?.getAttribute?.('data-library-source-local-cover-badges') === 'false') return '';
-  return buildTrackModalCoverSourceBadge(slot.source);
+  return buildTrackModalCoverSourceBadge(slot.source, context);
 }
 
 function renderTrackModalRelease(album) {
@@ -42301,9 +42496,26 @@ function renderTrackModalRelease(album) {
       },
     })}
   `;
-  const coverSourceBadge = typeof buildTrackModalCoverSourceBadge === 'function'
-    ? buildTrackModalCoverSourceBadge(album?.remote_cover_source || '')
-    : '';
+  // A selected cover from the stack keeps only its provider, so its badge links to the provider's search.
+  const coverSourceContext = {
+    artist: typeof albumDisplayArtist === 'function' ? albumDisplayArtist(album) : String(album?.album_artist || ''),
+    album: album?.name || '',
+  };
+  const coverSourceBadge = activeSelectedCover
+    ? buildAlbumDetailsLocalCoverSourceBadge(activeSelectedCover, coverSourceContext)
+    : typeof buildTrackModalCoverSourceBadge === 'function'
+      ? buildTrackModalCoverSourceBadge(album?.remote_cover_source || '', {
+        ...coverSourceContext,
+        albumUrl: album?.remote_cover_album_url,
+        imageUrl: album?.remote_cover_url,
+      })
+      : '';
+  // Spotify's mark never sits on the artwork: it goes centred beneath the cover (owner 2026-11-19).
+  const coverSourceBadgeBeneath = Boolean(coverSourceBadge) && coverSourceBadgeSitsBeneathArt(
+    activeSelectedCover ? activeSelectedCover.source : album?.remote_cover_source,
+  );
+  const coverSourceBeneathHtml = coverSourceBadgeBeneath
+    ? `<div class="track-modal-cover-source-beneath">${coverSourceBadge}</div>` : '';
   const coverSourceMarkersHtml = buildAlbumCoverSourceMarkersHtml(album);
   const albumDetailsLayout = String(
     document.documentElement?.getAttribute('data-album-details-layout') || 'classic_bar'
@@ -42409,8 +42621,9 @@ function renderTrackModalRelease(album) {
     els.cover.innerHTML = `
       <div class="track-modal-cover-shell">
       ${coverPresentationHtml}
-      ${activeSelectedCover ? buildAlbumDetailsLocalCoverSourceBadge(activeSelectedCover) : coverSourceBadge}
+      ${coverSourceBadgeBeneath ? '' : coverSourceBadge}
       </div>
+      ${coverSourceBeneathHtml}
       ${coverSourceMarkersHtml}
     `;
     const coverImageSlot = typeof els.cover?.querySelector === 'function'
@@ -42468,6 +42681,7 @@ function renderTrackModalRelease(album) {
           handleAlbumDisplayCoverImageError(modalCoverImage);
         });
       }
+      if (typeof applyCoverSourceBadgeTone === 'function') applyCoverSourceBadgeTone(els.cover);
     }
   } else {
     const emptyCoverHtml = renderAlbumArtbox({
@@ -52994,6 +53208,8 @@ function handleGalleryBootstrapClick(event) {
     // The logo is the library landing page (owner 2026-11-16): the All artists gallery it opens brings the side
     // panel back to the Artists tree through syncLibraryNavigationToMainPanel.
     const activeSearchQuery = isLibraryHome ? '' : String(state.view?.query || '').trim();
+    // The logo ends the search, and with it the phone library button's results pulse (audit 2026-11-18).
+    if (isLibraryHome) clearMobileLibrarySearchResultsMarker();
     clearPendingGallerySearchCommit();
     updateGallerySearchDraftQuery(activeSearchQuery);
     state.ui.pendingSearchClearOnBlur = false;
@@ -54262,6 +54478,12 @@ function revealArtistTreeForSearch() {
   }
 }
 
+function clearMobileLibrarySearchResultsMarker() {
+  const button = document?.getElementById?.('mobile-library-button');
+  button?.removeAttribute('data-search-results');
+  button?.removeAttribute('aria-description');
+}
+
 function handleGalleryBootstrapSearchSubmit(event) {
   event.preventDefault();
   if (typeof handleMobileSearchSubmit === 'function' && handleMobileSearchSubmit()) return;
@@ -54281,12 +54503,8 @@ function handleGalleryBootstrapSearchSubmit(event) {
     closeArtistsDrawer({ restoreFocus: false });
   }
   applyImmediateExactSearchArtistSelection(nextQuery);
-  const mobileArtistsButton = document?.getElementById?.('mobile-library-button');
   if (String(nextQuery).trim()) revealArtistTreeForSearch();
-  else {
-    mobileArtistsButton?.removeAttribute('data-search-results');
-    mobileArtistsButton?.removeAttribute('aria-description');
-  }
+  else clearMobileLibrarySearchResultsMarker();
   closeRecentSearchPopover();
   beginAlbumDetailPrewarmSearchSuspension();
   beginSearchCoverLoadSuspension();
@@ -56662,6 +56880,7 @@ function syncMobileHome() {
 // feature-owned bootstrap handler files rather than accumulating here.
 document.addEventListener('click', (event) => {
   if (consumeArtistTreeLongPressClick(event) || consumeAlbumCardLongPressClick(event)) return;
+  if (handleCoverSourceBadgeClick(event)) return;
   const closeScanPageButton = event.target?.closest?.('[data-close-scan-page]') || null;
   if (closeScanPageButton) {
     event.preventDefault();
@@ -56729,6 +56948,7 @@ document.addEventListener('mousedown', (event) => {
 });
 
 document.addEventListener('keydown', (event) => {
+  if (handleCoverSourceBadgeKeyDown(event)) return;
   handleUtilityBootstrapKeyDown(event);
 });
 

@@ -2822,6 +2822,64 @@ test('opening Loose Tracks by any route selects its Custom Collections row', () 
   assert.equal(visibleWhenSynced, 'Night');
 });
 
+test('a context menu opened at the last Artist tree row stays above the player and inside the window', () => {
+  // FTC-GALLERY-NAV-031: since the tree runs down to the player (2026-11-16), a menu opened on its last row
+  // hung under the player, which took the click on "Scroll to this artist".
+  const { context } = loadHelper();
+  context.window.innerWidth = 1200;
+  context.window.innerHeight = 800;
+  const player = { hidden: false, getBoundingClientRect: () => ({ top: 720, bottom: 800, left: 0, right: 1200 }) };
+  context.document.querySelector = selector => (selector === '.global-player' ? player : null);
+  const menu = new FakeElement('artist-tree-context-menu');
+  menu.getBoundingClientRect = () => {
+    const top = parseFloat(menu.style.top);
+    const left = parseFloat(menu.style.left);
+    return { top, left, bottom: top + 40, right: left + 180, width: 180, height: 40 };
+  };
+  context.document.body.appendChild(menu);
+
+  context.showArtistTreeContextMenu(1150, 715, 'Last Artist');
+  const placed = menu.getBoundingClientRect();
+  assert.equal(menu.hidden, false);
+  assert.ok(placed.bottom <= 720, `menu bottom ${placed.bottom} is under the player`);
+  assert.ok(placed.right <= 1200, `menu right ${placed.right} is off screen`);
+
+  context.showArtistTreeContextMenu(100, 200, 'Top Artist');
+  assert.equal(menu.style.top, '200px', 'a menu with room opens at the pointer');
+  assert.equal(menu.style.left, '100px');
+});
+
+test('a loading collection page shows its tree count, and All Loose Tracks only its own search total', () => {
+  // Audit 2026-11-18 #5/#7: a collection said "0 tracks" while its rows loaded, next to a tree row saying 85.
+  const { context } = loadHelper();
+  const overlay = new FakeElement('non-album-modal');
+  overlay.hidden = true;
+  overlay.addEventListener = () => {};
+  for (const element of [new FakeElement('shell-main-surface'), overlay,
+    new FakeElement('non-album-modal-header'), new FakeElement('non-album-modal-table')]) {
+    context.document.body.appendChild(element);
+  }
+  context.document.querySelectorAll = () => [];
+  context.document.addEventListener = () => {};
+  context.document.removeEventListener = () => {};
+  const subtitles = [];
+  context.buildLooseTracksPageHeaderHtml = ({ subtitle }) => { subtitles.push(subtitle); return ''; };
+  context.buildLooseTracksHeaderActionsHtml = () => '';
+  context.URL = URL;
+  context.syncLibraryNavigationAfterPageChange = () => {};
+  context.hydrateDeferredNonAlbumTracks = () => new Promise(() => {});
+  const catalogCounts = { Night: 85 };
+  context.customCollectionCatalogTrackCount = (name = '') => catalogCounts[name];
+
+  context.openNonAlbumModal({ libraryWide: true, collectionName: 'Night' });
+  context.openNonAlbumModal({ libraryWide: true, collectionName: 'Unknown' });
+  context.openNonAlbumModal({ libraryWide: true, collectionName: '' });
+  catalogCounts[''] = 814;
+  context.openNonAlbumModal({ libraryWide: true, collectionName: '' });
+
+  assert.deepEqual(subtitles, ['85 tracks', '', 'Non-album tracks found in the selected library sources.', '814 tracks']);
+});
+
 for (const mobile of [false, true]) {
   test(`${mobile ? 'phone' : 'desktop'}: the logo closes Loose Tracks in place`, () => {
     // Owner 2026-11-15: the logo selected All artists but left Loose Tracks on screen.

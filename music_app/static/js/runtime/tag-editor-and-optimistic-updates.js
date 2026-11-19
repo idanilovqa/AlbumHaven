@@ -2135,10 +2135,10 @@ function browseTrackModalSelectedCover(value, options = {}) {
 
 // A selected local cover that a save downloaded keeps its provider's badge, unless the album page setting
 // "Display provider badge for local covers" is off (owner 2026-11-17).
-function buildAlbumDetailsLocalCoverSourceBadge(slot) {
+function buildAlbumDetailsLocalCoverSourceBadge(slot, context = {}) {
   if (slot?.kind !== 'local' || !slot.source || typeof buildTrackModalCoverSourceBadge !== 'function') return '';
   if (document.documentElement?.getAttribute?.('data-library-source-local-cover-badges') === 'false') return '';
-  return buildTrackModalCoverSourceBadge(slot.source);
+  return buildTrackModalCoverSourceBadge(slot.source, context);
 }
 
 function renderTrackModalRelease(album) {
@@ -2196,9 +2196,26 @@ function renderTrackModalRelease(album) {
       },
     })}
   `;
-  const coverSourceBadge = typeof buildTrackModalCoverSourceBadge === 'function'
-    ? buildTrackModalCoverSourceBadge(album?.remote_cover_source || '')
-    : '';
+  // A selected cover from the stack keeps only its provider, so its badge links to the provider's search.
+  const coverSourceContext = {
+    artist: typeof albumDisplayArtist === 'function' ? albumDisplayArtist(album) : String(album?.album_artist || ''),
+    album: album?.name || '',
+  };
+  const coverSourceBadge = activeSelectedCover
+    ? buildAlbumDetailsLocalCoverSourceBadge(activeSelectedCover, coverSourceContext)
+    : typeof buildTrackModalCoverSourceBadge === 'function'
+      ? buildTrackModalCoverSourceBadge(album?.remote_cover_source || '', {
+        ...coverSourceContext,
+        albumUrl: album?.remote_cover_album_url,
+        imageUrl: album?.remote_cover_url,
+      })
+      : '';
+  // Spotify's mark never sits on the artwork: it goes centred beneath the cover (owner 2026-11-19).
+  const coverSourceBadgeBeneath = Boolean(coverSourceBadge) && coverSourceBadgeSitsBeneathArt(
+    activeSelectedCover ? activeSelectedCover.source : album?.remote_cover_source,
+  );
+  const coverSourceBeneathHtml = coverSourceBadgeBeneath
+    ? `<div class="track-modal-cover-source-beneath">${coverSourceBadge}</div>` : '';
   const coverSourceMarkersHtml = buildAlbumCoverSourceMarkersHtml(album);
   const albumDetailsLayout = String(
     document.documentElement?.getAttribute('data-album-details-layout') || 'classic_bar'
@@ -2304,8 +2321,9 @@ function renderTrackModalRelease(album) {
     els.cover.innerHTML = `
       <div class="track-modal-cover-shell">
       ${coverPresentationHtml}
-      ${activeSelectedCover ? buildAlbumDetailsLocalCoverSourceBadge(activeSelectedCover) : coverSourceBadge}
+      ${coverSourceBadgeBeneath ? '' : coverSourceBadge}
       </div>
+      ${coverSourceBeneathHtml}
       ${coverSourceMarkersHtml}
     `;
     const coverImageSlot = typeof els.cover?.querySelector === 'function'
@@ -2363,6 +2381,7 @@ function renderTrackModalRelease(album) {
           handleAlbumDisplayCoverImageError(modalCoverImage);
         });
       }
+      if (typeof applyCoverSourceBadgeTone === 'function') applyCoverSourceBadgeTone(els.cover);
     }
   } else {
     const emptyCoverHtml = renderAlbumArtbox({

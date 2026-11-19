@@ -5805,9 +5805,8 @@ def _membership_repository(albums):
     return Repository
 
 
-def test_tag_save_refuses_a_file_that_moved_to_another_album_and_writes_nothing(
-    app, asgi_app, monkeypatch, tmp_path,
-):
+def _moved_file_save(app, monkeypatch, tmp_path):
+    """A stale album lists 01 (still its own) and 02 (moved to another album)."""
     from music_app.routes import api_wave_a_asgi_routes as routes
 
     stays, moved = tmp_path / "01 - Stays.mp3", tmp_path / "02 - Moved.mp3"
@@ -5815,24 +5814,55 @@ def test_tag_save_refuses_a_file_that_moved_to_another_album_and_writes_nothing(
         path.write_bytes(b"original tags")
     source = {"key": "artist::source", "album_id": 55, "tracks": [{"path": str(stays)}]}
     destination = {"key": "artist::source 2", "album_id": 56, "tracks": [{"path": str(moved)}]}
+    repository = _membership_repository([source, destination])
+    repository.build_track_file_entries_by_paths = lambda _self, paths: {
+        path: {"path": path, "album": "Source"} for path in paths}
     app.config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://album_haven_app@localhost/app"
     app.config["PERSISTENCE_BACKENDS"] = {"library_browse": "postgres"}
-    monkeypatch.setattr(routes, "PostgresLibraryBrowseRepository", _membership_repository([source, destination]))
-    monkeypatch.setattr(routes, "_apply_repairs_worker", lambda *_args: pytest.fail("a moved file is never written"))
-    monkeypatch.setattr(routes, "create_save_task", lambda *_args: pytest.fail("a refused save queues nothing"))
-
+    monkeypatch.setattr(routes, "PostgresLibraryBrowseRepository", repository)
     stale = {**source, "name": "Source", "tracks": [{"path": str(stays)}, {"path": str(moved)}]}
+    return routes, stays, moved, stale
+
+
+def test_tag_save_writes_files_still_in_the_album_and_skips_one_that_moved(app, asgi_app, monkeypatch, tmp_path):
+    # Owner 2026-11-18: "the files that could be written should be written ... Not the whole batch".
+    routes, stays, moved, stale = _moved_file_save(app, monkeypatch, tmp_path)
+    handled = []
+
+    def handle(**options):
+        handled.append(options)
+        options["structural_tag_edit_reservation"].release()
+        return {"ok": True, "changed_files": [{"path": str(stays), "fields": ["album"]}], "changed_count": 1}
+
+    monkeypatch.setattr(routes, "handle_edit_tags_request", handle)
     status, _, body = _run_asgi_request(asgi_app, "POST", "/utilities/edit-tags", json_body={
         "confirmed": True, "album": stale,
         "updates": {str(stays): {"album": "Renamed"}, str(moved): {"album": "Renamed"}},
     })
 
     payload = _decode_json(body)
+    assert status == 200 and payload["ok"] is True
+    assert payload["moved_files"] == ["02 - Moved.mp3"]
+    assert [list(options["updates"]) for options in handled] == [[str(stays)]]
+    assert [track["path"] for track in handled[0]["album"]["tracks"]] == [str(stays)]
+    assert str(moved) not in handled[0]["requested_track_paths"]
+    assert moved.read_bytes() == b"original tags"
+
+
+def test_tag_save_whose_every_file_moved_changes_nothing(app, asgi_app, monkeypatch, tmp_path):
+    routes, _stays, moved, stale = _moved_file_save(app, monkeypatch, tmp_path)
+    monkeypatch.setattr(routes, "handle_edit_tags_request", lambda **_options: pytest.fail("nothing to write"))
+
+    status, _, body = _run_asgi_request(asgi_app, "POST", "/utilities/edit-tags", json_body={
+        "confirmed": True, "album": stale, "updates": {str(moved): {"album": "Renamed"}},
+    })
+
+    payload = _decode_json(body)
     assert status == 409
-    assert payload["ok"] is False
-    assert payload["error_code"] == "tag_edit_files_moved"
+    assert payload["ok"] is False and payload["error_code"] == "tag_edit_files_moved"
+    assert payload["moved_files"] == ["02 - Moved.mp3"]
     assert "02 - Moved.mp3" in payload["error"] and str(tmp_path) not in payload["error"]
-    assert moved.read_bytes() == stays.read_bytes() == b"original tags"
+    assert moved.read_bytes() == b"original tags"
 
 
 def test_tag_save_membership_check_keeps_combined_optimistic_and_unknown_albums():
@@ -5855,7 +5885,7 @@ def test_tag_save_membership_check_keeps_combined_optimistic_and_unknown_albums(
     # Matched by id alone when the key is unknown.
     assert check({"album_id": 9}, ["C:/c/03.mp3"]) == []
     assert check({"album_id": 9, "tracks": [{"path": "C:/c/03.mp3"}, {"path": "C:/a/01.mp3"}]},
-                 ["C:/a/01.mp3"]) == ["01.mp3"]
+                 ["C:/a/01.mp3"]) == ["C:/a/01.mp3"]
     # Two current albums answering to the opened key both count as the opened album.
     twin = {"key": "artist::album", "album_id": 8, "tracks": [{"path": "C:/d/04.mp3"}]}
     twins = _membership_repository([combined, twin, other])(None)

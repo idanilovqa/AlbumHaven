@@ -3200,10 +3200,10 @@ def test_full_snapshot_prepared_before_targeted_rename_is_rejected_by_inventory_
     )
 
 
-def test_live_postgres_tag_save_refuses_a_file_that_moved_to_another_album():
-    """Details loaded before a move still list the moved file; a save from them is refused
-    for that file (real inventory, grouped as the gallery groups it), and allowed from the
-    album that now holds it."""
+def test_live_postgres_tag_save_skips_a_file_that_moved_to_another_album():
+    """Details loaded before a move still list the moved file; a save from them skips that
+    file (real inventory, grouped as the gallery groups it), and it saves from the album
+    that now holds it."""
     database_url = _isolated_runtime_database_url_or_skip()
     if not _ISOLATED_SETUP_DATABASE_URL:
         pytest.skip("Isolated setup is required for the tag-save membership contract.")
@@ -3273,10 +3273,10 @@ def test_live_postgres_tag_save_refuses_a_file_that_moved_to_another_album():
             set(edited) | {track["path"] for track in album["tracks"]})
         return _edit_tags_files_outside_album(album, set(edited), current)
 
-    # The stale album still lists the moved file: that file is refused, the other is not.
+    # The stale album still lists the moved file: that file is skipped, the other is not.
     stale = {**source, "tracks": [{"path": path} for path in layout["Source"]]}
-    assert outside(stale, layout["Source"]) == ["02 - Moved.mp3"]
-    assert outside(stale, [moved_path]) == ["02 - Moved.mp3"]
+    assert outside(stale, layout["Source"]) == [moved_path]
+    assert outside(stale, [moved_path]) == [moved_path]
     assert outside(stale, [layout["Source"][0]]) == []
     # From the album that holds it now, the moved file saves.
     assert outside(destination, [moved_path]) == []

@@ -245,6 +245,27 @@ function scheduleTagEditorRenderAfterPaint(tagEditor, els) {
   scheduleBrowserAnimationFrame(() => scheduleBrowserAnimationFrame(render));
 }
 
+// Owner 2026-11-18: files that left the album since it was opened are skipped and left
+// untouched; the save says so in amber, with the files it did write.
+function buildMovedFilesAlertMessage(savedCount, movedFiles) {
+  const count = Math.max(0, Number(savedCount) || 0);
+  return `Saved ${count} ${count === 1 ? 'file' : 'files'}. These files are no longer in this album and were not changed: `
+    + `${[...movedFiles].sort().join(', ')}. Reopen the album to edit them.`;
+}
+
+function buildTagEditCompletionAlert(tagEditAlert, data) {
+  const warnings = (Array.isArray(data?.warnings) ? data.warnings : [])
+    .map((warning) => String(warning || '').trim())
+    .filter(Boolean);
+  const moved = String(tagEditAlert?.movedMessage || '').trim();
+  const hasWarning = Boolean(moved) || warnings.length > 0;
+  return {
+    message: [moved || String(tagEditAlert?.completionMessage || '').trim(), ...warnings].filter(Boolean).join(' '),
+    severity: hasWarning ? 'warning' : 'success',
+    title: hasWarning ? 'Tags saved with warning' : 'Tags updated',
+  };
+}
+
 function openTagEditor(album, options = {}) {
   const els = getTagEditorElements();
   if (!els.overlay || !album) return;
@@ -909,7 +930,7 @@ async function confirmManualTagEdit() {
       ) {
         failedSaveTaskError = String(data.error || '').trim();
       }
-      // The server refused files that left this album since it was opened: say which.
+      // Every edited file left this album since it was opened: nothing was changed; say which.
       if (data.error_code === 'tag_edit_files_moved') failedSaveTaskError = String(data.error || '').trim();
       if (data.log_entry) {
         failedLogHistoryEntryId = String(data.log_entry.id || '');
@@ -923,6 +944,8 @@ async function confirmManualTagEdit() {
         && data.edit_outcome === 'failed_rolled_back';
       throw new Error(data.error || 'Failed to apply tag edits');
     }
+    const movedFiles = (Array.isArray(data.moved_files) ? data.moved_files : []).map(String).filter(Boolean);
+    if (movedFiles.length) tagEditAlert.movedMessage = buildMovedFilesAlertMessage(editedPaths.length - movedFiles.length, movedFiles);
     const updatedAlbums = Array.isArray(data.updated_albums)
       ? data.updated_albums
       : [data.updated_album].filter(Boolean);
@@ -1001,18 +1024,8 @@ async function confirmManualTagEdit() {
       applyRepairResultToProblematicFiles(album, data.updated_problematic_album);
     }
     if (responseIsTerminal && !terminalResponseNeedsCanonicalRefresh) {
-      const completionWarnings = (Array.isArray(data.warnings) ? data.warnings : [])
-        .map((warning) => String(warning || '').trim())
-        .filter(Boolean);
-      const hasCompletionWarning = completionWarnings.length > 0;
-      showRepairAlert(
-        [tagEditAlert.completionMessage, ...completionWarnings].join(' '),
-        hasCompletionWarning ? 'warning' : 'success',
-        8000,
-        {
-          title: hasCompletionWarning ? 'Tags saved with warning' : 'Tags updated',
-        },
-      );
+      const completion = buildTagEditCompletionAlert(tagEditAlert, data);
+      showRepairAlert(completion.message, completion.severity, 8000, { title: completion.title });
     }
     if (responseIsTerminal) {
       pendingProblematicEntry.accept();

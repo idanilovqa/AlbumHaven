@@ -2891,11 +2891,27 @@ test('manual tag edit does not restore its previous snapshot after navigation du
   assert.deepEqual(restoredDrafts, [], 'navigation must not reopen a stale editor draft');
 });
 
-test('a save refused for files that left the album shows the server\'s reason', async () => {
+// Owner 2026-11-18: files that left the album are skipped; the rest is saved, in amber.
+test('a save that skipped files that left the album says so in amber with the saved count', () => {
+  const context = loadHelper([], {});
+  assert.equal(context.buildMovedFilesAlertMessage(3, ['02 - Moved.mp3']),
+    'Saved 3 files. These files are no longer in this album and were not changed: 02 - Moved.mp3. Reopen the album to edit them.');
+  assert.equal(context.buildMovedFilesAlertMessage(1, ['b.mp3', 'a.mp3']),
+    'Saved 1 file. These files are no longer in this album and were not changed: a.mp3, b.mp3. Reopen the album to edit them.');
+  const alert = { completionMessage: 'Saved changes to 4 tracks in “Album”.' };
+  assert.deepEqual({ ...context.buildTagEditCompletionAlert(alert, { warnings: [] }) },
+    { message: 'Saved changes to 4 tracks in “Album”.', severity: 'success', title: 'Tags updated' });
+  alert.movedMessage = context.buildMovedFilesAlertMessage(3, ['02 - Moved.mp3']);
+  const moved = context.buildTagEditCompletionAlert(alert, { warnings: [] });
+  assert.equal(moved.message, alert.movedMessage, 'the amber message replaces the plain completion');
+  assert.equal(moved.severity, 'warning');
+});
+
+test('a save whose every file left the album shows the server\'s reason', async () => {
   const trackPath = 'C:\\Music\\Artist\\Album\\02 - Moved.flac';
   const album = { key: 'artist::album', name: 'Album', album_artist: 'Artist',
     tracks: [{ path: trackPath, album: 'Album' }] };
-  const error = 'These files are no longer in this album, so nothing was saved: 02 - Moved.flac. Reopen the album and edit again.';
+  const error = 'These files are no longer in this album, so nothing was changed: 02 - Moved.flac. Reopen the album to edit them.';
   const alerts = [];
   const closedModal = { hidden: true };
   const context = loadHelper([album], {

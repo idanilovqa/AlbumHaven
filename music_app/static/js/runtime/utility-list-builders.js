@@ -2650,18 +2650,9 @@ async function watchSaveTask(taskId, context = {}) {
           context.tagEditAlert?.completionMessage || '',
         ).trim();
         if (completionMessage) {
-          const completionWarnings = (Array.isArray(data.warnings) ? data.warnings : [])
-            .map((warning) => String(warning || '').trim())
-            .filter(Boolean);
-          const hasCompletionWarning = completionWarnings.length > 0;
-          showRepairAlert(
-            [completionMessage, ...completionWarnings].join(' '),
-            hasCompletionWarning ? 'warning' : 'success',
-            hasCompletionWarning ? 8000 : 2000,
-            {
-              title: hasCompletionWarning ? 'Tags saved with warning' : 'Tags updated',
-            },
-          );
+          const completion = buildTagEditCompletionAlert(context.tagEditAlert, data);
+          showRepairAlert(completion.message, completion.severity,
+            completion.severity === 'warning' ? 8000 : 2000, { title: completion.title });
         } else if (!consumesProvidedTerminalPayload) {
           showRepairAlert('Library view updated from saved files.', 'success', 1000);
         }

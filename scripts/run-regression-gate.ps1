@@ -226,7 +226,7 @@ function Invoke-MeasuredTargets([string]$TargetList, [string]$FixtureProfile, [s
             -FixtureProfile $loaderProfile `
             -FixtureMode preloaded-release `
             -BasePort $PerformanceBasePort `
-            -DatabaseSuffixBase "$($ShardName.Replace('-', '_'))_$PID" `
+            -DatabaseSuffixBase "$($ShardName.Replace('synthetic-production-library', 'synprod').Replace('-', '_'))_$PID" `
             -ExpectedPostgresMajor $PostgresMajor `
             -Pgbin $Pgbin `
             -RepositoryRoot $repositoryRoot `

@@ -1,4 +1,5 @@
 import { GalleryPage } from '../../poms/galleryPage.js';
+import { createMobileBrowserSessions } from '../../support/mobileFixtures.js';
 import { AccountPage, LoginPage, RecoveryPage } from '../poms/authPages.js';
 import { OWNER, resetLinkFrom, signIn } from '../actions/authActions.js';
 import {
@@ -6,9 +7,17 @@ import {
   databaseState,
   expect,
   messages,
-  test,
+  test as base,
   waitForMessage,
 } from '../support/baseFixtures.js';
+
+const test = base.extend({
+  // Extra tabs share the signed-out context's cookie jar, like a second browser tab.
+  sameSessionTabs: async ({ browser, context, requestInterceptionGuard }, use) => {
+    const tabs = createMobileBrowserSessions(browser, context);
+    try { await use(tabs); } finally { await tabs.closeAll(); }
+  },
+});
 
 async function loginResponse(page, username, password) {
   const login = new LoginPage(page);
@@ -132,10 +141,10 @@ test('a sign-in page left open past its token life still signs in to the gallery
   await expectSignedInGallery(page, statuses);
 });
 
-test('signing in from an older sign-in tab after a newer one opened reaches the gallery', async ({ page, context }) => {
+test('signing in from an older sign-in tab after a newer one opened reaches the gallery', async ({ page, sameSessionTabs }) => {
   const first = new LoginPage(page);
   await first.open('/');
-  const second = new LoginPage(await context.newPage());
+  const second = new LoginPage((await sameSessionTabs.createPage()).page);
   await second.open('/');
   await page.bringToFront();
   const statuses = loginPostStatuses(page);

@@ -23,8 +23,8 @@ const EXPECTED_SHARD_COUNTS = new Map([
   ['cover-providers-1', 22],
   ['cover-providers-2', 15],
   ['metadata-mutations', 16],
-  ['playback-utilities-1', 14],
-  ['playback-utilities-2', 21],
+  ['playback-utilities-1', 15],
+  ['playback-utilities-2', 22],
   ['playback-utilities-3', 19],
 ]);
 const EXPECTED_SHARD_DISPLAY_NAMES = new Map([
@@ -124,7 +124,7 @@ function functionalJobSource() {
   return { workflow, job: workflow.slice(start, end) };
 }
 
-test('functional shard contract pins the approved eight-way 174-case assignment', () => {
+test('functional shard contract pins the approved eight-way 176-case assignment', () => {
   const contract = readJson(shardContractPath);
   assert.equal(contract.browser, 'chrome');
   assert.equal(contract.workersPerInvocation, 1);
@@ -138,7 +138,7 @@ test('functional shard contract pins the approved eight-way 174-case assignment'
     assert.ok(shard.invocations.length > 0, `${shard.name} must not be empty`);
     assert.ok(shard.suitePrerequisites.length > 0, `${shard.name} must declare prerequisites`);
   }
-  assert.equal(total, 174);
+  assert.equal(total, 176);
   for (const ownedCase of ownedCases(contract)) {
     assert.match(ownedCase.area, /^[a-z]+(?:-[a-z]+)*$/, ownedCase.case);
   }
@@ -931,6 +931,7 @@ validatorTest('playback restores three wave baselines and isolates conflicting e
     'FTC-PLAYBACK-TAKEOVER-003 after a playing tab closes, one press on a song in another browser plays it within seconds',
   ]);
   assert.deepEqual(waveInvocations(5).flatMap((invocation) => invocation.cases.map(({ case: name }) => name)), [
+    'FTC-PLAYBACK-OFFLINE-006 offline, seeks forward and back inside the received audio play, seeks past it wait silently at their place, Play is never dimmed or disabled, and the song plays on by itself when the network returns',
     'FTC-PREVIEW-STORAGE-001 / 002 relocates generated previews safely and denies non-owner access',
     'FTC-PLAYBACK-TITLE-001 pressing another song while one plays never shows the playing song again once the pressed one shows',
   ]);
@@ -989,8 +990,8 @@ validatorTest('all eight shards use explicit effect-compatible wave budgets', ()
     ['cover-providers-1', { cases: 22, waves: [1, 2, 4] }],
     ['cover-providers-2', { cases: 15, waves: [1, 2] }],
     ['metadata-mutations', { cases: 16, waves: [1, 2, 3] }],
-    ['playback-utilities-1', { cases: 14, waves: [1, 2, 3, 4] }],
-    ['playback-utilities-2', { cases: 21, waves: [1, 2, 3, 4, 5] }],
+    ['playback-utilities-1', { cases: 15, waves: [1, 2, 3, 4] }],
+    ['playback-utilities-2', { cases: 22, waves: [1, 2, 3, 4, 5] }],
     ['playback-utilities-3', { cases: 19, waves: [1, 2, 3, 4, 5] }],
   ]);
   const matrixByCase = new Map(matrix.map((row) => [row.case, row]));

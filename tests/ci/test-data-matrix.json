@@ -3,6 +3,42 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/playbackNetworkOutage.spec.js",
+    "case": "FTC-PLAYBACK-SEEK-001 under full CPU load ten rapid seeks forward and back each show their place, never reset to the start, never stop or disable Play, and the last one plays",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "databaseScenarios": ["playback:rapid-online-seeks-under-load"],
+    "filesystemScenarios": ["audio-copy:playback-length-signals"],
+    "expectedContracts": ["seek-never-resets", "play-never-disabled", "last-seek-plays"],
+    "mutationOwnership": {
+      "databaseIdentity": "case:playback-rapid-seeks",
+      "filesystemCopy": "media/Playback Start Signals/Length And Repetition"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/playbackNetworkOutage.spec.js",
+    "case": "FTC-PLAYBACK-OFFLINE-006 offline, seeks forward and back inside the received audio play, seeks past it wait silently at their place, Play is never dimmed or disabled, and the song plays on by itself when the network returns",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 5,
+    "databaseScenarios": ["playback:offline-seeks-both-ways"],
+    "filesystemScenarios": ["audio-copy:playback-length-signals"],
+    "expectedContracts": ["received-seek-plays", "past-seek-waits-playing", "play-never-disabled", "automatic-resume-on-reconnect"],
+    "mutationOwnership": {
+      "databaseIdentity": "case:playback-offline-seeks",
+      "filesystemCopy": "media/Playback Start Signals/Length And Repetition"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/playbackNetworkOutage.spec.js",
     "case": "FTC-PLAYBACK-OFFLINE-004 owner round 7 with Wi-Fi off and on: a click in the received audio plays at once, the head never jumps to the start, the song plays on by itself when the server is back, one Play continues it, and one press plays another song",
     "profile": "functional-core",
     "setupScope": "isolated",

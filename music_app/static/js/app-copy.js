@@ -30,6 +30,8 @@
     const copyAccount = marker?.getAttribute('data-account') || '';
     // The copy of another address stands in for this one, which was never kept (app-copy-worker.js).
     const viewMissing = startedFromCopy && marker.getAttribute('data-view-missing') === '1';
+    // The server gave no answer at all within the worker's wait, so it is unreachable already.
+    const unanswered = startedFromCopy && marker.getAttribute('data-unanswered') === '1';
     const answerListeners = [];
     let shell = null;
     let readOnly = false;
@@ -172,10 +174,11 @@
     if (inBrowser) window.addEventListener('pagehide', saveInBrowser);
     window.addEventListener('online', () => { if (readOnly) void confirmAccount(); });
     // A browser shows its copy only when the server could not answer, so the copy starts read-only.
-    // The notice waits for the account check unless the device itself is offline.
+    // The notice waits for the account check unless the device itself is offline or the server
+    // already gave no answer for the worker's whole wait.
     if (startedFromCopy && inBrowser) {
       setReadOnly(true);
-      if (navigator.onLine === false) showNotice(true);
+      if (navigator.onLine === false || unanswered) showNotice(true);
     }
     if (startedFromCopy) void confirmAccount();
 

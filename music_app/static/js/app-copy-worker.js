@@ -31,6 +31,8 @@
   const KEPT_COVER_PREFIX = '/__album-haven-cover/';
   const MAX_COVER_FILLS = 120;
   const KEEP_WAIT_MS = 200;
+  // A navigation with no answer at all for this long shows the copy (owner, round 10: "B: wait 10 s").
+  const NO_ANSWER_MS = 10000;
   // A referenced cover URL as an attribute (`&amp;`) or in the bootstrap JSON (`&`).
   const COVER_URL = /\/cover\/[A-Za-z0-9_-]{22}(?=[?"'\s<>&\\]|$)[^"'\s<>]*/g;
   // A versioned asset the page loads, as a relative or absolute URL.
@@ -54,9 +56,10 @@
   const isAppPage = url => url.pathname === '/';
   const pageKey = url => `${url.pathname}${url.search}`;
   const quietly = promise => promise.catch(() => {});
+  const NO_ANSWER = Symbol('no answer');
 
   function createAppCopyWorker({
-    caches, fetch, origin, now = Date.now, maxCoverBytes = MAX_COVER_BYTES, mode = 'app',
+    caches, fetch, origin, now = Date.now, maxCoverBytes = MAX_COVER_BYTES, mode = 'app', noAnswerMs = NO_ANSWER_MS,
   }) {
     const metaUrl = new URL(META_PATH, origin).href;
     // What the copy keeps, listed from the cache once per worker so no later request or message lists
@@ -255,18 +258,34 @@
       for (const key of ['/', meta.last]) {
         if (!key || key === pageKey(url) || !isFresh(meta.pages[key])) continue;
         const kept = await target.cache.match(new URL(key, origin).href);
-        if (!kept) continue;
-        const html = (await kept.text()).replace(COPY_MARKER, `${COPY_MARKER} data-view-missing="1"`);
-        return new Response(html, { headers: kept.headers });
+        if (kept) return marked(kept, 'data-view-missing');
       }
       return null;
     }
 
+    // [copy] with [attribute]="1" on its copy marker, for the page to read (app-copy.js).
+    async function marked(copy, attribute) {
+      const html = (await copy.text()).replace(COPY_MARKER, `${COPY_MARKER} ${attribute}="1"`);
+      return new Response(html, { headers: copy.headers });
+    }
+
     // A browser waits for the server, however slow, while it can answer: a slow connection is not
-    // an offline one. Only an unreachable server or a gateway error falls back to the copy.
+    // an offline one. An unreachable server or a gateway error falls back to the copy, and so does
+    // no answer at all within noAnswerMs (a tunnel holding the request for its stopped server); that
+    // copy says so, and the server's answer is still waited for and kept.
     async function serverFirst(url, event) {
       const network = fetchPage(url, { running: true }, event);
-      const answer = await network.catch(() => null);
+      const answered = network.catch(() => null);
+      let timer;
+      const answer = await Promise.race([
+        answered,
+        new Promise((resolve) => { timer = setTimeout(() => resolve(NO_ANSWER), noAnswerMs); }),
+      ]);
+      clearTimeout(timer);
+      if (answer === NO_ANSWER) {
+        const copy = (await freshCopy(url)) || (await standInCopy(url));
+        return copy ? marked(copy, 'data-unanswered') : network;
+      }
       if (answer && answer.status < 500) return answer;
       await keptSoFar();
       return (await freshCopy(url)) || (await standInCopy(url)) || network;

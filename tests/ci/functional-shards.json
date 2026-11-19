@@ -581,6 +581,13 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/instantReturnBrowser.spec.js",
+              "case": "FTC-IAR-W14 a navigation with no answer shows the saved library with the Offline line after 10 s, never sooner, and goes live in place when the answer comes",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/instantReturnSignOut.spec.js",
               "case": "FTC-IAR-W02 signing out deletes the copy; the next start is the sign-in page, never the library",
               "area": "gallery-search"

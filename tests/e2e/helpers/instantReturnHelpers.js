@@ -1,6 +1,7 @@
 // Shared steps of the instant-return browser specs (IAR-W cases): the copy is read from the
 // browser's own storage, never from an internal API.
 import { expect } from '../support/baseFixtures.js';
+import { coverLookupFixtureEndpoint, readJsonResponse } from './coverLookupProviderHelpers.js';
 
 export const LIBRARY_PATH = '/?surface=albums';
 
@@ -74,6 +75,15 @@ export async function slowConnection(page, latency) {
     await pageSession.detach();
     await browserSession.detach();
   };
+}
+
+// Holds ('hold') or lets answer ('release') the app page and the copy's account check on the
+// fixture-owned app process, as a tunnel holds requests for its stopped server (FTC-IAR-W14).
+export async function setAppPageHold(testInfo, action) {
+  const response = await fetch(coverLookupFixtureEndpoint(testInfo, '/app-page-fixture/control'), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action }),
+  });
+  return readJsonResponse(response, `App page ${action}`);
 }
 
 // Same-origin /static/ requests of [page] that fail from now on, by path.

@@ -66,7 +66,7 @@ function page(account, { version = 'v1', body = 'Library', cacheControl = 'priva
 }
 
 // [mode] 'app' is the Android app (the copy answers at once); 'web' a browser (the server first).
-function setup({ respond = () => page('acct-a'), maxCoverBytes, mode, caches = fakeCaches() } = {}) {
+function setup({ respond = () => page('acct-a'), maxCoverBytes, mode, caches = fakeCaches(), noAnswerMs } = {}) {
   const calls = [];
   const pending = [];
   let clock = 1_000_000;
@@ -77,7 +77,7 @@ function setup({ respond = () => page('acct-a'), maxCoverBytes, mode, caches = f
     return response;
   };
   const worker = createAppCopyWorker({
-    caches, fetch, origin: ORIGIN, now: () => clock, maxCoverBytes, mode,
+    caches, fetch, origin: ORIGIN, now: () => clock, maxCoverBytes, mode, noAnswerMs,
   });
   // Work the worker keeps doing after it answered (event.waitUntil).
   const event = { waitUntil: promise => pending.push(promise) };
@@ -1013,6 +1013,58 @@ test('IAR-W12: a page that arrived is there for a new tab however long writing i
   online = false;
 
   assert.match(await (await worker.handle('page', navigation('/'), event)).text(), /content="cache"/);
+});
+
+// Owner round 10 ("B: wait 10 s"): a tunnel held the first request after its server stopped for
+// 20-60 s, and the tab stayed blank all that time.
+function heldServer() {
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  let holding = false;
+  return {
+    hold() { holding = true; },
+    release: answer => release(answer),
+    respond: () => (holding ? held : page('acct-a')),
+  };
+}
+
+test('IAR-W14: a navigation with no answer within the wait shows the copy, marked unanswered, and still keeps the answer', async () => {
+  const server = heldServer();
+  const { worker, event, settled, caches } = setup({ mode: 'web', respond: server.respond, noAnswerMs: 30 });
+  await worker.message({ type: 'save', url: `${ORIGIN}/` });
+  server.hold();
+
+  const response = await worker.handle('page', navigation('/'), event);
+
+  assert.match(await response.text(), /content="cache" data-unanswered="1" data-account="acct-a"/);
+  server.release(page('acct-a', { body: 'Later' }));
+  await settled();
+  const kept = await caches.stores.get(`${CACHE_PREFIX}acct-a`).match(`${ORIGIN}/`);
+  assert.match(await kept.text(), /Later/, 'the answer that came after the wait is kept');
+});
+
+test('IAR-W14: a slow answer within the wait is the page, never the copy', async () => {
+  let slow = false;
+  const respond = () => (slow ? new Promise(resolve => setTimeout(() => resolve(page('acct-a')), 20)) : page('acct-a'));
+  const { worker, event } = setup({ mode: 'web', respond, noAnswerMs: 200 });
+  await worker.message({ type: 'save', url: `${ORIGIN}/` });
+  slow = true;
+
+  const response = await worker.handle('page', navigation('/'), event);
+
+  assert.match(await response.text(), /content="network"/);
+});
+
+test('IAR-W14: with nothing kept, a navigation keeps waiting for the server however long', async () => {
+  const server = heldServer();
+  server.hold();
+  const { worker, event } = setup({ mode: 'web', respond: server.respond, noAnswerMs: 20 });
+
+  const navigationDone = worker.handle('page', navigation('/'), event);
+  await new Promise(resolve => setTimeout(resolve, 60));
+  server.release(page('acct-a'));
+
+  assert.match(await (await navigationDone).text(), /content="network"/);
 });
 
 // Request-capture contracts (tests/ci/bounded-interactions.json): the real worker routes every

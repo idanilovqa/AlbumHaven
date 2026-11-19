@@ -557,6 +557,21 @@
       "proof": "static"
     },
     {
+      "id": "js:app-copy-worker.js#serverFirst",
+      "action": "One 10 s wait per browser navigation for the server's first answer, after which the copy shows",
+      "entrypoints": [
+        "js:music_app/static/js/app-copy-worker.js#serverFirst:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/app-copy-worker.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:app-copy-worker.js#versionedAsset",
       "action": "Load a versioned static asset twice and an already kept one",
       "entrypoints": [

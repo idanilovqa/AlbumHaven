@@ -6,7 +6,7 @@ import { defineTimingBudget, expectTimingBudget } from '../helpers/timingBudget.
 import { GalleryActions } from '../actions/index.js';
 import { GalleryPage } from '../poms/index.js';
 import {
-  failedStaticRequests, primeCopy, keptPages, slowConnection, visibleAlbumNames, workerReady, LIBRARY_PATH,
+  failedStaticRequests, primeCopy, keptPages, setAppPageHold, slowConnection, visibleAlbumNames, workerReady, LIBRARY_PATH,
 } from '../helpers/instantReturnHelpers.js';
 
 test.use({ serviceWorkers: 'allow' });
@@ -202,4 +202,48 @@ test(`FTC-IAR-W13 offline, album details show 'Offline. Can't load the details, 
   await navigationPanelActions.selectSidebarArtistByName(artist);
   await expect(galleryPage.unreachable).toHaveCount(0);
   await expect.poll(async () => (await visibleAlbumNames(galleryPage)).length).toBeGreaterThan(0);
+});
+
+// Owner round 10 ("B: wait 10 s"): a tunnel held the first request after its server stopped for
+// 20-60 s and the new tab stayed blank. With no answer for 10 s the saved library shows with the
+// Offline line, never sooner; when the held answer finally arrives the page goes live in place.
+const NO_ANSWER_WAIT_MS = 10_000;
+
+test('FTC-IAR-W14 a navigation with no answer shows the saved library with the Offline line after 10 s, never sooner, and goes live in place when the answer comes', {
+  tag: '@area:gallery-search',
+}, async ({ page, galleryActions }, testInfo) => {
+  await primeCopy(page, galleryActions);
+  await setAppPageHold(testInfo, 'hold');
+  try {
+    const tab = await page.context().newPage();
+    const library = new GalleryActions(new GalleryPage(tab, testInfo));
+    const { galleryPage } = library;
+    const started = Date.now();
+    const navigation = tab.goto(LIBRARY_PATH);
+
+    // Before the wait ends the tab is still waiting for the server: no copy, no Offline line.
+    await expect.poll(() => Date.now() - started, { timeout: NO_ANSWER_WAIT_MS }).toBeGreaterThanOrEqual(NO_ANSWER_WAIT_MS - 1500);
+    expect(tab.url(), 'nothing shown before the wait ends').toBe('about:blank');
+    await expect(galleryPage.appCopyOfflineNotice).toHaveCount(0);
+
+    await navigation;
+    const shownAfter = Date.now() - started;
+    expect(shownAfter, 'the saved library waits the full 10 s').toBeGreaterThanOrEqual(NO_ANSWER_WAIT_MS - 100);
+    expectTimingBudget(expect, shownAfter - NO_ANSWER_WAIT_MS, UNREACHABLE_VIEW_BUDGET, 'saved library once 10 s passed with no answer');
+    await library.waitForGalleryReady();
+    await expect(galleryPage.appCopyMarker).toHaveAttribute('content', 'cache');
+    await expect(galleryPage.appCopyOfflineNotice).toBeVisible();
+    await expect(galleryPage.appCopyOfflineNotice).toContainText('Offline');
+    expect((await visibleAlbumNames(galleryPage)).length).toBeGreaterThan(0);
+
+    // The held answer arrives: live again in place, with no reload.
+    const navigations = [];
+    tab.on('framenavigated', (frame) => { if (frame === tab.mainFrame()) navigations.push(frame.url()); });
+    await setAppPageHold(testInfo, 'release');
+    await expect(galleryPage.appCopyOfflineNotice).toBeHidden({ timeout: 35_000 });
+    expect(navigations).toEqual([]);
+    expect((await visibleAlbumNames(galleryPage)).length).toBeGreaterThan(0);
+  } finally {
+    await setAppPageHold(testInfo, 'release');
+  }
 });

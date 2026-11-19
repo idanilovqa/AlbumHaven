@@ -5082,6 +5082,29 @@ test('a socket lost while another song waits to replace the playing one opens th
   assert.notEqual(harness.api.snapshot().mode, 'error');
 });
 
+// Hosted FTC-PLAYBACK-OFFLINE-002 (round 8): the socket died while a press on another song was still
+// starting. The old song's splice, or a restart of the old song at its place, then took the press's place.
+test('a socket lost while a press on another song is still starting opens only that song on the next socket', async () => {
+  const harness = encodedHarness({ createStreamingDecoder: recordingDecoders().create });
+  await startLocallySeekable(harness, 100_000);
+  await harness.api.pause();
+  await settleTwice(harness);
+
+  let failure = null;
+  const press = harness.api.start(makeTrack('02.mp3')).catch((error) => { failure = error; });
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  await settleTwice(harness);
+  await settleTwice(harness);
+
+  const opens = harness.sockets.slice(1).flatMap((socket) => socket.sent.filter(({ type }) => type === 'open'));
+  assert.deepEqual(opens.map(({ path, startFrame }) => [path, startFrame]), [[makeTrack('02.mp3').path, 0]],
+    'only the pressed song opens, from its start');
+  assert.equal(failure, null);
+  assert.equal(harness.engine.roles.current?.track.path, makeTrack('02.mp3').path);
+  void press;
+});
+
 test('a refused socket still stops playback with an error', async () => {
   const harness = createEngineHarness();
   await harness.api.start(makeTrack());

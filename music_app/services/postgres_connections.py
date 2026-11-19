@@ -29,6 +29,9 @@ _held: dict[int, int] = {}
 # The default workload carries every request-path repository; the others keep their small pools.
 _DEFAULT_WORKLOAD_MAX_SIZE = 8
 _MAX_SIZE = 4
+# Gallery and search reads keep one connection open: a fresh backend spends 0.4-2.7 s planning the
+# search query, so a search after an idle spell would otherwise pay that again (owner, 11-19).
+_WARM_WORKLOADS = frozenset({"browse"})
 
 
 def _observe_pool_lease(
@@ -74,7 +77,9 @@ def pooled_connection(
         if pool is None:
             pool = ConnectionPool(
                 conninfo=database_url,
-                min_size=0, max_size=_DEFAULT_WORKLOAD_MAX_SIZE if depth == 0 and normalized_workload == "default" else _MAX_SIZE, max_waiting=32,
+                min_size=1 if depth == 0 and normalized_workload in _WARM_WORKLOADS else 0,
+                max_size=_DEFAULT_WORKLOAD_MAX_SIZE if depth == 0 and normalized_workload == "default" else _MAX_SIZE,
+                max_waiting=32,
                 timeout=30, max_idle=120, max_lifetime=600,
                 kwargs={"row_factory": dict_row, "connect_timeout": 15},
                 open=True,

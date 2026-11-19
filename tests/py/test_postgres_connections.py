@@ -49,8 +49,9 @@ def test_connection_pool_prewarm_is_bounded_to_one_released_lease_per_workload(m
     }
     assert len(_FakePool.created) == 2
     assert [pool.options["max_size"] for pool in _FakePool.created] == [8, 4]
+    # Only gallery and search reads keep a warm connection.
+    assert [pool.options["min_size"] for pool in _FakePool.created] == [0, 1]
     for pool in _FakePool.created:
-        assert pool.options["min_size"] == 0
         assert pool.options["max_waiting"] == 32
         assert pool.options["timeout"] == 30
         assert pool.options["max_idle"] == 120

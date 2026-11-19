@@ -292,7 +292,7 @@ test('under the gate a checked-in measurement records the test that measured it'
   const path = require('node:path');
   const { spawnSync } = require('node:child_process');
   const { loadRegistry } = require('../../scripts/ci/validate-bounded-interactions.cjs');
-  const contract = loadRegistry().interactions.find(entry => entry.proof === 'contract' && entry.id.startsWith('js:'));
+  const contract = loadRegistry().interactions.find(entry => entry.proof === 'contract' && entry.id.startsWith('js:') && !entry.requestOwnership);
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'bounded-evidence-'));
   try {
     const helpers = path.join(__dirname, 'helpers');

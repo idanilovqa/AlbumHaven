@@ -5836,7 +5836,7 @@ for (const query of ['Devin', '']) {
 const { assertRequestOwnership } = require('../helpers/bounded-interaction-counter');
 const { createGalleryRefreshContext, useRealViewUrls } = require('../helpers/gallery-refresh-context');
 const {
-  assertInteractionRequests, createRequestCapture, jsonResponse, measureInteractionContract,
+  createRequestCapture, jsonResponse, measureInteractionContract,
 } = require('../helpers/request-capture');
 
 function capturedGalleryHandlers() {
@@ -5866,49 +5866,53 @@ const clickEvent = matches => ({
 
 test('request capture: gallery links and similar-artist chips request their own view once per click', async () => {
   const id = 'js:runtime/bootstrap-gallery-event-handlers.js#handleGalleryBootstrapClick';
-  await measureInteractionContract(id, async (repeatedClicks) => {
-    const { context, capture } = capturedGalleryHandlers();
-    const clickRepeatedly = async (event) => {
-      for (let click = 0; click < repeatedClicks; click += 1) context.handleGalleryBootstrapClick(event);
-      await settleGallery();
-    };
-    await clickRepeatedly(clickEvent({ 'a[data-nav="1"]': { href: 'http://localhost/' } }));
-    await clickRepeatedly(clickEvent({ 'a[data-nav="1"]': { href: 'http://localhost/?artist=Broadcast' } }));
-    context.state.view = { ...context.state.view, selected_artist: 'Broadcast', related_filter_artists: [] };
-    await clickRepeatedly(clickEvent({ '[data-related-artist]': { getAttribute: () => 'Stereolab' } }));
-    const urls = capture.urls();
-    assert.deepEqual(urls.map(galleryRequestShape), [
-      ['/home-data', null, null, null, null],
-      ['/view-data', 'Broadcast', null, null, null],
-      ['/view-data', 'Broadcast', null, 'Stereolab', null],
-    ]);
-    assertRequestOwnership(urls.slice(0, 1), { allowed: ['/home-data'], forbidden: ['/view-data'] }, 'Home');
-    assertInteractionRequests(id, urls);
-    return capture.counter.snapshot();
+  await measureInteractionContract(id, {
+    setup: repeatedClicks => ({ ...capturedGalleryHandlers(), repeatedClicks }),
+    async act({ context, capture, repeatedClicks }) {
+      const before = capture.requests.length;
+      const clickRepeatedly = async (event) => {
+        for (let click = 0; click < repeatedClicks; click += 1) context.handleGalleryBootstrapClick(event);
+        await settleGallery();
+      };
+      await clickRepeatedly(clickEvent({ 'a[data-nav="1"]': { href: 'http://localhost/' } }));
+      await clickRepeatedly(clickEvent({ 'a[data-nav="1"]': { href: 'http://localhost/?artist=Broadcast' } }));
+      context.state.view = { ...context.state.view, selected_artist: 'Broadcast', related_filter_artists: [] };
+      await clickRepeatedly(clickEvent({ '[data-related-artist]': { getAttribute: () => 'Stereolab' } }));
+      const urls = capture.urls().slice(before);
+      assert.deepEqual(urls.map(galleryRequestShape), [
+        ['/home-data', null, null, null, null],
+        ['/view-data', 'Broadcast', null, null, null],
+        ['/view-data', 'Broadcast', null, 'Stereolab', null],
+      ]);
+      assertRequestOwnership(urls.slice(0, 1), { allowed: ['/home-data'], forbidden: ['/view-data'] }, 'Home');
+      return { requests: urls };
+    },
   });
 });
 
 test('request capture: history steps request the restored view once, Home through /home-data', async () => {
   const id = 'js:runtime/bootstrap-gallery-event-handlers.js#handleGalleryBootstrapPopState';
-  await measureInteractionContract(id, async (repeatedSteps) => {
-    const { context, capture } = capturedGalleryHandlers();
-    const step = async (href, options) => {
-      context.window.location.href = href;
-      for (let repeat = 0; repeat < repeatedSteps; repeat += 1) context.handleGalleryBootstrapPopState(options);
-      await settleGallery();
-    };
-    await step('http://localhost/');
-    await step('http://localhost/?q=broadcast');
-    await step('http://localhost/', { parentViewUrl: 'http://localhost/?surface=albums', galleryAnchorArtist: 'Broadcast' });
-    const urls = capture.urls();
-    assert.deepEqual(urls.map(galleryRequestShape), [
-      ['/home-data', null, null, null, null],
-      ['/view-data', null, 'broadcast', null, null],
-      ['/view-data', null, null, null, 'Broadcast'],
-    ]);
-    assertRequestOwnership(urls.slice(0, 1), { allowed: ['/home-data'], forbidden: ['/view-data'] }, 'Home');
-    assertInteractionRequests(id, urls);
-    return capture.counter.snapshot();
+  await measureInteractionContract(id, {
+    setup: repeatedSteps => ({ ...capturedGalleryHandlers(), repeatedSteps }),
+    async act({ context, capture, repeatedSteps }) {
+      const before = capture.requests.length;
+      const step = async (href, options) => {
+        context.window.location.href = href;
+        for (let repeat = 0; repeat < repeatedSteps; repeat += 1) context.handleGalleryBootstrapPopState(options);
+        await settleGallery();
+      };
+      await step('http://localhost/');
+      await step('http://localhost/?q=broadcast');
+      await step('http://localhost/', { parentViewUrl: 'http://localhost/?surface=albums', galleryAnchorArtist: 'Broadcast' });
+      const urls = capture.urls().slice(before);
+      assert.deepEqual(urls.map(galleryRequestShape), [
+        ['/home-data', null, null, null, null],
+        ['/view-data', null, 'broadcast', null, null],
+        ['/view-data', null, null, null, 'Broadcast'],
+      ]);
+      assertRequestOwnership(urls.slice(0, 1), { allowed: ['/home-data'], forbidden: ['/view-data'] }, 'Home');
+      return { requests: urls };
+    },
   });
 });
 
@@ -5951,18 +5955,30 @@ async function measureConstantGalleryTick(id, tick) {
 }
 
 test('BI cached selected-artist reconcile waits for the track modal with constant work', async () => {
-  await measureConstantGalleryTick('js:runtime/bootstrap-gallery-event-handlers.js#reconcile', async (artistCount) => {
-    const { calls, context, counter, fireNext, timers } = countedGalleryHandlers(artistCount, { trackModalHidden: false });
-    context.scheduleCachedSelectedArtistReconcile({ ...context.state.view });
-    await fireNext();
-    assert.equal(timers.length, 1, 'an open track modal defers the reconcile');
-    const counts = await counter.measure(fireNext);
-    assert.equal(timers.length, 1);
+  const galleries = [];
+  const { small, large } = await measureInteractionContract('js:runtime/bootstrap-gallery-event-handlers.js#reconcile', {
+    async setup(artistCount) {
+      const gallery = countedGalleryHandlers(artistCount, { trackModalHidden: false });
+      gallery.context.scheduleCachedSelectedArtistReconcile({ ...gallery.context.state.view });
+      await gallery.fireNext();
+      assert.equal(gallery.timers.length, 1, 'an open track modal defers the reconcile');
+      galleries.push(gallery);
+      return gallery;
+    },
+    // One deferred tick while the track modal stays open.
+    async act({ calls, counter, fireNext, timers }) {
+      const before = calls.fetchAndRender.length;
+      const metrics = await counter.measure(fireNext);
+      assert.equal(timers.length, 1);
+      return { requests: calls.fetchAndRender.slice(before).map(([url]) => url), metrics };
+    },
+  });
+  assert.deepEqual(large, small);
+  for (const { calls, context, fireNext } of galleries) {
     context.document.getElementById('track-modal').hidden = true;
     await fireNext();
     assert.equal(calls.fetchAndRender.length, 1, 'the closed modal lets the reconcile request once');
-    return counts;
-  });
+  }
 });
 
 test('BI sidebar artist cover resume waits for the pending view request with constant work', async () => {

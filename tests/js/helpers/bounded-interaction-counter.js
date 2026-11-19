@@ -52,6 +52,10 @@ function formatViolation(id, metric, cardinality, value, budget) {
 
 let checkedInEntries = null;
 
+// Passed only by request-capture.js's measureInteractionContract, which runs
+// each pass twice under the repeated-request rule.
+const REQUEST_PASSES = Symbol('repeated request passes');
+
 function registryEntry(id, registry) {
   if (registry) return registry.interactions.find(entry => entry.id === id);
   checkedInEntries ??= new Map(loadRegistry().interactions.map(entry => [entry.id, entry]));
@@ -61,14 +65,19 @@ function registryEntry(id, registry) {
 // A contract is measured under a registered interaction id and must measure
 // exactly the cardinalities, budgets, and growth the registry declares for it.
 // An unknown id is an error: a contract can never prove an entry it does not name.
-function registryMismatches(id, { small, large, budgets, growth }, registry) {
+// An entry with requestOwnership is proved only by measureInteractionContract.
+function registryMismatches(id, { small, large, budgets, growth, requestPasses }, registry) {
   const entry = registryEntry(id, registry);
   if (!entry) return [`${id}: measured id is not a registered interaction`];
   const expected = { small: entry.cardinalities?.small, large: entry.cardinalities?.production, budgets: entry.budgets, growth: entry.growth };
   const actual = { small, large, budgets, growth };
-  return Object.keys(expected)
+  const mismatches = Object.keys(expected)
     .filter(key => !isDeepStrictEqual(actual[key], expected[key]))
     .map(key => `${id}: ${key} ${JSON.stringify(actual[key])} differs from the registry's ${JSON.stringify(expected[key])}`);
+  if (entry.requestOwnership && requestPasses !== REQUEST_PASSES) {
+    mismatches.push(`${id}: a request-capture contract is measured by measureInteractionContract, which repeats the interaction`);
+  }
+  return mismatches;
 }
 
 // Under the gate runner, a passing checked-in contract records which test
@@ -80,11 +89,11 @@ function recordMeasuredId(id) {
 
 // Runs one interaction at a small and a production cardinality, then enforces
 // both the absolute budgets and the allowed growth between the two runs.
-async function measureScalePair({ id = 'interaction', small, large, run, budgets, growth, registry }) {
+async function measureScalePair({ id = 'interaction', small, large, run, budgets, growth, registry, requestPasses }) {
   if (!(Number.isInteger(small) && Number.isInteger(large) && large > small && small > 0)) {
     throw new Error(`${id}: scale pair needs integer cardinalities with large > small > 0`);
   }
-  const mismatches = registryMismatches(id, { small, large, budgets, growth }, registry);
+  const mismatches = registryMismatches(id, { small, large, budgets, growth, requestPasses }, registry);
   if (mismatches.length) throw new Error(mismatches.join('\n'));
   const results = { small: await run(small), large: await run(large) };
   const violations = [];
@@ -142,6 +151,7 @@ function assertRequestOwnership(urls, { allowed, forbidden = [] }, label = 'requ
 
 module.exports = {
   COUNTER_FIELDS,
+  REQUEST_PASSES,
   assertPlateau,
   assertRequestOwnership,
   countedCollection,

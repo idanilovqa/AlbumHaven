@@ -81,6 +81,9 @@ for (const [name, mutate, expected] of [
   ['bare slash wildcard endpoint', reg => { reg.interactions[0].requestOwnership = { allowed: ['/home-data', '/*'], forbidden: [] }; }, /endpoint \/\* is a bare wildcard/],
   ['nested bare wildcard endpoint', reg => { reg.interactions[0].requestOwnership = { allowed: ['/*/*'], forbidden: [] }; }, /endpoint \/\*\/\* is a bare wildcard/],
   ['star endpoint', reg => { reg.interactions[0].requestOwnership = { allowed: ['*'], forbidden: [] }; }, /endpoint \* is a bare wildcard/],
+  ['request-capture contract outside JavaScript', (reg) => {
+    Object.assign(reg.interactions[0], { requestOwnership: { allowed: ['/home-data'], forbidden: [] }, command: 'python -m pytest tests/py/test_bounded_interaction_counter.py' });
+  }, /a request-capture contract must be a JavaScript test/],
 ]) {
   test(`rejects ${name}`, () => {
     const candidate = registry([contractEntry()]);

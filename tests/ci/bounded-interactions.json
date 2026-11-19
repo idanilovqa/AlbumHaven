@@ -481,7 +481,7 @@
         "production": 1000
       },
       "budgets": {
-        "requests": 121
+        "requests": 120
       },
       "growth": {
         "metric": "requests",

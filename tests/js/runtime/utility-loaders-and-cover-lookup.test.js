@@ -5,9 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
-const {
-  assertInteractionRequests, createRequestCapture, jsonResponse, measureInteractionContract,
-} = require('../helpers/request-capture');
+const { createRequestCapture, jsonResponse, measureInteractionContract } = require('../helpers/request-capture');
 const { loadPendingProjectionFetch } = require('../helpers/pending-projection-fetch');
 
 const helperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'utility-loaders-and-cover-lookup.js');
@@ -44,18 +42,23 @@ function utilityState(items = []) {
 
 test('request capture: Problematic Files loads one bounded page and one complete summary', async () => {
   const id = 'js:runtime/utility-loaders-and-cover-lookup.js#fetchSummary';
-  await measureInteractionContract(id, async (problematicAlbums) => {
-    const items = Array.from({ length: problematicAlbums }, (_, index) => ({ key: `album-${index}`, name: `Album ${index}`, detail_loaded: false }));
-    const capture = createRequestCapture(url => jsonResponse(url.endsWith('?limit=50')
-      ? { complete: false, items: items.slice(0, 50) }
-      : { complete: true, items }));
-    const context = loadUtilityLoaders(capture, utilityState());
-    await Promise.all([context.loadProblematicFiles(true), context.loadProblematicFiles(true)]);
-    await context.loadProblematicFiles();
-    assert.equal(context.state.utility.problematicFiles.length, problematicAlbums);
-    assert.deepEqual(capture.urls(), ['/utilities/problematic-files?limit=50', '/utilities/problematic-files']);
-    assertInteractionRequests(id, capture.urls());
-    return capture.counter.snapshot();
+  await measureInteractionContract(id, {
+    setup(problematicAlbums) {
+      const items = Array.from({ length: problematicAlbums }, (_, index) => ({ key: `album-${index}`, name: `Album ${index}`, detail_loaded: false }));
+      const capture = createRequestCapture(url => jsonResponse(url.endsWith('?limit=50')
+        ? { complete: false, items: items.slice(0, 50) }
+        : { complete: true, items }));
+      return { capture, context: loadUtilityLoaders(capture, utilityState()), problematicAlbums };
+    },
+    async act({ capture, context, problematicAlbums }) {
+      const before = capture.requests.length;
+      await Promise.all([context.loadProblematicFiles(true), context.loadProblematicFiles(true)]);
+      await context.loadProblematicFiles();
+      assert.equal(context.state.utility.problematicFiles.length, problematicAlbums);
+      const requests = capture.urls().slice(before);
+      assert.deepEqual(requests, ['/utilities/problematic-files?limit=50', '/utilities/problematic-files']);
+      return { requests };
+    },
   });
 });
 
@@ -96,51 +99,65 @@ test('Problematic Files summary and detail repeat a pending answer from a cold s
 
 test('request capture: local playlist analysis posts once to the advertised analysis route', async () => {
   const id = 'js:runtime/utility-loaders-and-cover-lookup.js#runLocalPlaylistImportAnalysis';
-  await measureInteractionContract(id, async (clicks) => {
-    let integration = { key: 'local_playlist_import', analyze_route: '/utilities/imports/local-playlists/analyze' };
-    const capture = createRequestCapture(() => jsonResponse({ ok: true, analysis: { status: { key: 'preview_contract_ready' } } }));
-    const state = utilityState();
-    state.utility.localPlaylistImport.selectedFile = { name: 'mix.m3u8' };
-    const context = loadUtilityLoaders(capture, state, { getSelectedUtilityIntegration: () => integration });
-    const clickMany = () => Promise.all(Array.from({ length: clicks }, () => context.runLocalPlaylistImportAnalysis()));
-    await clickMany();
-    integration = null;
-    await clickMany();
-    assert.deepEqual(capture.urls(), ['/utilities/imports/local-playlists/analyze', '/utilities/imports/local-playlists/analyze']);
-    assert.ok(capture.requests.every(({ options }) => options.method === 'POST'));
-    assertInteractionRequests(id, capture.urls());
-    return capture.counter.snapshot();
+  const integration = { key: 'local_playlist_import', analyze_route: '/utilities/imports/local-playlists/analyze' };
+  await measureInteractionContract(id, {
+    setup(clicks) {
+      const session = { clicks, capture: createRequestCapture(() => jsonResponse({ ok: true, analysis: { status: { key: 'preview_contract_ready' } } })) };
+      const state = utilityState();
+      state.utility.localPlaylistImport.selectedFile = { name: 'mix.m3u8' };
+      session.context = loadUtilityLoaders(session.capture, state, { getSelectedUtilityIntegration: () => session.integration });
+      return session;
+    },
+    async act(session) {
+      const { capture, clicks, context } = session;
+      const before = capture.requests.length;
+      const clickMany = () => Promise.all(Array.from({ length: clicks }, () => context.runLocalPlaylistImportAnalysis()));
+      session.integration = integration;
+      await clickMany();
+      session.integration = null;
+      await clickMany();
+      const requests = capture.requests.slice(before).map(({ url, options }) => ({ url, method: options.method }));
+      assert.deepEqual(requests, [
+        { url: '/utilities/imports/local-playlists/analyze', method: 'POST' }, { url: '/utilities/imports/local-playlists/analyze', method: 'POST' },
+      ]);
+      return { requests };
+    },
   });
 });
 
 test('request capture: closing Settings resumes a deferred view on its own endpoint, once', async () => {
   const id = 'js:runtime/utility-loaders-and-cover-lookup.js#resumeDeferredUtilityViewRequest';
-  await measureInteractionContract(id, async (problematicAlbums) => {
-    // fetchAndRender passes /home-data and /view-data URLs to fetch unchanged; its own contract covers it.
-    const capture = createRequestCapture(() => Promise.resolve(true));
-    const state = utilityState(Array.from({ length: problematicAlbums }, (_, index) => ({ key: `album-${index}` })));
-    const context = loadUtilityLoaders(capture, state, { fetchAndRender: url => capture.fetch(url) });
-    const defer = (url, view = {}) => {
-      state.view = view;
-      state.ui.deferredUtilityViewRequest = { url, push: false, options: { startupRefresh: true }, originatingViewStateRevision: 0 };
-    };
-    const resumeTwice = async () => {
-      assert.equal(context.resumeDeferredUtilityViewRequest(), true);
-      await Promise.resolve();
-      assert.equal(context.resumeDeferredUtilityViewRequest(), false, 'a resumed request is not resumed again');
-    };
-    defer('/home-data');
-    await resumeTwice();
-    defer('/view-data?surface=albums&q=neal', {
-      query: 'neal', selected_artist: 'Neal Morse', search_context: { selected_artist_source: 'auto_top_match' },
-    });
-    await resumeTwice();
-    defer('/view-data?surface=albums&artist=Stale');
-    state.ui.viewStateRevision = 1;
-    assert.equal(context.resumeDeferredUtilityViewRequest(), false, 'a superseded view is dropped');
-    assert.deepEqual(capture.urls(), ['/home-data', '/view-data?surface=albums&q=neal&artist=Neal+Morse']);
-    assertInteractionRequests(id, capture.urls());
-    assert.equal(capture.urls()[0], '/home-data', 'Home resumes on /home-data, never /view-data');
-    return capture.counter.snapshot();
+  await measureInteractionContract(id, {
+    setup(problematicAlbums) {
+      // fetchAndRender passes /home-data and /view-data URLs to fetch unchanged; its own contract covers it.
+      const capture = createRequestCapture(() => Promise.resolve(true));
+      const state = utilityState(Array.from({ length: problematicAlbums }, (_, index) => ({ key: `album-${index}` })));
+      return { capture, state, context: loadUtilityLoaders(capture, state, { fetchAndRender: url => capture.fetch(url) }) };
+    },
+    async act({ capture, state, context }) {
+      const before = capture.requests.length;
+      state.ui.viewStateRevision = 0;
+      const defer = (url, view = {}) => {
+        state.view = view;
+        state.ui.deferredUtilityViewRequest = { url, push: false, options: { startupRefresh: true }, originatingViewStateRevision: 0 };
+      };
+      const resumeTwice = async () => {
+        assert.equal(context.resumeDeferredUtilityViewRequest(), true);
+        await Promise.resolve();
+        assert.equal(context.resumeDeferredUtilityViewRequest(), false, 'a resumed request is not resumed again');
+      };
+      defer('/home-data');
+      await resumeTwice();
+      defer('/view-data?surface=albums&q=neal', {
+        query: 'neal', selected_artist: 'Neal Morse', search_context: { selected_artist_source: 'auto_top_match' },
+      });
+      await resumeTwice();
+      defer('/view-data?surface=albums&artist=Stale');
+      state.ui.viewStateRevision = 1;
+      assert.equal(context.resumeDeferredUtilityViewRequest(), false, 'a superseded view is dropped');
+      const requests = capture.urls().slice(before);
+      assert.deepEqual(requests, ['/home-data', '/view-data?surface=albums&q=neal&artist=Neal+Morse'], 'Home resumes on /home-data, never /view-data');
+      return { requests };
+    },
   });
 });

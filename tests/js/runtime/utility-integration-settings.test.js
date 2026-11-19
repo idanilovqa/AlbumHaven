@@ -345,40 +345,35 @@ test('reopening Integrations during a background run resumes its progress',async
 });
 
 test('bounded interaction: following a background Last.fm submission does constant work per poll at 5,000 pending scrobbles',async()=>{
- const { createInteractionCounter, measureScalePair, assertRequestOwnership } = require('../helpers/bounded-interaction-counter.js');
- const { loadRegistry } = require('../../../scripts/ci/validate-bounded-interactions.cjs');
- const interactionId = 'js:runtime/utility-loaders-and-cover-lookup.js#followLastfmScrobbleSubmission';
- const entry = loadRegistry().interactions.find(item => item.id === interactionId);
- const run = async (pending) => {
-  const counter = createInteractionCounter();
-  // The worker sends 50 scrobbles per batch, so every other poll sees a lower count.
-  const progress = Array.from({ length: 11 }, (_value, poll) => ({
-   scrobbled: Math.min(pending, Math.floor(poll / 2) * 50),
-   pending: Math.max(0, pending - Math.floor(poll / 2) * 50),
-   submission: { state: 'running', error: '' },
-  }));
-  const server = lastfmSubmissionServer({ submit: queuedSubmit(pending), progress });
-  const urls = [];
-  const c = connectedLastfmSubmission(server, {
-   fetch: async (url, options) => { counter.count('requests'); urls.push(url); return server.fetch(url, options); },
-   setTimeout: (callback, delay) => { counter.count('timers'); return server.setTimeout(callback, delay); },
-   renderUtilityModalContent: () => counter.count('renderCommits'),
-  });
-  c.state.utility.lastfmScrobbles.summary = { scrobbled: 0, lastfm_total: 12000, pending, can_submit: true };
-  await c.submitPendingLastfmScrobbles();
-  await runLastfmPolls(server, 1);
-  const work = await counter.measure(() => runLastfmPolls(server, 10));
-  assert.equal(c.state.utility.lastfmScrobbles.submitting, true);
-  assertRequestOwnership(urls.filter(url => url.includes('?progress=1')), entry.requestOwnership, interactionId);
-  return work;
- };
- await measureScalePair({
-  id: interactionId,
-  small: 20,
-  large: 5000,
-  run,
-  budgets: { requests: 10, timers: 10, renderCommits: 5 },
-  growth: { metric: 'requests', largeMinusSmallMax: 0 },
+ const { createInteractionCounter } = require('../helpers/bounded-interaction-counter.js');
+ const { measureInteractionContract } = require('../helpers/request-capture');
+ await measureInteractionContract('js:runtime/utility-loaders-and-cover-lookup.js#followLastfmScrobbleSubmission', {
+  async setup(pending) {
+   const counter = createInteractionCounter();
+   // The worker sends 50 scrobbles per batch, so every other poll sees a lower count.
+   const progress = Array.from({ length: 21 }, (_value, poll) => ({
+    scrobbled: Math.min(pending, Math.floor(poll / 2) * 50),
+    pending: Math.max(0, pending - Math.floor(poll / 2) * 50),
+    submission: { state: 'running', error: '' },
+   }));
+   const server = lastfmSubmissionServer({ submit: queuedSubmit(pending), progress });
+   const c = connectedLastfmSubmission(server, {
+    fetch: async (url, options) => { counter.count('requests'); return server.fetch(url, options); },
+    setTimeout: (callback, delay) => { counter.count('timers'); return server.setTimeout(callback, delay); },
+    renderUtilityModalContent: () => counter.count('renderCommits'),
+   });
+   c.state.utility.lastfmScrobbles.summary = { scrobbled: 0, lastfm_total: 12000, pending, can_submit: true };
+   await c.submitPendingLastfmScrobbles();
+   await runLastfmPolls(server, 1);
+   return { c, counter, server };
+  },
+  // Ten more progress polls.
+  async act({ c, counter, server }) {
+   const before = server.requests.length;
+   const metrics = await counter.measure(() => runLastfmPolls(server, 10));
+   assert.equal(c.state.utility.lastfmScrobbles.submitting, true);
+   return { requests: server.requests.slice(before).map(([url, method]) => ({ url, method })), metrics };
+  },
  });
 });
 

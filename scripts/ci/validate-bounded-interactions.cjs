@@ -199,6 +199,10 @@ function validateSchema(registry, { fileExists, readFile }) {
       }
       const testFiles = commandTestFiles(entry.command);
       if (!testFiles.length) errors.push(`${label}: command must name a test file`);
+      // Only the JavaScript request-capture helper repeats an interaction under the repeated-request rule.
+      if (ownership !== undefined && testFiles.some(file => !file.endsWith('.js'))) {
+        errors.push(`${label}: a request-capture contract must be a JavaScript test (measureInteractionContract)`);
+      }
       const missing = testFiles.filter(file => !fileExists(file));
       for (const file of missing) errors.push(`${label}: command test file ${file} does not exist`);
       if (!missing.length && testFiles.length && !testFiles.some(file => declaresTest(readFile(file), file, entry.testIdentity))) {

@@ -1683,7 +1683,8 @@ test('IAR-W22: artist views and Home opened online open offline, however their p
   const artist = '/view-data?surface=albums&artist=3%20Inches%20of%20Blood&payload_tier=gallery_summary';
   const routes = {
     [artist]: { ok: true, selected_artist: '3 Inches of Blood', artist_groups: [{ artist: '3 Inches of Blood', albums: [] }] },
-    '/home-data?omit_sidebar=1': { ok: true, sections: [] },
+    // The app's own links are not file paths.
+    '/home-data?omit_sidebar=1': { ok: true, sections: [{ more: '/home/recent-albums' }] },
   };
   const server = dataServer(routes);
   const { handle } = setup({ mode: 'web', respond: server.respond });
@@ -1693,7 +1694,7 @@ test('IAR-W22: artist views and Home opened online open offline, however their p
   assert.equal((await json(await handle(resource(artist)))).selected_artist, '3 Inches of Blood');
   const reordered = '/view-data?payload_tier=gallery_summary&artist=3%20Inches%20of%20Blood&surface=albums';
   assert.equal((await json(await handle(resource(reordered)))).selected_artist, '3 Inches of Blood');
-  assert.deepEqual((await json(await handle(resource('/home-data?omit_sidebar=1')))).sections, []);
+  assert.equal((await json(await handle(resource('/home-data?omit_sidebar=1')))).sections[0].more, '/home/recent-albums');
 });
 
 test('IAR-W24: kept data holds to its limits, least recently opened out first', async () => {

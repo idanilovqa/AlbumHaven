@@ -92,30 +92,28 @@ def mark_app_copy(response: Any, account: str, asset_version: str, expires: date
     response.headers[EXPIRES_HEADER] = str(int(expires.timestamp() * 1000))
 
 
-def install_app_copy_data(app: Any) -> None:
-    """Marks the library data the copy's worker asks for, so it can be kept for that account."""
 
-    @app.middleware("http")
-    async def mark_app_copy_data(request, call_next):
-        response = await call_next(request)
-        if (
-            request.url.path in APP_COPY_DATA_PATHS
-            and response.status_code == 200
-            and app_copy_requested(request)
-            and app_copy_enabled()
-            and str(response.headers.get("content-type") or "").startswith("application/json")
-        ):
-            actor = getattr(request.state, "current_actor", None)
-            if getattr(actor, "account_id", None) is not None:
-                mark_app_copy(
-                    response,
-                    app_copy_account(actor),
-                    request.app.state.runtime_asset_version,
-                    app_copy_expires(
-                        actor,
-                        (getattr(request.app.state, "auth_policy_config", None) or {}).get("session") or {},
-                        datetime.now(timezone.utc),
-                    ),
-                )
-                response.headers[REDACT_HEADER] = ",".join(APP_COPY_REDACTED_KEYS)
-        return response
+def mark_app_copy_data(request: Any, response: Any) -> None:
+    """Marks library data the copy's worker asked for, so it can be kept for the signed-in account."""
+    if (
+        request.url.path not in APP_COPY_DATA_PATHS
+        or response.status_code != 200
+        or not app_copy_requested(request)
+        or not app_copy_enabled()
+        or not str(response.headers.get("content-type") or "").startswith("application/json")
+    ):
+        return
+    actor = getattr(request.state, "current_actor", None)
+    if getattr(actor, "account_id", None) is None:
+        return
+    mark_app_copy(
+        response,
+        app_copy_account(actor),
+        request.app.state.runtime_asset_version,
+        app_copy_expires(
+            actor,
+            (getattr(request.app.state, "auth_policy_config", None) or {}).get("session") or {},
+            datetime.now(timezone.utc),
+        ),
+    )
+    response.headers[REDACT_HEADER] = ",".join(APP_COPY_REDACTED_KEYS)

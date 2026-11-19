@@ -57,7 +57,6 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("GET", "/news"): "app.shell.read",
     ("GET", "/bootstrap-data"): "app.bootstrap.read",
     ("GET", "/app-copy/account"): "app.shell.read",
-    ("GET", "/app-copy-worker.js"): "app.shell.read",
     ("GET", "/status"): "app.status.read",
     ("POST", "/account/library-warning/dismiss"): "account.self.library_warning.dismiss",
     ("GET", "/view-data"): "library.browse.read",
@@ -355,6 +354,10 @@ def _is_public(method: str, path: str) -> bool:
     if path in _PUBLIC_AUTH_PATHS:
         return normalized_method in {"GET", "HEAD", "POST"}
     if path in {"/health", "/favicon.ico"}:
+        return normalized_method in _READ_METHODS
+    # The copy's worker script, served from the root only so its scope covers the app page; the
+    # same file is public under /static/. The sign-in page installs it before anyone signs in.
+    if path == "/app-copy-worker.js":
         return normalized_method in _READ_METHODS
     if path == "/static" or path.startswith("/static/"):
         return normalized_method in _READ_METHODS

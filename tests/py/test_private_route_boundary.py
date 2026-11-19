@@ -45,6 +45,7 @@ def test_private_routes_have_explicit_action_classification():
                 "/accept-invitation",
                 "/accept-invitation/continue",
                 "/favicon.ico",
+                "/app-copy-worker.js",
                 "/static",
                 "/artifacts/android/download/{token}",
                 "/downloads/{token}",
@@ -820,3 +821,15 @@ def test_admin_denial_is_readable_for_navigation_but_json_for_api_clients(path, 
         assert dict(response_headers)[b'content-type'] == b'application/json'
     assert b'location' not in dict(response_headers)
     assert b'set-cookie' not in dict(response_headers)
+
+
+@pytest.mark.parametrize("method, path, allowed", [
+    ("GET", "/app-copy-worker.js", True),
+    ("HEAD", "/app-copy-worker.js", True),
+    ("POST", "/app-copy-worker.js", False),
+    ("GET", "/app-copy-worker.js/extra", False),
+])
+def test_copy_worker_script_is_readable_before_signing_in(method, path, allowed):
+    """IAR-W12: the sign-in page installs the copy's worker, so the library page after it is kept."""
+    from music_app.services.private_route_boundary import _is_public
+    assert _is_public(method, path) is allowed

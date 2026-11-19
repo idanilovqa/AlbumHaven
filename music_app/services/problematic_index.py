@@ -37,7 +37,7 @@ _LOCK_NAMESPACE = 188  # pg advisory lock (namespace, library id)
 ENABLED_KEY = "ALBUM_HAVEN_PROBLEMATIC_INDEX_ENABLED"
 
 _EXECUTOR = create_daemon_executor(max_workers=1, thread_name_prefix="albumhaven-problematic-index")
-_QUEUED: set[tuple[str, str]] = set()
+_QUEUED: set[str] = set()
 _QUEUED_LOCK = Lock()
 _UNAVAILABLE_DATABASES: set[str] = set()
 
@@ -285,7 +285,7 @@ def refresh(repository: Any, *, inline_limit: int = INLINE_ALBUM_LIMIT) -> bool:
             if library_id is None:
                 return False
             if _state(connection, library_id) != "ready":
-                _queue(repository, "backfill")
+                queue_maintenance(repository)
                 return False
             marks = connection.execute(
                 """select album_id, marked_xid::text as marked_xid from library.problematic_index_dirty_albums
@@ -295,7 +295,7 @@ def refresh(repository: Any, *, inline_limit: int = INLINE_ALBUM_LIMIT) -> bool:
             if not marks:
                 return True
             if len(marks) > inline_limit:
-                _queue(repository, "drain")
+                queue_maintenance(repository)
                 return True
             if not _locked(connection, library_id):
                 return True  # another evaluator holds the marks; the index stays readable
@@ -398,8 +398,11 @@ def _backfill(repository: Any, connection: Any, library_id: int) -> None:
     )
 
 
-def _run(repository: Any, work: str) -> None:
-    key = (repository._database_url, work)
+def _maintain(repository: Any) -> None:
+    """Backfill when no ready index exists, then evaluate every marked album."""
+    with _QUEUED_LOCK:
+        # A request arriving from now on queues another pass for marks made meanwhile.
+        _QUEUED.discard(repository._database_url)
     try:
         with repository._connect_to_database() as connection:
             connection.autocommit = True
@@ -407,10 +410,8 @@ def _run(repository: Any, work: str) -> None:
             if library_id is None or not _locked(connection, library_id):
                 return
             try:
-                if work == "backfill":
-                    if _state(connection, library_id) != "ready":
-                        _backfill(repository, connection, library_id)
-                    return
+                if _state(connection, library_id) != "ready":
+                    _backfill(repository, connection, library_id)
                 while marks := connection.execute(
                     """select album_id, marked_xid::text as marked_xid from library.problematic_index_dirty_albums
                        where library_id = %s order by album_id limit %s""",
@@ -421,27 +422,18 @@ def _run(repository: Any, work: str) -> None:
             finally:
                 _unlock(connection, library_id)
     except Exception:
-        _LOGGER.warning("Problematic Files index %s failed.", work, exc_info=True)
-    finally:
-        with _QUEUED_LOCK:
-            _QUEUED.discard(key)
+        _LOGGER.warning("Problematic Files index maintenance failed.", exc_info=True)
 
 
-def _queue(repository: Any, work: str) -> None:
-    if repository._config.get("SHARED_LIBRARY_BROWSE_ONLY"):
+def queue_maintenance(repository: Any) -> None:
+    """Backfill or evaluate marked albums in the background (startup, saves, watcher passes)."""
+    if not _available(repository) or repository._config.get("SHARED_LIBRARY_BROWSE_ONLY"):
         return
-    key = (repository._database_url, work)
     with _QUEUED_LOCK:
-        if key in _QUEUED:
+        if repository._database_url in _QUEUED:
             return
-        _QUEUED.add(key)
-    _EXECUTOR.submit(_run, repository, work)
-
-
-def queue_refresh(repository: Any) -> None:
-    """Evaluate marked albums in the background (after a save or a watcher pass)."""
-    if _available(repository):
-        _queue(repository, "drain")
+        _QUEUED.add(repository._database_url)
+    _EXECUTOR.submit(_maintain, repository)
 
 
 def wait_for_background_work(timeout: float = 600) -> None:
@@ -450,9 +442,12 @@ def wait_for_background_work(timeout: float = 600) -> None:
         _EXECUTOR.submit(lambda: None).result(timeout=timeout)
 
 
-def read_page(repository: Any, *, limit: int, after: tuple[str, str, str, str] | None,
+def read_page(repository: Any, *, limit: int | None, after: tuple[str, str, str, str] | None,
               needle: str = "") -> list[dict[str, object]] | None:
-    """Up to ``limit + 1`` items after ``after`` (matching ``needle``); None when not ready."""
+    """Up to ``limit + 1`` items (every item when None) after ``after`` matching ``needle``.
+
+    None when no ready index exists yet.
+    """
     if not refresh(repository):
         return None
     with repository._browse_connection_context() as connection:
@@ -467,10 +462,37 @@ def read_page(repository: Any, *, limit: int, after: tuple[str, str, str, str] |
                   and (%(needle)s = '' or strpos(items.search_text, %(needle)s) > 0)
                 order by items.sort_name, items.sort_artist, items.sort_year, items.sort_key
                 limit %(limit)s""",
-            {"after": list(after) if after is not None else None, "needle": needle, "limit": limit + 1},
+            {"after": list(after) if after is not None else None, "needle": needle,
+             "limit": None if limit is None else limit + 1},
         ).fetchall()
     return [
         json.loads(item) if isinstance(item, str) else dict(item)
         for row in rows
         if (item := _value(row, "item")) is not None
     ]
+
+
+def loose_group_detail(repository: Any, item_key: str) -> dict[str, object] | None:
+    """The detail of an indexed loose-track group, from its files alone."""
+    if not refresh(repository):
+        return None
+    browse = _browse()
+    with repository._browse_connection_context() as connection:
+        row = connection.execute(
+            f"""select item from library.problematic_index_items
+                where library_id = ({_LIBRARY_SQL}) and item_key = %s""",
+            (item_key,),
+        ).fetchone()
+        item = _value(row, "item") if row is not None else None
+        item = json.loads(item) if isinstance(item, str) else item
+        paths = {str(path) for path in (item or {}).get("track_paths") or [] if str(path or "").strip()}
+        if not paths:
+            return None
+        rows = repository._load_problematic_loose_file_rows(
+            connection=connection, limit=None, album_keys={item_key}, seed_private_paths=paths,
+        )
+        payload = repository._build_problematic_files_payload_from_rows(
+            connection=connection, rows=rows, missing_rows=[], include_initial_detail=False, cache_albums=True,
+        )
+    album = (payload.get(browse._PROBLEMATIC_PAGE_ALBUMS_KEY) or {}).get(item_key)
+    return browse._problematic_album_detail_payload(album) if album else None

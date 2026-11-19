@@ -269,7 +269,7 @@ def refresh_postgres_utility_projections_after_edit(
         if patched:
             remaining.discard("problematic-files")
     if database_url:
-        problematic_index.queue_refresh(PostgresLibraryBrowseRepository(dict(config)))
+        problematic_index.queue_maintenance(PostgresLibraryBrowseRepository(dict(config)))
     invalidate_postgres_utility_projection_cache(database_url=database_url or None, kinds=remaining)
 
 
@@ -3074,6 +3074,9 @@ class PostgresLibraryBrowseRepository:
                     flight.set()
 
     def build_problematic_files_payload(self) -> dict[str, object]:
+        indexed = self._indexed_problematic_list()
+        if indexed is not None:
+            return indexed
         kind = "problematic-files"
 
         def cached() -> dict[str, object] | None:
@@ -3341,6 +3344,28 @@ class PostgresLibraryBrowseRepository:
         page = window(page)
         page["problem_reason_types"] = _problematic_filter_reason_types(page.get("items") or ())
         return page
+
+    def _indexed_problematic_list(self) -> dict[str, object] | None:
+        """The complete list from the persisted index, with the first item's detail."""
+        items = problematic_index.read_page(self, limit=None, after=None)
+        if items is None:
+            return None
+        initial_detail = self.build_problematic_file_detail_payload(items[0]["key"]) if items else None
+        return {
+            "items": items,
+            "count": len(items),
+            "initial_detail": initial_detail,
+            "complete": True,
+            "has_more": False,
+            "next_cursor": "",
+            "cursor_restarted": False,
+            "total_candidate_count": len(items),
+            "projection_cache_status": "indexed",
+            "problem_reason_types": _problematic_filter_reason_types(items),
+            "persistence_backend": PERSISTENCE_BACKEND_POSTGRES,
+            "persistence_seam": _LIBRARY_BROWSE_SEAM_ID,
+            "view_data_source": _SOURCE_TELEMETRY,
+        }
 
     def _indexed_problematic_page(self, *, limit: int, cursor: str, needle: str = "") -> dict[str, object] | None:
         """A page (or search page) read from the persisted index; None until it is ready."""
@@ -3875,9 +3900,28 @@ class PostgresLibraryBrowseRepository:
         normalized_paths = _normalized_track_paths(track_paths)
         if not normalized_paths:
             return None
-        albums = _problematic_album_projection_payloads(
-            self._load_problematic_file_rows(candidate_summary=False)
-        )
+        # Only the albums of these files: reading every file took tens of seconds.
+        with self._browse_connection_context() as connection:
+            album_ids = [
+                int(_row_mapping(row)["album_id"])
+                for row in connection.execute(
+                    f"""select distinct tracks.album_id
+                        from library.local_track_files files
+                        join library.local_tracks tracks on tracks.id = files.track_id
+                        where files.private_path = any(%(paths)s::text[])
+                          and tracks.album_id is not null
+                          and tracks.library_id = ({_PROBLEMATIC_SNAPSHOT_LIBRARY_SQL})""",
+                    {"paths": sorted(normalized_paths)},
+                ).fetchall()
+            ]
+            rows = (
+                self._load_problematic_file_rows(connection=connection, album_ids=album_ids)
+                if album_ids else
+                self._load_problematic_loose_file_rows(
+                    connection=connection, limit=None, private_paths=set(normalized_paths),
+                )
+            )
+        albums = _problematic_album_projection_payloads(rows)
         for album in albums:
             album_track_paths = {
                 str(track.get("path") or "").strip()
@@ -3968,6 +4012,9 @@ class PostgresLibraryBrowseRepository:
                         )
                     return _problematic_album_detail_payload(album)
         if _is_problematic_loose_tracks_key(normalized_album_key):
+            indexed = problematic_index.loose_group_detail(self, normalized_album_key)
+            if indexed is not None:
+                return indexed
             cached = self._get_cached_utility_projection("problematic-files", copy_payload=False)
             cached_details = (cached or {}).get(_PROBLEMATIC_LOOSE_TRACKS_DETAIL_KEY)
             cached_detail = (
@@ -5334,6 +5381,7 @@ class PostgresLibraryBrowseRepository:
     def queue_settings_projection_prewarm(self) -> None:
         kinds = [] if self._config.get("SHARED_LIBRARY_BROWSE_ONLY") else ["loose-tracks"]
         kinds.extend(("problematic-files", "rules"))
+        problematic_index.queue_maintenance(self)
         for kind in kinds:
             self.queue_utility_projection_prewarm(kind)
 

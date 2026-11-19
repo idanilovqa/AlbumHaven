@@ -329,7 +329,8 @@ def test_alias_proposals_survive_initial_detail_and_mutation_refresh(boundary, m
     class Connection:
         def __enter__(self): return self
         def __exit__(self, *_args): return False
-        def execute(self, *_args): return None
+        # The track-path lookup first reads the files' album ids.
+        def execute(self, *_args): return type('Cursor', (), {'fetchall': lambda _self: [{'album_id': 1}]})()
     connection = Connection()
     repository = module.PostgresLibraryBrowseRepository({'ALBUM_HAVEN_APP_DATABASE_URL': 'postgresql://alias-test'}, connect=lambda *_args: connection)
     monkeypatch.setattr(type(repository), '_load_problematic_file_rows', lambda *_args, **_kwargs: [row])

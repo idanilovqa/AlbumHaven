@@ -967,7 +967,16 @@ def _indexed_problematic_items(database_url, *, limit=2, needle=""):
         items += page["items"]
         cursor = page["next_cursor"]
         if not page["has_more"]:
-            return sorted(items, key=lambda item: (item["key"], item["track_paths"]))
+            break
+    items = sorted(items, key=lambda item: (item["key"], item["track_paths"]))
+    if not needle:
+        complete = repository.build_problematic_files_payload()
+        assert complete["projection_cache_status"] == "indexed" and complete["complete"]
+        assert sorted(complete["items"], key=lambda item: (item["key"], item["track_paths"])) == items
+        assert complete["problem_reason_types"] == browse._problematic_filter_reason_types(items)
+        if items:
+            assert complete["initial_detail"]["key"] == complete["items"][0]["key"]
+    return items
 
 
 def _ready_problematic_index(database_url):

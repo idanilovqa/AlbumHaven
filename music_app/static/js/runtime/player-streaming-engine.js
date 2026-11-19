@@ -611,6 +611,9 @@ function detachAtStreamingPlace(code) {
     : Math.max(0, Number(engine.snapshot.currentTime) || 0);
   // A start on its way to playing is playing, though its snapshot says paused until it plays.
   const starting = engine.mode === 'starting' && engine.roles.current?.autoplay === true;
+  // Another song's prepared start is restarted on the next socket; its press settles with that.
+  const press = seek?.kind === 'replacement' ? { resolve: seek.resolve, reject: seek.reject } : null;
+  if (press) Object.assign(seek, { resolve: null, reject: null });
   forgetLostStreamingSocket();
   engine.pendingPromotion = null;
   engine.detached = {
@@ -623,7 +626,8 @@ function detachAtStreamingPlace(code) {
   engine.diagnostics.transportDetaches = (Number(engine.diagnostics.transportDetaches) || 0) + 1;
   // Connected first: the restart then asks this socket instead of opening one of its own.
   if (!engine.detached.paused) connectStreamingSocket();
-  void jumpWhileDetached(track, startSeconds);
+  const restart = jumpWhileDetached(track, startSeconds);
+  if (press) void restart.then(press.resolve, press.reject);
   publishStreamingDiagnostics();
   return true;
 }

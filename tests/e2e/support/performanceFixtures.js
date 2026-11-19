@@ -1245,6 +1245,8 @@ export const test = base.extend({
       intro: 'This synthetic performance report records five Edit Tags cycles that move five «Ремиксы» tracks to «Ремиксы2» and merge them back, each save from click to terminal success with its server phase timings, plus album search and unrelated search between and after the saves.',
       buildSummaryCards: buildEditTagsSplitMergeSummaryCards,
       expectedTimingMetricIds: [
+        'edit-tags-split-merge.optimisticCardsMs',
+        'edit-tags-split-merge.confirmedSaveMs',
         'edit-tags-split-merge.splitSaveMs',
         'edit-tags-split-merge.mergeSaveMs',
         'edit-tags-split-merge.cardsReadyMs',

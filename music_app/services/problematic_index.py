@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from collections.abc import Mapping
 from threading import Lock
 from typing import Any
@@ -38,6 +39,9 @@ ENABLED_KEY = "ALBUM_HAVEN_PROBLEMATIC_INDEX_ENABLED"
 _EXECUTOR = create_daemon_executor(max_workers=1, thread_name_prefix="albumhaven-problematic-index")
 _QUEUED: set[str] = set()
 _QUEUED_LOCK = Lock()
+# After a failed pass, per database: no new pass before this monotonic time.
+_RETRY_NOT_BEFORE: dict[str, float] = {}
+RETRY_AFTER_FAILURE_SECONDS = 300
 _UNAVAILABLE_DATABASES: set[str] = set()
 # Albums checked by a running backfill of this process, per database.
 _PROGRESS: dict[str, dict[str, int]] = {}
@@ -405,7 +409,10 @@ def _maintain(repository: Any) -> None:
             finally:
                 _unlock(connection, library_id)
     except Exception:
-        _LOGGER.warning("Problematic Files index maintenance failed.", exc_info=True)
+        _LOGGER.warning("Problematic Files index maintenance failed; retrying in %d s.", RETRY_AFTER_FAILURE_SECONDS,
+                        exc_info=True)
+        with _QUEUED_LOCK:
+            _RETRY_NOT_BEFORE[repository._database_url] = time.monotonic() + RETRY_AFTER_FAILURE_SECONDS
 
 
 def indexing_progress(repository: Any) -> dict[str, int] | None:
@@ -423,7 +430,8 @@ def queue_maintenance(repository: Any) -> None:
     if not _available(repository) or repository._config.get("SHARED_LIBRARY_BROWSE_ONLY"):
         return
     with _QUEUED_LOCK:
-        if repository._database_url in _QUEUED:
+        # A failed pass (a backfill costs minutes) waits before the next poll may start another.
+        if repository._database_url in _QUEUED or time.monotonic() < _RETRY_NOT_BEFORE.get(repository._database_url, 0):
             return
         _QUEUED.add(repository._database_url)
     _EXECUTOR.submit(_maintain, repository)

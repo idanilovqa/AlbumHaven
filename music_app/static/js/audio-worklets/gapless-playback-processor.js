@@ -121,6 +121,9 @@
       this.configured = false;
       this.current = createRing(1);
       this.continuity = createRing(1);
+      // Streams this generation's current ring played and left: the engine learns of a cutover by
+      // message, so their next chunks may still arrive, and are dropped.
+      this.retiredStreamIds = new Set();
       this.renderedFrames = 0;
       this.timelineFrame = 0;
       this.playing = false;
@@ -156,6 +159,7 @@
 
     reset(generation, timelineStartFrame = 0) {
       this.generation = generation;
+      this.retiredStreamIds.clear();
       clearRing(this.current);
       clearRing(this.continuity);
       this.renderedFrames = timelineStartFrame;
@@ -262,6 +266,7 @@
     }
 
     enqueue(message) {
+      if (this.retiredStreamIds.has(message.streamId)) return;
       const ring = this.ringForRole(message.role);
       let rejection = '';
       if (!ring) rejection = 'unknown-role';
@@ -318,6 +323,7 @@
     }
 
     markEos(message) {
+      if (this.retiredStreamIds.has(message.streamId)) return;
       const ring = this.ringForRole(message.role);
       const validEmittedFrames = isIntegerBetween(
         message.emittedFrames,
@@ -611,6 +617,7 @@
 
     promoteContinuity() {
       const oldCurrent = this.current;
+      if (oldCurrent.streamId !== null) this.retiredStreamIds.add(oldCurrent.streamId);
       this.current = this.continuity;
       this.continuity = oldCurrent;
       clearRing(this.continuity);

@@ -583,3 +583,171 @@ for (const { id, serverBackAfterMs, outcome } of [
     }
   });
 }
+
+// Owner, sandbox5 2026-11-19, verbatim: "even with Network on if I seek into a different place in the
+// player it just immediately stops, resets the playhead to the beginning of the track, dims the play
+// button and sits". Reproduced on sandbox5 (a2-seek-repro.cjs): the third seek stopped playback with an
+// AudioWorklet protocol rejection, a late chunk of the stream the seek had just replaced.
+test('FTC-PLAYBACK-SEEK-001 under full CPU load ten rapid seeks forward and back each show their place, never reset to the start, never stop or disable Play, and the last one plays', {
+  tag: '@area:playback',
+}, async ({ page, galleryActions, globalPlayerActions, navigationPanelActions, playbackEvidence, stepLogger, trackModalActions }) => {
+  test.setTimeout(6 * 60 * 1000);
+  const player = globalPlayerActions.globalPlayer;
+  let load = null;
+  let path = '';
+  let durationSeconds = 0;
+
+  try {
+    await stepLogger.step('The long song plays under full CPU load', async () => {
+      await galleryActions.goto();
+      await galleryActions.waitForGalleryReady();
+      await navigationPanelActions.selectSidebarArtistByName(ARTIST);
+      await navigationPanelActions.waitForSidebarSelection(ARTIST);
+      await galleryActions.clickAlbumDetailsByArtistAndAlbum(ARTIST, ALBUM);
+      await trackModalActions.waitForInteractiveSummary();
+      path = String(await trackModalActions.trackModal.trackRowByTitle(TITLE).getAttribute('data-track-row-path') || '');
+      load = await startCpuLoad([page]);
+      const mark = await playbackEvidence.playbackMark();
+      await trackModalActions.playTrackByTitle(TITLE);
+      await playbackEvidence.waitForTrackPlaybackEvidence({ after: mark, path });
+      await trackModalActions.close();
+      await globalPlayerActions.waitForPlaybackState({ paused: false, minimumCurrentTime: 5 });
+      durationSeconds = (await player.readPlaybackTiming()).duration;
+      expect(durationSeconds).toBeGreaterThan(120);
+    });
+
+    await stepLogger.step('Ten rapid seeks: each shows its place, never the start, and Play stays playing and enabled', async () => {
+      const fractions = [0.8, 0.3, 0.65, 0.15, 0.9, 0.5, 0.7, 0.2, 0.85, 0.4];
+      const bounds = await player.timeline.boundingBox();
+      for (const fraction of fractions) {
+        const target = Math.floor(durationSeconds * fraction);
+        await player.timeline.click({ position: { x: bounds.width * fraction, y: bounds.height / 2 } });
+        await expect.poll(async () => displayedSeconds(await player.time.textContent()), { timeout: 2000 })
+          .toBeGreaterThanOrEqual(target - 2);
+        for (let read = 0; read < 4; read += 1) {
+          await page.waitForTimeout(150);
+          const shown = displayedSeconds(await player.time.textContent());
+          expect(shown, `after the seek to ${target}s the head never resets`).toBeGreaterThanOrEqual(target - 2);
+          await expect(player.playButton).toHaveAttribute('aria-label', 'Pause');
+          await expect(player.playButton).toBeEnabled();
+        }
+      }
+    });
+
+    await stepLogger.step('The last seek plays on from its place', async () => {
+      const target = Math.floor(durationSeconds * 0.4);
+      const mark = await playbackEvidence.playbackMark();
+      const evidence = await playbackEvidence.waitForTrackPlaybackEvidence({ after: mark, path }, { timeout: 8000 });
+      expect(evidence.nonZeroSamples).toBeGreaterThan(0);
+      await expect.poll(async () => displayedSeconds(await player.time.textContent()), { timeout: 8000 })
+        .toBeGreaterThan(target + 1);
+      await expect(player.playButton).toHaveAttribute('aria-label', 'Pause');
+    });
+  } finally {
+    await load?.stop();
+    await globalPlayerActions.pauseToReleasePlaybackClaim();
+  }
+});
+
+// Owner, sandbox5 2026-11-19, verbatim: "when I clicked into not downloaded part the player play button
+// became dimmed and disabled. I asked for it to be just in the state of playing, just playhead not
+// moving because no data. So when network returns [...] the song has to continue on its own".
+test('FTC-PLAYBACK-OFFLINE-006 offline, seeks forward and back inside the received audio play, seeks past it wait silently at their place, Play is never dimmed or disabled, and the song plays on by itself when the network returns', {
+  tag: '@area:playback',
+}, async ({ page, galleryActions, globalPlayerActions, navigationPanelActions, playbackEvidence, stepLogger, trackModalActions }, testInfo) => {
+  test.setTimeout(8 * 60 * 1000);
+  const appPort = Number(new URL(testInfo.project.use.baseURL).port);
+  const relay = await startNetworkRelay(appPort, { playbackBytesPerSecond: PLAYBACK_BYTES_PER_SECOND });
+  const player = globalPlayerActions.globalPlayer;
+  let path = '';
+  let durationSeconds = 0;
+
+  const wifiOff = async () => {
+    await page.context().setOffline(true);
+    relay.stall();
+  };
+  const wifiOn = async () => {
+    await relay.restore({ revive: false });
+    await page.context().setOffline(false);
+  };
+  const expectPlayingEnabled = async () => {
+    await expect(player.playButton).toHaveAttribute('aria-label', 'Pause');
+    await expect(player.playButton).toBeEnabled();
+  };
+  const seekTo = async (target) => {
+    const bounds = await player.timeline.boundingBox();
+    await player.timeline.click({ position: { x: bounds.width * (target / durationSeconds), y: bounds.height / 2 } });
+    await expect.poll(async () => displayedSeconds(await player.time.textContent()), { timeout: 2000 })
+      .toBeGreaterThanOrEqual(target - 1);
+  };
+  const expectPlaysFrom = async (target) => {
+    const mark = await playbackEvidence.playbackMark();
+    await seekTo(target);
+    const evidence = await playbackEvidence.waitForTrackPlaybackEvidence({ after: mark, path }, { timeout: 4000 });
+    expect(evidence.nonZeroSamples).toBeGreaterThan(0);
+    await expect.poll(async () => displayedSeconds(await player.time.textContent()), { timeout: 4000 })
+      .toBeGreaterThan(target);
+    await expectPlayingEnabled();
+  };
+  const expectWaitsSilentlyAt = async (target) => {
+    await seekTo(target);
+    await page.waitForTimeout(1000);
+    const silentFrom = await playbackEvidence.playbackMark();
+    for (let read = 0; read < 4; read += 1) {
+      await page.waitForTimeout(1000);
+      const shown = displayedSeconds(await player.time.textContent());
+      expect(shown, 'the head stays where it was put').toBeGreaterThanOrEqual(target - 1);
+      expect(shown).toBeLessThanOrEqual(target + 1);
+      await expectPlayingEnabled();
+    }
+    expect((await playbackEvidence.playbackMark()).renderedFrame, 'silent while it waits').toBe(silentFrom.renderedFrame);
+  };
+
+  try {
+    await stepLogger.step('The long song plays through a slow network for half a minute', async () => {
+      await page.goto(`${relay.origin}/?surface=albums`);
+      await galleryActions.waitForGalleryReady();
+      await navigationPanelActions.selectSidebarArtistByName(ARTIST);
+      await navigationPanelActions.waitForSidebarSelection(ARTIST);
+      await galleryActions.clickAlbumDetailsByArtistAndAlbum(ARTIST, ALBUM);
+      await trackModalActions.waitForInteractiveSummary();
+      path = String(await trackModalActions.trackModal.trackRowByTitle(TITLE).getAttribute('data-track-row-path') || '');
+      const mark = await playbackEvidence.playbackMark();
+      await trackModalActions.playTrackByTitle(TITLE);
+      await playbackEvidence.waitForTrackPlaybackEvidence({ after: mark, path });
+      await trackModalActions.close();
+      durationSeconds = (await player.readPlaybackTiming()).duration;
+      expect(durationSeconds).toBeGreaterThan(120);
+      await expect.poll(async () => displayedSeconds(await player.time.textContent()), { timeout: 60_000 })
+        .toBeGreaterThanOrEqual(30);
+    });
+
+    await stepLogger.step('Offline: back and forward inside the received audio, each plays at once', async () => {
+      await wifiOff();
+      await expectPlaysFrom(5);
+      await expectPlaysFrom(20);
+    });
+
+    await stepLogger.step('Still offline: forward and back past the received audio, each waits silently at its place, playing and enabled', async () => {
+      await expectWaitsSilentlyAt(Math.floor(durationSeconds * 0.85));
+      await expectWaitsSilentlyAt(Math.floor(durationSeconds * 0.5));
+    });
+
+    await stepLogger.step('The network returns: the song plays on from the place by itself', async () => {
+      const heldAt = displayedSeconds(await player.time.textContent());
+      const mark = await playbackEvidence.playbackMark();
+      await wifiOn();
+      const evidence = await playbackEvidence.waitForTrackPlaybackEvidence({ after: mark, path }, { timeout: 15_000 });
+      expect(evidence.nonZeroSamples).toBeGreaterThan(0);
+      await expect.poll(async () => displayedSeconds(await player.time.textContent()), { timeout: 15_000 })
+        .toBeGreaterThan(heldAt);
+      expect(displayedSeconds(await player.time.textContent())).toBeLessThan(heldAt + 20);
+      await expectPlayingEnabled();
+    });
+  } finally {
+    await page.context().setOffline(false);
+    await relay.restore();
+    await globalPlayerActions.pauseToReleasePlaybackClaim();
+    relay.close();
+  }
+});

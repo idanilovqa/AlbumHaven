@@ -585,6 +585,27 @@ test('prepared seek cuts over on the render clock without a silent frame', () =>
   assert.equal(fixture.events('first-frame').at(-1).streamId, 42);
 });
 
+// Owner, sandbox5 2026-11-19: "if I seek into a different place in the player it just immediately
+// stops, resets the playhead to the beginning of the track, dims the play button and sits". The
+// worklet cut over to the seek's stream; the engine, not yet told, still delivered the old stream's
+// next chunk as current, and the worklet rejected it, which stopped playback.
+test('a chunk or end of the stream a seek just replaced is dropped, and the seek plays on', () => {
+  const fixture = createProcessor({ currentCapacityFrames: 512, continuityCapacityFrames: 512 });
+  enqueue(fixture, { streamId: 41, role: 'current', sequence: 0, left: Array(256).fill(0.25) });
+  play(fixture);
+  renderQuantum(fixture);
+  enqueue(fixture, { streamId: 42, role: 'continuity', sequence: 0, left: Array(256).fill(-0.25) });
+  fixture.send({ type: 'prepare-seek', generation: fixture.generation, streamId: 42, timelineStartFrame: 144_000 });
+  renderQuantum(fixture);
+  assert.equal(fixture.events('seek-boundary').length, 1);
+
+  enqueue(fixture, { streamId: 41, role: 'current', sequence: 1, left: Array(128).fill(0.25) });
+  fixture.send({ type: 'eos', generation: fixture.generation, streamId: 41, role: 'current', emittedFrames: 384, authoritativeTotalFrames: 384 });
+
+  assert.deepEqual(fixture.events('protocol-reject'), [], 'the replaced stream is not a protocol error');
+  assert.deepEqual(renderQuantum(fixture).left, Array(128).fill(-0.25), 'the seek keeps playing');
+});
+
 test('buffered forward seek cuts within unread current PCM and preserves queued continuity', () => {
   const fixture = createProcessor({ currentCapacityFrames: 512, continuityCapacityFrames: 512 });
   enqueue(fixture, {

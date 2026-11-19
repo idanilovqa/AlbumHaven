@@ -610,19 +610,19 @@ class PostgresScanCacheAdapter:
                     if artist and album
                 }
             )
-            incoming_containers = sorted(
-                {
-                    physical_album_root(path)
-                    for path in (
-                        *(entry.get("path") for entry in file_cache.values()),
-                        *(row.get("private_path") for row in existing_memberships),
-                    )
-                    if path
-                }
-            )
+            context_paths = {
+                str(path)
+                for path in (
+                    *(entry.get("path") for entry in file_cache.values()),
+                    *(row.get("private_path") for row in existing_memberships),
+                )
+                if path
+            }
+            physical_roots = sorted({physical_album_root(path).replace('\\', '/') for path in context_paths})
             context_sql = _load_file_entries_sql().replace(
                 "order by library.local_track_files.private_path;",
-                "and (concat_ws(E'\\x1f', "
+                _targeted_membership_context_candidates_sql()
+                + "and (concat_ws(E'\\x1f', "
                 "regexp_replace(lower(btrim(coalesce(library.local_track_files.scan_file_album_artist, ''))), '[[:space:]]+', ' ', 'g'), "
                 "regexp_replace(lower(btrim(coalesce(library.local_track_files.scan_file_album, ''))), '[[:space:]]+', ' ', 'g')) "
                 "= any(%(album_identities)s::text[]) "
@@ -632,7 +632,9 @@ class PostgresScanCacheAdapter:
             membership_context = {}
             for raw_row in connection.execute(context_sql, {
                 "source": _SOURCE, "album_identities": incoming_album_identities,
-                "physical_roots": [value.replace('\\', '/') for value in incoming_containers],
+                "identity_artists": sorted({identity.split("\x1f", 1)[0] for identity in incoming_album_identities}),
+                "identity_albums": sorted({identity.split("\x1f", 1)[1] for identity in incoming_album_identities}),
+                "physical_roots": physical_roots,
             }).fetchall():
                 context_row = _row_mapping(raw_row)
                 context_entry = context_row.get("file_entry") or _fallback_file_entry(context_row)
@@ -7569,6 +7571,31 @@ def _load_cover_selections_sql() -> str:
               and file.metadata #>> '{scan_cache,source}' = %(source)s
           );
     """
+
+
+def _targeted_membership_context_candidates_sql() -> str:
+    """Index-driven superset of a watcher pass's membership context.
+
+    The exact identity/physical-root filter that follows evaluates regular
+    expressions on every file; alone it read the whole library (44 s on a real
+    one) while the pass held the album's save reservation. The identity index
+    folds case, spacing and accents, so it never drops an exact match; the
+    physical root has its own expression index (migration 0187).
+    """
+    from music_app.services.album_local_membership import physical_album_root_sql
+
+    return f"""and library.local_track_files.id in (
+          select candidate.id from library.local_track_files candidate
+          where candidate.scan_cache_stale is false and candidate.scan_file_entry_is_object is true
+            and library.duplicate_identity_text(candidate.scan_file_album_artist) = any(
+                  select library.duplicate_identity_text(value) from unnest(%(identity_artists)s::text[]) value)
+            and library.duplicate_identity_text(candidate.scan_file_album) = any(
+                  select library.duplicate_identity_text(value) from unnest(%(identity_albums)s::text[]) value)
+          union
+          select candidate.id from library.local_track_files candidate
+          where candidate.scan_cache_stale is false
+            and {physical_album_root_sql('candidate.private_path')} = any(%(physical_roots)s::text[])
+        ) """
 
 
 def _load_file_entries_sql(*, targeted_albums: bool = False) -> str:

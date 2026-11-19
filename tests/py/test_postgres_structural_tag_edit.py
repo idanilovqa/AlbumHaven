@@ -3936,3 +3936,40 @@ def test_live_postgres_journaled_album_merges_keys_and_keeps_its_first_revision(
     assert sorted(journaled["album_keys"]) == sorted({"old-key", "older-key", album["album_key"]})
     assert journaled["first_inventory_revision"] == first["first_inventory_revision"]
     assert journaled["first_gallery_generation"] == first["first_gallery_generation"]
+
+
+
+def test_live_watcher_membership_context_uses_indexes_and_keeps_every_physical_sibling(
+        watcher_repair_inventory, monkeypatch):
+    """A watcher batch reads its albums' context by index, never the whole library."""
+    from music_app.services import scan_cache_persistence as persistence
+    from music_app.services.album_local_membership import physical_album_root_sql
+
+    fixture = watcher_repair_inventory
+    disc_one = fixture.entry("Owner/Context Album/CD 1/01. One.flac", album="Context Album")
+    disc_two = fixture.entry("Owner/Context Album/CD 2/01. Two.flac", album="Retagged Elsewhere")
+    same_identity = fixture.entry("Owner/Loose Folder/03. Three.flac", album="Context Album")
+    unrelated = fixture.entry("Owner/Unrelated Album/01. Other.flac", album="Unrelated Album")
+    fixture.seed(disc_one, disc_two, same_identity, unrelated)
+
+    captured = []
+    restore = persistence._restore_structurally_inherited_covers
+
+    def capture(file_cache, membership_context):
+        captured.append(set(membership_context))
+        return restore(file_cache, membership_context)
+
+    monkeypatch.setattr(persistence, "_restore_structurally_inherited_covers", capture)
+    # A progressive scan batch can hold one disc folder only.
+    fixture.adapter.persist_targeted_inventory_mutation(
+        root_id=fixture.roots[0]["id"], active_file_entries={disc_one["path"]: dict(disc_one, title="One edited")},
+    )
+    assert captured and {disc_one["path"], disc_two["path"], same_identity["path"]} <= captured[0]
+    assert unrelated["path"] not in captured[0]
+
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute("set local enable_seqscan = off")
+        plan = "\n".join(row["QUERY PLAN"] for row in connection.execute(
+            "explain select id from library.local_track_files candidate where candidate.scan_cache_stale is false and "
+            f"{physical_album_root_sql('candidate.private_path')} = any(%s::text[])", (["x"],)).fetchall())
+    assert "local_track_files_active_physical_album_root_idx" in plan

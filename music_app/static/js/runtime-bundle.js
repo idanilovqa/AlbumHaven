@@ -17569,9 +17569,13 @@ const trackModalAlbumDetailsLoads = new Map();
 const trackModalSpeculativeAlbumDetailsLoadControllers = new Map();
 const trackModalHydratedAlbumDetails = new Map();
 const trackModalHydratedAlbumDetailsLru = new Map();
-const TRACK_MODAL_HYDRATED_ALBUM_DETAILS_LIMIT = 10;
+// Owner 2026-11-19: the details of the albums on screen load before the click. At most this many settled
+// visible cards are prefetched, two requests at a time; the cache keeps two screens of them.
+const TRACK_MODAL_VISIBLE_PREWARM_CARD_LIMIT = 24;
+const TRACK_MODAL_HYDRATED_ALBUM_DETAILS_LIMIT = TRACK_MODAL_VISIBLE_PREWARM_CARD_LIMIT * 2;
 const TRACK_MODAL_SPECULATIVE_PREWARM_LIMIT = 2;
 let trackModalActiveSpeculativePrewarms = 0;
+let trackModalQueuedPrewarmKeys = [];
 let trackModalCleanupGeneration = 0;
 const trackModalSpeculativePrewarmControllers = new Set();
 const trackModalCoverLoadSuspensionTokens = new Set();
@@ -17600,9 +17604,18 @@ function renderTrackModalLoadingState(album) {
     els.editTags.dataset.album = '';
     els.editTags.dataset.albumKey = String(getAlbumRequestKey(album) || getAlbumIdentity(album) || album?.key || '');
   }
+  // The card's own preview is already in the browser cache and is the image Album Details renders,
+  // which then reuses this element, so the cover shows at once instead of after the details load.
+  const coverSrc = albumHasDisplayCover(album) ? buildAlbumDisplayCoverUrl(album) : '';
   els.cover.innerHTML = `
     <div class="track-modal-cover-shell">
-      ${buildAlbumArtboxHtml({ state: 'loading', label: 'Loading cover art' })}
+      ${coverSrc
+    ? buildAlbumArtboxHtml({
+      state: 'ready',
+      label: `Album cover for ${album.name || 'Album'}`,
+      coverHtml: `<span class="track-modal-cover-visual"><img src="${escapeHtml(coverSrc)}" alt="" decoding="async" data-cover-visual-state="ready"></span>`,
+    })
+    : buildAlbumArtboxHtml({ state: 'loading', label: 'Loading cover art' })}
     </div>
   `;
   if (els.missingWarning) {
@@ -18203,7 +18216,13 @@ function queueTrackModalAlbumDetailsPrewarm(albumKey) {
     existingLoad.catch(() => {});
     return;
   }
-  if (trackModalActiveSpeculativePrewarms >= TRACK_MODAL_SPECULATIVE_PREWARM_LIMIT) return;
+  if (trackModalActiveSpeculativePrewarms >= TRACK_MODAL_SPECULATIVE_PREWARM_LIMIT) {
+    // The latest intent (a hover, then the visible cards in screen order) goes first once a slot frees.
+    trackModalQueuedPrewarmKeys = [normalizedAlbumKey, ...trackModalQueuedPrewarmKeys.filter(
+      (key) => key !== normalizedAlbumKey,
+    )].slice(0, TRACK_MODAL_VISIBLE_PREWARM_CARD_LIMIT);
+    return;
+  }
   const controller = typeof AbortController === 'function' ? new AbortController() : null;
   if (controller) trackModalSpeculativePrewarmControllers.add(controller);
   trackModalActiveSpeculativePrewarms += 1;
@@ -18217,10 +18236,25 @@ function queueTrackModalAlbumDetailsPrewarm(albumKey) {
   }).finally(() => {
     if (controller) trackModalSpeculativePrewarmControllers.delete(controller);
     trackModalActiveSpeculativePrewarms = Math.max(0, trackModalActiveSpeculativePrewarms - 1);
+    drainQueuedTrackModalAlbumDetailsPrewarms();
   });
 }
 
+function drainQueuedTrackModalAlbumDetailsPrewarms() {
+  while (
+    trackModalQueuedPrewarmKeys.length
+    && trackModalActiveSpeculativePrewarms < TRACK_MODAL_SPECULATIVE_PREWARM_LIMIT
+  ) {
+    queueTrackModalAlbumDetailsPrewarm(trackModalQueuedPrewarmKeys.shift());
+  }
+}
+
+function clearQueuedTrackModalAlbumDetailsPrewarms() {
+  trackModalQueuedPrewarmKeys = [];
+}
+
 function cancelTrackModalAlbumDetailsPrewarms() {
+  clearQueuedTrackModalAlbumDetailsPrewarms();
   // Unregister aborted loads now: their rejection can settle a task later, and an
   // open in between must start its own request instead of joining a doomed one.
   trackModalAlbumDetailsLoads.forEach((load, alias) => {
@@ -18248,14 +18282,14 @@ function visibleGalleryAlbumButtons(containerEl, scrollEl, limit) {
   return visibleButtons;
 }
 
-function queueVisibleTrackModalAlbumDetailsPrewarm(containerEl, scrollEl, limit = 2) {
-  const visibleButtons = visibleGalleryAlbumButtons(containerEl, scrollEl, limit);
-  if (!visibleButtons.length) return;
-  visibleButtons.forEach((button) => {
-    const albumKey = String(button.getAttribute('data-album-key') || '').trim();
-    if (!albumKey) return;
-    queueTrackModalAlbumDetailsPrewarm(albumKey);
-  });
+function queueVisibleTrackModalAlbumDetailsPrewarm(containerEl, scrollEl) {
+  // A settled range replaces the previous range's queue; requests already in flight finish.
+  trackModalQueuedPrewarmKeys = visibleGalleryAlbumButtons(
+    containerEl,
+    scrollEl,
+    TRACK_MODAL_VISIBLE_PREWARM_CARD_LIMIT,
+  ).map((button) => String(button.getAttribute('data-album-key') || '').trim()).filter(Boolean);
+  drainQueuedTrackModalAlbumDetailsPrewarms();
 }
 
 // Owner 2026-11-16: an album's other selected covers sit behind its main cover in Album Details. Their
@@ -37287,6 +37321,11 @@ function refreshCoverLookupAlbumArtwork(originalAlbum, updatedAlbums, options = 
   if (!updatedAlbum) return;
   state.ui = state.ui || {};
   state.ui.albumCoverMutationRevision = Number(state.ui.albumCoverMutationRevision || 0) + 1;
+  // A prefetched Album Details copy would reopen with the old cover. Dropping it first hands its gallery
+  // aliases back to the card objects that the patch below updates.
+  if (typeof invalidateHydratedTrackModalAlbumDetails === 'function') {
+    invalidateHydratedTrackModalAlbumDetails([originalAlbum, updatedAlbum]);
+  }
   const applyRefresh = () => {
     patchVisibleAlbumsByTrackPath(candidates);
     refreshRenderedAlbumCoverOnly(updatedAlbum);
@@ -46445,6 +46484,9 @@ class VirtualArtistGrid {
 
   cancelVisibleAlbumDetailPrewarm() {
     this._albumDetailPrewarmGeneration += 1;
+    if (typeof clearQueuedTrackModalAlbumDetailsPrewarms === 'function') {
+      clearQueuedTrackModalAlbumDetailsPrewarms();
+    }
     if (this._albumDetailPrewarmRaf) {
       cancelBrowserAnimationFrame(this._albumDetailPrewarmRaf);
       this._albumDetailPrewarmRaf = 0;
@@ -46482,7 +46524,7 @@ class VirtualArtistGrid {
           ) {
             return;
           }
-          queueVisibleTrackModalAlbumDetailsPrewarm(this.containerEl, this.scrollEl, 2);
+          queueVisibleTrackModalAlbumDetailsPrewarm(this.containerEl, this.scrollEl);
           if (typeof preloadVisibleAlbumDetailsCovers === 'function') {
             preloadVisibleAlbumDetailsCovers(this.containerEl, this.scrollEl);
           }
@@ -47915,6 +47957,9 @@ class VirtualArtistGrid {
         return;
       }
       if (deferredSetGroups) return;
+      // Renders during the scroll skipped the prefetch; the cards the user stopped on get it now.
+      // A render that changes the range after measuring reschedules it for the new cards.
+      this.scheduleVisibleAlbumDetailPrewarm(this.lastKey, this.scrollEl?.scrollTop);
       this.scheduleMeasureRows(true);
     }, 96);
   }

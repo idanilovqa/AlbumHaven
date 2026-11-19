@@ -5914,6 +5914,31 @@ require('node:test')('publishing album artwork advances the cover mutation revis
   assert.equal(context.state.ui.albumCoverMutationRevision, 1);
 });
 
+require('node:test')('a cover change drops only that album\'s prefetched details, before the views are patched', () => {
+  const original = { key: 'artist::album', tracks: [{ path: '/album/01.flac' }] };
+  const updated = { ...original, cover_ref: '/album/cover.jpg' };
+  const events = [];
+  const context = loadHelper({
+    state: {
+      ui: {},
+      coverLookup: { modal: { album: original, pastedImages: [], localCovers: [], otherArt: [] } },
+    },
+    getAlbumTrackPaths: (album) => (album?.tracks || []).map((track) => track.path),
+    getUpdatedAlbumForTrackPaths: (albums) => albums[0],
+    invalidateHydratedTrackModalAlbumDetails(albums) { events.push(['invalidate', albums]); },
+    patchVisibleAlbumsByTrackPath() { events.push(['patch']); },
+    refreshRenderedAlbumCoverOnly() {},
+    updateTrackModalIfStillShowingAlbum() {},
+  });
+
+  context.refreshCoverLookupAlbumArtwork(original, [updated]);
+
+  assert.deepEqual(events.map(([name]) => name), ['invalidate', 'patch'],
+    'a prefetched Album Details copy must not reopen with the old cover');
+  assert.equal(events[0][1][0], original);
+  assert.equal(events[0][1][1], updated);
+});
+
 require('node:test')('visible service cover previews receive eager browser priority', () => {
   const context = loadHelper({ escapeHtml: value => String(value ?? '') });
   const candidate = {

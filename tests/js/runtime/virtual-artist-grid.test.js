@@ -3272,7 +3272,7 @@ test('cover suspension remains until pending grid settlement finishes', () => {
   assert.deepEqual(context.visibleTrackModalAlbumDetailPrewarmCalls, [{
     container: virtualGrid.containerEl,
     scroll: virtualGrid.scrollEl,
-    limit: 2,
+    limit: undefined,
   }], 'a settled render should prewarm only after navigation stays quiescent');
 
   context.queueTrackModalAlbumDetailsPrewarm = (albumKey) => {
@@ -3293,6 +3293,41 @@ test('cover suspension remains until pending grid settlement finishes', () => {
     'gallery covers must not use the retired delayed serial loader',
   );
 }
+
+test('a scroll that settles on an unchanged rendered range still prefetches the visible cards', () => {
+  const { context } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const frames = [];
+  context.scheduleBrowserAnimationFrame = (callback) => { frames.push(callback); return frames.length; };
+  virtualGrid.scheduleMeasureRows = () => {};
+  const runFrames = () => { frames.splice(0).forEach((callback) => callback()); };
+  const lastTimeout = (delay) => context.__scheduledBrowserTimeouts.filter((entry) => entry.delay === delay).at(-1);
+  virtualGrid.setGroups([{
+    artist: 'Root Artist',
+    artist_display: 'Root Artist',
+    albums: Array.from({ length: 4 }, (_value, index) => ({
+      key: `root-${index + 1}`, name: `Root Album ${index + 1}`, album_artist: 'Root Artist', hasCover: true, tracks: [],
+    })),
+  }], [], null, {});
+  runFrames();
+  runFrames();
+  lastTimeout(250).callback();
+  assert.equal(context.visibleTrackModalAlbumDetailPrewarmCalls.length, 1);
+
+  // The user scrolls; the rendered range does not change, so no render reschedules the prefetch.
+  const firstPrefetchTimer = lastTimeout(250);
+  virtualGrid.onScroll();
+  runFrames();
+  assert.equal(virtualGrid.isScrollSettled, false);
+  lastTimeout(96).callback();
+  runFrames();
+  runFrames();
+  assert.notEqual(lastTimeout(250), firstPrefetchTimer, 'settling must schedule a fresh prefetch');
+  lastTimeout(250).callback();
+
+  assert.equal(context.visibleTrackModalAlbumDetailPrewarmCalls.length, 2,
+    'the cards the user stopped on must be prefetched once scrolling settles');
+});
 
 /* Automatic render-time album-detail prewarming was intentionally removed.
 {

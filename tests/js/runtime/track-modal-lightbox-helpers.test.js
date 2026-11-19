@@ -1949,8 +1949,8 @@ async function run() {
     assert.equal(trackModal.hidden, false);
     assert.equal(context.fetchCalls.length, 1);
     assert.deepEqual(context.modalSchedulingEvents, ['fetch-album-details']);
-    assert.match(trackModalCover.innerHTML, /Loading cover art/);
-    assert.doesNotMatch(trackModalCover.innerHTML, /<img/);
+    // The shell shows the card's already-loaded preview (owner 2026-11-19), not a placeholder.
+    assert.match(trackModalCover.innerHTML, /<img src="\/cover\.png"/);
     assert.deepEqual(galleryImages.map((image) => image.src), ['/cover/one', '/cover/two']);
     assert.deepEqual(galleryImages.map((image) => image.dataset.modalSuspendedSrc), [undefined, undefined]);
 
@@ -2073,12 +2073,10 @@ async function run() {
     assert.equal(elements.editTags.dataset.albumKey, 'alpha');
     assert.match(elements.subtitle.textContent, /Loading album details/);
     assert.match(elements.list.innerHTML, /Loading album details/);
-    assert.match(elements.cover.innerHTML, /Loading cover art/);
+    assert.match(elements.cover.innerHTML, /<img src="\/cover\.png"/);
     assert.equal(elements.missingWarning.hidden, true);
     assert.equal(elements.missingWarning.innerHTML, '');
-    assert.doesNotMatch(elements.cover.innerHTML, /<img/);
-    assert.doesNotMatch(elements.cover.innerHTML, /\/cover(?:\?|\.)/);
-    assert.deepEqual(context.buildAlbumDisplayCoverUrlCalls, []);
+    assert.equal(context.buildAlbumDisplayCoverUrlCalls.length, 1, 'the shell resolves only the card preview URL');
     assert.deepEqual(context.renderTrackModalReleaseCalls, []);
 
     const hydratedAlbum = {
@@ -2501,7 +2499,8 @@ async function run() {
   }
 
   {
-    const previews = Array.from({ length: 12 }, (_value, index) => ({
+    const cacheLimit = 48; // TRACK_MODAL_HYDRATED_ALBUM_DETAILS_LIMIT: two screens of prefetched cards.
+    const previews = Array.from({ length: cacheLimit + 2 }, (_value, index) => ({
       key: `album-${index + 1}`,
       name: `Album ${index + 1}`,
       preview_only: true,
@@ -2527,18 +2526,19 @@ async function run() {
       },
     });
 
-    for (let index = 1; index <= 11; index += 1) {
+    assert.equal(vm.runInContext('TRACK_MODAL_HYDRATED_ALBUM_DETAILS_LIMIT', context), cacheLimit);
+    for (let index = 1; index <= cacheLimit + 1; index += 1) {
       await context.loadTrackModalAlbumDetails(`album-${index}`);
     }
 
     assert.equal(context.getIndexedAlbum('album-1').preview_only, true, 'the oldest hydrated album should be evicted');
     assert.equal(context.getIndexedAlbum('album-2').preview_only, false);
     await context.loadTrackModalAlbumDetails('album-2');
-    await context.loadTrackModalAlbumDetails('album-12');
+    await context.loadTrackModalAlbumDetails(`album-${cacheLimit + 2}`);
 
     assert.equal(context.getIndexedAlbum('album-2').preview_only, false, 'a cache hit should refresh LRU order');
     assert.equal(context.getIndexedAlbum('album-3').preview_only, true, 'the next-oldest album should be evicted');
-    assert.equal(context.fetchCalls.length, 12, 'hydrated cache hits should not refetch');
+    assert.equal(context.fetchCalls.length, cacheLimit + 2, 'hydrated cache hits should not refetch');
   }
 
   {
@@ -3458,4 +3458,143 @@ test('visible gallery cards preload the extra selected covers Album Details show
     slots: context.getIndexedAlbum('holy war').selected_covers,
   });
   loaded.forEach((item) => assert.ok(stack.includes(item.src.replace(/&/g, '&amp;')) || stack.includes(item.src)));
+});
+
+// Owner 2026-11-19: details of the albums on screen load before the click. Bounded: only settled
+// visible cards, at most TRACK_MODAL_VISIBLE_PREWARM_CARD_LIMIT of them, two requests at a time.
+function visiblePrewarmFixture({ visibleCount, offscreenCount = 0 }) {
+  const keys = Array.from({ length: visibleCount + offscreenCount }, (_v, index) => `album-${index}`);
+  const pending = new Map();
+  let inFlight = 0;
+  let maxInFlight = 0;
+  const { context } = loadHelper({
+    initialAlbums: keys.map((key) => ({ key, name: key, preview_only: true, tracks: [], cover_ref: `${key}.jpg` })),
+    onFetchAlbumDetails({ url, requestOptions }) {
+      const albumKey = new URL(`http://localhost${url}`).searchParams.get('album_key');
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      return new Promise((resolve, reject) => {
+        const settle = () => { inFlight -= 1; pending.delete(albumKey); };
+        pending.set(albumKey, () => {
+          settle();
+          resolve({
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve({
+              ok: true,
+              album: { key: albumKey, name: albumKey, preview_only: false, tracks: [{ path: `/music/${albumKey}/01.flac` }] },
+            }),
+          });
+        });
+        requestOptions.signal?.addEventListener('abort', () => {
+          settle();
+          const error = new Error('aborted');
+          error.name = 'AbortError';
+          reject(error);
+        }, { once: true });
+      });
+    },
+  });
+  const scrollEl = new context.HTMLElement('scroll');
+  scrollEl.getBoundingClientRect = () => ({ top: 0, bottom: 1000, width: 1600, height: 1000 });
+  const buttons = keys.map((key, index) => {
+    const button = new context.HTMLElement(`${key}-button`);
+    button.setAttribute('data-album-key', key);
+    const top = index < visibleCount ? 10 + index : 5000 + index * 300;
+    button.getBoundingClientRect = () => ({ top, bottom: top + 40, width: 200, height: 40 });
+    return button;
+  });
+  let scannedButtons = 0;
+  const containerEl = new context.HTMLElement('artist-groups');
+  containerEl.querySelectorAll = (selector) => {
+    if (selector !== '.album-title-button[data-open-tracklist="1"][data-album-key]') return [];
+    return {
+      * [Symbol.iterator]() {
+        for (const button of buttons) {
+          scannedButtons += 1;
+          yield button;
+        }
+      },
+    };
+  };
+  const drain = async () => {
+    for (let round = 0; round < keys.length + 5 && pending.size; round += 1) {
+      Array.from(pending.values()).forEach((resolve) => resolve());
+      await flushMicrotasks();
+    }
+  };
+  return {
+    context, containerEl, scrollEl, pending, drain,
+    stats: () => ({ maxInFlight, scannedButtons }),
+    fetchedKeys: () => context.fetchCalls.map((call) => new URL(`http://localhost${call.url}`).searchParams.get('album_key')),
+  };
+}
+
+test('visible-card prefetch loads every settled visible card, two at a time, low priority', async () => {
+  const fixture = visiblePrewarmFixture({ visibleCount: 12, offscreenCount: 400 });
+  const { context, containerEl, scrollEl } = fixture;
+
+  context.queueVisibleTrackModalAlbumDetailsPrewarm(containerEl, scrollEl);
+  assert.equal(context.fetchCalls.length, 2, 'only two speculative requests start at once');
+  await fixture.drain();
+
+  assert.deepEqual(fixture.fetchedKeys(), Array.from({ length: 12 }, (_v, index) => `album-${index}`),
+    'every visible card is prefetched once, in on-screen order, and no off-screen card is');
+  assert.equal(fixture.stats().maxInFlight, 2);
+  assert.ok(context.fetchCalls.every((call) => call.requestOptions.priority === 'low' && call.requestOptions.signal));
+
+  // Every prefetched album opens from memory: no request, no loading shell.
+  for (let index = 0; index < 12; index += 1) {
+    context.openTrackModal(context.getIndexedAlbum(`album-${index}`));
+  }
+  assert.equal(context.fetchCalls.length, 12, 'prefetched details must survive until the user opens them');
+});
+
+test('visible-card prefetch is capped however many cards are visible', async () => {
+  const fixture = visiblePrewarmFixture({ visibleCount: 300 });
+  const { context, containerEl, scrollEl } = fixture;
+
+  context.queueVisibleTrackModalAlbumDetailsPrewarm(containerEl, scrollEl);
+  await fixture.drain();
+
+  const cardLimit = vm.runInContext('TRACK_MODAL_VISIBLE_PREWARM_CARD_LIMIT', context);
+  assert.equal(context.fetchCalls.length, cardLimit);
+  assert.ok(cardLimit <= 24);
+  assert.ok(fixture.stats().scannedButtons <= cardLimit,
+    'the visible scan stops at the cap instead of measuring every rendered card');
+  assert.equal(fixture.stats().maxInFlight, 2);
+});
+
+test('a new settled range replaces queued prefetches and navigation cancels them', async () => {
+  const fixture = visiblePrewarmFixture({ visibleCount: 10 });
+  const { context, containerEl, scrollEl, pending } = fixture;
+
+  context.queueVisibleTrackModalAlbumDetailsPrewarm(containerEl, scrollEl);
+  assert.equal(context.fetchCalls.length, 2);
+
+  context.cancelTrackModalAlbumDetailsPrewarms();
+  await flushMicrotasks();
+  assert.equal(pending.size, 0, 'navigation aborts in-flight prefetches');
+  await fixture.drain();
+  assert.equal(context.fetchCalls.length, 2, 'navigation drops queued prefetches instead of sending them later');
+
+  context.queueVisibleTrackModalAlbumDetailsPrewarm(containerEl, scrollEl);
+  context.clearQueuedTrackModalAlbumDetailsPrewarms();
+  await fixture.drain();
+  assert.equal(context.fetchCalls.length, 4, 'a scroll drops the old range queue; only in-flight requests finish');
+});
+
+test('the loading shell shows the gallery card cover and title at once', () => {
+  const { context, trackModalCover } = loadHelper({
+    onFetchAlbumDetails: () => new Promise(() => {}),
+  });
+
+  context.openTrackModal({
+    key: 'alpha', name: 'Album Alpha', album_artist: 'Artist', year: '1999', preview_only: true, cover_ref: 'alpha.jpg',
+  });
+
+  assert.equal(context.getTrackModalElements().title.textContent, 'Artist - Album Alpha - 1999');
+  assert.match(trackModalCover.innerHTML, /<img[^>]+src="\/cover\.png"/,
+    'the shell reuses the gallery preview URL that Album Details renders, already in the browser cache');
+  assert.doesNotMatch(trackModalCover.innerHTML, /Loading cover art/);
 });

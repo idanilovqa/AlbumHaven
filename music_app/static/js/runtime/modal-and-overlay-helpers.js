@@ -1101,13 +1101,15 @@ function openNonAlbumModal(options = {}) {
   if (typeof syncAlbumHavenDocumentTitle === 'function') syncAlbumHavenDocumentTitle();
   const hydrationPending = needsNonAlbumHydration({ libraryWide });
   const looseTracks = getVisibleNonAlbumTracks({ libraryWide, collectionName });
-  // All Loose Tracks shows its total like a collection (owner 2026-11-16); before its rows load, the tree
-  // catalog's total stands in when it is known.
-  const trackTotal = libraryWide && !collectionName && hydrationPending
-    ? state.ui?.libraryLooseTracksCount
+  // All Loose Tracks shows its total like a collection (owner 2026-11-16). Before the rows load, the current
+  // search's tree catalog total stands in when it is known, and no number otherwise (audit 2026-11-18).
+  const trackTotal = libraryWide && hydrationPending
+    ? (typeof customCollectionCatalogTrackCount === 'function' ? customCollectionCatalogTrackCount(collectionName) : undefined)
     : looseTracks.length;
-  const subtitle = collectionName || (libraryWide && Number.isInteger(trackTotal))
+  const subtitle = (collectionName || libraryWide) && Number.isInteger(trackTotal)
     ? `${trackTotal} ${trackTotal === 1 ? 'track' : 'tracks'}`
+    : collectionName
+    ? ''
     : !libraryWide && state.view.selected_artist
     ? `Non-album tracks found in ${state.view.selected_artist} and family artist folders.`
     : 'Non-album tracks found in the selected library sources.';

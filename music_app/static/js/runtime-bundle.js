@@ -11846,7 +11846,40 @@ function syncLibraryNavigationModePresentation(mode) {
 
 // The tree lists collection names and counts from their own bounded request. It never
 // waits for the library-wide Loose Tracks payload and never depends on the Artist tree.
-let customCollectionCatalog = { key: null, collections: null, request: null };
+// Each answer, with its All Loose Tracks total, is kept under the search it was asked for, so a late answer for
+// an older search can never stand in for the current one (audit 2026-11-18). A few recent searches are kept.
+const CUSTOM_COLLECTION_CATALOGS_KEPT = 8;
+const customCollectionCatalogs = new Map();
+const customCollectionCatalogRequests = new Map();
+let customCollectionCatalogGeneration = 0;
+
+function customCollectionInventoryRevision() {
+  const revision = Number(state.status?.inventory_mutation_revision);
+  return Number.isSafeInteger(revision) ? revision : null;
+}
+
+function currentCustomCollectionCatalog(view = state.view || {}) {
+  return customCollectionCatalogs.get(customCollectionCatalogUrl(view).search) || null;
+}
+
+function storeCustomCollectionCatalog(key, catalog) {
+  customCollectionCatalogs.delete(key);
+  customCollectionCatalogs.set(key, catalog);
+  while (customCollectionCatalogs.size > CUSTOM_COLLECTION_CATALOGS_KEPT) {
+    customCollectionCatalogs.delete(customCollectionCatalogs.keys().next().value);
+  }
+}
+
+// The current search's track total for a collection, or for All Loose Tracks without a name; undefined while
+// that search's catalog is not loaded, so no other search's number is shown.
+function customCollectionCatalogTrackCount(collectionName = '') {
+  const catalog = currentCustomCollectionCatalog();
+  if (!catalog) return undefined;
+  const count = collectionName
+    ? catalog.collections.find(({ name }) => name === collectionName)?.count
+    : catalog.looseTracksCount;
+  return Number.isInteger(count) ? count : undefined;
+}
 
 function customCollectionCatalogUrl(view = state.view || {}) {
   const url = new URL('/library/custom-collections', 'http://localhost');
@@ -11864,9 +11897,7 @@ function customCollectionCatalogUrl(view = state.view || {}) {
 // on first open (a skeleton for up to 2 s). It is loaded once the page is idle, so opening it paints at once.
 let customCollectionCatalogPrefetch = 0;
 function prefetchCustomCollectionCatalogWhenIdle() {
-  if (customCollectionCatalogPrefetch || customCollectionCatalog.request
-    || (customCollectionCatalog.key === customCollectionCatalogUrl().search
-      && Array.isArray(customCollectionCatalog.collections))) return;
+  if (customCollectionCatalogPrefetch || customCollectionCatalogRequests.size || currentCustomCollectionCatalog()) return;
   const run = () => {
     customCollectionCatalogPrefetch = 0;
     void loadCustomCollectionCatalog().catch(() => {});
@@ -11901,7 +11932,7 @@ async function syncCustomCollectionSearchIndicator() {
     return;
   }
   if (String(state.view?.query || '').trim() !== query) return;
-  mark(Number(state.ui?.libraryLooseTracksCount) > 0);
+  mark(Number(customCollectionCatalogTrackCount()) > 0);
   openBestCustomCollectionForSearch(query);
   if (deciding) setLibraryTreeSearchLoading(false);
 }
@@ -11919,10 +11950,10 @@ function openBestCustomCollectionForSearch(query) {
   if (pending && pending !== query && !state.ui.pendingViewTransition) state.ui.customCollectionSearchAutoOpenQuery = '';
   if (pending !== query || state.ui.pendingViewTransition) return;
   state.ui.customCollectionSearchAutoOpenQuery = '';
-  const collections = Array.isArray(customCollectionCatalog.collections) ? customCollectionCatalog.collections : [];
+  const collections = currentCustomCollectionCatalog()?.collections || [];
   const view = state.view || {};
   if (
-    !(Number(state.ui?.libraryLooseTracksCount) > 0)
+    !(Number(customCollectionCatalogTrackCount()) > 0)
     || (Array.isArray(view.artists_sidebar) && view.artists_sidebar.length)
     || (typeof isEffectivelyEmptyView === 'function' && !isEffectivelyEmptyView(view))
     || document.querySelector?.('#non-album-modal:not([hidden])')
@@ -11941,7 +11972,10 @@ function syncCustomCollectionsAfterTagEdit({ fresh = false } = {}) {
     if (state.ui.libraryNavigationMode === 'custom-collections') renderCustomCollectionNavigation(collections);
   };
   if (fresh) {
-    customCollectionCatalog = { ...customCollectionCatalog, collections: null, request: null };
+    // The saved library outdates every search's catalog, and any answer still on its way.
+    customCollectionCatalogs.clear();
+    customCollectionCatalogRequests.clear();
+    customCollectionCatalogGeneration += 1;
     // Only a tree on screen asks the server now; otherwise the next open fetches it, so a save never adds
     // a catalog query to the browsing that follows it.
     if (state.ui.libraryNavigationMode === 'custom-collections') {
@@ -11965,8 +11999,13 @@ function syncCustomCollectionsAfterTagEdit({ fresh = false } = {}) {
   const collections = [...counts.entries()]
     .map(([name, count]) => ({ name, count }))
     .sort((left, right) => left.name.localeCompare(right.name));
-  customCollectionCatalog = { ...customCollectionCatalog, key: customCollectionCatalogUrl().search, collections };
-  state.ui.libraryLooseTracksCount = tracks.length;
+  const key = customCollectionCatalogUrl().search;
+  // The recount keeps the loaded catalog's revision: it is a local estimate, not a newer server answer.
+  storeCustomCollectionCatalog(key, {
+    revision: customCollectionCatalogs.get(key)?.revision ?? null,
+    collections,
+    looseTracksCount: tracks.length,
+  });
   redraw(collections);
 }
 
@@ -11982,12 +12021,13 @@ function prefetchCustomCollectionCatalogForSearch(query) {
 function loadCustomCollectionCatalog({ fresh = false, view = state.view || {} } = {}) {
   const url = customCollectionCatalogUrl(view);
   const key = url.search;
-  if (customCollectionCatalog.request?.key === key) return customCollectionCatalog.request.promise;
+  const pending = customCollectionCatalogRequests.get(key);
+  if (pending) return pending;
   // A loaded catalog answers again: every sidebar redraw during a search used to refetch it and its artwork.
-  // Opening the Custom Collections tree still asks for a fresh one.
-  if (!fresh && customCollectionCatalog.key === key && Array.isArray(customCollectionCatalog.collections)) {
-    return Promise.resolve(customCollectionCatalog.collections);
-  }
+  const cached = customCollectionCatalogs.get(key);
+  if (!fresh && cached) return Promise.resolve(cached.collections);
+  const generation = customCollectionCatalogGeneration;
+  const revision = customCollectionInventoryRevision();
   const promise = (async () => {
     const response = await fetch(`${url.pathname}${url.search}`, { headers: { Accept: 'application/json' } });
     const payload = await response.json().catch(() => ({}));
@@ -12000,17 +12040,19 @@ function loadCustomCollectionCatalog({ fresh = false, view = state.view || {} } 
       .sort((left, right) => left.name.localeCompare(right.name));
     // null while the server's Loose Tracks snapshot is not current: show no number rather than a wrong one.
     const looseTracksCount = Number.isInteger(payload.loose_tracks_count) ? payload.loose_tracks_count : null;
-    state.ui.libraryLooseTracksCount = looseTracksCount;
-    customCollectionCatalog = { key, collections, request: null };
+    if (generation === customCollectionCatalogGeneration) {
+      storeCustomCollectionCatalog(key, { revision, collections, looseTracksCount });
+    }
     if (typeof prefetchCustomCollectionArtwork === 'function') {
       void prefetchCustomCollectionArtwork(collections.map(({ name }) => name));
     }
     return collections;
   })();
-  customCollectionCatalog.request = { key, promise };
-  promise.catch(() => {
-    if (customCollectionCatalog.request?.promise === promise) customCollectionCatalog.request = null;
-  });
+  customCollectionCatalogRequests.set(key, promise);
+  const release = () => {
+    if (customCollectionCatalogRequests.get(key) === promise) customCollectionCatalogRequests.delete(key);
+  };
+  promise.then(release, release);
   return promise;
 }
 
@@ -12077,8 +12119,8 @@ function syncLibraryNavigationAfterPageChange() {
 // Redraws the Custom Collections selection after its page opens or closes.
 function syncCustomCollectionNavigationSelection() {
   if (state.ui?.libraryNavigationMode !== 'custom-collections') return;
-  if (customCollectionCatalog.key !== customCollectionCatalogUrl().search) return;
-  renderCustomCollectionNavigation(customCollectionCatalog.collections);
+  const catalog = currentCustomCollectionCatalog();
+  if (catalog) renderCustomCollectionNavigation(catalog.collections);
 }
 
 // collections === null renders placeholders where the named rows will appear.
@@ -12089,8 +12131,9 @@ function renderCustomCollectionNavigation(collections, { failure = '' } = {}) {
   const activeCollectionName = pageOpen ? String(state.ui?.nonAlbumCollectionName || '').trim() : '';
   const allLooseTracksSelected = pageOpen && !activeCollectionName;
   list.dataset.navigationTree = 'custom-collections';
-  // Which search this tree shows, so a new search or a cleared one redraws it.
-  list.dataset.customCollectionsSearch = collections === null ? '' : customCollectionCatalogUrl().search;
+  // Which search this tree is for, so a new search or a cleared one redraws it. A loading or failed tree is stamped
+  // too: its own request redraws it, and status-poll redraws must not retry a failure (audit 2026-11-18).
+  list.dataset.customCollectionsSearch = customCollectionCatalogUrl().search;
   list.dataset.sidebarVirtualized = 'false';
   delete list.dataset.sidebarStructureSignature;
   const allLooseTracks = window.NavigationTree.renderItem({
@@ -12098,7 +12141,7 @@ function renderCustomCollectionNavigation(collections, { failure = '' } = {}) {
     variant: 'panel',
     key: 'all-loose-tracks',
     label: 'All Loose Tracks',
-    count: Number.isInteger(state.ui?.libraryLooseTracksCount) ? state.ui.libraryLooseTracksCount : undefined,
+    count: customCollectionCatalogTrackCount(),
     selected: allLooseTracksSelected,
     attributes: { 'data-open-loose-tracks': '1' },
   });
@@ -12123,6 +12166,7 @@ function renderCustomCollectionNavigation(collections, { failure = '' } = {}) {
 
 async function setLibraryNavigationMode(mode) {
   const normalized = mode === 'custom-collections' ? mode : 'artists';
+  const switched = state.ui.libraryNavigationMode !== normalized;
   state.ui.libraryNavigationMode = normalized;
   syncLibraryNavigationModePresentation(normalized);
   if (normalized === 'artists') {
@@ -12131,18 +12175,25 @@ async function setLibraryNavigationMode(mode) {
     renderSidebar();
     return normalized;
   }
-  const cached = customCollectionCatalog.key === customCollectionCatalogUrl().search
-    ? customCollectionCatalog.collections
-    : null;
-  renderCustomCollectionNavigation(cached);
-  setDesktopLibraryModeRailVisible(true);
+  const key = customCollectionCatalogUrl().search;
+  const cached = customCollectionCatalogs.get(key) || null;
+  renderCustomCollectionNavigation(cached ? cached.collections : null);
+  // Only a switch to this tree shows the auto-hidden view rail; redraws leave it as it is (audit 2026-11-18).
+  if (switched) setDesktopLibraryModeRailVisible(true);
+  // The server is asked again only when this search has no catalog or the library changed since it was loaded.
+  if (cached && cached.revision === customCollectionInventoryRevision()) return normalized;
+  // A newer search or the other tree owns the side bar once this answer arrives; its own redraw shows it.
+  const stillShown = () => state.ui.libraryNavigationMode === normalized && customCollectionCatalogUrl().search === key;
   try {
-    const collections = await loadCustomCollectionCatalog({ fresh: true });
+    await loadCustomCollectionCatalog({ fresh: true });
+    const loaded = customCollectionCatalogs.get(key);
     // The refreshed list replaces the drawn one only when it differs: redrawing the same rows made them blink.
-    const unchanged = cached !== null && JSON.stringify(cached) === JSON.stringify(collections);
-    if (state.ui.libraryNavigationMode === normalized && !unchanged) renderCustomCollectionNavigation(collections);
+    const unchanged = cached !== null && loaded !== undefined
+      && JSON.stringify([cached.collections, cached.looseTracksCount])
+        === JSON.stringify([loaded.collections, loaded.looseTracksCount]);
+    if (stillShown() && loaded && !unchanged) renderCustomCollectionNavigation(loaded.collections);
   } catch (error) {
-    if (state.ui.libraryNavigationMode === normalized && cached === null) {
+    if (stillShown() && cached === null) {
       renderCustomCollectionNavigation(null, { failure: error?.message || 'Unable to load Custom Collections.' });
     }
   }
@@ -16233,13 +16284,15 @@ function openNonAlbumModal(options = {}) {
   if (typeof syncAlbumHavenDocumentTitle === 'function') syncAlbumHavenDocumentTitle();
   const hydrationPending = needsNonAlbumHydration({ libraryWide });
   const looseTracks = getVisibleNonAlbumTracks({ libraryWide, collectionName });
-  // All Loose Tracks shows its total like a collection (owner 2026-11-16); before its rows load, the tree
-  // catalog's total stands in when it is known.
-  const trackTotal = libraryWide && !collectionName && hydrationPending
-    ? state.ui?.libraryLooseTracksCount
+  // All Loose Tracks shows its total like a collection (owner 2026-11-16). Before the rows load, the current
+  // search's tree catalog total stands in when it is known, and no number otherwise (audit 2026-11-18).
+  const trackTotal = libraryWide && hydrationPending
+    ? (typeof customCollectionCatalogTrackCount === 'function' ? customCollectionCatalogTrackCount(collectionName) : undefined)
     : looseTracks.length;
-  const subtitle = collectionName || (libraryWide && Number.isInteger(trackTotal))
+  const subtitle = (collectionName || libraryWide) && Number.isInteger(trackTotal)
     ? `${trackTotal} ${trackTotal === 1 ? 'track' : 'tracks'}`
+    : collectionName
+    ? ''
     : !libraryWide && state.view.selected_artist
     ? `Non-album tracks found in ${state.view.selected_artist} and family artist folders.`
     : 'Non-album tracks found in the selected library sources.';
@@ -52833,6 +52886,8 @@ function handleGalleryBootstrapClick(event) {
     // The logo is the library landing page (owner 2026-11-16): the All artists gallery it opens brings the side
     // panel back to the Artists tree through syncLibraryNavigationToMainPanel.
     const activeSearchQuery = isLibraryHome ? '' : String(state.view?.query || '').trim();
+    // The logo ends the search, and with it the phone library button's results pulse (audit 2026-11-18).
+    if (isLibraryHome) clearMobileLibrarySearchResultsMarker();
     clearPendingGallerySearchCommit();
     updateGallerySearchDraftQuery(activeSearchQuery);
     state.ui.pendingSearchClearOnBlur = false;
@@ -54101,6 +54156,12 @@ function revealArtistTreeForSearch() {
   }
 }
 
+function clearMobileLibrarySearchResultsMarker() {
+  const button = document?.getElementById?.('mobile-library-button');
+  button?.removeAttribute('data-search-results');
+  button?.removeAttribute('aria-description');
+}
+
 function handleGalleryBootstrapSearchSubmit(event) {
   event.preventDefault();
   if (typeof handleMobileSearchSubmit === 'function' && handleMobileSearchSubmit()) return;
@@ -54120,12 +54181,8 @@ function handleGalleryBootstrapSearchSubmit(event) {
     closeArtistsDrawer({ restoreFocus: false });
   }
   applyImmediateExactSearchArtistSelection(nextQuery);
-  const mobileArtistsButton = document?.getElementById?.('mobile-library-button');
   if (String(nextQuery).trim()) revealArtistTreeForSearch();
-  else {
-    mobileArtistsButton?.removeAttribute('data-search-results');
-    mobileArtistsButton?.removeAttribute('aria-description');
-  }
+  else clearMobileLibrarySearchResultsMarker();
   closeRecentSearchPopover();
   beginAlbumDetailPrewarmSearchSuspension();
   beginSearchCoverLoadSuspension();

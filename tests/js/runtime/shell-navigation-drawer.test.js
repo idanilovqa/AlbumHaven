@@ -248,8 +248,12 @@ function stubCatalogFetch(context) {
   const requests = [];
   context.URL = URL;
   context.fetch = (path) => new Promise((resolve) => {
-    requests.push({ path, respond: (collections, status = 200) => resolve({
-      ok: status < 400, status, json: async () => (status < 400 ? { custom_collections: collections } : { ok: false, error: 'boom' }),
+    requests.push({ path, respond: (collections, status = 200, looseTracksCount) => resolve({
+      ok: status < 400,
+      status,
+      json: async () => (status < 400
+        ? { custom_collections: collections, loose_tracks_count: looseTracksCount }
+        : { ok: false, error: 'boom' }),
     }) });
   });
   return requests;
@@ -333,10 +337,14 @@ test('reopening custom collections paints the cached catalog at once and refresh
   const { context, artistList } = loadHelper();
   stubCollectionTree(context);
   const requests = stubCatalogFetch(context);
+  context.renderSidebar = () => {};
+  context.state.status = { inventory_mutation_revision: 1 };
   const first = context.setLibraryNavigationMode('custom-collections');
   requests[0].respond([{ name: 'Cached', count: 1 }]);
   await first;
-  await context.setLibraryNavigationMode('artists').catch?.(() => {});
+  await context.setLibraryNavigationMode('artists');
+  // The library changed since the catalog was loaded, so reopening asks again.
+  context.state.status.inventory_mutation_revision = 2;
 
   const second = context.setLibraryNavigationMode('custom-collections');
 
@@ -1211,7 +1219,7 @@ test('a tag edit recounts the open collections tree at once, then takes the save
   context.syncCustomCollectionsAfterTagEdit();
   assert.equal(fetches, 0, 'the edit itself asks the server nothing');
   assert.match(artistList.innerHTML, /data-open-custom-collection="Женя машина">Женя машина:1<\/button><button data-open-custom-collection="Женя машина 2">Женя машина 2:2<\/button>$/);
-  assert.equal(context.state.ui.libraryLooseTracksCount, 4);
+  assert.equal(context.customCollectionCatalogTrackCount(), 4);
 
   context.syncCustomCollectionsAfterTagEdit({ fresh: true });
   await new Promise(resolve => setImmediate(resolve));
@@ -1278,4 +1286,84 @@ test('a submitted search closing a collection page moves the tree only once its 
   assert.equal(context.syncLibraryNavigationToMainPanel(), true);
   assert.deepEqual(modes, ['artists']);
   assert.equal(context.state.ui.libraryNavigationAwaitingQuery, null);
+});
+
+test('a late answer for an older search never replaces the current search catalog or count', async () => {
+  // Audit 2026-11-18 #4/#5: the tree kept a cleared search's collections and match count.
+  const { context, artistList } = loadHelper();
+  const renderedOptions = stubCollectionTree(context);
+  const requests = stubCatalogFetch(context);
+  context.escapeHtml = value => String(value);
+  context.state.view.query = 'night';
+  const searched = context.setLibraryNavigationMode('custom-collections');
+  context.state.view.query = '';
+  const cleared = context.setLibraryNavigationMode('custom-collections');
+  assert.deepEqual(requests.map(({ path }) => path), ['/library/custom-collections?q=night', '/library/custom-collections']);
+
+  requests[1].respond([{ name: 'Night', count: 2 }, { name: 'Day', count: 9 }], 200, 120);
+  await cleared;
+  requests[0].respond([{ name: 'Night', count: 1 }], 200, 3);
+  await searched;
+
+  assert.match(artistList.innerHTML, /Day:9<\/button><button data-open-custom-collection="Night">Night:2<\/button>$/);
+  assert.equal(renderedOptions.filter(({ key }) => key === 'all-loose-tracks').at(-1).count, 120);
+  assert.equal(context.customCollectionCatalogTrackCount(), 120);
+  assert.equal(context.customCollectionCatalogTrackCount('Night'), 2);
+  context.syncCustomCollectionNavigationSelection();
+  assert.match(artistList.innerHTML, /Day:9/);
+
+  // A search whose catalog is not loaded yet shows no number rather than another search's count.
+  context.state.view.query = 'other';
+  assert.equal(context.customCollectionCatalogTrackCount(), undefined);
+  context.state.view.query = 'night';
+  assert.equal(context.customCollectionCatalogTrackCount(), 3, 'the searched answer is kept under its own search');
+});
+
+test('the collections tree asks the server again only when the library changed, and a failure is not retried per redraw', async () => {
+  // Audit 2026-11-18 #8: every mode click, drawer toggle and status-poll redraw refetched the catalog.
+  const { context, artistList } = loadHelper();
+  stubCollectionTree(context);
+  const requests = stubCatalogFetch(context);
+  context.escapeHtml = value => String(value);
+  context.renderSidebar = () => {};
+  context.state.status = { inventory_mutation_revision: 5 };
+  const first = context.setLibraryNavigationMode('custom-collections');
+  requests[0].respond([{ name: 'Night', count: 2 }], 200, 4);
+  await first;
+  await context.setLibraryNavigationMode('custom-collections');
+  await context.setLibraryNavigationMode('artists');
+  await context.setLibraryNavigationMode('custom-collections');
+  assert.equal(requests.length, 1, 'an unchanged library reuses the loaded catalog');
+  context.state.status.inventory_mutation_revision = 6;
+  const refreshed = context.setLibraryNavigationMode('custom-collections');
+  assert.equal(requests.length, 2);
+  requests[1].respond([{ name: 'Night', count: 3 }], 200, 5);
+  await refreshed;
+  assert.match(artistList.innerHTML, /Night:3/);
+
+  context.state.view.query = 'gone';
+  const failing = context.setLibraryNavigationMode('custom-collections');
+  requests[2].respond([], 502);
+  await failing;
+  assert.equal(artistList.dataset.customCollectionsSearch, '?q=gone',
+    'the failed tree is stamped with its search, so renderSidebar does not retry it on every redraw');
+});
+
+test('redrawing the collections tree leaves an auto-hidden view rail hidden; switching to it shows the rail', async () => {
+  // Audit 2026-11-18 #9: search changes and retries brought the hidden rail back and restarted its timer.
+  const { context, drawerRail } = loadHelper({ isMobile: false });
+  stubCollectionTree(context);
+  context.URL = URL;
+  context.escapeHtml = value => String(value);
+  context.renderSidebar = () => {};
+  context.fetch = () => Promise.resolve({ ok: true, status: 200, json: async () => ({ custom_collections: [] }) });
+  await context.setLibraryNavigationMode('custom-collections');
+  drawerRail.classList.add('is-library-mode-rail-hidden');
+  context.state.view.query = 'night';
+  await context.setLibraryNavigationMode('custom-collections');
+  assert.equal(drawerRail.classList.contains('is-library-mode-rail-hidden'), true);
+  await context.setLibraryNavigationMode('artists');
+  drawerRail.classList.add('is-library-mode-rail-hidden');
+  await context.setLibraryNavigationMode('custom-collections');
+  assert.equal(drawerRail.classList.contains('is-library-mode-rail-hidden'), false);
 });

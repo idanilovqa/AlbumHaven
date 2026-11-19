@@ -342,6 +342,8 @@ function handleGalleryBootstrapClick(event) {
     // The logo is the library landing page (owner 2026-11-16): the All artists gallery it opens brings the side
     // panel back to the Artists tree through syncLibraryNavigationToMainPanel.
     const activeSearchQuery = isLibraryHome ? '' : String(state.view?.query || '').trim();
+    // The logo ends the search, and with it the phone library button's results pulse (audit 2026-11-18).
+    if (isLibraryHome) clearMobileLibrarySearchResultsMarker();
     clearPendingGallerySearchCommit();
     updateGallerySearchDraftQuery(activeSearchQuery);
     state.ui.pendingSearchClearOnBlur = false;
@@ -1610,6 +1612,12 @@ function revealArtistTreeForSearch() {
   }
 }
 
+function clearMobileLibrarySearchResultsMarker() {
+  const button = document?.getElementById?.('mobile-library-button');
+  button?.removeAttribute('data-search-results');
+  button?.removeAttribute('aria-description');
+}
+
 function handleGalleryBootstrapSearchSubmit(event) {
   event.preventDefault();
   if (typeof handleMobileSearchSubmit === 'function' && handleMobileSearchSubmit()) return;
@@ -1629,12 +1637,8 @@ function handleGalleryBootstrapSearchSubmit(event) {
     closeArtistsDrawer({ restoreFocus: false });
   }
   applyImmediateExactSearchArtistSelection(nextQuery);
-  const mobileArtistsButton = document?.getElementById?.('mobile-library-button');
   if (String(nextQuery).trim()) revealArtistTreeForSearch();
-  else {
-    mobileArtistsButton?.removeAttribute('data-search-results');
-    mobileArtistsButton?.removeAttribute('aria-description');
-  }
+  else clearMobileLibrarySearchResultsMarker();
   closeRecentSearchPopover();
   beginAlbumDetailPrewarmSearchSuspension();
   beginSearchCoverLoadSuspension();

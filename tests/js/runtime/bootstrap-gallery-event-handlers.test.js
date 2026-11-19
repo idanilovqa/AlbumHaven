@@ -1700,6 +1700,27 @@ for (const mobile of [false, true]) {
   });
 }
 
+for (const mobile of [false, true]) {
+  test(`${mobile ? 'phone' : 'desktop'}: the logo ends the search-results pulse on the phone library button`, () => {
+    // Audit 2026-11-18 #10: the phone's empty submit goes through the logo, which left the pulse on.
+    const { context } = createContext({ useProductionBuildApiUrl: true });
+    context.usesMobilePageLayout = () => mobile;
+    const attributes = new Map([['data-search-results', 'true'], ['aria-description', 'Search results available in Artists']]);
+    const libraryButton = {
+      setAttribute(name, value) { attributes.set(name, value); },
+      removeAttribute(name) { attributes.delete(name); },
+    };
+    const getElementById = context.document.getElementById.bind(context.document);
+    context.document.getElementById = id => (id === 'mobile-library-button' ? libraryButton : getElementById(id));
+    context.state.view.query = 'night';
+
+    context.handleGalleryBootstrapClick(createAllArtistsEvent({ libraryHome: true }).event);
+
+    assert.equal(attributes.has('data-search-results'), false);
+    assert.equal(attributes.has('aria-description'), false);
+  });
+}
+
 test('library-home navigation opens Home on mobile instead of All artists', () => {
   const { context, calls } = createContext({ useProductionBuildApiUrl: true });
   context.usesMobilePageLayout = () => true;

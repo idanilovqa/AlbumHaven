@@ -5383,10 +5383,10 @@
       "proof": "static"
     },
     {
-      "id": "js:runtime/player-streaming-engine.js#startBrowserStreamingTrack",
-      "action": "setTimeout timers installed by startBrowserStreamingTrack",
+      "id": "js:runtime/player-streaming-engine.js#startBrowserStreamingTrackNow",
+      "action": "setTimeout timers installed by startBrowserStreamingTrackNow",
       "entrypoints": [
-        "js:music_app/static/js/runtime/player-streaming-engine.js#startBrowserStreamingTrack:timer:setTimeout"
+        "js:music_app/static/js/runtime/player-streaming-engine.js#startBrowserStreamingTrackNow:timer:setTimeout"
       ],
       "owners": [
         "music_app/static/js/runtime/player-streaming-engine.js"

@@ -120,10 +120,29 @@ test('the popover waits briefly after the pointer leaves, stays open with focus 
   const popover = badge.locator('.cover-source-badge__popover');
   await badge.locator('.cover-source-badge__trigger').hover();
   await expect(popover).toBeVisible();
+  // Freeze the closing transitions the moment the browser starts them, so the check reads the popover at
+  // fixed points on the transition timeline instead of racing the wall clock.
+  await popover.evaluate(async (element) => {
+    await Promise.all(element.getAnimations().map((animation) => animation.finished));
+    window.coverSourceBadgeClosing = new Promise((resolve) => {
+      element.addEventListener('transitionrun', () => {
+        const transitions = element.getAnimations();
+        transitions.forEach((animation) => animation.pause());
+        resolve(transitions.length);
+      }, { once: true });
+    });
+  });
   await page.mouse.move(860, 740);
-  await page.waitForTimeout(120);
-  await expect(popover).toBeVisible();
-  await expect(popover).toBeHidden({ timeout: 1000 });
+  expect(await page.evaluate(() => window.coverSourceBadgeClosing)).toBeGreaterThan(0);
+  const at = (ms) => popover.evaluate((element, time) => {
+    element.getAnimations().forEach((animation) => { animation.currentTime = time; });
+    const style = getComputedStyle(element);
+    return { visibility: style.visibility, opacity: Number(style.opacity) };
+  }, ms);
+  expect(await at(240)).toEqual({ visibility: 'visible', opacity: 1 });
+  expect((await at(390)).visibility).toBe('hidden');
+  await popover.evaluate((element) => element.getAnimations().forEach((animation) => animation.finish()));
+  await expect(popover).toBeHidden();
 
   await badge.locator('.cover-source-badge__trigger').focus();
   await page.keyboard.press('Tab');

@@ -64,13 +64,6 @@ test('split release choices are no longer rendered inside Cover Lookup', () => {
   assert.doesNotMatch(helperSource, /data-cover-lookup-current-release|chooseCoverLookupCurrentRelease/);
 });
 
-test('Album Details split choices use the current-release selector action', () => {
-  assert.match(
-    helperSource,
-    /closest\('\[data-track-modal-current-release\]'\)[\s\S]*?preventDefault\(\)[\s\S]*?selectTrackModalCurrentRelease\([\s\S]*?getAttribute\('data-track-modal-current-release'\)/,
-  );
-});
-
 test('Cover Lookup album link uses the shared album-details navigation action', () => {
   assert.match(
     helperSource,

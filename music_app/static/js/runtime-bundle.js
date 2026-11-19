@@ -35788,24 +35788,21 @@ function buildTrackPathSignature(album) {
   return tracks.map((track) => String(track?.path || '')).filter(Boolean).sort().join('::');
 }
 
-function buildRemoteCoverLookupPreviewUrl(url) {
-  const raw = String(url || '').trim();
-  if (!raw) return '';
-  return `/utilities/cover-lookup/remote-image?url=${encodeURIComponent(raw)}`;
-}
-
-function buildRemoteCoverLookupImageUrl(url, key = '') {
+// A card asks for the server's 480 px preview: several providers offer no thumbnail, and their
+// originals reached several megabytes. The lightbox keeps the original.
+function buildRemoteCoverLookupImageUrl(url, key = '', { preview = false } = {}) {
   const raw = String(url || '').trim();
   if (!raw) return '';
   const params = new URLSearchParams({ url: raw });
   if (key) params.set('key', String(key));
+  if (preview) params.set('size', '480');
   return `/utilities/cover-lookup/remote-image?${params.toString()}`;
 }
 
-function buildRemoteCoverLookupDisplayUrl(item, preferredUrl, key = '') {
+function buildRemoteCoverLookupDisplayUrl(item, preferredUrl, key = '', options = {}) {
   const raw = String(preferredUrl || '').trim();
   if (!raw) return '';
-  return buildRemoteCoverLookupImageUrl(raw, key);
+  return buildRemoteCoverLookupImageUrl(raw, key, options);
 }
 
 function buildCoverLookupSearchQuery(album) {
@@ -36126,7 +36123,9 @@ function applyCoverLookupGalleryPayload(gallery, { confirmLocalInventory = true 
     state.coverLookup.modal.galleryError = String(gallery.local_inventory_error || '');
   }
   if ((gallery.local_inventory_complete !== false || gallery.local_inventory_available) && Array.isArray(gallery.local_covers)) {
-    if (gallery.local_inventory_complete !== false) cacheCoverLookupGalleryPayload(state.coverLookup.modal.album, gallery);
+    // A folder being re-indexed after a save or delete still has a listing, with this page's own changes laid
+    // over it; the next opening shows it at once instead of placeholders while the index catches up.
+    cacheCoverLookupGalleryPayload(state.coverLookup.modal.album, gallery);
     const incomingLocalCovers = Array.isArray(gallery.local_covers) ? gallery.local_covers : [];
     const savedSource = String(gallery.selected_source_path || '');
     const candidates = [...incomingLocalCovers, ...(Array.isArray(gallery.other_art) ? gallery.other_art : [])];
@@ -36724,11 +36723,11 @@ function applyOptimisticLocalCoverSelection(album, sourcePath) {
     size: 480,
     revision: selectedCandidate?.cover_revision,
   });
-  cacheOptimisticLocalCoverGallery(album, {
-    ...selectedCandidate,
-    path: normalizedSourcePath,
-    preview_url: selectedCandidate?.preview_url || src,
-  });
+  // A listed card keeps the picture address it already showed (its file does not change), so the reopened
+  // lookup paints its loaded image at once; only a card the listing never had borrows the cover's address.
+  cacheOptimisticLocalCoverGallery(album, selectedCandidate
+    ? { ...selectedCandidate, path: normalizedSourcePath }
+    : { path: normalizedSourcePath, preview_url: src });
   state.coverLookup.optimisticAlbumCovers[signature] = { src, coverPath: normalizedSourcePath };
   return src;
 }
@@ -37505,6 +37504,7 @@ function renderCoverLookupDrawer({
     const bestCandidateCoverUrl = buildRemoteCoverLookupImageUrl(
       bestCandidatePreviewUrl,
       bestCandidateId || bestCandidate?.id || '',
+      { preview: true },
     );
     const coverUrl = currentUserCoverUrl
       || bestCandidateCoverUrl
@@ -37719,9 +37719,9 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
   const sourceBadge = buildRemoteCoverSourceBadge(item?.source);
   const remoteSourceLabel = getRemoteCoverSourceLabel(item?.source, item?.source_label);
   const imageUrl = kind === 'remote'
-    ? buildRemoteCoverLookupDisplayUrl(item, item?.thumbnail_url || item?.url || '', item?.id || item?.url || '')
+    ? buildRemoteCoverLookupDisplayUrl(item, item?.thumbnail_url || item?.url || '', item?.id || item?.url || '', { preview: true })
     : kind === 'saved-remote'
-      ? buildRemoteCoverLookupDisplayUrl(item, item?.thumbnail_url || item?.url || '', `saved:${item?.id || item?.url || ''}`)
+      ? buildRemoteCoverLookupDisplayUrl(item, item?.thumbnail_url || item?.url || '', `saved:${item?.id || item?.url || ''}`, { preview: true })
       : kind === 'pasted'
         ? String(item?.object_url || item?.data_url || '').trim()
       : String(item?.preview_url || '').trim() || buildCoverUrl(item?.path || '', {
@@ -38063,11 +38063,12 @@ function buildCoverLookupGalleryLoadingMarkup(modalState) {
       </div>
     </section>
   ` : '';
+  // Owner (2026-11-18): an album without a cover opens straight into its empty state, with nothing blinking;
+  // the static heading is what that state keeps once the listing answers.
   const localMarkup = section('LOCAL', 'local', localCount) || `
-    <div class="cover-lookup-gallery-resolving">
-      <span class="cover-lookup-task-loading-line is-title" aria-hidden="true"></span>
-      <span>Resolving available cover art…</span>
-    </div>
+    <section class="cover-lookup-section cover-lookup-gallery-resolving">
+      <h4 class="cover-lookup-section-title">LOCAL</h4>
+    </section>
   `;
   return `<div role="status" aria-label="Loading cover art">
     ${localMarkup}
@@ -40103,9 +40104,11 @@ async function startCoverLookupForAlbum(album, options = {}) {
       const acceptedTaskId = String(acceptedTask.id);
       const existingTasks = state.coverLookup.tasks || [];
       const alreadyListed = existingTasks.some((task) => String(task?.id || '') === acceptedTaskId);
+      // Owner (2026-11-18): a new search's card is in the panel at once, on top as the server lists it;
+      // appended last it sat under every other notification until a reload re-sorted the list.
       state.coverLookup.tasks = mergeCoverLookupTasksWithNotifications(alreadyListed
         ? existingTasks.map((task) => String(task?.id || '') === acceptedTaskId ? { ...task, ...acceptedTask } : task)
-        : [...existingTasks, acceptedTask]);
+        : [acceptedTask, ...existingTasks]);
       if (!backgroundOnly) {
         state.coverLookup.modal.taskId = acceptedTaskId;
       }
@@ -42195,6 +42198,15 @@ async function confirmManualTagEdit() {
       },
     );
     releaseFailedTagEditViewMutation(tagEditMutationClaim);
+    // Owner (2026-11-18): a refused save leaves the Gallery exactly as the library is, without a page reload.
+    // Undoing only the edited album cannot restore an album an optimistic merge or split absorbed
+    // (a refused Ремиксы2 → Ремиксы merge left one "Ремиксы2" card and lost Ремиксы), so the view re-reads it.
+    if (
+      tagEditOriginStillOwnsView(originatingViewStateRevision)
+      && typeof refreshCurrentViewAfterBackgroundCompletion === 'function'
+    ) {
+      await refreshCurrentViewAfterBackgroundCompletion();
+    }
   }
 }
 
@@ -54570,14 +54582,8 @@ function handleGalleryBootstrapSearchSubmit(event) {
   }
   const input = document.getElementById('search-input');
   const nextQuery = input?.value || '';
-  // On phones an empty search is the way out of a search: it goes home exactly as the logo does,
-  // clearing the query and the artist the search selected.
-  const libraryHome = document?.querySelector?.('.app-bar-brand[data-library-home="1"]');
-  if (!String(nextQuery).trim() && libraryHome
-      && typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) {
-    libraryHome.click();
-    return;
-  }
+  // Owner (2026-11-18): an empty search clears the query on phones exactly as on web: the full artist
+  // tree returns with the selected artist kept. Home stays the logo's job.
   applyImmediateExactSearchArtistSelection(nextQuery);
   if (String(nextQuery).trim()) revealArtistTreeForSearch();
   else clearMobileSearchResultsMarker();
@@ -56524,8 +56530,8 @@ function syncMobileUtilityNavigation() {
   const choices = mobileUtilitySubsections();
   const trigger = document.getElementById('mobile-settings-section-button');
   const menu = document.getElementById('mobile-settings-subsection-menu');
-  trigger.hidden = !choices.length && state.utility.activeTab !== 'rules';
-  trigger.querySelector('.ui-button__content').textContent = choices.find(item => item.selected)?.label || (state.utility.activeTab === 'rules' ? 'Rules' : 'Sections');
+  (trigger.closest('.ui-dropdown-control') || trigger).hidden = !choices.length && state.utility.activeTab !== 'rules';
+  trigger.value = choices.find(item => item.selected)?.label || (state.utility.activeTab === 'rules' ? 'Rules' : 'Sections');
   const menuSignature = JSON.stringify(choices);
   if (menu.dataset.renderKey !== menuSignature) {
     menu.innerHTML = choices.map(item => `<button class="gallery-menu-action" type="button" data-mobile-subsection="${escapeHtml(item.key)}" aria-pressed="${item.selected}">${escapeHtml(item.label)}</button>`).join('');

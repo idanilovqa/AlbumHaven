@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
+from contextvars import ContextVar
 from math import isfinite
 from threading import Lock
 from time import perf_counter
@@ -56,6 +57,7 @@ class EditTagTimingRecorder:
         self._pool_lease_timings_ms: dict[str, dict[str, float]] = {}
         self._pool_lease_counts: dict[str, dict[str, int]] = {}
         self._pool_available_observed_workloads: set[str] = set()
+        self._postgres_commit_stages_ms: dict[str, float] = {}
 
     @contextmanager
     def measure(self, phase: str) -> Iterator[None]:
@@ -77,6 +79,15 @@ class EditTagTimingRecorder:
                 self._phase_timings_ms.get(normalized_phase, 0.0)
                 + normalized_elapsed
             )
+
+    def record_postgres_commit_stages(self, stages: Mapping[str, float]) -> None:
+        with self._lock:
+            for stage, elapsed_ms in stages.items():
+                normalized = _bounded_nonnegative_float(elapsed_ms)
+                if normalized is not None:
+                    self._postgres_commit_stages_ms[str(stage)] = (
+                        self._postgres_commit_stages_ms.get(str(stage), 0.0) + normalized
+                    )
 
     def observe_pool_lease(
         self,
@@ -142,6 +153,10 @@ class EditTagTimingRecorder:
                     phase: round(elapsed_ms, 2)
                     for phase, elapsed_ms in self._phase_timings_ms.items()
                 },
+                "postgres_commit_stages_ms": {
+                    stage: round(elapsed_ms, 2)
+                    for stage, elapsed_ms in self._postgres_commit_stages_ms.items()
+                },
                 "pool_lease_timings_ms": {
                     workload: {
                         key: round(value, 2)
@@ -154,3 +169,33 @@ class EditTagTimingRecorder:
                     for workload, counts in self._pool_lease_counts.items()
                 },
             }
+
+
+_PERSISTENCE_STAGES: ContextVar[dict[str, float] | None] = ContextVar(
+    "edit_tag_persistence_stages", default=None,
+)
+
+
+@contextmanager
+def collect_persistence_stages() -> Iterator[dict[str, float]]:
+    """Collect `persistence_stage` timings recorded on this thread."""
+    stages: dict[str, float] = {}
+    token = _PERSISTENCE_STAGES.set(stages)
+    try:
+        yield stages
+    finally:
+        _PERSISTENCE_STAGES.reset(token)
+
+
+@contextmanager
+def persistence_stage(name: str) -> Iterator[None]:
+    """Time one step of a tag save's Postgres transaction; free when unobserved."""
+    stages = _PERSISTENCE_STAGES.get()
+    if stages is None:
+        yield
+        return
+    started_at = perf_counter()
+    try:
+        yield
+    finally:
+        stages[name] = stages.get(name, 0.0) + (perf_counter() - started_at) * 1000

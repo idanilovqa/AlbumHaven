@@ -44,6 +44,7 @@ from music_app.services.metadata import normalize_exception_value
 from music_app.services.music_identity_matching import same_artist_credit_spelling
 from music_app.services.non_album_view_payloads import infer_blank_album_membership
 from music_app.services.persistence_selection import select_runtime_persistence_adapter
+from music_app.services.edit_tag_timings import persistence_stage
 from music_app.services.relation_projection_postgres import (
     RELATION_PROJECTION_BUILDER_VERSION,
     RELATION_PROJECTION_METADATA_KEY,
@@ -1427,11 +1428,12 @@ class PostgresScanCacheAdapter:
             before_commit=before_commit, rebuild_relation_projection=rebuild_relation_projection)
         try:
             from music_app.services.gallery_projection_postgres import schedule_gallery_projection_refresh
-            schedule_gallery_projection_refresh(
-                self._config, connect=self._connect,
-                # A publication that could not patch membership rebuilds it in full.
-                incremental_membership=not result.get("gallery_rebuild_required"),
-            )
+            with persistence_stage("gallery_refresh_scheduling"):
+                schedule_gallery_projection_refresh(
+                    self._config, connect=self._connect,
+                    # A publication that could not patch membership rebuilds it in full.
+                    incremental_membership=not result.get("gallery_rebuild_required"),
+                )
         except Exception:
             _LOGGER.exception("Unable to schedule scoped gallery refresh after tag edit")
         return result
@@ -1444,11 +1446,13 @@ class PostgresScanCacheAdapter:
         updated_file_entries = {path: dict(updated_file_entries[path]) for path in changed_paths
                                 if isinstance(updated_file_entries.get(path), dict)}
         with self._connect_to_database() as connection:
-            connection.execute(_inventory_publication_advisory_lock_sql())
-            _partition_edited_physical_copies(connection, changed_paths, previous_file_entries,
-                                             updated_file_entries, apply=True)
-            groups, source_ids, source_keys, delta_fields, identity_repairs = _structural_tag_edit_groups(
-                connection, changed_paths, previous_file_entries, updated_file_entries, changed_field_names)
+            with persistence_stage("inventory_lock_wait"):
+                connection.execute(_inventory_publication_advisory_lock_sql())
+            with persistence_stage("edit_grouping"):
+                _partition_edited_physical_copies(connection, changed_paths, previous_file_entries,
+                                                 updated_file_entries, apply=True)
+                groups, source_ids, source_keys, delta_fields, identity_repairs = _structural_tag_edit_groups(
+                    connection, changed_paths, previous_file_entries, updated_file_entries, changed_field_names)
             scoped = PostgresScanCacheAdapter(self._config, connect=lambda _url: nullcontext(connection),
                                              build_albums=self._build_albums)
             if len(groups) <= 1:
@@ -1532,7 +1536,8 @@ class PostgresScanCacheAdapter:
             if before_commit is not None:
                 before_commit(connection)
             if commit_guard is not None:
-                commit_guard(connection.commit)
+                with persistence_stage("commit"):
+                    commit_guard(connection.commit)
             return combined
 
     def _persist_structural_tag_edit_group(
@@ -1607,19 +1612,16 @@ class PostgresScanCacheAdapter:
                     connection.execute(relation_projection_advisory_lock_sql())
                     from music_app.services.gallery_projection_postgres import gallery_projection_context
                     gallery_context_before = gallery_projection_context(connection)
-                result = _row_mapping(
-                    _first_row(
-                        connection.execute(
-                            _persist_targeted_inventory_tag_edit_sql(),
-                            {
-                                "changed_paths": normalized_paths,
-                                "input_rows": _jsonb(input_rows),
-                                "updates_track_artist": detached_media_edit and bool(normalized_changed_fields & {"artist", "album_artist"}),
-                                "source": _SOURCE,
-                            },
-                        )
-                    )
-                )
+                with persistence_stage("inventory_sql"):
+                    result = _row_mapping(_first_row(connection.execute(
+                        _persist_targeted_inventory_tag_edit_sql(),
+                        {
+                            "changed_paths": normalized_paths,
+                            "input_rows": _jsonb(input_rows),
+                            "updates_track_artist": detached_media_edit and bool(normalized_changed_fields & {"artist", "album_artist"}),
+                            "source": _SOURCE,
+                        },
+                    )))
                 input_path_count = int(result.get("input_path_count") or 0)
                 resolved_path_count = int(result.get("resolved_path_count") or 0)
                 track_rows_updated = int(result.get("track_rows_updated") or 0)
@@ -1639,8 +1641,9 @@ class PostgresScanCacheAdapter:
                     raise RuntimeError(
                         "Targeted inventory tag persistence did not update every selected file."
                     )
-                _refresh_edited_album_metadata(connection, self._build_albums,
-                    [str(entry.get("path") or path) for path, entry in updated_entries.items()], normalized_changed_fields)
+                with persistence_stage("album_metadata_refresh"):
+                    _refresh_edited_album_metadata(connection, self._build_albums,
+                        [str(entry.get("path") or path) for path, entry in updated_entries.items()], normalized_changed_fields)
                 committed_relation_state = _patch_structural_relation_projection(
                     connection, config=self._config, previous_entries=previous_entries,
                     updated_entries=updated_entries, source_album_vacated=False,
@@ -1649,7 +1652,8 @@ class PostgresScanCacheAdapter:
                 if before_commit is not None:
                     before_commit(connection)
                 if commit_guard is not None:
-                    commit_guard(connection.commit)
+                    with persistence_stage("commit"):
+                        commit_guard(connection.commit)
 
             return {
                 "album_rows_updated": 0,
@@ -1750,8 +1754,9 @@ class PostgresScanCacheAdapter:
             for path in normalized_paths
         ]
         with self._connect_to_database() as connection:
-            connection.execute(_inventory_publication_advisory_lock_sql())
-            connection.execute(relation_projection_advisory_lock_sql())
+            with persistence_stage("inventory_lock_wait"):
+                connection.execute(_inventory_publication_advisory_lock_sql())
+                connection.execute(relation_projection_advisory_lock_sql())
             _ensure_bootstrap_context(connection)
             from music_app.services.gallery_projection_postgres import gallery_projection_context
             gallery_context_before = gallery_projection_context(connection)
@@ -1803,41 +1808,42 @@ class PostgresScanCacheAdapter:
                 )
             )
             destination_metadata = _jsonb_compatible(destination_albums[0]["metadata"])
-            result_row = _first_row(
-                connection.execute(
-                    _persist_structural_album_tag_edit_sql(
-                        updates_release_year=updates_release_year,
-                    ),
-                    {
-                        "changed_paths": normalized_paths,
-                        "input_rows": _jsonb(input_rows),
-                        "destination_album_key": destination_album_key,
-                        "destination_artist_key": _key(destination_album.album_artist),
-                        "destination_artist_name": destination_album.album_artist,
-                        "destination_artist_metadata": _jsonb({
-                            field: destination_metadata[field]
-                            for field in ("album_artist", "artists", "is_compilation", "featured_artists", "edition")
-                            if field != "edition" or "edition" in normalized_changed_fields
-                        }),
-                        "destination_album_title": str(
-                            getattr(destination_album, "name", "") or "Unknown Album"
+            with persistence_stage("structural_sql"):
+                result_row = _first_row(
+                    connection.execute(
+                        _persist_structural_album_tag_edit_sql(
+                            updates_release_year=updates_release_year,
                         ),
-                        "destination_release_year": destination_release_year,
-                        "destination_release_date": destination_release_date,
-                        "destination_edition": str(
-                            getattr(destination_album, "edition", None) or ""
-                        ).strip(),
-                        "destination_separate_release_key": (
-                            destination_separate_release_key
-                        ),
-                        "updates_release_year": updates_release_year,
-                        "destination_is_explicit_separate": (
-                            destination_is_explicit_separate
-                        ),
-                        "source": _SOURCE,
-                    },
+                        {
+                            "changed_paths": normalized_paths,
+                            "input_rows": _jsonb(input_rows),
+                            "destination_album_key": destination_album_key,
+                            "destination_artist_key": _key(destination_album.album_artist),
+                            "destination_artist_name": destination_album.album_artist,
+                            "destination_artist_metadata": _jsonb({
+                                field: destination_metadata[field]
+                                for field in ("album_artist", "artists", "is_compilation", "featured_artists", "edition")
+                                if field != "edition" or "edition" in normalized_changed_fields
+                            }),
+                            "destination_album_title": str(
+                                getattr(destination_album, "name", "") or "Unknown Album"
+                            ),
+                            "destination_release_year": destination_release_year,
+                            "destination_release_date": destination_release_date,
+                            "destination_edition": str(
+                                getattr(destination_album, "edition", None) or ""
+                            ).strip(),
+                            "destination_separate_release_key": (
+                                destination_separate_release_key
+                            ),
+                            "updates_release_year": updates_release_year,
+                            "destination_is_explicit_separate": (
+                                destination_is_explicit_separate
+                            ),
+                            "source": _SOURCE,
+                        },
+                    )
                 )
-            )
             result = _row_mapping(result_row)
             input_path_count = int(result.get("input_path_count") or 0)
             resolved_path_count = int(result.get("resolved_path_count") or 0)
@@ -1911,28 +1917,31 @@ class PostgresScanCacheAdapter:
                         "destination_release_year": destination_release_year,
                     },
                 )
-            _execute_semantic_local_album_reconciliation(
-                connection,
-                target_album_ids=(destination_album_id,),
-                allow_same_year_separate_release_merge=(
-                    normalized_changed_fields == frozenset({"album"})
-                ),
-            )
-            _refresh_edited_album_metadata(connection, self._build_albums,
-                [str(entry.get("path") or path) for path, entry in updated_entries.items()], normalized_changed_fields)
+            with persistence_stage("semantic_album_reconciliation"):
+                _execute_semantic_local_album_reconciliation(
+                    connection,
+                    target_album_ids=(destination_album_id,),
+                    allow_same_year_separate_release_merge=(
+                        normalized_changed_fields == frozenset({"album"})
+                    ),
+                )
+            with persistence_stage("album_metadata_refresh"):
+                _refresh_edited_album_metadata(connection, self._build_albums,
+                    [str(entry.get("path") or path) for path, entry in updated_entries.items()], normalized_changed_fields)
             # Staying in the same album must preserve distinct disc/track covers.
             cover_album_ids = [destination_album_id] if destination_album_id and destination_album_id != source_album_id else []
             if cover_album_ids:
-                connection.execute(
-                    _synchronize_album_cover_file_entries_sql(by_album_ids=True),
-                    {
-                        "album_ids": cover_album_ids,
-                        "active_paths": sorted(normalized_paths),
-                        "cover_inherited_from_structural_edit": (
-                            input_path_count < source_album_track_file_count
-                        ),
-                    },
-                )
+                with persistence_stage("cover_entry_sync"):
+                    connection.execute(
+                        _synchronize_album_cover_file_entries_sql(by_album_ids=True),
+                        {
+                            "album_ids": cover_album_ids,
+                            "active_paths": sorted(normalized_paths),
+                            "cover_inherited_from_structural_edit": (
+                                input_path_count < source_album_track_file_count
+                            ),
+                        },
+                    )
             committed_relation_state = (
                 _patch_structural_relation_projection(
                     connection,
@@ -1951,7 +1960,8 @@ class PostgresScanCacheAdapter:
             if before_commit is not None:
                 before_commit(connection)
             if commit_guard is not None:
-                commit_guard(connection.commit)
+                with persistence_stage("commit"):
+                    commit_guard(connection.commit)
 
         persistence_result: dict[str, object] = {
             "album_rows_updated": album_rows_updated,
@@ -3600,11 +3610,12 @@ def _patch_structural_relation_projection(
         for entry in (*previous_entries.values(), *updated_entries.values())
         if entry.get("album_id")
     }
-    return publish_affected_relation_projection(
-        connection, album_ids=album_ids | {int(value) for value in affected_album_ids if value is not None},
-        track_paths=set(previous_entries) | set(updated_entries), reason=reason, config=config,
-        expected_gallery_generation=expected_gallery_generation,
-    )
+    with persistence_stage("relation_publication"):
+        return publish_affected_relation_projection(
+            connection, album_ids=album_ids | {int(value) for value in affected_album_ids if value is not None},
+            track_paths=set(previous_entries) | set(updated_entries), reason=reason, config=config,
+            expected_gallery_generation=expected_gallery_generation,
+        )
 
 
 def _commit_structural_relation_projection(
@@ -5716,6 +5727,19 @@ def _rebind_cover_lookup_tasks_after_structural_edit_sql() -> str:
            and library.libraries.library_kind = 'local'
           where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
           limit 1
+        ),
+        -- Owner (BUGFIX-05, 2026-11-18): a card carried into a merged album takes the merged album's whole
+        -- track set, so a later split of that album covers it with two releases and opens the chooser.
+        destination_track_paths as (
+          select coalesce(jsonb_agg(library.local_track_files.private_path
+                   order by library.local_track_files.private_path), '[]'::jsonb) as paths
+          from bootstrap_context
+          join library.local_tracks
+            on library.local_tracks.library_id = bootstrap_context.library_id
+           and library.local_tracks.album_id = %(destination_album_id)s::bigint
+          join library.local_track_files
+            on library.local_track_files.track_id = library.local_tracks.id
+           and library.local_track_files.scan_cache_stale is false
         )
         update ops.cover_lookup_tasks as tasks
         set album_key = %(destination_album_key)s,
@@ -5727,6 +5751,7 @@ def _rebind_cover_lookup_tasks_after_structural_edit_sql() -> str:
                      'artist', %(destination_artist_name)s::text,
                      'album', %(destination_album_title)s::text,
                      'year', %(destination_release_year)s::integer,
+                     'track_paths', destination_track_paths.paths,
                      'album_payload',
                      coalesce(
                        tasks.metadata #> '{source_payload,album_payload}',
@@ -5739,12 +5764,14 @@ def _rebind_cover_lookup_tasks_after_structural_edit_sql() -> str:
                        'album', %(destination_album_title)s::text,
                        'album_artist', %(destination_artist_name)s::text,
                        'artist', %(destination_artist_name)s::text,
-                       'year', %(destination_release_year)s::integer
+                       'year', %(destination_release_year)s::integer,
+                       'track_paths', destination_track_paths.paths,
+                       'track_count', jsonb_array_length(destination_track_paths.paths)
                      )
                    ),
               true
-            )
-        from bootstrap_context
+            ) || jsonb_build_object('track_paths', destination_track_paths.paths)
+        from bootstrap_context, destination_track_paths
         where tasks.library_id = bootstrap_context.library_id
           and (
                 coalesce(
@@ -7492,29 +7519,39 @@ def _synchronize_album_cover_file_entries_sql(
         else ""
     )
     album_filter = (
-        """(
-          album.id = any(%(album_ids)s::bigint[])
-          or exists (
-            select 1
-            from library.local_tracks as selected_tracks
-            join library.local_track_files as selected_files
-              on selected_files.track_id = selected_tracks.id
-             and selected_files.scan_cache_stale is false
-            where selected_tracks.album_id = album.id
-              and selected_tracks.library_id = album.library_id
-              and selected_files.private_path = any(%(active_paths)s::text[])
-          )
+        """album.id in (
+          select unnest(%(album_ids)s::bigint[])
+          union
+          select selected_tracks.album_id
+          from library.local_track_files as selected_files
+          join library.local_tracks as selected_tracks
+            on selected_tracks.id = selected_files.track_id
+          where selected_files.private_path = any(%(active_paths)s::text[])
+            and selected_files.scan_cache_stale is false
         )"""
         if by_album_ids
         else "album.album_key = any(%(album_keys)s::text[])"
     )
+    # Materialized album and file sets keep the update on the album/track
+    # indexes; the planner otherwise scans every track file's metadata.
     return f"""
-        with repaired_albums as (
-          select album.* from library.local_albums album
+        with repaired_albums as materialized (
+          select album.id, album.library_id, album.cover_path, album.metadata
+          from library.local_albums album
           join library.libraries lib on lib.id = album.library_id
           join app.bootstrap_owners owner on owner.account_id = lib.owner_account_id
           where owner.owner_key = 'local-bootstrap-owner' and lib.library_kind = 'local'
             and {album_filter}
+        ), repaired_files as materialized (
+          select files.id as file_id, album.id, album.cover_path, album.metadata
+          from repaired_albums album
+          join library.local_tracks tracks
+            on tracks.album_id = album.id and album.library_id = tracks.library_id
+          join library.local_track_files files on files.track_id = tracks.id
+          join library.library_roots roots
+            on roots.id = files.library_root_id and roots.library_id = tracks.library_id
+           and roots.is_active is true
+          where files.scan_cache_stale is false and files.scan_file_entry_is_object is true
         )
         update library.local_track_files files
         set metadata = jsonb_set(files.metadata, '{{scan_cache,file_entry}}',
@@ -7522,11 +7559,8 @@ def _synchronize_album_cover_file_entries_sql(
             'album_id', album.id, 'cover_path', album.cover_path,
             {selection_fields}{structural_cover_field}
           ), true)
-        from library.local_tracks tracks
-        join repaired_albums album on album.id = tracks.album_id and album.library_id = tracks.library_id
-        join library.library_roots roots on roots.library_id = tracks.library_id and roots.is_active is true
-        where files.track_id = tracks.id and files.library_root_id = roots.id
-          and files.scan_cache_stale is false and files.scan_file_entry_is_object is true
+        from repaired_files album
+        where files.id = album.file_id
           and coalesce(files.metadata #>> '{{scan_cache,file_entry,local_album_membership_problem}}', '') = ''
           and coalesce(files.metadata #>> '{{scan_cache,file_entry,exception_type}}', '') = ''
         returning files.private_path, files.metadata #> '{{scan_cache,file_entry}}' as file_entry

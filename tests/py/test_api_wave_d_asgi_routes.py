@@ -288,6 +288,53 @@ def test_indexed_cover_gallery_api_uses_validated_inventory_without_filesystem_r
         assert events.count("queue_context") == 1
 
 
+def test_cover_gallery_waits_for_the_first_listing_of_an_unlisted_folder(app, monkeypatch):
+    """Owner (2026-11-18): an album opened before its folder was listed showed "not listed yet", then asked again."""
+    from music_app.routes import api_wave_d_asgi_routes as routes
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    root = Path(app.config["MUSIC_DIR"]) / "Artist" / "Unlisted Album"
+    track = root / "song.mp3"
+    listing = [{"path": str(root / "front.jpg"), "filename": "front.jpg", "is_squareish": True,
+                "width": 600, "height": 600, "sha256": "b" * 64}]
+    reads = []
+    requested = []
+
+    def get(_root):
+        reads.append(_root)
+        # The worker publishes while the request waits.
+        return {"available": True, "complete": True, "candidates": listing} if len(reads) >= 3 else None
+
+    worker = SimpleNamespace(
+        repository=SimpleNamespace(root_for_tracks=lambda paths: root, get=get),
+        note_foreground_activity=lambda: None,
+        request=requested.append,
+        request_context=lambda paths: pytest.fail("a known folder needs no context request"),
+    )
+    monkeypatch.setattr(routes.AlbumCoverCandidateSnapshotRepository, "resolve_album_track_context",
+                        lambda _self, **_kwargs: {"album_id": 42, "album_key": "artist::unlisted album", "track_paths": [str(track)]},
+                        raising=False)
+    monkeypatch.setattr(routes.AlbumCoverCandidateSnapshotRepository, "resolve_album_id_for_track_paths",
+                        lambda _self, *, track_paths: 42)
+    monkeypatch.setattr(PostgresLibraryBrowseRepository, "build_cover_state_entries_by_paths", lambda *args: {})
+    monkeypatch.setattr(routes, "_UNLISTED_INVENTORY_POLL_SECONDS", 0.001)
+    app.config["_LOCAL_COVER_INVENTORY"] = worker
+    asgi_app = _make_wave_d_app(app)
+    asgi_app.state.local_cover_inventory = worker
+
+    status, _, body = _run_asgi_request(
+        asgi_app, "POST", "/utilities/cover-lookup/gallery",
+        json_body={"album": {"album_id": 42, "name": "Unlisted Album", "tracks": []}},
+    )
+
+    assert status == 200
+    payload = _decode_json(body)
+    assert payload["local_inventory_complete"] is True
+    assert [item["filename"] for item in payload["local_covers"]] == ["front.jpg"]
+    assert requested == [root]
+    assert len(reads) == 3
+
+
 class _FatalFlaskBridge:
     def __init__(self, reason: str = "route must not use Flask bridge"):
         self._reason = reason
@@ -2024,6 +2071,78 @@ def test_asgi_cover_lookup_gallery_offers_split_choice_before_the_split_is_recor
     assert [release["album_id"] for release in _decode_json(body)["current_releases"]] == [41, 42]
 
 
+def test_asgi_cover_lookup_gallery_splits_a_card_listed_without_tracks_by_its_own_tracks(app, monkeypatch):
+    """Owner (BUGFIX-05 case 1, 2026-11-18): the card's album (key only, listed without tracks) was split, keeping
+    its key on one half. Opening the card offers the chooser, never that half's lookup."""
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+    from music_app.services import cover_lookup_tasks
+
+    first_track = (app.config["MUSIC_DIR"] / "ДДТ" / "Ремиксы" / "01.mp3").resolve()
+    second_track = (app.config["MUSIC_DIR"] / "ДДТ" / "Ремиксы" / "04.mp3").resolve()
+    for track_path in (first_track, second_track):
+        track_path.parent.mkdir(parents=True, exist_ok=True)
+        track_path.write_bytes(b"track")
+    reset_cover_lookup_runtime_state()
+    task_id, _cancel = cover_lookup_tasks.create_cover_lookup_task(
+        {**_album_payload(first_track), "name": "Ремиксы", "album_artist": "ДДТ",
+         "tracks": [{"path": str(first_track)}, {"path": str(second_track)}]},
+        {str(first_track), str(second_track)},
+    )
+    listed_card_album = {"key": "ддт::ремиксы", "album_artist": "ДДТ", "name": "Ремиксы", "year": 2000}
+    halves = [
+        {"key": "ддт::ремиксы", "album_artist": "ДДТ", "name": "Ремиксы", "year": 2000, "tracks": [{"path": str(first_track)}]},
+        {"key": "ддт::ремиксы2", "album_artist": "ДДТ", "name": "Ремиксы2", "year": 2000, "tracks": [{"path": str(second_track)}]},
+    ]
+
+    class SnapshotRepository:
+        def __init__(self, _config):
+            pass
+
+        def resolve_album_id_for_track_paths(self, *, track_paths):
+            return {frozenset({str(first_track)}): 41, frozenset({str(second_track)}): 42}.get(frozenset(track_paths), 41)
+
+        def resolve_album_track_context(self, *, album_id, album_key):
+            return {"album_id": 41, "album_key": "ддт::ремиксы", "track_paths": [str(first_track)]}
+
+    class BrowseRepository:
+        def __init__(self, _config):
+            pass
+
+        def build_album_payloads_by_track_paths(self, track_paths):
+            return halves
+
+    class LineageRepository:
+        def __init__(self, _config):
+            pass
+
+        def resolve(self, *, album_id, album_key, track_paths):
+            assert track_paths == {str(first_track), str(second_track)}
+            return {"status": "split", "album": None, "choices": [
+                {"album_id": 41, "album_key": "ддт::ремиксы", "name": "Ремиксы", "album_artist": "ДДТ", "year": 2000, "track_count": 1},
+                {"album_id": 42, "album_key": "ддт::ремиксы2", "name": "Ремиксы2", "album_artist": "ДДТ", "year": 2000, "track_count": 1}]}
+
+    monkeypatch.setattr(asgi_routes, "AlbumCoverCandidateSnapshotRepository", SnapshotRepository)
+    monkeypatch.setattr(asgi_routes, "PostgresLibraryBrowseRepository", BrowseRepository)
+    monkeypatch.setattr(asgi_routes, "AlbumIdentityLineageRepository", LineageRepository)
+    # As on sandbox2, the half that kept the key resolves to a real album folder.
+    monkeypatch.setattr(asgi_routes, "_resolve_cover_album_context", lambda _config, _album: object())
+
+    async def serialize_gallery(*_args, **_kwargs):
+        raise AssertionError("a split card must not open one half's lookup")
+
+    monkeypatch.setattr(asgi_routes, "_serialize_cover_gallery_from_asgi", serialize_gallery)
+
+    status, _headers, body = _run_asgi_request(
+        _make_wave_d_app(app), "POST", "/utilities/cover-lookup/gallery",
+        json_body={"album": listed_card_album, "task_id": task_id},
+    )
+
+    payload = _decode_json(body)
+    assert status == 409, payload
+    assert payload["resolution_kind"] == "album_split"
+    assert [release["name"] for release in payload["current_releases"]] == ["Ремиксы", "Ремиксы2"]
+
+
 def test_asgi_cover_lookup_gallery_returns_safe_current_release_choices_for_split_album(
     app,
     monkeypatch,
@@ -3721,6 +3840,44 @@ def test_asgi_cover_lookup_add_remote_merges_existing_candidates_and_remote_imag
 
     assert failed_status == 502
     assert _decode_json(failed_body) == {"ok": False, "error": "Failed to load remote image"}
+
+
+def test_remote_card_preview_is_downscaled_and_cached_apart_from_the_original(app, monkeypatch):
+    import io
+
+    from PIL import Image
+
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+
+    original = io.BytesIO()
+    Image.new("RGB", (2400, 2400), (10, 120, 200)).save(original, "JPEG", quality=95)
+    fetches = []
+
+    def fetch(image_url, **_kwargs):
+        fetches.append(image_url)
+        return original.getvalue(), "image/jpeg"
+
+    monkeypatch.setattr(asgi_routes, "fetch_remote_cover_bytes", fetch)
+    asgi_app = _make_wave_d_app(app)
+    asgi_app.state.flask_app = _FatalFlaskBridge()
+    url = "https://images.example/apple-3000.jpg"
+
+    def get(**query):
+        return _run_asgi_request(asgi_app, "GET", "/utilities/cover-lookup/remote-image", query={"url": url, **query})
+
+    first_status, first_headers, first_body = get(size="480", key="candidate")
+    again_status, _again_headers, again_body = get(size="480", key="candidate")
+    full_status, _full_headers, full_body = get()
+    unsupported_status, _unsupported_headers, unsupported_body = get(size="4000")
+
+    assert (first_status, again_status, full_status, unsupported_status) == (200, 200, 200, 200)
+    assert first_headers["content-type"] == "image/jpeg"
+    with Image.open(io.BytesIO(first_body)) as preview:
+        assert preview.size == (480, 480)
+    assert again_body == first_body
+    # The lightbox keeps the original, remembered from the card's fetch; only the card edge is ever resized.
+    assert full_body == unsupported_body == original.getvalue()
+    assert fetches == [url]
 
 
 def test_remote_candidate_image_download_does_not_block_cover_lookup_api(app, monkeypatch):

@@ -879,51 +879,51 @@ def _load_notification_summaries_sql() -> str:
         + f"""
         select jsonb_strip_nulls(
             jsonb_build_object(
-                'type', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'type',
-                'artist', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'artist',
-                'album', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album',
-                'year', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'year',
-                'progress', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'progress',
-                'progress_label', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'progress_label',
-                'message', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'message',
-                'result_kind', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'result_kind',
-                'started_at', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'started_at',
-                'updated_at', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'updated_at',
-                'finished_at', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'finished_at',
-                'cancel_requested', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'cancel_requested',
-                'caa_empty_notice', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'caa_empty_notice',
-                'selected_candidate_id', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'selected_candidate_id',
-                'save_generation', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'save_generation',
-            'search_generation', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'search_generation',
-                'best_candidate_id', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'best_candidate_id',
-                'candidate_revision', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'candidate_revision',
-                'candidate_updated_at', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'candidate_updated_at'
+                'type', task_document.source_payload -> 'type',
+                'artist', task_document.source_payload -> 'artist',
+                'album', task_document.source_payload -> 'album',
+                'year', task_document.source_payload -> 'year',
+                'progress', task_document.source_payload -> 'progress',
+                'progress_label', task_document.source_payload -> 'progress_label',
+                'message', task_document.source_payload -> 'message',
+                'result_kind', task_document.source_payload -> 'result_kind',
+                'started_at', task_document.source_payload -> 'started_at',
+                'updated_at', task_document.source_payload -> 'updated_at',
+                'finished_at', task_document.source_payload -> 'finished_at',
+                'cancel_requested', task_document.source_payload -> 'cancel_requested',
+                'caa_empty_notice', task_document.source_payload -> 'caa_empty_notice',
+                'selected_candidate_id', task_document.source_payload -> 'selected_candidate_id',
+                'save_generation', task_document.source_payload -> 'save_generation',
+            'search_generation', task_document.source_payload -> 'search_generation',
+                'best_candidate_id', task_document.source_payload -> 'best_candidate_id',
+                'candidate_revision', task_document.source_payload -> 'candidate_revision',
+                'candidate_updated_at', task_document.source_payload -> 'candidate_updated_at'
             )
             || jsonb_build_object(
                 'id', ops.cover_lookup_tasks.task_key,
                 'status', ops.cover_lookup_tasks.status,
                 'created_at', ops.cover_lookup_tasks.requested_at,
                 'notification_order_at', coalesce(
-                    nullif(ops.cover_lookup_tasks.metadata ->> 'notification_order_at', '')::timestamptz,
+                    nullif(task_document.metadata ->> 'notification_order_at', '')::timestamptz,
                     ops.cover_lookup_tasks.completed_at, ops.cover_lookup_tasks.requested_at
                 ),
                 'notification_completed_at', coalesce(
-                    nullif(ops.cover_lookup_tasks.metadata ->> 'notification_completed_at', ''),
+                    nullif(task_document.metadata ->> 'notification_completed_at', ''),
                     ops.cover_lookup_tasks.completed_at::text
                 ),
                 'notification_expires_at', coalesce(
-                    ops.cover_lookup_tasks.metadata ->> 'notification_expires_at',
+                    task_document.metadata ->> 'notification_expires_at',
                     ''
                 ),
                 'notification_action_taken', coalesce(
-                    (ops.cover_lookup_tasks.metadata ->> 'notification_action_taken')::boolean,
+                    (task_document.metadata ->> 'notification_action_taken')::boolean,
                     false
                 ),
                 'possible_match_count', (
                     select count(*)
                     from jsonb_array_elements(
                         coalesce(
-                            ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'possible_matches',
+                            task_document.source_payload -> 'possible_matches',
                             ops.cover_lookup_tasks.provider_payload -> 'possible_matches',
                             '[]'::jsonb
                         )
@@ -950,45 +950,45 @@ def _load_notification_summaries_sql() -> str:
                     )
                     from jsonb_array_elements(
                         coalesce(
-                            ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'possible_matches',
+                            task_document.source_payload -> 'possible_matches',
                             ops.cover_lookup_tasks.provider_payload -> 'possible_matches',
                             '[]'::jsonb
                         )
                     ) with ordinality as candidates(candidate, ordinal)
                     where coalesce(candidate ->> 'art_kind', 'cover') = 'cover'
                     order by case
-                        when candidate ->> 'id' = ops.cover_lookup_tasks.metadata -> 'source_payload' ->> 'best_candidate_id'
+                        when candidate ->> 'id' = task_document.source_payload ->> 'best_candidate_id'
                         then 0 else 1
                     end, ordinal
                     limit 1
                 ),
                 'album_payload', case
-                    when jsonb_typeof(ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload') = 'object'
+                    when jsonb_typeof(task_document.album_payload) = 'object'
                     then jsonb_strip_nulls(jsonb_build_object(
                         'album_id', coalesce(
-                            ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'id',
-                            ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'album_id'
+                            task_document.album_payload -> 'id',
+                            task_document.album_payload -> 'album_id'
                         ),
-                        'key', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'key',
-                        'name', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'name',
-                        'album', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'album',
-                        'album_artist', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'album_artist',
-                        'artist', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'artist',
-                        'year', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'year',
-                        'cover_path', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'cover_path',
-                        'cover_preview_url', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'cover_preview_url',
-                        'cover_revision', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'cover_revision',
-                        'remote_cover_url', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'remote_cover_url',
-                        'remote_cover_thumbnail_url', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'remote_cover_thumbnail_url',
-                        'remote_cover_source', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'remote_cover_source',
-                        'remote_cover_source_label', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'remote_cover_source_label',
-                        'remote_cover_album_url', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'remote_cover_album_url',
-                        'remote_cover_width', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'remote_cover_width',
+                        'key', task_document.album_payload -> 'key',
+                        'name', task_document.album_payload -> 'name',
+                        'album', task_document.album_payload -> 'album',
+                        'album_artist', task_document.album_payload -> 'album_artist',
+                        'artist', task_document.album_payload -> 'artist',
+                        'year', task_document.album_payload -> 'year',
+                        'cover_path', task_document.album_payload -> 'cover_path',
+                        'cover_preview_url', task_document.album_payload -> 'cover_preview_url',
+                        'cover_revision', task_document.album_payload -> 'cover_revision',
+                        'remote_cover_url', task_document.album_payload -> 'remote_cover_url',
+                        'remote_cover_thumbnail_url', task_document.album_payload -> 'remote_cover_thumbnail_url',
+                        'remote_cover_source', task_document.album_payload -> 'remote_cover_source',
+                        'remote_cover_source_label', task_document.album_payload -> 'remote_cover_source_label',
+                        'remote_cover_album_url', task_document.album_payload -> 'remote_cover_album_url',
+                        'remote_cover_width', task_document.album_payload -> 'remote_cover_width',
                         'tracks', coalesce((
                             select jsonb_agg(jsonb_build_object('path', track ->> 'path'))
                             from jsonb_array_elements(
                                 coalesce(
-                                    ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'tracks',
+                                    task_document.album_payload -> 'tracks',
                                     '[]'::jsonb
                                 )
                             ) as track
@@ -999,14 +999,10 @@ def _load_notification_summaries_sql() -> str:
                 end
             )
         ) as task_summary
-        from ops.cover_lookup_tasks
-        join bootstrap_context
-          on bootstrap_context.library_id = ops.cover_lookup_tasks.library_id
-        {_current_notification_album_joins_sql()}
-        where ops.cover_lookup_tasks.metadata ->> 'source_family' = any(%s::text[])
-          and {_actionable_notification_predicate_sql()}
+        {_notification_rows_sql()}
+        where {_actionable_notification_predicate_sql()}
         order by
-            coalesce(nullif(ops.cover_lookup_tasks.metadata ->> 'notification_order_at', '')::timestamptz,
+            coalesce(nullif(task_document.metadata ->> 'notification_order_at', '')::timestamptz,
               ops.cover_lookup_tasks.completed_at, ops.cover_lookup_tasks.requested_at) desc,
             ops.cover_lookup_tasks.task_key desc;
         """
@@ -1022,7 +1018,7 @@ def _count_notifications_sql() -> str:
           count(*) filter (
             where ops.cover_lookup_tasks.status = any(%s::text[])
               and coalesce(
-                ops.cover_lookup_tasks.metadata -> 'source_payload'
+                task_document.source_payload
                   -> 'job_contract' ->> 'job_kind',
                 ''
               ) <> 'save_remote_selection'
@@ -1031,7 +1027,7 @@ def _count_notifications_sql() -> str:
             where ops.cover_lookup_tasks.status = any(%s::text[])
                or (
                  ops.cover_lookup_tasks.status = any(%s::text[])
-                 and ops.cover_lookup_tasks.metadata -> 'source_payload'
+                 and task_document.source_payload
                    -> 'job_contract' ->> 'job_kind' = 'save_remote_selection'
                )
           )::int as finished_count,
@@ -1042,12 +1038,8 @@ def _count_notifications_sql() -> str:
             )),
             md5('')
           ) as membership_revision
-        from ops.cover_lookup_tasks
-        join bootstrap_context
-          on bootstrap_context.library_id = ops.cover_lookup_tasks.library_id
-        {_current_notification_album_joins_sql()}
-        where ops.cover_lookup_tasks.metadata ->> 'source_family' = any(%s::text[])
-          and {_actionable_notification_predicate_sql()};
+        {_notification_rows_sql()}
+        where {_actionable_notification_predicate_sql()};
         """
     )
 
@@ -1058,10 +1050,7 @@ def _load_notification_summary_page_sql(
     active_only: bool,
     has_task_ids: bool = False,
 ) -> str:
-    filters = [
-        "ops.cover_lookup_tasks.metadata ->> 'source_family' = any(%s::text[])",
-        _actionable_notification_predicate_sql(),
-    ]
+    filters = [_actionable_notification_predicate_sql()]
     if active_only and has_task_ids:
         filters.append(
             "(ops.cover_lookup_tasks.status = any(%s::text[]) "
@@ -1073,7 +1062,7 @@ def _load_notification_summary_page_sql(
         filters.append("ops.cover_lookup_tasks.task_key = any(%s::text[])")
     if has_cursor:
         filters.append(
-            "(coalesce(nullif(ops.cover_lookup_tasks.metadata ->> 'notification_order_at', '')::timestamptz, "
+            "(coalesce(nullif(task_document.metadata ->> 'notification_order_at', '')::timestamptz, "
             "ops.cover_lookup_tasks.completed_at, "
             "ops.cover_lookup_tasks.requested_at), ops.cover_lookup_tasks.task_key) "
             "< (%s::timestamptz, %s)"
@@ -1085,52 +1074,52 @@ def _load_notification_summary_page_sql(
         select
           jsonb_strip_nulls(
             jsonb_build_object(
-              'type', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'type',
-              'artist', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'artist',
-              'album', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album',
-              'year', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'year',
-              'progress', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'progress',
-              'progress_label', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'progress_label',
-              'message', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'message',
-              'result_kind', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'result_kind',
-              'started_at', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'started_at',
-              'updated_at', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'updated_at',
-              'finished_at', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'finished_at',
-              'cancel_requested', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'cancel_requested',
-              'caa_empty_notice', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'caa_empty_notice',
-              'selected_candidate_id', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'selected_candidate_id',
-              'save_generation', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'save_generation',
-            'search_generation', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'search_generation',
-              'best_candidate_id', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'best_candidate_id',
-              'candidate_revision', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'candidate_revision',
-              'candidate_updated_at', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'candidate_updated_at',
-              'job_kind', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'job_contract' -> 'job_kind'
+              'type', task_document.source_payload -> 'type',
+              'artist', task_document.source_payload -> 'artist',
+              'album', task_document.source_payload -> 'album',
+              'year', task_document.source_payload -> 'year',
+              'progress', task_document.source_payload -> 'progress',
+              'progress_label', task_document.source_payload -> 'progress_label',
+              'message', task_document.source_payload -> 'message',
+              'result_kind', task_document.source_payload -> 'result_kind',
+              'started_at', task_document.source_payload -> 'started_at',
+              'updated_at', task_document.source_payload -> 'updated_at',
+              'finished_at', task_document.source_payload -> 'finished_at',
+              'cancel_requested', task_document.source_payload -> 'cancel_requested',
+              'caa_empty_notice', task_document.source_payload -> 'caa_empty_notice',
+              'selected_candidate_id', task_document.source_payload -> 'selected_candidate_id',
+              'save_generation', task_document.source_payload -> 'save_generation',
+            'search_generation', task_document.source_payload -> 'search_generation',
+              'best_candidate_id', task_document.source_payload -> 'best_candidate_id',
+              'candidate_revision', task_document.source_payload -> 'candidate_revision',
+              'candidate_updated_at', task_document.source_payload -> 'candidate_updated_at',
+              'job_kind', task_document.source_payload -> 'job_contract' -> 'job_kind'
             )
             || jsonb_build_object(
               'id', ops.cover_lookup_tasks.task_key,
               'status', ops.cover_lookup_tasks.status,
               'created_at', ops.cover_lookup_tasks.requested_at,
               'notification_order_at', coalesce(
-                nullif(ops.cover_lookup_tasks.metadata ->> 'notification_order_at', '')::timestamptz,
+                nullif(task_document.metadata ->> 'notification_order_at', '')::timestamptz,
                 ops.cover_lookup_tasks.completed_at, ops.cover_lookup_tasks.requested_at
               ),
               'notification_completed_at', coalesce(
-                nullif(ops.cover_lookup_tasks.metadata ->> 'notification_completed_at', ''),
+                nullif(task_document.metadata ->> 'notification_completed_at', ''),
                 ops.cover_lookup_tasks.completed_at::text
               ),
               'notification_expires_at', coalesce(
-                ops.cover_lookup_tasks.metadata ->> 'notification_expires_at',
+                task_document.metadata ->> 'notification_expires_at',
                 ''
               ),
               'notification_action_taken', coalesce(
-                (ops.cover_lookup_tasks.metadata ->> 'notification_action_taken')::boolean,
+                (task_document.metadata ->> 'notification_action_taken')::boolean,
                 false
               ),
               'possible_match_count', (
                 select count(*)
                 from jsonb_array_elements(
                   coalesce(
-                    ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'possible_matches',
+                    task_document.source_payload -> 'possible_matches',
                     ops.cover_lookup_tasks.provider_payload -> 'possible_matches',
                     '[]'::jsonb
                   )
@@ -1157,61 +1146,58 @@ def _load_notification_summary_page_sql(
                 )
                 from jsonb_array_elements(
                   coalesce(
-                    ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'possible_matches',
+                    task_document.source_payload -> 'possible_matches',
                     ops.cover_lookup_tasks.provider_payload -> 'possible_matches',
                     '[]'::jsonb
                   )
                 ) with ordinality as candidates(candidate, ordinal)
                 where coalesce(candidate ->> 'art_kind', 'cover') = 'cover'
                 order by case
-                  when candidate ->> 'id' = ops.cover_lookup_tasks.metadata -> 'source_payload' ->> 'best_candidate_id'
+                  when candidate ->> 'id' = task_document.source_payload ->> 'best_candidate_id'
                   then 0 else 1
                 end, ordinal
                 limit 1
               ),
               'album_payload', case
                 when jsonb_typeof(
-                  ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload'
+                  task_document.album_payload
                 ) = 'object'
                 then jsonb_strip_nulls(jsonb_build_object(
                   'album_id', coalesce(
-                    ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'id',
-                    ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'album_id'
+                    task_document.album_payload -> 'id',
+                    task_document.album_payload -> 'album_id'
                   ),
-                  'key', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'key',
-                  'name', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'name',
-                  'album', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'album',
-                  'album_artist', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'album_artist',
-                  'artist', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'artist',
-                  'year', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'year',
-                  'cover_path', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'cover_path',
-                  'cover_preview_url', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'cover_preview_url',
-                  'cover_revision', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'cover_revision',
-                  'remote_cover_url', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'remote_cover_url',
-                  'remote_cover_thumbnail_url', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'remote_cover_thumbnail_url',
-                  'remote_cover_source', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'remote_cover_source',
-                  'remote_cover_source_label', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'remote_cover_source_label',
-                  'remote_cover_album_url', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'remote_cover_album_url',
-                  'remote_cover_width', ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' -> 'remote_cover_width'
+                  'key', task_document.album_payload -> 'key',
+                  'name', task_document.album_payload -> 'name',
+                  'album', task_document.album_payload -> 'album',
+                  'album_artist', task_document.album_payload -> 'album_artist',
+                  'artist', task_document.album_payload -> 'artist',
+                  'year', task_document.album_payload -> 'year',
+                  'cover_path', task_document.album_payload -> 'cover_path',
+                  'cover_preview_url', task_document.album_payload -> 'cover_preview_url',
+                  'cover_revision', task_document.album_payload -> 'cover_revision',
+                  'remote_cover_url', task_document.album_payload -> 'remote_cover_url',
+                  'remote_cover_thumbnail_url', task_document.album_payload -> 'remote_cover_thumbnail_url',
+                  'remote_cover_source', task_document.album_payload -> 'remote_cover_source',
+                  'remote_cover_source_label', task_document.album_payload -> 'remote_cover_source_label',
+                  'remote_cover_album_url', task_document.album_payload -> 'remote_cover_album_url',
+                  'remote_cover_width', task_document.album_payload -> 'remote_cover_width'
                 ))
                 else null
               end
             )
           ) as task_summary,
           coalesce(
-            nullif(ops.cover_lookup_tasks.metadata ->> 'notification_order_at', '')::timestamptz,
+            nullif(task_document.metadata ->> 'notification_order_at', '')::timestamptz,
             ops.cover_lookup_tasks.completed_at,
             ops.cover_lookup_tasks.requested_at
           ) as effective_timestamp,
           ops.cover_lookup_tasks.task_key
-        from ops.cover_lookup_tasks
-        join bootstrap_context
-          on bootstrap_context.library_id = ops.cover_lookup_tasks.library_id
-        {_current_notification_album_joins_sql()}
+        {_notification_rows_sql()}
         where {where_sql}
         order by
           coalesce(
-            nullif(ops.cover_lookup_tasks.metadata ->> 'notification_order_at', '')::timestamptz,
+            nullif(task_document.metadata ->> 'notification_order_at', '')::timestamptz,
             ops.cover_lookup_tasks.completed_at,
             ops.cover_lookup_tasks.requested_at
           ) desc,
@@ -1221,24 +1207,57 @@ def _load_notification_summary_page_sql(
     )
 
 
+def _notification_rows_sql() -> str:
+    # `metadata ? 'source_family'` lets the partial task-key index find the few
+    # notification rows among the automatic provider outcomes.
+    return f"""
+        from ops.cover_lookup_tasks
+        join bootstrap_context
+          on bootstrap_context.library_id = ops.cover_lookup_tasks.library_id
+         and ops.cover_lookup_tasks.metadata ? 'source_family'
+         and ops.cover_lookup_tasks.metadata ->> 'source_family' = any(%s::text[])
+        {_notification_document_sql()}
+        {_current_notification_album_joins_sql()}
+    """
+
+
+def _notification_document_sql() -> str:
+    # Notification metadata holds whole candidate lists and album payloads (up to
+    # ~200 KB) and is TOASTed; each `metadata -> ...` would decompress it again.
+    # Detoast it once per row (`#> '{}'` returns the whole document) and read the
+    # nested payloads from that copy. `offset 0` keeps both levels from being
+    # inlined back into per-reference expressions.
+    return """
+        cross join lateral (
+          select metadata,
+                 metadata -> 'source_payload',
+                 metadata -> 'source_payload' -> 'album_payload'
+          from (select ops.cover_lookup_tasks.metadata #> '{}' offset 0) as detoasted(metadata)
+          offset 0
+        ) as task_document(metadata, source_payload, album_payload)
+    """
+
+
 def _current_notification_album_joins_sql() -> str:
+    # `offset 0` on direct_album and current_album evaluates each once per row;
+    # inlined, every reference copied the active-track EXISTS into its own subplan.
     return f"""
         cross join lateral (
           select
             case
               when coalesce(
-                ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' ->> 'album_id',
-                ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' ->> 'id',
+                task_document.album_payload ->> 'album_id',
+                task_document.album_payload ->> 'id',
                 ''
               ) ~ '^[1-9][0-9]*$'
               then coalesce(
-                ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' ->> 'album_id',
-                ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' ->> 'id'
+                task_document.album_payload ->> 'album_id',
+                task_document.album_payload ->> 'id'
               )::bigint
               else null
             end,
             nullif(
-              ops.cover_lookup_tasks.metadata -> 'source_payload' -> 'album_payload' ->> 'key',
+              task_document.album_payload ->> 'key',
               ''
             )
         ) as identity(album_id, album_key)
@@ -1266,6 +1285,7 @@ def _current_notification_album_joins_sql() -> str:
                 current_album_by_key.id
               )
             )
+          offset 0
         ) as direct_album(album_id, cover_path, metadata, has_active_tracks)
         left join lateral (
           select array(
@@ -1275,8 +1295,8 @@ def _current_notification_album_joins_sql() -> str:
             )
           ) as paths
           from (select coalesce(
-            ops.cover_lookup_tasks.metadata -> 'track_paths',
-            ops.cover_lookup_tasks.metadata #> '{{source_payload,track_paths}}',
+            task_document.metadata -> 'track_paths',
+            task_document.source_payload -> 'track_paths',
             '[]'::jsonb
           )) as saved_paths(value)
         ) as requested_paths on not direct_album.has_active_tracks
@@ -1299,6 +1319,7 @@ def _current_notification_album_joins_sql() -> str:
             case when direct_album.has_active_tracks then direct_album.cover_path else path_album.cover_path end,
             case when direct_album.has_active_tracks then direct_album.metadata else path_album.metadata end,
             direct_album.has_active_tracks or coalesce(path_owners.complete, false)
+          offset 0
         ) as current_album(album_id, cover_path, metadata, has_active_tracks)
     """
 

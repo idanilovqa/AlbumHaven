@@ -1944,18 +1944,33 @@ function applyTagEditsToNonAlbumView(album, updates) {
   view.non_album_tracks = applyTagEditsToNonAlbumTracks(view.non_album_tracks, album, updates);
   // Owner 2026-11-18: the library-wide list behind Loose Tracks and every collection page follows the same
   // edit, so the open page and the collections tree change at once instead of after a reload.
-  if (Array.isArray(view.library_non_album_tracks)) {
-    const libraryTracks = applyTagEditsToNonAlbumTracks(view.library_non_album_tracks, album, updates);
-    if (typeof libraryNonAlbumHydrationCache !== 'undefined'
-      && libraryNonAlbumHydrationCache?.tracks === view.library_non_album_tracks) {
-      libraryNonAlbumHydrationCache = { ...libraryNonAlbumHydrationCache, tracks: libraryTracks };
-    }
+  // The owned list wins over the view's copy: a background refresh can leave the view with an empty list.
+  const ownedLibraryTracks = typeof currentLibraryLooseTracks === 'function' ? currentLibraryLooseTracks(view) : null;
+  const libraryBase = ownedLibraryTracks || (Array.isArray(view.library_non_album_tracks) ? view.library_non_album_tracks : null);
+  if (libraryBase) {
+    const libraryTracks = applyTagEditsToNonAlbumTracks(libraryBase, album, updates);
+    if (ownedLibraryTracks) replaceCurrentLibraryLooseTracks(libraryTracks, view);
     view.library_non_album_tracks = libraryTracks;
   }
   if (typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
-  if (typeof refreshOpenLooseTracksPage === 'function') refreshOpenLooseTracksPage();
   if (typeof syncCustomCollectionsAfterTagEdit === 'function') syncCustomCollectionsAfterTagEdit();
+  // Owner 2026-11-18: an edit that empties the open collection follows its tracks to the collection the last of
+  // them went to, and the tree selects it; otherwise the open page redraws in place.
+  const destination = collectionLeftByTagEdit(updates);
+  if (destination && typeof openLooseTracksPage === 'function') openLooseTracksPage({ collectionName: destination });
+  else if (typeof refreshOpenLooseTracksPage === 'function') refreshOpenLooseTracksPage();
   return view.non_album_tracks;
+}
+
+function collectionLeftByTagEdit(updates) {
+  if (typeof libraryLooseTracksPageOpen !== 'function' || !libraryLooseTracksPageOpen()) return '';
+  const openCollection = String(state.ui?.nonAlbumCollectionName || '').trim();
+  if (!openCollection || typeof getVisibleNonAlbumTracks !== 'function'
+    || getVisibleNonAlbumTracks({ libraryWide: true, collectionName: openCollection }).length) return '';
+  const destinations = Object.values(updates || {})
+    .map((edits) => String(edits?.custom_collection_name || '').trim())
+    .filter((name) => name && name !== openCollection);
+  return destinations.at(-1) || '';
 }
 
 function applyTagEditsToNonAlbumTracks(tracks, album, updates) {

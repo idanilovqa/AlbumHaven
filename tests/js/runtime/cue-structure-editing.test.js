@@ -75,3 +75,26 @@ test('the Exception field hides on the CUE structure tab', () => {
   const css = fs.readFileSync(path.join(runtime, '..', '..', '..', 'static', 'css', 'runtime', 'utilities.css'), 'utf8');
   assert.match(css, /\.tag-editor-exception-field\[hidden\] \{ display: none; \}/);
 });
+
+test('a moved CUE boundary updates both track lengths in the open album at once', () => {
+  // Owner 2026-11-18: "I changed the time in cue editor (first track became 5 seconds) but I don't see a change in
+  // album details. it should update."
+  const { context } = loadEditor();
+  const cueTracks = [
+    { cue_segment_ref: 'cue:1', cue_structure: { start_frame: 0, end_frame: 750 } },
+    { cue_segment_ref: 'cue:2', cue_structure: { start_frame: 375, end_frame: 1500 } },
+  ];
+  const album = { tracks: [
+    { cue_segment_ref: 'cue:1', duration_seconds: 10 },
+    { cue_segment_ref: 'cue:2', duration_seconds: 10 },
+  ] };
+  context.state.modalReleases = [album];
+  context.getCurrentTrackModalAlbum = () => album;
+  context.document = { getElementById: () => ({ hidden: false }) };
+  const rendered = [];
+  context.renderTrackModalRelease = (value) => rendered.push(value);
+
+  assert.equal(context.applyCueDurationsToOpenAlbums(cueTracks), true);
+  assert.deepEqual(album.tracks.map((track) => track.duration_seconds), [5, 15]);
+  assert.equal(rendered.length, 1, 'Album Details redraws with the new lengths');
+});

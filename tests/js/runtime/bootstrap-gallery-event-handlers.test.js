@@ -1693,7 +1693,9 @@ for (const mobile of [false, true]) {
 
     context.handleGalleryBootstrapClick(createAllArtistsEvent({ libraryHome: true }).event);
 
-    assert.deepEqual(modes, ['artists']);
+    // Owner 2026-11-18: the click does not switch the tree itself; the All artists gallery it opens does, through
+    // syncLibraryNavigationToMainPanel (covered in shell-navigation-drawer.test.js).
+    assert.deepEqual(modes, []);
     assert.equal(context.state.ui.pendingSidebarAllArtistsActive, !mobile);
   });
 }
@@ -5972,8 +5974,6 @@ test('search reveal keeps the tree mode and expands only a folded desktop tree',
   context.setLibraryNavigationMode = mode => {
     navigationModes.push(mode);
     context.state.ui.libraryNavigationMode = mode;
-    // Switching to Artists while Loose Tracks is still open suppresses the tree's selection.
-    context.state.ui.suppressSidebarSelection = true;
   };
   context.usesMobilePageLayout = () => false;
   context.document.getElementById = id => id === 'app-shell' ? { classList: { contains: name => name === 'is-artist-tree-folded' && folded } } : null;
@@ -5986,8 +5986,6 @@ test('search reveal keeps the tree mode and expands only a folded desktop tree',
   assert.deepEqual(JSON.parse(JSON.stringify(toggleOptions)), [{ instant: true }]);
   assert.deepEqual(navigationModes, []);
   assert.equal(context.state.ui.libraryNavigationMode, 'custom-collections');
-  // Owner 2026-11-18: a search from the Loose Tracks page leaves it, so the best match shows selected.
-  assert.equal(context.state.ui.suppressSidebarSelection, false);
 });
 
 

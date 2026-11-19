@@ -246,14 +246,10 @@ function getVisibleNonAlbumTracks(options = {}) {
   // Library-wide Loose Tracks do not belong to any artist page: an artist view replaces state.view and its
   // list, so the scope-keyed hydration cache is their source (owner 2026-11-16: back from 10cc, every
   // Loose Tracks item opened empty).
-  const libraryWideCache = options.libraryWide && libraryNonAlbumHydrationCache
-    && libraryNonAlbumHydrationCache.key === getLibraryNonAlbumScopeKey(view)
-    ? libraryNonAlbumHydrationCache.tracks
-    : null;
-  let tracks = libraryWideCache
-    || (options.libraryWide && Array.isArray(view.library_non_album_tracks)
-      ? view.library_non_album_tracks
-      : Array.isArray(view.non_album_tracks) ? view.non_album_tracks : []);
+  // A library-wide page reads only that list, never the artist's own Loose Tracks (audit 2026-11-18).
+  let tracks = options.libraryWide
+    ? (currentLibraryLooseTracks(view) || (Array.isArray(view.library_non_album_tracks) ? view.library_non_album_tracks : []))
+    : (Array.isArray(view.non_album_tracks) ? view.non_album_tracks : []);
   const collectionName = String(options.collectionName || '').trim();
   if (collectionName) {
     tracks = tracks.filter((track) => (
@@ -364,6 +360,28 @@ function buildArtistNonAlbumRequestUrl(view = state.view || {}, { availability =
 
 function getLibraryNonAlbumScopeKey(view = state.view || {}) {
   return getDeferredNonAlbumScopeKey(buildLibraryNonAlbumRequestUrl(view));
+}
+
+// The library-wide Loose Tracks list has one owner, the hydration cache (audit 2026-11-18): tag edits apply to it,
+// and the open page and the Custom Collections tree read it. It belongs to the same sources and search whatever
+// the inventory revision: a save moves the revision on, and the edited list must stay the one shown.
+function getLibraryLooseTracksListKey(view = state.view || {}) {
+  const url = buildLibraryNonAlbumRequestUrl(view);
+  url.searchParams.delete('inventory_revision');
+  return getDeferredNonAlbumScopeKey(url);
+}
+
+function currentLibraryLooseTracks(view = state.view || {}) {
+  if (!libraryNonAlbumHydrationCache) return null;
+  return libraryNonAlbumHydrationCache.listKey === getLibraryLooseTracksListKey(view)
+    ? libraryNonAlbumHydrationCache.tracks
+    : null;
+}
+
+function replaceCurrentLibraryLooseTracks(tracks, view = state.view || {}) {
+  if (libraryNonAlbumHydrationCache?.listKey !== getLibraryLooseTracksListKey(view)) return false;
+  libraryNonAlbumHydrationCache = { ...libraryNonAlbumHydrationCache, tracks };
+  return true;
 }
 
 function hasHydratedLibraryNonAlbumTracks() {
@@ -508,7 +526,9 @@ function hydrateLibraryNonAlbumTracks({ resolveLibrary = false } = {}) {
     state.view.library_non_album_tracks = tracks;
     state.view.library_non_album_tracks_search_matched = searchMatched;
     state.view.library_non_album_tracks_hydrated_scope = scopeKey;
-    libraryNonAlbumHydrationCache = { key: scopeKey, tracks, searchMatched };
+    libraryNonAlbumHydrationCache = {
+      key: scopeKey, listKey: getLibraryLooseTracksListKey(state.view || {}), tracks, searchMatched,
+    };
     if (typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
     return tracks;
   })();
@@ -1046,6 +1066,18 @@ function refreshOpenLooseTracksPage() {
   const els = getNonAlbumModalElements();
   if (!els.overlay || els.overlay.hidden || !els.table || state.ui?.nonAlbumLibraryWide !== true) return false;
   const collectionName = String(state.ui.nonAlbumCollectionName || '').trim();
+  // The page's list for the current sources and search is not loaded yet (a cleared search): load it, then redraw.
+  if (!currentLibraryLooseTracks() && needsNonAlbumHydration({ libraryWide: true })) {
+    els.table.innerHTML = buildNonAlbumTrackLoadingMarkup();
+    void hydrateDeferredNonAlbumTracks({ libraryWide: true, resolveLibrary: true })
+      .then(() => {
+        if (!els.overlay.hidden && String(state.ui.nonAlbumCollectionName || '').trim() === collectionName) {
+          refreshOpenLooseTracksPage();
+        }
+      })
+      .catch(() => {});
+    return true;
+  }
   const looseTracks = getVisibleNonAlbumTracks({ libraryWide: true, collectionName });
   const subtitle = document.getElementById('non-album-modal-subtitle');
   if (subtitle) subtitle.textContent = `${looseTracks.length} ${looseTracks.length === 1 ? 'track' : 'tracks'}`;
@@ -1113,8 +1145,9 @@ function openNonAlbumModal(options = {}) {
   const enhancementRevision = String((Number(els.table.dataset.enhancementRevision) || 0) + 1);
   els.table.dataset.enhancementRevision = enhancementRevision;
   els.overlay.hidden = false;
-  // Every open path (tree click, Back/Forward, direct load) selects its tree row, as closing clears it.
-  if (typeof syncCustomCollectionNavigationSelection === 'function') syncCustomCollectionNavigationSelection();
+  // Every open path (tree click, Back/Forward, direct load, a search's best match) shows the Custom Collections
+  // tree with this row selected (owner 2026-11-18).
+  if (typeof syncLibraryNavigationAfterPageChange === 'function') syncLibraryNavigationAfterPageChange();
   if (!page && !els.overlay.classList.contains('is-mobile-page')) {
     document.body.classList.add('modal-open');
   }
@@ -1325,7 +1358,8 @@ function closeNonAlbumModal() {
   if (!els.overlay) return;
   els.overlay.hidden = true;
   setNonAlbumPagePresentation(els.overlay, false);
-  if (typeof syncCustomCollectionNavigationSelection === 'function') syncCustomCollectionNavigationSelection();
+  // The gallery is back: its tree and its selection return (audit 2026-11-18: the Artists tree selected nothing).
+  if (typeof syncLibraryNavigationAfterPageChange === 'function') syncLibraryNavigationAfterPageChange();
   const trackModalOpen = !document.getElementById('track-modal')?.hidden;
   const utilityModalOpen = !document.getElementById('utility-modal')?.hidden;
   const lightboxOpen = !document.getElementById('image-lightbox')?.hidden;

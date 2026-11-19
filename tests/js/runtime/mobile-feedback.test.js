@@ -63,7 +63,9 @@ test('direct Loose Tracks URL restores the library-tree header action', () => {
 
   assert.equal(restored[0].navigationSource, 'library-tree');
   assert.equal(restored[0].collectionName, 'Night');
-  assert.deepEqual(calls, ['restore', 'mode:custom-collections']);
+  // Owner 2026-11-18: the restored page moves the side bar to its tree (syncLibraryNavigationToMainPanel); the
+  // URL restore does not switch it separately.
+  assert.deepEqual(calls, ['restore']);
 });
 
 test('restoring Loose Tracks preserves its navigation source', () => {

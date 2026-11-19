@@ -2789,7 +2789,7 @@ test('closing Loose Tracks clears its Custom Collections selection', () => {
   context.document.removeEventListener = () => {};
   context.dismissMobilePage = () => false;
   let overlayHiddenWhenSynced = null;
-  context.syncCustomCollectionNavigationSelection = () => { overlayHiddenWhenSynced = overlay.hidden; };
+  context.syncLibraryNavigationAfterPageChange = () => { overlayHiddenWhenSynced = overlay.hidden; };
 
   context.closeNonAlbumModal();
 
@@ -2813,7 +2813,7 @@ test('opening Loose Tracks by any route selects its Custom Collections row', () 
   context.buildLooseTracksHeaderActionsHtml = () => '';
   context.URL = URL;
   let visibleWhenSynced = null;
-  context.syncCustomCollectionNavigationSelection = () => {
+  context.syncLibraryNavigationAfterPageChange = () => {
     visibleWhenSynced = !overlay.hidden && context.state.ui.nonAlbumCollectionName;
   };
 

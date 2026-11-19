@@ -168,8 +168,8 @@ test('shared alert CSS uses the same tinted surface family and honors reduced mo
   assert.doesNotMatch(css, /\.album-card__artbox-trigger:hover \.small-alert/);
   assert.match(css, /\.album-card__artbox-trigger:focus-visible \.small-alert/);
   // Owner 2026-11-18: an opened alert is as wide as its text, capped by its container, with no dead space.
-  assert.match(css, /\.small-alert:hover[^}]*width:\s*max-content;[^}]*max-width:\s*100%/s);
-  assert.match(css, /\.small-alert__text\s*\{[^}]*text-overflow:\s*ellipsis/s);
+  assert.match(css, /\.small-alert:hover[^}]*width:\s*max-content;[^}]*max-width:\s*calc\(100vw - 32px\)/s);
+  assert.doesNotMatch(css, /\.small-alert__text\s*\{[^}]*text-overflow:\s*ellipsis/s, 'the whole text shows');
   assert.match(css, /\.small-alert__text\s*\{[^}]*padding:\s*0 14px 0 4px/s);
   assert.match(css, /\.on-page-alert__actions \.ui-button--primary\s*\{[^}]*background:\s*var\(--alert-edge\)/s);
   assert.match(css, /\.on-page-alert__actions \.ui-button--secondary\s*\{[^}]*border-color:\s*color-mix\([^;]*var\(--alert-edge\)/s);

@@ -115,7 +115,40 @@ async function applyCueStructureDraft() {
   tagEditor.cueDraft = null;
   tagEditor.cueTyping = null;
   await loadCueEditorState(tagEditor);
+  applyCueDurationsToOpenAlbums(tagEditor.tracks);
   return true;
+}
+
+// Owner 2026-11-18: a value the owner changes shows everywhere it appears at once. A moved CUE boundary changes two
+// track lengths (the edited track's and the one before it); Album Details shows them without waiting for a reload.
+function cueTrackDurationsBySegment(cueTracks) {
+  const tracks = Array.isArray(cueTracks) ? cueTracks : [];
+  const durations = new Map();
+  tracks.forEach((track, index) => {
+    const start = Number(track?.cue_structure?.start_frame);
+    const nextStart = Number(tracks[index + 1]?.cue_structure?.start_frame);
+    const end = Number.isFinite(nextStart) ? nextStart : Number(track?.cue_structure?.end_frame);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return;
+    durations.set(cueEditorTrackIdentity(track), Math.round(((end - start) / 75) * 1000) / 1000);
+  });
+  return durations;
+}
+
+function applyCueDurationsToOpenAlbums(cueTracks) {
+  const durations = cueTrackDurationsBySegment(cueTracks);
+  if (!durations.size) return false;
+  let changed = false;
+  (Array.isArray(state.modalReleases) ? state.modalReleases : []).forEach((album) => {
+    (Array.isArray(album?.tracks) ? album.tracks : []).forEach((track) => {
+      const seconds = durations.get(String(track?.cue_segment_ref || track?.cueSegmentRef || track?.path || ''));
+      if (seconds === undefined || Number(track.duration_seconds) === seconds) return;
+      track.duration_seconds = seconds;
+      changed = true;
+    });
+  });
+  const openAlbum = typeof getCurrentTrackModalAlbum === 'function' ? getCurrentTrackModalAlbum() : null;
+  if (changed && openAlbum && !document.getElementById('track-modal')?.hidden) renderTrackModalRelease(openAlbum);
+  return changed;
 }
 
 async function applyCueMetadataDrafts() {

@@ -330,7 +330,6 @@ function handleGalleryBootstrapClick(event) {
   const allArtistsLink = event.target.closest('[data-sidebar-all-artists="1"]');
   if (allArtistsLink) {
     event.preventDefault();
-    state.ui.suppressSidebarSelection = false;
     const isLibraryHome = allArtistsLink.getAttribute?.('data-library-home') === '1';
     const opensMobileHome = Boolean(
       isLibraryHome
@@ -340,12 +339,8 @@ function handleGalleryBootstrapClick(event) {
     if (opensMobileHome && typeof prepareMobileGalleryNavigation === 'function') {
       prepareMobileGalleryNavigation();
     }
-    // The logo is the library landing page: the side panel returns to the Artists tree at All artists,
-    // whichever tree was showing (owner 2026-11-16).
-    if (isLibraryHome && state.ui.libraryNavigationMode === 'custom-collections'
-        && typeof setLibraryNavigationMode === 'function') {
-      void setLibraryNavigationMode('artists');
-    }
+    // The logo is the library landing page (owner 2026-11-16): the All artists gallery it opens brings the side
+    // panel back to the Artists tree through syncLibraryNavigationToMainPanel.
     const activeSearchQuery = isLibraryHome ? '' : String(state.view?.query || '').trim();
     clearPendingGallerySearchCommit();
     updateGallerySearchDraftQuery(activeSearchQuery);
@@ -693,7 +688,6 @@ function handleSidebarArtistSelectionClick(event) {
   if (!sidebarArtistLink) return false;
 
   event.preventDefault();
-  state.ui.suppressSidebarSelection = false;
   if (
     state.ui.scanPageReturnContext
     || state.ui.forceScanPageVisible
@@ -1602,10 +1596,7 @@ function scheduleGallerySearchCommit(nextQuery, options = {}) {
 
 function revealArtistTreeForSearch() {
   // The tree is not switched here: where the best match is (an artist or a collection) is known only once the
-  // results arrive (owner 2026-11-18), so the side bar keeps its tree until then.
-  // The search leaves an open Loose Tracks page for the gallery, so its best match shows as selected in the
-  // tree (owner 2026-11-18); the page's own "no artist selected" state ends here.
-  state.ui.suppressSidebarSelection = false;
+  // results arrive (owner 2026-11-18). syncLibraryNavigationToMainPanel picks it from the settled view.
   if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) {
     const button = document.getElementById('mobile-library-button');
     button?.setAttribute('data-search-results', 'true');
@@ -1709,7 +1700,11 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     beginSearchCoverLoadSuspension();
     beginSearchWaveformPeakLoadSuspension();
   }
-  if (typeof prepareMobileGallerySearch === 'function'
+  // Owner 2026-11-18: the trees are equal and exclusive. Clearing the search on a Loose Tracks or collection page
+  // keeps that page, now unfiltered, and its tree; only a new search leaves it for its best match.
+  const keepsLibraryPage = !String(nextQuery || '').trim()
+    && typeof libraryLooseTracksPageOpen === 'function' && libraryLooseTracksPageOpen();
+  if (!keepsLibraryPage && typeof prepareMobileGallerySearch === 'function'
     && !prepareMobileGallerySearch(() => commitGallerySearchQuery(nextQuery, { ...options, mobileLeaveConfirmed: true }), mobileLeaveConfirmed)) {
     releasePendingGallerySearchSuspensions();
     return;

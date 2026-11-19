@@ -5433,9 +5433,8 @@ function animateAlbumDetailsCoverShuffle(previous, stack, direction) {
   const front = stack.querySelector('.album-details-cover-stack__front');
   if (!front || activeIndex === previous.activeIndex) return false;
   const dir = direction < 0 ? -1 : 1;
-  // 1400ms with an even ease-in-out: at 900ms the ease-out curve still finished most of the move in the first
-  // third, and the owner found the switch too fast (2026-11-17, again 2026-11-18).
-  const timing = { duration: 1400, easing: 'cubic-bezier(.45,0,.25,1)', fill: 'backwards' };
+  // 1100ms with an even ease-in-out: 900ms felt too fast (2026-11-17), 1400ms too slow (2026-11-18).
+  const timing = { duration: 1100, easing: 'cubic-bezier(.45,0,.25,1)', fill: 'backwards' };
   stack.classList.add('is-shuffling');
   // The old front cover leaves to the side and tucks in behind the stack, where its rear copy then shows.
   const ghost = previous.front;
@@ -5809,7 +5808,6 @@ const state = {
     pendingSidebarRevealArtist: '',
     pendingSidebarSelectedArtist: '',
     pendingSidebarAllArtistsActive: false,
-    suppressSidebarSelection: false,
     artistsDrawerOpen: false,
     artistTreeFolded: null,
     libraryNavigationMode: 'artists',
@@ -6282,6 +6280,8 @@ function renderSidebar() {
   const el = document.getElementById('sidebar-list');
   const v = state.view;
   if (!el) return;
+  // The tree follows the main panel (owner 2026-11-18); a switch redraws the tree itself.
+  if (typeof syncLibraryNavigationToMainPanel === 'function' && syncLibraryNavigationToMainPanel()) return;
   // The Custom Collections button's search dot and tree follow the current search (owner 2026-11-17).
   if (typeof syncCustomCollectionSearchIndicator === 'function') void syncCustomCollectionSearchIndicator();
   // The gallery's artist or search names the tab while no page is open (owner 2026-11-17).
@@ -6303,7 +6303,10 @@ function renderSidebar() {
     pendingSidebarSelectedArtist
     || Boolean(state.ui.pendingSidebarAllArtistsActive)
   );
-  const effectiveView = state.ui.suppressSidebarSelection
+  // Only the tree whose page is on screen shows a selection: behind a Loose Tracks or collection page the
+  // Artists tree selects nothing. Derived from the page, never stored (audit 2026-11-18).
+  const libraryPageOwnsSelection = typeof libraryLooseTracksPageOpen === 'function' && libraryLooseTracksPageOpen();
+  const effectiveView = libraryPageOwnsSelection
     ? {
       ...v,
       selected_artist: '',
@@ -6326,7 +6329,7 @@ function renderSidebar() {
     ? resolveViewSurface(effectiveView)
     : String(effectiveView?.surface?.active || '').trim().toLowerCase();
   const effectiveAllArtistsActive = Boolean(
-    !state.ui.suppressSidebarSelection
+    !libraryPageOwnsSelection
     && !state.ui.scanPageReturnContext
     && effectiveSurface === 'albums'
     && (
@@ -6351,7 +6354,7 @@ function renderSidebar() {
     view: effectiveView,
     usingSidebarOverride: Boolean(sidebarOverride && sidebarOverride.length),
     showAllArtistsOverride: sidebarOverride ? sidebarShowAllArtistsOverride : null,
-    selectedArtistOverride: state.ui.suppressSidebarSelection ? '' : effectiveView.selected_artist,
+    selectedArtistOverride: libraryPageOwnsSelection ? '' : effectiveView.selected_artist,
     allArtistsActiveOverride: effectiveAllArtistsActive,
     virtualWindow,
   };
@@ -11886,28 +11889,35 @@ async function syncCustomCollectionSearchIndicator() {
     prefetchCustomCollectionCatalogWhenIdle();
     return;
   }
-  // Owner 2026-11-18: the side bar keeps its tree while a search runs and moves to the one holding the best match
-  // once the results are in: an artist match shows the Artists tree at once, a collection match below.
-  if (state.ui.customCollectionSearchAutoOpenQuery === query && !state.ui.pendingViewTransition
-    && Array.isArray(state.view?.artists_sidebar) && state.view.artists_sidebar.length) {
-    state.ui.customCollectionSearchAutoOpenQuery = '';
-    if (state.ui.libraryNavigationMode !== 'artists') void setLibraryNavigationMode('artists');
-  }
+  // Owner 2026-11-18: a search with no artist match must not flash the Artists tree's empty result before its best
+  // collection opens; the tree keeps saying "Loading" until that choice is made.
+  const deciding = state.ui.customCollectionSearchAutoOpenQuery === query && !state.ui.pendingViewTransition
+    && !(Array.isArray(state.view?.artists_sidebar) && state.view.artists_sidebar.length);
+  if (deciding) setLibraryTreeSearchLoading(true);
   try {
     await loadCustomCollectionCatalog();
   } catch {
+    if (deciding) setLibraryTreeSearchLoading(false);
     return;
   }
   if (String(state.view?.query || '').trim() !== query) return;
   mark(Number(state.ui?.libraryLooseTracksCount) > 0);
   openBestCustomCollectionForSearch(query);
+  if (deciding) setLibraryTreeSearchLoading(false);
+}
+
+function setLibraryTreeSearchLoading(loading) {
+  document.getElementById('artist-tree-expanded')?.classList?.toggle('is-search-loading', Boolean(loading));
 }
 
 // Owner 2026-11-18: when the Artists tree finds nothing but a collection does, the search opens the collection
 // with the most matching tracks, as it opens the best-matching artist. Only for the search just submitted, once
 // its results are in; redraws (a tag edit, a reload of the same view) never open anything, nor over an open page.
 function openBestCustomCollectionForSearch(query) {
-  if (state.ui.customCollectionSearchAutoOpenQuery !== query || state.ui.pendingViewTransition) return;
+  const pending = state.ui.customCollectionSearchAutoOpenQuery;
+  // A settled view for another search (Home, Back, a newer search) ends an older pending choice (audit 2026-11-18).
+  if (pending && pending !== query && !state.ui.pendingViewTransition) state.ui.customCollectionSearchAutoOpenQuery = '';
+  if (pending !== query || state.ui.pendingViewTransition) return;
   state.ui.customCollectionSearchAutoOpenQuery = '';
   const collections = Array.isArray(customCollectionCatalog.collections) ? customCollectionCatalog.collections : [];
   const view = state.view || {};
@@ -11919,7 +11929,7 @@ function openBestCustomCollectionForSearch(query) {
   ) return;
   // A matching loose track in no collection opens All Loose Tracks, already filtered by the search.
   const best = collections.reduce((top, item) => (!top || item.count > top.count ? item : top), null);
-  void setLibraryNavigationMode('custom-collections');
+  // Opening the page moves the side bar to its tree (syncLibraryNavigationToMainPanel).
   openLooseTracksPage({ collectionName: best?.name || '' });
 }
 
@@ -11940,8 +11950,10 @@ function syncCustomCollectionsAfterTagEdit({ fresh = false } = {}) {
     return;
   }
   const view = state.view || {};
-  const tracks = view.library_non_album_tracks;
-  if (!Array.isArray(tracks) || !view.library_non_album_tracks_hydrated_scope) return;
+  // Counted from the owned library-wide list only: a view refresh can leave an empty copy in the view, which
+  // emptied the tree (audit 2026-11-18).
+  const tracks = typeof currentLibraryLooseTracks === 'function' ? currentLibraryLooseTracks(view) : null;
+  if (!Array.isArray(tracks)) return;
   // During a search the tree counts matches; a list that is not the search's own cannot recount it.
   if (String(view.query || '').trim() && view.library_non_album_tracks_search_matched !== true) return;
   const counts = new Map();
@@ -12000,6 +12012,52 @@ function libraryLooseTracksPageOpen() {
     && state.ui?.nonAlbumLibraryWide === true;
 }
 
+// Owner 2026-11-18: the side bar follows the main panel, from this one place. A Loose Tracks or collection page on
+// screen means the Custom Collections tree with that row selected (the Artists tree then selects nothing); the
+// gallery means the Artists tree with the gallery's artist selected. A search that found no artist keeps the tree
+// shown, because its best match may be a collection, which opens next. It acts only when the main panel changes,
+// so the rail buttons can still show the other tree until then.
+function libraryNavigationMainPanelKey(view = state.view || {}) {
+  if (libraryLooseTracksPageOpen()) {
+    return `page:${String(state.ui?.nonAlbumCollectionName || '').trim()}|${String(view.query || '').trim()}`;
+  }
+  return `gallery:${String(view.query || '').trim()}|${String(view.selected_artist || '').trim()}|${view.all_artists_active ? 1 : 0}`;
+}
+
+function libraryNavigationModeForMainPanel(view = state.view || {}) {
+  if (libraryLooseTracksPageOpen()) return 'custom-collections';
+  const searchWithoutArtist = String(view.query || '').trim()
+    && !String(view.selected_artist || '').trim()
+    && !(Array.isArray(view.artists_sidebar) && view.artists_sidebar.length);
+  return searchWithoutArtist ? state.ui.libraryNavigationMode : 'artists';
+}
+
+// Returns true when it switched the tree (which redraws it); the caller then has nothing left to draw.
+function syncLibraryNavigationToMainPanel() {
+  // Mid-transition states (a view loading, history closing one page and opening another) are not the main panel.
+  if (state.ui.pendingViewTransition) return false;
+  if (typeof mobilePageState !== 'undefined' && mobilePageState.restoring) return false;
+  const key = libraryNavigationMainPanelKey();
+  if (key === state.ui.libraryNavigationMainPanelKey) return false;
+  const previousKey = String(state.ui.libraryNavigationMainPanelKey || '');
+  state.ui.libraryNavigationMainPanelKey = key;
+  // A page kept through a search change (a cleared search) shows its tracks for the new search.
+  if (key.startsWith('page:') && previousKey.startsWith('page:') && typeof refreshOpenLooseTracksPage === 'function') {
+    refreshOpenLooseTracksPage();
+  }
+  const mode = libraryNavigationModeForMainPanel();
+  if (state.ui.libraryNavigationMode === mode) return false;
+  void setLibraryNavigationMode(mode);
+  return true;
+}
+
+// A page opening, switching or closing changes what the tree selects, in whichever tree is shown.
+function syncLibraryNavigationAfterPageChange() {
+  if (syncLibraryNavigationToMainPanel()) return;
+  if (state.ui?.libraryNavigationMode === 'custom-collections') syncCustomCollectionNavigationSelection();
+  else if (typeof renderSidebar === 'function') renderSidebar();
+}
+
 // Redraws the Custom Collections selection after its page opens or closes.
 function syncCustomCollectionNavigationSelection() {
   if (state.ui?.libraryNavigationMode !== 'custom-collections') return;
@@ -12049,7 +12107,6 @@ function renderCustomCollectionNavigation(collections, { failure = '' } = {}) {
 
 async function setLibraryNavigationMode(mode) {
   const normalized = mode === 'custom-collections' ? mode : 'artists';
-  state.ui.suppressSidebarSelection = normalized === 'artists' && libraryLooseTracksPageOpen();
   state.ui.libraryNavigationMode = normalized;
   syncLibraryNavigationModePresentation(normalized);
   if (normalized === 'artists') {
@@ -15305,14 +15362,10 @@ function getVisibleNonAlbumTracks(options = {}) {
   // Library-wide Loose Tracks do not belong to any artist page: an artist view replaces state.view and its
   // list, so the scope-keyed hydration cache is their source (owner 2026-11-16: back from 10cc, every
   // Loose Tracks item opened empty).
-  const libraryWideCache = options.libraryWide && libraryNonAlbumHydrationCache
-    && libraryNonAlbumHydrationCache.key === getLibraryNonAlbumScopeKey(view)
-    ? libraryNonAlbumHydrationCache.tracks
-    : null;
-  let tracks = libraryWideCache
-    || (options.libraryWide && Array.isArray(view.library_non_album_tracks)
-      ? view.library_non_album_tracks
-      : Array.isArray(view.non_album_tracks) ? view.non_album_tracks : []);
+  // A library-wide page reads only that list, never the artist's own Loose Tracks (audit 2026-11-18).
+  let tracks = options.libraryWide
+    ? (currentLibraryLooseTracks(view) || (Array.isArray(view.library_non_album_tracks) ? view.library_non_album_tracks : []))
+    : (Array.isArray(view.non_album_tracks) ? view.non_album_tracks : []);
   const collectionName = String(options.collectionName || '').trim();
   if (collectionName) {
     tracks = tracks.filter((track) => (
@@ -15423,6 +15476,28 @@ function buildArtistNonAlbumRequestUrl(view = state.view || {}, { availability =
 
 function getLibraryNonAlbumScopeKey(view = state.view || {}) {
   return getDeferredNonAlbumScopeKey(buildLibraryNonAlbumRequestUrl(view));
+}
+
+// The library-wide Loose Tracks list has one owner, the hydration cache (audit 2026-11-18): tag edits apply to it,
+// and the open page and the Custom Collections tree read it. It belongs to the same sources and search whatever
+// the inventory revision: a save moves the revision on, and the edited list must stay the one shown.
+function getLibraryLooseTracksListKey(view = state.view || {}) {
+  const url = buildLibraryNonAlbumRequestUrl(view);
+  url.searchParams.delete('inventory_revision');
+  return getDeferredNonAlbumScopeKey(url);
+}
+
+function currentLibraryLooseTracks(view = state.view || {}) {
+  if (!libraryNonAlbumHydrationCache) return null;
+  return libraryNonAlbumHydrationCache.listKey === getLibraryLooseTracksListKey(view)
+    ? libraryNonAlbumHydrationCache.tracks
+    : null;
+}
+
+function replaceCurrentLibraryLooseTracks(tracks, view = state.view || {}) {
+  if (libraryNonAlbumHydrationCache?.listKey !== getLibraryLooseTracksListKey(view)) return false;
+  libraryNonAlbumHydrationCache = { ...libraryNonAlbumHydrationCache, tracks };
+  return true;
 }
 
 function hasHydratedLibraryNonAlbumTracks() {
@@ -15567,7 +15642,9 @@ function hydrateLibraryNonAlbumTracks({ resolveLibrary = false } = {}) {
     state.view.library_non_album_tracks = tracks;
     state.view.library_non_album_tracks_search_matched = searchMatched;
     state.view.library_non_album_tracks_hydrated_scope = scopeKey;
-    libraryNonAlbumHydrationCache = { key: scopeKey, tracks, searchMatched };
+    libraryNonAlbumHydrationCache = {
+      key: scopeKey, listKey: getLibraryLooseTracksListKey(state.view || {}), tracks, searchMatched,
+    };
     if (typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
     return tracks;
   })();
@@ -16105,6 +16182,18 @@ function refreshOpenLooseTracksPage() {
   const els = getNonAlbumModalElements();
   if (!els.overlay || els.overlay.hidden || !els.table || state.ui?.nonAlbumLibraryWide !== true) return false;
   const collectionName = String(state.ui.nonAlbumCollectionName || '').trim();
+  // The page's list for the current sources and search is not loaded yet (a cleared search): load it, then redraw.
+  if (!currentLibraryLooseTracks() && needsNonAlbumHydration({ libraryWide: true })) {
+    els.table.innerHTML = buildNonAlbumTrackLoadingMarkup();
+    void hydrateDeferredNonAlbumTracks({ libraryWide: true, resolveLibrary: true })
+      .then(() => {
+        if (!els.overlay.hidden && String(state.ui.nonAlbumCollectionName || '').trim() === collectionName) {
+          refreshOpenLooseTracksPage();
+        }
+      })
+      .catch(() => {});
+    return true;
+  }
   const looseTracks = getVisibleNonAlbumTracks({ libraryWide: true, collectionName });
   const subtitle = document.getElementById('non-album-modal-subtitle');
   if (subtitle) subtitle.textContent = `${looseTracks.length} ${looseTracks.length === 1 ? 'track' : 'tracks'}`;
@@ -16172,8 +16261,9 @@ function openNonAlbumModal(options = {}) {
   const enhancementRevision = String((Number(els.table.dataset.enhancementRevision) || 0) + 1);
   els.table.dataset.enhancementRevision = enhancementRevision;
   els.overlay.hidden = false;
-  // Every open path (tree click, Back/Forward, direct load) selects its tree row, as closing clears it.
-  if (typeof syncCustomCollectionNavigationSelection === 'function') syncCustomCollectionNavigationSelection();
+  // Every open path (tree click, Back/Forward, direct load, a search's best match) shows the Custom Collections
+  // tree with this row selected (owner 2026-11-18).
+  if (typeof syncLibraryNavigationAfterPageChange === 'function') syncLibraryNavigationAfterPageChange();
   if (!page && !els.overlay.classList.contains('is-mobile-page')) {
     document.body.classList.add('modal-open');
   }
@@ -16384,7 +16474,8 @@ function closeNonAlbumModal() {
   if (!els.overlay) return;
   els.overlay.hidden = true;
   setNonAlbumPagePresentation(els.overlay, false);
-  if (typeof syncCustomCollectionNavigationSelection === 'function') syncCustomCollectionNavigationSelection();
+  // The gallery is back: its tree and its selection return (audit 2026-11-18: the Artists tree selected nothing).
+  if (typeof syncLibraryNavigationAfterPageChange === 'function') syncLibraryNavigationAfterPageChange();
   const trackModalOpen = !document.getElementById('track-modal')?.hidden;
   const utilityModalOpen = !document.getElementById('utility-modal')?.hidden;
   const lightboxOpen = !document.getElementById('image-lightbox')?.hidden;
@@ -34364,18 +34455,33 @@ function applyTagEditsToNonAlbumView(album, updates) {
   view.non_album_tracks = applyTagEditsToNonAlbumTracks(view.non_album_tracks, album, updates);
   // Owner 2026-11-18: the library-wide list behind Loose Tracks and every collection page follows the same
   // edit, so the open page and the collections tree change at once instead of after a reload.
-  if (Array.isArray(view.library_non_album_tracks)) {
-    const libraryTracks = applyTagEditsToNonAlbumTracks(view.library_non_album_tracks, album, updates);
-    if (typeof libraryNonAlbumHydrationCache !== 'undefined'
-      && libraryNonAlbumHydrationCache?.tracks === view.library_non_album_tracks) {
-      libraryNonAlbumHydrationCache = { ...libraryNonAlbumHydrationCache, tracks: libraryTracks };
-    }
+  // The owned list wins over the view's copy: a background refresh can leave the view with an empty list.
+  const ownedLibraryTracks = typeof currentLibraryLooseTracks === 'function' ? currentLibraryLooseTracks(view) : null;
+  const libraryBase = ownedLibraryTracks || (Array.isArray(view.library_non_album_tracks) ? view.library_non_album_tracks : null);
+  if (libraryBase) {
+    const libraryTracks = applyTagEditsToNonAlbumTracks(libraryBase, album, updates);
+    if (ownedLibraryTracks) replaceCurrentLibraryLooseTracks(libraryTracks, view);
     view.library_non_album_tracks = libraryTracks;
   }
   if (typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
-  if (typeof refreshOpenLooseTracksPage === 'function') refreshOpenLooseTracksPage();
   if (typeof syncCustomCollectionsAfterTagEdit === 'function') syncCustomCollectionsAfterTagEdit();
+  // Owner 2026-11-18: an edit that empties the open collection follows its tracks to the collection the last of
+  // them went to, and the tree selects it; otherwise the open page redraws in place.
+  const destination = collectionLeftByTagEdit(updates);
+  if (destination && typeof openLooseTracksPage === 'function') openLooseTracksPage({ collectionName: destination });
+  else if (typeof refreshOpenLooseTracksPage === 'function') refreshOpenLooseTracksPage();
   return view.non_album_tracks;
+}
+
+function collectionLeftByTagEdit(updates) {
+  if (typeof libraryLooseTracksPageOpen !== 'function' || !libraryLooseTracksPageOpen()) return '';
+  const openCollection = String(state.ui?.nonAlbumCollectionName || '').trim();
+  if (!openCollection || typeof getVisibleNonAlbumTracks !== 'function'
+    || getVisibleNonAlbumTracks({ libraryWide: true, collectionName: openCollection }).length) return '';
+  const destinations = Object.values(updates || {})
+    .map((edits) => String(edits?.custom_collection_name || '').trim())
+    .filter((name) => name && name !== openCollection);
+  return destinations.at(-1) || '';
 }
 
 function applyTagEditsToNonAlbumTracks(tracks, album, updates) {
@@ -39955,7 +40061,40 @@ async function applyCueStructureDraft() {
   tagEditor.cueDraft = null;
   tagEditor.cueTyping = null;
   await loadCueEditorState(tagEditor);
+  applyCueDurationsToOpenAlbums(tagEditor.tracks);
   return true;
+}
+
+// Owner 2026-11-18: a value the owner changes shows everywhere it appears at once. A moved CUE boundary changes two
+// track lengths (the edited track's and the one before it); Album Details shows them without waiting for a reload.
+function cueTrackDurationsBySegment(cueTracks) {
+  const tracks = Array.isArray(cueTracks) ? cueTracks : [];
+  const durations = new Map();
+  tracks.forEach((track, index) => {
+    const start = Number(track?.cue_structure?.start_frame);
+    const nextStart = Number(tracks[index + 1]?.cue_structure?.start_frame);
+    const end = Number.isFinite(nextStart) ? nextStart : Number(track?.cue_structure?.end_frame);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return;
+    durations.set(cueEditorTrackIdentity(track), Math.round(((end - start) / 75) * 1000) / 1000);
+  });
+  return durations;
+}
+
+function applyCueDurationsToOpenAlbums(cueTracks) {
+  const durations = cueTrackDurationsBySegment(cueTracks);
+  if (!durations.size) return false;
+  let changed = false;
+  (Array.isArray(state.modalReleases) ? state.modalReleases : []).forEach((album) => {
+    (Array.isArray(album?.tracks) ? album.tracks : []).forEach((track) => {
+      const seconds = durations.get(String(track?.cue_segment_ref || track?.cueSegmentRef || track?.path || ''));
+      if (seconds === undefined || Number(track.duration_seconds) === seconds) return;
+      track.duration_seconds = seconds;
+      changed = true;
+    });
+  });
+  const openAlbum = typeof getCurrentTrackModalAlbum === 'function' ? getCurrentTrackModalAlbum() : null;
+  if (changed && openAlbum && !document.getElementById('track-modal')?.hidden) renderTrackModalRelease(openAlbum);
+  return changed;
 }
 
 async function applyCueMetadataDrafts() {
@@ -52635,7 +52774,6 @@ function handleGalleryBootstrapClick(event) {
   const allArtistsLink = event.target.closest('[data-sidebar-all-artists="1"]');
   if (allArtistsLink) {
     event.preventDefault();
-    state.ui.suppressSidebarSelection = false;
     const isLibraryHome = allArtistsLink.getAttribute?.('data-library-home') === '1';
     const opensMobileHome = Boolean(
       isLibraryHome
@@ -52645,12 +52783,8 @@ function handleGalleryBootstrapClick(event) {
     if (opensMobileHome && typeof prepareMobileGalleryNavigation === 'function') {
       prepareMobileGalleryNavigation();
     }
-    // The logo is the library landing page: the side panel returns to the Artists tree at All artists,
-    // whichever tree was showing (owner 2026-11-16).
-    if (isLibraryHome && state.ui.libraryNavigationMode === 'custom-collections'
-        && typeof setLibraryNavigationMode === 'function') {
-      void setLibraryNavigationMode('artists');
-    }
+    // The logo is the library landing page (owner 2026-11-16): the All artists gallery it opens brings the side
+    // panel back to the Artists tree through syncLibraryNavigationToMainPanel.
     const activeSearchQuery = isLibraryHome ? '' : String(state.view?.query || '').trim();
     clearPendingGallerySearchCommit();
     updateGallerySearchDraftQuery(activeSearchQuery);
@@ -52998,7 +53132,6 @@ function handleSidebarArtistSelectionClick(event) {
   if (!sidebarArtistLink) return false;
 
   event.preventDefault();
-  state.ui.suppressSidebarSelection = false;
   if (
     state.ui.scanPageReturnContext
     || state.ui.forceScanPageVisible
@@ -53907,10 +54040,7 @@ function scheduleGallerySearchCommit(nextQuery, options = {}) {
 
 function revealArtistTreeForSearch() {
   // The tree is not switched here: where the best match is (an artist or a collection) is known only once the
-  // results arrive (owner 2026-11-18), so the side bar keeps its tree until then.
-  // The search leaves an open Loose Tracks page for the gallery, so its best match shows as selected in the
-  // tree (owner 2026-11-18); the page's own "no artist selected" state ends here.
-  state.ui.suppressSidebarSelection = false;
+  // results arrive (owner 2026-11-18). syncLibraryNavigationToMainPanel picks it from the settled view.
   if (typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()) {
     const button = document.getElementById('mobile-library-button');
     button?.setAttribute('data-search-results', 'true');
@@ -54014,7 +54144,11 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     beginSearchCoverLoadSuspension();
     beginSearchWaveformPeakLoadSuspension();
   }
-  if (typeof prepareMobileGallerySearch === 'function'
+  // Owner 2026-11-18: the trees are equal and exclusive. Clearing the search on a Loose Tracks or collection page
+  // keeps that page, now unfiltered, and its tree; only a new search leaves it for its best match.
+  const keepsLibraryPage = !String(nextQuery || '').trim()
+    && typeof libraryLooseTracksPageOpen === 'function' && libraryLooseTracksPageOpen();
+  if (!keepsLibraryPage && typeof prepareMobileGallerySearch === 'function'
     && !prepareMobileGallerySearch(() => commitGallerySearchQuery(nextQuery, { ...options, mobileLeaveConfirmed: true }), mobileLeaveConfirmed)) {
     releasePendingGallerySearchSuspensions();
     return;
@@ -55491,33 +55625,44 @@ function restoreMobilePageFromUrl() {
       loopSongId: url.searchParams.get('loop_song') || '',
       loopFilter: url.searchParams.get('loop_filter') || '',
     });
-    if (looseTracksPath && typeof setLibraryNavigationMode === 'function') {
-      void setLibraryNavigationMode('custom-collections');
-    }
+    // Opening the page moves the side bar to its tree (syncLibraryNavigationToMainPanel).
   } finally {
     mobilePageState.restoring = false;
   }
   writeMobilePageHistory('replace');
 }
 
+// Whether a history entry's page is the page already shown. Loose Tracks pages have no album key: their scope and
+// collection tell them apart (audit 2026-11-18: Back between two collections kept the second one on screen).
+function isSameMobilePage(requested, current) {
+  if (requested.kind !== current.kind || requested.albumKey !== current.albumKey) return false;
+  if (requested.kind === 'utilities') {
+    return requested.tab === current.tab
+      && String(requested.utilityDetail || '') === String(current.utilityDetail || '')
+      && String(requested.loopSongId || '') === String(current.loopSongId || '');
+  }
+  if (requested.kind === 'non-album') {
+    return Boolean(requested.libraryWide) === Boolean(current.libraryWide)
+      && String(requested.collectionName || '') === String(current.collectionName || '');
+  }
+  return true;
+}
 function handleMobilePagePopState() {
   const requested = Array.isArray(window.history.state?.mobilePages) ? window.history.state.mobilePages : [];
   const hadPage = mobilePageState.pages.length > 0;
   if (!hadPage && !requested.length) return false;
   let common = 0;
   while (common < requested.length && common < mobilePageState.pages.length
-    && requested[common].kind === mobilePageState.pages[common].kind
-    && requested[common].albumKey === mobilePageState.pages[common].albumKey
-    && (requested[common].kind !== 'utilities'
-      || (requested[common].tab === mobilePageState.pages[common].tab
-        && String(requested[common].utilityDetail || '') === String(mobilePageState.pages[common].utilityDetail || '')
-        && String(requested[common].loopSongId || '') === String(mobilePageState.pages[common].loopSongId || '')))) common += 1;
+    && isSameMobilePage(requested[common], mobilePageState.pages[common])) common += 1;
   const parent = mobilePageState.pages[0];
   let focus;
-  while (mobilePageState.pages.length > common) focus = cleanupMobilePage(mobilePageState.pages.pop());
+  // Closing the old pages and opening the requested ones is one step for the side bar: it syncs once, after.
   mobilePageState.restoring = true;
-  try { requested.slice(common).forEach(restoreMobilePage); }
-  finally { mobilePageState.restoring = false; }
+  try {
+    while (mobilePageState.pages.length > common) focus = cleanupMobilePage(mobilePageState.pages.pop());
+    requested.slice(common).forEach(restoreMobilePage);
+  } finally { mobilePageState.restoring = false; }
+  if (typeof syncLibraryNavigationAfterPageChange === 'function') syncLibraryNavigationAfterPageChange();
   if (mobilePageState.pages.length < requested.length) writeMobilePageHistory('replace');
   syncMobilePageShell();
   // A background refresh may have replaced the gallery while its child was open.

@@ -1416,8 +1416,11 @@ test('moving tracks to a new collection updates the library list, the open page 
     exception_type: 'Custom Collection', custom_collection_name: 'Женя машина',
   }));
   const library = songs.slice();
-  context.state = { view: { non_album_tracks: [], library_non_album_tracks: library } };
-  context.libraryNonAlbumHydrationCache = { key: 'scope', tracks: library, searchMatched: false };
+  // A background refresh left the view with an empty copy; the owned library-wide list is the one edited.
+  context.state = { view: { non_album_tracks: [], library_non_album_tracks: [] } };
+  let owned = library;
+  context.currentLibraryLooseTracks = () => owned;
+  context.replaceCurrentLibraryLooseTracks = (tracks) => { owned = tracks; return true; };
   const calls = [];
   context.refreshOpenLooseTracksPage = () => calls.push('page');
   context.syncCustomCollectionsAfterTagEdit = () => calls.push('tree');
@@ -1429,9 +1432,9 @@ test('moving tracks to a new collection updates the library list, the open page 
 
   const names = context.state.view.library_non_album_tracks.map((track) => track.custom_collection_name);
   assert.deepEqual(JSON.parse(JSON.stringify(names)), ['Женя машина 2', 'Женя машина 2', 'Женя машина']);
-  assert.equal(context.libraryNonAlbumHydrationCache.tracks, context.state.view.library_non_album_tracks,
-    'a re-opened page reads the edited list, not the one from before the edit');
-  assert.deepEqual(calls, ['page', 'tree']);
+  assert.equal(owned, context.state.view.library_non_album_tracks,
+    'the owned list carries the edit; a re-opened page reads it, not the one from before the edit');
+  assert.deepEqual(calls, ['tree', 'page']);
 });
 
 test('a Loose Tracks list known by media references keeps every track through a collection edit', () => {
@@ -1445,4 +1448,35 @@ test('a Loose Tracks list known by media references keeps every track through a 
   const after = JSON.parse(JSON.stringify(context.state.view.library_non_album_tracks));
   assert.deepEqual(after.map((track) => [track.media_ref, track.custom_collection_name]), [['m1', 'Mix 2'], ['m2', 'Mix'], ['m3', 'Mix']]);
   assert.equal(after[0].path, undefined, 'a media reference is not turned into a path');
+});
+
+test('an edit that empties the open collection opens the collection its tracks went to', () => {
+  // Owner 2026-11-18: "autoselect the tree to the custom collection where last portion of those tracks were just sent".
+  const context = loadHelpers();
+  const songs = ['a', 'b'].map((name) => ({
+    path: `D:/Music/Mix/${name}.mp3`, title: name, album: '', exception_type: 'Custom Collection', custom_collection_name: 'Mix',
+  }));
+  let owned = songs.slice();
+  context.state = { view: { non_album_tracks: [] }, ui: { nonAlbumCollectionName: 'Mix' } };
+  context.currentLibraryLooseTracks = () => owned;
+  context.replaceCurrentLibraryLooseTracks = (tracks) => { owned = tracks; return true; };
+  context.libraryLooseTracksPageOpen = () => true;
+  context.getVisibleNonAlbumTracks = ({ collectionName }) => owned.filter((track) => track.custom_collection_name === collectionName);
+  const opened = [];
+  let redraws = 0;
+  context.openLooseTracksPage = ({ collectionName }) => opened.push(collectionName);
+  context.refreshOpenLooseTracksPage = () => { redraws += 1; };
+
+  context.applyTagEditsToNonAlbumView({ tracks: songs }, {
+    [songs[0].path]: { custom_collection_name: 'Mix 2' },
+    [songs[1].path]: { custom_collection_name: 'Mix 3' },
+  });
+  assert.deepEqual(opened, ['Mix 3']);
+  assert.equal(redraws, 0);
+
+  // An edit that leaves tracks behind keeps the page and redraws it.
+  owned = songs.slice();
+  context.applyTagEditsToNonAlbumView({ tracks: songs }, { [songs[0].path]: { custom_collection_name: 'Mix 2' } });
+  assert.deepEqual(opened, ['Mix 3']);
+  assert.equal(redraws, 1);
 });

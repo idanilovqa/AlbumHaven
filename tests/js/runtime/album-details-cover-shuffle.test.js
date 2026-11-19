@@ -27,7 +27,7 @@ function node(extra = {}) {
   return self;
 }
 
-test('the rising cover shows its decoded rear picture until its own image arrives, over 1400ms', () => {
+test('the rising cover shows its decoded rear picture until its own image arrives, over 1100ms', () => {
   // Owner 2026-11-17: "When covers change in 3-covers artbox, the cover that appears from underneath is
   // absent" and "The animation is too fast on changing covers, slow it down a bit".
   const timings = [];
@@ -60,7 +60,7 @@ test('the rising cover shows its decoded rear picture until its own image arrive
   assert.equal(context.animateAlbumDetailsCoverShuffle(previous, stack, 1), true);
   assert.ok(visual.children.includes(rearImage), 'the decoded rear picture stands in');
   assert.equal(rearImage.classList.contains('album-details-cover-stack__stand-in'), true);
-  assert.deepEqual(timings, [1400]);
+  assert.deepEqual(timings, [1100]);
   risingImage.fire('load');
   assert.equal(visual.children.includes(rearImage), false, 'the real cover takes over once loaded');
 });

@@ -471,33 +471,44 @@ function restoreMobilePageFromUrl() {
       loopSongId: url.searchParams.get('loop_song') || '',
       loopFilter: url.searchParams.get('loop_filter') || '',
     });
-    if (looseTracksPath && typeof setLibraryNavigationMode === 'function') {
-      void setLibraryNavigationMode('custom-collections');
-    }
+    // Opening the page moves the side bar to its tree (syncLibraryNavigationToMainPanel).
   } finally {
     mobilePageState.restoring = false;
   }
   writeMobilePageHistory('replace');
 }
 
+// Whether a history entry's page is the page already shown. Loose Tracks pages have no album key: their scope and
+// collection tell them apart (audit 2026-11-18: Back between two collections kept the second one on screen).
+function isSameMobilePage(requested, current) {
+  if (requested.kind !== current.kind || requested.albumKey !== current.albumKey) return false;
+  if (requested.kind === 'utilities') {
+    return requested.tab === current.tab
+      && String(requested.utilityDetail || '') === String(current.utilityDetail || '')
+      && String(requested.loopSongId || '') === String(current.loopSongId || '');
+  }
+  if (requested.kind === 'non-album') {
+    return Boolean(requested.libraryWide) === Boolean(current.libraryWide)
+      && String(requested.collectionName || '') === String(current.collectionName || '');
+  }
+  return true;
+}
 function handleMobilePagePopState() {
   const requested = Array.isArray(window.history.state?.mobilePages) ? window.history.state.mobilePages : [];
   const hadPage = mobilePageState.pages.length > 0;
   if (!hadPage && !requested.length) return false;
   let common = 0;
   while (common < requested.length && common < mobilePageState.pages.length
-    && requested[common].kind === mobilePageState.pages[common].kind
-    && requested[common].albumKey === mobilePageState.pages[common].albumKey
-    && (requested[common].kind !== 'utilities'
-      || (requested[common].tab === mobilePageState.pages[common].tab
-        && String(requested[common].utilityDetail || '') === String(mobilePageState.pages[common].utilityDetail || '')
-        && String(requested[common].loopSongId || '') === String(mobilePageState.pages[common].loopSongId || '')))) common += 1;
+    && isSameMobilePage(requested[common], mobilePageState.pages[common])) common += 1;
   const parent = mobilePageState.pages[0];
   let focus;
-  while (mobilePageState.pages.length > common) focus = cleanupMobilePage(mobilePageState.pages.pop());
+  // Closing the old pages and opening the requested ones is one step for the side bar: it syncs once, after.
   mobilePageState.restoring = true;
-  try { requested.slice(common).forEach(restoreMobilePage); }
-  finally { mobilePageState.restoring = false; }
+  try {
+    while (mobilePageState.pages.length > common) focus = cleanupMobilePage(mobilePageState.pages.pop());
+    requested.slice(common).forEach(restoreMobilePage);
+  } finally { mobilePageState.restoring = false; }
+  if (typeof syncLibraryNavigationAfterPageChange === 'function') syncLibraryNavigationAfterPageChange();
   if (mobilePageState.pages.length < requested.length) writeMobilePageHistory('replace');
   syncMobilePageShell();
   // A background refresh may have replaced the gallery while its child was open.

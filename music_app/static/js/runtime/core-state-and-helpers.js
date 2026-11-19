@@ -77,7 +77,6 @@ const state = {
     pendingSidebarRevealArtist: '',
     pendingSidebarSelectedArtist: '',
     pendingSidebarAllArtistsActive: false,
-    suppressSidebarSelection: false,
     artistsDrawerOpen: false,
     artistTreeFolded: null,
     libraryNavigationMode: 'artists',
@@ -550,6 +549,8 @@ function renderSidebar() {
   const el = document.getElementById('sidebar-list');
   const v = state.view;
   if (!el) return;
+  // The tree follows the main panel (owner 2026-11-18); a switch redraws the tree itself.
+  if (typeof syncLibraryNavigationToMainPanel === 'function' && syncLibraryNavigationToMainPanel()) return;
   // The Custom Collections button's search dot and tree follow the current search (owner 2026-11-17).
   if (typeof syncCustomCollectionSearchIndicator === 'function') void syncCustomCollectionSearchIndicator();
   // The gallery's artist or search names the tab while no page is open (owner 2026-11-17).
@@ -571,7 +572,10 @@ function renderSidebar() {
     pendingSidebarSelectedArtist
     || Boolean(state.ui.pendingSidebarAllArtistsActive)
   );
-  const effectiveView = state.ui.suppressSidebarSelection
+  // Only the tree whose page is on screen shows a selection: behind a Loose Tracks or collection page the
+  // Artists tree selects nothing. Derived from the page, never stored (audit 2026-11-18).
+  const libraryPageOwnsSelection = typeof libraryLooseTracksPageOpen === 'function' && libraryLooseTracksPageOpen();
+  const effectiveView = libraryPageOwnsSelection
     ? {
       ...v,
       selected_artist: '',
@@ -594,7 +598,7 @@ function renderSidebar() {
     ? resolveViewSurface(effectiveView)
     : String(effectiveView?.surface?.active || '').trim().toLowerCase();
   const effectiveAllArtistsActive = Boolean(
-    !state.ui.suppressSidebarSelection
+    !libraryPageOwnsSelection
     && !state.ui.scanPageReturnContext
     && effectiveSurface === 'albums'
     && (
@@ -619,7 +623,7 @@ function renderSidebar() {
     view: effectiveView,
     usingSidebarOverride: Boolean(sidebarOverride && sidebarOverride.length),
     showAllArtistsOverride: sidebarOverride ? sidebarShowAllArtistsOverride : null,
-    selectedArtistOverride: state.ui.suppressSidebarSelection ? '' : effectiveView.selected_artist,
+    selectedArtistOverride: libraryPageOwnsSelection ? '' : effectiveView.selected_artist,
     allArtistsActiveOverride: effectiveAllArtistsActive,
     virtualWindow,
   };

@@ -193,28 +193,35 @@ async function syncCustomCollectionSearchIndicator() {
     prefetchCustomCollectionCatalogWhenIdle();
     return;
   }
-  // Owner 2026-11-18: the side bar keeps its tree while a search runs and moves to the one holding the best match
-  // once the results are in: an artist match shows the Artists tree at once, a collection match below.
-  if (state.ui.customCollectionSearchAutoOpenQuery === query && !state.ui.pendingViewTransition
-    && Array.isArray(state.view?.artists_sidebar) && state.view.artists_sidebar.length) {
-    state.ui.customCollectionSearchAutoOpenQuery = '';
-    if (state.ui.libraryNavigationMode !== 'artists') void setLibraryNavigationMode('artists');
-  }
+  // Owner 2026-11-18: a search with no artist match must not flash the Artists tree's empty result before its best
+  // collection opens; the tree keeps saying "Loading" until that choice is made.
+  const deciding = state.ui.customCollectionSearchAutoOpenQuery === query && !state.ui.pendingViewTransition
+    && !(Array.isArray(state.view?.artists_sidebar) && state.view.artists_sidebar.length);
+  if (deciding) setLibraryTreeSearchLoading(true);
   try {
     await loadCustomCollectionCatalog();
   } catch {
+    if (deciding) setLibraryTreeSearchLoading(false);
     return;
   }
   if (String(state.view?.query || '').trim() !== query) return;
   mark(Number(state.ui?.libraryLooseTracksCount) > 0);
   openBestCustomCollectionForSearch(query);
+  if (deciding) setLibraryTreeSearchLoading(false);
+}
+
+function setLibraryTreeSearchLoading(loading) {
+  document.getElementById('artist-tree-expanded')?.classList?.toggle('is-search-loading', Boolean(loading));
 }
 
 // Owner 2026-11-18: when the Artists tree finds nothing but a collection does, the search opens the collection
 // with the most matching tracks, as it opens the best-matching artist. Only for the search just submitted, once
 // its results are in; redraws (a tag edit, a reload of the same view) never open anything, nor over an open page.
 function openBestCustomCollectionForSearch(query) {
-  if (state.ui.customCollectionSearchAutoOpenQuery !== query || state.ui.pendingViewTransition) return;
+  const pending = state.ui.customCollectionSearchAutoOpenQuery;
+  // A settled view for another search (Home, Back, a newer search) ends an older pending choice (audit 2026-11-18).
+  if (pending && pending !== query && !state.ui.pendingViewTransition) state.ui.customCollectionSearchAutoOpenQuery = '';
+  if (pending !== query || state.ui.pendingViewTransition) return;
   state.ui.customCollectionSearchAutoOpenQuery = '';
   const collections = Array.isArray(customCollectionCatalog.collections) ? customCollectionCatalog.collections : [];
   const view = state.view || {};
@@ -226,7 +233,7 @@ function openBestCustomCollectionForSearch(query) {
   ) return;
   // A matching loose track in no collection opens All Loose Tracks, already filtered by the search.
   const best = collections.reduce((top, item) => (!top || item.count > top.count ? item : top), null);
-  void setLibraryNavigationMode('custom-collections');
+  // Opening the page moves the side bar to its tree (syncLibraryNavigationToMainPanel).
   openLooseTracksPage({ collectionName: best?.name || '' });
 }
 
@@ -247,8 +254,10 @@ function syncCustomCollectionsAfterTagEdit({ fresh = false } = {}) {
     return;
   }
   const view = state.view || {};
-  const tracks = view.library_non_album_tracks;
-  if (!Array.isArray(tracks) || !view.library_non_album_tracks_hydrated_scope) return;
+  // Counted from the owned library-wide list only: a view refresh can leave an empty copy in the view, which
+  // emptied the tree (audit 2026-11-18).
+  const tracks = typeof currentLibraryLooseTracks === 'function' ? currentLibraryLooseTracks(view) : null;
+  if (!Array.isArray(tracks)) return;
   // During a search the tree counts matches; a list that is not the search's own cannot recount it.
   if (String(view.query || '').trim() && view.library_non_album_tracks_search_matched !== true) return;
   const counts = new Map();
@@ -307,6 +316,52 @@ function libraryLooseTracksPageOpen() {
     && state.ui?.nonAlbumLibraryWide === true;
 }
 
+// Owner 2026-11-18: the side bar follows the main panel, from this one place. A Loose Tracks or collection page on
+// screen means the Custom Collections tree with that row selected (the Artists tree then selects nothing); the
+// gallery means the Artists tree with the gallery's artist selected. A search that found no artist keeps the tree
+// shown, because its best match may be a collection, which opens next. It acts only when the main panel changes,
+// so the rail buttons can still show the other tree until then.
+function libraryNavigationMainPanelKey(view = state.view || {}) {
+  if (libraryLooseTracksPageOpen()) {
+    return `page:${String(state.ui?.nonAlbumCollectionName || '').trim()}|${String(view.query || '').trim()}`;
+  }
+  return `gallery:${String(view.query || '').trim()}|${String(view.selected_artist || '').trim()}|${view.all_artists_active ? 1 : 0}`;
+}
+
+function libraryNavigationModeForMainPanel(view = state.view || {}) {
+  if (libraryLooseTracksPageOpen()) return 'custom-collections';
+  const searchWithoutArtist = String(view.query || '').trim()
+    && !String(view.selected_artist || '').trim()
+    && !(Array.isArray(view.artists_sidebar) && view.artists_sidebar.length);
+  return searchWithoutArtist ? state.ui.libraryNavigationMode : 'artists';
+}
+
+// Returns true when it switched the tree (which redraws it); the caller then has nothing left to draw.
+function syncLibraryNavigationToMainPanel() {
+  // Mid-transition states (a view loading, history closing one page and opening another) are not the main panel.
+  if (state.ui.pendingViewTransition) return false;
+  if (typeof mobilePageState !== 'undefined' && mobilePageState.restoring) return false;
+  const key = libraryNavigationMainPanelKey();
+  if (key === state.ui.libraryNavigationMainPanelKey) return false;
+  const previousKey = String(state.ui.libraryNavigationMainPanelKey || '');
+  state.ui.libraryNavigationMainPanelKey = key;
+  // A page kept through a search change (a cleared search) shows its tracks for the new search.
+  if (key.startsWith('page:') && previousKey.startsWith('page:') && typeof refreshOpenLooseTracksPage === 'function') {
+    refreshOpenLooseTracksPage();
+  }
+  const mode = libraryNavigationModeForMainPanel();
+  if (state.ui.libraryNavigationMode === mode) return false;
+  void setLibraryNavigationMode(mode);
+  return true;
+}
+
+// A page opening, switching or closing changes what the tree selects, in whichever tree is shown.
+function syncLibraryNavigationAfterPageChange() {
+  if (syncLibraryNavigationToMainPanel()) return;
+  if (state.ui?.libraryNavigationMode === 'custom-collections') syncCustomCollectionNavigationSelection();
+  else if (typeof renderSidebar === 'function') renderSidebar();
+}
+
 // Redraws the Custom Collections selection after its page opens or closes.
 function syncCustomCollectionNavigationSelection() {
   if (state.ui?.libraryNavigationMode !== 'custom-collections') return;
@@ -356,7 +411,6 @@ function renderCustomCollectionNavigation(collections, { failure = '' } = {}) {
 
 async function setLibraryNavigationMode(mode) {
   const normalized = mode === 'custom-collections' ? mode : 'artists';
-  state.ui.suppressSidebarSelection = normalized === 'artists' && libraryLooseTracksPageOpen();
   state.ui.libraryNavigationMode = normalized;
   syncLibraryNavigationModePresentation(normalized);
   if (normalized === 'artists') {

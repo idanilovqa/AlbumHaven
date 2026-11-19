@@ -156,9 +156,8 @@ function animateAlbumDetailsCoverShuffle(previous, stack, direction) {
   const front = stack.querySelector('.album-details-cover-stack__front');
   if (!front || activeIndex === previous.activeIndex) return false;
   const dir = direction < 0 ? -1 : 1;
-  // 1400ms with an even ease-in-out: at 900ms the ease-out curve still finished most of the move in the first
-  // third, and the owner found the switch too fast (2026-11-17, again 2026-11-18).
-  const timing = { duration: 1400, easing: 'cubic-bezier(.45,0,.25,1)', fill: 'backwards' };
+  // 1100ms with an even ease-in-out: 900ms felt too fast (2026-11-17), 1400ms too slow (2026-11-18).
+  const timing = { duration: 1100, easing: 'cubic-bezier(.45,0,.25,1)', fill: 'backwards' };
   stack.classList.add('is-shuffling');
   // The old front cover leaves to the side and tucks in behind the stack, where its rear copy then shows.
   const ghost = previous.front;

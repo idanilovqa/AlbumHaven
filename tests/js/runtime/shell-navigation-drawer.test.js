@@ -671,42 +671,63 @@ test('drawer hamburger selects the mode of the tree already displayed', () => {
   assert.deepEqual(modes, ['artists', 'custom-collections']);
 });
 
-for (const isMobile of [true, false]) {
-  test(`${isMobile ? 'phone' : 'desktop'}: switching from library Loose Tracks to Artists leaves every artist row unselected`, async () => {
-    // Owner 2026-11-15: on a collection page, the Artists tree must not select All artists.
-    const { context } = loadHelper({ isMobile });
-    context.state.ui.libraryNavigationMode = 'custom-collections';
-    context.state.ui.nonAlbumLibraryWide = true;
-    const originalQuerySelector = context.document.querySelector.bind(context.document);
-    context.document.querySelector = selector => (
-      selector === '#non-album-modal:not([hidden])'
-        ? {}
-        : originalQuerySelector(selector)
-    );
-    let suppressedDuringRender = false;
-    context.renderSidebar = () => {
-      suppressedDuringRender = context.state.ui.suppressSidebarSelection === true;
-    };
-
-    await context.setLibraryNavigationMode('artists');
-
-    assert.equal(suppressedDuringRender, true);
-  });
-}
-
-test('an artist Loose Tracks page keeps that artist selected in the Artists tree', async () => {
-  const { context } = loadHelper({ isMobile: false });
-  context.state.ui.libraryNavigationMode = 'custom-collections';
-  context.state.ui.nonAlbumLibraryWide = false;
+// Owner 2026-11-18: the side bar follows the main panel, from one owner (syncLibraryNavigationToMainPanel).
+function openLibraryPage(context, { libraryWide = true, collectionName = '' } = {}) {
+  let open = true;
+  context.state.ui.nonAlbumLibraryWide = libraryWide;
+  context.state.ui.nonAlbumCollectionName = collectionName;
   const originalQuerySelector = context.document.querySelector.bind(context.document);
   context.document.querySelector = selector => (
-    selector === '#non-album-modal:not([hidden])' ? {} : originalQuerySelector(selector)
+    selector === '#non-album-modal:not([hidden])' ? (open ? {} : null) : originalQuerySelector(selector)
   );
-  context.renderSidebar = () => {};
+  return { close() { open = false; } };
+}
 
-  await context.setLibraryNavigationMode('artists');
+test('a library Loose Tracks page owns the selection; an artist Loose Tracks page does not', () => {
+  // Owner 2026-11-15: on a collection page, the Artists tree selects nothing (derived, never stored).
+  const { context } = loadHelper({ isMobile: false });
+  openLibraryPage(context, { libraryWide: true, collectionName: 'Mix' });
+  assert.equal(context.libraryLooseTracksPageOpen(), true);
+  openLibraryPage(context, { libraryWide: false });
+  assert.equal(context.libraryLooseTracksPageOpen(), false);
+});
 
-  assert.equal(context.state.ui.suppressSidebarSelection, false);
+test('the tree follows the main panel: a collection page, then the gallery it leaves for', () => {
+  const { context } = loadHelper({ isMobile: false });
+  const modes = [];
+  context.setLibraryNavigationMode = async (mode) => { modes.push(mode); context.state.ui.libraryNavigationMode = mode; };
+  context.state.ui.libraryNavigationMode = 'artists';
+  context.state.view = { query: '', selected_artist: 'Rhapsody', artists_sidebar: [{ artist: 'Rhapsody' }] };
+  context.syncLibraryNavigationToMainPanel();
+
+  const page = openLibraryPage(context, { collectionName: 'Женя машина' });
+  assert.equal(context.syncLibraryNavigationToMainPanel(), true, 'a collection page shows the Custom Collections tree');
+  assert.deepEqual(modes, ['custom-collections']);
+
+  // The rail can show the other tree while the main panel stays: nothing switches back on a redraw.
+  context.state.ui.libraryNavigationMode = 'artists';
+  assert.equal(context.syncLibraryNavigationToMainPanel(), false);
+
+  page.close();
+  context.state.ui.libraryNavigationMode = 'custom-collections';
+  context.state.view = { query: 'rhapsody', selected_artist: 'Rhapsody', artists_sidebar: [{ artist: 'Rhapsody' }] };
+  assert.equal(context.syncLibraryNavigationToMainPanel(), true, 'an artist in the gallery shows the Artists tree');
+  assert.deepEqual(modes, ['custom-collections', 'artists']);
+});
+
+test('a search that found no artist keeps the tree until its best match decides', () => {
+  const { context } = loadHelper({ isMobile: false });
+  const modes = [];
+  context.setLibraryNavigationMode = async (mode) => { modes.push(mode); context.state.ui.libraryNavigationMode = mode; };
+  context.state.ui.libraryNavigationMode = 'custom-collections';
+  context.state.ui.pendingViewTransition = true;
+  context.state.view = { query: 'alas', selected_artist: '', artists_sidebar: [] };
+  assert.equal(context.syncLibraryNavigationToMainPanel(), false, 'nothing moves while the search loads');
+  context.state.ui.pendingViewTransition = false;
+  assert.equal(context.syncLibraryNavigationToMainPanel(), false, 'no artist: the tree stays for a collection match');
+  context.state.view = { query: 'rhapsody', selected_artist: 'Rhapsody', artists_sidebar: [{ artist: 'Rhapsody' }] };
+  assert.equal(context.syncLibraryNavigationToMainPanel(), true, 'an artist match moves it to Artists');
+  assert.deepEqual(modes, ['artists']);
 });
 
 test('mobile artist-tree scrolling does not schedule a mode-rail hide', () => {
@@ -1141,8 +1162,8 @@ test('a search with no artist opens the collection holding the most matching tra
 
   context.state.ui.customCollectionSearchAutoOpenQuery = 'ace';
   await context.syncCustomCollectionSearchIndicator();
+  // Opening the page is the whole step; the page moves the tree (syncLibraryNavigationToMainPanel).
   assert.deepEqual(opened, ['Disco']);
-  assert.equal(context.state.ui.libraryNavigationMode, 'custom-collections');
   pageOpen = false;
   await context.syncCustomCollectionSearchIndicator();
   assert.deepEqual(opened, ['Disco'], 'a redraw of the same search does not reopen it');
@@ -1158,11 +1179,8 @@ test('a search with no artist opens the collection holding the most matching tra
   context.state.view.query = 'ace again';
   context.state.ui.customCollectionSearchAutoOpenQuery = 'ace again';
   context.state.view.artists_sidebar = [{ artist: 'Ace Of Base' }];
-  context.renderSidebar = () => {};
   await context.syncCustomCollectionSearchIndicator();
   assert.deepEqual(opened, ['Disco', '']);
-  // Owner 2026-11-18: the tree changes only once results are in, to the one holding the best match.
-  assert.equal(context.state.ui.libraryNavigationMode, 'artists');
 });
 
 test('a tag edit recounts the open collections tree at once, then takes the saved catalog', async () => {
@@ -1172,8 +1190,10 @@ test('a tag edit recounts the open collections tree at once, then takes the save
   context.URL = URL;
   context.escapeHtml = value => String(value);
   context.state.ui.libraryNavigationMode = 'custom-collections';
-  context.state.view.library_non_album_tracks_hydrated_scope = 'scope';
-  context.state.view.library_non_album_tracks = [
+  // The owned library-wide list (the view may hold an empty copy after a refresh).
+  context.state.view.library_non_album_tracks = [];
+  context.currentLibraryLooseTracks = () => owned;
+  const owned = [
     { exception_type: 'Custom Collection', custom_collection_name: 'Женя машина 2' },
     { exception_type: 'Custom Collection', custom_collection_name: 'Женя машина 2' },
     { exception_type: 'Custom Collection', custom_collection_name: 'Женя машина' },

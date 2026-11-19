@@ -10425,6 +10425,29 @@
   {
     "config": "playwright.config.js",
     "project": "functional",
+    "test": "tests/e2e/specs/instantReturnOfflineData.spec.js",
+    "case": "FTC-IAR-W20 after browsing online, an offline reload still opens every artist and album already seen, by the tree and by scrolling, and their details",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [
+      "gallery:root-pagination"
+    ],
+    "filesystemScenarios": [
+      "media:root-pagination"
+    ],
+    "expectedContracts": [
+      "offline-reload-opens-artists-seen-from-the-tree",
+      "offline-reload-scrolls-gallery-pages-seen",
+      "offline-reload-opens-album-details-seen",
+      "offline-never-seen-album-says-offline",
+      "online-again-data-comes-from-the-server"
+    ],
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
     "test": "tests/e2e/specs/instantReturnBrowser.spec.js",
     "case": "FTC-IAR-W14 a navigation with no answer shows the saved library with the Offline line after 10 s, never sooner, and goes live in place when the answer comes",
     "profile": "functional-core",

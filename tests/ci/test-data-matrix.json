@@ -10383,6 +10383,6 @@
     "expectedContracts": [
       "IAR-W12: the first visit is kept while the page is still loading; a new tab opened offline then shows it"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   }
 ]

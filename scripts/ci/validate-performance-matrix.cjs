@@ -300,7 +300,7 @@ if (require.main === module) {
       for (const error of errors) process.stderr.write(`${error}\n`);
       process.exitCode = 1;
     } else {
-      process.stdout.write(`performance matrix: 5 profile runners, ${EXPECTED_TARGET_COUNT} targets, ${EXPECTED_CASE_COUNT} cases\n`);
+      process.stdout.write(`performance matrix: ${SHARD_DEFINITIONS.length} profile runners, ${EXPECTED_TARGET_COUNT} targets, ${EXPECTED_CASE_COUNT} cases\n`);
     }
   } catch (error) {
     process.stderr.write(`${error?.message || error}\n`);

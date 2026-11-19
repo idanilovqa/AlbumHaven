@@ -3715,7 +3715,7 @@ def test_build_view_payload_service_exposes_shared_search_query_contract(app):
             "supports_negation": True,
             "supports_quoted_values": True,
             "supports_comparison_operators": True,
-            "supports_fuzzy_commit_matching": True,
+            "supports_fuzzy_commit_matching": False,
             "shortcut_tokens": [
                 {
                     "token": ":loved",
@@ -3754,27 +3754,27 @@ def test_build_view_payload_service_exposes_shared_search_query_contract(app):
                 "artist": {
                     "value_type": "string",
                     "supports_quotes": True,
-                    "supports_fuzzy_commit": True,
+                    "supports_fuzzy_commit": False,
                     "availability": "shared",
                 },
                 "genre": {
                     "value_type": "string",
                     "supports_quotes": True,
-                    "supports_fuzzy_commit": True,
+                    "supports_fuzzy_commit": False,
                     "supports_structured_suggestions": True,
                     "availability": "shared",
                 },
                 "mood": {
                     "value_type": "string",
                     "supports_quotes": True,
-                    "supports_fuzzy_commit": True,
+                    "supports_fuzzy_commit": False,
                     "supports_structured_suggestions": True,
                     "availability": "shared",
                 },
                 "style": {
                     "value_type": "string",
                     "supports_quotes": True,
-                    "supports_fuzzy_commit": True,
+                    "supports_fuzzy_commit": False,
                     "supports_structured_suggestions": True,
                     "availability": "shared",
                 },
@@ -3801,14 +3801,14 @@ def test_build_view_payload_service_exposes_shared_search_query_contract(app):
                 "persons": {
                     "value_type": "csv_string",
                     "match_mode": "all_of",
-                    "supports_fuzzy_commit": True,
+                    "supports_fuzzy_commit": False,
                     "availability": "local_library_only",
                 },
             },
         },
         "structured_suggestions": {
             "value_fields": ["genre", "mood", "style"],
-            "fuzzy_commit_without_exact_suggestion": True,
+            "fuzzy_commit_without_exact_suggestion": False,
         },
         "committed_matching": {
             "priority_order": [
@@ -3817,7 +3817,6 @@ def test_build_view_payload_service_exposes_shared_search_query_contract(app):
                 "phrase",
                 "prefix",
                 "distributed",
-                "fuzzy",
             ],
             "numeric_terms_are_near_exact": True,
         },

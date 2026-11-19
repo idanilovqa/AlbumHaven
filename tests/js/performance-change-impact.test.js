@@ -38,6 +38,7 @@ test('sensitive browse, sidebar, modal, status, and mobile changes select their 
     ['music_app/services/runtime_asset_versions.py', ['app-open-all-artists', 'artist-tree-scroll-navigation', 'utility-problematic-files', 'problematic-files-focused']],
     ['music_app/services/compressed_static_files.py', ['app-open-all-artists', 'artist-tree-scroll-navigation', 'utility-problematic-files', 'problematic-files-focused']],
     ['music_app/static/js/app-copy.js', ['app-open-all-artists', 'artist-tree-scroll-navigation']],
+    ['music_app/services/http_compression.py', ['all-artists', 'selected-artist', 'root-album-browse', 'app-open-all-artists', 'artist-tree-scroll-navigation', 'artist-family', 'search-all-artists', 'search-browse', 'gallery-artwork-diversity', 'utility-problematic-files', 'problematic-files-focused']],
     ['music_app/services/library_browse_postgres.py', ['all-artists', 'selected-artist', 'root-album-browse', 'app-open-all-artists', 'artist-tree-scroll-navigation', 'artist-family', 'search-all-artists', 'search-browse', 'gallery-artwork-diversity', 'utility-problematic-files', 'problematic-files-focused']],
     ['music_app/static/js/runtime/virtual-artist-grid.js', ['all-artists', 'selected-artist', 'app-open-all-artists', 'artist-tree-scroll-navigation', 'gallery-artwork-diversity']],
     ['music_app/static/js/runtime/bootstrap-init.js', ['all-artists', 'selected-artist', 'root-album-browse', 'app-open-all-artists', 'artist-tree-scroll-navigation', 'artist-family', 'search-all-artists', 'search-browse', 'gallery-artwork-diversity']],
@@ -48,6 +49,12 @@ test('sensitive browse, sidebar, modal, status, and mobile changes select their 
   ];
   for (const [changedPath, expectedTargets] of cases) {
     assert.deepEqual(resolveRequiredPerformanceTargets(contract, [changedPath]), expectedTargets, changedPath);
+  }
+});
+
+test('structural save finalize and album rebuild changes select the Edit Tags post-save target', () => {
+  for (const changedPath of ['music_app/services/save_tasks.py', 'music_app/services/edit_state.py']) {
+    assert.ok(resolveRequiredPerformanceTargets(contract, [changedPath]).includes('edit-tags-post-edit'), changedPath);
   }
 });
 

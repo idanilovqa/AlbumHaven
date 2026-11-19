@@ -89,7 +89,7 @@ function setup() {
       allowedActions: { 'library.loops.reorder': true }, loopOrderRevisions: { 'track:1': 7, 'track:2': 7 },
     } },
     getUtilityModalElements: () => elements,
-    renderUtilityModalContent: () => renders.push('full'), showToast() {}, escapeHtml: value => String(value ?? ''),
+    renderUtilityModalContent: () => renders.push('full'), showToast() {}, escapeHtml: value => String(value ?? ''), cssEscape: value => String(value ?? ''),
     requestAnimationFrame: fn => { fn(0); return 1; }, cancelAnimationFrame() {},
     matchMedia: () => ({ matches: false }), setTimeout, clearTimeout,
     fetch: async (url, options) => { requests.push({ url, body: JSON.parse(options.body) }); return response; },
@@ -443,4 +443,54 @@ for (const change of ['load', 'scope']) test(`L05 a newer ${change} with an equa
   h.finish({ ok: true, song_key: 'track:1', order_revision: 8, ordered_ids: ['c', 'a', 'b'], loops: [h.loops[2], h.loops[0], h.loops[1]] });
   await pending;
   assert.equal(h.context.state.utility.loops, current);
+});
+
+test('bounded interaction: dragging a saved loop restyles only the marked rows among 1,000 saved loops', async () => {
+  const { countedCollection, createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const { createCountedDom } = require('../helpers/counted-dom.js');
+  const run = async (loopCount) => {
+    const counter = createInteractionCounter();
+    const { CountedElement } = createCountedDom(counter);
+    const loops = countedCollection(Array.from({ length: loopCount }, (_value, index) => (
+      makeLoop(`loop-${index}`, `track:${Math.floor(index / 4)}`))), counter);
+    const rows = Array.from({ length: loopCount }, (_value, index) => {
+      const row = new CountedElement('BUTTON');
+      row.attributes['data-utility-loop-id'] = `loop-${index}`;
+      return row;
+    });
+    const rowsById = new Map(rows.map(row => [row.attributes['data-utility-loop-id'], [row]]));
+    const document = {
+      addEventListener() {},
+      querySelectorAll(selector) {
+        counter.count('domQueries');
+        if (selector === '[data-utility-loop-entry], [data-utility-loop-id]') return rows;
+        const id = /^\[data-utility-loop-entry="([^"]*)"\]/.exec(selector)?.[1];
+        return id === undefined ? [] : rowsById.get(id) || [];
+      },
+    };
+    const context = { console, window: {}, document, cssEscape: value => String(value ?? ''), setTimeout, state: { utility: {
+      loops, allowedActions: { 'library.loops.reorder': true },
+    } } };
+    vm.createContext(context);
+    for (const name of ['player-and-waveform', 'utility-loop-playback', 'utility-renderers-and-actions']) vm.runInContext(read(name), context);
+    context.bindUtilityLoopDragAndDrop();
+    rows[1].dispatch('dragstart', { target: rows[1] });
+    const work = await counter.measure(() => {
+      for (const row of [rows[2], rows[3]]) {
+        for (let step = 0; step < 10; step += 1) row.dispatch('dragover', { clientY: 15 });
+      }
+    });
+    assert.deepEqual(rows.slice(0, 5).map(row => [...row.classes].sort().join(' ')),
+      ['', 'is-dragging', '', 'is-drop-after', ''], 'only the dragged and drop-target rows carry drag cues');
+    assert.equal(context.state.utility.loopDropTargetId, 'loop-3');
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:runtime/utility-renderers-and-actions.js#bindUtilityLoopDragAndDrop',
+    small: 20,
+    large: 1000,
+    run,
+    budgets: { itemsVisited: 0, domQueries: 5, domMutations: 15 },
+    growth: { metric: 'domMutations', largeMinusSmallMax: 0 },
+  });
 });

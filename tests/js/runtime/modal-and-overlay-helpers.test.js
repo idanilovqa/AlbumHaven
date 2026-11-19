@@ -2031,3 +2031,36 @@ test('paged root loose tracks remain visible outside the loaded artist window', 
   };
   assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks()), [track]);
 });
+
+// Request-capture contract (tests/ci/bounded-interactions.json): loose-track hydration builds its
+// URL with the real view helpers, coalesces repeated opens, and never asks again once hydrated.
+const { assertInteractionRequests, createRequestCapture, jsonResponse, measureInteractionContract } = require('../helpers/request-capture');
+const viewStateHelpersPath = path.join(path.dirname(helperPath), 'view-state-helpers.js');
+
+test('request capture: loose-track hydration requests /view-data once per scope', async () => {
+  const id = 'js:runtime/modal-and-overlay-helpers.js#hydrateDeferredNonAlbumTracks';
+  await measureInteractionContract(id, async (opens) => {
+    const { context } = loadHelper();
+    context.URL = URL;
+    context.URLSearchParams = URLSearchParams;
+    context.updateGalleryMainControls = () => {};
+    vm.runInContext(fs.readFileSync(viewStateHelpersPath, 'utf8'), context, { filename: viewStateHelpersPath });
+    const capture = createRequestCapture(() => jsonResponse({ non_album_tracks: [], library_non_album_tracks: [] }));
+    context.fetch = capture.fetch;
+    const openMany = options => Promise.all(Array.from({ length: opens }, () => context.hydrateDeferredNonAlbumTracks(options)));
+    for (const scope of [{ selected_artist: 'Agalloch' }, { surface_request: 'albums' }]) {
+      context.state.view = { ...scope, non_album_tracks: [], non_album_tracks_deferred: true };
+      await openMany();
+      await openMany();
+      await openMany({ libraryWide: true });
+      await openMany({ libraryWide: true });
+    }
+    const urls = capture.urls().map(url => new URL(url, 'http://localhost'));
+    assert.deepEqual(urls.map(url => [url.pathname, url.searchParams.get('artist'), url.searchParams.has('include_library_wide_non_album')]), [
+      ['/view-data', 'Agalloch', false], ['/view-data', 'Agalloch', true], ['/view-data', null, false], ['/view-data', null, true],
+    ]);
+    assert.ok(urls.every(url => url.searchParams.get('include_non_album') === '1' && url.searchParams.get('omit_sidebar') === '1'));
+    assertInteractionRequests(id, capture.urls());
+    return capture.counter.snapshot();
+  });
+});

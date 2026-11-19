@@ -250,6 +250,21 @@ def test_a_read_timeout_is_a_retryable_network_error(monkeypatch, allow_lastfm_l
 
     assert caught.value.retryable is True
     assert caught.value.error_kind == "network_error"
+    assert caught.value.request_sent is True
+
+
+@pytest.mark.lastfm_loopback_transport(provider_fixture="fixture_owned_lastfm_provider")
+def test_an_unreachable_last_fm_is_a_request_that_was_never_sent(monkeypatch, allow_lastfm_loopback_transport):
+    def refuse(*_args, **_kwargs):
+        raise lastfm.URLError(ConnectionRefusedError("Connection refused"))
+
+    monkeypatch.setattr(lastfm, "urlopen", refuse)
+
+    with pytest.raises(LastfmError) as caught:
+        lastfm.update_now_playing(_config(allow_lastfm_loopback_transport), _payload(),
+                                  session=LastfmSession("listener", "fake-session", "now"))
+
+    assert (caught.value.retryable, caught.value.request_sent) == (True, False)
 
 
 def test_disconnected_scrobble_is_an_explicit_no_send(monkeypatch):
@@ -304,3 +319,115 @@ def test_user_info_rejects_invalid_provider_playcount(
 
     assert caught.value.retryable is True
     assert caught.value.error_kind == "malformed_response"
+
+
+def _batch_payloads(count: int) -> list[dict[str, object]]:
+    return [
+        # Every field is filled: the fixture provider's form parser drops blank values.
+        {"artist": f"Artist {index}", "track": f"Song {index}", "album": "Album", "album_artist": "Album Artist",
+         "timestamp": 1_700_000_000 + index, "duration": 200, "track_number": str(index + 1)}
+        for index in range(count)
+    ]
+
+
+@pytest.mark.lastfm_loopback_transport(provider_fixture="fixture_owned_lastfm_provider")
+def test_scrobble_batch_sends_one_signed_call_and_returns_each_listens_outcome(
+    fixture_owned_lastfm_provider, allow_lastfm_loopback_transport,
+):
+    import hashlib
+
+    fixture_owned_lastfm_provider["responses"].append((200, b"""<lfm status="ok"><scrobbles accepted="2" ignored="1">
+        <scrobble><track corrected="0">Song 0</track><ignoredMessage code="0"></ignoredMessage></scrobble>
+        <scrobble><track corrected="0">Song 1</track><ignoredMessage code="3">Timestamp too old</ignoredMessage></scrobble>
+        <scrobble><track corrected="0">Song 2</track><ignoredMessage code="0"></ignoredMessage></scrobble>
+    </scrobbles></lfm>"""))
+
+    outcomes = lastfm.scrobble_tracks(
+        _config(allow_lastfm_loopback_transport), _batch_payloads(3),
+        session=LastfmSession("listener", "fixture-session", "now"),
+    )
+
+    assert [(item.succeeded, item.outcome, item.ignored_code) for item in outcomes] == [
+        (True, "accepted", None), (False, "ignored", 3), (True, "accepted", None),
+    ]
+    assert outcomes[1].sent is True and outcomes[1].message == "Timestamp too old"
+    [request] = fixture_owned_lastfm_provider["requests"]
+    params = {key: values[-1] for key, values in request.items()}
+    assert params["method"] == "track.scrobble"
+    assert params["sk"] == "fixture-session"
+    assert [params[f"track[{index}]"] for index in range(3)] == ["Song 0", "Song 1", "Song 2"]
+    assert [params[f"timestamp[{index}]"] for index in range(3)] == ["1700000000", "1700000001", "1700000002"]
+    assert params["chosenByUser[2]"] == "1"
+    signed = "".join(f"{key}{value}" for key, value in sorted(params.items()) if key not in {"api_sig", "format"})
+    assert params["api_sig"] == hashlib.md5((signed + "fake-secret").encode("utf-8")).hexdigest()
+
+
+@pytest.mark.lastfm_loopback_transport(provider_fixture="fixture_owned_lastfm_provider")
+def test_scrobble_batch_without_an_outcome_per_listen_is_a_malformed_response(
+    fixture_owned_lastfm_provider, allow_lastfm_loopback_transport,
+):
+    fixture_owned_lastfm_provider["responses"].append((200, b"""<lfm status="ok"><scrobbles accepted="1" ignored="0">
+        <scrobble><ignoredMessage code="0"></ignoredMessage></scrobble></scrobbles></lfm>"""))
+
+    with pytest.raises(LastfmError) as caught:
+        lastfm.scrobble_tracks(
+            _config(allow_lastfm_loopback_transport), _batch_payloads(2),
+            session=LastfmSession("listener", "fixture-session", "now"),
+        )
+
+    assert caught.value.retryable is True
+    assert caught.value.error_kind == "malformed_response"
+
+
+@pytest.mark.parametrize("count", [0, 51])
+def test_scrobble_batch_holds_one_to_fifty_listens(count):
+    with pytest.raises(ValueError):
+        lastfm.scrobble_tracks({}, _batch_payloads(count), session=LastfmSession("listener", "fixture-session", "now"))
+
+
+@pytest.mark.lastfm_loopback_transport(provider_fixture="fixture_owned_lastfm_provider")
+def test_recent_scrobbles_read_one_signed_page_of_a_window_and_skip_the_track_playing_now(
+    fixture_owned_lastfm_provider, allow_lastfm_loopback_transport,
+):
+    fixture_owned_lastfm_provider["responses"].append((200, """<lfm status="ok">
+        <recenttracks user="listener" page="2" perPage="200" totalPages="3" total="401">
+            <track nowplaying="true"><artist mbid="">ДДТ</artist><name>Playing now</name></track>
+            <track><artist mbid="">ДДТ</artist><name>Осень</name><date uts="1700000002">14 Nov 2023, 22:13</date></track>
+            <track><artist mbid="">Artist</artist><name>Song 0</name><date uts="1700000000">14 Nov 2023, 22:13</date></track>
+        </recenttracks></lfm>""".encode("utf-8")))
+
+    scrobbles, pages = lastfm.get_lastfm_scrobbles_between(
+        _config(allow_lastfm_loopback_transport), session=LastfmSession("listener", "fixture-session", "now"),
+        after=1_699_999_999, before=1_700_000_003, page=2,
+    )
+
+    assert pages == 3
+    assert scrobbles == [lastfm.LastfmScrobble(1_700_000_002, "ДДТ", "Осень"),
+                         lastfm.LastfmScrobble(1_700_000_000, "Artist", "Song 0")]
+    [request] = fixture_owned_lastfm_provider["requests"]
+    params = {key: values[-1] for key, values in request.items()}
+    assert {key: params[key] for key in ("method", "user", "sk", "from", "to", "limit", "page")} == {
+        "method": "user.getRecentTracks", "user": "listener", "sk": "fixture-session",
+        "from": "1699999999", "to": "1700000003", "limit": "200", "page": "2",
+    }
+    assert "api_sig" in params
+
+
+@pytest.mark.parametrize("body", [
+    b'<lfm status="ok"></lfm>',
+    b'<lfm status="ok"><recenttracks user="listener" page="1"></recenttracks></lfm>',
+    b'<lfm status="ok"><recenttracks user="listener" totalPages="many"></recenttracks></lfm>',
+])
+@pytest.mark.lastfm_loopback_transport(provider_fixture="fixture_owned_lastfm_provider")
+def test_recent_scrobbles_without_a_page_count_are_a_malformed_response(
+    fixture_owned_lastfm_provider, allow_lastfm_loopback_transport, body,
+):
+    fixture_owned_lastfm_provider["responses"].append((200, body))
+
+    with pytest.raises(LastfmError) as caught:
+        lastfm.get_lastfm_scrobbles_between(
+            _config(allow_lastfm_loopback_transport), session=LastfmSession("listener", "fixture-session", "now"),
+            after=1, before=3,
+        )
+
+    assert (caught.value.error_kind, caught.value.retryable) == ("malformed_response", True)

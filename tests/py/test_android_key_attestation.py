@@ -250,3 +250,25 @@ def test_the_real_google_chain_is_still_held_to_policy(sample_boot_verified, cha
 
 def test_the_bundled_roots_are_the_two_published_google_roots():
     assert len(load_root_public_keys()) == 2
+
+
+def test_attestation_roots_contract_reads_the_bundled_roots_once_per_process(monkeypatch):
+    from tests.py.bounded_interactions import OperationCounts, measure_scale_pair
+    from tests.py.filesystem_operation_counting import count_filesystem_and_media
+
+    def run(attestations: int) -> OperationCounts:
+        load_root_public_keys.cache_clear()
+        counts = OperationCounts()
+        with count_filesystem_and_media(monkeypatch, counts):
+            roots = {load_root_public_keys() for _ in range(attestations)}
+        assert len(roots) == 1 and next(iter(roots))
+        return counts
+
+    small, production = measure_scale_pair(
+        interaction_id="py:routes/android_artifacts_asgi.py#android_artifact_attest",
+        small=1,
+        large=1_000,
+        run=run,
+        budgets={"filesystem_enumerations": 0, "stat_calls": 0, "open_calls": 1},
+        growth=("open_calls", 0),
+    )

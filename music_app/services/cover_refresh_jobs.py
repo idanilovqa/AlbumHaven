@@ -130,4 +130,7 @@ def log_cover_refresh_completion(
         message = "Manual cover fetch completed"
     else:
         message = "Cover art update completed"
+    if result.get("summary"):
+        # Offline library roots and missing cover files, said plainly.
+        event_kwargs["summary"] = str(result["summary"])
     log_app_event(config, logger, message, **event_kwargs)

@@ -152,7 +152,7 @@ def test_build_album_detail_payload_without_config_does_not_consult_flask_global
         raise AssertionError("missing config should skip track preference lookup")
 
     monkeypatch.setattr(album_details_module, "has_app_context", fail_has_app_context, raising=False)
-    monkeypatch.setattr(album_details_module, "album_to_dict", lambda *_args, **_kwargs: dict(album_payload))
+    monkeypatch.setattr(album_details_module, "album_detail_to_dict", lambda *_args, **_kwargs: dict(album_payload))
     monkeypatch.setattr(album_details_module, "build_scrobbled_play_count_lookup", fail_scrobble_lookup)
     monkeypatch.setattr(album_details_module, "build_track_preference_overlay_lookup", fail_track_preference_lookup)
 

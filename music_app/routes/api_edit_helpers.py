@@ -11,7 +11,6 @@ from music_app.services.edit_state import (
     build_affected_album_dicts as _build_affected_album_dicts,
     rebuild_affected_albums_in_state as _rebuild_affected_albums_in_state,
     rebuild_relation_views,
-    refresh_changed_files_in_cache as _refresh_changed_files_in_cache,
     update_cache_entry_after_repairs as _update_cache_entry_after_repairs,
 )
 from music_app.services.repair_previews import (

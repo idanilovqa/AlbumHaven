@@ -968,6 +968,7 @@ function createDelayedStartupHydrationHarness({
   startupHydrationFollowupEndpoint = '/view-data',
   startupHydrationTier = 'sidebar',
   renderedGalleryMarkup = false,
+  prepare = () => {},
 } = {}) {
   const scheduledTimeouts = [];
   const fetchedEndpoints = [];
@@ -1089,6 +1090,7 @@ function createDelayedStartupHydrationHarness({
   };
 
   vm.createContext(context);
+  prepare(context);
   vm.runInContext(helperSource, context, { filename: helperPath });
   return {
     context,
@@ -1593,3 +1595,42 @@ test(`bootstrap init hydrates partial startup but keeps complete root pages boun
   }
 });
 }
+
+// Request-capture contract (tests/ci/bounded-interactions.json): startup hydration resolves its
+// endpoint with the real view URL helpers and requests it once; a blank Home endpoint resolves to
+// /home-data, never /view-data. fetchAndRender passes these API URLs to fetch unchanged.
+const { assertRequestOwnership } = require('../helpers/bounded-interaction-counter');
+const {
+  assertInteractionRequests, createRequestCapture, measureInteractionContract,
+} = require('../helpers/request-capture');
+
+test('request capture: startup hydration requests its own view endpoint once', async () => {
+  const id = 'js:runtime/bootstrap-init.js#runHydration';
+  const viewStateHelpersPath = path.join(path.dirname(helperPath), 'view-state-helpers.js');
+  await measureInteractionContract(id, async (albums) => {
+    const capture = createRequestCapture(() => true);
+    const startups = [
+      { startupHydrationEndpoint: '', startupHydrationFollowupEndpoint: '', startupHydrationTier: 'full' },
+      { startupHydrationEndpoint: '/view-data?payload_tier=sidebar', view: { surface_request: 'albums' } },
+      { selectedArtist: 'Broadcast', startupHydrationEndpoint: '/view-data?root_sidebar=1&artist=Broadcast', startupHydrationFollowupEndpoint: '', startupHydrationTier: 'full', renderedGalleryMarkup: true },
+    ];
+    for (const startup of startups) {
+      const { scheduledTimeouts } = createDelayedStartupHydrationHarness({
+        ...startup,
+        prepare(context) {
+          context.URLSearchParams = URLSearchParams;
+          vm.runInContext(fs.readFileSync(viewStateHelpersPath, 'utf8'), context, { filename: viewStateHelpersPath });
+          Object.assign(context.state.view, startup.view);
+          context.state.view.artist_groups = Array.from({ length: albums }, (_, index) => ({ artist: `Artist ${index}`, albums: [{ key: `album-${index}` }] }));
+          context.fetchAndRender = endpoint => capture.fetch(endpoint);
+        },
+      });
+      for (const { callback, delayMs } of scheduledTimeouts) if (delayMs === 0) callback();
+    }
+    const urls = capture.urls();
+    assert.deepEqual(urls, ['/home-data', '/view-data?payload_tier=sidebar', '/view-data?root_sidebar=1&artist=Broadcast']);
+    assertRequestOwnership(urls.slice(0, 1), { allowed: ['/home-data'], forbidden: ['/view-data'] }, 'Home');
+    assertInteractionRequests(id, urls);
+    return capture.counter.snapshot();
+  });
+});

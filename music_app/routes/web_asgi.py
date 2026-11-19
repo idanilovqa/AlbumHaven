@@ -21,7 +21,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import QueryParams
 
 from music_app.routes.appearance_asgi import load_appearance_context
-from music_app.services.app_logging import log_app_event
+from music_app.services.app_logging import log_app_message
 from music_app.services.auth_session_csrf import issue_session_csrf
 from music_app.services.covers import (
     display_cover_variant_cache_roots,
@@ -1101,8 +1101,8 @@ async def index(request: Request) -> Response:
             raise
         started_background_refresh = True
     total_elapsed_ms = round((time.perf_counter() - request_started_at) * 1000, 2)
-    log_app_event(
-        config,
+    # Application log only: a history write would open a connection on the event loop.
+    log_app_message(
         route_logger,
         "Index request completed",
         level="info",
@@ -1269,7 +1269,10 @@ async def refresh_api(request: Request) -> JSONResponse:
             "scan_album_folders_total": 0,
             "scan_progress_samples": [],
         }
-    accepted = state_service.start_background_refresh_for_state(
+    # The library cache lock may be held across hydration or a relation save:
+    # take it on a worker thread, never on the event loop.
+    accepted = await run_in_threadpool(
+        state_service.start_background_refresh_for_state,
         library_state,
         config,
         route_logger,
@@ -1296,14 +1299,15 @@ async def refresh_api(request: Request) -> JSONResponse:
 
 @router.post("/cancel-refresh-api")
 async def cancel_refresh_api(request: Request) -> JSONResponse:
-    cancelled = state_service.cancel_background_refresh_for_state(_library_state(request))
+    cancelled = await run_in_threadpool(state_service.cancel_background_refresh_for_state, _library_state(request))
     return JSONResponse({"ok": True, "cancelled": bool(cancelled)})
 
 
 @router.get("/refresh")
 async def refresh(request: Request) -> RedirectResponse:
     query_args = request.query_params
-    state_service.start_background_refresh_for_state(
+    await run_in_threadpool(
+        state_service.start_background_refresh_for_state,
         _library_state(request),
         _app_config(request),
         _app_logger(request),
@@ -1321,7 +1325,7 @@ async def refresh(request: Request) -> RedirectResponse:
 
 
 @router.get("/track")
-async def track(request: Request, path: str = "") -> FileResponse:
+def track(request: Request, path: str = "") -> FileResponse:
     resolved = resolve_configured_media_path(_app_config(request), path)
     if resolved is None:
         return _not_found()
@@ -1330,18 +1334,18 @@ async def track(request: Request, path: str = "") -> FileResponse:
 
 @router.get("/loops/media/{loop_id}")
 async def saved_loop_media(request: Request, loop_id: str) -> FileResponse:
-    resolved = resolve_loop_media_path(_app_config(request), loop_id, **(await saved_loop_scope(request)))
+    resolved = await run_in_threadpool(resolve_loop_media_path, _app_config(request), loop_id, **(await saved_loop_scope(request)))
     if resolved is None:
         return _not_found()
-    return _conditional_file_response(request, resolved, no_cache=True)
+    return await run_in_threadpool(_conditional_file_response, request, resolved, no_cache=True)
 
 
 @router.get("/loops/pitch-preview/{preview_id}")
 async def saved_loop_pitch_preview(request: Request, preview_id: str) -> FileResponse:
-    resolved = resolve_loop_preview_path(_app_config(request), preview_id, **(await saved_loop_scope(request)))
+    resolved = await run_in_threadpool(resolve_loop_preview_path, _app_config(request), preview_id, **(await saved_loop_scope(request)))
     if resolved is None:
         return _not_found()
-    return _conditional_file_response(request, resolved, no_cache=True)
+    return await run_in_threadpool(_conditional_file_response, request, resolved, no_cache=True)
 
 
 def _cached_cover_variant_response(
@@ -1568,7 +1572,8 @@ async def cover(
 ) -> Response:
     respond = _legacy_cover_response
     if loop_id:
-        item = get_loop(
+        item = await run_in_threadpool(
+            get_loop,
             _app_config(request),
             loop_id,
             **(await saved_loop_scope(request)),
@@ -1605,6 +1610,10 @@ async def open_album_location(request: Request) -> JSONResponse:
         album.get("name"),
         len(album.get("tracks") or []),
     )
+    return await run_in_threadpool(_open_album_location_response, request, album, route_logger)
+
+
+def _open_album_location_response(request: Request, album: dict[str, object], route_logger: logging.Logger) -> JSONResponse:
     paths = resolve_album_open_directories(_app_config(request), album)
     if not paths:
         route_logger.warning("open_album_location: no valid album paths found for album=%r", album.get("name"))

@@ -50,7 +50,16 @@ export class AppBarActions {
   }
 
   async triggerFullRescan() {
-    await this.openStatusMenu();
+    // While relations or covers are still busy the menu offers "Go to Library Status Page" instead;
+    // clicking that sends no rescan, and the caller then waited for one until the test timed out.
+    await expect.poll(async () => {
+      await this.openStatusMenu();
+      return this.appBar.scanActionButton.getAttribute('data-status-action');
+    }, {
+      timeout: 120000,
+      intervals: [250, 500, 1000],
+      message: 'Expected the scan status menu to offer Full Rescan',
+    }).toBe('full-rescan');
     await this.appBar.scanActionButton.click();
   }
 
@@ -255,7 +264,7 @@ export class AppBarActions {
       if (response.request().method() !== 'POST') return false;
       if (new URL(response.url()).pathname !== '/refresh-api') return false;
       return response.request().postDataJSON()?.full_rescan === true;
-    });
+    }, { timeout: 180000 });
     await this.triggerFullRescan();
     const [refreshResponse] = await Promise.all([
       refreshResponsePromise,

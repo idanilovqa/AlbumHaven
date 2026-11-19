@@ -52,6 +52,7 @@ from music_app.services.library_browse_postgres import (
     is_library_browse_postgres_available,
 )
 from music_app.services.library_watch_health import LibraryWatchHealthService
+from music_app.services import problematic_index
 from music_app.services.private_track_search import build_private_track_search_contract
 from music_app.services.library_warning_dismissals import PostgresLibraryWarningDismissals, warning_token
 from music_app.routes.bounded_json import read_bounded_json_object, JSONBodyTooLarge
@@ -462,6 +463,11 @@ async def status(request: Request) -> JSONResponse:
             payload["scan_in_progress"] = True
             payload["scan_phase"] = "discovering"
             payload["scan_mode"] = "background"
+    # Test harnesses wait for this with scans and relations: Problematic Files answers from
+    # its index only once the one-time backfill and queued album evaluations are done.
+    payload["problematic_index_in_progress"] = problematic_index.in_progress(
+        PostgresLibraryBrowseRepository(_app_config(request))
+    ) if _is_postgres_utility_projection_request(request) else False
     payload["watcher_health"] = await run_in_threadpool(
         _project_library_watch_health_for_request,
         request,

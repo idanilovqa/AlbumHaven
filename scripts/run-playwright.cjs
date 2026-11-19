@@ -1307,6 +1307,8 @@ async function waitForFunctionalFixtureBackgroundIdle(child, port, options = {})
       && lastStatus.relations_in_progress === false
       && lastStatus.covers_in_progress === false
       && lastStatus.pending_cover_refresh_after_scan === false
+      // Absent on an app without the Problematic Files index (older fixtures).
+      && lastStatus.problematic_index_in_progress !== true
     );
     consecutiveIdlePolls = idle ? consecutiveIdlePolls + 1 : 0;
     if (consecutiveIdlePolls >= stablePollCount) return;

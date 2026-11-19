@@ -9,6 +9,22 @@ export class UtilityProblematicFilesActions {
     this.navigationObservation = null;
   }
 
+  // A restored fixture database fills the Problematic Files index once after startup; a
+  // restarted production server already has it. /status reports the fill without warming
+  // Problematic Files, so a timed open afterwards stays cold.
+  async waitForIndexReady(options = {}) {
+    const page = this.utilityProblematicFilesTab.page;
+    const deadline = Date.now() + (options.timeout || 600000);
+    let last = null;
+    while (Date.now() < deadline) {
+      const response = await page.request.get('/status');
+      last = response.ok() ? await response.json() : null;
+      if (last && last.problematic_index_in_progress === false) return;
+      await page.waitForTimeout(500);
+    }
+    throw new Error(`The Problematic Files index did not finish filling: ${JSON.stringify(last?.problematic_index_in_progress)}`);
+  }
+
   async waitForReady(options = {}) {
     const timeout = options.timeout || 60000;
     await this.utilityProblematicFilesTab.waitForPageCondition((expected) => {

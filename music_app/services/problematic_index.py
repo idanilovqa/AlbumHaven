@@ -44,6 +44,9 @@ _RETRY_NOT_BEFORE: dict[str, float] = {}
 RETRY_AFTER_FAILURE_SECONDS = 300
 # Databases whose first-page detail this process has already built once.
 _WARMED: set[str] = set()
+# Databases this process has seen with a ready index, and those with a pass running.
+_READY: set[str] = set()
+_RUNNING: set[str] = set()
 _UNAVAILABLE_DATABASES: set[str] = set()
 # Albums checked by a running backfill of this process, per database.
 _PROGRESS: dict[str, dict[str, int]] = {}
@@ -300,6 +303,7 @@ def refresh(repository: Any, *, inline_limit: int = INLINE_ALBUM_LIMIT) -> bool:
         if not ready:
             queue_maintenance(repository)
             return False
+        _READY.add(repository._database_url)
         if not marks:
             return True
         if len(marks) > inline_limit:
@@ -394,6 +398,7 @@ def _maintain(repository: Any) -> None:
     with _QUEUED_LOCK:
         # A request arriving from now on queues another pass for marks made meanwhile.
         _QUEUED.discard(repository._database_url)
+        _RUNNING.add(repository._database_url)
     try:
         with repository._connect_to_database() as connection:
             connection.autocommit = True
@@ -406,6 +411,7 @@ def _maintain(repository: Any) -> None:
                         _backfill(repository, connection, library_id)
                     finally:
                         _PROGRESS.pop(repository._database_url, None)
+                _READY.add(repository._database_url)
                 while marks := connection.execute(
                     """select album_id, marked_xid::text as marked_xid from library.problematic_index_dirty_albums
                        where library_id = %s order by album_id limit %s""",
@@ -429,6 +435,9 @@ def _maintain(repository: Any) -> None:
                         exc_info=True)
         with _QUEUED_LOCK:
             _RETRY_NOT_BEFORE[repository._database_url] = time.monotonic() + RETRY_AFTER_FAILURE_SECONDS
+    finally:
+        with _QUEUED_LOCK:
+            _RUNNING.discard(repository._database_url)
 
 
 def indexing_progress(repository: Any) -> dict[str, int] | None:
@@ -439,6 +448,19 @@ def indexing_progress(repository: Any) -> dict[str, int] | None:
     if not _available(repository):
         return None
     return dict(_PROGRESS.get(repository._database_url) or {"done": 0, "total": 0})
+
+
+def in_progress(repository: Any) -> bool:
+    """For /status: index work is pending (no ready index seen yet, or a pass queued or running).
+
+    False for a repository that does not keep the index (it is disabled, or a browse-only
+    instance leaves the work to the writer).
+    """
+    if not _available(repository) or repository._config.get("SHARED_LIBRARY_BROWSE_ONLY"):
+        return False
+    database_url = repository._database_url
+    with _QUEUED_LOCK:
+        return database_url not in _READY or database_url in _QUEUED or database_url in _RUNNING
 
 
 def queue_maintenance(repository: Any) -> None:

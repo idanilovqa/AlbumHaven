@@ -993,6 +993,28 @@ test('IAR-W12: a page still being kept when the connection drops is there for a 
   assert.match(await (await newTab).text(), /content="cache"/);
 });
 
+// Owner D2 round 8 (sandbox5): offline right after sign-in, the library page had arrived but writing
+// it (several megabytes, on a busy computer) took longer than the wait for downloads.
+test('IAR-W12: a page that arrived is there for a new tab however long writing it takes', async () => {
+  const caches = fakeCaches();
+  const open = caches.open.bind(caches);
+  caches.open = async (name) => {
+    const cache = await open(name);
+    if (!cache.slow) {
+      const put = cache.put.bind(cache);
+      cache.put = async (...args) => { await new Promise(resolve => setTimeout(resolve, 150)); return put(...args); };
+      cache.slow = true;
+    }
+    return cache;
+  };
+  let online = true;
+  const { worker, event } = setup({ mode: 'web', caches, respond: () => (online ? page('acct-a') : new TypeError('Failed to fetch')) });
+  await worker.handle('page', navigation('/'), event);
+  online = false;
+
+  assert.match(await (await worker.handle('page', navigation('/'), event)).text(), /content="cache"/);
+});
+
 // Request-capture contracts (tests/ci/bounded-interactions.json): the real worker routes every
 // kind of browser request; only its owned endpoints may reach the network, each at most once.
 const { assertInteractionRequests, createRequestCapture, measureInteractionContract } = require('../helpers/request-capture');

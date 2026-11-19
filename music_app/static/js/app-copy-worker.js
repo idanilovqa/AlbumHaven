@@ -89,11 +89,15 @@
     };
     // What was already arriving when the server became unreachable is kept before the copy is
     // read: a connection lost just after the page loaded still leaves that page for a new tab.
-    // A download that hangs rather than fails never holds the copy up past the wait.
-    const keptSoFar = () => Promise.race([
-      Promise.all(Array.from(keeping)),
-      new Promise(resolve => setTimeout(resolve, KEEP_WAIT_MS)),
-    ]);
+    // Downloads get a short wait, so one that hangs rather than fails never holds the copy up;
+    // what has arrived is then being written, which touches only storage and is waited for in full.
+    const keptSoFar = async () => {
+      await Promise.race([
+        Promise.all(Array.from(keeping)),
+        new Promise(resolve => setTimeout(resolve, KEEP_WAIT_MS)),
+      ]);
+      await queue;
+    };
 
     async function accountCache() {
       const name = (await caches.keys()).find(key => key.startsWith(CACHE_PREFIX));

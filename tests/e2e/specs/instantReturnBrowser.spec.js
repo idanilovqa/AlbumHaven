@@ -149,7 +149,8 @@ test('FTC-IAR-W10 an offline reload of an artist opened after the last save name
   await expect(galleryPage.unreachable).toContainText('Offline');
   await expect(galleryPage.unreachable).toContainText(`Can't load ${artist}. Check your network or try again later.`);
   await expect(galleryPage.appCopyMarker).toHaveAttribute('content', 'cache');
-  await expect(galleryPage.appCopyOfflineNotice).toBeVisible();
+  // One message only: the kept-library notice does not show above the artist's own.
+  await expect(galleryPage.appCopyOfflineNotice).toBeHidden();
   expect(await visibleAlbumNames(galleryPage), 'no other view stands in for the artist').toEqual([]);
 });
 

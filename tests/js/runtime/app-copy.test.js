@@ -11,7 +11,8 @@ function setup({
   androidShell = true, secure = true, workers = true, controlled = false, onLine = true, viewMissing = false,
 } = {}) {
   const listeners = new Map();
-  const notice = { hidden: true };
+  const notice = { hidden: true, title: { textContent: 'Offline' } };
+  notice.querySelector = selector => (selector === '.on-page-alert__title' ? notice.title : null);
   const timers = [];
   const posted = [];
   const reported = [];
@@ -365,3 +366,16 @@ test('IAR-W10: a copy standing in for an address never kept says so, so the page
   assert.equal(network.client.viewMissing, false, 'only a page from the copy can stand in');
   assert.equal(standIn.client.isReadOnly(), true);
 });
+
+// Orchestrator round 8 (D4 a): with the server down and the device online, the notice said "Offline".
+for (const [onLine, title] of [[true, "Can't reach Album Haven"], [false, 'Offline']]) {
+  test(`IAR-W10: the notice says "${title}" when the device is ${onLine ? 'online and the server does not answer' : 'offline'}`, async () => {
+    const { notice, settle } = setup({
+      androidShell: false, marker: 'cache', onLine, answer: async () => ({ ok: false, status: 530, type: 'basic', json: async () => null }),
+    });
+    await settle();
+
+    assert.equal(notice.hidden, false);
+    assert.equal(notice.title.textContent, title);
+  });
+}

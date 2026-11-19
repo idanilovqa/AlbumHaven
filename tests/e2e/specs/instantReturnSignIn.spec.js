@@ -23,7 +23,8 @@ test('FTC-IAR-W12 signed in and offline at once, a new tab shows the saved libra
   // No wait for the copy: the connection is lost as soon as the library page is there.
   await context.setOffline(true);
 
-  const tab = await context.newPage();
+  // A second tab in the test's own guarded context, so it shares the worker and the offline state.
+  const tab = await page.context().newPage();
   const library = new GalleryActions(new GalleryPage(tab, testInfo));
   await tab.goto('/');
   await library.waitForGalleryReady();

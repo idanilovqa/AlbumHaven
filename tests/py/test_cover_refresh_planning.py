@@ -555,3 +555,41 @@ def test_planner_shared_cover_keeps_explicit_and_repair_thresholds_independent(t
     )
     assert [job["folder"].name for job in jobs] == ["legacy"]
     assert jobs[0]["needs_cover_fetch"] is True
+
+
+def test_cover_refresh_planning_contract_checks_each_cover_once_regardless_of_track_count(tmp_path, monkeypatch):
+    from PIL import Image
+
+    from music_app.services import covers
+    from music_app.services.cover_refresh_planning import build_cover_refresh_jobs
+    from tests.py.bounded_interactions import OperationCounts, measure_scale_pair
+    from tests.py.filesystem_operation_counting import count_filesystem_and_media
+
+    album_count = 20
+
+    def run(track_count: int) -> OperationCounts:
+        file_cache = {}
+        for album_index in range(album_count):
+            folder = tmp_path / f"tracks-{track_count}" / f"Artist {album_index}" / "Album"
+            folder.mkdir(parents=True)
+            cover = folder / "cover.jpg"
+            Image.new("RGB", (64, 64), "red").save(cover)
+            for track_index in range(track_count // album_count):
+                file_cache[str(folder / f"{track_index:03d}.mp3")] = {
+                    "album": "Album", "album_artist": f"Artist {album_index}", "cover_path": str(cover),
+                }
+        counts = OperationCounts()
+        with count_filesystem_and_media(monkeypatch, counts, media_modules=(covers,)):
+            jobs = build_cover_refresh_jobs(file_cache)
+        assert len(jobs) == album_count and all(job["needs_cover_fetch"] for job in jobs)
+        return counts
+
+    small, production = measure_scale_pair(
+        interaction_id="py:services/cover_refresh_planning.py#build_cover_refresh_jobs",
+        small=album_count,
+        large=1_000,
+        run=run,
+        budgets={"filesystem_enumerations": 0, "stat_calls": 2 * album_count, "open_calls": 0, "media_parses": album_count},
+        growth=("stat_calls", 0),
+    )
+    assert small == production

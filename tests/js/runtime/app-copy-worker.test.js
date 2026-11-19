@@ -1,8 +1,11 @@
 // The app-copy service worker: routing, per-account copies, age limit, deletion, asset versions and
 // cover eviction (instant return, IAR-001..IAR-009).
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const vm = require('node:vm');
+const { countedCollection, createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter');
 
 const {
   createAppCopyWorker, CACHE_PREFIX, COPY_HEADER, VERSION_HEADER, EXPIRES_HEADER, MAX_COPY_AGE_MS,
@@ -11,7 +14,8 @@ const {
 const ORIGIN = 'https://sandbox9.albumhaven.org';
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-function fakeCaches() {
+// With [counter], every request a cache lists counts as one visited item.
+function fakeCaches(counter) {
   const stores = new Map();
   const keyOf = request => new URL(typeof request === 'string' ? request : request.url, ORIGIN).href;
   const open = (name) => {
@@ -38,7 +42,10 @@ function fakeCaches() {
           matches.forEach(url => entries.delete(url));
           return matches.length > 0;
         },
-        async keys() { return [...entries.keys()].map(url => new Request(url)); },
+        async keys() {
+          const requests = [...entries.keys()].map(url => new Request(url));
+          return counter ? countedCollection(requests, counter) : requests;
+        },
       });
     }
     return stores.get(name);
@@ -949,4 +956,219 @@ test('after a save of a new server build, an asset download cut off by going off
   ]);
 
   assert.match(await response.text(), /content="cache"/);
+});
+
+// Request-capture contracts (tests/ci/bounded-interactions.json): the real worker routes every
+// kind of browser request; only its owned endpoints may reach the network, each at most once.
+const { assertInteractionRequests, createRequestCapture, measureInteractionContract } = require('../helpers/request-capture');
+
+const UNOWNED_REQUESTS = [
+  navigation('/account'), navigation('/admin/members'), resource('/view-data?surface=albums'), resource('/home-data'),
+  resource('/status'), resource('/utilities/edit-tags', 'POST'), { url: `https://example.org/cover/${'x'.repeat(22)}`, method: 'GET', mode: 'no-cors' },
+];
+
+// A cover reference: 22 URL-safe characters, as the server names covers.
+const coverReference = name => String(name).padStart(22, 'R');
+
+function coveredPage(covers, scripts = []) {
+  const images = Array.from({ length: covers }, (_, index) => (
+    `<img src="/cover/${coverReference(index)}?size=480&amp;v=process-abc">`
+  )).join('');
+  return page('acct-a', { body: images + scripts.map(src => `<script src="${src}"></script>`).join('') });
+}
+
+// [scripts]: versioned assets the app page loads.
+function capturedWorker(covers, { scripts } = {}) {
+  const capture = createRequestCapture(async (url) => {
+    const { pathname } = new URL(url);
+    if (pathname === '/') return coveredPage(covers, scripts);
+    if (pathname.startsWith('/cover/')) return coverResponse(4);
+    return new Response('asset', { headers: { 'Cache-Control': 'public, max-age=31536000, immutable' } });
+  });
+  const worker = createAppCopyWorker({ caches: fakeCaches(), fetch: capture.fetch, origin: ORIGIN, now: () => 1_000_000 });
+  // Like setup(): answers [request], then lets the worker finish keeping what it answered.
+  const pending = [];
+  const event = { waitUntil: promise => pending.push(promise) };
+  const handle = async (request) => {
+    const route = worker.route(request);
+    const response = route ? await worker.handle(route, request, event) : null;
+    while (pending.length) await pending.shift();
+    return response;
+  };
+  const paths = () => capture.urls().map((url) => {
+    const parsed = new URL(url);
+    assert.equal(parsed.origin, ORIGIN);
+    return `${parsed.pathname}${parsed.search}`;
+  });
+  return { capture, worker, handle, paths };
+}
+
+async function measureCaptured(captured, action) {
+  const before = captured.capture.requests.length;
+  const metrics = await captured.capture.counter.measure(action);
+  return { metrics, paths: captured.paths().slice(before) };
+}
+
+test('request capture: app page navigations fetch only the app page, once per missing copy', async () => {
+  await measureInteractionContract('js:app-copy-worker.js#fetchPage', async (covers) => {
+    const captured = capturedWorker(covers);
+    const { metrics, paths } = await measureCaptured(captured, async () => {
+      await captured.handle(navigation('/'));
+      await captured.handle(navigation('/'));
+      for (const request of UNOWNED_REQUESTS) await captured.handle(request);
+    });
+    assert.deepEqual(paths, ['/']);
+    assertInteractionRequests('js:app-copy-worker.js#fetchPage', paths);
+    return metrics;
+  });
+});
+
+test('request capture: a versioned asset is fetched once and then served from the copy', async () => {
+  await measureInteractionContract('js:app-copy-worker.js#versionedAsset', async (keptAssets) => {
+    const captured = capturedWorker(1);
+    await captured.handle(navigation('/'));
+    for (let index = 0; index < keptAssets; index += 1) {
+      await captured.handle(resource(`/static/js/runtime/kept-${index}.js?v=v1`));
+    }
+    const { metrics, paths } = await measureCaptured(captured, async () => {
+      await captured.handle(resource('/static/js/runtime/app.js?v=v1'));
+      await captured.handle(resource('/static/js/runtime/app.js?v=v1'));
+      await captured.handle(resource('/static/js/runtime/kept-0.js?v=v1'));
+      for (const request of UNOWNED_REQUESTS) await captured.handle(request);
+    });
+    assert.deepEqual(paths, ['/static/js/runtime/app.js?v=v1']);
+    assertInteractionRequests('js:app-copy-worker.js#versionedAsset', paths);
+    return metrics;
+  });
+});
+
+test('request capture: an unversioned asset request reaches only that asset', async () => {
+  await measureInteractionContract('js:app-copy-worker.js#asset', async (keptAssets) => {
+    const captured = capturedWorker(1);
+    await captured.handle(navigation('/'));
+    for (let index = 0; index < keptAssets; index += 1) await captured.handle(resource(`/static/images/kept-${index}.svg`));
+    const { metrics, paths } = await measureCaptured(captured, async () => {
+      await captured.handle(resource('/static/fonts/inter.woff2'));
+      for (const request of UNOWNED_REQUESTS) await captured.handle(request);
+    });
+    assert.deepEqual(paths, ['/static/fonts/inter.woff2']);
+    assertInteractionRequests('js:app-copy-worker.js#asset', paths);
+    return metrics;
+  });
+});
+
+test('request capture: a cover request reaches only that cover, whatever the kept covers', async () => {
+  await measureInteractionContract('js:app-copy-worker.js#cover', async (keptCovers) => {
+    const captured = capturedWorker(1);
+    await captured.handle(navigation('/'));
+    for (let index = 0; index < keptCovers; index += 1) {
+      await captured.handle(resource(`/cover/${coverReference(`kept${index}`)}?size=480`));
+    }
+    const cover = `/cover/${coverReference('next')}?size=480&v=process-abc`;
+    const { metrics, paths } = await measureCaptured(captured, async () => {
+      await captured.handle(resource(cover));
+      for (const request of UNOWNED_REQUESTS) await captured.handle(request);
+    });
+    assert.deepEqual(paths, [cover]);
+    assertInteractionRequests('js:app-copy-worker.js#cover', paths);
+    return metrics;
+  });
+});
+
+test('request capture: saving the view fetches its page once and at most one batch of unseen covers', async () => {
+  await measureInteractionContract('js:app-copy-worker.js#fillCovers', async (covers) => {
+    const captured = capturedWorker(covers);
+    const { metrics, paths } = await measureCaptured(captured, () => captured.worker.message({ type: 'save', url: `${ORIGIN}/` }));
+    const [pagePath, ...coverPaths] = paths;
+    assert.equal(pagePath, '/');
+    assert.equal(coverPaths.length, Math.min(covers, 120));
+    assert.equal(new Set(coverPaths).size, coverPaths.length, 'each unseen cover is fetched once');
+    assertInteractionRequests('js:app-copy-worker.js#fetchPage', [pagePath]);
+    assertInteractionRequests('js:app-copy-worker.js#fillCovers', coverPaths);
+    // The next save continues with the next batch; a kept cover is never fetched again.
+    const repeat = await measureCaptured(captured, () => captured.worker.message({ type: 'save', url: `${ORIGIN}/` }));
+    assert.equal(repeat.paths[0], '/');
+    assert.equal(repeat.paths.length - 1, Math.min(Math.max(covers - 120, 0), 120));
+    assert.equal(repeat.paths.slice(1).some(path => coverPaths.includes(path)), false);
+    return metrics;
+  });
+});
+
+test('request capture: saving the view fetches only the versioned assets its page loads that are not kept', async () => {
+  await measureInteractionContract('js:app-copy-worker.js#fillAssets', async (keptAssets) => {
+    const scripts = ['/static/js/runtime/kept-0.js?v=v1', '/static/js/runtime/app.js?v=v1', '/static/css/app.css?v=v1'];
+    const captured = capturedWorker(0, { scripts });
+    await captured.handle(navigation('/'));
+    for (let index = 0; index < keptAssets; index += 1) {
+      await captured.handle(resource(`/static/js/runtime/kept-${index}.js?v=v1`));
+    }
+    const { metrics, paths } = await measureCaptured(captured, () => captured.worker.message({ type: 'save', url: `${ORIGIN}/` }));
+    const [pagePath, ...assetPaths] = paths;
+    assert.equal(pagePath, '/');
+    assert.deepEqual(assetPaths, ['/static/js/runtime/app.js?v=v1', '/static/css/app.css?v=v1']);
+    assertInteractionRequests('js:app-copy-worker.js#fillAssets', assetPaths);
+    // Once kept, the next save fetches only its page.
+    const repeat = await measureCaptured(captured, () => captured.worker.message({ type: 'save', url: `${ORIGIN}/` }));
+    assert.deepEqual(repeat.paths, ['/']);
+    return metrics;
+  });
+});
+
+// The installed worker as the Android shell runs it: the file's own listeners on a service-worker scope.
+function installedWorker({ caches, fetch }) {
+  const listeners = new Map();
+  const scope = {
+    registration: {}, caches, fetch, location: { origin: ORIGIN, href: `${ORIGIN}/app-copy-worker.js` },
+    clients: { claim: async () => {} }, skipWaiting: async () => {},
+    addEventListener: (type, listener) => listeners.set(type, listener),
+  };
+  const file = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'app-copy-worker.js');
+  vm.runInNewContext(fs.readFileSync(file, 'utf8'), { self: scope, URL, Request, Response, TextEncoder }, { filename: file });
+  return {
+    async post(data) {
+      const replies = [];
+      let work;
+      listeners.get('message')({ data, ports: [{ postMessage: reply => replies.push({ ...reply }) }], waitUntil: (promise) => { work = promise; } });
+      await work;
+      return replies;
+    },
+  };
+}
+
+test('bounded interaction: a save message reads no kept cover or asset when 5,000 covers are kept', async () => {
+  await measureScalePair({
+    id: 'js:app-copy-worker.js#<top-level>',
+    small: 5,
+    large: 5000,
+    budgets: { itemsVisited: 0, requests: 2, outputEmissions: 1 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
+    async run(keptCovers) {
+      const counter = createInteractionCounter();
+      const caches = fakeCaches(counter);
+      // Covers kept by an earlier session, which the started worker reads once.
+      const kept = await caches.open(`${CACHE_PREFIX}acct-a`);
+      for (let index = 0; index < keptCovers; index += 1) {
+        await kept.put(`${ORIGIN}/__album-haven-cover/kept-${index}?bytes=4`, coverResponse(4));
+      }
+      let pageCovers = 0;
+      const worker = installedWorker({
+        caches,
+        fetch: async (request) => {
+          counter.count('requests');
+          return new URL(request.url).pathname === '/' ? coveredPage(pageCovers) : coverResponse(4);
+        },
+      });
+      pageCovers = 3;
+      assert.deepEqual(await worker.post({ type: 'save', url: `${ORIGIN}/` }), [{ stored: true }]);
+      // The next save names one cover more: the page and that one cover are fetched, nothing is listed.
+      pageCovers = 4;
+      const work = await counter.measure(async () => {
+        const replies = await worker.post({ type: 'save', url: `${ORIGIN}/` });
+        replies.forEach(() => counter.count('outputEmissions'));
+        assert.deepEqual(replies, [{ stored: true }]);
+      });
+      assert.equal([...kept.entries.keys()].filter(url => url.includes('/__album-haven-cover/')).length, keptCovers + 4);
+      return work;
+    },
+  });
 });

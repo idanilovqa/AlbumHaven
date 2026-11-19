@@ -5634,6 +5634,13 @@ def test_live_targeted_reconciliation_preserves_untouched_disc_guest_browse(
             1.0,
             observed_library_root_ids={"multi-disc-root"},
         )
+        # Startup publishes the relation projection before watcher events
+        # arrive; the event then leaves its rebuild to the background refresh.
+        from music_app.services.relation_projection_postgres import (
+            ensure_relation_projection_ready,
+        )
+
+        ensure_relation_projection_ready(config, connect=isolatedPostgres._connect)
 
         changed.write_bytes(b"disc-one-updated")
         result = TargetedLibraryReconciler(

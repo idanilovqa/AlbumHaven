@@ -58,8 +58,10 @@
     caches, fetch, origin, now = Date.now, maxCoverBytes = MAX_COVER_BYTES, mode = 'app',
   }) {
     const metaUrl = new URL(META_PATH, origin).href;
-    // Kept covers by key in least-recently-seen order, with their sizes; read from the cache once.
-    let coverIndex = null;
+    // What the copy keeps, listed from the cache once per worker so no later request or message lists
+    // it again: covers by key in least-recently-seen order with their sizes and total, and the URLs
+    // of versioned assets.
+    let keptIndex = null;
     // Covers named by kept pages, by key, to fetch once while online. Held in memory only.
     const unseenCovers = new Map();
     // Versioned assets kept pages load, to fetch once while online: a page kept by a save may be of
@@ -88,7 +90,7 @@
     }
 
     async function deleteCopies() {
-      coverIndex = null;
+      keptIndex = null;
       unseenCovers.clear();
       unseenAssets.clear();
       const names = (await caches.keys()).filter(key => key.startsWith(COPY_FAMILY));
@@ -144,11 +146,11 @@
     // Assets of a version no kept page and not the running page uses.
     async function pruneAssets(cache, meta) {
       const kept = new Set([meta.served, ...Object.values(meta.pages).map(page => page.version)].filter(Boolean));
-      for (const request of await cache.keys()) {
-        const url = new URL(request.url);
-        if (url.pathname.startsWith('/static/') && url.searchParams.has('v') && !kept.has(url.searchParams.get('v'))) {
-          await cache.delete(request);
-        }
+      const { assets } = await readKeptIndex(cache);
+      for (const asset of assets) {
+        if (kept.has(new URL(asset).searchParams.get('v'))) continue;
+        assets.delete(asset);
+        await cache.delete(asset);
       }
     }
 
@@ -262,7 +264,12 @@
     // an offline page waiting on it).
     async function storeAsset(cache, request, response, fetchedIn) {
       const kept = new Response(await response.arrayBuffer(), { headers: response.headers });
-      await exclusive(() => (fetchedIn === generation ? cache.put(request, kept) : undefined));
+      await exclusive(async () => {
+        if (fetchedIn !== generation) return;
+        await cache.put(request, kept);
+        const url = new URL(typeof request === 'string' ? request : request.url, origin);
+        if (url.pathname.startsWith('/static/') && url.searchParams.has('v')) (await listedIndex())?.assets.add(url.href);
+      });
     }
 
     // Keeps [response] for [request] after the answer.
@@ -301,27 +308,43 @@
     }
 
     // Each cover is stored as `<key>?bytes=<size>`, so the sizes come from the key names alone.
-    async function readCoverIndex(cache) {
-      if (!coverIndex) {
-        const index = new Map();
-        for (const request of await cache.keys()) {
+    // Concurrent first reads share one listing; a failed listing is tried again by the next read.
+    function readKeptIndex(cache) {
+      if (keptIndex) return keptIndex;
+      const listing = cache.keys().then((requests) => {
+        const index = { covers: new Map(), coverBytes: 0, assets: new Set() };
+        for (const request of requests) {
           const url = new URL(request.url);
-          if (!url.pathname.startsWith(KEPT_COVER_PREFIX)) continue;
-          index.set(`${url.origin}${url.pathname}`, Number(url.searchParams.get('bytes') || 0));
+          if (url.pathname.startsWith(KEPT_COVER_PREFIX)) {
+            const bytes = Number(url.searchParams.get('bytes') || 0);
+            index.covers.set(`${url.origin}${url.pathname}`, bytes);
+            index.coverBytes += bytes;
+          } else if (url.pathname.startsWith('/static/') && url.searchParams.has('v')) {
+            index.assets.add(request.url);
+          }
         }
-        coverIndex = index;
-      }
-      return coverIndex;
+        return index;
+      });
+      keptIndex = listing;
+      listing.catch(() => {
+        if (keptIndex === listing) keptIndex = null;
+      });
+      return listing;
     }
+
+    // The index once listed, without listing it: null before the first read or after a failed one,
+    // which the next read lists again with everything kept since.
+    const listedIndex = () => keptIndex?.catch(() => null) ?? null;
 
     // The cover under [key], now the most recently seen (in memory; a restart keeps the stored
     // order); null when none is kept.
     async function seenCover(cache, key) {
       const kept = await cache.match(key, { ignoreSearch: true });
-      if (kept && coverIndex?.has(key)) {
-        const bytes = coverIndex.get(key);
-        coverIndex.delete(key);
-        coverIndex.set(key, bytes);
+      const covers = kept ? (await listedIndex())?.covers : null;
+      if (covers?.has(key)) {
+        const bytes = covers.get(key);
+        covers.delete(key);
+        covers.set(key, bytes);
       }
       return kept || null;
     }
@@ -332,20 +355,20 @@
         const target = await accountCache();
         if (!target || fetchedIn !== generation) return;
         const { cache } = target;
-        const index = await readCoverIndex(cache);
-        if (index.get(key) !== body.byteLength) {
+        const index = await readKeptIndex(cache);
+        if (index.covers.get(key) !== body.byteLength) {
           await cache.delete(key, { ignoreSearch: true });
           await cache.put(`${key}?bytes=${body.byteLength}`, new Response(body, {
             headers: { 'Content-Type': response.headers.get('Content-Type') || 'application/octet-stream' },
           }));
         }
-        index.delete(key);
-        index.set(key, body.byteLength);
-        let total = Array.from(index.values()).reduce((sum, bytes) => sum + bytes, 0);
-        for (const [evicted, bytes] of index) {
-          if (total <= maxCoverBytes) break;
-          index.delete(evicted);
-          total -= bytes;
+        index.coverBytes += body.byteLength - (index.covers.get(key) || 0);
+        index.covers.delete(key);
+        index.covers.set(key, body.byteLength);
+        for (const [evicted, bytes] of index.covers) {
+          if (index.coverBytes <= maxCoverBytes) break;
+          index.covers.delete(evicted);
+          index.coverBytes -= bytes;
           await cache.delete(evicted, { ignoreSearch: true });
         }
       });
@@ -392,10 +415,14 @@
     async function fillCovers() {
       const target = await accountCache();
       if (!target) return;
-      const index = await readCoverIndex(target.cache);
-      for (const [key, url] of Array.from(unseenCovers).slice(0, MAX_COVER_FILLS)) {
+      const { covers } = await readKeptIndex(target.cache);
+      // In place, so a save reads one batch however long the backlog; each cover leaves it when read.
+      let read = 0;
+      for (const [key, url] of unseenCovers) {
+        if (read === MAX_COVER_FILLS) break;
+        read += 1;
         unseenCovers.delete(key);
-        if (index.has(key)) continue;
+        if (covers.has(key)) continue;
         const fetchedIn = generation;
         const response = await fetch(new Request(url, { credentials: 'same-origin' }));
         if (response.status === 200 && !noStore(response)) await keepCover(key, response, fetchedIn);

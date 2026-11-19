@@ -157,6 +157,10 @@ def resolve_loop_media_path(config, loop_id: str, *, account_id=None, library_id
     return path if path.is_file() else None
 
 
+# Zero plays the loop itself, so no preview file is ever named for it.
+_PREVIEW_SEMITONES = tuple(semitones for semitones in range(-12, 13) if semitones)
+
+
 def _preview_id(loop_id: str, semitones: int) -> str:
     safe_loop_id = "".join(ch for ch in str(loop_id or "") if ch.isalnum() or ch in {"-", "_"})
     pitch_part = f"p{semitones:+d}".replace("+", "plus").replace("-", "minus")
@@ -372,8 +376,7 @@ def delete_loop(config, loop_id: str, **scope) -> tuple[bool, list[dict[str, obj
             root = loops_dir(config,**scope)
             _safe_unlink_child(Path(str(target.get('path') or '')),root)
             if re.fullmatch(r'[A-Za-z0-9_-]+',loop_id):
-                for preview in loop_previews_dir(config,**scope).glob(f'{loop_id}_p*.mp3'):
-                    _safe_unlink_child(preview,loop_previews_dir(config,**scope))
+                _unlink_loop_previews(loop_previews_dir(config,**scope), loop_id)
         return deleted, remaining
     target_id = str(loop_id or "")
     loops = load_loops(config)
@@ -385,14 +388,19 @@ def delete_loop(config, loop_id: str, **scope) -> tuple[bool, list[dict[str, obj
     save_loops(config, remaining)
 
     loop_root = loops_dir(config)
-    preview_root = loop_previews_dir(config)
     _safe_unlink_child(Path(str(target.get("path") or "")), loop_root)
     safe_id = "".join(ch for ch in target_id if ch.isalnum() or ch in {"-", "_"})
     if safe_id and safe_id == target_id:
         _safe_unlink_child(loop_root / f"{safe_id}.mp3", loop_root)
-        for preview in preview_root.glob(f"{safe_id}_*.mp3"):
-            _safe_unlink_child(preview, preview_root)
+        _unlink_loop_previews(loop_previews_dir(config), safe_id)
     return True, remaining
+
+
+def _unlink_loop_previews(preview_root: Path, loop_id: str) -> None:
+    # Previews have closed names; probing them never lists or matches the
+    # files of another loop whose id shares this prefix.
+    for semitones in _PREVIEW_SEMITONES:
+        _safe_unlink_child(preview_root / f"{_preview_id(loop_id, semitones)}.mp3", preview_root)
 
 
 def build_loop_item(

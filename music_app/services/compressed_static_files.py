@@ -13,6 +13,8 @@ from starlette.datastructures import Headers
 from starlette.responses import FileResponse, Response
 from starlette.staticfiles import NotModifiedResponse, StaticFiles
 
+from music_app.services.http_compression import accepts_gzip
+
 _COMPRESSIBLE_MEDIA_TYPES = (
     "text/",
     "application/javascript",
@@ -20,27 +22,13 @@ _COMPRESSIBLE_MEDIA_TYPES = (
     "image/svg+xml",
 )
 _MIN_COMPRESS_BYTES = 1024
+WARMUP_THREAD_NAME = "static-gzip-warmup"
 
 
 def _is_compressible(media_type: str | None, size: int) -> bool:
     return size >= _MIN_COMPRESS_BYTES and (media_type or "").startswith(
         _COMPRESSIBLE_MEDIA_TYPES
     )
-
-
-def _accepts_gzip(accept_encoding: str) -> bool:
-    for coding in accept_encoding.split(","):
-        name, _, params = coding.partition(";")
-        if name.strip().lower() != "gzip":
-            continue
-        quality = params.strip().lower()
-        if not quality.startswith("q="):
-            return True
-        try:
-            return float(quality[2:]) > 0
-        except ValueError:
-            return False
-    return False
 
 
 class _GzipCache:
@@ -88,7 +76,7 @@ class _GzipCache:
         threading.Thread(
             target=self.warm,
             args=(root,),
-            name="static-gzip-warmup",
+            name=WARMUP_THREAD_NAME,
             daemon=True,
         ).start()
 
@@ -116,7 +104,7 @@ class CompressedStaticFiles(StaticFiles):
         if (
             scope["method"] != "GET"
             or "range" in request_headers
-            or not _accepts_gzip(request_headers.get("accept-encoding", ""))
+            or not accepts_gzip(request_headers.get("accept-encoding", ""))
         ):
             return response
         body = await run_in_threadpool(static_gzip_cache.body, str(response.path))

@@ -5,7 +5,10 @@ from collections import defaultdict
 from collections.abc import Iterable
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
-from music_app.services.library_roots import configured_library_root_paths_snapshot
+from music_app.services.library_roots import (
+    configured_library_root_paths_snapshot,
+    relative_parts_within_roots,
+)
 from music_app.services.metadata import normalize_exception_value
 from music_app.services.utils import repair_display_text
 
@@ -43,35 +46,11 @@ def _normalized_artist(entry: dict[str, object]) -> str:
     return normalized_artist or str(entry.get("album_artist") or entry.get("artist") or "Unknown Artist")
 
 
-def _lexical_relative_parts(
-    path: str,
-    configured_root_paths: tuple[Path, ...],
-) -> tuple[str, ...] | None:
-    raw_path = str(path or "").strip()
-    if not raw_path:
-        return None
-    path_type = (
-        PureWindowsPath
-        if re.match(r"^[A-Za-z]:[\\/]", raw_path) or "\\" in raw_path
-        else PurePosixPath
-    )
-    candidate = path_type(raw_path)
-    for configured_root in configured_root_paths:
-        root = path_type(str(configured_root))
-        try:
-            relative = candidate.relative_to(root)
-        except ValueError:
-            continue
-        if relative.parts and all(part not in {"", ".", ".."} for part in relative.parts):
-            return tuple(relative.parts)
-    return None
-
-
 def _relative_parent_parts(
     path: str,
     configured_root_paths: tuple[Path, ...],
 ) -> list[str]:
-    rel_parts = _lexical_relative_parts(path, configured_root_paths)
+    rel_parts = relative_parts_within_roots(path, configured_root_paths)
     if rel_parts is not None:
         return list(rel_parts[:-1])
 
@@ -82,7 +61,7 @@ def _relative_parent_parts(
 
 
 def _display_path(path: str, configured_root_paths: tuple[Path, ...]) -> str:
-    rel_parts = _lexical_relative_parts(path, configured_root_paths)
+    rel_parts = relative_parts_within_roots(path, configured_root_paths)
     if rel_parts:
         return str(Path(*rel_parts))
     return path
@@ -162,6 +141,49 @@ def infer_blank_album_membership(
     if not album_key or not any(album_key in _folder_signal_key(part) for part in target_container.parts):
         return None
     return inferred_album
+
+
+_CONTAINER_PATHS_STATE_KEY = "_album_container_track_paths"
+
+
+def album_container_track_paths(library_state: dict[str, object], track_paths: Iterable[str]) -> set[str]:
+    """Every live file-cache path in the album containers of `track_paths`.
+
+    These are all the entries `infer_blank_album_membership` weighs for those
+    tracks. The container index is built once per published file cache: its
+    paths change only when a new cache is published, never in place, so the
+    cache object it was built from identifies it.
+    """
+    file_cache = library_state.get("file_cache")
+    if not isinstance(file_cache, dict):
+        return set()
+    cached = library_state.get(_CONTAINER_PATHS_STATE_KEY)
+    if not (isinstance(cached, tuple) and cached[0] is file_cache):
+        paths_by_container: dict[PurePosixPath | PureWindowsPath, list[str]] = defaultdict(list)
+        for path in file_cache:
+            if (container := _album_container(path)) is not None:
+                paths_by_container[container].append(path)
+        cached = library_state[_CONTAINER_PATHS_STATE_KEY] = (file_cache, dict(paths_by_container))
+    paths_by_container = cached[1]
+    return {
+        path
+        for container in {_album_container(track_path) for track_path in track_paths} - {None}
+        for path in paths_by_container.get(container, ())
+    }
+
+
+def album_container_sibling_entries(
+    library_state: dict[str, object],
+    track_paths: set[str],
+) -> dict[str, dict[str, object]]:
+    """The other live file-cache entries in the album containers of
+    `track_paths`: the sibling evidence blank-Album inference weighs."""
+    file_cache = library_state.get("file_cache") or {}
+    return {
+        path: entry
+        for path in album_container_track_paths(library_state, track_paths) - set(track_paths)
+        if isinstance(entry := file_cache.get(path), dict)
+    }
 
 
 def build_non_album_album_groups(entries: list[dict[str, object]]) -> list[dict[str, object]]:

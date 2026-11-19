@@ -25,7 +25,9 @@ from music_app.services.cover_provider_deadline import (
     automatic_cover_budget_active,
     remaining_automatic_cover_seconds,
 )
-from music_app.services.app_logging import log_app_event
+# Provider calls log per query, candidate and probe: application log only,
+# never a log-history write (one database connection each).
+from music_app.services.app_logging import log_app_message_event as log_provider_event
 from music_app.services.cover_provider_candidates import (
     CoverCandidate,
     current_use_candidate_debug_payload,
@@ -118,7 +120,7 @@ def _http_get_json(url: str, user_agent: str, *, service: str = "remote", contex
         user_agent,
         service=service,
         context=context,
-        app_event_logger=log_app_event,
+        app_event_logger=log_provider_event,
         append_apple_request_trace=cover_provider_apple.append_apple_request_trace,
     )
 
@@ -129,7 +131,7 @@ def _http_get_text(url: str, user_agent: str, *, service: str = "remote", contex
         user_agent=user_agent,
         service=service,
         context=context,
-        app_event_logger=log_app_event,
+        app_event_logger=log_provider_event,
         append_apple_request_trace=cover_provider_apple.append_apple_request_trace,
     )
 
@@ -140,7 +142,7 @@ def _http_get_text_with_url(url: str, user_agent: str, *, service: str = "remote
         user_agent=user_agent,
         service=service,
         context=context,
-        app_event_logger=log_app_event,
+        app_event_logger=log_provider_event,
         append_apple_request_trace=cover_provider_apple.append_apple_request_trace,
     )
 
@@ -269,7 +271,7 @@ def _probe_match_candidates(
                 if metrics:
                     successful_url = probe_url
                     if probe_index > 1:
-                        log_app_event(
+                        log_provider_event(
                             {},
                             _LOGGER,
                             f"{source.title()} probe fallback succeeded",
@@ -296,7 +298,7 @@ def _probe_match_candidates(
                     candidate_probe_urls,
                 )
                 if source == "deezer":
-                    log_app_event(
+                    log_provider_event(
                         {},
                         _LOGGER,
                         "Deezer probe rejected candidate",
@@ -461,7 +463,7 @@ def _search_apple(
         http_get_text_with_url=_http_get_text_with_url,
         extract_og_image=cover_provider_fallback_web.extract_og_image,
         album_name_in_alt=cover_provider_matching.album_name_in_alt,
-        log_event=log_app_event,
+        log_event=log_provider_event,
         logger=_LOGGER,
     )
 
@@ -554,7 +556,7 @@ def _spotify_request_json(url: str, *, method: str, headers: dict[str, str], dat
         data=data,
         context=context,
         logger=_LOGGER,
-        log_event=log_app_event,
+        log_event=log_provider_event,
     )
 
 
@@ -563,7 +565,7 @@ def _spotify_access_token() -> str | None:
         config=Config,
         api_enabled=_spotify_api_enabled,
         request_json=_spotify_request_json,
-        log_event=log_app_event,
+        log_event=log_provider_event,
     )
 
 
@@ -573,7 +575,7 @@ def _spotify_api_get(path: str, *, params: dict[str, object] | None = None) -> d
         params=params,
         access_token=_spotify_access_token,
         request_json=_spotify_request_json,
-        log_event=log_app_event,
+        log_event=log_provider_event,
     )
 
 
@@ -599,7 +601,7 @@ def _spotify_collect_album_matches(
         api_get=_spotify_api_get,
         match_score=cover_provider_matching.match_score,
         parse_year=cover_provider_matching.parse_year,
-        log_event=log_app_event,
+        log_event=log_provider_event,
     )
 
 
@@ -626,7 +628,7 @@ def _spotify_collect_artist_album_matches(
         similarity=cover_provider_matching.similarity,
         match_score=cover_provider_matching.match_score,
         parse_year=cover_provider_matching.parse_year,
-        log_event=log_app_event,
+        log_event=log_provider_event,
     )
 
 
@@ -649,7 +651,7 @@ def _search_spotify(artist: str, album: str, edition: str | None, year: int | No
         collect_album_matches=_spotify_collect_album_matches,
         collect_artist_album_matches=_spotify_collect_artist_album_matches,
         select_largest_candidate=_select_largest_candidate,
-        log_event=log_app_event,
+        log_event=log_provider_event,
     )
 
 

@@ -4,6 +4,11 @@ from music_app.services import lastfm_retry, lastfm_sync_bridge as bridge, liste
 from music_app.services.lastfm_postgres import LastfmPostgresAdapter
 from music_app.services.playback_session_payloads import normalize_playback_track_payload
 from tests.py.test_settings_measured_listen_ledger import ledger, measured
+from music_app.services.lastfm import LastfmSubmissionOutcome
+
+
+def _accepted(payloads):
+    return [LastfmSubmissionOutcome(sent=True, accepted=1, outcome='accepted') for _payload in payloads]
 
 
 @pytest.mark.parametrize('source_change', ['renamed', 'deleted'])
@@ -55,9 +60,10 @@ def test_changed_pending_source_does_not_block_later_valid_listen(ledger, monkey
         {'username': 'changed-source-owner', 'session_key': 'owned-fixture'}, account_id=own['account_id'],
     )
     submissions = []
-    monkeypatch.setattr(lastfm_retry, 'scrobble_track', lambda config, payload, *, session: submissions.append(payload['track']))
+    monkeypatch.setattr(lastfm_retry, 'scrobble_tracks', lambda config, payloads, *, session: (
+        submissions.extend(payload['track'] for payload in payloads), _accepted(payloads))[1])
     monkeypatch.setattr(lastfm_retry, 'log_app_event', lambda *args, **kwargs: None)
-    monkeypatch.setattr(lastfm_retry, 'record_retry_summary', lambda *args, **kwargs: None)
+    monkeypatch.setattr(lastfm_retry, 'record_retry_results', lambda *args, **kwargs: None)
     lastfm_retry.retry_pending_lastfm_scrobbles(config, account_id=own['account_id'], reauthenticated=True)
     lastfm_retry.retry_pending_lastfm_scrobbles(config, account_id=own['account_id'])
 
@@ -83,8 +89,8 @@ def test_measured_retry_uses_each_persisted_account_credential_once(ledger, monk
             scrobble_track=lambda *args,**kwargs:None,log_lastfm_scrobble_event=lambda *args,**kwargs:None)
         LastfmPostgresAdapter(config).save_settings({"username":f"owned-{index}","session_key":f"owned-fixture-{index}"},account_id=owner["account_id"])
     calls=[]
-    monkeypatch.setattr(lastfm_retry,"scrobble_track",lambda config,payload,*,session:calls.append(session.username))
-    monkeypatch.setattr(lastfm_retry,"record_retry_summary",lambda *args,**kwargs:None)
+    monkeypatch.setattr(lastfm_retry,"scrobble_tracks",lambda config,payloads,*,session:(calls.append(session.username),_accepted(payloads))[1])
+    monkeypatch.setattr(lastfm_retry,"record_retry_results",lambda *args,**kwargs:None)
     lastfm_retry.retry_pending_lastfm_scrobbles(config)
     lastfm_retry.retry_pending_lastfm_scrobbles(config)
     assert sorted(calls)==["owned-0","owned-1"]
@@ -114,7 +120,7 @@ def test_measured_retry_does_not_resubmit_uncertain_receipt(ledger, monkeypatch)
         {"username": "owned", "session_key": "owned-fixture"}, account_id=owner["account_id"],
     )
     calls = []
-    monkeypatch.setattr(lastfm_retry, "scrobble_track", lambda *args, **kwargs: calls.append(True))
+    monkeypatch.setattr(lastfm_retry, "scrobble_tracks", lambda *args, **kwargs: calls.append(True))
     lastfm_retry.retry_pending_lastfm_scrobbles(config)
     assert calls == []
 
@@ -139,11 +145,13 @@ def test_measured_retry_records_actual_provider_outcome_with_row_scope(ledger, m
     LastfmPostgresAdapter(config).save_settings(
         {"username": "owned", "session_key": "owned-fixture"}, account_id=owner["account_id"],
     )
-    def provider(*args, **kwargs):
+    def provider(_config, payloads, **kwargs):
         if fails:
-            raise LastfmError("Provider unavailable")
+            raise LastfmError("Provider unavailable (Last.fm error 11)", code=11, retryable=True)
+        return _accepted(payloads)
     events = []
-    monkeypatch.setattr(lastfm_retry, "scrobble_track", provider)
+    monkeypatch.setattr(lastfm_retry, "scrobble_tracks", provider)
+    monkeypatch.setattr(lastfm_retry, "record_retry_results", lambda *args, **kwargs: None)
     monkeypatch.setattr(lastfm_retry, "log_app_event", lambda *args, **kwargs: events.append(kwargs))
     lastfm_retry.retry_pending_lastfm_scrobbles(config)
     assert len(events) == 1
@@ -181,11 +189,12 @@ def test_retry_limit_applies_after_connected_account_selection(ledger, monkeypat
     inventory = history.load_pending_scrobble_entries(config, limit=1000)
     assert predecessor_ids | {target_id} <= {item.entry['id'] for item in inventory}
     calls = []
-    monkeypatch.setattr(lastfm_retry, 'scrobble_track', lambda config, item, *, session: calls.append(session.username))
-    monkeypatch.setattr(lastfm_retry, 'record_retry_summary', lambda *args, **kwargs: None)
+    monkeypatch.setattr(lastfm_retry, 'scrobble_tracks', lambda config, payloads, *, session: (
+        calls.extend(session.username for _ in payloads), _accepted(payloads))[1])
+    monkeypatch.setattr(lastfm_retry, 'record_retry_results', lambda *args, **kwargs: None)
     monkeypatch.setattr(lastfm_retry, 'log_app_event', lambda *args, **kwargs: None)
     kwargs = {'account_id': own['account_id'], 'reauthenticated': True} if account_scoped else {}
-    summary = lastfm_retry.retry_pending_lastfm_scrobbles(config, **kwargs)
+    summary = lastfm_retry.retry_pending_lastfm_scrobbles(config, **kwargs).summary
     assert calls == ['target-account']
     assert summary['attempted'] == summary['succeeded'] == 1
     remaining = history.load_pending_scrobble_entries(config, limit=1000)

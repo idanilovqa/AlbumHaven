@@ -1164,7 +1164,7 @@ def test_problematic_files_endpoint_includes_path_free_operational_health_when_a
     )
     monkeypatch.setattr(
         api_read_asgi_routes,
-        "_hydrate_cached_library_for_asgi",
+        "_library_hydration_pending_for_asgi",
         lambda _request: None,
     )
     monkeypatch.setattr(

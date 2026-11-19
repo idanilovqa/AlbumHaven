@@ -6,6 +6,7 @@ import logging
 import sys
 import time
 from collections.abc import Iterable, Mapping
+from pathlib import Path
 from types import SimpleNamespace
 
 from music_app.services.artist_alias_views import enrich_casefold_artist_alias_views
@@ -38,7 +39,7 @@ from music_app.services.gallery_playback_context import (
 from music_app.services.ignored_versions import load_ignored_version_keys
 from music_app.services.library import album_preview_to_dict, build_artist_groups
 from music_app.services.library_roots import (
-    get_library_roots,
+    configured_library_root_paths_snapshot,
     relative_parts_within_roots,
 )
 from music_app.services.manual_versions import load_manual_version_links
@@ -679,20 +680,13 @@ def _visible_artist_path_candidates(
     return {candidate for candidate in candidate_names if candidate}
 
 
-def _non_album_entry_path_parts(
-    entry: dict[str, object],
-    *,
-    config: object,
-    roots: list[dict[str, object]],
-) -> frozenset[str]:
-    rel_match = relative_parts_within_roots(config, str(entry.get("path") or ""), roots=roots)
-    if rel_match is None:
+def _non_album_entry_path_parts(entry: dict[str, object], *, root_paths: tuple[Path, ...]) -> frozenset[str]:
+    rel_parts = relative_parts_within_roots(str(entry.get("path") or ""), root_paths)
+    if rel_parts is None:
         return frozenset()
-    _, rel_parts_all = rel_match
-    rel_parts = rel_parts_all[:-1]
     return frozenset(
         normalize_search_text(part)
-        for part in rel_parts
+        for part in rel_parts[:-1]
         if part
     )
 
@@ -704,8 +698,7 @@ def _build_non_album_entry_candidates(
     *,
     config: object,
 ) -> list[dict[str, object]]:
-    candidates: list[dict[str, object]] = []
-    roots: list[dict[str, object]] | None = None
+    visible: list[tuple[dict[str, object], dict[str, object], str, str]] = []
     for entry in file_cache.values():
         if not isinstance(entry, dict):
             continue
@@ -723,15 +716,20 @@ def _build_non_album_entry_candidates(
         normalized_copy["exception_type"] = exception_type
         if not entry_visible_in_categories(normalized_copy, visible_library_categories):
             continue
-        if roots is None:
-            roots = get_library_roots(config)
-        candidates.append({
+        visible.append((entry, normalized_copy, entry_artist, canonical_artist))
+    if not visible:
+        return []
+    # One root snapshot for every loose track, never a settings load per track.
+    root_paths = configured_library_root_paths_snapshot(config)
+    return [
+        {
             "entry": normalized_copy,
             "entry_artist": entry_artist,
             "canonical_artist": canonical_artist,
-            "path_parts": _non_album_entry_path_parts(entry, config=config, roots=roots),
-        })
-    return candidates
+            "path_parts": _non_album_entry_path_parts(entry, root_paths=root_paths),
+        }
+        for entry, normalized_copy, entry_artist, canonical_artist in visible
+    ]
 
 
 def _resolve_casefold_relation_views(

@@ -633,3 +633,40 @@ test('stale boundary promotion does not retry or abort the active generation con
   pending[1].resolve({ ok: true, json: async () => peakPayload(0.5) });
   assert.equal((await activeGenerationLoad).left[0], 0.5);
 });
+
+test('pressing Play asks for the waveform at once and the playing generation takes over that request', async () => {
+  const requests = [];
+  const context = loadPeaksRuntime(async (url, options) => {
+    requests.push({ url: String(url), options });
+    return { ok: true, json: async () => peakPayload(0.5, 720) };
+  });
+  const track = 'C:/Music/Album/first-after-sign-in.flac';
+
+  context.startSelectedTrackWaveformPeaks(track);
+  assert.equal(requests.length, 1, 'the request leaves when Play is pressed, before the stream opens');
+  assert.match(requests[0].url, /priority=current/);
+  assert.match(requests[0].url, /progressive=1/);
+
+  context.state.player.streaming.generation = 8;
+  const peaks = await context.loadWaveformPeaks(track, 720, 8, { current: true });
+
+  assert.equal(requests.length, 1, 'the playing generation never asks for the same song again');
+  assert.equal(peaks.left[0], 0.5);
+});
+
+test('pressing Play on another song stops the previous Play request', async () => {
+  const requests = [];
+  const context = loadPeaksRuntime((url, options) => {
+    requests.push({ url: String(url), options });
+    return new Promise(() => {});
+  });
+
+  context.startSelectedTrackWaveformPeaks('C:/Music/Album/01.flac');
+  context.startSelectedTrackWaveformPeaks('C:/Music/Album/01.flac');
+  assert.equal(requests.length, 1, 'a second press of the same song keeps its request');
+  context.startSelectedTrackWaveformPeaks('C:/Music/Album/02.flac');
+
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].options.signal.aborted, true);
+  assert.equal(requests[1].options.signal.aborted, false);
+});

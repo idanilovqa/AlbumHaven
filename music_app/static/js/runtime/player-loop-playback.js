@@ -368,6 +368,10 @@ async function playTrackFromPayload(track, options = {}) {
     ? canStartPlaybackInThisTab(track)
     : true;
   if (pendingClaim === false) return false;
+  if (shouldAutoplay && typeof startSelectedTrackWaveformPeaks === 'function') {
+    // The waveform builds while the stream opens, not after it.
+    startSelectedTrackWaveformPeaks(requestedTrackPath);
+  }
   if (selectionToken !== playerTrackSelectionToken) return false;
   pendingPlayerPlaybackHandoff = null;
   if (!track?.path) return false;

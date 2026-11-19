@@ -248,7 +248,7 @@ def _data_app(account_id: int | None = 7):
     from fastapi import FastAPI
     from fastapi.responses import JSONResponse
 
-    from music_app.services.app_copy import install_app_copy_data
+    from music_app.services.app_copy import mark_app_copy_data
 
     app = FastAPI()
     app.state.runtime_asset_version = "v9"
@@ -269,7 +269,11 @@ def _data_app(account_id: int | None = 7):
     async def status():
         return JSONResponse({"ok": True})
 
-    install_app_copy_data(app)
+    @app.middleware("http")
+    async def mark(request, call_next):
+        response = await call_next(request)
+        mark_app_copy_data(request, response)
+        return response
 
     @app.middleware("http")
     async def signed_in(request, call_next):

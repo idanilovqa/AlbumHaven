@@ -9,8 +9,9 @@ function buildPostSaveTimeline(requestTimeline, notificationSamples, viewDataRes
   const post = requestTimeline.find((entry) => (
     new URL(entry.url).pathname === '/utilities/edit-tags'
   ));
+  // A previous save's notice can still be showing when this save is sent.
   const saved = notificationSamples.find((sample) => (
-    sample.visible && TAG_EDIT_SAVED_MESSAGE.test(sample.text)
+    sample.visible && sample.atMs > post.startMs && TAG_EDIT_SAVED_MESSAGE.test(sample.text)
   ));
   if (!post || !saved) return null;
   const viewData = [...viewDataResponses];

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import contextmanager
 from datetime import datetime, timezone
 import uuid
 import math
 
 from music_app.services.listen_history_postgres import (
-    LASTFM_SCROBBLE_SOURCE_FAMILIES,
+    SETTLED_SUBMISSION_STATES,
+    UNVERIFIED_SUBMISSION_STATES,
     PendingListenEntry,
     PostgresListenHistoryAdapter,
 )
@@ -43,30 +45,7 @@ def build_listen_history_status_counts(config: dict, *, account_id=None, library
     if account_id is not None or library_id is not None:
         if any(type(value) is not int or value <= 0 for value in (account_id, library_id)):
             raise ValueError("Exact listen status scope is required")
-        adapter = _listen_history_adapter(config)
-        with adapter._connect_to_database() as connection:
-            row = connection.execute("""
-                with scoped as (
-                    select metadata,
-                        coalesce(case when metadata->'source_payload' ? 'scrobbled'
-                            then metadata->'source_payload'->>'scrobbled' = 'true'
-                            else scrobble_status = 'scrobbled' end, false) as accepted
-                    from integration.listen_history
-                    where account_id = %s and library_id = %s
-                      and source_family = any(%s)
-                )
-                select count(*) filter (where accepted) as scrobbled,
-                    count(*) filter (
-                        where metadata->'source_payload'->>'scrobble_eligible' = 'true'
-                        and not accepted
-                        and coalesce(metadata->'source_payload'->>'scrobble_retryable', 'true') = 'true'
-                        and coalesce(metadata->'source_payload'->>'scrobble_retry_exhausted', 'false') != 'true'
-                        and coalesce(metadata->'source_payload'->>'scrobble_submission_state', '')
-                            not in ('attempting', 'sent', 'uncertain', 'accepted')
-                    ) as pending
-                from scoped
-            """, (account_id, library_id, list(LASTFM_SCROBBLE_SOURCE_FAMILIES))).fetchone()
-        return {"listen_history_count": int(row["scrobbled"]), "pending_scrobble_count": int(row["pending"])}
+        return _listen_history_adapter(config).scrobble_status_counts(account_id=account_id, library_id=library_id)
     items = load_listen_history(config)
     return {
         "listen_history_count": sum(1 for item in items if is_scrobbled_listen_history_entry(item)),
@@ -85,8 +64,18 @@ def is_pending_scrobble_entry(item: object) -> bool:
         and not bool(item.get("scrobbled"))
         and bool(item.get("scrobble_retryable", True))
         and not bool(item.get("scrobble_retry_exhausted"))
-        and str(item.get("scrobble_submission_state") or "")
-            not in {"attempting", "sent", "uncertain", "accepted"}
+        and str(item.get("scrobble_submission_state") or "") not in SETTLED_SUBMISSION_STATES
+    )
+
+
+def is_unverified_scrobble_entry(item: object) -> bool:
+    """Whether Last.fm may or may not have recorded this listen: its submission's answer was
+    unclear, or never stored. It is looked up on Last.fm before it is sent again."""
+    return (
+        isinstance(item, dict)
+        and bool(item.get("scrobble_eligible"))
+        and not bool(item.get("scrobbled"))
+        and str(item.get("scrobble_submission_state") or "") in UNVERIFIED_SUBMISSION_STATES
     )
 
 
@@ -155,19 +144,33 @@ def update_listen_history_entry(config: dict, entry_id: str, updates: dict[str, 
 def load_pending_scrobble_entries(
     config: dict,
     *,
-    limit: int = 25,
+    limit: int | None = 25,
     eligible: Callable[[PendingListenEntry], bool] | None = None,
+    connection=None,
+    include_unverified: bool = False,
 ):
-    adapter = _listen_history_adapter(config)
-    if eligible is None:
-        return adapter.load_pending_entries(limit=limit)
-    return adapter.load_pending_entries(limit=limit, eligible=eligible)
+    return _listen_history_adapter(config).load_pending_entries(
+        limit=limit, eligible=eligible, connection=connection, include_unverified=include_unverified,
+    )
+
+
+def has_sendable_scrobbles(config: dict) -> bool:
+    """Whether any connected account has a listen waiting to be sent or looked up on Last.fm."""
+    return _listen_history_adapter(config).has_sendable_scrobbles()
+
+
+@contextmanager
+def listen_history_connection(config: dict):
+    """One listen-history connection whose explicit transactions each commit when they end."""
+    with _listen_history_adapter(config).connect() as connection:
+        connection.autocommit = True
+        yield connection
 
 
 def build_measured_playback_statistics(config, *, account_id, library_id):
     if any(type(value) is not int or value <= 0 for value in (account_id, library_id)):
         raise ValueError("Authenticated statistics scope is required")
-    with _listen_history_adapter(config)._connect_to_database() as connection:
+    with _listen_history_adapter(config).connect() as connection:
         row = connection.execute("""select count(*) as local_playcount,
             coalesce(sum(measured_listened_seconds),0) as total_listening_seconds
             from integration.listen_history where account_id=%s and library_id=%s

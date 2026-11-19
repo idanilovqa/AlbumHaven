@@ -896,7 +896,7 @@ class WaveformPeaksRegistry:
         if cached is None:
             return None
         try:
-            current_identity = self._cache_identity(path, bins=bins)
+            current_identity = await asyncio.to_thread(self._cache_identity, path, bins=bins)
         except OSError as error:
             _LOGGER.warning("Waveform peak cache identity failed: %s", error)
             return None
@@ -908,7 +908,7 @@ class WaveformPeaksRegistry:
             # A song was just selected: have a decoder ready before its build is asked for.
             self._decoder_pool.fill()
         try:
-            cache_identity = self._cache_identity(path, bins=bins)
+            cache_identity = await asyncio.to_thread(self._cache_identity, path, bins=bins)
         except OSError as error:
             _LOGGER.warning("Waveform peak cache identity failed: %s", error)
             return None
@@ -946,7 +946,7 @@ class WaveformPeaksRegistry:
         # Show the finished waveform now; the cache write can wait on a busy database.
         job.publish(peaks)
         try:
-            if self._cache_identity(path, bins=bins) != cache_identity:
+            if await asyncio.to_thread(self._cache_identity, path, bins=bins) != cache_identity:
                 return peaks
             await asyncio.to_thread(
                 repository.put_for_path,  # type: ignore[attr-defined]
@@ -1016,7 +1016,7 @@ class WaveformPeaksRegistry:
         cache_identity: dict[str, object] | None = None
         if self._cache_repository is not None:
             try:
-                cache_identity = self._cache_identity(path, bins=bins)
+                cache_identity = await asyncio.to_thread(self._cache_identity, path, bins=bins)
             except OSError as error:
                 _LOGGER.warning("Waveform peak cache identity failed: %s", error)
         cache_read: asyncio.Task[WaveformPeaks | None] | None = None
@@ -1031,7 +1031,7 @@ class WaveformPeaksRegistry:
                 return cached
             try:
                 # The file may have changed while the cache was read.
-                cache_identity = self._cache_identity(path, bins=bins)
+                cache_identity = await asyncio.to_thread(self._cache_identity, path, bins=bins)
             except OSError as error:
                 _LOGGER.warning("Waveform peak cache identity failed: %s", error)
                 cache_identity = None

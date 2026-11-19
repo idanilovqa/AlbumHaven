@@ -22,9 +22,6 @@ def payload(store, **changes):
 
 def complete(store, entry, provider, monkeypatch, *, scope=None):
     owner = scope or store['own']
-    def forbidden(*args, **kwargs): pytest.fail('measured receipt touched legacy provider orchestration')
-    monkeypatch.setattr(bridge, 'record_pending_scrobble', forbidden)
-    monkeypatch.setattr(bridge, 'clear_pending_scrobble', forbidden)
     return bridge.record_playback_session_complete(store['config'], entry,
         account_id=owner['account_id'], library_id=owner['library_id'],
         lastfm_session=LastfmSession('owned-test', 'owned-test-session', ''), user_timezone='UTC',

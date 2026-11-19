@@ -3,10 +3,11 @@ from __future__ import annotations
 import asyncio
 from music_app.services.media_host_roots import root_request_scope, bounded_directories
 
-from music_app.services.log_history import history_scope_for_request
+from music_app.services.log_history import HistoryScope, history_scope_for_request
 
 import inspect
 import logging
+from collections import ChainMap
 from collections.abc import Mapping
 from pathlib import Path
 from threading import Event
@@ -18,7 +19,10 @@ from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from config import PERSISTENCE_BACKEND_POSTGRES
-from music_app.routes.api_read_asgi_routes import _build_status_payload_from_state
+from music_app.routes.api_read_asgi_routes import (
+    _build_status_payload_from_state,
+    library_hydration_pending_response,
+)
 from music_app.routes.api_edit_helpers import (
     _apply_repairs_worker,
     _build_affected_album_dicts,
@@ -35,6 +39,7 @@ from music_app.routes.api_rules_helpers import (
 )
 from music_app.services.app_logging import log_app_event
 from music_app.services.album_ratings_postgres import PostgresAlbumRatingsService
+from music_app.services.non_album_view_payloads import album_container_sibling_entries
 from music_app.services.cache import (
     persist_structural_tag_edit_for_config,
     schedule_cache_updates_save_for_config,
@@ -46,7 +51,8 @@ from music_app.services.exception_overrides import (
 )
 from music_app.services.ignored_repairs import load_ignored_repair_keys, save_ignored_repair_keys
 from music_app.services.ignored_versions import load_ignored_version_keys, save_ignored_version_keys
-from music_app.services.library import _album_key, album_to_dict
+from music_app.services.library import _album_key, album_detail_to_dict, album_to_dict
+from music_app.services.library_album_index import library_album_index, publish_library_albums
 from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 from music_app.services.missing_album_removal_postgres import (
     MissingAlbumNotFound,
@@ -68,9 +74,6 @@ from music_app.services.manual_versions import load_manual_version_links, save_m
 from music_app.services.metadata import build_text_repairs_for_entry, normalize_exception_value
 from music_app.services.tag_editor_folder import load_tag_editor_folder_files
 from music_app.services.move_executor import AlbumMoveError, execute_album_move
-from music_app.services.problematic_albums import (
-    find_problematic_album_by_track_paths as _find_problematic_album_by_track_paths_in_payload,
-)
 from music_app.services.problem_exclusions import (
     create_problem_exclusions,
     revert_problem_exclusion,
@@ -89,11 +92,7 @@ from music_app.services.separate_releases import load_separate_release_keys, sav
 from music_app.services.tag_edit_intents_postgres import (
     PostgresTagEditIntentRepository,
 )
-from music_app.services.repair_previews import (
-    build_problematic_albums_payload as _build_problematic_albums_payload,
-)
 from music_app.services.state import (
-    hydrate_library_state_for_config,
     invalidate_targeted_library_projections,
     run_runtime_state_mutation_for_state,
     schedule_relation_projection_rebuild,
@@ -115,7 +114,6 @@ from music_app.services.edit_workflows import (
     handle_edit_tags_request,
     handle_repair_album_request,
 )
-from music_app.services.edit_state import find_album_dicts_by_track_paths
 
 
 router = APIRouter()
@@ -166,14 +164,14 @@ async def confirm_missing_album_removal(request: Request, album_key: str) -> JSO
     def remove_from_runtime_albums():
         albums = library_state.get("albums")
         if isinstance(albums, list):
-            library_state["albums"] = [
+            publish_library_albums(library_state, [
                 album
                 for album in albums
                 if str(
                     album.get("key") if isinstance(album, Mapping) else getattr(album, "key", "")
                 ).strip()
                 != normalized_key
-            ]
+            ])
 
     def update_runtime_after_removal():
         run_runtime_state_mutation_for_state(remove_from_runtime_albums)
@@ -327,7 +325,7 @@ def _authoritative_tag_editor_track_paths(
         authoritative_albums = [
             dict(candidate)
             if isinstance(candidate, Mapping)
-            else album_to_dict(candidate, config=_app_config(request))
+            else album_detail_to_dict(candidate, config=_app_config(request))
             for candidate in list(_library_state(request).get("albums", []) or [])
         ]
         candidates = []
@@ -384,30 +382,12 @@ def _current_rules_payload(request: Request | None = None, mutation_seam_id: str
     )
 
 
-def hydrate_cached_library_for_rules(
-    library_state: dict[str, object] | None = None,
-    config: dict[str, object] | None = None,
-    logger=None,
-) -> None:
-    if library_state is None or config is None:
-        raise ValueError("library_state and config must be provided together")
-    if library_state.get("albums") or library_state.get("scan_in_progress"):
-        return
-    hydrate_library_state_for_config(
-        library_state,
-        config,
-        ensure_relations=False,
-        validate_cache=False,
-        logger_for_prewarm=logger,
-    )
-
-
 def _find_albums_by_track_paths(
     track_paths: TrackPathSet,
     *,
     library_state: dict[str, object],
 ) -> list[JsonDict]:
-    return find_album_dicts_by_track_paths(list(library_state.get("albums", []) or []), track_paths)
+    return [album_to_dict(album) for album in library_album_index(library_state).albums_with_any_track(track_paths)]
 
 
 def _default_albums_by_track_paths_finder(get_state_provider):
@@ -479,6 +459,7 @@ def _bridge_queue_finalize_save_task(**kwargs: Any) -> None:
             ),
             before_commit=before_persistence_commit,
             rebuild_relation_projection=False,
+            blank_album_evidence=lambda paths: album_container_sibling_entries(get_state_provider(), paths),
         )
 
     complete_scoped_persistence = None
@@ -502,10 +483,6 @@ def _bridge_queue_finalize_save_task(**kwargs: Any) -> None:
         if intent_repository is not None
         else None
     )
-    rebuild_relation_projection = bool(
-        set(kwargs.get("changed_field_names") or ())
-        & _RELATION_PROJECTION_EDIT_FIELDS
-    ) and not scoped_postgres_exception_only
     if find_albums_by_track_paths is None:
         find_albums_by_track_paths = _default_albums_by_track_paths_finder(get_state_provider)
     if find_problematic_album_by_track_paths is None:
@@ -538,12 +515,10 @@ def _bridge_queue_finalize_save_task(**kwargs: Any) -> None:
             separate_release_keys,
         ),
         build_relation_views=lambda albums, config: rebuild_relation_views(albums, config),
-        schedule_cache_updates_save=lambda cache_path, payload, baseline, **save_options: schedule_cache_updates_save_for_config(
+        schedule_cache_updates_save=lambda payload, baseline, **save_options: schedule_cache_updates_save_for_config(
             config,
-            cache_path,
             payload,
             baseline_file_cache=baseline,
-            rebuild_relation_projection=rebuild_relation_projection,
             **save_options,
         ),
         append_log_history=append_history,
@@ -862,18 +837,10 @@ def _asgi_albums_by_track_paths_finder(request: Request):
     library_state = _library_state(request)
 
     def find_albums(track_paths: TrackPathSet) -> list[JsonDict]:
-        if not track_paths:
-            return []
-        matches: list[JsonDict] = []
-        for album in list(library_state.get("albums", []) or []):
-            album_paths = {
-                str(getattr(track, "path", "") or "")
-                for track in getattr(album, "tracks", []) or []
-                if str(getattr(track, "path", "") or "")
-            }
-            if album_paths & track_paths:
-                matches.append(album_to_dict(album, config=config))
-        return matches
+        return [
+            album_detail_to_dict(album, config=config)
+            for album in library_album_index(library_state).albums_with_any_track(track_paths)
+        ]
 
     return find_albums
 
@@ -883,17 +850,9 @@ def _asgi_problematic_album_by_track_paths_finder(request: Request):
     library_state = _library_state(request)
     logger = _asgi_logger(request)
 
-    def build_payload() -> JsonDict:
-        return _build_problematic_albums_payload(
-            config=config,
-            library_state=library_state,
-            logger=logger,
-        )
-
     def find_problematic_album(track_paths: TrackPathSet) -> JsonDict | None:
-        return _find_problematic_album_by_track_paths_in_payload(
-            track_paths,
-            build_problematic_albums_payload=build_payload,
+        return _find_problematic_album_by_track_paths(
+            track_paths, config=config, library_state=library_state, logger=logger,
         )
 
     return find_problematic_album
@@ -1276,8 +1235,7 @@ def _postgres_exception_only_edit_state(
         for path in (payload.get("updates") or {})
         if str(path or "").strip()
     }
-    request_state = dict(_library_state(request))
-    runtime_file_cache = dict(request_state.get("file_cache", {}) or {})
+    library_state = _library_state(request)
     repository = PostgresLibraryBrowseRepository(_app_config(request))
     inventory_paths = set(requested_paths)
     if _has_edit_tags_media_write_fields(payload):
@@ -1297,10 +1255,14 @@ def _postgres_exception_only_edit_state(
             "Postgres library inventory could not resolve requested track paths: "
             + ", ".join(sorted(unresolved_paths))
         )
-    for path, selected_entry in selected_file_entries.items():
-        runtime_file_cache[path] = dict(selected_entry)
-    request_state["file_cache"] = runtime_file_cache
-    return request_state
+    # The selected inventory overlays the runtime cache, which is never copied.
+    return {
+        **library_state,
+        "file_cache": ChainMap(
+            {path: dict(entry) for path, entry in selected_file_entries.items()},
+            library_state.get("file_cache") or {},
+        ),
+    }
 
 
 def _postgres_album_finder_for_track_paths(request: Request):
@@ -1318,12 +1280,17 @@ def _postgres_album_finder_for_track_paths(request: Request):
     return find_albums
 
 
+def _library_affected_album_dicts_builder(request: Request):
+    library_state = _library_state(request)
+    return lambda *cache_args: _build_affected_album_dicts(*cache_args, library_state=library_state)
+
+
 def _edit_tags_affected_album_dicts_builder(
     request: Request,
     payload: Mapping[str, object],
 ):
     if not _is_postgres_edit_tags_exception_only_response_request(request, payload):
-        return _build_affected_album_dicts
+        return _library_affected_album_dicts_builder(request)
 
     find_albums = _postgres_album_finder_for_track_paths(request)
 
@@ -1345,7 +1312,7 @@ def _repair_album_affected_album_dicts_builder(request: Request, payload: Mappin
         and _has_repair_album_media_write_rows(payload)
     ):
         return _empty_affected_album_dicts
-    return _build_affected_album_dicts
+    return _library_affected_album_dicts_builder(request)
 
 
 def _edit_tags_queue_finalize_save_task_builder(
@@ -1489,6 +1456,10 @@ async def revert_version_exception(request: Request) -> JSONResponse:
     payload = await _json_payload(request)
     if payload is None:
         return _json_response(_invalid_payload_response())
+    return await run_in_threadpool(_revert_version_exception_response, request, payload)
+
+
+def _revert_version_exception_response(request: Request, payload: JsonDict) -> JSONResponse:
     config = _app_config(request)
     _ignored, mutation_error = revert_rule_key(
         config,
@@ -1509,6 +1480,10 @@ async def revert_problem_ignore(request: Request) -> JSONResponse:
     payload = await _json_payload(request)
     if payload is None:
         return _json_response(_invalid_payload_response())
+    return await run_in_threadpool(_revert_problem_ignore_response, request, payload, history_scope)
+
+
+def _revert_problem_ignore_response(request: Request, payload: JsonDict, history_scope: HistoryScope | None) -> JSONResponse:
     config = _app_config(request)
     try:
         row_key = revert_problem_exclusion(config, payload.get("row_key"))
@@ -1531,6 +1506,10 @@ async def create_problem_ignores(request: Request) -> JSONResponse:
     payload = await _json_payload(request)
     if payload is None:
         return _json_response(_invalid_payload_response())
+    return await run_in_threadpool(_create_problem_ignores_response, request, payload, history_scope)
+
+
+def _create_problem_ignores_response(request: Request, payload: JsonDict, history_scope: HistoryScope | None) -> JSONResponse:
     config = _app_config(request)
     repository = PostgresLibraryBrowseRepository(config)
     try:
@@ -1563,6 +1542,10 @@ async def ignore_album_version(request: Request) -> JSONResponse:
     payload = await _json_payload(request)
     if payload is None:
         return _json_response(_invalid_payload_response())
+    return await run_in_threadpool(_ignore_album_version_response, request, payload, history_scope)
+
+
+def _ignore_album_version_response(request: Request, payload: JsonDict, history_scope: HistoryScope | None) -> JSONResponse:
     config = _app_config(request)
     ignored, mutation_error = create_version_exception(
         config,
@@ -1591,6 +1574,10 @@ async def mark_album_version(request: Request) -> JSONResponse:
     if payload is None:
         return _json_response(_invalid_payload_response())
 
+    return await run_in_threadpool(_mark_album_version_response, request, payload, history_scope)
+
+
+def _mark_album_version_response(request: Request, payload: JsonDict, history_scope: HistoryScope | None) -> JSONResponse:
     config = _app_config(request)
     library_state = _library_state(request)
     logger = _asgi_logger(request)
@@ -1601,14 +1588,11 @@ async def mark_album_version(request: Request) -> JSONResponse:
     if mutation_error:
         return _json_response(({"ok": False, "error": mutation_error}, 400))
 
-    hydrate_cached_library_for_rules(library_state, config, logger)
-    all_albums = {
-        str(getattr(album, "key", "") or ""): album
-        for album in list(library_state.get("albums", []))
-        if str(getattr(album, "key", "") or "")
-    }
-    album = all_albums.get(album_key)
-    parent_album = all_albums.get(parent_album_key)
+    if (pending := library_hydration_pending_response(library_state, config, logger)) is not None:
+        return pending
+    index = library_album_index(library_state)
+    album = index.album(album_key)
+    parent_album = index.album(parent_album_key)
     if album is None or parent_album is None:
         return _json_response(({"ok": False, "error": "Album could not be found"}, 404))
 
@@ -1648,6 +1632,10 @@ async def unmark_album_version(request: Request) -> JSONResponse:
     payload = await _json_payload(request)
     if payload is None:
         return _json_response(_invalid_payload_response())
+    return await run_in_threadpool(_unmark_album_version_response, request, payload, history_scope)
+
+
+def _unmark_album_version_response(request: Request, payload: JsonDict, history_scope: HistoryScope | None) -> JSONResponse:
     config = _app_config(request)
     logger = _asgi_logger(request)
     album_key = str(payload.get("album_key") or "").strip()
@@ -1678,6 +1666,10 @@ async def utilities_move_album(request: Request) -> JSONResponse:
     if not payload.get("confirmed"):
         return _json_response(_invalid_payload_response("Move was not confirmed"))
 
+    return await run_in_threadpool(_utilities_move_album_response, request, payload)
+
+
+def _utilities_move_album_response(request: Request, payload: JsonDict) -> JSONResponse:
     action = str(payload.get("action") or "").strip()
     if not action:
         return _json_response(_invalid_payload_response("No move action was provided"))
@@ -1724,6 +1716,10 @@ async def utilities_repair_album(request: Request) -> JSONResponse:
     payload = await _json_payload(request)
     if payload is None or not payload.get("confirmed"):
         return _json_response(({"ok": False, "error": "Repair was not confirmed"}, 400))
+    return await run_in_threadpool(_repair_album_response, request, payload, history_scope)
+
+
+def _repair_album_response(request: Request, payload: JsonDict, history_scope: HistoryScope | None) -> JSONResponse:
     payload = _normalize_asgi_repair_album_payload(payload)
 
     album, album_error = _require_album_payload(payload)
@@ -1829,7 +1825,8 @@ async def utilities_edit_tags(request: Request) -> JSONResponse:
             payload,
         )
     )
-    reservation_resource_keys = _edit_tags_reservation_resource_keys(
+    reservation_resource_keys = await run_in_threadpool(
+        _edit_tags_reservation_resource_keys,
         album,
         updates,
     )
@@ -1845,7 +1842,8 @@ async def utilities_edit_tags(request: Request) -> JSONResponse:
         _is_selected_postgres_library_browse_request(request)
         and _has_edit_tags_media_write_fields(payload)
     )
-    if needs_postgres_edit_state:
+    if needs_postgres_edit_state or "proposal_ids" in payload:
+        # Request-scoped overlays replace this copy's file cache, never the live one.
         get_state = lambda: dict(library_state)
     if needs_postgres_edit_state and "proposal_ids" not in payload:
         try:
@@ -1953,10 +1951,10 @@ async def utilities_edit_tags(request: Request) -> JSONResponse:
             if needs_postgres_edit_state:
                 st.update(_postgres_exception_only_edit_state(request, payload))
             previous_entries = st.get("file_cache") or {}
-            st["file_cache"] = {**previous_entries, **{
+            st["file_cache"] = ChainMap({
                 path: {**(previous_entries.get(path) or {}), **entry}
                 for path, entry in entries.items()
-            }}
+            }, previous_entries)
             return verified
 
         handler_options["validate_proposals"] = validate_proposals

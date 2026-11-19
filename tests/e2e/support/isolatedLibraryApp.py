@@ -4902,24 +4902,27 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
         expected_signature = hashlib.md5(signature_base.encode("utf-8")).hexdigest()
         signature_valid = supplied_signature == expected_signature
         method = str(params.get("method") or "")
-        request_record = {
-            "method": method,
-            "signature_valid": signature_valid,
-            "api_key_valid": params.get("api_key") == LASTFM_FAKE_API_KEY,
-            "artist": str(params.get("artist") or ""),
-            "track": str(params.get("track") or ""),
-            "album": str(params.get("album") or ""),
-            "album_artist": str(params.get("albumArtist") or ""),
-            "duration": str(params.get("duration") or ""),
-            "track_number": str(params.get("trackNumber") or ""),
-            "timestamp": str(params.get("timestamp") or ""),
-            "chosen_by_user": str(params.get("chosenByUser") or ""),
-            "session_key_valid": params.get("sk") == LASTFM_FAKE_SESSION_KEY,
-            "fixture_scrobble_mode": self.server.snapshot_lastfm_state()[
-                "scrobble_mode"
-            ],
-        }
-        self.server.record_lastfm_request(request_record)
+        # A batched track.scrobble names each listen's fields with an index: track[0], track[1], ...
+        batch_size = sum(1 for key in params if key.startswith("track["))
+        suffixes = [f"[{index}]" for index in range(batch_size)] or [""]
+        for suffix in suffixes:
+            self.server.record_lastfm_request({
+                "method": method,
+                "signature_valid": signature_valid,
+                "api_key_valid": params.get("api_key") == LASTFM_FAKE_API_KEY,
+                "artist": str(params.get(f"artist{suffix}") or ""),
+                "track": str(params.get(f"track{suffix}") or ""),
+                "album": str(params.get(f"album{suffix}") or ""),
+                "album_artist": str(params.get(f"albumArtist{suffix}") or ""),
+                "duration": str(params.get(f"duration{suffix}") or ""),
+                "track_number": str(params.get(f"trackNumber{suffix}") or ""),
+                "timestamp": str(params.get(f"timestamp{suffix}") or ""),
+                "chosen_by_user": str(params.get(f"chosenByUser{suffix}") or ""),
+                "session_key_valid": params.get("sk") == LASTFM_FAKE_SESSION_KEY,
+                "fixture_scrobble_mode": self.server.snapshot_lastfm_state()[
+                    "scrobble_mode"
+                ],
+            })
 
         if not signature_valid or params.get("api_key") != LASTFM_FAKE_API_KEY:
             self._send_lastfm_xml(
@@ -4976,11 +4979,12 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
                     status=503,
                 )
                 return
-            self.server.record_accepted_lastfm_scrobble()
+            for _suffix in suffixes:
+                self.server.record_accepted_lastfm_scrobble()
             self._send_lastfm_xml(
-                '<lfm status="ok"><scrobbles accepted="1" ignored="0">'
-                '<scrobble><ignoredmessage code="0"></ignoredmessage></scrobble>'
-                '</scrobbles></lfm>'
+                f'<lfm status="ok"><scrobbles accepted="{len(suffixes)}" ignored="0">'
+                + '<scrobble><ignoredmessage code="0"></ignoredmessage></scrobble>' * len(suffixes)
+                + '</scrobbles></lfm>'
             )
             return
         self._send_lastfm_xml(

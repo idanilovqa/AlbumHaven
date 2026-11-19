@@ -1,7 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
+import contextvars
+import gc
 import json
+import sys
+import threading
+import time
+import traceback
 from pathlib import Path
 from collections.abc import Iterable
 from types import SimpleNamespace
@@ -11,6 +18,225 @@ from urllib.parse import urlencode
 from urllib.parse import urlsplit
 
 from tests.py.runtime_testing import configure_test_app_paths
+
+
+EVENT_LOOP_STALL_LIMIT_SECONDS = 0.25
+# The watchdog's own sampler: formatting a stack reads source lines (a stat
+# each), which is the observer's work, never the request's.
+WATCHDOG_SAMPLER_THREAD_NAME = "asgi-event-loop-watchdog"
+_HEARTBEAT_SECONDS = 0.01
+_SAMPLE_SECONDS = 0.02
+
+
+class EventLoopStall(AssertionError):
+    """A request blocked the event loop, so every other request would have waited."""
+
+
+# The import system itself (`<frozen importlib._bootstrap>`, or its source
+# file), not other `importlib` packages: reading package metadata or resources
+# (`importlib.metadata`, `importlib.resources`) is request work.
+_IMPORT_MACHINERY = ("importlib._bootstrap", "_bootstrap.py", "_bootstrap_external.py")
+
+
+def _importing(frame) -> bool:
+    """Whether the stack is inside import machinery (a first import of a module)."""
+    while frame is not None:
+        filename = frame.f_code.co_filename
+        if filename.endswith(_IMPORT_MACHINERY[1:]) and "importlib" in filename or _IMPORT_MACHINERY[0] in filename:
+            return True
+        frame = frame.f_back
+    return False
+
+
+class _StackSampler:
+    """One process-wide thread samples the loop thread's stack for every active
+    watchdog. A thread per request would make concurrent requests start and
+    contend with their own observers, so a burst of requests on the loop would
+    be measured as a stall the watchdogs themselves caused."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._active = threading.Condition(self._lock)
+        self._watchdogs: set[EventLoopWatchdog] = set()
+        self._thread: threading.Thread | None = None
+
+    def add(self, watchdog: EventLoopWatchdog) -> None:
+        with self._lock:
+            self._watchdogs.add(watchdog)
+            self._active.notify()
+            start = self._thread is None
+            if start:
+                self._thread = threading.Thread(target=self._run, name=WATCHDOG_SAMPLER_THREAD_NAME, daemon=True)
+        if start:
+            self._thread.start()
+
+    def remove(self, watchdog: EventLoopWatchdog) -> None:
+        """Returns once no sampling pass can still record for `watchdog`."""
+        with self._lock:
+            self._watchdogs.discard(watchdog)
+
+    def _run(self) -> None:
+        while True:
+            with self._lock:
+                while not self._watchdogs:
+                    self._active.wait()
+            time.sleep(_SAMPLE_SECONDS)
+            with self._lock:
+                stacks: dict[int, tuple[str, bool] | None] = {}
+                for watchdog in self._watchdogs:
+                    watchdog._sample(stacks)
+
+
+class EventLoopWatchdog:
+    """Fails a request during which the event loop is blocked for over 250 ms.
+
+    A heartbeat task records how late the loop runs it. A shared sampler thread
+    reads the loop thread's stack through `sys._current_frames()` while the heartbeat
+    is overdue, so the failure names the blocking call. A stall every sample of
+    which is inside import machinery is a test process's first import of a
+    module, not request work, and is not counted. A stall the sampler could not
+    sample means the sampler thread did not run either: either the loop thread
+    held the GIL (a long C call, which spends the loop thread's own CPU time and
+    is counted) or the operating system did not schedule it (machine load,
+    which spends almost none of it and is not counted). Only the loop thread's
+    CPU time counts: worker threads busy while the loop thread waits for the
+    processor never make a scheduling delay look like a block. Garbage
+    collection on the loop thread is not request work either: its wall and CPU
+    time are taken out of the stall and of the loop thread's CPU before either
+    is compared with the limit, and a failure reports how much was taken out.
+    A test that needs to wait must `await asyncio.sleep(...)`, never block the loop.
+    """
+
+    def __init__(self) -> None:
+        self._loop_thread = threading.get_ident()
+        self._last_beat = time.monotonic()
+        self._last_beat_cpu = time.thread_time()
+        self._last_beat_collections = _LOOP_COLLECTIONS.totals(self._loop_thread)
+        self._worst_stall = 0.0
+        self._worst_stall_collection = 0.0
+        self._stack = ""
+        # The stacks sampled during each stall, keyed by the beat it started at,
+        # each marked when it was inside import machinery.
+        self._samples: dict[float, list[tuple[str, bool]]] = {}
+        self._samples_lock = threading.Lock()
+        self._heartbeat: asyncio.Task | None = None
+
+    async def __aenter__(self) -> EventLoopWatchdog:
+        _LOOP_COLLECTIONS.watch(self._loop_thread)
+        self._last_beat_collections = _LOOP_COLLECTIONS.totals(self._loop_thread)
+        self._last_beat = time.monotonic()
+        self._last_beat_cpu = time.thread_time()
+        self._heartbeat = asyncio.get_running_loop().create_task(self._beat())
+        _SAMPLER.add(self)
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> bool:
+        _SAMPLER.remove(self)
+        self._observe()
+        _LOOP_COLLECTIONS.unwatch(self._loop_thread)
+        self._heartbeat.cancel()
+        await asyncio.gather(self._heartbeat, return_exceptions=True)
+        if exc_type is None and self._worst_stall > EVENT_LOOP_STALL_LIMIT_SECONDS:
+            raise EventLoopStall(
+                f"the request blocked the event loop for {self._worst_stall * 1000:.0f} ms "
+                f"(limit {EVENT_LOOP_STALL_LIMIT_SECONDS * 1000:.0f} ms; "
+                f"{self._worst_stall_collection * 1000:.0f} ms of garbage collection on the loop thread "
+                f"not counted); loop thread stack while blocked:\n"
+                f"{self._stack or '<not sampled>'}"
+            )
+        return False
+
+    def _observe(self) -> None:
+        now = time.monotonic()
+        now_cpu = time.thread_time()
+        collections = _LOOP_COLLECTIONS.totals(self._loop_thread)
+        collection_wall = collections[0] - self._last_beat_collections[0]
+        collection_cpu = collections[1] - self._last_beat_collections[1]
+        stall = now - self._last_beat - _HEARTBEAT_SECONDS - collection_wall
+        with self._samples_lock:
+            samples = self._samples.pop(self._last_beat, [])
+        if stall > EVENT_LOOP_STALL_LIMIT_SECONDS:
+            if samples and all(importing for _stack, importing in samples):
+                stall = 0.0
+            elif not samples and now_cpu - self._last_beat_cpu - collection_cpu < EVENT_LOOP_STALL_LIMIT_SECONDS:
+                stall = 0.0
+        if stall > self._worst_stall:
+            self._worst_stall = stall
+            self._worst_stall_collection = collection_wall
+            self._stack = next((stack for stack, importing in reversed(samples) if not importing), "")
+        self._last_beat = now
+        self._last_beat_cpu = now_cpu
+        self._last_beat_collections = collections
+
+    async def _beat(self) -> None:
+        while True:
+            self._observe()
+            await asyncio.sleep(_HEARTBEAT_SECONDS)
+
+    def _sample(self, stacks: dict[int, tuple[str, bool] | None]) -> None:
+        """Records the loop thread's stack if the heartbeat is overdue; `stacks`
+        shares one formatted stack per thread across a sampling pass."""
+        beat = self._last_beat
+        if time.monotonic() - beat < EVENT_LOOP_STALL_LIMIT_SECONDS / 2:
+            return
+        if self._loop_thread not in stacks:
+            frame = sys._current_frames().get(self._loop_thread)
+            stacks[self._loop_thread] = (
+                None if frame is None else ("".join(traceback.format_stack(frame)), _importing(frame))
+            )
+        sample = stacks[self._loop_thread]
+        if sample is not None:
+            with self._samples_lock:
+                self._samples.setdefault(beat, []).append(sample)
+
+
+_SAMPLER = _StackSampler()
+
+
+class _LoopThreadCollections:
+    """Wall and CPU time the garbage collector spends on each watched loop
+    thread. A collection pauses whichever thread allocates, for as long as the
+    whole test process's heap takes, not the request's code, so it is measured
+    and taken out of a stall instead of being charged to the request. The
+    callback runs inside the collector and takes no lock; each thread writes
+    only its own entries."""
+
+    def __init__(self) -> None:
+        self._watchers: dict[int, int] = {}
+        self._started: dict[int, tuple[float, float]] = {}
+        self._totals: dict[int, tuple[float, float]] = {}
+        gc.callbacks.append(self._on_collection)
+
+    def watch(self, thread: int) -> None:
+        self._watchers[thread] = self._watchers.get(thread, 0) + 1
+
+    def unwatch(self, thread: int) -> None:
+        remaining = self._watchers.get(thread, 0) - 1
+        if remaining > 0:
+            self._watchers[thread] = remaining
+        else:
+            self._watchers.pop(thread, None)
+            self._started.pop(thread, None)
+
+    def totals(self, thread: int) -> tuple[float, float]:
+        """(wall, CPU) seconds of collection on `thread` so far."""
+        return self._totals.get(thread, (0.0, 0.0))
+
+    def _on_collection(self, phase: str, _info: dict) -> None:
+        thread = threading.get_ident()
+        if thread not in self._watchers:
+            return
+        if phase == "start":
+            self._started[thread] = (time.monotonic(), time.thread_time())
+        elif (started := self._started.pop(thread, None)) is not None:
+            wall, cpu = self.totals(thread)
+            self._totals[thread] = (
+                wall + time.monotonic() - started[0],
+                cpu + time.thread_time() - started[1],
+            )
+
+
+_LOOP_COLLECTIONS = _LoopThreadCollections()
 
 
 class _BootstrapOwnerResolver:
@@ -258,23 +484,24 @@ async def run_asgi_request_async(
     async def send(message: dict[str, object]) -> None:
         messages.append(message)
 
-    await app(
-        {
-            "type": "http",
-            "asgi": {"version": "3.0"},
-            "http_version": "1.1",
-            "method": method,
-            "scheme": "http",
-            "path": path,
-            "raw_path": path.encode("ascii"),
-            "query_string": query_string,
-            "headers": request_headers,
-            "client": (client_host, 50000),
-            "server": (server_host, 80),
-        },
-        receive,
-        send,
-    )
+    async with EventLoopWatchdog():
+        await app(
+            {
+                "type": "http",
+                "asgi": {"version": "3.0"},
+                "http_version": "1.1",
+                "method": method,
+                "scheme": "http",
+                "path": path,
+                "raw_path": path.encode("ascii"),
+                "query_string": query_string,
+                "headers": request_headers,
+                "client": (client_host, 50000),
+                "server": (server_host, 80),
+            },
+            receive,
+            send,
+        )
 
     start = next(message for message in messages if message["type"] == "http.response.start")
     response_body = b"".join(
@@ -289,13 +516,115 @@ async def run_asgi_request_async(
     return int(start["status"]), response_headers, response_body
 
 
+# Threadpool workers started with each test's loop, before its first request,
+# as a running server already has them: a request then never waits for the
+# operating system to start a thread. Requests needing more at once (a burst
+# of concurrent handlers) grow the pool as a server's pool grows.
+_WARM_THREADPOOL_WORKERS = 4
+
+
+async def _start_threadpool_workers(count: int) -> None:
+    import anyio.to_thread
+
+    started = threading.Barrier(count)
+    await asyncio.gather(*(anyio.to_thread.run_sync(started.wait) for _ in range(count)))
+
+
+class _ServerLoop:
+    """One event loop on its own thread, which every request of a test runs on,
+    as a server keeps one loop for all its requests.
+
+    The loop runs a long-lived root task the way `asyncio.run(server.serve())`
+    does, so AnyIO ties its threadpool workers to that root task and reuses
+    them across requests instead of starting (and waiting for) a fresh thread
+    for each one. A request runs in a copy of the caller's context, as
+    `asyncio.run` ran it. `close()` ends the root task, stops the workers,
+    and closes the loop and its thread."""
+
+    def __init__(self) -> None:
+        self._ready = threading.Event()
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._stop: asyncio.Event | None = None
+        self._thread = threading.Thread(target=self._run, name="asgi-test-server-loop", daemon=True)
+        self._thread.start()
+        self._ready.wait()
+
+    def _run(self) -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        async def serve() -> None:
+            self._stop = asyncio.Event()
+            self._loop = loop
+            await _start_threadpool_workers(_WARM_THREADPOOL_WORKERS)
+            self._ready.set()
+            await self._stop.wait()
+
+        try:
+            loop.run_until_complete(serve())
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
+            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            loop.run_until_complete(loop.shutdown_default_executor())
+        finally:
+            asyncio.set_event_loop(None)
+            loop.close()
+            self._ready.set()
+
+    def run(self, coroutine):
+        context = contextvars.copy_context()
+        outcome: concurrent.futures.Future = concurrent.futures.Future()
+
+        def start() -> None:
+            task = context.run(self._loop.create_task, coroutine)
+
+            def finish(done: asyncio.Task) -> None:
+                if done.cancelled():
+                    outcome.cancel()
+                elif done.exception() is not None:
+                    outcome.set_exception(done.exception())
+                else:
+                    outcome.set_result(done.result())
+
+            task.add_done_callback(finish)
+
+        self._loop.call_soon_threadsafe(start)
+        return outcome.result()
+
+    def close(self) -> None:
+        self._loop.call_soon_threadsafe(self._stop.set)
+        self._thread.join()
+
+
+_SERVER_LOOP_LOCK = threading.Lock()
+_SERVER_LOOP: _ServerLoop | None = None
+
+
+def close_server_loop() -> None:
+    """Ends the shared request loop, if a test started one; the next request
+    starts a new one. Called after every test, so no loop, thread or worker
+    outlives the test that used it."""
+    global _SERVER_LOOP
+    with _SERVER_LOOP_LOCK:
+        server_loop, _SERVER_LOOP = _SERVER_LOOP, None
+    if server_loop is not None:
+        server_loop.close()
+
+
 def run_asgi_request(
     app,
     method: str,
     path: str,
     **kwargs,
 ) -> tuple[int, dict[str, str], bytes]:
-    return asyncio.run(run_asgi_request_async(app, method, path, **kwargs))
+    global _SERVER_LOOP
+    with _SERVER_LOOP_LOCK:
+        if _SERVER_LOOP is None:
+            _SERVER_LOOP = _ServerLoop()
+        server_loop = _SERVER_LOOP
+    return server_loop.run(run_asgi_request_async(app, method, path, **kwargs))
 
 
 def decode_json(body: bytes) -> Any:

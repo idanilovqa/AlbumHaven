@@ -12,7 +12,7 @@ _SERVER_FIELDS = {
     "id", "recorded_at", "scrobbled", "scrobble_error", "scrobble_retryable",
     "scrobble_reauthentication_required", "scrobble_submission_state",
     "scrobble_retry_count", "scrobble_retry_exhausted", "last_scrobble_attempt_at",
-    "scrobbled_at", "sync_problem",
+    "scrobbled_at", "sync_problem", "scrobble_verification_failures", "last_scrobble_verification_at",
 }
 _HANDOFF_FINGERPRINT_DOMAIN = b"album-haven:playback-handoff-completion:v1:json\0"
 NO_HANDOFF_COMPLETION_DIGEST = hashlib.sha256(
@@ -150,7 +150,7 @@ def append_measured(adapter, entry, *, account_id, library_id, connection=None):
         return {key: item for key, item in value.items()
                 if key not in _SERVER_FIELDS and not key.startswith("scrobble_")}
     connection_scope = (nullcontext(connection) if connection is not None
-                        else adapter._connect_to_database())
+                        else adapter.connect())
     with connection_scope as connection:
         # The transaction-scoped identity lock also serializes first-row creation.
         lock_key = int.from_bytes(hashlib.sha256(identity.encode()).digest()[:8], "big", signed=True)
@@ -214,11 +214,17 @@ def load_measured(connection, *, account_id, library_id, device_id, session_id):
     return dict(row["metadata"]["source_payload"])
 
 
+def provider_lock_key(*, account_id, library_id, device_id, session_id):
+    """The advisory lock that serializes Last.fm submission of one measured listen."""
+    identity = f"provider:{account_id}:{library_id}:{device_id}:{session_id}"
+    return int.from_bytes(hashlib.sha256(identity.encode()).digest()[:8], "big", signed=True)
+
+
 @contextmanager
 def measured_provider_guard(config, *, account_id, library_id, device_id, session_id):
     from music_app.services.listen_history_postgres import PostgresListenHistoryAdapter
-    identity = f"provider:{account_id}:{library_id}:{device_id}:{session_id}"
-    lock_key = int.from_bytes(hashlib.sha256(identity.encode()).digest()[:8], "big", signed=True)
-    with PostgresListenHistoryAdapter(config)._connect_to_database() as connection:
+    lock_key = provider_lock_key(account_id=account_id, library_id=library_id,
+                                 device_id=device_id, session_id=session_id)
+    with PostgresListenHistoryAdapter(config).connect() as connection:
         connection.execute("select pg_advisory_xact_lock(%s)", (lock_key,))
         yield connection

@@ -3529,7 +3529,7 @@ class PostgresLibraryBrowseRepository:
         payload["total_candidate_count"] = None
         payload["projection_cache_status"] = status
         if not payload.get("duplicate_resolution_pending"):
-            self._set_cached_utility_projection(
+            cached = self._set_cached_utility_projection(
                 _PROBLEMATIC_FILES_PAGE_KIND,
                 {
                     **(
@@ -3542,7 +3542,7 @@ class PostgresLibraryBrowseRepository:
                 },
                 expected_generation=generation,
             )
-            if fingerprint and self._utility_projection_generation_is(_PROBLEMATIC_FILES_PAGE_KIND, generation):
+            if cached and fingerprint:
                 self._queue_problematic_files_snapshot_store(payload, fingerprint, first_page=True)
         if status == "revalidated" and (outdated_snapshot or {}).get(_PROBLEMATIC_SNAPSHOT_OUTDATED_KEY):
             # Albums outside the snapshot may have become problematic since it was stored.
@@ -3550,11 +3550,6 @@ class PostgresLibraryBrowseRepository:
         payload.pop(_PROBLEMATIC_PAGE_ALBUMS_KEY, None)
         payload.pop(_PROBLEMATIC_LOOSE_GROUP_IDENTITIES_KEY, None)
         return payload
-
-    def _utility_projection_generation_is(self, kind: str, generation: int | None) -> bool:
-        cache_key = self._utility_projection_cache_key(kind)
-        with _UTILITY_PROJECTION_CACHE_LOCK:
-            return cache_key is not None and _UTILITY_PROJECTION_GENERATIONS.get(cache_key, 0) == generation
 
     def _queue_problematic_first_page_refresh(self, limit: int) -> None:
         """Rebuild a revalidated first page from the whole library, once, in the background."""
@@ -5131,16 +5126,17 @@ class PostgresLibraryBrowseRepository:
         payload: dict[str, object],
         *,
         expected_generation: int | None = None,
-    ) -> None:
+    ) -> bool:
+        """Cache ``payload`` unless the kind was invalidated since ``expected_generation``."""
         cache_key = self._utility_projection_cache_key(kind)
         if cache_key is None:
-            return
+            return False
         with _UTILITY_PROJECTION_CACHE_LOCK:
             if (
                 expected_generation is not None
                 and _UTILITY_PROJECTION_GENERATIONS.get(cache_key, 0) != expected_generation
             ):
-                return
+                return False
             _UTILITY_PROJECTION_CACHE[cache_key] = deepcopy(payload)
             if kind in _STALE_SERVED_UTILITY_KINDS:
                 _UTILITY_PROJECTION_STALE.pop(cache_key, None)
@@ -5155,6 +5151,7 @@ class PostgresLibraryBrowseRepository:
                 _UTILITY_PROJECTION_REWARM[cache_key] = partial(
                     self.queue_utility_projection_prewarm, kind
                 )
+        return True
 
     def _get_stale_utility_projection(self, kind: str) -> dict[str, object] | None:
         cache_key = self._utility_projection_cache_key(kind)

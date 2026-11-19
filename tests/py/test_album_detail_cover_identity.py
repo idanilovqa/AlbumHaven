@@ -620,3 +620,53 @@ def test_cover_lookup_task_identity_accepts_renamed_paths_for_same_album_id():
         track_paths={"new/01.flac"},
         album_id=92,
     )
+
+
+def test_cover_lookup_labels_a_path_only_task_with_its_album_renamed_in_place(monkeypatch):
+    from music_app.routes import api_wave_d_asgi_routes as cover_routes
+
+    paths = {"main/01.flac", "main/02.flac"}
+
+    class FakeSnapshotRepository:
+        def __init__(self, _config):
+            pass
+
+        def resolve_album_id_for_track_paths(self, *, track_paths):
+            assert track_paths == paths
+            return 81
+
+        def resolve_album_track_context(self, *, album_id, album_key):
+            assert (album_id, album_key) == (81, None)
+            return {"album_id": 81, "album_key": "artist::renamed", "track_paths": sorted(paths)}
+
+    class FakeLineageRepository:
+        def __init__(self, _config):
+            pass
+
+        def resolve(self, **identity):
+            assert identity == {"album_id": 81, "album_key": "artist::renamed", "track_paths": paths}
+            # The rename's own transition (81:previous -> 81:renamed) reaches the album at depth 1.
+            return {"status": "resolved", "choices": [], "album": {
+                "album_id": 81, "album_key": "artist::renamed", "name": "Renamed", "album_artist": "Artist",
+                "year": 2026,
+            }}
+
+    monkeypatch.setattr(cover_routes, "AlbumCoverCandidateSnapshotRepository", FakeSnapshotRepository)
+    monkeypatch.setattr(cover_routes, "AlbumIdentityLineageRepository", FakeLineageRepository)
+    monkeypatch.setattr(cover_routes, "resolve_album_context", lambda _config, _album: None)
+    monkeypatch.setattr(
+        cover_routes, "_resolve_cover_album_context",
+        lambda _config, album: SimpleNamespace(album_root="main", track_paths=cover_routes._album_track_paths(album)),
+    )
+
+    album, context = asyncio.run(
+        cover_routes._resolve_album_payload_context(
+            {},
+            {"album_id": 2147483646, "key": "historical", "name": "Saved Before Rename"},
+            fallback_track_paths=paths,
+            task_scoped=True,
+        )
+    )
+
+    assert (album["album_id"], album["key"], album["name"], album["year"]) == (81, "artist::renamed", "Renamed", 2026)
+    assert context.track_paths == paths

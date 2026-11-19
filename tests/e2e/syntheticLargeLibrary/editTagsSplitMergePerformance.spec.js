@@ -136,6 +136,7 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags split and merge`, (
         phaseTimingsMs: result.payload.phase_timings_ms || null,
       };
       saves.push(entry);
+      console.log(`[split-merge-entry] ${JSON.stringify(entry)}`);
       await editTagsSplitMergeLocalReport.recordTimingCheckpoint({
         key: `cycle-${cycle}-${kind}-save`,
         label: `Cycle ${cycle} ${kind}: click to terminal success`,

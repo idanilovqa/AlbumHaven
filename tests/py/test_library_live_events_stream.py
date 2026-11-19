@@ -242,11 +242,42 @@ def test_live_events_route_reads_the_actors_scope_from_the_cursor_and_closes_on_
     assert body.index('event: resync\ndata: {"head": 9}') < body.index("event: unauthorized")
 
 
-def test_missing_or_malformed_cursor_asks_for_a_resync():
+def test_missing_or_malformed_cursor_is_no_cursor():
     def request(headers=None, query=None):
         return SimpleNamespace(headers=headers or {}, query_params=query or {})
 
     assert live_events_asgi._cursor(request(query={"since": "12"})) == 12
     assert live_events_asgi._cursor(request(headers={"last-event-id": "13"}, query={"since": "12"})) == 13
-    assert live_events_asgi._cursor(request()) == -1
-    assert live_events_asgi._cursor(request(query={"since": "-4"})) == -1
+    assert live_events_asgi._cursor(request()) is None
+    assert live_events_asgi._cursor(request(query={"since": "-4"})) is None
+
+
+def test_a_page_without_a_cursor_follows_from_the_current_head_without_a_resync():
+    async def scenario():
+        reads, frames = [], []
+
+        async def read_page(cursor):
+            reads.append(cursor)
+            return _page(head=50, resync=True) if cursor == -1 else _page(51)
+
+        async def wait_for_change(_timeout):
+            return True
+
+        async def is_disconnected():
+            return len(reads) >= 2
+
+        async def allowed():
+            return True
+
+        async for frame in stream_library_changes(
+            since=None, read_page=read_page, wait_for_change=wait_for_change,
+            authorized=allowed, is_disconnected=is_disconnected,
+        ):
+            frames.append(frame)
+        return reads, frames
+
+    reads, frames = asyncio.run(scenario())
+
+    assert reads == [-1, 50]
+    assert not any("event: resync" in frame for frame in frames)
+    assert any(frame.startswith("id: 51\n") for frame in frames)

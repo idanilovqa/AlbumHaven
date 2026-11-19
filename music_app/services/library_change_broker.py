@@ -160,7 +160,7 @@ def format_page(page: LibraryChangePage) -> list[str]:
 
 async def stream_library_changes(
     *,
-    since: int,
+    since: int | None,
     read_page: Callable[[int], Awaitable[LibraryChangePage]],
     wait_for_change: Callable[[float], Awaitable[bool]],
     authorized: Callable[[], Awaitable[bool]],
@@ -170,8 +170,12 @@ async def stream_library_changes(
     reauthorize_seconds: float = REAUTHORIZE_SECONDS,
     clock: Callable[[], float] = time.monotonic,
 ) -> AsyncIterator[str]:
-    """Replay from ``since``, then follow new changes until the client leaves or loses access."""
-    cursor = since
+    """Replay from ``since``, then follow new changes until the client leaves or loses access.
+
+    Without a cursor the page was rendered while this server was still connecting to the change
+    log; it follows from the current head rather than refreshing everything it just rendered.
+    """
+    cursor = since if since is not None else (await read_page(-1)).head
     reauthorize_at = clock() + reauthorize_seconds
     yield "retry: 3000\n: connected\n\n"
     while True:

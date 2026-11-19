@@ -15,10 +15,10 @@ LIBRARY_EVENTS_PATH = "/api/live/library-events"
 router = APIRouter()
 
 
-def _cursor(request: Request) -> int:
-    """The reader's last revision; an absent or malformed cursor asks for a resync."""
+def _cursor(request: Request) -> int | None:
+    """The reader's last revision, or None for a page rendered before this server knew one."""
     raw = request.headers.get("last-event-id") or request.query_params.get("since") or ""
-    return int(raw) if raw.isdigit() else -1
+    return int(raw) if raw.isdigit() else None
 
 
 @router.get(LIBRARY_EVENTS_PATH)

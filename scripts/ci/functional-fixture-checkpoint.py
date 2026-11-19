@@ -22,6 +22,15 @@ MIGRATION_OWNED_TABLES = frozenset(
         ("ops", "schema_migrations"),
     }
 )
+# The live change log only grows: restoring an older copy would rewind revisions that running
+# servers and open pages already hold, and its pending row exists only inside a transaction.
+CHANGE_LOG_TABLES = frozenset(
+    {
+        ("library", "change_event_pending"),
+        ("library", "change_event_watermark"),
+        ("library", "change_events"),
+    }
+)
 
 
 def validate_database_url(database_url: str) -> str:
@@ -70,7 +79,7 @@ def owned_application_tables(connection: Any) -> tuple[tuple[str, str], ...]:
     tables = tuple(
         (str(row[0]), str(row[1]))
         for row in rows
-        if (str(row[0]), str(row[1])) not in MIGRATION_OWNED_TABLES
+        if (str(row[0]), str(row[1])) not in MIGRATION_OWNED_TABLES | CHANGE_LOG_TABLES
     )
     if not tables:
         raise ValueError("functional checkpoint requires application tables")

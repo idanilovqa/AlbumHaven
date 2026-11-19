@@ -213,7 +213,7 @@ test('readers without library access or EventSource never connect', () => {
 
   const legacy = load({ locks: 'none', channel: false });
   legacy.context.startLibraryLiveEvents(null);
-  assert.equal(FakeEventSource.instances[0].url, '/api/live/library-events', 'no cursor asks the server to resync');
+  assert.equal(FakeEventSource.instances[0].url, '/api/live/library-events', 'without a cursor the server follows from its current head');
 });
 
 test('a burst of changes refreshes the view at most once a second', () => {

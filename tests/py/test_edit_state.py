@@ -291,3 +291,19 @@ def test_a_written_field_clears_its_display_correction(tmp_path):
     assert set(partly["text_corrections"]) == {"album_artist"}
     fully = edit_state_module.update_cache_entry_after_repairs(path, partly, {"album_artist": "B"})
     assert fully["text_corrections"] is None
+
+
+def test_a_tag_write_is_hidden_from_the_library_watcher(tmp_path, monkeypatch):
+    from music_app.services.library_watch_suppression import is_library_watch_event_suppressed
+
+    path = tmp_path / "track.mp3"
+    observed = []
+
+    def write(target, repairs):
+        observed.append(is_library_watch_event_suppressed(target))
+        return True, sorted(repairs)
+
+    monkeypatch.setattr(edit_state_module, "apply_text_repairs_to_file", write)
+
+    assert edit_state_module.apply_repairs_worker(str(path), {"album": "B"}) == (str(path), True, ["album"])
+    assert observed == [True]

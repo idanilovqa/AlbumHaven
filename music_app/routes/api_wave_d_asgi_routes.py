@@ -404,7 +404,9 @@ async def _resolve_album_payload_context(
                 except Exception:  # Only the labels depend on it; the saved ones stay.
                     lineage = {}
                 current_album = lineage.get("album")
-                if (lineage.get("status") == "current" and isinstance(current_album, Mapping)
+                # An in-place rename records a transition from the album's previous key, so the lineage
+                # reaches this same live album as "resolved"; its labels are current either way.
+                if (lineage.get("status") in {"current", "resolved"} and isinstance(current_album, Mapping)
                         and current_album.get("album_id") == normalized_album["album_id"]):
                     normalized_album.update({
                         key: current_album[key] for key in ("name", "album_artist", "year") if key in current_album

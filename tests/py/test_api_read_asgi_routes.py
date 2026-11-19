@@ -5003,6 +5003,9 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
     monkeypatch.setattr(asgi_read_routes, "build_problematic_albums_payload", fail_runtime_fallback)
     monkeypatch.setattr(asgi_read_routes, "build_problematic_album_detail_payload", fail_runtime_fallback)
     monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FakePostgresRepository)
+    # The placeholder database is unreachable: the owner's MusicBrainz Artist rows
+    # would wait out the pool timeout on every listing request.
+    monkeypatch.setattr(asgi_read_routes, "load_problematic_artist_items", lambda _request: [])
     asgi_app.state.library_watch_health_service = SimpleNamespace(
         load_problems=lambda: [],
     )

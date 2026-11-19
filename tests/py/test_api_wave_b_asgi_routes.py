@@ -2100,6 +2100,8 @@ def test_asgi_track_preferences_write_rehydrates_album_detail_track_rows(
         "PostgresLibraryBrowseRepository",
         FakePostgresLibraryBrowseRepository,
     )
+    # Cover identity repair would wait out the pool timeout on the unreachable placeholder database.
+    monkeypatch.setattr(asgi_read_routes, "_repair_album_detail_cover_identity", lambda *_args: None)
     asgi_app = _make_asgi_app()
 
     save_status, _save_headers, _save_body = _post_track_preference(

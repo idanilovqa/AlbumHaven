@@ -929,6 +929,13 @@
         "config": "playwright.config.js",
         "project": "functional",
         "test": "tests/e2e/specs/coverLookup.spec.js",
+        "case": "FTC-COVERS-049 an in-app split from search results opens the split chooser from the notification",
+        "area": "cover-providers"
+      },
+      {
+        "config": "playwright.config.js",
+        "project": "functional",
+        "test": "tests/e2e/specs/coverLookup.spec.js",
         "case": "FTC-COVERS-047 split re-merge redirects chosen split release notification to the survivor",
         "area": "cover-providers"
       },

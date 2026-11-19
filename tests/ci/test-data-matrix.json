@@ -1738,6 +1738,31 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/coverLookup.spec.js",
+    "case": "FTC-COVERS-049 an in-app split from search results opens the split chooser from the notification",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "cover-lookup:split-from-search-notification"
+    ],
+    "filesystemScenarios": [
+      "media-copy:split-from-search-notification"
+    ],
+    "expectedContracts": [
+      "split-from-search-results-opens-split-chooser-from-notification",
+      "split-after-merging-back-opens-split-chooser-again"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:split-from-search-notification",
+      "filesystemCopy": "media/cases/split-from-search-notification"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/coverLookup.spec.js",
     "case": "FTC-COVERS-047 split re-merge redirects unanswered split chooser notification to the survivor",
     "profile": "functional-core",
     "setupScope": "isolated",
@@ -7010,6 +7035,21 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/coverLookupFrames.spec.js",
+    "case": "a suggested cover pulses unless the user asks for reduced motion",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "a suggested cover pulses unless the user asks for reduced motion"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/artQualityAlert.spec.js",
     "case": "an expanded SmallAlert shows its whole message, wrapping instead of cutting it (owner, 11-08)",
     "profile": null,
@@ -9744,6 +9784,21 @@
     "ownerApproval": "approved"
   },
   {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/coverLookupMutationBusy.spec.js",
+    "case": "the art card delete icon is hollow red, and solid red under the pointer (owner, 11-16)",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "the art card delete icon is hollow red, and solid red under the pointer (owner, 11-16)"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
     "config": "playwright.synthetic-large-library.config.cjs",
     "project": "synthetic-large-library",
     "test": "tests/e2e/syntheticLargeLibrary/searchPreviewPairedCalibration.spec.js",
@@ -11524,6 +11579,36 @@
   {
     "config": "playwright.component.config.js",
     "project": "",
+    "test": "tests/components/artQualityAlert.spec.js",
+    "case": "a SmallAlert expands only horizontally: its height never grows past its final size (owner, 11-16)",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "a SmallAlert expands only horizontally: its height never grows past its final size (owner, 11-16)"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/artQualityAlert.spec.js",
+    "case": "an album opened from Problematic Files shows the poor-art warning from its problem reasons (owner, 11-17)",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "an album opened from Problematic Files shows the poor-art warning from its problem reasons (owner, 11-17)"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
     "test": "tests/components/artistInfoMobileSheet.spec.js",
     "case": "mobile artist info sits at the bottom without an anchored trigger outline",
     "profile": null,
@@ -12276,13 +12361,30 @@
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/galleryHeaderMobileActions.spec.js",
-    "case": "mobile keeps several genres on one third line and drops overflow as whole pills",
+    "case": "mobile keeps country then genres on one line when they fit",
     "profile": null,
     "setupScope": "suite",
     "stateMode": "read-only",
     "databaseScenarios": [],
     "filesystemScenarios": [],
-    "expectedContracts": ["mobile-genre-pills-one-line-overflow"],
+    "expectedContracts": [
+      "mobile keeps country then genres on one line when they fit"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/galleryHeaderMobileActions.spec.js",
+    "case": "mobile wraps labels to a second line without moving the right-side actions",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "mobile wraps labels to a second line without moving the right-side actions"
+    ],
     "ownerApproval": "approved"
   },
   {

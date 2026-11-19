@@ -894,6 +894,34 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/albumTagRename.spec.js",
+    "case": "FTC-TAGS-028 Edit Tags writes only the files still in the album",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "setupGroup": "files-left-album",
+    "appProcessScope": "isolated",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "tag-edit:files-left-album"
+    ],
+    "filesystemScenarios": [
+      "media-copy:files-left-album"
+    ],
+    "expectedContracts": [
+      "moved-file-skipped-and-unchanged",
+      "remaining-files-written",
+      "all-moved-save-writes-nothing"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:files-left-album",
+      "filesystemCopy": "media/cases/files-left-album"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/albumTagRename.spec.js",
     "case": "FTC-TAGS-015 / FTC-UTIL-PROBLEMS-012 keeps one stable destination through five selected-track moves and restores",
     "profile": "functional-core",
     "setupScope": "isolated",

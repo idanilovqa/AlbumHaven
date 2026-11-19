@@ -653,6 +653,25 @@ export class TagEditorActions {
     return { alertText, payload, status: response.status() };
   }
 
+  // Applies the edit and waits for the alert it ends with: its severity (the on-page alert's
+  // data-on-page-alert) and its exact text. beforeConfirm runs with the confirm dialog open.
+  async applyAndWaitForEditAlert({ severity, message, beforeConfirm, timeout = 60000 }) {
+    const editResponsePromise = this.tagEditor.page.waitForResponse((response) => (
+      response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/utilities/edit-tags'
+    ), { timeout });
+    await this.tagEditor.applyButton.click();
+    await expect(this.tagEditor.confirmDialog).toBeVisible({ timeout });
+    if (typeof beforeConfirm === 'function') await beforeConfirm();
+    await this.tagEditor.confirmButton.click();
+    const response = await editResponsePromise;
+    const payload = await response.json();
+    await expect(this.tagEditor.repairAlertMessage).toHaveText(message, { timeout });
+    await expect(this.tagEditor.repairAlert.locator('[data-on-page-alert]')).toHaveAttribute(
+      'data-on-page-alert', severity, { timeout });
+    return { payload, status: response.status() };
+  }
+
   async readFailureAlertPresentation() {
     const selectors = {
       link: this.tagEditor.repairAlertLogHistorySelector,

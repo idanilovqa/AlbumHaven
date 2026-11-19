@@ -1200,6 +1200,119 @@ test('FTC-TAGS-009 restores tracks from distinct temporary albums without duplic
   });
 });
 
+// Owner 2026-11-18/19: a save from an editor opened before a track moved writes the files still
+// in the album and leaves the moved file untouched; when every edited file moved, nothing is written.
+test('FTC-TAGS-028 Edit Tags writes only the files still in the album', { tag: '@area:tag-edit' }, async ({
+  freshBrowserSession,
+  galleryActions,
+  stepLogger,
+  tagEditorActions,
+  trackModalActions,
+}) => {
+  test.setTimeout(240_000);
+  const savedGenre = 'Saved Only In Album';
+  const refusedGenre = 'Never Written';
+  // The split fixture's files, "01 - Split Track 1.mp3" … "18 - Split Track 18.mp3"; 01 moves.
+  const keptFilenames = Array.from({ length: FIXTURE_TRACK_COUNT - 1 }, (_value, index) => (
+    `${String(index + 2).padStart(2, '0')} - Split Track ${index + 2}.mp3`));
+  const snapshotsByFilename = async () => new Map((await readGeneratedMp3TagSnapshots({
+    artist: FIXTURE_ARTIST,
+    album: SPLIT_ORIGINAL_ALBUM,
+  })).map((snapshot) => [snapshot.filename, snapshot.frames]));
+  const openSourceEditorOffline = async (session) => {
+    await session.galleryActions.goto(ARTIST_VIEW_URL);
+    await session.galleryActions.waitForGalleryReady();
+    await session.galleryActions.selectAlbumDetailsByIdentity({
+      artist: FIXTURE_ARTIST, album: SPLIT_ORIGINAL_ALBUM, year: FIXTURE_YEAR,
+    });
+    expect((await session.trackModalActions.waitForInteractiveSummary()).trackRows).toBe(FIXTURE_TRACK_COUNT);
+    await session.trackModalActions.openTagEditor();
+    await session.tagEditorActions.waitForOpen({ expectedTrackCount: FIXTURE_TRACK_COUNT });
+    // Status polling would otherwise refresh this client once the move lands.
+    await session.context.setOffline(true);
+  };
+
+  const partialSession = await freshBrowserSession.create();
+  const allMovedSession = await freshBrowserSession.create();
+  await stepLogger.step('Open Edit Tags on all 18 tracks in two clients before any move', async () => {
+    await openSourceEditorOffline(partialSession);
+    await openSourceEditorOffline(allMovedSession);
+  });
+
+  let beforeSave = null;
+  await stepLogger.step('Move one track to another album from a third client and wait for Saved', async () => {
+    await galleryActions.goto(ARTIST_VIEW_URL);
+    await galleryActions.waitForGalleryReady();
+    await galleryActions.selectAlbumDetailsByIdentity({
+      artist: FIXTURE_ARTIST, album: SPLIT_ORIGINAL_ALBUM, year: FIXTURE_YEAR,
+    });
+    await trackModalActions.waitForInteractiveSummary();
+    await trackModalActions.openTagEditor();
+    await tagEditorActions.waitForOpen({ expectedTrackCount: FIXTURE_TRACK_COUNT });
+    await tagEditorActions.selectTrackByFilename(SPLIT_SELECTED_FILENAME);
+    await tagEditorActions.setAlbumName(SPLIT_RENAMED_ALBUM);
+    await tagEditorActions.applyAndWaitForSavedFiles();
+    beforeSave = await snapshotsByFilename();
+    expect(beforeSave.get(SPLIT_SELECTED_FILENAME).TALB).toEqual([SPLIT_RENAMED_ALBUM]);
+  });
+
+  await stepLogger.step('Save Genre on all 18 from the editor opened before the move', async () => {
+    await partialSession.tagEditorActions.selectAllTracks();
+    await partialSession.tagEditorActions.setGenre(savedGenre);
+    const { payload } = await partialSession.tagEditorActions.applyAndWaitForEditAlert({
+      severity: 'warning',
+      message: `Saved 17 files. These files are no longer in this album and were not changed: ${SPLIT_SELECTED_FILENAME}. Reopen the album to edit them.`,
+      beforeConfirm: () => partialSession.context.setOffline(false),
+    });
+    expect(payload.ok).toBe(true);
+  });
+
+  await stepLogger.step('The 17 tracks still in the album carry the new Genre', async () => {
+    const after = await snapshotsByFilename();
+    for (const filename of keptFilenames) expect(after.get(filename).TCON).toEqual([savedGenre]);
+    await galleryActions.goto(ARTIST_VIEW_URL);
+    await galleryActions.waitForGalleryReady();
+    await galleryActions.selectAlbumDetailsByIdentity({
+      artist: FIXTURE_ARTIST, album: SPLIT_ORIGINAL_ALBUM, year: FIXTURE_YEAR,
+    });
+    expect((await trackModalActions.waitForInteractiveSummary()).trackRows).toBe(FIXTURE_TRACK_COUNT - 1);
+    await trackModalActions.openTagEditor();
+    await tagEditorActions.waitForOpen({ expectedTrackCount: FIXTURE_TRACK_COUNT - 1 });
+    await tagEditorActions.selectAllTracks();
+    expect((await tagEditorActions.readEditableValues(['genre'])).genre).toBe(savedGenre);
+    await tagEditorActions.close();
+  });
+
+  await stepLogger.step('The moved track is unchanged, in its new album', async () => {
+    expect((await snapshotsByFilename()).get(SPLIT_SELECTED_FILENAME)).toEqual(beforeSave.get(SPLIT_SELECTED_FILENAME));
+    await galleryActions.goto(ARTIST_VIEW_URL);
+    await galleryActions.waitForGalleryReady();
+    await galleryActions.selectAlbumDetailsByIdentity({
+      artist: FIXTURE_ARTIST, album: SPLIT_RENAMED_ALBUM, year: FIXTURE_YEAR,
+    });
+    expect((await trackModalActions.waitForInteractiveSummary()).trackRows).toBe(1);
+    await trackModalActions.openTagEditor();
+    await tagEditorActions.waitForOpen({ expectedTrackCount: 1 });
+    const moved = await tagEditorActions.readEditableValues(['album', 'genre']);
+    expect(moved.album).toBe(SPLIT_RENAMED_ALBUM);
+    expect(moved.genre).not.toBe(savedGenre);
+    await tagEditorActions.close();
+  });
+
+  await stepLogger.step('A save of only the moved track writes nothing and says so in red', async () => {
+    await allMovedSession.tagEditorActions.selectTrackByFilename(SPLIT_SELECTED_FILENAME);
+    await allMovedSession.tagEditorActions.setGenre(refusedGenre);
+    const { payload, status } = await allMovedSession.tagEditorActions.applyAndWaitForEditAlert({
+      severity: 'error',
+      message: `These files are no longer in this album, so nothing was changed: ${SPLIT_SELECTED_FILENAME}. Reopen the album to edit them.`,
+      beforeConfirm: () => allMovedSession.context.setOffline(false),
+    });
+    expect(status).toBe(409);
+    expect(payload.ok).toBe(false);
+    expect((await snapshotsByFilename()).get(SPLIT_SELECTED_FILENAME)).toEqual(beforeSave.get(SPLIT_SELECTED_FILENAME));
+  });
+});
+
 test('FTC-TAGS-015 / FTC-UTIL-PROBLEMS-012 keeps one stable destination through five selected-track moves and restores', { tag: '@area:problematic-files' }, async ({
   freshBrowserSession,
   galleryActions,

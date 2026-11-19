@@ -110,6 +110,32 @@
   {
     "config": "playwright.config.js",
     "project": "functional",
+    "test": "tests/e2e/specs/playbackStartLatency.spec.js",
+    "case": "FTC-PLAYER-026 the first song after the page opens and a switch to another song both sound within a second while the CPU is busy",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "databaseScenarios": [
+      "playback:click-to-sound-under-cpu-load"
+    ],
+    "filesystemScenarios": [
+      "audio-copy:playback-length-signals"
+    ],
+    "expectedContracts": [
+      "first-song-click-to-sound-budget",
+      "switch-click-to-sound-budget",
+      "audible-selected-track"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:playback-start-latency",
+      "filesystemCopy": "media/Playback Start Signals/Length And Repetition"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
     "test": "tests/e2e/specs/playbackNetworkOutage.spec.js",
     "case": "FTC-PLAYBACK-OFFLINE-001 a seek past the received audio offline stays playing silently, resumes by itself when the network returns, and one Play press continues a paused one",
     "profile": "functional-core",

@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const { loadPendingProjectionFetch } = require('../helpers/pending-projection-fetch');
 
 const helperPath = path.join(
   __dirname,
@@ -443,6 +444,7 @@ function loadHelper(options = {}) {
   };
 
   vm.createContext(context);
+  loadPendingProjectionFetch(context);
   vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'album-artbox.js'), 'utf8'), context);
   vm.runInContext(helperSource, context, { filename: helperPath });
 
@@ -537,20 +539,19 @@ test('preview hydration completes before full-size artwork preload', async () =>
   );
 });
 
-test('stale album hydration sends its id and renders current split choices', async () => {
-  const choices = [
-    { album_id: 92, key: 'artist::left', name: 'Left Album', track_count: 4 },
-    { album_id: 93, key: 'artist::right', name: 'Right Album', track_count: 5 },
-  ];
+test('a gallery open never renders a split chooser, even from an older server', async () => {
   const { context } = loadHelper({
-    onFetchAlbumDetails: ({ url }) => ({
+    onFetchAlbumDetails: () => ({
       ok: false,
       status: 409,
       json: () => Promise.resolve({
         ok: false,
         error: 'This album was split—choose the current release',
         resolution_kind: 'album_split',
-        current_releases: choices,
+        current_releases: [
+          { album_id: 92, key: 'artist::left', name: 'Left Album', track_count: 4 },
+          { album_id: 93, key: 'artist::right', name: 'Right Album', track_count: 5 },
+        ],
       }),
     }),
   });
@@ -568,25 +569,125 @@ test('stale album hydration sends its id and renders current split choices', asy
     context.fetchCalls[0].url,
     '/album-details?album_key=artist%3A%3Aold&album_id=17',
   );
-  assert.match(
-    context.getTrackModalElements().list.innerHTML,
-    /data-track-modal-current-release="92"[\s\S]*Left Album[\s\S]*data-track-modal-current-release="93"[\s\S]*Right Album/,
-  );
-  assert.equal(context.showToastCalls.length, 0);
-
-  assert.equal(context.selectTrackModalCurrentRelease('92'), true);
-  await flushMicrotasks();
-  assert.equal(
-    context.fetchCalls[1].url,
-    '/album-details?album_key=artist%3A%3Aleft&album_id=92',
-  );
+  const elements = context.getTrackModalElements();
+  assert.doesNotMatch(elements.list.innerHTML, /data-track-modal-current-release/);
+  assert.notEqual(elements.subtitle.textContent, 'This album was split—choose the current release');
+  assert.equal(context.showToastCalls.length, 1);
 });
 
-test('this session keeps its recovered split release rendered during inventory refresh', async () => {
-  const choices = [
+test('a gallery card whose album is gone closes Album Details and refreshes the gallery', async () => {
+  const { context } = loadHelper({
+    onFetchAlbumDetails: () => ({
+      ok: false,
+      status: 404,
+      json: () => Promise.resolve({ ok: false, error: 'Album not found' }),
+    }),
+  });
+  let galleryRefreshes = 0;
+  context.refreshCurrentViewAfterBackgroundCompletion = async () => { galleryRefreshes += 1; };
+
+  context.openTrackModal({ album_id: 17, key: 'artist::old', name: 'Old Album', preview_only: true });
+  await flushMicrotasks();
+
+  assert.equal(context.getTrackModalElements().overlay.hidden, true);
+  assert.equal(galleryRefreshes, 1);
+  assert.deepEqual(context.showToastCalls.map(({ message }) => message), [
+    'This album changed—choose it again in the gallery.',
+  ]);
+  assert.doesNotMatch(context.getTrackModalElements().list.innerHTML, /data-track-modal-current-release/);
+});
+
+function splitByThisSessionResponses(chosen) {
+  const releases = [
     { album_id: 92, album_key: 'artist::album::year::2014', name: 'Album', year: 2014, track_count: 1 },
     { album_id: 93, album_key: 'artist::album::year::2004', name: 'Album', year: 2004, track_count: 17 },
   ];
+  return [
+    { ok: false, status: 404, json: async () => ({ ok: false, error: 'Album not found' }) },
+    {
+      ok: false,
+      status: 409,
+      json: async () => ({ ok: false, resolution_kind: 'album_split', current_releases: releases }),
+    },
+    { ok: true, status: 200, json: async () => ({ ok: true, album: chosen }) },
+  ];
+}
+
+const releaseThisSessionSplit = {
+  album_id: 93,
+  key: 'artist::album::year::2004',
+  request_key: 'artist::album::year::2004',
+  name: 'Album',
+  year: 2004,
+  preview_only: false,
+  tracks: [{ path: 'one', title: 'Edited track' }],
+};
+
+test('a card this session split opens its own release by name and year, never a chooser', async () => {
+  const responses = splitByThisSessionResponses(releaseThisSessionSplit);
+  const { context } = loadHelper({ onFetchAlbumDetails: () => responses.shift() });
+  const card = { album_id: 17, key: 'artist::album', name: 'Album', year: 2004, preview_only: true };
+
+  context.rememberLocallyEditedAlbum(card);
+  context.openTrackModal(card);
+  await flushMicrotasks();
+
+  assert.deepEqual(context.fetchCalls.map(({ url }) => url), [
+    '/album-details?album_key=artist%3A%3Aalbum&album_id=17',
+    '/album-details?album_key=artist%3A%3Aalbum&album_id=17&resolve_lineage=1',
+    '/album-details?album_key=artist%3A%3Aalbum%3A%3Ayear%3A%3A2004&album_id=93',
+  ]);
+  assert.equal(context.getTrackModalElements().overlay.hidden, false);
+  assert.deepEqual(context.showToastCalls, []);
+  assert.doesNotMatch(context.getTrackModalElements().list.innerHTML, /Current releases|data-track-modal-current-release/);
+});
+
+test('inventory refresh follows the release this session split instead of closing', async () => {
+  const open = { ...releaseThisSessionSplit, album_id: 17, key: 'artist::album', request_key: 'artist::album' };
+  const responses = splitByThisSessionResponses(releaseThisSessionSplit);
+  const { context } = loadHelper({ initialAlbums: [open], onFetchAlbumDetails: () => responses.shift() });
+  context.rememberLocallyEditedAlbum(open);
+  context.state.modalReleases = [open];
+  context.state.modalReleaseIndex = 0;
+  context.getTrackModalElements().overlay.hidden = false;
+
+  assert.equal(await context.refreshOpenTrackModalAfterInventoryMutation(), true);
+  await flushMicrotasks();
+
+  assert.equal(context.fetchCalls.at(-1).url, '/album-details?album_key=artist%3A%3Aalbum%3A%3Ayear%3A%3A2004&album_id=93');
+  assert.equal(context.getTrackModalElements().overlay.hidden, false);
+  assert.deepEqual(context.showToastCalls, []);
+});
+
+test('inventory refresh closes Album Details when the open album is gone', async () => {
+  const open = {
+    album_id: 17,
+    key: 'artist::old',
+    request_key: 'artist::old',
+    name: 'Old Album',
+    preview_only: false,
+    tracks: [{ path: 'one' }],
+  };
+  const { context } = loadHelper({
+    initialAlbums: [open],
+    onFetchAlbumDetails: async () => ({
+      ok: false,
+      status: 404,
+      json: async () => ({ ok: false, error: 'Album not found' }),
+    }),
+  });
+  context.state.modalReleases = [open];
+  context.state.modalReleaseIndex = 0;
+  context.getTrackModalElements().overlay.hidden = false;
+
+  assert.equal(await context.refreshOpenTrackModalAfterInventoryMutation(), true);
+  assert.equal(context.getTrackModalElements().overlay.hidden, true);
+  assert.deepEqual(context.showToastCalls.map(({ message }) => message), [
+    'This album changed—choose it again in the gallery.',
+  ]);
+});
+
+test('this session keeps its edited album rendered during inventory refresh', async () => {
   const selected = {
     album_id: 93,
     key: 'artist::album::year::2004',
@@ -594,53 +695,31 @@ test('this session keeps its recovered split release rendered during inventory r
     name: 'Album',
     year: 2004,
     preview_only: false,
-    tracks: [{ path: 'one', title: 'Recovered track' }],
+    tracks: [{ path: 'one', title: 'Edited track' }],
   };
   let resolveRefresh = null;
-  const responses = [
-    {
-      ok: false,
-      status: 409,
-      json: () => Promise.resolve({
-        ok: false,
-        resolution_kind: 'album_split',
-        current_releases: choices,
-      }),
-    },
-    {
-      ok: true,
-      status: 200,
-      json: () => Promise.resolve({ ok: true, album: selected }),
-    },
-  ];
+  const responses = [{
+    ok: true,
+    status: 200,
+    json: () => Promise.resolve({ ok: true, album: selected }),
+  }];
   const { context } = loadHelper({
     onFetchAlbumDetails: () => responses.shift() || new Promise((resolve) => {
       resolveRefresh = resolve;
     }),
   });
 
-  const card = {
-    album_id: 17,
-    key: 'artist::album',
-    name: 'Album',
-    year: 2004,
-    preview_only: true,
-  };
+  const card = { ...selected, preview_only: true, tracks: [] };
   context.rememberLocallyEditedAlbum(card);
   context.openTrackModal(card);
   await flushMicrotasks();
-
-  assert.equal(
-    context.fetchCalls[1].url,
-    '/album-details?album_key=artist%3A%3Aalbum%3A%3Ayear%3A%3A2004&album_id=93',
-  );
 
   const elements = context.getTrackModalElements();
   const renderedRows = elements.list.innerHTML;
   context.refreshOpenTrackModalVersionState = () => {};
   const refresh = context.refreshOpenTrackModalAfterInventoryMutation();
   assert.equal(elements.list.innerHTML, renderedRows);
-  assert.doesNotMatch(context.fetchCalls[2].url, /resolve_lineage=1/);
+  assert.doesNotMatch(context.fetchCalls[1].url, /resolve_lineage=1/);
   resolveRefresh({
     ok: true,
     status: 200,
@@ -649,7 +728,7 @@ test('this session keeps its recovered split release rendered during inventory r
   assert.equal(await refresh, true);
 });
 
-test('a card rendered before an inventory mutation resolves lineage before current identity', () => {
+test('a card rendered before an inventory mutation reloads its exact identity without the split chooser', () => {
   const staleRenderedAlbum = {
     album_id: 17,
     key: 'artist::original',
@@ -685,7 +764,7 @@ test('a card rendered before an inventory mutation resolves lineage before curre
   assert.equal(context.openTrackModalForButton(staleButton), true);
   assert.equal(
     context.fetchCalls[0].url,
-    '/album-details?album_key=artist%3A%3Aoriginal&album_id=17&resolve_lineage=1',
+    '/album-details?album_key=artist%3A%3Aoriginal&album_id=17',
   );
 });
 
@@ -713,7 +792,7 @@ test('an unstamped preview card does not claim stale lineage', () => {
   );
 });
 
-test('a stale card bypasses current hydrated details before resolving lineage', () => {
+test('a stale card bypasses current hydrated details and reloads its exact identity', () => {
   const staleRenderedAlbum = {
     album_id: 17,
     key: 'artist::original',
@@ -739,7 +818,7 @@ test('a stale card bypasses current hydrated details before resolving lineage', 
 
   assert.equal(context.openTrackModalForButton(button), true);
   assert.equal(context.fetchCalls.length, 1);
-  assert.match(context.fetchCalls[0].url, /resolve_lineage=1$/);
+  assert.equal(context.fetchCalls[0].url, '/album-details?album_key=artist%3A%3Aoriginal&album_id=17');
 });
 
 test('Album Details retries by key when an older server rejects album_id', async () => {
@@ -1337,7 +1416,7 @@ test('inventory mutation refresh does not reuse an in-flight stale child after m
   assert.deepEqual(refreshed, [{ albumKey: staleChild.key, album: mergedRelease }]);
 });
 
-test('inventory mutation refresh renders current releases when the open album split', async () => {
+test('inventory mutation refresh of a gallery-opened album never renders a split chooser', async () => {
   const stale = {
     album_id: 17,
     key: 'artist::old',
@@ -1369,11 +1448,12 @@ test('inventory mutation refresh renders current releases when the open album sp
   context.state.modalReleaseIndex = 0;
   context.getTrackModalElements().overlay.hidden = false;
 
-  assert.equal(await context.refreshOpenTrackModalAfterInventoryMutation(), true);
-  assert.match(
-    context.getTrackModalElements().list.innerHTML,
-    /data-track-modal-current-release="92"[\s\S]*Left Album[\s\S]*data-track-modal-current-release="93"[\s\S]*Right Album/,
+  await assert.rejects(
+    context.refreshOpenTrackModalAfterInventoryMutation(),
+    /This album was split/,
   );
+  assert.doesNotMatch(context.fetchCalls[0].url, /resolve_lineage=1/);
+  assert.doesNotMatch(context.getTrackModalElements().list.innerHTML, /data-track-modal-current-release/);
 });
 
 test('in-flight details preserve an optimistic owner across inventory revisions until settlement', async () => {
@@ -2136,8 +2216,8 @@ async function run() {
       onFetchAlbumDetails() {
         return {
           ok: false,
-          status: 404,
-          json: () => Promise.resolve({ ok: false, error: 'Album not found' }),
+          status: 500,
+          json: () => Promise.resolve({ ok: false, error: 'Album details failed' }),
         };
       },
     });
@@ -3416,3 +3496,26 @@ for (const interruption of ['cancel', 'pinch', 'zoom', 'close', 'remaining-touch
     assert.equal(prevented, 0, 'rejected gestures retain native scrolling');
   });
 }
+
+// Request-capture contract (tests/ci/bounded-interactions.json): repeated Album Details opens
+// share one /album-details request and the cached result; a rejected album_id adds one retry.
+const { assertInteractionRequests, measureInteractionContract } = require('../helpers/request-capture');
+
+test('request capture: Album Details opens fetch /album-details once per album', async () => {
+  const id = 'js:runtime/track-modal-lightbox-helpers.js#fetchTrackModalAlbumDetails';
+  await measureInteractionContract(id, async (opens) => {
+    const { context } = loadHelper({
+      onFetchAlbumDetails: ({ url }) => (url.includes('album_id=')
+        ? { ok: false, status: 400, json: () => Promise.resolve({ ok: false, error: 'Unsupported album-details query parameter', unsupported_parameters: ['album_id'] }) }
+        : { ok: true, status: 200, json: () => Promise.resolve({ ok: true, album: { key: new URL(url, 'http://localhost').searchParams.get('album_key'), tracks: [] } }) }),
+    });
+    const loadMany = albumKey => Promise.all(Array.from({ length: opens }, () => context.loadTrackModalAlbumDetails(albumKey)));
+    await loadMany('alpha');
+    await loadMany('alpha');
+    await context.loadTrackModalAlbumDetails('beta', { albumId: 7 });
+    const urls = context.fetchCalls.map(call => call.url);
+    assert.deepEqual(urls, ['/album-details?album_key=alpha', '/album-details?album_key=beta&album_id=7', '/album-details?album_key=beta']);
+    assertInteractionRequests(id, urls);
+    return { requests: urls.length };
+  });
+});

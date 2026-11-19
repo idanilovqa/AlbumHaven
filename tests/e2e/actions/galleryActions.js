@@ -1525,6 +1525,29 @@ export class GalleryActions {
     return { ...labels, artistText: (await this.galleryPage.albumCard.readVisibleMetadata(card)).artist };
   }
 
+  // Album Details requests a gallery card sends; a shared key alone can name several releases,
+  // so each card open must carry its own album id and never ask for the split chooser.
+  recordAlbumDetailsRequests() {
+    const page = this.galleryPage.page;
+    const urls = [];
+    const record = (request) => {
+      const url = new URL(request.url());
+      if (request.method() === 'GET' && url.pathname === '/album-details') urls.push(url);
+    };
+    page.on('request', record);
+    return {
+      stop: () => page.off('request', record),
+      // A card whose view already carries its tracks opens without a request; any request made
+      // must still name the card's own album and never ask for the split chooser.
+      expectExactCardOpens: () => {
+        for (const url of urls) {
+          expect(Number(url.searchParams.get('album_id'))).toBeGreaterThan(0);
+          expect(url.searchParams.has('resolve_lineage')).toBe(false);
+        }
+      },
+    };
+  }
+
   async selectAlbumDetailsByIdentity(expected, options = {}) {
     const artist = String(expected.artist || '').trim();
     const album = String(expected.album || '').trim();

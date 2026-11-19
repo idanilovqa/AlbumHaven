@@ -9,6 +9,7 @@ const RUNTIME_SCRIPT_PATHS = [
   'js/runtime/bootstrap-state.js',
   'js/runtime/startup-metrics-helpers.js',
   'js/runtime/response-state-helpers.js',
+  'js/runtime/pending-projection-fetch.js',
   'js/runtime/view-state-helpers.js',
   'js/runtime/browser-navigation-helpers.js',
   'js/runtime/discovery-center-navigation.js',

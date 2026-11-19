@@ -10,10 +10,8 @@ from music_app.services.lastfm_postgres import (
     _upsert_scrobble_retry_state_sql,
 )
 from music_app.services.lastfm_listen_sync import (
-    clear_pending_scrobble,
     load_lastfm_sync_state,
-    record_pending_scrobble,
-    record_retry_summary,
+    record_retry_results,
     save_lastfm_sync_state,
 )
 
@@ -80,13 +78,9 @@ def test_pending_scrobble_and_retry_summary_state_shapes(
 ):
     config = {"DATA_DIR": tmp_path}
 
-    record_pending_scrobble(
-        config,
-        listen_id="listen-1",
-        entry={"track_ref": "C:/Music/song.mp3"},
-        retry_count=2,
-        error="Temporary failure",
-    )
+    record_retry_results(config, pending_changes={"listen-1": {
+        "track_ref": "C:/Music/song.mp3", "scrobble_retry_count": 2, "scrobble_error": "Temporary failure",
+    }}, summary=None)
     state = load_lastfm_sync_state(config)
 
     assert state["pending_scrobbles"]["listen-1"] == {
@@ -96,12 +90,13 @@ def test_pending_scrobble_and_retry_summary_state_shapes(
     }
     assert state["sync_problems"]["listen-1"]["provider"] == "lastfm"
 
-    clear_pending_scrobble(config, listen_id="listen-1")
+    record_retry_results(config, pending_changes={"listen-1": None}, summary=None)
     assert load_lastfm_sync_state(config)["pending_scrobbles"] == {}
 
-    record_retry_summary(
+    record_retry_results(
         config,
-        {
+        pending_changes={},
+        summary={
             "pending_before": 2,
             "attempted": 2,
             "succeeded": 1,
@@ -159,17 +154,14 @@ def test_selected_postgres_sync_state_pending_and_retry_summary_leave_stale_json
     monkeypatch.setattr("music_app.services.lastfm_postgres.psycopg", FakePsycopg())
     monkeypatch.setattr(lastfm_listen_sync, "LastfmPostgresAdapter", FakeLastfmSyncStateAdapter)
 
-    record_pending_scrobble(
+    record_retry_results(config, pending_changes={"listen-db": {
+        "track_ref": "db-track", "scrobble_retry_count": 3, "scrobble_error": "retry me",
+    }}, summary=None)
+    record_retry_results(config, pending_changes={"listen-db": None}, summary=None)
+    record_retry_results(
         config,
-        listen_id="listen-db",
-        entry={"track_ref": "db-track"},
-        retry_count=3,
-        error="retry me",
-    )
-    clear_pending_scrobble(config, listen_id="listen-db")
-    record_retry_summary(
-        config,
-        {
+        pending_changes={},
+        summary={
             "pending_before": 1,
             "attempted": 1,
             "succeeded": 1,

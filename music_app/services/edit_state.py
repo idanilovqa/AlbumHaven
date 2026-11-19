@@ -6,16 +6,20 @@ Route and workflow seams can call into this module for cache-entry repair,
 affected-album rebuilds, and related edit-side state refreshes.
 """
 
+from collections.abc import Mapping
 import logging
 from pathlib import Path
 
-from music_app.services.cache import schedule_cache_updates_save_for_config
-from music_app.services.exception_overrides import apply_exception_override, load_exception_overrides
-from music_app.services.library import album_separate_release_key, album_to_dict, build_albums_from_file_cache
-from music_app.services.metadata import apply_text_repairs_to_file, normalize_exception_value, read_metadata_for_file
+from music_app.services.library import (
+    album_separate_release_key,
+    album_sort_key,
+    album_to_dict,
+    build_albums_from_file_cache,
+)
+from music_app.services.library_album_index import LibraryAlbumIndex, library_album_index, replace_library_albums
+from music_app.services.metadata import apply_text_repairs_to_file, normalize_exception_value
 from music_app.services.non_album_view_payloads import is_loose_track_album_value
 from music_app.services.relations import build_relation_views
-from music_app.services.separate_releases import load_separate_release_keys
 from music_app.services.utils import repair_display_text
 
 logger = logging.getLogger(__name__)
@@ -98,140 +102,109 @@ def _cache_entry_album_keys(entry: dict[str, object], separate_release_keys: set
     return keys
 
 
-def _merge_rebuilt_albums(existing_albums: list, rebuilt_albums: list, affected_album_keys: set[str]) -> list:
-    merged = [
-        album
-        for album in existing_albums
-        if not any(
-            str(getattr(album, "key", "") or "") == affected_key
-            or str(getattr(album, "key", "") or "").startswith(
-                f"{affected_key}::year::"
-            )
-            for affected_key in affected_album_keys
-        )
-    ]
-    merged.extend(rebuilt_albums)
-    merged.sort(
-        key=lambda album: (
-            str(getattr(album, "album_artist", "") or "").lower(),
-            int(getattr(album, "year", None) or 9999),
-            str(getattr(album, "name", "") or "").lower(),
-        )
-    )
-    return merged
+def _affected_album_keys(
+    previous_file_cache: Mapping[str, dict[str, object]],
+    updated_file_cache: Mapping[str, dict[str, object]],
+    paths: set[str],
+    separate_release_keys: set[str],
+) -> set[str]:
+    affected_album_keys: set[str] = set()
+    for raw_path in paths:
+        for file_cache in (previous_file_cache, updated_file_cache):
+            entry = file_cache.get(raw_path)
+            if isinstance(entry, dict):
+                affected_album_keys.update(_cache_entry_album_keys(entry, separate_release_keys))
+    return affected_album_keys
+
+
+def _album_track_paths(albums: list[object]) -> set[str]:
+    return {
+        path
+        for album in albums
+        for track in getattr(album, "tracks", ()) or ()
+        if (path := str(getattr(track, "path", "") or ""))
+    }
+
+
+def affected_album_track_paths(
+    library_state: Mapping[str, object],
+    previous_file_cache: Mapping[str, dict[str, object]],
+    updated_file_cache: Mapping[str, dict[str, object]],
+    changed_paths: set[str],
+    separate_release_keys: set[str],
+) -> set[str]:
+    """The changed paths and every track of the published albums they left or
+    joined, read by track path and release key, never by scanning."""
+    index = library_album_index(library_state)
+    affected_album_keys = _affected_album_keys(previous_file_cache, updated_file_cache, changed_paths, separate_release_keys)
+    return set(changed_paths) | _album_track_paths([
+        *index.albums_with_any_track(changed_paths), *index.albums_of_releases(affected_album_keys),
+    ])
+
+
+def _affected_album_entries(
+    index: LibraryAlbumIndex,
+    updated_file_cache: Mapping[str, dict[str, object]],
+    paths: set[str],
+    affected_album_keys: set[str],
+    separate_release_keys: set[str],
+) -> dict[str, dict[str, object]]:
+    """The entries of every affected album: the given paths plus the tracks the
+    published albums of those releases hold, read by key, never by scanning."""
+    candidate_paths = set(paths) | _album_track_paths(index.albums_of_releases(affected_album_keys))
+    return {
+        path: entry
+        for path in sorted(candidate_paths)
+        if isinstance(entry := updated_file_cache.get(path), dict)
+        and _cache_entry_album_keys(entry, separate_release_keys) & affected_album_keys
+    }
 
 
 def rebuild_affected_albums_in_state(
     st: dict[str, object],
-    previous_file_cache: dict[str, dict[str, object]],
-    updated_file_cache: dict[str, dict[str, object]],
+    previous_file_cache: Mapping[str, dict[str, object]],
+    updated_file_cache: Mapping[str, dict[str, object]],
     changed_paths: set[str],
     separate_release_keys: set[str],
 ) -> None:
-    affected_album_keys: set[str] = set()
-    for raw_path in changed_paths:
-        previous_entry = previous_file_cache.get(raw_path)
-        if isinstance(previous_entry, dict):
-            affected_album_keys.update(_cache_entry_album_keys(previous_entry, separate_release_keys))
-        updated_entry = updated_file_cache.get(raw_path)
-        if isinstance(updated_entry, dict):
-            affected_album_keys.update(_cache_entry_album_keys(updated_entry, separate_release_keys))
-
+    """Rebuild the albums the changed paths belonged to or now belong to and
+    republish them in place of their previous versions."""
+    affected_album_keys = _affected_album_keys(previous_file_cache, updated_file_cache, changed_paths, separate_release_keys)
     if not affected_album_keys:
-        st["albums"] = _merge_rebuilt_albums(list(st.get("albums", []) or []), [], set())
         return
-
-    affected_entries = {
-        path_str: entry
-        for path_str, entry in updated_file_cache.items()
-        if _cache_entry_album_keys(entry, separate_release_keys) & affected_album_keys
-    }
-    rebuilt_albums = build_albums_from_file_cache(affected_entries, separate_release_keys)
-    st["albums"] = _merge_rebuilt_albums(list(st.get("albums", []) or []), rebuilt_albums, affected_album_keys)
+    index = library_album_index(st)
+    rebuilt_albums = build_albums_from_file_cache(
+        _affected_album_entries(index, updated_file_cache, changed_paths, affected_album_keys, separate_release_keys),
+        separate_release_keys,
+    )
+    replace_library_albums(
+        st, index.albums_of_releases(affected_album_keys), rebuilt_albums, sort_key=album_sort_key,
+    )
 
 
 def build_affected_album_dicts(
-    previous_file_cache: dict[str, dict[str, object]],
-    updated_file_cache: dict[str, dict[str, object]],
+    previous_file_cache: Mapping[str, dict[str, object]],
+    updated_file_cache: Mapping[str, dict[str, object]],
     track_paths: set[str],
     changed_paths: set[str],
     separate_release_keys: set[str],
+    *,
+    library_state: Mapping[str, object],
 ) -> list[dict[str, object]]:
-    affected_album_keys: set[str] = set()
-    for raw_path in changed_paths or track_paths:
-        previous_entry = previous_file_cache.get(raw_path)
-        if isinstance(previous_entry, dict):
-            affected_album_keys.update(_cache_entry_album_keys(previous_entry, separate_release_keys))
-        updated_entry = updated_file_cache.get(raw_path)
-        if isinstance(updated_entry, dict):
-            affected_album_keys.update(_cache_entry_album_keys(updated_entry, separate_release_keys))
-    affected_entries = {
-        path_str: entry
-        for path_str, entry in updated_file_cache.items()
-        if _cache_entry_album_keys(entry, separate_release_keys) & affected_album_keys
-    }
-    rebuilt_albums = build_albums_from_file_cache(affected_entries, separate_release_keys)
+    paths = changed_paths or track_paths
+    affected_album_keys = _affected_album_keys(previous_file_cache, updated_file_cache, paths, separate_release_keys)
+    rebuilt_albums = build_albums_from_file_cache(
+        _affected_album_entries(
+            library_album_index(library_state), updated_file_cache, paths, affected_album_keys, separate_release_keys,
+        ),
+        separate_release_keys,
+    )
     return find_album_dicts_by_track_paths(rebuilt_albums, track_paths)
 
 
 def apply_repairs_worker(raw_path: str, repairs: dict[str, str]) -> tuple[str, bool, list[str]]:
     changed, changed_fields = apply_text_repairs_to_file(Path(raw_path), repairs)
     return raw_path, changed, changed_fields
-
-
-def refresh_changed_files_in_cache(
-    st: dict[str, object],
-    file_cache: dict[str, dict[str, object]],
-    changed_paths: set[str],
-    *,
-    config: dict[str, object],
-    logger: object | None = None,
-) -> bool:
-    if not changed_paths:
-        return False
-
-    log_target = logger if logger is not None else globals()["logger"]
-    updated_file_cache = dict(file_cache)
-    exception_overrides = load_exception_overrides(config)
-    cache_changed = False
-    for raw_path in changed_paths:
-        previous_entry = file_cache.get(raw_path) if isinstance(file_cache.get(raw_path), dict) else {}
-        try:
-            refreshed_entry = read_metadata_for_file(Path(raw_path))
-            previous_cover_value = str(previous_entry.get("cover_path") or "").strip() if isinstance(previous_entry, dict) else ""
-            previous_cover_path = Path(previous_cover_value) if previous_cover_value else None
-            if (
-                isinstance(previous_entry, dict)
-                and previous_cover_path is not None
-                and previous_cover_path.exists()
-                and not refreshed_entry.get("cover_path")
-            ):
-                refreshed_entry["cover_path"] = previous_cover_value
-            apply_exception_override(refreshed_entry, exception_overrides)
-            updated_file_cache[raw_path] = refreshed_entry
-            cache_changed = True
-        except Exception as exc:
-            log_target.warning("Could not refresh metadata cache entry for %s: %s", raw_path, exc)
-
-    if not cache_changed:
-        return False
-
-    st["file_cache"] = updated_file_cache
-    separate_release_keys = set(st.get("separate_release_keys") or load_separate_release_keys(config))
-    rebuild_affected_albums_in_state(st, file_cache, updated_file_cache, changed_paths, separate_release_keys)
-    try:
-        schedule_cache_updates_save_for_config(
-            config,
-            config["CACHE_PATH"],
-            {
-                path_str: updated_file_cache[path_str]
-                for path_str in changed_paths
-                if isinstance(updated_file_cache.get(path_str), dict)
-            },
-        )
-    except Exception as exc:
-        log_target.warning("Could not schedule repaired metadata cache update: %s", exc)
-    return True
 
 
 def rebuild_relation_views(albums: list[object], config: dict[str, object]) -> dict[str, object]:

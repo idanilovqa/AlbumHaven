@@ -384,9 +384,13 @@ function createEngineHarness(options = {}) {
       return sockets.flatMap((socket) => socket.sent).filter((message) => message.type === type);
     },
     portMessages(type) {
-      return nodes.flatMap((node) => node.port.messages)
-        .map(({ message }) => message)
-        .filter((message) => message.type === type);
+      const matches = [];
+      for (const node of nodes) {
+        for (const { message } of node.port.messages) {
+          if (message.type === type) matches.push(message);
+        }
+      }
+      return matches;
     },
   };
 }
@@ -6740,6 +6744,44 @@ test('a browser cache that never answers does not hold the start of a track', as
   await start;
 });
 
+test('a browser cache that never answers does not hold the next song', async () => {
+  const deadlines = [];
+  const harness = createEngineHarness({
+    setTimeout: (callback, delay) => {
+      if (delay === 500) {
+        deadlines.push(delay);
+        Promise.resolve().then(callback);
+        return 1;
+      }
+      return setTimeout(callback, delay);
+    },
+  });
+  const next = makeTrack('02.flac');
+  Object.assign(harness.context, {
+    streamingTrackCacheKey: (track, quality) => `${track.path}|${quality || 'original'}`,
+    loadStreamingCachedTrack: key => (key.startsWith(next.path) ? new Promise(() => {}) : Promise.resolve(null)),
+    keepStreamingCachedTrack: () => {},
+  });
+  await harness.api.start(makeTrack());
+  const current = harness.sent('open')[0];
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame', generation: current.generation, streamId: current.streamId,
+    renderedFrame: 0, contextTime: 1,
+  });
+  harness.sockets[0].receive({
+    type: 'eos', generation: current.generation, streamId: current.streamId, role: 'current',
+    emittedFrames: 10_000, authoritativeTotalFrames: 10_000,
+  });
+
+  const scheduling = harness.api.continuity(next);
+  await harness.settle();
+
+  assert.deepEqual(deadlines, [500, 500], 'the start and the next song each wait out the same deadline');
+  assert.deepEqual(harness.sent('open').map(({ role }) => role), ['current', 'continuity'],
+    'the next song streams from the server instead');
+  await scheduling;
+});
+
 test('a kept track starts mid-track from its seek table', async () => {
   const { decoders, create } = recordingDecoders();
   const harness = encodedHarness({ createStreamingDecoder: create });
@@ -6792,4 +6834,86 @@ test('a successor prepared ahead is kept at the local audible boundary', async (
     type: 'promoted', generation: current.generation, streamId: continuity.streamId, role: 'current',
   });
   assert.equal(kept.length, 1, 'it is kept once');
+});
+
+// Bounded-interaction contracts (tests/ci/bounded-interactions.json): a socket chunk or a worklet
+// message decodes one fixed-size buffer and publishes fixed-shape diagnostics however long the
+// session has been playing.
+async function startCountedStreamingSession(counter, options = {}) {
+  const harness = createEngineHarness({
+    ...options,
+    sendSocket: () => counter.count('requests'),
+    handleStreamingPlaybackPosition: () => counter.count('renderCommits'),
+  });
+  harness.context.document = { documentElement: { setAttribute(_name, value) {
+    counter.count('domMutations');
+    counter.count('markupBytes', String(value).length);
+  } } };
+  await harness.api.start(makeTrack());
+  await harness.settle();
+  const current = harness.sent('open')[0];
+  acceptMetadata(harness, current);
+  const port = harness.nodes[0].port;
+  const post = port.postMessage.bind(port);
+  port.postMessage = (...args) => { counter.count('outputEmissions'); return post(...args); };
+  port.dispatch({ type: 'first-frame', generation: current.generation, streamId: current.streamId, renderedFrame: 0, contextTime: 12.5 });
+  let sequence = 0;
+  let nowMs = 1000;
+  // One 2-frame chunk arrives, the worklet plays it, and reports its position 100 ms later.
+  const playChunk = () => {
+    receivePcmAndAssertEnqueue(harness, { generation: current.generation, streamId: current.streamId, sequence });
+    sequence += 1;
+    port.dispatch({ type: 'consumed', generation: current.generation, streamId: current.streamId, role: 'current', frames: 2, bufferedFrames: 0 });
+    nowMs += 100;
+    harness.setNow(nowMs);
+    port.dispatch({ type: 'position', generation: current.generation, streamId: current.streamId, timelineFrame: sequence * 2 });
+  };
+  return { harness, playChunk, chunks: () => sequence };
+}
+
+test('bounded interaction: streaming socket chunks and worklet messages stay constant over a 10,000-chunk session', async () => {
+  const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const run = async (sessionChunks) => {
+    const counter = createInteractionCounter();
+    const session = await startCountedStreamingSession(counter);
+    for (let chunk = 0; chunk < sessionChunks; chunk += 1) session.playChunk();
+    const work = await counter.measure(() => {
+      for (let chunk = 0; chunk < 10; chunk += 1) session.playChunk();
+    });
+    assert.equal(session.harness.engine.mode, 'playing');
+    assert.equal(session.harness.portMessages('enqueue').length, sessionChunks + 10, 'every chunk reaches the worklet');
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:runtime/player-streaming-engine.js#prepareStreamingPlaybackEngine',
+    small: 10,
+    large: 10000,
+    run,
+    budgets: { outputEmissions: 10, requests: 0, renderCommits: 3, domMutations: 10, markupBytes: 13000 },
+    growth: { metric: 'outputEmissions', largeMinusSmallMax: 0 },
+  });
+});
+
+test('bounded interaction: the streaming keepalive sends one control per tick over a 1,000-tick pause', async () => {
+  const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const run = async (ticks) => {
+    const counter = createInteractionCounter();
+    const { harness } = await startCountedStreamingSession(counter);
+    await harness.api.pause();
+    const keepalive = harness.intervals.find(({ delay }) => delay === 25_000).callback;
+    for (let tick = 0; tick < ticks; tick += 1) keepalive();
+    const work = await counter.measure(() => {
+      for (let tick = 0; tick < 10; tick += 1) keepalive();
+    });
+    assert.equal(harness.sent('keepalive').length, ticks + 10);
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:runtime/player-streaming-engine.js#keepStreamingSocketAlive',
+    small: 10,
+    large: 1000,
+    run,
+    budgets: { requests: 10, outputEmissions: 0, domMutations: 0 },
+    growth: { metric: 'requests', largeMinusSmallMax: 0 },
+  });
 });

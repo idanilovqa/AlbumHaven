@@ -125,6 +125,27 @@ def _safe_history_write_error_message(exc: Exception, config: dict) -> str:
     )
 
 
+def log_app_message(logger: logging.Logger, action: str, *, level: str = "info", **fields) -> dict:
+    """Writes the event to the application log only; never touches log history,
+    so it is safe on the event loop. Returns the logged payload."""
+    payload = {"action": action}
+    for key, value in fields.items():
+        payload[str(key)] = _normalize_log_value(value)
+
+    message = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    level_number = int(getattr(logging, str(level or "info").upper(), logging.INFO))
+    logger.log(level_number, message)
+    return payload
+
+
+def log_app_message_event(config: dict, logger: logging.Logger, action: str, *, level: str = "info", **fields) -> None:
+    """`log_app_event` without its log-history branch, for code that logs per
+    item or per provider call: one history write opens one database
+    connection, so those events go to the application log only."""
+    del config
+    log_app_message(logger, action, level=level, **fields)
+
+
 def log_app_event(
     config: dict,
     logger: logging.Logger,
@@ -135,14 +156,10 @@ def log_app_event(
     history_scope=None,
     **fields,
 ) -> None:
-    payload = {"action": action}
-    for key, value in fields.items():
-        payload[str(key)] = _normalize_log_value(value)
-
-    message = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    """Writes the event to the application log and, with `history`, to log
+    history, which opens a database connection."""
+    payload = log_app_message(logger, action, level=level, **fields)
     level_name = str(level or "info").upper()
-    level_number = int(getattr(logging, level_name, logging.INFO))
-    logger.log(level_number, message)
 
     if history:
         try:

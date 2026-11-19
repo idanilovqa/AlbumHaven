@@ -7,6 +7,7 @@ from functools import partial
 import time
 
 from music_app.services.cover_provider_cache import CoverSearchCache
+from music_app.services.library_album_index import library_album_index
 from music_app.services.scan_cache_persistence import select_scan_cache_adapter
 
 
@@ -165,12 +166,30 @@ def _start_cover_refresh_progress(
     library_state["covers_current_folder"] = current_folder
 
 
+def _selected_album_file_cache(
+    library_state: dict[str, object],
+    track_paths: set[str],
+) -> dict[str, dict[str, object]]:
+    """The cache entries of the albums holding `track_paths`, read by key."""
+    paths = {str(path) for path in track_paths}
+    for album in library_album_index(library_state).albums_with_any_track(paths):
+        tracks = album.get("tracks", []) if isinstance(album, dict) else getattr(album, "tracks", [])
+        for track in tracks or []:
+            path = track.get("path") if isinstance(track, dict) else getattr(track, "path", None)
+            if str(path or "").strip():
+                paths.add(str(path))
+    file_cache = library_state.get("file_cache") or {}
+    return {path: entry for path in sorted(paths) if isinstance(entry := file_cache.get(path), dict)}
+
+
 def build_cover_refresh_context(
     *,
     get_state: StateGetter,
     config,
     bump_cover_generation: bool = False,
+    track_paths: set[str] | None = None,
 ) -> CoverRefreshContext:
+    """The pass context; `track_paths` limits it to the albums holding them."""
     library_state = get_state()
     if bump_cover_generation:
         library_state["cover_generation"] = int(library_state.get("cover_generation") or 0) + 1
@@ -180,7 +199,12 @@ def build_cover_refresh_context(
         library_state["covers_finished_monotonic"] = None
     return CoverRefreshContext(
         library_state=library_state,
-        file_cache=cover_pass_file_cache_snapshot(library_state.get("file_cache") or {}, config),
+        file_cache=cover_pass_file_cache_snapshot(
+            library_state.get("file_cache") or {}
+            if track_paths is None
+            else _selected_album_file_cache(library_state, track_paths),
+            config,
+        ),
         separate_release_keys=set(library_state.get("separate_release_keys") or set()),
         cover_cache=CoverSearchCache(config["COVER_CACHE_PATH"]),
         image_extensions=config["IMAGE_EXTENSIONS"],
@@ -767,6 +791,7 @@ def refresh_cover_artwork_for_track_paths_request(
         get_state=get_state,
         config=config,
         bump_cover_generation=True,
+        track_paths=track_paths,
     )
     jobs = select_manual_track_cover_refresh_jobs(
         file_cache=context.file_cache,

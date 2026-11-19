@@ -2100,23 +2100,17 @@ function buildNotificationTaskCardHtml({
 }) {
   const title = NOTIFICATION_CARD_TITLES[kind];
   const secondLine = [subject, byline].filter(Boolean).join(' · ');
-  return `
-      <div class="cover-lookup-task-card ${stateClass}">
-        <div class="cover-lookup-task-open" role="button" tabindex="0" aria-label="${escapeHtml(openLabel)}" ${openAttributes}>
-          ${coverHtml}
-          <span class="cover-lookup-task-copy">
-            <span class="cover-lookup-task-title">${escapeHtml(title)}</span>
-            <span class="cover-lookup-task-byline">${escapeHtml(secondLine)}</span>
-            <span class="cover-lookup-task-meta">
-              <span class="cover-lookup-task-status-label ${stateClass}">${escapeHtml(statusLabel)}</span>
-              ${elapsedHtml}
-            </span>
-          </span>
-        </div>
-      <div class="cover-lookup-task-actions">${actionsHtml}</div>
-      <div class="cover-lookup-task-progress" aria-hidden="true"><span style="width:${progress}%"></span></div>
-      </div>
-    `;
+  // No indentation inside the markup: the drawer repaints up to 60 cards per frame.
+  return `<div class="cover-lookup-task-card ${stateClass}">`
+    + `<div class="cover-lookup-task-open" role="button" tabindex="0" aria-label="${escapeHtml(openLabel)}" ${openAttributes}>`
+    + `${coverHtml}<span class="cover-lookup-task-copy">`
+    + `<span class="cover-lookup-task-title">${escapeHtml(title)}</span>`
+    + `<span class="cover-lookup-task-byline">${escapeHtml(secondLine)}</span>`
+    + `<span class="cover-lookup-task-meta"><span class="cover-lookup-task-status-label ${stateClass}">${escapeHtml(statusLabel)}</span>${elapsedHtml}</span>`
+    + '</span></div>'
+    + `<div class="cover-lookup-task-actions">${actionsHtml}</div>`
+    + `<div class="cover-lookup-task-progress" aria-hidden="true"><span style="width:${progress}%"></span></div>`
+    + '</div>';
 }
 
 async function clearCompletedCoverLookupTasks() {

@@ -355,6 +355,7 @@ function pagingContext() {
     'GET /api/musicbrainz/corrections/albums?offset=100&limit=100': pageOf(100, 100, 250) } });
   f.context.state.utility.musicBrainzCorrectionAlbumCount = 250;
   f.context.state.utility.selectedProblemFilters = [];
+  f.context.state.utility.problematicFilesComplete = true;
   return f;
 }
 
@@ -380,6 +381,25 @@ test('choosing the filter fetches page 1 only, and an already listed album keeps
   const keys = context.state.utility.problematicFiles.map((item) => item.key);
   assert.equal(keys.length, 100, 'album a1 is listed already: 99 new rows beside it');
   assert.equal(keys.filter((key) => key.endsWith(':a1')).length, 0);
+});
+
+test('page 1 waits for the complete list, so the bounded first page never costs a second page 1', async () => {
+  const { context, requests } = pagingContext();
+  context.state.utility.selectedProblemFilters = ['Data Correction Needed'];
+  context.state.utility.problematicFilesComplete = false;
+
+  context.syncMusicBrainzCorrectionRows();
+  context.loadMoreMusicBrainzCorrectionRows(1, 1);
+  await vm.runInContext('musicBrainzCorrectionPages.loading', context);
+  assert.deepEqual(requests, [], 'nothing is fetched beside the bounded first page');
+
+  // The complete list replaces the bounded page; only now does page 1 load, once.
+  context.state.utility.problematicFiles = [...context.state.utility.problematicFiles];
+  context.state.utility.problematicFilesComplete = true;
+  context.syncMusicBrainzCorrectionRows();
+  await vm.runInContext('musicBrainzCorrectionPages.loading', context);
+  context.syncMusicBrainzCorrectionRows();
+  assert.deepEqual(requests.map(([, url]) => url), ['/api/musicbrainz/corrections/albums?offset=0&limit=100']);
 });
 
 test('scrolling near the end fetches the next page, and not before', async () => {

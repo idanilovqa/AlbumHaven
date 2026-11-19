@@ -531,6 +531,7 @@ test('artist info ignores queued pre-open scroll but dismisses real post-open mo
   context.observeArtistFamilyPanelBounds = () => null;
   context.updateGalleryMainChrome = () => {};
   context.focusGalleryMainSurface = () => {};
+  context.refreshRomanizedArtistNames = () => Promise.resolve(false);
   context.initGalleryMain();
   const anchor = { setAttribute() {} };
   const surface = { hidden: true, matches: () => false, setAttribute() {},

@@ -2982,6 +2982,9 @@ function renderArtistGroups(options = {}) {
   ) {
     rebuildAlbumIndex([]);
     virtualGrid.containerEl.innerHTML = buildGalleryEmptySelectionHtml();
+  } else if (state.ui?.galleryUnreachable && virtualGrid.containerEl) {
+    rebuildAlbumIndex([]);
+    virtualGrid.containerEl.innerHTML = buildGalleryUnreachableHtml(state.ui.galleryUnreachable);
   }
   if (typeof updateGalleryMainChrome === 'function' && typeof document?.querySelector === 'function') updateGalleryMainChrome();
 }

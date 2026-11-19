@@ -1788,6 +1788,8 @@ function findRememberedRuntimeAlbumCoverAuthority(album) {
 }
 
 function applyViewPayload(payload, options = {}) {
+  // Any applied view replaces one the server could not be reached for (applyUnreachableView).
+  if (state.ui) state.ui.galleryUnreachable = null;
   if (!options.rootGalleryContinuation && typeof cancelRootGalleryPageRequest === 'function') {
     cancelRootGalleryPageRequest();
   }
@@ -2086,14 +2088,40 @@ function applyLocalRelatedFilterState(nextRelatedArtists, options = {}) {
 
 // BEGIN js/runtime/pending-projection-fetch.js
 
+// A gateway answering for a server it cannot reach (a tunnel without its server answers 502,
+// 504 or 520-530 with its own page). The app's own 503 means "not ready yet", never unreachable.
+const isGatewayFailureStatus = status => status === 502 || status === 504 || (status >= 520 && status <= 530);
+
+// What a surface that needs the server says while the server cannot be reached: [subject] names
+// what could not be loaded.
+function serverUnreachableNotice(subject) {
+  return {
+    title: globalThis.navigator?.onLine === false ? 'Offline' : "Can't reach Album Haven",
+    message: `Can't load ${subject}. Check your network or try again later.`,
+  };
+}
+
 // While the server publishes the library, projection-backed requests answer 503
 // with a pending code. The same request repeats once per second for up to 60 s;
-// aborting init.signal cancels the wait without another request.
+// aborting init.signal cancels the wait without another request. No answer at all,
+// or a gateway's, rejects with `serverUnreachable` set.
 async function fetchRetryingPendingProjection(url, init) {
   const signal = init?.signal;
   const deadline = Date.now() + 60000;
   while (true) {
-    const response = await fetch(url, init);
+    let response;
+    try {
+      response = await fetch(url, init);
+    } catch (error) {
+      // fetch rejects with a TypeError when no answer arrives; an abort is the caller's own.
+      if (error?.name === 'TypeError') error.serverUnreachable = true;
+      throw error;
+    }
+    if (isGatewayFailureStatus(response.status)) {
+      throw Object.assign(new Error(`Album Haven could not be reached (${response.status}).`), {
+        status: response.status, serverUnreachable: true,
+      });
+    }
     if (response.status !== 503) return response;
     const pending = await response.clone().json().catch(() => null);
     if (!['search_projection_pending', 'gallery_projection_pending'].includes(pending?.code) || Date.now() >= deadline) return response;
@@ -4984,6 +5012,13 @@ function buildGalleryEmptySelectionHtml() {
   return '<div class="gallery-empty-selection" data-gallery-empty-selection role="status">Select at least one artist in Artist Family.</div>';
 }
 
+// A view the server could not be reached for: the shared OnPageAlert in place of its albums.
+function buildGalleryUnreachableHtml(notice) {
+  return `<div class="gallery-unreachable" data-gallery-unreachable>${buildOnPageAlertHtml({
+    severity: 'warning', role: 'status', title: notice.title, message: notice.message,
+  })}</div>`;
+}
+
 function buildGalleryDividerHtml(config = {}) {
   return `<div class="gallery-divider"><span>${escapeHtml(config.label || 'Family')}</span><span class="gallery-divider__line"></span><span>${escapeHtml(galleryMainPlural(config.albumCount, 'album'))}</span></div>`;
 }
@@ -7737,6 +7772,15 @@ function renderGalleryMainContext(bar, context) {
     else {
       oldInfo.dataset.artist = context.artist;
       oldInfo.setAttribute('aria-label', `Information about ${context.artist}`);
+    }
+  }
+  // A view the server could not be reached for has no counts to give, only its name.
+  if (state.ui?.galleryUnreachable) {
+    summary.hidden = true;
+    summary.textContent = '';
+    if (inlineTotal) {
+      inlineTotal.hidden = true;
+      inlineTotal.textContent = '';
     }
   }
   positionGalleryFamilyPanel(bar);
@@ -16245,6 +16289,23 @@ function renderTrackModalLoadingState(album) {
   }
 }
 
+// The open album's details could not be loaded because the server cannot be reached: the loading
+// rows give way to the shared OnPageAlert saying so, and nothing keeps spinning.
+function renderTrackModalUnreachableState(album) {
+  const els = getTrackModalElements();
+  if (!els.overlay || !album) return;
+  const { title, message } = serverUnreachableNotice('the details');
+  els.subtitle.textContent = '';
+  els.cover.innerHTML = `
+    <div class="track-modal-cover-shell">
+      ${buildAlbumArtboxHtml({ state: 'empty', label: 'Cover art unavailable' })}
+    </div>
+  `;
+  els.list.innerHTML = `<li class="track-modal-unreachable-row">${buildOnPageAlertHtml({
+    severity: 'warning', role: 'status', title, message,
+  })}</li>`;
+}
+
 function clearTrackModalRenderedState() {
   const els = getTrackModalElements();
   if (!els.overlay) return;
@@ -16921,6 +16982,10 @@ function openTrackModal(album, options = {}) {
             console.error('[AlbumHaven][AlbumDetails] Failed to refresh the gallery.', refreshError);
           });
         }
+        return;
+      }
+      if (error?.serverUnreachable) {
+        renderTrackModalUnreachableState(albumWithPlaybackContext);
         return;
       }
       console.error('[AlbumHaven][AlbumDetails] Failed to load full album details.', error);
@@ -19159,7 +19224,9 @@ async function loadNextRootGalleryPage() {
     return true;
   } catch (error) {
     if (ownsResponse() && error?.name !== 'AbortError') {
-      showToast('Unable to load more albums. Scroll to retry.', 'error', 3200);
+      showToast(error?.serverUnreachable
+        ? unreachableToastText('more albums')
+        : 'Unable to load more albums. Scroll to retry.', 'error', 3200);
     }
     return false;
   } finally {
@@ -19240,7 +19307,9 @@ async function loadPreviousRootGalleryPage() {
     return true;
   } catch (error) {
     if (error?.name !== 'AbortError') {
-      showToast(error.message || 'Unable to load earlier albums.', 'error', 3200);
+      showToast(error?.serverUnreachable
+        ? unreachableToastText('earlier albums')
+        : error.message || 'Unable to load earlier albums.', 'error', 3200);
     }
     return false;
   } finally {
@@ -19950,6 +20019,12 @@ function dispatchStartupHydrationFollowup(followup, delayMs = 0) {
   Promise.resolve().then(runDispatch);
 }
 
+// One line for a toast: "Offline. Can't load more albums. Check your network or try again later."
+function unreachableToastText(subject) {
+  const { title, message } = serverUnreachableNotice(subject);
+  return `${title}. ${message}`;
+}
+
 function fetchGalleryViewResponse(url, signal) {
   return fetchRetryingPendingProjection(url, { headers: { Accept: 'application/json' }, signal });
 }
@@ -20056,6 +20131,34 @@ async function recoverRootGalleryWindow(
     return { response: currentResponse, url: currentUrl };
   }
   throw new Error('The previously viewed gallery artists are unavailable. Refresh the gallery to continue.');
+}
+
+// [url]'s view with no albums: its name in the bar and, in place of the albums, why they cannot
+// be shown. The next view the server answers replaces it.
+function applyUnreachableView(url) {
+  const requested = parseBrowserUrlState(url);
+  const subject = requested.selected_artist
+    || (requested.query ? `results for "${requested.query}"` : 'the library');
+  applyViewPayload({
+    ...state.view,
+    selected_artist: requested.selected_artist,
+    all_artists_active: requested.all_artists_active,
+    query: requested.query,
+    related_artists: [],
+    primary_artist_groups: [],
+    family_artist_groups: [],
+    artist_groups: [],
+    artist_count: 0,
+    album_count: 0,
+    gallery_page: null,
+  }, { trackSidebarReveal: false });
+  state.ui.galleryUnreachable = serverUnreachableNotice(subject);
+}
+
+function showUnreachableView(apiUrl, push) {
+  applyUnreachableView(apiUrl);
+  renderView({ resetScrollForUserArtistSelection: true });
+  if (push) pushBrowserViewState(state.view);
 }
 
 async function fetchAndRender(url, push = true, options = {}) {
@@ -20538,6 +20641,12 @@ async function fetchAndRender(url, push = true, options = {}) {
     if (typeof clearPendingSidebarSelection === 'function') {
       clearPendingSidebarSelection();
       renderSidebar();
+    }
+    // A view opened while the server cannot be reached names what was asked for and why it is
+    // empty, rather than leaving the previous view on screen as if nothing happened.
+    if (error?.serverUnreachable && !requestOptions.preserveScroll && !requestOptions.startupRefresh) {
+      showUnreachableView(apiUrl, push);
+      return false;
     }
     throw error;
   } finally {
@@ -45622,6 +45731,9 @@ function renderArtistGroups(options = {}) {
   ) {
     rebuildAlbumIndex([]);
     virtualGrid.containerEl.innerHTML = buildGalleryEmptySelectionHtml();
+  } else if (state.ui?.galleryUnreachable && virtualGrid.containerEl) {
+    rebuildAlbumIndex([]);
+    virtualGrid.containerEl.innerHTML = buildGalleryUnreachableHtml(state.ui.galleryUnreachable);
   }
   if (typeof updateGalleryMainChrome === 'function' && typeof document?.querySelector === 'function') updateGalleryMainChrome();
 }
@@ -53333,6 +53445,9 @@ const resolvedBootstrapView = resolveGalleryDisplayPreferenceViewState(
   galleryDisplayPreferenceResolutionOptions,
 );
 applyViewPayload(resolvedBootstrapView, { trackSidebarReveal: false });
+// The server was unreachable and this address was never kept: the kept page standing in for it
+// shows this address's view, named and saying why it cannot load, until the server answers.
+if (window.AlbumHavenAppCopy?.viewMissing) applyUnreachableView(window.location.href);
 if (typeof appBootstrap?.releasePayloadViewState === 'function') {
   appBootstrap.releasePayloadViewState();
 }
@@ -53386,7 +53501,10 @@ const shellMainContentKind = String(
   state.view?.shell_layout?.slots?.main_content?.content_kind || '',
 ).trim();
 const hasPagedRootInitialView = typeof isPagedRootGallery === 'function' && isPagedRootGallery();
+// A view standing in while the server is unreachable is refreshed once the server answers
+// (onServerAnswer below), never by a startup request that can only fail.
 const shouldStartImmediateHydration = hasPagedRootInitialView || shellMainContentKind === 'discovery_center_page'
+  || state.ui.galleryUnreachable
   ? false
   : shouldRunImmediateStartupHydration(state.view, bootstrap);
 let embeddedStartupViewPatch = startupHydration?.embeddedViewPatch && typeof startupHydration.embeddedViewPatch === 'object'

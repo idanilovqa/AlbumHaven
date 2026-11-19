@@ -30,6 +30,7 @@
   const MAX_COVER_BYTES = 200 * 1024 * 1024;
   const KEPT_COVER_PREFIX = '/__album-haven-cover/';
   const MAX_COVER_FILLS = 120;
+  const KEEP_WAIT_MS = 200;
   // A referenced cover URL as an attribute (`&amp;`) or in the bootstrap JSON (`&`).
   const COVER_URL = /\/cover\/[A-Za-z0-9_-]{22}(?=[?"'\s<>&\\]|$)[^"'\s<>]*/g;
   // A versioned asset the page loads, as a relative or absolute URL.
@@ -78,11 +79,21 @@
     let generation = 0;
 
     // Work that continues after the answer; a storage failure only means nothing is kept.
+    const keeping = new Set();
     const later = (event, task) => {
       const work = quietly(task());
+      keeping.add(work);
+      void work.then(() => keeping.delete(work));
       event?.waitUntil?.(work);
       return work;
     };
+    // What was already arriving when the server became unreachable is kept before the copy is
+    // read: a connection lost just after the page loaded still leaves that page for a new tab.
+    // A download that hangs rather than fails never holds the copy up past the wait.
+    const keptSoFar = () => Promise.race([
+      Promise.all(Array.from(keeping)),
+      new Promise(resolve => setTimeout(resolve, KEEP_WAIT_MS)),
+    ]);
 
     async function accountCache() {
       const name = (await caches.keys()).find(key => key.startsWith(CACHE_PREFIX));
@@ -231,15 +242,18 @@
     }
 
     // With the server unreachable, an address never kept (an artist opened after the last save) is
-    // sent to the last view kept, or Home, rather than failing like a page without a copy.
-    async function lastView(url) {
+    // answered at that address by Home, or the last view, kept and marked as standing in: the page
+    // then shows the view asked for, named and saying why it cannot load, never another view.
+    async function standInCopy(url) {
       const target = await accountCache();
       if (!target) return null;
       const meta = await readMeta(target.cache);
-      for (const key of [meta.last, '/']) {
+      for (const key of ['/', meta.last]) {
         if (!key || key === pageKey(url) || !isFresh(meta.pages[key])) continue;
-        const href = new URL(key, origin).href;
-        if (await target.cache.match(href)) return Response.redirect(href, 302);
+        const kept = await target.cache.match(new URL(key, origin).href);
+        if (!kept) continue;
+        const html = (await kept.text()).replace(COPY_MARKER, `${COPY_MARKER} data-view-missing="1"`);
+        return new Response(html, { headers: kept.headers });
       }
       return null;
     }
@@ -250,7 +264,8 @@
       const network = fetchPage(url, { running: true }, event);
       const answer = await network.catch(() => null);
       if (answer && answer.status < 500) return answer;
-      return (await freshCopy(url)) || (await lastView(url)) || network;
+      await keptSoFar();
+      return (await freshCopy(url)) || (await standInCopy(url)) || network;
     }
 
     async function navigate(request, event) {
@@ -283,7 +298,15 @@
       const target = await accountCache();
       const kept = target ? await target.cache.match(request) : null;
       if (kept) return kept;
-      const response = await fetch(request);
+      let response;
+      try {
+        response = await fetch(request);
+      } catch (error) {
+        await keptSoFar();
+        const keptSince = target ? await target.cache.match(request) : null;
+        if (keptSince) return keptSince;
+        throw error;
+      }
       if (target && response.status === 200 && immutable(response)) {
         keepAsset(event, target.cache, request, response.clone());
       }
@@ -298,6 +321,7 @@
       try {
         response = await fetch(request);
       } catch (error) {
+        await keptSoFar();
         const kept = target ? await target.cache.match(request) : null;
         if (kept) return kept;
         throw error;

@@ -326,6 +326,13 @@
   list-style: none;
 }
 
+.track-modal-list li.track-modal-unreachable-row {
+  display: block;
+  margin-left: -20px;
+  padding: 16px 0;
+  list-style: none;
+}
+
 .track-modal-loading-row .library-loader-spinner {
   width: 24px;
   height: 24px;

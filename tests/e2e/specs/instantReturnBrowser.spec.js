@@ -126,8 +126,9 @@ test('FTC-IAR-W09 after the first visit, a new tab opened offline shows the save
 });
 
 // Reloading, offline, an artist opened in the app after the last save: that address was never
-// kept, so the last view kept is shown instead of a connection error.
-test('FTC-IAR-W10 an offline reload of an artist opened after the last save shows the last saved view', {
+// kept. Owner D4: the page never lands on another kept view; it names the artist asked for and
+// says the server cannot be reached.
+test('FTC-IAR-W10 an offline reload of an artist opened after the last save names that artist and says it cannot load', {
   tag: '@area:gallery-search',
 }, async ({ page, context, galleryActions, navigationPanelActions }) => {
   await primeCopy(page, galleryActions);
@@ -139,12 +140,51 @@ test('FTC-IAR-W10 an offline reload of an artist opened after the last save show
   await context.setOffline(true);
   const started = Date.now();
   await page.reload();
-  await galleryActions.waitForGalleryReady();
-  expectTimingBudget(expect, Date.now() - started, UNREACHABLE_VIEW_BUDGET, `saved view after reloading ${artist} offline`);
+  const { galleryPage } = galleryActions;
+  await expect(galleryPage.unreachable).toBeVisible();
+  expectTimingBudget(expect, Date.now() - started, UNREACHABLE_VIEW_BUDGET, `unreachable view after reloading ${artist} offline`);
 
-  // The address bar names the view shown: the last one kept, never the artist with an empty page.
-  await expect(page).toHaveURL(new URL(LIBRARY_PATH, artistUrl).href);
-  await expect(galleryActions.galleryPage.appCopyMarker).toHaveAttribute('content', 'cache');
-  await expect(galleryActions.galleryPage.appCopyOfflineNotice).toBeVisible();
-  expect((await visibleAlbumNames(galleryActions.galleryPage)).length).toBeGreaterThan(0);
+  await expect(page).toHaveURL(artistUrl.href);
+  await expect(galleryPage.galleryContextName).toHaveText(artist);
+  await expect(galleryPage.unreachable).toContainText('Offline');
+  await expect(galleryPage.unreachable).toContainText(`Can't load ${artist}. Check your network or try again later.`);
+  await expect(galleryPage.appCopyMarker).toHaveAttribute('content', 'cache');
+  await expect(galleryPage.appCopyOfflineNotice).toBeVisible();
+  expect(await visibleAlbumNames(galleryPage), 'no other view stands in for the artist').toEqual([]);
+});
+
+// Owner D4, server down: an album's details spun forever and tree entries quietly kept the view
+// on screen. Offline in an open tab, each says the server cannot be reached and stops loading.
+test('FTC-IAR-W13 offline, album details and an artist that cannot load say so instead of loading forever', {
+  tag: '@area:gallery-search',
+}, async ({ page, context, galleryActions, navigationPanelActions, trackModalActions }) => {
+  await primeCopy(page, galleryActions);
+  const { galleryPage } = galleryActions;
+  const [album] = await visibleAlbumNames(galleryPage);
+  await context.setOffline(true);
+
+  await galleryActions.clickAlbumDetailsByAlbumName(album);
+  const { trackModal } = trackModalActions;
+  await expect(trackModal.unreachableAlert).toBeVisible();
+  await expect(trackModal.unreachableAlert).toContainText('Offline');
+  await expect(trackModal.unreachableAlert).toContainText("Can't load the details. Check your network or try again later.");
+  await expect(trackModal.loadingRow).toHaveCount(0);
+  await expect(trackModal.title).toContainText(album);
+  await trackModalActions.close();
+
+  // An artist further down the tree than the loaded albums: nothing on the device shows it.
+  await navigationPanelActions.openArtistTree();
+  const rendered = await navigationPanelActions.navigationPanel.sidebarArtists.count();
+  const artist = await navigationPanelActions.selectSidebarArtistAt(rendered - 1);
+  await expect(galleryPage.unreachable).toBeVisible();
+  await expect(galleryPage.galleryContextName).toHaveText(artist);
+  await expect(galleryPage.unreachable).toContainText(`Can't load ${artist}. Check your network or try again later.`);
+  expect(await visibleAlbumNames(galleryPage), 'the previous view is never left on screen').toEqual([]);
+  expect(new URL(page.url()).searchParams.get('artist')).toBe(artist);
+
+  // Back online, the same artist loads as usual and the alert is gone.
+  await context.setOffline(false);
+  await navigationPanelActions.selectSidebarArtistByName(artist);
+  await expect(galleryPage.unreachable).toHaveCount(0);
+  await expect.poll(async () => (await visibleAlbumNames(galleryPage)).length).toBeGreaterThan(0);
 });

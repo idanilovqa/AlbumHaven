@@ -3519,3 +3519,28 @@ test('request capture: Album Details opens fetch /album-details once per album',
     return { requests: urls.length };
   });
 });
+
+// Owner D4: with the server down, Album Details kept "Loading album details..." forever.
+for (const [cause, fail] of [
+  ['no answer at all', () => { throw new TypeError('Failed to fetch'); }],
+  ['a gateway answering for it (530)', () => ({ ok: false, status: 530, json: async () => { throw new SyntaxError('not JSON'); } })],
+]) {
+  test(`IAR-W10: album details that cannot reach the server stop loading and say so (${cause})`, async () => {
+    const { context } = loadHelper({ onFetchAlbumDetails: fail });
+    vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'alert-components.js'), 'utf8'), context);
+    const elements = context.getTrackModalElements();
+
+    context.openTrackModal({ key: 'alpha', name: 'Album Alpha', album_artist: 'Chris Buck', preview_only: true });
+    assert.match(elements.list.innerHTML, /Loading album details/);
+    await flushMicrotasks();
+
+    assert.doesNotMatch(elements.list.innerHTML, /Loading album details|library-loader-spinner/);
+    assert.match(elements.list.innerHTML, /data-on-page-alert="warning"/);
+    assert.match(elements.list.innerHTML, /Can&#39;t reach Album Haven|Can't reach Album Haven/);
+    assert.match(elements.list.innerHTML, /Can(&#39;|')t load the details\. Check your network or try again later\./);
+    assert.equal(elements.subtitle.textContent, '');
+    assert.doesNotMatch(elements.cover.innerHTML, /Loading cover art/);
+    assert.match(elements.title.textContent, /Album Alpha/, 'the album asked for stays named');
+    assert.deepEqual(context.showToastCalls, []);
+  });
+}

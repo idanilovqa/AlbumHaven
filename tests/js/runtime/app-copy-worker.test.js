@@ -826,30 +826,38 @@ test('IAR-W09: assets the server did not mark immutable for this build are not k
   assert.deepEqual(kept, []);
 });
 
-test('IAR-W10: in a browser, offline, an address never kept opens the last view kept', async () => {
+// Owner D4: every tree entry and Home reload landed on the one kept view (3 Crows), silently.
+test('IAR-W10: in a browser, offline, an address never kept is answered at that address by kept Home marked as standing in', async () => {
   let online = true;
-  const { handle, worker } = setup({ mode: 'web', respond: () => (online ? page('acct-a') : new TypeError('Failed to fetch')) });
+  const { handle, worker } = setup({ mode: 'web', respond: () => (online ? page('acct-a', { body: 'Home' }) : new TypeError('Failed to fetch')) });
   await worker.message({ type: 'save', url: `${ORIGIN}/?artist=Broadcast` });
   online = false;
 
   const response = await handle(navigation('/?artist=Mono'));
 
-  assert.equal(response.status, 302);
-  assert.equal(response.headers.get('Location'), `${ORIGIN}/?artist=Broadcast`);
-  assert.match(await (await handle(navigation('/?artist=Broadcast'))).text(), /content="cache"/);
+  assert.equal(response.status, 200);
+  assert.equal(response.redirected, false);
+  assert.match(await response.text(), /content="cache" data-view-missing="1" data-account="acct-a"/);
 });
 
-test('IAR-W10: the last view is the page last kept by a navigation or save, not Home kept beside it', async () => {
+test('IAR-W10: on a gateway error (530) an address never kept is answered the same way', async () => {
+  let up = true;
+  const { handle, worker } = setup({ mode: 'web', respond: () => (up ? page('acct-a') : new Response('origin down', { status: 530 })) });
+  await worker.message({ type: 'save', url: `${ORIGIN}/?artist=Broadcast` });
+  up = false;
+
+  assert.match(await (await handle(navigation('/?artist=Mono'))).text(), /data-view-missing="1"/);
+});
+
+test('IAR-W10: without Home kept, the last view kept stands in; a kept address itself is never marked', async () => {
   let online = true;
-  const { handle, worker, advance } = setup({ mode: 'web', respond: () => (online ? page('acct-a') : new TypeError('Failed to fetch')) });
-  await handle(navigation('/?artist=Broadcast'));
-  advance(1000);
-  await worker.message({ type: 'save', url: `${ORIGIN}/?artist=Mono` });
+  const { caches, handle, worker } = setup({ mode: 'web', respond: () => (online ? page('acct-a') : new TypeError('Failed to fetch')) });
+  await worker.message({ type: 'save', url: `${ORIGIN}/?artist=Broadcast` });
+  caches.stores.get(`${CACHE_PREFIX}acct-a`).entries.delete(`${ORIGIN}/`);
   online = false;
 
-  const response = await handle(navigation('/?artist=Unseen'));
-
-  assert.equal(response.headers.get('Location'), `${ORIGIN}/?artist=Mono`);
+  assert.match(await (await handle(navigation('/?artist=Mono'))).text(), /data-view-missing="1"/);
+  assert.doesNotMatch(await (await handle(navigation('/?artist=Broadcast'))).text(), /data-view-missing/);
 });
 
 test('IAR-W10: a last view past its age is not opened; the navigation fails as today', async () => {
@@ -871,7 +879,7 @@ test('the Android app still opens only the copy of the page asked for', async ()
   await assert.rejects(handle(navigation('/?artist=Mono')), TypeError);
 });
 
-test('IAR-W10: a last view whose page is gone from storage is not opened, so navigations never loop', async () => {
+test('IAR-W10: with no kept page left in storage, nothing stands in and the navigation fails as today', async () => {
   let online = true;
   const { caches, handle, worker } = setup({ mode: 'web', respond: () => (online ? page('acct-a') : new TypeError('Failed to fetch')) });
   await worker.message({ type: 'save', url: `${ORIGIN}/?artist=Broadcast` });
@@ -956,6 +964,33 @@ test('after a save of a new server build, an asset download cut off by going off
   ]);
 
   assert.match(await response.text(), /content="cache"/);
+});
+
+// Owner D2 round 7: signed in, then the connection lost at once; the page had arrived but was
+// still being written to the copy when a new tab asked for it.
+test('IAR-W12: a page still being kept when the connection drops is there for a new tab', async () => {
+  const caches = fakeCaches();
+  let release;
+  const writes = new Promise((resolve) => { release = resolve; });
+  const open = caches.open.bind(caches);
+  caches.open = async (name) => {
+    const cache = await open(name);
+    if (!cache.slow) {
+      const put = cache.put.bind(cache);
+      cache.put = async (...args) => { await writes; return put(...args); };
+      cache.slow = true;
+    }
+    return cache;
+  };
+  let online = true;
+  const { worker, event } = setup({ mode: 'web', caches, respond: () => (online ? page('acct-a') : new TypeError('Failed to fetch')) });
+  assert.match(await (await worker.handle('page', navigation('/'), event)).text(), /content="network"/);
+  online = false;
+
+  const newTab = worker.handle('page', navigation('/'), event);
+  setTimeout(release, 50);
+
+  assert.match(await (await newTab).text(), /content="cache"/);
 });
 
 // Request-capture contracts (tests/ci/bounded-interactions.json): the real worker routes every

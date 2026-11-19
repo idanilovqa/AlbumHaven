@@ -10275,7 +10275,7 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/instantReturnBrowser.spec.js",
-    "case": "FTC-IAR-W10 an offline reload of an artist opened after the last save shows the last saved view",
+    "case": "FTC-IAR-W10 an offline reload of an artist opened after the last save names that artist and says it cannot load",
     "profile": "functional-core",
     "setupScope": "suite",
     "stateMode": "read-only",
@@ -10283,9 +10283,9 @@
     "databaseScenarios": [],
     "filesystemScenarios": [],
     "expectedContracts": [
-      "browser-copy-offline-reload-unsaved-view"
+      "browser-copy-offline-reload-names-unreachable-view"
     ],
-    "ownerApproval": "approved"
+    "ownerApproval": "pending"
   },
   {
     "config": "playwright.config.js",
@@ -10384,5 +10384,42 @@
       "IAR-W12: the first visit is kept while the page is still loading; a new tab opened offline then shows it"
     ],
     "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/instantReturnBrowser.spec.js",
+    "case": "FTC-IAR-W13 offline, album details and an artist that cannot load say so instead of loading forever",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "unreachable-album-details-stop-loading",
+      "unreachable-artist-named-without-other-view"
+    ],
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/instantReturnSignIn.spec.js",
+    "case": "FTC-IAR-W12 signed in and offline at once, a new tab shows the saved library and more albums say why they cannot load",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [
+      "gallery:root-pagination"
+    ],
+    "filesystemScenarios": [
+      "media:root-pagination"
+    ],
+    "expectedContracts": [
+      "sign-in-keeps-library-before-offline",
+      "unreachable-more-albums-message"
+    ],
+    "ownerApproval": "pending"
   }
 ]

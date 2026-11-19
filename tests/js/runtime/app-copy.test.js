@@ -8,7 +8,7 @@ const { createAppCopyClient } = require(path.join(__dirname, '..', '..', '..', '
 
 function setup({
   marker = null, account = 'acct-a', answer = async () => ({ ok: true, status: 200, type: 'basic', json: async () => ({ account }) }),
-  androidShell = true, secure = true, workers = true, controlled = false, onLine = true,
+  androidShell = true, secure = true, workers = true, controlled = false, onLine = true, viewMissing = false,
 } = {}) {
   const listeners = new Map();
   const notice = { hidden: true };
@@ -38,7 +38,7 @@ function setup({
   const document = {
     visibilityState: 'visible',
     querySelector: selector => (selector === 'meta[name="album-haven-app-copy"]' && marker
-      ? { getAttribute: name => ({ content: marker, 'data-account': 'acct-a' })[name] } : null),
+      ? { getAttribute: name => ({ content: marker, 'data-account': 'acct-a', ...(viewMissing ? { 'data-view-missing': '1' } : {}) })[name] } : null),
     getElementById: id => (id === 'app-copy-offline-notice' ? notice : null),
     addEventListener: (name, listener) => listeners.set(`document:${name}`, listener),
   };
@@ -350,4 +350,18 @@ test('bounded interaction: an unreachable copy retries one account check per tic
     budgets: { requests: 10, timers: 10, renderCommits: 0 },
     growth: { metric: 'requests', largeMinusSmallMax: 0 },
   });
+});
+
+// Owner D4: an address never kept, opened while the server is unreachable, showed another view.
+test('IAR-W10: a copy standing in for an address never kept says so, so the page shows that address as unreachable', async () => {
+  const offline = async () => { throw new TypeError('Failed to fetch'); };
+  const standIn = setup({ androidShell: false, marker: 'cache', viewMissing: true, answer: offline });
+  const ownCopy = setup({ androidShell: false, marker: 'cache', answer: offline });
+  const network = setup({ androidShell: false, marker: 'network', viewMissing: true });
+  await Promise.all([standIn.settle(), ownCopy.settle(), network.settle()]);
+
+  assert.equal(standIn.client.viewMissing, true);
+  assert.equal(ownCopy.client.viewMissing, false);
+  assert.equal(network.client.viewMissing, false, 'only a page from the copy can stand in');
+  assert.equal(standIn.client.isReadOnly(), true);
 });

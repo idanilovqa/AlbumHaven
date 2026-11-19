@@ -542,6 +542,21 @@
       "rollback": "Test-only request-capture contract; the worker answers the same requests. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
+      "id": "js:app-copy-worker.js#keptSoFar",
+      "action": "One bounded wait (200 ms) for copy work already started, when the server cannot be reached",
+      "entrypoints": [
+        "js:music_app/static/js/app-copy-worker.js#keptSoFar:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/app-copy-worker.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:app-copy-worker.js#versionedAsset",
       "action": "Load a versioned static asset twice and an already kept one",
       "entrypoints": [
@@ -917,11 +932,12 @@
     },
     {
       "id": "js:login.js#<top-level>",
-      "action": "click/pageshow/submit listeners installed by <top-level>",
+      "action": "click/pageshow/submit listeners and the one-shot sign-in wait for the copy worker installed by <top-level>",
       "entrypoints": [
         "js:music_app/static/js/login.js#<top-level>:event:click",
         "js:music_app/static/js/login.js#<top-level>:event:pageshow",
-        "js:music_app/static/js/login.js#<top-level>:event:submit"
+        "js:music_app/static/js/login.js#<top-level>:event:submit",
+        "js:music_app/static/js/login.js#<top-level>:timer:setTimeout"
       ],
       "owners": [
         "music_app/static/js/login.js"

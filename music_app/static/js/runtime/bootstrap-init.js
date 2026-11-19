@@ -52,6 +52,9 @@ const resolvedBootstrapView = resolveGalleryDisplayPreferenceViewState(
   galleryDisplayPreferenceResolutionOptions,
 );
 applyViewPayload(resolvedBootstrapView, { trackSidebarReveal: false });
+// The server was unreachable and this address was never kept: the kept page standing in for it
+// shows this address's view, named and saying why it cannot load, until the server answers.
+if (window.AlbumHavenAppCopy?.viewMissing) applyUnreachableView(window.location.href);
 if (typeof appBootstrap?.releasePayloadViewState === 'function') {
   appBootstrap.releasePayloadViewState();
 }
@@ -105,7 +108,10 @@ const shellMainContentKind = String(
   state.view?.shell_layout?.slots?.main_content?.content_kind || '',
 ).trim();
 const hasPagedRootInitialView = typeof isPagedRootGallery === 'function' && isPagedRootGallery();
+// A view standing in while the server is unreachable is refreshed once the server answers
+// (onServerAnswer below), never by a startup request that can only fail.
 const shouldStartImmediateHydration = hasPagedRootInitialView || shellMainContentKind === 'discovery_center_page'
+  || state.ui.galleryUnreachable
   ? false
   : shouldRunImmediateStartupHydration(state.view, bootstrap);
 let embeddedStartupViewPatch = startupHydration?.embeddedViewPatch && typeof startupHydration.embeddedViewPatch === 'object'

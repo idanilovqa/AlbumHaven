@@ -68,6 +68,23 @@ function renderTrackModalLoadingState(album) {
   }
 }
 
+// The open album's details could not be loaded because the server cannot be reached: the loading
+// rows give way to the shared OnPageAlert saying so, and nothing keeps spinning.
+function renderTrackModalUnreachableState(album) {
+  const els = getTrackModalElements();
+  if (!els.overlay || !album) return;
+  const { title, message } = serverUnreachableNotice('the details');
+  els.subtitle.textContent = '';
+  els.cover.innerHTML = `
+    <div class="track-modal-cover-shell">
+      ${buildAlbumArtboxHtml({ state: 'empty', label: 'Cover art unavailable' })}
+    </div>
+  `;
+  els.list.innerHTML = `<li class="track-modal-unreachable-row">${buildOnPageAlertHtml({
+    severity: 'warning', role: 'status', title, message,
+  })}</li>`;
+}
+
 function clearTrackModalRenderedState() {
   const els = getTrackModalElements();
   if (!els.overlay) return;
@@ -744,6 +761,10 @@ function openTrackModal(album, options = {}) {
             console.error('[AlbumHaven][AlbumDetails] Failed to refresh the gallery.', refreshError);
           });
         }
+        return;
+      }
+      if (error?.serverUnreachable) {
+        renderTrackModalUnreachableState(albumWithPlaybackContext);
         return;
       }
       console.error('[AlbumHaven][AlbumDetails] Failed to load full album details.', error);

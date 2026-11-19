@@ -284,6 +284,13 @@ function buildGalleryEmptySelectionHtml() {
   return '<div class="gallery-empty-selection" data-gallery-empty-selection role="status">Select at least one artist in Artist Family.</div>';
 }
 
+// A view the server could not be reached for: the shared OnPageAlert in place of its albums.
+function buildGalleryUnreachableHtml(notice) {
+  return `<div class="gallery-unreachable" data-gallery-unreachable>${buildOnPageAlertHtml({
+    severity: 'warning', role: 'status', title: notice.title, message: notice.message,
+  })}</div>`;
+}
+
 function buildGalleryDividerHtml(config = {}) {
   return `<div class="gallery-divider"><span>${escapeHtml(config.label || 'Family')}</span><span class="gallery-divider__line"></span><span>${escapeHtml(galleryMainPlural(config.albumCount, 'album'))}</span></div>`;
 }

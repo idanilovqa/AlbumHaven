@@ -28,6 +28,8 @@
     const marker = document.querySelector('meta[name="album-haven-app-copy"]');
     const startedFromCopy = marker?.getAttribute('content') === 'cache';
     const copyAccount = marker?.getAttribute('data-account') || '';
+    // The copy of another address stands in for this one, which was never kept (app-copy-worker.js).
+    const viewMissing = startedFromCopy && marker.getAttribute('data-view-missing') === '1';
     const answerListeners = [];
     let shell = null;
     let readOnly = false;
@@ -177,7 +179,7 @@
     }
     if (startedFromCopy) void confirmAccount();
 
-    return { startedFromCopy, isReadOnly: () => readOnly, adoptShell, forget, onServerAnswer };
+    return { startedFromCopy, viewMissing, isReadOnly: () => readOnly, adoptShell, forget, onServerAnswer };
   }
 
   if (typeof module === 'object' && module.exports) module.exports = { createAppCopyClient };

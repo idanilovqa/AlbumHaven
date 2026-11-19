@@ -561,7 +561,7 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/instantReturnBrowser.spec.js",
-              "case": "FTC-IAR-W10 an offline reload of an artist opened after the last save shows the last saved view",
+              "case": "FTC-IAR-W10 an offline reload of an artist opened after the last save names that artist and says it cannot load",
               "area": "gallery-search"
             },
             {
@@ -574,8 +574,22 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/instantReturnBrowser.spec.js",
+              "case": "FTC-IAR-W13 offline, album details and an artist that cannot load say so instead of loading forever",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/instantReturnSignOut.spec.js",
               "case": "FTC-IAR-W02 signing out deletes the copy; the next start is the sign-in page, never the library",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/instantReturnSignIn.spec.js",
+              "case": "FTC-IAR-W12 signed in and offline at once, a new tab shows the saved library and more albums say why they cannot load",
               "area": "gallery-search"
             }
           ]

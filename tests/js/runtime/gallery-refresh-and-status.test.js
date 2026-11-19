@@ -7567,3 +7567,92 @@ test('BI scan completion refresh retry requests the current view once at product
 test('BI cover completion refresh retry requests the current view once at production scale', () => (
   measureCompletionRefreshRetry('Cover')
 ));
+
+// ---- Server unreachable (owner D4: server down while the device is online, or the device offline) ----
+
+function unreachableGallery() {
+  const fixture = createContext();
+  useRealViewUrls(fixture.context);
+  fixture.context.state.view = {
+    ...fixture.context.state.view, selected_artist: '3 Crows', query: '',
+    artist_groups: [{ artist: '3 Crows', albums: [{ key: 'crows::one' }] }],
+  };
+  return fixture;
+}
+
+for (const [cause, fail] of [
+  ['no answer at all', request => request.rejectWith(new TypeError('Failed to fetch'))],
+  ['a gateway answering for it (530)', request => request.resolveWith({ status: 530, ok: false })],
+]) {
+  test(`IAR-W10: an artist opened while the server cannot be reached is named and says why it is empty (${cause})`, async () => {
+    const { context, pendingRequests, calls } = unreachableGallery();
+
+    const navigation = context.fetchAndRender('/view-data?artist=Chris+Buck', true);
+    fail(pendingRequests[0]);
+
+    assert.equal(await navigation, false);
+    assert.equal(context.state.view.selected_artist, 'Chris Buck', 'the bar names the artist asked for');
+    assert.equal(context.state.view.artist_groups.length, 0, 'the previous artist is never left on screen');
+    assert.deepEqual({ ...context.state.ui.galleryUnreachable }, {
+      title: "Can't reach Album Haven", message: "Can't load Chris Buck. Check your network or try again later.",
+    });
+    assert.equal(calls.pushBrowserViewState.at(-1).selected_artist, 'Chris Buck');
+    assert.deepEqual(calls.showToast, []);
+  });
+}
+
+test('IAR-W10: a device that is offline is told it is offline', async () => {
+  const { context, pendingRequests } = unreachableGallery();
+  context.navigator = { onLine: false };
+
+  const navigation = context.fetchAndRender('/view-data?artist=Chris+Buck', true);
+  pendingRequests[0].rejectWith(new TypeError('Failed to fetch'));
+  await navigation;
+
+  assert.equal(context.state.ui.galleryUnreachable.title, 'Offline');
+});
+
+test('IAR-W10: a background refresh that cannot reach the server leaves the view as it is', async () => {
+  const { context, pendingRequests } = unreachableGallery();
+  const before = context.state.view;
+
+  const refresh = context.fetchAndRender('/view-data?artist=3+Crows', false, { preserveScroll: true });
+  pendingRequests[0].rejectWith(new TypeError('Failed to fetch'));
+
+  await assert.rejects(refresh, { serverUnreachable: true });
+  assert.equal(context.state.view, before);
+  assert.equal(context.state.ui.galleryUnreachable ?? null, null);
+});
+
+// The flag belongs to the view on screen: an artist selected from loaded albums, or a server
+// answer, replaces the unreachable view rather than staying covered by its alert.
+test('IAR-W10: any view applied replaces one the server could not be reached for', async () => {
+  const { context, pendingRequests } = createArtistFamilyOwnershipContext();
+  useRealViewUrls(context);
+  const failed = context.fetchAndRender('/view-data?artist=Chris+Buck', true);
+  pendingRequests[0].rejectWith(new TypeError('Failed to fetch'));
+  await failed;
+  assert.equal(context.state.ui.galleryUnreachable.message, "Can't load Chris Buck. Check your network or try again later.");
+
+  context.applyViewPayload({ ...context.state.view, selected_artist: 'Mono', artist_groups: [{ artist: 'Mono', albums: [{ key: 'mono::one' }] }] });
+
+  assert.equal(context.state.ui.galleryUnreachable, null);
+});
+
+test('IAR-W10: the app\'s own "not ready yet" (503) is never taken for an unreachable server', async () => {
+  const { context, pendingRequests } = createContext();
+  const request = context.fetchRetryingPendingProjection('/view-data', {});
+  pendingRequests[0].resolveWith({ status: 503, ok: false, error: 'unavailable' });
+  const response = await request;
+  assert.equal(response.status, 503);
+});
+
+test('IAR-W10: more albums that cannot load say the server cannot be reached', async () => {
+  const gallery = capturedGallery(async () => { throw new TypeError('Failed to fetch'); });
+  gallery.context.state.view = retainedRootView(3);
+
+  assert.equal(await gallery.context.loadNextRootGalleryPage(), false);
+
+  assert.deepEqual(gallery.calls.showToast.map(toast => toast.message),
+    ["Can't reach Album Haven. Can't load more albums. Check your network or try again later."]);
+});

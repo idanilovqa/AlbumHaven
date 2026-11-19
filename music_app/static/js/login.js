@@ -8,6 +8,22 @@
   const failure = document.querySelector(".login-alert");
   const csrfToken = form?.querySelector('input[name="csrf_token"]');
 
+  // Instant return in a browser: the copy's worker is installed while signing in, so the library
+  // page that follows passes through it and is kept as it arrives. Without it the first copy waits
+  // for a second render of the page, and a connection lost in between leaves nothing to show.
+  // The Android app runs its own worker, which the shell starts.
+  const copyWorkerReady = (() => {
+    const workerUrl = document.querySelector('meta[name="album-haven-app-copy-worker"]')?.content;
+    const bridge = window.AlbumHavenBridge;
+    const inAndroidShell = typeof bridge?.postMessage === "function" && bridge.window !== bridge;
+    if (!workerUrl || inAndroidShell || !window.isSecureContext || !window.navigator?.serviceWorker) return null;
+    return window.navigator.serviceWorker.register(workerUrl, { scope: "/", updateViaCache: "none" })
+      .then(() => window.navigator.serviceWorker.ready)
+      .catch(() => {});
+  })();
+  // Signing in never waits long for it: a worker that is late only keeps the page later.
+  const COPY_WORKER_WAIT_MS = 2000;
+
   if (password && toggle) {
     toggle.addEventListener("click", () => {
       const visible = password.type === "password";
@@ -53,6 +69,9 @@
       const reply = await requestSignIn();
       if (reply?.accepted && typeof reply.body?.redirect === "string") {
         window.AlbumHavenStartupProgress?.show(25);
+        if (copyWorkerReady) {
+          await Promise.race([copyWorkerReady, new Promise(resolve => window.setTimeout(resolve, COPY_WORKER_WAIT_MS))]);
+        }
         window.location.assign(reply.body.redirect);
       } else if (reply && !reply.accepted && typeof reply.body?.csrf_token === "string") {
         csrfToken.value = reply.body.csrf_token;

@@ -4036,6 +4036,28 @@ test('canonical same-artist reconciliation retains mounted cards without an opti
   assert.doesNotMatch(containerEl.innerHTML, /Neal Morse|Cosmic Cathedral/);
 }
 
+// Owner D4: a view the server could not be reached for says why it is empty.
+{
+  const { context, containerEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  context.state.view.selected_artist = 'Chris Buck';
+  context.state.view.primary_artist_groups = [];
+  context.state.view.artist_groups = [];
+  context.state.ui = { ...(context.state.ui || {}), galleryUnreachable: null };
+  context.state.ui.galleryUnreachable = { title: 'Offline', message: "Can't load Chris Buck. Check your network or try again later." };
+  virtualGrid.setGroups = () => {
+    containerEl.children = [];
+    containerEl.innerHTML = '';
+  };
+
+  context.renderArtistGroups();
+
+  assert.match(containerEl.innerHTML, /data-gallery-unreachable/);
+  assert.match(containerEl.innerHTML, /data-on-page-alert="warning"/);
+  assert.match(containerEl.innerHTML, /Offline/);
+  assert.match(containerEl.innerHTML, /Can(&#39;|')t load Chris Buck\. Check your network or try again later\./);
+}
+
 {
   const { context, containerEl } = createRuntimeContext();
   const virtualGrid = vm.runInContext('virtualGrid', context);

@@ -2590,6 +2590,7 @@ function tryRestoreClearedSearchView(nextView, options = {}) {
     state.ui.pendingGallerySearch = false;
     state.ui.pendingViewTransitionRequestId = 0;
     if (hadPendingTransition) renderLibraryLoader(state.status);
+    // renderSidebar asks syncLibraryNavigationToMainPanel first, now that the transition has ended.
     renderSidebar();
     pushBrowserViewState(nextView);
     return true;

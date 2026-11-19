@@ -404,6 +404,8 @@ function finishPendingViewTransition(requestId, options = {}) {
   state.ui.pendingViewTransition = false;
   state.ui.pendingGallerySearch = false;
   state.ui.pendingViewTransitionRequestId = 0;
+  // The settled view is the main panel now: the side bar follows it (its redraw ran while the view was loading).
+  if (typeof syncLibraryNavigationToMainPanel === 'function') syncLibraryNavigationToMainPanel();
   if (wasSearching || options.restoreCurrentGallery === true) {
     renderLibraryLoader({
       ...(state.status || {}),

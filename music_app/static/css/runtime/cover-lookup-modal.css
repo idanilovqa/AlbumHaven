@@ -634,7 +634,17 @@
   opacity: 0;
   visibility: hidden;
   transform: translateY(-3px);
-  transition: opacity 140ms ease, transform 140ms ease, visibility 140ms;
+  /* Closing waits 250 ms, so the pointer can travel from the mark to the link. */
+  transition: opacity 140ms ease 250ms, transform 140ms ease 250ms, visibility 0s linear 390ms;
+}
+/* Bridges the gap between mark and popover so the pointer never crosses a dead zone. */
+.cover-source-badge__popover::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  height: 10px;
 }
 .cover-source-badge__legal + .cover-source-badge__legal {
   color: var(--muted);
@@ -651,6 +661,7 @@
   opacity: 1;
   visibility: visible;
   transform: none;
+  transition-delay: 0s;
 }
 .cover-source-badge--over {
   position: absolute;
@@ -658,11 +669,12 @@
   left: 10px;
   z-index: 3;
   opacity: 0;
-  transition: opacity 180ms ease;
+  transition: opacity 180ms ease 250ms;
 }
 .track-modal-cover-shell:is(:hover, :focus-within) .cover-source-badge--over,
 .cover-source-badge--over.is-open {
   opacity: 1;
+  transition-delay: 0s;
 }
 @media (hover: none) {
   .cover-source-badge--over { opacity: 1; }
@@ -680,8 +692,8 @@
   transform: translateX(-50%);
 }
 @media (prefers-reduced-motion: reduce) {
-  .cover-source-badge--over,
-  .cover-source-badge__popover { transition: none; }
+  .cover-source-badge--over { transition: none; }
+  .cover-source-badge__popover { transition: visibility 0s linear 250ms; }
 }
 .cover-lookup-art-preview-fallback {
   position: absolute;

@@ -84,6 +84,57 @@ test('an over-art badge is the bare mark on the cover corner and shows its legal
   await expect(link).toHaveText('Listen on Apple Music ↗');
 });
 
+for (const [where, source] of [['over the art', 'apple'], ['beneath the art', 'spotify']]) {
+  test(`the pointer can travel from the ${where} icon onto its popover and click the link`, async ({ page, context }) => {
+    await context.route('https://**/*', (route) => route.fulfill({ contentType: 'text/html', body: 'release page' }));
+    await mount(page);
+    await page.evaluate(([image, provider]) => window.renderAlbumDetails(provider, image, {
+      albumUrl: `https://example.test/${provider}/release/1`,
+    }), [solidImage('#335577'), source]);
+    const badge = page.locator(`.cover-source-badge.is-${source}`);
+    const popover = badge.locator('.cover-source-badge__popover');
+    const link = popover.locator('.cover-source-badge__link');
+    const mark = await badge.locator('.cover-source-badge__mark').boundingBox();
+    await page.mouse.move(mark.x + (mark.width / 2), mark.y + (mark.height / 2));
+    await expect(popover).toBeVisible();
+    const target = await link.boundingBox();
+    const box = await popover.boundingBox();
+    // Resting in the gap between icon and popover, longer than the close delay, keeps it open.
+    await page.mouse.move(mark.x + (mark.width / 2), (mark.y + mark.height + box.y) / 2);
+    await page.waitForTimeout(600);
+    await expect(popover).toBeVisible();
+    // Straight down onto the popover, then across to the link.
+    await page.mouse.move(mark.x + (mark.width / 2), target.y + (target.height / 2), { steps: 12 });
+    await page.mouse.move(target.x + (target.width / 2), target.y + (target.height / 2), { steps: 8 });
+    await expect(popover).toBeVisible();
+    const [releasePage] = await Promise.all([context.waitForEvent('page'), link.click()]);
+    await releasePage.waitForLoadState();
+    expect(releasePage.url()).toBe(`https://example.test/${source}/release/1`);
+  });
+}
+
+test('the popover waits briefly after the pointer leaves, stays open with focus inside, and Escape closes it', async ({ page }) => {
+  await mount(page);
+  await page.evaluate((image) => window.renderAlbumDetails('apple', image), solidImage('#335577'));
+  const badge = page.locator('.cover-source-badge.is-apple');
+  const popover = badge.locator('.cover-source-badge__popover');
+  await badge.locator('.cover-source-badge__trigger').hover();
+  await expect(popover).toBeVisible();
+  await page.mouse.move(860, 740);
+  await page.waitForTimeout(120);
+  await expect(popover).toBeVisible();
+  await expect(popover).toBeHidden({ timeout: 1000 });
+
+  await badge.locator('.cover-source-badge__trigger').focus();
+  await page.keyboard.press('Tab');
+  await expect(popover.locator('.cover-source-badge__link')).toBeFocused();
+  await expect(popover).toBeVisible();
+  await badge.locator('.cover-source-badge__trigger').click();
+  await expect(badge).toHaveClass(/is-open/);
+  await page.keyboard.press('Escape');
+  await expect(badge).not.toHaveClass(/is-open/);
+});
+
 test('Spotify sits centred beneath the cover, never on it', async ({ page }) => {
   await mount(page);
   await page.evaluate((image) => window.renderAlbumDetails('spotify', image, { artist: '10cc', album: 'Sheet Music' }), solidImage('#ddaa22'));

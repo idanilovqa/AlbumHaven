@@ -329,13 +329,13 @@ def test_build_waveform_peaks_rejects_metadata_frame_missing_one_stereo_channel(
             0x08000000 | 0x00004000,
         ),
         ("linux", False, ("nice", "-n", "10", "resolved-ffmpeg"), 0),
-        ("win32", True, ("resolved-ffmpeg",), 0x08000000),
+        ("win32", True, ("resolved-ffmpeg",), 0x08000000 | 0x00008000),
         ("linux", True, ("resolved-ffmpeg",), 0),
     ],
     ids=[
         "prefetch-windows-hidden-below-normal",
         "prefetch-non-windows-nice-10",
-        "current-windows-hidden-normal",
+        "current-windows-hidden-above-normal",
         "current-non-windows-not-niced",
     ],
 )
@@ -366,6 +366,12 @@ def test_build_waveform_peaks_launches_decoder_with_explicit_priority_policy(
             waveform_peaks.subprocess,
             "BELOW_NORMAL_PRIORITY_CLASS",
             0x00004000,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            waveform_peaks.subprocess,
+            "ABOVE_NORMAL_PRIORITY_CLASS",
+            0x00008000,
             raising=False,
         )
         monkeypatch.setattr(
@@ -1336,7 +1342,7 @@ def _segmented_build_setup(monkeypatch, processes_by_seek, calls) -> None:
     monkeypatch.setattr(waveform_peaks.asyncio, "create_subprocess_exec", create_process)
 
 
-def test_current_song_build_decodes_parallel_exact_segments_at_normal_priority(
+def test_current_song_build_decodes_parallel_exact_segments_above_normal_priority(
     tmp_path,
     monkeypatch,
 ):
@@ -1355,6 +1361,9 @@ def test_current_song_build_decodes_parallel_exact_segments_at_normal_priority(
         monkeypatch.setattr(
             waveform_peaks.subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0x00004000, raising=False
         )
+        monkeypatch.setattr(
+            waveform_peaks.subprocess, "ABOVE_NORMAL_PRIORITY_CLASS", 0x00008000, raising=False
+        )
 
         result = await build_waveform_peaks(
             (tmp_path / "long.flac").resolve(),
@@ -1368,7 +1377,7 @@ def test_current_song_build_decodes_parallel_exact_segments_at_normal_priority(
         assert sorted(_segment_seek(args) for args, _kwargs in calls) == sorted(SEGMENT_SEEKS)
         for args, kwargs in calls:
             assert args[0] == "ffmpeg"
-            assert kwargs["creationflags"] == 0x08000000
+            assert kwargs["creationflags"] == 0x08000000 | 0x00008000
             audio_filter = str(args[args.index("-af") + 1])
             if _segment_seek(args) == SEGMENT_SEEKS[-1]:
                 # The last segment runs to the end of the file.
@@ -1748,5 +1757,351 @@ def test_shutdown_stops_a_playing_song_build_waiting_to_be_rejoined():
 
         assert stopped.is_set() is True
         assert registry.active_job_count == 0
+
+    asyncio.run(scenario())
+
+
+class FakeStdin:
+    def __init__(self) -> None:
+        self.written = bytearray()
+        self.closed = False
+
+    def write(self, data: bytes) -> None:
+        self.written.extend(data)
+
+    async def drain(self) -> None:
+        return None
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class WarmDecoder(FakeProcess):
+    def __init__(self, payload: bytes = b"", *, stdout=None) -> None:
+        super().__init__(stdout=stdout if stdout is not None else FakeStream(payload))
+        self.stdin = FakeStdin()
+
+
+def _chunk_payload(pairs: list[tuple[float, float]]) -> bytes:
+    lines = []
+    for index, (left, right) in enumerate(pairs):
+        lines.extend(
+            (
+                f"frame:{index} pts:{index * 400} pts_time:{index * 0.05}",
+                f"lavfi.astats.1.Peak_level={20 * math.log10(left):.9f}",
+                f"lavfi.astats.2.Peak_level={20 * math.log10(right):.9f}",
+            )
+        )
+    return ("\n".join(lines) + "\n").encode("ascii")
+
+
+class OneDecoderPool:
+    def __init__(self, decoder) -> None:
+        self.decoder = decoder
+
+    def take(self):
+        decoder, self.decoder = self.decoder, None
+        return decoder
+
+
+def test_playing_song_build_names_the_file_to_a_started_decoder_and_folds_its_chunks(
+    tmp_path,
+    monkeypatch,
+):
+    async def scenario() -> None:
+        # One second over 4 bins: each 50 ms chunk's midpoint lands in one 250 ms bin.
+        pairs = [((index + 1) / 20, (20 - index) / 20) for index in range(20)]
+        decoder = WarmDecoder(_chunk_payload(pairs))
+        monkeypatch.setattr(waveform_peaks, "resolve_ffmpeg_executable", lambda: "ffmpeg")
+        monkeypatch.setattr(waveform_peaks, "_audio_duration_seconds", lambda _path: 1.0)
+
+        async def no_spawn(*_args, **_kwargs):
+            raise AssertionError("a started decoder must be used instead of a new process")
+
+        monkeypatch.setattr(waveform_peaks.asyncio, "create_subprocess_exec", no_spawn)
+        track = tmp_path / "it's here.mp3"
+        track.write_bytes(b"mp3")
+        progress: list[WaveformPeaks] = []
+
+        result = await build_waveform_peaks(
+            track,
+            bins=4,
+            cancel_event=asyncio.Event(),
+            current=True,
+            decoders=OneDecoderPool(decoder),
+            progress=progress.append,
+        )
+
+        assert result.left == pytest.approx([0.25, 0.5, 0.75, 1.0])
+        assert result.right == pytest.approx([1.0, 0.75, 0.5, 0.25])
+        script = decoder.stdin.written.decode("utf-8")
+        assert script.startswith("ffconcat version 1.0\n")
+        assert "file '" + track.resolve().as_posix().replace("'", "'\\''") + "'" in script
+        assert decoder.stdin.closed is True
+        assert decoder.wait_calls == 1
+        assert decoder.terminate_calls == 0
+        assert progress and progress[0].sample_count == 4
+
+    asyncio.run(scenario())
+
+
+def test_chunks_longer_than_a_bin_cover_every_bin_they_span():
+    folded = waveform_peaks._ChunkPeakBins(bins=8, duration_seconds=0.1)
+    folded.feed(_chunk_payload([(0.5, 0.25), (1.0, 0.75)]))
+
+    peaks = folded.peaks()
+
+    assert peaks.left == pytest.approx([0.5] * 4 + [1.0] * 4)
+    assert peaks.right == pytest.approx([0.25] * 4 + [0.75] * 4)
+
+
+def test_chunk_records_split_across_reads_fold_once_complete():
+    payload = _chunk_payload([(0.5, 0.25), (1.0, 0.75)])
+    folded = waveform_peaks._ChunkPeakBins(bins=2, duration_seconds=0.1)
+    for index in range(0, len(payload), 7):
+        folded.feed(payload[index:index + 7])
+
+    assert folded.chunks == 2
+    assert folded.peaks().left == pytest.approx([0.5, 1.0])
+
+
+def test_a_chunk_missing_its_left_channel_is_rejected():
+    folded = waveform_peaks._ChunkPeakBins(bins=2, duration_seconds=0.1)
+
+    with pytest.raises(RuntimeError, match="malformed"):
+        folded.feed(b"frame:0\nlavfi.astats.2.Peak_level=-6.0\n")
+
+
+@pytest.mark.parametrize("stop", ["cancel-event", "caller-cancelled"])
+def test_stopping_a_playing_song_build_reaps_its_started_decoder(tmp_path, monkeypatch, stop):
+    async def scenario() -> None:
+        decoder = WarmDecoder(stdout=BlockingStream())
+        decoder.terminate = lambda: (
+            setattr(decoder, "terminate_calls", decoder.terminate_calls + 1),
+            setattr(decoder, "returncode", 0),
+            decoder.stdout.released.set(),
+        )
+        monkeypatch.setattr(waveform_peaks, "resolve_ffmpeg_executable", lambda: "ffmpeg")
+        monkeypatch.setattr(waveform_peaks, "_audio_duration_seconds", lambda _path: 60.0)
+        cancel_event = asyncio.Event()
+        task = asyncio.create_task(
+            build_waveform_peaks(
+                tmp_path / "playing.mp3",
+                bins=BIN_COUNT,
+                cancel_event=cancel_event,
+                current=True,
+                decoders=OneDecoderPool(decoder),
+            )
+        )
+        await asyncio.wait_for(decoder.stdout.read_started.wait(), timeout=1)
+
+        if stop == "cancel-event":
+            cancel_event.set()
+        else:
+            task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=1)
+
+        assert decoder.stdin.closed is True
+        assert decoder.terminate_calls == 1
+        assert decoder.wait_calls == 1
+
+    asyncio.run(scenario())
+
+
+def test_a_failed_duration_read_reaps_the_started_decoder(tmp_path, monkeypatch):
+    async def scenario() -> None:
+        decoder = WarmDecoder(b"")
+
+        def unreadable(_path):
+            raise RuntimeError("audio duration is unavailable for waveform analysis")
+
+        monkeypatch.setattr(waveform_peaks, "resolve_ffmpeg_executable", lambda: "ffmpeg")
+        monkeypatch.setattr(waveform_peaks, "_audio_duration_seconds", unreadable)
+
+        with pytest.raises(RuntimeError, match="duration"):
+            await build_waveform_peaks(
+                tmp_path / "broken.mp3",
+                bins=BIN_COUNT,
+                cancel_event=asyncio.Event(),
+                current=True,
+                decoders=OneDecoderPool(decoder),
+            )
+
+        assert decoder.stdin.closed is True
+        assert decoder.wait_calls == 1, "the decoder is reaped, never left running"
+
+    asyncio.run(scenario())
+
+
+def test_a_file_name_with_a_line_break_never_reaches_a_started_decoder(tmp_path, monkeypatch):
+    async def scenario() -> None:
+        pool = OneDecoderPool(WarmDecoder(b""))
+        process = FakeProcess(stdout=FakeStream(_segment_payload([0.5])))
+        calls: list[ProcessCall] = []
+        monkeypatch.setattr(waveform_peaks, "resolve_ffmpeg_executable", lambda: "ffmpeg")
+        monkeypatch.setattr(waveform_peaks, "_audio_duration_seconds", lambda _path: 1.0)
+        monkeypatch.setattr(
+            waveform_peaks.asyncio, "create_subprocess_exec", _process_factory(process, calls)
+        )
+
+        await build_waveform_peaks(
+            tmp_path / "line\nfile 'other.mp3'.mp3",
+            bins=1,
+            cancel_event=asyncio.Event(),
+            current=True,
+            decoders=pool,
+        )
+
+        assert pool.decoder is not None
+        assert pool.decoder.stdin.written == bytearray()
+        assert len(calls) == 1
+
+    asyncio.run(scenario())
+
+
+def test_prefetch_never_takes_a_started_decoder(tmp_path, monkeypatch):
+    async def scenario() -> None:
+        pool = OneDecoderPool(WarmDecoder(b""))
+        process = FakeProcess(stdout=FakeStream(_segment_payload([0.5])))
+        calls: list[ProcessCall] = []
+        monkeypatch.setattr(waveform_peaks, "resolve_ffmpeg_executable", lambda: "ffmpeg")
+        monkeypatch.setattr(waveform_peaks, "_audio_duration_seconds", lambda _path: 1.0)
+        monkeypatch.setattr(
+            waveform_peaks.asyncio, "create_subprocess_exec", _process_factory(process, calls)
+        )
+
+        await build_waveform_peaks(
+            tmp_path / "next.flac", bins=1, cancel_event=asyncio.Event(), decoders=pool
+        )
+
+        assert pool.decoder is not None
+        assert len(calls) == 1
+
+    asyncio.run(scenario())
+
+
+def test_decoder_pool_keeps_started_decoders_ready_and_reaps_them_on_close(monkeypatch):
+    async def scenario() -> None:
+        launched: list[tuple[list[str], dict[str, object]]] = []
+        decoders: list[WarmDecoder] = []
+
+        async def launch(command, **kwargs):
+            launched.append((command, kwargs))
+            decoder = WarmDecoder(b"")
+            decoders.append(decoder)
+            return decoder
+
+        monkeypatch.setattr(waveform_peaks, "resolve_ffmpeg_executable", lambda: "ffmpeg")
+        monkeypatch.setattr(waveform_peaks, "_launch_decoder", launch)
+        pool = waveform_peaks.WaveformDecoderPool(size=2)
+
+        assert pool.take() is None
+        assert launched == [], "taking never starts a decoder that would compete with the build"
+        pool.fill()
+        await pool._filling
+        assert len(launched) == 2
+        command, kwargs = launched[0]
+        assert command[command.index("-i") + 1] == "pipe:0"
+        assert ("-f", "concat") in tuple(zip(command, command[1:]))
+        assert kwargs == {"current": True, "stdin": asyncio.subprocess.PIPE}
+
+        decoders[1].returncode = 1
+        assert pool.take() is decoders[0], "a decoder that already exited is skipped"
+        pool.fill()
+        await pool._filling
+        await pool.close()
+
+        assert len(launched) == 4
+        for decoder in decoders[2:]:
+            assert decoder.stdin.closed is True
+            assert decoder.wait_calls >= 1
+        assert pool.take() is None
+        assert len(launched) == 4, "a closed pool starts nothing"
+
+    asyncio.run(scenario())
+
+
+def test_every_caller_of_a_build_sees_the_waveform_built_so_far():
+    async def scenario() -> None:
+        release = asyncio.Event()
+        published = asyncio.Event()
+
+        async def builder(
+            path: Path,
+            *,
+            bins: int,
+            cancel_event: asyncio.Event,
+            current: bool = False,
+            decoders=None,
+            progress=None,
+        ):
+            progress(WaveformPeaks(left=(0.25,) * bins, right=(0.0,) * bins, sample_count=bins))
+            published.set()
+            await release.wait()
+            return WaveformPeaks(left=(1.0,) * bins, right=(0.5,) * bins, sample_count=bins)
+
+        class IdlePool:
+            def fill(self) -> None:
+                return None
+
+            async def close(self) -> None:
+                return None
+
+        registry = WaveformPeaksRegistry(builder=builder, decoder_pool=IdlePool())
+        first_seen: list[float] = []
+        late_seen: list[float] = []
+        first = asyncio.create_task(
+            registry.run(
+                Path("playing.mp3"),
+                bins=BIN_COUNT,
+                current=True,
+                on_progress=lambda peaks: first_seen.append(peaks.left[0]),
+            )
+        )
+        await asyncio.wait_for(published.wait(), timeout=1)
+        late = asyncio.create_task(
+            registry.run(
+                Path("playing.mp3"),
+                bins=BIN_COUNT,
+                current=True,
+                on_progress=lambda peaks: late_seen.append(peaks.left[0]),
+            )
+        )
+        await _until(lambda: late_seen == [0.25])
+
+        release.set()
+        assert (await first).left[0] == 1.0
+        assert (await late).left[0] == 1.0
+        assert first_seen == [0.25]
+        await registry.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_decoders_are_readied_when_a_song_is_selected_and_after_each_build(tmp_path):
+    async def scenario() -> None:
+        class CountingPool:
+            fills = 0
+
+            def fill(self) -> None:
+                CountingPool.fills += 1
+
+            async def close(self) -> None:
+                return None
+
+        async def builder(path, *, bins, cancel_event, current=False, decoders=None, progress=None):
+            assert CountingPool.fills == 1, "no decoder starts while the build itself runs"
+            return WaveformPeaks(left=(0.5,) * bins, right=(0.5,) * bins, sample_count=bins)
+
+        track = tmp_path / "selected.mp3"
+        track.write_bytes(b"mp3")
+        registry = WaveformPeaksRegistry(builder=builder, decoder_pool=CountingPool())
+
+        assert await registry.get_cached(track, bins=BIN_COUNT) is None
+        assert CountingPool.fills == 1
+        await registry.run(track, bins=BIN_COUNT, current=True)
+        await _until(lambda: CountingPool.fills == 2)
+        await registry.shutdown()
 
     asyncio.run(scenario())

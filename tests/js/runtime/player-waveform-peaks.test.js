@@ -14,6 +14,7 @@ function loadPeaksRuntime(fetchImpl, overrides = {}) {
   const context = {
     AbortController,
     Map,
+    TextDecoder,
     setTimeout: overrides.setTimeout || setTimeout,
     URLSearchParams,
     console,
@@ -383,6 +384,89 @@ test('only the playing song asks the server for current priority', async () => {
 
   assert.equal(requests[0].searchParams.get('priority'), 'current');
   assert.equal(requests[1].searchParams.has('priority'), false, 'a prefetch must yield on the server');
+});
+
+function streamedResponse(lines, splitAt = 37) {
+  const bytes = new TextEncoder().encode(lines.map((line) => `${JSON.stringify(line)}\n`).join(''));
+  const pieces = [];
+  for (let index = 0; index < bytes.length; index += splitAt) pieces.push(bytes.slice(index, index + splitAt));
+  return {
+    ok: true,
+    status: 200,
+    headers: { get: (name) => (name.toLowerCase() === 'content-type' ? 'application/x-ndjson' : null) },
+    body: {
+      getReader: () => ({
+        read: async () => (pieces.length
+          ? { value: pieces.shift(), done: false }
+          : { value: undefined, done: true }),
+      }),
+    },
+  };
+}
+
+test('the playing song draws its waveform as it streams in, then keeps the complete one', async () => {
+  const requests = [];
+  const drawn = [];
+  const context = loadPeaksRuntime(async (url) => {
+    requests.push(new URL(String(url), 'http://album-haven.test'));
+    return streamedResponse([
+      { ...peakPayload(0.25, 720), complete: false },
+      { ...peakPayload(0.5, 720), complete: false },
+      { ...peakPayload(0.75, 720), complete: true },
+    ]);
+  });
+  context.state.player.current = { path: 'C:/Music/playing.mp3' };
+  context.state.player.waveform.compactPeaks = null;
+  context.updateWaveformAppearance = async () => {
+    drawn.push(context.state.player.waveform.compactPeaks.data.left[0]);
+  };
+
+  const peaks = await context.loadWaveformPeaks('C:/Music/playing.mp3', 720, 7, { current: true });
+
+  assert.equal(requests[0].searchParams.get('progressive'), '1');
+  assert.deepEqual(drawn, [0.25, 0.5], 'each partial waveform is drawn as it arrives');
+  assert.equal(context.state.player.waveform.compactPeaks.partial, true);
+  assert.equal(peaks.left[0], 0.75, 'the complete waveform is the result');
+});
+
+test('a streamed busy answer is retried like a 429', async () => {
+  let attempts = 0;
+  const context = loadPeaksRuntime(async () => {
+    attempts += 1;
+    return attempts === 1
+      ? streamedResponse([{ error: 'waveform peak build was stopped' }])
+      : { ok: true, status: 200, json: async () => peakPayload(0.5, 720) };
+  }, {
+    setTimeout(callback) {
+      callback();
+      return 1;
+    },
+  });
+  context.state.player.current = { path: 'C:/Music/playing.mp3' };
+
+  const peaks = await context.loadWaveformPeaks('C:/Music/playing.mp3', 720, 7, { current: true });
+
+  assert.equal(attempts, 2);
+  assert.equal(peaks.left[0], 0.5);
+});
+
+test('a partial waveform never replaces a finished one or shows for another song', async () => {
+  const finished = { sampleCount: 720, left: [1], right: [1] };
+  const context = loadPeaksRuntime(async () => streamedResponse([
+    { ...peakPayload(0.25, 720), complete: false },
+    { ...peakPayload(0.75, 720), complete: true },
+  ]));
+  context.updateWaveformAppearance = async () => {};
+  context.state.player.current = { path: 'C:/Music/seeked.mp3' };
+  context.state.player.waveform.compactPeaks = { path: 'C:/Music/seeked.mp3', generation: 6, data: finished };
+
+  await context.loadWaveformPeaks('C:/Music/seeked.mp3', 720, 7, { current: true });
+  assert.equal(context.state.player.waveform.compactPeaks.data, finished);
+
+  context.state.player.current = { path: 'C:/Music/skipped-to.mp3' };
+  context.state.player.waveform.compactPeaks = null;
+  await context.loadWaveformPeaks('C:/Music/earlier.mp3', 720, 7, { current: true });
+  assert.equal(context.state.player.waveform.compactPeaks, null);
 });
 
 test('a prefetch still building is replaced at current priority once its song plays', async () => {

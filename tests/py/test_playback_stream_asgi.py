@@ -4,6 +4,7 @@ import asyncio
 from contextlib import AsyncExitStack
 from dataclasses import replace
 import json
+from urllib.parse import urlencode
 import math
 from pathlib import Path
 import struct
@@ -3387,3 +3388,111 @@ def test_a_seek_table_request_must_be_a_boolean(playback_app, media_path, decode
             return await socket.receive_close()
 
     assert asyncio.run(scenario()) == 4400
+
+
+def test_waveform_route_streams_the_playing_song_waveform_as_it_builds(
+    playback_app,
+    media_path,
+):
+    from music_app.services.waveform_peaks import WaveformPeaks
+
+    class RegistryDouble:
+        def __init__(self) -> None:
+            self.calls: list[tuple[Path, int, bool]] = []
+
+        async def run(self, path, *, bins, current=False, on_progress=None):
+            self.calls.append((path, bins, current))
+            await asyncio.sleep(0)
+            on_progress(WaveformPeaks(left=(0.25,) * bins, right=(0.0,) * bins, sample_count=bins))
+            await asyncio.sleep(0.05)
+            on_progress(WaveformPeaks(left=(0.5,) * bins, right=(0.0,) * bins, sample_count=bins))
+            await asyncio.sleep(0.05)
+            return WaveformPeaks(left=(0.75,) * bins, right=(0.5,) * bins, sample_count=bins)
+
+    registry = RegistryDouble()
+    playback_app.state.waveform_peaks_registry = registry
+    messages: list[dict[str, object]] = []
+    requested = False
+
+    async def receive() -> dict[str, object]:
+        nonlocal requested
+        if requested:
+            # The browser stays connected while the waveform streams.
+            await asyncio.Event().wait()
+        requested = True
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message: dict[str, object]) -> None:
+        messages.append(message)
+
+    query = urlencode(
+        {"path": str(media_path), "bins": "720", "priority": "current", "progressive": "1"}
+    )
+    asyncio.run(
+        playback_app(
+            {
+                "type": "http",
+                "asgi": {"version": "3.0"},
+                "http_version": "1.1",
+                "method": "GET",
+                "scheme": "http",
+                "path": "/playback/waveform",
+                "raw_path": b"/playback/waveform",
+                "query_string": query.encode("ascii"),
+                "headers": [(b"host", b"testserver")],
+                "client": ("testclient", 50000),
+                "server": ("testserver", 80),
+            },
+            receive,
+            send,
+        )
+    )
+
+    start = next(message for message in messages if message["type"] == "http.response.start")
+    headers = {key.decode("latin1"): value.decode("latin1") for key, value in start["headers"]}
+    body = b"".join(
+        message.get("body", b"") for message in messages if message["type"] == "http.response.body"
+    )
+    assert start["status"] == 200
+    assert headers["content-type"] == "application/x-ndjson"
+    lines = [json.loads(line) for line in body.decode("utf-8").splitlines()]
+    assert [line["complete"] for line in lines] == [False, False, True]
+    assert [line["left"][0] for line in lines] == [0.25, 0.5, 0.75]
+    assert all(line["sampleCount"] == 720 and len(line["right"]) == 720 for line in lines)
+    assert registry.calls == [(media_path, 720, True)]
+
+
+@pytest.mark.parametrize(
+    ("outcome", "expected_status"),
+    [("cached", 200), ("busy", 429)],
+)
+def test_waveform_route_answers_a_finished_playing_song_build_without_streaming(
+    playback_app,
+    media_path,
+    outcome,
+    expected_status,
+):
+    from music_app.services.waveform_peaks import WaveformPeaks, WaveformPeaksBusyError
+
+    class RegistryDouble:
+        async def run(self, path, *, bins, current=False, on_progress=None):
+            if outcome == "busy":
+                raise WaveformPeaksBusyError("waveform peak job already active")
+            return WaveformPeaks(left=(0.75,) * bins, right=(0.5,) * bins, sample_count=bins)
+
+    playback_app.state.waveform_peaks_registry = RegistryDouble()
+
+    status, headers, body = run_asgi_request(
+        playback_app,
+        "GET",
+        "/playback/waveform",
+        query={"path": str(media_path), "bins": "720", "priority": "current", "progressive": "1"},
+    )
+
+    assert status == expected_status
+    assert headers["content-type"] == "application/json"
+    payload = decode_json(body)
+    if outcome == "cached":
+        assert payload == {"left": [0.75] * 720, "right": [0.5] * 720, "sampleCount": 720}
+    else:
+        assert payload == {"error": "waveform peak job already active"}

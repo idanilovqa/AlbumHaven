@@ -393,6 +393,18 @@ async function run() {
     assert.equal(context.state.player.waveform.compactPeaks.data, shown,
       'the waveform drawn before the seek stays on screen');
     assert.equal(waveformRenders, 1);
+
+    context.state.player.waveform.compactPeaks = {
+      path: track.path, generation: 8, data: shown, partial: true,
+    };
+    context.state.player.streaming.generation = 9;
+    await context.handleStreamingPlaybackWaveformReady({
+      generation: 9,
+      currentPath: track.path,
+      continuityPath: '',
+    });
+    assert.equal(requests.length, 1, 'a waveform still streaming in is asked for again in full');
+    assert.equal(context.state.player.waveform.compactPeaks.partial, undefined);
   }
 
   {

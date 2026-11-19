@@ -275,7 +275,7 @@ def _configure_asgi_app(app, runtime) -> None:
     from music_app.services.saved_loop_waveform_peak_cache_postgres import (
         PostgresSavedLoopWaveformPeakCacheRepository,
     )
-    from music_app.services.waveform_peaks import WaveformPeaksRegistry
+    from music_app.services.waveform_peaks import WaveformDecoderPool, WaveformPeaksRegistry
     from music_app.services.cover_reference_boundary import CoverReferenceBoundary
     from music_app.services.cover_references import CoverReferenceStore
     from music_app.services.private_route_boundary import install_private_route_boundary
@@ -312,7 +312,8 @@ def _configure_asgi_app(app, runtime) -> None:
         else None
     )
     app.state.waveform_peaks_registry = WaveformPeaksRegistry(
-        cache_repository=waveform_cache_repository
+        cache_repository=waveform_cache_repository,
+        decoder_pool=WaveformDecoderPool(),
     )
     app.state.saved_loop_waveform_peak_cache_repository = (
         PostgresSavedLoopWaveformPeakCacheRepository(runtime.config)

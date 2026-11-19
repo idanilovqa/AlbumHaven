@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import logging
 import math
 import os
@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import time
 from typing import TYPE_CHECKING, Awaitable, Callable
 
 from music_app.services.ffmpeg_runtime import resolve_ffmpeg_executable
@@ -33,7 +34,15 @@ CURRENT_SONG_MAX_BUILDS = 2
 # buffered, so its build keeps going this long for that request to rejoin.
 CURRENT_SONG_REJOIN_SECONDS = 5.0
 SEGMENT_SEEK_PREROLL_SECONDS = 0.25
+# Started decoders kept waiting for playing songs, and the 50 ms chunks they measure.
+WARM_DECODERS = 2
+WARM_DECODER_CHUNK_FRAMES = 400
+# Ceiling on one decoder's output before its duration is known (about 8 hours of audio).
+WARM_DECODER_OUTPUT_LIMIT_BYTES = 64 * 1024 * 1024
+# How often a building waveform is shown so far.
+PROGRESS_INTERVAL_SECONDS = 0.1
 _EXACT_SEEK_SUFFIXES = frozenset({".wav", ".wave", ".flac", ".aif", ".aiff"})
+_CHUNK_PEAK_PATTERN = re.compile(rb"lavfi\.astats\.([12])\.Peak_level=([^\r\n]+)")
 _PEAK_LEVEL_PATTERN = re.compile(
     rb"^lavfi\.astats\.(?P<channel>[12])\.Peak_level=(?P<decibels>[^\r\n]+)$"
 )
@@ -235,6 +244,225 @@ async def _cancel_active_read(read_task: asyncio.Task[bytes] | None) -> None:
         await read_task
 
 
+async def _stop_feed(feed_task: asyncio.Future[None] | None) -> None:
+    if feed_task is None or feed_task.done():
+        return
+    feed_task.cancel()
+    with suppress(BaseException):
+        await feed_task
+
+
+async def _name_input(process: asyncio.subprocess.Process, path: Path) -> None:
+    """Tell a waiting decoder which file to read; it reads the file itself."""
+    stdin = process.stdin
+    assert stdin is not None
+    quoted = path.as_posix().replace("'", "'\\''")
+    try:
+        stdin.write(f"ffconcat version 1.0\nfile '{quoted}'\n".encode("utf-8"))
+        await stdin.drain()
+    finally:
+        # End of input lets the decoder start; a stopped decoder may already be gone.
+        with suppress(OSError):
+            stdin.close()
+
+
+def _warm_decoder_command(executable: str) -> list[str]:
+    return [
+        executable,
+        "-v",
+        "error",
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-protocol_whitelist",
+        "file,pipe",
+        "-i",
+        "pipe:0",
+        "-af",
+        f"aresample={WAVEFORM_ANALYSIS_SAMPLE_RATE},"
+        "aformat=channel_layouts=stereo,"
+        f"asetnsamples=n={WARM_DECODER_CHUNK_FRAMES}:p=1,"
+        "astats=metadata=1:reset=1:measure_perchannel=Peak_level:measure_overall=none,"
+        "ametadata=print:file=-",
+        "-f",
+        "null",
+        "-",
+    ]
+
+
+class WaveformDecoderPool:
+    """Idle analysis decoders waiting on stdin for the next playing song's file name.
+
+    Starting ffmpeg takes up to seconds on a saturated host, so the playing song's build
+    takes a decoder that already started, and a replacement starts in the background.
+    """
+
+    def __init__(self, *, size: int = WARM_DECODERS) -> None:
+        self._size = size
+        self._idle: list[asyncio.subprocess.Process] = []
+        self._filling: asyncio.Task[None] | None = None
+        self._closed = False
+
+    def take(self) -> asyncio.subprocess.Process | None:
+        # Refilling waits for fill(): a decoder starting now would compete with this build.
+        while self._idle:
+            decoder = self._idle.pop()
+            if decoder.returncode is None:
+                return decoder
+        return None
+
+    def fill(self) -> None:
+        if self._closed or (self._filling is not None and not self._filling.done()):
+            return
+        self._filling = asyncio.create_task(self._fill())
+
+    async def _fill(self) -> None:
+        while not self._closed and len(self._idle) < self._size:
+            executable = resolve_ffmpeg_executable()
+            if not executable:
+                return
+            try:
+                decoder = await _launch_decoder(
+                    _warm_decoder_command(executable),
+                    current=True,
+                    stdin=asyncio.subprocess.PIPE,
+                )
+            except Exception as error:
+                _LOGGER.warning("Waveform decoder start failed: %s", error)
+                return
+            if self._closed:
+                await _discard_decoder(decoder)
+                return
+            self._idle.append(decoder)
+
+    async def close(self) -> None:
+        self._closed = True
+        if self._filling is not None:
+            with suppress(BaseException):
+                await self._filling
+        idle, self._idle = self._idle, []
+        await asyncio.gather(*(_discard_decoder(decoder) for decoder in idle))
+
+
+async def _discard_decoder(decoder: asyncio.subprocess.Process) -> None:
+    if decoder.stdin is not None:
+        with suppress(OSError):
+            decoder.stdin.close()
+    await _finish_process_cleanup(
+        decoder,
+        stdout=decoder.stdout,
+        stderr_task=asyncio.create_task(_read_stream_tail(decoder.stderr)),
+    )
+
+
+class _ChunkPeakBins:
+    """Fold fixed-size analysis chunks into waveform bins as decoder output arrives."""
+
+    def __init__(self, *, bins: int, duration_seconds: float) -> None:
+        self.bins = bins
+        self.frames_per_bin = max(
+            1, math.ceil(duration_seconds * WAVEFORM_ANALYSIS_SAMPLE_RATE / bins)
+        )
+        self.peak_bins = [_PeakBin(0.0, 0.0, 0) for _ in range(bins)]
+        # Twice the probed length is a corrupt or mislabelled file, not a long song.
+        self.chunk_limit = 2 * math.ceil(
+            duration_seconds * WAVEFORM_ANALYSIS_SAMPLE_RATE / WARM_DECODER_CHUNK_FRAMES
+        ) + bins
+        self.chunks = 0
+        self._pending = b""
+        self._left: float | None = None
+
+    def feed(self, output: bytes) -> None:
+        complete, newline, self._pending = (self._pending + output).rpartition(b"\n")
+        if not newline:
+            self._pending = complete + self._pending
+            return
+        for channel, decibels in _CHUNK_PEAK_PATTERN.findall(complete):
+            peak = _peak_from_decibels(decibels)
+            if channel == b"1":
+                self._left = peak
+                continue
+            if self._left is None:
+                raise RuntimeError("ffmpeg returned malformed stereo waveform metadata frame")
+            self._add(self._left, peak)
+            self._left = None
+
+    def _add(self, left: float, right: float) -> None:
+        # A chunk counts toward the bin holding its midpoint, or toward every bin it covers
+        # when bins are shorter than a chunk, so none stays empty. Audio past the probed
+        # duration adds bins that the final expansion folds in.
+        start = self.chunks * WARM_DECODER_CHUNK_FRAMES
+        self.chunks += 1
+        if self.frames_per_bin < WARM_DECODER_CHUNK_FRAMES:
+            first = start // self.frames_per_bin
+            last = (start + WARM_DECODER_CHUNK_FRAMES - 1) // self.frames_per_bin
+        else:
+            first = last = (start + WARM_DECODER_CHUNK_FRAMES // 2) // self.frames_per_bin
+        while len(self.peak_bins) <= last:
+            self.peak_bins.append(_PeakBin(0.0, 0.0, 0))
+        for peak in self.peak_bins[first:last + 1]:
+            peak.left = max(peak.left, left)
+            peak.right = max(peak.right, right)
+
+    def peaks(self) -> WaveformPeaks:
+        left, right = _expand_peak_bins(self.peak_bins, bins=self.bins)
+        return WaveformPeaks(left=left, right=right, sample_count=self.bins)
+
+
+async def _build_with_warm_decoder(
+    decoder: asyncio.subprocess.Process,
+    path: Path,
+    *,
+    bins: int,
+    cancel_event: asyncio.Event,
+    progress: Callable[[WaveformPeaks], None] | None,
+) -> WaveformPeaks:
+    # The decoder starts on the file at once and its output is kept until the duration,
+    # read meanwhile, says how chunks fold into bins.
+    naming = asyncio.ensure_future(_name_input(decoder, path))
+    duration = asyncio.ensure_future(asyncio.to_thread(_audio_duration_seconds, path))
+    early_output: list[bytes] = []
+    folded: _ChunkPeakBins | None = None
+    published_at = 0.0
+
+    def fold(output: bytes) -> None:
+        nonlocal folded, published_at
+        if folded is None:
+            if not duration.done():
+                early_output.append(output)
+                return
+            folded = _ChunkPeakBins(bins=bins, duration_seconds=duration.result())
+            output = b"".join(early_output) + output
+            early_output.clear()
+        folded.feed(output)
+        if folded.chunks > folded.chunk_limit:
+            raise RuntimeError("ffmpeg waveform aggregate output exceeded its bound")
+        now = time.monotonic()
+        if progress is not None and folded.chunks and now - published_at >= PROGRESS_INTERVAL_SECONDS:
+            published_at = now
+            progress(folded.peaks())
+
+    try:
+        await _collect_aggregate_output(
+            decoder,
+            cancel_event=cancel_event,
+            limit=WARM_DECODER_OUTPUT_LIMIT_BYTES,
+            feed=naming,
+            on_output=fold,
+        )
+        await duration
+        fold(b"\n")
+    finally:
+        if not duration.done():
+            with suppress(BaseException):
+                await duration
+    assert folded is not None
+    if not folded.chunks:
+        raise RuntimeError("ffmpeg returned empty waveform aggregate output")
+    return folded.peaks()
+
+
 def _segment_count(duration_seconds: float, *, bins: int, current: bool) -> int:
     if not current:
         return 1
@@ -314,39 +542,78 @@ async def _build_segment_peak_bins(
         "astats=metadata=1:reset=1:measure_perchannel=Peak_level:measure_overall=none,"
         "ametadata=print:file=-"
     )
-    command = [
-        executable,
-        "-nostdin",
-        "-v",
-        "error",
-        *input_options,
-        "-i",
-        str(path),
-        "-af",
-        aggregate_filter,
-        "-f",
-        "null",
-        "-",
-    ]
-    # The playing song decodes at the same priority as playback; only prefetch yields.
+    process = await _launch_decoder(
+        [
+            executable,
+            "-nostdin",
+            "-v",
+            "error",
+            *input_options,
+            "-i",
+            str(path),
+            "-af",
+            aggregate_filter,
+            "-f",
+            "null",
+            "-",
+        ],
+        current=current,
+    )
+    payload = await _collect_aggregate_output(
+        process,
+        cancel_event=cancel_event,
+        limit=segment_bins * MAX_AGGREGATE_OUTPUT_BYTES_PER_BIN,
+    )
+    return _parse_aggregate_records(payload, bins=segment_bins)
+
+
+async def _launch_decoder(
+    command: list[str],
+    *,
+    current: bool,
+    stdin: int | None = None,
+) -> asyncio.subprocess.Process:
+    # The playing song's short build runs ahead of background load so its waveform arrives
+    # with playback even when the host CPU is saturated; prefetch yields to everything.
     creationflags = 0
     if sys.platform.startswith("win"):
-        creationflags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        if not current:
-            creationflags |= int(getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0))
+        creationflags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0)) | int(
+            getattr(
+                subprocess,
+                "ABOVE_NORMAL_PRIORITY_CLASS" if current else "BELOW_NORMAL_PRIORITY_CLASS",
+                0,
+            )
+        )
     elif not current:
         command = ["nice", "-n", "10", *command]
-
-    process = await asyncio.create_subprocess_exec(
+    return await asyncio.create_subprocess_exec(
         *command,
+        stdin=stdin,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         creationflags=creationflags,
     )
+
+
+async def _collect_aggregate_output(
+    process: asyncio.subprocess.Process,
+    *,
+    cancel_event: asyncio.Event,
+    limit: int,
+    feed: Awaitable[None] | None = None,
+    on_output: Callable[[bytes], None] | None = None,
+) -> bytes:
+    """Read a decoder's metadata output to EOF, reaping it on failure or cancellation.
+
+    `feed` writes the decoder's input to its stdin while the output is read. With
+    `on_output`, each piece of output goes there as it arrives instead of being kept.
+    """
     stderr_task = asyncio.create_task(_read_stream_tail(process.stderr))
+    feed_task = asyncio.ensure_future(feed) if feed is not None else None
     cancel_task = asyncio.create_task(cancel_event.wait())
     waited = False
     aggregate_output = bytearray()
+    received = 0
     read_task: asyncio.Task[bytes] | None = None
 
     try:
@@ -373,10 +640,17 @@ async def _build_segment_peak_bins(
             read_task = None
             if not chunk:
                 break
-            aggregate_output.extend(chunk)
-            if len(aggregate_output) > segment_bins * MAX_AGGREGATE_OUTPUT_BYTES_PER_BIN:
+            received += len(chunk)
+            if received > limit:
                 raise RuntimeError("ffmpeg waveform aggregate output exceeded its bound")
+            if on_output is None:
+                aggregate_output.extend(chunk)
+            else:
+                on_output(chunk)
 
+        if feed_task is not None:
+            # A failed input read must not pass for a short song.
+            await feed_task
         return_code = await process.wait()
         waited = True
         stderr = await stderr_task
@@ -384,9 +658,10 @@ async def _build_segment_peak_bins(
             detail = stderr.decode("utf-8", errors="replace").strip()
             suffix = f": {detail}" if detail else ""
             raise RuntimeError(f"ffmpeg exited with code {return_code}{suffix}")
-        return _parse_aggregate_records(bytes(aggregate_output), bins=segment_bins)
+        return bytes(aggregate_output)
     except asyncio.CancelledError:
         cancel_event.set()
+        await _stop_feed(feed_task)
         await _cancel_active_read(read_task)
         if not waited:
             await _finish_process_cleanup(
@@ -400,6 +675,7 @@ async def _build_segment_peak_bins(
                 await stderr_task
         raise
     except BaseException:
+        await _stop_feed(feed_task)
         await _cancel_active_read(read_task)
         if not waited:
             await _finish_process_cleanup(
@@ -455,14 +731,28 @@ async def build_waveform_peaks(
     bins: int,
     cancel_event: asyncio.Event,
     current: bool = False,
+    decoders: WaveformDecoderPool | None = None,
+    progress: Callable[[WaveformPeaks], None] | None = None,
 ) -> WaveformPeaks:
-    """Build stereo peaks; the playing song decodes in parallel at normal priority."""
+    """Build stereo peaks; the playing song uses a started decoder or parallel segments."""
     if bins < 1:
         raise ValueError("waveform bin count must be positive")
 
     executable = resolve_ffmpeg_executable()
     if not executable:
         raise RuntimeError("ffmpeg executable is unavailable")
+    # A started decoder learns the file from a one-line script, which a line break would
+    # break; such a file decodes the slower way instead.
+    nameable = not any(character in str(path) for character in "\r\n")
+    decoder = decoders.take() if current and decoders is not None and nameable else None
+    if decoder is not None:
+        return await _build_with_warm_decoder(
+            decoder,
+            path,
+            bins=bins,
+            cancel_event=cancel_event,
+            progress=progress,
+        )
     duration_seconds = await asyncio.to_thread(_audio_duration_seconds, path)
     from music_app.services.mp3_gapless import ignored_mp3_gapless_info
 
@@ -514,6 +804,14 @@ class _BuildJob:
     stopping: bool = False
     # Set while a playing-song build with no callers waits for its song to ask again.
     linger_timer: asyncio.TimerHandle | None = None
+    # The waveform built so far, shown to every caller while the build runs.
+    partial: WaveformPeaks | None = None
+    listeners: set[Callable[[WaveformPeaks], None]] = field(default_factory=set)
+
+    def publish(self, peaks: WaveformPeaks) -> None:
+        self.partial = peaks
+        for listener in tuple(self.listeners):
+            listener(peaks)
 
     def stop(self) -> None:
         """Cancel the build; callers still waiting get a busy answer, not a cancellation."""
@@ -541,10 +839,12 @@ class WaveformPeaksRegistry:
         builder: Callable[..., Awaitable[WaveformPeaks]] = build_waveform_peaks,
         cache_repository: object | None = None,
         analyzer_version: str = WAVEFORM_ANALYZER_VERSION,
+        decoder_pool: WaveformDecoderPool | None = None,
     ) -> None:
         self._builder = builder
         self._cache_repository = cache_repository
         self._analyzer_version = analyzer_version
+        self._decoder_pool = decoder_pool
         self._jobs: set[_BuildJob] = set()
         self._shutting_down = False
 
@@ -586,6 +886,9 @@ class WaveformPeaksRegistry:
 
     async def get_cached(self, path: Path, *, bins: int) -> WaveformPeaks | None:
         self._ensure_open()
+        if self._decoder_pool is not None:
+            # A song was just selected: have a decoder ready before its build is asked for.
+            self._decoder_pool.fill()
         try:
             cache_identity = self._cache_identity(path, bins=bins)
         except OSError as error:
@@ -614,6 +917,11 @@ class WaveformPeaksRegistry:
                 bins=bins,
                 cancel_event=job.cancel_event,
                 current=job.current,
+                **(
+                    {"decoders": self._decoder_pool, "progress": job.publish}
+                    if self._decoder_pool is not None
+                    else {}
+                ),
             )
         except asyncio.CancelledError:
             if job.stopping:
@@ -669,11 +977,22 @@ class WaveformPeaksRegistry:
 
     def _retire(self, job: _BuildJob, task: asyncio.Task[WaveformPeaks]) -> None:
         self._jobs.discard(job)
+        if self._decoder_pool is not None and not self._shutting_down:
+            # Replace a used decoder once the build no longer competes with its start.
+            self._decoder_pool.fill()
         if not task.cancelled():
             # Every caller may have left; consume the outcome so it is never reported unretrieved.
             task.exception()
 
-    async def run(self, path: Path, *, bins: int, current: bool = False) -> WaveformPeaks:
+    async def run(
+        self,
+        path: Path,
+        *,
+        bins: int,
+        current: bool = False,
+        on_progress: Callable[[WaveformPeaks], None] | None = None,
+    ) -> WaveformPeaks:
+        """Return the song's peaks; `on_progress` sees the waveform built so far."""
         self._ensure_open()
         cache_identity: dict[str, object] | None = None
         if self._cache_repository is not None:
@@ -698,6 +1017,10 @@ class WaveformPeaksRegistry:
         task = job.task
         assert task is not None
         job.waiters += 1
+        if on_progress is not None:
+            job.listeners.add(on_progress)
+            if job.partial is not None:
+                on_progress(job.partial)
         try:
             return await asyncio.shield(task)
         except asyncio.CancelledError:
@@ -715,6 +1038,7 @@ class WaveformPeaksRegistry:
             raise
         finally:
             job.waiters -= 1
+            job.listeners.discard(on_progress)
 
     async def _shutdown_and_release(self) -> None:
         self._shutting_down = True
@@ -723,6 +1047,8 @@ class WaveformPeaksRegistry:
             job.stop()
         if tasks:
             await asyncio.wait(tasks)
+        if self._decoder_pool is not None:
+            await self._decoder_pool.close()
 
     async def shutdown(self) -> None:
         shutdown_task = asyncio.create_task(self._shutdown_and_release())

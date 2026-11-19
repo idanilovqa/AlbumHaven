@@ -264,7 +264,7 @@ async function handleStreamingPlaybackWaveformReady(event = {}) {
   const continuityPath = String(event.continuityPath || '');
   const shownPeaks = state.player.waveform.compactPeaks;
   // A seek restarts playback in a new generation of the same song: reuse its peaks.
-  const currentPeaks = shownPeaks?.path === currentPath && shownPeaks.data
+  const currentPeaks = shownPeaks?.path === currentPath && shownPeaks.data && !shownPeaks.partial
     ? shownPeaks.data
     : await loadWaveformPeaks(currentPath, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, generation, {
       current: true,

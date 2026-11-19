@@ -145,6 +145,44 @@ async function loadSavedLoopWaveformPeaks(loopId) {
   return entry.promise;
 }
 
+// A building waveform streams as NDJSON: partial peaks, then the complete ones. A cached
+// or finished one answers as plain JSON.
+async function readWaveformPeakResponse(response, sampleCount, onPartial) {
+  if (!String(response.headers?.get?.('content-type') || '').includes('ndjson')) {
+    return { peaks: validateWaveformPeakPayload(await response.json(), sampleCount) };
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffered = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    buffered += decoder.decode(value || new Uint8Array(), { stream: !done });
+    const lines = buffered.split('\n');
+    buffered = lines.pop();
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      const payload = JSON.parse(line);
+      if (payload.error) return { busy: true };
+      const peaks = validateWaveformPeakPayload(payload, sampleCount);
+      if (!peaks || payload.complete) return { peaks };
+      onPartial?.(peaks);
+    }
+    if (done) return { peaks: null };
+  }
+}
+
+// Draws the playing song's waveform as far as it is built, never over a finished one.
+function showPartialWaveformPeaks(path, generation, peaks) {
+  const shown = state.player.waveform.compactPeaks;
+  if (String(state.player.current?.path || '') !== path
+      || state.player.streaming.generation !== generation
+      || (shown?.path === path && !shown.partial)) return;
+  state.player.waveform.compactPeaks = { path, generation, data: peaks, partial: true };
+  if (typeof updateWaveformAppearance === 'function') {
+    void Promise.resolve(updateWaveformAppearance()).catch(() => {});
+  }
+}
+
 // The playing song's peaks are asked for with `current`, so the server builds them first at
 // playback priority; any other load is a prefetch that yields to it.
 async function loadWaveformPeaks(
@@ -197,10 +235,19 @@ async function loadWaveformPeaks(
     let retained = false;
     try {
       const query = new URLSearchParams({ path: rawPath, bins: String(sampleCount) });
-      if (current) query.set('priority', 'current');
+      if (current) {
+        query.set('priority', 'current');
+        query.set('progressive', '1');
+      }
+      const showPartial = current
+        ? (partial) => showPartialWaveformPeaks(rawPath, generation, partial)
+        : null;
       for (let attempt = 0; ; attempt += 1) {
         const response = await fetch(`/playback/waveform?${query}`, { signal: controller.signal });
-        if (response.status === 429) {
+        const outcome = response.status === 429
+          ? { busy: true }
+          : response.ok ? await readWaveformPeakResponse(response, sampleCount, showPartial) : null;
+        if (outcome?.busy) {
           await new Promise((resolve) => {
             setTimeout(resolve, PLAYER_WAVEFORM_BUSY_RETRY_DELAYS_MS[attempt]
               ?? PLAYER_WAVEFORM_BUSY_RETRY_MAX_DELAY_MS);
@@ -208,8 +255,7 @@ async function loadWaveformPeaks(
           if (controller.signal.aborted || state.player.streaming.generation !== generation) return null;
           continue;
         }
-        if (!response.ok) return null;
-        const peaks = validateWaveformPeakPayload(await response.json(), sampleCount);
+        const peaks = outcome?.peaks || null;
         if (controller.signal.aborted || state.player.streaming.generation !== generation) return null;
         if (!peaks) return null;
         retained = true;

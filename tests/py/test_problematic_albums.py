@@ -887,6 +887,13 @@ def test_a_restarted_server_answers_the_first_page_from_the_stored_first_page(mo
     _drain_background_work()
     page_key = (database_url, browse._PROBLEMATIC_FILES_PAGE_KIND)
 
+    def resolve_duplicates():
+        # A page whose duplicate sources are still resolving is served but neither cached
+        # nor stored; the background warm-up (off in tests) resolves them first.
+        repository = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": database_url})
+        with repository._search_connection_context() as connection:
+            browse._load_duplicate_candidate_album_ids(connection, [], repository=repository)
+
     def restart_and_open_first_page(*, candidate_query_allowed):
         for registry in (browse._UTILITY_PROJECTION_CACHE, browse._UTILITY_PROJECTION_STALE):
             registry.pop(page_key, None)
@@ -901,10 +908,12 @@ def test_a_restarted_server_answers_the_first_page_from_the_stored_first_page(mo
     with psycopg.connect(database_url) as connection:
         connection.execute("delete from library.problematic_files_snapshots")
         connection.commit()
+    resolve_duplicates()
     fresh = restart_and_open_first_page(candidate_query_allowed=True)
     _drain_background_work()
     reader = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": database_url})
     assert fresh["projection_cache_status"] == "bounded"
+    assert reader._load_problematic_files_snapshot(allow_outdated=True, for_first_page=True),         "A freshly built first page is stored for the next restart."
     assert reader._load_problematic_files_snapshot() is None, "A first page is never served as the complete list."
     assert reader._load_problematic_files_snapshot(allow_outdated=True) is None, "Search never reads a first page."
 
@@ -928,6 +937,7 @@ def test_a_restarted_server_answers_the_first_page_from_the_stored_first_page(mo
             values(%s,%s,%s,%s)""", (track_id, root_id, f"C:/pf-search/{token}/new/01.flac", "new/01.flac"))
         _bump_inventory_revision(connection)
         connection.commit()
+    resolve_duplicates()
 
     outdated = restart_and_open_first_page(candidate_query_allowed=True)
     assert outdated["projection_cache_status"] == "revalidated"

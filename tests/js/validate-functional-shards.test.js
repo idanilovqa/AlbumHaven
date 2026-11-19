@@ -23,7 +23,7 @@ const EXPECTED_SHARD_COUNTS = new Map([
   ['cover-providers-1', 27],
   ['cover-providers-2', 18],
   ['metadata-mutations', 18],
-  ['playback-utilities-1', 14],
+  ['playback-utilities-1', 15],
   ['playback-utilities-2', 17],
   ['playback-utilities-3', 14],
 ]);
@@ -124,7 +124,7 @@ function functionalJobSource() {
   return { workflow, job: workflow.slice(start, end) };
 }
 
-test('functional shard contract pins the approved eight-way 191-case assignment', () => {
+test('functional shard contract pins the approved eight-way 192-case assignment', () => {
   const contract = readJson(shardContractPath);
   assert.equal(contract.browser, 'chrome');
   assert.equal(contract.workersPerInvocation, 1);
@@ -138,7 +138,7 @@ test('functional shard contract pins the approved eight-way 191-case assignment'
     assert.ok(shard.invocations.length > 0, `${shard.name} must not be empty`);
     assert.ok(shard.suitePrerequisites.length > 0, `${shard.name} must declare prerequisites`);
   }
-  assert.equal(total, 191);
+  assert.equal(total, 192);
   for (const ownedCase of ownedCases(contract)) {
     assert.match(ownedCase.area, /^[a-z]+(?:-[a-z]+)*$/, ownedCase.case);
   }

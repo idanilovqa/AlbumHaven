@@ -608,17 +608,22 @@ export class GalleryActions {
       const hasArtistParam = location.search.includes(`artist=${encodeURIComponent(selectors.expectedArtist)}`);
       const hasMatchingSidebarSelection = activeText.includes(selectors.expectedArtist);
       const hasDerivedSearchSelection = Boolean(location.search.includes(`q=${encodeURIComponent(selectors.queryValue)}`) && hasMatchingHeading);
+      // A deferred artist page shows its heading before its albums; the gallery is shown once cards render.
+      const hasAlbumCards = Boolean(document.querySelector(selectors.albumCardSelector));
       if (selectors.requireExclusiveView) {
-        return headings.length === 1 && headings[0] === selectors.expectedArtist && (hasArtistParam || hasMatchingSidebarSelection);
+        return hasAlbumCards && headings.length === 1 && headings[0] === selectors.expectedArtist
+          && (hasArtistParam || hasMatchingSidebarSelection);
       }
       if (selectors.requireArtistQuery) {
-        return hasMatchingHeading && hasArtistParam;
+        return hasAlbumCards && hasMatchingHeading && hasArtistParam;
       }
-      return hasMatchingHeading && (hasArtistParam || hasMatchingSidebarSelection || hasDerivedSearchSelection);
+      return hasAlbumCards && hasMatchingHeading
+        && (hasArtistParam || hasMatchingSidebarSelection || hasDerivedSearchSelection);
     }, {
       timeout: options.timeout || 30000,
     }, {
       artistHeadingSelector: this.galleryPage.artistHeadingSelector,
+      albumCardSelector: '#artist-groups .album-card',
       expectedArtist: artistName,
       activeSidebarLinkSelector: '#sidebar-list .artist-link.active',
       queryValue: String(options.queryValue || artistName),

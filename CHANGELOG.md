@@ -7,6 +7,10 @@
 - The device copy (Android app and browsers) keeps covers by the server's cover reference, is never shown past the end of the signing-in session, cannot be brought back by a save that finishes after signing out, answers pages before writing the copy, and never breaks a page when storage is full. Copies kept by the previous version are deleted once.
 - `ALBUM_HAVEN_APP_COPY=off` switches the device copy off: pages stop loading it and installed copies delete themselves.
 
+## 0.11.41 - 2026-11-19
+
+- Test-only: the Python test suite runs as three parallel CI jobs, so its results arrive in about 14 minutes instead of 33, and four tests no longer wait out a 30-second database timeout.
+
 ## 0.11.40 - 2026-11-19
 
 - Right after the library's gallery data is rebuilt (for example on the first start after an update), opening an artist's gallery no longer stalls: the first page loads in well under a second instead of up to 20 seconds.

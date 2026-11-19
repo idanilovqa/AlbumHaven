@@ -35858,24 +35858,21 @@ function buildTrackPathSignature(album) {
   return tracks.map((track) => String(track?.path || '')).filter(Boolean).sort().join('::');
 }
 
-function buildRemoteCoverLookupPreviewUrl(url) {
-  const raw = String(url || '').trim();
-  if (!raw) return '';
-  return `/utilities/cover-lookup/remote-image?url=${encodeURIComponent(raw)}`;
-}
-
-function buildRemoteCoverLookupImageUrl(url, key = '') {
+// A card asks for the server's 480 px preview: several providers offer no thumbnail, and their
+// originals reached several megabytes. The lightbox keeps the original.
+function buildRemoteCoverLookupImageUrl(url, key = '', { preview = false } = {}) {
   const raw = String(url || '').trim();
   if (!raw) return '';
   const params = new URLSearchParams({ url: raw });
   if (key) params.set('key', String(key));
+  if (preview) params.set('size', '480');
   return `/utilities/cover-lookup/remote-image?${params.toString()}`;
 }
 
-function buildRemoteCoverLookupDisplayUrl(item, preferredUrl, key = '') {
+function buildRemoteCoverLookupDisplayUrl(item, preferredUrl, key = '', options = {}) {
   const raw = String(preferredUrl || '').trim();
   if (!raw) return '';
-  return buildRemoteCoverLookupImageUrl(raw, key);
+  return buildRemoteCoverLookupImageUrl(raw, key, options);
 }
 
 function buildCoverLookupSearchQuery(album) {
@@ -37778,6 +37775,7 @@ function renderCoverLookupDrawer({
     const bestCandidateCoverUrl = buildRemoteCoverLookupImageUrl(
       bestCandidatePreviewUrl,
       bestCandidateId || bestCandidate?.id || '',
+      { preview: true },
     );
     const coverUrl = currentUserCoverUrl
       || bestCandidateCoverUrl
@@ -37982,9 +37980,9 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
   const orderedLimitReached = Boolean(state.coverLookup.modal.orderedSelectionMode)
     && orderedSelections.length >= 3;
   const imageUrl = kind === 'remote'
-    ? buildRemoteCoverLookupDisplayUrl(item, item?.thumbnail_url || item?.url || '', item?.id || item?.url || '')
+    ? buildRemoteCoverLookupDisplayUrl(item, item?.thumbnail_url || item?.url || '', item?.id || item?.url || '', { preview: true })
     : kind === 'saved-remote'
-      ? buildRemoteCoverLookupDisplayUrl(item, item?.thumbnail_url || item?.url || '', `saved:${item?.id || item?.url || ''}`)
+      ? buildRemoteCoverLookupDisplayUrl(item, item?.thumbnail_url || item?.url || '', `saved:${item?.id || item?.url || ''}`, { preview: true })
       : kind === 'pasted'
         ? String(item?.object_url || item?.data_url || '').trim()
       : buildCoverUrl(item?.candidate_cover_ref || '', {
@@ -38288,11 +38286,12 @@ function buildCoverLookupGalleryLoadingMarkup(modalState) {
       </div>
     </section>
   ` : '';
+  // Owner (2026-11-18): nothing blinks at the top while the listing loads; an album without a known cover
+  // shows the static heading its empty state keeps once the listing answers.
   const localMarkup = section('LOCAL', 'local', localCount) || `
-    <div class="cover-lookup-gallery-resolving">
-      <span class="cover-lookup-task-loading-line is-title" aria-hidden="true"></span>
-      <span>Resolving available cover art…</span>
-    </div>
+    <section class="cover-lookup-section cover-lookup-gallery-resolving">
+      <h4 class="cover-lookup-section-title">LOCAL</h4>
+    </section>
   `;
   return `<div role="status" aria-label="Loading cover art">
     ${localMarkup}
@@ -38501,8 +38500,8 @@ function renderCoverLookupModal() {
       <div class="cover-lookup-section-heading">
         <h4 class="cover-lookup-section-title">${possibleMatches.length || taskRunning || showCaaEmptyNotice ? `POSSIBLE MATCHES · ${formatCoverLookupImageCount(possibleMatches.length)}` : 'ADD COVER ART'}</h4>
       </div>
-      ${progressMarkup}
       ${possibleMatchesMarkup}
+      ${progressMarkup}
         <div class="cover-lookup-manual-add" data-cover-lookup-scroll-key="manual-add">
         <div class="cover-lookup-manual-divider" aria-hidden="true"></div>
         <div class="cover-lookup-subsection-title">MANUAL SEARCH</div>
@@ -38858,7 +38857,7 @@ async function loadCoverLookupTasks(options = {}) {
         const terminalCandidatesPending = terminalTask
           && Number(task.possible_match_count || 0) > (candidateSource?.candidates.length || 0);
         if (terminalCandidatesPending && options.refreshModalGallery !== false) {
-          await refreshCoverLookupGallery(false);
+          await refreshCoverLookupGallery(false, { coalesce: true });
         } else {
           applyCoverLookupTaskModalStatus(task);
           applyCoverLookupCandidateSource(candidateSource);
@@ -38869,16 +38868,16 @@ async function loadCoverLookupTasks(options = {}) {
                 > coverLookupCandidateTimestamp(state.coverLookup.modal.candidateSnapshot?.updated_at)
             );
           if (partialCandidatesAdvanced) {
-            await refreshCoverLookupGallery(false);
+            await refreshCoverLookupGallery(false, { coalesce: true });
           } else if (terminalTask) {
             if (options.refreshModalGallery !== false) {
-              await refreshCoverLookupGallery(false);
+              await refreshCoverLookupGallery(false, { coalesce: true });
             } else {
               renderCoverLookupModal();
             }
           } else if (Array.isArray(task.updated_albums) && task.updated_albums.length) {
             if (Number(task.progress || 0) >= 100) {
-              await refreshCoverLookupGallery(false);
+              await refreshCoverLookupGallery(false, { coalesce: true });
             } else {
               renderCoverLookupModal();
             }
@@ -39010,7 +39009,7 @@ function ensureCoverLookupPolling() {
         && !hasMatchingActiveTask
         && ['pending', 'running'].includes(String(snapshot?.status || ''))
       ) {
-        await refreshCoverLookupGallery(false);
+        await refreshCoverLookupGallery(false, { coalesce: true });
       }
     } finally {
       coverLookupPollInFlight = false;
@@ -39178,9 +39177,20 @@ async function finishCoverLookupLocalMutation(mutationKey, session) {
   }
 }
 
-async function refreshCoverLookupGallery(showLoading = true) {
+// A running search's progress polls join the gallery read in flight and ask for one more after it,
+// instead of discarding it; otherwise the open's read never lands while candidates keep arriving, and
+// the dialog stays in its loading state with no local covers.
+let coverLookupGalleryFlight = null;
+
+async function refreshCoverLookupGallery(showLoading = true, { coalesce = false } = {}) {
   const album = state.coverLookup.modal.album;
   if (!album) return;
+  if (coalesce && coverLookupGalleryFlight?.album === album) {
+    coverLookupGalleryFlight.queued = true;
+    return;
+  }
+  const flight = { album, queued: false };
+  coverLookupGalleryFlight = flight;
   const request = ++coverLookupGalleryRequest;
   const isCurrent = () => request === coverLookupGalleryRequest;
   if (showLoading) state.coverLookup.modal.loading = true;
@@ -39218,6 +39228,13 @@ async function refreshCoverLookupGallery(showLoading = true) {
     console.error('[AlbumHaven][CoverLookup] Failed to load gallery.', error);
     renderCoverLookupModal();
     showToast(error.message || 'Failed to load cover art gallery.', 'error', 2800);
+  } finally {
+    if (coverLookupGalleryFlight === flight) {
+      coverLookupGalleryFlight = null;
+      if (flight.queued && isCurrent() && state.coverLookup.modal.album === album) {
+        void refreshCoverLookupGallery(false, { coalesce: true });
+      }
+    }
   }
 }
 

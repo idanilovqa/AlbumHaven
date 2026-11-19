@@ -46,9 +46,11 @@ from music_app.services.cover_state import (
     serialize_cover_gallery_payload,
 )
 from music_app.services.cover_lookup_runtime import (
+    REMOTE_COVER_PREVIEW_EDGE,
     fetch_remote_cover_bytes,
     merge_lookup_matches,
     queue_cover_lookup_task,
+    remote_cover_preview,
 )
 from music_app.services.cover_lookup_tasks import (
     cancel_cover_lookup_task_payload,
@@ -2107,6 +2109,8 @@ async def utilities_cover_lookup_remote_image(request: Request) -> Response:
     )
     if payload is None:
         return _json_response(({"ok": False, "error": "Failed to load remote image"}, 502))
+    if request.query_params.get("size") == str(REMOTE_COVER_PREVIEW_EDGE):
+        payload, mime_type = await run_in_threadpool(remote_cover_preview, payload, mime_type)
     return Response(payload, media_type=mime_type, headers={"Cache-Control": "public, max-age=3600"})
 
 

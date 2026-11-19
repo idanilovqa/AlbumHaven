@@ -800,7 +800,7 @@ require('node:test')('notification thumbnails show the best candidate when no us
 
   assert.match(
     bodyElement.innerHTML,
-    /src="\/utilities\/cover-lookup\/remote-image\?url=https%3A%2F%2Fimages.example%2Frevelations-best.jpg&key=revelations-best"/,
+    /src="\/utilities\/cover-lookup\/remote-image\?url=https%3A%2F%2Fimages.example%2Frevelations-best.jpg&key=revelations-best&size=480"/,
   );
   assert.doesNotMatch(bodyElement.innerHTML, /automatic-or-stale-cover|is-placeholder/);
   assert.doesNotMatch(bodyElement.innerHTML, /current-art/);
@@ -6584,7 +6584,10 @@ require('node:test')('loading Cover Lookup renders only known gallery card place
 
   assert.match(bodyElement.innerHTML, /cover-lookup-gallery-loading/);
   assert.match(bodyElement.innerHTML, /cover-lookup-task-loading-line/);
-  assert.doesNotMatch(bodyElement.innerHTML, />LOCAL</);
+  // LOCAL is a still heading with no count and no placeholder until its listing answers.
+  assert.match(bodyElement.innerHTML, />LOCAL</);
+  assert.doesNotMatch(bodyElement.innerHTML, /LOCAL ·/);
+  assert.doesNotMatch(bodyElement.innerHTML, /data-cover-lookup-loading-section="local"/);
   assert.doesNotMatch(bodyElement.innerHTML, />OTHER ART</);
   assert.match(bodyElement.innerHTML, />REMOTE · 4 images</);
   assert.match(bodyElement.innerHTML, />MANUAL SEARCH</);
@@ -6761,4 +6764,16 @@ require('node:test')('retry immediately resets the existing card label tone and 
     }),
   });
   await retryRequest;
+});
+
+require('node:test')('a remote card shows the 480 px preview while its lightbox keeps the original', () => {
+  const context = loadHelper({ escapeHtml: value => String(value ?? '') });
+  const card = context.buildCoverLookupCard({
+    id: 'apple-1', source: 'apple', url: 'https://images.example/3000x3000bb.jpg',
+  }, 'remote', true);
+  const preview = card.match(/<img class="cover-lookup-art-preview-image" src="([^"]+)"/)[1];
+  const full = card.match(/data-cover-src="([^"]+)"/)[1];
+
+  assert.match(preview, /size=480/);
+  assert.doesNotMatch(full, /size=/);
 });

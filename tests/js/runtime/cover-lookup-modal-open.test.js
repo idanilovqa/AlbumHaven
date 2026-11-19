@@ -796,7 +796,9 @@ test('Cover Lookup loading markup does not invent empty artwork cards and keeps 
 
   assert.equal((markup.match(/cover-lookup-art-card-shell is-loading/g) || []).length, 0);
   assert.doesNotMatch(markup, /data-cover-lookup-loading-section="other-art"/);
-  assert.match(markup, /Resolving available cover art/);
+  // Owner 2026-11-18: nothing blinks at the top while the listing loads; LOCAL is a static heading.
+  assert.doesNotMatch(markup, /cover-lookup-task-loading-line/);
+  assert.match(markup, /<h4 class="cover-lookup-section-title">LOCAL<\/h4>/);
   assert.doesNotMatch(markup, /No local cover art found/);
   assert.match(markup, />MANUAL SEARCH</);
   assert.match(markup, /id="cover-lookup-pasted-urls"/);
@@ -862,7 +864,10 @@ test('Cover Lookup loading markup keeps cached remote candidates usable while lo
   });
 
   assert.match(markup, /cached-thumb\.jpg/);
-  assert.match(markup, /Resolving available cover art/);
+  // Only the REMOTE placeholders shimmer; the LOCAL heading above them is static.
+  const localPart = markup.slice(0, markup.indexOf('REMOTE'));
+  assert.match(localPart, />LOCAL</);
+  assert.doesNotMatch(localPart, /cover-lookup-task-loading-line/);
   assert.doesNotMatch(markup, /data-cover-lookup-loading-section="local"/);
   assert.equal((markup.match(/data-cover-lookup-loading-section="remote"/g) || []).length, 1);
 });
@@ -1384,3 +1389,95 @@ for (const actions of [{ 'library.covers.lookup': true }, undefined]) {
     assert.equal(new URL(f.location.href).searchParams.get('mobile_page'), 'cover-lookup');
   });
 }
+
+test('owner 2026-11-18: local covers show while the remote search keeps polling, and no poll discards the open read', async () => {
+  const resolvers = [];
+  const overlay = { hidden: false, classList: { toggle() {}, contains: () => false }, toggleAttribute() {}, removeAttribute() {}, setAttribute() {}, hasAttribute: () => false };
+  const album = { album_id: 7, key: 'a::b', name: 'B', album_artist: 'A', tracks: [{ path: 'N:/A/B/01.flac' }] };
+  const context = {
+    window: {}, URLSearchParams, console: { ...console, log() {} }, HTMLButtonElement: class {},
+    ButtonComponent: { renderButton: () => '<button>Extract images</button>' },
+    setTimeout: () => 0, clearTimeout() {},
+    state: { coverLookup: { tasks: [{ id: 't1', status: 'running', progress: 30 }], modal: { album, taskId: 't1', loading: true, pastedImages: [], localCovers: [], otherArt: [], possibleMatches: [] } } },
+    getAlbumTrackPaths: value => new Set((value?.tracks || []).map(item => item.path)),
+    markAlbumCoverRefsFresh() {},
+    showToast() {},
+    fetch: () => new Promise((resolve) => resolvers.push(resolve)),
+    document: { body: { classList: { add() {} } }, getElementById: id => (id === 'cover-lookup-modal' ? overlay : null) },
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  const renders = [];
+  context.renderCoverLookupModal = () => renders.push({
+    loading: context.state.coverLookup.modal.loading,
+    local: context.state.coverLookup.modal.localCovers.map(cover => cover.filename),
+  });
+  context.markCoverLookupAutomaticImprovementSeen = async () => {};
+  const answer = filename => ({ ok: true, json: async () => ({ ok: true, local_covers: [{ filename, candidate_cover_ref: `ref:${filename}` }], other_art: [] }) });
+
+  const opening = context.refreshCoverLookupGallery(false);
+  // Remote progress polls keep arriving while the opening read is still running.
+  await context.refreshCoverLookupGallery(false, { coalesce: true });
+  await context.refreshCoverLookupGallery(false, { coalesce: true });
+  assert.equal(resolvers.length, 1, 'the polls join the read in flight');
+  resolvers[0](answer('front.jpg'));
+  await opening;
+  assert.deepEqual(renders.at(-1), { loading: false, local: ['front.jpg'] }, 'the local covers render as soon as the open read lands');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(resolvers.length, 2, 'one more read follows for the polls');
+  resolvers[1](answer('front.jpg'));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(renders.every((entry, index) => index < 1 || entry.loading === false), 'the dialog never falls back to its loading state');
+});
+
+function renderRunningSearchModal(modalOverrides = {}) {
+  const body = { innerHTML: '', scrollTop: 0, querySelector: () => null };
+  const elements = { 'cover-lookup-modal': { hidden: false, classList: { toggle() {} } }, 'cover-lookup-modal-body': body };
+  const context = {
+    window: {}, URLSearchParams, console,
+    ButtonComponent: { renderButton: () => '<button>Extract images</button>' },
+    escapeHtml: value => String(value ?? ''),
+    buildSmallAlertHtml: () => '',
+    buildCoverUrl: ref => `/cover?ref=${ref}`,
+    state: { coverLookup: {
+      tasks: [{ id: 'search', status: 'running', progress: 40, progress_label: 'Searching providers...' }],
+      modal: {
+        album: { album_artist: 'Artist', name: 'Album' },
+        taskId: 'search', localCovers: [{ filename: 'front.jpg', candidate_cover_ref: 'ref:front' }],
+        pastedImages: [], manualImageAttachments: [], otherArt: [], currentReleases: [], manualUrlText: '',
+        possibleMatches: [{ id: 'cand-1', url: 'https://images.example/one.jpg', source: 'direct_url', lookup_group: 'services', art_kind: 'cover', filename: 'Candidate one' }],
+        ...modalOverrides,
+      },
+    } },
+    document: { activeElement: null, getElementById: id => elements[id] || null },
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  context.scheduleDeferredCoverLookupPreviews = () => {};
+  context.renderCoverLookupModal();
+  return body.innerHTML;
+}
+
+function assertProgressBelowCandidates(markup) {
+  const local = markup.indexOf('front.jpg');
+  const candidate = markup.indexOf('data-select-remote-cover="cand-1"');
+  const progress = markup.indexOf('class="cover-lookup-search-progress"');
+  const manual = markup.indexOf('>MANUAL SEARCH<');
+  assert.ok(local >= 0 && candidate >= 0 && progress >= 0 && manual >= 0, 'every part renders');
+  assert.ok(local < candidate, 'local covers stay above the remote candidates');
+  assert.ok(candidate < progress, 'candidates appear above the search progress');
+  assert.ok(progress < manual, 'the progress and manual search close the dialog');
+  assert.equal(markup.slice(progress).includes('data-select-remote-cover='), false, 'no candidate renders below the progress');
+}
+
+test('owner 2026-11-18: the search progress stays at the bottom with candidates above it', () => {
+  assertProgressBelowCandidates(renderRunningSearchModal());
+});
+
+test('owner 2026-11-18: the search progress stays at the bottom during a manual search', () => {
+  assertProgressBelowCandidates(renderRunningSearchModal({
+    manualBusy: true,
+    manualPendingCount: 1,
+    manualUrlText: 'https://images.example/manual.jpg',
+  }));
+});

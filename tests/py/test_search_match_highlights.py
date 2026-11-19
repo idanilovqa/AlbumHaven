@@ -28,9 +28,10 @@ def _marked(text: str, query: str) -> str:
         ("alas", "Edu Falaschi", "Edu F[alas]chi"),
         ("ALAS", "Galasphere 347", "G[alas]phere 347"),
         ("alas", "Wache, Wala! Wala! Erwach!", "Wache, Wala! Wala! Erwach!"),
-        # A close-spelling match highlights the whole word it matched. Pending the owner's decision whether
-        # literal search also removes close-spelling matches; this case goes with that rule.
-        ("metalica", "Metallica", "[Metallica]"),
+        # Literal everywhere (owner 2026-11-18): no close spellings, but spaces and punctuation are ignored.
+        ("metalica", "Metallica", "Metallica"),
+        ("acdc", "AC/DC Live", "[AC/DC] Live"),
+        ("ac dc", "AC/DC", "[AC/DC]"),
         # The full query and its separated parts each highlight where they match.
         ("river - love", "River of Endless Love", "[River] of Endless [Love]"),
         ("dont", "Don't Stop", "[Don't] Stop"),
@@ -48,6 +49,7 @@ def test_ranges_agree_with_the_search_matcher():
         ("alas", "Wache, Wala! Wala! Erwach!"),
         ("alas", "Alas de Sal"),
         ("metalica", "Metallica"),
+        ("acdc", "AC/DC"),
         ("dragonland", "A-ha"),
         ("la", "Ala"),
     ]

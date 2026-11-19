@@ -418,15 +418,15 @@ def search_terms_match_fields(terms: list[str], fields: list[str]) -> bool:
 # Search highlighting: the characters of a displayed text that search matched, found with the same
 # normalization and word rules as search_term_matches_field so a highlight never disagrees with a result.
 # Ranges are [start, end) code-point offsets into the original text.
-_SEARCH_APOSTROPHES = frozenset("'’")
 _SEARCH_HIGHLIGHT_TEXT_KEYS = frozenset({
     "name", "title", "filename", "artist", "artist_display", "album_artist", "display_artist", "secondary_artist",
 })
 _SEARCH_HIGHLIGHT_TEXT_LIMIT = 4000
 
 
-def _search_highlight_words(text: str) -> list[tuple[str, list[tuple[int, int]]]]:
-    """Each normalized word of text with the original span of every one of its characters."""
+def _search_highlight_chars(text: str) -> list[tuple[str, tuple[int, int]]]:
+    """The compact search key of text (as compact_search_key(normalize_search_text(text))), one entry per
+    character, each with the span of the original character it came from."""
     clusters: list[tuple[str, int, int]] = []
     for index, char in enumerate(text):
         if clusters and unicodedata.combining(char):
@@ -434,35 +434,11 @@ def _search_highlight_words(text: str) -> list[tuple[str, list[tuple[int, int]]]
             clusters[-1] = (cluster + char, start, index + 1)
         else:
             clusters.append((char, index, index + 1))
-    words: list[tuple[str, list[tuple[int, int]]]] = []
-    raw_word = ""
-    folded_chars: list[tuple[str, tuple[int, int]]] = []
-
-    def finish_word() -> None:
-        nonlocal raw_word, folded_chars
-        normalized = _normalize_search_string(raw_word) if raw_word else ""
-        folded = "".join(char for char, _ in folded_chars)
-        if normalized:
-            if folded.startswith(normalized):
-                spans = [span for _, span in folded_chars[: len(normalized)]]
-            else:
-                whole = (folded_chars[0][1][0], folded_chars[-1][1][1])
-                spans = [whole] * len(normalized)
-            words.append((normalized, spans))
-        raw_word, folded_chars = "", []
-
+    chars: list[tuple[str, tuple[int, int]]] = []
     for cluster, start, end in clusters:
-        if cluster in _SEARCH_APOSTROPHES:
-            raw_word += cluster
-            continue
         composed = unicodedata.normalize("NFC", cluster).casefold()
-        if not _SEARCH_PUNCT_RE.fullmatch(composed):
-            raw_word += cluster
-            folded_chars.extend((char, (start, end)) for char in composed)
-        else:
-            finish_word()
-    finish_word()
-    return words
+        chars.extend((char, (start, end)) for char in composed if not _SEARCH_PUNCT_RE.fullmatch(char))
+    return chars
 
 
 def _merge_search_ranges(ranges: list[tuple[int, int]]) -> list[list[int]]:
@@ -476,33 +452,21 @@ def _merge_search_ranges(ranges: list[tuple[int, int]]) -> list[list[int]]:
 
 
 def search_match_ranges(query: str, text: str) -> list[list[int]]:
-    """The [start, end) ranges of text that the search for query matched, merged and in order."""
-    terms = split_search_terms(str(query or ""))
-    words = _search_highlight_words(str(text or ""))
-    if not terms or not words:
-        return []
-    field = " ".join(word for word, _ in words)
-    position_spans: list[tuple[int, int] | None] = []
-    for word_index, (_, spans) in enumerate(words):
-        if word_index:
-            position_spans.append(None)
-        position_spans.extend(spans)
+    """The [start, end) ranges of text that the search for query matched, merged and in order.
+
+    search_term_matches_field matches a term found as written, or found once spaces and punctuation are
+    removed ("acdc" in "AC/DC"); the second includes the first, so every occurrence of the compact term in
+    the compact text is a match.
+    """
+    chars = _search_highlight_chars(str(text or ""))
+    compact_text = "".join(char for char, _ in chars)
     ranges: list[tuple[int, int]] = []
-    for term in terms:
-        if not search_term_matches_field(term, field):
-            continue
-        found = field.find(term)
+    for term in split_search_terms(str(query or "")):
+        compact_term = compact_search_key(term)
+        found = compact_text.find(compact_term) if compact_term else -1
         while found >= 0:
-            ranges.append((position_spans[found][0], position_spans[found + len(term) - 1][1]))
-            found = field.find(term, found + len(term))
-        word_matched = False
-        for word, spans in words:
-            if term not in word and search_word_matches(term, word):
-                ranges.append((spans[0][0], spans[-1][1]))
-                word_matched = True
-        if not word_matched and term not in field:
-            # Matched as one compact key (e.g. "acdc" for "AC/DC"): the whole text is the match.
-            ranges.append((words[0][1][0][0], words[-1][1][-1][1]))
+            ranges.append((chars[found][1][0], chars[found + len(compact_term) - 1][1][1]))
+            found = compact_text.find(compact_term, found + len(compact_term))
     return _merge_search_ranges(ranges)
 
 

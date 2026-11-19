@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.40 - 2026-11-19
+
+- Right after the library's gallery data is rebuilt (for example on the first start after an update), opening an artist's gallery no longer stalls: the first page loads in well under a second instead of up to 20 seconds.
+
 ## 0.11.39 - 2026-11-18
 
 - Test-only: the large-library performance check now records how long the first artist page and Home take even when they pass, so before/after comparisons no longer need a failing run.

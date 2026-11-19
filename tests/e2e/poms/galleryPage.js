@@ -597,7 +597,8 @@ export class GalleryPage extends BasePage {
     return {
       async finish() {
         // parity-check: allow-read-only-measurement-evaluate -- stop the card count observer and return its page-clock record
-        finished ??= observation.evaluate((owned) => owned.finish());
+        finished ??= observation.evaluate((owned) => owned.finish())
+          .finally(() => observation.dispose());
         return finished;
       },
     };

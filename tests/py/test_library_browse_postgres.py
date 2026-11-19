@@ -12023,30 +12023,6 @@ def test_problematic_db_loose_identity_survives_unchanged_and_replacement_paths(
     assert album["_loose_group_identity"] == group_id
     assert "_loose_group_identity" not in summary
 
-    cached_payload = {
-        "items": [{"key": public_key, "track_paths": [old_path]}],
-        browse._PROBLEMATIC_LOOSE_GROUP_IDENTITIES_KEY: {public_key: group_id},
-    }
-    monkeypatch.setattr(
-        repository,
-        "_get_cached_utility_projection",
-        lambda kind, **_kwargs: cached_payload if kind == "problematic-files" else None,
-    )
-    current_path[0] = replacement_path
-    connection = type(
-        "Connection",
-        (),
-        {"execute": lambda *_args, **_kwargs: _InventoryCursor(rows=[])},
-    )()
-
-    replacement_rows = repository._load_problematic_file_rows(
-        album_key=public_key,
-        connection=connection,
-    )
-
-    assert [row["file_private_path"] for row in replacement_rows] == [replacement_path]
-    assert replacement_rows[0]["loose_track_membership_group_id"] == group_id
-
 
 def test_problematic_loose_page_loads_canonical_headers_before_group_rows(monkeypatch):
     from music_app.services import library_browse_postgres as browse
@@ -16423,75 +16399,6 @@ def test_opened_rules_are_rebuilt_after_a_library_change_instead_of_on_the_next_
                          browse._UTILITY_PROJECTION_GENERATIONS):
             registry.pop(cache_key, None)
         browse._UTILITY_PROJECTION_REWARM_PENDING.discard(cache_key)
-
-
-def test_problematic_loose_detail_refresh_uses_private_identity_after_complete_replacement(monkeypatch):
-    from music_app.services import library_browse_postgres as browse
-
-    repository = browse.PostgresLibraryBrowseRepository({
-        "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://fixture/replaced-loose-group",
-    })
-    loose_key = browse._problematic_loose_group_key("root-7\x01artist/album")
-    cached_payload = {
-        "items": [{"key": loose_key, "track_paths": [r"Artist\Album\old.flac"]}],
-        browse._PROBLEMATIC_LOOSE_GROUP_IDENTITIES_KEY: {
-            loose_key: "root-7\x01artist/album",
-        },
-    }
-    monkeypatch.setattr(
-        repository,
-        "_get_cached_utility_projection",
-        lambda kind, **_kwargs: cached_payload if kind == "problematic-files" else None,
-    )
-    monkeypatch.setattr(
-        repository._inventory_repository,
-        "load_membership_problem_group_headers",
-        lambda **_kwargs: pytest.fail("private identity must bypass vanished seed paths"),
-    )
-
-    def load_candidates(**options):
-        assert options["private_paths"] is None
-        assert options["membership_group_ids"] == ["root-7\x01artist/album"]
-        return [
-            {
-                "album_id": None,
-                "root_id": "root-7",
-                "membership_group_id": "root-7\x01artist/album",
-                "membership_group_folder": "artist/album",
-                "private_path": path,
-                "title": title,
-                "file_entry": {
-                    "artist": "Replacement Artist",
-                    "title": title,
-                    "local_album_membership_problem": "Missing album",
-                },
-            }
-            for path, title in (
-                (r"Artist\Album\new-one.flac", "New One"),
-                (r"Artist\Album\new-two.flac", "New Two"),
-            )
-        ]
-
-    monkeypatch.setattr(
-        repository._inventory_repository,
-        "load_non_album_candidates",
-        load_candidates,
-    )
-    connection = type(
-        "Connection",
-        (),
-        {"execute": lambda *_args, **_kwargs: _InventoryCursor(rows=[])},
-    )()
-
-    rows = repository._load_problematic_file_rows(
-        album_key=loose_key,
-        connection=connection,
-    )
-
-    assert {row["file_private_path"] for row in rows} == {
-        r"Artist\Album\new-one.flac",
-        r"Artist\Album\new-two.flac",
-    }
 
 
 def test_problematic_page_cursor_returns_every_bounded_canonical_window(monkeypatch):

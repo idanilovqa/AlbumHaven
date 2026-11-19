@@ -360,58 +360,6 @@
 .track-modal-cover-visual:not(.is-loading) .cover-placeholder {
   display: none;
 }
-.track-modal-cover-source-badge {
-  position: absolute;
-  top: 10px;
-  left: 10px;
-  z-index: 2;
-  width: 28px;
-  height: 28px;
-  border-radius: 999px;
-  display: grid;
-  place-items: center;
-  color: #1ed760;
-  background: rgba(15, 23, 42, 0.82);
-  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.28);
-  opacity: 0;
-  transform: translateY(-2px);
-  pointer-events: none;
-  transition: opacity 180ms ease, transform 180ms ease;
-}
-.track-modal-cover-source-badge.is-apple {
-  color: #f6f7fb;
-  background: linear-gradient(135deg, rgba(246, 247, 251, 0.18), rgba(255, 111, 145, 0.24));
-  border: 1px solid rgba(255, 157, 181, 0.34);
-}
-.track-modal-cover-source-badge.is-deezer {
-  color: #ff7a59;
-  background: linear-gradient(135deg, rgba(255, 122, 89, 0.18), rgba(255, 196, 84, 0.18));
-  border: 1px solid rgba(255, 151, 121, 0.32);
-}
-.track-modal-cover-source-badge.is-spotify {
-  color: #1ed760;
-  background: rgba(15, 23, 42, 0.82);
-  border: 1px solid rgba(30, 215, 96, 0.35);
-}
-.track-modal-cover-source-badge.is-youtube-music {
-  color: #ff3b30;
-  background: rgba(48, 10, 10, 0.9);
-  border: 1px solid rgba(255, 59, 48, 0.4);
-}
-.track-modal-cover-source-badge.is-bandcamp {
-  color: #5dade2;
-  background: rgba(10, 29, 43, 0.92);
-  border: 1px solid rgba(93, 173, 226, 0.36);
-}
-.track-modal-cover-source-badge svg {
-  width: 16px;
-  height: 16px;
-}
-.track-modal-cover-shell:hover .track-modal-cover-source-badge,
-.track-modal-cover-shell:focus-within .track-modal-cover-source-badge {
-  opacity: 1;
-  transform: translateY(0);
-}
 .track-modal-cover img {
   width: 100%;
   height: 100%;

@@ -314,7 +314,13 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
           SAVE_GALLERY_PATCH_BUDGET,
           'Edit Tags gallery membership patch',
         );
-        const reconciledView = await readRuntimeView(page);
+        // Owner (2026-11-19): "Saved" shows once the server accepts the save; the destination
+        // artist opens with the Gallery refetch that follows it.
+        let reconciledView = null;
+        await expect.poll(async () => {
+          reconciledView = await readRuntimeView(page);
+          return reconciledView.selected_artist;
+        }, { timeout: 10000 }).toBe(CORRECTED_ARTIST);
         const [sourceIdentity, destinationIdentity] = await Promise.all([
           queryPersistedAlbumIdentity({
             artist: TYPO_ARTIST,

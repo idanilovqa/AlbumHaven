@@ -408,6 +408,55 @@
       "rollback": "Test-only request-capture contract; the worker answers the same requests. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
+      "id": "js:app-copy-worker.js#data",
+      "action": "Load one library data answer online, again offline from the copy, and again with no answer (one reachability check), with other data kept",
+      "entrypoints": [
+        "js:music_app/static/js/app-copy-worker.js#data:request:fetch",
+        "js:music_app/static/js/app-copy-worker.js#data:timer:setTimeout",
+        "js:music_app/static/js/app-copy-worker.js#serverReachable:request:fetch",
+        "js:music_app/static/js/app-copy-worker.js#serverReachable:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/app-copy-worker.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/view-data",
+          "/album-details",
+          "/home-data",
+          "/app-copy/account"
+        ],
+        "forbidden": [
+          "/status",
+          "/"
+        ]
+      },
+      "cardinalities": {
+        "small": 2,
+        "production": 400
+      },
+      "budgets": {
+        "requests": 4
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/app-copy-worker.test.js",
+      "testIdentity": "request capture: a data request reaches only its own address, whatever the kept data; a hung one adds one check",
+      "performanceTargets": [
+        "app-open-all-artists",
+        "artist-tree-scroll-navigation"
+      ],
+      "rollback": "Remove the data route from the worker (DATA_PATHS, the data handler and its OWN_PATHS entries) and this entry; data requests then go straight to the network as before and nothing is kept for them. Kept data entries are deleted with the copy on the next forget. No server data change."
+    },
+    {
       "id": "js:app-copy-worker.js#fetchPage",
       "action": "Navigate to the app page without a fresh copy, then to it again and to unrelated pages",
       "entrypoints": [
@@ -8179,6 +8228,22 @@
       ],
       "owners": [
         "music_app/__init__.py"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-08"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "py:app_copy.py#install_app_copy_data.<locals>.mark_app_copy_data",
+      "action": "Mark library data the copy's worker asked for as a copy for the signed-in account",
+      "entrypoints": [
+        "py:music_app/services/app_copy.py#install_app_copy_data.<locals>.mark_app_copy_data:middleware:MIDDLEWARE http"
+      ],
+      "owners": [
+        "music_app/services/app_copy.py"
       ],
       "rules": [
         "BI-03",

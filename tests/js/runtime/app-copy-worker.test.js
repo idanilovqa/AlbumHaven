@@ -66,7 +66,9 @@ function page(account, { version = 'v1', body = 'Library', cacheControl = 'priva
 }
 
 // [mode] 'app' is the Android app (the copy answers at once); 'web' a browser (the server first).
-function setup({ respond = () => page('acct-a'), maxCoverBytes, mode, caches = fakeCaches(), noAnswerMs } = {}) {
+function setup({
+  respond = () => page('acct-a'), maxCoverBytes, mode, caches = fakeCaches(), noAnswerMs, dataLimits, dataCheckMs,
+} = {}) {
   const calls = [];
   const pending = [];
   let clock = 1_000_000;
@@ -77,7 +79,7 @@ function setup({ respond = () => page('acct-a'), maxCoverBytes, mode, caches = f
     return response;
   };
   const worker = createAppCopyWorker({
-    caches, fetch, origin: ORIGIN, now: () => clock, maxCoverBytes, mode, noAnswerMs,
+    caches, fetch, origin: ORIGIN, now: () => clock, maxCoverBytes, mode, noAnswerMs, dataLimits, dataCheckMs,
   });
   // Work the worker keeps doing after it answered (event.waitUntil).
   const event = { waitUntil: promise => pending.push(promise) };
@@ -215,7 +217,7 @@ test('IAR-009: admin, account and other pages are never routed through the copy'
   const { worker } = setup();
   for (const request of [
     navigation('/account'), navigation('/admin/members'), navigation('/news'), resource('/bootstrap-data'),
-    resource('/view-data'), resource('/status'), resource('/app-copy/account'), resource('/utilities/edit-tags', 'POST'),
+    resource('/status'), resource('/app-copy/account'), resource('/utilities/edit-tags', 'POST'),
     { url: 'https://example.org/', method: 'GET', mode: 'navigate' },
   ]) {
     assert.equal(worker.route(request), null, request.url);
@@ -1199,8 +1201,7 @@ test('IAR-W13: a stylesheet kept before is read for its images once per worker, 
 const { assertInteractionRequests, createRequestCapture, measureInteractionContract } = require('../helpers/request-capture');
 
 const UNOWNED_REQUESTS = [
-  navigation('/account'), navigation('/admin/members'), resource('/view-data?surface=albums'), resource('/home-data'),
-  resource('/status'), resource('/utilities/edit-tags', 'POST'), { url: `https://example.org/cover/${'x'.repeat(22)}`, method: 'GET', mode: 'no-cors' },
+  navigation('/account'), navigation('/admin/members'), resource('/status'), resource('/utilities/edit-tags', 'POST'), { url: `https://example.org/cover/${'x'.repeat(22)}`, method: 'GET', mode: 'no-cors' },
 ];
 
 // A cover reference: 22 URL-safe characters, as the server names covers.
@@ -1406,4 +1407,460 @@ test('bounded interaction: a save message reads no kept cover or asset when 5,00
       return work;
     },
   });
+});
+
+// ---- Library data already seen, offline after a reload (IAR-W20..IAR-W25) ----
+
+const REDACT_HEADER = 'X-Album-Haven-App-Copy-Redact';
+const REDACTED = 'path,src,track_paths,music_dir';
+
+function dataAnswer(payload, {
+  account = 'acct-a', status = 200, cacheControl = 'private, no-cache', marked = true, expires,
+} = {}) {
+  const headers = { 'Content-Type': 'application/json', 'Cache-Control': cacheControl };
+  if (marked) Object.assign(headers, { [COPY_HEADER]: account, [REDACT_HEADER]: REDACTED });
+  if (expires) headers[EXPIRES_HEADER] = String(expires);
+  return new Response(JSON.stringify(payload), { status, headers });
+}
+
+const albumDetails = (key, tracks = ['01 Intro.flac', '02 Song.flac']) => ({
+  ok: true,
+  album: {
+    key,
+    name: key.split('::')[1],
+    track_paths: tracks.map(name => `D:\\Music\\${key}\\${name}`),
+    // A track's key is its path; its stream URL names the path too.
+    tracks: tracks.map((name, index) => {
+      const file = `D:\\Music\\${key}\\${name}`;
+      return { title: name.slice(3, -5), number: index + 1, path: file, key: file, src: `/stream?path=${encodeURIComponent(file)}` };
+    }),
+  },
+});
+
+// The server's gallery cursor (Python's json.dumps spacing, unpadded URL-safe base64).
+const cursor = (revision, offset) => Buffer.from(`[1, ${JSON.stringify(revision)}, ${offset}]`).toString('base64url');
+
+// One page of the unfiltered gallery: [artists] each with one album, the next page at [end].
+function galleryPage(artists, { revision = 'r1', end = null } = {}) {
+  return {
+    ok: true,
+    artist_groups: artists.map(artist => ({ artist, albums: [{ key: `${artist}::Debut`, name: 'Debut' }] })),
+    gallery_page: {
+      revision, has_more: end !== null, next_cursor: end === null ? null : cursor(revision, end), page_size: 50,
+    },
+  };
+}
+
+const ROOT = '/view-data?surface=albums&gallery_page_size=50';
+const pageAt = (offset, revision = 'r1') => `${ROOT}&gallery_cursor=${cursor(revision, offset)}&omit_sidebar=1`;
+const anchorAt = artist => `${ROOT}&gallery_anchor_artist=${encodeURIComponent(artist)}&omit_sidebar=1`;
+
+// A server answering [routes] (path and query -> payload) while [online.value] holds.
+function dataServer(routes, options = {}) {
+  const online = { value: true };
+  return {
+    online,
+    respond: (request) => {
+      if (!online.value) return new TypeError('Failed to fetch');
+      const url = new URL(request.url);
+      const payload = routes[`${url.pathname}${url.search}`];
+      return payload ? dataAnswer(payload, options) : new Response('{"ok":false}', { status: 404 });
+    },
+  };
+}
+
+const json = async response => JSON.parse(await response.text());
+const artistsOf = payload => payload.artist_groups.map(group => group.artist);
+
+test('IAR-W20: album details opened online open offline, kept without a file path', async () => {
+  const url = '/album-details?album_key=Broadcast%3A%3ATender';
+  const server = dataServer({ [url]: albumDetails('Broadcast::Tender') });
+  const { calls, handle, caches } = setup({ mode: 'web', respond: server.respond });
+
+  const online = await handle(resource(url));
+  assert.equal(calls[0].headers.get(COPY_HEADER), '1');
+  assert.equal((await json(online)).album.tracks[0].path, 'D:\\Music\\Broadcast::Tender\\01 Intro.flac');
+  server.online.value = false;
+  const offline = await handle(resource(url));
+
+  assert.equal(offline.headers.get(COPY_HEADER), 'cache');
+  const kept = await json(offline);
+  assert.deepEqual(kept.album.tracks.map(track => track.title), ['Intro', 'Song']);
+  // The same path gets the same token, so rows stay distinct and lists still match them.
+  assert.deepEqual(kept.album.track_paths, ['offline:1', 'offline:2']);
+  assert.deepEqual(kept.album.tracks.map(track => track.path), ['offline:1', 'offline:2']);
+  assert.deepEqual(kept.album.tracks.map(track => track.key), ['offline:1', 'offline:2']);
+  assert.deepEqual(kept.album.tracks.map(track => track.src), ['offline:3', 'offline:4']);
+  assert.equal(kept.album.key, 'Broadcast::Tender');
+  const stored = [...caches.stores.values()].flatMap(store => [...store.entries.values()]);
+  for (const response of stored) assert.doesNotMatch(await response.clone().text(), /Music/);
+});
+
+test('IAR-W20: an answer still holding a path outside the listed fields is not kept', async () => {
+  const url = '/album-details?album_key=A%3A%3AB';
+  const other = '/album-details?album_key=C%3A%3AD';
+  const server = dataServer({
+    [url]: { ok: true, album: { key: 'A::B', note: 'C:\\Users\\owner\\Music\\A\\B' } },
+    [other]: { ok: true, album: { key: 'C::D', download: '/download?file=%2Fhome%2Fowner%2FMusic%2Fx.flac' } },
+  });
+  const { handle } = setup({ mode: 'web', respond: server.respond });
+  await handle(resource(url));
+  await handle(resource(other));
+  server.online.value = false;
+
+  await assert.rejects(handle(resource(url)), TypeError);
+  await assert.rejects(handle(resource(other)), TypeError);
+});
+
+test('IAR-W20: data the server did not mark, marked no-store, failed or searched is never kept', async () => {
+  const urls = ['/album-details?album_key=A', '/album-details?album_key=B', '/album-details?album_key=C',
+    '/view-data?surface=albums&q=Broad', '/album-details?track_path=D%3A%5CMusic%5Cx.flac'];
+  const answers = [
+    () => dataAnswer({ ok: true }, { marked: false }),
+    () => dataAnswer({ ok: true }, { cacheControl: 'no-store' }),
+    () => dataAnswer({ ok: false, error: 'Album not found' }, { status: 404 }),
+    () => dataAnswer({ ok: true }),
+    () => dataAnswer({ ok: true }),
+  ];
+  let online = true;
+  let index = 0;
+  const { calls, handle, caches } = setup({
+    mode: 'web', respond: () => (online ? answers[index]() : new TypeError('Failed to fetch')),
+  });
+  for (index = 0; index < urls.length; index += 1) await handle(resource(urls[index]));
+  online = false;
+
+  for (const url of urls) await assert.rejects(handle(resource(url)), TypeError, url);
+  // A search or a path lookup goes to the server untouched.
+  assert.equal(calls[3].headers.get(COPY_HEADER), null);
+  assert.equal(calls[4].headers.get(COPY_HEADER), null);
+  const keys = [...caches.stores.values()].flatMap(store => [...store.entries.keys()]);
+  assert.deepEqual(keys.filter(key => !key.includes('/__app-copy__/')), []);
+});
+
+test('IAR-W23: offline, data never kept fails as it would without the copy; a gateway error is passed on', async () => {
+  let status = 0;
+  const { handle } = setup({
+    mode: 'web', respond: () => (status ? new Response('Bad gateway', { status }) : new TypeError('Failed to fetch')),
+  });
+
+  await assert.rejects(handle(resource('/album-details?album_key=Never')), TypeError);
+  status = 530;
+  assert.equal((await handle(resource('/album-details?album_key=Never'))).status, 530);
+});
+
+test('IAR-W20: a gateway error answers with the kept data; the app\'s own 503 never does', async () => {
+  const url = '/view-data?surface=albums&artist=Broadcast';
+  let answer = () => dataAnswer({ ok: true, artist_groups: [{ artist: 'Broadcast', albums: [] }] });
+  const { handle } = setup({ mode: 'web', respond: () => answer() });
+  await handle(resource(url));
+
+  answer = () => new Response('{"ok":false,"code":"gallery_projection_pending"}', { status: 503 });
+  assert.equal((await handle(resource(url))).status, 503);
+  answer = () => new Response('<html>Cloudflare</html>', { status: 530 });
+  const kept = await handle(resource(url));
+  assert.equal(kept.headers.get(COPY_HEADER), 'cache');
+  assert.deepEqual(artistsOf(await json(kept)), ['Broadcast']);
+});
+
+test('IAR-W25: online, the server answers and replaces what was kept', async () => {
+  const url = '/view-data?surface=albums&artist=Broadcast';
+  let name = 'Old';
+  let online = true;
+  const { handle } = setup({
+    mode: 'web',
+    respond: () => (online ? dataAnswer({ ok: true, artist_groups: [{ artist: name, albums: [] }] }) : new TypeError('Failed to fetch')),
+  });
+  await handle(resource(url));
+  name = 'New';
+
+  const fresh = await handle(resource(url));
+  assert.equal(fresh.headers.get(COPY_HEADER), 'acct-a');
+  assert.deepEqual(artistsOf(await json(fresh)), ['New']);
+  online = false;
+  assert.deepEqual(artistsOf(await json(await handle(resource(url)))), ['New']);
+});
+
+test('IAR-W25: a slow server is waited for; the kept data answers only when the server cannot be reached', async () => {
+  const url = '/view-data?surface=albums&artist=Broadcast';
+  let mode = 'quick';
+  let reachable = true;
+  let release = () => {};
+  const { handle } = setup({
+    mode: 'web',
+    dataCheckMs: 5,
+    respond: (request) => {
+      if (new URL(request.url).pathname === '/app-copy/account') {
+        return reachable ? new Response('{}') : new TypeError('Failed to fetch');
+      }
+      const answer = dataAnswer({ ok: true, artist_groups: [{ artist: mode, albums: [] }] });
+      return mode === 'quick' ? answer : new Promise((resolve) => { release = () => resolve(answer); });
+    },
+  });
+  await handle(resource(url));
+
+  mode = 'slow';
+  const waiting = handle(resource(url));
+  await new Promise(resolve => setTimeout(resolve, 30));
+  release();
+  assert.deepEqual(artistsOf(await json(await waiting)), ['slow']);
+
+  mode = 'hung';
+  reachable = false;
+  const kept = await handle(resource(url)).finally(() => release());
+  assert.equal(kept.headers.get(COPY_HEADER), 'cache');
+  assert.deepEqual(artistsOf(await json(kept)), ['slow']);
+});
+
+test('a data request the page cancels is never answered from the copy', async () => {
+  const url = '/view-data?surface=albums&artist=Broadcast';
+  let online = true;
+  const { handle } = setup({
+    mode: 'web',
+    respond: () => (online ? dataAnswer({ ok: true }) : Object.assign(new Error('aborted'), { name: 'AbortError' })),
+  });
+  await handle(resource(url));
+  online = false;
+
+  await assert.rejects(handle(resource(url)), { name: 'AbortError' });
+});
+
+test('IAR-W21: gallery pages scrolled through online scroll again offline, page after page', async () => {
+  const routes = {
+    [pageAt(50)]: galleryPage(['3 Crows', '3 Doors Down'], { end: 100 }),
+    [pageAt(100)]: galleryPage(['3 Inches of Blood', '30 Seconds'], { end: 150 }),
+  };
+  const server = dataServer(routes);
+  const { handle } = setup({ mode: 'web', respond: server.respond });
+  for (const url of Object.keys(routes)) await handle(resource(url));
+  server.online.value = false;
+
+  assert.deepEqual(artistsOf(await json(await handle(resource(pageAt(50))))), ['3 Crows', '3 Doors Down']);
+  assert.deepEqual(artistsOf(await json(await handle(resource(pageAt(100))))), ['3 Inches of Blood', '30 Seconds']);
+  // Never scrolled to: the end of the kept gallery says it cannot load more.
+  await assert.rejects(handle(resource(pageAt(150))), TypeError);
+});
+
+test('IAR-W21: offline, the tree opens an artist whose albums were scrolled past, and scrolling goes on both ways', async () => {
+  const routes = {
+    [pageAt(50)]: galleryPage(['3 Crows'], { end: 100 }),
+    [pageAt(100)]: galleryPage(['3 Inches of Blood', '30 Seconds'], { end: 150 }),
+    [pageAt(150)]: galleryPage(['311'], { end: 200 }),
+  };
+  const server = dataServer(routes);
+  const { handle } = setup({ mode: 'web', respond: server.respond });
+  for (const url of Object.keys(routes)) await handle(resource(url));
+  server.online.value = false;
+
+  const jump = await handle(resource(anchorAt('3 inches of blood')));
+  assert.equal(jump.headers.get(COPY_HEADER), 'cache');
+  const anchored = await json(jump);
+  assert.deepEqual(artistsOf(anchored), ['3 Inches of Blood', '30 Seconds']);
+  assert.equal(anchored.gallery_page.anchor_artist, '3 inches of blood');
+  assert.equal(anchored.gallery_page.anchor_group_artist, '3 Inches of Blood');
+  assert.equal(anchored.gallery_page.has_previous, true);
+  // Down: the page's own next cursor; up: a cursor for the page kept before it, asked as "previous".
+  const below = await json(await handle(resource(`${ROOT}&gallery_cursor=${anchored.gallery_page.next_cursor}&omit_sidebar=1`)));
+  assert.deepEqual(artistsOf(below), ['311']);
+  const above = await json(await handle(resource(
+    `${ROOT}&gallery_cursor=${anchored.gallery_page.previous_cursor}&gallery_page_direction=previous&omit_sidebar=1`,
+  )));
+  assert.deepEqual(artistsOf(above), ['3 Crows']);
+  // An artist never seen is not made up.
+  await assert.rejects(handle(resource(anchorAt('ABBA'))), TypeError);
+});
+
+test('IAR-W21: a page of another gallery revision never continues this one', async () => {
+  const server = dataServer({ [pageAt(50, 'r1')]: galleryPage(['3 Crows'], { revision: 'r1', end: 100 }) });
+  const { handle } = setup({ mode: 'web', respond: server.respond });
+  await handle(resource(pageAt(50, 'r1')));
+  server.online.value = false;
+
+  await assert.rejects(handle(resource(pageAt(50, 'r2'))), TypeError);
+});
+
+test('IAR-W22: artist views and Home opened online open offline, however their parameters are ordered', async () => {
+  const artist = '/view-data?surface=albums&artist=3%20Inches%20of%20Blood&payload_tier=gallery_summary';
+  const routes = {
+    [artist]: { ok: true, selected_artist: '3 Inches of Blood', artist_groups: [{ artist: '3 Inches of Blood', albums: [] }] },
+    '/home-data?omit_sidebar=1': { ok: true, sections: [] },
+  };
+  const server = dataServer(routes);
+  const { handle } = setup({ mode: 'web', respond: server.respond });
+  for (const url of Object.keys(routes)) await handle(resource(url));
+  server.online.value = false;
+
+  assert.equal((await json(await handle(resource(artist)))).selected_artist, '3 Inches of Blood');
+  const reordered = '/view-data?payload_tier=gallery_summary&artist=3%20Inches%20of%20Blood&surface=albums';
+  assert.equal((await json(await handle(resource(reordered)))).selected_artist, '3 Inches of Blood');
+  assert.deepEqual((await json(await handle(resource('/home-data?omit_sidebar=1')))).sections, []);
+});
+
+test('IAR-W24: kept data holds to its limits, least recently opened out first', async () => {
+  const routes = {};
+  for (const key of ['A', 'B', 'C']) routes[`/album-details?album_key=${key}`] = albumDetails(`X::${key}`);
+  for (const key of ['D', 'E']) routes[`/view-data?surface=albums&artist=${key}`] = { ok: true, artist_groups: [] };
+  const server = dataServer(routes);
+  const { handle, advance } = setup({ mode: 'web', respond: server.respond, dataLimits: { albums: 2, views: 1 } });
+  const open = (url) => { advance(1000); return handle(resource(url)); };
+  await open('/album-details?album_key=A');
+  await open('/album-details?album_key=B');
+  server.online.value = false;
+  await open('/album-details?album_key=A');
+  server.online.value = true;
+  await open('/album-details?album_key=C');
+  await open('/view-data?surface=albums&artist=D');
+  await open('/view-data?surface=albums&artist=E');
+  server.online.value = false;
+
+  // A was opened again offline after B, so B went first.
+  await assert.rejects(open('/album-details?album_key=B'), TypeError);
+  for (const url of ['/album-details?album_key=A', '/album-details?album_key=C', '/view-data?surface=albums&artist=E']) {
+    assert.equal((await open(url)).headers.get(COPY_HEADER), 'cache', url);
+  }
+  await assert.rejects(open('/view-data?surface=albums&artist=D'), TypeError);
+});
+
+test('IAR-W24: kept data holds to its byte budget; an answer over the entry limit is not kept', async () => {
+  const routes = {
+    '/home-data': { ok: true, filler: 'x'.repeat(600) },
+    '/view-data?surface=albums&artist=A': { ok: true, filler: 'x'.repeat(600) },
+    '/view-data?surface=albums&artist=B': { ok: true, filler: 'y'.repeat(2000) },
+  };
+  const server = dataServer(routes);
+  const { handle, advance } = setup({ mode: 'web', respond: server.respond, dataLimits: { bytes: 1000, entryBytes: 1500 } });
+  for (const url of Object.keys(routes)) {
+    advance(1000);
+    await handle(resource(url));
+  }
+  server.online.value = false;
+
+  await assert.rejects(handle(resource('/home-data')), TypeError);
+  assert.equal((await handle(resource('/view-data?surface=albums&artist=A'))).headers.get(COPY_HEADER), 'cache');
+  await assert.rejects(handle(resource('/view-data?surface=albums&artist=B')), TypeError);
+});
+
+test('IAR-W24: kept data past its age or past the session\'s end is not shown', async () => {
+  const url = '/album-details?album_key=A';
+  let online = true;
+  const { handle, advance } = setup({
+    mode: 'web',
+    respond: () => (online ? dataAnswer(albumDetails('X::A'), { expires: 1_000_000 + DAY_MS }) : new TypeError('Failed to fetch')),
+  });
+  await handle(resource(url));
+  online = false;
+  assert.equal((await handle(resource(url))).headers.get(COPY_HEADER), 'cache');
+
+  advance(DAY_MS + 1);
+  await assert.rejects(handle(resource(url)), TypeError);
+});
+
+test('IAR-006: kept data belongs to one account and goes with the copy on sign-out', async () => {
+  let account = 'acct-a';
+  let online = true;
+  const { handle, worker } = setup({
+    mode: 'web',
+    respond: () => (online ? dataAnswer(albumDetails('X::A'), { account }) : new TypeError('Failed to fetch')),
+  });
+  await handle(resource('/album-details?album_key=A'));
+  account = 'acct-b';
+  await handle(resource('/album-details?album_key=B'));
+  online = false;
+
+  // The first account's album went when the second account's data was kept.
+  await assert.rejects(handle(resource('/album-details?album_key=A')), TypeError);
+  assert.equal((await handle(resource('/album-details?album_key=B'))).headers.get(COPY_HEADER), 'cache');
+  await worker.message({ type: 'forget' });
+  await assert.rejects(handle(resource('/album-details?album_key=B')), TypeError);
+});
+
+test('request capture: a data request reaches only its own address, whatever the kept data; a hung one adds one check', async () => {
+  await measureInteractionContract('js:app-copy-worker.js#data', async (keptEntries) => {
+    let network = 'online';
+    const capture = createRequestCapture(async (url) => {
+      const { pathname } = new URL(url);
+      if (network === 'offline') throw new TypeError('Failed to fetch');
+      if (pathname === '/app-copy/account') return new Response('{}', { status: 530 });
+      if (network === 'hung') return new Promise(() => {});
+      return dataAnswer({ ok: true, artist_groups: [] });
+    });
+    const worker = createAppCopyWorker({
+      caches: fakeCaches(), fetch: capture.fetch, origin: ORIGIN, now: () => 1_000_000, mode: 'web', dataCheckMs: 1,
+      dataLimits: { views: 2000 },
+    });
+    const pending = [];
+    const event = { waitUntil: promise => pending.push(promise) };
+    const handle = async (request) => {
+      const response = await worker.handle(worker.route(request), request, event);
+      while (pending.length) await pending.shift();
+      return response;
+    };
+    for (let index = 0; index < keptEntries; index += 1) await handle(resource(`/view-data?surface=albums&artist=Kept${index}`));
+    const before = capture.requests.length;
+    const metrics = await capture.counter.measure(async () => {
+      await handle(resource('/view-data?surface=albums&artist=Kept0'));
+      network = 'offline';
+      await handle(resource('/view-data?surface=albums&artist=Kept0'));
+      network = 'hung';
+      await handle(resource('/view-data?surface=albums&artist=Kept0'));
+    });
+    const paths = capture.urls().slice(before).map((url) => {
+      const parsed = new URL(url);
+      return `${parsed.pathname}${parsed.search}`;
+    });
+    assert.deepEqual(paths, [
+      '/view-data?surface=albums&artist=Kept0', '/view-data?surface=albums&artist=Kept0',
+      '/view-data?surface=albums&artist=Kept0', '/app-copy/account',
+    ]);
+    assertInteractionRequests('js:app-copy-worker.js#data', paths);
+    return metrics;
+  });
+});
+
+test('IAR-W21: offline, the tree opens an artist only scrolled past in the gallery, as that artist\'s albums', async () => {
+  const routes = { [pageAt(50)]: galleryPage(['3 Crows', '3 Inches of Blood'], { end: 100 }) };
+  routes[pageAt(50)].surface = { active: 'albums' };
+  const server = dataServer(routes);
+  const { handle } = setup({ mode: 'web', respond: server.respond });
+  await handle(resource(pageAt(50)));
+  server.online.value = false;
+
+  const view = await handle(resource('/view-data?surface=albums&artist=3%20Inches%20of%20Blood&payload_tier=gallery_summary'));
+  assert.equal(view.headers.get(COPY_HEADER), 'cache');
+  const payload = await json(view);
+  assert.equal(payload.selected_artist, '3 Inches of Blood');
+  assert.deepEqual(artistsOf(payload), ['3 Inches of Blood']);
+  assert.deepEqual(payload.artist_groups[0].albums.map(album => album.key), ['3 Inches of Blood::Debut']);
+  assert.deepEqual(payload.family_artist_groups, []);
+  assert.equal(payload.gallery_page, undefined);
+  assert.deepEqual(payload.surface, { active: 'albums' });
+  // Never made up for an artist never seen, or for a search inside one.
+  await assert.rejects(handle(resource('/view-data?surface=albums&artist=ABBA')), TypeError);
+  await assert.rejects(handle(resource('/view-data?surface=albums&artist=3%20Crows&genre=Metal')), TypeError);
+});
+
+test('IAR-W21: the gallery\'s first block, kept with the app page, opens its artists offline too', async () => {
+  const bootstrap = {
+    initial_view: {
+      ...galleryPage(['311', '3 Crows'], { end: 8 }),
+      surface: { active: 'albums' },
+    },
+  };
+  const html = `<!doctype html><html><head><meta name="album-haven-app-copy" content="network" data-account="acct-a"></head><body>
+<script>
+    window.__ALBUM_HAVEN_BOOTSTRAP_PAYLOAD__ = ${JSON.stringify(bootstrap)};
+</script></body></html>`;
+  let online = true;
+  const { handle } = setup({
+    mode: 'web',
+    respond: () => (online ? new Response(html, {
+      headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'private, no-cache', [COPY_HEADER]: 'acct-a', [VERSION_HEADER]: 'v1' },
+    }) : new TypeError('Failed to fetch')),
+  });
+  await handle(navigation('/'));
+  online = false;
+
+  const payload = await json(await handle(resource('/view-data?surface=albums&artist=3%20Crows&payload_tier=gallery_summary')));
+  assert.equal(payload.selected_artist, '3 Crows');
+  assert.deepEqual(artistsOf(payload), ['3 Crows']);
 });

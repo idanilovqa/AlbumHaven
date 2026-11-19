@@ -83,7 +83,10 @@
     "music_app/services/cover_references.py",
     "migrations/postgres/0200_create_cover_references.sql",
     "migrations/postgres/0201_backfill_cover_references.sql",
-    "music_app/static/js/runtime/modal-and-overlay-helpers.js"
+    "music_app/static/js/runtime/modal-and-overlay-helpers.js",
+    "migrations/postgres/0189_create_library_change_events.sql",
+    "music_app/static/js/runtime/library-live-events.js",
+    "music_app/static/js/runtime/session-csrf-fetch.js"
   ],
   "rules": [
     {
@@ -330,6 +333,21 @@
         "app-open-all-artists",
         "artist-tree-scroll-navigation",
         "gallery-artwork-diversity"
+      ]
+    },
+    {
+      "paths": [
+        "migrations/postgres/0189_create_library_change_events.sql",
+        "music_app/static/js/runtime/library-live-events.js",
+        "music_app/static/js/runtime/session-csrf-fetch.js"
+      ],
+      "targets": [
+        "idle-memory",
+        "selected-artist",
+        "artist-tree-scroll-navigation",
+        "search-browse",
+        "utility-problematic-files",
+        "problematic-files-focused"
       ]
     }
   ]

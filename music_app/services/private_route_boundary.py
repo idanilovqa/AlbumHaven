@@ -61,6 +61,7 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("GET", "/status"): "app.status.read",
     ("POST", "/account/library-warning/dismiss"): "account.self.library_warning.dismiss",
     ("GET", "/view-data"): "library.browse.read",
+    ("GET", "/api/live/library-events"): "library.browse.read",
     ("GET", "/library/loose-tracks"): "library.browse.read",
     ("GET", "/library/custom-collections"): "library.browse.read",
     ("GET", "/loose-tracks"): "app.shell.read",

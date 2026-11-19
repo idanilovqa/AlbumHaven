@@ -1015,6 +1015,12 @@ async def favicon() -> Response:
     return Response(status_code=204, headers={"Cache-Control": "public, max-age=86400"})
 
 
+def _live_events_head(request: Request) -> int | None:
+    """Read before the view is built, so a change committed meanwhile is still replayed."""
+    broker = getattr(request.app.state, "library_change_broker", None)
+    return broker.head if broker is not None else None
+
+
 @router.get("/", response_class=HTMLResponse)
 async def index(request: Request) -> Response:
     request_started_at = time.perf_counter()
@@ -1026,6 +1032,7 @@ async def index(request: Request) -> Response:
     query_raw = query_args.get("q", "").strip()
     selected_artist = query_args.get("artist", "").strip()
     refreshed = query_args.get("refreshed") == "1"
+    live_events_head = _live_events_head(request)
     bootstrap_payload, payload_elapsed_ms, startup_preview = await run_in_threadpool(
         _build_bootstrap_payload,
         query_args=query_args,
@@ -1037,6 +1044,7 @@ async def index(request: Request) -> Response:
         refreshed=refreshed,
         request_started_epoch_ms=request_started_epoch_ms,
     )
+    bootstrap_payload["bootstrap"]["liveEventsHead"] = live_events_head
     bootstrap_elapsed_ms = round((time.perf_counter() - request_started_at) * 1000, 2)
     initial_view = bootstrap_payload.get("initial_view") or {}
     if (
@@ -1133,6 +1141,7 @@ async def loose_tracks_page(request: Request) -> Response:
 
 @router.get("/news", response_class=HTMLResponse)
 async def news_center(request: Request) -> Response:
+    live_events_head = _live_events_head(request)
     query_args = request.query_params
     config = _app_config(request)
     route_logger = _app_logger(request)
@@ -1151,6 +1160,7 @@ async def news_center(request: Request) -> Response:
             "appVersion": config.get("APP_VERSION", RELEASE_VERSION),
             "requestSurface": "news",
             "resolvedSurface": "news",
+            "liveEventsHead": live_events_head,
             "loadedFromCache": False,
             "initialPayloadTier": "full",
             "partialView": False,
@@ -1209,6 +1219,7 @@ async def bootstrap_data(request: Request) -> JSONResponse:
     query_raw = query_args.get("q", "").strip()
     selected_artist = query_args.get("artist", "").strip()
     refreshed = query_args.get("refreshed") == "1"
+    live_events_head = _live_events_head(request)
     bootstrap_payload, _payload_elapsed_ms, _startup_preview = await run_in_threadpool(
         _build_bootstrap_payload,
         query_args=query_args,
@@ -1220,6 +1231,7 @@ async def bootstrap_data(request: Request) -> JSONResponse:
         refreshed=refreshed,
         request_started_epoch_ms=request_started_epoch_ms,
     )
+    bootstrap_payload["bootstrap"]["liveEventsHead"] = live_events_head
     return JSONResponse(bootstrap_payload)
 
 

@@ -84,6 +84,7 @@ const expectedRuntimeOrder = [
   'loop-edit-session-expiry.js',
   'player-and-waveform.js',
   'gallery-refresh-and-status.js',
+  'library-live-events.js',
   'problematic-album-helpers.js',
   'browser-log-history-store.js',
   'utility-log-history-query.js',

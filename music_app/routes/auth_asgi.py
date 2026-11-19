@@ -89,6 +89,7 @@ def _render_login(
     token: str,
     *,
     failed: bool,
+    expired: bool,
     return_to: str,
 ) -> Response:
     templates = getattr(request.app.state, "templates", _FALLBACK_TEMPLATES)
@@ -99,6 +100,7 @@ def _render_login(
             "request": request,
             "csrf_token": token,
             "failed": failed,
+            "expired": expired,
             "return_to": return_to,
         },
     )
@@ -339,6 +341,7 @@ async def _login_page(
     *,
     status_code: int,
     failed: bool,
+    expired: bool = False,
     return_to: object | None = None,
 ) -> Response:
     try:
@@ -352,12 +355,13 @@ async def _login_page(
             request.query_params.get("return_to") if return_to is None else return_to
         )
         response = (
-            JSONResponse({"csrf_token": issued.raw_token})
+            JSONResponse({"csrf_token": issued.raw_token, **({"expired": True} if expired else {})})
             if _wants_json(request)
             else _render_login(
                 request,
                 issued.raw_token,
                 failed=failed,
+                expired=expired,
                 return_to=resolved_return_to,
             )
         )
@@ -389,6 +393,19 @@ async def get_login(request: Request) -> HTMLResponse:
     return await _login_page(request, status_code=200, failed=False)
 
 
+async def _expired_login_page(request: Request, payload: Mapping[str, str]) -> Response:
+    """A same-origin post whose one-time token expired, was replaced by another
+    tab, or was already used gets a fresh token instead of a dead end. Nothing
+    is authenticated; the client must post again with the new token."""
+    return await _login_page(
+        request,
+        status_code=400,
+        failed=False,
+        expired=True,
+        return_to=payload.get("return_to"),
+    )
+
+
 @router.post("/login")
 async def post_login(request: Request) -> Response:
     try:
@@ -404,7 +421,7 @@ async def post_login(request: Request) -> Response:
     cookie_token = request.cookies.get(_PREAUTH_COOKIE)
     form_token = payload["csrf_token"]
     if not _tokens_match(cookie_token, form_token):
-        return _generic_bad_request()
+        return await _expired_login_page(request, payload)
 
     try:
         preauth, login = _services(request)
@@ -412,7 +429,7 @@ async def post_login(request: Request) -> Response:
     except Exception:
         return _generic_unavailable()
     if consumed is not True:
-        return _generic_bad_request()
+        return await _expired_login_page(request, payload)
 
     source_key, source_class = _request_source(request, config)
     try:

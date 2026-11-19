@@ -39,7 +39,7 @@
       ? preferred : policy?.availableTabs[0] || null;
     const allowsCoverCandidate = (candidate) => Boolean(policy && (policy.clientSurface !== 'tv'
       || policy.coverProviderGroups.includes(candidate?.lookup_group)));
-    // The Android app's offline copy (app-copy.js) hides permitted writes the same way as denied
+    // The device copy (app-copy.js) hides permitted writes the same way as denied
     // ones until the server answers.
     const readOnlySelectors = policy ? policy.readOnlySelectors.join(',\n') : '';
     let readOnlyStyle = null;

@@ -261,6 +261,17 @@ export class GalleryPage extends BasePage {
     this.artistHeadings = page.locator(this.artistHeadingSelector);
     this.sectionLabels = page.locator(this.sectionLabelSelector);
     this.emptyFamilySelection = page.locator('[data-gallery-empty-selection]');
+    // The device copy (instant return): its marker says whether the page came from the server or the
+    // copy, and the notice shows while the copy is read-only.
+    this.appCopyMarker = page.locator('meta[name="album-haven-app-copy"]');
+    this.appCopyOfflineNotice = page.locator('#app-copy-offline-notice');
+    // A view the server could not be reached for: its OfflineNotice in place of the albums, and the
+    // line ending a kept gallery that cannot load more.
+    this.unreachable = page.locator('[data-gallery-unreachable] [data-offline-notice]');
+    // v004: the centered message's "Offline" title (with the small cloud) and its detail line.
+    this.unreachableTitle = this.unreachable.locator('.offline-notice__title');
+    this.unreachableDetail = this.unreachable.locator('.offline-notice__text');
+    this.galleryEndOffline = page.locator('#gallery-end-offline');
     this.galleryContext = page.locator('[data-gallery-bar-instance="gallery"] .gallery-bar__context');
     this.galleryContextName = this.galleryContext.locator('[data-gallery-context-name]');
     this.galleryContextMetadata = this.galleryContext.locator('[data-gallery-context-metadata]');
@@ -383,6 +394,47 @@ export class GalleryPage extends BasePage {
 
   sectionByArtistHeading(artistHeading) {
     return this.albumCard.sectionByArtistHeading(artistHeading);
+  }
+
+  // How far apart the vertical centers of an OfflineNotice line's cloud and its text's first line
+  // are, in pixels (owner v004: "centerline the line with the cloud").
+  async readOfflineLineCenterOffset(notice) {
+    // parity-check: allow-read-only-measurement-evaluate -- reads the rendered cloud and text boxes.
+    return notice.evaluate((element) => {
+      const cloud = element.querySelector('.offline-notice__cloud').getBoundingClientRect();
+      const text = element.querySelector('.offline-notice__text');
+      const lineHeight = parseFloat(getComputedStyle(text).lineHeight);
+      const top = text.getBoundingClientRect().top;
+      return Math.abs((cloud.top + cloud.height / 2) - (top + lineHeight / 2));
+    });
+  }
+
+  get ownStylesheetSelector() {
+    return 'link[rel="stylesheet"][href^="/static/"]';
+  }
+
+  // The page's own stylesheets that did not load (no rules), Settings' and Account's included.
+  async readUnloadedStylesheets() {
+    // parity-check: allow-read-only-measurement-evaluate -- reads which page stylesheets have rules.
+    return this.page.evaluate(selector => [...document.querySelectorAll(selector)]
+      // Same-origin sheets, so reading their rules never throws.
+      .filter(link => !link.sheet || link.sheet.cssRules.length === 0)
+      .map(link => link.getAttribute('href')), this.ownStylesheetSelector);
+  }
+
+  // Where the kept-library line's text ends and where the first album card visible in the gallery starts,
+  // clipped to the gallery's scroll box: the line must never sit on top of content.
+  async readOfflineNoticeClearance() {
+    // parity-check: allow-read-only-measurement-evaluate -- reads the rendered line and card boxes.
+    return this.page.evaluate(({ noticeSelector, cardSelector }) => {
+      const notice = document.querySelector(`${noticeSelector} .offline-notice__text`).getBoundingClientRect();
+      const scroll = document.getElementById('albums-scroll').getBoundingClientRect();
+      const visibleTops = [...document.querySelectorAll(cardSelector)]
+        .map(card => card.getBoundingClientRect())
+        .filter(box => box.height > 0 && box.bottom > scroll.top && box.top < scroll.bottom)
+        .map(box => Math.max(box.top, scroll.top));
+      return { noticeBottom: notice.bottom, firstVisibleCardTop: Math.min(...visibleTops), partlyScrolled: visibleTops.some(top => top === scroll.top) };
+    }, { noticeSelector: '#app-copy-offline-notice', cardSelector: this.albumCard.cardSelector });
   }
 
   headingByArtistName(artistName) {

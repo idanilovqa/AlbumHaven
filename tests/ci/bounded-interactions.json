@@ -380,7 +380,7 @@
       "proof": "contract",
       "requestOwnership": {
         "allowed": [
-          "/cover"
+          "/cover/*"
         ],
         "forbidden": [
           "/view-data",
@@ -452,6 +452,52 @@
       "rollback": "Test-only request-capture contract; the worker answers the same requests. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
     },
     {
+      "id": "js:app-copy-worker.js#fillAssets",
+      "action": "Save the current view: fetch once each versioned asset its page loads that the copy does not keep",
+      "entrypoints": [
+        "js:music_app/static/js/app-copy-worker.js#fillAssets:request:fetch"
+      ],
+      "owners": [
+        "music_app/static/js/app-copy-worker.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "background-batch",
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/static/*",
+          "/static/*/*",
+          "/static/*/*/*"
+        ],
+        "forbidden": [
+          "/view-data",
+          "/home-data",
+          "/status"
+        ]
+      },
+      "cardinalities": {
+        "small": 2,
+        "production": 400
+      },
+      "budgets": {
+        "requests": 3
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/app-copy-worker.test.js",
+      "testIdentity": "request capture: saving the view fetches only the versioned assets its page loads that are not kept",
+      "performanceTargets": [
+        "app-open-all-artists",
+        "artist-tree-scroll-navigation"
+      ],
+      "rollback": "Test-only request-capture contract; the worker answers the same requests. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
+    },
+    {
       "id": "js:app-copy-worker.js#fillCovers",
       "action": "Save the current view: keep its page and fill one batch of its unseen covers",
       "entrypoints": [
@@ -468,7 +514,7 @@
       "proof": "contract",
       "requestOwnership": {
         "allowed": [
-          "/cover"
+          "/cover/*"
         ],
         "forbidden": [
           "/view-data",
@@ -494,6 +540,36 @@
         "artist-tree-scroll-navigation"
       ],
       "rollback": "Test-only request-capture contract; the worker answers the same requests. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
+    },
+    {
+      "id": "js:app-copy-worker.js#keptSoFar",
+      "action": "One bounded wait (200 ms) for copy work already started, when the server cannot be reached",
+      "entrypoints": [
+        "js:music_app/static/js/app-copy-worker.js#keptSoFar:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/app-copy-worker.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:app-copy-worker.js#serverFirst",
+      "action": "One 10 s wait per browser navigation for the server's first answer, after which the copy shows",
+      "entrypoints": [
+        "js:music_app/static/js/app-copy-worker.js#serverFirst:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/app-copy-worker.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
     },
     {
       "id": "js:app-copy-worker.js#versionedAsset",
@@ -584,7 +660,7 @@
       },
       "budgets": {
         "requests": 10,
-        "timers": 10,
+        "timers": 20,
         "renderCommits": 0
       },
       "growth": {
@@ -598,9 +674,10 @@
     },
     {
       "id": "js:app-copy.js#createAppCopyClient",
-      "action": "online/visibilitychange listeners installed by createAppCopyClient",
+      "action": "online/pagehide/visibilitychange listeners installed by createAppCopyClient",
       "entrypoints": [
         "js:music_app/static/js/app-copy.js#createAppCopyClient:event:online",
+        "js:music_app/static/js/app-copy.js#createAppCopyClient:event:pagehide",
         "js:music_app/static/js/app-copy.js#createAppCopyClient:event:visibilitychange"
       ],
       "owners": [
@@ -870,11 +947,12 @@
     },
     {
       "id": "js:login.js#<top-level>",
-      "action": "click/pageshow/submit listeners installed by <top-level>",
+      "action": "click/pageshow/submit listeners and the one-shot sign-in wait for the copy worker installed by <top-level>",
       "entrypoints": [
         "js:music_app/static/js/login.js#<top-level>:event:click",
         "js:music_app/static/js/login.js#<top-level>:event:pageshow",
-        "js:music_app/static/js/login.js#<top-level>:event:submit"
+        "js:music_app/static/js/login.js#<top-level>:event:submit",
+        "js:music_app/static/js/login.js#<top-level>:timer:setTimeout"
       ],
       "owners": [
         "music_app/static/js/login.js"
@@ -4652,6 +4730,86 @@
       "testIdentity": "bounded interaction: the modal control watch handles one scrolled and one rendered row of a 2,000-control modal",
       "performanceTargets": [],
       "rollback": "Revert the open modal's on-screen control watch together with its registerFloatingNotification#2 contract; placement then reads every control of the open modal on each frame again. No data or API change."
+    },
+    {
+      "id": "js:runtime/gallery-refresh-and-status.js#resumeGalleryAfterServerReachable",
+      "action": "Once the server answers again, one reload of the view that could not load",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/gallery-refresh-and-status.js#resumeGalleryAfterServerReachable:request:fetchAndRender"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/gallery-refresh-and-status.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/home-data",
+          "/view-data"
+        ],
+        "forbidden": []
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 100
+      },
+      "budgets": {
+        "requests": 2
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-refresh-and-status.test.js",
+      "testIdentity": "request capture: once the server answers again, a view that could not load reloads once, however many failed",
+      "performanceTargets": [],
+      "rollback": "Remove the recovery after an unreachable server (owner round 8); surfaces then stay Offline until the user acts again. No data or API change."
+    },
+    {
+      "id": "js:runtime/pending-projection-fetch.js#serverReachability",
+      "action": "While the server is unreachable, one bounded /health probe every 2.5 s (each given up after 4 s), and one at once on the browser's online event",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/pending-projection-fetch.js#noteServerUnreachable:event:online",
+        "js:music_app/static/js/runtime/pending-projection-fetch.js#probeServerReachability:request:fetch",
+        "js:music_app/static/js/runtime/pending-projection-fetch.js#probeServerReachability:timer:setTimeout",
+        "js:music_app/static/js/runtime/pending-projection-fetch.js#scheduleReachabilityProbe:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/pending-projection-fetch.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "contract",
+      "requestOwnership": {
+        "allowed": [
+          "/health"
+        ],
+        "forbidden": []
+      },
+      "cardinalities": {
+        "small": 3,
+        "production": 1000
+      },
+      "budgets": {
+        "requests": 2,
+        "timers": 4,
+        "outputEmissions": 1
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-refresh-and-status.test.js",
+      "testIdentity": "request capture: while the server is unreachable, one /health probe per tick, however many requests failed",
+      "performanceTargets": [],
+      "rollback": "Remove the recovery after an unreachable server (owner round 8); surfaces then stay Offline until the user acts again. No data or API change."
     },
     {
       "id": "js:runtime/pending-projection-fetch.js#fetchRetryingPendingProjection",

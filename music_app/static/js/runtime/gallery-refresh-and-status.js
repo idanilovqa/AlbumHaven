@@ -206,6 +206,7 @@ async function loadNextRootGalleryPage() {
     const ownsDataResponse = restarted ? ownsRootBrowseIdentity : ownsResponse;
     const data = await readGalleryResponse(response, ownsDataResponse);
     if (!ownsDataResponse()) return false;
+    setGalleryEndOffline('');
     if (!data.gallery_page || !data.gallery_page.revision
       || (!restarted && data.gallery_page.revision !== request.revision)
       || (data.gallery_page.has_more && (!data.gallery_page.next_cursor
@@ -255,9 +256,10 @@ async function loadNextRootGalleryPage() {
     scheduleBrowserAnimationFrame(() => { void loadNextRootGalleryPage(); });
     return true;
   } catch (error) {
-    if (ownsResponse() && error?.name !== 'AbortError') {
-      showToast('Unable to load more albums. Scroll to retry.', 'error', 3200);
-    }
+    if (!ownsResponse() || error?.name === 'AbortError') return false;
+    // The end of the kept gallery says why nothing more loads, and stays until something does.
+    if (error?.serverUnreachable) setGalleryEndOffline(serverUnreachableMessage('more albums'));
+    else showToast('Unable to load more albums. Scroll to retry.', 'error', 3200);
     return false;
   } finally {
     if (rootGalleryPageRequest === request) rootGalleryPageRequest = null;
@@ -337,7 +339,9 @@ async function loadPreviousRootGalleryPage() {
     return true;
   } catch (error) {
     if (error?.name !== 'AbortError') {
-      showToast(error.message || 'Unable to load earlier albums.', 'error', 3200);
+      showToast(error?.serverUnreachable
+        ? serverUnreachableMessage('earlier albums')
+        : error.message || 'Unable to load earlier albums.', 'error', 3200);
     }
     return false;
   } finally {
@@ -1047,6 +1051,32 @@ function dispatchStartupHydrationFollowup(followup, delayMs = 0) {
   Promise.resolve().then(runDispatch);
 }
 
+// The OfflineNotice line at the end of the gallery: [message] shows it, '' hides it.
+function setGalleryEndOffline(message) {
+  const notice = typeof document === 'undefined' ? null : document.getElementById?.('gallery-end-offline');
+  if (!notice) return;
+  const text = notice.querySelector?.('.offline-notice__text');
+  if (text && message) text.textContent = message;
+  notice.hidden = !message;
+}
+
+// The server answers again (onServerReachableAgain): the view that could not load loads, a view
+// shown from the device copy is brought up to date in place, and a gallery that could not load
+// more continues where it stopped (owner round 8).
+function resumeGalleryAfterServerReachable({ copyServed = false } = {}) {
+  const notice = typeof document === 'undefined' ? null : document.getElementById?.('gallery-end-offline');
+  const endWasOffline = Boolean(notice && !notice.hidden);
+  setGalleryEndOffline('');
+  if (state.ui?.galleryUnreachable) {
+    void fetchAndRender(`${window.location.pathname}${window.location.search}`, false).catch(() => {});
+  } else if (copyServed) {
+    void refreshCurrentViewAfterBackgroundCompletion({ preserveScroll: true }).catch(() => {});
+  } else if (endWasOffline) {
+    void loadNextRootGalleryPage();
+  }
+}
+if (typeof onServerReachableAgain === 'function') onServerReachableAgain(resumeGalleryAfterServerReachable);
+
 function fetchGalleryViewResponse(url, signal) {
   return fetchRetryingPendingProjection(url, { headers: { Accept: 'application/json' }, signal });
 }
@@ -1153,6 +1183,34 @@ async function recoverRootGalleryWindow(
     return { response: currentResponse, url: currentUrl };
   }
   throw new Error('The previously viewed gallery artists are unavailable. Refresh the gallery to continue.');
+}
+
+// [url]'s view with no albums: its name in the bar and, in place of the albums, why they cannot
+// be shown. The next view the server answers replaces it.
+function applyUnreachableView(url) {
+  const requested = parseBrowserUrlState(url);
+  const subject = requested.selected_artist
+    || (requested.query ? `results for "${requested.query}"` : 'the library');
+  applyViewPayload({
+    ...state.view,
+    selected_artist: requested.selected_artist,
+    all_artists_active: requested.all_artists_active,
+    query: requested.query,
+    related_artists: [],
+    primary_artist_groups: [],
+    family_artist_groups: [],
+    artist_groups: [],
+    artist_count: 0,
+    album_count: 0,
+    gallery_page: null,
+  }, { trackSidebarReveal: false });
+  state.ui.galleryUnreachable = serverUnreachableDetail(subject);
+}
+
+function showUnreachableView(apiUrl, push) {
+  applyUnreachableView(apiUrl);
+  renderView({ resetScrollForUserArtistSelection: true });
+  if (push) pushBrowserViewState(state.view);
 }
 
 async function fetchAndRender(url, push = true, options = {}) {
@@ -1635,6 +1693,12 @@ async function fetchAndRender(url, push = true, options = {}) {
     if (typeof clearPendingSidebarSelection === 'function') {
       clearPendingSidebarSelection();
       renderSidebar();
+    }
+    // A view opened while the server cannot be reached names what was asked for and why it is
+    // empty, rather than leaving the previous view on screen as if nothing happened.
+    if (error?.serverUnreachable && !requestOptions.preserveScroll && !requestOptions.startupRefresh) {
+      showUnreachableView(apiUrl, push);
+      return false;
     }
     throw error;
   } finally {

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 from html import escape
 import hashlib
 import json
@@ -4689,6 +4690,9 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path.rstrip("/") == "/app-page-fixture/control":
+            self._serve_app_page_control()
+            return
         if parsed.path.rstrip("/") == "/cover-lookup-fixture/control":
             self._serve_cover_lookup_control()
             return
@@ -4802,6 +4806,27 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
             return
         payload = cover_path.read_bytes()
         self._send_payload(payload, "image/jpeg", include_body=include_body)
+
+    def _serve_app_page_control(self) -> None:
+        try:
+            content_length = int(self.headers.get("Content-Length") or 0)
+            payload = json.loads(self.rfile.read(content_length).decode("utf-8"))
+        except (ValueError, json.JSONDecodeError):
+            self.send_error(400)
+            return
+        action = str(payload.get("action") or "") if isinstance(payload, dict) else ""
+        if action == "hold":
+            APP_PAGE_HOLD.set()
+        elif action == "release":
+            APP_PAGE_HOLD.clear()
+        elif action == "down":
+            APP_DOWN.set()
+        elif action == "up":
+            APP_DOWN.clear()
+        else:
+            self.send_error(400)
+            return
+        self._send_json({"held": APP_PAGE_HOLD.is_set(), "down": APP_DOWN.is_set()}, include_body=True)
 
     def _serve_cover_lookup_control(self) -> None:
         try:
@@ -5573,6 +5598,39 @@ class _ProviderFixtureHandler(BaseHTTPRequestHandler):
         return
 
 
+# FTC-IAR-W14: while set, the app page and the copy's account check get no answer, as when a tunnel
+# holds requests for its stopped server; clearing it lets the held requests answer.
+APP_PAGE_HOLD = threading.Event()
+_HELD_APP_PATHS = frozenset({"/", "/app-copy/account"})
+# FTC-IAR-W16: while set, every request but static files gets the 502 page a tunnel answers for its
+# stopped server; clearing it brings the server back.
+APP_DOWN = threading.Event()
+_GATEWAY_PAGE = b"<!doctype html><title>502 Bad gateway</title><h1>Bad gateway</h1>"
+
+
+class HeldAppPageMiddleware:
+    """Holds the app page and account check while APP_PAGE_HOLD is set; everything else passes."""
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.app, name)
+
+    async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
+        path = str(scope.get("path") or "")
+        if scope.get("type") == "http" and APP_DOWN.is_set() and not path.startswith("/static/"):
+            await send({"type": "http.response.start", "status": 502, "headers": [
+                (b"content-type", b"text/html; charset=utf-8"), (b"cache-control", b"no-store"),
+            ]})
+            await send({"type": "http.response.body", "body": _GATEWAY_PAGE})
+            return
+        if scope.get("type") == "http" and path in _HELD_APP_PATHS:
+            while APP_PAGE_HOLD.is_set():
+                await asyncio.sleep(0.05)
+        await self.app(scope, receive, send)
+
+
 class ProviderFixtureService:
     def __init__(
         self,
@@ -5600,6 +5658,8 @@ class ProviderFixtureService:
         self._thread.start()
 
     def stop(self) -> None:
+        APP_PAGE_HOLD.clear()
+        APP_DOWN.clear()
         self._server.release_cover_lookup_later_provider()
         self._server.release_cover_lookup_candidate_images()
         self._server.release_musicbrainz_hydration()
@@ -5878,7 +5938,7 @@ def main() -> None:
         )
         import uvicorn
 
-        uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="warning")
+        uvicorn.run(HeldAppPageMiddleware(app), host="127.0.0.1", port=args.port, log_level="warning")
     except BaseException as exc:
         original_failure = exc
         raise

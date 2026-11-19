@@ -468,6 +468,8 @@ function createRuntimeContext() {
 
   vm.createContext(context);
   vm.runInContext(alertComponentSource, context, { filename: alertComponentPath });
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(alertComponentPath), 'offline-notice.js'), 'utf8'), context);
+  require('../helpers/pending-projection-fetch').loadPendingProjectionFetch(context);
   vm.runInContext(albumArtboxSource, context, { filename: albumArtboxPath });
   vm.runInContext(galleryMainComponentsSource, context, { filename: galleryMainComponentsPath });
   vm.runInContext(galleryCardSource, context, { filename: galleryCardPath });
@@ -4034,6 +4036,30 @@ test('canonical same-artist reconciliation retains mounted cards without an opti
   assert.match(containerEl.innerHTML, /data-gallery-empty-selection/);
   assert.match(containerEl.innerHTML, /Select at least one artist in Artist Family\./);
   assert.doesNotMatch(containerEl.innerHTML, /Neal Morse|Cosmic Cathedral/);
+}
+
+// Owner D4: a view the server could not be reached for says why it is empty.
+{
+  const { context, containerEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  context.state.view.selected_artist = 'Chris Buck';
+  context.state.view.primary_artist_groups = [];
+  context.state.view.artist_groups = [];
+  context.state.ui = { ...(context.state.ui || {}), galleryUnreachable: null };
+  context.state.ui.galleryUnreachable = "Can't load Chris Buck, check your network or try again later";
+  virtualGrid.setGroups = () => {
+    containerEl.children = [];
+    containerEl.innerHTML = '';
+  };
+
+  context.renderArtistGroups();
+
+  assert.match(containerEl.innerHTML, /data-gallery-unreachable/);
+  assert.match(containerEl.innerHTML, /data-offline-notice="message"/);
+  assert.match(containerEl.innerHTML, /offline-notice__cloud/);
+  assert.doesNotMatch(containerEl.innerHTML, /on-page-alert/, 'plain text, never the yellow alert');
+  assert.match(containerEl.innerHTML, /<p class="offline-notice__title"><span class="offline-notice__cloud">.*<\/span>Offline<\/p>/);
+  assert.match(containerEl.innerHTML, /<p class="offline-notice__text">Can(&#39;|')t load Chris Buck, check your network or try again later<\/p>/);
 }
 
 {

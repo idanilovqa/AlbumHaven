@@ -2,4 +2,4 @@
 <link rel="stylesheet" href="/static/css/navigation-tree.css{% if navigation_asset_version %}?v={{ navigation_asset_version }}{% endif %}">
 <script id="navigation-tree-item-template" type="text/plain">{% include "components/navigation-tree-item.html" %}</script>
 <script src="/static/js/navigation-tree.js{% if navigation_asset_version %}?v={{ navigation_asset_version }}{% endif %}" defer></script>
-<script src="/static/js/selection-accent.js" defer></script>
+<script src="/static/js/selection-accent.js{% if navigation_asset_version %}?v={{ navigation_asset_version }}{% endif %}" defer></script>

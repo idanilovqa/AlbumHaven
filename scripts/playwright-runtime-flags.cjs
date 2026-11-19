@@ -61,22 +61,24 @@ function normalizeBrowserSelection(rawValue, env = process.env) {
   );
 }
 
+// Every suite runs without the app's device-copy service worker, so a test sees the server's page
+// and its own routes; the instant-return specs allow it (`test.use({ serviceWorkers: 'allow' })`),
+// and PLAYWRIGHT_SERVICE_WORKERS=allow measures a whole suite with it.
 function resolveBrowserProjectUse(browser, env = process.env) {
   const selectedBrowser = normalizeBrowserSelection(browser, {});
+  const serviceWorkers = env.PLAYWRIGHT_SERVICE_WORKERS === 'allow' ? 'allow' : 'block';
+  const base = { browserName: 'chromium', serviceWorkers };
   if (selectedBrowser === 'chrome') {
     const verifiedChromeExecutable = String(env.PLAYWRIGHT_CHROME_EXECUTABLE || '').trim();
     if (verifiedChromeExecutable) {
-      return {
-        browserName: 'chromium',
-        launchOptions: { executablePath: verifiedChromeExecutable },
-      };
+      return { ...base, launchOptions: { executablePath: verifiedChromeExecutable } };
     }
-    return { browserName: 'chromium', channel: 'chrome' };
+    return { ...base, channel: 'chrome' };
   }
   if (selectedBrowser === 'edge') {
-    return { browserName: 'chromium', channel: 'msedge' };
+    return { ...base, channel: 'msedge' };
   }
-  return { browserName: 'chromium' };
+  return base;
 }
 
 function resolveRuntimeFlags(argv = rawArgv, env = process.env) {

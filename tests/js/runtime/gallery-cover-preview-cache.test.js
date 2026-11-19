@@ -1653,45 +1653,6 @@ test('stored gallery covers name no file path and the old path-keyed cache is de
   }
 });
 
-test('the gallery cache and the app-copy worker key a cover identically', async () => {
-  const { context } = createContext();
-  const { createAppCopyWorker, COPY_HEADER } = require(path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'app-copy-worker.js'));
-  const origin = 'http://127.0.0.1:4173';
-  const coverUrl = '/cover/MonoCoverReference0000?size=480&v=process-1';
-  const pages = new Map();
-  const caches = {
-    async keys() { return [...pages.keys()]; },
-    async open(name) {
-      if (!pages.has(name)) {
-        const entries = new Map();
-        pages.set(name, {
-          entries,
-          async match(key) { return entries.get(String(key?.url || key))?.clone(); },
-          async put(key, response) { entries.set(String(key?.url || key), response); },
-          async delete(key) { return entries.delete(String(key?.url || key)); },
-          async keys() { return [...entries.keys()].map(url => ({ url })); },
-        });
-      }
-      return pages.get(name);
-    },
-    async delete(name) { return pages.delete(name); },
-  };
-  const worker = createAppCopyWorker({
-    caches,
-    origin,
-    fetch: async () => new Response(`<meta name="album-haven-app-copy" content="network"><img src="${coverUrl.replaceAll('&', '&amp;')}">`, {
-      headers: { 'Content-Type': 'text/html', [COPY_HEADER]: 'acct' },
-    }),
-  });
-  await worker.handle('page', { url: `${origin}/`, method: 'GET', mode: 'navigate' });
-  const kept = await (await [...pages.values()][0].entries.get(`${origin}/`)).text();
-  const workerKey = kept.match(/\/__album-haven-cover\/[0-9a-f]{64}/)[0];
-
-  const previewCache = new context.GalleryCoverPreviewCache({ locationOrigin: origin });
-
-  assert.equal(new URL(await previewCache.storedCoverKey(`${origin}${coverUrl}`)).pathname, workerKey);
-});
-
 test('a cover key is computed synchronously, so a cover load waits on nothing new', () => {
   const { context } = createContext();
   const previewCache = new context.GalleryCoverPreviewCache({ locationOrigin: 'http://127.0.0.1:4173' });

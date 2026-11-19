@@ -64,8 +64,8 @@ def test_ignored_repairs_missing_malformed_and_update_normalize_to_key_set(tmp_p
     update_ignored_repair_key(config, "row-1", False)
     assert load_ignored_repair_keys(config) == set()
     assert invalidations == [
-        {"database_url": database_url, "kinds": ("problematic-files", "rules")},
-        {"database_url": database_url, "kinds": ("problematic-files", "rules")},
+        {"database_url": database_url, "kinds": ("rules",)},
+        {"database_url": database_url, "kinds": ("rules",)},
     ]
 
 

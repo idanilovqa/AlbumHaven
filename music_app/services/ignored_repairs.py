@@ -56,7 +56,7 @@ def migrate_legacy_album_exclusions(config: dict) -> dict[str, int]:
     )
     invalidate_postgres_utility_projection_cache(
         database_url=config.get("ALBUM_HAVEN_APP_DATABASE_URL"),
-        kinds=("problematic-files", "rules"),
+        kinds=("rules",),
     )
     return {
         "migrated_album_count": len(migrated_album_keys),
@@ -89,7 +89,7 @@ def save_ignored_repair_keys(
 
     invalidate_postgres_utility_projection_cache(
         database_url=config.get("ALBUM_HAVEN_APP_DATABASE_URL"),
-        kinds=("problematic-files", "rules"),
+        kinds=("rules",),
     )
 
 
@@ -120,7 +120,7 @@ def _invalidate_ignored_repair_projections(config: dict) -> None:
 
     invalidate_postgres_utility_projection_cache(
         database_url=config.get("ALBUM_HAVEN_APP_DATABASE_URL"),
-        kinds=("problematic-files", "rules"),
+        kinds=("rules",),
     )
 
 

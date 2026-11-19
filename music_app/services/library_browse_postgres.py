@@ -107,12 +107,9 @@ _SEARCH_PREVIEW_ALBUM_LIMIT = 8
 _STARTUP_PREVIEW_ARTIST_LIMIT = 6
 _UTILITY_PROJECTION_CACHE_LOCK = Lock()
 # Built Problematic Files first pages, by limit, until the complete list is cached.
-_PROBLEMATIC_FILES_PAGE_KIND = "problematic-files-page"
 _PROBLEMATIC_LOOSE_TRACKS_KEY_PREFIX = "loose-source::"
-_PROBLEMATIC_LOOSE_TRACKS_DETAIL_KEY = "_loose_tracks_detail"
 _PROBLEMATIC_LOOSE_GROUP_IDENTITIES_KEY = "_loose_group_identities"
 _PROBLEMATIC_PAGE_ALBUMS_KEY = "_page_albums"
-_PROBLEMATIC_PAGE_MAX_ALBUM_BATCHES = 4
 # Databases without migration 0112's stored path projection (same pattern as
 # the pre-prefilter search fallback): use the inline expressions there.
 _PROBLEMATIC_PATH_COLUMN_FALLBACK_DATABASES: set[str] = set()
@@ -122,11 +119,9 @@ _UTILITY_PROJECTION_SINGLEFLIGHT: dict[tuple[str, str], Event] = {}
 _UTILITY_PROJECTION_GENERATIONS: dict[tuple[str, str], int] = {}
 # The last complete Problematic Files list survives invalidation so the first
 # page and early search answer at once while the fresh list rebuilds.
-_STALE_SERVED_UTILITY_KINDS = frozenset({"problematic-files"})
 # A list someone opened is rebuilt in the background after each library change,
 # so the next open answers from memory instead of rebuilding on the click.
-_REWARMED_UTILITY_KINDS = frozenset({"problematic-files", "rules"})
-_UTILITY_PROJECTION_STALE: dict[tuple[str, str], dict[str, object]] = {}
+_REWARMED_UTILITY_KINDS = frozenset({"rules"})
 _UTILITY_PROJECTION_REWARM: dict[tuple[str, str], Callable[[], None]] = {}
 _UTILITY_PROJECTION_REWARM_PENDING: set[tuple[str, str]] = set()
 _UTILITY_PROJECTION_REWARM_DELAY_SECONDS = 5.0
@@ -144,12 +139,8 @@ def _is_problematic_loose_tracks_key(value: object) -> bool:
     return str(value or "").startswith(_PROBLEMATIC_LOOSE_TRACKS_KEY_PREFIX)
 # Candidate album ids per (cache key, generation); one whole-library pass
 # serves both the bounded first page and searches before the list completes.
-_PROBLEMATIC_CANDIDATE_IDS: dict[tuple[str, str], tuple[int, frozenset[int]]] = {}
-_PROBLEMATIC_CANDIDATE_IDS_LOCK = Lock()
 # Migration 0117's stored last complete list: read once per process when no
 # list is in memory; databases without the table skip it.
-_PROBLEMATIC_SNAPSHOT_CHECKED: set[tuple[str, str]] = set()
-_PROBLEMATIC_SNAPSHOT_UNAVAILABLE_DATABASES: set[str] = set()
 _SEARCH_UTF8_FALLBACK_DATABASES: set[str] = set()
 _UTILITY_PROJECTION_PREWARM_EXECUTOR = create_daemon_executor(
     max_workers=1,
@@ -178,7 +169,6 @@ class _SearchPreviewRows(list[object]):
         ]
 
 
-
 def invalidate_postgres_utility_projection_cache(
     *,
     database_url: object | None = None,
@@ -190,9 +180,6 @@ def invalidate_postgres_utility_projection_cache(
         for kind in (_UTILITY_PROJECTION_KINDS if kinds is None else kinds)
         if str(kind or "").strip()
     }
-    if "problematic-files" in normalized_kinds:
-        # Cached first pages follow the complete list they preview.
-        normalized_kinds.add(_PROBLEMATIC_FILES_PAGE_KIND)
     if not normalized_kinds:
         return
     rewarms = []
@@ -218,11 +205,6 @@ def invalidate_postgres_utility_projection_cache(
                 _UTILITY_PROJECTION_GENERATIONS.get(cache_key, 0) + 1
             )
             _UTILITY_PROJECTION_CACHE.pop(cache_key, None)
-            # A changed library may have removed or merged listed albums: the
-            # previous list is never served again (a click on a merged-away
-            # identity found no album). Only a stored list whose inventory
-            # fingerprint still matches may answer early.
-            _UTILITY_PROJECTION_STALE.pop(cache_key, None)
             rewarm = _UTILITY_PROJECTION_REWARM.get(cache_key)
             if rewarm is not None and cache_key not in _UTILITY_PROJECTION_REWARM_PENDING:
                 _UTILITY_PROJECTION_REWARM_PENDING.add(cache_key)
@@ -237,7 +219,7 @@ def invalidate_postgres_utility_projection_cache(
 
 
 _UTILITY_PROJECTION_KINDS = (
-    "problematic-files", "rules", "duplicate-identities", "duplicate-absence",
+    "rules", "duplicate-identities", "duplicate-absence",
     "non-album-candidates", "relation-alias-maps", "loose-tracks",
 )
 
@@ -247,30 +229,12 @@ def refresh_postgres_utility_projections_after_edit(
     *,
     track_paths: Iterable[str],
 ) -> None:
-    """After a tag save or watcher edit, patch the Problematic Files list for the files'
-    albums and invalidate the other utility projections. If the list cannot be
-    patched it is invalidated (and rebuilt) as before."""
-    remaining = set(_UTILITY_PROJECTION_KINDS)
+    """After a tag save or watcher edit: invalidate the utility projections and let the
+    Problematic Files index evaluate the albums the database marked."""
     database_url = str(config.get(_APP_DATABASE_URL_KEY) or "").strip()
-    paths = {str(path) for path in track_paths if str(path or "").strip()}
-    if database_url and paths:
-        started = perf_counter()
-        try:
-            patched = PostgresLibraryBrowseRepository(dict(config)).patch_problematic_files_projection(
-                track_paths=paths,
-            )
-        except Exception:
-            logging.getLogger(__name__).exception("Problematic Files patch failed; the list is rebuilt instead")
-            patched = False
-        logging.getLogger(__name__).info(
-            "Problematic Files after a library edit: %s in %.0f ms for %d files",
-            "patched" if patched else "invalidated", (perf_counter() - started) * 1000, len(paths),
-        )
-        if patched:
-            remaining.discard("problematic-files")
     if database_url:
         problematic_index.queue_maintenance(PostgresLibraryBrowseRepository(dict(config)))
-    invalidate_postgres_utility_projection_cache(database_url=database_url or None, kinds=remaining)
+    invalidate_postgres_utility_projection_cache(database_url=database_url or None)
 
 
 def _run_utility_projection_rewarm(cache_key: tuple[str, str], rewarm: Callable[[], None]) -> None:
@@ -3074,177 +3038,17 @@ class PostgresLibraryBrowseRepository:
                     flight.set()
 
     def build_problematic_files_payload(self) -> dict[str, object]:
+        """The complete list, read from the persisted index (or its indexing state).
+
+        A repository that does not use the index (its own connections: tools and
+        tests) evaluates the library directly; the server never does.
+        """
         indexed = self._indexed_problematic_list()
         if indexed is not None:
             return indexed
-        kind = "problematic-files"
-
-        def cached() -> dict[str, object] | None:
-            payload = self._get_cached_utility_projection(kind)
-            if payload is not None:
-                payload.pop(_PROBLEMATIC_LOOSE_TRACKS_DETAIL_KEY, None)
-                payload.pop(_PROBLEMATIC_LOOSE_GROUP_IDENTITIES_KEY, None)
-                payload["projection_cache_status"] = "hit"
-            return payload
-
-        def build(generation: int | None) -> dict[str, object]:
-            payload = self._build_problematic_files_payload_uncached()
-            fingerprint = payload.pop(_SNAPSHOT_FINGERPRINT_KEY, None)
-            self._set_cached_utility_projection(kind, payload, expected_generation=generation)
-            cache_key = self._utility_projection_cache_key(kind)
-            page_cache_key = self._utility_projection_cache_key(
-                _PROBLEMATIC_FILES_PAGE_KIND
-            )
-            with _UTILITY_PROJECTION_CACHE_LOCK:
-                current = (
-                    cache_key is None
-                    or _UTILITY_PROJECTION_GENERATIONS.get(cache_key, 0) == generation
-                )
-                if current and page_cache_key is not None:
-                    _UTILITY_PROJECTION_GENERATIONS[page_cache_key] = (
-                        _UTILITY_PROJECTION_GENERATIONS.get(page_cache_key, 0) + 1
-                    )
-                    _UTILITY_PROJECTION_CACHE.pop(page_cache_key, None)
-            if current and fingerprint:
-                self._queue_problematic_files_snapshot_store(payload, fingerprint)
-            payload.pop(_PROBLEMATIC_LOOSE_TRACKS_DETAIL_KEY, None)
-            payload.pop(_PROBLEMATIC_LOOSE_GROUP_IDENTITIES_KEY, None)
-            payload["projection_cache_status"] = "rebuilt"
-            return payload
-
-        return self._build_utility_projection_once(kind, cached, build)
-
-    def patch_problematic_files_projection(self, *, track_paths: Iterable[str]) -> bool:
-        """Recompute the cached Problematic Files lists only for the albums a save touched.
-
-        A whole-library rebuild takes minutes, and a cold first page about 24 s,
-        on a real library. A save therefore patches the complete list, its stale
-        copy and the cached first pages for the edited files' albums and their
-        duplicate identity peers. Returns False when nothing is cached or it is
-        not safe to patch; the caller then invalidates the lists as before.
-        """
-        cache_key = self._utility_projection_cache_key("problematic-files")
-        page_cache_key = self._utility_projection_cache_key(_PROBLEMATIC_FILES_PAGE_KIND)
-        if cache_key is None or page_cache_key is None:
-            return False
-        with _UTILITY_PROJECTION_CACHE_LOCK:
-            complete = _UTILITY_PROJECTION_CACHE.get(cache_key)
-            stale = _UTILITY_PROJECTION_STALE.get(cache_key)
-            pages = _UTILITY_PROJECTION_CACHE.get(page_cache_key)
-            generations = (
-                _UTILITY_PROJECTION_GENERATIONS.get(cache_key, 0),
-                _UTILITY_PROJECTION_GENERATIONS.get(page_cache_key, 0),
-            )
-        page_payloads = [page for page in pages.values() if isinstance(page, Mapping)] if isinstance(pages, Mapping) else []
-        lists = [payload for payload in (complete, stale) if isinstance(payload, Mapping)] + page_payloads
-        if not lists or any(payload.get("duplicate_resolution_pending") for payload in lists):
-            return False
-        paths = {
-            variant for path in track_paths if str(path or "").strip()
-            for variant in (str(path), str(Path(path)))
-        }
-        old_identities = [
-            {"album_artist": str(item.get("album_artist") or ""), "album": str(item.get("name") or ""),
-             "year": str(item.get("year") or "")}
-            for payload in lists for item in payload.get("items") or []
-            if isinstance(item, Mapping) and paths.intersection(item.get("track_paths") or [])
-        ]
-        with self._connect_to_database() as connection:
-            connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-            connection.execute("SET LOCAL jit = off")
-            scope = _row_mapping(connection.execute(_PROBLEMATIC_PATCH_SCOPE_SQL, {
-                "track_paths": sorted(paths),
-                "old_identities": json.dumps(old_identities),
-            }).fetchone() or {})
-            if scope.get("has_detached_track"):
-                # Loose-track groups span the library; they keep the full rebuild.
-                return False
-            album_ids = sorted({int(value) for value in scope.get("album_ids") or []})
-            rows = self._load_problematic_file_rows(connection=connection, album_ids=album_ids) if album_ids else []
-            partial = self._build_problematic_files_payload_from_rows(
-                connection=connection, rows=rows, missing_rows=[], include_initial_detail=False,
-                cache_albums=True,
-            ) if rows else {"items": [], _PROBLEMATIC_PAGE_ALBUMS_KEY: {}}
-        if partial.get("duplicate_resolution_pending") or partial.get(_PROBLEMATIC_LOOSE_GROUP_IDENTITIES_KEY):
-            return False
-        # Every current track of a recomputed album, and every edited path, now
-        # belongs to a recomputed entry (or to none when the album is fixed).
-        replaced_paths = paths | {str(value) for value in scope.get("track_paths") or []}
-        new_items = list(partial.get("items") or [])
-        new_albums = dict(partial.get(_PROBLEMATIC_PAGE_ALBUMS_KEY) or {})
-        replaced_keys = {str(item.get("key") or "") for item in new_items}
-
-        def patch(payload: Mapping[str, object], *, bounded: bool) -> dict[str, object] | None:
-            base_items = [item for item in payload.get("items") or [] if isinstance(item, Mapping)]
-            removed = [
-                item for item in base_items
-                if str(item.get("key") or "") in replaced_keys
-                or replaced_paths.intersection(item.get("track_paths") or [])
-            ]
-            if any(_is_problematic_loose_tracks_key(item.get("key")) for item in removed):
-                return None
-            removed_ids = {id(item) for item in removed}
-            kept = [item for item in base_items if id(item) not in removed_ids]
-            added = new_items
-            if bounded and payload.get("has_more") and base_items:
-                # A first page holds only the start of the order; later entries
-                # belong to the next pages, which are read from the database.
-                boundary = max(_problematic_summary_sort_key(item) for item in base_items)
-                added = [item for item in new_items if _problematic_summary_sort_key(item) <= boundary]
-            items = sorted(kept + added, key=_problematic_summary_sort_key)
-            patched = {**payload, "items": items, "count": len(items)}
-            removed_keys = {str(item.get("key") or "") for item in removed}
-            initial_detail = payload.get("initial_detail")
-            if (
-                not items or not isinstance(initial_detail, Mapping)
-                or initial_detail.get("key") != items[0].get("key")
-                or str(initial_detail.get("key") or "") in removed_keys
-            ):
-                # The page loads the first album's detail on demand.
-                patched["initial_detail"] = None
-            cached_albums = payload.get(_PROBLEMATIC_PAGE_ALBUMS_KEY)
-            if isinstance(cached_albums, Mapping):
-                albums = {key: album for key, album in cached_albums.items() if key not in removed_keys}
-                albums.update({
-                    key: new_albums[key]
-                    for key in (str(item.get("key") or "") for item in added) if key in new_albums
-                })
-                patched[_PROBLEMATIC_PAGE_ALBUMS_KEY] = albums
-            return patched
-
-        patched_complete = patch(complete, bounded=False) if isinstance(complete, Mapping) else None
-        patched_stale = patch(stale, bounded=False) if isinstance(stale, Mapping) else None
-        patched_pages = (
-            {limit: patch(page, bounded=True) for limit, page in pages.items() if isinstance(page, Mapping)}
-            if isinstance(pages, Mapping) else None
-        )
-        if (
-            (isinstance(complete, Mapping) and patched_complete is None)
-            or (isinstance(stale, Mapping) and patched_stale is None)
-            or (patched_pages is not None and any(page is None for page in patched_pages.values()))
-        ):
-            return False
-        with _UTILITY_PROJECTION_CACHE_LOCK:
-            if (
-                _UTILITY_PROJECTION_CACHE.get(cache_key) is not complete
-                or _UTILITY_PROJECTION_STALE.get(cache_key) is not stale
-                or _UTILITY_PROJECTION_CACHE.get(page_cache_key) is not pages
-                or (
-                    _UTILITY_PROJECTION_GENERATIONS.get(cache_key, 0),
-                    _UTILITY_PROJECTION_GENERATIONS.get(page_cache_key, 0),
-                ) != generations
-            ):
-                return False
-            # Builds that started before the save are discarded, and page cursors restart.
-            _UTILITY_PROJECTION_GENERATIONS[cache_key] = generations[0] + 1
-            _UTILITY_PROJECTION_GENERATIONS[page_cache_key] = generations[1] + 1
-            if patched_complete is not None:
-                _UTILITY_PROJECTION_CACHE[cache_key] = patched_complete
-            if patched_stale is not None:
-                _UTILITY_PROJECTION_STALE[cache_key] = patched_stale
-            if patched_pages is not None:
-                _UTILITY_PROJECTION_CACHE[page_cache_key] = patched_pages
-        return True
+        payload = self._build_problematic_files_payload_uncached()
+        payload["projection_cache_status"] = "evaluated"
+        return payload
 
     def _build_problematic_files_payload_uncached(self) -> dict[str, object]:
         with self._connect_to_database() as connection:
@@ -3255,10 +3059,8 @@ class PostgresLibraryBrowseRepository:
                 connection=connection,
                 rows=self._load_problematic_file_rows(connection=connection),
             )
-            # Same snapshot as the rows: a stored list is served only while
-            # the inventory is still exactly this one.
-            payload[_SNAPSHOT_FINGERPRINT_KEY] = _problematic_inventory_fingerprint(connection)
-            return payload
+        payload.pop(_PROBLEMATIC_LOOSE_GROUP_IDENTITIES_KEY, None)
+        return payload
 
     def build_problematic_files_page(self, *, limit: int, cursor: str = "") -> dict[str, object]:
         if limit < 1 or limit > 200:
@@ -3266,84 +3068,49 @@ class PostgresLibraryBrowseRepository:
         indexed = self._indexed_problematic_page(limit=limit, cursor=cursor)
         if indexed is not None:
             return indexed
-        cache_key = self._utility_projection_cache_key(_PROBLEMATIC_FILES_PAGE_KIND)
-        with _UTILITY_PROJECTION_CACHE_LOCK:
-            generation = _UTILITY_PROJECTION_GENERATIONS.setdefault(cache_key, 0) if cache_key else 0
+        return self._evaluated_problematic_page(limit=limit, cursor=cursor)
+
+    def _evaluated_problematic_page(self, *, limit: int, cursor: str, needle: str = "") -> dict[str, object]:
+        """A page of the directly evaluated list, with the index's cursors."""
         after: tuple[str, str, str, str] | None = None
-        cursor_restarted = False
         if cursor:
-            after, cursor_generation = _decode_problematic_page_cursor(cursor)
-            if cursor_generation != generation:
-                after = None
-                cursor_restarted = True
-
-        def window(payload: dict[str, object]) -> dict[str, object]:
-            items = sorted(
-                (item for item in payload.get("items") or [] if isinstance(item, Mapping)),
-                key=_problematic_summary_sort_key,
+            after = (
+                _decode_problematic_search_cursor(cursor, needle) if needle
+                else _decode_problematic_page_cursor(cursor)
+            )[0]
+        payload = self.build_problematic_files_payload()
+        items = sorted(
+            (item for item in payload["items"]
+             if (not needle or _problematic_summary_matches_query(item, needle))
+             and (after is None or _problematic_summary_sort_key(item) > after)),
+            key=_problematic_summary_sort_key,
+        )
+        has_more = len(items) > limit
+        items = items[:limit]
+        next_cursor = ""
+        if has_more and items:
+            last = _problematic_summary_sort_key(items[-1])
+            next_cursor = (
+                _encode_problematic_search_cursor(last, _PROBLEMATIC_INDEX_CURSOR_GENERATION, needle) if needle
+                else _encode_problematic_page_cursor(last, _PROBLEMATIC_INDEX_CURSOR_GENERATION)
             )
-            if after is not None:
-                items = [item for item in items if _problematic_summary_sort_key(item) > after]
-            page = deepcopy({key: value for key, value in payload.items() if key != "items"})
-            page["items"] = deepcopy(items[:limit])
-            page["count"] = len(page["items"])
-            page["complete"] = False
-            page["has_more"] = bool(payload.get("has_more")) or len(items) > limit
-            page["cursor_restarted"] = cursor_restarted
-            page["next_cursor"] = (
-                _encode_problematic_page_cursor(
-                    _problematic_summary_sort_key(page["items"][-1]), generation,
-                )
-                if page["has_more"] and page["items"] else ""
-            )
-            initial_detail = page.get("initial_detail")
-            page_keys = {str(item.get("key") or "") for item in page["items"] if isinstance(item, Mapping)}
-            if isinstance(initial_detail, Mapping) and str(initial_detail.get("key") or "") not in page_keys:
-                page.pop("initial_detail", None)
-            return page
-
-        def cached() -> dict[str, object] | None:
-            complete = self._get_cached_utility_projection("problematic-files", copy_payload=False)
-            status = "bounded"
-            if complete is None:
-                complete = self._get_stale_utility_projection("problematic-files")
-                status = "stale"
-            if complete is not None:
-                # Copy only the page: the complete payload is megabytes on a real library.
-                page = window(complete)
-                page["total_candidate_count"] = None
-                page["projection_cache_status"] = status
-                page.pop(_PROBLEMATIC_LOOSE_GROUP_IDENTITIES_KEY, None)
-                return page
-            # Until the complete list is cached, a built first page is reused: every
-            # open would otherwise repeat the whole-library candidate query.
-            pages = self._get_cached_utility_projection(_PROBLEMATIC_FILES_PAGE_KIND, copy_payload=False) or {}
-            page = deepcopy(pages[str(limit)]) if not cursor and str(limit) in pages else None
-            if page is not None:
-                page = window(page)
-                page.pop(_PROBLEMATIC_PAGE_ALBUMS_KEY, None)
-                page.pop(_PROBLEMATIC_LOOSE_GROUP_IDENTITIES_KEY, None)
-            return page
-
-        if cursor and cached() is None:
-            page = self._build_problematic_files_first_page(
-                limit=limit,
-                generation=generation,
-                after=after,
-            )
-        else:
-            page = self._build_utility_projection_once(
-                _PROBLEMATIC_FILES_PAGE_KIND,
-                cached,
-                lambda build_generation: self._build_problematic_files_first_page(
-                    limit=limit,
-                    generation=build_generation,
-                    after=after,
-                ),
-            )
-        page = window(page)
-        page["problem_reason_types"] = _problematic_filter_reason_types(page.get("items") or ())
-        return page
+        initial_detail = payload.get("initial_detail")
+        return {
+            **payload,
+            "items": items,
+            "count": len(items),
+            "initial_detail": (
+                initial_detail if not needle and after is None and items
+                and isinstance(initial_detail, Mapping) and initial_detail.get("key") == items[0].get("key")
+                else None
+            ),
+            "complete": bool(needle) and not has_more,
+            "has_more": has_more,
+            "next_cursor": next_cursor,
+            "cursor_restarted": False,
+            "total_candidate_count": None,
+            "problem_reason_types": _problematic_filter_reason_types(items),
+        }
 
     def _problematic_indexing_payload(self) -> dict[str, object] | None:
         """An empty answer with the backfill's progress while the index first fills."""
@@ -3433,242 +3200,6 @@ class PostgresLibraryBrowseRepository:
             "view_data_source": _SOURCE_TELEMETRY,
         }
 
-    def _build_problematic_files_first_page(
-        self,
-        *,
-        limit: int,
-        generation: int | None,
-        after: tuple[str, str, str, str] | None = None,
-        use_snapshot: bool = True,
-    ) -> dict[str, object]:
-        # Re-evaluating the prior first-page albums avoids a whole-library cold query.
-        status = "bounded"
-        outdated_snapshot = (
-            self._load_problematic_files_snapshot(allow_outdated=True, for_first_page=after is None)
-            if use_snapshot else None
-        )
-        # A stored first page lists only its own albums: more may follow, and albums
-        # that became problematic since are found by the background refresh.
-        first_page_snapshot = bool(
-            outdated_snapshot and outdated_snapshot.get(_PROBLEMATIC_SNAPSHOT_SCOPE_KEY)
-        )
-        outdated_items = sorted(
-            (item for item in (outdated_snapshot or {}).get("items") or [] if isinstance(item, Mapping)),
-            key=_problematic_summary_sort_key,
-        )
-        if after is not None:
-            outdated_items = [item for item in outdated_items if _problematic_summary_sort_key(item) > after]
-        scan_has_more = False
-        with self._browse_connection_context() as connection:
-            connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-            connection.execute("SET LOCAL work_mem = '16MB'")
-            connection.execute("SET LOCAL jit = off")
-            missing_rows = self._load_missing_album_rows(
-                connection=connection,
-                limit=limit,
-                after=after,
-            )
-            if outdated_items:
-                status = "revalidated"
-                rows = []
-                snapshot_index = 0
-                while snapshot_index < len(outdated_items):
-                    snapshot_batch = outdated_items[snapshot_index:snapshot_index + limit]
-                    snapshot_index += len(snapshot_batch)
-                    snapshot_keys = [str(item.get("key") or "") for item in snapshot_batch]
-                    persisted_keys = [
-                        key for key in snapshot_keys
-                        if not _is_problematic_loose_tracks_key(key)
-                    ]
-                    if persisted_keys:
-                        album_ids = [
-                            int(_row_mapping(row)["id"])
-                            for row in connection.execute(
-                                "select id from library.local_albums where album_key = any(%(keys)s::text[])",
-                                {"keys": persisted_keys},
-                            ).fetchall()
-                        ]
-                        rows.extend(self._load_problematic_file_rows(
-                            connection=connection,
-                            album_ids=album_ids,
-                        ))
-                    loose_items = [
-                        item for item in snapshot_batch
-                        if _is_problematic_loose_tracks_key(item.get("key"))
-                    ]
-                    loose_keys = {str(item.get("key") or "") for item in loose_items}
-                    if loose_keys:
-                        identity_map = (outdated_snapshot or {}).get(
-                            _PROBLEMATIC_LOOSE_GROUP_IDENTITIES_KEY
-                        )
-                        loose_group_ids = {
-                            group_id
-                            for key in loose_keys
-                            if (
-                                group_id := _problematic_loose_group_id(
-                                    identity_map.get(key)
-                                    if isinstance(identity_map, Mapping)
-                                    else None
-                                )
-                            )
-                        }
-                        loose_paths = {
-                            str(path).strip()
-                            for item in loose_items
-                            for path in item.get("track_paths") or []
-                            if str(path or "").strip()
-                        }
-                        rows.extend(self._load_problematic_loose_file_rows(
-                            connection=connection,
-                            album_keys=loose_keys,
-                            membership_group_ids=loose_group_ids or None,
-                            seed_private_paths=None if loose_group_ids else loose_paths,
-                            limit=None,
-                        ))
-                    candidate_page = self._build_problematic_files_payload_from_rows(
-                        connection=connection,
-                        rows=rows,
-                        missing_rows=missing_rows,
-                        limit=limit,
-                        include_initial_detail=False,
-                    )
-                    if candidate_page["count"] >= limit:
-                        break
-                scan_has_more = snapshot_index < len(outdated_items) or (
-                    first_page_snapshot and bool(outdated_snapshot.get("has_more"))
-                )
-                if first_page_snapshot and not candidate_page["count"] and scan_has_more:
-                    # Every stored album was fixed: only the full pass finds the next ones.
-                    outdated_items, rows, status, scan_has_more = [], [], "bounded", False
-            if not outdated_items:
-                rows = self._load_problematic_loose_file_rows(
-                    connection=connection,
-                    limit=limit,
-                    after=after,
-                )
-                candidate_album_ids = self._load_problematic_candidate_ids(
-                    connection=connection,
-                    limit=_PROBLEMATIC_PAGE_MAX_ALBUM_BATCHES * limit + 1,
-                    after=after,
-                )
-                ordered_albums = sorted(
-                    (
-                        _row_mapping(row)
-                        for row in connection.execute(
-                            _problematic_page_album_order_sql(),
-                            {"album_ids": candidate_album_ids},
-                        ).fetchall()
-                    ),
-                    key=_problematic_summary_sort_key,
-                )
-                boundary_confirmed = False
-                batch_end = 0
-                for batch_number in range(_PROBLEMATIC_PAGE_MAX_ALBUM_BATCHES):
-                    batch_start = batch_number * limit
-                    batch = ordered_albums[batch_start:batch_start + limit]
-                    if not batch:
-                        break
-                    batch_end = batch_start + len(batch)
-                    rows.extend(self._load_problematic_file_rows(
-                        connection=connection,
-                        album_ids=[int(row["album_id"]) for row in batch],
-                    ))
-                    candidate_page = self._build_problematic_files_payload_from_rows(
-                        connection=connection,
-                        rows=rows,
-                        missing_rows=missing_rows,
-                        limit=limit,
-                        include_initial_detail=False,
-                        resolve_all_duplicates=True,
-                    )
-                    boundary = (candidate_page.get("items") or [None])[-1]
-                    next_album = (
-                        ordered_albums[batch_end]
-                        if batch_end < len(ordered_albums)
-                        else None
-                    )
-                    boundary_confirmed = (
-                        candidate_page["count"] >= limit
-                        and isinstance(boundary, Mapping)
-                        and isinstance(next_album, Mapping)
-                        and _problematic_summary_sort_key(boundary)[:2]
-                        < _problematic_summary_sort_key(next_album)[:2]
-                    )
-                    if boundary_confirmed or batch_end == len(ordered_albums):
-                        break
-                confirmed_prefix = None
-                if (
-                    not boundary_confirmed
-                    and batch_end < len(ordered_albums)
-                    and batch_end > 0
-                ):
-                    confirmed_prefix = _problematic_summary_sort_key(
-                        ordered_albums[batch_end - 1]
-                    )[:2]
-                scan_has_more = batch_end < len(ordered_albums)
-            payload = self._build_problematic_files_payload_from_rows(
-                connection=connection,
-                rows=rows,
-                missing_rows=missing_rows,
-                limit=limit,
-                resolve_all_duplicates=not outdated_items,
-                maximum_sort_prefix=(confirmed_prefix if not outdated_items else None),
-                cache_albums=True,
-            )
-            # A fresh first page is stored for the next restart, at its own inventory.
-            fingerprint = (
-                _problematic_inventory_fingerprint(connection)
-                if status == "bounded" and after is None and self._problematic_snapshot_available() else ""
-            )
-        payload["complete"] = False
-        payload["has_more"] = scan_has_more or int(payload.get("count") or 0) >= limit
-        payload["total_candidate_count"] = None
-        payload["projection_cache_status"] = status
-        if not payload.get("duplicate_resolution_pending"):
-            cached = self._set_cached_utility_projection(
-                _PROBLEMATIC_FILES_PAGE_KIND,
-                {
-                    **(
-                        self._get_cached_utility_projection(
-                            _PROBLEMATIC_FILES_PAGE_KIND, copy_payload=False
-                        )
-                        or {}
-                    ),
-                    str(limit): payload,
-                },
-                expected_generation=generation,
-            )
-            if cached and fingerprint:
-                self._queue_problematic_files_snapshot_store(payload, fingerprint, first_page=True)
-        if status == "revalidated" and (outdated_snapshot or {}).get(_PROBLEMATIC_SNAPSHOT_OUTDATED_KEY):
-            # Albums outside the snapshot may have become problematic since it was stored.
-            self._queue_problematic_first_page_refresh(limit)
-        payload.pop(_PROBLEMATIC_PAGE_ALBUMS_KEY, None)
-        payload.pop(_PROBLEMATIC_LOOSE_GROUP_IDENTITIES_KEY, None)
-        return payload
-
-    def _queue_problematic_first_page_refresh(self, limit: int) -> None:
-        """Rebuild a revalidated first page from the whole library, once, in the background."""
-        cache_key = self._utility_projection_cache_key(_PROBLEMATIC_FILES_PAGE_KIND)
-        if cache_key is None or not self._problematic_snapshot_available():
-            return
-        with _UTILITY_PROJECTION_CACHE_LOCK:
-            if cache_key in _UTILITY_PROJECTION_PREWARM_INFLIGHT:
-                return
-            generation = _UTILITY_PROJECTION_GENERATIONS.setdefault(cache_key, 0)
-            _UTILITY_PROJECTION_PREWARM_INFLIGHT.add(cache_key)
-
-        def refresh() -> None:
-            try:
-                self._build_problematic_files_first_page(limit=limit, generation=generation, use_snapshot=False)
-            except Exception:
-                logging.getLogger(__name__).warning("Problematic Files first page refresh failed.", exc_info=True)
-            finally:
-                with _UTILITY_PROJECTION_CACHE_LOCK:
-                    _UTILITY_PROJECTION_PREWARM_INFLIGHT.discard(cache_key)
-
-        _UTILITY_PROJECTION_PREWARM_EXECUTOR.submit(refresh)
-
     def build_problematic_files_search(
         self,
         query: str,
@@ -3676,133 +3207,17 @@ class PostgresLibraryBrowseRepository:
         limit: int = 50,
         cursor: str = "",
     ) -> dict[str, object]:
-        """Every problematic album whose summary matches ``query``, without the full list.
-
-        The complete projection answers exactly once cached; the last complete
-        list answers at once while a fresh one rebuilds. With neither, SQL
-        narrows the candidate albums (the ones the complete list evaluates) to
-        those whose title, artist, year or track titles contain the text, and
-        only those are evaluated. Matches only visible in computed text
-        (problem reasons, repaired spellings) arrive with the complete list
-        (``complete: false``).
-        """
+        """Every problematic album whose summary text contains ``query``, a page at a time."""
         needle = str(query or "").strip().lower()
         if not needle:
             raise ValueError("Problematic Files search needs a query.")
         if limit < 1 or limit > 200:
             raise ValueError("Problematic Files search limit must be between 1 and 200.")
-        indexed = self._indexed_problematic_page(limit=limit, cursor=cursor, needle=needle)
-        if indexed is not None:
-            indexed.update(query=query, search_truncated=False)
-            return indexed
-        page_cache_key = self._utility_projection_cache_key(_PROBLEMATIC_FILES_PAGE_KIND)
-        with _UTILITY_PROJECTION_CACHE_LOCK:
-            generation = (
-                _UTILITY_PROJECTION_GENERATIONS.setdefault(page_cache_key, 0)
-                if page_cache_key else 0
-            )
-        after: tuple[str, str, str, str] | None = None
-        cursor_restarted = False
-        if cursor:
-            after, cursor_generation = _decode_problematic_search_cursor(cursor, needle)
-            if cursor_generation != generation:
-                after = None
-                cursor_restarted = True
-        complete, status = True, "hit"
-        cached_payload = self._get_cached_utility_projection("problematic-files")
-        if cached_payload is None:
-            complete, status = False, "stale"
-            cached_payload = self._get_stale_utility_projection("problematic-files")
-        if cached_payload is None:
-            cached_payload = self._load_problematic_files_snapshot(allow_outdated=True)
-        if cached_payload is None:
-            # Search is its own bounded query. Never queue it behind a complete
-            # projection rebuild; that would make typing wait for the slow path
-            # the search endpoint exists to avoid.
-            cached_payload = self._get_cached_utility_projection("problematic-files")
-            if cached_payload is not None:
-                complete, status = True, "hit"
-        if cached_payload is not None:
-            items = sorted((
-                item for item in cached_payload.get("items") or []
-                if _problematic_summary_matches_query(item, needle)
-            ), key=_problematic_summary_sort_key)
-            if after is not None:
-                items = [item for item in items if _problematic_summary_sort_key(item) > after]
-            page_items = items[:limit]
-            has_more = len(items) > limit
-            cached_payload.update(
-                items=page_items, count=len(page_items), initial_detail=None,
-                complete=complete and not has_more,
-                query=query, search_truncated=False, projection_cache_status=status,
-                cursor_restarted=cursor_restarted,
-                has_more=has_more,
-                next_cursor=(
-                    _encode_problematic_search_cursor(
-                        _problematic_summary_sort_key(page_items[-1]), generation, needle,
-                    )
-                    if has_more and page_items else ""
-                ),
-            )
-            cached_payload.pop(_PROBLEMATIC_LOOSE_GROUP_IDENTITIES_KEY, None)
-            return cached_payload
-        with self._browse_connection_context() as connection:
-            connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-            connection.execute("SET LOCAL work_mem = '16MB'")
-            connection.execute("SET LOCAL jit = off")
-            candidate_rows = [
-                _row_mapping(row)
-                for row in connection.execute(
-                    _problematic_search_album_ids_sql(),
-                    {
-                        "needle": needle,
-                        "candidate_ids": sorted(self._problematic_candidate_album_ids(connection)),
-                        "after_present": after is not None,
-                        "after_name": (after or ("", "", "", ""))[0],
-                        "after_artist": (after or ("", "", "", ""))[1],
-                        "after_year": (after or ("", "", "", ""))[2],
-                        "after_key": (after or ("", "", "", ""))[3],
-                        "limit": limit + 1,
-                    },
-                ).fetchall()
-            ]
-            has_more = len(candidate_rows) > limit
-            page_candidates = candidate_rows[:limit]
-            album_ids = [int(row["id"]) for row in page_candidates]
-            payload = self._build_problematic_files_payload_from_rows(
-                connection=connection,
-                rows=self._load_problematic_file_rows(
-                    connection=connection,
-                    album_ids=album_ids,
-                ),
-                include_initial_detail=False,
-            )
-        items = sorted(
-            (item for item in payload["items"] if _problematic_summary_matches_query(item, needle)),
-            key=_problematic_summary_sort_key,
-        )
-        payload.update(
-            items=items, count=len(items), complete=False,
-            total_candidate_count=None, query=query, search_truncated=False,
-            projection_cache_status="search",
-            cursor_restarted=cursor_restarted,
-            has_more=has_more,
-            next_cursor=(
-                _encode_problematic_search_cursor(
-                    (
-                        str(page_candidates[-1]["sort_name"]),
-                        str(page_candidates[-1]["sort_artist"]),
-                        str(page_candidates[-1]["sort_year"]),
-                        str(page_candidates[-1]["sort_key"]),
-                    ),
-                    generation,
-                    needle,
-                )
-                if has_more and page_candidates else ""
-            ),
-        )
-        payload.pop(_PROBLEMATIC_LOOSE_GROUP_IDENTITIES_KEY, None)
-        return payload
+        page = self._indexed_problematic_page(limit=limit, cursor=cursor, needle=needle)
+        if page is None:
+            page = self._evaluated_problematic_page(limit=limit, cursor=cursor, needle=needle)
+        page.update(query=query, search_truncated=False)
+        return page
 
     def _build_problematic_files_payload_from_rows(
         self,
@@ -3810,28 +3225,16 @@ class PostgresLibraryBrowseRepository:
         connection: Any,
         rows: list[object],
         missing_rows: list[object] | None = None,
-        limit: int | None = None,
         include_initial_detail: bool = True,
-        resolve_all_duplicates: bool = False,
-        maximum_sort_prefix: tuple[str, str] | None = None,
         cache_albums: bool = False,
     ) -> dict[str, object]:
         albums = _problematic_album_projection_payloads(rows)
-        duplicate_candidates = [
-            album
-            for album in albums
-            if album.get("_duplicate_candidate")
-            or (
-                resolve_all_duplicates
-                and not _is_problematic_loose_tracks_key(album.get("key"))
-            )
-        ]
+        duplicate_candidates = [album for album in albums if album.get("_duplicate_candidate")]
         duplicate_resolution_complete = True
         if duplicate_candidates:
             duplicate_resolution_complete = self._attach_duplicate_sources(
                 duplicate_candidates,
                 connection=connection,
-                defer_on_cache_miss=resolve_all_duplicates,
                 defer_source_payloads=True,
             ) is not False
             if not duplicate_resolution_complete:
@@ -3853,16 +3256,7 @@ class PostgresLibraryBrowseRepository:
             item = _problematic_album_summary_payload(album)
             if item is not None:
                 projected_items.append((item, album))
-        if maximum_sort_prefix is not None:
-            projected_items = [
-                projected_item
-                for projected_item in projected_items
-                if _problematic_summary_sort_key(projected_item[0])[:2]
-                < maximum_sort_prefix
-            ]
         projected_items.sort(key=lambda projected_item: _problematic_summary_sort_key(projected_item[0]))
-        if limit is not None:
-            projected_items = projected_items[:limit]
         items = [item for item, _album in projected_items]
         initial_detail = None
         if projected_items and include_initial_detail:
@@ -3912,12 +3306,6 @@ class PostgresLibraryBrowseRepository:
                 )
                 if str(album.get("key") or "")
             }
-        if limit is None and include_initial_detail:
-            initial_key = str((initial_detail or {}).get("key") or "")
-            if _is_problematic_loose_tracks_key(initial_key):
-                payload[_PROBLEMATIC_LOOSE_TRACKS_DETAIL_KEY] = {
-                    initial_key: initial_detail,
-                }
         return payload
 
     def build_problematic_album_payload_by_track_paths(
@@ -3937,7 +3325,7 @@ class PostgresLibraryBrowseRepository:
                         join library.local_tracks tracks on tracks.id = files.track_id
                         where files.private_path = any(%(paths)s::text[])
                           and tracks.album_id is not null
-                          and tracks.library_id = ({_PROBLEMATIC_SNAPSHOT_LIBRARY_SQL})""",
+                          and tracks.library_id = ({_LOCAL_LIBRARY_ID_SQL})""",
                     {"paths": sorted(normalized_paths)},
                 ).fetchall()
             ]
@@ -4015,42 +3403,10 @@ class PostgresLibraryBrowseRepository:
 
     def build_problematic_file_detail_payload(self, album_key: object) -> dict[str, object] | None:
         normalized_album_key = str(album_key or "")
-        pages = self._get_cached_utility_projection(
-            _PROBLEMATIC_FILES_PAGE_KIND,
-            copy_payload=False,
-        )
-        if isinstance(pages, Mapping):
-            for page in pages.values():
-                cached_albums = (
-                    page.get(_PROBLEMATIC_PAGE_ALBUMS_KEY)
-                    if isinstance(page, Mapping)
-                    else None
-                )
-                cached_album = (
-                    cached_albums.get(normalized_album_key)
-                    if isinstance(cached_albums, Mapping)
-                    else None
-                )
-                if isinstance(cached_album, Mapping):
-                    album = deepcopy(cached_album)
-                    if album.get("inventory_status") != "missing":
-                        album["_suggestion_aliases"] = self._load_relation_alias_maps().get(
-                            "alias_to_canonical", {}
-                        )
-                    return _problematic_album_detail_payload(album)
         if _is_problematic_loose_tracks_key(normalized_album_key):
             indexed = problematic_index.loose_group_detail(self, normalized_album_key)
             if indexed is not None:
                 return indexed
-            cached = self._get_cached_utility_projection("problematic-files", copy_payload=False)
-            cached_details = (cached or {}).get(_PROBLEMATIC_LOOSE_TRACKS_DETAIL_KEY)
-            cached_detail = (
-                cached_details.get(normalized_album_key)
-                if isinstance(cached_details, Mapping)
-                else None
-            )
-            if isinstance(cached_detail, Mapping):
-                return deepcopy(cached_detail)
         missing_albums = _missing_album_projection_payloads(
             self._load_missing_album_rows(album_key=normalized_album_key)
         )
@@ -4927,49 +4283,8 @@ class PostgresLibraryBrowseRepository:
                 return _execute_problematic_sql(active_connection, self._database_url, build_sql, params)
 
             def standalone_rows() -> list[object]:
-                cached_paths: set[str] | None = None
-                cached_group_ids: set[str] | None = None
-                if _is_problematic_loose_tracks_key(normalized_album_key):
-                    cached_payloads = []
-                    complete = self._get_cached_utility_projection(
-                        "problematic-files", copy_payload=False,
-                    )
-                    if isinstance(complete, Mapping):
-                        cached_payloads.append(complete)
-                    pages = self._get_cached_utility_projection(
-                        _PROBLEMATIC_FILES_PAGE_KIND, copy_payload=False,
-                    )
-                    if isinstance(pages, Mapping):
-                        cached_payloads.extend(
-                            page for page in pages.values() if isinstance(page, Mapping)
-                        )
-                    for payload in cached_payloads:
-                        identities = payload.get(_PROBLEMATIC_LOOSE_GROUP_IDENTITIES_KEY)
-                        group_id = _problematic_loose_group_id(
-                            identities.get(normalized_album_key)
-                            if isinstance(identities, Mapping)
-                            else None
-                        )
-                        if group_id:
-                            cached_group_ids = {group_id}
-                            break
-                        item = next((
-                            item for item in payload.get("items") or []
-                            if isinstance(item, Mapping)
-                            and item.get("key") == normalized_album_key
-                        ), None)
-                        paths = {
-                            str(path).strip()
-                            for path in (item or {}).get("track_paths") or []
-                            if str(path or "").strip()
-                        }
-                        if paths:
-                            cached_paths = paths
-                            break
                 return self._load_problematic_loose_file_rows(
                     connection=active_connection,
-                    membership_group_ids=cached_group_ids,
-                    seed_private_paths=cached_paths,
                     limit=None,
                     album_key=normalized_album_key,
                 )
@@ -5156,36 +4471,6 @@ class PostgresLibraryBrowseRepository:
             rows.append(row)
         return rows
 
-    def _load_problematic_candidate_ids(
-        self,
-        *,
-        connection: Any,
-        limit: int,
-        after: tuple[str, str, str, str] | None = None,
-    ) -> list[int]:
-        cursor = _execute_problematic_sql(
-            connection,
-            self._database_url,
-            lambda path_columns: _problematic_files_sql(
-                candidate_summary=True,
-                candidate_ids_page=True,
-                candidate_ids_after=after is not None,
-                path_columns=path_columns,
-            ),
-            {
-                "mojibake_candidate_pattern": MOJIBAKE_CANDIDATE_PATTERN,
-                "encoding_candidate_chars": MOJIBAKE_ENCODING_CANDIDATE_CHARS,
-                "limit": limit,
-                "after_name": (after or ("", "", "", ""))[0],
-                "after_artist": (after or ("", "", "", ""))[1],
-            },
-        )
-        return [
-            int(row["album_id"])
-            for raw in cursor.fetchall()
-            if (row := _row_mapping(raw)).get("album_id") is not None
-        ]
-
     def _load_utility_rules_rows(self) -> list[object]:
         with self._connect_to_database() as connection:
             cursor = connection.execute(_utility_rules_sql(), {})
@@ -5261,8 +4546,6 @@ class PostgresLibraryBrowseRepository:
             ):
                 return False
             _UTILITY_PROJECTION_CACHE[cache_key] = deepcopy(payload)
-            if kind in _STALE_SERVED_UTILITY_KINDS:
-                _UTILITY_PROJECTION_STALE.pop(cache_key, None)
             if (
                 (kind in _REWARMED_UTILITY_KINDS and self._allow_background_prewarm)
                 or (
@@ -5276,138 +4559,28 @@ class PostgresLibraryBrowseRepository:
                 )
         return True
 
-    def _get_stale_utility_projection(self, kind: str) -> dict[str, object] | None:
-        cache_key = self._utility_projection_cache_key(kind)
-        if cache_key is None:
-            return None
-        with _UTILITY_PROJECTION_CACHE_LOCK:
-            payload = _UTILITY_PROJECTION_STALE.get(cache_key)
-            load_snapshot = (
-                payload is None and kind == "problematic-files"
-                and cache_key not in _PROBLEMATIC_SNAPSHOT_CHECKED
-            )
-            if load_snapshot:
-                _PROBLEMATIC_SNAPSHOT_CHECKED.add(cache_key)
-        if load_snapshot:
-            # A restarted server has no list in memory: the last stored one
-            # answers the first page until the fresh list completes.
-            snapshot = self._load_problematic_files_snapshot()
-            if snapshot is not None:
-                with _UTILITY_PROJECTION_CACHE_LOCK:
-                    if cache_key not in _UTILITY_PROJECTION_CACHE:
-                        _UTILITY_PROJECTION_STALE.setdefault(cache_key, snapshot)
-                    payload = _UTILITY_PROJECTION_STALE.get(cache_key)
-        return None if payload is None else deepcopy(payload)
-
-    def _problematic_snapshot_available(self) -> bool:
-        return (
-            self._use_shared_connection_pool
-            and self._database_url not in _PROBLEMATIC_SNAPSHOT_UNAVAILABLE_DATABASES
-        )
-
-    def _load_problematic_files_snapshot(
-        self, *, allow_outdated: bool = False, for_first_page: bool = False,
-    ) -> dict[str, object] | None:
-        """The last stored list; one from before a later library change only when ``allow_outdated``.
-
-        An outdated list is never served as such: it may name albums since merged, split or
-        removed. It may only choose which albums a first page re-evaluates. A stored first
-        page is returned only ``for_first_page``, which also marks an outdated snapshot.
-        """
-        if not self._problematic_snapshot_available():
-            return None
-        try:
-            with self._connect_to_database() as connection:
-                row = connection.execute(_problematic_files_snapshot_load_sql()).fetchone()
-                current_fingerprint = _problematic_inventory_fingerprint(connection) if row is not None else None
-        except Exception as error:
-            if _is_undefined_table_error(error):
-                _PROBLEMATIC_SNAPSHOT_UNAVAILABLE_DATABASES.add(self._database_url)
-                return None
-            logging.getLogger(__name__).warning("Problematic Files snapshot could not be read.", exc_info=True)
-            return None
-        payload = _row_mapping(row).get("payload") if row is not None else None
-        if isinstance(payload, str):
-            payload = json.loads(payload)
-        if not isinstance(payload, Mapping):
-            return None
-        payload = dict(payload)
-        snapshot_version = payload.pop(_PROBLEMATIC_SNAPSHOT_VERSION_KEY, None)
-        snapshot_fingerprint = payload.pop(_SNAPSHOT_FINGERPRINT_KEY, None)
-        if snapshot_version != _PROBLEMATIC_SNAPSHOT_VERSION:
-            return None
-        if payload.get(_PROBLEMATIC_SNAPSHOT_SCOPE_KEY) and not for_first_page:
-            return None
-        if snapshot_fingerprint != current_fingerprint or not current_fingerprint:
-            if not allow_outdated:
-                return None
-            if for_first_page:
-                payload[_PROBLEMATIC_SNAPSHOT_OUTDATED_KEY] = True
-        return payload
-
-    def _queue_problematic_files_snapshot_store(
-        self, payload: Mapping[str, object], fingerprint: str, *, first_page: bool = False,
-    ) -> None:
-        # Browse-only instances never write the shared database.
-        if self._config.get("SHARED_LIBRARY_BROWSE_ONLY") or not self._problematic_snapshot_available():
-            return
-        document = json.dumps(
-            {
-                **{
-                    key: value for key, value in payload.items()
-                    if key not in {"projection_cache_status", _PROBLEMATIC_PAGE_ALBUMS_KEY}
-                },
-                _SNAPSHOT_FINGERPRINT_KEY: fingerprint,
-                _PROBLEMATIC_SNAPSHOT_VERSION_KEY: _PROBLEMATIC_SNAPSHOT_VERSION,
-                **({_PROBLEMATIC_SNAPSHOT_SCOPE_KEY: "first-page"} if first_page else {}),
-            },
-            default=str,
-        )
-        _UTILITY_PROJECTION_PREWARM_EXECUTOR.submit(self._store_problematic_files_snapshot, document)
-
-    def _store_problematic_files_snapshot(self, document: str) -> None:
-        try:
-            with self._connect_to_database() as connection:
-                connection.execute(_problematic_files_snapshot_store_sql(), {"payload": document})
-        except Exception as error:
-            if _is_undefined_table_error(error):
-                _PROBLEMATIC_SNAPSHOT_UNAVAILABLE_DATABASES.add(self._database_url)
-                return
-            logging.getLogger(__name__).warning("Problematic Files snapshot could not be stored.", exc_info=True)
-
     def _problematic_candidate_album_ids(self, connection: Any) -> frozenset[int]:
-        """Every album the complete list evaluates, computed once per invalidation generation."""
-        cache_key = self._utility_projection_cache_key("problematic-files")
-        with _PROBLEMATIC_CANDIDATE_IDS_LOCK:
-            with _UTILITY_PROJECTION_CACHE_LOCK:
-                generation = _UTILITY_PROJECTION_GENERATIONS.get(cache_key, 0) if cache_key else None
-                cached = _PROBLEMATIC_CANDIDATE_IDS.get(cache_key) if cache_key else None
-            if cached is not None and cached[0] == generation:
-                return cached[1]
-            cursor = _execute_problematic_sql(
-                connection,
-                self._database_url,
-                lambda path_columns: _problematic_files_sql(
-                    candidate_summary=True, candidate_ids_only=True, path_columns=path_columns,
-                ),
-                {
-                    "mojibake_candidate_pattern": MOJIBAKE_CANDIDATE_PATTERN,
-                    "encoding_candidate_chars": MOJIBAKE_ENCODING_CANDIDATE_CHARS,
-                },
-            )
-            # Loose files without an album join the union as null album ids.
-            album_ids = frozenset(
-                int(album_id) for row in cursor.fetchall()
-                if (album_id := _row_mapping(row)["album_id"]) is not None
-            )
-            if cache_key is not None:
-                with _UTILITY_PROJECTION_CACHE_LOCK:
-                    _PROBLEMATIC_CANDIDATE_IDS[cache_key] = (generation, album_ids)
-            return album_ids
+        """Every album the complete list evaluates (the index backfill's whole-library pass)."""
+        cursor = _execute_problematic_sql(
+            connection,
+            self._database_url,
+            lambda path_columns: _problematic_files_sql(
+                candidate_summary=True, candidate_ids_only=True, path_columns=path_columns,
+            ),
+            {
+                "mojibake_candidate_pattern": MOJIBAKE_CANDIDATE_PATTERN,
+                "encoding_candidate_chars": MOJIBAKE_ENCODING_CANDIDATE_CHARS,
+            },
+        )
+        # Loose files without an album join the union as null album ids.
+        return frozenset(
+            int(album_id) for row in cursor.fetchall()
+            if (album_id := _row_mapping(row)["album_id"]) is not None
+        )
 
     def queue_settings_projection_prewarm(self) -> None:
         kinds = [] if self._config.get("SHARED_LIBRARY_BROWSE_ONLY") else ["loose-tracks"]
-        kinds.extend(("problematic-files", "rules"))
+        kinds.append("rules")
         problematic_index.queue_maintenance(self)
         for kind in kinds:
             self.queue_utility_projection_prewarm(kind)
@@ -5444,9 +4617,7 @@ class PostgresLibraryBrowseRepository:
         queued_generation: int,
     ) -> None:
         try:
-            if kind == "problematic-files":
-                self.build_problematic_files_payload()
-            elif kind == "rules":
+            if kind == "rules":
                 self.build_utility_rules_payload()
             elif kind == "loose-tracks":
                 self.build_library_loose_tracks_payload(rebuild_missing_snapshot=True)
@@ -5787,7 +4958,6 @@ def _row_mapping(row: object) -> Mapping[str, object]:
     if isinstance(row, (tuple, list)) and len(row) >= 3:
         return {"artist_name": row[0], "sort_name": row[1], "album_count": row[2]}
     return {}
-
 
 
 def build_transient_root_gallery_page(
@@ -8214,62 +7384,11 @@ def _problematic_summary_search_text(album: Mapping[str, object]) -> str:
     return "\n".join(haystack).lower()
 
 
-def _problematic_search_album_ids_sql() -> str:
-    """Candidate albums whose own title, artist, year or track titles contain the needle."""
-    return """
-        select
-          albums.id,
-          lower(coalesce(albums.title, '') collate "und-x-icu") collate "C" as sort_name,
-          lower(coalesce(nullif(albums.metadata ->> 'album_artist', ''),
-                         artists.name, '') collate "und-x-icu") collate "C" as sort_artist,
-          coalesce(albums.release_year::text, '') collate "C" as sort_year,
-          lower(coalesce(albums.album_key, '') collate "und-x-icu") collate "C" as sort_key
-        from library.local_albums albums
-        left join library.local_artists artists on artists.id = albums.artist_id
-        where albums.id = any(%(candidate_ids)s::bigint[])
-          and (
-            %(after_present)s is false
-            or (
-              lower(coalesce(albums.title, '') collate "und-x-icu") collate "C",
-              lower(coalesce(nullif(albums.metadata ->> 'album_artist', ''),
-                             artists.name, '') collate "und-x-icu") collate "C",
-              coalesce(albums.release_year::text, '') collate "C",
-              lower(coalesce(albums.album_key, '') collate "und-x-icu") collate "C"
-            ) > (
-              %(after_name)s collate "C", %(after_artist)s collate "C",
-              %(after_year)s collate "C", %(after_key)s collate "C"
-            )
-          )
-          and (
-            strpos(lower(albums.title), %(needle)s) > 0
-            or strpos(lower(coalesce(artists.name, '')), %(needle)s) > 0
-            or strpos(lower(coalesce(albums.metadata ->> 'album_artist', '')), %(needle)s) > 0
-            or strpos(coalesce(albums.release_year::text, ''), %(needle)s) > 0
-            or exists (
-              select 1 from library.local_tracks tracks
-              where tracks.album_id = albums.id
-                and strpos(lower(tracks.title), %(needle)s) > 0
-            )
-          )
-        order by sort_name, sort_artist, sort_year, sort_key
-        limit %(limit)s
-    """
-
-
 _SNAPSHOT_FINGERPRINT_KEY = "_inventory_fingerprint"
 # Cursors of pages read from the persisted index stay valid across its updates
 # (keyset by sort key); in-memory generations never reach this value.
 _PROBLEMATIC_INDEX_CURSOR_GENERATION = -1
 # A stored first page rather than the complete list; the store SQL names the same key.
-_PROBLEMATIC_SNAPSHOT_SCOPE_KEY = "_snapshot_scope"
-_PROBLEMATIC_SNAPSHOT_OUTDATED_KEY = "_snapshot_outdated"
-_PROBLEMATIC_SNAPSHOT_VERSION_KEY = "_snapshot_version"
-_PROBLEMATIC_SNAPSHOT_VERSION = 8
-
-
-def _problematic_loose_group_id(identity: object) -> str | None:
-    value = str(identity or "") if isinstance(identity, str) else ""
-    return value or None
 
 
 def _problematic_inventory_fingerprint(connection: Any) -> str:
@@ -8278,72 +7397,7 @@ def _problematic_inventory_fingerprint(connection: Any) -> str:
     return json.dumps(fingerprint, default=str) if fingerprint else ""
 
 
-# The albums of the saved files, plus every album sharing a duplicate identity
-# with them before or after the save (their duplicate state can flip).
-_PROBLEMATIC_PATCH_SCOPE_SQL = """
-    with library_scope as (
-      select libraries.id as library_id
-      from app.bootstrap_owners owners
-      join library.libraries libraries
-        on libraries.owner_account_id = owners.account_id
-       and libraries.name = 'Local Library'
-       and libraries.library_kind = 'local'
-      where owners.owner_key = 'local-bootstrap-owner'
-      limit 1
-    ), edited_tracks as (
-      select tracks.album_id
-      from library_scope
-      join library.local_tracks tracks on tracks.library_id = library_scope.library_id
-      join library.local_track_files files on files.track_id = tracks.id
-      where files.private_path = any(%(track_paths)s::text[])
-    ), touched as (
-      select distinct album_id as id from edited_tracks where album_id is not null
-    ), identities as materialized (
-      -- The same (album artist, album, year) identity duplicate detection uses.
-      select library.duplicate_identity_text(files.scan_file_album_artist) as artist_identity,
-             library.duplicate_identity_text(files.scan_file_album) as album_identity,
-             library.duplicate_identity_year(files.scan_file_year) as album_year
-      from library.local_tracks tracks
-      join library.local_track_files files on files.track_id = tracks.id
-      where tracks.album_id = any(array(select id from touched))
-      union
-      select library.duplicate_identity_text(old.album_artist),
-             library.duplicate_identity_text(old.album),
-             library.duplicate_identity_year(old.year)
-      from jsonb_to_recordset(%(old_identities)s::jsonb) as old(album_artist text, album text, year text)
-    ), scoped as (
-      select id from touched
-      union
-      select tracks.album_id
-      from identities
-      join library.local_track_files files
-        on library.duplicate_identity_text(files.scan_file_album_artist) = identities.artist_identity
-       and library.duplicate_identity_text(files.scan_file_album) = identities.album_identity
-       and library.duplicate_identity_year(files.scan_file_year) = identities.album_year
-       and files.scan_cache_stale is false
-       and files.scan_file_entry_is_object is true
-      join library.local_tracks tracks on tracks.id = files.track_id
-      join library_scope on library_scope.library_id = tracks.library_id
-      where identities.artist_identity <> '' and identities.album_identity <> ''
-        and tracks.album_id is not null
-    )
-    select
-      exists(select 1 from edited_tracks where album_id is null) as has_detached_track,
-      coalesce((select array_agg(id order by id) from scoped), '{}'::bigint[]) as album_ids,
-      coalesce((
-        select array_agg(files.private_path)
-        from library.local_tracks tracks
-        join library.local_track_files files on files.track_id = tracks.id
-        where tracks.album_id = any(array(select id from scoped))
-      ), '{}'::text[]) as track_paths
-"""
-
-
-def _is_undefined_table_error(error: BaseException) -> bool:
-    return getattr(error, "sqlstate", None) == "42P01"
-
-
-_PROBLEMATIC_SNAPSHOT_LIBRARY_SQL = """
+_LOCAL_LIBRARY_ID_SQL = """
     select libraries.id
     from app.bootstrap_owners owners
     join library.libraries libraries
@@ -8355,66 +7409,21 @@ _PROBLEMATIC_SNAPSHOT_LIBRARY_SQL = """
 """
 
 
-def _problematic_files_snapshot_load_sql() -> str:
-    return f"""
-        select snapshots.payload
-        from library.problematic_files_snapshots snapshots
-        where snapshots.library_id = ({_PROBLEMATIC_SNAPSHOT_LIBRARY_SQL})
-    """
-
-
-def _problematic_files_snapshot_store_sql() -> str:
-    return f"""
-        insert into library.problematic_files_snapshots (library_id, payload, built_at)
-        select ({_PROBLEMATIC_SNAPSHOT_LIBRARY_SQL}), %(payload)s::jsonb, now()
-        where ({_PROBLEMATIC_SNAPSHOT_LIBRARY_SQL}) is not null
-        on conflict (library_id) do update
-          set payload = excluded.payload, built_at = excluded.built_at
-          -- A first page never replaces a complete list of the same inventory.
-          where not (excluded.payload ? '_snapshot_scope')
-             or problematic_files_snapshots.payload ? '_snapshot_scope'
-             or problematic_files_snapshots.payload ->> '_inventory_fingerprint'
-                is distinct from excluded.payload ->> '_inventory_fingerprint'
-    """
-
-
 def _non_album_track_snapshot_load_sql() -> str:
     return f"""
         select snapshots.payload
         from library.non_album_track_snapshots snapshots
-        where snapshots.library_id = ({_PROBLEMATIC_SNAPSHOT_LIBRARY_SQL})
+        where snapshots.library_id = ({_LOCAL_LIBRARY_ID_SQL})
     """
 
 
 def _non_album_track_snapshot_store_sql() -> str:
     return f"""
         insert into library.non_album_track_snapshots (library_id, payload, built_at)
-        select ({_PROBLEMATIC_SNAPSHOT_LIBRARY_SQL}), %(payload)s::jsonb, now()
-        where ({_PROBLEMATIC_SNAPSHOT_LIBRARY_SQL}) is not null
+        select ({_LOCAL_LIBRARY_ID_SQL}), %(payload)s::jsonb, now()
+        where ({_LOCAL_LIBRARY_ID_SQL}) is not null
         on conflict (library_id) do update
         set payload = excluded.payload, built_at = excluded.built_at
-    """
-
-
-def _problematic_page_album_order_sql() -> str:
-    return """
-        select
-          albums.id as album_id,
-          coalesce(albums.title, '') as name,
-          coalesce(nullif(albums.metadata ->> 'album_artist', ''), artists.name, '') as album_artist,
-          coalesce(albums.release_year::text, '') as year,
-          coalesce(albums.album_key, '') as key
-        from app.bootstrap_owners owners
-        join library.libraries libraries
-          on libraries.owner_account_id = owners.account_id
-         and libraries.name = 'Local Library'
-         and libraries.library_kind = 'local'
-        join library.local_albums albums on albums.library_id = libraries.id
-        left join library.local_artists artists
-          on artists.id = albums.artist_id
-         and artists.library_id = albums.library_id
-        where owners.owner_key = 'local-bootstrap-owner'
-          and albums.id = any(%(album_ids)s::bigint[])
     """
 
 
@@ -10758,7 +9767,6 @@ def _eligible_album_tracks_cte_sql(
     """.strip()
 
 
-
 def _root_gallery_membership_sql(*, candidate_albums_only: bool = False) -> str:
     # Reuse the exact eligibility predicate; membership returns only lightweight
     # identities and ordering fields. EXISTS needs no per-track duration rollup.
@@ -11728,10 +10736,6 @@ def _artist_search_projection_authority_sql() -> str:
         ) as projection_authoritative
         from bootstrap_context;
     """
-
-
-
-
 
 
 def _exact_artist_match_sql() -> str:

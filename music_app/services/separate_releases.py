@@ -11,10 +11,5 @@ def load_separate_release_keys(config: dict) -> set[str]:
 
 def save_separate_release_keys(config: dict, separate_release_keys: set[str]) -> None:
     select_runtime_persistence_adapter("separate_releases", config)
+    # Changed releases mark their albums for the Problematic Files index (0188).
     RuleStatePostgresAdapter(config).save_separate_release_keys(separate_release_keys)
-    from music_app.services.library_browse_postgres import invalidate_postgres_utility_projection_cache
-
-    invalidate_postgres_utility_projection_cache(
-        database_url=config.get("ALBUM_HAVEN_APP_DATABASE_URL"),
-        kinds=("problematic-files",),
-    )

@@ -299,10 +299,8 @@ def test_separate_release_only_repair_path_still_succeeds_and_invalidates_projec
         {"artist::album"},
         {"artist::album", "artist::album::deluxe"},
     ]
-    assert invalidations == [
-        {"database_url": database_url, "kinds": ("problematic-files",)},
-        {"database_url": database_url, "kinds": ("problematic-files",)},
-    ]
+    # Separate releases mark their albums for the Problematic Files index (0188); no cache is dropped.
+    assert invalidations == []
 
 
 def test_handle_edit_tags_request_exception_only_uses_override_and_queues_save(config):

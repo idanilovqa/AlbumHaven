@@ -30,7 +30,6 @@ BUILDER_VERSION = "1"
 INLINE_ALBUM_LIMIT = 50
 # Albums evaluated per transaction by the backfill.
 BACKFILL_BATCH = 500
-_IDENTITY_SEPARATOR = "\x1f"
 _LOCK_NAMESPACE = 188  # pg advisory lock (namespace, library id)
 # On unless set to 0; the Python test suite turns it off so a background backfill
 # never races another test's database reset (index tests turn it back on).

@@ -69,7 +69,7 @@ def test_create_ignored_repair_keys_uses_one_targeted_mutation_then_invalidates(
     assert invalidated == [
         {
             "database_url": "postgresql://runtime/app",
-            "kinds": ("problematic-files", "rules"),
+            "kinds": ("rules",),
         }
     ]
 
@@ -94,7 +94,7 @@ def test_delete_ignored_repair_keys_uses_targeted_delete_then_invalidates(monkey
     assert invalidated == [
         {
             "database_url": "postgresql://runtime/app",
-            "kinds": ("problematic-files", "rules"),
+            "kinds": ("rules",),
         }
     ]
 

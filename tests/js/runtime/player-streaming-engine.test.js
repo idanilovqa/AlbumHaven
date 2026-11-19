@@ -6430,6 +6430,18 @@ test('a good connection keeps FLAC at original quality', async () => {
   assert.equal(harness.sent('open').at(-1).quality, undefined);
 });
 
+test('a FLAC start on a measured slow connection still reads its size before choosing quality', async () => {
+  const harness = encodedHarness({ trackSampleRates: new Map(), trackSampleRate: () => 44_100 });
+  harness.engine.transferBytes = 125_000;
+  harness.engine.transferMs = 1_000;
+  const track = makeTrack('hi.flac');
+
+  await harness.api.start(track);
+
+  assert.deepEqual(harness.sockets[0].probes.map(({ path }) => path), [track.path]);
+  assert.equal(harness.sent('open').at(-1).sampleRate, 44_100);
+});
+
 test('a manual quality preference overrides the connection measurement', async () => {
   const harness = encodedHarness();
   harness.engine.lastStallAtMs = 1_000;

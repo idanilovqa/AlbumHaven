@@ -3546,6 +3546,23 @@ test('a gallery album without its own id opens at once and asks no details by ke
   assert.equal(context.fetchCalls.length, 0);
 });
 
+// Details cached before a move still list the moved track; the gallery album already shows
+// the album without it, and stays as shown (suspected in FTC-TAGS-015's 17-for-16 editor).
+test('gallery album details with other tracks than the open album never replace it', async () => {
+  const stale = { key: 'alpha', name: 'Album Alpha', tracks: [{ path: 'a' }, { path: 'moved' }],
+    musicbrainz_release: { type_label: 'Live' } };
+  const { context } = loadHelper({ fetchedAlbum: stale });
+  const galleryAlbum = { key: 'alpha', album_id: 7, name: 'Album Alpha', tracks: [{ path: 'a' }] };
+
+  context.openTrackModal(galleryAlbum);
+  const renders = context.renderTrackModalReleaseAlbums.length;
+  await flushMicrotasks();
+
+  assert.equal(context.fetchCalls.length, 1);
+  assert.equal(context.renderTrackModalReleaseAlbums.length, renders, 'nothing is redrawn');
+  assert.deepEqual(Array.from(context.state.modalReleases[context.state.modalReleaseIndex].tracks, (track) => track.path), ['a']);
+});
+
 test('gallery album details that arrive after the modal closed or moved on are dropped', async () => {
   let resolveDetails;
   const { context, trackModal } = loadHelper({

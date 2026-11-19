@@ -6,9 +6,11 @@ import hashlib
 import json
 import logging
 from threading import Lock
+import time
 
 from psycopg.types.json import Jsonb
 
+from music_app.services import browse_query_diagnostics  # TEMPORARY FTC-OPS-016 diagnostics
 from music_app.services.library_roots import library_category_slugs
 
 BUILDER_VERSION = "root-gallery-v5"
@@ -370,6 +372,7 @@ def _ensure_gallery_projection_ready(config, *, connect=None, cancel_requested=N
         built = 0
         for state in scopes:
             _raise_if_projection_cancelled(cancel_requested)
+            started_at = time.perf_counter()  # TEMPORARY FTC-OPS-016 diagnostics; remove before PR 80 merges
             with repository._connect_to_database() as connection:
                 connection.execute("set transaction isolation level repeatable read, read only")
                 context = gallery_projection_context(connection)
@@ -386,7 +389,13 @@ def _ensure_gallery_projection_ready(config, *, connect=None, cancel_requested=N
                 missing = browse._missing_album_projection_payloads(missing_rows, view_state=state)
                 snapshot = browse._prepare_root_gallery_snapshot(rows, missing, root_aliases, state)
             _raise_if_projection_cancelled(cancel_requested)
+            prepared_at = time.perf_counter()
             built += int(publish_gallery_projection(config, context, state, snapshot, connect=connect))
+            if browse_query_diagnostics.enabled():  # TEMPORARY FTC-OPS-016 diagnostics
+                _LOGGER.warning(
+                    "BROWSE-DIAG gallery projection rebuilt: scope=%s albums=%s occurrences=%s prepare_ms=%.0f publish_ms=%.0f",
+                    state.get("gallery_scope") or "all", snapshot.get("album_count"), len(snapshot.get("ordered") or ()),
+                    (prepared_at - started_at) * 1000, (time.perf_counter() - prepared_at) * 1000)
         return built
 
     built = 0

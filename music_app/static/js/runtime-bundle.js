@@ -17133,6 +17133,13 @@ async function fetchTrackModalAlbumDetails(albumKey, options = {}) {
   return payload.album;
 }
 
+function sameAlbumTrackPaths(first, second) {
+  const paths = (album) => (Array.isArray(album?.tracks) ? album.tracks : [])
+    .map((track) => String(track?.path || '')).sort();
+  const [left, right] = [paths(first), paths(second)];
+  return left.length === right.length && left.every((path, index) => path === right[index]);
+}
+
 // A gallery album opened with all its tracks renders at once; the details request every other
 // album makes then adds what the gallery payload lacks, if this album is still the one open.
 function completeOpenTrackModalAlbumDetails(album) {
@@ -17148,6 +17155,9 @@ function completeOpenTrackModalAlbumDetails(album) {
     if (!albumHasLoadedDetails(details) || albumRequiresHydration(details)) return;
     const shown = getCurrentTrackModalAlbum();
     if (String(getAlbumRequestKey(shown) || '') !== albumKey) return;
+    // Details add what the gallery lacks, never membership: details cached before a move
+    // or split still list the old tracks, and the gallery album is the current one.
+    if (!sameAlbumTrackPaths(details, shown)) return;
     // Re-render in place (it recomposes the phone page too): the modal, its page and its player
     // are already open. An edition tab keeps its label.
     const withContext = attachGalleryPlaybackContextToAlbum(details);

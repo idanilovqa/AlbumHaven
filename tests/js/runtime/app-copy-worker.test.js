@@ -1852,3 +1852,29 @@ test('IAR-W21: the gallery\'s first block, kept with the app page, opens its art
   assert.equal(payload.selected_artist, '3 Crows');
   assert.deepEqual(artistsOf(payload), ['3 Crows']);
 });
+
+test('IAR-W25: a slow request that fails after the server was found reachable still falls back to the kept data', async () => {
+  const url = '/view-data?surface=albums&artist=Broadcast';
+  let first = true;
+  let fail = () => {};
+  const { handle } = setup({
+    mode: 'web',
+    dataCheckMs: 5,
+    respond: (request) => {
+      if (new URL(request.url).pathname === '/app-copy/account') return new Response('{}');
+      if (first) {
+        first = false;
+        return dataAnswer({ ok: true, artist_groups: [{ artist: 'Kept', albums: [] }] });
+      }
+      return new Promise((_resolve, reject) => { fail = () => reject(new TypeError('Failed to fetch')); });
+    },
+  });
+  await handle(resource(url));
+
+  const answering = handle(resource(url));
+  await new Promise(resolve => setTimeout(resolve, 30));
+  fail();
+  const kept = await answering;
+  assert.equal(kept.headers.get(COPY_HEADER), 'cache');
+  assert.deepEqual(artistsOf(await json(kept)), ['Kept']);
+});

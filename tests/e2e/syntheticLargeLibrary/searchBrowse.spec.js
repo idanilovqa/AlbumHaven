@@ -12,6 +12,7 @@ import {
   requirePostgresRuntimeEnv,
   waitForPostgresBrowseWarmRoot,
 } from '../helpers/realAppBenchmarkHelpers.js';
+import { runSearchClearAudit } from '../helpers/searchClearAudit.js';
 
 // Passive diagnostics only; the measured user flow and budgets remain unchanged.
 const test = performanceTest.extend({
@@ -359,5 +360,8 @@ test.describe(`${CASE_ID} synthetic-large direct search browse`, () => {
       ),
     );
     searchBrowseFocusedLocalReport.recordContractCompletion();
+    // AUDIT ONLY: unmeasured follow-up stages for the search/clear audit.
+    test.setTimeout(test.info().timeout + 600000);
+    await runSearchClearAudit({ page, searchQuery, testInfo: test.info() });
   });
 });

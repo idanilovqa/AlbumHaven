@@ -19213,10 +19213,12 @@ def test_searched_loose_tracks_decode_the_stored_list_once_per_stored_version(mo
     assert connection.payload_loads == 2
 
 
-def test_live_searched_loose_tracks_reuse_the_stored_list_until_it_is_rebuilt(watcher_repair_inventory):
+def test_live_searched_loose_tracks_reuse_the_stored_list_until_it_is_rebuilt(monkeypatch, watcher_repair_inventory):
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
     from tests.e2e.support import isolatedPostgres
 
+    # This module's autouse fakes empty the inventory fingerprint and Loose Tracks candidates; use the real ones.
+    monkeypatch.undo()
     fixture = watcher_repair_inventory
 
     def loose(name):

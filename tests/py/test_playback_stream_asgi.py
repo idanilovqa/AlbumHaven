@@ -382,6 +382,49 @@ def test_pcm_socket_scans_an_mp3_open_while_its_authority_refresh_is_pending(
     assert len(decoder_factory.instances) == 1
 
 
+def test_pcm_socket_opens_never_reread_the_library_root_settings(
+    playback_app,
+    media_path,
+    decoder_factory,
+    monkeypatch,
+):
+    from music_app.services import library_roots
+
+    store_type = library_roots.PostgresLibraryRootSettingsStore
+    loads = []
+    original_load = store_type.load_settings
+
+    def counted_load(self, *args, **kwargs):
+        loads.append(1)
+        return original_load(self, *args, **kwargs)
+
+    monkeypatch.setattr(store_type, "load_settings", counted_load)
+    # The test runtime stubs the roots reader; a start must use neither it nor the store.
+    stubbed_roots = library_roots.get_library_roots
+
+    def counted_roots(config):
+        loads.append(1)
+        return stubbed_roots(config)
+
+    monkeypatch.setattr(library_roots, "get_library_roots", counted_roots)
+
+    async def scenario():
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            await socket.send_json(open_command(media_path))
+            assert (await socket.receive_json())["type"] == "metadata"
+            loads_after_first_open = len(loads)
+            await socket.send_json(open_command(media_path, generation=2, streamId=2))
+            assert (await socket.receive_json())["type"] == "metadata"
+            await socket.send_json({"type": "probe", "requestId": 1, "path": str(media_path)})
+            await socket.receive_json()
+            return loads_after_first_open
+
+    loads_after_first_open = asyncio.run(scenario())
+    assert loads_after_first_open <= 1
+    assert len(loads) == loads_after_first_open, "a later start reads the roots snapshot"
+    assert len(decoder_factory.instances) == 2
+
+
 def test_waveform_route_resolves_configured_media_path_and_returns_compact_fixed_bins(
     playback_app,
     media_path,

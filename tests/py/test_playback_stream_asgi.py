@@ -320,6 +320,69 @@ def test_pcm_socket_revalidates_durable_authority_before_each_open(
     assert decoder_factory.instances == []
 
 
+def test_pcm_socket_scans_an_mp3_open_while_its_authority_refresh_is_pending(
+    playback_app,
+    decoder_factory,
+    monkeypatch,
+):
+    import threading
+
+    from music_app.services import playback_encoded
+    from music_app.services.current_actor import (
+        ActorState,
+        CapabilityGrant,
+        CurrentActor,
+        LibraryRelationship,
+    )
+
+    mp3_path = Path(playback_app.state.config["MUSIC_DIR"]) / "Artist" / "Album" / "track.mp3"
+    mp3_path.parent.mkdir(parents=True, exist_ok=True)
+    mp3_path.write_bytes(b"not-really-mp3")
+    scan_started = threading.Event()
+    scanned: list[Path] = []
+
+    def scan(path):
+        scanned.append(path)
+        scan_started.set()
+        return None
+
+    monkeypatch.setattr(playback_stream_asgi, "mp3_stream_map", scan)
+    monkeypatch.setattr(playback_encoded, "mp3_stream_map", scan)
+
+    class SlowRefreshResolver:
+        calls = 0
+        refresh_saw_scan: bool | None = None
+
+        def resolve(self, _token):
+            self.calls += 1
+            if self.calls > 1 and self.refresh_saw_scan is None:
+                # The refresh answers only after the scan began, or after 5 s without it.
+                self.refresh_saw_scan = scan_started.wait(5)
+            return CurrentActor(
+                state=ActorState.ACTIVE,
+                account_id=41,
+                session_id=73,
+                username_display="Listener",
+                current_library_id=23,
+                library_relationships=(LibraryRelationship(23, "member", False),),
+                capability_grants=(CapabilityGrant("library.media.read", "library", 23),),
+            )
+
+    resolver = SlowRefreshResolver()
+    playback_app.state.current_actor_resolver = resolver
+
+    async def scenario():
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            await socket.send_json(open_command(mp3_path.resolve(), codecs=["mp3"]))
+            metadata = await socket.receive_json()
+            assert metadata["type"] == "metadata"
+
+    asyncio.run(scenario())
+    assert resolver.refresh_saw_scan is True
+    assert scanned[0] == mp3_path.resolve()
+    assert len(decoder_factory.instances) == 1
+
+
 def test_waveform_route_resolves_configured_media_path_and_returns_compact_fixed_bins(
     playback_app,
     media_path,

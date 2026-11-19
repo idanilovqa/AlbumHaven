@@ -723,6 +723,8 @@ test('FTC-LIBROOTS-016 / 017 / 018 reconciles filesystem changes and confirms mi
         album: LATER_ALBUM,
         year: 2009,
         trackTitles: ['Later Signal'],
+        // Untouched: no folder art, whose unrecorded origin would count as an owner choice.
+        createLocalArt: false,
       });
       status = await libraryFilesystemWatcherActions.waitForRevisionAfter(status.inventory_mutation_revision);
       latencySamples.push({ mutation: 'create-burst', visibleRevisionMs: Date.now() - startedAt });

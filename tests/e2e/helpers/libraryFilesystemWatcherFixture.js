@@ -278,6 +278,8 @@ async function buildWatchedAlbumFixture({
     // Disc folders are "CD1", "CD2"... unless an album names them otherwise ("Часть 1", "Part 2").
     discFolderPrefix = 'CD',
     isCompilation: albumCompilation = false,
+    // Folder art is detected without a recorded origin, which the missing-album rule treats as the owner's.
+    createLocalArt: albumLocalArt = createLocalArt,
   }) => {
     const directory = assertOwnedPath(
       mediaRoot,
@@ -295,7 +297,7 @@ async function buildWatchedAlbumFixture({
         stagingParent: path.dirname(mediaRoot),
         destination: directory,
         async buildAlbum(stagedAlbum) {
-          if (createLocalArt) {
+          if (albumLocalArt) {
             await execFileAsync(resolvePlaywrightPython(process.env), [
               '-c', CREATE_LOCAL_ART_SCRIPT, stagedAlbum,
             ], { encoding: 'utf8', windowsHide: true });

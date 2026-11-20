@@ -5,6 +5,67 @@ import io
 from scripts import run_jobs_worker
 
 
+def test_worker_connector_reuses_only_matching_cover_scope_and_commits_each_read(monkeypatch):
+    from contextlib import contextmanager
+    import pytest
+    from types import SimpleNamespace
+    from music_app.services import scan_cache_persistence
+
+
+    class Connection:
+        def __init__(self):
+            self.commits = 0
+            self.rollbacks = 0
+            self.closed = False
+
+        def commit(self):
+            self.commits += 1
+
+        def rollback(self):
+            self.rollbacks += 1
+
+        def close(self):
+            self.closed = True
+
+    shared_connection = Connection()
+    borrowed = []
+
+    class Pool:
+        @contextmanager
+        def connection(self):
+            connection = Connection()
+            borrowed.append(connection)
+            try:
+                yield connection
+            finally:
+                connection.close()
+
+    pool = Pool()
+    connect = lambda database_url: run_jobs_worker._worker_database_connection(pool, database_url)
+    monkeypatch.setattr(scan_cache_persistence, "PostgresScanCacheAdapter",
+                        lambda _config: SimpleNamespace(_connect_to_database=lambda: shared_connection))
+    with connect(WORKER_URL) as outside:
+        assert outside is not shared_connection
+    with scan_cache_persistence.shared_scan_cache_connection({"ALBUM_HAVEN_APP_DATABASE_URL": WORKER_URL}):
+        with connect(WORKER_URL) as first:
+            assert first is shared_connection
+        assert shared_connection.commits == 1
+        with connect(WORKER_URL) as second:
+            assert second is shared_connection
+        assert shared_connection.commits == 2
+        with pytest.raises(RuntimeError, match="read failed"):
+            with connect(WORKER_URL) as failed:
+                assert failed is shared_connection
+                raise RuntimeError("read failed")
+        assert shared_connection.rollbacks == 1
+        with connect("postgresql://different-scope") as different:
+            assert different is not shared_connection
+        assert len(borrowed) == 2
+        assert shared_connection.closed is False
+    assert shared_connection.closed is True
+    assert all(connection.closed for connection in borrowed)
+
+
 WORKER_URL = "postgresql://worker-role:private@db.example/album_haven"
 
 

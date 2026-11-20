@@ -178,7 +178,7 @@ function readDecodedProductionCardWindow(args = {}) {
     }
     const expectedCover = Boolean(
       productionSrc
-      || String(album?.cover_path || '').trim()
+      || String(album?.cover_ref || '').trim()
       || String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim()
     );
     return {
@@ -1273,6 +1273,22 @@ export class GalleryPage extends BasePage {
       previousMaxScrollTop: previous.maxScrollTop,
       cursor: previous.pageCursor,
       revision: previous.pageRevision,
+    });
+  }
+
+  async waitForVirtualGalleryOwnership(options = {}) {
+    // The server-rendered startup preview carries no section identities, and the
+    // virtual grid defers its startup hydration while the gallery scrolls.
+    await this.waitForPageCondition((selectors) => (
+      Boolean(document.querySelector(selectors.virtualSectionSelector))
+      && Array.from(document.querySelectorAll(selectors.sectionHeadingSelector))
+        .every((heading) => heading.closest('[data-virtual-section-key]'))
+      && !(typeof virtualGrid !== 'undefined' && virtualGrid?.hasDeferredMountedGroupUpdate?.())
+    ), {
+      timeout: options.timeout || 30000,
+    }, {
+      virtualSectionSelector: '#artist-groups [data-virtual-section-key]',
+      sectionHeadingSelector: '#artist-groups .artist-name',
     });
   }
 

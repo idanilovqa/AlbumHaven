@@ -25,6 +25,110 @@ from music_app.services.jobs.models import (
 NOW = datetime(2026, 9, 6, 12, 0, tzinfo=timezone.utc)
 
 
+@pytest.mark.parametrize("owner", ["job", "instance"])
+def test_worker_heartbeat_contract_targets_one_owned_row_at_production_cardinality(owner):
+    from music_app.services.jobs.repository_postgres import PostgresJobRepository
+    from tests.py.bounded_interactions import CountingConnection, OperationCounts, measure_scale_pair
+
+    method = "_heartbeat_job" if owner == "job" else "_heartbeat_instance"
+    interaction_id = f"py:jobs/worker.py#Worker.{method}"
+
+    def run(cardinality):
+        counts = OperationCounts()
+        selected = 41 if owner == "job" else "worker-test"
+        rows = {f"unrelated-{index}": False for index in range(cardinality - 1)}
+        rows[selected] = False
+        active = 0
+
+        class Cursor:
+            rowcount = 1
+            description = None if owner == "instance" else ("job_id", "cancel_requested")
+
+            def fetchone(self):
+                return {"job_id": selected, "cancel_requested": False}
+
+        class Connection:
+            def __enter__(self):
+                nonlocal active
+                active += 1
+                assert active == 1
+                return self
+
+            def __exit__(self, exc_type, *_exc):
+                nonlocal active
+                active -= 1
+                if exc_type is None:
+                    counts.transactions += 1
+
+            def execute(self, statement, parameters):
+                sql = " ".join(statement.casefold().split())
+                table = "ops.jobs" if owner == "job" else "ops.worker_instances"
+                key = "job_id" if owner == "job" else "worker_id"
+                column = "id" if owner == "job" else "instance_id"
+                assert sql.startswith(f"update {table} ")
+                assert f"where {column} = %({key})s" in sql
+                assert "select " not in sql
+                assert parameters[key] == selected
+                rows[parameters[key]] = True
+                if owner == "job":
+                    counts.affected_rows += 1
+                return Cursor()
+
+        def connect(_database_url):
+            counts.pool_leases += 1
+            return CountingConnection(Connection(), counts)
+
+        repository = PostgresJobRepository(database_url="postgresql://contract/heartbeats", connect_to_database=connect)
+        instances = PostgresWorkerInstanceRepository(database_url="postgresql://contract/heartbeats", connect_to_database=connect)
+        subject = worker(repository, worker_instances=instances)
+
+        class OneTick(threading.Event):
+            def wait(self, timeout=None):
+                assert active == 0, "heartbeat must release its transaction before waiting"
+                self.set()
+                return True
+
+        def tick():
+            stop = OneTick()
+            if owner == "job":
+                context = ExecutionContext(claim(), authorization_service=Authorization(), clock=lambda: NOW)
+                subject._heartbeat_job(context.claim, context, stop)
+                assert context.lease_active
+            else:
+                failed = threading.Event()
+                subject._heartbeat_instance(stop, failed)
+                assert not failed.is_set()
+            assert stop.is_set()
+
+        tick()
+        for _ in range(3):
+            errors = []
+
+            def owned_tick():
+                try:
+                    tick()
+                except BaseException as error:
+                    errors.append(error)
+
+            thread = threading.Thread(target=owned_tick, name="bounded-heartbeat-contract")
+            thread.start()
+            thread.join(2)
+            assert not thread.is_alive()
+            assert not errors
+        assert active == 0
+        assert rows[selected]
+        assert sum(rows.values()) == 1
+        assert counts.sql_statements == counts.pool_leases == counts.transactions == 4
+        return counts
+
+    measure_scale_pair(
+        interaction_id=interaction_id, small=20, large=160000 if owner == "job" else 1000,
+        budgets={"sql_statements": 4, "pool_leases": 4, "transactions": 4,
+                 "affected_rows": 4, "returned_rows": 4, "unrelated_reads": 0, "unrelated_writes": 0},
+        growth=("affected_rows", 0), run=run,
+    )
+
+
 def test_combined_due_reconciler_runs_every_domain_even_after_one_failure():
     calls = []
 

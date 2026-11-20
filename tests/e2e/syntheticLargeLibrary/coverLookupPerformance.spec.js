@@ -89,7 +89,7 @@ test.describe(`${CASE_ID} Cover Lookup interaction timing`, () => {
         () => coverLookupActions.coverLookup.waitForHidden(coverLookupActions.coverLookup.modal),
       )
     ));
-    expect(savePayload?.optimistic_cover_path).toBe('');
+    expect(savePayload?.optimistic_cover_ref).toBe('');
     expect(savePayload?.optimistic_remote_source).toBe('spotify');
     expect(thirdPartyRequestEvidence.snapshot()).toEqual([]);
 

@@ -1438,11 +1438,11 @@ test('new cover run explicit zero discards previous completed count', () => {
 
 {
   const context = loadHelpers();
-  const coverPath = 'D:\\Music\\Signal\\Album\\cover.png';
+  const coverRef = 'D:\\Music\\Signal\\Album\\cover.png';
   const mountedAlbum = {
     key: 'signal::album',
     name: 'Album',
-    cover_path: coverPath,
+    cover_ref: coverRef,
     tracks: [{ path: 'D:\\Music\\Signal\\Album\\01 Track.flac' }],
   };
   context.state.view = {
@@ -1459,32 +1459,32 @@ test('new cover run explicit zero discards previous completed count', () => {
     ...context.state.view,
     primary_artist_groups: [{
       artist: 'Signal',
-      albums: [{ ...mountedAlbum, cover_path: null, track_count_preview: 1 }],
+      albums: [{ ...mountedAlbum, cover_ref: null, track_count_preview: 1 }],
     }],
     artist_groups: [{
       artist: 'Signal',
-      albums: [{ ...mountedAlbum, cover_path: null, track_count_preview: 1 }],
+      albums: [{ ...mountedAlbum, cover_ref: null, track_count_preview: 1 }],
     }],
   }, {
     preserveMountedGalleryChildren: true,
     trackSidebarReveal: false,
   });
 
-  assert.equal(context.state.view.primary_artist_groups[0].albums[0].cover_path, coverPath);
-  assert.equal(context.state.view.artist_groups[0].albums[0].cover_path, coverPath);
+  assert.equal(context.state.view.primary_artist_groups[0].albums[0].cover_ref, coverRef);
+  assert.equal(context.state.view.artist_groups[0].albums[0].cover_ref, coverRef);
   assert.equal(context.state.view.artist_groups[0].albums[0].track_count_preview, 1);
 
-  context.state.view.primary_artist_groups[0].albums[0].cover_path = null;
-  context.state.view.artist_groups[0].albums[0].cover_path = null;
+  context.state.view.primary_artist_groups[0].albums[0].cover_ref = null;
+  context.state.view.artist_groups[0].albums[0].cover_ref = null;
   context.applyViewPayload({
     ...context.state.view,
     primary_artist_groups: [{
       artist: 'Signal',
-      albums: [{ ...mountedAlbum, cover_path: null, track_count_preview: 2 }],
+      albums: [{ ...mountedAlbum, cover_ref: null, track_count_preview: 2 }],
     }],
     artist_groups: [{
       artist: 'Signal',
-      albums: [{ ...mountedAlbum, cover_path: null, track_count_preview: 2 }],
+      albums: [{ ...mountedAlbum, cover_ref: null, track_count_preview: 2 }],
     }],
   }, {
     preserveMountedGalleryChildren: true,
@@ -1492,21 +1492,21 @@ test('new cover run explicit zero discards previous completed count', () => {
     trackSidebarReveal: false,
   });
 
-  assert.equal(context.state.view.artist_groups[0].albums[0].cover_path, coverPath);
+  assert.equal(context.state.view.artist_groups[0].albums[0].cover_ref, coverRef);
   assert.equal(context.state.view.artist_groups[0].albums[0].track_count_preview, 2);
 
   context.applyViewPayload({
     ...context.state.view,
     primary_artist_groups: [{
       artist: 'Signal',
-      albums: [{ ...mountedAlbum, cover_path: null }],
+      albums: [{ ...mountedAlbum, cover_ref: null }],
     }],
     artist_groups: [{
       artist: 'Signal',
-      albums: [{ ...mountedAlbum, cover_path: null }],
+      albums: [{ ...mountedAlbum, cover_ref: null }],
     }],
   }, { trackSidebarReveal: false });
-  assert.equal(context.state.view.artist_groups[0].albums[0].cover_path, coverPath);
+  assert.equal(context.state.view.artist_groups[0].albums[0].cover_ref, coverRef);
 
   context.state.ui.albumCoverMutationRevision = Number(
     context.state.ui.albumCoverMutationRevision || 0,
@@ -1515,14 +1515,14 @@ test('new cover run explicit zero discards previous completed count', () => {
     ...context.state.view,
     primary_artist_groups: [{
       artist: 'Signal',
-      albums: [{ ...mountedAlbum, cover_path: null }],
+      albums: [{ ...mountedAlbum, cover_ref: null }],
     }],
     artist_groups: [{
       artist: 'Signal',
-      albums: [{ ...mountedAlbum, cover_path: null }],
+      albums: [{ ...mountedAlbum, cover_ref: null }],
     }],
   }, { trackSidebarReveal: false });
-  assert.equal(context.state.view.artist_groups[0].albums[0].cover_path, null);
+  assert.equal(context.state.view.artist_groups[0].albums[0].cover_ref, null);
 }
 
 {

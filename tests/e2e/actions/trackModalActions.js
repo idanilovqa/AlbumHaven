@@ -171,26 +171,22 @@ export class TrackModalActions {
     await this.trackModal.waitForHidden(this.trackModal.dialog, { timeout: options.timeout || 60000 });
   }
 
-  async waitForIdentitySplitChoices(albumNames, options = {}) {
-    const expectedNames = Array.isArray(albumNames) ? albumNames : [];
-    await expect(this.trackModal.subtitle).toHaveText(
-      'This album was split—choose the current release',
-      { timeout: options.timeout || 60000 },
-    );
-    // A stale session's chooser updates as later splits reach it.
-    await expect.poll(async () => (
-      await this.trackModal.currentReleaseChoiceTitles.allTextContents()
-    ).map((title) => title.trim()).sort(), {
-      timeout: options.timeout || 60000,
-    }).toEqual([...expectedNames].sort());
-    return this.trackModal.currentReleaseChoiceTitles.allTextContents();
+  // The notice is a short toast, so start watching before the change that triggers it.
+  watchForChangedAlbumNotice(options = {}) {
+    return this.trackModal.changedAlbumNotice.waitFor({
+      state: 'visible',
+      timeout: options.timeout || 120000,
+    });
   }
 
-  async chooseCurrentRelease(albumName) {
-    const choice = this.trackModal.currentReleaseChoiceByTitle(albumName);
-    await expect(choice).toHaveCount(1);
-    await choice.click();
-    return this.waitForInteractiveSummary();
+  // A gallery-opened album that was split elsewhere sends the user back to the gallery's cards.
+  async waitForChangedAlbumNotice(noticeShown) {
+    await noticeShown;
+    await this.waitForClosed();
+    await expect(this.trackModal.splitChooser).toHaveCount(0);
+    await expect(this.trackModal.subtitle).not.toHaveText(
+      'This album was split—choose the current release',
+    );
   }
 
   async clickClose(options = {}) {
@@ -357,7 +353,7 @@ export class TrackModalActions {
   }) {
     await this.closeIfOpen();
     await galleryActions.waitForAlbumVisible(destinationAlbum);
-    await galleryActions.clickAlbumDetailsByAlbumName(destinationAlbum);
+    await galleryActions.clickRevealedAlbumDetailsByAlbumName(destinationAlbum);
     const destinationSummary = await this.waitForExactTrackRowCount(destinationTrackCount);
     const destination = {
       credits: await this.readTrackCredits(destinationCreditCount),
@@ -365,7 +361,7 @@ export class TrackModalActions {
     };
 
     await this.close();
-    await galleryActions.clickAlbumDetailsByAlbumName(sourceAlbum);
+    await galleryActions.clickRevealedAlbumDetailsByAlbumName(sourceAlbum);
     const sourceSummary = await this.waitForExactTrackRowCount(sourceTrackCount);
     const source = {
       credits: await this.readTrackCredits(sourceCreditCount),
@@ -382,7 +378,7 @@ export class TrackModalActions {
   }) {
     await this.closeIfOpen();
     if (!(await galleryActions.hasVisibleAlbum(destinationAlbum))) return false;
-    await galleryActions.clickAlbumDetailsByAlbumName(destinationAlbum);
+    await galleryActions.clickRevealedAlbumDetailsByAlbumName(destinationAlbum);
     await this.waitForLoadedSummary();
     await this.openTagEditor();
     await tagEditorActions.waitForOpen({ expectedTrackCount: 1 });

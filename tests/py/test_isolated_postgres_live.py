@@ -399,6 +399,145 @@ def watcher_repair_inventory(monkeypatch, tmp_path):
         isolatedPostgres.reset_application_tables(setup_url)
 
 
+def test_live_claimed_bulk_cover_miss_never_republishes_inventory(
+    watcher_repair_inventory, monkeypatch, tmp_path,
+):
+    from uuid import uuid4
+    from traceback import format_exc
+    from music_app.jobs.cover_handlers import (
+        build_cover_bulk_refresh_resource_validator, build_cover_refresh_handler,
+    )
+    from music_app.services import cover_refresh_execution, state
+    from music_app.services.cover_jobs_postgres import PostgresCoverJobRepository
+    from music_app.services.cover_refresh_runtime import run_claimed_cover_refresh
+    from music_app.services.jobs.authorization import (
+        JobAuthorizationService, PostgresJobAuthorizationContextRepository,
+    )
+    from music_app.services.jobs.models import JobState
+    from music_app.services.jobs.repository_postgres import PostgresJobRepository
+    from music_app.services.policy_evaluator import PolicyEvaluator
+
+    fixture = watcher_repair_inventory
+    entry = fixture.entry("Owner/Missing Cover/01.flac", album="Missing Cover")
+    missing_cover = Path(entry["path"]).parent / "missing.jpg"
+    fixture.seed({**entry, "cover_path": str(missing_cover),
+                  "cover_revision": "automatic-missing-cover",
+                  "cover_selection_origin": "automatic"})
+    worker_url = os.environ["ALBUM_HAVEN_FAKE_E2E_WORKER_DATABASE_URL"]
+    origin_key = f"bulk-cover-miss-{uuid4().hex}"
+    snapshot_sql = (
+        "select to_jsonb(album) album, to_jsonb(file) file, "
+        "library.read_cover_mutation_revision(album.library_id) cover_revision, "
+        "owned.metadata ->> 'inventory_mutation_revision' inventory_revision "
+        "from library.local_track_files file "
+        "join library.local_tracks track on track.id=file.track_id "
+        "join library.local_albums album on album.id=track.album_id "
+        "join library.libraries owned on owned.id=album.library_id "
+        "where file.private_path=%s"
+    )
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        scope = connection.execute(
+            "select owner.account_id, owned.id library_id "
+            "from app.bootstrap_owners owner join library.libraries owned "
+            "on owned.owner_account_id=owner.account_id "
+            "where owner.owner_key='local-bootstrap-owner' "
+            "and owned.name='Local Library' and owned.library_kind='local'"
+        ).fetchone()
+        connection.execute(
+            "insert into library.library_memberships (library_id,account_id,membership_role) "
+            "values (%s,%s,'owner')", (scope["library_id"], scope["account_id"]),
+        )
+        connection.execute(
+            "insert into app.request_origins "
+            "(account_id,client_surface_class,origin_type,origin_key) "
+            "values (%s,'private_web','browser',%s)", (scope["account_id"], origin_key),
+        )
+        before = connection.execute(snapshot_sql, (entry["path"],)).fetchone()
+    assert before["album"]["cover_path"] == str(missing_cover)
+    assert before["album"]["metadata"]["cover_selection_origin"] == "automatic"
+    assert not missing_cover.exists()
+    media_before = Path(entry["path"]).read_bytes()
+    with isolatedPostgres._connect(fixture.runtime_url) as connection:
+        assert connection.execute(
+            "select has_table_privilege(current_user,'library.local_albums','UPDATE') albums, "
+            "has_table_privilege(current_user,'library.local_track_files','UPDATE') files"
+        ).fetchone() == {"albums": False, "files": False}
+    app_covers = PostgresCoverJobRepository(
+        database_url=fixture.runtime_url, connect_to_database=isolatedPostgres._connect,
+    )
+    accepted = app_covers.accept_bulk_refresh(
+        task_key=origin_key, library_id=scope["library_id"], account_id=scope["account_id"],
+        request_origin_ref=f"browser:{origin_key}", deployment_mode="self_hosted_private_web",
+        client_surface="private_web", mode="manual", force_search=True,
+        resource_revision=int(before["inventory_revision"] or 0), scheduled_at=datetime.now(timezone.utc),
+    )
+    jobs = PostgresJobRepository(database_url=worker_url, connect_to_database=isolatedPostgres._connect)
+    claim = jobs.claim(worker_id=origin_key, now=datetime.now(timezone.utc),
+                       lease_seconds=120, kinds=("cover_bulk_refresh",))
+    assert claim is not None and claim.job_id == accepted.job_id
+    covers = PostgresCoverJobRepository(database_url=worker_url, connect_to_database=isolatedPostgres._connect)
+    authorization = JobAuthorizationService(
+        context_repository=PostgresJobAuthorizationContextRepository(
+            worker_url, connect_to_database=isolatedPostgres._connect,
+        ),
+        policy_evaluator=PolicyEvaluator(),
+        resource_validators={"cover_bulk_refresh": build_cover_bulk_refresh_resource_validator(cover_repository=covers)},
+    )
+    context = SimpleNamespace(cancel_requested=False, lease_active=True,
+                              reauthorize=lambda: authorization.authorize(claim, datetime.now(timezone.utc)))
+    assert context.reauthorize().allowed
+    provider_calls, errors, runtime_states, error_tracebacks = [], [], [], []
+    refresh_results = []
+    run_cover_jobs = state.run_cover_jobs
+
+    def observe_engine(**options):
+        runtime_states.append(options["get_state"]())
+        return run_cover_jobs(**options)
+
+    def provider_miss(**options):
+        provider_calls.append(options)
+        return None, False, {"reason": "no_match", "artist": "Owner", "album": "Missing Cover"}
+
+    def observe_refresh(**options):
+        try:
+            result = run_claimed_cover_refresh(**options)
+            refresh_results.append(result)
+            return result
+        except Exception as error:
+            errors.append(error)
+            error_tracebacks.append(format_exc())
+            raise
+
+    monkeypatch.setattr(state, "run_cover_jobs", observe_engine)
+    monkeypatch.setattr(cover_refresh_execution, "execute_cover_job", provider_miss)
+    config = {**fixture.config, "IMAGE_EXTENSIONS": {".jpg"},
+              "COVER_CACHE_PATH": tmp_path / "cover-search.json", "CACHE_PATH": tmp_path / "inventory.json",
+              "MUSICBRAINZ_USER_AGENT": "AlbumHavenTests/claimed-cover-miss", "BULK_COVER_JOB_WORKERS": 1}
+    outcome = build_cover_refresh_handler(
+        cover_repository=covers, config=config, logger=logging.getLogger("test.claimed.cover.miss"),
+        run_refresh=observe_refresh,
+    )(claim, context)
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        after = connection.execute(snapshot_sql, (entry["path"],)).fetchone()
+    assert len(provider_calls) == 1
+    assert len(runtime_states) == 1
+    assert after == before
+    assert runtime_states[0]["file_cache"][entry["path"]]["cover_path"] == str(missing_cover)
+    assert Path(entry["path"]).read_bytes() == media_before
+    assert not missing_cover.exists()
+    assert not errors, {
+        "errors": [(type(error).__name__, str(error)) for error in errors],
+        "tracebacks": error_tracebacks,
+        "outcome": outcome,
+    }
+    assert len(refresh_results) == 1
+    assert refresh_results[0]["processed"] == 1
+    assert refresh_results[0]["downloaded"] == 0
+    assert refresh_results[0]["failed"] == 1
+    assert outcome.next_state is JobState.FAILED
+    assert outcome.reason_code == "cover_refresh_failed"
+
+
 def test_live_targeted_invalidation_publishes_new_album_to_gallery(
     watcher_repair_inventory,
     monkeypatch,
@@ -7616,6 +7755,13 @@ def test_live_targeted_reconciliation_preserves_untouched_disc_guest_browse(
             1.0,
             observed_library_root_ids={"multi-disc-root"},
         )
+        # Startup publishes the relation projection before watcher events
+        # arrive; the event then leaves its rebuild to the background refresh.
+        from music_app.services.relation_projection_postgres import (
+            ensure_relation_projection_ready,
+        )
+
+        ensure_relation_projection_ready(config, connect=isolatedPostgres._connect)
 
         changed.write_bytes(b"disc-one-updated")
         result = TargetedLibraryReconciler(

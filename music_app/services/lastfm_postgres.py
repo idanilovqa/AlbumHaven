@@ -48,10 +48,12 @@ class LastfmPostgresAdapter:
             return {}
         return _settings_from_row(row)
 
-    def save_settings(self, settings: dict[str, object], *, account_id=None) -> dict[str, object]:
+    def save_settings(self, settings: dict[str, object], *, account_id=None, reauthentication_context=None) -> dict[str, object]:
         if account_id is not None:
             from music_app.services.lastfm_account_settings import save_account_settings
-            return save_account_settings(self, settings, account_id)
+            return save_account_settings(self, settings, account_id, reauthentication_context=reauthentication_context)
+        if reauthentication_context is not None:
+            raise ValueError("Authenticated Last.fm account is required")
         normalized = dict(settings)
         username = _text(normalized.get("username")) or None
         session_key = _text(normalized.get("session_key")) or None

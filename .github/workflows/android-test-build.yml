@@ -1,7 +1,8 @@
 name: Android Test Build
 
 # The owner's `test_build` label: promotes a same-repository pull request's head to the sandbox
-# channel without waiting for PR Gates (docs/android-release-signing.md). This run executes the
+# channel without waiting for PR Gates (docs/android-release-signing.md), for the sandbox its one
+# `sandbox<N>` label names, with its branch and title as the build picker label. This run executes the
 # pull request's own workflow definition, so it holds no secret, checks out nothing and only asks
 # main's android-promote.yml to promote the head. Main's workflow then verifies, builds, signs in
 # the main-only android-sandbox environment and records the promotion, exactly as a manual
@@ -42,16 +43,25 @@ jobs:
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         env:
           COMMIT: ${{ github.event.pull_request.head.sha }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+          TITLE: ${{ github.event.pull_request.title }}
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
         with:
           script: |
             const commit = process.env.COMMIT;
             if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error('The pull request head is not a 40-character commit SHA');
+            // The build is published to the sandbox the pull request's `sandbox<N>` label names.
+            const slots = JSON.parse(process.env.LABELS).map((name) => /^sandbox([1-9]\d?)$/.exec(name)?.[1]).filter(Boolean);
+            if (slots.length !== 1) throw new Error('Add exactly one sandbox<N> label (for example sandbox2) to say which sandbox this test build is for');
+            const sandbox = slots[0];
+            // The title becomes the picker label: printable characters only, at most 60.
+            const label = process.env.TITLE.replace(/[\p{Cc}\p{Cf}]/gu, ' ').trim().slice(0, 60).trim();
             await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
               repo: context.repo.repo,
               workflow_id: 'android-promote.yml',
               ref: 'main',
-              inputs: { commit, channel: 'sandbox' },
+              inputs: { commit, channel: 'sandbox', sandbox, branch: process.env.BRANCH, label },
             });
             await core.summary.addHeading('Android sandbox test build requested')
-              .addRaw(`Android Promote runs on main as "Android sandbox promotion of ${commit}".`).write();
+              .addRaw(`Android Promote runs on main as "Android sandbox promotion of ${commit} for sandbox${sandbox}".`).write();

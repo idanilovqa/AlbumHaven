@@ -372,6 +372,56 @@ def test_cover_lookup_handler_fails_when_candidate_snapshot_publication_fails():
     assert outcome.reason_code == "cover_lookup_failed"
 
 
+@pytest.mark.parametrize("mode", ["manual", "post_scan"])
+def test_cover_refresh_injects_claim_bound_fresh_selection_reader(mode):
+    from music_app.jobs.cover_handlers import build_cover_refresh_handler
+
+    claim = _claim(
+        job_id=88, kind="cover_bulk_refresh", subject_kind="cover_bulk_refresh",
+        subject_ref="bulk-a", parameters={"task_id": 51, "mode": "manual", "force_search": False},
+        capability_key="library.covers.fetch", idempotency_key="cover-bulk-refresh:9:bulk-a",
+    )
+    if mode == "post_scan":
+        from dataclasses import replace
+        claim = replace(
+            claim, kind="post_scan_cover_refresh", subject_kind="inventory_revision",
+            subject_ref="revision-12", parameters={"inventory_revision": 12},
+            account_id=None, capability_key=None, request_origin_id=None,
+            idempotency_key="post-scan-cover-refresh:9:12",
+        )
+    calls, runs = [], []
+    selected = {31: {"selected_cover_path": "C.jpg", "cover_selection_origin": "user"}}
+
+    def load(**values):
+        calls.append(values)
+        return selected
+
+    repository = SimpleNamespace(
+        begin_claimed_cover_refresh=lambda **_values: SimpleNamespace(task_id=51, row_revision=1),
+        cover_refresh_cancel_requested=lambda **_values: False,
+        finish_claimed_cover_refresh=lambda **_values: True,
+        load_claimed_cover_refresh_selections=load,
+    )
+
+    def run_refresh(**values):
+        runs.append(values)
+        assert values["config"]["CLAIMED_COVER_LIBRARY_ID"] == 9
+        assert values["config"]["CLAIMED_COVER_SELECTION_LOADER"]({31}) is selected
+        return {"processed": 0, "downloaded": 0, "failed": 0}
+
+    outcome = build_cover_refresh_handler(
+        cover_repository=repository, config={"CLAIMED_COVER_LIBRARY_ID": 999},
+        logger=SimpleNamespace(), run_refresh=run_refresh, clock=lambda: NOW,
+    )(claim, _Context())
+    assert outcome.next_state == JobState.SUCCEEDED
+    assert len(runs) == 1
+    assert calls == [{
+        "task_id": 51, "library_id": 9, "job_id": 88, "attempt": claim.attempt,
+        "worker_id": claim.worker_id, "lease_token": claim.lease_token,
+        "now": NOW, "album_ids": {31},
+    }]
+
+
 def test_post_scan_cover_refresh_uses_shared_claimed_core_and_publishes_progress():
     from music_app.jobs.cover_handlers import build_cover_refresh_handler
 

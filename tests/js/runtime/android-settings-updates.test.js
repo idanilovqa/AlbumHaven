@@ -133,7 +133,7 @@ const STATES = [
   [update({ state: 'ready', ...ready }), 'Install update', null, 'install'],
   [update({ state: 'installing', ...ready }), 'Installing…', null, 'install'],
   [update({ state: 'authorization', ...ready }), 'Open install settings', null, 'install'],
-  // Every failed check, download or install reads the same, whatever the shell's error and reason.
+  // Every failed check, download or install reads the same, whatever the shell's error and other reasons.
   ...[
     [{ error: 'check_failed' }, 'check'],
     [{ error: 'check_failed', reason: 'signed_out' }, 'check'],
@@ -143,6 +143,14 @@ const STATES = [
     [{ error: 'verification_failed', reason: 'hash_mismatch', ...ready }, 'download'],
     [{ error: 'install_failed', ...ready }, 'download'],
   ].map(([failure, action]) => [update({ state: 'failed', ...failure }), 'Update failed. Try again', null, action]),
+  // Except a full phone, which only the owner can fix.
+  ...[
+    [{ error: 'download_failed', ...ready }, 'download'],
+    [{ error: 'install_failed', ...ready }, 'download'],
+  ].map(([failure, action]) => [
+    update({ state: 'failed', reason: 'insufficient_storage', ...failure }),
+    'Not enough storage', 'Free up space on this phone, then try again', action,
+  ]),
 ];
 
 for (const [state, label, detail, action] of STATES) {
@@ -152,7 +160,7 @@ for (const [state, label, detail, action] of STATES) {
     // The Settings card keeps the version and leaves updates to the menu, in every state.
     const html = api.buildAndroidSettingsHtml(api.androidBridge.info);
     assert.equal(text(alertOf(html)[0]), 'Android app Sandbox · 0.9.50 (1)');
-    assert.doesNotMatch(html, /data-android-update|<progress|Check for update|Update failed|Download update|Installing…/);
+    assert.doesNotMatch(html, /data-android-update|<progress|Check for update|Update failed|Not enough storage|Download update|Installing…/);
   });
 }
 
@@ -369,4 +377,61 @@ test('a Settings retry that fails again waits for the next time the tab opens', 
   await new Promise(setImmediate);
   assert.equal(bridge.sent.length, 2);
   assert.match(pane.detail.innerHTML, /data-on-page-alert="error".*This app could not connect to the current site/);
+});
+
+// The sandbox app's build picker (updates.choose.v1): the Update row offers every sandbox's build.
+const builds = (count, single = null) => ({ installedVersionCode: 24, count, single });
+
+test('the shared fixture advertises the sandbox build picker and its summary', () => {
+  assert.ok(fixture.capabilities.sandbox.includes('updates.choose.v1'));
+  assert.ok(!fixture.capabilities.stable.includes('updates.choose.v1'));
+  assert.deepEqual(handshakePayload.builds, { installedVersionCode: 1, count: 0, single: null });
+});
+
+for (const [summary, label, detail] of [
+  [builds(3), 'Choose app build', '3 sandboxes have builds · installed 24'],
+  [builds(1), 'Choose app build', '1 sandbox has a build · installed 24'],
+  [builds(1, { sandbox: 2, versionCode: 25, title: '8 - Gapless Fix', thisSandbox: false }), 'Update to build 25',
+    'From sandbox2 · switches sandbox'],
+  [builds(1, { sandbox: 5, versionCode: 26, title: '8 - Gapless Fix', thisSandbox: true }), 'Update to build 26', '8 - Gapless Fix'],
+]) {
+  test(`build picker row: ${detail} → ${label}`, async () => {
+    for (const state of [update(), update({ state: 'upToDate' }), update({ state: 'available', ...ready }),
+      update({ state: 'failed', error: 'check_failed' })]) {
+      const { bridge, row } = await connected(state);
+      bridge.event('updates.builds', summary);
+      assert.deepEqual(shown(row), { hidden: false, label, detail, busy: false, action: 'choose' }, state.state);
+    }
+  });
+}
+
+test('a running update keeps its own row, and no waiting build keeps the update row', async () => {
+  for (const state of [update({ state: 'checking' }), update({ state: 'downloading', progress: 5, ...ready }),
+    update({ state: 'ready', ...ready }), update({ state: 'failed', error: 'download_failed', ...ready })]) {
+    const { bridge, row } = await connected(state);
+    bridge.event('updates.builds', builds(2));
+    assert.notEqual(shown(row).action, 'choose', state.state);
+  }
+  const { bridge, row } = await connected(update());
+  bridge.event('updates.builds', builds(0));
+  assert.deepEqual(shown(row), { hidden: false, label: 'Check for update', detail: null, busy: false, action: 'check' });
+});
+
+test('pressing the build picker row asks the shell to choose', async () => {
+  const { api, bridge, row } = await connected(update(), { respond: () => ({ ok: true }) });
+  bridge.event('updates.builds', builds(2));
+  press(api, row);
+  await new Promise(setImmediate);
+  assert.equal(bridge.sent.at(-1).name, 'updates.choose');
+  assert.deepEqual(bridge.sent.at(-1).payload, {});
+  assert.equal(shown(row).busy, false);
+});
+
+test('without updates.choose.v1 a builds summary changes nothing', async () => {
+  const bridge = fakeBridge(() => ({ ...handshakePayload, capabilities: ['updates.manual.v1'], builds: builds(3) }));
+  const { api, row } = loadRuntime({ bridge });
+  api.initAndroidSettings();
+  await api.connectAndroidBridge();
+  await new Promise(setImmediate);
+  assert.deepEqual(shown(row), { hidden: false, label: 'Check for update', detail: null, busy: false, action: 'check' });
 });

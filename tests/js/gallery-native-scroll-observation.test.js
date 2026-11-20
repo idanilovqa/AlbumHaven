@@ -176,7 +176,7 @@ test('response-overlap setup keeps native input active through fixture and respo
   );
   assert.match(
     source,
-    /page\.waitForResponse\(isRootContinuation,\s*\{\s*timeout: RESPONSE_BOUNDARY_TIMEOUT_MS/,
+    /page\.waitForResponse\(\s*candidate => isRootContinuation\(candidate\) && candidate\.ok\(\),\s*\{\s*timeout: RESPONSE_BOUNDARY_TIMEOUT_MS/,
   );
 });
 

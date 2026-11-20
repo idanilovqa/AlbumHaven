@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
+import hashlib
 import json
 import re
 from typing import Any
@@ -55,6 +56,30 @@ class LastfmAttemptFinalization:
     domain_status: str
     next_job_id: int | None
     row_revision: int
+
+
+@dataclass(frozen=True)
+class LastfmSessionCredentials:
+    session_key: str = field(repr=False)
+    active_session_id: int
+    reauthentication_generation: int
+    username: str = ""
+    connected_at: str = ""
+
+
+def _credentials(row: Mapping[str, object]) -> LastfmSessionCredentials | None:
+    if not row:
+        return None
+    secret = row.get("session_key_encrypted")
+    if not isinstance(secret, str) or not secret or len(secret) > 8192:
+        raise RuntimeError("Last.fm session credentials are invalid")
+    return LastfmSessionCredentials(
+        session_key=secret,
+        active_session_id=_positive("active_session_id", row.get("active_session_id")),
+        reauthentication_generation=_nonnegative("reauthentication_generation", row.get("reauthentication_generation")),
+        username=str(row.get("provider_username") or ""),
+        connected_at=str(row.get("connected_at") or ""),
+    )
 
 
 def _default_connect(database_url: str) -> Any:
@@ -194,6 +219,47 @@ class PostgresLastfmRetryJobRepository:
             raise RuntimeError("claimed Last.fm session secret is invalid")
         return secret
 
+    def load_reauthentication_generation(self, *, account_id: int, library_id: int) -> int:
+        """Fence a reconnect before provider authentication starts."""
+        values = {"account_id": _positive("account_id", account_id),
+                  "library_id": _positive("library_id", library_id)}
+        with self._connect() as connection:
+            row = _mapping(connection.execute("""
+                select coalesce((select generation
+                  from integration.lastfm_reauthentication_continuations
+                 where account_id=%(account_id)s and library_id=%(library_id)s), 0) as generation
+                """, values).fetchone())
+        return _nonnegative("generation", row.get("generation"))
+
+    def load_session_credentials(self, *, account_id: int, library_id: int) -> LastfmSessionCredentials | None:
+        """Capture credentials and their scoped generation before the provider call."""
+        with self._connect() as connection:
+            row = _mapping(connection.execute("""
+                select session.session_key_encrypted, session.id as active_session_id,
+                       session.provider_username, session.metadata->>'connected_at' as connected_at,
+                       coalesce(continuation.generation, 0) as reauthentication_generation
+                  from integration.lastfm_sessions session
+                  left join integration.lastfm_reauthentication_continuations continuation
+                    on continuation.account_id=session.account_id
+                   and continuation.library_id=%(library_id)s
+                 where session.account_id=%(account_id)s and session.is_active
+                   and (continuation.active_session_id is null
+                        or continuation.active_session_id=session.id)
+                 order by session.updated_at desc, session.id desc limit 1
+                """, {"account_id": _positive("account_id", account_id),
+                       "library_id": _positive("library_id", library_id)}).fetchone())
+        return _credentials(row)
+
+    def load_claimed_session_credentials(self, **values: object) -> LastfmSessionCredentials | None:
+        parameters = self._claim_values(**values)
+        with self._connect() as connection:
+            row = _mapping(connection.execute("""
+                select * from ops.load_claimed_lastfm_session_credentials(
+                  %(pending_scrobble_id)s, %(active_session_id)s,
+                  %(job_id)s, %(attempt)s, %(worker_id)s, %(lease_token)s, %(now)s)
+                """, parameters).fetchone())
+        return _credentials(row)
+
     def begin_claimed_attempt(self, **values: object) -> ClaimedLastfmAttempt:
         parameters = self._claim_values(**values)
         with self._connect() as connection:
@@ -262,18 +328,19 @@ class PostgresLastfmRetryJobRepository:
                     ensure_ascii=False,
                     allow_nan=False,
                 ),
+                "reauthentication_generation": _nonnegative("reauthentication_generation", values.get("reauthentication_generation", 0)),
             }
         )
         with self._connect() as connection:
             row = _mapping(
                 connection.execute(
                     """
-                    select * from ops.finish_claimed_lastfm_attempt(
+                    select * from ops.finish_claimed_lastfm_attempt_with_generation(
                       %(pending_scrobble_id)s, %(active_session_id)s,
                       %(job_id)s, %(attempt)s, %(worker_id)s,
                       %(lease_token)s, %(now)s, %(expected_row_revision)s,
                       %(disposition)s, %(reason_code)s,
-                      %(history_updates)s::jsonb
+                      %(history_updates)s::jsonb, %(reauthentication_generation)s
                     )
                     """,
                     parameters,
@@ -401,6 +468,8 @@ class PostgresLastfmRetryJobRepository:
         client_surface: str,
         now: datetime,
         reauthentication_required: bool = False,
+        active_session_id: int | None = None,
+        reauthentication_generation: int | None = None,
     ) -> AcceptedLastfmRetry:
         """Atomically bind a known-not-sent playback failure to the active session."""
 
@@ -411,11 +480,26 @@ class PostgresLastfmRetryJobRepository:
             raise ValueError("retry_count must leave a durable retry attempt")
         listen_id = _bounded("listen_id", listen_id, maximum=512)
         now = _aware("now", now)
+        from music_app.services.measured_listen_history import SOURCE, VERSION
+        measured = entry.get("measurement_version") is not None
+        source_family = "runtime_lastfm_sync_state_adapter"
+        source_key = listen_id
+        if measured:
+            if entry.get("measurement_version") != VERSION:
+                raise ValueError("Measured listen version is invalid")
+            device_id = _bounded("device_id", entry.get("device_id"), maximum=128)
+            session_id = _bounded("session_id", entry.get("session_id"), maximum=128)
+            source_key = f"{account_id}:{library_id}:{device_id}:{session_id}"
+            if hashlib.sha256(source_key.encode()).hexdigest() != listen_id:
+                raise ValueError("Measured listen identity is invalid")
+            source_family = SOURCE
         values = {
             "account_id": account_id,
             "library_id": library_id,
-            "source_family": "runtime_lastfm_sync_state_adapter",
-            "source_key": listen_id,
+            "source_family": source_family,
+            "source_key": source_key,
+            "measurement_version": VERSION if measured else None,
+            "listen_id": listen_id,
             "track_key": _bounded(
                 "track_key",
                 entry.get("track_ref") or entry.get("path") or "opaque-listen",
@@ -428,29 +512,39 @@ class PostgresLastfmRetryJobRepository:
             "payload": json.dumps(
                 {"source_payload": dict(entry)}, ensure_ascii=False, allow_nan=False
             ),
+            "reauthentication_generation": None if reauthentication_generation is None else _nonnegative("reauthentication_generation", reauthentication_generation),
         }
         with self._connect() as connection:
             session = _mapping(
                 connection.execute(
                     """
-                    select id from integration.lastfm_sessions
-                     where account_id = %(account_id)s and is_active
-                     order by id desc limit 1 for share
+                    select session.id, coalesce(continuation.generation, 0) as reauthentication_generation
+                      from integration.lastfm_sessions session
+                      left join integration.lastfm_reauthentication_continuations continuation
+                        on continuation.account_id=session.account_id
+                       and continuation.library_id=%(library_id)s
+                     where session.account_id = %(account_id)s
+                       and (case when %(captured_session_id)s::bigint is null
+                                 then session.is_active else session.id=%(captured_session_id)s end)
+                     order by session.id desc limit 1 for share of session
                     """,
-                    values,
+                    {**values, "captured_session_id": None if active_session_id is None else _positive("active_session_id", active_session_id)},
                 ).fetchone()
             )
             if not session:
                 raise ValueError("active Last.fm session is unavailable")
             active_session_id = _positive("active_session_id", session.get("id"))
             values["active_session_id"] = active_session_id
+            if values["reauthentication_generation"] is None:
+                values["reauthentication_generation"] = _nonnegative(
+                    "reauthentication_generation", session.get("reauthentication_generation"))
             if reauthentication_required:
                 row = _mapping(
                     connection.execute(_hold_reauthentication_sql(), values).fetchone()
                 )
                 if not row:
                     raise ValueError("pending scrobble could not be held")
-                return AcceptedLastfmRetry(
+                accepted = AcceptedLastfmRetry(
                     pending_scrobble_id=_positive(
                         "pending_scrobble_id", row.get("pending_scrobble_id")
                     ),
@@ -460,35 +554,51 @@ class PostgresLastfmRetryJobRepository:
                     ),
                     accepted_attempt=retry_count,
                 )
-            row = _mapping(connection.execute(_accept_pending_sql(), values).fetchone())
-            if not row:
-                raise ValueError("pending scrobble is terminal, stale, or malformed")
-            accepted = self._compose_job(
-                connection=connection,
-                row=row,
-                account_id=account_id,
-                library_id=library_id,
-                active_session_id=active_session_id,
-                request_origin_ref=request_origin_ref,
-                deployment_mode=deployment_mode,
-                client_surface=client_surface,
-                scheduled_at=now,
-            )
+            else:
+                row = _mapping(connection.execute(_accept_pending_sql(), values).fetchone())
+                if not row:
+                    raise ValueError("pending scrobble is terminal, stale, or malformed")
+                accepted = self._compose_job(
+                    connection=connection,
+                    row=row,
+                    account_id=account_id,
+                    library_id=library_id,
+                    active_session_id=active_session_id,
+                    request_origin_ref=request_origin_ref,
+                    deployment_mode=deployment_mode,
+                    client_surface=client_surface,
+                    scheduled_at=now,
+                )
             marked = connection.execute(
                 """
                 update integration.listen_history
-                   set metadata = coalesce(metadata, '{}'::jsonb)
-                     || '{"scrobble_durable_job_owned":true}'::jsonb
+                   set metadata = case when %(measurement_version)s::text is not null
+                     then jsonb_set(coalesce(metadata, '{}'::jsonb), '{source_payload}',
+                       coalesce(metadata->'source_payload', '{}'::jsonb)
+                         || '{"scrobble_durable_job_owned":true}'::jsonb)
+                     else coalesce(metadata, '{}'::jsonb)
+                       || '{"scrobble_durable_job_owned":true}'::jsonb end
                  where account_id = %(account_id)s
                    and library_id = %(library_id)s
                    and source_family = %(source_family)s
                    and source_entry_id = %(source_key)s
+                   and (%(measurement_version)s::text is null or (
+                     measurement_version=%(measurement_version)s
+                     and metadata->'source_payload'->>'id'=%(listen_id)s))
                 returning id
                 """,
                 values,
             ).fetchone()
-            if not marked:
+            # Reauthentication holds can precede a corresponding history row.
+            if not marked and (measured or not reauthentication_required):
                 raise ValueError("listen history durable ownership could not be marked")
+            if reauthentication_required:
+                connection.execute("""
+                    update integration.lastfm_reauthentication_continuations
+                       set drain_requested=true, updated_at=%(now)s
+                     where account_id=%(account_id)s and library_id=%(library_id)s
+                       and generation>%(reauthentication_generation)s
+                    """, values | {"now": now})
             return accepted
 
     def adopt_due_pending(
@@ -813,7 +923,8 @@ def _hold_reauthentication_sql() -> str:
         insert into integration.pending_scrobbles (
           account_id, library_id, track_key, played_at, attempt_count,
           next_attempt_at, status, payload, row_revision, accepted_attempt,
-          active_session_id, last_provider_disposition, repair_reason_code
+          active_session_id, last_provider_disposition, repair_reason_code,
+          reauthentication_generation
         ) values (
           %(account_id)s, %(library_id)s, %(track_key)s, %(played_at)s,
           %(attempt_count)s, null, 'reauthentication_required',
@@ -823,7 +934,8 @@ def _hold_reauthentication_sql() -> str:
             'account_id', %(account_id)s::text,
             'library_id', %(library_id)s::text
           ), 0, null, %(active_session_id)s,
-          'reauthentication_required', 'lastfm_reauthentication_required'
+          'reauthentication_required', 'lastfm_reauthentication_required',
+          %(reauthentication_generation)s
         )
         on conflict (
           account_id, library_id, (payload->>'source_family'),
@@ -837,6 +949,7 @@ def _hold_reauthentication_sql() -> str:
           current_job_id = null,
           accepted_attempt = null,
           active_session_id = excluded.active_session_id,
+          reauthentication_generation = excluded.reauthentication_generation,
           last_provider_disposition = 'reauthentication_required',
           repair_reason_code = 'lastfm_reauthentication_required',
           row_revision = integration.pending_scrobbles.row_revision + 1,

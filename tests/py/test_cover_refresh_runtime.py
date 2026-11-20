@@ -25,6 +25,196 @@ def test_automatic_cover_writer_uses_shared_mutation_coordinator():
         assert callback in source
 
 
+@pytest.mark.parametrize("mode", ["manual", "post_scan"])
+@pytest.mark.parametrize("scoped", [True, False], ids=["trusted-roots", "legacy-scope"])
+def test_claimed_runtime_uses_private_root_snapshot_without_settings_read_or_path_resolution(
+    monkeypatch, tmp_path, mode, scoped,
+):
+    from pathlib import Path
+    from music_app.services import library_roots, state
+
+    root = tmp_path / "currently-offline-root"
+    existing_snapshot = (tmp_path / "legacy-root",)
+    config = {"_library_root_paths_snapshot": existing_snapshot}
+    scope = SimpleNamespace(file_cache={}, progress_total=0, mode=mode, force_search=False)
+    if scoped:
+        scope.library_root_paths = (str(root),)
+    seen = []
+
+    def reject_settings(*_args, **_values):
+        pytest.fail("claimed root snapshot must not query unscoped root settings")
+
+    def reject_resolve(*_args, **_values):
+        pytest.fail("claim root conversion must not resolve or probe filesystem paths")
+
+    def inspect_config(execution_config):
+        seen.append(execution_config)
+        assert execution_config is not config
+        assert library_roots.configured_library_root_paths_snapshot(execution_config) == (
+            (root,) if scoped else existing_snapshot
+        )
+        return {"processed": 0, "downloaded": 0, "failed": 0}
+
+    monkeypatch.setattr(library_roots, "load_library_root_settings", reject_settings)
+    monkeypatch.setattr(Path, "resolve", reject_resolve)
+    monkeypatch.setattr(state, "refresh_unsuccessful_cover_artwork_for_state",
+                        lambda _state, execution_config, *_args, **_values: inspect_config(execution_config))
+    monkeypatch.setattr(state, "refresh_cover_artwork_request",
+                        lambda **values: inspect_config(values["config"]))
+    cover_refresh_runtime.run_claimed_cover_refresh(
+        scope=scope, config=config, logger=SimpleNamespace(),
+        should_cancel=lambda: False, progress=lambda **_values: True,
+    )
+    assert len(seen) == 1
+    assert config == {"_library_root_paths_snapshot": existing_snapshot}
+
+
+@pytest.mark.parametrize("mode", ["manual", "post_scan"])
+def test_claimed_runtime_scopes_fresh_checks_preparation_and_completion(monkeypatch, mode):
+    from music_app.services import scan_cache_persistence, state
+
+    current = {"invalid": False}
+    checks, stages = [], []
+
+    class Connection:
+        def __init__(self):
+            self.in_transaction = False
+            self.commits = 0
+            self.closed = False
+
+        def commit(self):
+            self.in_transaction = False
+            self.commits += 1
+
+        def rollback(self):
+            self.in_transaction = False
+
+        def close(self):
+            self.closed = True
+
+    connection = Connection()
+    config = {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://claimed-runtime-scope"}
+    monkeypatch.setattr(scan_cache_persistence, "PostgresScanCacheAdapter",
+                        lambda _config: SimpleNamespace(_connect_to_database=lambda: connection))
+
+    def read_current_authority():
+        assert scan_cache_persistence._SHARED_CONNECTION.get() is not None
+        with scan_cache_persistence.scan_cache_transaction(config["ALBUM_HAVEN_APP_DATABASE_URL"]) as sql:
+            assert sql is connection
+            assert sql.in_transaction is False
+            sql.in_transaction = True
+            checks.append(current["invalid"])
+            return not current["invalid"]
+
+    def should_cancel():
+        return not read_current_authority()
+
+    def progress(**_values):
+        return read_current_authority()
+
+    def engine(library_state):
+        assert scan_cache_persistence._SHARED_CONNECTION.get() is not None
+        stages.append("preparation")
+        assert read_current_authority()
+        # The provider runs after the read's transaction committed.
+        assert connection.in_transaction is False
+        stages.append("provider")
+        current["invalid"] = True
+        generation = library_state["cover_generation"]
+        library_state["covers_processed"] = 1
+        assert library_state["cover_generation"] > generation
+        stages.append("completion")
+        library_state["covers_current_folder"] = ""
+        assert should_cancel()
+        assert connection.in_transaction is False
+        return {"processed": 1, "downloaded": 0, "failed": 0}
+
+    monkeypatch.setattr(state, "refresh_unsuccessful_cover_artwork_for_state",
+                        lambda library_state, *_args, **_values: engine(library_state))
+    monkeypatch.setattr(state, "refresh_cover_artwork_request",
+                        lambda **values: engine(values["get_state"]()))
+    result = cover_refresh_runtime.run_claimed_cover_refresh(
+        scope=SimpleNamespace(file_cache={}, progress_total=1, mode=mode, force_search=False),
+        config=config, logger=SimpleNamespace(), should_cancel=should_cancel, progress=progress,
+    )
+    assert result["processed"] == 1
+    assert stages == ["preparation", "provider", "completion"]
+    assert checks[0] is False
+    assert checks[-1] is True
+    assert connection.commits == len(checks)
+    assert connection.closed is True
+
+
+def test_claimed_cover_pass_uses_fresh_loader_instead_of_bootstrap_adapter(monkeypatch):
+    selection = {19: {"selected_cover_path": "A.jpg", "cover_selection_origin": "automatic"}}
+    calls = []
+
+    def load(album_ids):
+        calls.append(album_ids)
+        return selection
+
+    monkeypatch.setattr(
+        cover_refresh_runtime, "select_scan_cache_adapter",
+        lambda _config: pytest.fail("durable worker must not read bootstrap inventory"),
+    )
+    cache = {"track": {"album_id": 19, "selected_cover_path": "stale.jpg"}}
+    config = {"CLAIMED_COVER_SELECTION_LOADER": load}
+    first = cover_refresh_runtime.cover_pass_file_cache_snapshot(cache, config)
+    selection[19] = {
+        "selected_cover_path": "C.jpg", "cover_selection_origin": "user",
+        "cover_selection_provenance": "explicit", "cover_revision": "C-revision",
+    }
+    second = cover_refresh_runtime.cover_pass_file_cache_snapshot(cache, config)
+    assert first["track"]["selected_cover_path"] == "A.jpg"
+    assert second["track"]["selected_cover_path"] == "C.jpg"
+    assert second["track"]["selected_cover_origin"] == "user"
+    assert second["track"]["selected_cover_provenance"] == "explicit"
+    assert second["track"]["selected_cover_revision"] == "C-revision"
+    assert cache["track"]["selected_cover_path"] == "stale.jpg"
+    assert calls == [{19}, {19}]
+
+
+@pytest.mark.parametrize("mode", ["recovered", "downloaded"])
+def test_claimed_automatic_mutation_forwards_validated_library_id(monkeypatch, tmp_path, mode):
+    from music_app.services.cover_mutation_coordinator import CoverMutationOutcome, CoverMutationStatus
+
+    cover = tmp_path / "cover.jpg"
+    cover.write_bytes(b"retained artwork")
+    track = str(tmp_path / "01.flac")
+    entries = {track: {"album_id": 19, "cover_path": None}}
+    state = {"file_cache": entries}
+    config = {"CLAIMED_COVER_LIBRARY_ID": 37, "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://worker"}
+    calls = []
+
+    def execute(_config, **kwargs):
+        calls.append(kwargs)
+        return CoverMutationOutcome(status=CoverMutationStatus.CANCELED)
+
+    monkeypatch.setattr(cover_refresh_execution, "execute_cover_mutation_for_config", execute)
+    monkeypatch.setattr(
+        cover_refresh_execution, "PostgresCoverMutationRepository",
+        lambda **_kwargs: SimpleNamespace(load_baseline=lambda **_values: None),
+    )
+    if mode == "recovered":
+        cover_refresh_execution._recover_existing_cover_selection(
+            config=config, job={"folder": tmp_path, "track_paths": [track]},
+            cover_path=cover, file_cache=entries, get_state=lambda: state,
+            library_state=state, cache_lock=threading.Lock(),
+            scan_generation=None, cover_generation=None,
+        )
+    else:
+        def write():
+            pytest.fail("canceled coordinator must not write an artifact")
+
+        write.provisional_cover_revision = "provisional-revision"
+        guard = cover_refresh_execution._build_automatic_cover_write_guard(
+            config=config, folder=tmp_path, track_paths={track},
+        )
+        assert guard(write, cover_selection_origin="automatic") is False
+    assert len(calls) == 1
+    assert calls[0]["library_id"] == 37
+
+
 def test_cover_pass_snapshot_refreshes_selection_once_without_runtime_alias(monkeypatch):
     from types import SimpleNamespace
 
@@ -719,8 +909,9 @@ def claimed_existing_cover(tmp_path, monkeypatch):
     }
 
     class FakeCoverMutationRepository:
-        def __init__(self, *, database_url):
+        def __init__(self, *, database_url, connect_to_database):
             assert database_url == config["ALBUM_HAVEN_APP_DATABASE_URL"]
+            assert connect_to_database is cover_refresh_execution.scan_cache_transaction
 
         def resolve_identity(self, *, library_id, track_paths):
             assert library_id == identity.library_id
@@ -761,7 +952,7 @@ def claimed_existing_cover(tmp_path, monkeypatch):
         lambda **options: options["acquire_local_lock"](),
     )
     monkeypatch.setattr(
-        cover_refresh_execution, "persist_cover_selection_for_tracks_for_config",
+        cover_refresh_execution, "persist_cover_selection_in_shared_transaction",
         lambda *_args, **_kwargs: pytest.fail("claimed recovery must not use generic persistence"),
     )
     return SimpleNamespace(

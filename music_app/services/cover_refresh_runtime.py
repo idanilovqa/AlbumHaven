@@ -8,6 +8,7 @@ from pathlib import Path
 import time
 
 from music_app.services.cover_provider_cache import CoverSearchCache
+from music_app.services.library_album_index import library_album_index
 from music_app.services.scan_cache_persistence import select_scan_cache_adapter
 
 
@@ -18,7 +19,12 @@ def cover_pass_file_cache_snapshot(file_cache, config):
         entry["album_id"] for entry in snapshot.values()
         if type(entry.get("album_id")) is int and entry["album_id"] > 0
     }
-    selections = select_scan_cache_adapter(config).load_cover_selections(album_ids) if album_ids else {}
+    loader = config.get("CLAIMED_COVER_SELECTION_LOADER")
+    selections = (
+        (loader(album_ids=album_ids) if loader is not None
+         else select_scan_cache_adapter(config).load_cover_selections(album_ids))
+        if album_ids else {}
+    )
     # An album without a persisted selection has no canonical override yet.
     # Treat that as an unselected album instead of aborting the whole refresh;
     # explicit rows still supply the authoritative path and origin below.
@@ -71,12 +77,17 @@ class _DurableCoverRefreshState(dict):
 
     def __setitem__(self, key, value):
         super().__setitem__(key, value)
-        if self._publishing or key not in {
+        if key not in {
             "covers_processed",
             "covers_total",
             "covers_downloaded",
             "covers_current_folder",
         }:
+            return
+        self.publish_progress()
+
+    def publish_progress(self):
+        if self._publishing:
             return
         self._publishing = True
         try:
@@ -106,56 +117,62 @@ def run_claimed_cover_refresh(
 
     from music_app.services import state as state_service
     from music_app.services.library import build_albums_from_file_cache
+    from music_app.services.scan_cache_persistence import shared_scan_cache_connection
 
-    file_cache = {str(path): dict(entry) for path, entry in scope.file_cache.items()}
-    separate_release_keys = {
-        str(key)
-        for key in getattr(scope, "separate_release_keys", ())
-        if str(key).strip()
-    }
-    library_state = _DurableCoverRefreshState(
-        {
-            "file_cache": file_cache,
-            "albums": build_albums_from_file_cache(
-                file_cache, separate_release_keys
-            ),
-            "separate_release_keys": separate_release_keys,
-            "scan_generation": 0,
-            "scan_in_progress": False,
-            "cover_generation": 1,
-            "covers_in_progress": True,
-            "covers_processed": 0,
-            "covers_total": max(0, int(scope.progress_total)),
-            "covers_downloaded": 0,
-            "covers_current_folder": "",
-        },
-        progress=progress,
-        should_cancel=should_cancel,
-    )
-    if should_cancel():
-        return {"processed": 0, "downloaded": 0, "failed": 0}
-    if scope.mode == "manual":
-        return state_service.refresh_unsuccessful_cover_artwork_for_state(
-            library_state,
-            dict(config),
-            logger,
-            force_search=bool(scope.force_search),
+    config = dict(config)
+    root_paths = getattr(scope, "library_root_paths", None)
+    if root_paths is not None:
+        config["_library_root_paths_snapshot"] = tuple(Path(path) for path in root_paths)
+    with shared_scan_cache_connection(config):
+        file_cache = {str(path): dict(entry) for path, entry in scope.file_cache.items()}
+        separate_release_keys = {
+            str(key)
+            for key in getattr(scope, "separate_release_keys", ())
+            if str(key).strip()
+        }
+        library_state = _DurableCoverRefreshState(
+            {
+                "file_cache": file_cache,
+                "albums": build_albums_from_file_cache(
+                    file_cache, separate_release_keys
+                ),
+                "separate_release_keys": separate_release_keys,
+                "scan_generation": 0,
+                "scan_in_progress": False,
+                "cover_generation": 1,
+                "covers_in_progress": True,
+                "covers_processed": 0,
+                "covers_total": max(0, int(scope.progress_total)),
+                "covers_downloaded": 0,
+                "covers_current_folder": "",
+            },
+            progress=progress,
+            should_cancel=should_cancel,
         )
-    return state_service.refresh_cover_artwork_request(
-        get_state=lambda: library_state,
-        cache_lock=state_service._CACHE_LOCK,
-        config=dict(config),
-        logger=logger,
-        log_app_event=state_service.log_app_event,
-        select_background_cover_refresh_jobs=state_service.select_background_cover_refresh_jobs,
-        build_cover_jobs=state_service.build_cover_refresh_jobs,
-        run_cover_jobs=state_service.run_cover_jobs,
-        log_cover_refresh_completion=state_service.log_cover_refresh_completion,
-        bulk_negative_cache_ttl_seconds=config.get(
-            "BULK_COVER_NEGATIVE_CACHE_TTL_SECONDS", 86400
-        ),
-        job_workers=config.get("BULK_COVER_JOB_WORKERS", 1),
-    )
+        if should_cancel():
+            return {"processed": 0, "downloaded": 0, "failed": 0}
+        if scope.mode == "manual":
+            return state_service.refresh_unsuccessful_cover_artwork_for_state(
+                library_state,
+                dict(config),
+                logger,
+                force_search=bool(scope.force_search),
+            )
+        return state_service.refresh_cover_artwork_request(
+            get_state=lambda: library_state,
+            cache_lock=state_service._CACHE_LOCK,
+            config=dict(config),
+            logger=logger,
+            log_app_event=state_service.log_app_event,
+            select_background_cover_refresh_jobs=state_service.select_background_cover_refresh_jobs,
+            build_cover_jobs=state_service.build_cover_refresh_jobs,
+            run_cover_jobs=state_service.run_cover_jobs,
+            log_cover_refresh_completion=state_service.log_cover_refresh_completion,
+            bulk_negative_cache_ttl_seconds=config.get(
+                "BULK_COVER_NEGATIVE_CACHE_TTL_SECONDS", 86400
+            ),
+            job_workers=config.get("BULK_COVER_JOB_WORKERS", 1),
+        )
 
 
 PreparedCoverRefresh = tuple[CoverRefreshContext, list[dict[str, object]]]
@@ -262,12 +279,30 @@ def _start_cover_refresh_progress(
     library_state["covers_current_folder"] = current_folder
 
 
+def _selected_album_file_cache(
+    library_state: dict[str, object],
+    track_paths: set[str],
+) -> dict[str, dict[str, object]]:
+    """The cache entries of the albums holding `track_paths`, read by key."""
+    paths = {str(path) for path in track_paths}
+    for album in library_album_index(library_state).albums_with_any_track(paths):
+        tracks = album.get("tracks", []) if isinstance(album, dict) else getattr(album, "tracks", [])
+        for track in tracks or []:
+            path = track.get("path") if isinstance(track, dict) else getattr(track, "path", None)
+            if str(path or "").strip():
+                paths.add(str(path))
+    file_cache = library_state.get("file_cache") or {}
+    return {path: entry for path in sorted(paths) if isinstance(entry := file_cache.get(path), dict)}
+
+
 def build_cover_refresh_context(
     *,
     get_state: StateGetter,
     config,
     bump_cover_generation: bool = False,
+    track_paths: set[str] | None = None,
 ) -> CoverRefreshContext:
+    """The pass context; `track_paths` limits it to the albums holding them."""
     library_state = get_state()
     if bump_cover_generation:
         library_state["cover_generation"] = int(library_state.get("cover_generation") or 0) + 1
@@ -277,7 +312,12 @@ def build_cover_refresh_context(
         library_state["covers_finished_monotonic"] = None
     return CoverRefreshContext(
         library_state=library_state,
-        file_cache=cover_pass_file_cache_snapshot(library_state.get("file_cache") or {}, config),
+        file_cache=cover_pass_file_cache_snapshot(
+            library_state.get("file_cache") or {}
+            if track_paths is None
+            else _selected_album_file_cache(library_state, track_paths),
+            config,
+        ),
         separate_release_keys=set(library_state.get("separate_release_keys") or set()),
         cover_cache=CoverSearchCache(config["COVER_CACHE_PATH"]),
         image_extensions=config["IMAGE_EXTENSIONS"],
@@ -864,6 +904,7 @@ def refresh_cover_artwork_for_track_paths_request(
         get_state=get_state,
         config=config,
         bump_cover_generation=True,
+        track_paths=track_paths,
     )
     jobs = select_manual_track_cover_refresh_jobs(
         file_cache=context.file_cache,

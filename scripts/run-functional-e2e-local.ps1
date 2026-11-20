@@ -6,7 +6,9 @@ param(
     [Parameter(ParameterSetName = 'All')][Parameter(ParameterSetName = 'Shard')][string]$Case,
     [Parameter(ParameterSetName = 'All')][Parameter(ParameterSetName = 'Shard')][string[]]$Cases,
     [string]$FixtureDistribution,
-    [string]$PythonPath = $env:PLAYWRIGHT_PYTHON
+    [string]$PythonPath = $env:PLAYWRIGHT_PYTHON,
+    [ValidateSet('17', '18')][string]$PostgresMajor = '18',
+    [string]$Pgbin = 'C:\PostgreSQL\18\bin'
 )
 
 Set-StrictMode -Version Latest
@@ -177,10 +179,10 @@ function Assert-OwnedTempRoot([string]$Candidate) {
 
 $node = Resolve-Executable '' @('node.exe', 'C:\Program Files\nodejs\node.exe') 'Node.js'
 $python = Resolve-Executable $PythonPath @('python.exe', 'python') 'Python'
-$postgresBin = 'C:\PostgreSQL\18\bin'
+$postgresBin = $Pgbin
 foreach ($executable in @('psql.exe', 'pg_isready.exe', 'postgres.exe')) {
     if (-not (Test-Path -LiteralPath (Join-Path $postgresBin $executable) -PathType Leaf)) {
-        throw "PostgreSQL 18 executable is missing: $executable"
+        throw "PostgreSQL $PostgresMajor executable is missing: $executable"
     }
 }
 
@@ -247,8 +249,8 @@ function Invoke-PostgresBootstrap(
         '-ExecutionPolicy', 'Bypass',
         '-File', $bootstrap,
         '-Mode', $Mode,
-        '-ServiceName', 'postgresql-x64-18',
-        '-ExpectedMajorVersion', '18',
+        '-ServiceName', "postgresql-x64-$PostgresMajor",
+        '-ExpectedMajorVersion', $PostgresMajor,
         '-Pgbin', $postgresBin,
         '-HostName', 'localhost',
         '-DatabaseSuffix', $DatabaseSuffix,

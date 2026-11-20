@@ -35,6 +35,8 @@ const SEMVER = /^(0|[1-9]\d{0,4})\.(0|[1-9]\d{0,4})\.(0|[1-9]\d{0,4})$/;
 const SANDBOX_VERSION = /^(?:0|[1-9]\d{0,4})\.(?:0|[1-9]\d{0,4})\.(?:0|[1-9]\d{0,4})-sandbox\.([0-9a-f]{7,12})$/;
 const PUBLISHED_AT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?Z$/;
 const APK_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.apk$/;
+const BRANCH = /^[A-Za-z0-9][A-Za-z0-9._\/-]{0,199}$/;
+const LABEL_MAX = 60;
 // Encrypted APK: magic, ephemeral X25519 public key, AES-256-GCM nonce, ciphertext, tag.
 const ENCRYPTION_MAGIC = Buffer.from('AHAPKv1\n', 'ascii');
 const ENCRYPTION_INFO = Buffer.from('album-haven-android-apk-v1', 'ascii');
@@ -53,6 +55,24 @@ function requireChannel(channel) {
 function requireCommit(commit) {
   if (typeof commit !== 'string' || !COMMIT.test(commit)) fail('Commit must be exactly 40 lowercase hexadecimal characters');
   return commit;
+}
+
+/**
+ * Where a sandbox promotion is published: the sandbox slot (1-99) its chat deployed to, the branch
+ * holding the commit, and an optional short label such as the chat title. Stable has no target.
+ */
+function sandboxTarget({ sandbox, branch, label }) {
+  const digits = String(sandbox ?? '').trim();
+  const slot = typeof sandbox === 'number' ? sandbox : /^[1-9]\d?$/.test(digits) ? Number(digits) : Number.NaN;
+  if (!Number.isInteger(slot) || slot < 1 || slot > 99) {
+    fail('A sandbox promotion needs the sandbox it is for: a number from 1 to 99');
+  }
+  if (typeof branch !== 'string' || !BRANCH.test(branch) || branch.includes('..') || branch.endsWith('/') || branch.endsWith('.lock')) {
+    fail('A sandbox promotion needs the branch that contains its commit');
+  }
+  const text = typeof label === 'string' ? label.trim() : '';
+  if (text.length > LABEL_MAX || /[\p{Cc}\p{Cf}]/u.test(text)) fail(`The label must be at most ${LABEL_MAX} printable characters`);
+  return { sandbox: slot, branch, label: text || null };
 }
 
 function versionTag(channel, versionCode) {
@@ -328,6 +348,16 @@ function finalizePromotion({ plan, apkBytes, badging, signerDigest, recipientPub
     ? Number.isSafeInteger(plan.pipelineRunId) && plan.pipelineRunId >= 1
     : !Object.hasOwn(plan, 'pipelineRunId');
   if (plan.ciGate !== ciGate || !pipelineMatches) errors.push('CI gate does not match the channel');
+  let target = null;
+  if (channel === 'sandbox') {
+    try {
+      target = sandboxTarget(plan.target || {});
+    } catch (error) {
+      errors.push(error.message);
+    }
+  } else if (plan.target != null) {
+    errors.push('A stable promotion has no sandbox target');
+  }
   if (badging.packageName !== CHANNELS[channel].applicationId) errors.push('APK package does not match the channel');
   if (badging.versionCode !== plan.versionCode || badging.versionName !== plan.versionName) {
     errors.push('APK version does not match the allocated version');
@@ -366,6 +396,7 @@ function finalizePromotion({ plan, apkBytes, badging, signerDigest, recipientPub
     ...(ciGate === 'complete-pipeline' && { pipelineRunId: plan.pipelineRunId }),
     versionTag: versionTag(channel, plan.versionCode),
     encryptedApk: `${name}.enc`,
+    ...(target && { target }),
     manifest,
   };
   fs.mkdirSync(outDir, { recursive: true });
@@ -430,6 +461,7 @@ module.exports = {
   readReleaseVersion,
   requireChannel,
   requireCommit,
+  sandboxTarget,
   validateManifest,
   versionNameFor,
   versionTag,

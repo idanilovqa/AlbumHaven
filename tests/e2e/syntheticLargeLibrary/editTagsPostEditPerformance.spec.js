@@ -382,14 +382,26 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
       });
 
       await stepLogger.step('Return to the DDT source album for repeated-save coverage', async () => {
-        await galleryActions.goto(ARTIST_VIEW_URL);
-        await galleryActions.waitForSelectedArtistGallery(ARTIST, { timeout: 60000 });
-        await galleryActions.selectAlbumDetailsByIdentity({
-          artist: ARTIST,
-          album: ORIGINAL_ALBUM,
-          year: FIXTURE_YEAR,
-        });
-        await trackModalActions.waitForLoadedSummary({ timeout: 60000 });
+        // Several DDT releases share this key; the card must open its own release by id.
+        const albumDetailsRequests = galleryActions.recordAlbumDetailsRequests();
+        try {
+          await galleryActions.goto(ARTIST_VIEW_URL);
+          await galleryActions.waitForSelectedArtistGallery(ARTIST, { timeout: 60000 });
+          await galleryActions.selectAlbumDetailsByIdentity({
+            artist: ARTIST,
+            album: ORIGINAL_ALBUM,
+            year: FIXTURE_YEAR,
+          });
+          const summary = await trackModalActions.waitForLoadedSummary({ timeout: 60000 });
+          expect(summary.title).toContain(ORIGINAL_ALBUM);
+          expect(summary.title).toContain(FIXTURE_YEAR);
+          expect(summary.trackRows).toBeGreaterThan(0);
+          expect(await trackModalActions.readTrackTitles()).toContain(TRACK_TITLE);
+          await expect(trackModalActions.trackModal.splitChooser).toHaveCount(0);
+          albumDetailsRequests.expectExactCardOpens();
+        } finally {
+          albumDetailsRequests.stop();
+        }
         cdp = await page.context().newCDPSession(page);
         retentionBaseline = await sampleRendererRetention(cdp, 'before-repeated-edits');
         retentionSamples.push(retentionBaseline);

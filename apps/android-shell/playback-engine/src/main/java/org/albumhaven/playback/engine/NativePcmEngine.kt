@@ -162,6 +162,12 @@ class NativePcmEngine(
 
         /** Played from the device's cache: the server never heard of it, so no control names it. */
         var local = false
+
+        /** A queued successor that is the next track of the same album, as the queue named it. */
+        var consecutiveAlbumBoundary = false
+
+        /** Whether this stream's tail was already judged for consecutive-album padding. */
+        var boundaryTailDecided = false
     }
 
     /**
@@ -335,6 +341,8 @@ class NativePcmEngine(
     private var current: Stream? = null
     private var continuity: Stream? = null
     private var queuedNext: PcmTrack? = null
+    private var queuedNextIsConsecutiveAlbum = false
+    private val boundaryWindowFrames = BoundaryPadding.windowFrames(config.sampleRate)
     private var loop: LoopRange? = null
     private var pendingSeek: PendingSeek? = null
     private var pendingPromotion: PendingPromotion? = null
@@ -370,6 +378,12 @@ class NativePcmEngine(
     private var resumeSeekFrame: Long? = null
 
     /**
+     * Where a seek past the received audio left the head while offline (owner retest B-D4,
+     * 2026-11-17): nothing sounds and the place does not move until that frame's audio takes over.
+     */
+    private var parkedFrame: Long? = null
+
+    /**
      * The socket was lost while the current stream needed nothing more from the server: it plays on
      * alone, and [resume] prepares what follows it on the next socket (see [detach]).
      */
@@ -384,7 +398,8 @@ class NativePcmEngine(
 
     /** Whether a seek has not cut over yet; until it does, [timelineFrame] still names the old place. */
     val seekPending: Boolean
-        get() = pendingSeek != null || pendingPromotion?.requestedSeekFrame != null || current?.encoded?.localSeek != null
+        get() = pendingSeek != null || pendingPromotion?.requestedSeekFrame != null || current?.encoded?.localSeek != null ||
+            parkedFrame != null
 
     // Inspection for the engine's own tests; production reads only the events.
     @VisibleForTesting
@@ -399,6 +414,14 @@ class NativePcmEngine(
 
     @VisibleForTesting
     internal fun bufferedFrames(role: PcmRole): Int = ringFor(role).bufferedFrames
+
+    @VisibleForTesting
+    internal val preparedSuccessorIsConsecutiveAlbum: Boolean
+        get() = continuity?.let { it.kind == StreamKind.QUEUED_NEXT && it.consecutiveAlbumBoundary } == true
+
+    /** The latest consecutive-album padding decision for each edge; aggregates only, never samples. */
+    @VisibleForTesting
+    internal val boundaryPadding = mutableMapOf<BoundaryEdge, PaddingDecision>()
 
     @VisibleForTesting
     internal fun inFlightFrames(role: PcmRole): Int = streamFor(role)?.inFlightFrames ?: 0
@@ -477,9 +500,14 @@ class NativePcmEngine(
     /**
      * Sets the immediate successor of the current track. As in `scheduleStreamingContinuity`, a
      * different successor waits while one is already prepared and follows it once it has promoted.
+     * [consecutiveAlbumBoundary] says the successor is the next track of the current one's album, so
+     * proven decoder padding at their natural boundary may be removed.
      */
-    fun setQueuedNext(track: PcmTrack?) {
+    fun setQueuedNext(track: PcmTrack?, consecutiveAlbumBoundary: Boolean = false) {
         queuedNext = track
+        queuedNextIsConsecutiveAlbum = track != null && consecutiveAlbumBoundary
+        continuity?.takeIf { it.kind == StreamKind.QUEUED_NEXT && it.track == track }
+            ?.consecutiveAlbumBoundary = queuedNextIsConsecutiveAlbum
         reconcileContinuity()
     }
 
@@ -513,8 +541,13 @@ class NativePcmEngine(
         require(frame >= 0) { "seek frame must be nonnegative" }
         val stream = current ?: return
         if (failed) return
-        if (resumeFrame != null) {
-            resumeSeekFrame = frame
+        resumeFrame?.let { splice ->
+            // Offline, audio already received is sought on the device; a place past it waits silently.
+            if (frame < splice && seekWithinKeptBytes(stream, frame)) {
+                resumeSeekFrame = null
+                return
+            }
+            park(frame)
             return
         }
         pendingPromotion?.let { promotion ->
@@ -527,12 +560,21 @@ class NativePcmEngine(
         if (seekWithinKeptBytes(stream, frame)) return
         // Offline, only audio already on the device can be sought; the rest waits for the next socket.
         if (playingOffline) {
-            resumeSeekFrame = frame
+            park(frame)
             return
         }
         if (continuity != null) closeContinuity("seek-replaced")
         val target = open(PcmRole.CONTINUITY, stream.track, StreamKind.SEEK, frame) ?: return
         pendingSeek = PendingSeek(target.streamId, frame)
+    }
+
+    private fun park(frame: Long) {
+        current?.encoded?.localSeek?.let { seek ->
+            seek.decoding.close()
+            current?.encoded?.localSeek = null
+        }
+        resumeSeekFrame = frame
+        parkedFrame = frame
     }
 
     /** The successor a continuity decoder is preparing, if any. */
@@ -562,10 +604,12 @@ class NativePcmEngine(
         val encoded = stream.encoded ?: return false
         if (loop != null || stream.eosReceived || encoded.closed) return false
         val store = encoded.store ?: return false
+        // A detached stream's end is its splice, not the song's: the bytes past it never arrived.
+        val splice = resumeFrame
         val window = encoded.table?.lookup(
             encoded.initialSkipFrames, encoded.initialTotalFrames, stream.startFrame, frame,
-            receivedBytes = store.size, ended = encoded.serverEos != null,
-        ) ?: return false
+            receivedBytes = store.size, ended = encoded.serverEos != null && splice == null,
+        )?.let { found -> if (splice == null) found else found.copy(totalFrames = splice - frame) } ?: return false
         // The newest seek wins: an older one, local or on the server, is dropped.
         encoded.localSeek?.decoding?.close()
         if (continuity?.kind == StreamKind.SEEK) closeContinuity("seek-replaced")
@@ -593,6 +637,11 @@ class NativePcmEngine(
         encoded.deliveredFrames = 0
         encoded.localSeek = null
         seek.committed = true
+        parkedFrame = null
+        // Detached, the stream now ends at the splice from the new place on.
+        if (resumeFrame != null) {
+            encoded.serverEos = encoded.serverEos?.copy(authoritativeTotalFrames = encoded.decodedFrames + encoded.remainingFrames)
+        }
         currentRing.clear()
         stream.inFlightFrames = 0
         stream.receivedFrames = 0
@@ -639,6 +688,7 @@ class NativePcmEngine(
         }
         currentRing.skip(delta.toInt())
         timelineFrame = frame
+        parkedFrame = null
         refillCredit(stream)
         events(PcmEngineEvent.Boundary(PcmBoundaryKind.SEEK, stream.streamId, stream.streamId, frame))
         return true
@@ -847,16 +897,17 @@ class NativePcmEngine(
     }
 
     /**
-     * The socket is gone, as when the phone moves from Wi-Fi to mobile data. A playing stream the
-     * server has nothing more to send for (all of it received, or played from the device's cache)
-     * plays on to its end, and [resume] on the next socket prepares what follows it. A playing
-     * encoded stream still arriving keeps playing the bytes it already received, cut at a frame they
-     * decode whole, instead of stopping; [resume] opens the rest from that frame and it takes over
-     * there with no gap, as a queued successor does. Returns the frame the stream plays on to, or
-     * null when nothing can play on, in which case the caller stops as [onTransportClosed] does.
+     * The socket is gone, as when the phone moves from Wi-Fi to mobile data; the stream may be
+     * playing or paused. A stream the server has nothing more to send for (all of it received, or
+     * played from the device's cache) plays on to its end, and [resume] on the next socket prepares
+     * what follows it. An encoded stream still arriving keeps playing the bytes it already
+     * received, cut at a frame they decode whole, instead of stopping; [resume] opens the rest from
+     * that frame and it takes over there with no gap, as a queued successor does. Returns the frame
+     * the stream plays on to, or null when nothing can play on, in which case the caller stops as
+     * [onTransportClosed] does.
      */
     fun detach(): Long? {
-        if (failed || !playing || pendingSeek != null || resumeFrame != null || playingOffline) return null
+        if (failed || pendingSeek != null || resumeFrame != null || playingOffline) return null
         val stream = current ?: return null
         receivedEnd(stream)?.let { end ->
             playOffline(stream)
@@ -885,6 +936,28 @@ class NativePcmEngine(
         resumeFrame = splice
         pumpEncoded(stream)
         return splice
+    }
+
+    /** Whether the stream plays on from received audio, with no socket under it. */
+    val detached: Boolean get() = !failed && (playingOffline || resumeFrame != null)
+
+    /**
+     * A socket lost while the playing stream is already detached, as when a reconnect fails because
+     * the network is still down: it plays on as it was. A splice the lost socket had already opened
+     * is dropped, so [resume] on the next socket opens it again from the same frame. Returns the
+     * frame playback goes on to, or null when nothing was detached.
+     */
+    fun redetach(): Long? {
+        if (failed) return null
+        if (playingOffline) return current?.let(::receivedEnd)
+        val frame = resumeFrame ?: return null
+        continuity?.takeUnless { it.local }?.let { opened ->
+            opened.local = true
+            closeContinuity("socket-lost")
+        }
+        pendingPromotion = null
+        unconfirmedCloses.clear()
+        return frame
     }
 
     /** The frame [stream]'s audio ends at when all of it is already on the device; else null. */
@@ -928,6 +1001,14 @@ class NativePcmEngine(
         }
         if (!awaitingResume) return false
         val stream = current ?: return false
+        resumeSeekFrame?.let { frame ->
+            // The head waits past the received audio: the next socket opens there, not at the splice.
+            resumeFrame = null
+            resumeSeekFrame = null
+            val target = open(PcmRole.CONTINUITY, stream.track, StreamKind.SEEK, frame) ?: return true
+            pendingSeek = PendingSeek(target.streamId, frame)
+            return true
+        }
         open(PcmRole.CONTINUITY, stream.track, StreamKind.SEEK, checkNotNull(resumeFrame))
         return true
     }
@@ -942,7 +1023,7 @@ class NativePcmEngine(
         commitPreparedSeek()
         val head = current ?: return 0
         if (pausing) pausing = !sink.fadeOutSettled()
-        if (!playing) return 0
+        if (!playing || parkedFrame != null) return 0
         if (!head.firstFrameRendered && !playsThrough(head, currentRing, committedCapacityFrames(PcmRole.CURRENT))) return 0
         if (rebuffering) {
             val cushion = minOf(config.frames(PcmEngineConfig.REBUFFER_CUSHION_SECONDS), committedCapacityFrames(PcmRole.CURRENT))
@@ -980,7 +1061,14 @@ class NativePcmEngine(
                 if (!finishDrainedCurrent(stream)) break
                 continue
             }
+            val tailUndecided = stream.eosReceived && !stream.boundaryTailDecided
+            if (tailUndecided && currentRing.bufferedFrames <= boundaryWindowFrames) {
+                trimConsecutiveAlbumTail(stream)
+                continue
+            }
             var frames = minOf(maxFrames - written, currentRing.contiguousFrames())
+            // The tail is judged before any of it is heard.
+            if (tailUndecided) frames = minOf(frames, currentRing.bufferedFrames - boundaryWindowFrames)
             if (loopRange != null) frames = minOf(frames.toLong(), loopRange.endFrame - timelineFrame).toInt()
             val accepted = sink.write(currentRing.samples, currentRing.readFrame * PcmRing.CHANNELS, frames)
             check(accepted in 0..frames) { "audio output answered $accepted for $frames frames" }
@@ -1023,7 +1111,12 @@ class NativePcmEngine(
                 StreamKind.SEEK -> PcmBoundaryKind.SEEK
                 else -> PcmBoundaryKind.QUEUED_NEXT
             }
-            promote(kind, next.startFrame)
+            val skippedFrames = if (next.kind == StreamKind.QUEUED_NEXT && next.consecutiveAlbumBoundary) {
+                trimConsecutiveAlbumHead(next)
+            } else {
+                0
+            }
+            promote(kind, next.startFrame + skippedFrames)
             return true
         }
         if (expectContinuity && next?.eosReceived != true) {
@@ -1034,6 +1127,29 @@ class NativePcmEngine(
         events(PcmEngineEvent.Ended(stream.streamId, timelineFrame))
         return false
     }
+
+    /** The worklet's `trimConsecutiveAlbumTail`: proven padding at the end of the outgoing track goes unheard. */
+    private fun trimConsecutiveAlbumTail(stream: Stream) {
+        stream.boundaryTailDecided = true
+        val next = continuity
+        if (next?.kind != StreamKind.QUEUED_NEXT || !next.consecutiveAlbumBoundary || loop != null || pendingSeek != null) return
+        val frames = currentRing.bufferedFrames
+        val decision = BoundaryPadding.classify(copyBuffered(currentRing, frames), config.sampleRate, BoundaryEdge.SUFFIX)
+        currentRing.dropNewest(decision.removableFrames)
+        boundaryPadding[BoundaryEdge.SUFFIX] = decision
+    }
+
+    /** The worklet's `trimConsecutiveAlbumHead`: returns the proven leading padding skipped from [next]. */
+    private fun trimConsecutiveAlbumHead(next: Stream): Int {
+        val frames = minOf(continuityRing.bufferedFrames, boundaryWindowFrames)
+        val decision = BoundaryPadding.classify(copyBuffered(continuityRing, frames), config.sampleRate, BoundaryEdge.PREFIX)
+        continuityRing.skip(decision.removableFrames)
+        boundaryPadding[BoundaryEdge.PREFIX] = decision
+        return decision.removableFrames
+    }
+
+    private fun copyBuffered(ring: PcmRing, frames: Int): FloatArray =
+        FloatArray(frames * PcmRing.CHANNELS).also { ring.copyTo(0, frames, it, 0) }
 
     /**
      * The worklet's short-loop wrap: once the whole loop is retained, replay restarts at its first
@@ -1081,6 +1197,7 @@ class NativePcmEngine(
         pendingPromotion = PendingPromotion(incoming.streamId).apply { requestedSeekFrame = resumeSeekFrame }
         resumeFrame = null
         resumeSeekFrame = null
+        if (kind == PcmBoundaryKind.SEEK) parkedFrame = null
         when (kind) {
             PcmBoundaryKind.QUEUED_NEXT -> {
                 // A successor deferred behind the promoted one is prepared once the server confirms.
@@ -1279,6 +1396,7 @@ class NativePcmEngine(
             StreamKind.START -> capacity
         }
         val stream = Stream(track, generation, nextStreamId++, role, kind, startFrame, minOf(capacity, target))
+        if (kind == StreamKind.QUEUED_NEXT) stream.consecutiveAlbumBoundary = queuedNextIsConsecutiveAlbum
         ringFor(role).clear()
         if (role == PcmRole.CURRENT) current = stream else continuity = stream
         if (kind == StreamKind.LOOP) {
@@ -1438,6 +1556,7 @@ class NativePcmEngine(
         sounded = false
         resumeFrame = null
         resumeSeekFrame = null
+        parkedFrame = null
         playingOffline = false
     }
 }

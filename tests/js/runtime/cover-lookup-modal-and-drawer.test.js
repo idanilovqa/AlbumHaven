@@ -160,10 +160,10 @@ for (const [source, label] of [['apple', 'Apple Music'], ['cover_art_archive', '
 require('node:test')('local Cover Lookup cards retain their loaded preview as the full-size fallback', () => {
   const context = loadHelper({
     escapeHtml: value => String(value ?? ''),
-    buildCoverUrl: (path, options = {}) => `/cover?path=${path}${options.size ? `&size=${options.size}` : ''}`,
+    buildCoverUrl: (ref, options = {}) => `/cover/${ref}${options.size ? `?size=${options.size}` : ''}`,
   });
   const card = context.buildCoverLookupCard({
-    path: 'N:/Music/Dissection/cover.jpg',
+    candidate_cover_ref: 'N:/Music/Dissection/cover.jpg',
     filename: 'cover.jpg',
     cover_revision: 'dissection-cover',
   }, 'local');
@@ -835,23 +835,23 @@ require('node:test')('cover updates preserve unrelated pathless notification art
     key: 'altin-gun::garip::2026',
     album_artist: 'Altın Gün',
     name: 'Garip',
-    cover_path: 'C:/music/Altin Gun/Garip/cover.jpg',
+    cover_ref: 'C:/music/Altin Gun/Garip/cover.jpg',
   };
   const secondUnrelatedAlbum = {
     key: 'susanne-sundfor::revelations::2026',
     album_artist: 'Susanne Sundfør',
     name: 'Revelations of Divine Love',
-    cover_path: 'C:/music/Susanne Sundfor/Revelations/cover.jpg',
+    cover_ref: 'C:/music/Susanne Sundfor/Revelations/cover.jpg',
   };
   const updatedSelectedAlbum = {
     ...selectedAlbum,
-    cover_path: 'C:/music/Black Obelisk/Angels/cover.jpg',
+    cover_ref: 'C:/music/Black Obelisk/Angels/cover.jpg',
   };
   const conflictingLegacyIdAlbum = {
     album_id: 999,
     id: selectedAlbum.id,
     key: 'unrelated::album::2026',
-    cover_path: 'C:/music/Unrelated/cover.jpg',
+    cover_ref: 'C:/music/Unrelated/cover.jpg',
   };
   const context = loadHelper({ persistCoverLookupNotificationTasks: () => {} });
   context.state.coverLookup.modal = { album: selectedAlbum };
@@ -1021,7 +1021,7 @@ require('node:test')('mobile notification scrolling defers virtual-window rerend
     getBoundingClientRect: () => ({ top: 100, bottom: 196 }),
   }];
   let renderCount = 0;
-  context.renderCoverLookupDrawer = () => { renderCount += 1; };
+  context.renderCoverLookupDrawerScrollWindow = () => { renderCount += 1; };
 
   const anchor = context.captureCoverLookupDrawerScrollAnchor(bodyElement);
   assert.equal(anchor.taskId, 'task-40');
@@ -1064,7 +1064,7 @@ require('node:test')('mobile notification scrolling immediately replaces an unco
     getBoundingClientRect: () => ({ top: -196, bottom: -100 }),
   }];
   let renderCount = 0;
-  context.renderCoverLookupDrawer = () => { renderCount += 1; };
+  context.renderCoverLookupDrawerScrollWindow = () => { renderCount += 1; };
 
   await context.handleCoverLookupDrawerScroll({ currentTarget: bodyElement });
 
@@ -1410,7 +1410,7 @@ require('node:test')('pasted cover updates its notification before the save resp
       filename: 'third-cover.jpg',
     }],
   };
-  context.markAlbumCoverPathsFresh = () => {};
+  context.markAlbumCoverRefsFresh = () => {};
   context.syncCoverLookupAlbumReferences = () => {};
   context.refreshCoverLookupAlbumArtwork = () => {};
   context.clearOptimisticAlbumCovers = () => {};
@@ -1478,7 +1478,7 @@ require('node:test')('pasted cover applies server-actioned notification when ope
       filename: 'new-cover.jpg',
     }],
   };
-  context.markAlbumCoverPathsFresh = () => {};
+  context.markAlbumCoverRefsFresh = () => {};
   context.syncCoverLookupAlbumReferences = () => {};
   context.refreshCoverLookupAlbumArtwork = () => {};
   context.clearOptimisticAlbumCovers = () => {};
@@ -3049,8 +3049,8 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
   Object.assign(context.state.coverLookup.modal, {
     album: { name: 'Large album' },
     taskId: 'completed-task',
-    localCovers: [{ path: 'C:/Music/cover.jpg' }],
-    otherArt: [{ path: 'C:/Music/booklet.jpg' }],
+    localCovers: [{ candidate_cover_ref: 'C:/Music/cover.jpg' }],
+    otherArt: [{ candidate_cover_ref: 'C:/Music/booklet.jpg' }],
     possibleMatches: [{ id: 'remote-cover', url: 'https://images.example/large-cover.jpg' }],
     candidateSnapshot: { search_generation: 'completed-task', candidates: [{ id: 'remote-cover' }] },
   });
@@ -3398,32 +3398,32 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
 }
 
 {
-  const activeCoverPath = 'C:/music/Mastodon/Crack The Skye/cover.jpg';
-  const alternateCoverPath = 'C:/music/Mastodon/Crack The Skye/Art/Front.jpg';
+  const activeCoverRef = 'C:/music/Mastodon/Crack The Skye/cover.jpg';
+  const alternateCoverRef = 'C:/music/Mastodon/Crack The Skye/Art/Front.jpg';
   const context = loadHelper({
     document: {
       getElementById: () => ({ hidden: true }),
     },
   });
   context.state.coverLookup.modal = {
-    activeLocalSelectionPath: activeCoverPath,
-    pendingLocalPath: '',
+    activeLocalSelectionRef: activeCoverRef,
+    pendingLocalRef: '',
     pendingPastedImageId: '',
     selectedRemoteId: '',
   };
 
-  context.selectLocalCoverFromLookup(alternateCoverPath);
+  context.selectLocalCoverFromLookup(alternateCoverRef);
 
-  assert.equal(context.state.coverLookup.modal.activeLocalSelectionPath, activeCoverPath);
-  assert.equal(context.state.coverLookup.modal.pendingLocalPath, alternateCoverPath);
+  assert.equal(context.state.coverLookup.modal.activeLocalSelectionRef, activeCoverRef);
+  assert.equal(context.state.coverLookup.modal.pendingLocalRef, alternateCoverRef);
   assert.equal(context.hasPendingLocalCoverSelection(), true);
 }
 
 require('node:test')('remote optimistic selection reuses the selected preview until save completion', () => {
   const album = {
     key: 'artist::album::2001',
-    cover_path: 'C:/music/Remote/original.jpg',
-    tracks: [{ path: 'C:/music/Remote/01.flac', cover_path: 'C:/music/Remote/original.jpg' }],
+    cover_ref: 'C:/music/Remote/original.jpg',
+    tracks: [{ path: 'C:/music/Remote/01.flac', cover_ref: 'C:/music/Remote/original.jpg' }],
   };
   const selectedMatch = {
     id: 'apple-candidate',
@@ -3441,7 +3441,7 @@ require('node:test')('remote optimistic selection reuses the selected preview un
   });
   context.state.coverLookup.optimisticAlbumCovers = {};
   context.state.coverLookup.tasks = [];
-  context.markAlbumCoverPathsFresh = () => {};
+  context.markAlbumCoverRefsFresh = () => {};
   context.syncCoverLookupAlbumReferences = () => {};
   context.refreshCoverLookupAlbumArtwork = (_originalAlbum, updatedAlbums) => {
     refreshedAlbums.push(...updatedAlbums);
@@ -3458,9 +3458,9 @@ require('node:test')('remote optimistic selection reuses the selected preview un
     selectedMatch.thumbnail_url,
     selectedMatch.id,
   );
-  assert.equal(updatedAlbum.cover_path, null);
+  assert.equal(updatedAlbum.cover_ref, null);
   assert.equal(updatedAlbum.remote_cover_url, selectedMatch.url);
-  assert.equal(refreshedAlbums[0].cover_path, null);
+  assert.equal(refreshedAlbums[0].cover_ref, null);
   assert.equal(
     context.state.coverLookup.optimisticAlbumCovers['C:/music/Remote/01.flac'].src,
     expectedPreview,
@@ -3494,7 +3494,7 @@ require('node:test')('remote save publishes the selected preview before server a
     return album;
   };
   context.closeCoverLookupModal = () => {};
-  context.markAlbumCoverPathsFresh = () => {};
+  context.markAlbumCoverRefsFresh = () => {};
   context.syncCoverLookupAlbumReferences = () => {};
   context.refreshCoverLookupAlbumArtwork = () => {};
   context.fetch = () => new Promise((resolve) => { resolveResponse = resolve; });
@@ -3586,7 +3586,7 @@ require('node:test')('remote save closes only after the server accepts the queue
   };
   context.applyOptimisticRemoteCoverSelection = () => {};
   context.closeCoverLookupModal = () => { closeCount += 1; };
-  context.markAlbumCoverPathsFresh = () => {};
+  context.markAlbumCoverRefsFresh = () => {};
   context.syncCoverLookupAlbumReferences = () => {};
   context.refreshCoverLookupAlbumArtwork = () => { refreshCount += 1; };
   context.fetch = () => {
@@ -3664,12 +3664,12 @@ require('node:test')('remote save closes only after the server accepts the queue
 require('node:test')('failed or canceled accepted remote save restores owned artwork state', async () => {
   const album = {
     key: 'artist::album::2001',
-    cover_path: 'C:/music/Remote/original.jpg',
-    tracks: [{ path: 'C:/music/Remote/01.flac', cover_path: 'C:/music/Remote/original.jpg' }],
+    cover_ref: 'C:/music/Remote/original.jpg',
+    tracks: [{ path: 'C:/music/Remote/01.flac', cover_ref: 'C:/music/Remote/original.jpg' }],
   };
   const albumSignature = 'C:/music/Remote/01.flac';
   const previousOptimisticCover = {
-    src: '/cover?path=original.jpg&size=480&revision=stable-prior-revision',
+    src: '/cover/original.jpg?size=480&revision=stable-prior-revision',
   };
   let terminalStatus = 'failed';
   const toastCalls = [];
@@ -3698,7 +3698,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
   };
   context.closeCoverLookupModal = () => {};
   context.clearOptimisticAlbumCovers = () => {};
-  context.markAlbumCoverPathsFresh = () => {};
+  context.markAlbumCoverRefsFresh = () => {};
   context.syncCoverLookupAlbumReferences = () => {};
   context.refreshCoverLookupAlbumArtwork = (_album, updatedAlbums) => {
     restoredAlbums.push(updatedAlbums);
@@ -3854,18 +3854,18 @@ require('node:test')('failed or canceled accepted remote save restores owned art
 {
   const buildCoverUrlCalls = [];
   const context = loadHelper({
-    buildCoverUrl: (coverPath, options) => {
+    buildCoverUrl: (coverRef, options) => {
       const revision = options?.revision;
       const size = options?.size;
-      buildCoverUrlCalls.push({ coverPath, revision, size });
-      return `/cover?path=${encodeURIComponent(coverPath)}${size ? `&size=${size}` : ''}&v=${revision || 'session-fallback'}`;
+      buildCoverUrlCalls.push({ coverRef, revision, size });
+      return `/cover/${encodeURIComponent(coverRef)}?${size ? `size=${size}&` : ''}v=${revision || 'session-fallback'}`;
     },
     buildRemoteCoverSourceBadge: () => '',
     escapeHtml: (value) => String(value || ''),
-    getCoverLookupActiveLocalPath: () => '',
+    getCoverLookupActiveLocalRef: () => '',
   });
   const localCover = {
-    path: 'C:/music/Kaipa/cover.jpg',
+    candidate_cover_ref: 'C:/music/Kaipa/cover.jpg',
     filename: 'cover.jpg',
     cover_revision: 'authoritative-cover-revision',
   };
@@ -3874,12 +3874,12 @@ require('node:test')('failed or canceled accepted remote save restores owned art
 
   assert.deepEqual(buildCoverUrlCalls, [
     {
-      coverPath: localCover.path,
+      coverRef: localCover.candidate_cover_ref,
       revision: localCover.cover_revision,
       size: 480,
     },
     {
-      coverPath: localCover.path,
+      coverRef: localCover.candidate_cover_ref,
       revision: localCover.cover_revision,
       size: undefined,
     },
@@ -3887,12 +3887,12 @@ require('node:test')('failed or canceled accepted remote save restores owned art
 
   buildCoverUrlCalls.length = 0;
   const fallbackHtml = context.buildCoverLookupCard(
-    { path: 'C:/music/Kaipa/alternate.jpg', filename: 'alternate.jpg' },
+    { candidate_cover_ref: 'C:/music/Kaipa/alternate.jpg', filename: 'alternate.jpg' },
     'local',
   );
   assert.deepEqual(buildCoverUrlCalls, [
-    { coverPath: 'C:/music/Kaipa/alternate.jpg', revision: undefined, size: 480 },
-    { coverPath: 'C:/music/Kaipa/alternate.jpg', revision: undefined, size: undefined },
+    { coverRef: 'C:/music/Kaipa/alternate.jpg', revision: undefined, size: 480 },
+    { coverRef: 'C:/music/Kaipa/alternate.jpg', revision: undefined, size: undefined },
   ]);
   assert.match(fallbackHtml, /size=480/);
   assert.match(fallbackHtml, /v=session-fallback/);
@@ -4086,22 +4086,22 @@ require('node:test')('failed or canceled accepted remote save restores owned art
 
 ;(async () => {
   const sourcePath = 'C:/music/Kaipa/Art/Front.jpg';
-  const selectedCoverPath = 'C:/music/Kaipa/cover.jpg';
+  const selectedCoverRef = 'C:/music/Kaipa/cover.jpg';
   const album = {
     key: 'kaipa::kaipa::1975',
     album_artist: 'Kaipa',
     name: 'Kaipa',
     year: 1975,
-    cover_path: 'C:/music/Kaipa/Art/back.jpg',
-    cover_preview_url: '/cover?path=C%3A%2Fmusic%2FKaipa%2FArt%2Fback.jpg&size=480&v=old-revision',
-    tracks: [{ path: 'C:/music/Kaipa/01.mp3', cover_path: 'C:/music/Kaipa/Art/back.jpg' }],
+    cover_ref: 'C:/music/Kaipa/Art/back.jpg',
+    cover_preview_url: '/cover/C%3A%2Fmusic%2FKaipa%2FArt%2Fback.jpg?size=480&v=old-revision',
+    tracks: [{ path: 'C:/music/Kaipa/01.mp3', cover_ref: 'C:/music/Kaipa/Art/back.jpg' }],
   };
   const authoritativeAlbum = {
     ...album,
-    cover_path: selectedCoverPath,
-    cover_preview_url: '/cover?path=C%3A%2Fmusic%2FKaipa%2Fcover.jpg&size=480&v=selected-front-revision',
+    cover_ref: selectedCoverRef,
+    cover_preview_url: '/cover/C%3A%2Fmusic%2FKaipa%2Fcover.jpg?size=480&v=selected-front-revision',
     cover_revision: 'selected-front-revision',
-    tracks: [{ path: 'C:/music/Kaipa/01.mp3', cover_path: selectedCoverPath }],
+    tracks: [{ path: 'C:/music/Kaipa/01.mp3', cover_ref: selectedCoverRef }],
   };
   const fetchCalls = [];
   const refreshedAlbums = [];
@@ -4130,10 +4130,10 @@ require('node:test')('failed or canceled accepted remote save restores owned art
     modal: {
       album,
       taskId: 'kaipa-local-cover-task',
-      pendingLocalPath: sourcePath,
+      pendingLocalRef: sourcePath,
       selectedRemoteId: '',
       localCovers: [{
-        path: sourcePath,
+        candidate_cover_ref: sourcePath,
         cover_revision: 'selected-source-revision',
       }],
     },
@@ -4141,7 +4141,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
     optimisticAlbumCovers: {},
   };
   context.closeCoverLookupModal = () => { closeCalls += 1; };
-  context.markAlbumCoverPathsFresh = () => {};
+  context.markAlbumCoverRefsFresh = () => {};
   context.refreshCoverLookupAlbumArtwork = (_originalAlbum, updatedAlbums, options = {}) => {
     refreshedAlbums.push({
       albums: updatedAlbums,
@@ -4151,8 +4151,8 @@ require('node:test')('failed or canceled accepted remote save restores owned art
       )),
     });
   };
-  context.buildCoverUrl = (coverPath, options = {}) => (
-    `/cover?path=${encodeURIComponent(coverPath)}&size=${options.size || ''}&v=${options.revision || ''}`
+  context.buildCoverUrl = (coverRef, options = {}) => (
+    `/cover/${encodeURIComponent(coverRef)}?size=${options.size || ''}&v=${options.revision || ''}`
   );
   context.preloadCoverLookupAlbumImage = async (updatedAlbum) => {
     preloadedAlbums.push({
@@ -4173,7 +4173,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
       ok: true,
       json: async () => ({
         ok: true,
-        selected_cover_path: selectedCoverPath,
+        selected_cover_ref: selectedCoverRef,
         updated_albums: [authoritativeAlbum],
         updated_album: authoritativeAlbum,
       }),
@@ -4188,15 +4188,15 @@ require('node:test')('failed or canceled accepted remote save restores owned art
 
   assert.equal(fetchCalls.length, 1);
   assert.equal(fetchCalls[0].url, '/utilities/cover-lookup/local-select');
-  assert.equal(context.state.coverLookup.modal.album.cover_path, selectedCoverPath);
+  assert.equal(context.state.coverLookup.modal.album.cover_ref, selectedCoverRef);
   assert.equal(context.state.coverLookup.modal.album.cover_revision, 'selected-front-revision');
   assert.deepEqual(refreshedAlbums.at(-1).albums, [authoritativeAlbum]);
   assert.equal(refreshedAlbums[0].options.updateTrackModal, false);
   assert.deepEqual(
     refreshedAlbums[0].optimisticAlbumCovers['C:/music/Kaipa/01.mp3'],
     {
-      src: '/cover?path=C%3A%2Fmusic%2FKaipa%2FArt%2FFront.jpg&size=480&v=selected-source-revision',
-      coverPath: sourcePath,
+      src: '/cover/C%3A%2Fmusic%2FKaipa%2FArt%2FFront.jpg?size=480&v=selected-source-revision',
+      coverRef: sourcePath,
     },
   );
   assert.equal(preloadedAlbums.length, 1);
@@ -4204,13 +4204,13 @@ require('node:test')('failed or canceled accepted remote save restores owned art
   assert.deepEqual(
     preloadedAlbums[0].optimisticAlbumCovers['C:/music/Kaipa/01.mp3'],
     {
-      src: '/cover?path=C%3A%2Fmusic%2FKaipa%2FArt%2FFront.jpg&size=480&v=selected-source-revision',
-      coverPath: sourcePath,
+      src: '/cover/C%3A%2Fmusic%2FKaipa%2FArt%2FFront.jpg?size=480&v=selected-source-revision',
+      coverRef: sourcePath,
     },
   );
   assert.deepEqual(JSON.parse(fetchCalls[0].options.body), {
     album,
-    source_path: sourcePath,
+    source_cover_ref: sourcePath,
     task_id: 'kaipa-local-cover-task',
   });
 })().catch((error) => {
@@ -4756,9 +4756,9 @@ require('node:test')('failed or canceled accepted remote save restores owned art
     album_artist: 'Kaipa',
     name: 'Kaipa',
     year: 1975,
-    cover_path: 'C:/music/Kaipa/cover.jpg',
+    cover_ref: 'C:/music/Kaipa/cover.jpg',
     cover_revision: 'original-revision',
-    tracks: [{ path: 'C:/music/Kaipa/01.mp3', cover_path: 'C:/music/Kaipa/cover.jpg' }],
+    tracks: [{ path: 'C:/music/Kaipa/01.mp3', cover_ref: 'C:/music/Kaipa/cover.jpg' }],
   };
   const refreshedAlbums = [];
   const context = loadHelper({
@@ -4781,15 +4781,15 @@ require('node:test')('failed or canceled accepted remote save restores owned art
     modal: {
       album,
       taskId: '',
-      pendingLocalPath: sourcePath,
+      pendingLocalRef: sourcePath,
       selectedRemoteId: '',
-      localCovers: [{ path: sourcePath }],
+      localCovers: [{ candidate_cover_ref: sourcePath }],
     },
     tasks: [],
     optimisticAlbumCovers: {},
   };
   context.closeCoverLookupModal = () => {};
-  context.markAlbumCoverPathsFresh = () => {};
+  context.markAlbumCoverRefsFresh = () => {};
   context.syncCoverLookupAlbumReferences = () => {};
   context.refreshCoverLookupAlbumArtwork = (_originalAlbum, updatedAlbums) => {
     refreshedAlbums.push(updatedAlbums);
@@ -4948,7 +4948,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
   });
   context.state.coverLookup.modal = {
     selectedRemoteId: '',
-    pendingLocalPath: '',
+    pendingLocalRef: '',
     pendingPastedImageId: '',
     possibleMatches: [],
   };
@@ -4956,7 +4956,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
   context.applyCoverLookupGalleryPayload({
     remote_cover: null,
     local_covers: [{
-      path: 'C:/music/Artist/Album/cover.jpg',
+      candidate_cover_ref: 'C:/music/Artist/Album/cover.jpg',
       is_active: true,
     }],
     other_art: [],
@@ -4979,7 +4979,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
     '',
     'a downloaded candidate must reopen with canonical local cover active',
   );
-  assert.equal(context.getCoverLookupActiveLocalPath(), 'C:/music/Artist/Album/cover.jpg');
+  assert.equal(context.getCoverLookupActiveLocalRef(), 'C:/music/Artist/Album/cover.jpg');
 }
 
 {
@@ -4991,7 +4991,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
     statusText: '',
     statusTone: 'neutral',
     selectedRemoteId: '',
-    pendingLocalPath: '',
+    pendingLocalRef: '',
     pendingPastedImageId: '',
     possibleMatches: [],
   };
@@ -5024,7 +5024,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
   });
   context.state.coverLookup.modal = {
     selectedRemoteId: '',
-    pendingLocalPath: '',
+    pendingLocalRef: '',
     pendingPastedImageId: '',
     possibleMatches: [],
   };
@@ -5068,7 +5068,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
   });
   context.state.coverLookup.modal = {
     selectedRemoteId: '',
-    pendingLocalPath: '',
+    pendingLocalRef: '',
     pendingPastedImageId: '',
     possibleMatches: [],
   };
@@ -5076,7 +5076,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
   context.applyCoverLookupGalleryPayload({
     remote_cover: null,
     local_covers: [{
-      path: 'C:/music/Flaming Row/The Pure Shine/cover.jpg',
+      candidate_cover_ref: 'C:/music/Flaming Row/The Pure Shine/cover.jpg',
       width: 4518,
       height: 4518,
       is_active: true,
@@ -5105,7 +5105,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
     'a progressive provider candidate must not replace the active local cover selection',
   );
   assert.equal(
-    context.getCoverLookupActiveLocalPath(),
+    context.getCoverLookupActiveLocalRef(),
     'C:/music/Flaming Row/The Pure Shine/cover.jpg',
   );
 
@@ -5137,7 +5137,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
     'the starting local choice must survive refreshed linked metadata for its search generation',
   );
   assert.equal(
-    context.getCoverLookupActiveLocalPath(),
+    context.getCoverLookupActiveLocalRef(),
     'C:/music/Flaming Row/The Pure Shine/cover.jpg',
     'the starting local card must remain visibly active for its search generation',
   );
@@ -5154,19 +5154,19 @@ require('node:test')('failed or canceled accepted remote save restores owned art
       album_artist: 'Neal Morse',
       name: 'One',
       year: 2004,
-      cover_path: activeLocalPath,
+      cover_ref: activeLocalPath,
     },
     selectedRemoteId: '',
-    pendingLocalPath: '',
+    pendingLocalRef: '',
     pendingPastedImageId: '',
-    activeLocalSelectionPath: '',
+    activeLocalSelectionRef: '',
     possibleMatches: [],
   };
 
   context.applyCoverLookupGalleryPayload({
     remote_cover: null,
     local_covers: [{
-      path: activeLocalPath,
+      candidate_cover_ref: activeLocalPath,
       width: 2400,
       height: 2400,
       is_active: false,
@@ -5190,7 +5190,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
   });
 
   assert.equal(
-    context.getCoverLookupActiveLocalPath(),
+    context.getCoverLookupActiveLocalRef(),
     activeLocalPath,
     'the album path identifies the active local cover when gallery metadata does not',
   );
@@ -5221,7 +5221,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
       .filter(Boolean)
       .sort()
       .join('|'),
-    markAlbumCoverPathsFresh: () => {},
+    markAlbumCoverRefsFresh: () => {},
     persistCoverLookupNotificationTasks: () => {},
   });
   context.state.coverLookup = {
@@ -6045,7 +6045,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
 {
   const context = loadHelper({
     escapeHtml: (value) => String(value || ''),
-    getCoverLookupActiveLocalPath: () => '',
+    getCoverLookupActiveLocalRef: () => '',
   });
   const savedCover = { id: 'saved-cover', url: 'https://covers.example/saved.jpg' };
   const stagedCover = { id: 'staged-cover', filename: 'staged.png', object_url: 'blob:staged-cover' };
@@ -6465,7 +6465,7 @@ require('node:test')('reopening Cover Lookup renders its cached gallery before r
   });
   context.cacheCoverLookupGalleryPayload(album, {
     ok: true,
-    local_covers: [{ path: 'N:/Music/Dissection/cover.jpg' }, { path: 'N:/Music/Dissection/cover-existing-1.jpg' }],
+    local_covers: [{ candidate_cover_ref: 'N:/Music/Dissection/cover.jpg' }, { candidate_cover_ref: 'N:/Music/Dissection/cover-existing-1.jpg' }],
     other_art: [],
   });
   context.renderCoverLookupModal = () => {};
@@ -6501,7 +6501,7 @@ require('node:test')('reopening Cover Lookup from a compact notification reuses 
   });
   context.cacheCoverLookupGalleryPayload(fullAlbum, {
     ok: true,
-    local_covers: [{ path: 'N:/Music/Mastodon/Crack the Skye/cover.jpg' }],
+    local_covers: [{ candidate_cover_ref: 'N:/Music/Mastodon/Crack the Skye/cover.jpg' }],
     other_art: [],
   });
   context.renderCoverLookupModal = () => {};
@@ -6570,11 +6570,11 @@ require('node:test')('actioned terminal notifications render source-neutral Art 
   const modal = context.state.coverLookup.modal;
   modal.possibleMatches = candidates;
   modal.selectedRemoteId = 'provider';
-  modal.pendingLocalPath = '';
+  modal.pendingLocalRef = '';
   context.selectRemoteCoverFromLookup('manual');
   assert.equal(modal.selectedRemoteId, 'provider', 'TV must reject programmatic manual candidate selection');
   context.selectLocalCoverFromLookup('private-cover.jpg');
-  assert.equal(modal.pendingLocalPath, '', 'TV must reject programmatic local selection');
+  assert.equal(modal.pendingLocalRef, '', 'TV must reject programmatic local selection');
 }
 
 
@@ -6582,7 +6582,7 @@ function savedSourceRevisionContext({ albumRevision = 'saved-revision', saving =
   const context = loadHelper();
   vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'modal-and-overlay-helpers.js'), 'utf8'), context);
   context.state.coverRefreshTokens = { '/owned/Art/Front.jpg': sourceToken };
-  context.state.coverLookup.modal.album = { cover_path: '/owned/cover.jpg', cover_revision: albumRevision };
+  context.state.coverLookup.modal.album = { cover_ref: '/owned/cover.jpg', cover_revision: albumRevision };
   context.state.coverLookup.modal.saving = saving;
   return context;
 }
@@ -6604,38 +6604,38 @@ require('node:test')('compact local gallery removes only verified initial duplic
   const modal = context.state.coverLookup.modal;
   modal.album = { name: 'Owned album' };
   const covers = [
-    { path: '/owned/alternate.jpg' },
-    { path: '/owned/original.jpg', duplicate_of: '/owned/cover.jpg' },
-    { path: '/owned/cover.jpg', is_active: true },
+    { candidate_cover_ref: '/owned/alternate.jpg' },
+    { candidate_cover_ref: '/owned/original.jpg', duplicate_of_cover_ref: '/owned/cover.jpg' },
+    { candidate_cover_ref: '/owned/cover.jpg', is_active: true },
   ];
-  context.applyCoverLookupGalleryPayload({ active_cover_path: '/owned/cover.jpg',
-    selected_source_path: '/owned/cover.jpg', local_covers: covers });
+  context.applyCoverLookupGalleryPayload({ active_cover_ref: '/owned/cover.jpg',
+    selected_source_cover_ref: '/owned/cover.jpg', local_covers: covers });
   const observed = [];
-  context.buildCoverLookupCard = item => { observed.push(item.path); return item.path; };
+  context.buildCoverLookupCard = item => { observed.push(item.candidate_cover_ref); return item.candidate_cover_ref; };
   function render() { observed.length = 0; context.renderCoverLookupModal(); return [...observed]; }
   const initial = JSON.stringify(modal.localCovers);
   assert.deepEqual(render(), ['/owned/alternate.jpg', '/owned/cover.jpg']);
   assert.match(body.innerHTML, /LOCAL · 2 images/);
-  assert.equal(modal.activeLocalSelectionPath, '/owned/cover.jpg');
+  assert.equal(modal.activeLocalSelectionRef, '/owned/cover.jpg');
   compact = false;
-  assert.deepEqual(render(), covers.map(item => item.path));
+  assert.deepEqual(render(), covers.map(item => item.candidate_cover_ref));
   assert.match(body.innerHTML, /LOCAL · 3 images/);
-  modal.pendingLocalPath = '/owned/original.jpg';
+  modal.pendingLocalRef = '/owned/original.jpg';
   compact = true;
-  assert.deepEqual(render(), covers.map(item => item.path), 'an existing desktop draft remains visible after narrowing');
-  assert.equal(modal.pendingLocalPath, '/owned/original.jpg');
-  modal.pendingLocalPath = '/owned/alternate.jpg';
+  assert.deepEqual(render(), covers.map(item => item.candidate_cover_ref), 'an existing desktop draft remains visible after narrowing');
+  assert.equal(modal.pendingLocalRef, '/owned/original.jpg');
+  modal.pendingLocalRef = '/owned/alternate.jpg';
   assert.deepEqual(render(), ['/owned/alternate.jpg', '/owned/cover.jpg']);
-  assert.equal(modal.pendingLocalPath, '/owned/alternate.jpg');
+  assert.equal(modal.pendingLocalRef, '/owned/alternate.jpg');
   assert.equal(JSON.stringify(modal.localCovers), initial, 'rendering never discards the file inventory');
   modal.localCovers = [covers[0], covers[1]];
   assert.deepEqual(render(), ['/owned/alternate.jpg', '/owned/original.jpg'], 'an absent canonical representative cannot hide its remaining source');
 });
 function savedSourceGallery(revision = 'saved-revision') {
-  return { active_cover_path: '/owned/cover.jpg', selected_source_path: '/owned/Art/Front.jpg',
+  return { active_cover_ref: '/owned/cover.jpg', selected_source_cover_ref: '/owned/Art/Front.jpg',
     local_covers: [
-      { path: '/owned/cover.jpg', is_active: true, cover_revision: revision },
-      { path: '/owned/Art/Front.jpg', is_active: false, cover_revision: revision },
+      { candidate_cover_ref: '/owned/cover.jpg', is_active: true, cover_revision: revision },
+      { candidate_cover_ref: '/owned/Art/Front.jpg', is_active: false, cover_revision: revision },
     ] };
 }
 
@@ -6662,7 +6662,7 @@ for (const [label, values] of [
 
 require('node:test')('publishing album artwork advances the cover mutation revision', () => {
   const original = { key: 'artist::album', tracks: [{ path: '/album/01.flac' }] };
-  const updated = { ...original, cover_path: '/album/cover.jpg' };
+  const updated = { ...original, cover_ref: '/album/cover.jpg' };
   const context = loadHelper({
     state: {
       ui: {},
@@ -7009,9 +7009,9 @@ require('node:test')('UUID generation formatting retains a progressive remote ov
     remoteSelectionOverrideCandidateId: 'user-choice',
     remoteSelectionOverrideUrl: 'https://images.example/user-choice.jpg',
     selectedRemoteId: 'user-choice',
-    pendingLocalPath: '',
+    pendingLocalRef: '',
     pendingPastedImageId: '',
-    activeLocalSelectionPath: '',
+    activeLocalSelectionRef: '',
     localCovers: [],
   };
 
@@ -7526,4 +7526,198 @@ require('node:test')('retry immediately resets the existing card label tone and 
     }),
   });
   await retryRequest;
+});
+
+require('node:test')('bounded interaction: Cover Lookup sheet touchmove stays constant with 1,000 candidates', async () => {
+  const { countedCollection, createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const run = async (cardinality) => {
+    const counter = createInteractionCounter();
+    const eventTarget = (extra = {}) => {
+      const listeners = {};
+      return {
+        ...extra,
+        dataset: {},
+        addEventListener(type, listener) { counter.count('listeners'); listeners[type] = listener; },
+        dispatch(type, event = {}) { listeners[type]?.(event); },
+      };
+    };
+    const candidates = countedCollection(Array.from({ length: cardinality }, (_value, index) => ({
+      key: `candidate-${index}`,
+      url: `https://covers.example.test/${index}.jpg`,
+    })), counter);
+    const header = eventTarget();
+    const body = eventTarget({ scrollTop: 0, children: candidates });
+    const overlay = {
+      classList: { contains: (name) => name === 'is-mobile-sheet' },
+      style: {
+        setProperty() { counter.count('domMutations'); },
+        removeProperty() { counter.count('domMutations'); },
+      },
+      querySelector(selector) {
+        counter.count('domQueries');
+        return selector === '.cover-lookup-modal-header' ? header : body;
+      },
+    };
+    const context = loadHelper();
+    context.state.coverLookup.modal.otherArt = candidates;
+    context.closeCoverLookupModal = () => assert.fail('a drag that has not ended must not close the sheet');
+    context.bindCoverLookupMobileSheetSwipe(overlay);
+    body.dispatch('touchstart', { touches: [{ clientX: 20, clientY: 20 }] });
+    let prevented = 0;
+    const work = await counter.measure(() => {
+      for (let step = 1; step <= 10; step += 1) {
+        body.dispatch('touchmove', { touches: [{ clientX: 20, clientY: 20 + step * 8 }], preventDefault() { prevented += 1; } });
+      }
+      body.dispatch('touchmove', { touches: [{ clientX: 200, clientY: 30 }], preventDefault() { prevented += 1; } });
+    });
+    assert.equal(prevented, 10, 'vertical sheet drags own the gesture; a sideways move releases it');
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:runtime/cover-lookup-modal-and-drawer.js#bindTarget',
+    small: 20,
+    large: 1000,
+    run,
+    budgets: { itemsVisited: 0, domQueries: 0, domMutations: 11, listeners: 0 },
+    growth: { metric: 'domMutations', largeMinusSmallMax: 0 },
+  });
+});
+
+require('node:test')('bounded interaction: notification drawer scroll renders one task window among 1,000 loaded notifications', async () => {
+  const { countedCollection, createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const run = async (cardinality) => {
+    const counter = createInteractionCounter();
+    const { context, bodyElement } = createDrawerHarness();
+    let markup = '';
+    Object.defineProperty(bodyElement, 'innerHTML', {
+      get: () => markup,
+      set(value) {
+        counter.count('renderCommits');
+        counter.count('markupBytes', String(value).length);
+        markup = String(value);
+      },
+    });
+    Object.assign(bodyElement, { scrollTop: 0, scrollHeight: cardinality * 96, clientHeight: 600 });
+    bodyElement.getBoundingClientRect = () => ({ top: 0, bottom: 600 });
+    bodyElement.querySelectorAll = () => { counter.count('domQueries'); return []; };
+    context.state.coverLookup.tasks = countedCollection(Array.from({ length: cardinality }, (_value, index) => ({
+      id: `task-${index}`, status: 'completed', album: `Album ${index % 10}`, artist: 'Artist',
+    })), counter);
+    context.state.coverLookup.tasksNextCursor = null;
+    context.renderCoverLookupDrawer();
+    const work = await counter.measure(async () => {
+      for (const scrollTop of [960, 1920]) {
+        bodyElement.scrollTop = scrollTop;
+        await context.handleCoverLookupDrawerScroll({ currentTarget: bodyElement });
+      }
+    });
+    assert.equal(context.state.coverLookup.taskRenderWindowStart, 10);
+    assert.equal((markup.match(/data-open-cover-lookup-task=/g) || []).length, Math.min(60, cardinality - 10));
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:runtime/bootstrap-init.js#<top-level>',
+    small: 80,
+    large: 1000,
+    run,
+    budgets: { itemsVisited: 60, renderCommits: 1, markupBytes: 91400, domQueries: 4 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
+  });
+});
+
+// One running lookup among `cardinality` loaded notifications, the drawer open over its first
+// task window and the Cover Lookup modal open, so every 100 ms interval tick polls.
+function createCountedCoverLookupPolling(counter, cardinality) {
+  const { countedCollection } = require('../helpers/bounded-interaction-counter.js');
+  const running = { id: 'task-0', status: 'running', progress: 40, album: 'Album 0', artist: 'Artist', created_at: '2026-11-15T10:00:00Z' };
+  const harness = createDrawerHarness({
+    fetch: async () => {
+      counter.count('requests');
+      return { ok: true, json: async () => ({
+        ok: true, tasks: [{ ...running }], next_cursor: null, total_count: cardinality,
+        active_count: 1, finished_count: cardinality - 1, membership_revision: 'revision-1',
+      }) };
+    },
+  });
+  const { context } = harness;
+  const getElementById = context.document.getElementById;
+  context.document.getElementById = id => (id === 'cover-lookup-modal' ? { hidden: false } : getElementById(id));
+  for (const name of ['renderCoverLookupDrawer', 'renderCoverLookupModal']) {
+    const render = context[name];
+    context[name] = (...args) => { counter.count('renderCommits'); return render(...args); };
+  }
+  // Every task list the poller stores is counted, not only the first one.
+  let tasks = [];
+  Object.defineProperty(context.state.coverLookup, 'tasks', {
+    configurable: true,
+    enumerable: true,
+    get: () => tasks,
+    set: (value) => { tasks = Array.isArray(value) ? countedCollection(value, counter) : value; },
+  });
+  context.state.coverLookup.tasks = ([running, ...Array.from({ length: cardinality - 1 }, (_value, index) => ({
+    id: `task-${index + 1}`, status: 'completed', album: `Album ${index + 1}`, artist: 'Artist',
+    created_at: '2026-11-15T09:00:00Z', finished_at: '2026-11-15T09:01:00Z',
+  }))]);
+  context.state.coverLookup.taskRenderWindowStart = 0;
+  return harness;
+}
+
+require('node:test')('bounded interaction: Cover Lookup polling repeats nothing per loaded notification while one lookup runs among 1,000', async () => {
+  const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const run = async (cardinality) => {
+    const counter = createInteractionCounter();
+    const { context, intervalCalls } = createCountedCoverLookupPolling(counter, cardinality);
+    context.ensureCoverLookupPolling();
+    const poll = intervalCalls.find(({ delay }) => delay === 100).callback;
+    await poll();
+    const work = await counter.measure(async () => {
+      for (let tick = 0; tick < 10; tick += 1) await poll();
+    });
+    assert.equal(context.state.coverLookup.tasks[0].status, 'running');
+    assert.equal(context.state.coverLookup.tasks.length, cardinality);
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:runtime/cover-lookup-modal-and-drawer.js#ensureCoverLookupPolling',
+    small: 80,
+    large: 1000,
+    run,
+    budgets: { itemsVisited: 600, requests: 10, renderCommits: 0 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
+  });
+});
+
+require('node:test')('bounded interaction: Cover Lookup elapsed ticks relabel only the mounted task window among 1,000 notifications', async () => {
+  const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const { createCountedDom } = require('../helpers/counted-dom.js');
+  const run = async (cardinality) => {
+    const counter = createInteractionCounter();
+    const { CountedElement } = createCountedDom(counter);
+    const { context, bodyElement, intervalCalls } = createCountedCoverLookupPolling(counter, cardinality);
+    const labels = Array.from({ length: 60 }, (_value, index) => {
+      const label = new CountedElement('SPAN');
+      label.attributes['data-cover-lookup-task-elapsed'] = `task-${index}`;
+      return label;
+    });
+    bodyElement.querySelectorAll = (selector) => {
+      counter.count('domQueries');
+      return selector === '[data-cover-lookup-task-elapsed]' ? labels : [];
+    };
+    context.syncCoverLookupElapsedTimer();
+    const tick = intervalCalls.find(({ delay }) => delay === 1000).callback;
+    tick();
+    const work = await counter.measure(() => {
+      for (let second = 0; second < 10; second += 1) tick();
+    });
+    assert.equal(labels[0].textContent, 'Elapsed 1s');
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:runtime/cover-lookup-modal-and-drawer.js#syncCoverLookupElapsedTimer',
+    small: 80,
+    large: 1000,
+    run,
+    budgets: { itemsVisited: 0, domQueries: 10, domMutations: 600 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
+  });
 });

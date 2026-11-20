@@ -11,7 +11,9 @@ from html import unescape
 
 import requests
 
-from music_app.services.app_logging import log_app_event
+# Provider calls log per query, candidate and probe: application log only,
+# never a log-history write (one database connection each).
+from music_app.services.app_logging import log_app_message_event as log_provider_event
 from music_app.services.cover_provider_availability import provider_availability
 from music_app.services.cover_provider_deadline import (
     AutomaticCoverDeadlineExceeded,
@@ -71,7 +73,7 @@ def youtube_music_enabled(*, config, youtube_music_client_class=None) -> bool:
 
 def youtube_music_client(
     *,
-    log_event: LogEvent | None = log_app_event,
+    log_event: LogEvent | None = log_provider_event,
     logger=None,
 ) -> object | None:
     if YTMusic is None:
@@ -186,7 +188,7 @@ def search_youtube_music_candidates(
     parse_year: ParseYear,
     probe_match_candidates: ProbeCandidates,
     dedupe_candidates: DedupeCandidates = dedupe_cover_candidates,
-    log_event: LogEvent | None = log_app_event,
+    log_event: LogEvent | None = log_provider_event,
     logger=None,
 ) -> list[CoverCandidate]:
     active_logger = logger or _LOGGER

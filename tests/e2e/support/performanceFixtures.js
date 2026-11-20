@@ -774,7 +774,7 @@ export const test = base.extend({
     const manifestPath = path.join(tempRoot, 'app-data', 'gapless-playback-fixture.json');
     const fixture = JSON.parse(await readFile(manifestPath, 'utf8'));
     if (!fixture?.artist || !fixture?.album || !Array.isArray(fixture?.tracks)
-        || fixture.tracks.length !== 10) {
+        || fixture.tracks.length !== 12) {
       throw new Error(`Invalid gapless playback fixture manifest: ${manifestPath}`);
     }
     await use(Object.freeze({

@@ -379,6 +379,46 @@ def test_commit_selection_binds_every_field_and_maps_durable_commit() -> None:
         assert f"%({argument})s" in sql
 
 
+@pytest.mark.parametrize("commit_ack_lost", [False, True], ids=["committed", "unknown-commit"])
+def test_commit_selection_uses_connection_yielded_by_context_factory(commit_ack_lost) -> None:
+    from contextlib import contextmanager
+
+    connection = _Connection(
+        {"committed": True, "cover_mutation_revision": 12, "reason_code": "committed",
+         "finalization_checkpoint_id": None, "finalization_checkpoint_revision": None},
+        exit_error=OperationalError("connection lost") if commit_ack_lost else None,
+    )
+    calls = []
+
+    @contextmanager
+    def connect(database_url):
+        calls.append(database_url)
+        with connection:
+            yield connection
+
+    repository, _ = _repository(connector=connect)
+    request = _commit_request(job_id=None, attempt=None, worker_id=None, lease_token=None,
+                              task_id=None, checkpoint_revision=None)
+    if commit_ack_lost:
+        with pytest.raises(CommitOutcomeUnknown) as error:
+            repository.commit_selection(request=request)
+        assert "connection lost" not in str(error.value)
+        assert PRIVATE_PATH not in str(error.value)
+        assert error.value.__cause__ is None and error.value.__context__ is None
+    else:
+        outcome = repository.commit_selection(request=request)
+        assert outcome.status is CoverMutationStatus.COMMITTED
+        assert outcome.cover_mutation_revision == 12
+        assert outcome.selected_cover_revision == "cover-12"
+        assert outcome.checkpoint is None
+    assert calls == ["postgresql://app@localhost/album_haven"]
+    _sql, parameters = _call(connection, "library.commit_cover_selection")
+    assert parameters["selected_cover_path"] == request.selected_cover_path
+    assert parameters["expected_cover_mutation_revision"] == 11
+    assert parameters["artifact_sha256"] == SHA256
+    assert parameters["job_id"] is None
+
+
 def test_commit_selection_binds_explicit_manual_cover_dimensions() -> None:
     connection = _Connection(
         {

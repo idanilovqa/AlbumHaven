@@ -298,6 +298,37 @@ test('shared choice dropdown toggles, switches triggers, preserves IDs and Fooba
   assert.equal(menus.length, 5); assert.equal(menus[4].removed, true); assert.equal(first.attributes['aria-expanded'], 'false');
 });
 
+test('a trigger-width choice list grows to its longest choice within the viewport', () => {
+  const { context } = loadHelpers();
+  const menus = [];
+  const makeNode = (rect) => ({
+    style: {}, listeners: {}, attributes: {}, isConnected: true,
+    setAttribute(key, value) { this.attributes[key] = value; },
+    addEventListener(type, callback) { this.listeners[type] = callback; },
+    remove() {}, contains: () => false, focus() {}, querySelector: () => null, querySelectorAll: () => [],
+    getBoundingClientRect: () => rect,
+  });
+  let contentWidth = 0;
+  context.document = { body: { append: menu => menus.push(menu) }, addEventListener() {}, removeEventListener() {},
+    createElement: () => makeNode(null), querySelector: () => null };
+  context.addEventListener = () => {}; context.removeEventListener = () => {};
+  context.innerHeight = 800;
+  context.syncTriggerAnchor = () => {}; context.clearTriggerAnchor = () => {};
+  const open = (triggerWidth, viewportWidth, naturalWidth) => {
+    context.innerWidth = viewportWidth; contentWidth = naturalWidth;
+    const trigger = makeNode({ left: 20, top: 100, bottom: 140, width: triggerWidth });
+    context.document.createElement = () => makeNode(null);
+    context.measureUtilityChoiceListWidth = () => contentWidth;
+    context.openUtilityChoiceDropdown(trigger, { formats: ['sandbox1', 'sandbox10'], selected: 'sandbox1', label: 'Sandbox server', onSelect: () => false, matchTriggerWidth: true });
+    const menu = menus.at(-1);
+    context.openUtilityChoiceDropdown(trigger, { formats: [], selected: '', label: '', onSelect: () => false });
+    return menu.style.width;
+  };
+  assert.equal(open(80, 400, 120), '120px', 'a choice wider than the button widens the list');
+  assert.equal(open(200, 400, 120), '200px', 'the button width stays the minimum');
+  assert.equal(open(80, 100, 120), '84px', 'the list never exceeds the viewport');
+});
+
 test('library failures use shared escaped alerts and retain the retry action', async () => {
   const { context } = loadHelpers();
   const settings = context.ensureLibrarySettingsState();

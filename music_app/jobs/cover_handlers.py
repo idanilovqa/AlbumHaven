@@ -508,6 +508,16 @@ def build_cover_refresh_handler(
         )
         execution_config[_CANDIDATE_PERSISTENCE_REQUIRED_KEY] = True
 
+        def load_claimed_selections(album_ids: set[int]) -> dict[int, dict[str, object]]:
+            return cover_repository.load_claimed_cover_refresh_selections(
+                **_refresh_claim_parameters(claim, now()),
+                task_id=scope.task_id,
+                album_ids=album_ids,
+            )
+
+        execution_config["CLAIMED_COVER_SELECTION_LOADER"] = load_claimed_selections
+        execution_config["CLAIMED_COVER_LIBRARY_ID"] = int(claim.library_id)
+
         def persist_claimed_selection(
             track_paths: set[str], selected_cover_path: Any, **options: object
         ) -> dict[str, object]:

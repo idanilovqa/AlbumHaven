@@ -992,6 +992,194 @@ def _seed_cover_scope(setup_url: str) -> tuple[int, int, str, str]:
     return account_id, library_id, album_key, origin_key
 
 
+@pytest.fixture
+def live_refresh_selection(request, live_cover_database):
+    setup_url, runtime_url = live_cover_database
+    account_id, library_id, album_key, origin_key = _seed_cover_scope(setup_url)
+
+    def finish_owned_jobs():
+        with isolatedPostgres._connect(setup_url) as connection:
+            connection.execute(
+                "update ops.jobs set state='succeeded',completed_at=clock_timestamp(),"
+                "lease_owner=null,lease_token=null,lease_expires_at=null,heartbeat_at=null "
+                "where library_id=%s and state in ('running','queued','retry_wait')",
+                (library_id,),
+            )
+
+    request.addfinalizer(finish_owned_jobs)
+    with isolatedPostgres._connect(setup_url) as connection:
+        selected = connection.execute(
+            "select album.id album_id,file.id file_id,file.private_path,file.library_root_id root_id "
+            "from library.local_albums album join library.local_tracks track on track.album_id=album.id "
+            "join library.local_track_files file on file.track_id=track.id "
+            "where album.library_id=%s and album.album_key=%s", (library_id, album_key),
+        ).fetchone()
+        connection.execute(
+            "update library.local_track_files set metadata="
+            "jsonb_build_object('scan_cache',jsonb_build_object('source','runtime_scan_cache',"
+            "'file_entry','{}'::jsonb)) where id=%s", (selected["file_id"],),
+        )
+    app_covers = PostgresCoverJobRepository(database_url=runtime_url, connect_to_database=isolatedPostgres._connect)
+    task_key = f"selection-{uuid4().hex}"
+    accepted = app_covers.accept_bulk_refresh(
+        task_key=task_key, library_id=library_id, account_id=account_id,
+        request_origin_ref=f"browser:{origin_key}", deployment_mode="self_hosted_private_web",
+        client_surface="private_web", mode="manual", force_search=False,
+        resource_revision=0, scheduled_at=datetime.now(timezone.utc),
+    )
+    worker_url = os.environ["ALBUM_HAVEN_FAKE_E2E_WORKER_DATABASE_URL"]
+    jobs = PostgresJobRepository(database_url=worker_url, connect_to_database=isolatedPostgres._connect)
+    claim = jobs.claim(worker_id=f"selection-{uuid4().hex}", now=datetime.now(timezone.utc),
+                       lease_seconds=60, kinds=("cover_bulk_refresh",))
+    assert claim is not None and claim.job_id == accepted.job_id
+    covers = PostgresCoverJobRepository(database_url=worker_url, connect_to_database=isolatedPostgres._connect)
+    values = dict(task_id=accepted.task_id, library_id=library_id, job_id=claim.job_id,
+                  attempt=claim.attempt, worker_id=claim.worker_id, lease_token=claim.lease_token,
+                  now=datetime.now(timezone.utc))
+    admitted = covers.begin_claimed_cover_refresh(
+        **values, mode="manual", inventory_revision=0, task_key=task_key,
+    )
+    assert admitted is not None
+    return SimpleNamespace(setup_url=setup_url, runtime_url=runtime_url, worker_url=worker_url,
+                           covers=covers, values=values, admitted=admitted, **selected)
+
+
+@pytest.mark.parametrize("invalid", [
+    "task_id", "library_id", "job_id", "attempt", "worker_id", "lease_token",
+    "expired", "job_canceled", "refresh_canceled", "job_terminal", "refresh_terminal", "wrong_job_kind",
+])
+def test_live_refresh_selection_read_rejects_invalid_claim(live_refresh_selection, invalid):
+    case = live_refresh_selection
+    values = dict(case.values, album_ids={case.album_id})
+    if invalid in {"task_id", "library_id", "job_id", "attempt"}:
+        values[invalid] += 1000000
+    elif invalid in {"worker_id", "lease_token"}:
+        values[invalid] = "wrong-claim"
+    else:
+        with isolatedPostgres._connect(case.setup_url) as connection:
+            if invalid == "expired":
+                connection.execute("update ops.jobs set lease_expires_at=clock_timestamp()-interval '1 second' where id=%s", (values["job_id"],))
+                values["now"] -= timedelta(days=1)
+            elif invalid == "job_canceled":
+                connection.execute("update ops.jobs set cancel_requested_at=clock_timestamp(),cancel_reason_code='owner_requested' where id=%s", (values["job_id"],))
+            elif invalid == "refresh_canceled":
+                connection.execute("update ops.cover_bulk_refreshes set cancel_requested_at=clock_timestamp() where id=%s", (values["task_id"],))
+            elif invalid == "job_terminal":
+                connection.execute("update ops.jobs set state='succeeded',completed_at=clock_timestamp(),lease_owner=null,lease_token=null,lease_expires_at=null,heartbeat_at=null where id=%s", (values["job_id"],))
+            elif invalid == "wrong_job_kind":
+                connection.execute("update ops.jobs set kind='cover_lookup' where id=%s", (values["job_id"],))
+            else:
+                connection.execute("update ops.cover_bulk_refreshes set status='completed',completed_at=clock_timestamp() where id=%s", (values["task_id"],))
+    assert case.covers.load_claimed_cover_refresh_selections(**values) == {}
+
+
+def test_live_refresh_selection_read_does_not_leak_other_library_album(live_refresh_selection):
+    case = live_refresh_selection
+    _, foreign_library_id, foreign_key, _ = _seed_cover_scope(case.setup_url)
+    with isolatedPostgres._connect(case.setup_url) as connection:
+        foreign_album_id = connection.execute(
+            "select id from library.local_albums where library_id=%s and album_key=%s",
+            (foreign_library_id, foreign_key),
+        ).fetchone()["id"]
+    selected = case.covers.load_claimed_cover_refresh_selections(
+        **case.values, album_ids={case.album_id, foreign_album_id},
+    )
+    assert set(selected) == {case.album_id}
+
+
+@pytest.mark.parametrize("excluded", ["unrequested_album", "inactive_root", "stale_file", "foreign_source"])
+def test_live_refresh_selection_read_preserves_inventory_scope(live_refresh_selection, excluded):
+    case = live_refresh_selection
+    values = dict(case.values, album_ids={case.album_id})
+    if excluded == "unrequested_album":
+        values["album_ids"] = {case.album_id + 1000000}
+    else:
+        with isolatedPostgres._connect(case.setup_url) as connection:
+            if excluded == "inactive_root":
+                connection.execute("update library.library_roots set is_active=false where id=%s", (case.root_id,))
+            elif excluded == "stale_file":
+                connection.execute("update library.local_track_files set metadata=jsonb_set(metadata,'{scan_cache,stale}','true'::jsonb) where id=%s", (case.file_id,))
+            else:
+                connection.execute("update library.local_track_files set metadata=jsonb_set(metadata,'{scan_cache,source}','\"foreign\"'::jsonb) where id=%s", (case.file_id,))
+    assert case.covers.load_claimed_cover_refresh_selections(**values) == {}
+
+
+def test_live_refresh_selection_read_observes_owner_C_after_admission(live_refresh_selection):
+    from music_app.services.cover_mutation_coordinator import CoverMutationIdentity, CoverMutationStatus, CoverSelectionCommit
+    from music_app.services.cover_mutations_postgres import PostgresCoverMutationRepository
+
+    case = live_refresh_selection
+    assert next(iter(case.admitted.file_cache.values()))["cover_path"] is None
+    before_owner = case.covers.load_claimed_cover_refresh_selections(
+        **case.values, album_ids={case.album_id},
+    )
+    assert before_owner[case.album_id]["selected_cover_path"] is None
+    owner_path = str(Path(case.private_path).with_name("owner-C.jpg"))
+    outcome = PostgresCoverMutationRepository(
+        database_url=case.runtime_url, connect_to_database=isolatedPostgres._connect,
+    ).commit_selection(request=CoverSelectionCommit(
+        identity=CoverMutationIdentity(case.values["library_id"], case.album_id),
+        track_paths=(case.private_path,), expected_inventory_revision=0,
+        expected_cover_mutation_revision=0, expected_selected_cover_revision=None,
+        selected_cover_path=owner_path, promoted_cover_revision="owner-C",
+        selected_origin="user", explicit_selection=True, clear_selection=False,
+        remote_cover=None, artifact_sha256="c" * 64, observed_at=datetime.now(timezone.utc),
+        job_id=None, attempt=None, worker_id=None, lease_token=None,
+        task_id=None, checkpoint_revision=None,
+    ))
+    assert outcome.status is CoverMutationStatus.COMMITTED
+    selected = case.covers.load_claimed_cover_refresh_selections(
+        **case.values, album_ids={case.album_id},
+    )
+    assert selected == {case.album_id: {
+        "selected_cover_path": owner_path, "cover_selection_origin": "user",
+        "cover_selection_provenance": "explicit", "cover_revision": "owner-C",
+    }}
+    with pytest.raises(psycopg.errors.SerializationFailure):
+        case.covers.persist_claimed_automatic_cover_selection(
+            **case.values, track_paths={case.private_path},
+            selected_cover_path=Path(case.private_path).with_name("automatic-A.jpg"),
+            cover_revision="automatic-A", cover_selection_origin="automatic",
+            reject_if_user_controlled=True, reject_if_explicit_selection=True,
+            expected_cover_state=(None, None),
+            expected_library_id=case.values["library_id"], expected_album_id=case.album_id,
+            expected_inventory_revision=0, expected_cover_mutation_revision=0,
+        )
+    assert case.covers.load_claimed_cover_refresh_selections(
+        **case.values, album_ids={case.album_id},
+    ) == selected
+
+
+def test_live_refresh_selection_reader_is_worker_execute_only_and_required_at_startup(live_cover_database):
+    from music_app.services.jobs.models import JobKind
+
+    setup_url, runtime_url = live_cover_database
+    signature = "ops.load_claimed_cover_refresh_selections(bigint,bigint,bigint,integer,text,text,timestamptz,bigint[])"
+    worker_url = os.environ["ALBUM_HAVEN_FAKE_E2E_WORKER_DATABASE_URL"]
+    with isolatedPostgres._connect(worker_url) as connection:
+        for table in ("library.local_albums", "library.local_tracks", "library.local_track_files"):
+            assert connection.execute("select has_table_privilege(current_user,%s,'SELECT') allowed", (table,)).fetchone()["allowed"] is False
+    with isolatedPostgres._connect(runtime_url) as connection:
+        assert connection.execute("select has_function_privilege(current_user,%s,'EXECUTE') allowed", (signature,)).fetchone()["allowed"] is False
+    with isolatedPostgres._connect(setup_url) as connection:
+        assert connection.execute("select has_function_privilege('album_haven_readonly',%s,'EXECUTE') allowed", (signature,)).fetchone()["allowed"] is False
+    kinds = sorted(kind.value for kind in JobKind)
+
+    def preflight():
+        with isolatedPostgres._connect(worker_url) as connection:
+            return connection.execute("select ops.validate_durable_worker_startup(%s::text[]) valid", (kinds,)).fetchone()["valid"]
+
+    assert preflight() is True
+    try:
+        with isolatedPostgres._connect(setup_url) as connection:
+            connection.execute(f"revoke execute on function {signature} from album_haven_worker")
+        assert preflight() is False
+    finally:
+        with isolatedPostgres._connect(setup_url) as connection:
+            connection.execute(f"grant execute on function {signature} to album_haven_worker")
+    assert preflight() is True
+
+
 @pytest.mark.parametrize("initial_metadata", [{}, {"unrelated": {"preserve": True}}])
 def test_live_cover_commit_populates_missing_scan_cache_parent(live_cover_database, initial_metadata):
     setup_url, runtime_url = live_cover_database

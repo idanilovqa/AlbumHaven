@@ -213,8 +213,10 @@ Use lowercase, zero-padded filenames and apply them in lexical order:
 0248_restore_authoritative_exception_clear.sql
 0249_create_problematic_files_projection.sql
 0250_restore_incomplete_album_contract.sql
-0252_refresh_reconciled_album_cover_cache.sql
-0253_preserve_invalid_legacy_scan_warnings.sql
+0262_create_lastfm_reauthentication_continuations.sql
+0263_refresh_reconciled_album_cover_cache.sql
+0264_preserve_invalid_legacy_scan_warnings.sql
+0265_grant_claimed_cover_selection_read.sql
 ```
 
 Section 3 owns the first baseline schema migration. Do not add future-feature reservation schemas here. Phase 6 migration files should stay current-stack scoped and target app-owned durable data for `album_haven_core`.
@@ -544,6 +546,19 @@ same-named MusicBrainz groups a matched person is a member of (Alice Cooper and
 his 1969-74 group), shown under the one local artist while each album keeps its
 own MBID. It is additive; running code that does not know the column ignores it.
 Rollback stops the readers and drops the column.
+
+Migration `0210_create_schema_migration_attestations.sql` adds the append-only
+`ops.schema_migration_attestations` table used to reconcile a database's
+`ops.schema_migrations` ledger with the repository without rewriting history. A
+row binds a migration name, its repository checksum, the checksum the ledger
+actually holds (null when the name is absent), the SHA-256 of the catalog
+evidence manifest proving the database's state, the reconciliation migration and
+the owner's approval. Updates, deletes and truncation are rejected by triggers and
+privileges; the runtime role has no access and the read-only role may select. The
+migration creates an empty table: rows are written per database by the reviewed
+reconciliation tooling. Fresh databases built from the repository never need
+attestations. Rollback is not expected; removing the table also removes the
+reconciliation evidence, so it requires an owner-approved contraction.
 
 Migration `0171_create_musicbrainz_artist_enrichment.sql` uses a reserved number:
 `0099` through `0170` are already taken by unmerged branches or recorded in the

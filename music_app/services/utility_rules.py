@@ -5,6 +5,7 @@ from threading import Lock
 from time import perf_counter
 
 from music_app.routes.api_rules_helpers import build_utility_rules_payload as build_utility_rules_read_payload
+from music_app.services.library_album_index import library_album_index
 from music_app.services.runtime_shutdown import create_daemon_executor
 
 
@@ -189,7 +190,7 @@ def build_utility_rules_payload(
     alias_to_canonical = relation_views.get("alias_to_canonical", {}) if isinstance(relation_views, dict) else {}
     payload = build_utility_rules_read_payload(
         config=cfg,
-        albums=list(st.get("albums", []) or []),
+        albums_with_keys=library_album_index(st).albums_with_keys,
         file_cache=st.get("file_cache", {}) or {},
         ignored_version_keys=load_ignored_version_keys(cfg),
         ignored_repair_keys=load_ignored_repair_keys(cfg),

@@ -330,11 +330,10 @@ class PostgresCoverMutationRepository:
 
     def commit_selection(self, *, request: CoverSelectionCommit) -> CoverMutationOutcome:
         parameters = self._commit_parameters(request)
-        connection = self._connect_to_database(self._database_url)
         may_have_committed = False
         outcome_unknown = False
         try:
-            with connection:
+            with self._connect_to_database(self._database_url) as connection:
                 self._set_timeout(connection)
                 may_have_committed = True
                 row = connection.execute(

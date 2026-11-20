@@ -15,6 +15,7 @@ from music_app.jobs.lastfm_handlers import (
 from music_app.services.jobs.authorization import AuthorizationDecision
 from music_app.services.jobs.models import ClaimedJob, JobState, JobTransitionResult
 from music_app.services.lastfm import LastfmError, LastfmSubmissionOutcome
+from music_app.services.lastfm_retry_jobs_postgres import LastfmSessionCredentials
 
 
 NOW = datetime(2026, 9, 7, 15, 0, tzinfo=timezone.utc)
@@ -80,9 +81,13 @@ class _Repository:
             payload={"artist": "Artist", "track": "Song", "timestamp": 100},
         )
 
-    def load_claimed_session_secret(self, **values):
+    def load_claimed_session_credentials(self, **values):
         self.calls.append(("secret", values))
-        return self.secret
+        if self.secret is None:
+            return None
+        return LastfmSessionCredentials(
+            session_key=self.secret, active_session_id=31, reauthentication_generation=7,
+        )
 
     def begin_claimed_attempt(self, **values):
         self.calls.append(("begin", values))
@@ -163,6 +168,7 @@ def test_handler_reauthorizes_loads_secret_marks_sending_and_finalizes_accepted(
     finish = repository.calls[-1][1]
     assert finish["disposition"] == "accepted"
     assert finish["expected_row_revision"] == 6
+    assert finish["reauthentication_generation"] == 7
     assert "claimed-session-secret" not in repr(finish)
 
 

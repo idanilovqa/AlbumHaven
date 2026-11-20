@@ -140,7 +140,7 @@ test('loaded track uses its resolved album cover when the track payload omits ar
       imageProbe = this;
     }
   }
-  const album = { cover_path: 'C:/Music/Artist/Album/cover.jpg' };
+  const album = { cover_ref: 'C:/Music/Artist/Album/cover.jpg' };
   const { context } = loadRuntime({
     Image: LoadedImage,
     resolveAlbumForPlayerTrack: () => album,
@@ -155,11 +155,11 @@ test('loaded track uses its resolved album cover when the track payload omits ar
   }, { persist: false });
   imageProbe.onload();
 
-  assert.equal(context.state.player.current.coverPath, album.cover_path);
-  assert.equal(imageProbe.src, `/cover?path=${encodeURIComponent(album.cover_path)}`);
+  assert.equal(context.state.player.current.coverRef, album.cover_ref);
+  assert.equal(imageProbe.src, `/cover/${encodeURIComponent(album.cover_ref)}`);
   assert.equal(
     coverButton.style.backgroundImage,
-    `url("/cover?path=${encodeURIComponent(album.cover_path)}")`,
+    `url("/cover/${encodeURIComponent(album.cover_ref)}")`,
   );
   assert.equal(coverButton.hidden, false);
 });

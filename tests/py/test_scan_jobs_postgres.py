@@ -137,6 +137,77 @@ def _normalized(statement):
     return " ".join(statement.casefold().split())
 
 
+def test_targeted_enqueue_contract_admits_only_selected_scope_at_production_root_count(monkeypatch):
+    from tests.py.bounded_interactions import CountingConnection, OperationCounts, measure_scale_pair
+
+    original_is_dir = Path.is_dir
+    selected = _targeted_request()
+
+    def run(cardinality):
+        counts = OperationCounts()
+        roots = {f"unrelated-{index}": _root_row(f"unrelated-{index}", index + 100)
+                 for index in range(cardinality - 2)}
+        roots.update({"root-a": _root_row("root-a", 31), "root-b": _root_row("root-b", 32)})
+
+        class Connection(_RecordingConnection):
+            def execute(self, statement, parameters=None):
+                sql = _normalized(statement)
+                self.executed.append((str(statement), parameters or {}))
+                if "from library.library_roots" in sql:
+                    assert "= any(%(logical_root_ids)s)" in sql
+                    assert parameters["library_id"] == 19
+                    requested = parameters["logical_root_ids"]
+                    assert set(requested) == {"root-a", "root-b"}
+                    return _Result(all_rows=[roots[key] for key in requested])
+                assert "create_targeted_reconciliation_intent" in sql or "link_scan_intent_job" in sql
+                return _Result(one={"intent_id": 84})
+
+        connection = Connection()
+        counted = CountingConnection(connection, counts)
+        repository, connector, jobs = _repository(counted)
+
+        def is_dir(path):
+            assert path in selected.paths
+            counts.stat_calls += 1
+            return original_is_dir(path)
+
+        def no_enumeration(*_args, **_kwargs):
+            pytest.fail("targeted admission must not enumerate the library")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(Path, "is_dir", is_dir)
+            patch.setattr(Path, "iterdir", no_enumeration)
+            patch.setattr(Path, "rglob", no_enumeration)
+            result = repository.enqueue_targeted_reconciliation(
+                library_id=19, request=selected, deployment_mode="self_hosted_private_web",
+                client_surface="library_watcher", scheduled_at=NOW,
+            )
+        counts.pool_leases = len(connector.urls)
+        counts.transactions = connection.commits
+        counts.queue_claims = len(jobs.calls)
+        assert result.intent_id == 84 and result.job_id == 901
+        assert counts.stat_calls == len(selected.paths) == 2
+        assert counts.returned_rows == 4
+        assert counts.sql_statements == 3
+        assert counts.pool_leases == counts.transactions == counts.queue_claims == 1
+        values = next(parameters for sql, parameters in connection.executed
+                      if "create_targeted_reconciliation_intent" in sql)
+        assert values["active_paths"] == sorted(str(path) for path in selected.paths)
+        assert values["deleted_paths"] == sorted(str(path) for path in selected.deleted_paths)
+        assert len(json.loads(values["moves_json"])) == len(selected.moves)
+        counts.serialize(values, rows=1)
+        return counts
+
+    measure_scale_pair(
+        interaction_id="py:services/scan_jobs_postgres.py#PostgresScanJobRepository.enqueue_targeted_reconciliation",
+        small=20, large=14000,
+        budgets={"sql_statements": 3, "pool_leases": 1, "transactions": 1, "queue_claims": 1,
+                 "returned_rows": 4, "stat_calls": 2, "filesystem_enumerations": 0,
+                 "serialized_rows": 1, "serialized_bytes": 4096, "unrelated_reads": 0},
+        growth=("returned_rows", 0), run=run,
+    )
+
+
 def _root_row(logical_root_id, root_id, *, library_id=19, is_active=True):
     return {
         "logical_root_id": logical_root_id,

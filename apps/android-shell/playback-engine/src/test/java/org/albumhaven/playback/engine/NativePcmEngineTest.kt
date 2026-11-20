@@ -600,4 +600,76 @@ class NativePcmEngineTest {
         assertEquals("control-send-error", harness.failure()?.code)
         assertNull(harness.engine.currentStreamId)
     }
+
+    /** Two album tracks whose decoder left 1 500 near-silent frames after and 1 200 silent frames before the join. */
+    private val paddedOutgoing = SyntheticTrack(tag = 11, frames = 2L * RATE) { frame -> if (frame < 2L * RATE - 1_500) 0.25f else 0.0001f }
+    private val paddedIncoming = SyntheticTrack(tag = 12, frames = 2L * RATE) { frame -> if (frame < 1_200) 0f else 0.5f }
+
+    private fun playAlbumBoundary(consecutiveAlbumBoundary: Boolean): PcmHarness =
+        PcmHarness(paddedOutgoing, paddedIncoming).also { harness ->
+            harness.engine.start(paddedOutgoing.pcm)
+            harness.engine.setQueuedNext(paddedIncoming.pcm, consecutiveAlbumBoundary)
+            harness.playToEnd()
+            assertNull(harness.failure())
+            assertEquals(0, harness.emitted<PcmEngineEvent.Underrun>().size)
+        }
+
+    @Test
+    fun aNaturalConsecutiveAlbumHandoffRemovesProvenPaddingFromBothEdges() {
+        val harness = playAlbumBoundary(consecutiveAlbumBoundary = true)
+        val written = harness.sink.writtenLeft()
+
+        val contentEnd = 2 * RATE - 1_500
+        assertEquals(contentEnd, written.indexOf(0.5f))
+        assertTrue(written.subList(0, contentEnd).all { it == 0.25f })
+        assertTrue(written.subList(contentEnd, written.size).all { it == 0.5f })
+        assertEquals(
+            listOf(PcmEngineEvent.Boundary(PcmBoundaryKind.QUEUED_NEXT, 1, 2, 1_200)),
+            harness.emitted<PcmEngineEvent.Boundary>(),
+        )
+        assertEquals(1_500, harness.engine.boundaryPadding.getValue(BoundaryEdge.SUFFIX).removableFrames)
+        assertEquals(1_200, harness.engine.boundaryPadding.getValue(BoundaryEdge.PREFIX).removableFrames)
+        assertEquals(listOf(PcmEngineEvent.Ended(2, 2L * RATE)), harness.emitted<PcmEngineEvent.Ended>())
+    }
+
+    @Test
+    fun aSuccessorNotQualifiedAsTheNextAlbumTrackKeepsEveryFrame() {
+        val harness = playAlbumBoundary(consecutiveAlbumBoundary = false)
+        val written = harness.sink.writtenLeft()
+
+        assertEquals(4 * RATE, written.size)
+        assertEquals(2 * RATE + 1_200, written.indexOf(0.5f))
+        assertEquals(listOf(PcmEngineEvent.Boundary(PcmBoundaryKind.QUEUED_NEXT, 1, 2, 0)), harness.emitted<PcmEngineEvent.Boundary>())
+        assertTrue(harness.engine.boundaryPadding.isEmpty())
+    }
+
+    @Test
+    fun aManualSkipToTheConsecutiveSuccessorKeepsEveryFrame() {
+        val harness = PcmHarness(paddedOutgoing, paddedIncoming)
+        harness.engine.start(paddedOutgoing.pcm)
+        harness.engine.setQueuedNext(paddedIncoming.pcm, consecutiveAlbumBoundary = true)
+        harness.playUntil { harness.engine.preparedSuccessor != null && harness.engine.bufferedFrames(PcmRole.CONTINUITY) > RATE / 10 }
+
+        assertTrue(harness.engine.skipToPrepared())
+        harness.playToEnd()
+
+        assertEquals(listOf(PcmEngineEvent.Boundary(PcmBoundaryKind.QUEUED_NEXT, 1, 2, 0)), harness.emitted<PcmEngineEvent.Boundary>())
+        assertTrue(harness.engine.boundaryPadding.isEmpty())
+    }
+
+    @Test
+    fun thePreparedSuccessorFollowsItsQueueQualification() {
+        val harness = PcmHarness(paddedOutgoing, paddedIncoming)
+        harness.engine.start(paddedOutgoing.pcm)
+        harness.engine.setQueuedNext(paddedIncoming.pcm, consecutiveAlbumBoundary = true)
+        harness.playUntil { harness.engine.preparedSuccessor != null }
+        assertTrue(harness.engine.preparedSuccessorIsConsecutiveAlbum)
+
+        harness.engine.setQueuedNext(paddedIncoming.pcm, consecutiveAlbumBoundary = false)
+        assertFalse(harness.engine.preparedSuccessorIsConsecutiveAlbum)
+        assertEquals(paddedIncoming.pcm, harness.engine.preparedSuccessor)
+
+        harness.engine.setQueuedNext(null)
+        assertFalse(harness.engine.preparedSuccessorIsConsecutiveAlbum)
+    }
 }

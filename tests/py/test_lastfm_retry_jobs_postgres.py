@@ -339,3 +339,37 @@ def test_claimed_session_secret_loader_returns_only_local_secret_value():
     assert "ops.load_claimed_lastfm_session_secret" in sql
     assert "integration.lastfm_sessions" not in sql
     assert values["job_id"] == 71
+
+
+def test_claimed_credentials_capture_secret_session_and_generation_in_one_fenced_query():
+    connection = _Connection([{
+        "session_key_encrypted": "private-claimed-secret", "active_session_id": 31,
+        "reauthentication_generation": 7, "provider_username": "fixture-user", "connected_at": "",
+    }])
+    credentials = _repository(connection, _Jobs()).load_claimed_session_credentials(
+        pending_scrobble_id=53, active_session_id=31, job_id=71, attempt=1,
+        worker_id="worker-a", lease_token="lease-a", now=NOW,
+    )
+    assert credentials is not None
+    assert credentials.session_key == "private-claimed-secret"
+    assert credentials.active_session_id == 31
+    assert credentials.reauthentication_generation == 7
+    assert "private-claimed-secret" not in repr(credentials)
+    assert len(connection.executed) == 1
+    sql, values = connection.executed[0]
+    assert "ops.load_claimed_lastfm_session_credentials" in sql
+    assert values == {
+        "pending_scrobble_id": 53, "active_session_id": 31, "job_id": 71,
+        "attempt": 1, "worker_id": "worker-a", "lease_token": "lease-a", "now": NOW,
+    }
+
+
+def test_missing_claimed_credentials_fail_closed_without_loading_legacy_secret():
+    connection = _Connection([None])
+    credentials = _repository(connection, _Jobs()).load_claimed_session_credentials(
+        pending_scrobble_id=53, active_session_id=31, job_id=71, attempt=1,
+        worker_id="worker-a", lease_token="lease-a", now=NOW,
+    )
+    assert credentials is None
+    assert len(connection.executed) == 1
+    assert "ops.load_claimed_lastfm_session_credentials" in connection.executed[0][0]

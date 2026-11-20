@@ -2,11 +2,13 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 
-test('TrackModalActions exposes the current-release split choice journey', async () => {
+test('TrackModalActions exposes the changed-album journey instead of a split chooser', async () => {
   const { TrackModalActions } = await import('../e2e/actions/trackModalActions.js');
 
-  assert.equal(typeof TrackModalActions.prototype.waitForIdentitySplitChoices, 'function');
-  assert.equal(typeof TrackModalActions.prototype.chooseCurrentRelease, 'function');
+  assert.equal(typeof TrackModalActions.prototype.watchForChangedAlbumNotice, 'function');
+  assert.equal(typeof TrackModalActions.prototype.waitForChangedAlbumNotice, 'function');
+  assert.equal(TrackModalActions.prototype.waitForIdentitySplitChoices, undefined);
+  assert.equal(TrackModalActions.prototype.chooseCurrentRelease, undefined);
 });
 
 test('TrackModalActions waits for one atomic exact album-details render', async () => {
@@ -181,8 +183,8 @@ test('TrackModalActions reads the displayed modal cover checkpoint through its P
   const { TrackModalActions } = await import('../e2e/actions/trackModalActions.js');
   const coverCheckpoint = {
     complete: true,
-    currentSrc: 'http://127.0.0.1:4173/cover?path=joseph&size=480',
-    productionSrc: '/cover?path=joseph&size=480',
+    currentSrc: 'http://127.0.0.1:4173/cover/joseph?size=480',
+    productionSrc: '/cover/joseph?size=480',
     naturalWidth: 480,
     naturalHeight: 480,
   };

@@ -753,8 +753,8 @@ def test_recovered_tag_edit_state_reads_only_requested_paths(monkeypatch):
         for sql, params in connection.executed
         if "local_track_files.metadata" in sql
     )
-    assert "private_path = any(%(changed_paths)s::text[])" in file_query[0]
-    assert file_query[1]["changed_paths"] == ["track.flac"]
+    assert "private_path = any(%(paths)s::text[])" in file_query[0]
+    assert file_query[1]["paths"] == ["track.flac"]
     statements = [sql for sql, _params in connection.executed]
     inventory_lock_index = next(
         index
@@ -800,9 +800,9 @@ def test_tag_edit_state_loads_raw_metadata_with_bounded_album_scope(monkeypatch,
                 self.executed.append((sql, params))
                 normalized = _normalized_sql(sql)
                 assert "join bootstrap_context on bootstrap_context.library_id = library.local_tracks.library_id" in normalized
-                if "changed_paths" in params:
-                    assert "private_path = any(%(changed_paths)s::text[])" in normalized
-                    return FakeCursor([row for row in rows if row["library_id"] == 7 and row["private_path"] in params["changed_paths"]])
+                if "paths" in params:
+                    assert "private_path = any(%(paths)s::text[])" in normalized
+                    return FakeCursor([row for row in rows if row["library_id"] == 7 and row["private_path"] in params["paths"]])
                 assert params["album_keys"] == ["artist::album"]
                 assert "album_key = any(%(album_keys)s::text[])" in normalized
                 return FakeCursor([row for row in rows if row["library_id"] == 7 and row["album_key"] in params["album_keys"]])
@@ -843,7 +843,7 @@ def test_tag_edit_state_loads_raw_metadata_with_bounded_album_scope(monkeypatch,
     assert "bootstrap_context.library_id = library.exception_overrides.library_id" in _normalized_sql(override_sql)
     file_queries = [(sql, params) for sql, params in connection.executed if "local_track_files.metadata #> '{scan_cache,file_entry}'" in sql]
     assert len(file_queries) == (1 if mode == "recovery-exact" else 2)
-    assert file_queries[0][1]["changed_paths"] == sorted(requested)
+    assert file_queries[0][1]["paths"] == sorted(requested)
 
 
 def test_recovered_tag_edit_state_returns_explicit_clear_for_missing_override(
@@ -1020,6 +1020,12 @@ def test_featured_artist_sync_reconciles_only_current_and_legacy_generated_rows(
 def test_targeted_inventory_mutation_uses_shared_lock_and_commits_one_revision(monkeypatch):
     from music_app.services import scan_cache_persistence
     from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+
+    monkeypatch.setattr(
+        scan_cache_persistence,
+        "_commit_structural_relation_projection",
+        lambda *_args, **_kwargs: pytest.fail("targeted inventory publication must defer relation rebuilding"),
+    )
 
     class TargetedConnection(FakeConnection):
         def __init__(self, *, existing_memberships=None):
@@ -3966,6 +3972,120 @@ def _pure_relation_adapter(persistence, connections):
     return persistence.PostgresScanCacheAdapter(
         {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
         connect=lambda _database_url: next(remaining),
+    )
+
+
+@pytest.mark.parametrize("superseded", [False, True], ids=["publish", "superseded"])
+def test_relation_refresh_contract_builds_one_source_batch_and_fences_publication(monkeypatch, superseded):
+    from music_app.services import scan_cache_persistence as persistence
+    from tests.py.bounded_interactions import CountingConnection, OperationCounts, measure_scale_pair
+
+    real_fingerprint = persistence.relation_source_fingerprint
+    real_builder = persistence.build_relation_views_from_postgres_rows
+
+    def run(cardinality):
+        counts = OperationCounts()
+        revisions = {"library_id": 5, "inventory_mutation_revision": 17, "cover_mutation_revision": 9}
+        snapshot = {"relation_projection": {"status": "stale", "rebuild_reason": "bounded-contract"}}
+        source_rows = [{
+            "album_id": index + 1, "owner_artist_name": "Owner", "album_artist": "Owner",
+            "member_artist_name": "Guest", "featured_kind": "featured_member",
+            "library_root_id": "root-a", "root_kind": "main_library", "root_path": "C:/Music",
+            "relative_path": f"Owner/Album {index}/01.flac",
+            "private_path": f"C:/Music/Owner/Album {index}/01.flac",
+        } for index in range(cardinality)]
+
+        class Connection(_PureRelationConnection):
+            exited = False
+
+            def __exit__(self, *exc):
+                self.exited = True
+                return super().__exit__(*exc)
+
+            def execute(self, sql, params=None):
+                normalized = " ".join(sql.casefold().split())
+                assert not any(operation in normalized for operation in (
+                    "insert into library.local_albums", "update library.local_albums",
+                    "delete from library.local_albums", "insert into library.local_track_files",
+                    "update library.local_track_files", "delete from library.local_track_files",
+                )), "pure relation refresh must not rewrite the authoritative inventory"
+                if params and "rows" in params:
+                    rows = getattr(params["rows"], "obj", params["rows"])
+                    counts.serialized_rows += len(rows)
+                if params and "row_count" in params and "select" in normalized:
+                    self.executed.append((sql, params))
+                    return FakeCursor([{"replacement_row_count": params["row_count"]}])
+                return super().execute(sql, params)
+
+            def commit(self):
+                counts.transactions += 1
+                super().commit()
+
+        preparation = Connection(persistence, revisions=revisions, snapshot=snapshot, source_rows=source_rows)
+        publication = Connection(
+            persistence, revisions={**revisions, "inventory_mutation_revision": 18} if superseded else revisions,
+            snapshot=snapshot, source_rows=source_rows,
+        )
+        connections = iter([preparation, publication])
+
+        def connect(_database_url):
+            counts.pool_leases += 1
+            return CountingConnection(next(connections), counts)
+
+        def fingerprint(rows):
+            counts.candidate_rows += len(rows)
+            return real_fingerprint(rows)
+
+        def build(config, rows):
+            counts.builder_calls += 1
+            counts.membership_rows += len(rows)
+            assert preparation.exited and preparation.exit_exc_type is None
+            assert not publication.executed, "build must finish before acquiring publication locks"
+            return real_builder(config, rows)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(persistence, "Jsonb", None)
+            patch.setattr(persistence, "relation_source_fingerprint", fingerprint)
+            patch.setattr(persistence, "build_relation_views_from_postgres_rows", build)
+            adapter = persistence.PostgresScanCacheAdapter(
+                {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://contract/relation-refresh"}, connect=connect,
+            )
+            before_commit_calls = []
+            guard_calls = []
+
+            def before_commit(connection):
+                before_commit_calls.append(connection)
+                assert any(sql == persistence._save_scan_snapshot_sql() for sql, _ in publication.executed)
+
+            def guard(commit):
+                guard_calls.append(True)
+                commit()
+
+            if superseded:
+                with pytest.raises(persistence.ScanCachePublicationSuperseded, match="changed during preparation"):
+                    adapter.refresh_relation_projection(before_commit=before_commit, publication_commit_guard=guard)
+                assert not before_commit_calls and not guard_calls
+                assert not any(sql == persistence._save_scan_snapshot_sql() for sql, _ in publication.executed)
+                assert publication.exit_exc_type is persistence.ScanCachePublicationSuperseded
+            else:
+                result = adapter.refresh_relation_projection(before_commit=before_commit, publication_commit_guard=guard)
+                assert {"Owner", "Guest"} <= set(result["relation_views"]["artists"])
+                assert len(before_commit_calls) == len(guard_calls) == counts.transactions == 1
+                saved = next(params["scan_cache"] for sql, params in publication.executed
+                             if sql == persistence._save_scan_snapshot_sql())
+                assert saved["relation_projection"]["source_row_count"] == cardinality
+        assert counts.pool_leases == 2
+        assert counts.builder_calls == 1
+        assert counts.candidate_rows == counts.membership_rows == cardinality
+        return counts
+
+    measure_scale_pair(
+        interaction_id="py:services/scan_cache_persistence.py#PostgresScanCacheAdapter.refresh_relation_projection",
+        small=20, large=160000,
+        budgets={"builder_calls": 1, "pool_leases": 2, "transactions": 1,
+                 "sql_statements": 12, "candidate_rows": 160000, "membership_rows": 160000,
+                 "returned_rows": 160016, "unrelated_writes": 0},
+        growth=("builder_calls", 0), run=run,
     )
 
 

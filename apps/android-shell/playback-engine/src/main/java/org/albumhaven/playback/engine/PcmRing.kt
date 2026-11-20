@@ -63,6 +63,13 @@ class PcmRing(val capacityFrames: Int) {
         bufferedFrames -= frames
     }
 
+    /** Discards the newest [frames] buffered frames, so the ring ends earlier. */
+    fun dropNewest(frames: Int) {
+        require(frames in 0..bufferedFrames) { "frames exceed buffered PCM" }
+        writeFrame = (writeFrame - frames + capacityFrames) % capacityFrames
+        bufferedFrames -= frames
+    }
+
     /** Copies [frames] buffered frames starting [offsetFrames] after [readFrame] into [target] at [targetFrame]. */
     fun copyTo(offsetFrames: Int, frames: Int, target: FloatArray, targetFrame: Int) {
         require(offsetFrames >= 0 && frames >= 0 && offsetFrames + frames <= bufferedFrames) {

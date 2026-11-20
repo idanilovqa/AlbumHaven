@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from music_app.services.log_history import history_scope_for_request
+from music_app.services.log_history import HistoryScope, history_scope_for_request
 
 from music_app.services.loop_request_scope import saved_loop_scope
 from music_app.services.loops import project_loop_for_client, project_loop_order_for_client
@@ -21,7 +21,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 from music_app.routes.playback_control_asgi import require_playback_claim, resolve_listen_track
-from music_app.services.lastfm import get_saved_lastfm_session, get_lastfm_total_scrobbles
+from music_app.services.lastfm import LastfmSession, get_saved_lastfm_session, get_lastfm_total_scrobbles
 
 from music_app.routes.api_loop_helpers import (
     parse_pitch_semitones,
@@ -51,9 +51,10 @@ from music_app.services.lastfm import (
 )
 from music_app.services.lastfm_listen_sync import has_heard_scrobble_threshold
 from music_app.services.lastfm_retry import (
-    LastfmRetryBatchError,
+    lastfm_submission_status,
     pending_scrobble_count,
-    retry_pending_lastfm_scrobbles,
+    request_lastfm_reconnect_retry,
+    request_lastfm_submission,
 )
 from music_app.services.policy_asgi import request_origin_ref_for_request
 from music_app.services.lastfm_sync_bridge import (
@@ -153,6 +154,16 @@ def _durable_lastfm_retry_recorder(request: Request):
         )
 
     return record_retryable
+
+
+def _measured_lastfm_credentials(request: Request, account_id: int, library_id: int):
+    repository = getattr(request.app.state, "lastfm_retry_job_repository", None)
+    if repository is None:
+        return None, None
+    credentials = repository.load_session_credentials(account_id=account_id, library_id=library_id)
+    if credentials is None:
+        return None, None
+    return credentials, LastfmSession(credentials.username, credentials.session_key, credentials.connected_at)
 
 
 def _first_query_value(request: Request, key: str) -> str | None:
@@ -452,7 +463,9 @@ async def utilities_integrations(request: Request) -> JSONResponse:
 async def utilities_lastfm_scrobbles(request: Request) -> JSONResponse:
     config = _app_config(request)
     scope = await history_scope_for_request(request)
-    session = await run_in_threadpool(
+    # A progress read during a background submission leaves out the Last.fm total.
+    progress = request.query_params.get("progress") == "1"
+    session = None if progress else await run_in_threadpool(
         get_saved_lastfm_session, config, account_id=scope.account_id,
     )
     summary = await run_in_threadpool(
@@ -462,10 +475,15 @@ async def utilities_lastfm_scrobbles(request: Request) -> JSONResponse:
         library_id=scope.library_id,
         session=session,
     )
+    if progress:
+        del summary["lastfm_total"]
     can_submit = allowed_actions_for_request(
         request, ("integration.lastfm.scrobbles.submit",),
     ).allows("integration.lastfm.scrobbles.submit")
-    return JSONResponse({"ok": True, **summary, "can_submit": can_submit})
+    return JSONResponse({
+        "ok": True, **summary, "can_submit": can_submit,
+        "submission": lastfm_submission_status(scope.account_id),
+    })
 
 
 @router.post("/utilities/integrations/lastfm/scrobbles/submit")
@@ -492,14 +510,14 @@ async def utilities_lastfm_scrobbles_submit(request: Request) -> JSONResponse:
         retry_summary["pending_after"] = pending_before
     except Exception:
         error = "Album Haven could not submit pending scrobbles to Last.fm."
-        _log_lastfm_pending_submit_failure(
-            config, logger, scope, error, summary=retry_summary, failure_stage="pending_count_read",
+        await run_in_threadpool(
+            _log_lastfm_pending_submit_failure, config, logger, scope, error, summary=retry_summary, failure_stage="pending_count_read",
         )
         return _json_response(({"ok": False, "error": error, **retry_summary}, 500))
     if not lastfm_api_enabled(config):
         error = "Last.fm API credentials are not configured on the server."
-        _log_lastfm_pending_submit_failure(
-            config, logger, scope, error, summary=retry_summary, failure_stage="api_configuration",
+        await run_in_threadpool(
+            _log_lastfm_pending_submit_failure, config, logger, scope, error, summary=retry_summary, failure_stage="api_configuration",
         )
         return _json_response(({"ok": False, "error": error, **retry_summary}, 503))
     try:
@@ -508,90 +526,35 @@ async def utilities_lastfm_scrobbles_submit(request: Request) -> JSONResponse:
         )
     except Exception:
         error = "Album Haven could not submit pending scrobbles to Last.fm."
-        _log_lastfm_pending_submit_failure(
-            config, logger, scope, error, summary=retry_summary, failure_stage="account_session_read",
+        await run_in_threadpool(
+            _log_lastfm_pending_submit_failure, config, logger, scope, error, summary=retry_summary, failure_stage="account_session_read",
         )
         return _json_response(({"ok": False, "error": error, **retry_summary}, 500))
     if session is None:
         error = "Last.fm account is not connected."
-        _log_lastfm_pending_submit_failure(
-            config, logger, scope, error, summary=retry_summary, failure_stage="account_connection",
+        await run_in_threadpool(
+            _log_lastfm_pending_submit_failure, config, logger, scope, error, summary=retry_summary, failure_stage="account_connection",
         )
         return _json_response(({"ok": False, "error": error, **retry_summary}, 409))
-    try:
-        retry_summary = await run_in_threadpool(
-            retry_pending_lastfm_scrobbles,
-            config,
-            account_id=scope.account_id,
-            library_id=scope.library_id,
-            bypass_backoff=True,
-            limit=1_000_000,
-        )
-    except LastfmRetryBatchError as exc:
-        retry_summary = exc.summary
-        try:
-            counts = await run_in_threadpool(
-                build_listen_history_status_counts,
-                config,
-                account_id=scope.account_id,
-                library_id=scope.library_id,
-            )
-            retry_summary["pending_after"] = int(counts["pending_scrobble_count"])
-        except Exception:
-            pass
-        error = "Album Haven could not submit pending scrobbles to Last.fm."
-        _log_lastfm_pending_submit_failure(
-            config, logger, scope, error, summary=retry_summary, failure_stage="submission",
-        )
-        return _json_response(({"ok": False, "error": error, **retry_summary}, 500))
-    except Exception:
-        error = "Album Haven could not submit pending scrobbles to Last.fm."
-        _log_lastfm_pending_submit_failure(
-            config, logger, scope, error, summary=retry_summary, failure_stage="submission",
-        )
-        return _json_response(({"ok": False, "error": error, **retry_summary}, 500))
-    try:
-        status_summary = await run_in_threadpool(
-            _lastfm_scrobble_summary,
-            config,
-            account_id=scope.account_id,
-            library_id=scope.library_id,
-            session=session,
-        )
-    except Exception:
-        error = "Album Haven could not submit pending scrobbles to Last.fm."
-        _log_lastfm_pending_submit_failure(
-            config, logger, scope, error, summary=retry_summary, failure_stage="status_refresh",
-        )
-        return _json_response(({"ok": False, "error": error, **retry_summary}, 500))
-    retry_summary = {**retry_summary, "pending_after": int(status_summary["pending"])}
-    result = {
-        **status_summary,
-        **{key: int(retry_summary[key]) for key in (
-            "pending_before", "attempted", "succeeded", "failed", "pending_after",
-        )},
-    }
-    if result["failed"] or result["pending"]:
-        error = "Some pending scrobbles could not be submitted to Last.fm."
-        _log_lastfm_pending_submit_failure(
-            config,
-            logger,
-            scope,
-            error,
-            summary={**retry_summary, "pending_after": result["pending"]},
-            failure_stage="submission",
-        )
-        return _json_response(({"ok": False, "error": error, **result}, 502))
-    return JSONResponse({"ok": True, **result})
+    # The retry worker sends the scrobbles in batches; the page follows the pending count.
+    submission = request_lastfm_submission(scope)
+    return JSONResponse({
+        "ok": True,
+        "scrobbled": int(counts["listen_history_count"]),
+        "pending": pending_before,
+        **retry_summary,
+        "queued": pending_before,
+        "submission": {"state": submission, "error": ""},
+    })
 
 
 @router.get("/utilities/integrations/foobar/help")
-async def utilities_foobar_help() -> JSONResponse:
+def utilities_foobar_help() -> JSONResponse:
     return JSONResponse(build_foobar_help_payload(build_asset_url=build_foobar_asset_url))
 
 
 @router.get("/utilities/integrations/foobar/assets/{asset_key}")
-async def utilities_foobar_asset(request: Request, asset_key: str) -> Response:
+def utilities_foobar_asset(request: Request, asset_key: str) -> Response:
     try:
         asset_definition, asset_path = resolve_foobar_asset(asset_key)
     except KeyError:
@@ -697,6 +660,20 @@ async def utilities_lastfm_settings(request: Request) -> JSONResponse:
     if not username or not password:
         return _json_response(({"ok": False, "error": "Last.fm username and password are required."}, 400))
 
+    durable = _durable_lastfm_request_context(request)
+    reconnect = {}
+    if durable is not None:
+        _repository, audit, _account_id, library_id = durable
+        reconnect["reauthentication_context"] = {
+            "library_id": library_id,
+            "request_origin_ref": request_origin_ref_for_request(request),
+            "deployment_mode": audit.deployment_mode,
+            "client_surface": audit.client_surface_class,
+            "request_ref": uuid.uuid4().hex,
+            "expected_generation": await run_in_threadpool(
+                _repository.load_reauthentication_generation,
+                account_id=history_scope.account_id, library_id=library_id),
+        }
     try:
         integration = await run_in_threadpool(
             authenticate_lastfm,
@@ -706,10 +683,12 @@ async def utilities_lastfm_settings(request: Request) -> JSONResponse:
             connected_at=datetime.now(timezone.utc).isoformat(),
             user_timezone=timezone_name,
             account_id=history_scope.account_id,
+            **reconnect,
         )
     except LastfmError as exc:
         try:
-            log_app_event(
+            await run_in_threadpool(
+                log_app_event,
                 config,
                 logger,
                 "Last.fm connection failed",
@@ -733,7 +712,8 @@ async def utilities_lastfm_settings(request: Request) -> JSONResponse:
         return _json_response(({"ok": False, "error": str(exc)}, 400))
     except Exception as exc:
         try:
-            log_app_event(
+            await run_in_threadpool(
+                log_app_event,
                 config,
                 logger,
                 "Last.fm connection failed",
@@ -754,24 +734,7 @@ async def utilities_lastfm_settings(request: Request) -> JSONResponse:
                 pass
         raise
 
-    durable = _durable_lastfm_request_context(request)
-    if durable is not None:
-        repository, audit, account_id, library_id = durable
-        try:
-            await run_in_threadpool(
-                repository.release_after_reauthentication,
-                account_id=account_id,
-                library_id=library_id,
-                request_origin_ref=request_origin_ref_for_request(request),
-                deployment_mode=audit.deployment_mode,
-                client_surface=audit.client_surface_class,
-                now=datetime.now(timezone.utc),
-                limit=100,
-            )
-        except Exception:
-            return _json_response(
-                ({"ok": False, "error": "Last.fm retries could not be queued."}, 503)
-            )
+    request_lastfm_reconnect_retry(history_scope.account_id)
     return JSONResponse(
         {
             "ok": True,
@@ -832,7 +795,11 @@ async def playback_session_scrobble(request: Request) -> JSONResponse:
     await require_playback_claim(request, payload)
     payload = await resolve_listen_track(request, payload)
     trusted = await history_scope_for_request(request)
-    session = await run_in_threadpool(get_saved_lastfm_session, config, account_id=trusted.account_id)
+    credentials = None
+    if payload.get("measurement_version") is not None:
+        credentials, session = await run_in_threadpool(_measured_lastfm_credentials, request, trusted.account_id, trusted.library_id)
+    else:
+        session = await run_in_threadpool(get_saved_lastfm_session, config, account_id=trusted.account_id)
     if payload.get("measurement_version") is not None and session is None:
         return JSONResponse({"ok": False, "error": "account_scoped_scrobble_unavailable", "retryable": False}, status_code=409)
     captured = {"session": session}
@@ -840,7 +807,7 @@ async def playback_session_scrobble(request: Request) -> JSONResponse:
         try:
             result, status = await run_in_threadpool(record_playback_session_complete, config,
                 {**payload, "finalized": payload.get("finalized", False)}, account_id=trusted.account_id, library_id=trusted.library_id,
-                lastfm_session=session, user_timezone="UTC",
+                lastfm_session=session, lastfm_credentials=credentials, user_timezone="UTC",
                 normalize_playback_track_payload=normalize_playback_track_payload,
                 is_meaningful_listen_session=is_meaningful_listen_session,
                 append_listen_history_entry=append_listen_history_entry,
@@ -862,7 +829,8 @@ async def playback_session_scrobble(request: Request) -> JSONResponse:
     try:
         result = await run_in_threadpool(scrobble_track, config, normalize_playback_track_payload(payload), **captured)
     except LastfmError as exc:
-        _log_lastfm_scrobble_event(
+        await run_in_threadpool(
+            _log_lastfm_scrobble_event,
             config,
             logger,
             "Last.fm scrobble failed",
@@ -872,7 +840,8 @@ async def playback_session_scrobble(request: Request) -> JSONResponse:
          history_scope=history_scope)
         return _json_response(({"ok": False, "error": str(exc)}, 400))
     response_payload = _lastfm_submission_response(result, success_key="scrobbled")
-    _log_lastfm_scrobble_event(
+    await run_in_threadpool(
+        _log_lastfm_scrobble_event,
         config,
         logger,
         "Last.fm scrobble succeeded" if response_payload.get("scrobbled", True) else "Last.fm scrobble not submitted",
@@ -899,21 +868,19 @@ async def playback_session_complete(request: Request) -> JSONResponse:
             status_code=400,
         )
     trusted = await history_scope_for_request(request)
+    credentials, session = await run_in_threadpool(_measured_lastfm_credentials, request, trusted.account_id, trusted.library_id)
     scope = {
         "account_id": trusted.account_id,
         "library_id": trusted.library_id,
-        "lastfm_session": await run_in_threadpool(
-            get_saved_lastfm_session,
-            config,
-            account_id=trusted.account_id,
-        ),
+        "lastfm_session": session,
+        "lastfm_credentials": credentials,
     }
     try:
         response_payload, status_code = await run_in_threadpool(
             record_playback_session_complete,
             config,
             payload,
-            user_timezone="UTC",
+            user_timezone="UTC" if scope else await run_in_threadpool(get_lastfm_user_timezone, config),
             **scope,
             normalize_playback_track_payload=normalize_playback_track_payload,
             is_meaningful_listen_session=is_meaningful_listen_session,
@@ -952,6 +919,10 @@ async def create_saved_loop(request: Request) -> JSONResponse:
     if payload is None:
         return _json_response(_invalid_payload_response())
 
+    return await run_in_threadpool(_create_saved_loop_response, config, scope, library_state, logger, payload, history_scope)
+
+
+def _create_saved_loop_response(config: dict[str, object], scope: dict[str, object], library_state: dict[str, object], logger: logging.Logger, payload: JsonDict, history_scope: HistoryScope | None) -> JSONResponse:
     validated, error_response = validate_loop_create_payload(payload)
     if error_response is not None:
         return _json_response(error_response)
@@ -1043,6 +1014,10 @@ async def create_loop_pitch_preview(request: Request) -> JSONResponse:
     payload = await _json_payload(request)
     if payload is None:
         return _json_response(_invalid_payload_response())
+    return await run_in_threadpool(_create_loop_pitch_preview_response, config, scope, payload)
+
+
+def _create_loop_pitch_preview_response(config: dict[str, object], scope: dict[str, object], payload: JsonDict) -> JSONResponse:
     loop_id, loop_error = parse_required_loop_id(payload)
     if loop_error is not None:
         return _json_response(loop_error)
@@ -1079,6 +1054,10 @@ async def delete_saved_loop(request: Request) -> JSONResponse:
     payload = await _json_payload(request)
     if payload is None:
         return _json_response(_invalid_payload_response())
+    return await run_in_threadpool(_delete_saved_loop_response, config, scope, payload)
+
+
+def _delete_saved_loop_response(config: dict[str, object], scope: dict[str, object], payload: JsonDict) -> JSONResponse:
     loop_id, error_response = parse_required_loop_id(payload)
     if error_response is not None:
         return _json_response(error_response)
@@ -1095,6 +1074,10 @@ async def reorder_saved_loops(request: Request) -> JSONResponse:
     payload = await _json_payload(request)
     if payload is None:
         return _json_response(_invalid_payload_response())
+    return await run_in_threadpool(_reorder_saved_loops_response, config, scope, payload)
+
+
+def _reorder_saved_loops_response(config: dict[str, object], scope: dict[str, object], payload: JsonDict) -> JSONResponse:
     ordered_ids = payload.get("ordered_ids")
     if not isinstance(ordered_ids, list):
         return _json_response(({"ok": False, "error": "ordered_ids must be a list"}, 400))
@@ -1194,6 +1177,10 @@ async def track_preferences_write(request: Request) -> JSONResponse:
     if payload is None:
         return _json_response(_invalid_payload_response())
 
+    return await run_in_threadpool(_track_preferences_write_response, request, config, payload)
+
+
+def _track_preferences_write_response(request: Request, config: dict[str, object], payload: JsonDict) -> JSONResponse:
     track_ref = str(payload.get("track_ref") or "").strip()
     if not track_ref:
         return _json_response(({"ok": False, "error": "Track preference payload must include a track_ref."}, 400))

@@ -153,22 +153,25 @@ function renderGlobalPlayerPlayGlyph(button, paused) {
   button.setAttribute('data-player-glyph', icon);
 }
 
-function updatePlayerUi() {
-  const els = getPlayerElements();
-  const playback = getPlayerPlaybackSnapshot();
+function resolvePlayerUiStatus(playback) {
   const lockedByAnotherTab = typeof isPlaybackLockedByAnotherTab === 'function' && isPlaybackLockedByAnotherTab();
   const playbackUnavailable = lockedByAnotherTab && typeof getPlaybackOwnershipState === 'function'
     && getPlaybackOwnershipState().blockedReason === 'playback_unavailable';
-  const blockedLabel = playbackUnavailable ? 'Playback unavailable' : 'Playing in another tab';
   const mirroredTrack = lockedByAnotherTab && typeof getMirroredPlaybackTrack === 'function'
     ? getMirroredPlaybackTrack()
     : null;
   const displayTrack = mirroredTrack || state.player.current;
-  state.player.lastKnownWasPlaying = Boolean(!lockedByAnotherTab && !playback.paused && !playback.ended);
-  const hasTrack = Boolean(displayTrack && (lockedByAnotherTab || playback.src || state.player.current?.src));
-  els.player?.classList?.toggle('is-empty', !hasTrack);
-  const emptyMessage = els.player?.querySelector?.('[data-player-empty-message]');
-  if (emptyMessage) emptyMessage.hidden = hasTrack;
+  return {
+    lockedByAnotherTab,
+    playbackUnavailable,
+    blockedLabel: playbackUnavailable ? 'Playback unavailable' : 'Playing in another tab',
+    displayTrack,
+    hasTrack: Boolean(displayTrack && (lockedByAnotherTab || playback.src || state.player.current?.src)),
+  };
+}
+
+// The seek position and its time label: all that a timeline drag preview changes.
+function renderPlayerTimelinePosition(els, playback, { hasTrack, lockedByAnotherTab, blockedLabel }) {
   const duration = getPlayerDuration();
   const dragPreview = Number(state.player.timelineDragPreviewSeconds);
   const current = state.player.timelineDragging && Number.isFinite(dragPreview)
@@ -188,12 +191,25 @@ function updatePlayerUi() {
       ? `${formatLoopTime(state.player.loopStart, true)} - ${formatLoopTime(state.player.loopEnd, true)}`
       : `${formatLoopTime(current)} / ${formatLoopTime(duration)}`;
   }
+  return { duration, current };
+}
+
+function updatePlayerUi() {
+  const els = getPlayerElements();
+  const playback = getPlayerPlaybackSnapshot();
+  const status = resolvePlayerUiStatus(playback);
+  const { lockedByAnotherTab, playbackUnavailable, blockedLabel, displayTrack, hasTrack } = status;
+  state.player.lastKnownWasPlaying = Boolean(!lockedByAnotherTab && !playback.paused && !playback.ended);
+  els.player?.classList?.toggle('is-empty', !hasTrack);
+  const emptyMessage = els.player?.querySelector?.('[data-player-empty-message]');
+  if (emptyMessage) emptyMessage.hidden = hasTrack;
+  const { duration, current } = renderPlayerTimelinePosition(els, playback, status);
   els.loopActions?._loopActionController?.update({
-    enabled: Boolean(getPlayerPlaybackSnapshot().src || state.player.current?.src),
+    enabled: Boolean(!lockedByAnotherTab && (getPlayerPlaybackSnapshot().src || state.player.current?.src)),
     canCreate: state.loopCreateAllowed === true,
     contextKey: state.player.current?.path || state.player.current?.src || '',
     active: state.player.loopActive,
-    busy: state.player.saveBusy || lockedByAnotherTab,
+    busy: state.player.saveBusy,
   });
   if (els.play) {
     renderGlobalPlayerPlayGlyph(els.play, playback.paused);
@@ -240,9 +256,9 @@ function setCurrentPlayerTrack(track, options = {}) {
       duration: Number(previousPlaybackSnapshot?.duration) || undefined,
     });
   }
-  if (track && !String(track.coverPath || '').trim() && typeof resolveAlbumForPlayerTrack === 'function') {
-    const resolvedCoverPath = String(resolveAlbumForPlayerTrack(track)?.cover_path || '').trim();
-    if (resolvedCoverPath) track = { ...track, coverPath: resolvedCoverPath };
+  if (track && !String(track.coverRef || '').trim() && typeof resolveAlbumForPlayerTrack === 'function') {
+    const resolvedCoverRef = String(resolveAlbumForPlayerTrack(track)?.cover_ref || '').trim();
+    if (resolvedCoverRef) track = { ...track, coverRef: resolvedCoverRef };
   }
   state.player.current = track;
   state.player.timelineDragging = false;
@@ -265,7 +281,7 @@ function setCurrentPlayerTrack(track, options = {}) {
   state.player.loopEditDurationSeconds = 0;
   renderGlobalPlayerMetadata(els, track);
   if (els.coverButton) {
-    const coverPath = track?.coverPath || '';
+    const coverRef = track?.coverRef || '';
     const loadId = (state.player.coverLoadId || 0) + 1;
     state.player.coverLoadId = loadId;
     els.coverButton.hidden = false;
@@ -274,8 +290,8 @@ function setCurrentPlayerTrack(track, options = {}) {
     els.coverButton.textContent = '';
     if (!track) {
       els.coverButton.textContent = '';
-    } else if (coverPath) {
-      const coverSrc = `/cover?path=${encodeURIComponent(coverPath)}`;
+    } else if (coverRef) {
+      const coverSrc = `/cover/${encodeURIComponent(coverRef)}`;
       const probe = new Image();
       probe.onload = () => {
         if (state.player.coverLoadId !== loadId) return;
@@ -428,6 +444,19 @@ function resumePlayerPlaybackFromPageCache(playbackSnapshot) {
   });
 }
 
+// Only the queue owner knows whether `track` follows the current one inside the same album.
+function queuedNextContinuityOptions(track) {
+  return {
+    kind: 'queued-next',
+    startSeconds: 0,
+    consecutiveAlbumBoundary: typeof isConsecutiveAlbumSuccessor === 'function'
+      && isConsecutiveAlbumSuccessor(track),
+  };
+}
+
+// A first-frame schedule that has not settled by then stops holding its identity, so a later
+// first frame or reconciliation of the same stream schedules its continuity again.
+const STREAMING_FIRST_FRAME_SCHEDULE_DEADLINE_MS = 2000;
 let handledStreamingFirstFrameIdentity = '';
 let pendingStreamingFirstFrameIdentity = '';
 let pendingStreamingFirstFrameSchedule = null;
@@ -459,13 +488,19 @@ async function handleStreamingPlaybackFirstFrame(event = {}) {
       || selectedTrackPath !== String(state.player.current?.path || '')) return;
     return state.player.loopActive
       ? dispatchActiveStreamingLoop()
-      : nextTrack ? scheduleStreamingContinuity(nextTrack) : null;
+      : nextTrack ? scheduleStreamingContinuity(nextTrack, queuedNextContinuityOptions(nextTrack)) : null;
   });
   pendingStreamingFirstFrameSchedule = scheduling;
+  let deadline = 0;
+  const expired = new Promise((resolve) => {
+    deadline = setTimeout(resolve, STREAMING_FIRST_FRAME_SCHEDULE_DEADLINE_MS, false);
+  });
   try {
-    await scheduling;
-    handledStreamingFirstFrameIdentity = identity;
+    if (await Promise.race([scheduling.then(() => true), expired])) {
+      handledStreamingFirstFrameIdentity = identity;
+    }
   } finally {
+    clearTimeout(deadline);
     if (pendingStreamingFirstFrameSchedule === scheduling) {
       pendingStreamingFirstFrameIdentity = '';
       pendingStreamingFirstFrameSchedule = null;
@@ -608,7 +643,7 @@ async function handleStreamingPlaybackBoundary(event = {}) {
     ? peekNextQueuedTrack()
     : null;
   if (subsequentTrack && typeof scheduleStreamingContinuity === 'function') {
-    await scheduleStreamingContinuity(subsequentTrack);
+    await scheduleStreamingContinuity(subsequentTrack, queuedNextContinuityOptions(subsequentTrack));
   }
   if (typeof promoteWaveformPeaks === 'function') {
     try {
@@ -785,9 +820,7 @@ function setLoopActive(active) {
       ? peekNextQueuedTrack()
       : null;
     if (nextTrack && typeof scheduleStreamingContinuity === 'function') {
-      const result = scheduleStreamingContinuity(nextTrack, {
-        kind: 'queued-next', startSeconds: 0,
-      });
+      const result = scheduleStreamingContinuity(nextTrack, queuedNextContinuityOptions(nextTrack));
       if (typeof observeStreamingFacadeCallback === 'function') {
         observeStreamingFacadeCallback(result, 'loop-disable-continuity-error');
       }
@@ -1062,7 +1095,7 @@ async function saveCurrentLoop() {
         artist: current.artist || '',
         title: current.title || '',
         album: current.album || '',
-        cover_path: current.coverPath || '',
+        cover_ref: current.coverRef || '',
       }),
     });
     const data = await response.json().catch(() => ({}));
@@ -1153,7 +1186,7 @@ function activateSharedTrackButton(btn, { restart = false, focusTimeline = false
     artist: btn.getAttribute('data-track-artist') || '',
     albumArtist: btn.getAttribute('data-track-album-artist') || '',
     album: btn.getAttribute('data-track-album') || '',
-    coverPath: btn.getAttribute('data-track-cover') || '',
+    coverRef: btn.getAttribute('data-track-cover') || '',
     durationSeconds: Number(btn.getAttribute('data-track-duration-seconds')) || 0,
   });
   if (currentAlbum) {
@@ -1264,8 +1297,8 @@ function attachPlayerEvents() {
     if (!state.player.timelineDragging) return;
     const next = getTimelineSecondsFromClientX(event.clientX);
     state.player.timelineDragPreviewSeconds = next;
-    if (els.timeline) els.timeline.value = String(next);
-    updatePlayerUi();
+    const playback = getPlayerPlaybackSnapshot();
+    renderPlayerTimelinePosition(getPlayerElements(), playback, resolvePlayerUiStatus(playback));
   });
   document.addEventListener('pointerup', (event) => {
     if (thinSeekGesture) {

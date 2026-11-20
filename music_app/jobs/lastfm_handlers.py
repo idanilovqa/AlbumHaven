@@ -161,8 +161,8 @@ def build_lastfm_retry_handler(
                 )
             return cancel(claim, decision.reason_code)
 
-        secret = retry_repository.load_claimed_session_secret(**_claim_values(claim, now()))
-        if not secret:
+        credentials = retry_repository.load_claimed_session_credentials(**_claim_values(claim, now()))
+        if credentials is None:
             return cancel(claim, "lastfm_session_unavailable")
         if context.cancel_requested:
             return cancel(claim, "lastfm_retry_canceled_before_send")
@@ -177,7 +177,7 @@ def build_lastfm_retry_handler(
             provider_payload = build_pending_scrobble_payload(provider_payload)
         try:
             provider_result = classify_lastfm_provider_outcome(
-                scrobble_with_session(provider_config, provider_payload, secret)
+                scrobble_with_session(provider_config, provider_payload, credentials.session_key)
             )
         except Exception as error:
             provider_result = classify_lastfm_provider_error(error)
@@ -188,6 +188,7 @@ def build_lastfm_retry_handler(
                 expected_row_revision=scope.row_revision,
                 disposition=provider_result.disposition.value,
                 reason_code=provider_result.reason_code,
+                reauthentication_generation=credentials.reauthentication_generation,
                 history_updates=_history_updates(
                     provider_result.disposition,
                     attempted_at=observed_at,

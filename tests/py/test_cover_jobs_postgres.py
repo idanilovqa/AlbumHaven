@@ -90,6 +90,32 @@ def _accept(repository):
     )
 
 
+def test_claimed_cover_selection_reader_uses_only_typed_function_and_maps_authority():
+    connection = _Connection([[{
+        "album_id": 31, "cover_path": "C:/private/C.jpg",
+        "cover_selection_origin": "user", "cover_selection_provenance": "explicit",
+        "cover_revision": "owner-C", "remote_cover_url": None,
+        "remote_cover_width": None, "remote_cover_height": None,
+    }]])
+    selected = _repository(connection, _Jobs()).load_claimed_cover_refresh_selections(
+        task_id=51, library_id=19, job_id=88, attempt=2,
+        worker_id="worker-a", lease_token="lease-a", now=NOW, album_ids={31},
+    )
+    assert selected == {31: {
+        "selected_cover_path": "C:/private/C.jpg", "cover_selection_origin": "user",
+        "cover_selection_provenance": "explicit", "cover_revision": "owner-C",
+    }}
+    assert len(connection.executed) == 1
+    sql, values = connection.executed[0]
+    assert "ops.load_claimed_cover_refresh_selections(" in sql
+    assert "library.local_albums" not in sql and "app.bootstrap_owners" not in sql
+    assert values == {
+        "task_id": 51, "library_id": 19, "job_id": 88, "attempt": 2,
+        "worker_id": "worker-a", "lease_token": "lease-a", "now": NOW,
+        "album_ids": [31],
+    }
+
+
 def test_accept_candidate_lookup_resolves_scope_and_enqueues_atomically():
     connection = _Connection(
         [
@@ -677,6 +703,56 @@ def test_begin_claimed_cover_refresh_returns_lease_fenced_separate_release_keys(
     assert scope.separate_release_keys == ("artist::same title",)
     sql = connection.executed[0][0]
     assert "ops.begin_claimed_cover_refresh" in sql
+
+
+def test_begin_claimed_cover_refresh_decodes_private_root_scope_without_leaking_transient_fields():
+    raw_cache = {
+        "C:/private/root-a/album/01.flac": {"album_id": 31, "library_root_path": "C:/private/root-a"},
+        "C:/private/root-a/album/02.flac": {"album_id": 31, "library_root_path": "C:/private/root-a"},
+        "C:/private/root-b/album/01.flac": {"album_id": 32, "library_root_path": "C:/private/root-b"},
+    }
+    connection = _Connection([{
+        "task_id": 51, "task_key": "bulk-a", "row_revision": 2,
+        "file_cache": raw_cache, "separate_release_keys": [],
+        "progress_total": 2, "mode": "manual", "force_search": False,
+    }])
+    scope = _repository(connection, _Jobs()).begin_claimed_cover_refresh(
+        task_id=51, library_id=19, job_id=88, attempt=1, worker_id="cover-worker-a",
+        lease_token="lease-a", now=NOW, mode="manual", inventory_revision=5, task_key="bulk-a",
+    )
+    assert scope is not None
+    assert set(scope.library_root_paths) == {"C:/private/root-a", "C:/private/root-b"}
+    assert len(scope.library_root_paths) == 2
+    assert scope.file_cache == {path: {"album_id": entry["album_id"]} for path, entry in raw_cache.items()}
+    assert all("library_root_path" in entry for entry in raw_cache.values())
+
+
+@pytest.mark.parametrize("root", [None, "", "   ", 7, True, "missing"],
+                         ids=["null", "empty", "blank", "integer", "boolean", "missing"])
+def test_begin_claimed_cover_refresh_rejects_nonempty_inventory_without_trusted_root(root):
+    entry = {"album_id": 31}
+    if root != "missing":
+        entry["library_root_path"] = root
+    connection = _Connection([{
+        "task_id": 51, "task_key": "bulk-a", "row_revision": 2,
+        "file_cache": {"C:/private/root/album/01.flac": entry}, "separate_release_keys": [],
+        "progress_total": 1, "mode": "manual", "force_search": False,
+    }])
+    with pytest.raises((RuntimeError, ValueError, TypeError)):
+        _repository(connection, _Jobs()).begin_claimed_cover_refresh(
+            task_id=51, library_id=19, job_id=88, attempt=1, worker_id="cover-worker-a",
+            lease_token="lease-a", now=NOW, mode="manual", inventory_revision=5, task_key="bulk-a",
+        )
+
+
+def test_claimed_cover_refresh_scope_root_paths_default_to_empty_tuple():
+    from music_app.services.cover_jobs_postgres import ClaimedCoverRefreshScope
+
+    scope = ClaimedCoverRefreshScope(
+        task_id=51, task_key="bulk-a", row_revision=2, file_cache={},
+        separate_release_keys=(), progress_total=0, mode="manual", force_search=False,
+    )
+    assert scope.library_root_paths == ()
 
 
 @pytest.mark.parametrize("checkpoint", ["authority_committed", "runtime_published", "publication_completed"])

@@ -80,7 +80,9 @@ test('local functional runner owns safe setup, exact delegation, and teardown', 
   assert.match(source, /postgresql[\\\\/]pgpass\.conf/);
   assert.doesNotMatch(source, /C:[\\\\/]Users[\\\\/]/i);
   assert.match(source, /['"]-HostName['"]\s*,\s*['"]localhost['"]/);
-  assert.match(source, /['"]-ExpectedMajorVersion['"]\s*,\s*['"]18['"]/);
+  assert.match(source, /\[ValidateSet\('17', '18'\)\]\[string\]\$PostgresMajor = '18'/);
+  assert.match(source, /['"]-ExpectedMajorVersion['"]\s*,\s*\$PostgresMajor/);
+  assert.match(source, /['"]-ServiceName['"]\s*,\s*"postgresql-x64-\$PostgresMajor"/);
   assert.match(source, /bootstrap-windows-postgres\.ps1/);
   assert.match(source, /load-fixture-profile\.py/);
   assert.match(source, /validate-functional-shards\.cjs/);

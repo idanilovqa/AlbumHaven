@@ -236,7 +236,6 @@ def _create_asgi_runtime_state():
 
 
 def _configure_asgi_app(app, runtime) -> None:
-    from fastapi.staticfiles import StaticFiles
     from fastapi.templating import Jinja2Templates
 
     from music_app.routes.api_read_asgi_routes import router as api_read_asgi_router
@@ -267,7 +266,14 @@ def _configure_asgi_app(app, runtime) -> None:
         PostgresSavedLoopWaveformPeakCacheRepository,
     )
     from music_app.services.waveform_peaks import WaveformPeaksRegistry
+    from music_app.services.cover_reference_boundary import CoverReferenceBoundary
+    from music_app.services.cover_references import CoverReferenceStore
     from music_app.services.private_route_boundary import install_private_route_boundary
+    from music_app.services.http_compression import JsonGzipMiddleware
+    from music_app.services.compressed_static_files import (
+        CompressedStaticFiles,
+        static_gzip_cache,
+    )
     from music_app.services.library_watch_health import (
         LibraryWatchHealthService,
         PostgresLibraryWatchHealthStore,
@@ -309,6 +315,13 @@ def _configure_asgi_app(app, runtime) -> None:
     app.state.auth_service_lock = threading.Lock()
     app.state.database_identity_status = None
     app.state.database_identity_status_lock = threading.Lock()
+    app.state.cover_reference_store = (
+        CoverReferenceStore(runtime.config)
+        if str(runtime.config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()
+        else None
+    )
+    # Added before the private boundary so it runs inside it, where the actor is resolved.
+    app.add_middleware(CoverReferenceBoundary)
     install_private_route_boundary(app)
     immutable_nested_javascript_paths = {
         "/static/js/audio-worklets/gapless-playback-processor.js",
@@ -364,7 +377,10 @@ def _configure_asgi_app(app, runtime) -> None:
             response.headers["Expires"] = "0"
         return response
 
-    app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+    # Outermost, so it compresses the final JSON body after every other middleware.
+    app.add_middleware(JsonGzipMiddleware)
+    app.mount("/static", CompressedStaticFiles(directory=str(static_dir)), name="static")
+    static_gzip_cache.warm_in_background(static_dir)
     app.include_router(auth_asgi_router)
     app.include_router(account_asgi_router)
     app.include_router(appearance_asgi_router)

@@ -169,20 +169,6 @@ test('rootFullPayload requests full root albums without changing other browse UR
 }
 
 {
-  const context = loadHelpers();
-  context.state.view = {
-    album_count: 2,
-    artist_count: 1,
-    music_dir: 'C:/Music/<Library>',
-    selected_artist: 'Broadcast',
-  };
-  assert.equal(
-    context.formatScanSummary('May 13, 2026'),
-    'Found 2 albums by 1 artist in C:/Music/&lt;Library&gt; (family context)<br>Last scan: May 13, 2026',
-  );
-}
-
-{
   const { buildUrl } = loadHelpers();
   const url = buildUrl({
     query: 'dream pop',

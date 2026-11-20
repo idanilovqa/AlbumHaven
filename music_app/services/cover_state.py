@@ -11,6 +11,7 @@ from music_app.services.generated_preview_storage import (
     is_managed_preview_path,
 )
 from music_app.services.library import album_to_dict
+from music_app.services.library_album_index import library_album_index
 from music_app.services.cover_workflow import restrict_album_root_to_represented_disc
 
 
@@ -82,36 +83,30 @@ def resolve_authoritative_album_track_paths(
     if not normalized_selected_paths:
         raise ValueError("Cover selection requires at least one live track path.")
 
-    normalized_album_key = str(album_key or "").strip().casefold()
-    if normalized_album_key:
-        keyed_albums = [
-            album
-            for album in list(library_state.get("albums", []) or [])
-            if str(getattr(album, "key", "") or "").strip().casefold()
-            == normalized_album_key
-        ]
-        if len(keyed_albums) == 1:
-            keyed_track_paths = {
-                str(getattr(track, "path", "") or "").strip()
-                for track in list(getattr(keyed_albums[0], "tracks", []) or [])
-                if str(getattr(track, "path", "") or "").strip()
-            }
-            if normalized_selected_paths <= keyed_track_paths:
-                return keyed_track_paths
-
-    matching_album_track_sets: list[set[str]] = []
-    resolved_selected_paths: set[str] = set()
-    for album in list(library_state.get("albums", []) or []):
-        album_track_paths = {
+    def album_track_paths(album: object) -> set[str]:
+        return {
             str(getattr(track, "path", "") or "").strip()
             for track in list(getattr(album, "tracks", []) or [])
             if str(getattr(track, "path", "") or "").strip()
         }
-        album_selected_paths = album_track_paths & normalized_selected_paths
-        if not album_selected_paths:
-            continue
-        matching_album_track_sets.append(album_track_paths)
-        resolved_selected_paths.update(album_selected_paths)
+
+    # Only albums holding a selected track can answer; they are read by path.
+    candidate_albums = library_album_index(library_state).albums_with_any_track(normalized_selected_paths)
+    normalized_album_key = str(album_key or "").strip().casefold()
+    if normalized_album_key:
+        keyed_albums = [
+            album
+            for album in candidate_albums
+            if str(getattr(album, "key", "") or "").strip().casefold()
+            == normalized_album_key
+        ]
+        if len(keyed_albums) == 1:
+            keyed_track_paths = album_track_paths(keyed_albums[0])
+            if normalized_selected_paths <= keyed_track_paths:
+                return keyed_track_paths
+
+    matching_album_track_sets = [album_track_paths(album) for album in candidate_albums]
+    resolved_selected_paths = set().union(*matching_album_track_sets) & normalized_selected_paths
 
     if resolved_selected_paths != normalized_selected_paths:
         raise ValueError("Every selected track must resolve to the live album inventory.")
@@ -255,6 +250,15 @@ def selected_local_cover_source(
     return next(_matching_local_cover_sources(candidates, active_path, revision), str(active_path))
 
 
+def _client_candidate(item: Mapping[str, object]) -> dict[str, object]:
+    """A lookup candidate named by fields the cover reference boundary turns into references."""
+    candidate = {key: value for key, value in item.items() if key not in {"path", "duplicate_of"}}
+    candidate["candidate_cover_path"] = item["path"]
+    if item.get("duplicate_of"):
+        candidate["duplicate_of_cover_path"] = item["duplicate_of"]
+    return candidate
+
+
 def serialize_cover_gallery_payload(
     *,
     album_root: Path,
@@ -293,12 +297,11 @@ def serialize_cover_gallery_payload(
                 candidate["cover_revision"] = active_cover_revision
     return {
         "ok": True,
-        "album_root": str(album_root),
         "active_cover_path": str(active_cover_path) if active_cover_path else None,
-        "selected_source_path": selected_source_path,
+        "selected_source_cover_path": selected_source_path,
         "remote_cover": active_remote_cover,
-        "local_covers": [item for item in local_candidates if item.get("is_squareish")],
-        "other_art": [item for item in local_candidates if not item.get("is_squareish")],
+        "local_covers": [_client_candidate(item) for item in local_candidates if item.get("is_squareish")],
+        "other_art": [_client_candidate(item) for item in local_candidates if not item.get("is_squareish")],
         "task": task_payload if task_payload else None,
         "candidate_snapshot": serialize_cover_candidate_snapshot(candidate_snapshot),
     }
@@ -370,7 +373,6 @@ def apply_cover_selection_for_tracks(
     library_state: dict[str, object],
     track_paths: set[str],
     schedule_cache_updates_save,
-    cache_path,
     find_updated_albums,
     find_problematic_album,
     cover_path: Path | None = None,
@@ -501,7 +503,6 @@ def apply_cover_selection_for_tracks(
 
     if persist_cache_update:
         schedule_cache_updates_save(
-            cache_path,
             {
                 path_str: updated_file_cache[path_str]
                 for path_str in changed_paths
@@ -666,18 +667,10 @@ def _set_cover_fields(
 
 
 def find_albums_by_track_paths(
-    albums: list[object] | None,
+    library_state: Mapping[str, object],
     track_paths: set[str],
 ) -> list[dict[str, object]]:
+    """Albums holding any of `track_paths`, read by track path."""
     if not track_paths:
         return []
-    matches: list[dict[str, object]] = []
-    for album in albums or []:
-        album_paths = {
-            str(getattr(track, "path", "") or "")
-            for track in getattr(album, "tracks", [])
-            if str(getattr(track, "path", "") or "")
-        }
-        if album_paths & track_paths:
-            matches.append(album_to_dict(album))
-    return matches
+    return [album_to_dict(album) for album in library_album_index(library_state).albums_with_any_track(track_paths)]

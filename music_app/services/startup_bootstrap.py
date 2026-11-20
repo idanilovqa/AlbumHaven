@@ -109,6 +109,7 @@ def _build_initial_album_preview(album: dict[str, object], *, public_safe: bool 
     cover_preview_url = build_startup_cover_url(source_album) if cover_path else ""
     root_provenance = source_album.get("root_provenance")
     return {
+        "album_id": source_album.get("album_id"),
         "key": source_album.get("key"),
         **build_album_ref_seam(source_album.get("key")),
         "name": source_album.get("name"),
@@ -326,10 +327,11 @@ def build_startup_album_card_html(album: dict[str, object], eager_cover: bool = 
     total_length = str(album.get("total_duration_display") or "")
     rating_value = get_startup_album_card_rating(album)
     if cover_url:
+        # The cover reference boundary sends `data-cover-path` to the page as `data-cover-ref`.
         onerror_js = (
-            "const failedPath=this.getAttribute('data-cover-path')||'';"
-            "if(failedPath){"
-            "(window.__ALBUM_HAVEN_FAILED_LOCAL_DISPLAY_COVERS__||(window.__ALBUM_HAVEN_FAILED_LOCAL_DISPLAY_COVERS__={}))[failedPath]=true;"
+            "const failedRef=this.getAttribute('data-cover-ref')||'';"
+            "if(failedRef){"
+            "(window.__ALBUM_HAVEN_FAILED_LOCAL_DISPLAY_COVERS__||(window.__ALBUM_HAVEN_FAILED_LOCAL_DISPLAY_COVERS__={}))[failedRef]=true;"
             "}"
             "const remoteFallback=this.getAttribute('data-remote-cover-url')||'';"
             "if(remoteFallback&&this.dataset.remoteCoverTried!=='1'){"

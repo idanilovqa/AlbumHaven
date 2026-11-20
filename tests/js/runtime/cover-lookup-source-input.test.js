@@ -101,7 +101,7 @@ test('manual search enables extraction for either links or image attachments', (
 });
 
 test('linked remote selection cannot duplicate the active local selection', () => {
-  assert.match(source, /data-cover-lookup-saved-remote[^]*activeLocalSelectionPath/s);
+  assert.match(source, /data-cover-lookup-saved-remote[^]*activeLocalSelectionRef/s);
   assert.match(source, /kind === 'local'[^]*pendingPastedImageId/s);
 });
 

@@ -1103,8 +1103,8 @@ test('selected-track album split retains mounted cover authority for both cards'
   const context = loadHelpers();
   const selectedPath = 'C:\\Music\\Artist\\Album\\01 Selected.flac';
   const siblingPath = 'C:\\Music\\Artist\\Album\\02 Sibling.flac';
-  const coverPath = 'C:\\Music\\Artist\\Album\\cover.png';
-  const coverPreviewUrl = '/cover?path=opaque&size=480&v=revision';
+  const coverRef = 'C:\\Music\\Artist\\Album\\cover.png';
+  const coverPreviewUrl = '/cover/opaque?size=480&v=revision';
   const remoteCoverUrl = 'https://covers.example/album.jpg';
   const album = {
     key: 'artist::album::2000',
@@ -1118,7 +1118,7 @@ test('selected-track album split retains mounted cover authority for both cards'
   };
   context.findVisibleAlbumByTrackPaths = () => ({
     ...album,
-    cover_path: coverPath,
+    cover_ref: coverRef,
     cover_preview_url: coverPreviewUrl,
     remote_cover_url: remoteCoverUrl,
   });
@@ -1129,7 +1129,7 @@ test('selected-track album split retains mounted cover authority for both cards'
 
   assert.equal(updatedAlbums.length, 2);
   for (const updatedAlbum of updatedAlbums) {
-    assert.equal(updatedAlbum.cover_path, coverPath);
+    assert.equal(updatedAlbum.cover_ref, coverRef);
     assert.equal(updatedAlbum.cover_preview_url, coverPreviewUrl);
     assert.equal(updatedAlbum.remote_cover_url, remoteCoverUrl);
   }
@@ -1139,7 +1139,7 @@ test('selected-track split uses remembered cover authority when compact state om
   const context = loadHelpers();
   const selectedPath = 'C:\\Music\\Artist\\Album\\01 Selected.flac';
   const siblingPath = 'C:\\Music\\Artist\\Album\\02 Sibling.flac';
-  const coverPath = 'C:\\Music\\Artist\\Album\\cover.png';
+  const coverRef = 'C:\\Music\\Artist\\Album\\cover.png';
   const album = {
     key: 'artist::album::2000',
     name: 'Album',
@@ -1150,7 +1150,7 @@ test('selected-track split uses remembered cover authority when compact state om
       { path: siblingPath, album: 'Album', album_artist: 'Artist', title: 'Sibling' },
     ],
   };
-  context.findRememberedRuntimeAlbumCoverAuthority = () => ({ cover_path: coverPath });
+  context.findRememberedRuntimeAlbumCoverAuthority = () => ({ cover_ref: coverRef });
 
   const updatedAlbums = context.buildOptimisticUpdatedAlbumsFromEdits(album, {
     [selectedPath]: { album: 'Album (Renamed)' },
@@ -1158,7 +1158,7 @@ test('selected-track split uses remembered cover authority when compact state om
 
   assert.equal(updatedAlbums.length, 2);
   for (const updatedAlbum of updatedAlbums) {
-    assert.equal(updatedAlbum.cover_path, coverPath);
+    assert.equal(updatedAlbum.cover_ref, coverRef);
   }
 });
 

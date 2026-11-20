@@ -1,5 +1,6 @@
 """Transaction, scope and privilege proof on the existing disposable PG fixture."""
 from concurrent.futures import ThreadPoolExecutor
+import json
 from threading import Event
 from time import monotonic, sleep
 
@@ -509,8 +510,12 @@ def test_native_scan_invalidation_recovers_root_snapshot_publication(gallery_inv
     if fail_first:
         with pytest.raises(RuntimeError, match="temporary relation repair failure"):
             refreshes[0].result(timeout=10)
+        # Keep last families: the scopes published before the failed relation
+        # rebuild, so the watcher-found artist already shows, ungrouped.
         with isolatedPostgres._connect(fixture.runtime_url) as connection:
-            assert gallery.load_gallery_projection_page(connection, fixture.view_state, {}) is None
+            page = gallery.load_gallery_projection_page(connection, fixture.view_state, {})
+        assert page is not None
+        assert "name:new artist" in {row["artist_id"] for row in page[0]}
         assert repository._load_relation_alias_maps().get("projection_stale_reason")
         deadline = monotonic() + 5
         identity = (fixture.config["ALBUM_HAVEN_APP_DATABASE_URL"], "refresh")
@@ -540,7 +545,7 @@ def test_relation_refresh_and_targeted_publication_use_consistent_lock_order(gal
     fixture.seed(fixture.first, fixture.second, added)
     concurrent = fixture.entry("Concurrent/Fourth/four.flac", artist="Concurrent", album="Fourth")
     built, publish, revision_locked = Event(), Event(), Event()
-    release_target, target_family_attempt = Event(), Event()
+    release_target, target_family_write = Event(), Event()
     build_views = relations.build_relation_views_from_postgres_rows
     replace_families = relations.replace_artist_family_projection_in_transaction
 
@@ -553,7 +558,6 @@ def test_relation_refresh_and_targeted_publication_use_consistent_lock_order(gal
     def coordinate_family_publication(*args, **kwargs):
         result = replace_families(*args, **kwargs)
         release_target.set()
-        assert target_family_attempt.wait(10)
         return result
 
     class Connection:
@@ -578,7 +582,7 @@ def test_relation_refresh_and_targeted_publication_use_consistent_lock_order(gal
                 # taking family rows that the owner still needs to replace.
                 release_target.set()
             if self.targeted and "insert into library.local_artist_family_links" in statement.lower():
-                target_family_attempt.set()
+                target_family_write.set()
             result = self.connection.execute(query, params)
             if self.targeted and statement == persistence._increment_inventory_mutation_revision_sql():
                 revision_locked.set()
@@ -614,7 +618,10 @@ def test_relation_refresh_and_targeted_publication_use_consistent_lock_order(gal
         finally:
             publish.set()
             release_target.set()
-            target_family_attempt.set()
+    # The watcher publication leaves family rows to the relation refresh, and
+    # the refresh that was already building rebuilds from the published sources
+    # instead of publishing its earlier build as ready.
+    assert not target_family_write.is_set()
     repository = browse.PostgresLibraryBrowseRepository(fixture.config, connect=isolatedPostgres._connect)
     aliases = repository._load_relation_alias_maps()
     assert not aliases["projection_stale_reason"]
@@ -693,8 +700,52 @@ def test_targeted_publication_coexists_with_legacy_relation_only_publisher(galle
             refresh.result(timeout=15)
         finally:
             release_publisher.set()
+    # The watcher publication leaves its relations to the queued background refresh.
+    relations.ensure_relation_projection_ready(fixture.config, connect=isolatedPostgres._connect)
     aliases = browse.PostgresLibraryBrowseRepository(
         fixture.config, connect=isolatedPostgres._connect,
     )._load_relation_alias_maps()
     assert not aliases["projection_stale_reason"]
     assert "Concurrent" in aliases["alias_to_canonical"]
+
+
+def test_first_anchored_request_after_republish_ignores_stale_statistics(gallery_inventory):
+    """CI run 44445861031: 5,332 rows estimated as 1 made artist bounds a 1.6 M-buffer nested loop."""
+    fixture = gallery_inventory
+    scope_key = gallery.gallery_projection_scope_key(fixture.view_state)
+    revision = "f" * 64
+    rows = [{
+        "artist_id": f"artist-{index // 4:04d}", "artist_name": f"Artist {index // 4:04d}",
+        "album_id": index, "album_key": f"album-{index}", "album_title": f"Album {index}",
+        "album_release_year": 2000,
+    } for index in range(5332)]
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute("alter table library.gallery_projection_occurrences set (autovacuum_enabled = false)")
+        connection.execute("analyze library.gallery_projection_occurrences")
+    with isolatedPostgres._connect(fixture.runtime_url) as connection:
+        assert publish(connection, fixture.context, fixture.view_state, revision=revision, rows=rows)
+    with isolatedPostgres._connect(fixture.runtime_url) as connection:
+        estimate = connection.execute("""
+            explain (format json) select 1 from library.gallery_projection_occurrences
+            where library_id = %s and scope_key = %s and revision = %s
+        """, (fixture.context["library_id"], scope_key, revision)).fetchone()["QUERY PLAN"][0]["Plan"]
+        assert estimate["Plan Rows"] < 100, "statistics must still predate the republished revision"
+
+        started = monotonic()
+        page, _sidebar, count, metadata = gallery.load_gallery_projection_page(
+            connection, fixture.view_state, {"gallery_page_size": "60", "gallery_anchor_artist": "Artist 0666"})
+        elapsed_ms = (monotonic() - started) * 1000
+
+        explained = connection.execute("explain (analyze, buffers, format json) " + gallery._ARTIST_BOUNDS_SQL, {
+            "library_id": fixture.context["library_id"], "scope_key": scope_key,
+            "revision": revision, "ordinal": 666 * 4,
+        }).fetchone()["QUERY PLAN"][0]
+
+    assert count == len(rows)
+    assert metadata["revision"] == revision
+    names = [row["artist_name"] for row in page]
+    assert names.count("Artist 0666") == 4
+    assert all(names.count(name) == 4 for name in set(names)), "pages hold whole artist groups"
+    assert elapsed_ms < 1000, f"first anchored gallery request took {elapsed_ms:.0f} ms"
+    assert "Nested Loop" not in json.dumps(explained)
+    assert explained["Plan"]["Shared Hit Blocks"] + explained["Plan"]["Shared Read Blocks"] < 1000

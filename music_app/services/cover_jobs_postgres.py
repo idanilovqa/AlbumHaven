@@ -90,6 +90,7 @@ class ClaimedCoverRefreshScope:
     progress_total: int
     mode: str
     force_search: bool
+    library_root_paths: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -232,7 +233,11 @@ class PostgresCoverJobRepository:
         )
 
     def _connect(self) -> Any:
-        return self._connect_to_database(self._database_url)
+        from music_app.services.scan_cache_persistence import scan_cache_transaction
+
+        return scan_cache_transaction(
+            self._database_url, connect=self._connect_to_database,
+        )
 
     def accept_candidate_lookup(
         self,
@@ -750,6 +755,12 @@ class PostgresCoverJobRepository:
             for path, entry in raw_file_cache.items()
             if str(path).strip() and isinstance(entry, Mapping)
         }
+        library_root_paths = set()
+        for entry in file_cache.values():
+            root_path = entry.pop("library_root_path", None)
+            if not isinstance(root_path, str) or not root_path.strip():
+                raise RuntimeError("claimed cover refresh root context is invalid")
+            library_root_paths.add(root_path.strip())
         return ClaimedCoverRefreshScope(
             task_id=_positive("task_id", row.get("task_id")),
             task_key=_bounded("task_key", row.get("task_key"), maximum=128),
@@ -763,7 +774,31 @@ class PostgresCoverJobRepository:
             progress_total=max(0, int(row.get("progress_total") or 0)),
             mode=_bounded("mode", row.get("mode"), maximum=32),
             force_search=bool(row.get("force_search")),
+            library_root_paths=tuple(sorted(library_root_paths)),
         )
+
+    def load_claimed_cover_refresh_selections(
+        self, *, album_ids: set[int], **values: object,
+    ) -> dict[int, dict[str, object]]:
+        if not album_ids:
+            return {}
+        parameters = self._refresh_claim_values(**values)
+        parameters["album_ids"] = sorted(_positive("album_id", value) for value in album_ids)
+        with self._connect() as connection:
+            rows = connection.execute(
+                "select * from ops.load_claimed_cover_refresh_selections(%(task_id)s, %(library_id)s, %(job_id)s, %(attempt)s, %(worker_id)s, %(lease_token)s, %(now)s, %(album_ids)s::bigint[])",
+                parameters,
+            ).fetchall()
+        return {
+            int(row["album_id"]): {
+                "selected_cover_path": str(row.get("cover_path") or "").strip() or None,
+                "cover_selection_origin": str(row.get("cover_selection_origin") or "").strip() or None,
+                **({"cover_selection_provenance": "explicit"} if row.get("cover_selection_provenance") == "explicit" else {}),
+                **({"cover_revision": row["cover_revision"]} if row.get("cover_revision") else {}),
+                **({key: row[key] for key in ("remote_cover_url", "remote_cover_width", "remote_cover_height") if row.get(key) is not None} if row.get("remote_cover_url") else {}),
+            }
+            for value in rows if (row := _mapping(value))
+        }
 
     def cover_refresh_cancel_requested(self, **values: object) -> bool:
         parameters = self._refresh_claim_values(**values)
@@ -924,10 +959,9 @@ class PostgresCoverJobRepository:
                 "expected_cover_revision": expected_revision,
             }
         )
-        connection = self._connect()
         may_have_committed = False
         try:
-            with connection:
+            with self._connect() as connection:
                 row = _mapping(
                     connection.execute(
                         "select * from ops.persist_claimed_automatic_cover_selection(%(task_id)s, %(library_id)s, %(job_id)s, %(attempt)s, %(worker_id)s, %(lease_token)s, %(now)s, %(track_paths)s, %(selected_cover_path)s, %(cover_revision)s, %(cover_selection_origin)s, %(reject_if_user_controlled)s, %(reject_if_explicit_selection)s, %(local_cover_width)s, %(local_cover_height)s, %(expected_cover_selection_origin)s, %(expected_cover_revision)s, %(expected_library_id)s, %(expected_album_id)s, %(expected_inventory_revision)s, %(expected_cover_mutation_revision)s)",
@@ -1367,10 +1401,9 @@ class PostgresCoverJobRepository:
                 "local_cover_height": local_cover_height,
             }
         )
-        connection = self._connect()
         may_have_committed = False
         try:
-            with connection:
+            with self._connect() as connection:
                 row = connection.execute(
                     "select ops.persist_claimed_remote_cover_selection(%(checkpoint_id)s, %(job_id)s, %(attempt)s, %(worker_id)s, %(lease_token)s, %(now)s, %(expected_checkpoint_revision)s, %(selected_cover_path)s, %(selected_cover_revision)s, %(linked_remote)s, %(local_cover_width)s, %(local_cover_height)s, %(expected_library_id)s, %(expected_album_id)s, %(expected_inventory_revision)s, %(expected_cover_mutation_revision)s, %(track_paths)s::text[]) as row_revision",
                     parameters,

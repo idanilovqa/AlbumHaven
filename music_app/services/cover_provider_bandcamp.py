@@ -8,7 +8,9 @@ from concurrent.futures import FIRST_COMPLETED, wait
 from html import unescape
 from threading import Event
 
-from music_app.services.app_logging import log_app_event
+# Provider calls log per query, candidate and probe: application log only,
+# never a log-history write (one database connection each).
+from music_app.services.app_logging import log_app_message_event as log_provider_event
 from music_app.services.cover_provider_candidates import CoverCandidate, dedupe_cover_candidates
 from music_app.services.cover_provider_deadline import (
     AutomaticCoverDeadlineExceeded,
@@ -79,7 +81,7 @@ def search_bandcamp_cover(
     fetch_musicbrainz_bandcamp_context: FetchMusicBrainzContext,
     should_cancel: Callable[[], bool] | None = None,
     canonical_album_title: Normalize | None = None,
-    log_event: LogEvent | None = log_app_event,
+    log_event: LogEvent | None = log_provider_event,
     logger=None,
 ) -> CoverCandidate | None:
     for query_mode, matches in _build_bandcamp_matches(
@@ -134,7 +136,7 @@ def search_bandcamp_cover_candidates(
     should_cancel: Callable[[], bool] | None = None,
     canonical_album_title: Normalize | None = None,
     dedupe_candidates: DedupeCandidates = dedupe_cover_candidates,
-    log_event: LogEvent | None = log_app_event,
+    log_event: LogEvent | None = log_provider_event,
     logger=None,
 ) -> list[CoverCandidate]:
     candidates: list[CoverCandidate] = []
@@ -254,7 +256,7 @@ def _build_bandcamp_matches(
     should_cancel: Callable[[], bool] | None = None,
     canonical_album_title: Normalize | None = None,
     log_debug: bool = False,
-    log_event: LogEvent | None = log_app_event,
+    log_event: LogEvent | None = log_provider_event,
     logger=None,
 ) -> list[tuple[str, list[tuple[float, str, dict]]]]:
     catalog_matches = _build_bandcamp_label_catalog_matches(
@@ -308,7 +310,7 @@ def _build_bandcamp_label_catalog_matches(
     fetch_musicbrainz_bandcamp_context: FetchMusicBrainzContext,
     should_cancel: Callable[[], bool] | None = None,
     canonical_album_title: Normalize | None = None,
-    log_event: LogEvent | None = log_app_event,
+    log_event: LogEvent | None = log_provider_event,
     logger=None,
 ) -> list[tuple[str, list[tuple[float, str, dict]]]]:
     local_stop_event = Event()

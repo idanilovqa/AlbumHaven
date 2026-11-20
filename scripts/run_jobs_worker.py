@@ -8,6 +8,7 @@ from pathlib import Path
 import signal
 import sys
 import threading
+from functools import partial
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, TextIO
 
@@ -88,6 +89,12 @@ def _shutdown_signals() -> tuple[int, ...]:
     if hasattr(signal, "SIGTERM"):
         candidates.append(signal.SIGTERM)
     return tuple(dict.fromkeys(candidates))
+
+
+def _worker_database_connection(pool: Any, database_url: str) -> Any:
+    from music_app.services.scan_cache_persistence import scan_cache_transaction
+
+    return scan_cache_transaction(database_url, connect=lambda _url: pool.connection())
 
 
 def _build_worker(
@@ -175,8 +182,7 @@ def _build_worker(
 
     pool = create_worker_pool(config)
 
-    def connect_to_database(_database_url: str) -> Any:
-        return pool.connection()
+    connect_to_database = partial(_worker_database_connection, pool)
 
     repository = PostgresJobRepository(
         database_url=config.database_url,

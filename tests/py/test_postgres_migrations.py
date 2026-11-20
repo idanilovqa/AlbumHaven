@@ -536,7 +536,7 @@ def test_0128_is_the_exact_ordered_successor_to_0127():
         if path.is_file() and path.suffix.casefold() == ".sql"
     )
 
-    assert migration_names[-11:] == [
+    expected_tail = [
         "0242_preserve_full_scan_progress_on_restart.sql",
         "0243_close_cover_consistency.sql",
         "0244_preserve_newer_watcher_incident_presentation.sql",
@@ -546,9 +546,14 @@ def test_0128_is_the_exact_ordered_successor_to_0127():
         "0248_restore_authoritative_exception_clear.sql",
         "0249_create_problematic_files_projection.sql",
         "0250_restore_incomplete_album_contract.sql",
-        "0252_refresh_reconciled_album_cover_cache.sql",
-        "0253_preserve_invalid_legacy_scan_warnings.sql",
+        "0262_create_lastfm_reauthentication_continuations.sql",
+        "0263_refresh_reconciled_album_cover_cache.sql",
+        "0264_preserve_invalid_legacy_scan_warnings.sql",
+        "0265_grant_claimed_cover_selection_read.sql",
     ]
+
+
+    assert migration_names[-len(expected_tail):] == expected_tail
 
 
 def test_0128_declares_bounded_problematic_projection_storage_and_indexes():
@@ -1157,12 +1162,12 @@ def test_0128_disc_folder_digits_are_ascii_in_python_and_sql():
     function_sql = _problematic_projection_function_sql(
         "library.problematic_physical_album_container"
     )
-    unicode_disc_path = r"C:\Music\Album\Disc ١\song.flac"
+    unicode_disc_path = r"C:\Music\Album\Disc ЩЎ\song.flac"
 
     assert library._DISC_FOLDER_RE.search("Disc 1") is not None
-    assert library._DISC_FOLDER_RE.search("Disc ١") is None
+    assert library._DISC_FOLDER_RE.search("Disc ЩЎ") is None
     assert library._track_album_container(unicode_disc_path).casefold().endswith(
-        "disc ١"
+        "disc ЩЎ"
     )
     assert "[0-9]{1,2}" in function_sql
     assert "\\d" not in function_sql
@@ -3606,7 +3611,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     # Migration numbers may have gaps, but each number has one owner.
     assert len(set(migration_numbers)) == len(migration_numbers)
-    assert migration_names[-110:] == [
+    expected_tail = [
         "0040_repair_ignored_repairs_delete_grant.sql",
         "0041_create_local_album_cover_candidate_snapshots.sql",
         "0042_track_distinct_cover_improvement_alerts.sql",
@@ -3684,6 +3689,9 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0176_create_album_disc_ratings.sql",
         "0177_create_local_album_artist_identities.sql",
         "0178_add_musicbrainz_associated_artists.sql",
+        "0200_create_cover_references.sql",
+        "0201_backfill_cover_references.sql",
+        "0210_create_schema_migration_attestations.sql",
         "0220_create_durable_job_foundation.sql",
         "0221_request_durable_job_cancellation.sql",
         "0222_harden_durable_job_boundaries.sql",
@@ -3715,9 +3723,14 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0248_restore_authoritative_exception_clear.sql",
         "0249_create_problematic_files_projection.sql",
         "0250_restore_incomplete_album_contract.sql",
-        "0252_refresh_reconciled_album_cover_cache.sql",
-        "0253_preserve_invalid_legacy_scan_warnings.sql",
+        "0262_create_lastfm_reauthentication_continuations.sql",
+        "0263_refresh_reconciled_album_cover_cache.sql",
+        "0264_preserve_invalid_legacy_scan_warnings.sql",
+        "0265_grant_claimed_cover_selection_read.sql",
     ]
+
+    assert migration_names[-len(expected_tail):] == expected_tail
+
 
 def test_cover_lookup_worker_migration_keeps_private_scope_behind_claim_fences():
     sql = _normalized_sql(COVER_LOOKUP_WORKER_MIGRATION.read_text(encoding="utf-8"))
@@ -8617,3 +8630,37 @@ def test_problematic_projection_integrity_revision_reset_clears_composite_cursor
     ):
         assert cursor in publish
         assert cursor in complete
+SCHEMA_MIGRATION_ATTESTATIONS_MIGRATION = (
+    MIGRATIONS_DIR / "0210_create_schema_migration_attestations.sql"
+)
+
+
+def test_schema_migration_attestations_are_append_only_and_owner_written():
+    sql = " ".join(SCHEMA_MIGRATION_ATTESTATIONS_MIGRATION.read_text(encoding="utf-8").lower().split())
+
+    assert "create table if not exists ops.schema_migration_attestations" in sql
+    # One attestation per (name, repository checksum, observed ledger checksum); an absent
+    # ledger name is a null checksum and still counts once.
+    assert (
+        "on ops.schema_migration_attestations (migration_name, repository_checksum, ledger_checksum) "
+        "nulls not distinct" in sql
+    )
+    for disposition in (
+        "'contract-present'", "'contract-present-with-extras'", "'superseded-by-unmerged'",
+        "'not-applied'", "'historical-ledger-row'",
+    ):
+        assert disposition in sql
+    assert "evidence_manifest_sha256 ~ '^[0-9a-f]{64}$'" in sql
+    assert "approved_at timestamptz not null" in sql
+    # Append-only: row changes and truncation are rejected, and the privileges are gone.
+    assert "before update or delete on ops.schema_migration_attestations for each row" in sql
+    assert "before truncate on ops.schema_migration_attestations for each statement" in sql
+    assert "revoke update, delete, truncate on table ops.schema_migration_attestations from current_user" in sql
+    assert "revoke all on table ops.schema_migration_attestations from album_haven_app" in sql
+    assert "grant select on table ops.schema_migration_attestations to album_haven_readonly" in sql
+    # Rows are written per database by the reconciliation tooling, never by the migration.
+    assert "insert into ops.schema_migration_attestations" not in sql
+    # The historical ledger itself is never rewritten.
+    for statement in ("update ops.schema_migrations", "delete from ops.schema_migrations",
+                      "insert into ops.schema_migrations", "truncate ops.schema_migrations"):
+        assert statement not in sql

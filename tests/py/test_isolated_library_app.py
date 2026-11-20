@@ -1773,6 +1773,58 @@ def test_managed_durable_jobs_worker_starts_waits_and_stops_cleanly():
     assert events == ["worker.run", "worker.stopped", "worker.close"]
 
 
+@pytest.mark.parametrize("deadline_case", ["default", "shorter-shared", "expired-shared", "late-ready"])
+def test_managed_durable_worker_respects_default_and_shared_startup_deadline(monkeypatch, deadline_case):
+    now, starts, probes = [100.0], [], []
+
+    class Thread:
+        ident = None
+
+        def __init__(self, **_kwargs):
+            self.alive = False
+
+        def start(self):
+            starts.append(True)
+            self.ident = 1
+            self.alive = True
+
+        def is_alive(self):
+            return self.alive
+
+        def join(self, _timeout):
+            self.alive = False
+
+    def sleep(seconds):
+        now[0] += seconds
+
+    def ready():
+        probes.append(now[0])
+        if deadline_case == "late-ready":
+            now[0] = 100.13
+            return True
+        return False
+
+    monkeypatch.setattr(isolatedLibraryApp, "threading", SimpleNamespace(Thread=Thread, Event=threading.Event))
+    monkeypatch.setattr(isolatedLibraryApp, "time", SimpleNamespace(monotonic=lambda: now[0], sleep=sleep))
+    worker = isolatedLibraryApp.ManagedDurableJobsWorker(SimpleNamespace(run=lambda _stop: None), ready_probe=ready)
+    options = {} if deadline_case == "default" else {"deadline": 99.0 if deadline_case == "expired-shared" else 100.12}
+    limit = 115.0 if deadline_case == "default" else options["deadline"]
+    try:
+        with pytest.raises((RuntimeError, TimeoutError), match="ready|readiness|startup|expired|deadline"):
+            worker.start(**options)
+        if deadline_case == "expired-shared":
+            assert starts == []
+            assert probes == []
+            assert now[0] == 100.0
+        else:
+            assert starts == [True]
+            assert probes and all(value < limit for value in probes)
+            assert limit <= now[0] <= limit + 0.051
+    finally:
+        worker.stop()
+    assert not worker._thread.is_alive()
+
+
 def test_exact_stdin_shutdown_command_requests_uvicorn_exit():
     server = SimpleNamespace(should_exit=False)
 

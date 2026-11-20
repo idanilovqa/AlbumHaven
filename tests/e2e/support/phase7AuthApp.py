@@ -38,6 +38,7 @@ from phase7PlaybackFixture import (
 OWNER_PASSWORD = "Phase Seven Owner Passphrase 2026!"
 CAPTURE_HANDLER_DRAIN_TIMEOUT_SECONDS = 10
 APPLICATION_SHUTDOWN_TIMEOUT_SECONDS = 10
+APPLICATION_SETUP_TIMEOUT_SECONDS = 120
 
 
 class _ApplicationServers:
@@ -52,7 +53,11 @@ class _ApplicationServers:
         self._generation = 0
         self._resetting = False
 
-    def start(self) -> None:
+    def start(self, *, deadline: float | None = None) -> None:
+        if deadline is None:
+            deadline = monotonic() + APPLICATION_SETUP_TIMEOUT_SECONDS
+        if monotonic() >= deadline:
+            raise TimeoutError("Application server startup readiness deadline expired")
         from music_app import create_asgi_app
         import uvicorn
 
@@ -93,10 +98,24 @@ class _ApplicationServers:
             self._generation += 1
             try:
                 for entry in reversed(entries):
+                    if monotonic() >= deadline:
+                        raise TimeoutError("Application server startup readiness deadline expired")
                     entry[1].start()
                     started_entries.append(entry)
+                while True:
+                    for server, thread, port, failures in entries:
+                        if failures:
+                            raise RuntimeError(f"Application server startup failed on port {port}") from failures[0]
+                        if not thread.is_alive():
+                            raise RuntimeError(f"Application server exited before startup readiness on port {port}")
+                    remaining = deadline - monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError("Application server startup readiness deadline expired")
+                    if all(server.started for server, _thread, _port, _failures in entries):
+                        break
+                    self._condition.wait(timeout=min(0.05, remaining))
             except BaseException as start_error:
-                for server, _thread, _port, _failures in started_entries:
+                for server, _thread, _port, _failures in entries:
                     server.should_exit = True
                 for _server, thread, _port, _failures in started_entries:
                     thread.join(timeout=APPLICATION_SHUTDOWN_TIMEOUT_SECONDS)
@@ -105,7 +124,7 @@ class _ApplicationServers:
                     for _server, thread, port, _failures in started_entries
                     if thread.is_alive()
                 ]
-                self._entries = []
+                self._entries = [entry for entry in started_entries if entry[1].is_alive()]
                 self._condition.notify_all()
                 if live_ports:
                     raise RuntimeError(
@@ -578,6 +597,7 @@ def _start_thread(server: Any, name: str) -> threading.Thread:
 
 
 def main() -> None:
+    setup_deadline = monotonic() + APPLICATION_SETUP_TIMEOUT_SECONDS
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--smtp-port", type=int, required=True)
@@ -644,7 +664,10 @@ def main() -> None:
 
         def reset_fixture() -> None:
             nonlocal jobs_worker
+            reset_deadline = monotonic() + APPLICATION_SETUP_TIMEOUT_SECONDS
             with reset_lock:
+                if monotonic() >= reset_deadline:
+                    raise TimeoutError("Phase 7 fixture reset readiness deadline expired")
                 application_servers.begin_reset()
                 try:
                     state.delivery_gate.set()
@@ -674,11 +697,11 @@ def main() -> None:
                                 playback_inventory,
                                 temp_root / "app-data",
                             )
-                    application_servers.start()
                     jobs_worker = build_isolated_jobs_worker(runtime_database_url)
                     if jobs_worker is None:
                         raise RuntimeError("Phase 7 E2E requires a durable worker database URL.")
-                    jobs_worker.start()
+                    jobs_worker.start(deadline=reset_deadline)
+                    application_servers.start(deadline=reset_deadline)
                 finally:
                     application_servers.finish_reset()
 
@@ -687,12 +710,16 @@ def main() -> None:
             setup_database_url, action
         )
         state.database_state = lambda: _database_state(setup_database_url)
+        if monotonic() >= setup_deadline:
+            raise TimeoutError("Phase 7 fixture setup readiness deadline expired")
         _start_thread(smtp_server, "album-haven-phase7-smtp")
         started_servers.append(smtp_server)
         jobs_worker = build_isolated_jobs_worker(runtime_database_url)
         if jobs_worker is None:
             raise RuntimeError("Phase 7 E2E requires a durable worker database URL.")
-        jobs_worker.start()
+        jobs_worker.start(deadline=setup_deadline)
+        if monotonic() >= setup_deadline:
+            raise TimeoutError("Phase 7 fixture setup readiness deadline expired")
         _start_thread(control_server, "album-haven-phase7-control")
         started_servers.append(control_server)
 
@@ -703,9 +730,11 @@ def main() -> None:
                 cover_cache_path=Path(os.environ["MUSIC_COVER_CACHE_PATH"]),
                 derivative_root=temp_root / "provider-artwork",
             )
+            if monotonic() >= setup_deadline:
+                raise TimeoutError("Phase 7 fixture setup readiness deadline expired")
             provider_service.start()
 
-        application_servers.start()
+        application_servers.start(deadline=setup_deadline)
         print(
             f"Phase 7 production E2E app listening on http://127.0.0.1:{args.port}; "
             f"SMTP capture control on http://127.0.0.1:{args.control_port}"

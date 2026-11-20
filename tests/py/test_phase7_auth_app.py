@@ -71,7 +71,7 @@ def test_application_servers_clean_partial_secondary_start_when_primary_start_fa
 
 
 def _start_reset_lifecycle_harness(
-    tmp_path, monkeypatch, *, stubborn_port=None, require_quiescence=True,
+    tmp_path, monkeypatch, *, stubborn_port=None, require_quiescence=True, reset_readiness=None,
 ):
     from http.client import HTTPConnection
     import threading
@@ -86,6 +86,7 @@ def _start_reset_lifecycle_harness(
     temp_root.mkdir()
     events, control_servers, app_servers, errors = [], [], [], []
     release_apps = threading.Event()
+    reset_apps_created = threading.Event()
     initial_servers = []
 
     class Lock:
@@ -112,7 +113,9 @@ def _start_reset_lifecycle_harness(
 
     class Worker:
         def __init__(self, number): self.number = number
-        def start(self): events.append(f"worker-start-{self.number}")
+        def start(self, *, deadline=None):
+            del deadline
+            events.append(f"worker-start-{self.number}")
         def stop(self): events.append(f"worker-stop-{self.number}")
 
     workers = []
@@ -132,13 +135,24 @@ def _start_reset_lifecycle_harness(
         def __init__(self, config):
             self.config = config
             self.should_exit = False
-            self.started = threading.Event()
+            self.started = False
+            self.entered = threading.Event()
+            self.ready = threading.Event()
             self.stopped = threading.Event()
             app_servers.append(self)
+            self.readiness_gate = reset_readiness.get(config.port) if reset_readiness and len(app_servers) > 2 else None
+            if len(app_servers) == 4:
+                reset_apps_created.set()
 
         def run(self):
             events.append(f"app-start-{self.config.port}")
-            self.started.set()
+            self.entered.set()
+            while self.readiness_gate is not None and not self.readiness_gate.wait(0.005):
+                if self.should_exit or release_apps.is_set():
+                    self.stopped.set()
+                    return
+            self.started = True
+            self.ready.set()
             while not release_apps.is_set():
                 if self.should_exit and self.config.port != stubborn_port:
                     break
@@ -193,7 +207,7 @@ def _start_reset_lifecycle_harness(
     owner.start()
     deadline = time.monotonic() + 3
     while time.monotonic() < deadline:
-        running = [server for server in app_servers if server.started.is_set()]
+        running = [server for server in app_servers if server.started]
         if control_servers and {server.config.port for server in running} == {5101, 5102}:
             initial_servers.extend(running)
             break
@@ -224,6 +238,7 @@ def _start_reset_lifecycle_harness(
         events=events,
         initial_servers=initial_servers,
         reset=reset,
+        reset_apps_created=reset_apps_created,
         stop=stop,
         workers=workers,
     )
@@ -269,6 +284,144 @@ def test_phase7_reset_refuses_truncate_when_any_app_lifespan_does_not_stop(
         harness.stop()
 
 
+@pytest.mark.parametrize("first_ready_port", [5101, 5102])
+def test_phase7_reset_waits_for_both_application_listeners(tmp_path, monkeypatch, first_ready_port):
+    import threading
+
+    gates = {port: threading.Event() for port in (5101, 5102)}
+    harness = _start_reset_lifecycle_harness(tmp_path, monkeypatch, reset_readiness=gates)
+    completed = threading.Event()
+    responses, errors = [], []
+
+    def reset():
+        try:
+            responses.append(harness.reset())
+        except BaseException as error:
+            errors.append(error)
+        finally:
+            completed.set()
+
+    request = threading.Thread(target=reset)
+    request.start()
+    try:
+        assert harness.reset_apps_created.wait(2)
+        reset_servers = {server.config.port: server for server in harness.app_servers[2:]}
+        assert set(reset_servers) == {5101, 5102}
+        assert all(server.entered.wait(2) for server in reset_servers.values())
+        assert not completed.wait(0.05), "reset returned before either listener became ready"
+        gates[first_ready_port].set()
+        assert reset_servers[first_ready_port].ready.wait(2)
+        assert not completed.wait(0.05), "reset returned while the other listener was still unavailable"
+        gates[5102 if first_ready_port == 5101 else 5101].set()
+        assert completed.wait(2)
+        assert errors == []
+        assert responses == [(200, b'{"ok": true}')]
+        assert all(server.started for server in reset_servers.values())
+    finally:
+        for gate in gates.values():
+            gate.set()
+        request.join(timeout=3)
+        harness.stop()
+        assert not request.is_alive()
+
+
+@pytest.mark.parametrize("failure", ["thread-error", "thread-exit", "deadline"])
+def test_phase7_application_startup_failure_cleans_every_owned_server(monkeypatch, failure):
+    from types import SimpleNamespace
+
+    import music_app
+
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "e2e" / "support"))
+    launcher = importlib.import_module("phase7AuthApp")
+    servers, threads = [], []
+
+    class Server:
+        def __init__(self, config):
+            self.config = config
+            self.should_exit = False
+            self.started = False
+            servers.append(self)
+
+        def run(self):
+            if failure == "thread-error":
+                raise RuntimeError("controlled ASGI startup failure")
+
+    class Thread:
+        def __init__(self, *, target, name, daemon):
+            self.target = target
+            self.name = name
+            self.daemon = daemon
+            self.alive = False
+            self.joined = False
+            threads.append(self)
+
+        def start(self):
+            self.alive = True
+            if failure != "deadline":
+                self.target()
+                self.alive = False
+
+        def is_alive(self):
+            return self.alive
+
+        def join(self, timeout=None):
+            del timeout
+            self.joined = True
+            if all(server.should_exit for server in servers):
+                self.alive = False
+
+    clock = iter((*([0.0] * 8), 121.0))
+    monkeypatch.setattr(launcher, "monotonic", lambda: next(clock, 121.0))
+    monkeypatch.setattr(launcher.threading, "Thread", Thread)
+    monkeypatch.setattr(music_app, "create_asgi_app", lambda: object())
+    monkeypatch.setitem(sys.modules, "uvicorn", SimpleNamespace(
+        Config=lambda app, **kwargs: SimpleNamespace(app=app, **kwargs), Server=Server,
+    ))
+    owner = launcher._ApplicationServers(primary_port=5101, secondary_port=5102)
+    with pytest.raises((RuntimeError, TimeoutError), match="startup|readiness|ready|controlled"):
+        owner.start()
+    assert len(servers) == 2
+    assert all(server.should_exit for server in servers)
+    assert all(thread.joined and not thread.is_alive() for thread in threads)
+    assert owner._entries == []
+
+
+def test_application_servers_reject_expired_shared_deadline_without_starting_threads(monkeypatch):
+    from types import SimpleNamespace
+
+    import music_app
+
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "e2e" / "support"))
+    launcher = importlib.import_module("phase7AuthApp")
+    starts = []
+
+    class Thread:
+        def __init__(self, **_kwargs):
+            pass
+
+        def start(self):
+            starts.append(True)
+
+        def is_alive(self):
+            return False
+
+        def join(self, timeout=None):
+            del timeout
+
+    monkeypatch.setattr(launcher, "monotonic", lambda: 100.0)
+    monkeypatch.setattr(launcher.threading, "Thread", Thread)
+    monkeypatch.setattr(music_app, "create_asgi_app", lambda: object())
+    monkeypatch.setitem(sys.modules, "uvicorn", SimpleNamespace(
+        Config=lambda app, **kwargs: SimpleNamespace(app=app, **kwargs),
+        Server=lambda config: SimpleNamespace(config=config, started=False, should_exit=False, run=lambda: None),
+    ))
+    owner = launcher._ApplicationServers(primary_port=5101, secondary_port=5102)
+    with pytest.raises((RuntimeError, TimeoutError), match="startup|readiness|ready|expired|deadline"):
+        owner.start(deadline=99.0)
+    assert starts == []
+    assert owner._entries == []
+
+
 @pytest.fixture(autouse=True)
 def _stub_durable_worker(monkeypatch):
     from types import SimpleNamespace
@@ -276,7 +429,7 @@ def _stub_durable_worker(monkeypatch):
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "e2e" / "support"))
     launcher = importlib.import_module("phase7AuthApp")
     monkeypatch.setattr(launcher, "build_isolated_jobs_worker",
-        lambda _url: SimpleNamespace(start=lambda: None, stop=lambda: None), raising=False)
+        lambda _url: SimpleNamespace(start=lambda **_kwargs: None, stop=lambda: None), raising=False)
 
 
 @pytest.mark.parametrize("stop_fails", [False, True])
@@ -310,7 +463,9 @@ def test_phase7_durable_worker_quiesces_for_reset_and_before_database_cleanup(
 
     class Worker:
         def __init__(self, number): self.number = number
-        def start(self): events.append(f"start-{self.number}")
+        def start(self, *, deadline=None):
+            del deadline
+            events.append(f"start-{self.number}")
         def stop(self):
             events.append(f"stop-{self.number}")
             if stop_fails:
@@ -329,18 +484,34 @@ def test_phase7_durable_worker_quiesces_for_reset_and_before_database_cleanup(
         def __init__(self, app, **_kwargs):
             self.app = app
 
+    application_ready = threading.Event()
+    original_wait = launcher._ApplicationServers.wait_for_primary_exit
+
+    def wait_for_primary_exit(owner):
+        application_ready.set()
+        if stop_fails:
+            owner.stop()
+            return
+        original_wait(owner)
+
+    monkeypatch.setattr(launcher._ApplicationServers, "wait_for_primary_exit", wait_for_primary_exit)
+
     class Server:
         def __init__(self, config):
             self.config = config
             self.number = len(app_servers) + 1
             self.should_exit = False
+            self.started = True
             app_servers.append(self)
 
         def run(self):
             events.append("app-run")
             if stop_fails:
+                while not self.should_exit:
+                    time.sleep(0.005)
                 return
             if self.number == 1:
+                assert application_ready.wait(2)
                 def request_reset():
                     states[0].reset_fixture()
                     events.append("reset-complete")
@@ -442,8 +613,9 @@ def test_phase7_startup_failure_cleans_only_owned_database_and_closes_bound_serv
     finally:
         for server in servers:
             server.server_close()
-@pytest.mark.parametrize("original_failure", [False, True])
-@pytest.mark.parametrize("failure_point", ["secondary", "capture_shutdown", "capture_close"])
+@pytest.mark.parametrize(("failure_point", "original_failure"), [
+    (point, original) for point in ("secondary", "capture_shutdown", "capture_close") for original in (False, True)
+] + [("partial_start", False)])
 def test_phase7_retains_database_fixture_and_ownership_when_secondary_shutdown_is_unproven(
     tmp_path, monkeypatch, capsys, original_failure, failure_point
 ):
@@ -452,6 +624,15 @@ def test_phase7_retains_database_fixture_and_ownership_when_secondary_shutdown_i
 
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "e2e" / "support"))
     launcher = importlib.import_module("phase7AuthApp")
+    owners = []
+    application_servers = launcher._ApplicationServers
+
+    def construct_application_servers(**kwargs):
+        owner = application_servers(**kwargs)
+        owners.append(owner)
+        return owner
+
+    monkeypatch.setattr(launcher, "_ApplicationServers", construct_application_servers)
     temp_root = tmp_path / "phase7"
     temp_root.mkdir()
     events = []
@@ -471,15 +652,20 @@ def test_phase7_retains_database_fixture_and_ownership_when_secondary_shutdown_i
             self.target = target
             self.number = Thread.created
             self.ran = False
+            self.joined = False
             Thread.created += 1
 
-        def start(self): pass
+        def start(self):
+            if failure_point == "partial_start" and self.number == 0:
+                raise RuntimeError("primary thread start failed")
         def join(self, timeout):
+            self.joined = True
             events.append(("join", timeout))
             if timeout is None and self.number == 0 and not self.ran:
                 self.ran = True
                 self.target()
-        def is_alive(self): return failure_point == "secondary" and self.number == 1
+        def is_alive(self):
+            return (self.number == 1 and failure_point in {"secondary", "partial_start"}) or not self.joined
 
     class CaptureServer:
         def __init__(self, *_args): pass
@@ -495,7 +681,8 @@ def test_phase7_retains_database_fixture_and_ownership_when_secondary_shutdown_i
                 raise RuntimeError("capture close failed")
 
     class Worker:
-        def start(self):
+        def start(self, *, deadline=None):
+            del deadline
             events.append("worker-start")
 
         def stop(self):
@@ -518,7 +705,7 @@ def test_phase7_retains_database_fixture_and_ownership_when_secondary_shutdown_i
     monkeypatch.setattr(music_app, "create_asgi_app", lambda: object())
     monkeypatch.setitem(sys.modules, "uvicorn", SimpleNamespace(
         Config=lambda *_args, **_kwargs: object(),
-        Server=lambda *_args: SimpleNamespace(should_exit=False, run=run),
+        Server=lambda *_args: SimpleNamespace(should_exit=False, started=True, run=run),
     ))
     monkeypatch.setattr(launcher, "reset_application_tables", lambda _url: events.append("reset"))
     with pytest.raises(RuntimeError) as caught:
@@ -529,7 +716,10 @@ def test_phase7_retains_database_fixture_and_ownership_when_secondary_shutdown_i
             assert any(failure_point.replace("_", " ") in str(error) for error in primary_error.cleanup_failures)
             assert failure_point.replace("_", " ") in capsys.readouterr().err
     else:
-        assert "shutdown" in str(caught.value).lower()
+        assert ("startup cleanup is unproven" if failure_point == "partial_start" else "shutdown") in str(caught.value).lower()
+    if failure_point == "partial_start":
+        assert owners and owners[0]._entries, "unproved startup cleanup must retain the surviving owner"
+        assert any(thread.is_alive() for _server, thread, _port, _failures in owners[0]._entries)
     assert "reset" not in events
     assert "release" not in events, "the live owner's identity lock must remain until that process exits"
     assert temp_root.exists(), "a surviving writer may still be using its fixture"
@@ -619,6 +809,7 @@ def test_phase7_drains_control_requests_before_database_release(tmp_path, monkey
         def __init__(self, config):
             self.config = config
             self.should_exit = False
+            self.started = True
 
         def run(self):
             run()

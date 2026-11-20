@@ -5962,17 +5962,23 @@ class ManagedDurableJobsWorker:
                     if self._failure is None:
                         self._failure = exc
 
-    def start(self) -> None:
+    def start(self, *, deadline: float | None = None) -> None:
+        startup_deadline = time.monotonic() + self._startup_timeout_seconds
+        if deadline is not None:
+            startup_deadline = min(startup_deadline, deadline)
+        if time.monotonic() >= startup_deadline:
+            raise RuntimeError("Isolated durable jobs worker did not become ready")
         self._thread.start()
-        deadline = time.monotonic() + self._startup_timeout_seconds
-        while time.monotonic() < deadline:
+        while time.monotonic() < startup_deadline:
             if self._failure is not None:
                 raise RuntimeError("Isolated durable jobs worker failed during startup") from self._failure
             if not self._thread.is_alive():
                 raise RuntimeError("Isolated durable jobs worker exited during startup")
             if self._ready_probe():
-                return
-            time.sleep(0.05)
+                if time.monotonic() < startup_deadline:
+                    return
+                break
+            time.sleep(min(0.05, max(0, startup_deadline - time.monotonic())))
         raise RuntimeError("Isolated durable jobs worker did not become ready")
 
     def stop(self) -> None:

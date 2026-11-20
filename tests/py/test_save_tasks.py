@@ -1489,8 +1489,20 @@ def test_structural_tag_edit_schedules_stale_projection_rebuild_after_commit(tmp
     assert "warnings" not in terminal_task
 
 
+@pytest.mark.parametrize(
+    ("publication_result", "published_keys"),
+    [
+        ({"separate_release_key": "first-release"}, {"first-release"}),
+        (
+            {"separate_release_keys": ["first-release", "second-release"], "separate_release_key": "ignored-legacy"},
+            {"first-release", "second-release"},
+        ),
+        ({"separate_release_keys": [], "separate_release_key": "ignored-legacy"}, set()),
+    ],
+    ids=["legacy-single-key", "all-published-keys", "explicit-empty-overrides-legacy"],
+)
 def test_structural_year_edit_publishes_committed_separate_release_key_before_rebuild(
-    tmp_path,
+    tmp_path, publication_result, published_keys,
 ):
     task_id = create_save_task("edit-tags")
     state = {
@@ -1502,10 +1514,10 @@ def test_structural_year_edit_publishes_committed_separate_release_key_before_re
                 "year": 2004,
             },
         },
-        "separate_release_keys": set(),
+        "separate_release_keys": {"existing-release"},
     }
     rebuilt_keys: list[set[str]] = []
-    release_key = "year split artist::year split album"
+    expected_keys = {"existing-release"} | published_keys
 
     def rebuild_with_committed_release_key(
         current_state,
@@ -1514,7 +1526,7 @@ def test_structural_year_edit_publishes_committed_separate_release_key_before_re
         _paths,
         separate_release_keys,
     ):
-        assert current_state["separate_release_keys"] == {release_key}
+        assert current_state["separate_release_keys"] == expected_keys
         rebuilt_keys.append(set(separate_release_keys))
 
     finalize_structural_tag_edit_save_task(
@@ -1525,7 +1537,7 @@ def test_structural_year_edit_publishes_committed_separate_release_key_before_re
         rebuild_affected_albums_in_state=rebuild_with_committed_release_key,
         persist_structural_tag_edit=lambda **_kwargs: {
             "album_rows_updated": 1,
-            "separate_release_key": release_key,
+            **publication_result,
         },
         append_log_history=lambda *_args, **_kwargs: None,
         log_app_event=lambda *_args, **_kwargs: None,
@@ -1547,15 +1559,15 @@ def test_structural_year_edit_publishes_committed_separate_release_key_before_re
         },
         changed_paths={"track-1.mp3"},
         requested_track_paths={"track-1.mp3"},
-        separate_release_keys=set(),
+        separate_release_keys={"existing-release"},
         changed_field_names={"year"},
         structural_edit_fields={"album", "year"},
         log_entry={"action": "Year edited"},
     )
 
     assert save_task_result(task_id)["status"] == "completed"
-    assert state["separate_release_keys"] == {release_key}
-    assert rebuilt_keys == [{release_key}]
+    assert state["separate_release_keys"] == expected_keys
+    assert rebuilt_keys == [expected_keys]
 
 
 def test_structural_tag_edit_runtime_refresh_preserves_cover_selected_after_commit(
@@ -1625,6 +1637,70 @@ def test_structural_tag_edit_runtime_refresh_preserves_cover_selected_after_comm
             "cover_revision": "selected-cover",
         }
     ]
+
+
+@pytest.mark.parametrize(
+    ("persistence_result", "expected_inherited"),
+    [
+        (
+            {"cover_inherited_paths": ["split.mp3"], "cover_inherited_from_structural_edit": True},
+            {"split.mp3"},
+        ),
+        (
+            {"cover_inherited_paths": [], "cover_inherited_from_structural_edit": True},
+            set(),
+        ),
+        (
+            {"cover_inherited_from_structural_edit": True},
+            {"split.mp3", "vacated.mp3"},
+        ),
+    ],
+    ids=["exact-subset", "explicit-empty-overrides-legacy", "legacy-boolean-fallback"],
+)
+def test_structural_finalizer_uses_published_cover_inheritance_paths(
+    tmp_path, persistence_result, expected_inherited,
+):
+    task_id = create_save_task("edit-tags")
+    previous = {
+        path: {
+            "path": path, "album_artist": "Artist", "album": album,
+            "cover_path": str(tmp_path / album / "cover.jpg"),
+            "cover_revision": f"{album}-cover",
+        }
+        for path, album in (("split.mp3", "Split Source"), ("vacated.mp3", "Vacated Source"))
+    }
+    updated = {path: {**entry, "album": f"{entry['album']} Repaired"} for path, entry in previous.items()}
+    unrelated = {
+        "path": "other.mp3", "album_artist": "Other", "album": "Other Album",
+        "cover_path": str(tmp_path / "Other Album" / "selected-cover.jpg"),
+        "cover_revision": "selected-cover-revision",
+    }
+    state = {"albums": [], "file_cache": {**previous, "other.mp3": dict(unrelated)}}
+
+    finalize_structural_tag_edit_save_task(
+        task_id,
+        config=_explicit_config(tmp_path), logger=_logger_stub(), get_state=lambda: state,
+        rebuild_affected_albums_in_state=lambda *_args, **_kwargs: None,
+        persist_structural_tag_edit=lambda **_kwargs: {"album_rows_updated": 2, **persistence_result},
+        append_log_history=lambda *_args, **_kwargs: None,
+        log_app_event=lambda *_args, **_kwargs: None,
+        find_albums_by_track_paths=lambda _paths: [],
+        find_problematic_album_by_track_paths=lambda _paths: None,
+        updated_file_cache=updated, previous_file_cache=previous,
+        changed_paths=set(previous), requested_track_paths=set(previous),
+        separate_release_keys=set(), changed_field_names={"album"},
+        structural_edit_fields={"album"}, log_entry={"action": "Repair album metadata"},
+    )
+
+    assert save_task_result(task_id)["status"] == "completed"
+    assert {
+        path for path, entry in state["file_cache"].items()
+        if entry.get("cover_inherited_from_structural_edit") is True
+    } == expected_inherited
+    for path in previous:
+        assert state["file_cache"][path]["cover_path"] == previous[path]["cover_path"]
+        assert state["file_cache"][path]["cover_revision"] == previous[path]["cover_revision"]
+    assert state["file_cache"]["other.mp3"] == unrelated
 
 
 def test_structural_cover_inheritance_marks_only_affected_album_identities():

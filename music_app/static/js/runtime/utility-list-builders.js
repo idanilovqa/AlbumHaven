@@ -4023,7 +4023,7 @@ function getDraggableProblemSuggestions() {
 function formatProblemSuggestionLabel(proposal) {
   const label = { album: 'Album', album_artist: 'Album artist', artist: 'Artist', title: 'Title', year: 'Year', track_number: 'Track', disc_number: 'Disc', album_disc_marker: 'Album / disc', album_edition: 'Album / edition' }[proposal.field] || proposal.field;
   const original = proposal.original === null || proposal.original === undefined || proposal.original === '' ? 'missing' : String(proposal.original);
-  return `${label}: ${original} в†’ ${String(proposal.corrected ?? '')}`;
+  return `${label}: ${original} → ${String(proposal.corrected ?? '')}`;
 }
 
 function syncProblemSuggestionSelection() {

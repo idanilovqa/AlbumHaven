@@ -242,6 +242,14 @@ class ScanCacheAdapter(Protocol):
     ) -> dict[str, object]:
         ...
 
+    def load_tag_edit_state(
+        self,
+        changed_paths: set[str],
+        *,
+        include_album_siblings: bool = False,
+    ) -> dict[str, object]:
+        ...
+
     def validate_structural_tag_edit(
         self,
         *,
@@ -1055,6 +1063,14 @@ class PostgresScanCacheAdapter:
         self,
         changed_paths: set[str],
     ) -> dict[str, object]:
+        return self.load_tag_edit_state(changed_paths)
+
+    def load_tag_edit_state(
+        self,
+        changed_paths: set[str],
+        *,
+        include_album_siblings: bool = False,
+    ) -> dict[str, object]:
         normalized_paths = sorted(
             {str(path or "").strip() for path in changed_paths if str(path or "").strip()}
         )
@@ -1070,9 +1086,30 @@ class PostgresScanCacheAdapter:
                 _load_file_entries_sql(targeted_paths=True),
                 {"source": _SOURCE, "changed_paths": normalized_paths},
             ).fetchall()
+            resolved_paths = {
+                str(_row_mapping(row).get("private_path") or "").strip()
+                for row in rows
+            }
+            if resolved_paths != set(normalized_paths):
+                raise RuntimeError("Recovered tag edit state could not resolve every changed path.")
+            if include_album_siblings:
+                album_keys = sorted({
+                    str(_row_mapping(row).get("album_key") or "").strip()
+                    for row in rows
+                    if str(_row_mapping(row).get("album_key") or "").strip()
+                })
+                if album_keys:
+                    rows = list(rows) + list(connection.execute(
+                        _load_file_entries_sql(targeted_albums=True),
+                        {"source": _SOURCE, "album_keys": album_keys},
+                    ).fetchall())
+            returned_paths = sorted({
+                str(_row_mapping(row).get("private_path") or "").strip()
+                for row in rows
+            })
             override_rows = connection.execute(
                 _load_recovered_exception_overrides_sql(),
-                {"changed_paths": normalized_paths},
+                {"changed_paths": returned_paths},
             ).fetchall()
         file_entries: dict[str, dict[str, object]] = {}
         for row in rows:
@@ -1080,13 +1117,13 @@ class PostgresScanCacheAdapter:
             if hydrated is not None:
                 path, entry = hydrated
                 file_entries[path] = entry
-        if set(file_entries) != set(normalized_paths):
+        if set(file_entries) != set(returned_paths):
             raise RuntimeError(
                 "Recovered tag edit state could not resolve every changed path."
             )
         exception_overrides = {
             path: {"exception_type": "", "custom_collection_name": ""}
-            for path in normalized_paths
+            for path in returned_paths
         }
         for row in override_rows:
             row_payload = _row_mapping(row)
@@ -1711,6 +1748,44 @@ class PostgresScanCacheAdapter:
         if not normalized_paths:
             raise ValueError("Structural tag persistence requires at least one changed path.")
         normalized_changed_fields = frozenset(changed_field_names)
+        structural_fields = normalized_changed_fields - _TARGETED_INVENTORY_EDIT_FIELDS
+        inventory_fields = normalized_changed_fields & _TARGETED_INVENTORY_EDIT_FIELDS
+        groups = []
+        inventory_paths = []
+        if _connection is None and structural_fields in _TARGETED_STRUCTURAL_EDIT_FIELD_SETS:
+            groups, inventory_paths = _normal_tag_edit_partitions(
+                normalized_paths, previous_file_entries, updated_file_entries,
+                structural_fields, inventory_fields,
+            )
+        if _connection is None and (
+            (structural_fields in _TARGETED_STRUCTURAL_EDIT_FIELD_SETS and inventory_fields)
+            or len(groups) > 1
+            or (groups and groups[0][0] != normalized_paths)
+        ):
+            with self._connect_to_database() as connection:
+                connection.execute(_inventory_publication_advisory_lock_sql())
+                connection.execute(relation_projection_advisory_lock_sql())
+                _ensure_bootstrap_context(connection)
+                result = self._persist_tag_edit_partitions_in_transaction(
+                    connection,
+                    structural_groups=groups,
+                    inventory_paths=inventory_paths,
+                    previous_file_entries=previous_file_entries,
+                    updated_file_entries=updated_file_entries,
+                    inventory_fields=inventory_fields,
+                    rebuild_relation_projection=rebuild_relation_projection,
+                )
+                if before_commit is not None:
+                    before_commit(connection)
+                (commit_guard or (lambda commit: commit()))(connection.commit)
+            if groups:
+                from music_app.services.gallery_projection_postgres import schedule_gallery_projection_refresh
+
+                try:
+                    schedule_gallery_projection_refresh(self._config, connect=self._connect)
+                except Exception:
+                    _LOGGER.exception("Committed structural tag edit could not schedule gallery refresh.")
+            return result
         targeted_inventory_edit = bool(normalized_changed_fields) and (
             normalized_changed_fields <= _TARGETED_INVENTORY_EDIT_FIELDS
         )
@@ -2181,61 +2256,17 @@ class PostgresScanCacheAdapter:
             inventory_revision = int(
                 revision_row.get("inventory_mutation_revision") or 0
             )
-            source_album_vacated = False
-            if structural_fields:
-                structural_result = self.persist_structural_tag_edit(
-                    changed_paths=set(normalized_paths),
-                    previous_file_entries=previous_file_entries,
-                    updated_file_entries=_recovered_partition_entries(
-                        previous_file_entries,
-                        resolved_file_entries,
-                        normalized_paths,
-                        structural_fields,
-                    ),
-                    changed_field_names=set(structural_fields),
-                    rebuild_relation_projection=False,
-                    _connection=connection,
-                )
-                inventory_revision = int(
-                    structural_result.get("inventory_mutation_revision")
-                    or inventory_revision
-                )
-                source_album_vacated = bool(
-                    structural_result.pop("_source_album_vacated", False)
-                )
-            if inventory_fields:
-                inventory_result = self.persist_structural_tag_edit(
-                    changed_paths=set(normalized_paths),
-                    previous_file_entries=previous_file_entries,
-                    updated_file_entries=_recovered_partition_entries(
-                        previous_file_entries,
-                        resolved_file_entries,
-                        normalized_paths,
-                        inventory_fields,
-                    ),
-                    changed_field_names=set(inventory_fields),
-                    rebuild_relation_projection=False,
-                    _connection=connection,
-                )
-                inventory_revision = int(
-                    inventory_result.get("inventory_mutation_revision")
-                    or inventory_revision
-                )
-            if structural_fields:
-                _patch_structural_relation_projection(
-                    connection,
-                    previous_entries={
-                        path: dict(previous_file_entries[path])
-                        for path in normalized_paths
-                    },
-                    updated_entries={
-                        path: dict(resolved_file_entries[path])
-                        for path in normalized_paths
-                    },
-                    source_album_vacated=source_album_vacated,
-                )
+            partition_result = self._persist_tag_edit_partitions_in_transaction(
+                connection,
+                structural_groups=[(normalized_paths, structural_fields)] if structural_fields else [],
+                inventory_paths=normalized_paths if inventory_fields else [],
+                previous_file_entries=previous_file_entries,
+                updated_file_entries=resolved_file_entries,
+                inventory_fields=inventory_fields,
+                rebuild_relation_projection=True,
+            )
             persistence_result = {
-                "inventory_mutation_revision": inventory_revision,
+                "inventory_mutation_revision": partition_result.get("inventory_mutation_revision", inventory_revision),
                 "structural_partition_ran": bool(structural_fields),
             }
             before_commit(connection)
@@ -2244,6 +2275,91 @@ class PostgresScanCacheAdapter:
             except Exception as error:
                 raise RecoveredTagEditCommitUnknown(persistence_result) from error
         return persistence_result
+
+    def _persist_tag_edit_partitions_in_transaction(
+        self,
+        connection: Any,
+        *,
+        structural_groups: list[tuple[list[str], frozenset[str]]],
+        inventory_paths: list[str],
+        previous_file_entries: Mapping[str, dict[str, object]],
+        updated_file_entries: Mapping[str, dict[str, object]],
+        inventory_fields: frozenset[str],
+        rebuild_relation_projection: bool,
+    ) -> dict[str, object]:
+        result: dict[str, object] = {}
+        structural_results = []
+        inherited_paths: list[str] = []
+        separate_release_keys: set[str] = set()
+        orphaned_source_artists: set[str] = set()
+        destination_identities: set[tuple[object, object, object]] = set()
+        for paths, fields in structural_groups:
+            structural_result = self.persist_structural_tag_edit(
+                changed_paths=set(paths),
+                previous_file_entries=previous_file_entries,
+                updated_file_entries=_recovered_partition_entries(
+                    previous_file_entries, updated_file_entries, paths, fields,
+                ),
+                changed_field_names=set(fields),
+                rebuild_relation_projection=False,
+                _connection=connection,
+            )
+            structural_results.append((paths, structural_result))
+            destination_identities.add((
+                structural_result.get("destination_album_id"),
+                structural_result.get("destination_album_key"),
+                structural_result.get("destination_artist_name"),
+            ))
+            separate_release_key = str(structural_result.get("separate_release_key") or "").strip()
+            if separate_release_key:
+                separate_release_keys.add(separate_release_key)
+            orphaned_source_artists.update(structural_result.get("orphaned_source_artists") or [])
+            if structural_result.get("cover_inherited_from_structural_edit") is True:
+                inherited_paths.extend(paths)
+            result.update(structural_result)
+        if inventory_paths:
+            inventory_result = self.persist_structural_tag_edit(
+                changed_paths=set(inventory_paths),
+                previous_file_entries=previous_file_entries,
+                updated_file_entries=_recovered_partition_entries(
+                    previous_file_entries, updated_file_entries, inventory_paths, inventory_fields,
+                ),
+                changed_field_names=set(inventory_fields),
+                rebuild_relation_projection=False,
+                _connection=connection,
+            )
+            result["inventory_mutation_revision"] = inventory_result["inventory_mutation_revision"]
+        if rebuild_relation_projection:
+            for paths, structural_result in structural_results:
+                previous_entries = {path: dict(previous_file_entries[path]) for path in paths}
+                source_album_vacated = bool(structural_result.get("_source_album_vacated"))
+                if result.get("projection_mode") == "stale":
+                    if source_album_vacated:
+                        orphaned_source_artists.update(_structural_entry_artist_names(previous_entries))
+                    continue
+                projection_result = _patch_structural_relation_projection(
+                    connection,
+                    previous_entries=previous_entries,
+                    updated_entries={path: dict(updated_file_entries[path]) for path in paths},
+                    source_album_vacated=source_album_vacated,
+                )
+                orphaned_source_artists.update(projection_result.get("orphaned_source_artists") or [])
+                result.update(projection_result)
+                if result.get("projection_mode") == "stale":
+                    result.pop("relation_views", None)
+                    result.pop("relations_last_built", None)
+        if len(destination_identities) > 1:
+            for field in ("destination_album_id", "destination_album_key", "destination_artist_name"):
+                result.pop(field, None)
+        if len(separate_release_keys) != 1:
+            result.pop("separate_release_key", None)
+        result.pop("_source_album_vacated", None)
+        result["cover_inherited_paths"] = inherited_paths
+        result["separate_release_keys"] = sorted(separate_release_keys)
+        result["orphaned_source_artists"] = sorted(
+            _orphaned_structural_source_artists(connection, orphaned_source_artists)
+        )
+        return result
 
     def validate_structural_tag_edit(
         self,
@@ -2257,6 +2373,30 @@ class PostgresScanCacheAdapter:
             {str(path or "").strip() for path in changed_paths if str(path or "").strip()}
         )
         normalized_changed_fields = frozenset(changed_field_names)
+        structural_fields = normalized_changed_fields - _TARGETED_INVENTORY_EDIT_FIELDS
+        inventory_fields = normalized_changed_fields & _TARGETED_INVENTORY_EDIT_FIELDS
+        groups = []
+        inventory_paths = []
+        if structural_fields in _TARGETED_STRUCTURAL_EDIT_FIELD_SETS:
+            groups, inventory_paths = _normal_tag_edit_partitions(
+                normalized_paths, previous_file_entries, updated_file_entries,
+                structural_fields, inventory_fields,
+            )
+        if (
+            (structural_fields in _TARGETED_STRUCTURAL_EDIT_FIELD_SETS and inventory_fields)
+            or len(groups) > 1
+            or (groups and groups[0][0] != normalized_paths)
+        ):
+            for paths, fields in groups:
+                self.validate_structural_tag_edit(
+                    changed_paths=set(paths),
+                    previous_file_entries=previous_file_entries,
+                    updated_file_entries=dict(_recovered_partition_entries(
+                        previous_file_entries, updated_file_entries, paths, fields,
+                    )),
+                    changed_field_names=set(fields),
+                )
+            return
         targeted_inventory_edit = bool(normalized_changed_fields) and (
             normalized_changed_fields <= _TARGETED_INVENTORY_EDIT_FIELDS
         )
@@ -3104,6 +3244,69 @@ def _structural_file_entry_delta(
     return delta
 
 
+def _normal_tag_edit_partitions(
+    paths: list[str],
+    previous_entries: Mapping[str, dict[str, object]],
+    updated_entries: Mapping[str, dict[str, object]],
+    structural_fields: frozenset[str],
+    inventory_fields: frozenset[str],
+) -> tuple[list[tuple[list[str], frozenset[str]]], list[str]]:
+    if not paths or any(
+        not isinstance(previous_entries.get(path), dict)
+        or not isinstance(updated_entries.get(path), dict)
+        for path in paths
+    ):
+        raise RuntimeError("Structural tag persistence must resolve every changed path in memory.")
+    groups: dict[tuple, tuple[list[str], set[str]]] = {}
+    inventory_paths = []
+    unsupported_fields: set[str] = set()
+    identity_fields = ("album", "album_artist", "edition", "exception_type")
+    if "year" in structural_fields:
+        identity_fields += ("year",)
+    admitted_fields = structural_fields | inventory_fields | {"mtime", "size"}
+    if "year" in structural_fields:
+        admitted_fields |= {"release_date"}
+    for path in paths:
+        previous = previous_entries[path]
+        updated = updated_entries[path]
+        delta = _structural_file_entry_delta(previous, updated)
+        unsupported_fields.update(set(delta) - admitted_fields)
+        fields = frozenset(field for field in structural_fields if field in delta)
+        if fields:
+            restores_blank_album = (
+                fields == frozenset({"album"})
+                and not str(previous.get("album") or "").strip()
+                and not normalize_exception_value(previous.get("exception_type"))
+            )
+            clears_exception = (
+                fields <= frozenset({"exception_type", "custom_collection_name"})
+                and not normalize_exception_value(updated.get("exception_type"))
+            )
+            if str(updated.get("album") or "").strip() and (restores_blank_album or clears_exception):
+                source = ("detached_restore", str(previous.get("album") or "").strip())
+            elif previous.get("album_id") is not None:
+                source = ("album_id", str(previous["album_id"]))
+            else:
+                source = tuple(str(previous.get(field) or "").strip() for field in identity_fields)
+            destination = tuple(str(updated.get(field) or "").strip() for field in identity_fields)
+            group_paths, group_fields = groups.setdefault((source, destination), ([], set()))
+            group_paths.append(path)
+            group_fields.update(fields)
+        if inventory_fields.intersection(delta):
+            inventory_paths.append(path)
+    structural_groups = [
+        (group_paths, frozenset(fields))
+        for group_paths, fields in groups.values()
+    ]
+    if unsupported_fields and (
+        inventory_fields
+        or len(structural_groups) > 1
+        or (structural_groups and structural_groups[0][0] != paths)
+    ):
+        raise ValueError("Targeted tag persistence has unsupported metadata drift.")
+    return structural_groups, inventory_paths
+
+
 def _recovered_partition_entries(
     previous_file_entries: Mapping[str, dict[str, object]],
     resolved_file_entries: Mapping[str, dict[str, object]],
@@ -3226,7 +3429,16 @@ def _orphaned_structural_source_artists(
         return []
     rows = connection.execute(
         """
-        with source_artist_names as (
+        with bootstrap_context as (
+            select library.libraries.id as library_id
+            from app.bootstrap_owners
+            join library.libraries
+              on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+             and library.libraries.name = 'Local Library'
+             and library.libraries.library_kind = 'local'
+            where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+            limit 1
+        ), source_artist_names as (
           select unnest(%(artist_names)s::text[]) as artist_name
         )
         select source.artist_name
@@ -3234,6 +3446,8 @@ def _orphaned_structural_source_artists(
         where not exists (
           select 1
           from library.local_artists artist
+            join bootstrap_context
+              on bootstrap_context.library_id = artist.library_id
           where lower(btrim(artist.name)) = lower(btrim(source.artist_name))
             and (
               exists (

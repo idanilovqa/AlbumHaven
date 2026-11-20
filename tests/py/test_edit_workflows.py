@@ -105,6 +105,120 @@ def test_handle_repair_album_request_queues_explicit_config_logger_without_app(c
     assert "app" not in queued_payloads[0]
 
 
+@pytest.mark.parametrize(
+    "outcome",
+    ["success", "validation-failure", "intent-failure", "media-failure", "unchanged-writer"],
+)
+def test_repair_journal_orders_media_and_transfers_or_releases_reservation(config, outcome):
+    path = str((config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve())
+    entry = {"path": path, "title": "Mojibake Song", "album": "Album", "album_artist": "Artist"}
+    state = {"file_cache": {path: entry}, "relation_views": {"alias_to_canonical": {}}, "separate_release_keys": set()}
+    events = []
+    queued = []
+    reservation = SimpleNamespace(released=False)
+
+    def release():
+        assert not reservation.released
+        reservation.released = True
+        events.append("release")
+
+    reservation.release = release
+
+    def acquire(repairs_by_path):
+        assert repairs_by_path == {path: {"title": "Fixed Song"}}
+        events.append("reserve")
+        return reservation
+
+    def validate(**options):
+        assert not reservation.released
+        assert options["changed_paths"] == {path}
+        assert options["updated_file_entries"][path]["title"] == "Fixed Song"
+        events.append("validate")
+        if outcome == "validation-failure":
+            raise RuntimeError("repair scope rejected")
+
+    def prepare(**options):
+        assert not reservation.released
+        assert options["changes"] == [{
+            "path": path, "old_values": {"title": "Mojibake Song"},
+            "requested_values": {"title": "Fixed Song"},
+        }]
+        events.append("prepare")
+        if outcome == "intent-failure":
+            raise RuntimeError("journal unavailable")
+        return "repair-intent"
+
+    def write(raw_path, repairs):
+        assert events == ["reserve", "validate", "prepare"]
+        assert not reservation.released
+        events.append("media")
+        if outcome == "media-failure":
+            raise RuntimeError("media write failed")
+        if outcome == "unchanged-writer":
+            return raw_path, False, []
+        return raw_path, True, list(repairs)
+
+    def verified(intent_id):
+        assert intent_id == "repair-intent"
+        assert not reservation.released
+        events.append("verified")
+
+    def record_failure(intent_id, error_payload):
+        assert intent_id == "repair-intent"
+        assert error_payload["ok"] is False
+        events.append("record-failure")
+
+    def queue(**options):
+        assert events == ["reserve", "validate", "prepare", "media", "verified"]
+        assert not reservation.released
+        queued.append(options)
+        events.append("queue")
+
+    result = handle_repair_album_request(
+        payload={"selected_rows": [f"{path}::title"]},
+        album={"name": "Album", "album_artist": "Artist", "tracks": [{"path": path}]},
+        requested_track_paths={path}, config=config, logger=_logger_stub(), get_state=lambda: state,
+        create_save_task=lambda kind: f"task-{kind}", queue_finalize_save_task=queue,
+        build_text_repairs_for_entry=lambda _entry: {"title": "Fixed Song"},
+        build_artist_alias_repairs_for_entry=lambda _entry, _aliases: {},
+        build_disc_marker_repairs_for_entry=lambda _entry: {}, apply_repairs_worker=write,
+        update_cache_entry_after_repairs=lambda raw_path, old, repairs: {**old, **repairs},
+        build_affected_album_dicts=lambda *_args, **_kwargs: [],
+        find_problematic_album_by_track_paths=lambda _paths: None,
+        find_albums_by_track_paths=lambda _paths: [],
+        rebuild_affected_albums_in_state=lambda *_args, **_kwargs: None,
+        load_ignored_repair_keys=lambda _config: set(),
+        save_ignored_repair_keys=lambda *_args, **_kwargs: None,
+        load_separate_release_keys=lambda _config: set(),
+        save_separate_release_keys=lambda *_args, **_kwargs: None,
+        append_log_history=lambda *_args, **_kwargs: None,
+        log_app_event=lambda *_args, **_kwargs: None,
+        structural_edit_fields={"album", "artist", "album_artist"}, edit_write_workers=1,
+        acquire_repair_reservation=acquire, prevalidate_structural_tag_edit=validate,
+        prepare_tag_edit_intent=prepare, mark_tag_edit_files_verified=verified,
+        record_tag_edit_failure=record_failure,
+    )
+
+    if outcome == "success":
+        assert result["ok"] is True
+        assert queued[0]["tag_edit_intent_id"] == "repair-intent"
+        assert queued[0]["structural_tag_edit_reservation"] is reservation
+        assert not reservation.released
+        queued[0]["structural_tag_edit_reservation"].release()
+        assert events == ["reserve", "validate", "prepare", "media", "verified", "queue", "release"]
+    else:
+        assert result[0]["ok"] is False
+        assert result[1] == 500
+        assert queued == []
+        expected = ["reserve", "validate"]
+        if outcome != "validation-failure":
+            expected.append("prepare")
+        if outcome in {"media-failure", "unchanged-writer"}:
+            expected.extend(["media", "record-failure"])
+        assert events == [*expected, "release"]
+    assert reservation.released
+
+
 def test_handle_repair_album_request_rejects_ignored_only_problem_exclusion(config):
     durable_album_key = "product artist::studio records"
     projected_album_key = f"{durable_album_key}::year::1988"

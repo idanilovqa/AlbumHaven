@@ -6590,6 +6590,310 @@ def test_live_deletion_only_targeted_mutation_preserves_surviving_album_projecti
             isolatedPostgres.reset_application_tables(setup_url)
 
 
+def test_live_selected_title_repair_publishes_through_app_role(
+    monkeypatch, tmp_path, record_property,
+):
+    import asyncio
+    import copy
+
+    import config as app_config
+    import psycopg
+    from mutagen.easyid3 import EasyID3
+    from PIL import Image
+    from starlette.requests import Request
+
+    from music_app import create_asgi_app
+    from music_app.services.auth_session_csrf import issue_session_csrf
+    from music_app.services.auth_sessions_postgres import PostgresAuthSessionService
+    from music_app.services.cover_mutation_coordinator import CoverMutationIdentity, CoverSelectionCommit
+    from music_app.services.cover_mutations_postgres import PostgresCoverMutationRepository
+    from music_app.services.current_actor_postgres import PostgresCurrentActorResolver
+    from music_app.services.library_roots import library_root_cache_identity
+    from music_app.services.library_roots_postgres import PostgresLibraryRootSettingsStore
+    from music_app.services.metadata import build_text_repairs_for_entry, read_metadata_for_file
+    from music_app.services.policy_asgi import require_action
+    from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+    from music_app.services.state import hydrate_library_state_for_config
+    from tests.e2e.support import isolatedLibraryApp
+    from tests.py.asgi_testing import decode_json, run_asgi_request
+    from tests.py.runtime_testing import configure_test_app_paths
+    from tests.py.test_watcher_recovery_postgres_live import (
+        _claim_linked_full_scan, _repository, _seed_scanning_repair,
+    )
+
+    setup_url, app_url, worker_url, _readonly_url = _durable_job_database_urls_or_skip(monkeypatch)
+    paths = configure_test_app_paths(tmp_path, monkeypatch)
+    music_dir = paths["music_dir"]
+    selected = music_dir / "Repair Artist" / "Repair Album" / "01.mp3"
+    unrelated = music_dir / "Other Artist" / "Other Album" / "01.mp3"
+    broken_title = "The Joy in Discovery".encode("utf-16le").decode("utf-16be")
+    repaired_title = "The Joy In Discovery"
+    monkeypatch.setenv("ALBUM_HAVEN_E2E_TEMP_ROOT", str(tmp_path))
+    for track_path, artist, album, title in (
+        (selected, "Repair Artist", "Repair Album", broken_title),
+        (unrelated, "Other Artist", "Other Album", "Unrelated Title"),
+    ):
+        isolatedLibraryApp.generate_rarity_fixture_audio(music_dir, track_path, frequency_hz=440)
+        tags = EasyID3()
+        for field, value in {
+            "artist": artist, "albumartist": artist, "album": album, "title": title,
+            "date": "2026", "tracknumber": "1", "discnumber": "1",
+        }.items():
+            tags[field] = value
+        tags.save(str(track_path))
+    selected_bytes = selected.read_bytes()
+    unrelated_bytes = unrelated.read_bytes()
+    cover_path = paths["data_dir"] / "selected-cover.jpg"
+    Image.new("RGB", (32, 32), "navy").save(cover_path)
+    now = datetime.now(timezone.utc)
+    before = None
+    response = None
+    terminal = None
+    app = None
+    runtime_before = None
+
+    def database_state():
+        with isolatedPostgres._connect(app_url) as connection:
+            state = {}
+            for table in ("local_albums", "local_tracks", "library_roots"):
+                state[table] = [dict(row) for row in connection.execute(
+                    f"select * from library.{table} where library_id = %s order by id",
+                    (scope.library_id,),
+                ).fetchall()]
+            state["local_track_files"] = [dict(row) for row in connection.execute(
+                "select file.* from library.local_track_files file "
+                "join library.local_tracks track on track.id = file.track_id "
+                "where track.library_id = %s order by file.id", (scope.library_id,),
+            ).fetchall()]
+            state["library_metadata"] = connection.execute(
+                "select metadata from library.libraries where id = %s", (scope.library_id,),
+            ).fetchone()["metadata"]
+            state["inventory_mutation_revision"] = adapter.load_inventory_mutation_revision()
+            state["cover_mutation_revision"] = adapter.load_cover_mutation_revision()
+            return state
+
+    def capture_repair_state():
+        record_property("repair_before", json.dumps(before, default=str))
+        record_property("repair_after", json.dumps(database_state(), default=str))
+        record_property("repair_response", json.dumps(response, default=str))
+        record_property("repair_task", json.dumps(terminal, default=str))
+        record_property("repair_media", json.dumps({
+            "selected_exists": selected.exists(), "unrelated_exists": unrelated.exists(),
+            "selected_bytes_unchanged": selected.exists() and selected.read_bytes() == selected_bytes,
+            "unrelated_bytes_unchanged": unrelated.exists() and unrelated.read_bytes() == unrelated_bytes,
+            "selected_tags": read_metadata_for_file(selected) if selected.exists() else None,
+            "unrelated_tags": read_metadata_for_file(unrelated) if unrelated.exists() else None,
+        }, default=str))
+        record_property("repair_runtime", json.dumps({
+            "file_cache": app.state.library_state["file_cache"],
+            "relation_views": app.state.library_state["relation_views"],
+        }, default=str))
+        record_property("repair_runtime_before", json.dumps(runtime_before, default=str))
+
+    try:
+        _drop_application_schemas(setup_url)
+        isolatedPostgres.prepare_isolated_database(setup_url, app_url)
+        monkeypatch.setattr(app_config.Config, "ALBUM_HAVEN_APP_DATABASE_URL", app_url)
+        app = create_asgi_app()
+        config = app.state.config
+        PostgresLibraryRootSettingsStore(config).save_settings({
+            "main_library_roots": [{"id": "repair-root", "path": str(music_dir), "layout_mode": "artist"}],
+            "hoarding_library_roots": [], "new_arrivals_roots": [], "move_policy": {},
+        })
+        root_identity = library_root_cache_identity(config)
+        with isolatedPostgres._connect(setup_url) as connection:
+            authority = connection.execute(
+                "select root.id, root.library_id, library.owner_account_id "
+                "from library.library_roots root join library.libraries library on library.id = root.library_id "
+                "join app.bootstrap_owners owner on owner.account_id = library.owner_account_id "
+                "where owner.owner_key = 'local-bootstrap-owner' and library.name = 'Local Library' "
+                "and library.library_kind = 'local' and root.is_active "
+                "and root.metadata ->> 'root_id' = 'repair-root'",
+            ).fetchone()
+            connection.execute(
+                "insert into library.library_memberships (library_id, account_id, membership_role) "
+                "values (%s, %s, 'owner') on conflict (library_id, account_id) do nothing",
+                (authority["library_id"], authority["owner_account_id"]),
+            )
+            connection.execute(
+                "update library.libraries set metadata = coalesce(metadata, '{}'::jsonb) || "
+                "jsonb_build_object('scan_cache', coalesce(metadata -> 'scan_cache', '{}'::jsonb) || "
+                "jsonb_build_object('library_root_identity', %s::text, 'last_scan', %s::double precision)) "
+                "where id = %s", (str(root_identity), now.timestamp(), authority["library_id"]),
+            )
+        scope = SimpleNamespace(
+            setup_url=setup_url, app_url=app_url, worker_url=worker_url,
+            library_id=int(authority["library_id"]), account_id=int(authority["owner_account_id"]),
+            root_database_ids={"repair-root": int(authority["id"])},
+        )
+        _repository(app_url).mark_dirty(
+            library_id=scope.library_id, logical_root_id="repair-root",
+            reason_code="root_unavailable", observed_at=now,
+        )
+        repair_id = _seed_scanning_repair(scope, now=now, logical_root_id="repair-root")
+        scans, accepted, claim, intent, claimed_scope = _claim_linked_full_scan(
+            scope, repair_id=repair_id, now=now, request_ref="selected-title-repair:seed",
+            worker_id="selected-title-repair-worker", root_ids=("repair-root",),
+        )
+        file_cache = {}
+        for track_path in (selected, unrelated):
+            entry = read_metadata_for_file(track_path)
+            entry.update(library_root_id="repair-root", library_root_category="main_library")
+            file_cache[str(track_path)] = entry
+        assert build_text_repairs_for_entry(file_cache[str(selected)]) == {"title": repaired_title}
+        adapter = PostgresScanCacheAdapter(config)
+        publication = scans.publish_claimed_full_scan(
+            claim=claim, intent_id=accepted.intent_id,
+            expected_inventory_mutation_revision=intent.inventory_mutation_revision,
+            inventory=adapter.prepare_full_scan_inventory(file_cache),
+            observed_root_ids=[root["id"] for root in claimed_scope.roots], now=now,
+        )
+        assert publication["publication_won"] is True, publication
+        before = database_state()
+        album = next(row for row in before["local_albums"] if row["title"] == "Repair Album")
+        covers = PostgresCoverMutationRepository(database_url=app_url)
+        identity = CoverMutationIdentity(scope.library_id, album["id"])
+        baseline = covers.load_baseline(identity=identity)
+        covers.commit_selection(request=CoverSelectionCommit(
+            identity=identity, track_paths=(str(selected),),
+            expected_inventory_revision=adapter.load_inventory_mutation_revision(),
+            expected_cover_mutation_revision=adapter.load_cover_mutation_revision(),
+            expected_selected_cover_revision=baseline.selected_cover_revision,
+            selected_cover_path=str(cover_path), promoted_cover_revision="selected-repair-user-cover",
+            selected_origin="user", explicit_selection=True, clear_selection=False, remote_cover=None,
+            artifact_sha256=None, observed_at=now, job_id=None, attempt=None,
+            worker_id=None, lease_token=None, task_id=None, checkpoint_revision=None,
+        ))
+        adapter.refresh_relation_projection()
+        snapshot = adapter.load_snapshot_strict(config["CACHE_PATH"], root_identity)
+        hydration = {
+            "library_id": scope.library_id, "expected_root_identity": str(root_identity),
+            "stored_root_identity": database_state()["library_metadata"]["scan_cache"].get("library_root_identity"),
+            "snapshot_file_count": len(snapshot[0]), "snapshot_last_scan": snapshot[1], "snapshot_error": snapshot[4],
+        }
+        record_property("repair_hydration", json.dumps(hydration, default=str))
+        assert hydrate_library_state_for_config(
+            app.state.library_state, config, ensure_relations=False, validate_cache=False,
+        ), {**hydration, "runtime_last_error": app.state.library_state.get("last_error")}
+        app.state.media_host_library_id = scope.library_id
+        sessions = PostgresAuthSessionService(config)
+        session = sessions.issue_session(scope.account_id)
+        resolver = PostgresCurrentActorResolver(config, session_service=sessions)
+        app.state.current_actor_resolver = resolver
+        app.state.auth_policy_config = {
+            **config, "hmac": {"secret": "selected-repair-test-origin-key-32-bytes-minimum", "key_version": 1},
+        }
+        csrf = issue_session_csrf(session.raw_token, app.state.auth_policy_config)
+        headers = {
+            "cookie": f"__Host-album_haven_session={session.raw_token}; __Host-album_haven_csrf={csrf}",
+            "origin": "http://testserver", "x-album-haven-csrf": csrf,
+        }
+        policy_request = Request({
+            "type": "http", "app": app, "method": "POST", "scheme": "http",
+            "path": "/utilities/repair-album", "query_string": b"",
+            "headers": [(key.encode("ascii"), value.encode("ascii")) for key, value in headers.items()],
+            "client": ("testclient", 50000), "server": ("testserver", 80),
+        })
+        try:
+            policy = asyncio.run(require_action("library.files.repair")(policy_request))
+        finally:
+            evaluated = getattr(policy_request.state, "policy_evaluation", None)
+            if evaluated is not None:
+                record_property("repair_authorization", json.dumps({
+                    "actor_state": evaluated.audit.actor_class, "account_id": evaluated.audit.account_id,
+                    "is_bootstrap_owner": evaluated.audit.bootstrap_owner, "library_id": evaluated.audit.library_id,
+                    "allowed": evaluated.decision.allowed, "reason_code": evaluated.decision.reason_code,
+                    "client_surface_class": evaluated.audit.client_surface_class,
+                    "deployment_mode": evaluated.audit.deployment_mode,
+                }))
+        actor = policy_request.state.current_actor
+        assert actor.is_authenticated and actor.is_bootstrap_owner
+        assert actor.account_id == session.account_id
+        assert actor.current_library_id == scope.library_id
+        assert policy.decision.allowed, policy.decision.reason_code
+        with isolatedPostgres._connect(app_url) as connection:
+            for statement in (
+                "update library.local_albums set title = title where false",
+                "update library.local_track_files set private_path = private_path where false",
+            ):
+                with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                    with connection.transaction():
+                        connection.execute(statement)
+        before = database_state()
+        runtime_before = copy.deepcopy(app.state.library_state["file_cache"])
+        cover_revision_before = adapter.load_cover_mutation_revision()
+        inventory_revision_before = adapter.load_inventory_mutation_revision()
+        status, _, body = run_asgi_request(
+            app, "POST", "/utilities/repair-album", headers=headers,
+            json_body={"confirmed": True,
+                       "album": {"name": "Repair Album", "album_artist": "Repair Artist", "tracks": [{"path": str(selected)}]},
+                       "selected_rows": [f"{selected}::title"]},
+        )
+        response = {"status": status, "payload": decode_json(body)}
+        payload = response["payload"]
+        if payload.get("save_task_id"):
+            task_status, _, task_body = run_asgi_request(
+                app, "GET", f"/utilities/save-task/{payload['save_task_id']}", headers=headers,
+            )
+            terminal = {"status": task_status, "payload": decode_json(task_body)}
+        assert status == 200, response
+        assert payload["changed_files"] == [{"path": str(selected), "fields": ["title"]}]
+        assert payload["requires_view_refresh"] is True
+        assert payload["updated_album"] is None and payload["updated_albums"] == []
+        assert payload["updated_problematic_album"] is None
+        assert payload["save_task_id"]
+        assert terminal["status"] == 200, terminal
+        assert terminal["payload"]["ok"] is True
+        assert terminal["payload"]["status"] == "completed", terminal
+        assert terminal["payload"]["requires_view_refresh"] is True
+        assert terminal["payload"]["updated_albums"] == []
+        assert terminal["payload"]["updated_problematic_album"] is None
+        after = database_state()
+        assert selected.exists() and unrelated.read_bytes() == unrelated_bytes
+        assert read_metadata_for_file(selected)["title"] == repaired_title
+        old_file = next(row for row in before["local_track_files"] if row["private_path"] == str(selected))
+        new_file = next(row for row in after["local_track_files"] if row["private_path"] == str(selected))
+        for field in ("id", "track_id", "library_root_id", "private_path"):
+            assert new_file[field] == old_file[field]
+        for old_track, new_track in zip(before["local_tracks"], after["local_tracks"], strict=True):
+            for field in ("id", "album_id", "artist_id"):
+                assert new_track[field] == old_track[field]
+            if old_track["id"] == old_file["track_id"]:
+                assert new_track["title"] == repaired_title
+            else:
+                assert new_track == old_track
+        for old_album, new_album in zip(before["local_albums"], after["local_albums"], strict=True):
+            for field in ("id", "artist_id", "album_key", "title", "cover_path"):
+                assert new_album[field] == old_album[field]
+            if old_album["id"] != album["id"]:
+                assert new_album == old_album
+        assert after["library_roots"] == before["library_roots"]
+        assert [row for row in after["local_track_files"] if row["id"] != old_file["id"]] == [
+            row for row in before["local_track_files"] if row["id"] != old_file["id"]
+        ]
+        assert new_file["metadata"]["scan_cache"]["file_entry"]["title"] == repaired_title
+        persisted_cache, _, relations, _, error = adapter.load_snapshot_strict(config["CACHE_PATH"], root_identity)
+        assert not error
+        for field in ("title", "album", "artist", "album_artist", "year", "track_number", "disc_number", "library_root_id"):
+            assert app.state.library_state["file_cache"][str(selected)][field] == persisted_cache[str(selected)][field]
+        assert app.state.library_state["relation_views"] == relations
+        assert persisted_cache[str(selected)]["title"] == repaired_title
+        assert persisted_cache[str(unrelated)] == runtime_before[str(unrelated)]
+        assert adapter.load_cover_mutation_revision() == cover_revision_before
+        assert adapter.load_inventory_mutation_revision() > inventory_revision_before
+        selected_album = next(row for row in after["local_albums"] if row["id"] == album["id"])
+        assert selected_album["cover_path"] == str(cover_path)
+        assert selected_album["metadata"]["cover_selection_origin"] == "user"
+        assert selected_album["metadata"]["cover_selection_provenance"] == "explicit"
+        assert selected_album["metadata"]["cover_revision"] == "selected-repair-user-cover"
+    finally:
+        try:
+            if before is not None:
+                capture_repair_state()
+        finally:
+            isolatedPostgres.reset_application_tables(setup_url)
+
+
 def test_live_app_role_pure_relation_refresh_succeeds_with_album_and_file_dml_revoked(
     monkeypatch,
     tmp_path,

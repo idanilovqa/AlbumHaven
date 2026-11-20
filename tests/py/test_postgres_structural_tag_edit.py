@@ -9,6 +9,7 @@ from uuid import uuid4
 import pytest
 
 from tests.e2e.support import isolatedPostgres
+from tests.py.test_isolated_postgres_live import watcher_repair_inventory  # noqa: F401
 
 try:
     import psycopg
@@ -459,6 +460,342 @@ def test_postgres_track_number_edit_updates_only_selected_inventory_rows(monkeyp
         updated_file_entries=updated,
         changed_field_names={"track_number"},
     )
+
+
+@pytest.mark.parametrize(
+    ("identity_fields", "inventory_field", "inventory_values"),
+    [
+        ({"album": "New Album"}, "disc_number", ("2", "3")),
+        ({"album_artist": "New Artist"}, "title", ("Fixed First", "Fixed Second")),
+        (
+            {"artist": "New Artist", "album_artist": "New Artist"},
+            "title",
+            ("Fixed First", "Fixed Second"),
+        ),
+    ],
+    ids=["disc-marker", "alias-and-title", "artist-and-album-artist-and-title"],
+)
+def test_postgres_normal_tag_edit_partitions_mixed_fields_on_one_transaction(
+    monkeypatch, identity_fields, inventory_field, inventory_values,
+):
+    paths, previous, _updated = _entries(album="Old Album")
+    updated = {
+        path: {**previous[path], **identity_fields, inventory_field: value}
+        for path, value in zip(paths, inventory_values)
+    }
+    connection = StructuralTagEditConnection(_successful_result())
+    adapter = _adapter(monkeypatch, connection)
+    monkeypatch.setattr(
+        adapter,
+        "persist_recovered_tag_edit",
+        lambda **_kwargs: pytest.fail("normal edit entered recovery publication"),
+    )
+    events = []
+
+    def complete_intent(received_connection):
+        assert received_connection is connection
+        events.append("intent-completed")
+        assert len([
+            sql for sql, _params in connection.executed
+            if "library.persist_authorized_structural_tag_edit_noncover("
+            in _normalized_sql(sql)
+            or "library.persist_inventory_tag_edit_noncover(" in _normalized_sql(sql)
+        ]) == 2
+
+    result = adapter.persist_structural_tag_edit(
+        changed_paths=set(paths),
+        previous_file_entries=previous,
+        updated_file_entries=updated,
+        changed_field_names=set(identity_fields) | {inventory_field},
+        before_commit=complete_intent,
+        commit_guard=lambda commit: (events.append("commit"), commit()),
+    )
+
+    assert result["track_file_rows_updated"] == len(paths)
+    assert events == ["intent-completed", "commit"]
+    assert connection.commit_calls == 1
+    for owner, owned_fields in (
+        ("persist_authorized_structural_tag_edit_noncover", set(identity_fields)),
+        ("persist_inventory_tag_edit_noncover", {inventory_field}),
+    ):
+        calls = [
+            params for sql, params in connection.executed
+            if f"library.{owner}(" in _normalized_sql(sql)
+        ]
+        assert len(calls) == 1
+        rows = {row["private_path"]: row["file_entry"] for row in calls[0]["input_rows"]}
+        assert rows == {
+            path: {field: updated[path][field] for field in owned_fields}
+            for path in paths
+        }
+
+
+def test_postgres_normal_mixed_tag_edit_routes_distinct_destinations_and_path_deltas(monkeypatch):
+    from music_app.services import gallery_projection_postgres
+
+    first_paths, first_entries, _updated = _entries(album="Old Album")
+    paths = [*first_paths, "C:/Music/Artist/Old Album/03 Third.flac", "C:/Music/Artist/Old Album/04 Fourth.flac"]
+    previous = {
+        path: {**first_entries[first_paths[0]], "path": path, "title": f"Track {index}", "album_id": 40}
+        for index, path in enumerate(paths, start=1)
+    }
+    updated = {path: dict(entry) for path, entry in previous.items()}
+    updated[paths[0]].update(album="Destination A", title="Fixed First")
+    updated[paths[1]].update(album_artist="New Artist", disc_number="2")
+    updated[paths[2]].update(title="Fixed Third")
+    connection = StructuralTagEditConnection({
+        **_successful_result(path_count=1),
+        "source_album_track_file_count": len(paths), "source_album_id": 40,
+        "source_album_key": "artist::old album",
+    })
+    adapter = _adapter(monkeypatch, connection)
+    connect_calls = []
+    monkeypatch.setattr(adapter, "_connect", lambda url: connect_calls.append(url) or connection)
+    monkeypatch.setattr(
+        adapter, "persist_recovered_tag_edit",
+        lambda **_kwargs: pytest.fail("normal mixed edit entered recovery publication"),
+    )
+    execute = connection.execute
+
+    def execute_partition(sql, params=None):
+        if isinstance(params, dict) and "input_rows" in params:
+            connection.result_row.update(
+                _successful_result(path_count=len(params["input_rows"])),
+                source_album_track_file_count=len(paths), source_album_id=40,
+            )
+        return execute(sql, params)
+
+    monkeypatch.setattr(connection, "execute", execute_partition)
+    events = []
+    callback_sql_counts = []
+    monkeypatch.setattr(
+        gallery_projection_postgres, "schedule_gallery_projection_refresh",
+        lambda *_args, **_kwargs: events.append("schedule-gallery"),
+    )
+
+    def complete_intent(received_connection):
+        assert received_connection is connection
+        assert len(connect_calls) == 1
+        owner_calls = [
+            (sql, params) for sql, params in connection.executed
+            if "library.persist_authorized_structural_tag_edit_noncover(" in _normalized_sql(sql)
+            or "library.persist_inventory_tag_edit_noncover(" in _normalized_sql(sql)
+        ]
+        assert len(owner_calls) == 3
+        callback_sql_counts.append(len(connection.executed))
+        events.append("complete-intent")
+
+    adapter.persist_structural_tag_edit(
+        changed_paths=set(paths), previous_file_entries=previous,
+        updated_file_entries=updated,
+        changed_field_names={"album", "album_artist", "title", "disc_number"},
+        before_commit=complete_intent,
+        commit_guard=lambda commit: (events.append("commit"), commit()),
+    )
+
+    structural_calls = [
+        params for sql, params in connection.executed
+        if "library.persist_authorized_structural_tag_edit_noncover(" in _normalized_sql(sql)
+    ]
+    assert [params["requested_track_paths"] for params in structural_calls] == [[paths[0]], [paths[1]]]
+    assert [params["changed_field_names"] for params in structural_calls] == [["album"], ["album_artist"]]
+    assert [
+        [{"private_path": row["private_path"], "file_entry": row["file_entry"]} for row in params["input_rows"]]
+        for params in structural_calls
+    ] == [
+        [{"private_path": paths[0], "file_entry": {"album": "Destination A"}}],
+        [{"private_path": paths[1], "file_entry": {"album_artist": "New Artist"}}],
+    ]
+    inventory_calls = [
+        params for sql, params in connection.executed
+        if "library.persist_inventory_tag_edit_noncover(" in _normalized_sql(sql)
+    ]
+    assert len(inventory_calls) == 1
+    assert inventory_calls[0]["changed_paths"] == paths[:3]
+    assert inventory_calls[0]["input_rows"] == [
+        {"private_path": paths[0], "file_entry": {"title": "Fixed First"}},
+        {"private_path": paths[1], "file_entry": {"disc_number": "2"}},
+        {"private_path": paths[2], "file_entry": {"title": "Fixed Third"}},
+    ]
+    assert len(connect_calls) == 1
+    assert events == ["complete-intent", "commit", "schedule-gallery"]
+    assert connection.commit_calls == 1
+    assert connection.commit_executed_counts == callback_sql_counts
+
+
+def test_postgres_normal_mixed_tag_edit_preflight_accepts_disc_marker_without_publication(monkeypatch):
+    paths, previous, updated = _entries()
+    updated = {path: {**entry, "disc_number": "2"} for path, entry in updated.items()}
+    connection = StructuralTagEditConnection(_successful_result())
+    adapter = _adapter(monkeypatch, connection)
+
+    adapter.validate_structural_tag_edit(
+        changed_paths=set(paths),
+        previous_file_entries=previous,
+        updated_file_entries=updated,
+        changed_field_names={"album", "disc_number"},
+    )
+
+    assert connection.commit_calls == 0
+    assert not any(
+        "library.persist_authorized_structural_tag_edit_noncover(" in _normalized_sql(sql)
+        or "library.persist_inventory_tag_edit_noncover(" in _normalized_sql(sql)
+        for sql, _params in connection.executed
+    )
+
+
+def test_postgres_normal_mixed_tag_edit_completion_failure_aborts_both_partitions(monkeypatch):
+    paths, previous, updated = _entries()
+    updated = {path: {**entry, "title": f"Fixed {entry['title']}"} for path, entry in updated.items()}
+    connection = StructuralTagEditConnection(_successful_result())
+    adapter = _adapter(monkeypatch, connection)
+    completion_calls = []
+
+    def reject_completion(received_connection):
+        completion_calls.append(received_connection)
+        assert len([
+            sql for sql, _params in connection.executed
+            if "library.persist_authorized_structural_tag_edit_noncover("
+            in _normalized_sql(sql)
+            or "library.persist_inventory_tag_edit_noncover(" in _normalized_sql(sql)
+        ]) == 2
+        raise RuntimeError("intent lease no longer owned")
+
+    with pytest.raises(RuntimeError, match="intent lease no longer owned"):
+        adapter.persist_structural_tag_edit(
+            changed_paths=set(paths),
+            previous_file_entries=previous,
+            updated_file_entries=updated,
+            changed_field_names={"album", "title"},
+            before_commit=reject_completion,
+        )
+
+    assert completion_calls == [connection]
+    assert connection.commit_calls == 0
+    assert connection.exit_exc_type is RuntimeError
+
+
+@pytest.mark.parametrize("reject_completion", [False, True], ids=["commit", "rollback"])
+def test_live_normal_mixed_tag_edit_publishes_or_rolls_back_with_intent(
+    watcher_repair_inventory, monkeypatch, reject_completion,
+):
+    from music_app.services import gallery_projection_postgres
+    from music_app.services.library_roots import library_root_cache_identity
+    from music_app.services.scan_cache_persistence import _orphaned_structural_source_artists
+    from music_app.services.tag_edit_intents_postgres import PostgresTagEditIntentRepository
+
+    fixture = watcher_repair_inventory
+    entries = [fixture.entry(f"Owner/Repair Album/{number}.flac") for number in (1, 2)]
+    fixture.seed(*entries)
+    previous = {entry["path"]: entry for entry in entries}
+    updated = {
+        path: {**entry, "album": "Repaired Album", "disc_number": number}
+        for number, (path, entry) in enumerate(previous.items(), start=2)
+    }
+    paths = sorted(previous)
+    scheduled = []
+    monkeypatch.setattr(
+        gallery_projection_postgres,
+        "schedule_gallery_projection_refresh",
+        lambda *args, **kwargs: scheduled.append((args, kwargs)),
+    )
+
+    def read_rows(connection):
+        rows = connection.execute(
+            """select to_jsonb(album) as album, to_jsonb(track) as track,
+                      to_jsonb(file) as file, artist.name as artist
+                 from library.local_track_files file
+                 join library.local_tracks track on track.id = file.track_id
+                 join library.local_albums album on album.id = track.album_id
+                 join library.local_artists artist on artist.id = album.artist_id
+                where file.private_path = any(%s) order by file.private_path""",
+            (paths,),
+        ).fetchall()
+        return [(row["album"], row["track"], row["file"], row["artist"]) for row in rows]
+
+    with isolatedPostgres._connect(fixture.runtime_url) as connection:
+        assert connection.execute(
+            "select has_table_privilege(current_user, 'library.local_albums', 'UPDATE') as albums_update, "
+            "has_table_privilege(current_user, 'library.local_track_files', 'UPDATE') as files_update"
+        ).fetchone() == {"albums_update": False, "files_update": False}
+        baseline = read_rows(connection)
+        missing_artist = f"Missing Artist {uuid4().hex}"
+        assert _orphaned_structural_source_artists(connection, {"Owner", missing_artist}) == [missing_artist]
+    assert len(baseline) == 2
+    baseline_revision = fixture.adapter.load_inventory_mutation_revision()
+    repository = PostgresTagEditIntentRepository(fixture.config)
+    lease = repository.intent_lease()
+    completion_connections = []
+    try:
+        intent_id = lease.prepare_intent(
+            library_root_identity=library_root_cache_identity(fixture.config),
+            changes=[
+                {
+                    "path": path,
+                    "old_values": {"album": previous[path]["album"], "disc_number": 1},
+                    "requested_values": {"album": "Repaired Album", "disc_number": updated[path]["disc_number"]},
+                }
+                for path in paths
+            ],
+        )
+        repository.mark_files_verified(intent_id)
+
+        def complete_intent(connection):
+            completion_connections.append(connection)
+            rows = read_rows(connection)
+            for before, after in zip(baseline, rows, strict=True):
+                album, track, file, artist = after
+                path = file["private_path"]
+                assert album["title"] == "Repaired Album"
+                assert track["disc_number"] == updated[path]["disc_number"]
+                assert file["metadata"]["scan_cache"]["file_entry"]["album"] == "Repaired Album"
+                assert file["metadata"]["scan_cache"]["file_entry"]["disc_number"] == updated[path]["disc_number"]
+                assert (album["id"], track["id"], file["id"], artist) == (
+                    before[0]["id"], before[1]["id"], before[2]["id"], "Owner",
+                )
+                assert album["cover_path"] == before[0]["cover_path"]
+                assert {key: value for key, value in album["metadata"].items() if "cover" in key} == {
+                    key: value for key, value in before[0]["metadata"].items() if "cover" in key
+                }
+            with isolatedPostgres._connect(fixture.runtime_url) as observer:
+                assert read_rows(observer) == baseline
+            repository.complete_in_transaction(connection, intent_id)
+            assert connection.execute(
+                "select status from library.tag_edit_intents where id = %s", (intent_id,),
+            ).fetchone()["status"] == "completed"
+            if reject_completion:
+                raise RuntimeError("reject mixed publication after intent completion")
+
+        def publish():
+            return fixture.adapter.persist_structural_tag_edit(
+                changed_paths=set(paths), previous_file_entries=previous,
+                updated_file_entries=updated, changed_field_names={"album", "disc_number"},
+                before_commit=complete_intent,
+            )
+
+        if reject_completion:
+            with pytest.raises(RuntimeError, match="reject mixed publication after intent completion"):
+                publish()
+        else:
+            publish()
+        assert len(completion_connections) == 1
+        with isolatedPostgres._connect(fixture.runtime_url) as observer:
+            after = read_rows(observer)
+            status = observer.execute(
+                "select status from library.tag_edit_intents where id = %s", (intent_id,),
+            ).fetchone()["status"]
+        if reject_completion:
+            assert after == baseline
+            assert fixture.adapter.load_inventory_mutation_revision() == baseline_revision
+            assert status == "files_verified"
+            assert scheduled == []
+        else:
+            assert [row[0]["title"] for row in after] == ["Repaired Album"] * 2
+            assert [row[1]["disc_number"] for row in after] == [updated[path]["disc_number"] for path in paths]
+            assert status == "completed"
+            assert fixture.adapter.load_inventory_mutation_revision() > baseline_revision
+    finally:
+        lease.release()
 
 
 @pytest.mark.parametrize(

@@ -807,3 +807,25 @@ test('the neutral search highlight lives in the track table stylesheet the page 
   assert.match(rule[1], /color: inherit/);
   assert.match(rule[1], /background: color-mix\(in srgb, currentColor 24%, transparent\)/);
 });
+
+test('TrackSelectionController selects a mouse-held row without movement (owner 2026-11-21)', () => {
+  const context = loadTrackTable();
+  const harness = createSelectionHarness(context);
+  const controller = new context.TrackSelectionController(harness.root, {});
+
+  harness.dispatch('pointerdown', harness.rows[1]);
+  harness.runTimers(549);
+  assert.deepEqual(Array.from(controller.getSelectedPaths()), [], 'a short press is still a click');
+  harness.dispatch('pointerup', harness.rows[1]);
+  assert.deepEqual(Array.from(controller.getSelectedPaths()), []);
+
+  harness.dispatch('pointerdown', harness.rows[1]);
+  harness.runTimers(550);
+  harness.dispatch('pointerup', harness.rows[1]);
+  assert.deepEqual(Array.from(controller.getSelectedPaths()), ['two'], 'holding still selects the row');
+
+  harness.dispatch('pointerdown', harness.rows[3], { shiftKey: true });
+  harness.runTimers(550);
+  harness.dispatch('pointerup', harness.rows[3], { shiftKey: true });
+  assert.deepEqual(Array.from(controller.getSelectedPaths()), ['two', 'three', 'four'], 'shift still selects a range');
+});

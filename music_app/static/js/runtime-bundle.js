@@ -24471,7 +24471,8 @@ var TrackSelectionController = class {
       held: false,
       cancelled: false,
     };
-    if (this.gesture.pointerType === 'touch' && !this.gesture.selectionWasActive) {
+    // Holding a row selects it, with a mouse too and without moving (owner 2026-11-21); touch always could.
+    if (!this.gesture.selectionWasActive && !additive && !this.gesture.shift) {
       this.holdTimer = scheduleBrowserTimeout(() => {
         if (!this.gesture || this.gesture.cancelled) return;
         this.gesture.held = true;
@@ -24505,6 +24506,8 @@ var TrackSelectionController = class {
     }
     const path = this.pathForRow(this.rowFromEvent(event));
     if (!path || path === gesture.path) return;
+    // A drag selects its range instead; a hold that already fired stays part of it.
+    this.clearHold();
     gesture.dragging = true;
     this.anchorPath = gesture.path;
     this.selectGestureRange(path);

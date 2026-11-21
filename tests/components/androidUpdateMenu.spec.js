@@ -144,6 +144,8 @@ for (const [state, name, command] of [
   [{ state: 'installing', ...ready }, 'Installing…', 'updates.install'],
   [{ state: 'failed', error: 'check_failed' }, 'Update failed. Try again', 'updates.check'],
   [{ state: 'failed', error: 'download_failed', ...ready }, 'Update failed. Try again', 'updates.download'],
+  [{ state: 'failed', error: 'install_failed', reason: 'insufficient_storage', ...ready },
+    'Not enough storage Free up space on this phone, then try again', 'updates.download'],
 ]) {
   test(`${name} stays pressable and sends ${command}`, async ({ page }) => {
     const { trigger, menu } = await mountMenu(page, { updates: { ...handshake.updates, ...state } });

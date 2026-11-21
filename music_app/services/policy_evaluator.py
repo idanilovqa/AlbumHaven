@@ -107,8 +107,8 @@ class PolicyEvaluator:
         )
         if (
             context.action.startswith("system.preview_storage.")
-            and not actor.is_bootstrap_owner
-        ):
+            or context.action == "system.android_sandbox_rebuild"
+        ) and not actor.is_bootstrap_owner:
             return False, "bootstrap_only"
         if not client_allows_action(
             context.action, context.client_surface_class, administrator=administrator

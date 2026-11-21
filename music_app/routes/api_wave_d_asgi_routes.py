@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from music_app.services.log_history import history_scope_for_request
+from music_app.services.log_history import HistoryScope, history_scope_for_request
 
 import asyncio
 from collections.abc import Mapping
@@ -240,11 +240,11 @@ def _resolve_distributed_album_context(
     )
 
 
-def _resolve_cover_album_context(
+def _resolve_album_or_distributed_context(
     config: Mapping[str, object],
     album: Mapping[str, object],
 ) -> CoverAlbumContext | None:
-    # Owner (11-16): an album whose tracks sit in part folders ("Часть 1".."Часть 4") is still one album.
+    # Owner (11-16): an album whose tracks sit in part folders ("Р§Р°СЃС‚СЊ 1".."Р§Р°СЃС‚СЊ 4") is still one album.
     return resolve_album_context(config, album) or _resolve_distributed_album_context(config, album)
 
 
@@ -265,9 +265,10 @@ async def _resolve_album_payload_context(
             paths = _album_track_paths(normalized_album)
             root = await run_in_threadpool(inventory.repository.root_for_tracks, paths)
             return CoverAlbumContext(root, paths) if paths else None
+        # Resolving reads the filesystem; it runs off the event loop.
         if distributed:
-            return _resolve_cover_album_context(config, normalized_album)
-        return resolve_album_context(config, normalized_album)
+            return await run_in_threadpool(_resolve_album_or_distributed_context, config, normalized_album)
+        return await run_in_threadpool(resolve_album_context, config, normalized_album)
 
     repository = AlbumCoverCandidateSnapshotRepository(config)
     fallback_paths = {
@@ -544,17 +545,17 @@ async def _serialize_cover_gallery_from_asgi(
     include_local: bool = True,
 ) -> dict[str, object]:
     config = _app_config(request)
-    runtime_entries = _library_state(request).get("file_cache", {}) or {}
-    file_cache = {path: runtime_entries[path] for path in track_paths if path in runtime_entries}
-    paths_to_load = track_paths if refresh_persisted_cover_state else track_paths - file_cache.keys()
+    library_file_cache = _library_state(request).get("file_cache", {}) or {}
+    # The gallery reads only the selected tracks' entries, never the library cache.
+    file_cache = {path: library_file_cache[path] for path in track_paths if path in library_file_cache}
+    paths_to_load = track_paths if refresh_persisted_cover_state else track_paths - set(file_cache)
     if paths_to_load and str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip():
         from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
-        selected_entries = await run_in_threadpool(
+        file_cache.update(await run_in_threadpool(
             PostgresLibraryBrowseRepository(config).build_cover_state_entries_by_paths,
             paths_to_load,
-        )
-        file_cache = {**file_cache, **selected_entries}
+        ))
     serialized_task_payload = serialize_cover_lookup_task_payload(
         dict(task_payload) if isinstance(task_payload, Mapping)
         else cover_lookup_result(task_id) if task_id
@@ -729,23 +730,32 @@ async def _cover_lookup_album_split_response(
     current_releases: list[dict[str, object]] = []
     covered_paths: set[str] = set()
     seen_album_ids: set[int] = set()
-    identity_repository = AlbumCoverCandidateSnapshotRepository(config)
-    for album in albums:
-        if not isinstance(album, Mapping):
-            continue
-        album_id = _album_id(album)
+    split_albums = [
+        album
+        for album in albums
+        if isinstance(album, Mapping) and not _album_track_paths(album) - task_track_paths
+    ]
+    unidentified = [
+        album
+        for album in split_albums
+        if _album_id(album) is None and _album_track_paths(album) & task_track_paths
+    ]
+    resolved_ids: list[int | None] = []
+    if unidentified:
+        try:
+            resolved_ids = await run_in_threadpool(
+                AlbumCoverCandidateSnapshotRepository(config).resolve_album_ids_for_track_path_sets,
+                [_album_track_paths(album) & task_track_paths for album in unidentified],
+            )
+        except Exception:
+            resolved_ids = []
+    resolved_by_album = {id(album): album_id for album, album_id in zip(unidentified, resolved_ids)}
+    for album in split_albums:
         album_paths = _album_track_paths(album)
         matching_paths = album_paths & task_track_paths
-        if album_paths - task_track_paths:
-            continue
-        if album_id is None and matching_paths:
-            try:
-                album_id = await run_in_threadpool(
-                    identity_repository.resolve_album_id_for_track_paths,
-                    track_paths=matching_paths,
-                )
-            except Exception:
-                album_id = None
+        album_id = _album_id(album)
+        if album_id is None:
+            album_id = resolved_by_album.get(id(album))
         album_name = str(album.get("name") or album.get("album") or "").strip()
         if (
             album_id is None
@@ -877,6 +887,10 @@ async def utilities_cover_lookup_tasks_clear_completed(request: Request) -> JSON
     payload = await _json_payload(request)
     if payload is None:
         return _json_response(_invalid_payload_response())
+    return await run_in_threadpool(_utilities_cover_lookup_tasks_clear_completed_response, request, payload)
+
+
+def _utilities_cover_lookup_tasks_clear_completed_response(request: Request, payload: JsonDict) -> JSONResponse:
     raw_task_ids = payload.get("task_ids") if isinstance(payload, dict) else None
     task_ids = _clean_string_list(raw_task_ids) if isinstance(raw_task_ids, list) else None
     config = _app_config(request)
@@ -895,7 +909,7 @@ async def utilities_cover_lookup_tasks_clear_completed(request: Request) -> JSON
 
 
 @router.post("/utilities/cover-lookup/task/{task_id}/clear")
-async def utilities_cover_lookup_task_clear(request: Request, task_id: str) -> JSONResponse:
+def utilities_cover_lookup_task_clear(request: Request, task_id: str) -> JSONResponse:
     normalized_id = str(task_id or "").strip()
     if not normalized_id:
         return _json_response(_task_not_found_response("Lookup task"))
@@ -913,7 +927,7 @@ async def utilities_cover_lookup_task_clear(request: Request, task_id: str) -> J
 
 
 @router.post("/utilities/cover-lookup/task/{task_id}/mark-action-taken")
-async def utilities_cover_lookup_task_mark_action_taken(request: Request, task_id: str) -> JSONResponse:
+def utilities_cover_lookup_task_mark_action_taken(request: Request, task_id: str) -> JSONResponse:
     normalized_id = str(task_id or "").strip()
     if not normalized_id:
         return _json_response(_task_not_found_response("Lookup task"))
@@ -993,9 +1007,7 @@ async def utilities_cover_lookup_gallery(request: Request) -> JSONResponse:
     candidate_snapshot = None
     if not album.get("_cover_lookup_task_scoped_context"):
         try:
-            candidate_snapshot = await run_in_threadpool(
-                repository.get_for_album_context, album_id=int(album_id),
-            )
+            candidate_snapshot = await run_in_threadpool(repository.get_for_album_context, album_id=int(album_id))
         except Exception:
             candidate_snapshot = _candidate_snapshot_read_failure(
                 "candidate_snapshot_read_failed"
@@ -1041,6 +1053,14 @@ async def utilities_cover_lookup_gallery_mark_seen(request: Request) -> JSONResp
         return _json_response(
             ({"ok": False, "error": "Album root could not be resolved"}, 400)
         )
+    return await run_in_threadpool(_utilities_cover_lookup_gallery_mark_seen_response, album, config, album_context)
+
+
+def _utilities_cover_lookup_gallery_mark_seen_response(
+    album: JsonDict | None,
+    config: dict[str, object],
+    album_context: CoverAlbumContext,
+) -> JSONResponse:
     album_id = _album_id(album or {})
     repository, album_id, identity_error = _resolved_snapshot_album_context(
         config,
@@ -1092,7 +1112,7 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
         _album_track_paths(album)
         or _cover_lookup_task_track_paths(task_payload)
     )
-    album_context = _resolve_cover_album_context(config, queued_album)
+    album_context = await run_in_threadpool(_resolve_album_or_distributed_context, config, queued_album)
     if task_payload:
         queued_album, album_context = await _resolve_album_payload_context(
             config,
@@ -1140,7 +1160,8 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
         return _json_response(
             ({"ok": False, "error": "Album does not contain any tracks"}, 400)
         )
-    reservation_resource_keys = structural_tag_edit_resource_keys(
+    reservation_resource_keys = await run_in_threadpool(
+        structural_tag_edit_resource_keys,
         str((album or {}).get("key") or (album or {}).get("album_ref") or ""),
         requested_track_paths,
     )
@@ -1156,7 +1177,7 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
         # album's stored record as it is now; a tag save in progress has nothing to do with the search.
         del cancel_event
         prepared_album = current_album
-        album_context = _resolve_cover_album_context(config, prepared_album)
+        album_context = _resolve_album_or_distributed_context(config, prepared_album)
         album_id = _album_id(prepared_album)
         repository = PostgresLibraryBrowseRepository(config)
         if album_id is not None:
@@ -1172,7 +1193,7 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
             )
             if refreshed_album is not None:
                 prepared_album = _album_with_context_tracks(refreshed_album)
-                album_context = _resolve_cover_album_context(config, prepared_album)
+                album_context = _resolve_album_or_distributed_context(config, prepared_album)
             elif destination_album_id > 0:
                 album_context = None
         if album_context is None and current_track_paths:
@@ -1181,7 +1202,7 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
             )
             for refreshed_album in current_albums:
                 candidate = _album_with_context_tracks(refreshed_album)
-                candidate_context = _resolve_cover_album_context(config, candidate)
+                candidate_context = _resolve_album_or_distributed_context(config, candidate)
                 if (
                     candidate_context is not None
                     and current_track_paths <= candidate_context.track_paths
@@ -1208,7 +1229,8 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
         )
     except CoverLookupFinishingError as exc:
         return _json_response(({"ok": False, "error": str(exc)}, 409))
-    log_app_event(
+    await run_in_threadpool(
+        log_app_event,
         config,
         logger,
         "Cover lookup task queued",
@@ -1230,7 +1252,7 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
 
 
 @router.post("/utilities/cover-lookup/task/{task_id}/cancel")
-async def utilities_cover_lookup_cancel(request: Request, task_id: str) -> JSONResponse:
+def utilities_cover_lookup_cancel(request: Request, task_id: str) -> JSONResponse:
     task_payload = cancel_cover_lookup_task_payload(task_id, config=_app_config(request))
     if task_payload is None:
         return _json_response(_task_not_found_response("Lookup task"))
@@ -1238,15 +1260,50 @@ async def utilities_cover_lookup_cancel(request: Request, task_id: str) -> JSONR
 
 
 def _replaced_cover_backup_payload(backup_path: Path | None) -> dict[str, str] | None:
-    """Name the cover-existing-N.jpg that now holds the replaced cover.jpg, so clients rename its card."""
+    """Name the cover-existing-N.jpg that now holds the replaced cover.jpg, so clients rename its card.
+
+    The path leaves only as a candidate reference (`candidate_cover_ref`), like every lookup card.
+    """
     if backup_path is None:
         return None
     return {
-        "path": str(backup_path),
+        "candidate_cover_path": str(backup_path),
         "filename": backup_path.name,
         "relative_path": backup_path.name,
         "sort_relative_path": backup_path.name.casefold(),
     }
+
+
+async def _selected_cover_inventory_state(
+    config: dict[str, object],
+    library_state: dict[str, object],
+    track_paths: set[str],
+) -> dict[str, object]:
+    """Answer for one album without publishing it into the shared library state.
+
+    An album the in-memory library does not hold is loaded request-locally from
+    Postgres; the shared state keeps whatever its owners published.
+    """
+    file_cache = library_state.get("file_cache") or {}
+    if not str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip() or all(
+        path in file_cache for path in track_paths
+    ):
+        return library_state
+    from music_app.services.library import build_albums_from_file_cache
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    def load_selected_inventory() -> dict[str, object]:
+        repository = PostgresLibraryBrowseRepository(config)
+        paths = {
+            str(track.get("path") or "").strip()
+            for album in repository.build_album_payloads_by_track_paths(track_paths)
+            for track in album.get("tracks", [])
+            if str(track.get("path") or "").strip()
+        }
+        entries = repository.build_track_file_entries_by_paths(paths)
+        return {**library_state, "file_cache": entries, "albums": build_albums_from_file_cache(entries)}
+
+    return await run_in_threadpool(load_selected_inventory)
 
 
 @router.post("/utilities/cover-lookup/local-select")
@@ -1268,187 +1325,142 @@ async def utilities_cover_lookup_local_select(request: Request) -> JSONResponse:
     album, album_context = await _resolve_album_payload_context(config, album or {})
     if album_context is None:
         return _json_response(({"ok": False, "error": "Album root could not be resolved"}, 400))
-    selected_inventory_state = library_state
-    if (
-        str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()
-        and not album_context.track_paths <= set(library_state.get("file_cache") or {})
-    ):
-        from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
-        from music_app.services.library import build_albums_from_file_cache
+    selected_inventory_state = await _selected_cover_inventory_state(
+        config, library_state, album_context.track_paths,
+    )
+    return await run_in_threadpool(_utilities_cover_lookup_local_select_response, selected_inventory_state, album_context, album, config, source_path, logger, library_state, history_scope, request_started_at)
 
-        def load_selected_inventory():
-            repository = PostgresLibraryBrowseRepository(config)
-            albums = repository.build_album_payloads_by_track_paths(album_context.track_paths)
-            paths = {
-                str(track.get("path") or "").strip()
-                for selected_album in albums
-                for track in selected_album.get("tracks", [])
-                if str(track.get("path") or "").strip()
-            }
-            entries = repository.build_track_file_entries_by_paths(paths)
-            return {**library_state, "file_cache": entries,
-                    "albums": build_albums_from_file_cache(entries)}
 
-        selected_inventory_state = await run_in_threadpool(load_selected_inventory)
-    # File promotion, hashing, persistence and runtime refresh are synchronous
-    # (one to three seconds); on the event loop they stalled every request.
-    def complete_local_cover_selection() -> JSONResponse:
-        try:
-            authoritative_track_paths = resolve_authoritative_album_track_paths(
-                selected_inventory_state,
-                album_context.track_paths,
-                album_key=str(
-                    album.get("_persisted_album_key")
-                    or album.get("key")
-                    or album.get("album_ref")
-                    or ""
-                ),
-            )
-        except ValueError as exc:
-            return _json_response(({"ok": False, "error": str(exc)}, 409))
-        try:
-            resolved = validate_local_cover_source(
-                config,
-                album_context.album_root,
-                source_path,
-                track_paths=album_context.track_paths,
-            )
-        except ValueError as exc:
-            return _json_response(({"ok": False, "error": str(exc)}, 400))
-        except FileNotFoundError:
-            return _json_response(({"ok": False, "error": "Selected image was not found"}, 404))
-        resolution_finished_at = perf_counter()
-        promotion = begin_local_image_promotion(
-            resolved,
-            album_context.album_root,
-            serialize_selection=True,
+def _utilities_cover_lookup_local_select_response(
+    selected_inventory_state: dict[str, object],
+    album_context: CoverAlbumContext,
+    album: JsonDict | None,
+    config: dict[str, object],
+    source_path: str,
+    logger: logging.Logger,
+    library_state: dict[str, object],
+    history_scope: HistoryScope | None,
+    request_started_at: float,
+) -> JSONResponse:
+    try:
+        authoritative_track_paths = resolve_authoritative_album_track_paths(
+            selected_inventory_state,
+            album_context.track_paths,
+            album_key=str(
+                album.get("_persisted_album_key")
+                or album.get("key")
+                or album.get("album_ref")
+                or ""
+            ),
         )
-        authoritative_cover = promotion.cover_path
-        promotion_finished_at = perf_counter()
-        updated_albums: list[dict[str, object]] = []
-        updated_problematic_album = None
-        runtime_refresh_error: Exception | None = None
-        runtime_fallback_error: Exception | None = None
-        commit_guard_called = False
-        database_commit_completed = False
-        lock_wait_ms = 0.0
-        database_ms = 0.0
-        runtime_refresh_ms = 0.0
+    except ValueError as exc:
+        return _json_response(({"ok": False, "error": str(exc)}, 409))
+    try:
+        resolved = validate_local_cover_source(
+            config,
+            album_context.album_root,
+            source_path,
+            track_paths=album_context.track_paths,
+        )
+    except ValueError as exc:
+        return _json_response(({"ok": False, "error": str(exc)}, 400))
+    except FileNotFoundError:
+        return _json_response(({"ok": False, "error": "Selected image was not found"}, 404))
+    resolution_finished_at = perf_counter()
+    promotion = begin_local_image_promotion(
+        resolved,
+        album_context.album_root,
+        serialize_selection=True,
+    )
+    authoritative_cover = promotion.cover_path
+    promotion_finished_at = perf_counter()
+    updated_albums: list[dict[str, object]] = []
+    updated_problematic_album = None
+    runtime_refresh_error: Exception | None = None
+    runtime_fallback_error: Exception | None = None
+    commit_guard_called = False
+    database_commit_completed = False
+    lock_wait_ms = 0.0
+    database_ms = 0.0
+    runtime_refresh_ms = 0.0
 
-        def refresh_runtime_state() -> None:
-            nonlocal updated_albums, updated_problematic_album
-            nonlocal runtime_refresh_error, runtime_fallback_error
-            nonlocal runtime_refresh_ms
-            runtime_started_at = perf_counter()
-            try:
-                updated_albums, updated_problematic_album = apply_cover_path_for_tracks(
-                    authoritative_track_paths,
-                    authoritative_cover,
-                    config=config,
-                    logger=logger,
-                    library_state=library_state,
-                    cover_revision=cover_revision,
-                    selected_local_cover_source_path=resolved,
-                    schedule_cache_update=False,
-                    include_problematic_album=False,
-                )
-            except Exception as exc:
-                runtime_refresh_error = exc
-                try:
-                    apply_authoritative_local_cover_fallback(
-                        library_state=library_state,
-                        track_paths=authoritative_track_paths,
-                        cover_path=authoritative_cover,
-                        cover_revision=cover_revision,
-                        selected_local_cover_source_path=resolved,
-                    )
-                except Exception as fallback_exc:
-                    runtime_fallback_error = fallback_exc
-            finally:
-                runtime_refresh_ms += (perf_counter() - runtime_started_at) * 1000
-
-        def commit_cover_selection(commit_action) -> object:
-            nonlocal commit_guard_called, lock_wait_ms, database_ms
-            commit_guard_called = True
-            lock_requested_at = perf_counter()
-
-            def commit_and_refresh_runtime_state() -> object:
-                nonlocal database_commit_completed
-                nonlocal lock_wait_ms, database_ms
-                lock_wait_ms += (perf_counter() - lock_requested_at) * 1000
-                database_started_at = perf_counter()
-                commit_result = commit_action()
-                database_ms += (perf_counter() - database_started_at) * 1000
-                database_commit_completed = True
-                refresh_runtime_state()
-                return commit_result
-
-            return state_service.run_authoritative_cover_commit_for_state(
-                library_state,
-                commit_and_refresh_runtime_state,
-            )
-
+    def refresh_runtime_state() -> None:
+        nonlocal updated_albums, updated_problematic_album
+        nonlocal runtime_refresh_error, runtime_fallback_error
+        nonlocal runtime_refresh_ms
+        runtime_started_at = perf_counter()
         try:
-            hash_started_at = perf_counter()
-            cover_revision = cover_revision_for_path(authoritative_cover)
-            hash_ms = (perf_counter() - hash_started_at) * 1000
-            persistence_started_at = perf_counter()
-            persistence_result = persist_cover_selection_for_tracks(
+            updated_albums, updated_problematic_album = apply_cover_path_for_tracks(
                 authoritative_track_paths,
                 authoritative_cover,
                 config=config,
                 logger=logger,
+                library_state=library_state,
                 cover_revision=cover_revision,
                 selected_local_cover_source_path=resolved,
-                cover_selection_origin="user",
-                explicit_selection=True,
-                commit_guard=commit_cover_selection,
+                schedule_cache_update=False,
+                include_problematic_album=False,
             )
-            persistence_ms = (perf_counter() - persistence_started_at) * 1000
         except Exception as exc:
-            if database_commit_completed:
-                complete_local_image_promotion(promotion)
-                _log_local_cover_persistence_event(
-                    config,
-                    logger,
-                    "Local cover post-commit finalization failed",
-                    level="error",
-                    artist=str((album or {}).get("album_artist") or "").strip(),
-                    album=str((album or {}).get("name") or "").strip(),
-                    year=(album or {}).get("year"),
-                    target_filename=authoritative_cover.name,
-                    error_kind=type(exc).__name__,
-                 history_scope=history_scope)
-                return _json_response(
-                    (
-                        {
-                            "ok": False,
-                            "persisted": True,
-                            "selected_cover_path": str(authoritative_cover),
-                            "cover_revision": cover_revision,
-                            "error": "Selected cover art was persisted, but runtime state could not be finalized. Reload the app.",
-                        },
-                        500,
-                    )
-                )
+            runtime_refresh_error = exc
             try:
-                rollback_local_image_promotion(promotion)
-            except Exception as rollback_exc:
-                _log_local_cover_persistence_event(
-                    config,
-                    logger,
-                    "Local cover promotion rollback failed",
-                    level="error",
-                    artist=str((album or {}).get("album_artist") or "").strip(),
-                    album=str((album or {}).get("name") or "").strip(),
-                    year=(album or {}).get("year"),
-                    target_filename=authoritative_cover.name,
-                    error_kind=type(rollback_exc).__name__,
-                 history_scope=history_scope)
+                apply_authoritative_local_cover_fallback(
+                    library_state=library_state,
+                    track_paths=authoritative_track_paths,
+                    cover_path=authoritative_cover,
+                    cover_revision=cover_revision,
+                    selected_local_cover_source_path=resolved,
+                )
+            except Exception as fallback_exc:
+                runtime_fallback_error = fallback_exc
+        finally:
+            runtime_refresh_ms += (perf_counter() - runtime_started_at) * 1000
+
+    def commit_cover_selection(commit_action) -> object:
+        nonlocal commit_guard_called, lock_wait_ms, database_ms
+        commit_guard_called = True
+        lock_requested_at = perf_counter()
+
+        def commit_and_refresh_runtime_state() -> object:
+            nonlocal database_commit_completed
+            nonlocal lock_wait_ms, database_ms
+            lock_wait_ms += (perf_counter() - lock_requested_at) * 1000
+            database_started_at = perf_counter()
+            commit_result = commit_action()
+            database_ms += (perf_counter() - database_started_at) * 1000
+            database_commit_completed = True
+            refresh_runtime_state()
+            return commit_result
+
+        return state_service.run_authoritative_cover_commit_for_state(
+            library_state,
+            commit_and_refresh_runtime_state,
+        )
+
+    try:
+        hash_started_at = perf_counter()
+        cover_revision = cover_revision_for_path(authoritative_cover)
+        hash_ms = (perf_counter() - hash_started_at) * 1000
+        persistence_started_at = perf_counter()
+        persistence_result = persist_cover_selection_for_tracks(
+            authoritative_track_paths,
+            authoritative_cover,
+            config=config,
+            logger=logger,
+            cover_revision=cover_revision,
+            selected_local_cover_source_path=resolved,
+            cover_selection_origin="user",
+            explicit_selection=True,
+            commit_guard=commit_cover_selection,
+        )
+        persistence_ms = (perf_counter() - persistence_started_at) * 1000
+    except Exception as exc:
+        if database_commit_completed:
+            complete_local_image_promotion(promotion)
             _log_local_cover_persistence_event(
                 config,
                 logger,
-                "Local cover selection persistence failed",
+                "Local cover post-commit finalization failed",
                 level="error",
                 artist=str((album or {}).get("album_artist") or "").strip(),
                 album=str((album or {}).get("name") or "").strip(),
@@ -1457,117 +1469,152 @@ async def utilities_cover_lookup_local_select(request: Request) -> JSONResponse:
                 error_kind=type(exc).__name__,
              history_scope=history_scope)
             return _json_response(
-                ({"ok": False, "error": "Selected cover art could not be persisted."}, 500)
-            )
-        try:
-            if not commit_guard_called:
-                state_service.run_authoritative_cover_commit_for_state(
-                    library_state,
-                    refresh_runtime_state,
-                )
-        finally:
-            # The per-album promotion lock covers filesystem promotion through the
-            # committed runtime-state patch, but not logging or response shaping.
-            complete_local_image_promotion(promotion)
-        if selected_inventory_state is not library_state and runtime_refresh_error is None:
-            updated_albums = [
-                _authoritative_local_cover_album_payload(selected_album, authoritative_cover, cover_revision)
-                for selected_album in find_albums_by_track_paths_in_state(
-                    selected_inventory_state.get("albums", []), authoritative_track_paths
-                )
-            ]
-        if runtime_refresh_error is not None:
-            updated_albums = [
-                _authoritative_local_cover_album_payload(
-                    album or {},
-                    authoritative_cover,
-                    cover_revision,
-                )
-            ]
-            updated_problematic_album = None
-            _log_local_cover_persistence_event(
-                config,
-                logger,
-                "Local cover runtime refresh failed",
-                level="error",
-                artist=str((album or {}).get("album_artist") or "").strip(),
-                album=str((album or {}).get("name") or "").strip(),
-                year=(album or {}).get("year"),
-                target_filename=authoritative_cover.name,
-                error_kind=type(runtime_refresh_error).__name__,
-             history_scope=history_scope)
-        interrupted_scan_mode = (
-            state_service.take_cover_selection_interrupted_scan_mode_for_state(
-                library_state
-            )
-        )
-        if interrupted_scan_mode is not None:
-            state_service.start_background_refresh_for_state(
-                library_state,
-                config,
-                logger,
-                force=True,
-                scan_mode=interrupted_scan_mode,
-            )
-        if runtime_fallback_error is not None:
-            _log_local_cover_persistence_event(
-                config,
-                logger,
-                "Local cover authoritative runtime fallback failed",
-                level="error",
-                artist=str((album or {}).get("album_artist") or "").strip(),
-                album=str((album or {}).get("name") or "").strip(),
-                year=(album or {}).get("year"),
-                target_filename=authoritative_cover.name,
-                error_kind=type(runtime_fallback_error).__name__,
-             history_scope=history_scope)
-            return _json_response(
                 (
                     {
                         "ok": False,
                         "persisted": True,
                         "selected_cover_path": str(authoritative_cover),
                         "cover_revision": cover_revision,
-                        "error": "Selected cover art was persisted, but runtime state could not be refreshed. Reload the app.",
+                        "error": "Selected cover art was persisted, but runtime state could not be finalized. Reload the app.",
                     },
                     500,
                 )
             )
+        try:
+            rollback_local_image_promotion(promotion)
+        except Exception as rollback_exc:
+            _log_local_cover_persistence_event(
+                config,
+                logger,
+                "Local cover promotion rollback failed",
+                level="error",
+                artist=str((album or {}).get("album_artist") or "").strip(),
+                album=str((album or {}).get("name") or "").strip(),
+                year=(album or {}).get("year"),
+                target_filename=authoritative_cover.name,
+                error_kind=type(rollback_exc).__name__,
+             history_scope=history_scope)
         _log_local_cover_persistence_event(
             config,
             logger,
-            "Local cover selection persisted",
-            level="info",
+            "Local cover selection persistence failed",
+            level="error",
             artist=str((album or {}).get("album_artist") or "").strip(),
             album=str((album or {}).get("name") or "").strip(),
             year=(album or {}).get("year"),
             target_filename=authoritative_cover.name,
-            album_rows_updated=int(persistence_result.get("album_rows_updated") or 0),
-            track_file_rows_updated=int(persistence_result.get("track_file_rows_updated") or 0),
-            timings_ms={
-                "resolve_and_validate": round((resolution_finished_at - request_started_at) * 1000, 2),
-                "promotion": round((promotion_finished_at - resolution_finished_at) * 1000, 2),
-                "hash": round(hash_ms, 2),
-                "persistence": round(persistence_ms, 2),
-                "lock_wait": round(lock_wait_ms, 2),
-                "database": round(database_ms, 2),
-                "runtime_refresh": round(runtime_refresh_ms, 2),
-                "total": round((perf_counter() - request_started_at) * 1000, 2),
-            },
+            error_kind=type(exc).__name__,
          history_scope=history_scope)
-        return JSONResponse(
-            {
-                "ok": True,
-                "selected_cover_path": str(authoritative_cover),
-                "cover_revision": cover_revision,
-                "replaced_cover_backup": _replaced_cover_backup_payload(promotion.reserve_artifact),
-                "updated_albums": updated_albums,
-                "updated_album": updated_albums[0] if updated_albums else None,
-                "updated_problematic_album": updated_problematic_album,
-            }
+        return _json_response(
+            ({"ok": False, "error": "Selected cover art could not be persisted."}, 500)
         )
-
-    return await run_in_threadpool(complete_local_cover_selection)
+    try:
+        if not commit_guard_called:
+            state_service.run_authoritative_cover_commit_for_state(
+                library_state,
+                refresh_runtime_state,
+            )
+    finally:
+        # The per-album promotion lock covers filesystem promotion through the
+        # committed runtime-state patch, but not logging or response shaping.
+        complete_local_image_promotion(promotion)
+    if selected_inventory_state is not library_state and runtime_refresh_error is None:
+        updated_albums = [
+            _authoritative_local_cover_album_payload(selected_album, authoritative_cover, cover_revision)
+            for selected_album in find_albums_by_track_paths_in_state(
+                selected_inventory_state, authoritative_track_paths
+            )
+        ]
+    if runtime_refresh_error is not None:
+        updated_albums = [
+            _authoritative_local_cover_album_payload(
+                album or {},
+                authoritative_cover,
+                cover_revision,
+            )
+        ]
+        updated_problematic_album = None
+        _log_local_cover_persistence_event(
+            config,
+            logger,
+            "Local cover runtime refresh failed",
+            level="error",
+            artist=str((album or {}).get("album_artist") or "").strip(),
+            album=str((album or {}).get("name") or "").strip(),
+            year=(album or {}).get("year"),
+            target_filename=authoritative_cover.name,
+            error_kind=type(runtime_refresh_error).__name__,
+         history_scope=history_scope)
+    interrupted_scan_mode = (
+        state_service.take_cover_selection_interrupted_scan_mode_for_state(
+            library_state
+        )
+    )
+    if interrupted_scan_mode is not None:
+        state_service.start_background_refresh_for_state(
+            library_state,
+            config,
+            logger,
+            force=True,
+            scan_mode=interrupted_scan_mode,
+        )
+    if runtime_fallback_error is not None:
+        _log_local_cover_persistence_event(
+            config,
+            logger,
+            "Local cover authoritative runtime fallback failed",
+            level="error",
+            artist=str((album or {}).get("album_artist") or "").strip(),
+            album=str((album or {}).get("name") or "").strip(),
+            year=(album or {}).get("year"),
+            target_filename=authoritative_cover.name,
+            error_kind=type(runtime_fallback_error).__name__,
+         history_scope=history_scope)
+        return _json_response(
+            (
+                {
+                    "ok": False,
+                    "persisted": True,
+                    "selected_cover_path": str(authoritative_cover),
+                    "cover_revision": cover_revision,
+                    "error": "Selected cover art was persisted, but runtime state could not be refreshed. Reload the app.",
+                },
+                500,
+            )
+        )
+    _log_local_cover_persistence_event(
+        config,
+        logger,
+        "Local cover selection persisted",
+        level="info",
+        artist=str((album or {}).get("album_artist") or "").strip(),
+        album=str((album or {}).get("name") or "").strip(),
+        year=(album or {}).get("year"),
+        target_filename=authoritative_cover.name,
+        album_rows_updated=int(persistence_result.get("album_rows_updated") or 0),
+        track_file_rows_updated=int(persistence_result.get("track_file_rows_updated") or 0),
+        timings_ms={
+            "resolve_and_validate": round((resolution_finished_at - request_started_at) * 1000, 2),
+            "promotion": round((promotion_finished_at - resolution_finished_at) * 1000, 2),
+            "hash": round(hash_ms, 2),
+            "persistence": round(persistence_ms, 2),
+            "lock_wait": round(lock_wait_ms, 2),
+            "database": round(database_ms, 2),
+            "runtime_refresh": round(runtime_refresh_ms, 2),
+            "total": round((perf_counter() - request_started_at) * 1000, 2),
+        },
+     history_scope=history_scope)
+    return JSONResponse(
+        {
+            "ok": True,
+            "selected_cover_path": str(authoritative_cover),
+            "cover_revision": cover_revision,
+            "replaced_cover_backup": _replaced_cover_backup_payload(promotion.reserve_artifact),
+            "updated_albums": updated_albums,
+            "updated_album": updated_albums[0] if updated_albums else None,
+            "updated_problematic_album": updated_problematic_album,
+        }
+    )
 
 
 async def _additional_artwork_album_context(request: Request, payload: Mapping[str, object]):
@@ -1700,6 +1747,36 @@ async def utilities_cover_lookup_local_delete(request: Request) -> JSONResponse:
     album, album_context = await _resolve_album_payload_context(config, album or {})
     if album_context is None:
         return _json_response(({"ok": False, "error": "Album root could not be resolved"}, 400))
+    outcome = await run_in_threadpool(_delete_local_cover, config, logger, library_state, album_context, source_path)
+    if isinstance(outcome, Response):
+        return outcome
+    updated_albums, updated_problematic_album, deleted_path = outcome
+    inventory_worker = getattr(request.app.state, "local_cover_inventory", None)
+    if inventory_worker is not None:
+        await run_in_threadpool(inventory_worker.remove_path, deleted_path)
+    return JSONResponse(
+        {
+            "ok": True,
+            "updated_albums": updated_albums,
+            "updated_album": updated_albums[0] if updated_albums else None,
+            "updated_problematic_album": updated_problematic_album,
+            "gallery": await _serialize_cover_gallery_from_asgi(
+                request,
+                album_context.album_root,
+                album_context.track_paths,
+            ),
+        }
+    )
+
+
+def _delete_local_cover(
+    config: dict[str, object],
+    logger: logging.Logger,
+    library_state: dict[str, object],
+    album_context: CoverAlbumContext,
+    source_path: str,
+) -> Response | tuple[list[dict[str, object]], dict[str, object] | None, Path]:
+    """Deletes the selected local image and repoints the album, off the event loop."""
     try:
         resolved = validate_local_cover_source(
             config,
@@ -1749,22 +1826,7 @@ async def utilities_cover_lookup_local_delete(request: Request) -> JSONResponse:
             library_state=library_state,
             schedule_cache_update=False,
         )
-    inventory_worker = getattr(request.app.state, "local_cover_inventory", None)
-    if inventory_worker is not None:
-        await run_in_threadpool(inventory_worker.remove_path, resolved)
-    return JSONResponse(
-        {
-            "ok": True,
-            "updated_albums": updated_albums,
-            "updated_album": updated_albums[0] if updated_albums else None,
-            "updated_problematic_album": updated_problematic_album,
-            "gallery": await _serialize_cover_gallery_from_asgi(
-                request,
-                album_context.album_root,
-                album_context.track_paths,
-            ),
-        }
-    )
+    return updated_albums, updated_problematic_album, resolved
 
 
 @router.post("/utilities/cover-lookup/pasted-image-save")
@@ -1784,73 +1846,13 @@ async def utilities_cover_lookup_pasted_image_save(request: Request) -> JSONResp
     album, album_context = await _resolve_album_payload_context(config, album or {})
     if album_context is None:
         return _json_response(({"ok": False, "error": "Album root could not be resolved"}, 400))
-    if (
-        str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()
-        and not album_context.track_paths <= set(library_state.get("file_cache") or {})
-    ):
-        from music_app.services.library import build_albums_from_file_cache
-        from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
-
-        def load_selected_inventory():
-            repository = PostgresLibraryBrowseRepository(config)
-            albums = repository.build_album_payloads_by_track_paths(album_context.track_paths)
-            paths = {
-                str(track.get("path") or "").strip()
-                for selected_album in albums
-                for track in selected_album.get("tracks", [])
-                if str(track.get("path") or "").strip()
-            }
-            entries = repository.build_track_file_entries_by_paths(paths)
-            file_cache = {**(library_state.get("file_cache") or {}), **entries}
-            return file_cache, build_albums_from_file_cache(file_cache)
-
-        file_cache, albums = await run_in_threadpool(load_selected_inventory)
-        library_state["file_cache"] = file_cache
-        library_state["albums"] = albums
-    def persist_pasted_cover():
-        # Synchronous file write, hash and persistence must not block the loop.
-        try:
-            promotion = save_pasted_image_as_authoritative_cover(data_url, album_context.album_root)
-        except ValueError as exc:
-            return _json_response(({"ok": False, "error": str(exc)}, 400)), None
-        except Exception as exc:
-            return _json_response(({"ok": False, "error": str(exc or "Failed to save pasted image.")}, 500)), None
-        saved_cover_path = promotion.cover_path
-        cover_revision = cover_revision_for_path(saved_cover_path)
-        try:
-            persist_cover_selection_for_tracks(
-                album_context.track_paths,
-                saved_cover_path,
-                config=config,
-                logger=logger,
-                cover_revision=cover_revision,
-                selected_local_cover_source_path=saved_cover_path,
-                cover_selection_origin="user",
-                explicit_selection=True,
-            )
-        except Exception:
-            rollback_local_image_promotion(promotion)
-            raise
-        return None, (
-            saved_cover_path,
-            promotion.reserve_artifact,
-            cover_revision,
-            *apply_cover_path_for_tracks(
-                album_context.track_paths,
-                saved_cover_path,
-                config=config,
-                logger=logger,
-                library_state=library_state,
-                cover_revision=cover_revision,
-                selected_local_cover_source_path=saved_cover_path,
-                schedule_cache_update=False,
-            ),
-        )
-
-    error_response, persisted = await run_in_threadpool(persist_pasted_cover)
-    if error_response is not None:
-        return error_response
-    saved_cover_path, created_backup_path, cover_revision, updated_albums, updated_problematic_album = persisted
+    cover_state = await _selected_cover_inventory_state(
+        config, library_state, album_context.track_paths,
+    )
+    outcome = await run_in_threadpool(_save_pasted_cover, config, logger, cover_state, album_context, data_url)
+    if isinstance(outcome, Response):
+        return outcome
+    saved_cover_path, created_backup_path, cover_revision, updated_albums, updated_problematic_album = outcome
     written_paths = [saved_cover_path, *([created_backup_path] if created_backup_path else [])]
     inventory_worker = getattr(request.app.state, "local_cover_inventory", None)
     if inventory_worker is not None:
@@ -1912,6 +1914,49 @@ async def utilities_cover_lookup_pasted_image_save(request: Request) -> JSONResp
     )
 
 
+def _save_pasted_cover(
+    config: dict[str, object],
+    logger: logging.Logger,
+    cover_state: dict[str, object],
+    album_context: CoverAlbumContext,
+    data_url: str,
+) -> Response | tuple[Path, Path | None, str, list[dict[str, object]], dict[str, object] | None]:
+    """Writes the pasted image as the album cover, off the event loop; names any backup it made."""
+    try:
+        promotion = save_pasted_image_as_authoritative_cover(data_url, album_context.album_root)
+    except ValueError as exc:
+        return _json_response(({"ok": False, "error": str(exc)}, 400))
+    except Exception as exc:
+        return _json_response(({"ok": False, "error": str(exc or "Failed to save pasted image.")}, 500))
+    saved_cover_path = promotion.cover_path
+    cover_revision = cover_revision_for_path(saved_cover_path)
+    try:
+        persist_cover_selection_for_tracks(
+            album_context.track_paths,
+            saved_cover_path,
+            config=config,
+            logger=logger,
+            cover_revision=cover_revision,
+            selected_local_cover_source_path=saved_cover_path,
+            cover_selection_origin="user",
+            explicit_selection=True,
+        )
+    except Exception:
+        rollback_local_image_promotion(promotion)
+        raise
+    updated_albums, updated_problematic_album = apply_cover_path_for_tracks(
+        album_context.track_paths,
+        saved_cover_path,
+        config=config,
+        logger=logger,
+        library_state=cover_state,
+        cover_revision=cover_revision,
+        selected_local_cover_source_path=saved_cover_path,
+        schedule_cache_update=False,
+    )
+    return saved_cover_path, promotion.reserve_artifact, cover_revision, updated_albums, updated_problematic_album
+
+
 @router.post("/utilities/cover-lookup/save-remote")
 async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
     config = _app_config(request)
@@ -1966,7 +2011,8 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
     selected_match = None
     notification_action_taken = is_terminal_cover_lookup_task(task_payload)
     if task_payload:
-        repository, album_id, identity_error = _resolved_snapshot_album_context(
+        repository, album_id, identity_error = await run_in_threadpool(
+            _resolved_snapshot_album_context,
             config,
             album or {},
             album_context.track_paths,
@@ -2004,7 +2050,8 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
             None,
         )
     if selected_match is None and snapshot_generation:
-        repository, album_id, identity_error = _resolved_snapshot_album_context(
+        repository, album_id, identity_error = await run_in_threadpool(
+            _resolved_snapshot_album_context,
             config,
             album or {},
             album_context.track_paths,
@@ -2012,7 +2059,7 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
         if identity_error is not None:
             return _json_response(identity_error)
         try:
-            candidate_snapshot = repository.get_for_album_context(album_id=int(album_id))
+            candidate_snapshot = await run_in_threadpool(repository.get_for_album_context, album_id=int(album_id))
         except Exception:
             return _json_response(
                 ({"ok": False, "error": "Saved cover candidates are unavailable"}, 503)
@@ -2042,7 +2089,8 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
             and not is_provider_lookup_match(selected_match)):
         return _json_response(({"ok": False, "error": "Only provider cover candidates can be selected on TV."}, 403))
     if selected_match and not task_payload:
-        task_id, _cancel_event = create_cover_lookup_task(
+        task_id, _cancel_event = await run_in_threadpool(
+            create_cover_lookup_task,
             dict(album or {}),
             album_context.track_paths,
             internal=True,
@@ -2073,7 +2121,8 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
             in DISPLAY_ONLY_REMOTE_SOURCES,
         }
     save_generation = uuid4().hex
-    update_cover_lookup_task(
+    await run_in_threadpool(
+        update_cover_lookup_task,
         task_id,
         config=config,
         **{
@@ -2113,7 +2162,8 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
             commit_guard=commit_cover_selection,
         )
 
-    queue_cover_lookup_save_remote_task(
+    await run_in_threadpool(
+        queue_cover_lookup_save_remote_task,
         task_id,
         album_context.album_root,
         album_context.track_paths,
@@ -2168,7 +2218,8 @@ async def utilities_cover_lookup_add_remote(request: Request) -> JSONResponse:
     cleaned_urls = _clean_string_list(raw_urls)
     if not cleaned_urls:
         return _json_response(({"ok": False, "error": "Paste at least one URL"}, 400))
-    log_app_event(
+    await run_in_threadpool(
+        log_app_event,
         config,
         logger,
         "Manual cover link extraction requested",
@@ -2182,7 +2233,8 @@ async def utilities_cover_lookup_add_remote(request: Request) -> JSONResponse:
     album, album_context = await _resolve_album_payload_context(config, album or {})
     if album_context is None:
         return _json_response(({"ok": False, "error": "Album root could not be resolved"}, 400))
-    matches = add_manual_cover_candidates_from_urls(
+    matches = await run_in_threadpool(
+        add_manual_cover_candidates_from_urls,
         cleaned_urls,
         target_artist=str((album or {}).get("album_artist") or ""),
         target_album=str((album or {}).get("name") or (album or {}).get("album") or ""),
@@ -2190,7 +2242,8 @@ async def utilities_cover_lookup_add_remote(request: Request) -> JSONResponse:
         target_year=int((album or {}).get("year")) if isinstance((album or {}).get("year"), int) else None,
         user_agent=str(config["MUSICBRAINZ_USER_AGENT"]),
     )
-    log_app_event(
+    await run_in_threadpool(
+        log_app_event,
         config,
         logger,
         "Manual cover link extraction completed",
@@ -2204,7 +2257,8 @@ async def utilities_cover_lookup_add_remote(request: Request) -> JSONResponse:
     if not matches:
         return _json_response(({"ok": False, "error": "No usable cover art could be extracted from those links"}, 400))
     if not task_id:
-        task_id, _cancel_event = create_cover_lookup_task(
+        task_id, _cancel_event = await run_in_threadpool(
+            create_cover_lookup_task,
             album or {},
             album_context.track_paths,
             config=config,
@@ -2214,7 +2268,8 @@ async def utilities_cover_lookup_add_remote(request: Request) -> JSONResponse:
         task_payload.get("possible_matches") if isinstance(task_payload.get("possible_matches"), list) else [],
         matches,
     )
-    update_cover_lookup_task(
+    await run_in_threadpool(
+        update_cover_lookup_task,
         task_id,
         config=config,
         possible_matches=merged_matches,
@@ -2283,6 +2338,17 @@ async def utilities_fetch_cover(request: Request) -> JSONResponse:
     requested_track_paths, track_error = _require_album_track_paths(album)
     if track_error is not None:
         return _json_response(track_error)
+    return await run_in_threadpool(_utilities_fetch_cover_response, library_state, config, logger, requested_track_paths, history_scope, album)
+
+
+def _utilities_fetch_cover_response(
+    library_state: dict[str, object],
+    config: dict[str, object],
+    logger: logging.Logger,
+    requested_track_paths: set[str],
+    history_scope: HistoryScope | None,
+    album: JsonDict | None,
+) -> JSONResponse:
     try:
         result = state_service.refresh_cover_artwork_for_track_paths_for_state(
             library_state,
@@ -2304,10 +2370,7 @@ async def utilities_fetch_cover(request: Request) -> JSONResponse:
             mode="manual",
          history_scope=history_scope)
         return _json_response(({"ok": False, "error": str(exc)}, 500))
-    updated_albums = find_albums_by_track_paths_in_state(
-        library_state.get("albums", []) if isinstance(library_state, dict) else [],
-        requested_track_paths or set(),
-    )
+    updated_albums = find_albums_by_track_paths_in_state(library_state, requested_track_paths or set())
     album_key = str(updated_albums[0].get("key") or "") if updated_albums else ""
     updated_problematic_album = (
         build_problematic_album_detail_payload(
@@ -2380,7 +2443,8 @@ async def utilities_fetch_covers_unsuccessful(request: Request) -> JSONResponse:
             defer_preparation=True,
         )
     except Exception as exc:
-        log_app_event(
+        await run_in_threadpool(
+            log_app_event,
             config,
             logger,
             "Cover art bulk update failed",

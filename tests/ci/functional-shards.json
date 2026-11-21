@@ -1270,6 +1270,13 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+              "case": "FTC-UTIL-PROBLEMS-014 a watcher-found problem album appears in the open Problematic Files list without a reload",
+              "area": "problematic-files"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/albumDetailsComponents.functional.spec.js",
               "case": "FTC-ALBUM-DETAILS-020 preserves search, hover, playback, and reduced-motion states",
               "area": "album-details"
@@ -1423,7 +1430,7 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/musicbrainzArtistIdentity.spec.js",
-              "case": "FTC-MBID-002 a split name lists each MusicBrainz artist; a person and their band stay one artist",
+              "case": "FTC-MBID-002 a split name lists each MusicBrainz artist; a person and their band are separate artists",
               "area": "album-details"
             },
             {

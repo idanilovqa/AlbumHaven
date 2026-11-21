@@ -8,15 +8,26 @@ def _owner(account_id):
     return account_id
 
 
+_ACCOUNT_SETTINGS_SQL = """select s.account_id,s.provider_username,s.timezone_name,s.settings_payload,
+    k.session_key_encrypted,k.metadata->>'connected_at' as connected_at
+    from integration.lastfm_settings s left join integration.lastfm_sessions k
+      on k.account_id=s.account_id and k.provider_username is not distinct from s.provider_username
+      and k.is_active where s.account_id=any(%s)"""
+
+
 def load_account_settings(adapter, account_id):
     owner = _owner(account_id)
     with adapter._connect_to_database() as connection:
-        row = connection.execute("""select s.provider_username,s.timezone_name,s.settings_payload,
-            k.session_key_encrypted,k.metadata->>'connected_at' as connected_at
-            from integration.lastfm_settings s left join integration.lastfm_sessions k
-              on k.account_id=s.account_id and k.provider_username is not distinct from s.provider_username
-              and k.is_active where s.account_id=%s""", (owner,)).fetchone()
-    return _settings_from_row(row) if row is not None else {}
+        return load_settings_for_accounts(connection, [owner]).get(owner, {})
+
+
+def load_settings_for_accounts(connection, account_ids):
+    """Each listed account's saved settings, in one query on the caller's connection."""
+    owners = sorted({_owner(account_id) for account_id in account_ids})
+    if not owners:
+        return {}
+    rows = connection.execute(_ACCOUNT_SETTINGS_SQL, (owners,)).fetchall()
+    return {row["account_id"]: _settings_from_row(row) for row in rows}
 
 
 def save_account_settings(adapter, settings, account_id):

@@ -127,6 +127,8 @@ const PERFORMANCE_GROUPS = Object.freeze({
     'paired-search-calibration',
     'scan-error',
     'notification-history',
+    'edit-tags-split-merge',
+    'edit-tags-api-consecutive',
   ],
   'library-browse': [
     'all-artists',
@@ -661,6 +663,42 @@ PERFORMANCE_TARGETS['notification-history'] = {
   aliasNames: ['notification-history', 'notifications-performance'],
   reportId: 'notificationHistoryLocal',
   casePattern: 'FTC-NOTIFICATIONS-001P',
+  env: {
+    ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
+    ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET: 'production-calibration',
+  },
+};
+
+// Owner request 2026-11-18: repeated split/merge saves on the fake «Ремиксы» MP3s must stay
+// fast and comparable; budgets are proposed for owner approval.
+PERFORMANCE_TARGETS['edit-tags-split-merge'] = {
+  kind: 'synthetic',
+  fixtureProfile: 'synthetic-large-library',
+  fixtureMode: PRELOADED_RELEASE_FIXTURE_MODE,
+  coverageClass: 'real-app-library-browse-load',
+  coverageDescription: 'Real Edit Tags UI moving five «Ремиксы» tracks to «Ремиксы2» and back five times: every save click to terminal success, visible cards, physical tags, and album and unrelated search between and after the saves.',
+  specPath: 'tests/e2e/syntheticLargeLibrary/editTagsSplitMergePerformance.spec.js',
+  grep: 'FTC-TAGS-031P',
+  aliasNames: ['edit-tags-split-merge'],
+  reportId: 'editTagsSplitMergeLocal',
+  casePattern: 'FTC-TAGS-031P',
+  env: {
+    ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
+    ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET: 'production-calibration',
+  },
+};
+
+PERFORMANCE_TARGETS['edit-tags-api-consecutive'] = {
+  kind: 'synthetic',
+  fixtureProfile: 'synthetic-large-library',
+  fixtureMode: PRELOADED_RELEASE_FIXTURE_MODE,
+  coverageClass: 'real-app-library-browse-load',
+  coverageDescription: 'Eight consecutive authenticated Edit Tags API saves on the fake «Ремиксы» MP3s: time to HTTP 200, completed save task and browse consistency, with /status probes during, between and after the saves.',
+  specPath: 'tests/e2e/syntheticLargeLibrary/editTagsApiConsecutivePerformance.spec.js',
+  grep: 'FTC-TAGS-032P',
+  aliasNames: ['edit-tags-api-consecutive'],
+  reportId: 'editTagsApiConsecutiveLocal',
+  casePattern: 'FTC-TAGS-032P',
   env: {
     ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE: 'postgres',
     ALBUM_HAVEN_SYNTHETIC_SCALE_PRESET: 'production-calibration',
@@ -2697,7 +2735,7 @@ function runSequentialPerformanceSuite(options) {
 
 function printUsage() {
   console.log('Usage: npm run test:e2e:performance -- [--group library-browse|idle-memory|playback-start|gapless-playback|real-app|scan] [--test <name-or-path>] [--repeat-count <n>] [--headed|--headless] [--browser chromium|chrome|edge] [--grep <pattern>]');
-  console.log('Known names: idle-memory, playback-start, gapless-playback, all-artists, artist-family, paired-search-calibration, search-all-artists, utility-problematic-files, utility-rules, selected-artist, edit-tags-post-edit, cover-lookup, album-title-search, track-title-search, search-browse, root-album-browse, artist-tree-scroll-navigation, gallery-artwork-diversity, app-open-all-artists, problematic-files-focused, rules-focused, scan-cold, scan-cached, scan-add-album, scan-metadata, scan-page, scan-health, scan-error');
+  console.log('Known names: idle-memory, playback-start, gapless-playback, all-artists, artist-family, paired-search-calibration, search-all-artists, utility-problematic-files, utility-rules, selected-artist, edit-tags-post-edit, cover-lookup, album-title-search, track-title-search, search-browse, root-album-browse, artist-tree-scroll-navigation, gallery-artwork-diversity, app-open-all-artists, problematic-files-focused, rules-focused, scan-cold, scan-cached, scan-add-album, scan-metadata, scan-page, scan-health, scan-error, notification-history, edit-tags-split-merge, edit-tags-api-consecutive');
   console.log('Known groups: library-browse, idle-memory, playback-start, gapless-playback, real-app, scan');
   console.log('Coverage classes: real-app-isolated-postgres-memory, real-app-isolated-postgres-playback, real-app-library-browse-load, scanner-index-cache.');
   console.log('The performance runner defaults to headless mode; pass --headed to keep the browser visible.');

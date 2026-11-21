@@ -21,9 +21,9 @@ const EXPECTED_SHARD_COUNTS = new Map([
   ['gallery-search-visual-1', 36],
   ['gallery-search-visual-2', 47],
   ['cover-providers-1', 27],
-  ['cover-providers-2', 18],
+  ['cover-providers-2', 19],
   ['metadata-mutations', 18],
-  ['playback-utilities-1', 14],
+  ['playback-utilities-1', 15],
   ['playback-utilities-2', 17],
   ['playback-utilities-3', 14],
 ]);
@@ -124,7 +124,7 @@ function functionalJobSource() {
   return { workflow, job: workflow.slice(start, end) };
 }
 
-test('functional shard contract pins the approved eight-way 191-case assignment', () => {
+test('functional shard contract pins the approved eight-way 193-case assignment', () => {
   const contract = readJson(shardContractPath);
   assert.equal(contract.browser, 'chrome');
   assert.equal(contract.workersPerInvocation, 1);
@@ -138,7 +138,7 @@ test('functional shard contract pins the approved eight-way 191-case assignment'
     assert.ok(shard.invocations.length > 0, `${shard.name} must not be empty`);
     assert.ok(shard.suitePrerequisites.length > 0, `${shard.name} must declare prerequisites`);
   }
-  assert.equal(total, 191);
+  assert.equal(total, 193);
   for (const ownedCase of ownedCases(contract)) {
     assert.match(ownedCase.area, /^[a-z]+(?:-[a-z]+)*$/, ownedCase.case);
   }
@@ -924,6 +924,7 @@ validatorTest('playback restores three wave baselines and isolates conflicting e
     [
       'FTC-LIBROOTS-016 / 017 / 018 reconciles filesystem changes and confirms missing-album removal',
       'FTC-UTIL-PROBLEMS-001 rolls back failed exclusion creation and reversion',
+      'FTC-UTIL-PROBLEMS-014 a watcher-found problem album appears in the open Problematic Files list without a reload',
     ].sort(),
   );
   assert.deepEqual(waveInvocations(4).flatMap((invocation) => invocation.cases.map(({ case: name }) => name)), [
@@ -985,9 +986,9 @@ validatorTest('all eight shards use explicit effect-compatible wave budgets', ()
     ['gallery-search-visual-1', { cases: 36, waves: [1, 2] }],
     ['gallery-search-visual-2', { cases: 47, waves: [1, 2, 3, 4] }],
     ['cover-providers-1', { cases: 27, waves: [1, 2, 4] }],
-    ['cover-providers-2', { cases: 18, waves: [1, 2] }],
+    ['cover-providers-2', { cases: 19, waves: [1, 2] }],
     ['metadata-mutations', { cases: 18, waves: [1, 2, 3] }],
-    ['playback-utilities-1', { cases: 14, waves: [1, 2, 3, 4] }],
+    ['playback-utilities-1', { cases: 15, waves: [1, 2, 3, 4] }],
     ['playback-utilities-2', { cases: 17, waves: [1, 2, 5] }],
     ['playback-utilities-3', { cases: 14, waves: [1, 2] }],
   ]);

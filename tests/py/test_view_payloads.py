@@ -7352,7 +7352,7 @@ def test_build_view_payload_selected_artist_filters_do_not_rebuild_runtime_famil
     assert payload["primary_filter_active"] is True
 
 
-def test_build_view_payload_does_not_repeat_non_album_path_probe_during_display_shaping(app, monkeypatch):
+def test_build_view_payload_shapes_non_album_paths_without_probing_them(app, monkeypatch):
     library_root = Path(r"X:\SyntheticMusic")
     _use_library_root_settings_read_seam(
         app,
@@ -7402,7 +7402,7 @@ def test_build_view_payload_does_not_repeat_non_album_path_probe_during_display_
     assert payload["non_album_tracks"][0]["artist"] == "Metallica"
     assert payload["non_album_tracks"][0]["title"] == "Imperial March"
     assert payload["non_album_tracks"][0]["display_path"] == r"Blocked\track.mp3"
-    assert matching_exists_calls == [r"X:\SyntheticMusic\Blocked\track.mp3"]
+    assert matching_exists_calls == []
 
 
 def test_build_view_payload_scopes_non_album_tracks_to_selected_artist_family(app, monkeypatch):
@@ -7587,3 +7587,98 @@ def test_public_safe_album_payload_strips_private_app_rating_but_preserves_share
     assert public_payload["tag_album_rating_source"] == "file_tag"
     assert public_payload["gallery_list_block"]["summary"]["tag_album_rating"] == 7
     assert private_payload["album_preference"] == private_preference
+
+
+@pytest.mark.parametrize("interaction_id, build", [
+    ("py:routes/api_read_asgi_routes.py#home_data", "build_home_payload"),
+    ("py:routes/web_asgi.py#news_center", "build_news_payload"),
+])
+def test_home_payload_contract_shapes_loose_tracks_without_probing_them_at_production_track_count(
+    app, monkeypatch, interaction_id, build,
+):
+    from tests.py.bounded_interactions import OperationCounts, measure_scale_pair
+    from tests.py.filesystem_operation_counting import count_filesystem_and_media
+
+    music_dir = Path(app.config["MUSIC_DIR"])
+    seeded_load_settings = library_roots_module.load_library_root_settings
+    active_counts: list[OperationCounts] = []
+
+    def counted_load_settings(config, **kwargs):
+        # Each load is one Postgres root-settings query in production.
+        for counts in active_counts:
+            counts.count("sql_statements")
+        return seeded_load_settings(config, **kwargs)
+
+    monkeypatch.setattr(library_roots_module, "load_library_root_settings", counted_load_settings)
+
+    def run(track_count: int) -> OperationCounts:
+        app.config.pop(library_roots_module._CONFIGURED_ROOT_PATHS_SNAPSHOT_KEY, None)
+        st = app.library_state
+        st.clear()
+        st.update({"albums": [], "relation_views": {}, "file_cache": {}})
+        for index in range(track_count):
+            artist = f"Artist {index % 500:03d}"
+            path = str(music_dir / artist / "Loose" / f"{index:06d}.mp3")
+            st["file_cache"][path] = {
+                "path": path, "album": "!Non album", "artist": artist,
+                "album_artist": artist, "title": f"Loose {index}", "exception_type": None,
+            }
+        counts = OperationCounts()
+        active_counts.append(counts)
+        try:
+            with count_filesystem_and_media(monkeypatch, counts):
+                payload = getattr(view_payloads_module, build)(config=app.config, library_state=st)
+        finally:
+            active_counts.clear()
+        assert len(payload["non_album_tracks"]) == track_count
+        return counts
+
+    measure_scale_pair(
+        interaction_id=interaction_id,
+        small=20,
+        large=160_000,
+        run=run,
+        budgets={"filesystem_enumerations": 0, "stat_calls": 2, "open_calls": 0, "sql_statements": 2},
+        growth=("stat_calls", 0),
+    )
+
+
+def test_non_album_candidates_load_library_roots_once_per_build(tmp_path, monkeypatch):
+    from music_app.services import library_roots as library_roots_module
+    from music_app.services import view_payloads
+
+    loads: list[object] = []
+    settings = {
+        "version": 1,
+        "main_library_roots": [{"id": "main", "path": str(tmp_path.resolve()), "layout_mode": "artist"}],
+        "hoarding_library_roots": [],
+        "new_arrivals_roots": [],
+        "move_policy": {},
+    }
+    monkeypatch.setattr(
+        library_roots_module,
+        "load_library_root_settings",
+        lambda config, **_kwargs: loads.append(config) or settings,
+    )
+    file_cache = {}
+    for index in range(25):
+        track = tmp_path / f"Artist {index}" / "Loose" / "Track.flac"
+        track.parent.mkdir(parents=True)
+        track.write_bytes(b"")
+        file_cache[str(track)] = {
+            "path": str(track),
+            "album": "",
+            "artist": f"Artist {index}",
+            "library_root_category": "main_library",
+        }
+
+    candidates = view_payloads._build_non_album_entry_candidates(
+        file_cache,
+        {},
+        ["main_library"],
+        config={},
+    )
+
+    assert len(candidates) == 25
+    assert candidates[0]["path_parts"] == frozenset({"artist 0", "loose"})
+    assert len(loads) == 1

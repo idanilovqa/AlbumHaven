@@ -555,9 +555,17 @@ def find_problematic_album_by_track_paths(
 ) -> dict[str, object] | None:
     return _service_find_problematic_album_by_track_paths(
         track_paths,
-        build_problematic_albums_payload=lambda: build_problematic_albums_payload(
-            config=config,
-            library_state=library_state,
-            logger=logger,
-        ),
+        text_problem_reason=text_problem_reason,
+        artist_alias_problem_reason=_artist_alias_problem_reason,
+        year_problem_reason=year_problem_reason,
+        all_track_text_problems_ignored=_all_track_text_problems_ignored,
+        all_track_year_problems_ignored=_all_track_year_problems_ignored,
+        collect_track_level_problem_reasons=_collect_track_level_problem_reasons,
+        build_encoding_repair_preview=_build_encoding_repair_preview,
+        collect_track_problem_rows=_collect_track_problem_rows,
+        separate_release_candidate=_separate_release_candidate,
+        image_dimensions=image_dimensions,
+        config=config,
+        library_state=library_state,
+        logger=logger,
     )

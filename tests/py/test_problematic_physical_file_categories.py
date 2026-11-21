@@ -201,7 +201,7 @@ def test_repository_count_and_cached_items_follow_physical_reason_exclusion(monk
         assert first["items"][0]["problem_reasons"] == ["Empty audio file"]
         assert first["initial_detail"]["problem_reasons"] == ["Empty audio file"]
         cached = repository.build_problematic_files_payload()
-        assert cached["projection_cache_status"] == "hit"
+        assert cached["projection_cache_status"] == "evaluated"
         assert cached["count"] == 1
         row["ignored_repair_keys"] = [browse._problem_identity_row_key(
             row["file_private_path"], "Empty audio file", scope="file")]

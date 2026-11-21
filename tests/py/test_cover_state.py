@@ -15,12 +15,19 @@ from music_app.services.covers import Image, image_dimensions
 
 
 def test_authoritative_track_resolution_uses_album_key_without_scanning_unrelated_tracks():
+    from music_app.services.library_album_index import publish_library_albums
+
+    published = False
+
     class UnrelatedAlbum:
         key = "other::album"
 
         @property
         def tracks(self):
-            raise AssertionError("Unrelated album tracks must not be scanned")
+            # The publisher indexes every album; a request never walks them.
+            if published:
+                raise AssertionError("Unrelated album tracks must not be scanned")
+            return [SimpleNamespace(path="N:/Music/Other/Album/01.mp3")]
 
     target = SimpleNamespace(
         key="artist::target album",
@@ -29,9 +36,12 @@ def test_authoritative_track_resolution_uses_album_key_without_scanning_unrelate
             SimpleNamespace(path="N:/Music/Artist/Target/02.mp3"),
         ],
     )
+    library_state: dict[str, object] = {}
+    publish_library_albums(library_state, [UnrelatedAlbum(), target])
+    published = True
 
     assert resolve_authoritative_album_track_paths(
-        {"albums": [UnrelatedAlbum(), target]},
+        library_state,
         {"N:/Music/Artist/Target/01.mp3"},
         album_key="artist::target album",
     ) == {
@@ -97,7 +107,7 @@ def test_cover_gallery_excludes_managed_preview_files(tmp_path: Path):
         is_squareish_cover=lambda width, height: width == height,
     )
 
-    assert [item["path"] for item in payload["local_covers"]] == [str(cover_path)]
+    assert [item["candidate_cover_path"] for item in payload["local_covers"]] == [str(cover_path)]
 
 
 def test_cover_gallery_includes_active_cover_outside_album_folder(tmp_path: Path):
@@ -119,7 +129,7 @@ def test_cover_gallery_includes_active_cover_outside_album_folder(tmp_path: Path
 
     assert payload["local_covers"] == [
         {
-            "path": str(active_cover),
+            "candidate_cover_path": str(active_cover),
             "filename": active_cover.name,
             "relative_path": active_cover.name,
             "sort_relative_path": active_cover.name,
@@ -153,9 +163,9 @@ def test_cover_gallery_keeps_active_selected_non_square_art_under_local(tmp_path
         is_squareish_cover=lambda width, height: width == height,
     )
 
-    assert payload["selected_source_path"] == str(active_cover)
-    assert [item["path"] for item in payload["local_covers"]] == [str(active_cover)]
-    assert [item["path"] for item in payload["other_art"]] == [str(other_art)]
+    assert payload["selected_source_cover_path"] == str(active_cover)
+    assert [item["candidate_cover_path"] for item in payload["local_covers"]] == [str(active_cover)]
+    assert [item["candidate_cover_path"] for item in payload["other_art"]] == [str(other_art)]
 
 
 def test_cover_gallery_excludes_external_managed_active_preview(tmp_path: Path):
@@ -203,8 +213,8 @@ def test_cover_gallery_hashes_local_duplicates_without_hashlib_file_digest(
         is_squareish_cover=lambda width, height: width == height,
     )
 
-    candidates = {item["path"]: item for item in payload["local_covers"]}
-    assert candidates[str(duplicate_cover)]["duplicate_of"] == str(active_cover)
+    candidates = {item["candidate_cover_path"]: item for item in payload["local_covers"]}
+    assert candidates[str(duplicate_cover)]["duplicate_of_cover_path"] == str(active_cover)
 
 
 def test_cover_gallery_hides_only_redundant_generated_backup(tmp_path: Path):
@@ -237,7 +247,7 @@ def test_cover_gallery_hides_only_redundant_generated_backup(tmp_path: Path):
         is_squareish_cover=lambda width, height: width == height,
     )
 
-    paths = {item["path"] for item in payload["local_covers"]}
+    paths = {item["candidate_cover_path"] for item in payload["local_covers"]}
     assert paths == {str(active_cover), str(original_cover), str(unique_backup)}
 
 
@@ -267,9 +277,9 @@ def test_cover_gallery_keeps_selected_generated_backup(tmp_path: Path):
         is_squareish_cover=lambda width, height: width == height,
     )
 
-    assert payload["selected_source_path"] == str(selected_backup)
+    assert payload["selected_source_cover_path"] == str(selected_backup)
     # Owner (2026-11-15): one card per picture; the app's cover.jpg copy of the selected file is hidden.
-    assert [(item["path"], item["is_active"]) for item in payload["local_covers"]] == [
+    assert [(item["candidate_cover_path"], item["is_active"]) for item in payload["local_covers"]] == [
         (str(selected_backup), True),
     ]
 
@@ -330,7 +340,7 @@ def test_cover_gallery_prefers_persisted_selected_local_source_when_duplicate_ha
     )
 
     assert payload["active_cover_path"] == str(active_cover)
-    assert payload["selected_source_path"] == str(selected_source)
+    assert payload["selected_source_cover_path"] == str(selected_source)
 
 
 def test_serialize_cover_gallery_payload_prefers_saved_remote_cover(tmp_path: Path):
@@ -379,9 +389,9 @@ def test_serialize_cover_gallery_payload_prefers_saved_remote_cover(tmp_path: Pa
         "height": 1500,
         "resolution": "1500x1500",
     }
-    assert payload["local_covers"][0]["path"] == str(local_cover)
+    assert payload["local_covers"][0]["candidate_cover_path"] == str(local_cover)
     assert payload["local_covers"][0]["is_active"] is False
-    assert payload["other_art"][0]["path"] == str(other_art)
+    assert payload["other_art"][0]["candidate_cover_path"] == str(other_art)
 
 
 def test_serialize_cover_gallery_payload_assigns_revision_only_to_active_local_cover(
@@ -411,7 +421,7 @@ def test_serialize_cover_gallery_payload_assigns_revision_only_to_active_local_c
     )
 
     candidates_by_path = {
-        candidate["path"]: candidate for candidate in payload["local_covers"]
+        candidate["candidate_cover_path"]: candidate for candidate in payload["local_covers"]
     }
     assert candidates_by_path[str(active_cover)].get("cover_revision") == (
         "authoritative-cover-revision"
@@ -442,7 +452,7 @@ def test_serialize_cover_gallery_payload_excludes_generated_preview_assets(tmp_p
         is_squareish_cover=lambda width, height: abs(width - height) / max(width, height) <= 0.18,
     )
 
-    assert [candidate["path"] for candidate in payload["local_covers"]] == [
+    assert [candidate["candidate_cover_path"] for candidate in payload["local_covers"]] == [
         str(active_cover)
     ]
 
@@ -466,7 +476,7 @@ def test_serialize_cover_gallery_payload_allows_reserved_ancestor_outside_album_
         is_squareish_cover=lambda width, height: abs(width - height) / max(width, height) <= 0.18,
     )
 
-    assert [candidate["path"] for candidate in payload["local_covers"]] == [
+    assert [candidate["candidate_cover_path"] for candidate in payload["local_covers"]] == [
         str(active_cover)
     ]
 
@@ -615,13 +625,12 @@ def test_apply_cover_selection_for_tracks_updates_cache_and_media_state(tmp_path
             }
         },
     }
-    scheduled_updates: list[tuple[Path, dict[str, dict[str, object]]]] = []
+    scheduled_updates: list[dict[str, dict[str, object]]] = []
 
     updated_albums, updated_problematic = apply_cover_selection_for_tracks(
         library_state=library_state,
         track_paths={str(track_path)},
-        schedule_cache_updates_save=lambda cache_path, changed_entries: scheduled_updates.append((cache_path, changed_entries)),
-        cache_path=(tmp_path / "cache.json").resolve(),
+        schedule_cache_updates_save=scheduled_updates.append,
         find_updated_albums=lambda track_paths: [{"key": "album-1", "track_paths": sorted(track_paths)}],
         find_problematic_album=lambda track_paths: {"key": "problem-1", "track_paths": sorted(track_paths)},
         cover_path=next_cover,
@@ -643,12 +652,9 @@ def test_apply_cover_selection_for_tracks_updates_cache_and_media_state(tmp_path
     assert track.cover_path == str(next_cover)
     assert track.remote_cover_album_url == "https://music.example/album/1"
     assert scheduled_updates == [
-        (
-            (tmp_path / "cache.json").resolve(),
-            {
-                str(track_path): library_state["file_cache"][str(track_path)],
-            },
-        )
+        {
+            str(track_path): library_state["file_cache"][str(track_path)],
+        },
     ]
 
 
@@ -694,3 +700,49 @@ def test_cover_gallery_names_the_backup_a_save_would_create(tmp_path: Path):
     assert gallery()["cover_backup_name"] == "cover-existing-2.jpg"
     (album_root / "folder.jpg").write_bytes(cover.read_bytes())
     assert gallery()["cover_backup_name"] is None, "no backup when another file already holds the picture"
+
+
+def test_cover_gallery_contract_reads_only_the_selected_album_at_production_library_size(tmp_path: Path, monkeypatch):
+    from tests.py.bounded_interactions import OperationCounts, measure_scale_pair
+    from tests.py.filesystem_operation_counting import count_filesystem_and_media
+
+    def run(album_count: int) -> OperationCounts:
+        library_root = tmp_path / f"library-{album_count}"
+        for index in range(album_count):
+            _write_jpeg(library_root / f"Artist {index:04d}" / "Album" / "cover.jpg", (index % 255, 40, 40))
+        album_root = (library_root / "Selected" / "Album").resolve()
+        track_path = album_root / "CD1" / "01.flac"
+        track_path.parent.mkdir(parents=True)
+        track_path.write_bytes(b"track")
+        (album_root / "CD2").mkdir()
+        active_cover = album_root / "CD1" / "folder.jpg"
+        _write_jpeg(active_cover, (220, 40, 40))
+        _write_jpeg(album_root / "CD1" / "back.jpg", (40, 220, 40))
+        _write_jpeg(album_root / "CD1" / "scans" / "booklet.jpg", (40, 40, 220))
+        file_cache = {
+            f"{library_root}/Other {index}/track.flac": {"cover_path": None}
+            for index in range(album_count * 160)
+        }
+        file_cache[str(track_path)] = {"cover_path": str(active_cover)}
+        counts = OperationCounts()
+        with count_filesystem_and_media(monkeypatch, counts, media_modules=(covers_module,)):
+            payload = serialize_cover_gallery_payload(
+                album_root=album_root,
+                track_paths={str(track_path)},
+                file_cache=file_cache,
+                image_extensions={".jpg"},
+                image_dimensions=image_dimensions,
+                is_squareish_cover=lambda width, height: width == height,
+            )
+        assert sorted(item["filename"] for item in payload["local_covers"]) == ["back.jpg", "booklet.jpg", "folder.jpg"]
+        return counts
+
+    small, production = measure_scale_pair(
+        interaction_id="py:routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_gallery",
+        small=20,
+        large=1_000,
+        run=run,
+        budgets={"filesystem_enumerations": 3, "stat_calls": 12, "open_calls": 3, "media_parses": 3},
+        growth=("stat_calls", 0),
+    )
+    assert small == production

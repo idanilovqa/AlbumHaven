@@ -209,6 +209,8 @@ button.small-alert:is(:hover, :focus-visible) { width: 200px; }
   box-shadow: 0 0 26px color-mix(in srgb, var(--alert-edge) 14%, transparent);
 }
 .on-page-alert[hidden] { display: none; }
+/* Flat: no glow, for an alert set directly on a page beside other controls (owner, 2026-11-19). */
+.on-page-alert.on-page-alert--flat { box-shadow: none; }
 /* Compact: as wide as its message, for a short note beside the controls it concerns (owner, 11-10). */
 .on-page-alert--compact { width: fit-content; max-width: 100%; }
 .on-page-alert__icon { width: 40px; height: 40px; border-radius: 12px; background: color-mix(in srgb, var(--alert-edge) 15%, transparent); color: var(--alert-ink); }

@@ -314,8 +314,11 @@ class EncodedPcmEngineTest {
 
         val controls = harness.server.controls.size
         harness.engine.seek(70_000)
+        val written = harness.sink.writtenFrames
         repeat(5) { harness.step() }
         assertEquals("nothing was sent on the lost socket", controls, harness.server.controls.size)
+        assertEquals("the head waits there silently", written, harness.sink.writtenFrames)
+        assertTrue(harness.engine.seekPending)
         harness.server.reconnect()
         assertTrue(harness.engine.resume())
         harness.playToEnd()
@@ -323,6 +326,67 @@ class EncodedPcmEngineTest {
         assertEquals(null, harness.failure())
         assertEquals(70_000L, harness.sent<PcmClientControl.Open>().last().startFrame)
         assertEquals(Run(4, 70_000, whole.frames - 70_000), harness.sink.runs().last())
+        assertEquals(emptyList<String>(), harness.server.violations)
+    }
+
+    /** Owner retest B-D4 (2026-11-17): offline, a seek into the received audio did not move the head. */
+    @Test
+    fun aSeekBackIntoReceivedAudioWhileOfflinePlaysThereAndTheNextSocketTakesOverAtTheSplice() {
+        val long = SyntheticTrack(tag = 3, frames = 48_000L * 60)
+        val harness = PcmHarness(long, encoded = true)
+        harness.engine.start(long.pcm)
+        harness.playUntil { harness.sink.writtenFrames >= 48_000 }
+        harness.server.disconnect()
+        val splice = checkNotNull(harness.engine.detach())
+
+        val controls = harness.server.controls.size
+        harness.engine.seek(24_000)
+        val written = harness.sink.writtenFrames
+        repeat(20) { harness.step() }
+        assertEquals(null, harness.failure())
+        assertEquals("nothing was sent on the lost socket", controls, harness.server.controls.size)
+        assertTrue("it plays from the new place offline", harness.sink.writtenFrames > written)
+        assertEquals(24_000L, harness.sink.runs().last().start)
+
+        harness.server.reconnect()
+        assertTrue(harness.engine.resume())
+        harness.playToEnd()
+        assertEquals(null, harness.failure())
+        assertEquals(Run(3, 24_000, long.frames - 24_000), harness.sink.runs().last())
+        assertEquals(splice, harness.sent<PcmClientControl.Open>().last().startFrame)
+        assertEquals(emptyList<String>(), harness.server.violations)
+    }
+
+    /**
+     * Owner retest B-D4 (2026-11-17): offline, a seek past the received audio should put the head
+     * there and make no sound, then play from there once the network is back.
+     */
+    @Test
+    fun aSeekPastTheReceivedAudioWhileOfflineWaitsSilentlyThereUntilTheNextSocket() {
+        val long = SyntheticTrack(tag = 3, frames = 48_000L * 300)
+        val harness = PcmHarness(long, encoded = true)
+        harness.engine.start(long.pcm)
+        harness.playUntil { harness.sink.writtenFrames >= 48_000 }
+        harness.server.disconnect()
+        checkNotNull(harness.engine.detach())
+
+        val target = long.frames - 48_000
+        harness.engine.seek(target)
+        val written = harness.sink.writtenFrames
+        val timeline = harness.engine.timelineFrame
+        repeat(20) { harness.step() }
+        assertEquals(null, harness.failure())
+        assertEquals("no sound", written, harness.sink.writtenFrames)
+        assertEquals("the place does not move", timeline, harness.engine.timelineFrame)
+        assertTrue("the seek still names the new place", harness.engine.seekPending)
+        assertTrue(harness.engine.detached)
+
+        harness.server.reconnect()
+        assertTrue(harness.engine.resume())
+        harness.playToEnd()
+        assertEquals(null, harness.failure())
+        assertEquals(listOf(0L, target), harness.sent<PcmClientControl.Open>().map { it.startFrame })
+        assertEquals(Run(3, target, 48_000), harness.sink.runs().last())
         assertEquals(emptyList<String>(), harness.server.violations)
     }
 

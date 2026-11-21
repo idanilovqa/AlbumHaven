@@ -24,8 +24,3 @@ function renderStars(rating) {
   }
   return html;
 }
-
-function formatScanSummary(lastScanDisplay = '') {
-  const view = state?.view || {};
-  return `Found ${view.album_count} album${view.album_count === 1 ? '' : 's'} by ${view.artist_count} artist${view.artist_count === 1 ? '' : 's'} in ${escapeHtml(view.music_dir)}${view.selected_artist ? ' (family context)' : ''}<br>Last scan: ${escapeHtml(lastScanDisplay || '—')}`;
-}

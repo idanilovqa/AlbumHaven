@@ -178,7 +178,7 @@ function readDecodedProductionCardWindow(args = {}) {
     }
     const expectedCover = Boolean(
       productionSrc
-      || String(album?.cover_path || '').trim()
+      || String(album?.cover_ref || '').trim()
       || String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim()
     );
     return {
@@ -539,6 +539,69 @@ export class GalleryPage extends BasePage {
       albumYearPattern: VISIBLE_ALBUM_YEAR_PATTERN,
       trackCountSelector: this.albumCard.trackCountWithinCardSelector,
     });
+  }
+
+  // Page-clock record of the named albums' card track counts, one entry per rendered change,
+  // plus the moment the button named startButtonText is clicked.
+  async startAlbumCardTrackCountObservation({ albums, startButtonText }) {
+    // parity-check: allow-read-only-measurement-evaluate -- observe rendered card count labels on the page clock without touching application state
+    const observation = await this.page.evaluateHandle((options) => {
+      const names = new Set(options.albums);
+      const changes = [];
+      let startMs = null;
+      let lastKey = '';
+      let frame = 0;
+      const read = () => {
+        frame = 0;
+        const counts = Object.fromEntries(options.albums.map((album) => [album, null]));
+        document.querySelectorAll(options.cardSelector).forEach((card) => {
+          const album = String(card.querySelector(options.titleSelector)?.textContent || '').trim();
+          if (!names.has(album)) return;
+          const match = String(card.querySelector(options.trackCountSelector)?.textContent || '')
+            .trim().match(/^(\d+)\s+tracks?$/i);
+          counts[album] = match ? Number(match[1]) : -1;
+        });
+        const key = JSON.stringify(counts);
+        if (key === lastKey) return;
+        lastKey = key;
+        changes.push({ atMs: performance.now(), counts });
+      };
+      const schedule = () => { if (!frame) frame = requestAnimationFrame(read); };
+      const onClick = (event) => {
+        const button = event.target?.closest?.('button');
+        if (startMs === null && String(button?.textContent || '').trim() === options.startButtonText) {
+          startMs = performance.now();
+        }
+      };
+      const observer = new MutationObserver(schedule);
+      observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+      document.addEventListener('click', onClick, true);
+      read();
+      return {
+        finish() {
+          observer.disconnect();
+          document.removeEventListener('click', onClick, true);
+          if (frame) cancelAnimationFrame(frame);
+          read();
+          return { startMs, changes };
+        },
+      };
+    }, {
+      albums,
+      startButtonText,
+      cardSelector: `${this.artistSectionSelector} ${this.albumCardWithinSectionSelector}`,
+      titleSelector: this.albumTitleButtonWithinSectionSelector,
+      trackCountSelector: this.albumCard.trackCountWithinCardSelector,
+    });
+    let finished = null;
+    return {
+      async finish() {
+        // parity-check: allow-read-only-measurement-evaluate -- stop the card count observer and return its page-clock record
+        finished ??= observation.evaluate((owned) => owned.finish())
+          .finally(() => observation.dispose());
+        return finished;
+      },
+    };
   }
 
   async readMountedAlbumInventory() {
@@ -1304,6 +1367,22 @@ export class GalleryPage extends BasePage {
       previousMaxScrollTop: previous.maxScrollTop,
       cursor: previous.pageCursor,
       revision: previous.pageRevision,
+    });
+  }
+
+  async waitForVirtualGalleryOwnership(options = {}) {
+    // The server-rendered startup preview carries no section identities, and the
+    // virtual grid defers its startup hydration while the gallery scrolls.
+    await this.waitForPageCondition((selectors) => (
+      Boolean(document.querySelector(selectors.virtualSectionSelector))
+      && Array.from(document.querySelectorAll(selectors.sectionHeadingSelector))
+        .every((heading) => heading.closest('[data-virtual-section-key]'))
+      && !(typeof virtualGrid !== 'undefined' && virtualGrid?.hasDeferredMountedGroupUpdate?.())
+    ), {
+      timeout: options.timeout || 30000,
+    }, {
+      virtualSectionSelector: '#artist-groups [data-virtual-section-key]',
+      sectionHeadingSelector: '#artist-groups .artist-name',
     });
   }
 

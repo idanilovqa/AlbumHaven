@@ -83,6 +83,7 @@ def test_system_admin_is_never_available_as_an_ordinary_grant():
         "system.preview_storage.manage",
         "system.preview_storage.cancel",
         "system.preview_storage.retry",
+        "system.android_sandbox_rebuild",
     ],
 )
 def test_preview_storage_actions_are_bootstrap_owner_only(action):

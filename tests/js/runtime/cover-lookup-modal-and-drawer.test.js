@@ -213,10 +213,10 @@ for (const [source, label] of [['apple', 'Apple Music'], ['cover_art_archive', '
 require('node:test')('local Cover Lookup cards retain their loaded preview as the full-size fallback', () => {
   const context = loadHelper({
     escapeHtml: value => String(value ?? ''),
-    buildCoverUrl: (path, options = {}) => `/cover?path=${path}${options.size ? `&size=${options.size}` : ''}`,
+    buildCoverUrl: (ref, options = {}) => `/cover/${ref}${options.size ? `?size=${options.size}` : ''}`,
   });
   const card = context.buildCoverLookupCard({
-    path: 'N:/Music/Dissection/cover.jpg',
+    candidate_cover_ref: 'N:/Music/Dissection/cover.jpg',
     filename: 'cover.jpg',
     cover_revision: 'dissection-cover',
   }, 'local');
@@ -254,7 +254,7 @@ for (const outcome of ['load', 'error']) {
       escapeHtml: value => String(value ?? ''),
       buildCoverUrl: () => '/cover?path=cover.jpg&size=480',
     });
-    const card = context.buildCoverLookupCard({ path: 'cover.jpg' }, 'local');
+    const card = context.buildCoverLookupCard({ candidate_cover_ref: 'cover.jpg' }, 'local');
     assert.match(card, /class="cover-lookup-art-preview is-loading" aria-busy="true"/);
     const classes = new Set(['is-loading']);
     const preview = {
@@ -306,22 +306,22 @@ require('node:test')('the suggested cover keeps its frame after a different manu
 require('node:test')('Neural Code keeps its automatic local cover selected while marking the remote suggestion', () => {
   const { context } = createDrawerHarness();
   context.buildCoverUrl = (path) => `/cover?path=${encodeURIComponent(path)}`;
-  const local = { path: 'C:/Fixture/Neural Code/cover.jpg', is_active: true };
+  const local = { candidate_cover_ref: 'C:/Fixture/Neural Code/cover.jpg', is_active: true };
   const remote = { id: 'neural-discogs', source: 'discogs', art_kind: 'cover', url: 'https://images.example/neural.jpg' };
   const task = { id: 'neural-task', status: 'completed', notification_action_taken: false };
   context.state.coverLookup.tasks = [task];
   Object.assign(context.state.coverLookup.modal, {
     taskId: task.id,
-    album: { key: 'neural-code::neural-code', name: 'Neural Code', cover_path: local.path, cover_selection_origin: 'automatic' },
-    localCovers: [local], activeLocalSelectionPath: local.path,
-    selectedRemoteId: '', pendingLocalPath: '', pendingPastedImageId: '',
+    album: { key: 'neural-code::neural-code', name: 'Neural Code', cover_ref: local.candidate_cover_ref, cover_selection_origin: 'automatic' },
+    localCovers: [local], activeLocalSelectionRef: local.candidate_cover_ref,
+    selectedRemoteId: '', pendingLocalRef: '', pendingPastedImageId: '',
   });
   const source = { generation: 'neural-search', status: 'completed', revision: 1, bestCandidateId: remote.id, candidates: [remote] };
 
   context.applyCoverLookupCandidateSource(source);
 
   assert.equal(context.state.coverLookup.modal.selectedRemoteId, '');
-  assert.equal(context.state.coverLookup.modal.activeLocalSelectionPath, local.path);
+  assert.equal(context.state.coverLookup.modal.activeLocalSelectionRef, local.candidate_cover_ref);
   assert.equal(context.state.coverLookup.modal.suggestedRemoteId, remote.id);
   const suggested = context.buildCoverLookupCard(remote, 'remote');
   assert.match(suggested, /\bis-suggested\b/);
@@ -357,7 +357,7 @@ require('node:test')('Neural Code keeps its automatic local cover selected while
   assert.equal(context.state.coverLookup.modal.suggestedRemoteId, '');
   assert.equal(context.state.coverLookup.modal.selectedRemoteId, '');
   assert.doesNotMatch(context.buildCoverLookupCard(remote, 'remote'), /\bis-suggested\b|\bis-active\b|cover-lookup-art-check/);
-  assert.equal(context.state.coverLookup.modal.activeLocalSelectionPath, local.path);
+  assert.equal(context.state.coverLookup.modal.activeLocalSelectionRef, local.candidate_cover_ref);
   context.syncCoverLookupSelectionUi();
   assert.equal(classes.has('is-suggested'), false);
   assert.equal(classes.has('is-active'), false);
@@ -367,10 +367,10 @@ require('node:test')('INT-028: a suggestion must be sharper than the current cov
   const { context } = createDrawerHarness();
   const task = { id: 'sharp-task', status: 'completed', notification_action_taken: false };
   context.state.coverLookup.tasks = [task];
-  const local = { path: 'C:/Fixture/cover.jpg', is_active: true, width: 1000, height: 1000 };
+  const local = { candidate_cover_ref: 'C:/Fixture/cover.jpg', is_active: true, width: 1000, height: 1000 };
   Object.assign(context.state.coverLookup.modal, {
-    taskId: task.id, album: { key: 'a', cover_path: local.path }, localCovers: [local],
-    selectedRemoteId: '', pendingLocalPath: '', pendingPastedImageId: '',
+    taskId: task.id, album: { key: 'a', cover_ref: local.candidate_cover_ref }, localCovers: [local],
+    selectedRemoteId: '', pendingLocalRef: '', pendingPastedImageId: '',
   });
   const apply = (width) => context.applyCoverLookupCandidateSource({
     generation: `g-${width}`, status: 'completed', bestCandidateId: 'remote',
@@ -388,7 +388,7 @@ require('node:test')('a user-owned local cover keeps its selection, and without 
   const { context } = createDrawerHarness();
   Object.assign(context.state.coverLookup.modal, {
     album: { cover_selection_origin: 'user' },
-    localCovers: [{ path: 'C:/Fixture/user-cover.jpg', is_active: true }],
+    localCovers: [{ candidate_cover_ref: 'C:/Fixture/user-cover.jpg', is_active: true }],
     selectedRemoteId: '',
   });
   context.applyCoverLookupCandidateSource({
@@ -1048,23 +1048,23 @@ require('node:test')('cover updates preserve unrelated pathless notification art
     key: 'altin-gun::garip::2026',
     album_artist: 'Altın Gün',
     name: 'Garip',
-    cover_path: 'C:/music/Altin Gun/Garip/cover.jpg',
+    cover_ref: 'C:/music/Altin Gun/Garip/cover.jpg',
   };
   const secondUnrelatedAlbum = {
     key: 'susanne-sundfor::revelations::2026',
     album_artist: 'Susanne Sundfør',
     name: 'Revelations of Divine Love',
-    cover_path: 'C:/music/Susanne Sundfor/Revelations/cover.jpg',
+    cover_ref: 'C:/music/Susanne Sundfor/Revelations/cover.jpg',
   };
   const updatedSelectedAlbum = {
     ...selectedAlbum,
-    cover_path: 'C:/music/Black Obelisk/Angels/cover.jpg',
+    cover_ref: 'C:/music/Black Obelisk/Angels/cover.jpg',
   };
   const conflictingLegacyIdAlbum = {
     album_id: 999,
     id: selectedAlbum.id,
     key: 'unrelated::album::2026',
-    cover_path: 'C:/music/Unrelated/cover.jpg',
+    cover_ref: 'C:/music/Unrelated/cover.jpg',
   };
   const context = loadHelper({ persistCoverLookupNotificationTasks: () => {} });
   context.state.coverLookup.modal = { album: selectedAlbum };
@@ -1234,7 +1234,7 @@ require('node:test')('mobile notification scrolling defers virtual-window rerend
     getBoundingClientRect: () => ({ top: 100, bottom: 196 }),
   }];
   let renderCount = 0;
-  context.renderCoverLookupDrawer = () => { renderCount += 1; };
+  context.renderCoverLookupDrawerScrollWindow = () => { renderCount += 1; };
 
   const anchor = context.captureCoverLookupDrawerScrollAnchor(bodyElement);
   assert.equal(anchor.taskId, 'task-40');
@@ -1277,7 +1277,7 @@ require('node:test')('mobile notification scrolling immediately replaces an unco
     getBoundingClientRect: () => ({ top: -196, bottom: -100 }),
   }];
   let renderCount = 0;
-  context.renderCoverLookupDrawer = () => { renderCount += 1; };
+  context.renderCoverLookupDrawerScrollWindow = () => { renderCount += 1; };
 
   await context.handleCoverLookupDrawerScroll({ currentTarget: bodyElement });
 
@@ -1625,7 +1625,7 @@ require('node:test')('pasted cover updates its notification before the save resp
       filename: 'third-cover.jpg',
     }],
   };
-  context.markAlbumCoverPathsFresh = () => {};
+  context.markAlbumCoverRefsFresh = () => {};
   context.syncCoverLookupAlbumReferences = () => {};
   context.refreshCoverLookupAlbumArtwork = () => {};
   context.clearOptimisticAlbumCovers = () => {};
@@ -1693,7 +1693,7 @@ require('node:test')('pasted cover applies server-actioned notification when ope
       filename: 'new-cover.jpg',
     }],
   };
-  context.markAlbumCoverPathsFresh = () => {};
+  context.markAlbumCoverRefsFresh = () => {};
   context.syncCoverLookupAlbumReferences = () => {};
   context.refreshCoverLookupAlbumArtwork = () => {};
   context.clearOptimisticAlbumCovers = () => {};
@@ -1717,7 +1717,7 @@ require('node:test')('successful pasted save restores same-album notifications t
     name: 'Последнее испытание',
     tracks: [{ path: 'N:/Last Trial/01.flac' }],
   };
-  const updatedAlbum = { ...album, cover_path: 'N:/Last Trial/cover.jpg' };
+  const updatedAlbum = { ...album, cover_ref: 'N:/Last Trial/cover.jpg' };
   const context = loadHelper({
     buildAlbumDisplayCoverUrl: () => '/cover/current.jpg',
     buildTrackPathSignature: value => (value?.tracks || []).map(track => track.path).sort().join('\n'),
@@ -1750,7 +1750,7 @@ require('node:test')('successful pasted save restores same-album notifications t
     }],
   };
   context.closeCoverLookupModal = () => {};
-  context.markAlbumCoverPathsFresh = () => {};
+  context.markAlbumCoverRefsFresh = () => {};
   context.syncCoverLookupAlbumReferences = () => {};
   context.refreshCoverLookupAlbumArtwork = () => {};
   context.clearOptimisticAlbumCovers = () => {};
@@ -3355,8 +3355,8 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
   Object.assign(context.state.coverLookup.modal, {
     album: { name: 'Large album' },
     taskId: 'completed-task',
-    localCovers: [{ path: 'C:/Music/cover.jpg' }],
-    otherArt: [{ path: 'C:/Music/booklet.jpg' }],
+    localCovers: [{ candidate_cover_ref: 'C:/Music/cover.jpg' }],
+    otherArt: [{ candidate_cover_ref: 'C:/Music/booklet.jpg' }],
     possibleMatches: [{ id: 'remote-cover', url: 'https://images.example/large-cover.jpg' }],
     candidateSnapshot: { search_generation: 'completed-task', candidates: [{ id: 'remote-cover' }] },
   });
@@ -3721,39 +3721,39 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
 }
 
 {
-  const activeCoverPath = 'C:/music/Mastodon/Crack The Skye/cover.jpg';
-  const alternateCoverPath = 'C:/music/Mastodon/Crack The Skye/Art/Front.jpg';
+  const activeCoverRef = 'C:/music/Mastodon/Crack The Skye/cover.jpg';
+  const alternateCoverRef = 'C:/music/Mastodon/Crack The Skye/Art/Front.jpg';
   const context = loadHelper({
     document: {
       getElementById: () => ({ hidden: true }),
     },
   });
   context.state.coverLookup.modal = {
-    activeLocalSelectionPath: activeCoverPath,
-    pendingLocalPath: '',
+    activeLocalSelectionRef: activeCoverRef,
+    pendingLocalRef: '',
     pendingPastedImageId: '',
     selectedRemoteId: '',
   };
 
-  context.selectLocalCoverFromLookup(alternateCoverPath);
+  context.selectLocalCoverFromLookup(alternateCoverRef);
 
-  assert.equal(context.state.coverLookup.modal.activeLocalSelectionPath, activeCoverPath);
-  assert.equal(context.state.coverLookup.modal.pendingLocalPath, alternateCoverPath);
+  assert.equal(context.state.coverLookup.modal.activeLocalSelectionRef, activeCoverRef);
+  assert.equal(context.state.coverLookup.modal.pendingLocalRef, alternateCoverRef);
   assert.equal(context.hasPendingLocalCoverSelection(), true);
 }
 
 require('node:test')('clicking the current cover enables Save only when the app applied it automatically', () => {
-  const coverPath = 'C:/music/Mastodon/Crack The Skye/cover.jpg';
+  const coverRef = 'C:/music/Mastodon/Crack The Skye/cover.jpg';
   for (const [origin, expected] of [['automatic', true], ['user', false]]) {
     const context = loadHelper({ document: { getElementById: () => ({ hidden: true }) } });
     context.state.coverLookup.modal = {
-      album: { cover_path: coverPath, cover_selection_origin: origin },
-      activeLocalSelectionPath: coverPath,
-      pendingLocalPath: '',
+      album: { cover_ref: coverRef, cover_selection_origin: origin },
+      activeLocalSelectionRef: coverRef,
+      pendingLocalRef: '',
       pendingPastedImageId: '',
       selectedRemoteId: '',
     };
-    context.selectLocalCoverFromLookup(coverPath);
+    context.selectLocalCoverFromLookup(coverRef);
     assert.equal(context.hasPendingLocalCoverSelection(), expected, origin);
   }
 });
@@ -3761,8 +3761,8 @@ require('node:test')('clicking the current cover enables Save only when the app 
 require('node:test')('remote optimistic selection reuses the selected preview until save completion', () => {
   const album = {
     key: 'artist::album::2001',
-    cover_path: 'C:/music/Remote/original.jpg',
-    tracks: [{ path: 'C:/music/Remote/01.flac', cover_path: 'C:/music/Remote/original.jpg' }],
+    cover_ref: 'C:/music/Remote/original.jpg',
+    tracks: [{ path: 'C:/music/Remote/01.flac', cover_ref: 'C:/music/Remote/original.jpg' }],
   };
   const selectedMatch = {
     id: 'apple-candidate',
@@ -3780,7 +3780,7 @@ require('node:test')('remote optimistic selection reuses the selected preview un
   });
   context.state.coverLookup.optimisticAlbumCovers = {};
   context.state.coverLookup.tasks = [];
-  context.markAlbumCoverPathsFresh = () => {};
+  context.markAlbumCoverRefsFresh = () => {};
   context.syncCoverLookupAlbumReferences = () => {};
   context.refreshCoverLookupAlbumArtwork = (_originalAlbum, updatedAlbums) => {
     refreshedAlbums.push(...updatedAlbums);
@@ -3797,9 +3797,9 @@ require('node:test')('remote optimistic selection reuses the selected preview un
     selectedMatch.thumbnail_url,
     selectedMatch.id,
   );
-  assert.equal(updatedAlbum.cover_path, null);
+  assert.equal(updatedAlbum.cover_ref, null);
   assert.equal(updatedAlbum.remote_cover_url, selectedMatch.url);
-  assert.equal(refreshedAlbums[0].cover_path, null);
+  assert.equal(refreshedAlbums[0].cover_ref, null);
   assert.equal(
     context.state.coverLookup.optimisticAlbumCovers['C:/music/Remote/01.flac'].src,
     expectedPreview,
@@ -3833,7 +3833,7 @@ require('node:test')('remote save publishes the selected preview before server a
     return album;
   };
   context.closeCoverLookupModal = () => {};
-  context.markAlbumCoverPathsFresh = () => {};
+  context.markAlbumCoverRefsFresh = () => {};
   context.syncCoverLookupAlbumReferences = () => {};
   context.refreshCoverLookupAlbumArtwork = () => {};
   context.fetch = () => new Promise((resolve) => { resolveResponse = resolve; });
@@ -3954,7 +3954,7 @@ require('node:test')('remote save closes on click, runs once in the background, 
   };
   context.applyOptimisticRemoteCoverSelection = () => {};
   context.closeCoverLookupModal = () => { closeCount += 1; };
-  context.markAlbumCoverPathsFresh = () => {};
+  context.markAlbumCoverRefsFresh = () => {};
   context.syncCoverLookupAlbumReferences = () => {};
   context.refreshCoverLookupAlbumArtwork = () => {};
   context.fetch = () => {
@@ -4027,12 +4027,12 @@ require('node:test')('remote save closes on click, runs once in the background, 
 require('node:test')('failed or canceled accepted remote save restores owned artwork state', async () => {
   const album = {
     key: 'artist::album::2001',
-    cover_path: 'C:/music/Remote/original.jpg',
-    tracks: [{ path: 'C:/music/Remote/01.flac', cover_path: 'C:/music/Remote/original.jpg' }],
+    cover_ref: 'C:/music/Remote/original.jpg',
+    tracks: [{ path: 'C:/music/Remote/01.flac', cover_ref: 'C:/music/Remote/original.jpg' }],
   };
   const albumSignature = 'C:/music/Remote/01.flac';
   const previousOptimisticCover = {
-    src: '/cover?path=original.jpg&size=480&revision=stable-prior-revision',
+    src: '/cover/original.jpg?size=480&revision=stable-prior-revision',
   };
   let terminalStatus = 'failed';
   const toastCalls = [];
@@ -4061,7 +4061,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
   };
   context.closeCoverLookupModal = () => {};
   context.clearOptimisticAlbumCovers = () => {};
-  context.markAlbumCoverPathsFresh = () => {};
+  context.markAlbumCoverRefsFresh = () => {};
   context.syncCoverLookupAlbumReferences = () => {};
   context.refreshCoverLookupAlbumArtwork = (_album, updatedAlbums) => {
     restoredAlbums.push(updatedAlbums);
@@ -4218,18 +4218,18 @@ require('node:test')('failed or canceled accepted remote save restores owned art
 {
   const buildCoverUrlCalls = [];
   const context = loadHelper({
-    buildCoverUrl: (coverPath, options) => {
+    buildCoverUrl: (coverRef, options) => {
       const revision = options?.revision;
       const size = options?.size;
-      buildCoverUrlCalls.push({ coverPath, revision, size });
-      return `/cover?path=${encodeURIComponent(coverPath)}${size ? `&size=${size}` : ''}&v=${revision || 'session-fallback'}`;
+      buildCoverUrlCalls.push({ coverRef, revision, size });
+      return `/cover/${encodeURIComponent(coverRef)}?${size ? `size=${size}&` : ''}v=${revision || 'session-fallback'}`;
     },
     buildRemoteCoverSourceBadge: () => '',
     escapeHtml: (value) => String(value || ''),
-    getCoverLookupActiveLocalPath: () => '',
+    getCoverLookupActiveLocalRef: () => '',
   });
   const localCover = {
-    path: 'C:/music/Kaipa/cover.jpg',
+    candidate_cover_ref: 'C:/music/Kaipa/cover.jpg',
     filename: 'cover.jpg',
     cover_revision: 'authoritative-cover-revision',
   };
@@ -4238,12 +4238,12 @@ require('node:test')('failed or canceled accepted remote save restores owned art
 
   assert.deepEqual(buildCoverUrlCalls, [
     {
-      coverPath: localCover.path,
+      coverRef: localCover.candidate_cover_ref,
       revision: localCover.cover_revision,
       size: 480,
     },
     {
-      coverPath: localCover.path,
+      coverRef: localCover.candidate_cover_ref,
       revision: localCover.cover_revision,
       size: undefined,
     },
@@ -4251,12 +4251,12 @@ require('node:test')('failed or canceled accepted remote save restores owned art
 
   buildCoverUrlCalls.length = 0;
   const fallbackHtml = context.buildCoverLookupCard(
-    { path: 'C:/music/Kaipa/alternate.jpg', filename: 'alternate.jpg' },
+    { candidate_cover_ref: 'C:/music/Kaipa/alternate.jpg', filename: 'alternate.jpg' },
     'local',
   );
   assert.deepEqual(buildCoverUrlCalls, [
-    { coverPath: 'C:/music/Kaipa/alternate.jpg', revision: undefined, size: 480 },
-    { coverPath: 'C:/music/Kaipa/alternate.jpg', revision: undefined, size: undefined },
+    { coverRef: 'C:/music/Kaipa/alternate.jpg', revision: undefined, size: 480 },
+    { coverRef: 'C:/music/Kaipa/alternate.jpg', revision: undefined, size: undefined },
   ]);
   assert.match(fallbackHtml, /size=480/);
   assert.match(fallbackHtml, /v=session-fallback/);
@@ -4450,22 +4450,22 @@ require('node:test')('failed or canceled accepted remote save restores owned art
 
 ;(async () => {
   const sourcePath = 'C:/music/Kaipa/Art/Front.jpg';
-  const selectedCoverPath = 'C:/music/Kaipa/cover.jpg';
+  const selectedCoverRef = 'C:/music/Kaipa/cover.jpg';
   const album = {
     key: 'kaipa::kaipa::1975',
     album_artist: 'Kaipa',
     name: 'Kaipa',
     year: 1975,
-    cover_path: 'C:/music/Kaipa/Art/back.jpg',
-    cover_preview_url: '/cover?path=C%3A%2Fmusic%2FKaipa%2FArt%2Fback.jpg&size=480&v=old-revision',
-    tracks: [{ path: 'C:/music/Kaipa/01.mp3', cover_path: 'C:/music/Kaipa/Art/back.jpg' }],
+    cover_ref: 'C:/music/Kaipa/Art/back.jpg',
+    cover_preview_url: '/cover/C%3A%2Fmusic%2FKaipa%2FArt%2Fback.jpg?size=480&v=old-revision',
+    tracks: [{ path: 'C:/music/Kaipa/01.mp3', cover_ref: 'C:/music/Kaipa/Art/back.jpg' }],
   };
   const authoritativeAlbum = {
     ...album,
-    cover_path: selectedCoverPath,
-    cover_preview_url: '/cover?path=C%3A%2Fmusic%2FKaipa%2Fcover.jpg&size=480&v=selected-front-revision',
+    cover_ref: selectedCoverRef,
+    cover_preview_url: '/cover/C%3A%2Fmusic%2FKaipa%2Fcover.jpg?size=480&v=selected-front-revision',
     cover_revision: 'selected-front-revision',
-    tracks: [{ path: 'C:/music/Kaipa/01.mp3', cover_path: selectedCoverPath }],
+    tracks: [{ path: 'C:/music/Kaipa/01.mp3', cover_ref: selectedCoverRef }],
   };
   const fetchCalls = [];
   const refreshedAlbums = [];
@@ -4494,10 +4494,10 @@ require('node:test')('failed or canceled accepted remote save restores owned art
     modal: {
       album,
       taskId: 'kaipa-local-cover-task',
-      pendingLocalPath: sourcePath,
+      pendingLocalRef: sourcePath,
       selectedRemoteId: '',
       localCovers: [{
-        path: sourcePath,
+        candidate_cover_ref: sourcePath,
         cover_revision: 'selected-source-revision',
       }],
     },
@@ -4505,7 +4505,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
     optimisticAlbumCovers: {},
   };
   context.closeCoverLookupModal = () => { closeCalls += 1; };
-  context.markAlbumCoverPathsFresh = () => {};
+  context.markAlbumCoverRefsFresh = () => {};
   context.refreshCoverLookupAlbumArtwork = (_originalAlbum, updatedAlbums, options = {}) => {
     refreshedAlbums.push({
       albums: updatedAlbums,
@@ -4515,8 +4515,8 @@ require('node:test')('failed or canceled accepted remote save restores owned art
       )),
     });
   };
-  context.buildCoverUrl = (coverPath, options = {}) => (
-    `/cover?path=${encodeURIComponent(coverPath)}&size=${options.size || ''}&v=${options.revision || ''}`
+  context.buildCoverUrl = (coverRef, options = {}) => (
+    `/cover/${encodeURIComponent(coverRef)}?size=${options.size || ''}&v=${options.revision || ''}`
   );
   context.preloadCoverLookupAlbumImage = async (updatedAlbum) => {
     preloadedAlbums.push({
@@ -4537,7 +4537,7 @@ require('node:test')('failed or canceled accepted remote save restores owned art
       ok: true,
       json: async () => ({
         ok: true,
-        selected_cover_path: selectedCoverPath,
+        selected_cover_ref: selectedCoverRef,
         updated_albums: [authoritativeAlbum],
         updated_album: authoritativeAlbum,
       }),
@@ -4552,15 +4552,15 @@ require('node:test')('failed or canceled accepted remote save restores owned art
 
   assert.equal(fetchCalls.length, 1);
   assert.equal(fetchCalls[0].url, '/utilities/cover-lookup/local-select');
-  assert.equal(context.state.coverLookup.modal.album.cover_path, selectedCoverPath);
+  assert.equal(context.state.coverLookup.modal.album.cover_ref, selectedCoverRef);
   assert.equal(context.state.coverLookup.modal.album.cover_revision, 'selected-front-revision');
   assert.deepEqual(refreshedAlbums.at(-1).albums, [authoritativeAlbum]);
   assert.equal(refreshedAlbums[0].options.updateTrackModal, false);
   assert.deepEqual(
     refreshedAlbums[0].optimisticAlbumCovers['C:/music/Kaipa/01.mp3'],
     {
-      src: '/cover?path=C%3A%2Fmusic%2FKaipa%2FArt%2FFront.jpg&size=480&v=selected-source-revision',
-      coverPath: sourcePath,
+      src: '/cover/C%3A%2Fmusic%2FKaipa%2FArt%2FFront.jpg?size=480&v=selected-source-revision',
+      coverRef: sourcePath,
     },
   );
   assert.equal(preloadedAlbums.length, 1);
@@ -4568,13 +4568,13 @@ require('node:test')('failed or canceled accepted remote save restores owned art
   assert.deepEqual(
     preloadedAlbums[0].optimisticAlbumCovers['C:/music/Kaipa/01.mp3'],
     {
-      src: '/cover?path=C%3A%2Fmusic%2FKaipa%2FArt%2FFront.jpg&size=480&v=selected-source-revision',
-      coverPath: sourcePath,
+      src: '/cover/C%3A%2Fmusic%2FKaipa%2FArt%2FFront.jpg?size=480&v=selected-source-revision',
+      coverRef: sourcePath,
     },
   );
   assert.deepEqual(JSON.parse(fetchCalls[0].options.body), {
     album,
-    source_path: sourcePath,
+    source_cover_ref: sourcePath,
     task_id: 'kaipa-local-cover-task',
   });
 })().catch((error) => {
@@ -5186,9 +5186,9 @@ for (const status of ['pending', 'running']) {
     album_artist: 'Kaipa',
     name: 'Kaipa',
     year: 1975,
-    cover_path: 'C:/music/Kaipa/cover.jpg',
+    cover_ref: 'C:/music/Kaipa/cover.jpg',
     cover_revision: 'original-revision',
-    tracks: [{ path: 'C:/music/Kaipa/01.mp3', cover_path: 'C:/music/Kaipa/cover.jpg' }],
+    tracks: [{ path: 'C:/music/Kaipa/01.mp3', cover_ref: 'C:/music/Kaipa/cover.jpg' }],
   };
   const refreshedAlbums = [];
   const context = loadHelper({
@@ -5211,15 +5211,15 @@ for (const status of ['pending', 'running']) {
     modal: {
       album,
       taskId: '',
-      pendingLocalPath: sourcePath,
+      pendingLocalRef: sourcePath,
       selectedRemoteId: '',
-      localCovers: [{ path: sourcePath }],
+      localCovers: [{ candidate_cover_ref: sourcePath }],
     },
     tasks: [],
     optimisticAlbumCovers: {},
   };
   context.closeCoverLookupModal = () => {};
-  context.markAlbumCoverPathsFresh = () => {};
+  context.markAlbumCoverRefsFresh = () => {};
   context.syncCoverLookupAlbumReferences = () => {};
   context.refreshCoverLookupAlbumArtwork = (_originalAlbum, updatedAlbums) => {
     refreshedAlbums.push(updatedAlbums);
@@ -5227,8 +5227,8 @@ for (const status of ['pending', 'running']) {
   const previousGallery = {
     ok: true,
     local_inventory_complete: true,
-    selected_source_path: album.cover_path,
-    local_covers: [{ path: sourcePath, is_active: false }, { path: album.cover_path, is_active: true }],
+    selected_source_cover_ref: album.cover_ref,
+    local_covers: [{ candidate_cover_ref: sourcePath, is_active: false }, { candidate_cover_ref: album.cover_ref, is_active: true }],
     other_art: [],
   };
   context.cacheCoverLookupGalleryPayload(album, previousGallery);
@@ -5397,7 +5397,7 @@ for (const status of ['pending', 'running']) {
   });
   context.state.coverLookup.modal = {
     selectedRemoteId: '',
-    pendingLocalPath: '',
+    pendingLocalRef: '',
     pendingPastedImageId: '',
     possibleMatches: [],
   };
@@ -5405,7 +5405,7 @@ for (const status of ['pending', 'running']) {
   context.applyCoverLookupGalleryPayload({
     remote_cover: null,
     local_covers: [{
-      path: 'C:/music/Artist/Album/cover.jpg',
+      candidate_cover_ref: 'C:/music/Artist/Album/cover.jpg',
       is_active: true,
     }],
     other_art: [],
@@ -5428,32 +5428,33 @@ for (const status of ['pending', 'running']) {
     '',
     'a downloaded candidate must reopen with canonical local cover active',
   );
-  assert.equal(context.getCoverLookupActiveLocalPath(), 'C:/music/Artist/Album/cover.jpg');
+  assert.equal(context.getCoverLookupActiveLocalRef(), 'C:/music/Artist/Album/cover.jpg');
 }
 
 {
   // UI-14 (owner, 11-09): the second artbox's Cover Look Up opened with the album cover selected. Only the second
   // artbox's own saved art starts selected.
-  const second = { slot: 1, cover_path: 'C:/music/Artist/Album/Covers/Back.jpg' };
+  const second = { slot: 1, cover_ref: 'C:/music/Artist/Album/Covers/Back.jpg' };
   const context = loadHelper({
     getAlbumAdditionalArtwork: (album) => (album?.additional_artworks || []).find((artwork) => artwork.slot === 1) || null,
     sameLocalPath: (left, right) => String(left || '').replaceAll('\\', '/').toLowerCase() === String(right || '').replaceAll('\\', '/').toLowerCase(),
   });
   context.state.coverLookup.modal = {
     artboxSlot: 1,
-    album: { key: 'a', cover_path: 'C:/music/Artist/Album/cover.jpg', additional_artworks: [] },
-    localCovers: [{ path: 'C:/music/Artist/Album/cover.jpg', is_active: true }],
+    album: { key: 'a', cover_ref: 'C:/music/Artist/Album/cover.jpg', additional_artworks: [] },
+    localCovers: [{ candidate_cover_ref: 'C:/music/Artist/Album/cover.jpg', is_active: true }],
   };
-  assert.equal(context.getCoverLookupActiveLocalPath(), '', 'nothing selected in a new second artbox');
+  assert.equal(context.getCoverLookupActiveLocalRef(), '', 'nothing selected in a new second artbox');
   context.state.coverLookup.modal.album.additional_artworks = [second];
-  assert.equal(context.getCoverLookupActiveLocalPath(), second.cover_path);
+  assert.equal(context.getCoverLookupActiveLocalRef(), second.cover_ref);
   assert.equal(
-    context.coverLookupLocalPathMatches('c:\\MUSIC\\artist\\album\\covers\\back.jpg', second.cover_path),
+    context.coverLookupLocalPathMatches(second.cover_ref, second.cover_ref)
+      && !context.coverLookupLocalPathMatches(second.cover_ref.toLowerCase(), second.cover_ref),
     true,
-    'Windows path casing cannot hide the selected second-artbox frame',
+    'cards are matched by their exact reference',
   );
   context.state.coverLookup.modal.artboxCleared = true;
-  assert.equal(context.getCoverLookupActiveLocalPath(), '');
+  assert.equal(context.getCoverLookupActiveLocalRef(), '');
 }
 
 {
@@ -5465,7 +5466,7 @@ for (const status of ['pending', 'running']) {
     statusText: '',
     statusTone: 'neutral',
     selectedRemoteId: '',
-    pendingLocalPath: '',
+    pendingLocalRef: '',
     pendingPastedImageId: '',
     possibleMatches: [],
   };
@@ -5498,7 +5499,7 @@ for (const status of ['pending', 'running']) {
   });
   context.state.coverLookup.modal = {
     selectedRemoteId: '',
-    pendingLocalPath: '',
+    pendingLocalRef: '',
     pendingPastedImageId: '',
     possibleMatches: [],
   };
@@ -5542,7 +5543,7 @@ for (const status of ['pending', 'running']) {
   });
   context.state.coverLookup.modal = {
     selectedRemoteId: '',
-    pendingLocalPath: '',
+    pendingLocalRef: '',
     pendingPastedImageId: '',
     possibleMatches: [],
   };
@@ -5550,7 +5551,7 @@ for (const status of ['pending', 'running']) {
   context.applyCoverLookupGalleryPayload({
     remote_cover: null,
     local_covers: [{
-      path: 'C:/music/Flaming Row/The Pure Shine/cover.jpg',
+      candidate_cover_ref: 'C:/music/Flaming Row/The Pure Shine/cover.jpg',
       width: 4518,
       height: 4518,
       is_active: true,
@@ -5579,7 +5580,7 @@ for (const status of ['pending', 'running']) {
     'a progressive provider candidate must not replace the active local cover selection',
   );
   assert.equal(
-    context.getCoverLookupActiveLocalPath(),
+    context.getCoverLookupActiveLocalRef(),
     'C:/music/Flaming Row/The Pure Shine/cover.jpg',
   );
 
@@ -5611,7 +5612,7 @@ for (const status of ['pending', 'running']) {
     'the starting local choice must survive refreshed linked metadata for its search generation',
   );
   assert.equal(
-    context.getCoverLookupActiveLocalPath(),
+    context.getCoverLookupActiveLocalRef(),
     'C:/music/Flaming Row/The Pure Shine/cover.jpg',
     'the starting local card must remain visibly active for its search generation',
   );
@@ -5628,19 +5629,19 @@ for (const status of ['pending', 'running']) {
       album_artist: 'Neal Morse',
       name: 'One',
       year: 2004,
-      cover_path: activeLocalPath,
+      cover_ref: activeLocalPath,
     },
     selectedRemoteId: '',
-    pendingLocalPath: '',
+    pendingLocalRef: '',
     pendingPastedImageId: '',
-    activeLocalSelectionPath: '',
+    activeLocalSelectionRef: '',
     possibleMatches: [],
   };
 
   context.applyCoverLookupGalleryPayload({
     remote_cover: null,
     local_covers: [{
-      path: activeLocalPath,
+      candidate_cover_ref: activeLocalPath,
       width: 2400,
       height: 2400,
       is_active: false,
@@ -5664,7 +5665,7 @@ for (const status of ['pending', 'running']) {
   });
 
   assert.equal(
-    context.getCoverLookupActiveLocalPath(),
+    context.getCoverLookupActiveLocalRef(),
     activeLocalPath,
     'the album path identifies the active local cover when gallery metadata does not',
   );
@@ -5695,7 +5696,7 @@ for (const status of ['pending', 'running']) {
       .filter(Boolean)
       .sort()
       .join('|'),
-    markAlbumCoverPathsFresh: () => {},
+    markAlbumCoverRefsFresh: () => {},
     persistCoverLookupNotificationTasks: () => {},
   });
   context.state.coverLookup = {
@@ -6519,7 +6520,7 @@ for (const status of ['pending', 'running']) {
 {
   const context = loadHelper({
     escapeHtml: (value) => String(value || ''),
-    getCoverLookupActiveLocalPath: () => '',
+    getCoverLookupActiveLocalRef: () => '',
   });
   const savedCover = { id: 'saved-cover', url: 'https://covers.example/saved.jpg' };
   const stagedCover = { id: 'staged-cover', filename: 'staged.png', object_url: 'blob:staged-cover' };
@@ -6929,12 +6930,12 @@ require('node:test')('optimistic cover changes keep cached LOCAL cards for immed
     buildCoverUrl: () => '/cover/local',
   });
   context.state.coverLookup.optimisticAlbumCovers = {};
-  context.state.coverLookup.modal.localCovers = [{ path: 'N:/Fleet Foxes/front.jpg' }];
+  context.state.coverLookup.modal.localCovers = [{ candidate_cover_ref: 'N:/Fleet Foxes/front.jpg' }];
   context.cacheCoverLookupGalleryPayload(album, {
     ok: true,
     local_inventory_complete: true,
     local_covers: context.state.coverLookup.modal.localCovers,
-    other_art: [{ path: 'N:/Fleet Foxes/back.jpg' }],
+    other_art: [{ candidate_cover_ref: 'N:/Fleet Foxes/back.jpg' }],
   });
 
   context.applyOptimisticLocalCoverSelection(album, 'N:/Fleet Foxes/front.jpg');
@@ -6959,13 +6960,13 @@ require('node:test')('local cover selection updates the cached active card befor
   });
   context.state.coverLookup.optimisticAlbumCovers = {};
   context.state.coverLookup.modal.localCovers = [
-    { path: 'N:/Fleet Foxes/old.jpg', is_active: true },
-    { path: 'N:/Fleet Foxes/new.jpg', is_active: false },
+    { candidate_cover_ref: 'N:/Fleet Foxes/old.jpg', is_active: true },
+    { candidate_cover_ref: 'N:/Fleet Foxes/new.jpg', is_active: false },
   ];
   context.cacheCoverLookupGalleryPayload(album, {
     ok: true,
     local_inventory_complete: true,
-    selected_source_path: 'N:/Fleet Foxes/old.jpg',
+    selected_source_cover_ref: 'N:/Fleet Foxes/old.jpg',
     remote_cover: { url: 'https://images.example/old-remote.jpg' },
     local_covers: context.state.coverLookup.modal.localCovers,
     other_art: [],
@@ -6974,9 +6975,9 @@ require('node:test')('local cover selection updates the cached active card befor
   context.applyOptimisticLocalCoverSelection(album, 'N:/Fleet Foxes/new.jpg');
 
   const cached = context.cachedCoverLookupGalleryPayload(album);
-  assert.equal(cached.selected_source_path, 'N:/Fleet Foxes/new.jpg');
+  assert.equal(cached.selected_source_cover_ref, 'N:/Fleet Foxes/new.jpg');
   assert.equal(cached.remote_cover, null);
-  assert.deepEqual(Array.from(cached.local_covers, item => [item.path, item.is_active]), [
+  assert.deepEqual(Array.from(cached.local_covers, item => [item.candidate_cover_ref, item.is_active]), [
     ['N:/Fleet Foxes/new.jpg', true],
     ['N:/Fleet Foxes/old.jpg', false],
   ]);
@@ -6998,7 +6999,7 @@ require('node:test')('successful pasted cover seeds the cached LOCAL card before
     width: 600,
     height: 543,
   };
-  const updatedAlbum = { ...album, cover_path: 'N:/Fleet Foxes/cover.jpg', cover_revision: 'new-revision' };
+  const updatedAlbum = { ...album, cover_ref: 'N:/Fleet Foxes/cover.jpg', cover_revision: 'new-revision' };
   const context = loadHelper({
     deepCloneJson: value => JSON.parse(JSON.stringify(value)),
     getAlbumPathSignature: () => 'fleet-foxes',
@@ -7008,7 +7009,7 @@ require('node:test')('successful pasted cover seeds the cached LOCAL card before
       ok: true,
       json: async () => ({
         ok: true,
-        selected_cover_path: updatedAlbum.cover_path,
+        selected_cover_ref: updatedAlbum.cover_ref,
         cover_revision: updatedAlbum.cover_revision,
         updated_album: updatedAlbum,
       }),
@@ -7019,12 +7020,12 @@ require('node:test')('successful pasted cover seeds the cached LOCAL card before
   context.cacheCoverLookupGalleryPayload(album, {
     ok: true,
     local_inventory_complete: true,
-    selected_source_path: 'N:/Fleet Foxes/old.jpg',
-    local_covers: [{ path: 'N:/Fleet Foxes/old.jpg', is_active: true }],
+    selected_source_cover_ref: 'N:/Fleet Foxes/old.jpg',
+    local_covers: [{ candidate_cover_ref: 'N:/Fleet Foxes/old.jpg', is_active: true }],
     other_art: [],
   });
   context.closeCoverLookupModal = () => {};
-  context.markAlbumCoverPathsFresh = () => {};
+  context.markAlbumCoverRefsFresh = () => {};
   context.syncCoverLookupAlbumReferences = () => {};
   context.refreshCoverLookupAlbumArtwork = () => {};
   context.clearOptimisticAlbumCovers = () => {};
@@ -7033,10 +7034,10 @@ require('node:test')('successful pasted cover seeds the cached LOCAL card before
   await context.savePastedCoverFromLookup(pasted.id);
 
   const cached = context.cachedCoverLookupGalleryPayload(album);
-  assert.equal(cached.selected_source_path, updatedAlbum.cover_path);
+  assert.equal(cached.selected_source_cover_ref, updatedAlbum.cover_ref);
   assert.deepEqual(
-    [cached.local_covers[0].path, cached.local_covers[0].preview_url, cached.local_covers[0].resolution],
-    [updatedAlbum.cover_path, pasted.data_url, '600x543'],
+    [cached.local_covers[0].candidate_cover_ref, cached.local_covers[0].preview_url, cached.local_covers[0].resolution],
+    [updatedAlbum.cover_ref, pasted.data_url, '600x543'],
   );
   assert.equal(cached.local_covers[0].is_active, true);
   assert.equal(cached.local_covers[1].is_active, false);
@@ -7049,14 +7050,14 @@ require('node:test')('successful pasted cover seeds the cached LOCAL card before
   context.applyCoverLookupGalleryPayload({
     ok: true,
     local_inventory_complete: true,
-    selected_source_path: 'N:/Fleet Foxes/old.jpg',
-    local_covers: [{ path: 'N:/Fleet Foxes/old.jpg', is_active: true }],
+    selected_source_cover_ref: 'N:/Fleet Foxes/old.jpg',
+    local_covers: [{ candidate_cover_ref: 'N:/Fleet Foxes/old.jpg', is_active: true }],
     other_art: [],
   });
 
   assert.equal(
-    context.state.coverLookup.modal.localCovers[0].path,
-    updatedAlbum.cover_path,
+    context.state.coverLookup.modal.localCovers[0].candidate_cover_ref,
+    updatedAlbum.cover_ref,
     'the first lagging inventory read after reopen must retain the newly saved image',
   );
   assert.equal(context.state.coverLookup.modal.localCovers[0].is_active, true);
@@ -7065,10 +7066,10 @@ require('node:test')('successful pasted cover seeds the cached LOCAL card before
     ok: true,
     local_inventory_complete: false,
     local_inventory_available: true,
-    active_cover_path: updatedAlbum.cover_path,
-    selected_source_path: updatedAlbum.cover_path,
+    active_cover_ref: updatedAlbum.cover_ref,
+    selected_source_cover_ref: updatedAlbum.cover_ref,
     local_covers: [{
-      path: updatedAlbum.cover_path,
+      candidate_cover_ref: updatedAlbum.cover_ref,
       filename: 'cover.jpg',
       resolution: 'Unknown',
       width: 0,
@@ -7079,7 +7080,7 @@ require('node:test')('successful pasted cover seeds the cached LOCAL card before
   });
 
   const delayed = context.state.coverLookup.modal.localCovers.filter(
-    cover => cover.path === updatedAlbum.cover_path,
+    cover => cover.candidate_cover_ref === updatedAlbum.cover_ref,
   );
   assert.equal(delayed.length, 1, 'the inventory echo must reconcile into the optimistic card');
   assert.equal(delayed[0].filename, 'cover.jpg');
@@ -7133,8 +7134,8 @@ require('node:test')('reopening during a pasted save keeps local selection and d
           ok: true,
           local_inventory_complete: true,
           local_covers: [
-            { path: activePath, is_active: true },
-            { path: alternatePath, is_active: false },
+            { candidate_cover_ref: activePath, is_active: true },
+            { candidate_cover_ref: alternatePath, is_active: false },
           ],
           other_art: [],
         }),
@@ -7147,15 +7148,15 @@ require('node:test')('reopening during a pasted save keeps local selection and d
   context.cacheCoverLookupGalleryPayload(album, {
     ok: true,
     local_inventory_complete: true,
-    selected_source_path: activePath,
+    selected_source_cover_ref: activePath,
     local_covers: [
-      { path: activePath, is_active: true },
-      { path: alternatePath, is_active: false },
+      { candidate_cover_ref: activePath, is_active: true },
+      { candidate_cover_ref: alternatePath, is_active: false },
     ],
     other_art: [],
   });
   context.renderCoverLookupModal = () => {};
-  context.markAlbumCoverPathsFresh = () => {};
+  context.markAlbumCoverRefsFresh = () => {};
   context.syncCoverLookupAlbumReferences = () => {};
   context.refreshCoverLookupAlbumArtwork = () => {};
   context.clearOptimisticAlbumCovers = () => {};
@@ -7170,11 +7171,11 @@ require('node:test')('reopening during a pasted save keeps local selection and d
   context.state.coverLookup.modal = {
     album,
     localCovers: [
-      { path: activePath, is_active: true },
-      { path: alternatePath, is_active: false },
+      { candidate_cover_ref: activePath, is_active: true },
+      { candidate_cover_ref: alternatePath, is_active: false },
     ],
-    activeLocalSelectionPath: activePath,
-    pendingLocalPath: '',
+    activeLocalSelectionRef: activePath,
+    pendingLocalRef: '',
     pendingPastedImageId: '',
     selectedRemoteId: '',
   };
@@ -7188,8 +7189,8 @@ require('node:test')('reopening during a pasted save keeps local selection and d
     ok: true,
     json: async () => ({
       ok: true,
-      selected_cover_path: activePath,
-      updated_album: { ...album, cover_path: activePath },
+      selected_cover_ref: activePath,
+      updated_album: { ...album, cover_ref: activePath },
     }),
   });
   await saving;
@@ -7203,12 +7204,12 @@ require('node:test')('pasted save renames the replaced cover card to its backup 
     filename: 'pasted.png', width: 300, height: 300,
   };
   const png = {
-    path: `${root}/cover.png`, filename: 'cover.png', relative_path: 'cover.png',
+    candidate_cover_ref: `${root}/cover.png`, filename: 'cover.png', relative_path: 'cover.png',
     sort_relative_path: 'cover.png', width: 1000, height: 1000, area: 1000000, depth: 1,
     is_squareish: true, is_active: false, sha256: 'png',
   };
   const previousCover = {
-    path: `${root}/cover.jpg`, filename: 'cover.jpg', relative_path: 'cover.jpg',
+    candidate_cover_ref: `${root}/cover.jpg`, filename: 'cover.jpg', relative_path: 'cover.jpg',
     sort_relative_path: 'cover.jpg', width: 600, height: 600, area: 360000, depth: 1,
     is_squareish: true, is_active: true, sha256: 'old', cover_revision: 'old',
   };
@@ -7221,13 +7222,13 @@ require('node:test')('pasted save renames the replaced cover card to its backup 
       ok: true,
       json: async () => ({
         ok: true,
-        selected_cover_path: previousCover.path,
+        selected_cover_ref: previousCover.candidate_cover_ref,
         cover_revision: 'new',
         replaced_cover_backup: {
-          path: `${root}/cover-existing-1.jpg`, filename: 'cover-existing-1.jpg',
+          candidate_cover_ref: `${root}/cover-existing-1.jpg`, filename: 'cover-existing-1.jpg',
           relative_path: 'cover-existing-1.jpg', sort_relative_path: 'cover-existing-1.jpg',
         },
-        updated_album: { ...album, cover_path: previousCover.path, cover_revision: 'new' },
+        updated_album: { ...album, cover_ref: previousCover.candidate_cover_ref, cover_revision: 'new' },
       }),
     }),
     showToast: () => {},
@@ -7236,11 +7237,11 @@ require('node:test')('pasted save renames the replaced cover card to its backup 
   context.state.coverLookup.optimisticAlbumCovers = {};
   context.state.coverLookup.modal = { album, taskId: '', pastedImages: [pasted] };
   context.cacheCoverLookupGalleryPayload(album, {
-    ok: true, local_inventory_complete: true, selected_source_path: previousCover.path,
-    active_cover_path: previousCover.path, local_covers: [png, previousCover], other_art: [],
+    ok: true, local_inventory_complete: true, selected_source_cover_ref: previousCover.candidate_cover_ref,
+    active_cover_ref: previousCover.candidate_cover_ref, local_covers: [png, previousCover], other_art: [],
   });
   context.renderCoverLookupModal = () => {};
-  context.markAlbumCoverPathsFresh = () => {};
+  context.markAlbumCoverRefsFresh = () => {};
   context.syncCoverLookupAlbumReferences = () => {};
   context.refreshCoverLookupAlbumArtwork = () => {};
   context.clearOptimisticAlbumCovers = () => {};
@@ -7249,8 +7250,8 @@ require('node:test')('pasted save renames the replaced cover card to its backup 
   await context.savePastedCoverFromLookup(pasted.id);
 
   const reopened = context.cachedCoverLookupGalleryPayload(album).local_covers;
-  const expectedPaths = [png.path, `${root}/cover-existing-1.jpg`, previousCover.path];
-  assert.deepEqual(Array.from(reopened, cover => cover.path), expectedPaths);
+  const expectedPaths = [png.candidate_cover_ref, `${root}/cover-existing-1.jpg`, previousCover.candidate_cover_ref];
+  assert.deepEqual(Array.from(reopened, cover => cover.candidate_cover_ref), expectedPaths);
   assert.deepEqual(Array.from(reopened, cover => cover.is_active), [false, false, true]);
   const backupCard = reopened[1];
   assert.equal(backupCard.filename, 'cover-existing-1.jpg');
@@ -7259,18 +7260,18 @@ require('node:test')('pasted save renames the replaced cover card to its backup 
   assert.equal(backupCard.preview_url, undefined);
 
   const authoritative = context.reconcileCoverLookupLocalInventory(album, {
-    ok: true, local_inventory_complete: true, selected_source_path: previousCover.path,
-    active_cover_path: previousCover.path,
+    ok: true, local_inventory_complete: true, selected_source_cover_ref: previousCover.candidate_cover_ref,
+    active_cover_ref: previousCover.candidate_cover_ref,
     local_covers: [
       png,
-      { ...previousCover, path: `${root}/cover-existing-1.jpg`, filename: 'cover-existing-1.jpg',
+      { ...previousCover, candidate_cover_ref: `${root}/cover-existing-1.jpg`, filename: 'cover-existing-1.jpg',
         relative_path: 'cover-existing-1.jpg', sort_relative_path: 'cover-existing-1.jpg',
         is_active: false, cover_revision: undefined },
       { ...previousCover, width: 300, height: 300, area: 90000, sha256: 'new', cover_revision: 'new' },
     ],
     other_art: [],
   }, true);
-  assert.deepEqual(Array.from(authoritative.local_covers, cover => cover.path), expectedPaths,
+  assert.deepEqual(Array.from(authoritative.local_covers, cover => cover.candidate_cover_ref), expectedPaths,
     'authoritative inventory must not move or insert any card');
   assert.equal(authoritative.local_covers[2].preview_url, '',
     'once confirmed, the saved card shows the server-served revision, not the pasted data URL');
@@ -7281,8 +7282,8 @@ require('node:test')('a pending pasted save already shows the final file names a
   const album = { key: 'pending-paste-names', tracks: [{ path: 'N:/Band/Album/01.flac' }] };
   const root = 'N:/Band/Album';
   const pasted = { id: 'p1', data_url: 'data:image/png;base64,new', mime_type: 'image/png', filename: 'image.png', width: 547, height: 365 };
-  const png = { path: `${root}/cover.png`, filename: 'cover.png', sort_relative_path: 'cover.png', width: 1000, height: 1000, area: 1000000, depth: 1, is_squareish: true, is_active: false, sha256: 'png' };
-  const oldCover = { path: `${root}/cover.jpg`, filename: 'cover.jpg', sort_relative_path: 'cover.jpg', width: 600, height: 600, area: 360000, depth: 1, is_squareish: true, is_active: true, sha256: 'old' };
+  const png = { candidate_cover_ref: `${root}/cover.png`, filename: 'cover.png', sort_relative_path: 'cover.png', width: 1000, height: 1000, area: 1000000, depth: 1, is_squareish: true, is_active: false, sha256: 'png' };
+  const oldCover = { candidate_cover_ref: `${root}/cover.jpg`, filename: 'cover.jpg', sort_relative_path: 'cover.jpg', width: 600, height: 600, area: 360000, depth: 1, is_squareish: true, is_active: true, sha256: 'old' };
   let respond;
   const context = loadHelper({
     deepCloneJson: value => JSON.parse(JSON.stringify(value)),
@@ -7296,16 +7297,16 @@ require('node:test')('a pending pasted save already shows the final file names a
   context.state.coverLookup.optimisticAlbumCovers = {};
   context.state.coverLookup.modal = { album, taskId: '', pastedImages: [pasted] };
   context.cacheCoverLookupGalleryPayload(album, {
-    ok: true, local_inventory_complete: true, album_root: root, cover_backup_name: 'cover-existing-1.jpg',
-    selected_source_path: oldCover.path, active_cover_path: oldCover.path, local_covers: [png, oldCover], other_art: [],
+    ok: true, local_inventory_complete: true, cover_jpg_ref: `${root}/cover.jpg`, cover_backup_name: 'cover-existing-1.jpg', cover_backup_ref: `${root}/cover-existing-1.jpg`,
+    selected_source_cover_ref: oldCover.candidate_cover_ref, active_cover_ref: oldCover.candidate_cover_ref, local_covers: [png, oldCover], other_art: [],
   });
-  Object.assign(context, { renderCoverLookupModal() {}, markAlbumCoverPathsFresh() {}, syncCoverLookupAlbumReferences() {},
+  Object.assign(context, { renderCoverLookupModal() {}, markAlbumCoverRefsFresh() {}, syncCoverLookupAlbumReferences() {},
     refreshCoverLookupAlbumArtwork() {}, clearOptimisticAlbumCovers() {}, renderCoverLookupDrawer() {}, closeCoverLookupModal() {} });
 
   const saving = context.savePastedCoverFromLookup(pasted.id);
   await Promise.resolve();
   const snapshot = () => Array.from(context.cachedCoverLookupGalleryPayload(album).local_covers,
-    cover => [cover.filename, cover.path, Boolean(cover.is_active)]);
+    cover => [cover.filename, cover.candidate_cover_ref, Boolean(cover.is_active)]);
   const expected = [
     ['cover.png', `${root}/cover.png`, false],
     ['cover-existing-1.jpg', `${root}/cover-existing-1.jpg`, false],
@@ -7313,9 +7314,9 @@ require('node:test')('a pending pasted save already shows the final file names a
   ];
   assert.deepEqual(snapshot(), expected, 'before the save answers, every card already has its final name and place');
   respond({ ok: true, json: async () => ({
-    ok: true, selected_cover_path: `${root}/cover.jpg`, cover_revision: 'new',
-    replaced_cover_backup: { path: `${root}/cover-existing-1.jpg`, filename: 'cover-existing-1.jpg', relative_path: 'cover-existing-1.jpg', sort_relative_path: 'cover-existing-1.jpg' },
-    updated_album: { ...album, cover_path: `${root}/cover.jpg`, cover_revision: 'new' },
+    ok: true, selected_cover_ref: `${root}/cover.jpg`, cover_revision: 'new',
+    replaced_cover_backup: { candidate_cover_ref: `${root}/cover-existing-1.jpg`, filename: 'cover-existing-1.jpg', relative_path: 'cover-existing-1.jpg', sort_relative_path: 'cover-existing-1.jpg' },
+    updated_album: { ...album, cover_ref: `${root}/cover.jpg`, cover_revision: 'new' },
   }) });
   await saving;
   assert.deepEqual(snapshot(), expected, 'the landed save changes nothing visible');
@@ -7324,7 +7325,7 @@ require('node:test')('a pending pasted save already shows the final file names a
 require('node:test')('a stale inventory after a pasted save never hides, moves or doubles a card', async () => {
   const album = { key: 'replay', tracks: [{ path: 'N:/A/01.flac' }] };
   const root = 'N:/A';
-  const card = (name, w, h, sha, extra = {}) => ({ path: `${root}/${name}`, filename: name, relative_path: name, sort_relative_path: name, width: w, height: h, area: w * h, depth: 1, is_squareish: Math.abs(w - h) / Math.max(w, h) <= 0.18, resolution: `${w}x${h}`, sha256: sha, ...extra });
+  const card = (name, w, h, sha, extra = {}) => ({ candidate_cover_ref: `${root}/${name}`, filename: name, relative_path: name, sort_relative_path: name, width: w, height: h, area: w * h, depth: 1, is_squareish: Math.abs(w - h) / Math.max(w, h) <= 0.18, resolution: `${w}x${h}`, sha256: sha, ...extra });
   const pasted = { id: 'p', data_url: 'data:image/png;base64,x', mime_type: 'image/png', filename: 'image.png', width: 547, height: 365 };
   let respond;
   const context = loadHelper({
@@ -7334,31 +7335,31 @@ require('node:test')('a stale inventory after a pasted save never hides, moves o
   });
   context.state.coverLookup.tasks = []; context.state.coverLookup.optimisticAlbumCovers = {};
   context.state.coverLookup.modal = { album, taskId: '', pastedImages: [pasted] };
-  context.cacheCoverLookupGalleryPayload(album, { ok: true, local_inventory_complete: true, album_root: root, cover_backup_name: null,
-    selected_source_path: `${root}/cover-existing-2.jpg`, active_cover_path: `${root}/cover.jpg`,
+  context.cacheCoverLookupGalleryPayload(album, { ok: true, local_inventory_complete: true, cover_jpg_ref: `${root}/cover.jpg`, cover_backup_name: null,
+    selected_source_cover_ref: `${root}/cover-existing-2.jpg`, active_cover_ref: `${root}/cover.jpg`,
     local_covers: [card('cover.png', 1200, 1200, 'png'), card('cover-existing-1.jpg', 640, 640, 'e1'), card('cover-existing-2.jpg', 245, 230, 'c2', { is_active: true })], other_art: [] });
-  Object.assign(context, { renderCoverLookupModal() {}, markAlbumCoverPathsFresh() {}, syncCoverLookupAlbumReferences() {}, refreshCoverLookupAlbumArtwork() {}, clearOptimisticAlbumCovers() {}, renderCoverLookupDrawer() {}, closeCoverLookupModal() {} });
+  Object.assign(context, { renderCoverLookupModal() {}, markAlbumCoverRefsFresh() {}, syncCoverLookupAlbumReferences() {}, refreshCoverLookupAlbumArtwork() {}, clearOptimisticAlbumCovers() {}, renderCoverLookupDrawer() {}, closeCoverLookupModal() {} });
   const saving = context.savePastedCoverFromLookup('p');
   await Promise.resolve();
   const expected = [['cover.png', ''], ['cover-existing-1.jpg', ''], ['cover-existing-2.jpg', ''], ['cover.jpg', 'ACT']];
   const show = (label) => assert.deepEqual(
-    Array.from(context.state.coverLookup.modal.localCovers || [], c => [c.path.split('/').pop(), c.is_active ? 'ACT' : '']),
+    Array.from(context.state.coverLookup.modal.localCovers || [], c => [c.candidate_cover_ref.split('/').pop(), c.is_active ? 'ACT' : '']),
     expected,
     label,
   );
-  respond({ ok: true, json: async () => ({ ok: true, selected_cover_path: `${root}/cover.jpg`, cover_revision: 'new', replaced_cover_backup: null, updated_album: { ...album, cover_path: `${root}/cover.jpg` } }) });
+  respond({ ok: true, json: async () => ({ ok: true, selected_cover_ref: `${root}/cover.jpg`, cover_revision: 'new', replaced_cover_backup: null, updated_album: { ...album, cover_ref: `${root}/cover.jpg` } }) });
   await saving;
   context.applyCoverLookupGalleryPayload(context.cachedCoverLookupGalleryPayload(album), { confirmLocalInventory: false }); show('open from cache');
-  context.applyCoverLookupGalleryPayload({ ok: true, local_inventory_complete: false, local_inventory_available: true, album_root: root, selected_source_path: `${root}/cover.jpg`, active_cover_path: `${root}/cover.jpg`,
+  context.applyCoverLookupGalleryPayload({ ok: true, local_inventory_complete: false, local_inventory_available: true, cover_jpg_ref: `${root}/cover.jpg`, selected_source_cover_ref: `${root}/cover.jpg`, active_cover_ref: `${root}/cover.jpg`,
     local_covers: [card('cover.png', 1200, 1200, 'png'), card('cover-existing-1.jpg', 640, 640, 'e1'), card('cover-existing-2.jpg', 245, 230, 'c2'), card('cover.jpg', 245, 230, 'c2', { is_active: true })], other_art: [] }); show('stale incomplete');
-  context.applyCoverLookupGalleryPayload({ ok: true, local_inventory_complete: true, album_root: root, cover_backup_name: 'cover-existing-3.jpg', selected_source_path: `${root}/cover.jpg`, active_cover_path: `${root}/cover.jpg`,
+  context.applyCoverLookupGalleryPayload({ ok: true, local_inventory_complete: true, cover_jpg_ref: `${root}/cover.jpg`, cover_backup_name: 'cover-existing-3.jpg', cover_backup_ref: `${root}/cover-existing-3.jpg`, selected_source_cover_ref: `${root}/cover.jpg`, active_cover_ref: `${root}/cover.jpg`,
     local_covers: [card('cover.png', 1200, 1200, 'png'), card('cover-existing-1.jpg', 640, 640, 'e1'), card('cover-existing-2.jpg', 245, 230, 'c2'), card('cover.jpg', 547, 365, 'new', { is_active: true })], other_art: [] }); show('complete');
 });
 
 require('node:test')('a reply still describing the replaced cover.jpg never swaps the pasted card for the old picture', async () => {
   const album = { key: 'no-old-swap', tracks: [{ path: 'N:/A/01.flac' }] };
   const root = 'N:/A';
-  const card = (name, w, h, sha, extra = {}) => ({ path: `${root}/${name}`, filename: name, relative_path: name, sort_relative_path: name, width: w, height: h, area: w * h, depth: 1, is_squareish: true, resolution: `${w}x${h}`, sha256: sha, ...extra });
+  const card = (name, w, h, sha, extra = {}) => ({ candidate_cover_ref: `${root}/${name}`, filename: name, relative_path: name, sort_relative_path: name, width: w, height: h, area: w * h, depth: 1, is_squareish: true, resolution: `${w}x${h}`, sha256: sha, ...extra });
   const pasted = { id: 'p', data_url: 'data:image/png;base64,new', mime_type: 'image/png', filename: 'image.png', width: 500, height: 500 };
   let respond;
   const context = loadHelper({
@@ -7368,19 +7369,19 @@ require('node:test')('a reply still describing the replaced cover.jpg never swap
   });
   context.state.coverLookup.tasks = []; context.state.coverLookup.optimisticAlbumCovers = {};
   context.state.coverLookup.modal = { album, taskId: '', pastedImages: [pasted] };
-  const before = { ok: true, local_inventory_complete: true, album_root: root, cover_backup_name: 'cover-existing-1.jpg',
-    selected_source_path: `${root}/cover.jpg`, active_cover_path: `${root}/cover.jpg`,
+  const before = { ok: true, local_inventory_complete: true, cover_jpg_ref: `${root}/cover.jpg`, cover_backup_name: 'cover-existing-1.jpg', cover_backup_ref: `${root}/cover-existing-1.jpg`,
+    selected_source_cover_ref: `${root}/cover.jpg`, active_cover_ref: `${root}/cover.jpg`,
     local_covers: [card('cover.png', 1200, 1200, 'png'), card('cover.jpg', 600, 600, 'old', { is_active: true })], other_art: [] };
   context.cacheCoverLookupGalleryPayload(album, before);
-  Object.assign(context, { renderCoverLookupModal() {}, markAlbumCoverPathsFresh() {}, syncCoverLookupAlbumReferences() {}, refreshCoverLookupAlbumArtwork() {}, clearOptimisticAlbumCovers() {}, renderCoverLookupDrawer() {}, closeCoverLookupModal() {} });
+  Object.assign(context, { renderCoverLookupModal() {}, markAlbumCoverRefsFresh() {}, syncCoverLookupAlbumReferences() {}, refreshCoverLookupAlbumArtwork() {}, clearOptimisticAlbumCovers() {}, renderCoverLookupDrawer() {}, closeCoverLookupModal() {} });
   const saving = context.savePastedCoverFromLookup('p');
   await Promise.resolve();
-  const pastedCard = () => Array.from(context.state.coverLookup.modal.localCovers).find(c => c.path === `${root}/cover.jpg`);
+  const pastedCard = () => Array.from(context.state.coverLookup.modal.localCovers).find(c => c.candidate_cover_ref === `${root}/cover.jpg`);
   context.applyCoverLookupGalleryPayload(before);
   assert.equal(pastedCard().preview_url, pasted.data_url, 'pending: the old cover.jpg on disk never replaces the pasted card');
-  respond({ ok: true, json: async () => ({ ok: true, selected_cover_path: `${root}/cover.jpg`, cover_revision: 'new',
-    replaced_cover_backup: { path: `${root}/cover-existing-1.jpg`, filename: 'cover-existing-1.jpg', relative_path: 'cover-existing-1.jpg', sort_relative_path: 'cover-existing-1.jpg' },
-    updated_album: { ...album, cover_path: `${root}/cover.jpg`, cover_revision: 'new' } }) });
+  respond({ ok: true, json: async () => ({ ok: true, selected_cover_ref: `${root}/cover.jpg`, cover_revision: 'new',
+    replaced_cover_backup: { candidate_cover_ref: `${root}/cover-existing-1.jpg`, filename: 'cover-existing-1.jpg', relative_path: 'cover-existing-1.jpg', sort_relative_path: 'cover-existing-1.jpg' },
+    updated_album: { ...album, cover_ref: `${root}/cover.jpg`, cover_revision: 'new' } }) });
   await saving;
   context.applyCoverLookupGalleryPayload(before);
   assert.equal(pastedCard().preview_url, pasted.data_url, 'saved but not yet indexed: still the pasted picture');
@@ -7391,11 +7392,11 @@ require('node:test')('a reply still describing the replaced cover.jpg never swap
 require('node:test')('a local card keeps its image address when it becomes the selected cover', () => {
   const context = loadHelper({
     getAlbumRequestKey: value => String(value?.key || ''),
-    buildCoverUrl: (coverPath, options = {}) => `/cover?path=${encodeURIComponent(coverPath)}&v=${options.revision}`,
+    buildCoverUrl: (coverRef, options = {}) => `/cover?path=${encodeURIComponent(coverRef)}&v=${options.revision}`,
     escapeHtml: value => String(value ?? ''),
   });
   context.state.coverLookup.modal = { album: { key: 'a' }, localCovers: [], otherArt: [], pastedImages: [] };
-  const card = { path: 'N:/A/cover-existing-2.jpg', filename: 'cover-existing-2.jpg', sha256: 'abc', width: 1024, height: 1024 };
+  const card = { candidate_cover_ref: 'N:/A/cover-existing-2.jpg', filename: 'cover-existing-2.jpg', sha256: 'abc', width: 1024, height: 1024 };
   const imageSource = markup => markup.match(/data-cover-preview-src="([^"]+)"/)?.[1];
   const before = imageSource(context.buildCoverLookupCard(card, 'local'));
   const selected = imageSource(context.buildCoverLookupCard({ ...card, is_active: true, cover_revision: 'abc' }, 'local'));
@@ -7406,11 +7407,11 @@ require('node:test')('a local card keeps its image address when it becomes the s
 require('node:test')('a detached card image finishing its load never throws', () => {
   const context = loadHelper({
     getAlbumRequestKey: value => String(value?.key || ''),
-    buildCoverUrl: coverPath => `/cover?path=${encodeURIComponent(coverPath)}`,
+    buildCoverUrl: coverRef => `/cover?path=${encodeURIComponent(coverRef)}`,
     escapeHtml: value => String(value ?? ''),
   });
   context.state.coverLookup.modal = { album: { key: 'a' }, localCovers: [], otherArt: [], pastedImages: [] };
-  const markup = context.buildCoverLookupCard({ path: 'N:/A/cover.jpg', filename: 'cover.jpg' }, 'local');
+  const markup = context.buildCoverLookupCard({ candidate_cover_ref: 'N:/A/cover.jpg', filename: 'cover.jpg' }, 'local');
   const onload = markup.match(/<img class="cover-lookup-art-preview-image"[^>]*onload="([^"]+)"/)?.[1];
   assert.ok(onload);
   assert.doesNotThrow(() => new Function(onload).call({ parentElement: null }),
@@ -7429,14 +7430,14 @@ require('node:test')('optimistic pasted LOCAL cover gets its final server rankin
     ok: true,
     local_inventory_complete: true,
     local_covers: [
-      { path: 'N:/Fleet Foxes/Art/Back.jpg', relative_path: 'Art/Back.jpg', is_squareish: true, area: 1600000, depth: 2 },
-      { path: 'N:/Fleet Foxes/00-wide.jpg', relative_path: '00-wide.jpg', is_squareish: false, area: 4000000, depth: 1 },
+      { candidate_cover_ref: 'N:/Fleet Foxes/Art/Back.jpg', relative_path: 'Art/Back.jpg', is_squareish: true, area: 1600000, depth: 2 },
+      { candidate_cover_ref: 'N:/Fleet Foxes/00-wide.jpg', relative_path: '00-wide.jpg', is_squareish: false, area: 4000000, depth: 1 },
     ],
     other_art: [],
   });
 
   context.cacheOptimisticLocalCoverGallery(album, {
-    path: 'N:/Fleet Foxes/cover.jpg',
+    candidate_cover_ref: 'N:/Fleet Foxes/cover.jpg',
     filename: 'cover.jpg',
     preview_url: 'data:image/jpeg;base64,cover',
     width: 800,
@@ -7445,7 +7446,7 @@ require('node:test')('optimistic pasted LOCAL cover gets its final server rankin
 
   const covers = context.cachedCoverLookupGalleryPayload(album).local_covers;
   assert.deepEqual(
-    Array.from(covers, cover => cover.path),
+    Array.from(covers, cover => cover.candidate_cover_ref),
     [
       'N:/Fleet Foxes/Art/Back.jpg',
       'N:/Fleet Foxes/cover.jpg',
@@ -7464,10 +7465,10 @@ require('node:test')('optimistic LOCAL covers preserve server square-size-depth-
   });
   assert.deepEqual(
     Array.from(context.sortCoverLookupLocalCovers([
-      { path: 'N:/Fleet Foxes/cover.jpg', relative_path: 'cover.jpg', is_squareish: true, area: 640000, depth: 1 },
-      { path: 'N:/Fleet Foxes/Art/Back.jpg', relative_path: 'Art/Back.jpg', is_squareish: true, area: 1600000, depth: 2 },
-      { path: 'N:/Fleet Foxes/00-wide.jpg', relative_path: '00-wide.jpg', is_squareish: false, area: 4000000, depth: 1 },
-    ]), cover => cover.path),
+      { candidate_cover_ref: 'N:/Fleet Foxes/cover.jpg', relative_path: 'cover.jpg', is_squareish: true, area: 640000, depth: 1 },
+      { candidate_cover_ref: 'N:/Fleet Foxes/Art/Back.jpg', relative_path: 'Art/Back.jpg', is_squareish: true, area: 1600000, depth: 2 },
+      { candidate_cover_ref: 'N:/Fleet Foxes/00-wide.jpg', relative_path: '00-wide.jpg', is_squareish: false, area: 4000000, depth: 1 },
+    ]), cover => cover.candidate_cover_ref),
     [
       'N:/Fleet Foxes/Art/Back.jpg',
       'N:/Fleet Foxes/cover.jpg',
@@ -7478,14 +7479,14 @@ require('node:test')('optimistic LOCAL covers preserve server square-size-depth-
   assert.deepEqual(
     Array.from(context.sortCoverLookupLocalCovers([
       {
-        path: 'N:/Fleet Foxes/z.jpg', relative_path: 'z.jpg', sort_relative_path: 'z.jpg',
+        candidate_cover_ref: 'N:/Fleet Foxes/z.jpg', relative_path: 'z.jpg', sort_relative_path: 'z.jpg',
         is_squareish: true, area: 640000, depth: 1,
       },
       {
-        path: 'N:/Fleet Foxes/ß.jpg', relative_path: 'ß.jpg', sort_relative_path: 'ss.jpg',
+        candidate_cover_ref: 'N:/Fleet Foxes/ß.jpg', relative_path: 'ß.jpg', sort_relative_path: 'ss.jpg',
         is_squareish: true, area: 640000, depth: 1,
       },
-    ]), cover => cover.path),
+    ]), cover => cover.candidate_cover_ref),
     ['N:/Fleet Foxes/ß.jpg', 'N:/Fleet Foxes/z.jpg'],
     'server casefold keys keep Unicode filename ties in authoritative order',
   );
@@ -7494,14 +7495,14 @@ require('node:test')('optimistic LOCAL covers preserve server square-size-depth-
     ok: true,
     local_inventory_complete: true,
     local_covers: [
-      { path: 'N:/Fleet Foxes/zebra.jpg', filename: 'zebra.jpg' },
-      { path: 'N:/Fleet Foxes/alpha.jpg', filename: 'alpha.jpg' },
+      { candidate_cover_ref: 'N:/Fleet Foxes/zebra.jpg', filename: 'zebra.jpg' },
+      { candidate_cover_ref: 'N:/Fleet Foxes/alpha.jpg', filename: 'alpha.jpg' },
     ],
     other_art: [],
   });
 
   context.cacheOptimisticLocalCoverGallery(album, {
-    path: 'N:/Fleet Foxes/cover.jpg',
+    candidate_cover_ref: 'N:/Fleet Foxes/cover.jpg',
     filename: 'cover.jpg',
     preview_url: 'data:image/jpeg;base64,cover',
   });
@@ -7512,7 +7513,7 @@ require('node:test')('optimistic LOCAL covers preserve server square-size-depth-
     'N:/Fleet Foxes/zebra.jpg',
   ];
   assert.deepEqual(
-    Array.from(context.cachedCoverLookupGalleryPayload(album).local_covers, cover => cover.path),
+    Array.from(context.cachedCoverLookupGalleryPayload(album).local_covers, cover => cover.candidate_cover_ref),
     expectedOrder,
     'the immediate cached gallery must place the new filename in its final slot',
   );
@@ -7521,15 +7522,15 @@ require('node:test')('optimistic LOCAL covers preserve server square-size-depth-
     ok: true,
     local_inventory_complete: false,
     local_inventory_available: true,
-    selected_source_path: 'N:/Fleet Foxes/cover.jpg',
+    selected_source_cover_ref: 'N:/Fleet Foxes/cover.jpg',
     local_covers: [
-      { path: 'N:/Fleet Foxes/zebra.jpg', filename: 'zebra.jpg' },
-      { path: 'N:/Fleet Foxes/alpha.jpg', filename: 'alpha.jpg' },
+      { candidate_cover_ref: 'N:/Fleet Foxes/zebra.jpg', filename: 'zebra.jpg' },
+      { candidate_cover_ref: 'N:/Fleet Foxes/alpha.jpg', filename: 'alpha.jpg' },
     ],
     other_art: [],
   }, { confirmLocalInventory: false });
   assert.deepEqual(
-    Array.from(context.state.coverLookup.modal.localCovers, cover => cover.path),
+    Array.from(context.state.coverLookup.modal.localCovers, cover => cover.candidate_cover_ref),
     expectedOrder,
     'a lagging refresh must retain the same slot',
   );
@@ -7537,16 +7538,16 @@ require('node:test')('optimistic LOCAL covers preserve server square-size-depth-
   context.applyCoverLookupGalleryPayload({
     ok: true,
     local_inventory_complete: true,
-    selected_source_path: 'N:/Fleet Foxes/cover.jpg',
+    selected_source_cover_ref: 'N:/Fleet Foxes/cover.jpg',
     local_covers: [
-      { path: 'N:/Fleet Foxes/zebra.jpg', filename: 'zebra.jpg' },
-      { path: 'N:/Fleet Foxes/cover.jpg', filename: 'cover.jpg' },
-      { path: 'N:/Fleet Foxes/alpha.jpg', filename: 'alpha.jpg' },
+      { candidate_cover_ref: 'N:/Fleet Foxes/zebra.jpg', filename: 'zebra.jpg' },
+      { candidate_cover_ref: 'N:/Fleet Foxes/cover.jpg', filename: 'cover.jpg' },
+      { candidate_cover_ref: 'N:/Fleet Foxes/alpha.jpg', filename: 'alpha.jpg' },
     ],
     other_art: [],
   });
   assert.deepEqual(
-    Array.from(context.state.coverLookup.modal.localCovers, cover => cover.path),
+    Array.from(context.state.coverLookup.modal.localCovers, cover => cover.candidate_cover_ref),
     expectedOrder,
     'the confirmed inventory and later reopen must keep the same order',
   );
@@ -7556,15 +7557,15 @@ require('node:test')('an incomplete LOCAL inventory cannot replace or reorder th
   const album = { key: 'fleet-foxes', tracks: [{ path: 'N:/Fleet Foxes/01.flac' }] };
   const context = loadHelper({ getAlbumRequestKey: value => String(value?.key || '') });
   const knownCovers = [
-    { path: 'N:/Fleet Foxes/alpha.jpg', filename: 'alpha.jpg', is_squareish: true, area: 900, depth: 1 },
-    { path: 'N:/Fleet Foxes/cover.jpg', filename: 'cover.jpg', is_squareish: true, area: 400, depth: 1, is_active: true },
-    { path: 'N:/Fleet Foxes/zebra.jpg', filename: 'zebra.jpg', is_squareish: true, area: 100, depth: 1 },
+    { candidate_cover_ref: 'N:/Fleet Foxes/alpha.jpg', filename: 'alpha.jpg', is_squareish: true, area: 900, depth: 1 },
+    { candidate_cover_ref: 'N:/Fleet Foxes/cover.jpg', filename: 'cover.jpg', is_squareish: true, area: 400, depth: 1, is_active: true },
+    { candidate_cover_ref: 'N:/Fleet Foxes/zebra.jpg', filename: 'zebra.jpg', is_squareish: true, area: 100, depth: 1 },
   ];
   context.state.coverLookup.modal.album = album;
   context.applyCoverLookupGalleryPayload({
     ok: true,
     local_inventory_complete: true,
-    selected_source_path: 'N:/Fleet Foxes/cover.jpg',
+    selected_source_cover_ref: 'N:/Fleet Foxes/cover.jpg',
     local_covers: knownCovers,
     other_art: [],
   });
@@ -7574,14 +7575,14 @@ require('node:test')('an incomplete LOCAL inventory cannot replace or reorder th
     local_inventory_complete: false,
     local_inventory_available: true,
     local_inventory_pending: true,
-    selected_source_path: 'N:/Fleet Foxes/cover.jpg',
+    selected_source_cover_ref: 'N:/Fleet Foxes/cover.jpg',
     local_covers: [knownCovers[1]],
     other_art: [],
   });
 
   assert.deepEqual(
-    Array.from(context.state.coverLookup.modal.localCovers, cover => cover.path),
-    knownCovers.map(cover => cover.path),
+    Array.from(context.state.coverLookup.modal.localCovers, cover => cover.candidate_cover_ref),
+    knownCovers.map(cover => cover.candidate_cover_ref),
   );
 });
 
@@ -7589,17 +7590,17 @@ require('node:test')('cached LOCAL inventory suppresses only redundant generated
   const album = { key: 'fleet-foxes', tracks: [{ path: 'N:/Fleet Foxes/01.flac' }] };
   const context = loadHelper({ getAlbumRequestKey: value => String(value?.key || '') });
   context.cacheCoverLookupGalleryPayload(album, {
-    selected_source_path: 'N:/Fleet Foxes/cover.jpg',
+    selected_source_cover_ref: 'N:/Fleet Foxes/cover.jpg',
     local_covers: [
-      { path: 'N:/Fleet Foxes/cover.png', sha256: 'original' },
-      { path: 'N:/Fleet Foxes/cover-existing-1.jpg', sha256: 'original' },
-      { path: 'N:/Fleet Foxes/cover.jpg', sha256: 'selected', is_active: true },
-      { path: 'N:/Fleet Foxes/cover-existing-2.jpg', sha256: 'unique' },
+      { candidate_cover_ref: 'N:/Fleet Foxes/cover.png', filename: 'cover.png', sha256: 'original' },
+      { candidate_cover_ref: 'N:/Fleet Foxes/cover-existing-1.jpg', filename: 'cover-existing-1.jpg', sha256: 'original' },
+      { candidate_cover_ref: 'N:/Fleet Foxes/cover.jpg', filename: 'cover.jpg', sha256: 'selected', is_active: true },
+      { candidate_cover_ref: 'N:/Fleet Foxes/cover-existing-2.jpg', filename: 'cover-existing-2.jpg', sha256: 'unique' },
     ],
   });
 
   assert.deepEqual(
-    Array.from(context.cachedCoverLookupGalleryPayload(album).local_covers, cover => cover.path),
+    Array.from(context.cachedCoverLookupGalleryPayload(album).local_covers, cover => cover.candidate_cover_ref),
     [
       'N:/Fleet Foxes/cover-existing-2.jpg',
       'N:/Fleet Foxes/cover.jpg',
@@ -7608,10 +7609,10 @@ require('node:test')('cached LOCAL inventory suppresses only redundant generated
   );
 
   context.cacheCoverLookupGalleryPayload(album, {
-    selected_source_path: 'N:/Fleet Foxes/cover-existing-1.jpg',
+    selected_source_cover_ref: 'N:/Fleet Foxes/cover-existing-1.jpg',
     local_covers: [
-      { path: 'N:/Fleet Foxes/cover.jpg', sha256: 'same', is_active: true },
-      { path: 'N:/Fleet Foxes/cover-existing-1.jpg', sha256: 'same' },
+      { candidate_cover_ref: 'N:/Fleet Foxes/cover.jpg', sha256: 'same', is_active: true },
+      { candidate_cover_ref: 'N:/Fleet Foxes/cover-existing-1.jpg', sha256: 'same' },
     ],
   });
   assert.equal(context.cachedCoverLookupGalleryPayload(album).local_covers.length, 2);
@@ -7627,7 +7628,7 @@ require('node:test')('deleting the selected LOCAL cover selects the first remain
   const deleteOverlay = { hidden: false, style: {} };
   const album = {
     key: 'fleet-foxes',
-    cover_path: 'N:/Fleet Foxes/cover.jpg',
+    cover_ref: 'N:/Fleet Foxes/cover.jpg',
     tracks: [{ path: 'N:/Fleet Foxes/01.flac' }],
   };
   const deletedPath = 'N:/Fleet Foxes/alpha.jpg';
@@ -7653,10 +7654,10 @@ require('node:test')('deleting the selected LOCAL cover selects the first remain
         gallery: {
           ok: true,
           local_inventory_complete: true,
-          active_cover_path: album.cover_path,
-          selected_source_path: fallbackPath,
-          local_covers: [{ path: fallbackPath, filename: 'Back.jpg', is_active: false }],
-          other_art: [{ path: deletedPath, filename: 'alpha.jpg' }],
+          active_cover_ref: album.cover_ref,
+          selected_source_cover_ref: fallbackPath,
+          local_covers: [{ candidate_cover_ref: fallbackPath, filename: 'Back.jpg', is_active: false }],
+          other_art: [{ candidate_cover_ref: deletedPath, filename: 'alpha.jpg' }],
         },
       }),
     }),
@@ -7666,30 +7667,30 @@ require('node:test')('deleting the selected LOCAL cover selects the first remain
   context.state.coverLookup.modal = {
     album,
     localCovers: [
-      { path: deletedPath, filename: 'alpha.jpg', is_active: true },
-      { path: fallbackPath, filename: 'cover.jpg', is_active: false },
+      { candidate_cover_ref: deletedPath, filename: 'alpha.jpg', is_active: true },
+      { candidate_cover_ref: fallbackPath, filename: 'cover.jpg', is_active: false },
     ],
     otherArt: [],
-    activeLocalSelectionPath: deletedPath,
-    pendingLocalPath: '',
+    activeLocalSelectionRef: deletedPath,
+    pendingLocalRef: '',
     pendingPastedImageId: '',
     selectedRemoteId: '',
   };
   context.renderCoverLookupModal = () => {};
-  context.markAlbumCoverPathsFresh = () => {};
+  context.markAlbumCoverRefsFresh = () => {};
   context.syncCoverLookupAlbumReferences = () => {};
   context.refreshCoverLookupAlbumArtwork = () => {};
 
   await context.deleteLocalCoverFromLookup(deletedPath);
 
   assert.deepEqual(
-    Array.from(context.state.coverLookup.modal.localCovers, cover => cover.path),
+    Array.from(context.state.coverLookup.modal.localCovers, cover => cover.candidate_cover_ref),
     [fallbackPath],
   );
-  assert.equal(context.state.coverLookup.modal.pendingLocalPath, fallbackPath);
-  assert.equal(context.state.coverLookup.modal.activeLocalSelectionPath, fallbackPath);
+  assert.equal(context.state.coverLookup.modal.pendingLocalRef, fallbackPath);
+  assert.equal(context.state.coverLookup.modal.activeLocalSelectionRef, fallbackPath);
   assert.equal(saveButton.disabled, false, 'the automatically applied fallback remains confirmable');
-  assert.equal(context.state.coverLookup.modal.otherArt.some(cover => cover.path === deletedPath), false);
+  assert.equal(context.state.coverLookup.modal.otherArt.some(cover => cover.candidate_cover_ref === deletedPath), false);
 });
 
 require('node:test')('deleting a pending LOCAL selection selects the first remainder and enables Save', async () => {
@@ -7705,7 +7706,7 @@ require('node:test')('deleting a pending LOCAL selection selects the first remai
   const fallbackPath = 'N:/Fleet Foxes/Back.jpg';
   const album = {
     key: 'fleet-foxes-pending-selection',
-    cover_path: activePath,
+    cover_ref: activePath,
     tracks: [{ path: 'N:/Fleet Foxes/01.flac' }],
   };
   const context = loadHelper({
@@ -7729,11 +7730,11 @@ require('node:test')('deleting a pending LOCAL selection selects the first remai
         gallery: {
           ok: true,
           local_inventory_complete: true,
-          active_cover_path: activePath,
-          selected_source_path: activePath,
+          active_cover_ref: activePath,
+          selected_source_cover_ref: activePath,
           local_covers: [
-            { path: fallbackPath, filename: 'Back.jpg', is_active: false },
-            { path: activePath, filename: 'cover.jpg', is_active: true },
+            { candidate_cover_ref: fallbackPath, filename: 'Back.jpg', is_active: false },
+            { candidate_cover_ref: activePath, filename: 'cover.jpg', is_active: true },
           ],
           other_art: [],
         },
@@ -7745,25 +7746,25 @@ require('node:test')('deleting a pending LOCAL selection selects the first remai
   context.state.coverLookup.modal = {
     album,
     localCovers: [
-      { path: deletedPath, filename: 'selected.jpg', is_active: false },
-      { path: fallbackPath, filename: 'Back.jpg', is_active: false },
-      { path: activePath, filename: 'cover.jpg', is_active: true },
+      { candidate_cover_ref: deletedPath, filename: 'selected.jpg', is_active: false },
+      { candidate_cover_ref: fallbackPath, filename: 'Back.jpg', is_active: false },
+      { candidate_cover_ref: activePath, filename: 'cover.jpg', is_active: true },
     ],
     otherArt: [],
-    activeLocalSelectionPath: activePath,
-    pendingLocalPath: deletedPath,
+    activeLocalSelectionRef: activePath,
+    pendingLocalRef: deletedPath,
     pendingPastedImageId: '',
     selectedRemoteId: '',
   };
   context.renderCoverLookupModal = () => {};
-  context.markAlbumCoverPathsFresh = () => {};
+  context.markAlbumCoverRefsFresh = () => {};
   context.syncCoverLookupAlbumReferences = () => {};
   context.refreshCoverLookupAlbumArtwork = () => {};
 
   await context.deleteLocalCoverFromLookup(deletedPath);
 
-  assert.equal(context.state.coverLookup.modal.pendingLocalPath, fallbackPath);
-  assert.equal(context.state.coverLookup.modal.activeLocalSelectionPath, activePath);
+  assert.equal(context.state.coverLookup.modal.pendingLocalRef, fallbackPath);
+  assert.equal(context.state.coverLookup.modal.activeLocalSelectionRef, activePath);
   assert.equal(saveButton.disabled, false);
 });
 
@@ -7779,7 +7780,7 @@ require('node:test')('deleting the selected LOCAL cover enables Save before pers
   const fallbackPath = 'N:/Fleet Foxes/fallback.jpg';
   const album = {
     key: 'fleet-foxes-immediate-fallback',
-    cover_path: deletedPath,
+    cover_ref: deletedPath,
     tracks: [{ path: 'N:/Fleet Foxes/01.flac' }],
   };
   let resolveDelete;
@@ -7802,24 +7803,24 @@ require('node:test')('deleting the selected LOCAL cover enables Save before pers
   context.state.coverLookup.modal = {
     album,
     localCovers: [
-      { path: deletedPath, filename: 'selected.jpg', is_active: true },
-      { path: fallbackPath, filename: 'fallback.jpg', is_active: false },
+      { candidate_cover_ref: deletedPath, filename: 'selected.jpg', is_active: true },
+      { candidate_cover_ref: fallbackPath, filename: 'fallback.jpg', is_active: false },
     ],
     otherArt: [],
-    activeLocalSelectionPath: deletedPath,
-    pendingLocalPath: '',
+    activeLocalSelectionRef: deletedPath,
+    pendingLocalRef: '',
     pendingPastedImageId: '',
     selectedRemoteId: '',
   };
   context.renderCoverLookupModal = () => context.syncCoverLookupSaveButton();
-  context.markAlbumCoverPathsFresh = () => {};
+  context.markAlbumCoverRefsFresh = () => {};
   context.syncCoverLookupAlbumReferences = () => {};
   context.refreshCoverLookupAlbumArtwork = () => {};
 
   const deletion = context.deleteLocalCoverFromLookup(deletedPath);
   await Promise.resolve();
 
-  assert.equal(context.state.coverLookup.modal.pendingLocalPath, fallbackPath);
+  assert.equal(context.state.coverLookup.modal.pendingLocalRef, fallbackPath);
   assert.equal(context.isCoverLookupMutationPending(album), true);
   assert.equal(saveButton.disabled, false, 'the already-applied fallback must be clickable immediately');
 
@@ -7832,9 +7833,9 @@ require('node:test')('deleting the selected LOCAL cover enables Save before pers
       gallery: {
         ok: true,
         local_inventory_complete: true,
-        active_cover_path: fallbackPath,
-        selected_source_path: fallbackPath,
-        local_covers: [{ path: fallbackPath, filename: 'fallback.jpg', is_active: true }],
+        active_cover_ref: fallbackPath,
+        selected_source_cover_ref: fallbackPath,
+        local_covers: [{ candidate_cover_ref: fallbackPath, filename: 'fallback.jpg', is_active: true }],
         other_art: [],
       },
     }),
@@ -7877,13 +7878,13 @@ require('node:test')('pasted cover is selected under LOCAL when reopened before 
   context.cacheCoverLookupGalleryPayload(album, {
     ok: true,
     local_inventory_complete: true,
-    selected_source_path: 'N:/Last Trial/old.jpg',
-    active_cover_path: 'N:/Last Trial/old.jpg',
-    local_covers: [{ path: 'N:/Last Trial/old.jpg', is_active: true }],
+    selected_source_cover_ref: 'N:/Last Trial/old.jpg',
+    active_cover_ref: 'N:/Last Trial/old.jpg',
+    local_covers: [{ candidate_cover_ref: 'N:/Last Trial/old.jpg', is_active: true }],
     other_art: [],
   });
   context.closeCoverLookupModal = () => {};
-  context.markAlbumCoverPathsFresh = () => {};
+  context.markAlbumCoverRefsFresh = () => {};
   context.syncCoverLookupAlbumReferences = () => {};
   context.refreshCoverLookupAlbumArtwork = () => {};
   context.clearOptimisticAlbumCovers = () => {};
@@ -7897,7 +7898,7 @@ require('node:test')('pasted cover is selected under LOCAL when reopened before 
   const reopened = context.cachedCoverLookupGalleryPayload(album);
   assert.equal(reopened.local_covers[0].preview_url, pasted.data_url);
   assert.equal(reopened.local_covers[0].is_active, true);
-  assert.equal(reopened.selected_source_path, reopened.local_covers[0].path);
+  assert.equal(reopened.selected_source_cover_ref, reopened.local_covers[0].candidate_cover_ref);
   assert.equal(reopened.other_art.length, 0);
   assert.equal(context.state.coverLookup.tasks.every(task => task.notification_action_taken), true);
 
@@ -7909,8 +7910,8 @@ require('node:test')('pasted cover is selected under LOCAL when reopened before 
 
   assert.equal(context.isCoverLookupMutationPending(album), false);
   const rolledBack = context.cachedCoverLookupGalleryPayload(album);
-  assert.deepEqual(Array.from(rolledBack.local_covers, cover => cover.path), ['N:/Last Trial/old.jpg']);
-  assert.equal(rolledBack.selected_source_path, 'N:/Last Trial/old.jpg');
+  assert.deepEqual(Array.from(rolledBack.local_covers, cover => cover.candidate_cover_ref), ['N:/Last Trial/old.jpg']);
+  assert.equal(rolledBack.selected_source_cover_ref, 'N:/Last Trial/old.jpg');
   assert.deepEqual(JSON.parse(JSON.stringify(context.state.coverLookup.tasks)), previousTasks);
 });
 
@@ -7947,9 +7948,9 @@ require('node:test')('accepted remote save seeds and selects its new LOCAL card 
   context.cacheCoverLookupGalleryPayload(album, {
     ok: true,
     local_inventory_complete: true,
-    active_cover_path: originalPath,
-    selected_source_path: originalPath,
-    local_covers: [{ path: originalPath, is_active: true }],
+    active_cover_ref: originalPath,
+    selected_source_cover_ref: originalPath,
+    local_covers: [{ candidate_cover_ref: originalPath, is_active: true }],
     other_art: [],
   });
   context.state.coverLookup.tasks = [{ id: 'fleet-save', status: 'completed' }];
@@ -7978,7 +7979,7 @@ require('node:test')('accepted remote save seeds and selects its new LOCAL card 
     ok: true,
     json: async () => ({
       ok: true,
-      optimistic_cover_path: downloadedPath,
+      optimistic_cover_ref: downloadedPath,
       task: {
         id: 'fleet-save',
         status: 'running',
@@ -7991,8 +7992,8 @@ require('node:test')('accepted remote save seeds and selects its new LOCAL card 
   await context.saveRemoteCoverFromLookup();
 
   const cached = context.cachedCoverLookupGalleryPayload(album);
-  assert.equal(cached.selected_source_path, downloadedPath);
-  assert.deepEqual(Array.from(cached.local_covers, item => [item.path, item.is_active]), [
+  assert.equal(cached.selected_source_cover_ref, downloadedPath);
+  assert.deepEqual(Array.from(cached.local_covers, item => [item.candidate_cover_ref, item.is_active]), [
     [downloadedPath, true],
     [originalPath, false],
   ]);
@@ -8008,9 +8009,9 @@ require('node:test')('accepted remote save seeds and selects its new LOCAL card 
   );
 
   context.refreshCoverLookupGallery = async () => {
-    assert.equal(context.state.coverLookup.modal.localCovers[0].path, downloadedPath);
+    assert.equal(context.state.coverLookup.modal.localCovers[0].candidate_cover_ref, downloadedPath);
     assert.equal(context.state.coverLookup.modal.localCovers[0].resolution, '599x543');
-    assert.equal(context.state.coverLookup.modal.activeLocalSelectionPath, downloadedPath);
+    assert.equal(context.state.coverLookup.modal.activeLocalSelectionRef, downloadedPath);
     assert.equal(context.state.coverLookup.modal.selectedRemoteId, '');
   };
   await context.openCoverLookupModal(album, { taskId: 'fleet-save' });
@@ -8021,9 +8022,9 @@ require('node:test')('failed accepted remote save restores the previously cached
   const originalGallery = {
     ok: true,
     local_inventory_complete: true,
-    active_cover_path: 'N:/Music/Fleet Foxes/original.jpg',
-    selected_source_path: 'N:/Music/Fleet Foxes/original.jpg',
-    local_covers: [{ path: 'N:/Music/Fleet Foxes/original.jpg', is_active: true }],
+    active_cover_ref: 'N:/Music/Fleet Foxes/original.jpg',
+    selected_source_cover_ref: 'N:/Music/Fleet Foxes/original.jpg',
+    local_covers: [{ candidate_cover_ref: 'N:/Music/Fleet Foxes/original.jpg', is_active: true }],
     other_art: [],
   };
   const context = loadHelper({
@@ -8050,7 +8051,7 @@ require('node:test')('failed accepted remote save restores the previously cached
     ok: true,
     json: async () => ({
       ok: true,
-      optimistic_cover_path: 'N:/Music/Fleet Foxes/cover.jpg',
+      optimistic_cover_ref: 'N:/Music/Fleet Foxes/cover.jpg',
       task: { id: 'fleet-save', status: 'running', save_generation: 'new-save' },
     }),
   });
@@ -8071,8 +8072,8 @@ require('node:test')('an unowned remote save cannot mutate the cached LOCAL gall
   const originalGallery = {
     ok: true,
     local_inventory_complete: true,
-    selected_source_path: 'N:/Music/Fleet Foxes/original.jpg',
-    local_covers: [{ path: 'N:/Music/Fleet Foxes/original.jpg', is_active: true }],
+    selected_source_cover_ref: 'N:/Music/Fleet Foxes/original.jpg',
+    local_covers: [{ candidate_cover_ref: 'N:/Music/Fleet Foxes/original.jpg', is_active: true }],
     other_art: [],
   };
   const context = loadHelper({ getAlbumRequestKey: value => String(value?.key || '') });
@@ -8099,8 +8100,8 @@ require('node:test')('failed older save cannot roll back a newer optimistic cach
   context.cacheCoverLookupGalleryPayload(album, {
     ok: true,
     local_inventory_complete: true,
-    selected_source_path: 'N:/Music/Fleet Foxes/original.jpg',
-    local_covers: [{ path: 'N:/Music/Fleet Foxes/original.jpg', is_active: true }],
+    selected_source_cover_ref: 'N:/Music/Fleet Foxes/original.jpg',
+    local_covers: [{ candidate_cover_ref: 'N:/Music/Fleet Foxes/original.jpg', is_active: true }],
     other_art: [],
   });
   const beforeOlderSave = context.cacheOptimisticRemoteCoverGallery(
@@ -8123,9 +8124,9 @@ require('node:test')('failed older save cannot roll back a newer optimistic cach
   );
 
   const cached = context.cachedCoverLookupGalleryPayload(album);
-  assert.equal(cached.selected_source_path, 'N:/Music/Fleet Foxes/newer.jpg');
+  assert.equal(cached.selected_source_cover_ref, 'N:/Music/Fleet Foxes/newer.jpg');
   assert.equal(
-    cached.local_covers.find(cover => cover.path === cached.selected_source_path)?.pending_remote_save_task_id,
+    cached.local_covers.find(cover => cover.candidate_cover_ref === cached.selected_source_cover_ref)?.pending_remote_save_task_id,
     'newer-save',
   );
 });
@@ -8148,7 +8149,7 @@ require('node:test')('reopening Cover Lookup renders its cached gallery before r
   });
   context.cacheCoverLookupGalleryPayload(album, {
     ok: true,
-    local_covers: [{ path: 'N:/Music/Dissection/cover.jpg' }, { path: 'N:/Music/Dissection/cover-existing-1.jpg' }],
+    local_covers: [{ candidate_cover_ref: 'N:/Music/Dissection/cover.jpg' }, { candidate_cover_ref: 'N:/Music/Dissection/cover-existing-1.jpg' }],
     other_art: [],
   });
   context.renderCoverLookupModal = () => {};
@@ -8184,7 +8185,7 @@ require('node:test')('reopening Cover Lookup from a compact notification reuses 
   });
   context.cacheCoverLookupGalleryPayload(fullAlbum, {
     ok: true,
-    local_covers: [{ path: 'N:/Music/Mastodon/Crack the Skye/cover.jpg' }],
+    local_covers: [{ candidate_cover_ref: 'N:/Music/Mastodon/Crack the Skye/cover.jpg' }],
     other_art: [],
   });
   context.renderCoverLookupModal = () => {};
@@ -8253,11 +8254,11 @@ require('node:test')('actioned terminal notifications render source-neutral Art 
   const modal = context.state.coverLookup.modal;
   modal.possibleMatches = candidates;
   modal.selectedRemoteId = 'provider';
-  modal.pendingLocalPath = '';
+  modal.pendingLocalRef = '';
   context.selectRemoteCoverFromLookup('manual');
   assert.equal(modal.selectedRemoteId, 'provider', 'TV must reject programmatic manual candidate selection');
   context.selectLocalCoverFromLookup('private-cover.jpg');
-  assert.equal(modal.pendingLocalPath, '', 'TV must reject programmatic local selection');
+  assert.equal(modal.pendingLocalRef, '', 'TV must reject programmatic local selection');
 }
 
 
@@ -8265,7 +8266,7 @@ function savedSourceRevisionContext({ albumRevision = 'saved-revision', saving =
   const context = loadHelper();
   vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'modal-and-overlay-helpers.js'), 'utf8'), context);
   context.state.coverRefreshTokens = { '/owned/Art/Front.jpg': sourceToken };
-  context.state.coverLookup.modal.album = { cover_path: '/owned/cover.jpg', cover_revision: albumRevision };
+  context.state.coverLookup.modal.album = { cover_ref: '/owned/cover.jpg', cover_revision: albumRevision };
   context.state.coverLookup.modal.saving = saving;
   return context;
 }
@@ -8287,39 +8288,39 @@ require('node:test')('compact local gallery removes only verified initial duplic
   const modal = context.state.coverLookup.modal;
   modal.album = { name: 'Owned album' };
   const covers = [
-    { path: '/owned/alternate.jpg' },
-    { path: '/owned/original.jpg', duplicate_of: '/owned/cover.jpg' },
-    { path: '/owned/cover.jpg', is_active: true },
+    { candidate_cover_ref: '/owned/alternate.jpg' },
+    { candidate_cover_ref: '/owned/original.jpg', duplicate_of_cover_ref: '/owned/cover.jpg' },
+    { candidate_cover_ref: '/owned/cover.jpg', is_active: true },
   ];
-  const orderedPaths = Array.from(context.sortCoverLookupLocalCovers(covers), item => item.path);
-  context.applyCoverLookupGalleryPayload({ active_cover_path: '/owned/cover.jpg',
-    selected_source_path: '/owned/cover.jpg', local_covers: covers });
+  const orderedPaths = Array.from(context.sortCoverLookupLocalCovers(covers), item => item.candidate_cover_ref);
+  context.applyCoverLookupGalleryPayload({ active_cover_ref: '/owned/cover.jpg',
+    selected_source_cover_ref: '/owned/cover.jpg', local_covers: covers });
   const observed = [];
-  context.buildCoverLookupCard = item => { observed.push(item.path); return item.path; };
+  context.buildCoverLookupCard = item => { observed.push(item.candidate_cover_ref); return item.candidate_cover_ref; };
   function render() { observed.length = 0; context.renderCoverLookupModal(); return [...observed]; }
   const initial = JSON.stringify(modal.localCovers);
   assert.deepEqual(render(), ['/owned/alternate.jpg', '/owned/cover.jpg']);
   assert.match(body.innerHTML, /LOCAL · 2 images/);
-  assert.equal(modal.activeLocalSelectionPath, '/owned/cover.jpg');
+  assert.equal(modal.activeLocalSelectionRef, '/owned/cover.jpg');
   compact = false;
   assert.deepEqual(render(), orderedPaths);
   assert.match(body.innerHTML, /LOCAL · 3 images/);
-  modal.pendingLocalPath = '/owned/original.jpg';
+  modal.pendingLocalRef = '/owned/original.jpg';
   compact = true;
   assert.deepEqual(render(), orderedPaths, 'an existing desktop draft remains visible after narrowing');
-  assert.equal(modal.pendingLocalPath, '/owned/original.jpg');
-  modal.pendingLocalPath = '/owned/alternate.jpg';
+  assert.equal(modal.pendingLocalRef, '/owned/original.jpg');
+  modal.pendingLocalRef = '/owned/alternate.jpg';
   assert.deepEqual(render(), ['/owned/alternate.jpg', '/owned/cover.jpg']);
-  assert.equal(modal.pendingLocalPath, '/owned/alternate.jpg');
+  assert.equal(modal.pendingLocalRef, '/owned/alternate.jpg');
   assert.equal(JSON.stringify(modal.localCovers), initial, 'rendering never discards the file inventory');
   modal.localCovers = [covers[0], covers[1]];
   assert.deepEqual(render(), ['/owned/alternate.jpg', '/owned/original.jpg'], 'an absent canonical representative cannot hide its remaining source');
 });
 function savedSourceGallery(revision = 'saved-revision') {
-  return { active_cover_path: '/owned/cover.jpg', selected_source_path: '/owned/Art/Front.jpg',
+  return { active_cover_ref: '/owned/cover.jpg', selected_source_cover_ref: '/owned/Art/Front.jpg',
     local_covers: [
-      { path: '/owned/cover.jpg', is_active: true, cover_revision: revision },
-      { path: '/owned/Art/Front.jpg', is_active: false, cover_revision: revision },
+      { candidate_cover_ref: '/owned/cover.jpg', is_active: true, cover_revision: revision },
+      { candidate_cover_ref: '/owned/Art/Front.jpg', is_active: false, cover_revision: revision },
     ] };
 }
 
@@ -8346,7 +8347,7 @@ for (const [label, values] of [
 
 require('node:test')('publishing album artwork advances the cover mutation revision', () => {
   const original = { key: 'artist::album', tracks: [{ path: '/album/01.flac' }] };
-  const updated = { ...original, cover_path: '/album/cover.jpg' };
+  const updated = { ...original, cover_ref: '/album/cover.jpg' };
   const context = loadHelper({
     state: {
       ui: {},
@@ -8692,9 +8693,9 @@ require('node:test')('UUID generation formatting retains a progressive remote ov
     remoteSelectionOverrideCandidateId: 'user-choice',
     remoteSelectionOverrideUrl: 'https://images.example/user-choice.jpg',
     selectedRemoteId: 'user-choice',
-    pendingLocalPath: '',
+    pendingLocalRef: '',
     pendingPastedImageId: '',
-    activeLocalSelectionPath: '',
+    activeLocalSelectionRef: '',
     localCovers: [],
   };
 
@@ -9314,12 +9315,12 @@ require('node:test')('unknown indexed local inventory stays pending instead of r
 });
 
 require('node:test')('known stale inventory keeps exact cards while remote-only progress cannot clear its pending state', () => {
-  const context = loadHelper({ getAlbumTrackPaths: () => [], markAlbumCoverPathsFresh() {} });
+  const context = loadHelper({ getAlbumTrackPaths: () => [], markAlbumCoverRefsFresh() {} });
   context.state.coverLookup.modal.album = { tracks: [{ path: 'N:/Album/01.flac' }] };
   context.applyCoverLookupGalleryPayload({
     local_inventory_complete: false, local_inventory_available: true, local_inventory_pending: true,
-    local_covers: [{ path: 'N:/Album/front.jpg' }, { path: 'N:/Album/alternate.jpg' }],
-    other_art: [{ path: 'N:/Album/back.jpg' }],
+    local_covers: [{ candidate_cover_ref: 'N:/Album/front.jpg' }, { candidate_cover_ref: 'N:/Album/alternate.jpg' }],
+    other_art: [{ candidate_cover_ref: 'N:/Album/back.jpg' }],
   });
   context.applyCoverLookupGalleryPayload({ local_inventory_complete: false, task: null });
 
@@ -9330,10 +9331,10 @@ require('node:test')('known stale inventory keeps exact cards while remote-only 
 });
 
 require('node:test')('remote-only progress preserves local cards and the complete reopen cache', () => {
-  const context = loadHelper({ getAlbumTrackPaths: () => [], markAlbumCoverPathsFresh() {} });
+  const context = loadHelper({ getAlbumTrackPaths: () => [], markAlbumCoverRefsFresh() {} });
   const album = { tracks: [{ path: 'N:/Album/01.flac' }] };
   context.state.coverLookup.modal.album = album;
-  context.applyCoverLookupGalleryPayload({ local_covers: [{ path: 'N:/Album/front.jpg' }], other_art: [{ path: 'N:/Album/back.jpg' }] });
+  context.applyCoverLookupGalleryPayload({ local_covers: [{ candidate_cover_ref: 'N:/Album/front.jpg' }], other_art: [{ candidate_cover_ref: 'N:/Album/back.jpg' }] });
   const local = context.state.coverLookup.modal.localCovers;
   const other = context.state.coverLookup.modal.otherArt;
   context.applyCoverLookupGalleryPayload({ local_inventory_complete: false, task: null, candidate_snapshot: null });
@@ -9364,7 +9365,7 @@ require('node:test')('reopening while the folder re-indexes after a delete shows
   const overlay = { hidden: true, classList: { toggle() {} }, removeAttribute() {}, toggleAttribute() {} };
   const context = loadHelper({
     HTMLButtonElement: TestButton,
-    markAlbumCoverPathsFresh() {},
+    markAlbumCoverRefsFresh() {},
     document: { body: { classList: { add() {} } }, getElementById: id => id === 'cover-lookup-modal' ? overlay : null },
   });
   const album = { key: 'reindexing', tracks: [{ path: 'N:/Album/01.flac' }] };
@@ -9375,7 +9376,7 @@ require('node:test')('reopening while the folder re-indexes after a delete shows
   // The stale index still lists the deleted file; this page's own delete is laid over it.
   context.applyCoverLookupGalleryPayload({
     ok: true, local_inventory_complete: false, local_inventory_available: true, local_inventory_pending: true,
-    local_covers: [{ path: 'N:/Album/front.jpg', is_active: true }, { path: 'N:/Album/deleted.jpg' }],
+    local_covers: [{ candidate_cover_ref: 'N:/Album/front.jpg', is_active: true }, { candidate_cover_ref: 'N:/Album/deleted.jpg' }],
     other_art: [],
   });
   context.renderCoverLookupModal = () => {};
@@ -9384,7 +9385,7 @@ require('node:test')('reopening while the folder re-indexes after a delete shows
   context.refreshCoverLookupGallery = async () => {
     openedWith = {
       loading: context.state.coverLookup.modal.loading,
-      paths: context.state.coverLookup.modal.localCovers.map(cover => cover.path),
+      paths: context.state.coverLookup.modal.localCovers.map(cover => cover.candidate_cover_ref),
     };
   };
 
@@ -9444,14 +9445,14 @@ for (const [kind, accepted] of [['local', false], ['remote', false], ['local', t
     context.ensureCoverLookupPolling = () => {};
     context.renderCoverLookupDrawer = () => {};
     context.preloadCoverLookupAlbumImageWithTimeout = async () => true;
-    context.buildOptimisticCoverUpdatedAlbum = () => ({ ...album, cover_path: 'N:/Mobile/new.jpg' });
+    context.buildOptimisticCoverUpdatedAlbum = () => ({ ...album, cover_ref: 'N:/Mobile/new.jpg' });
     context.applyOptimisticLocalCoverSelection = () => {};
     context.applyOptimisticRemoteCoverSelection = () => {
       const cover = { src: '/new.jpg' };
       context.state.coverLookup.optimisticAlbumCovers = { mobile: cover };
       return album;
     };
-    context.markAlbumCoverPathsFresh = () => {};
+    context.markAlbumCoverRefsFresh = () => {};
     context.syncCoverLookupAlbumReferences = updated => restored.push(updated);
     context.refreshCoverLookupAlbumArtwork = () => {};
     context.state.coverLookup.modal = {
@@ -9543,11 +9544,11 @@ require('node:test')('NEW-003: a local artwork problem is a compact alert right 
     fetch: async () => ({ ok: true, json: async () => ({
       ok: true, local_inventory_complete: false, local_inventory_pending: false,
       local_inventory_error: "Can't read local art right now. Retrying.",
-      local_covers: [{ path: 'N:/Album/front.jpg', width: 600, height: 600 }],
+      local_covers: [{ candidate_cover_ref: 'N:/Album/front.jpg', width: 600, height: 600 }],
     }) }),
     setTimeout() { return 1; }, clearTimeout() {},
     showToast() {}, console: { error() {}, log() {} },
-    getAlbumTrackPaths: () => [], markAlbumCoverPathsFresh() {},
+    getAlbumTrackPaths: () => [], markAlbumCoverRefsFresh() {},
   });
   context.getCoverLookupModalElements = () => ({ overlay: {}, body });
   context.state.coverLookup.modal = { album: { key: 'test', tracks: [{ path: 'N:/Album/01.flac' }] }, loading: true };
@@ -9565,14 +9566,14 @@ require('node:test')('NEW-003: a local artwork problem is a compact alert right 
 require('node:test')('UI-3: a linked remote cover reads Selected only after LOCAL loaded without an active local file', () => {
   const context = loadHelper({ escapeHtml: value => String(value ?? '') });
   Object.assign(context.state.coverLookup.modal, {
-    selectedRemoteId: '', pendingLocalPath: '', pendingPastedImageId: '', activeLocalSelectionPath: '',
-    album: { key: 'a', cover_path: 'C:/Music/A/cover.jpg' }, localInventoryLoaded: false,
+    selectedRemoteId: '', pendingLocalRef: '', pendingPastedImageId: '', activeLocalSelectionRef: '',
+    album: { key: 'a', cover_ref: 'C:/Music/A/cover.jpg' }, localInventoryLoaded: false,
   });
   const card = () => context.buildCoverLookupCard({ id: 'r', source: 'apple', album: 'A' }, 'saved-remote');
   assert.doesNotMatch(card(), /\bis-active\b/, 'before LOCAL loads, nothing is selected');
   context.state.coverLookup.modal.localInventoryLoaded = true;
   assert.match(card(), /\bis-active\b/, 'with no active local file, the linked remote cover is selected');
-  context.state.coverLookup.modal.activeLocalSelectionPath = 'C:/Music/A/cover.jpg';
+  context.state.coverLookup.modal.activeLocalSelectionRef = 'C:/Music/A/cover.jpg';
   assert.doesNotMatch(card(), /\bis-active\b/, 'an active local file keeps the selection');
 });
 
@@ -9581,12 +9582,12 @@ require('node:test')('UI-14: art held by the second artbox is dimmed with the ho
     escapeHtml: value => String(value ?? ''),
     buildCoverUrl: () => '/cover?path=back.jpg&size=480',
     isCoverLookupItemInFirstArtbox: () => false,
-    isCoverLookupItemInSecondArtbox: (item) => item.path === 'back.jpg',
+    isCoverLookupItemInSecondArtbox: (item) => item.candidate_cover_ref === 'back.jpg',
   });
-  const held = context.buildCoverLookupCard({ path: 'back.jpg' }, 'local');
+  const held = context.buildCoverLookupCard({ candidate_cover_ref: 'back.jpg' }, 'local');
   assert.match(held, /class="cover-lookup-art-card[^"]*is-disabled[^"]*"[^>]*title="Deselect cover in the second artbox first"/);
   assert.doesNotMatch(held, /data-select-local-cover=/, 'it cannot be selected');
-  const free = context.buildCoverLookupCard({ path: 'cover.jpg' }, 'local');
+  const free = context.buildCoverLookupCard({ candidate_cover_ref: 'cover.jpg' }, 'local');
   assert.doesNotMatch(free, /second artbox first/);
 });
 
@@ -9641,4 +9642,198 @@ require('node:test')('UI-14: art held by the second artbox is dimmed with the ho
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
+});
+
+require('node:test')('bounded interaction: Cover Lookup sheet touchmove stays constant with 1,000 candidates', async () => {
+  const { countedCollection, createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const run = async (cardinality) => {
+    const counter = createInteractionCounter();
+    const eventTarget = (extra = {}) => {
+      const listeners = {};
+      return {
+        ...extra,
+        dataset: {},
+        addEventListener(type, listener) { counter.count('listeners'); listeners[type] = listener; },
+        dispatch(type, event = {}) { listeners[type]?.(event); },
+      };
+    };
+    const candidates = countedCollection(Array.from({ length: cardinality }, (_value, index) => ({
+      key: `candidate-${index}`,
+      url: `https://covers.example.test/${index}.jpg`,
+    })), counter);
+    const header = eventTarget();
+    const body = eventTarget({ scrollTop: 0, children: candidates });
+    const overlay = {
+      classList: { contains: (name) => name === 'is-mobile-sheet' },
+      style: {
+        setProperty() { counter.count('domMutations'); },
+        removeProperty() { counter.count('domMutations'); },
+      },
+      querySelector(selector) {
+        counter.count('domQueries');
+        return selector === '.cover-lookup-modal-header' ? header : body;
+      },
+    };
+    const context = loadHelper();
+    context.state.coverLookup.modal.otherArt = candidates;
+    context.closeCoverLookupModal = () => assert.fail('a drag that has not ended must not close the sheet');
+    context.bindCoverLookupMobileSheetSwipe(overlay);
+    body.dispatch('touchstart', { touches: [{ clientX: 20, clientY: 20 }] });
+    let prevented = 0;
+    const work = await counter.measure(() => {
+      for (let step = 1; step <= 10; step += 1) {
+        body.dispatch('touchmove', { touches: [{ clientX: 20, clientY: 20 + step * 8 }], preventDefault() { prevented += 1; } });
+      }
+      body.dispatch('touchmove', { touches: [{ clientX: 200, clientY: 30 }], preventDefault() { prevented += 1; } });
+    });
+    assert.equal(prevented, 10, 'vertical sheet drags own the gesture; a sideways move releases it');
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:runtime/cover-lookup-modal-and-drawer.js#bindTarget',
+    small: 20,
+    large: 1000,
+    run,
+    budgets: { itemsVisited: 0, domQueries: 0, domMutations: 11, listeners: 0 },
+    growth: { metric: 'domMutations', largeMinusSmallMax: 0 },
+  });
+});
+
+require('node:test')('bounded interaction: notification drawer scroll renders one task window among 1,000 loaded notifications', async () => {
+  const { countedCollection, createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const run = async (cardinality) => {
+    const counter = createInteractionCounter();
+    const { context, bodyElement } = createDrawerHarness();
+    let markup = '';
+    Object.defineProperty(bodyElement, 'innerHTML', {
+      get: () => markup,
+      set(value) {
+        counter.count('renderCommits');
+        counter.count('markupBytes', String(value).length);
+        markup = String(value);
+      },
+    });
+    Object.assign(bodyElement, { scrollTop: 0, scrollHeight: cardinality * 96, clientHeight: 600 });
+    bodyElement.getBoundingClientRect = () => ({ top: 0, bottom: 600 });
+    bodyElement.querySelectorAll = () => { counter.count('domQueries'); return []; };
+    context.state.coverLookup.tasks = countedCollection(Array.from({ length: cardinality }, (_value, index) => ({
+      id: `task-${index}`, status: 'completed', album: `Album ${index % 10}`, artist: 'Artist',
+    })), counter);
+    context.state.coverLookup.tasksNextCursor = null;
+    context.renderCoverLookupDrawer();
+    const work = await counter.measure(async () => {
+      for (const scrollTop of [960, 1920]) {
+        bodyElement.scrollTop = scrollTop;
+        await context.handleCoverLookupDrawerScroll({ currentTarget: bodyElement });
+      }
+    });
+    assert.equal(context.state.coverLookup.taskRenderWindowStart, 10);
+    assert.equal((markup.match(/data-open-cover-lookup-task=/g) || []).length, Math.min(60, cardinality - 10));
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:runtime/bootstrap-init.js#<top-level>',
+    small: 80,
+    large: 1000,
+    run,
+    budgets: { itemsVisited: 60, renderCommits: 1, markupBytes: 91400, domQueries: 4 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
+  });
+});
+
+// One running lookup among `cardinality` loaded notifications, the drawer open over its first
+// task window and the Cover Lookup modal open, so every 100 ms interval tick polls.
+function createCountedCoverLookupPolling(counter, cardinality) {
+  const { countedCollection } = require('../helpers/bounded-interaction-counter.js');
+  const running = { id: 'task-0', status: 'running', progress: 40, album: 'Album 0', artist: 'Artist', created_at: '2026-11-15T10:00:00Z' };
+  const harness = createDrawerHarness({
+    fetch: async () => {
+      counter.count('requests');
+      return { ok: true, json: async () => ({
+        ok: true, tasks: [{ ...running }], next_cursor: null, total_count: cardinality,
+        active_count: 1, finished_count: cardinality - 1, membership_revision: 'revision-1',
+      }) };
+    },
+  });
+  const { context } = harness;
+  const getElementById = context.document.getElementById;
+  context.document.getElementById = id => (id === 'cover-lookup-modal' ? { hidden: false } : getElementById(id));
+  for (const name of ['renderCoverLookupDrawer', 'renderCoverLookupModal']) {
+    const render = context[name];
+    context[name] = (...args) => { counter.count('renderCommits'); return render(...args); };
+  }
+  // Every task list the poller stores is counted, not only the first one.
+  let tasks = [];
+  Object.defineProperty(context.state.coverLookup, 'tasks', {
+    configurable: true,
+    enumerable: true,
+    get: () => tasks,
+    set: (value) => { tasks = Array.isArray(value) ? countedCollection(value, counter) : value; },
+  });
+  context.state.coverLookup.tasks = ([running, ...Array.from({ length: cardinality - 1 }, (_value, index) => ({
+    id: `task-${index + 1}`, status: 'completed', album: `Album ${index + 1}`, artist: 'Artist',
+    created_at: '2026-11-15T09:00:00Z', finished_at: '2026-11-15T09:01:00Z',
+  }))]);
+  context.state.coverLookup.taskRenderWindowStart = 0;
+  return harness;
+}
+
+require('node:test')('bounded interaction: Cover Lookup polling repeats nothing per loaded notification while one lookup runs among 1,000', async () => {
+  const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const run = async (cardinality) => {
+    const counter = createInteractionCounter();
+    const { context, intervalCalls } = createCountedCoverLookupPolling(counter, cardinality);
+    context.ensureCoverLookupPolling();
+    const poll = intervalCalls.find(({ delay }) => delay === 100).callback;
+    await poll();
+    const work = await counter.measure(async () => {
+      for (let tick = 0; tick < 10; tick += 1) await poll();
+    });
+    assert.equal(context.state.coverLookup.tasks[0].status, 'running');
+    assert.equal(context.state.coverLookup.tasks.length, cardinality);
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:runtime/cover-lookup-modal-and-drawer.js#ensureCoverLookupPolling',
+    small: 80,
+    large: 1000,
+    run,
+    budgets: { itemsVisited: 600, requests: 10, renderCommits: 0 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
+  });
+});
+
+require('node:test')('bounded interaction: Cover Lookup elapsed ticks relabel only the mounted task window among 1,000 notifications', async () => {
+  const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const { createCountedDom } = require('../helpers/counted-dom.js');
+  const run = async (cardinality) => {
+    const counter = createInteractionCounter();
+    const { CountedElement } = createCountedDom(counter);
+    const { context, bodyElement, intervalCalls } = createCountedCoverLookupPolling(counter, cardinality);
+    const labels = Array.from({ length: 60 }, (_value, index) => {
+      const label = new CountedElement('SPAN');
+      label.attributes['data-cover-lookup-task-elapsed'] = `task-${index}`;
+      return label;
+    });
+    bodyElement.querySelectorAll = (selector) => {
+      counter.count('domQueries');
+      return selector === '[data-cover-lookup-task-elapsed]' ? labels : [];
+    };
+    context.syncCoverLookupElapsedTimer();
+    const tick = intervalCalls.find(({ delay }) => delay === 1000).callback;
+    tick();
+    const work = await counter.measure(() => {
+      for (let second = 0; second < 10; second += 1) tick();
+    });
+    assert.equal(labels[0].textContent, 'Elapsed 1s');
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:runtime/cover-lookup-modal-and-drawer.js#syncCoverLookupElapsedTimer',
+    small: 80,
+    large: 1000,
+    run,
+    budgets: { itemsVisited: 0, domQueries: 10, domMutations: 600 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
+  });
 });

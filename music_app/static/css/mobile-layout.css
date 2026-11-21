@@ -751,6 +751,8 @@ html[data-client-profile="mobile"] :is([data-open-track-modal-duplicate-folder],
   #utility-modal.is-mobile-page:is([data-active-tab="log-history"], [data-active-tab="problematic-files"])[data-mobile-utility-view="list"] .utility-detail,
   #utility-modal.is-mobile-page:is([data-active-tab="log-history"], [data-active-tab="problematic-files"])[data-mobile-utility-view="detail"] .utility-sidebar { display: none; }
   #utility-modal.is-mobile-page .utility-sidebar-search { padding: 0 0 10px; }
+  /* A mobile Settings page is the plain page background: its controls are separate elements. */
+  #utility-modal.is-mobile-page .utility-modal-body { background: transparent; }
   #utility-modal.is-mobile-page[data-active-tab="rules"] .utility-detail { flex: none; }
   #utility-modal.is-mobile-page .utility-detail-header { grid-template-columns: 84px minmax(0, 1fr); }
   #utility-modal.is-mobile-page .utility-detail-cover { width: 84px; height: 84px; flex-basis: 84px; }

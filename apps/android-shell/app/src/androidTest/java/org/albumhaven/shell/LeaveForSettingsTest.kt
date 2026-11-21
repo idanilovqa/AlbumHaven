@@ -22,13 +22,14 @@ import org.junit.runner.RunWith
 /**
  * Owner report (2026-11-09): the app crashed when it opened a system Settings screen, as its
  * update flow does for "Appear on top": the page's picture was taken of a window whose surface
- * was already gone. The user leaves the app for each Settings screen it opens and comes back.
+ * was already gone. The user leaves the app for each Settings screen it opens and comes back
+ * (Android's own battery question, which leaves the app underneath, is in [BatteryPromptTest]).
  */
 @RunWith(AndroidJUnit4::class)
 class LeaveForSettingsTest {
     private val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
     private val packageName = InstrumentationRegistry.getInstrumentation().targetContext.packageName
-    private val origin = DeviceOrigin { DeviceOrigin.html(PAGE) }.start(DeviceOrigin.DEV_PORT)
+    private val origin = DeviceOrigin { DeviceOrigin.html(DeviceOrigin.LIBRARY_PAGE) }.start(DeviceOrigin.DEV_PORT)
 
     @After
     fun tearDown() = origin.close()
@@ -44,6 +45,8 @@ class LeaveForSettingsTest {
             val settingsScreens = listOf(
                 Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, "package:$packageName".toUri()),
                 Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, "package:$packageName".toUri()),
+                // Where the battery offer sends the user when Android's own question is not available.
+                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, "package:$packageName".toUri()),
             )
             for (screen in settingsScreens) {
                 scenario.onActivity { it.startActivity(screen) }
@@ -70,16 +73,5 @@ class LeaveForSettingsTest {
     }.also {
         assertEquals(packageName, device.currentPackageName)
         assertFalse(device.hasObject(By.res(packageName, "recovery_root")))
-    }
-
-    private companion object {
-        const val PAGE = """<!doctype html><title>Library</title><body style="background:#2a6">Library
-<script>
-AlbumHavenBridge.onmessage = () => { document.title = 'replied'; };
-AlbumHavenBridge.postMessage(JSON.stringify({
-  protocol: 1, id: '6f0e2a5c-4c1f-4a3e-9f17-2b8f4f1f7a11', type: 'command',
-  name: 'bridge.handshake', payload: { protocolMin: 1, protocolMax: 1 },
-}));
-</script>"""
     }
 }

@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const { loadPendingProjectionFetch } = require('../helpers/pending-projection-fetch');
 
 const helperPath = path.join(
   __dirname,
@@ -352,7 +353,7 @@ function loadHelper(options = {}) {
       return String(value);
     },
     albumHasDisplayCover(album) {
-      return Boolean(album?.cover_path || options.albumHasDisplayCover);
+      return Boolean(album?.cover_ref || options.albumHasDisplayCover);
     },
     buildAlbumDisplayCoverUrlCalls: [],
     buildAlbumDisplayCoverUrl(album) {
@@ -443,6 +444,7 @@ function loadHelper(options = {}) {
   };
 
   vm.createContext(context);
+  loadPendingProjectionFetch(context);
   vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'album-artbox.js'), 'utf8'), context);
   vm.runInContext(helperSource, context, { filename: helperPath });
 
@@ -2066,13 +2068,13 @@ async function run() {
 
   {
     const { context, trackModal, trackModalCover, galleryImages } = loadHelper({
-      galleryImageSources: ['/cover?path=one', '/cover?path=two'],
+      galleryImageSources: ['/cover/one', '/cover/two'],
       onFetchAlbumDetails({ url }) {
         assert.equal(url, '/album-details?album_key=alpha');
         assert.equal(trackModal.hidden, false, 'the loading shell should be visible before the detail fetch starts');
         assert.deepEqual(
           galleryImages.map((image) => image.src),
-          ['/cover?path=one', '/cover?path=two'],
+          ['/cover/one', '/cover/two'],
           'opening the real modal must not strip already-loaded gallery image sources',
         );
         return new Promise(() => {});
@@ -2083,7 +2085,7 @@ async function run() {
       key: 'alpha',
       name: 'Album Alpha',
       preview_only: true,
-      cover_path: 'C:/Music/Album Alpha/cover.jpg',
+      cover_ref: 'C:/Music/Album Alpha/cover.jpg',
     });
 
     assert.equal(trackModal.hidden, false);
@@ -2091,12 +2093,12 @@ async function run() {
     assert.deepEqual(context.modalSchedulingEvents, ['fetch-album-details']);
     assert.match(trackModalCover.innerHTML, /Loading cover art/);
     assert.doesNotMatch(trackModalCover.innerHTML, /<img/);
-    assert.deepEqual(galleryImages.map((image) => image.src), ['/cover?path=one', '/cover?path=two']);
+    assert.deepEqual(galleryImages.map((image) => image.src), ['/cover/one', '/cover/two']);
     assert.deepEqual(galleryImages.map((image) => image.dataset.modalSuspendedSrc), [undefined, undefined]);
 
     context.closeTrackModal();
 
-    assert.deepEqual(galleryImages.map((image) => image.src), ['/cover?path=one', '/cover?path=two']);
+    assert.deepEqual(galleryImages.map((image) => image.src), ['/cover/one', '/cover/two']);
     assert.deepEqual(galleryImages.map((image) => image.dataset.modalSuspendedSrc), [undefined, undefined]);
   }
 
@@ -2201,7 +2203,7 @@ async function run() {
       key: 'alpha',
       name: 'Album Alpha',
       preview_only: true,
-      cover_path: 'C:/Music/Album Alpha/cover.jpg',
+      cover_ref: 'C:/Music/Album Alpha/cover.jpg',
     });
     const elements = context.getTrackModalElements();
 
@@ -2224,7 +2226,7 @@ async function run() {
     const hydratedAlbum = {
       key: 'alpha',
       name: 'Album Alpha',
-      cover_path: 'C:/Music/Album Alpha/cover.jpg',
+      cover_ref: 'C:/Music/Album Alpha/cover.jpg',
       tracks: [{ path: 'C:\\Music\\Album Alpha\\01 Track.flac' }],
     };
     resolveAlbumDetails({
@@ -2235,7 +2237,7 @@ async function run() {
     await flushMicrotasks();
 
     assert.deepEqual(context.renderTrackModalReleaseCalls, ['alpha']);
-    assert.equal(context.renderTrackModalReleaseAlbums[0].cover_path, hydratedAlbum.cover_path);
+    assert.equal(context.renderTrackModalReleaseAlbums[0].cover_ref, hydratedAlbum.cover_ref);
     assert.equal(context.state.ui.pendingTrackModalLoadAlbumKey, '');
 
     context.closeTrackModal();
@@ -3584,4 +3586,27 @@ test('release candidate cache follows changes to the manual version family', () 
   assert.equal(context.getCachedHydratedTrackModalAlbum(album.key), album);
   context.getManualVersionFamilyKeys = () => new Set([album.key, 'artist::bonus']);
   assert.equal(context.getCachedHydratedTrackModalAlbum(album.key), null);
+});
+
+// Request-capture contract (tests/ci/bounded-interactions.json): repeated Album Details opens
+// share one /album-details request and the cached result; a rejected album_id adds one retry.
+const { assertInteractionRequests, measureInteractionContract } = require('../helpers/request-capture');
+
+test('request capture: Album Details opens fetch /album-details once per album', async () => {
+  const id = 'js:runtime/track-modal-lightbox-helpers.js#fetchTrackModalAlbumDetails';
+  await measureInteractionContract(id, async (opens) => {
+    const { context } = loadHelper({
+      onFetchAlbumDetails: ({ url }) => (url.includes('album_id=')
+        ? { ok: false, status: 400, json: () => Promise.resolve({ ok: false, error: 'Unsupported album-details query parameter', unsupported_parameters: ['album_id'] }) }
+        : { ok: true, status: 200, json: () => Promise.resolve({ ok: true, album: { key: new URL(url, 'http://localhost').searchParams.get('album_key'), tracks: [] } }) }),
+    });
+    const loadMany = albumKey => Promise.all(Array.from({ length: opens }, () => context.loadTrackModalAlbumDetails(albumKey)));
+    await loadMany('alpha');
+    await loadMany('alpha');
+    await context.loadTrackModalAlbumDetails('beta', { albumId: 7 });
+    const urls = context.fetchCalls.map(call => call.url);
+    assert.deepEqual(urls, ['/album-details?album_key=alpha', '/album-details?album_key=beta&album_id=7', '/album-details?album_key=beta']);
+    assertInteractionRequests(id, urls);
+    return { requests: urls.length };
+  });
 });

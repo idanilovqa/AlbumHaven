@@ -359,7 +359,7 @@ export class TrackModalActions {
   }) {
     await this.closeIfOpen();
     await galleryActions.waitForAlbumVisible(destinationAlbum);
-    await galleryActions.clickAlbumDetailsByAlbumName(destinationAlbum);
+    await galleryActions.clickRevealedAlbumDetailsByAlbumName(destinationAlbum);
     const destinationSummary = await this.waitForExactTrackRowCount(destinationTrackCount);
     const destination = {
       credits: await this.readTrackCredits(destinationCreditCount),
@@ -367,7 +367,7 @@ export class TrackModalActions {
     };
 
     await this.close();
-    await galleryActions.clickAlbumDetailsByAlbumName(sourceAlbum);
+    await galleryActions.clickRevealedAlbumDetailsByAlbumName(sourceAlbum);
     const sourceSummary = await this.waitForExactTrackRowCount(sourceTrackCount);
     const source = {
       credits: await this.readTrackCredits(sourceCreditCount),
@@ -384,7 +384,7 @@ export class TrackModalActions {
   }) {
     await this.closeIfOpen();
     if (!(await galleryActions.hasVisibleAlbum(destinationAlbum))) return false;
-    await galleryActions.clickAlbumDetailsByAlbumName(destinationAlbum);
+    await galleryActions.clickRevealedAlbumDetailsByAlbumName(destinationAlbum);
     await this.waitForLoadedSummary();
     await this.openTagEditor();
     await tagEditorActions.waitForOpen({ expectedTrackCount: 1 });

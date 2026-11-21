@@ -299,10 +299,8 @@ def test_separate_release_only_repair_path_still_succeeds_and_invalidates_projec
         {"artist::album"},
         {"artist::album", "artist::album::deluxe"},
     ]
-    assert invalidations == [
-        {"database_url": database_url, "kinds": ("problematic-files",)},
-        {"database_url": database_url, "kinds": ("problematic-files",)},
-    ]
+    # Separate releases mark their albums for the Problematic Files index (0188); no cache is dropped.
+    assert invalidations == []
 
 
 def test_handle_edit_tags_request_exception_only_uses_override_and_queues_save(config):
@@ -1613,3 +1611,72 @@ def test_failed_edit_restores_a_file_another_process_holds_briefly(config, monke
 
     assert albums == {first: "Ремиксы", second: "Ремиксы"}
     assert failure["edit_outcome"] == "failed_rolled_back"
+
+
+def test_blank_album_edit_hands_the_finalizer_the_selected_albums_loaded_inventory(config):
+    """FTC-NON-ALBUM-013 without a browser: clearing Album on one numbered track
+    of an 18-track album whose folder names it keeps the track in that album.
+    A Postgres edit request overlays the selected albums' inventory on the live
+    cache; those 17 siblings are the inference evidence, so the finalizer must
+    receive them. Handed only the edited entry, inference detaches the track and
+    Album Details shows 17 rows instead of 18."""
+    from collections import ChainMap
+
+    from music_app.services.non_album_view_payloads import infer_blank_album_membership
+
+    album_name = "Queued Album Rename Fixture"
+    folder = config["MUSIC_DIR"] / "E2E Rarity Artist" / album_name
+    selected_inventory = {
+        str(folder / f"{number:02d} - Rename Track {number}.mp3"): {
+            "path": str(folder / f"{number:02d} - Rename Track {number}.mp3"),
+            "title": f"Rename Track {number}",
+            "album": album_name,
+            "album_artist": "E2E Rarity Artist",
+            "artist": "E2E Rarity Artist",
+            "track_number": number,
+        }
+        for number in range(1, 19)
+    }
+    target = str(folder / "02 - Rename Track 2.mp3")
+    live_cache: dict[str, dict[str, object]] = {}
+    state_payload = {
+        # The request-scoped Postgres edit state: loaded inventory over the live cache.
+        "file_cache": ChainMap({path: dict(entry) for path, entry in selected_inventory.items()}, live_cache),
+        "separate_release_keys": set(),
+    }
+    queued: list[dict[str, object]] = []
+
+    payload = handle_edit_tags_request(
+        album={"name": album_name, "album_artist": "E2E Rarity Artist", "tracks": [{"path": path} for path in selected_inventory]},
+        updates={target: {"album": ""}},
+        requested_track_paths={target},
+        config=config,
+        logger=_logger_stub(),
+        get_state=lambda: state_payload,
+        create_save_task=lambda kind: f"task-{kind}",
+        queue_finalize_save_task=lambda **kwargs: queued.append(dict(kwargs)),
+        apply_repairs_worker=lambda raw_path, repairs: (raw_path, True, list(repairs)),
+        update_cache_entry_after_repairs=lambda path, entry, repairs: {**entry, **repairs, "path": str(path)},
+        build_affected_album_dicts=lambda *_args, **_kwargs: [],
+        load_separate_release_keys=lambda _config: set(),
+        normalize_exception_value=lambda value: str(value or "").strip(),
+        append_log_history=lambda *_args, **_kwargs: None,
+        log_app_event=lambda *_args, **_kwargs: None,
+        structural_edit_fields={"album"},
+        edit_write_workers=1,
+        save_track_exception_override=lambda *_args: pytest.fail("no exception edit"),
+    )
+
+    assert payload["ok"] is True, payload
+    (finalize,) = queued
+    assert finalize["changed_paths"] == {target}
+    snapshot = finalize["updated_file_cache"]
+    assert snapshot[target]["album"] == ""
+    assert {path for path in snapshot if path != target} == set(selected_inventory) - {target}
+    assert all(snapshot[path]["album"] == album_name for path in snapshot if path != target)
+    # The blank-Album persistence weighs the snapshot (plus the live cache's
+    # container siblings, here none) and keeps the track: 18 rows.
+    assert infer_blank_album_membership(snapshot[target], snapshot.values()) == album_name
+    # The regression: the edited entry alone detaches the track, leaving 17.
+    assert infer_blank_album_membership(snapshot[target], [snapshot[target]]) is None
+    assert live_cache == {}, "the live cache is never copied or written by the request"

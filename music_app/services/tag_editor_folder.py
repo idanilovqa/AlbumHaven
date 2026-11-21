@@ -117,20 +117,18 @@ def load_tag_editor_folder_files(
     ):
         folder = release_root
         entries = folder.rglob("*")
-    candidates = sorted(
-        (
-            candidate
-            for candidate in (
-                entry.resolve(strict=True)
-                for entry in entries
-                if entry.is_file() and entry.suffix.casefold() in supported
-            )
-            if candidate.is_relative_to(folder) and _is_within_any_root(candidate, roots)
-        ),
-        key=lambda path: _disc_order_key(path, folder),
-    )
-    if len(candidates) > _MAX_FOLDER_FILES:
-        raise ValueError("The selected folder contains too many audio files.")
+    # Stop at the audio-file cap instead of resolving the whole folder first.
+    candidates: list[Path] = []
+    for entry in entries:
+        if not (entry.is_file() and entry.suffix.casefold() in supported):
+            continue
+        candidate = entry.resolve(strict=True)
+        if not (candidate.is_relative_to(folder) and _is_within_any_root(candidate, roots)):
+            continue
+        candidates.append(candidate)
+        if len(candidates) > _MAX_FOLDER_FILES:
+            raise ValueError("The selected folder contains too many audio files.")
+    candidates.sort(key=lambda path: _disc_order_key(path, folder))
     if paths_only:
         return {"folder_path": str(folder), "paths": [str(candidate) for candidate in candidates]}
 

@@ -674,7 +674,7 @@ def test_cover_lookup_labels_a_path_only_task_with_its_album_renamed_in_place(mo
     monkeypatch.setattr(cover_routes, "AlbumIdentityLineageRepository", FakeLineageRepository)
     monkeypatch.setattr(cover_routes, "resolve_album_context", lambda _config, _album: None)
     monkeypatch.setattr(
-        cover_routes, "_resolve_cover_album_context",
+        cover_routes, "_resolve_album_or_distributed_context",
         lambda _config, album: SimpleNamespace(album_root="main", track_paths=cover_routes._album_track_paths(album)),
     )
 

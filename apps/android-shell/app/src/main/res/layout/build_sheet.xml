@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Choose app build: one row per sandbox whose build this app does not have. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@drawable/sheet_surface"
+    android:orientation="vertical"
+    android:paddingBottom="16dp">
+
+    <View
+        android:layout_width="40dp"
+        android:layout_height="4dp"
+        android:layout_gravity="center_horizontal"
+        android:layout_marginTop="8dp"
+        android:background="@drawable/sheet_grab" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:accessibilityHeading="true"
+        android:paddingHorizontal="16dp"
+        android:paddingTop="10dp"
+        android:text="@string/build_sheet_title"
+        android:textColor="@color/sheet_ink"
+        android:textSize="16sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/build_sheet_installed"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingHorizontal="16dp"
+        android:paddingBottom="10dp"
+        android:textColor="@color/sheet_muted"
+        android:textSize="12sp" />
+
+    <ScrollView
+        android:id="@+id/build_sheet_scroll"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content">
+
+        <LinearLayout
+            android:id="@+id/build_sheet_rows"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingHorizontal="8dp" />
+    </ScrollView>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_marginTop="8dp"
+        android:background="@color/sheet_line" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="end"
+        android:orientation="horizontal"
+        android:paddingHorizontal="16dp"
+        android:paddingTop="12dp">
+
+        <Button
+            android:id="@+id/build_sheet_cancel"
+            style="@style/RecoveryAction"
+            android:text="@string/build_sheet_cancel" />
+
+        <Button
+            android:id="@+id/build_sheet_install"
+            style="@style/RecoveryAction"
+            android:layout_marginStart="10dp"
+            android:background="@drawable/button_primary"
+            android:textColor="@color/button_primary_text" />
+    </LinearLayout>
+</LinearLayout>

@@ -13,7 +13,7 @@ function buildPersistedPlaybackQueue(currentTrackPath) {
         ...(track.albumArtist ? { albumArtist: String(track.albumArtist) } : {}),
         album: String(track.album || ''),
         ...(track.year ? { year: String(track.year) } : {}),
-        coverPath: String(track.coverPath || ''),
+        coverRef: String(track.coverRef || ''),
         ...(Number(track.durationSeconds) > 0
           ? { durationSeconds: Number(track.durationSeconds) }
           : {}),
@@ -63,7 +63,7 @@ function buildPersistedPlayerState(options = {}) {
       ...(current.albumArtist ? { albumArtist: String(current.albumArtist) } : {}),
       album: String(current.album || ''),
       ...(current.year ? { year: String(current.year) } : {}),
-      coverPath: String(current.coverPath || ''),
+      coverRef: String(current.coverRef || ''),
       ...(durationSeconds > 0
         ? { durationSeconds }
         : {}),
@@ -92,7 +92,7 @@ function restorePersistedPlaybackQueue(parsedState, currentTrackPath) {
           ...(track.albumArtist ? { albumArtist: String(track.albumArtist) } : {}),
           album: String(track.album || ''),
           ...(track.year ? { year: String(track.year) } : {}),
-          coverPath: String(track.coverPath || ''),
+          coverRef: String(track.coverRef || ''),
           ...(Number(track.durationSeconds) > 0
             ? { durationSeconds: Number(track.durationSeconds) }
             : {}),

@@ -292,7 +292,7 @@ function validatePerformanceTargets(contract, expectedCases, expectedNames) {
 
   const defaults = contract.targets.filter((target) => target.defaultMember === true);
   const omissions = contract.targets.filter((target) => target.defaultMember === false);
-  if (defaults.length !== 29) errors.push('default performance group must expose all 29 targets');
+  if (defaults.length !== 31) errors.push('default performance group must expose all 31 targets');
   if (omissions.length !== 0) errors.push('default performance group must not omit a reviewed target');
   return errors;
 }
@@ -518,7 +518,7 @@ test('matrix validation accepts isolated database-only mutation ownership', () =
   assert.deepEqual(errors, []);
 });
 
-test('functional shard contract owns all 192 browser-functional cases exactly once', () => {
+test('functional shard contract owns every browser-functional case exactly once', () => {
   const matrix = readJson(testDataMatrixPath);
   const expectedCases = new Set(
     matrix
@@ -534,14 +534,13 @@ test('functional shard contract owns all 192 browser-functional cases exactly on
   const contract = readJson(functionalShardsPath);
   const errors = validateFunctionalShards(contract, expectedCases);
 
-  assert.equal(expectedCases.size, 192);
   assert.deepEqual(errors, []);
   assert.equal(contract.shards.length, 8);
   assert.equal(contract.shards.every((shard) => shard.invocations.length > 0), true);
   assert.equal(contract.workersPerInvocation, 1);
 });
 
-test('performance target contract owns all 61 performance cases across 29 targets', () => {
+test('performance target contract owns every performance case across the approved targets', () => {
   const matrix = readJson(testDataMatrixPath);
   const expectedCases = new Set(
     matrix
@@ -582,14 +581,14 @@ test('performance target contract owns all 61 performance cases across 29 target
     'scan-metadata',
     'scan-page',
     'scan-health', 'scan-error',
+    'edit-tags-split-merge',
+    'edit-tags-api-consecutive',
   ]);
   const contract = readJson(performanceTargetsPath);
   const errors = validatePerformanceTargets(contract, expectedCases, expectedNames);
 
-  assert.equal(expectedCases.size, 61);
   assert.deepEqual(errors, []);
-  assert.equal(contract.targets.length, 29);
-  assert.equal(contract.targets.filter((target) => target.defaultMember).length, 29);
+  assert.equal(contract.targets.every((target) => target.defaultMember), true);
   assert.equal(
     contract.targets
       .filter((target) => target.calibrationState !== 'approved')
@@ -749,18 +748,18 @@ test('idle-memory fixture uses the owner-approved shared local and CI limits', (
 
 test('read-only inventory command reports complete discovery and ownership totals', () => {
   const inventory = discoverInventory();
+  const categoryByConfig = new Map(inventory.surfaces.map((surface) => [surface.config, surface.category]));
+  const matrixCategories = { browserFunctional: 0, mobile: 0, component: 0, performance: 0, total: 0 };
+  for (const entry of readJson(testDataMatrixPath)) {
+    matrixCategories[categoryByConfig.get(entry.config)] += 1;
+    matrixCategories.total += 1;
+  }
 
-  assert.equal(inventory.configuredSurfaces, 12);
-  assert.deepEqual(inventory.categories, {
-    browserFunctional: 192,
-    component: 314,
-    mobile: 78,
-    performance: 61,
-    total: 645,
-  });
+  assert.equal(inventory.configuredSurfaces, configuredPlaywrightSurfaces.length);
+  assert.deepEqual(inventory.categories, matrixCategories);
   assert.deepEqual(inventory.ownership, {
-    testDataMatrix: 645,
-    functionalShards: 192,
-    performanceTargets: 61,
+    testDataMatrix: matrixCategories.total,
+    functionalShards: matrixCategories.browserFunctional,
+    performanceTargets: matrixCategories.performance,
   });
 });

@@ -5,6 +5,7 @@ import {
   queryPersistedAlbumIdentity,
   queryPersistedAlbumTrackMetadata,
 } from '../helpers/postgresAlbumIdentityHelpers.js';
+import { coverPathForReference } from '../helpers/coverReferences.js';
 
 const ARTIST = 'Watcher Reconciliation Artist';
 const TARGET_ALBUM = 'Watcher Reconciliation Album';
@@ -69,7 +70,7 @@ test('FTC-COVERS-034 watcher prefers front-named local art over a larger booklet
           WATCHER_LOCAL_COVER_TARGET,
           60000,
         );
-        expect(opened.album.cover_path).toMatch(/[\\/]front-scan\.jpg$/i);
+        expect(await coverPathForReference(opened.album.cover_ref)).toMatch(/[\\/]front-scan\.jpg$/i);
       }).toPass({ timeout: 60000, intervals: [250, 500, 1000] });
 
       await trackModalActions.waitForLoadedSummary();
@@ -1201,6 +1202,11 @@ test(`FTC-SEARCH-NAV-032 watcher sorts I${apostrophe}m with Her before IZZ witho
         context,
         managedAppLifecycle,
       });
+      // The tree is read on the next page load, so every album must be indexed
+      // first: wait for each addition before writing the next.
+      let revision = (await libraryFilesystemWatcherActions.waitForRevisionAfter(
+        status.inventory_mutation_revision,
+      )).inventory_mutation_revision;
       for (const target of siblings) {
         await fixture.createSiblingAlbum({
           album: target.album,
@@ -1209,10 +1215,9 @@ test(`FTC-SEARCH-NAV-032 watcher sorts I${apostrophe}m with Her before IZZ witho
           trackArtist: target.artist,
           albumArtist: target.artist,
         });
+        revision = (await libraryFilesystemWatcherActions.waitForRevisionAfter(revision))
+          .inventory_mutation_revision;
       }
-      await libraryFilesystemWatcherActions.waitForRevisionAfter(
-        status.inventory_mutation_revision,
-      );
     });
 
     await stepLogger.step('Ignore leading punctuation for ordering but preserve every display name', async () => {
@@ -1718,7 +1723,7 @@ test('FTC-COVERS-033 watcher indexes a new album and applies one automatic cover
           { timeout: 60000 },
         );
         expect(opened.album.cover_selection_origin).toBe('automatic');
-        expect(opened.album.cover_path).toMatch(/[\\/]cover\.jpg$/i);
+        expect(await coverPathForReference(opened.album.cover_ref)).toMatch(/[\\/]cover\.jpg$/i);
       }).toPass({ timeout: 60000, intervals: [250, 500, 1000] });
 
       await trackModalActions.waitForLoadedSummary();
@@ -1726,7 +1731,7 @@ test('FTC-COVERS-033 watcher indexes a new album and applies one automatic cover
       const coverFiles = fs.readdirSync(fixture.albumDirectory)
         .filter((name) => /^cover\.(?:jpe?g|png|webp)$/i.test(name));
       expect(coverFiles).toEqual(['cover.jpg']);
-      fixture.coverPath = opened.album.cover_path;
+      fixture.coverReference = opened.album.cover_ref;
       fixture.coverRevision = opened.album.cover_revision;
       await trackModalActions.close();
     });
@@ -1742,7 +1747,8 @@ test('FTC-COVERS-033 watcher indexes a new album and applies one automatic cover
         { timeout: 60000 },
       );
       expect(reopened.album.cover_selection_origin).toBe('automatic');
-      expect(reopened.album.cover_path).toBe(fixture.coverPath);
+      // The same file keeps the same opaque reference across a restart.
+      expect(reopened.album.cover_ref).toBe(fixture.coverReference);
       expect(reopened.album.cover_revision).toBe(fixture.coverRevision);
       await trackModalActions.waitForLoadedSummary();
       await expect(trackModalActions.trackModal.detailedCoverImage).toBeVisible();
@@ -1774,6 +1780,78 @@ test('FTC-COVERS-033 watcher indexes a new album and applies one automatic cover
         discogs_detail_requests: 0,
         candidate_image_requests: 0,
       });
+    });
+  } catch (error) {
+    originalFailure = error;
+  } finally {
+    if (fixture) await fixture.cleanup({ context, managedAppLifecycle, originalFailure });
+    else if (originalFailure) throw originalFailure;
+  }
+});
+
+// Cyrillic read as cp1251 inside UTF-8: Problematic Files lists the album for its encoding.
+const WATCHER_PROBLEM_ALBUM = 'Watcher Р“Р°РјРјР° Live';
+
+test('FTC-UTIL-PROBLEMS-014 a watcher-found problem album appears in the open Problematic Files list without a reload', {
+  tag: '@area:problematic-files',
+}, async ({
+  context,
+  galleryActions,
+  libraryFilesystemWatcherActions,
+  managedAppLifecycle,
+  page,
+  settingsModalAppBarActions,
+  stepLogger,
+  utilityProblematicFilesActions,
+  utilityTabBarActions,
+}) => {
+  test.skip(process.platform === 'linux', 'Native library watching is deferred on Linux; use manual Full Rescan.');
+  test.setTimeout(240000);
+  let fixture;
+  let originalFailure;
+  try {
+    let documentMarker;
+    let status;
+    await stepLogger.step('Open Problematic Files on the indexed list', async () => {
+      await galleryActions.goto('/?surface=albums');
+      await galleryActions.waitForGalleryReady();
+      await settingsModalAppBarActions.openSettings();
+      await utilityTabBarActions.openTab('problematic-files');
+      await utilityProblematicFilesActions.waitForReady({ requirePopulated: true });
+      expect((await utilityProblematicFilesActions.readCompleteListItems()).map((item) => item.title))
+        .not.toContain(WATCHER_PROBLEM_ALBUM);
+      // parity-check: allow-read-only-measurement-evaluate -- proves the document is never reloaded
+      documentMarker = await page.evaluate(() => (window.__problematicLiveMarker = `${Date.now()}-${Math.random()}`));
+      status = await libraryFilesystemWatcherActions.readStatus();
+      expect(status.scan_in_progress).toBe(false);
+    });
+
+    await stepLogger.step('The watcher indexes a new album with garbled tags', async () => {
+      fixture = await createWatchedAlbumFixture({
+        artist: 'Watcher Problem Artist',
+        album: WATCHER_PROBLEM_ALBUM,
+        albumFolderName: 'Watcher Problem Live',
+        year: 2011,
+        ownedDirectoryName: 'watcher-problematic-live',
+        context,
+        managedAppLifecycle,
+      });
+      await libraryFilesystemWatcherActions.waitForRevisionAfter(status.inventory_mutation_revision);
+    });
+
+    await stepLogger.step('The open list shows it, with its reason, in place', async () => {
+      await expect.poll(async () => (await utilityProblematicFilesActions.readCompleteListItems())
+        .filter((item) => item.title === WATCHER_PROBLEM_ALBUM).length, {
+        timeout: 30000, intervals: [500, 1000, 2000],
+      }).toBe(1);
+      const listed = (await utilityProblematicFilesActions.readCompleteListItems())
+        .find((item) => item.title === WATCHER_PROBLEM_ALBUM);
+      expect(listed.meta).toContain('Watcher Problem Artist');
+      const detail = await utilityProblematicFilesActions.selectAlbumByTitle(WATCHER_PROBLEM_ALBUM);
+      expect(detail.artist).toContain('Watcher Problem Artist');
+      expect(detail.problemReasons.length).toBeGreaterThan(0);
+      // parity-check: allow-read-only-measurement-evaluate -- same document, no reload
+      expect(await page.evaluate(() => window.__problematicLiveMarker)).toBe(documentMarker);
     });
   } catch (error) {
     originalFailure = error;

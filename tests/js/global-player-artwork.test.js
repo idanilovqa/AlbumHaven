@@ -57,7 +57,7 @@ async function withBrowserArtworkFakes(options, callback) {
     },
   };
   globalThis.getComputedStyle = () => ({
-    backgroundImage: options.backgroundImage ?? 'url("/cover?path=Joseph.png")',
+    backgroundImage: options.backgroundImage ?? 'url("/cover/Joseph.png")',
   });
   globalThis.Image = FakeImage;
 
@@ -80,11 +80,11 @@ test('player artwork checkpoint extracts the computed URL and decodes it with a 
   await withBrowserArtworkFakes({}, async ({ button, decodeCalls }) => {
     const checkpoint = await serializedCheckpoint(button);
 
-    assert.deepEqual(decodeCalls, ['http://127.0.0.1:4173/cover?path=Joseph.png']);
+    assert.deepEqual(decodeCalls, ['http://127.0.0.1:4173/cover/Joseph.png']);
     assert.deepEqual(checkpoint, {
       hidden: false,
-      backgroundImage: 'url("/cover?path=Joseph.png")',
-      sourceUrl: 'http://127.0.0.1:4173/cover?path=Joseph.png',
+      backgroundImage: 'url("/cover/Joseph.png")',
+      sourceUrl: 'http://127.0.0.1:4173/cover/Joseph.png',
       width: 72,
       height: 72,
       naturalWidth: 480,
@@ -102,7 +102,7 @@ test('player artwork checkpoint rejects a CSS URL when browser Image.decode reje
       /invalid image/,
     );
 
-    assert.deepEqual(decodeCalls, ['http://127.0.0.1:4173/cover?path=Joseph.png']);
+    assert.deepEqual(decodeCalls, ['http://127.0.0.1:4173/cover/Joseph.png']);
   });
 });
 

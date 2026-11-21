@@ -17,6 +17,7 @@ const WATCHER_FIXTURE_DIRECTORIES = [
   'gallery-native-response-overlap',
   'generated-preview-storage',
   'problematic-files-missing-album',
+  'watcher-problematic-live',
 ];
 
 function resolveWatcherFixtureMediaRoot(environment = process.env) {

@@ -313,51 +313,54 @@ class CoverLookupTasksPostgresAdapter:
         persistence_revision: int | None = None,
         expected_search_generation: str = "",
     ) -> None:
+        if not expected_search_generation:
+            self.upsert_notifications([(task, persistence_revision)])
+            return
         normalized_task = _normalize_task(task)
         if normalized_task is None:
             return
-        row = _task_row(
-            normalized_task,
-            source_index=0,
-            persistence_revision=persistence_revision,
-        )
         with self._connect_to_database() as connection:
             with _transaction(connection):
                 _ensure_bootstrap_context(connection)
-                if expected_search_generation:
-                    current_row = connection.execute(
-                        _load_notification_sql().rstrip().rstrip(";") + " for update of cover_lookup_tasks",
-                        (str(normalized_task["id"]),),
-                    ).fetchone()
-                    current = _task_from_row(current_row) if current_row is not None else {}
-                    if (
-                        current.get("search_generation") != expected_search_generation
-                        or ((current.get("job_contract") or {}).get("job_kind") == "save_remote_selection"
-                            and (normalized_task.get("job_contract") or {}).get("job_kind") != "save_remote_selection")
-                        or (current.get("status") in {"completed", "failed", "canceled"}
-                            and normalized_task.get("status") != current.get("status"))
-                    ):
-                        return
-                    if current.get("notification_action_taken"):
-                        for key in ("notification_action_taken", "selected_candidate_id", "save_generation",
-                                    "notification_completed_at", "notification_expires_at"):
-                            if key in current:
-                                normalized_task[key] = current[key]
-                    row = _task_row(normalized_task, source_index=0, persistence_revision=persistence_revision)
-                connection.execute(
-                    _upsert_notification_sql(),
-                    (
-                        row["task_key"],
-                        row["status"],
-                        row["requested_at"],
-                        row["completed_at"],
-                        row["album_key"],
-                        row["selected_cover_private_path"],
-                        _jsonb(row["provider_payload"]),
-                        row["error_message"],
-                        _jsonb(row["metadata"]),
-                    ),
+                current_row = connection.execute(
+                    _load_notification_sql().rstrip().rstrip(";") + " for update of cover_lookup_tasks",
+                    (str(normalized_task["id"]),),
+                ).fetchone()
+                current = _task_from_row(current_row) if current_row is not None else {}
+                if (
+                    current.get("search_generation") != expected_search_generation
+                    or ((current.get("job_contract") or {}).get("job_kind") == "save_remote_selection"
+                        and (normalized_task.get("job_contract") or {}).get("job_kind") != "save_remote_selection")
+                    or (current.get("status") in {"completed", "failed", "canceled"}
+                        and normalized_task.get("status") != current.get("status"))
+                ):
+                    return
+                if current.get("notification_action_taken"):
+                    for key in ("notification_action_taken", "selected_candidate_id", "save_generation",
+                                "notification_completed_at", "notification_expires_at"):
+                        if key in current:
+                            normalized_task[key] = current[key]
+                _execute_notification_upsert(
+                    connection,
+                    _task_row(normalized_task, source_index=0, persistence_revision=persistence_revision),
                 )
+
+    def upsert_notifications(
+        self,
+        tasks: list[tuple[dict[str, object], int | None]],
+    ) -> None:
+        rows = [
+            _task_row(normalized_task, source_index=0, persistence_revision=persistence_revision)
+            for task, persistence_revision in tasks
+            if (normalized_task := _normalize_task(task)) is not None
+        ]
+        if not rows:
+            return
+        with self._connect_to_database() as connection:
+            with _transaction(connection):
+                _ensure_bootstrap_context(connection)
+                for row in rows:
+                    _execute_notification_upsert(connection, row)
 
     def delete_notifications(self, task_ids: set[str]) -> set[str]:
         normalized_ids = sorted({_text(task_id) for task_id in task_ids if _text(task_id)})
@@ -1406,6 +1409,23 @@ def _delete_notifications_sql() -> str:
           and ops.cover_lookup_tasks.task_key = any(%s::text[])
         returning ops.cover_lookup_tasks.task_key;
     """
+    )
+
+
+def _execute_notification_upsert(connection: Any, row: dict[str, Any]) -> None:
+    connection.execute(
+        _upsert_notification_sql(),
+        (
+            row["task_key"],
+            row["status"],
+            row["requested_at"],
+            row["completed_at"],
+            row["album_key"],
+            row["selected_cover_private_path"],
+            _jsonb(row["provider_payload"]),
+            row["error_message"],
+            _jsonb(row["metadata"]),
+        ),
     )
 
 

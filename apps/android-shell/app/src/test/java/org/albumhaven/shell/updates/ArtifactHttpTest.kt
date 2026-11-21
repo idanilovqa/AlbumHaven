@@ -169,6 +169,35 @@ class ArtifactHttpTest {
     }
 
     @Test
+    fun `the build index may be larger than a manifest`() {
+        backend.manifestBody = "x".repeat(ManifestValidator.MAX_MANIFEST_BYTES + 1)
+        assertEquals(
+            FetchResult.Body(backend.manifestBody),
+            http.fetchManifest(SandboxIndex.url(origin), SandboxIndex.MAX_INDEX_BYTES),
+        )
+        backend.manifestBody = "x".repeat(SandboxIndex.MAX_INDEX_BYTES + 1)
+        assertEquals(FetchResult.Refused(Rejection.MALFORMED), http.fetchManifest(SandboxIndex.url(origin), SandboxIndex.MAX_INDEX_BYTES))
+    }
+
+    @Test
+    fun `a rebuild is a signed bodiless POST whose status says what happened`() {
+        for ((code, result) in listOf(
+            202 to RebuildResult.STARTED, 409 to RebuildResult.ALREADY_RUNNING, 429 to RebuildResult.TOO_MANY,
+            503 to RebuildResult.UNAVAILABLE, 404 to RebuildResult.FAILED, 502 to RebuildResult.FAILED,
+        )) {
+            backend.rebuildCode = code
+            assertEquals(result, http.requestRebuild(origin, 2))
+        }
+        val request = backend.requests.last()
+        assertEquals("POST", request.method)
+        assertEquals("/artifacts/android/sandbox/rebuild/2", request.url.encodedPath)
+        assertEquals(0L, request.bodySize)
+        assertEquals("csrf token", request.headers[ShellSession.CSRF_HEADER])
+        backend.signedOut = true
+        assertEquals(RebuildResult.FAILED, http.requestRebuild(origin, 2))
+    }
+
+    @Test
     fun `the signed message matches the server's format`() {
         assertArrayEquals(
             (
@@ -215,6 +244,7 @@ class ArtifactHttpTest {
         var forgetEveryKey = false
         var manifestBody = "{\"schemaVersion\":1}"
         var manifestCode = 200
+        var rebuildCode = 202
         var downloadLength = "4096"
         var downloadLocation: String? = null
         var movedLength = "4096"
@@ -246,8 +276,10 @@ class ArtifactHttpTest {
                     downloadLocation != null -> MockResponse.Builder().code(302).addHeader("Location", downloadLocation!!).build()
                     else -> MockResponse.Builder().addHeader("Content-Length", downloadLength).build()
                 }
-                else -> signed(request) ?: if (path.endsWith("manifest.json")) {
+                else -> signed(request) ?: if (path.endsWith("manifest.json") || path.endsWith("index.json")) {
                     MockResponse.Builder().code(manifestCode).body(manifestBody).build()
+                } else if (path.startsWith("/artifacts/android/sandbox/rebuild/")) {
+                    json(rebuildCode, "{}")
                 } else {
                     json(200, JSONObject().put("path", DOWNLOAD_PATH).toString())
                 }

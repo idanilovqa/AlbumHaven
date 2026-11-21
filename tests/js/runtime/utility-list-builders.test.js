@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const { loadPendingProjectionFetch } = require('../helpers/pending-projection-fetch');
 
 const helperPath = path.join(
   __dirname,
@@ -214,6 +215,7 @@ function loadHelpers() {
     lastMergedPayload: null,
   };
   vm.createContext(context);
+  loadPendingProjectionFetch(context);
   context.window = context;
   vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'view-state-helpers.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/button-component.js'), 'utf8'), context);
@@ -446,12 +448,12 @@ test('player album resolution prefers fresh exact-track data over the active que
     key: 'album-alpha',
     name: 'Album Alpha',
     album_artist: 'Artist Alpha',
-    cover_path: 'C:\\Music\\Artist Alpha\\Album Alpha\\old-cover.jpg',
+    cover_ref: 'C:\\Music\\Artist Alpha\\Album Alpha\\old-cover.jpg',
     tracks: [{ path: playingTrackPath }],
   };
   const freshAlbum = {
     ...queueSnapshot,
-    cover_path: 'C:\\Music\\Artist Alpha\\Album Alpha\\new-cover.jpg',
+    cover_ref: 'C:\\Music\\Artist Alpha\\Album Alpha\\new-cover.jpg',
   };
   const playingTrack = {
     path: playingTrackPath,
@@ -1351,18 +1353,18 @@ test('findVisibleAlbumByTrackPaths fills missing cover authority from duplicate 
     key: 'preferred',
     track_paths: [sharedPath],
     album_preference: { rating: 8 },
-    cover_path: null,
+    cover_ref: null,
   }, {
     key: 'covered',
     track_paths: [sharedPath],
-    cover_path: 'D:\\Synthetic Music\\Rarity Artist\\Duplicate\\cover.png',
+    cover_ref: 'D:\\Synthetic Music\\Rarity Artist\\Duplicate\\cover.png',
   }];
 
   const album = context.findVisibleAlbumByTrackPaths(new Set([sharedPath]));
 
   assert.equal(album.key, 'preferred');
   assert.equal(
-    album.cover_path,
+    album.cover_ref,
     'D:\\Synthetic Music\\Rarity Artist\\Duplicate\\cover.png',
   );
 });
@@ -1402,7 +1404,7 @@ test('applyUpdatedAlbumsToCurrentView merges a second moved track into the stabl
     release_date: '2026-07-22',
     genres: ['Progressive Rock'],
     label: 'Fixture Records',
-    cover_path: 'D:\\Synthetic Music\\Rarity Artist\\Split\\folder.jpg',
+    cover_ref: 'D:\\Synthetic Music\\Rarity Artist\\Split\\folder.jpg',
     remote_cover_url: 'https://covers.example/stable-destination.jpg',
     remote_cover_thumbnail_url: 'https://covers.example/stable-destination-thumb.jpg',
     tracks: [firstMovedTrack],
@@ -1459,14 +1461,14 @@ test('applyUpdatedAlbumsToCurrentView keeps mounted covers when finalized split 
   const context = loadHelpers();
   const sourcePath = 'D:\\Music\\Artist\\Album\\02 Source.mp3';
   const destinationPath = 'D:\\Music\\Artist\\Album\\01 Destination.mp3';
-  const coverPath = 'D:\\Music\\Artist\\Album\\cover.png';
+  const coverRef = 'D:\\Music\\Artist\\Album\\cover.png';
   const remoteCoverUrl = 'https://covers.example/album.jpg';
   const visibleSource = {
     key: 'artist::album::2000',
     name: 'Album',
     album_artist: 'Artist',
     year: 2000,
-    cover_path: coverPath,
+    cover_ref: coverRef,
     remote_cover_url: remoteCoverUrl,
     tracks: [{ path: sourcePath }],
   };
@@ -1475,13 +1477,13 @@ test('applyUpdatedAlbumsToCurrentView keeps mounted covers when finalized split 
     name: 'Album Renamed',
     album_artist: 'Artist',
     year: 2000,
-    cover_path: coverPath,
+    cover_ref: coverRef,
     remote_cover_url: remoteCoverUrl,
     tracks: [{ path: destinationPath }],
   };
   const finalized = [visibleSource, visibleDestination].map((album) => ({
     ...album,
-    cover_path: null,
+    cover_ref: null,
     remote_cover_url: null,
   }));
   context.state.view.selected_artist = '';
@@ -1500,15 +1502,15 @@ test('applyUpdatedAlbumsToCurrentView keeps mounted covers when finalized split 
   });
 
   for (const album of context.lastMergedPayload.artist_groups[0].albums) {
-    assert.equal(album.cover_path, coverPath);
+    assert.equal(album.cover_ref, coverRef);
     assert.equal(album.remote_cover_url, remoteCoverUrl);
   }
 });
 
 test('applyUpdatedAlbumsToCurrentView keeps covers through consecutive selected-artist splits', () => {
   const context = loadHelpers();
-  const coverPath = 'D:\\Music\\Artist\\Album\\cover.png';
-  const coverPreviewUrl = '/cover?path=opaque&size=480&v=revision';
+  const coverRef = 'D:\\Music\\Artist\\Album\\cover.png';
+  const coverPreviewUrl = '/cover/opaque?size=480&v=revision';
   const remoteCoverUrl = 'https://covers.example/album.jpg';
   const albums = [
     ['artist::source::2000', 'Source', '03 Source.mp3'],
@@ -1524,13 +1526,13 @@ test('applyUpdatedAlbumsToCurrentView keeps covers through consecutive selected-
   }));
   const coveredAlbums = albums.map((album) => ({
     ...album,
-    cover_path: coverPath,
+    cover_ref: coverRef,
     cover_preview_url: coverPreviewUrl,
     remote_cover_url: remoteCoverUrl,
   }));
   const finalizedAlbums = albums.map((album) => ({
     ...album,
-    cover_path: null,
+    cover_ref: null,
     cover_preview_url: null,
     remote_cover_url: null,
   }));
@@ -1547,7 +1549,7 @@ test('applyUpdatedAlbumsToCurrentView keeps covers through consecutive selected-
   });
 
   for (const album of context.lastMergedPayload.primary_artist_groups[0].albums) {
-    assert.equal(album.cover_path, coverPath);
+    assert.equal(album.cover_ref, coverRef);
     assert.equal(album.cover_preview_url, coverPreviewUrl);
     assert.equal(album.remote_cover_url, remoteCoverUrl);
   }
@@ -1775,7 +1777,7 @@ test('compact canonical enrichment preserves finalized modal membership while ad
     album_artist: 'DDT',
     year: 1999,
     edition: 'Original',
-    cover_path: 'D:\\Synthetic Music\\DDT\\Studio Records\\cover.jpg',
+    cover_ref: 'D:\\Synthetic Music\\DDT\\Studio Records\\cover.jpg',
     preview_only: true,
     track_count_preview: 13,
     tracks: [],
@@ -1790,7 +1792,7 @@ test('compact canonical enrichment preserves finalized modal membership while ad
   assert.equal(enrichedAlbum.request_key, 'postgres-studio-source');
   assert.equal(enrichedAlbum.identity_key, 'postgres-studio-source');
   assert.equal(enrichedAlbum.edition, 'Original');
-  assert.equal(enrichedAlbum.cover_path, canonicalCompactAlbum.cover_path);
+  assert.equal(enrichedAlbum.cover_ref, canonicalCompactAlbum.cover_ref);
   assert.equal(enrichedAlbum.preview_only, false);
   assert.equal(enrichedAlbum.track_count_preview, 13);
   assert.deepEqual(
@@ -3234,7 +3236,7 @@ test('watchSaveTask routes a committed typo rename through destination reconcili
   );
 });
 
-test('watchSaveTask reports a saved rename once its destination shows, before the open album reloads', async () => {
+test('watchSaveTask reports a saved rename when the server accepts it, before the Gallery refetch', async () => {
   const context = loadHelpers();
   const trackPath = 'D:\\Synthetic Music\\Ovderhead\\Telepathic Minds\\01.flac';
   const originalAlbum = {
@@ -3266,7 +3268,9 @@ test('watchSaveTask reports a saved rename once its destination shows, before th
   const historyUrls = [];
   context.window.history = { state: {}, replaceState: (_state, _title, url) => historyUrls.push(url) };
   let finishOpenAlbumReload;
+  const events = [];
   context.fetchAndRender = async (_url, _push, options) => {
+    events.push('gallery');
     if (!options.shouldApplyResponse({ inventory_mutation_revision: 2 })) return false;
     const destinationGroup = { artist: 'Overhead', albums: [destinationAlbum] };
     context.state.view = {
@@ -3282,7 +3286,6 @@ test('watchSaveTask reports a saved rename once its destination shows, before th
     }));
     return true;
   };
-  const events = [];
   context.showRepairAlert = (message) => events.push(`alert:${message}`);
   context.updateOpenTrackModalAfterTagEdit = () => events.push('modal');
 
@@ -3303,11 +3306,12 @@ test('watchSaveTask reports a saved rename once its destination shows, before th
       updated_albums: [],
     },
   });
-  for (let attempt = 0; attempt < 20 && !events.length; attempt += 1) {
+  for (let attempt = 0; attempt < 20 && !finishOpenAlbumReload; attempt += 1) {
     await new Promise((resolve) => setImmediate(resolve));
   }
 
-  assert.deepEqual(events, ['alert:Saved changes to 1 track in “Telepathic Minds”.']);
+  // Owner (2026-11-19): "Saved" on accept; the Gallery refetch follows and corrects the cards.
+  assert.deepEqual(events, ['alert:Saved changes to 1 track in “Telepathic Minds”.', 'gallery']);
   assert.deepEqual(
     Array.from(context.state.view.artists_sidebar, (item) => item.artist),
     ['Overhead'],
@@ -3315,7 +3319,76 @@ test('watchSaveTask reports a saved rename once its destination shows, before th
   assert.deepEqual(historyUrls, ['/?artist=Overhead']);
   finishOpenAlbumReload();
   await watch;
-  assert.deepEqual(events.slice(1), ['modal']);
+  assert.deepEqual(events.slice(2), ['modal']);
+});
+
+test('watchSaveTask leaves a search started after Saved alone instead of refetching the old artist', async () => {
+  const context = loadHelpers();
+  const trackPath = 'D:\\Synthetic Music\\ДДТ\\Ремиксы2\\01.flac';
+  const originalAlbum = {
+    key: 'ддт::ремиксы2',
+    name: 'Ремиксы2',
+    album_artist: 'ДДТ',
+    tracks: [{ path: trackPath }],
+  };
+  const sourceGroup = { artist: 'ДДТ', albums: [originalAlbum] };
+  Object.assign(context.state, {
+    busy: false,
+    ui: { viewStateRevision: 7, activeViewRequestId: 10 },
+    view: {
+      ...context.state.view,
+      selected_artist: 'ДДТ',
+      query: '',
+      artist_groups: [sourceGroup],
+      primary_artist_groups: [sourceGroup],
+      family_artist_groups: [],
+    },
+  });
+  context.buildApiUrl = (view) => `/view-data?artist=${view.selected_artist || ''}&q=${view.query || ''}`;
+  context.waitForBrowserTimeout = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  // The person starts a search right after "Saved", before the save's Gallery refetch.
+  context.refreshLoadedProblematicFilesAfterSaveCompletion = async () => {
+    context.state.busy = true;
+    context.state.ui.activeViewRequestId = 11;
+  };
+  setTimeout(() => {
+    const searchGroup = { artist: 'Ария', albums: [{ key: 'ария::герой асфальта', name: 'Герой асфальта', album_artist: 'Ария', tracks: [] }] };
+    context.state.view = {
+      ...context.state.view,
+      selected_artist: 'Ария',
+      query: 'Ария',
+      artist_groups: [searchGroup],
+      primary_artist_groups: [searchGroup],
+    };
+    context.state.busy = false;
+  }, 150);
+  const fetchedUrls = [];
+  context.fetchAndRender = async (url) => {
+    fetchedUrls.push(url);
+    return true;
+  };
+  const alerts = [];
+  context.showRepairAlert = (message) => alerts.push(message);
+  context.updateOpenTrackModalAfterTagEdit = () => {};
+
+  await context.watchSaveTask('merge-task', {
+    originalAlbum,
+    originatingViewStateRevision: 7,
+    tagEdits: { [trackPath]: { album: 'Ремиксы' } },
+    tagEditAlert: { completionMessage: 'Saved changes to 1 track in “Ремиксы2”.' },
+    terminalPayload: {
+      ok: true,
+      save_task_id: 'merge-task',
+      save_task_status: 'completed',
+      requires_view_refresh: true,
+      inventory_mutation_revision: 2,
+      updated_albums: [],
+    },
+  });
+
+  assert.deepEqual(alerts, ['Saved changes to 1 track in “Ремиксы2”.']);
+  assert.deepEqual(fetchedUrls, []);
+  assert.equal(context.state.view.query, 'Ария');
 });
 
 test('watchSaveTask reconciles an open destination modal locally after a structural merge', async () => {
@@ -3522,7 +3595,7 @@ test('watchSaveTask adopts canonical structural membership transfers without a s
     request_key: 'postgres-studio-source',
     identity_key: 'postgres-studio-source',
     edition: 'Original',
-    cover_path: 'D:\\Synthetic Music\\DDT\\Studio Records\\cover.jpg',
+    cover_ref: 'D:\\Synthetic Music\\DDT\\Studio Records\\cover.jpg',
     track_count_preview: 13,
     tracks: [restoredTrack, ...existingTracks],
   };
@@ -3604,7 +3677,7 @@ test('watchSaveTask adopts canonical structural membership transfers without a s
   assert.equal(canonicalHydratedSource.request_key, finalizedSource.request_key);
   assert.equal(canonicalHydratedSource.identity_key, finalizedSource.identity_key);
   assert.equal(canonicalHydratedSource.edition, finalizedSource.edition);
-  assert.equal(canonicalHydratedSource.cover_path, finalizedSource.cover_path);
+  assert.equal(canonicalHydratedSource.cover_ref, finalizedSource.cover_ref);
   assert.equal(canonicalHydratedSource.track_count_preview, 13);
   assert.deepEqual(
     Array.from(canonicalHydratedSource.tracks, (track) => track.path),
@@ -5183,7 +5256,7 @@ test('watchSaveTask preserves finalized raw credits for album-only splits', asyn
     request_key: 'postgres-raw-credit-source',
     identity_key: 'postgres-raw-credit-source',
     edition: 'Original',
-    cover_path: 'D:\\Music\\DDT\\Studio Records\\source-cover.jpg',
+    cover_ref: 'D:\\Music\\DDT\\Studio Records\\source-cover.jpg',
     preview_only: true,
     track_count_preview: 1,
     tracks: [],
@@ -5193,7 +5266,7 @@ test('watchSaveTask preserves finalized raw credits for album-only splits', asyn
     request_key: 'postgres-raw-credit-suffix',
     identity_key: 'postgres-raw-credit-suffix',
     edition: 'Original',
-    cover_path: 'D:\\Music\\DDT\\Studio Records\\suffix-cover.jpg',
+    cover_ref: 'D:\\Music\\DDT\\Studio Records\\suffix-cover.jpg',
     preview_only: true,
     track_count_preview: 1,
     tracks: [],
@@ -5202,7 +5275,7 @@ test('watchSaveTask preserves finalized raw credits for album-only splits', asyn
     request_key: canonicalCompactSource.request_key,
     identity_key: canonicalCompactSource.identity_key,
     edition: canonicalCompactSource.edition,
-    cover_path: canonicalCompactSource.cover_path,
+    cover_ref: canonicalCompactSource.cover_ref,
     preview_only: false,
     track_count_preview: 1,
   });
@@ -5210,7 +5283,7 @@ test('watchSaveTask preserves finalized raw credits for album-only splits', asyn
     request_key: canonicalCompactSuffix.request_key,
     identity_key: canonicalCompactSuffix.identity_key,
     edition: canonicalCompactSuffix.edition,
-    cover_path: canonicalCompactSuffix.cover_path,
+    cover_ref: canonicalCompactSuffix.cover_ref,
     preview_only: false,
     track_count_preview: 1,
   });
@@ -5307,7 +5380,7 @@ test('watchSaveTask preserves finalized raw credits for album-only splits', asyn
       requestKey: album.request_key,
       identityKey: album.identity_key,
       edition: album.edition,
-      coverPath: album.cover_path,
+      coverRef: album.cover_ref,
       previewOnly: album.preview_only,
       trackCount: album.track_count_preview,
       trackPaths: album.tracks.map((track) => track.path),
@@ -5316,7 +5389,7 @@ test('watchSaveTask preserves finalized raw credits for album-only splits', asyn
       requestKey: canonicalCompactSource.request_key,
       identityKey: canonicalCompactSource.identity_key,
       edition: canonicalCompactSource.edition,
-      coverPath: canonicalCompactSource.cover_path,
+      coverRef: canonicalCompactSource.cover_ref,
       previewOnly: false,
       trackCount: 1,
       trackPaths: [siblingPath],
@@ -5324,7 +5397,7 @@ test('watchSaveTask preserves finalized raw credits for album-only splits', asyn
       requestKey: canonicalCompactSuffix.request_key,
       identityKey: canonicalCompactSuffix.identity_key,
       edition: canonicalCompactSuffix.edition,
-      coverPath: canonicalCompactSuffix.cover_path,
+      coverRef: canonicalCompactSuffix.cover_ref,
       previewOnly: false,
       trackCount: 1,
       trackPaths: [movedPath],
@@ -5334,7 +5407,7 @@ test('watchSaveTask preserves finalized raw credits for album-only splits', asyn
   assert.equal(context.state.modalReleases[0].request_key, 'postgres-raw-credit-source');
   assert.equal(context.state.modalReleases[0].identity_key, 'postgres-raw-credit-source');
   assert.equal(context.state.modalReleases[0].edition, 'Original');
-  assert.equal(context.state.modalReleases[0].cover_path, canonicalCompactSource.cover_path);
+  assert.equal(context.state.modalReleases[0].cover_ref, canonicalCompactSource.cover_ref);
   assert.equal(context.state.modalReleases[0].track_count_preview, 1);
   assert.equal(context.state.modalReleases[0].preview_only, false);
   assert.equal(
@@ -7941,6 +8014,150 @@ test('Problematic Files renders load failure instead of a successful empty state
   assert.match(elements.list.innerHTML, /Unable to load problematic albums/);
   assert.match(elements.detail.innerHTML, /Problematic Files unavailable/);
   assert.doesNotMatch(`${elements.list.innerHTML}${elements.detail.innerHTML}`, /No matching/);
+});
+
+function fakeIndexingElement(tag = 'div') {
+  const attributes = new Map();
+  const classes = new Set();
+  const children = [];
+  const element = {
+    tagName: tag.toUpperCase(),
+    className: '',
+    textContent: '',
+    disabled: false,
+    children,
+    ownerDocument: { createElement: (childTag) => fakeIndexingElement(childTag) },
+    classList: {
+      toggle(name, on) { if (on) classes.add(name); else classes.delete(name); },
+      contains: (name) => classes.has(name),
+    },
+    setAttribute(name, value) { attributes.set(name, String(value)); },
+    removeAttribute(name) { attributes.delete(name); },
+    hasAttribute(name) { return attributes.has(name); },
+    getAttribute(name) { return attributes.has(name) ? attributes.get(name) : null; },
+    appendChild(child) { children.push(child); child.parent = element; return child; },
+    remove() {
+      const siblings = element.parent?.children;
+      if (siblings) siblings.splice(siblings.indexOf(element), 1);
+    },
+    querySelector(selector) {
+      return selector === ':scope > [data-problematic-indexing-overlay]'
+        ? children.find((child) => child.hasAttribute('data-problematic-indexing-overlay')) || null
+        : null;
+    },
+  };
+  return element;
+}
+
+function renderIndexingState({ phone, indexing }) {
+  const sidebar = fakeIndexingElement('aside');
+  const filterButtons = [fakeIndexingElement('button'), fakeIndexingElement('button')];
+  const searchField = { querySelectorAll: () => filterButtons };
+  const elements = {
+    overlay: {},
+    list: { innerHTML: '', scrollTop: 0, closest: (selector) => (selector === '.utility-sidebar' ? sidebar : null) },
+    detail: { innerHTML: 'previous detail', removeAttribute() {} },
+    count: { textContent: '12' },
+    sidebarLabel: { textContent: '' },
+    search: {
+      disabled: false, placeholder: '', value: '',
+      closest: (selector) => (selector === '.search-field' ? searchField : null),
+    },
+    problemFilterButton: fakeIndexingElement('button'),
+  };
+  const alerts = [];
+  const context = {
+    console,
+    document: { createElement: (tag) => fakeIndexingElement(tag) },
+    escapeHtml(value) { return String(value ?? ''); },
+    state: { utility: {
+      problematicFiles: [], libraryWatchHealthProblems: [], selectedProblematicKey: '',
+      selectedProblemFilters: [], searchQuery: '', loaded: false, loading: true,
+      problematicLoadError: '', problematicIndexing: indexing,
+    } },
+    usesMobilePageLayout: () => phone,
+    getUtilityModalElements() { return elements; },
+    getFilteredProblematicAlbums() { return []; },
+    renderProblemFilterControls() {},
+    buildOnPageAlertHtml(config) {
+      alerts.push(config);
+      return `<section data-alert>${config.title}</section>`;
+    },
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  vm.runInContext(utilityRendererSource, context, { filename: utilityRendererPath });
+  context.renderProblematicFiles();
+  return { context, elements, sidebar, filterButtons, alerts };
+}
+
+function finishIndexing(context) {
+  context.state.utility.problematicIndexing = null;
+  context.state.utility.loading = false;
+  context.state.utility.loaded = true;
+  context.renderProblematicFiles();
+}
+
+const APPROVED_INDEXING_ALERT = {
+  severity: 'info',
+  role: 'status',
+  flat: true,
+  title: 'Indexing Problematic Files…',
+  message: 'A one-time step after an update. The list opens by itself when it is ready.',
+  progress: { value: (1226 / 2665) * 100, label: '1,226 of 2,665 albums checked' },
+};
+
+test('Problematic Files indexing on desktop: the left panel is inert under the Under construction overlay', () => {
+  const { context, elements, sidebar, alerts } = renderIndexingState({ phone: false, indexing: { done: 1226, total: 2665 } });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(alerts)), [APPROVED_INDEXING_ALERT]);
+  assert.equal(elements.detail.innerHTML, '<section data-alert>Indexing Problematic Files…</section>');
+  assert.equal(elements.list.innerHTML, '', 'The list shows no Indexing text.');
+  assert.equal(sidebar.hasAttribute('inert'), true);
+  assert.equal(sidebar.getAttribute('aria-hidden'), 'true');
+  assert.equal(sidebar.classList.contains('is-indexing'), true);
+  const overlays = sidebar.children.filter((child) => child.hasAttribute('data-problematic-indexing-overlay'));
+  assert.equal(overlays.length, 1);
+  assert.equal(overlays[0].className, 'problematic-mutation-overlay', 'The shared overlay, not a page-local copy.');
+  assert.equal(overlays[0].textContent, 'Under construction');
+  assert.equal(elements.search.disabled, false, 'Desktop blocks the panel, not the field.');
+  assert.equal(elements.count.textContent, '');
+
+  finishIndexing(context);
+  assert.equal(sidebar.hasAttribute('inert'), false);
+  assert.equal(sidebar.hasAttribute('aria-hidden'), false);
+  assert.equal(sidebar.children.length, 0, 'The overlay leaves when the list opens.');
+});
+
+test('Problematic Files indexing on a phone: only the filter is disabled, with no overlay', () => {
+  const { context, elements, sidebar, filterButtons, alerts } = renderIndexingState({ phone: true, indexing: { done: 1226, total: 2665 } });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(alerts)), [APPROVED_INDEXING_ALERT]);
+  assert.equal(elements.list.innerHTML, '<section data-alert>Indexing Problematic Files…</section>');
+  assert.equal(elements.detail.innerHTML, 'previous detail');
+  assert.equal(elements.search.disabled, true);
+  assert.equal(elements.problemFilterButton.disabled, true);
+  assert.deepEqual(filterButtons.map((button) => button.disabled), [true, true]);
+  assert.equal(sidebar.hasAttribute('inert'), false);
+  assert.equal(sidebar.children.length, 0, 'No overlay on a phone.');
+
+  finishIndexing(context);
+  // The field is usable again; the filter button follows its own rule (enabled once reasons exist).
+  assert.equal(elements.search.disabled, false);
+  assert.deepEqual(filterButtons.map((button) => button.disabled), [false, false]);
+});
+
+test('Problematic Files indexing styles: plain mobile page body, flat alert, themed overlay, disabled search input', () => {
+  const cssRoot = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'css');
+  const css = (relative) => fs.readFileSync(path.join(cssRoot, ...relative.split('/')), 'utf8');
+  // The filter and the card are separate elements on the plain page background: no shared band.
+  assert.match(css('mobile-layout.css'), /#utility-modal\.is-mobile-page \.utility-modal-body \{ background: transparent; \}/);
+  assert.match(css('runtime/alert-components.css'), /\.on-page-alert\.on-page-alert--flat \{ box-shadow: none; \}/);
+  const overlay = css('runtime/utilities.css').match(/\.problematic-mutation-overlay \{[^}]*\}/)[0];
+  assert.match(overlay, /background: color-mix\(in srgb, var\(--appearance-panel-background, var\(--panel\)\) 78%, transparent\);/);
+  assert.match(overlay, /color: var\(--appearance-panel-ink, var\(--text\)\);/);
+  assert.doesNotMatch(overlay, /rgba\(14, 22, 33/);
+  assert.match(css('button-component.css'), /\.ui-input-action:has\(> input:disabled\) \{ opacity: \.45; cursor: not-allowed; \}/);
 });
 
 test('watcher warning retains title copy while the status icon stays green beside the separate warning control', () => {

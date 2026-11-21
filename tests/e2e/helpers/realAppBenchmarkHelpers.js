@@ -506,7 +506,7 @@ export function createCoverResponseFailureCollector(page) {
   const failures = [];
   page.on('response', (response) => {
     const url = new URL(response.url());
-    if (url.pathname === '/cover' && response.status() >= 400) {
+    if (url.pathname.startsWith('/cover/') && response.status() >= 400) {
       failures.push({
         status: response.status(),
         url: response.url(),

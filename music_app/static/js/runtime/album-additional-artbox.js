@@ -51,7 +51,7 @@ function buildAdditionalArtworkCoverSource(album, artwork) {
     name: album?.name || '',
     album_artist: album?.album_artist || '',
     tracks: [],
-    cover_path: artwork?.cover_path || '',
+    cover_ref: artwork?.cover_ref || '',
     remote_cover_url: artwork?.remote_cover_url || '',
     remote_cover_source: 'artbox',
   };
@@ -203,9 +203,9 @@ async function removeAlbumAdditionalArtbox() {
   });
 }
 
-// Windows paths compare without case: the library holds both n: and N: spellings of one file.
-function sameLocalPath(left, right) {
-  const normalize = (value) => String(value || '').trim().replaceAll('/', '\\').toLowerCase();
+// Covers reach the client as opaque references: one file has one reference, compared exactly.
+function sameCoverRef(left, right) {
+  const normalize = (value) => String(value || '').trim();
   return Boolean(normalize(left)) && normalize(left) === normalize(right);
 }
 
@@ -216,7 +216,7 @@ function isCoverLookupItemInFirstArtbox(item, kind) {
   const album = modal.album || {};
   if (kind === 'saved-remote') return true;
   if (kind === 'local') {
-    return sameLocalPath(album.cover_path, item?.path);
+    return sameCoverRef(album.cover_ref, item?.candidate_cover_ref);
   }
   if (kind === 'remote') {
     const urls = [album.remote_cover_url, album.remote_cover_thumbnail_url]
@@ -234,7 +234,7 @@ async function saveAdditionalArtworkFromLookup() {
     : null;
   const selection = remote
     ? { source_kind: 'remote', remote_url: String(remote.url || '') }
-    : (hasPendingLocalCoverSelection() ? { source_kind: 'local', source_path: modal.pendingLocalPath } : null);
+    : (hasPendingLocalCoverSelection() ? { source_kind: 'local', source_cover_ref: modal.pendingLocalRef } : null);
   if (album && !selection && modal.artboxCleared) {
     // Saved with nothing selected: the second artbox is emptied, freeing its art for the album cover.
     await removeAlbumAdditionalArtbox();
@@ -269,7 +269,7 @@ function isSecondArtboxSavedRemote(candidate) {
 
 function isSecondArtboxSavedRemoteActive(candidate) {
   const modal = state.coverLookup?.modal;
-  return Boolean(modal) && !modal.artboxCleared && !modal.selectedRemoteId && !modal.pendingLocalPath
+  return Boolean(modal) && !modal.artboxCleared && !modal.selectedRemoteId && !modal.pendingLocalRef
     && !modal.pendingPastedImageId && isSecondArtboxSavedRemote(candidate);
 }
 
@@ -280,7 +280,7 @@ function isCoverLookupItemInSecondArtbox(item, kind) {
   const artwork = getAlbumAdditionalArtwork(modal.album);
   if (!artwork) return false;
   if (kind === 'local') {
-    return sameLocalPath(artwork.cover_path, item?.path);
+    return sameCoverRef(artwork.cover_ref, item?.candidate_cover_ref);
   }
   if (kind === 'remote') {
     const url = String(artwork.remote_url || artwork.remote_cover_url || '').trim();

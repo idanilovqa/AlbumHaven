@@ -28,8 +28,9 @@ async function provesRecovery({ page, galleryActions, navigationPanelActions, tr
   // An album never on screen while online: the gallery fetches (and the copy may keep) the details
   // of the albums it shows, so one shown online could open offline. Three screens down, short of
   // the end of the loaded albums.
-  const { clientHeight, maxScrollTop } = await galleryActions.readGalleryScrollState();
-  const below = Math.min(3 * clientHeight, maxScrollTop - clientHeight);
+  const firstScreen = await galleryActions.readGalleryScrollState();
+  const { clientHeight } = firstScreen;
+  const below = Math.min(3 * clientHeight, firstScreen.maxScrollTop - clientHeight);
   expect(below, 'the loaded albums reach well below the first screen').toBeGreaterThan(clientHeight);
   await galleryActions.scrollGalleryBy(below);
   await expect.poll(async () => (await galleryActions.readGalleryScrollState()).scrollTop).toBeGreaterThanOrEqual(below - 1);

@@ -3342,23 +3342,27 @@ class PostgresLibraryBrowseRepository:
                     {"path": path},
                 ).fetchall()
             ]
-        for album_key in album_keys:
-            for album in _problematic_album_projection_payloads(
-                self._load_problematic_file_rows(album_key=album_key)
-            ):
-                track_paths = {
-                    str(track.get("path") or "").strip()
-                    for track in album.get("tracks") or []
-                    if isinstance(track, Mapping)
-                }
-                if path not in track_paths:
-                    continue
-                album["_suggestion_aliases"] = self._load_relation_alias_maps().get(
-                    "alias_to_canonical", {}
-                )
-                detail = _problematic_album_detail_payload(album)
-                if detail is not None:
-                    return detail
+            # Every read shares this connection; the aliases are read once, on the first match.
+            aliases = None
+            for album_key in album_keys:
+                for album in _problematic_album_projection_payloads(
+                    self._load_problematic_file_rows(album_key=album_key, connection=connection)
+                ):
+                    track_paths = {
+                        str(track.get("path") or "").strip()
+                        for track in album.get("tracks") or []
+                        if isinstance(track, Mapping)
+                    }
+                    if path not in track_paths:
+                        continue
+                    if aliases is None:
+                        aliases = self._load_relation_alias_maps(connection=connection).get(
+                            "alias_to_canonical", {}
+                        )
+                    album["_suggestion_aliases"] = aliases
+                    detail = _problematic_album_detail_payload(album)
+                    if detail is not None:
+                        return detail
         return None
 
     def build_problematic_file_detail_payload(self, album_key: object) -> dict[str, object] | None:

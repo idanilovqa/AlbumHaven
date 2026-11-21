@@ -247,6 +247,7 @@ def test_indexed_cover_gallery_api_uses_validated_inventory_without_filesystem_r
     worker = SimpleNamespace(
         repository=repository, note_foreground_activity=lambda: None,
         request=lambda selected_root: events.append("queue_root"), request_context=request_context,
+        wait_for_context=lambda paths, timeout: events.append("wait_context"),
     )
     monkeypatch.setattr(routes.AlbumCoverCandidateSnapshotRepository, "resolve_album_track_context", validated_context, raising=False)
     monkeypatch.setattr(routes.AlbumCoverCandidateSnapshotRepository, "resolve_album_id_for_track_paths", validate_tracks)
@@ -299,17 +300,23 @@ def test_cover_gallery_waits_for_the_first_listing_of_an_unlisted_folder(app, mo
                 "width": 600, "height": 600, "sha256": "b" * 64}]
     reads = []
     requested = []
+    waits = []
 
     def get(_root):
         reads.append(_root)
-        # The worker publishes while the request waits.
-        return {"available": True, "complete": True, "candidates": listing} if len(reads) >= 3 else None
+        return {"available": True, "complete": True, "candidates": listing} if waits else None
+
+    def wait_for_listing(folder, timeout):
+        # The worker publishes while the request waits, then wakes it.
+        assert 0 < timeout <= routes._UNLISTED_INVENTORY_WAIT_SECONDS
+        waits.append(folder)
 
     worker = SimpleNamespace(
         repository=SimpleNamespace(root_for_tracks=lambda paths: root, get=get),
         note_foreground_activity=lambda: None,
         request=requested.append,
         request_context=lambda paths: pytest.fail("a known folder needs no context request"),
+        wait_for_listing=wait_for_listing,
     )
     monkeypatch.setattr(routes.AlbumCoverCandidateSnapshotRepository, "resolve_album_track_context",
                         lambda _self, **_kwargs: {"album_id": 42, "album_key": "artist::unlisted album", "track_paths": [str(track)]},
@@ -317,7 +324,6 @@ def test_cover_gallery_waits_for_the_first_listing_of_an_unlisted_folder(app, mo
     monkeypatch.setattr(routes.AlbumCoverCandidateSnapshotRepository, "resolve_album_id_for_track_paths",
                         lambda _self, *, track_paths: 42)
     monkeypatch.setattr(PostgresLibraryBrowseRepository, "build_cover_state_entries_by_paths", lambda *args: {})
-    monkeypatch.setattr(routes, "_UNLISTED_INVENTORY_POLL_SECONDS", 0.001)
     app.config["_LOCAL_COVER_INVENTORY"] = worker
     asgi_app = _make_wave_d_app(app)
     asgi_app.state.local_cover_inventory = worker
@@ -332,7 +338,9 @@ def test_cover_gallery_waits_for_the_first_listing_of_an_unlisted_folder(app, mo
     assert payload["local_inventory_complete"] is True
     assert [item["filename"] for item in payload["local_covers"]] == ["front.jpg"]
     assert requested == [root]
-    assert len(reads) == 3
+    # Freeze guard (BI-05): the worker wakes the request; one read before the wait and one after, no polling.
+    assert waits == [root]
+    assert len(reads) == 2
 
 
 class _FatalFlaskBridge:

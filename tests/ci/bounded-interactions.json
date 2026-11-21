@@ -271,12 +271,14 @@
       "entrypoints": [
         "js:music_app/static/js/admin-server.js#<top-level>:event:change",
         "js:music_app/static/js/admin-server.js#<top-level>:event:click",
+        "js:music_app/static/js/admin-server.js#<top-level>:event:input",
         "js:music_app/static/js/admin-server.js#<top-level>:event:submit"
       ],
       "owners": [
         "music_app/static/js/admin-server.js"
       ],
       "rules": [
+        "BI-01",
         "BI-03"
       ],
       "workClass": "constant",
@@ -901,6 +903,21 @@
       "proof": "static"
     },
     {
+      "id": "js:path-input.js#choose",
+      "action": "click listeners installed by choose",
+      "entrypoints": [
+        "js:music_app/static/js/path-input.js#choose:event:click"
+      ],
+      "owners": [
+        "music_app/static/js/path-input.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:runtime/account-menu.js#on",
       "action": "click/focusout/keydown/pointerdown/resize listeners installed by on",
       "entrypoints": [
@@ -921,6 +938,130 @@
       "proof": "static"
     },
     {
+      "id": "js:runtime/album-additional-artbox.js#hashArtboxPicture",
+      "action": "error/load listeners installed by hashArtboxPicture",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/album-additional-artbox.js#hashArtboxPicture:event:error",
+        "js:music_app/static/js/runtime/album-additional-artbox.js#hashArtboxPicture:event:load"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/album-additional-artbox.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/album-additional-artbox.js#hashLoadedPreview",
+      "action": "load listeners installed by hashLoadedPreview",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/album-additional-artbox.js#hashLoadedPreview:event:load"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/album-additional-artbox.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/album-additional-artbox.js#postAlbumAdditionalArtwork",
+      "action": "fetch requests installed by postAlbumAdditionalArtwork",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/album-additional-artbox.js#postAlbumAdditionalArtwork:request:fetch"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/album-additional-artbox.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [],
+        "forbidden": []
+      }
+    },
+    {
+      "id": "js:runtime/album-additional-artbox.js#removeAlbumAdditionalArtbox",
+      "action": "postAlbumAdditionalArtwork requests installed by removeAlbumAdditionalArtbox",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/album-additional-artbox.js#removeAlbumAdditionalArtbox:request:postAlbumAdditionalArtwork"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/album-additional-artbox.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [],
+        "forbidden": []
+      }
+    },
+    {
+      "id": "js:runtime/album-additional-artbox.js#saveAdditionalArtworkFromLookup",
+      "action": "postAlbumAdditionalArtwork requests installed by saveAdditionalArtworkFromLookup",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/album-additional-artbox.js#saveAdditionalArtworkFromLookup:request:postAlbumAdditionalArtwork"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/album-additional-artbox.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [],
+        "forbidden": []
+      }
+    },
+    {
+      "id": "js:runtime/album-track-table.js#schedule",
+      "action": "requestAnimationFrame timers installed by schedule",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/album-track-table.js#schedule:timer:requestAnimationFrame"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/album-track-table.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/album-track-table.js#syncAlbumTrackCreditMotion",
+      "action": "change listeners, IntersectionObserver/ResizeObserver observers installed by syncAlbumTrackCreditMotion",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/album-track-table.js#syncAlbumTrackCreditMotion:event:change",
+        "js:music_app/static/js/runtime/album-track-table.js#syncAlbumTrackCreditMotion:observer:IntersectionObserver",
+        "js:music_app/static/js/runtime/album-track-table.js#syncAlbumTrackCreditMotion:observer:ResizeObserver"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/album-track-table.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-09"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:runtime/album-track-table.js#triggerAlbumTrackPlayActivation",
       "action": "animationend listeners installed by triggerAlbumTrackPlayActivation",
       "entrypoints": [
@@ -928,6 +1069,22 @@
       ],
       "owners": [
         "music_app/static/js/runtime/album-track-table.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/alert-components.js#<top-level>",
+      "action": "click/keydown listeners installed by <top-level>",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/alert-components.js#<top-level>:event:click",
+        "js:music_app/static/js/runtime/alert-components.js#<top-level>:event:keydown"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/alert-components.js"
       ],
       "rules": [
         "BI-03"
@@ -2188,6 +2345,21 @@
       "rollback": "Test-only contract; the sidebar window render is unchanged. Reverting returns this entry to an unproven hot path, which the guard rejects."
     },
     {
+      "id": "js:runtime/core-state-and-helpers.js#holdSearchPendingRail",
+      "action": "setTimeout timers installed by holdSearchPendingRail",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/core-state-and-helpers.js#holdSearchPendingRail:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/core-state-and-helpers.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:runtime/core-state-and-helpers.js#renderSidebar",
       "action": "scheduleBrowserAnimationFrame timers installed by renderSidebar",
       "entrypoints": [
@@ -2493,6 +2665,21 @@
       }
     },
     {
+      "id": "js:runtime/cover-lookup-modal-and-drawer.js#openCoverLookupModal",
+      "action": "setTimeout timers installed by openCoverLookupModal",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/cover-lookup-modal-and-drawer.js#openCoverLookupModal:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/cover-lookup-modal-and-drawer.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:runtime/cover-lookup-modal-and-drawer.js#preloadCoverLookupAlbumImage",
       "action": "error/load listeners installed by preloadCoverLookupAlbumImage",
       "entrypoints": [
@@ -2524,10 +2711,26 @@
       "proof": "static"
     },
     {
+      "id": "js:runtime/cover-lookup-modal-and-drawer.js#presentCoverLookupSplitChoice",
+      "action": "click listeners installed by presentCoverLookupSplitChoice",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/cover-lookup-modal-and-drawer.js#presentCoverLookupSplitChoice:event:click"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/cover-lookup-modal-and-drawer.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:runtime/cover-lookup-modal-and-drawer.js#refreshCoverLookupGallery",
       "action": "fetch requests installed by refreshCoverLookupGallery",
       "entrypoints": [
-        "js:music_app/static/js/runtime/cover-lookup-modal-and-drawer.js#refreshCoverLookupGallery:request:fetch"
+        "js:music_app/static/js/runtime/cover-lookup-modal-and-drawer.js#refreshCoverLookupGallery:request:fetch",
+        "js:music_app/static/js/runtime/cover-lookup-modal-and-drawer.js#refreshCoverLookupGallery:timer:setTimeout"
       ],
       "owners": [
         "music_app/static/js/runtime/cover-lookup-modal-and-drawer.js"
@@ -3117,10 +3320,75 @@
       "rollback": "Revert the scroll-only gallery bar update; retain this contract."
     },
     {
+      "id": "js:runtime/gallery-main-interactions.js#initGalleryMain#2",
+      "action": "album-haven:artist-tree-settled listeners installed by initGalleryMain",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/gallery-main-interactions.js#initGalleryMain:event:album-haven:artist-tree-settled"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/gallery-main-interactions.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:runtime/gallery-main-interactions.js#observeArtistFamilyPanelBounds",
       "action": "ResizeObserver observers installed by observeArtistFamilyPanelBounds",
       "entrypoints": [
         "js:music_app/static/js/runtime/gallery-main-interactions.js#observeArtistFamilyPanelBounds:observer:ResizeObserver"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/gallery-main-interactions.js"
+      ],
+      "rules": [
+        "BI-09"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/gallery-main-interactions.js#prefetchGallerySourceTotalsForAllScopes",
+      "action": "fetch requests installed by prefetchGallerySourceTotalsForAllScopes",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/gallery-main-interactions.js#prefetchGallerySourceTotalsForAllScopes:request:fetch"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/gallery-main-interactions.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [],
+        "forbidden": []
+      }
+    },
+    {
+      "id": "js:runtime/gallery-main-interactions.js#revealGalleryArtistInfoSurface",
+      "action": "requestAnimationFrame timers installed by revealGalleryArtistInfoSurface",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/gallery-main-interactions.js#revealGalleryArtistInfoSurface:timer:requestAnimationFrame"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/gallery-main-interactions.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/gallery-main-interactions.js#syncGalleryBarNameFit",
+      "action": "ResizeObserver observers installed by syncGalleryBarNameFit",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/gallery-main-interactions.js#syncGalleryBarNameFit:observer:ResizeObserver"
       ],
       "owners": [
         "music_app/static/js/runtime/gallery-main-interactions.js"
@@ -3587,6 +3855,26 @@
       }
     },
     {
+      "id": "js:runtime/gallery-refresh-and-status.js#refreshArtistTreeAfterInventoryMutation",
+      "action": "fetch requests installed by refreshArtistTreeAfterInventoryMutation",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/gallery-refresh-and-status.js#refreshArtistTreeAfterInventoryMutation:request:fetch"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/gallery-refresh-and-status.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [],
+        "forbidden": []
+      }
+    },
+    {
       "id": "js:runtime/gallery-refresh-and-status.js#refreshCurrentViewAfterBackgroundCompletion",
       "action": "fetchAndRender requests installed by refreshCurrentViewAfterBackgroundCompletion",
       "entrypoints": [
@@ -3815,21 +4103,6 @@
       "proof": "static"
     },
     {
-      "id": "js:runtime/library-settings.js#browseLibraryRootDraft",
-      "action": "click listeners installed by browseLibraryRootDraft",
-      "entrypoints": [
-        "js:music_app/static/js/runtime/library-settings.js#browseLibraryRootDraft:event:click"
-      ],
-      "owners": [
-        "music_app/static/js/runtime/library-settings.js"
-      ],
-      "rules": [
-        "BI-03"
-      ],
-      "workClass": "constant",
-      "proof": "static"
-    },
-    {
       "id": "js:runtime/library-settings.js#importAlbumRatingsFromFileTags",
       "action": "fetch/fetchAndRender requests installed by importAlbumRatingsFromFileTags",
       "entrypoints": [
@@ -3930,28 +4203,6 @@
       "requestOwnership": {
         "allowed": [
           "/utilities/integrations/foobar/help"
-        ],
-        "forbidden": []
-      }
-    },
-    {
-      "id": "js:runtime/library-settings.js#read",
-      "action": "fetch requests installed by read",
-      "entrypoints": [
-        "js:music_app/static/js/runtime/library-settings.js#read:request:fetch"
-      ],
-      "owners": [
-        "music_app/static/js/runtime/library-settings.js"
-      ],
-      "rules": [
-        "BI-03",
-        "BI-13"
-      ],
-      "workClass": "constant",
-      "proof": "static",
-      "requestOwnership": {
-        "allowed": [
-          "/library-settings/browse"
         ],
         "forbidden": []
       }
@@ -4146,7 +4397,8 @@
         "js:music_app/static/js/runtime/mobile-navigation.js#initMobileNavigation:event:scroll",
         "js:music_app/static/js/runtime/mobile-navigation.js#initMobileNavigation:event:touchstart",
         "js:music_app/static/js/runtime/mobile-navigation.js#initMobileNavigation:event:wheel",
-        "js:music_app/static/js/runtime/mobile-navigation.js#initMobileNavigation:observer:ResizeObserver"
+        "js:music_app/static/js/runtime/mobile-navigation.js#initMobileNavigation:observer:ResizeObserver",
+        "js:music_app/static/js/runtime/mobile-navigation.js#initMobileNavigation:timer:requestAnimationFrame"
       ],
       "owners": [
         "music_app/static/js/runtime/mobile-navigation.js"
@@ -4212,6 +4464,21 @@
       "action": "requestAnimationFrame timers installed by restoreMobileLoopListScroll",
       "entrypoints": [
         "js:music_app/static/js/runtime/mobile-navigation.js#restoreMobileLoopListScroll:timer:requestAnimationFrame"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/mobile-navigation.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/mobile-navigation.js#runBottomSheetExit",
+      "action": "setTimeout timers installed by runBottomSheetExit",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/mobile-navigation.js#runBottomSheetExit:timer:setTimeout"
       ],
       "owners": [
         "music_app/static/js/runtime/mobile-navigation.js"
@@ -4304,6 +4571,26 @@
       "proof": "static"
     },
     {
+      "id": "js:runtime/modal-and-overlay-helpers.js#fetchNonAlbumPayload",
+      "action": "fetch requests installed by fetchNonAlbumPayload",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/modal-and-overlay-helpers.js#fetchNonAlbumPayload:request:fetch"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/modal-and-overlay-helpers.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [],
+        "forbidden": []
+      }
+    },
+    {
       "id": "js:runtime/modal-and-overlay-helpers.js#hideGalleryFocusGlow",
       "action": "scheduleBrowserTimeout timers installed by hideGalleryFocusGlow",
       "entrypoints": [
@@ -4319,48 +4606,34 @@
       "proof": "static"
     },
     {
-      "id": "js:runtime/modal-and-overlay-helpers.js#hydrateDeferredNonAlbumTracks",
-      "action": "Open artist and library loose tracks repeatedly for a selected artist and the root gallery",
+      "id": "js:runtime/modal-and-overlay-helpers.js#hydrateArtistNonAlbumAvailability",
+      "action": "scheduleBrowserTimeout timers installed by hydrateArtistNonAlbumAvailability",
       "entrypoints": [
-        "js:music_app/static/js/runtime/modal-and-overlay-helpers.js#hydrateDeferredNonAlbumTracks:request:fetch"
+        "js:music_app/static/js/runtime/modal-and-overlay-helpers.js#hydrateArtistNonAlbumAvailability:timer:scheduleBrowserTimeout"
       ],
       "owners": [
         "music_app/static/js/runtime/modal-and-overlay-helpers.js"
       ],
       "rules": [
-        "BI-03",
-        "BI-13"
+        "BI-03"
       ],
       "workClass": "constant",
-      "proof": "contract",
-      "requestOwnership": {
-        "allowed": [
-          "/view-data"
-        ],
-        "forbidden": [
-          "/home-data",
-          "/album-details"
-        ]
-      },
-      "cardinalities": {
-        "small": 1,
-        "production": 100
-      },
-      "budgets": {
-        "requests": 4
-      },
-      "growth": {
-        "metric": "requests",
-        "largeMinusSmallMax": 0
-      },
-      "command": "node --test --test-concurrency=1 tests/js/runtime/modal-and-overlay-helpers.test.js",
-      "testIdentity": "request capture: loose-track hydration requests /view-data once per scope",
-      "performanceTargets": [
-        "selected-artist",
-        "all-artists",
-        "gapless-playback"
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/modal-and-overlay-helpers.js#hydrateLibraryNonAlbumTracks",
+      "action": "scheduleBrowserTimeout timers installed by hydrateLibraryNonAlbumTracks",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/modal-and-overlay-helpers.js#hydrateLibraryNonAlbumTracks:timer:scheduleBrowserTimeout"
       ],
-      "rollback": "Test-only request-capture contract; loose-track hydration is unchanged. Reverting removes the test and returns this entry to an unresolved dynamic target, which the guard rejects."
+      "owners": [
+        "music_app/static/js/runtime/modal-and-overlay-helpers.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
     },
     {
       "id": "js:runtime/modal-and-overlay-helpers.js#openAlbumInExplorer",
@@ -4388,7 +4661,23 @@
       "id": "js:runtime/modal-and-overlay-helpers.js#openNonAlbumModal",
       "action": "toggle listeners installed by openNonAlbumModal",
       "entrypoints": [
-        "js:music_app/static/js/runtime/modal-and-overlay-helpers.js#openNonAlbumModal:event:toggle"
+        "js:music_app/static/js/runtime/modal-and-overlay-helpers.js#openNonAlbumModal:event:toggle",
+        "js:music_app/static/js/runtime/modal-and-overlay-helpers.js#openNonAlbumModal:timer:scheduleBrowserAnimationFrame"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/modal-and-overlay-helpers.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/modal-and-overlay-helpers.js#openVersionPickerModal",
+      "action": "click listeners installed by openVersionPickerModal",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/modal-and-overlay-helpers.js#openVersionPickerModal:event:click"
       ],
       "owners": [
         "music_app/static/js/runtime/modal-and-overlay-helpers.js"
@@ -4404,6 +4693,21 @@
       "action": "scheduleBrowserAnimationFrame timers installed by scheduleGalleryFocusGlow",
       "entrypoints": [
         "js:music_app/static/js/runtime/modal-and-overlay-helpers.js#scheduleGalleryFocusGlow:timer:scheduleBrowserAnimationFrame"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/modal-and-overlay-helpers.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/modal-and-overlay-helpers.js#setNonAlbumPagePresentation",
+      "action": "click listeners installed by setNonAlbumPagePresentation",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/modal-and-overlay-helpers.js#setNonAlbumPagePresentation:event:click"
       ],
       "owners": [
         "music_app/static/js/runtime/modal-and-overlay-helpers.js"
@@ -4703,6 +5007,41 @@
         "problematic-files-focused"
       ],
       "rollback": "Revert the shared pending-projection retry; gallery requests keep their own retry and Album Details, Problematic Files and version marking answer a cold process with the pending error again."
+    },
+    {
+      "id": "js:runtime/pending-tag-edits.js#schedule",
+      "action": "setTimeout timers installed by schedule",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/pending-tag-edits.js#schedule:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/pending-tag-edits.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/pending-tag-edits.js#settle",
+      "action": "fetch requests installed by settle",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/pending-tag-edits.js#settle:request:fetch"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/pending-tag-edits.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [],
+        "forbidden": []
+      }
     },
     {
       "id": "js:runtime/playback-ownership-helpers.js#acceptPlaybackClaim",
@@ -5481,6 +5820,27 @@
       }
     },
     {
+      "id": "js:runtime/preview-move-attention.js#refreshPreviewMoveAttention",
+      "action": "fetch requests, setTimeout timers installed by refreshPreviewMoveAttention",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/preview-move-attention.js#refreshPreviewMoveAttention:request:fetch",
+        "js:music_app/static/js/runtime/preview-move-attention.js#refreshPreviewMoveAttention:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/preview-move-attention.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [],
+        "forbidden": []
+      }
+    },
+    {
       "id": "js:runtime/problem-exclusion-mutations.js#queueProblemExclusionCreate",
       "action": "fetch requests installed by queueProblemExclusionCreate",
       "entrypoints": [
@@ -5803,8 +6163,7 @@
       "id": "js:runtime/tag-editor-and-optimistic-updates.js#ignoreAlbumVersion",
       "action": "fetch/fetchAndRender requests installed by ignoreAlbumVersion",
       "entrypoints": [
-        "js:music_app/static/js/runtime/tag-editor-and-optimistic-updates.js#ignoreAlbumVersion:request:fetch",
-        "js:music_app/static/js/runtime/tag-editor-and-optimistic-updates.js#ignoreAlbumVersion:request:fetchAndRender"
+        "js:music_app/static/js/runtime/tag-editor-and-optimistic-updates.js#ignoreAlbumVersion:request:fetch"
       ],
       "owners": [
         "music_app/static/js/runtime/tag-editor-and-optimistic-updates.js"
@@ -5821,6 +6180,26 @@
           "/versions/ignore",
           "/view-data"
         ],
+        "forbidden": []
+      }
+    },
+    {
+      "id": "js:runtime/tag-editor-and-optimistic-updates.js#keepMissingAlbum",
+      "action": "fetch requests installed by keepMissingAlbum",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/tag-editor-and-optimistic-updates.js#keepMissingAlbum:request:fetch"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/tag-editor-and-optimistic-updates.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [],
         "forbidden": []
       }
     },
@@ -5848,11 +6227,70 @@
       }
     },
     {
+      "id": "js:runtime/tag-editor-and-optimistic-updates.js#refreshGalleryAfterVersionChange",
+      "action": "fetchAndRender requests installed by refreshGalleryAfterVersionChange",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/tag-editor-and-optimistic-updates.js#refreshGalleryAfterVersionChange:request:fetchAndRender"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/tag-editor-and-optimistic-updates.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [],
+        "forbidden": []
+      }
+    },
+    {
+      "id": "js:runtime/tag-editor-and-optimistic-updates.js#refreshMissingAlbumView",
+      "action": "fetchAndRender requests installed by refreshMissingAlbumView",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/tag-editor-and-optimistic-updates.js#refreshMissingAlbumView:request:fetchAndRender"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/tag-editor-and-optimistic-updates.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [],
+        "forbidden": []
+      }
+    },
+    {
+      "id": "js:runtime/tag-editor-and-optimistic-updates.js#rescanMissingAlbum",
+      "action": "fetch requests installed by rescanMissingAlbum",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/tag-editor-and-optimistic-updates.js#rescanMissingAlbum:request:fetch"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/tag-editor-and-optimistic-updates.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [],
+        "forbidden": []
+      }
+    },
+    {
       "id": "js:runtime/tag-editor-and-optimistic-updates.js#revertVersionException",
       "action": "fetch/fetchAndRender requests installed by revertVersionException",
       "entrypoints": [
-        "js:music_app/static/js/runtime/tag-editor-and-optimistic-updates.js#revertVersionException:request:fetch",
-        "js:music_app/static/js/runtime/tag-editor-and-optimistic-updates.js#revertVersionException:request:fetchAndRender"
+        "js:music_app/static/js/runtime/tag-editor-and-optimistic-updates.js#revertVersionException:request:fetch"
       ],
       "owners": [
         "music_app/static/js/runtime/tag-editor-and-optimistic-updates.js"
@@ -5907,7 +6345,6 @@
       "id": "js:runtime/tag-editor-and-optimistic-updates.js#scheduleVersionGalleryRefresh",
       "action": "fetchAndRender requests installed by scheduleVersionGalleryRefresh",
       "entrypoints": [
-        "js:music_app/static/js/runtime/tag-editor-and-optimistic-updates.js#scheduleVersionGalleryRefresh:request:fetchAndRender",
         "js:music_app/static/js/runtime/tag-editor-and-optimistic-updates.js#scheduleVersionGalleryRefresh:timer:scheduleBrowserAnimationFrame",
         "js:music_app/static/js/runtime/tag-editor-and-optimistic-updates.js#scheduleVersionGalleryRefresh:timer:scheduleBrowserTimeout"
       ],
@@ -6231,6 +6668,7 @@
         "js:music_app/static/js/runtime/trigger-anchor.js#installPanelSelectionBoundary:event:click",
         "js:music_app/static/js/runtime/trigger-anchor.js#installPanelSelectionBoundary:event:pointercancel",
         "js:music_app/static/js/runtime/trigger-anchor.js#installPanelSelectionBoundary:event:pointerdown",
+        "js:music_app/static/js/runtime/trigger-anchor.js#installPanelSelectionBoundary:event:pointermove",
         "js:music_app/static/js/runtime/trigger-anchor.js#installPanelSelectionBoundary:event:pointerup",
         "js:music_app/static/js/runtime/trigger-anchor.js#installPanelSelectionBoundary:event:selectionchange",
         "js:music_app/static/js/runtime/trigger-anchor.js#installPanelSelectionBoundary:event:selectstart"
@@ -6239,6 +6677,7 @@
         "music_app/static/js/runtime/trigger-anchor.js"
       ],
       "rules": [
+        "BI-01",
         "BI-03"
       ],
       "workClass": "constant",
@@ -6666,6 +7105,66 @@
       }
     },
     {
+      "id": "js:runtime/utility-loaders-and-cover-lookup.js#loadNextProblematicArtistPage",
+      "action": "fetch requests installed by loadNextProblematicArtistPage",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/utility-loaders-and-cover-lookup.js#loadNextProblematicArtistPage:request:fetch"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/utility-loaders-and-cover-lookup.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [],
+        "forbidden": []
+      }
+    },
+    {
+      "id": "js:runtime/utility-loaders-and-cover-lookup.js#loadNextProblematicFilesPage",
+      "action": "fetch requests installed by loadNextProblematicFilesPage",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/utility-loaders-and-cover-lookup.js#loadNextProblematicFilesPage:request:fetch"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/utility-loaders-and-cover-lookup.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [],
+        "forbidden": []
+      }
+    },
+    {
+      "id": "js:runtime/utility-loaders-and-cover-lookup.js#loadNextProblematicServerSearchPage",
+      "action": "fetch requests installed by loadNextProblematicServerSearchPage",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/utility-loaders-and-cover-lookup.js#loadNextProblematicServerSearchPage:request:fetch"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/utility-loaders-and-cover-lookup.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [],
+        "forbidden": []
+      }
+    },
+    {
       "id": "js:runtime/utility-loaders-and-cover-lookup.js#loadProblematicAlbumDetail",
       "action": "fetch requests installed by loadProblematicAlbumDetail",
       "entrypoints": [
@@ -6689,10 +7188,31 @@
       }
     },
     {
+      "id": "js:runtime/utility-loaders-and-cover-lookup.js#loadProblematicAlbumDetailForTrackPath",
+      "action": "fetch requests installed by loadProblematicAlbumDetailForTrackPath",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/utility-loaders-and-cover-lookup.js#loadProblematicAlbumDetailForTrackPath:request:fetch"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/utility-loaders-and-cover-lookup.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [],
+        "forbidden": []
+      }
+    },
+    {
       "id": "js:runtime/utility-loaders-and-cover-lookup.js#loadProblematicFiles",
       "action": "fetchSummary requests installed by loadProblematicFiles",
       "entrypoints": [
-        "js:music_app/static/js/runtime/utility-loaders-and-cover-lookup.js#loadProblematicFiles:request:fetchSummary"
+        "js:music_app/static/js/runtime/utility-loaders-and-cover-lookup.js#loadProblematicFiles:request:fetchSummary",
+        "js:music_app/static/js/runtime/utility-loaders-and-cover-lookup.js#loadProblematicFiles:timer:scheduleBrowserTimeout"
       ],
       "owners": [
         "music_app/static/js/runtime/utility-loaders-and-cover-lookup.js"
@@ -6863,6 +7383,46 @@
       }
     },
     {
+      "id": "js:runtime/utility-loaders-and-cover-lookup.js#refreshLastfmTotal",
+      "action": "fetch requests installed by refreshLastfmTotal",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/utility-loaders-and-cover-lookup.js#refreshLastfmTotal:request:fetch"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/utility-loaders-and-cover-lookup.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [],
+        "forbidden": []
+      }
+    },
+    {
+      "id": "js:runtime/utility-loaders-and-cover-lookup.js#refreshTagEditorFolderCompleteness",
+      "action": "fetch requests installed by refreshTagEditorFolderCompleteness",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/utility-loaders-and-cover-lookup.js#refreshTagEditorFolderCompleteness:request:fetch"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/utility-loaders-and-cover-lookup.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [],
+        "forbidden": []
+      }
+    },
+    {
       "id": "js:runtime/utility-loaders-and-cover-lookup.js#resumeDeferredUtilityViewRequest",
       "action": "Close Settings and resume the gallery request it deferred (Home or a search)",
       "entrypoints": [
@@ -6990,6 +7550,21 @@
       }
     },
     {
+      "id": "js:runtime/utility-loaders-and-cover-lookup.js#scheduleProblematicServerSearch",
+      "action": "scheduleBrowserTimeout timers installed by scheduleProblematicServerSearch",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/utility-loaders-and-cover-lookup.js#scheduleProblematicServerSearch:timer:scheduleBrowserTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/utility-loaders-and-cover-lookup.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:runtime/utility-loaders-and-cover-lookup.js#scheduleUtilityModalOpenWorkAfterPaint",
       "action": "scheduleBrowserAnimationFrame timers installed by scheduleUtilityModalOpenWorkAfterPaint",
       "entrypoints": [
@@ -7018,6 +7593,26 @@
       ],
       "workClass": "constant",
       "proof": "static"
+    },
+    {
+      "id": "js:runtime/utility-loaders-and-cover-lookup.js#searchProblematicFilesOnServer",
+      "action": "fetch requests installed by searchProblematicFilesOnServer",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/utility-loaders-and-cover-lookup.js#searchProblematicFilesOnServer:request:fetch"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/utility-loaders-and-cover-lookup.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [],
+        "forbidden": []
+      }
     },
     {
       "id": "js:runtime/utility-loaders-and-cover-lookup.js#submitPendingLastfmScrobbles",
@@ -7810,7 +8405,8 @@
       "action": "click/error listeners installed by <top-level>",
       "entrypoints": [
         "js:music_app/static/js/startup-progress.js#<top-level>:event:click",
-        "js:music_app/static/js/startup-progress.js#<top-level>:event:error"
+        "js:music_app/static/js/startup-progress.js#<top-level>:event:error",
+        "js:music_app/static/js/startup-progress.js#<top-level>:timer:requestAnimationFrame"
       ],
       "owners": [
         "music_app/static/js/startup-progress.js"
@@ -7893,7 +8489,8 @@
         "js:music_app/static/js/surface-dismissal.js#bind:event:keydown",
         "js:music_app/static/js/surface-dismissal.js#bind:event:pointercancel",
         "js:music_app/static/js/surface-dismissal.js#bind:event:pointerdown",
-        "js:music_app/static/js/surface-dismissal.js#bind:event:pointerup"
+        "js:music_app/static/js/surface-dismissal.js#bind:event:pointerup",
+        "js:music_app/static/js/surface-dismissal.js#bind:event:visibilitychange"
       ],
       "owners": [
         "music_app/static/js/surface-dismissal.js"
@@ -8714,6 +9311,22 @@
       "rollback": "Reverting restores one root-settings query and two file probes per loose track on a cold /home-data build; the contract then fails."
     },
     {
+      "id": "py:routes/api_read_asgi_routes.py#library_loose_tracks",
+      "action": "Serve GET /library/loose-tracks",
+      "entrypoints": [
+        "py:music_app/routes/api_read_asgi_routes.py#library_loose_tracks:route:GET /library/loose-tracks"
+      ],
+      "owners": [
+        "music_app/routes/api_read_asgi_routes.py"
+      ],
+      "rules": [
+        "BI-04",
+        "BI-13"
+      ],
+      "workClass": "page",
+      "proof": "static"
+    },
+    {
       "id": "py:routes/api_read_asgi_routes.py#people_read_reserved",
       "action": "Serve GET /people/{person_ref}",
       "entrypoints": [
@@ -9061,6 +9674,22 @@
       "proof": "static"
     },
     {
+      "id": "py:routes/api_wave_a_asgi_routes.py#keep_missing_album",
+      "action": "Serve POST /api/library/albums/{album_key:path}/keep-missing",
+      "entrypoints": [
+        "py:music_app/routes/api_wave_a_asgi_routes.py#keep_missing_album:route:POST /api/library/albums/{album_key:path}/keep-missing"
+      ],
+      "owners": [
+        "music_app/routes/api_wave_a_asgi_routes.py"
+      ],
+      "rules": [
+        "BI-04",
+        "BI-14"
+      ],
+      "workClass": "affected-set",
+      "proof": "static"
+    },
+    {
       "id": "py:routes/api_wave_a_asgi_routes.py#library_settings_browse",
       "action": "Serve GET /library-settings/browse",
       "entrypoints": [
@@ -9172,6 +9801,22 @@
       "command": "python -m pytest tests/py/test_library_route_bounded_contracts.py::test_mark_version_route_contract_reads_two_albums_by_key_at_production_album_count",
       "testIdentity": "test_mark_version_route_contract_reads_two_albums_by_key_at_production_album_count",
       "rollback": "Reverting fix(versions) makes POST /versions/mark build a key map over every published album again (candidate_rows grows with the album count)."
+    },
+    {
+      "id": "py:routes/api_wave_a_asgi_routes.py#rescan_missing_album",
+      "action": "Serve POST /api/library/albums/{album_key:path}/rescan",
+      "entrypoints": [
+        "py:music_app/routes/api_wave_a_asgi_routes.py#rescan_missing_album:route:POST /api/library/albums/{album_key:path}/rescan"
+      ],
+      "owners": [
+        "music_app/routes/api_wave_a_asgi_routes.py"
+      ],
+      "rules": [
+        "BI-04",
+        "BI-14"
+      ],
+      "workClass": "affected-set",
+      "proof": "static"
     },
     {
       "id": "py:routes/api_wave_a_asgi_routes.py#revert_problem_ignore",
@@ -9298,6 +9943,22 @@
       "command": "python -m pytest tests/py/test_library_route_bounded_contracts.py::test_edit_tags_route_contract_reads_only_the_edited_albums_at_production_track_count",
       "testIdentity": "test_edit_tags_route_contract_reads_only_the_edited_albums_at_production_track_count",
       "rollback": "Revert fix(edit-tags) selected-set handler, save-task merge and contract; that restores the whole file-cache copies on the request and in its save task."
+    },
+    {
+      "id": "py:routes/api_wave_a_asgi_routes.py#utilities_edit_tags_request_status",
+      "action": "Serve GET /utilities/edit-tags/requests/{client_request_id}",
+      "entrypoints": [
+        "py:music_app/routes/api_wave_a_asgi_routes.py#utilities_edit_tags_request_status:route:GET /utilities/edit-tags/requests/{client_request_id}"
+      ],
+      "owners": [
+        "music_app/routes/api_wave_a_asgi_routes.py"
+      ],
+      "rules": [
+        "BI-04",
+        "BI-13"
+      ],
+      "workClass": "page",
+      "proof": "static"
     },
     {
       "id": "py:routes/api_wave_a_asgi_routes.py#utilities_move_album",
@@ -10165,6 +10826,38 @@
       "command": "python -m pytest tests/py/test_library_route_bounded_contracts.py::test_cover_lookup_add_remote_route_contract_reads_only_the_selected_album_at_production_library_size",
       "testIdentity": "test_cover_lookup_add_remote_route_contract_reads_only_the_selected_album_at_production_library_size",
       "rollback": "Revert the contract test commit; no product code changed for this interaction."
+    },
+    {
+      "id": "py:routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_additional_artwork",
+      "action": "Serve POST /utilities/cover-lookup/additional-artwork",
+      "entrypoints": [
+        "py:music_app/routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_additional_artwork:route:POST /utilities/cover-lookup/additional-artwork"
+      ],
+      "owners": [
+        "music_app/routes/api_wave_d_asgi_routes.py"
+      ],
+      "rules": [
+        "BI-04",
+        "BI-14"
+      ],
+      "workClass": "affected-set",
+      "proof": "static"
+    },
+    {
+      "id": "py:routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_additional_artwork_remove",
+      "action": "Serve POST /utilities/cover-lookup/additional-artwork/remove",
+      "entrypoints": [
+        "py:music_app/routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_additional_artwork_remove:route:POST /utilities/cover-lookup/additional-artwork/remove"
+      ],
+      "owners": [
+        "music_app/routes/api_wave_d_asgi_routes.py"
+      ],
+      "rules": [
+        "BI-04",
+        "BI-14"
+      ],
+      "workClass": "affected-set",
+      "proof": "static"
     },
     {
       "id": "py:routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_cancel",
@@ -11276,6 +11969,22 @@
       "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
+      "id": "py:routes/web_asgi.py#albums_page",
+      "action": "Serve GET /albums",
+      "entrypoints": [
+        "py:music_app/routes/web_asgi.py#albums_page:route:GET /albums"
+      ],
+      "owners": [
+        "music_app/routes/web_asgi.py"
+      ],
+      "rules": [
+        "BI-04",
+        "BI-13"
+      ],
+      "workClass": "page",
+      "proof": "static"
+    },
+    {
       "id": "py:routes/web_asgi.py#app_copy_account_route",
       "action": "Serve GET /app-copy/account",
       "entrypoints": [
@@ -11508,6 +12217,22 @@
       "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
+      "id": "py:routes/web_asgi.py#loose_tracks_page",
+      "action": "Serve GET /loose-tracks",
+      "entrypoints": [
+        "py:music_app/routes/web_asgi.py#loose_tracks_page:route:GET /loose-tracks"
+      ],
+      "owners": [
+        "music_app/routes/web_asgi.py"
+      ],
+      "rules": [
+        "BI-04",
+        "BI-13"
+      ],
+      "workClass": "page",
+      "proof": "static"
+    },
+    {
       "id": "py:routes/web_asgi.py#news_center",
       "action": "Serve GET /news",
       "entrypoints": [
@@ -11736,6 +12461,22 @@
         "BI-14"
       ],
       "workClass": "affected-set",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/cache.py#_refresh_local_cover_inventory_after_selection",
+      "action": "Run refresh _refresh_local_cover_inventory_after_selection",
+      "entrypoints": [
+        "py:music_app/services/cache.py#_refresh_local_cover_inventory_after_selection:refresh:name"
+      ],
+      "owners": [
+        "music_app/services/cache.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
       "proof": "static"
     },
     {
@@ -12820,10 +13561,10 @@
       "proof": "static"
     },
     {
-      "id": "py:services/gallery_projection_postgres.py#ensure_gallery_projection_ready",
-      "action": "Run background ensure_gallery_projection_ready",
+      "id": "py:services/gallery_projection_postgres.py#_refresh_all_stray_duplicate_ownership",
+      "action": "Run refresh _refresh_all_stray_duplicate_ownership",
       "entrypoints": [
-        "py:music_app/services/gallery_projection_postgres.py#ensure_gallery_projection_ready:background:executor"
+        "py:music_app/services/gallery_projection_postgres.py#_refresh_all_stray_duplicate_ownership:refresh:name"
       ],
       "owners": [
         "music_app/services/gallery_projection_postgres.py"
@@ -12833,22 +13574,7 @@
         "BI-08"
       ],
       "workClass": "background-batch",
-      "proof": "contract",
-      "cardinalities": {
-        "small": 20,
-        "production": 1000
-      },
-      "budgets": {
-        "builder_calls": 7,
-        "generation_changes": 4
-      },
-      "growth": {
-        "metric": "builder_calls",
-        "largeMinusSmallMax": 0
-      },
-      "command": "python -m pytest tests/py/test_projection_rebuild_bounded_contracts.py::test_gallery_projection_refresh_contract_coalesces_triggers_and_converges_at_production_trigger_count",
-      "testIdentity": "test_gallery_projection_refresh_contract_coalesces_triggers_and_converges_at_production_trigger_count",
-      "rollback": "Revert the contract test commit; no product code changed for this interaction."
+      "proof": "static"
     },
     {
       "id": "py:services/gallery_projection_postgres.py#publish_gallery_projection",
@@ -12886,6 +13612,22 @@
       "action": "Run scheduler schedule_gallery_projection_refresh",
       "entrypoints": [
         "py:music_app/services/gallery_projection_postgres.py#schedule_gallery_projection_refresh:scheduler:name"
+      ],
+      "owners": [
+        "music_app/services/gallery_projection_postgres.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/gallery_projection_postgres.py#schedule_gallery_projection_refresh.<locals>.refresh",
+      "action": "Run background schedule_gallery_projection_refresh.<locals>.refresh",
+      "entrypoints": [
+        "py:music_app/services/gallery_projection_postgres.py#schedule_gallery_projection_refresh.<locals>.refresh:background:executor"
       ],
       "owners": [
         "music_app/services/gallery_projection_postgres.py"
@@ -13020,6 +13762,38 @@
       "action": "Prewarm a utility projection (Problematic Files and others) on an executor",
       "entrypoints": [
         "py:music_app/services/library_browse_postgres.py#PostgresLibraryBrowseRepository._run_utility_projection_prewarm:background:executor"
+      ],
+      "owners": [
+        "music_app/services/library_browse_postgres.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/library_browse_postgres.py#_run_utility_projection_rewarm",
+      "action": "Run background _run_utility_projection_rewarm",
+      "entrypoints": [
+        "py:music_app/services/library_browse_postgres.py#_run_utility_projection_rewarm:background:thread"
+      ],
+      "owners": [
+        "music_app/services/library_browse_postgres.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/library_browse_postgres.py#refresh_postgres_utility_projections_after_edit",
+      "action": "Run refresh refresh_postgres_utility_projections_after_edit",
+      "entrypoints": [
+        "py:music_app/services/library_browse_postgres.py#refresh_postgres_utility_projections_after_edit:refresh:name"
       ],
       "owners": [
         "music_app/services/library_browse_postgres.py"
@@ -13196,6 +13970,22 @@
       "proof": "static"
     },
     {
+      "id": "py:services/library_watch_health.py#_catch_up_may_publish_over",
+      "action": "Run publisher _catch_up_may_publish_over",
+      "entrypoints": [
+        "py:music_app/services/library_watch_health.py#_catch_up_may_publish_over:publisher:name"
+      ],
+      "owners": [
+        "music_app/services/library_watch_health.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
       "id": "py:services/library_watch_suppression.py#is_library_watch_event_suppressed",
       "action": "Run watcher is_library_watch_event_suppressed",
       "entrypoints": [
@@ -13245,6 +14035,102 @@
       "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
+      "id": "py:services/local_cover_inventory.py#LocalCoverInventoryRepository.publish",
+      "action": "Run publisher LocalCoverInventoryRepository.publish",
+      "entrypoints": [
+        "py:music_app/services/local_cover_inventory.py#LocalCoverInventoryRepository.publish:publisher:name"
+      ],
+      "owners": [
+        "music_app/services/local_cover_inventory.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/local_cover_inventory.py#LocalCoverInventoryRepository.publish_context",
+      "action": "Run publisher LocalCoverInventoryRepository.publish_context",
+      "entrypoints": [
+        "py:music_app/services/local_cover_inventory.py#LocalCoverInventoryRepository.publish_context:publisher:name"
+      ],
+      "owners": [
+        "music_app/services/local_cover_inventory.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/local_cover_inventory.py#LocalCoverInventoryWorker._retry_scheduled_invalidation",
+      "action": "Run scheduler LocalCoverInventoryWorker._retry_scheduled_invalidation",
+      "entrypoints": [
+        "py:music_app/services/local_cover_inventory.py#LocalCoverInventoryWorker._retry_scheduled_invalidation:scheduler:name"
+      ],
+      "owners": [
+        "music_app/services/local_cover_inventory.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/local_cover_inventory.py#LocalCoverInventoryWorker._run",
+      "action": "Run background LocalCoverInventoryWorker._run",
+      "entrypoints": [
+        "py:music_app/services/local_cover_inventory.py#LocalCoverInventoryWorker._run:background:thread"
+      ],
+      "owners": [
+        "music_app/services/local_cover_inventory.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/local_cover_inventory.py#LocalCoverInventoryWorker.schedule_invalidation_retry",
+      "action": "Run scheduler LocalCoverInventoryWorker.schedule_invalidation_retry",
+      "entrypoints": [
+        "py:music_app/services/local_cover_inventory.py#LocalCoverInventoryWorker.schedule_invalidation_retry:scheduler:name"
+      ],
+      "owners": [
+        "music_app/services/local_cover_inventory.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/local_cover_inventory.py#watch_request_relocates_tracks",
+      "action": "Run watcher watch_request_relocates_tracks",
+      "entrypoints": [
+        "py:music_app/services/local_cover_inventory.py#watch_request_relocates_tracks:watcher:name"
+      ],
+      "owners": [
+        "music_app/services/local_cover_inventory.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-14"
+      ],
+      "workClass": "affected-set",
+      "proof": "static"
+    },
+    {
       "id": "py:services/metadata.py#read_metadata_for_file",
       "action": "Read one media file's tags and stat on an executor",
       "entrypoints": [
@@ -13258,6 +14144,22 @@
         "BI-08"
       ],
       "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/missing_album_rescan.py#MissingAlbumRescan._publish",
+      "action": "Run publisher MissingAlbumRescan._publish",
+      "entrypoints": [
+        "py:music_app/services/missing_album_rescan.py#MissingAlbumRescan._publish:publisher:name"
+      ],
+      "owners": [
+        "music_app/services/missing_album_rescan.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
       "proof": "static"
     },
     {
@@ -13625,6 +14527,54 @@
       "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
+      "id": "py:services/problematic_index.py#_maintain",
+      "action": "Run background _maintain",
+      "entrypoints": [
+        "py:music_app/services/problematic_index.py#_maintain:background:executor"
+      ],
+      "owners": [
+        "music_app/services/problematic_index.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/problematic_index.py#refresh",
+      "action": "Run refresh refresh",
+      "entrypoints": [
+        "py:music_app/services/problematic_index.py#refresh:refresh:name"
+      ],
+      "owners": [
+        "music_app/services/problematic_index.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/progressive_scan_publication.py#ProgressiveScanPublisher._run",
+      "action": "Run background ProgressiveScanPublisher._run",
+      "entrypoints": [
+        "py:music_app/services/progressive_scan_publication.py#ProgressiveScanPublisher._run:background:thread"
+      ],
+      "owners": [
+        "music_app/services/progressive_scan_publication.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
       "id": "py:services/relation_projection_postgres.py#_cancel_active_connection_on_request.<locals>.cancel_active_connection",
       "action": "Cancel the active relation projection query when cancellation is requested",
       "entrypoints": [
@@ -13730,6 +14680,54 @@
       "rollback": "Revert the cherry-picked 0211ed0bf and the contract commit; that restores one cover-path resolve per candidate track."
     },
     {
+      "id": "py:services/scan_cache_persistence.py#PostgresScanCacheAdapter.count_published_files_by_root",
+      "action": "Run publisher PostgresScanCacheAdapter.count_published_files_by_root",
+      "entrypoints": [
+        "py:music_app/services/scan_cache_persistence.py#PostgresScanCacheAdapter.count_published_files_by_root:publisher:name"
+      ],
+      "owners": [
+        "music_app/services/scan_cache_persistence.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/scan_cache_persistence.py#PostgresScanCacheAdapter.load_inventory_published_since",
+      "action": "Run publisher PostgresScanCacheAdapter.load_inventory_published_since",
+      "entrypoints": [
+        "py:music_app/services/scan_cache_persistence.py#PostgresScanCacheAdapter.load_inventory_published_since:publisher:name"
+      ],
+      "owners": [
+        "music_app/services/scan_cache_persistence.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/scan_cache_persistence.py#PostgresScanCacheAdapter.load_removed_unpublished_paths",
+      "action": "Run publisher PostgresScanCacheAdapter.load_removed_unpublished_paths",
+      "entrypoints": [
+        "py:music_app/services/scan_cache_persistence.py#PostgresScanCacheAdapter.load_removed_unpublished_paths:publisher:name"
+      ],
+      "owners": [
+        "music_app/services/scan_cache_persistence.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
       "id": "py:services/scan_cache_persistence.py#_execute_semantic_local_album_reconciliation",
       "action": "Run reconciler _execute_semantic_local_album_reconciliation",
       "entrypoints": [
@@ -13746,6 +14744,22 @@
       "proof": "static"
     },
     {
+      "id": "py:services/scan_cache_persistence.py#_published_path_key",
+      "action": "Run publisher _published_path_key",
+      "entrypoints": [
+        "py:music_app/services/scan_cache_persistence.py#_published_path_key:publisher:name"
+      ],
+      "owners": [
+        "music_app/services/scan_cache_persistence.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
       "id": "py:services/scan_cache_persistence.py#_reconcile_semantic_local_albums_sql",
       "action": "Run reconciler _reconcile_semantic_local_albums_sql",
       "entrypoints": [
@@ -13759,6 +14773,54 @@
         "BI-14"
       ],
       "workClass": "affected-set",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/scan_cache_persistence.py#_refresh_edited_album_metadata",
+      "action": "Run refresh _refresh_edited_album_metadata",
+      "entrypoints": [
+        "py:music_app/services/scan_cache_persistence.py#_refresh_edited_album_metadata:refresh:name"
+      ],
+      "owners": [
+        "music_app/services/scan_cache_persistence.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/scan_state.py#_merge_newer_published_inventory",
+      "action": "Run publisher _merge_newer_published_inventory",
+      "entrypoints": [
+        "py:music_app/services/scan_state.py#_merge_newer_published_inventory:publisher:name"
+      ],
+      "owners": [
+        "music_app/services/scan_state.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/scan_state.py#_published_entry_is_newer",
+      "action": "Run publisher _published_entry_is_newer",
+      "entrypoints": [
+        "py:music_app/services/scan_state.py#_published_entry_is_newer:publisher:name"
+      ],
+      "owners": [
+        "music_app/services/scan_state.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
       "proof": "static"
     },
     {
@@ -13800,6 +14862,70 @@
         "problematic-files-focused"
       ],
       "rollback": "Revert the contract test commit; no product code changed for this interaction."
+    },
+    {
+      "id": "py:services/scoped_relation_projection.py#_published_aliases",
+      "action": "Run publisher _published_aliases",
+      "entrypoints": [
+        "py:music_app/services/scoped_relation_projection.py#_published_aliases:publisher:name"
+      ],
+      "owners": [
+        "music_app/services/scoped_relation_projection.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/scoped_relation_projection.py#_refresh_low_value_family_references",
+      "action": "Run refresh _refresh_low_value_family_references",
+      "entrypoints": [
+        "py:music_app/services/scoped_relation_projection.py#_refresh_low_value_family_references:refresh:name"
+      ],
+      "owners": [
+        "music_app/services/scoped_relation_projection.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/scoped_relation_projection.py#_refresh_stray_duplicate_ownership",
+      "action": "Run refresh _refresh_stray_duplicate_ownership",
+      "entrypoints": [
+        "py:music_app/services/scoped_relation_projection.py#_refresh_stray_duplicate_ownership:refresh:name"
+      ],
+      "owners": [
+        "music_app/services/scoped_relation_projection.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
+      "id": "py:services/scoped_relation_projection.py#publish_affected_relation_projection",
+      "action": "Run publisher publish_affected_relation_projection",
+      "entrypoints": [
+        "py:music_app/services/scoped_relation_projection.py#publish_affected_relation_projection:publisher:name"
+      ],
+      "owners": [
+        "music_app/services/scoped_relation_projection.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
     },
     {
       "id": "py:services/state.py#_drain_watcher_cover_refresh_queue",
@@ -13939,6 +15065,22 @@
       "command": "python -m pytest tests/py/test_projection_rebuild_bounded_contracts.py::test_scheduled_relation_rebuild_contract_coalesces_triggers_and_converges_at_production_trigger_count",
       "testIdentity": "test_scheduled_relation_rebuild_contract_coalesces_triggers_and_converges_at_production_trigger_count",
       "rollback": "Revert the contract test commit; no product code changed for this interaction."
+    },
+    {
+      "id": "py:services/state.py#_schedule_watcher_cover_refresh_retry",
+      "action": "Run watcher _schedule_watcher_cover_refresh_retry",
+      "entrypoints": [
+        "py:music_app/services/state.py#_schedule_watcher_cover_refresh_retry:watcher:name"
+      ],
+      "owners": [
+        "music_app/services/state.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-14"
+      ],
+      "workClass": "affected-set",
+      "proof": "static"
     },
     {
       "id": "py:services/state.py#_submit_watcher_cover_refresh",

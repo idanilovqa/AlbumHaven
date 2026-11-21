@@ -720,7 +720,7 @@ validatorTest('metadata shard uses one fixture setup with three effect-compatibl
   );
   assert.equal(
     waves[0].invocations[0].cases[0].case,
-    'FTC-ALBUM-DETAILS-029 stale album references follow merges and return to the gallery after splits',
+    "FTC-ALBUM-DETAILS-029 an open Album Details whose album is split or merged elsewhere says 'This album changed—choose it again in the gallery' and returns to the gallery; a stale card opened afterwards just shows the refreshed gallery; a gallery open never shows the split chooser",
   );
   assert.equal(
     waves[2].invocations[0].cases[0].case,

@@ -64,7 +64,7 @@ const POST_EDIT_DEGRADATION_BUDGET = defineTimingBudget({
   graceMs: POST_EDIT_DEGRADATION_GRACE_MS,
 });
 
-test('FTC-ALBUM-DETAILS-029 stale album references follow merges and return to the gallery after splits', { tag: '@area:tag-edit' }, async ({
+test("FTC-ALBUM-DETAILS-029 an open Album Details whose album is split or merged elsewhere says 'This album changed—choose it again in the gallery' and returns to the gallery; a stale card opened afterwards just shows the refreshed gallery; a gallery open never shows the split chooser", { tag: '@area:tag-edit' }, async ({
   freshBrowserSession,
   galleryActions,
   stepLogger,

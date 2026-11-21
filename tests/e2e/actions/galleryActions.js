@@ -943,7 +943,7 @@ export class GalleryActions {
     ));
     expect(
       renderedIdentities,
-      `Expected every provided ${artistName} album identity to be rendered in the current optimistic window`,
+      `Expected every provided ${artistName} album identity to be rendered in the current optimistic window DIAG=${JSON.stringify(observation.diag)}`,
     ).toEqual(expected);
     if (options.expectedAlbumCount !== undefined) {
       expect(

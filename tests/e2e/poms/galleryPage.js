@@ -586,6 +586,25 @@ export class GalleryPage extends BasePage {
       return {
         artistMetaText,
         renderedIdentities,
+        diag: {
+          allCardTitles: [...element.querySelectorAll(selectors.albumCardSelector)]
+            .map((card) => String(card.querySelector(selectors.albumTitleSelector)?.textContent || '').trim()),
+          sectionCount: document.querySelectorAll(selectors.artistSectionSelector).length,
+          sectionHtmlLength: element.innerHTML.length,
+          url: location.href,
+          now: Math.round(performance.now()),
+          requests: (window.__diagLog || []).slice(-40),
+          scrollTop: Math.round(document.getElementById('albums-scroll')?.scrollTop || 0),
+          stateArtistAlbums: (typeof state === 'undefined' ? [] : (state.view?.artist_groups || []))
+            .filter((group) => String(group?.artist || '').trim() === selectors.artistName)
+            .map((group) => (group.albums || []).map((album) => album?.name || album?.album || '')),
+          stateArtists: (typeof state === 'undefined' ? [] : (state.view?.artist_groups || []))
+            .map((group) => `${group?.artist}:${(group?.albums || []).length}`),
+          galleryPage: typeof state === 'undefined' ? null : (state.view?.gallery_page || null),
+          mountedRows: [...document.querySelectorAll('.album-row[data-section-key][data-block-index]')]
+            .map((row) => `${row.getAttribute('data-section-key')}#${row.getAttribute('data-block-index')}@${Math.round(row.getBoundingClientRect().top)}`),
+          virtualGrid: globalThis.__ALBUM_HAVEN_VIRTUAL_GRID__ ? JSON.parse(JSON.stringify(globalThis.__ALBUM_HAVEN_VIRTUAL_GRID__)) : null,
+        },
       };
     }, {
       albumCardSelector: this.albumCardWithinSectionSelector,
@@ -600,6 +619,7 @@ export class GalleryPage extends BasePage {
     return {
       albumCount: parseArtistAlbumCount(observation.artistMetaText),
       renderedIdentities: observation.renderedIdentities,
+      diag: { ...observation.diag, artistMetaText: observation.artistMetaText },
     };
   }
 

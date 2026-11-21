@@ -626,7 +626,7 @@ class _EditTagsDatabase:
             def __init__(self, _config):
                 pass
 
-            def intent_lease(self):
+            def intent_lease(self, _request_id=""):
                 return self
 
             def release(self):

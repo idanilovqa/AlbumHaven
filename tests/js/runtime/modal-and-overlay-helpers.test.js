@@ -2991,3 +2991,18 @@ test('Loose Tracks highlight matched track titles and never mark a row for its a
   assert.equal(byArtist.titleHighlightRanges, null);
   assert.equal('isSearchMatch' in titled || 'isSearchMatch' in byArtist, false);
 });
+
+
+test('the Interviews page lists only Interview loose tracks under the title Interviews (owner 2026-11-21)', () => {
+  const { context } = loadHelper();
+  const tracks = [
+    { path: 'a.mp3', title: 'Talk', exception_type: 'Interview' },
+    { path: 'b.mp3', title: 'Rare', exception_type: 'Non-album rarity' },
+    { path: 'c.mp3', title: 'Car song', exception_type: 'Custom Collection', custom_collection_name: '@interviews' },
+  ];
+  context.state.view = { library_non_album_tracks: tracks };
+  const key = context.LOOSE_TRACKS_INTERVIEWS_KEY ?? '@interviews';
+  assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks({ libraryWide: true, collectionName: key }), (track) => track.title), ['Talk']);
+  assert.equal(context.looseTracksPageTitle(key), 'Interviews');
+  assert.equal(context.looseTracksPageTitle('Night'), 'Night');
+});

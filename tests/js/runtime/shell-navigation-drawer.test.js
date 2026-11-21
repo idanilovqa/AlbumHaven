@@ -1,6 +1,11 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const looseTracksPageKeySource = (() => {
+  const source = fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/runtime/modal-and-overlay-helpers.js'), 'utf8');
+  return source.slice(source.indexOf('const LOOSE_TRACKS_INTERVIEWS_KEY'), source.indexOf('function getVisibleNonAlbumTracks'));
+})();
+
 const test = require('node:test');
 const vm = require('node:vm');
 
@@ -201,6 +206,8 @@ function loadHelper({ isMobile = false, artistTreeFolded = false, savedArtistTre
     persistShellLayoutPreferencesCallCount: 0,
   };
   vm.createContext(context);
+  // The Interviews key and its helpers are owned by the Loose Tracks module; run that exact snippet.
+  vm.runInContext(looseTracksPageKeySource, context);
   vm.runInContext(helperSource, context, { filename: helperPath });
   return {
     context,
@@ -249,11 +256,11 @@ function stubCatalogFetch(context) {
   const requests = [];
   context.URL = URL;
   context.fetch = (path) => new Promise((resolve) => {
-    requests.push({ path, respond: (collections, status = 200, looseTracksCount) => resolve({
+    requests.push({ path, respond: (collections, status = 200, looseTracksCount, interviewsCount) => resolve({
       ok: status < 400,
       status,
       json: async () => (status < 400
-        ? { custom_collections: collections, loose_tracks_count: looseTracksCount }
+        ? { custom_collections: collections, loose_tracks_count: looseTracksCount, interviews_count: interviewsCount }
         : { ok: false, error: 'boom' }),
     }) });
   });
@@ -1367,4 +1374,25 @@ test('redrawing the collections tree leaves an auto-hidden view rail hidden; swi
   drawerRail.classList.add('is-library-mode-rail-hidden');
   await context.setLibraryNavigationMode('custom-collections');
   assert.equal(drawerRail.classList.contains('is-library-mode-rail-hidden'), false);
+});
+
+
+test('Interviews are listed under All Loose Tracks once they have tracks, and open as their own page (owner 2026-11-21)', async () => {
+  const { context, artistList } = loadHelper();
+  stubCollectionTree(context);
+  const requests = stubCatalogFetch(context);
+  const pending = context.setLibraryNavigationMode('custom-collections');
+  assert.doesNotMatch(artistList.innerHTML, /Interviews/, 'no row while its count is unknown');
+  requests[0].respond([{ name: 'Night', count: 2 }], 200, 9, 3);
+  await pending;
+  assert.match(artistList.innerHTML, /^<button data-open-loose-tracks="1">All Loose Tracks<\/button><button data-open-custom-collection="@interviews">Interviews:3<\/button><div class="navigation-tree-separator"/);
+  assert.equal(context.customCollectionCatalogTrackCount('@interviews'), 3);
+
+  const { context: emptyContext, artistList: emptyList } = loadHelper();
+  stubCollectionTree(emptyContext);
+  const emptyRequests = stubCatalogFetch(emptyContext);
+  const emptyPending = emptyContext.setLibraryNavigationMode('custom-collections');
+  emptyRequests[0].respond([{ name: 'Night', count: 2 }], 200, 9, 0);
+  await emptyPending;
+  assert.doesNotMatch(emptyList.innerHTML, /Interviews/, 'a library without interviews shows no row');
 });

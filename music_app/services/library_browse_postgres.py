@@ -531,11 +531,15 @@ class PostgresLibraryBrowseRepository:
         # All Loose Tracks total (owner 2026-11-16): counted inside Postgres from the current snapshot;
         # unknown (None) while the snapshot is missing or stale, so the tree never shows a wrong number.
         loose_tracks_count = None
+        interviews_count = None
         if loose_rows and all(_row_mapping(row).get("fingerprint") == current_fingerprint for row in loose_rows):
-            loose_tracks_count = sum(
-                int(_row_mapping(row).get("track_count") or 0)
-                for row in loose_rows
-                if entry_visible_in_categories(_row_mapping(row), categories)
+            visible = [_row_mapping(row) for row in loose_rows if entry_visible_in_categories(_row_mapping(row), categories)]
+            loose_tracks_count = sum(int(row.get("track_count") or 0) for row in visible)
+            # Interviews are a Loose Tracks category the tree lists beside the collections (owner 2026-11-21).
+            interviews_count = sum(
+                int(row.get("track_count") or 0)
+                for row in visible
+                if normalize_exception_value(row.get("exception_type")) == "Interview"
             )
         counts: dict[str, int] = {}
         for row in rows:
@@ -551,6 +555,7 @@ class PostgresLibraryBrowseRepository:
         return {
             "custom_collections": [{"name": name, "count": count} for name, count in sorted(counts.items())],
             "loose_tracks_count": loose_tracks_count,
+            "interviews_count": interviews_count,
         }
 
     def _searched_custom_collection_catalog(
@@ -574,6 +579,9 @@ class PostgresLibraryBrowseRepository:
         return {
             "custom_collections": [{"name": name, "count": count} for name, count in sorted(counts.items())],
             "loose_tracks_count": len(tracks),
+            "interviews_count": sum(
+                1 for track in tracks if normalize_exception_value(track.get("exception_type")) == "Interview"
+            ),
             "query": query,
         }
 
@@ -6826,11 +6834,12 @@ def _non_album_snapshot_category_counts_sql() -> str:
     return f"""
         select snapshots.payload ->> %(fingerprint_key)s as fingerprint,
                track ->> 'library_root_category' as library_root_category,
+               track ->> 'exception_type' as exception_type,
                count(*) as track_count
         from library.non_album_track_snapshots snapshots
         cross join lateral jsonb_array_elements(coalesce(snapshots.payload -> 'tracks', '[]'::jsonb)) track
         where snapshots.library_id = ({_NON_ALBUM_SNAPSHOT_LIBRARY_SQL})
-        group by 1, 2
+        group by 1, 2, 3
     """
 
 

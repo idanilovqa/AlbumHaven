@@ -19307,6 +19307,46 @@ def test_searched_custom_collection_tree_counts_only_matching_tracks(monkeypatch
 
     assert payload["custom_collections"] == [{"name": "Car", "count": 1}, {"name": "Home", "count": 1}]
     assert payload["loose_tracks_count"] == 3
+    assert payload["interviews_count"] == 1
+
+
+def test_plain_custom_collection_tree_counts_interviews_from_the_stored_loose_tracks(monkeypatch):
+    # Owner 2026-11-21: Interviews are a Loose Tracks category listed under All Loose Tracks with their own count.
+    from music_app.services import library_browse_postgres as browse
+
+    class Cursor:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def fetchall(self):
+            return self._rows
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def execute(self, sql, *_args):
+            if "max_parallel_workers_per_gather" in sql:
+                return Cursor([])
+            if "jsonb_array_elements" in sql:
+                return Cursor([
+                    {"fingerprint": "f", "library_root_category": "main_library", "exception_type": "Interview", "track_count": 2},
+                    {"fingerprint": "f", "library_root_category": "main_library", "exception_type": "Non-album rarity", "track_count": 5},
+                    {"fingerprint": "f", "library_root_category": "hoard", "exception_type": "Interview", "track_count": 4},
+                ])
+            return Cursor([])
+
+    repository = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://unused"})
+    monkeypatch.setattr(repository, "_connect_to_database", lambda: Connection())
+    monkeypatch.setattr(browse, "_non_album_inventory_fingerprint", lambda _connection: "f")
+
+    payload = repository.build_custom_collection_catalog_payload(query_params={"category": ["main_library"]})
+
+    assert payload["loose_tracks_count"] == 7
+    assert payload["interviews_count"] == 2
 
 
 def test_album_musicbrainz_artist_carries_known_discogs_artist_page() -> None:

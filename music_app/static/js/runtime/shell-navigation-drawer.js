@@ -179,7 +179,9 @@ function storeCustomCollectionCatalog(key, catalog) {
 function customCollectionCatalogTrackCount(collectionName = '') {
   const catalog = currentCustomCollectionCatalog();
   if (!catalog) return undefined;
-  const count = collectionName
+  const count = collectionName === LOOSE_TRACKS_INTERVIEWS_KEY
+    ? catalog.interviewsCount
+    : collectionName
     ? catalog.collections.find(({ name }) => name === collectionName)?.count
     : catalog.looseTracksCount;
   return Number.isInteger(count) ? count : undefined;
@@ -309,6 +311,7 @@ function syncCustomCollectionsAfterTagEdit({ fresh = false } = {}) {
     revision: customCollectionCatalogs.get(key)?.revision ?? null,
     collections,
     looseTracksCount: tracks.length,
+    interviewsCount: tracks.filter((track) => trackBelongsToLooseTracksPage(track, LOOSE_TRACKS_INTERVIEWS_KEY)).length,
   });
   redraw(collections);
 }
@@ -344,8 +347,9 @@ function loadCustomCollectionCatalog({ fresh = false, view = state.view || {} } 
       .sort((left, right) => left.name.localeCompare(right.name));
     // null while the server's Loose Tracks snapshot is not current: show no number rather than a wrong one.
     const looseTracksCount = Number.isInteger(payload.loose_tracks_count) ? payload.loose_tracks_count : null;
+    const interviewsCount = Number.isInteger(payload.interviews_count) ? payload.interviews_count : null;
     if (generation === customCollectionCatalogGeneration) {
-      storeCustomCollectionCatalog(key, { revision, collections, looseTracksCount });
+      storeCustomCollectionCatalog(key, { revision, collections, looseTracksCount, interviewsCount });
     }
     if (typeof prefetchCustomCollectionArtwork === 'function') {
       void prefetchCustomCollectionArtwork(collections.map(({ name }) => name));
@@ -451,11 +455,23 @@ function renderCustomCollectionNavigation(collections, { failure = '' } = {}) {
     attributes: { 'data-open-loose-tracks': '1' },
   });
   const query = String(state.view?.query || '').trim();
+  // Interviews sit under All Loose Tracks as the other Loose Tracks category (owner 2026-11-21). Like a collection,
+  // the row shows only once its count is known and above 0, so it never flashes in and out.
+  const interviewsCount = customCollectionCatalogTrackCount(LOOSE_TRACKS_INTERVIEWS_KEY);
+  const interviews = failure || !(interviewsCount > 0) ? '' : window.NavigationTree.renderItem({
+    action: true,
+    variant: 'panel',
+    key: LOOSE_TRACKS_INTERVIEWS_KEY,
+    label: 'Interviews',
+    count: interviewsCount,
+    selected: activeCollectionName === LOOSE_TRACKS_INTERVIEWS_KEY,
+    attributes: { 'data-open-custom-collection': LOOSE_TRACKS_INTERVIEWS_KEY },
+  });
   const collectionRows = failure
     ? `<p class="utility-empty-state compact">${escapeHtml(failure)}</p>`
     : collections === null
       ? window.NavigationTree.renderSkeleton({ count: 3 })
-      : !collections.length && query
+      : !collections.length && query && !interviews
         ? window.NavigationTree.renderEmpty({ text: 'No match found' })
       : collections.map(({ name, count }) => window.NavigationTree.renderItem({
         action: true,
@@ -466,7 +482,7 @@ function renderCustomCollectionNavigation(collections, { failure = '' } = {}) {
         selected: name === activeCollectionName,
         attributes: { 'data-open-custom-collection': name },
       })).join('');
-  list.innerHTML = `${allLooseTracks}${window.NavigationTree.renderSeparator({ label: 'Custom Collections' })}${collectionRows}`;
+  list.innerHTML = `${allLooseTracks}${interviews}${window.NavigationTree.renderSeparator({ label: 'Custom Collections' })}${collectionRows}`;
 }
 
 async function setLibraryNavigationMode(mode) {
@@ -494,8 +510,8 @@ async function setLibraryNavigationMode(mode) {
     const loaded = customCollectionCatalogs.get(key);
     // The refreshed list replaces the drawn one only when it differs: redrawing the same rows made them blink.
     const unchanged = cached !== null && loaded !== undefined
-      && JSON.stringify([cached.collections, cached.looseTracksCount])
-        === JSON.stringify([loaded.collections, loaded.looseTracksCount]);
+      && JSON.stringify([cached.collections, cached.looseTracksCount, cached.interviewsCount])
+        === JSON.stringify([loaded.collections, loaded.looseTracksCount, loaded.interviewsCount]);
     if (stillShown() && loaded && !unchanged) renderCustomCollectionNavigation(loaded.collections);
   } catch (error) {
     if (stillShown() && cached === null) {

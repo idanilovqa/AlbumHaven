@@ -248,6 +248,22 @@ function closeVersionPickerModal() {
   }
 }
 
+// Interviews are a Loose Tracks category, not a collection, but the Custom Collections tree lists them beside the
+// collections and they open the same page (owner 2026-11-21). One reserved key carries them through every place a
+// collection page is named (URL, history, tree selection, recounts); these two helpers are its only readers.
+const LOOSE_TRACKS_INTERVIEWS_KEY = '@interviews';
+
+function trackBelongsToLooseTracksPage(track, collectionKey) {
+  const exceptionType = String(track?.exception_type || '').trim();
+  if (collectionKey === LOOSE_TRACKS_INTERVIEWS_KEY) return exceptionType === 'Interview';
+  return exceptionType === 'Custom Collection'
+    && String(track?.custom_collection_name || '').trim() === collectionKey;
+}
+
+function looseTracksPageTitle(collectionKey) {
+  return collectionKey === LOOSE_TRACKS_INTERVIEWS_KEY ? 'Interviews' : collectionKey;
+}
+
 function getVisibleNonAlbumTracks(options = {}) {
   const view = state.view;
   const mainState = state.gallery?.mainState;
@@ -269,12 +285,7 @@ function getVisibleNonAlbumTracks(options = {}) {
     ? (currentLibraryLooseTracks(view) || (Array.isArray(view.library_non_album_tracks) ? view.library_non_album_tracks : []))
     : (Array.isArray(view.non_album_tracks) ? view.non_album_tracks : []);
   const collectionName = String(options.collectionName || '').trim();
-  if (collectionName) {
-    tracks = tracks.filter((track) => (
-      String(track?.exception_type || '').trim() === 'Custom Collection'
-      && String(track?.custom_collection_name || '').trim() === collectionName
-    ));
-  }
+  if (collectionName) tracks = tracks.filter((track) => trackBelongsToLooseTracksPage(track, collectionName));
   const selectedArtist = options.libraryWide
     ? ''
     : String(view.selected_artist || '').trim();
@@ -737,7 +748,7 @@ function buildNonAlbumTrackSectionsConfig(items, options = {}) {
     showPath,
     forceGroupLabels: !collectionName,
     collapsibleGroups: !collectionName,
-    ariaLabel: collectionName || 'Loose tracks',
+    ariaLabel: looseTracksPageTitle(collectionName) || 'Loose tracks',
     idPrefix: 'loose-track-table',
     mobile: 'grouped',
     mobileColumns: '36px minmax(0, 1fr) minmax(54px, auto)',
@@ -1138,9 +1149,9 @@ function openNonAlbumModal(options = {}) {
     : 'Non-album tracks found in the selected library sources.';
   if (els.header) {
     els.header.innerHTML = buildLooseTracksPageHeaderHtml({
-      title: collectionName || 'Loose Tracks',
+      title: looseTracksPageTitle(collectionName) || 'Loose Tracks',
       subtitle,
-      leadingHtml: collectionName
+      leadingHtml: collectionName && collectionName !== LOOSE_TRACKS_INTERVIEWS_KEY
         ? buildCustomCollectionHeaderArtworkMarkup(collectionName, collectionArtwork)
         : '',
       actionsHtml: buildLooseTracksHeaderActionsHtml({ showClose: !page }),
@@ -1153,7 +1164,7 @@ function openNonAlbumModal(options = {}) {
         collectionName,
         navigationSource: options.navigationSource,
       }),
-      title: collectionName || 'Loose Tracks',
+      title: looseTracksPageTitle(collectionName) || 'Loose Tracks',
       subtitle,
     });
   }

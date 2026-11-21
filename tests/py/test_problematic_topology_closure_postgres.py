@@ -109,6 +109,143 @@ def _state_topology_proof(connection, library_id):
     ).fetchone()
 
 
+@pytest.mark.parametrize(
+    ("interruption", "reason_code"),
+    [("cancel", "problematic_projection_canceled"),
+     ("lease-lost", "problematic_projection_lease_lost")],
+    ids=["cancel", "lease-lost"],
+)
+def test_live_topology_signature_stop_closes_resources_without_publication(
+    live_projection_database, monkeypatch, interruption, reason_code,
+):
+    from music_app.services import problematic_files_projection as projection
+    from music_app.services.library import _normalized_duplicate_card_text
+    from tests.py.test_problematic_files_projection import (
+        _persist_semantic_facts, _topology_unit_row, _tracked_projection_spools,
+    )
+    from tests.py.test_problematic_topology_derived_identity import _seed_native_overlap
+    from tests.py.test_problematic_topology_sql_boundaries_postgres import _canonical_rows
+
+    db = live_projection_database
+    expanded_title = "\ufdfa" * 2000
+    assert len(expanded_title.encode("utf-8")) < projection._MAX_REDUCER_FACT_BYTES
+    assert len(_normalized_duplicate_card_text(expanded_title).encode("utf-8")) > projection._MAX_REDUCER_FACT_BYTES
+    rows = []
+    for folder, album in (("P", "Café"), ("Q", "Cafe")):
+        for number, title in ((1, expanded_title), (2, "Closing")):
+            row = _topology_unit_row(
+                f"C:/TopologyDerived/{folder}/{number}.flac", len(rows) + 1,
+                original_key="a-owner", title=album, number=number,
+            )
+            row["track_title"] = row["file_entry"]["title"] = title
+            rows.append(row)
+    album_id = _seed_native_overlap(db, rows)
+    with isolatedPostgres._connect(db.setup_url) as connection:
+        assert len(connection.execute(
+            "update library.local_tracks set duration_seconds=180,disc_number=1 "
+            "where library_id=%s and album_id=%s returning id", (db.library_id, album_id),
+        ).fetchall()) == 4
+    _browse, persisted_rows = _canonical_rows(db)
+    assert len(persisted_rows) == 4
+    assert all(row["duration_seconds"] == 180 for row in persisted_rows)
+    canonical = projection._duplicate_sources_from_rows(persisted_rows)["a-owner"]
+    assert canonical["has_duplicate_files"] is True
+    assert len(canonical["duplicate_sources"]) == 2
+    assert all(len(source["tracks"]) == 2 for source in canonical["duplicate_sources"])
+    worker, claim, build, _now = _main_search_claimed_v2(db)
+    page = worker.load_claimed_source_page(
+        claim=claim, build=build, limit=100, child_limit=100, now=_now,
+    )
+    source_rows = [row for chunk in page.chunks for row in chunk.rows]
+    assert len(source_rows) == 4
+    identities = {(row["file_private_path"], row["track_key"]) for row in source_rows}
+    assert len(identities) == 4
+    assert identities == {(row["file_private_path"], row["track_key"]) for row in persisted_rows}
+    assert worker.load_claimed_source_page(
+        claim=claim, build=build, limit=100, child_limit=100, now=_now,
+    ) == page
+    facts = _persist_semantic_facts(projection.ProblematicGroupAccumulator(), enumerate(source_rows, 1))
+    assert max(len(json.dumps(value, ensure_ascii=True).encode("utf-8"))
+               for _stage, _kind, value in facts) <= projection._MAX_REDUCER_FACT_BYTES
+
+    contexts, signatures, binary_spools, interrupted, cleanup = [], set(), [], [], []
+    real_context = ExecutionContext
+    real_write = projection._ProblematicSignatureStore.write_refs
+    real_compare = projection._ProblematicSignatureStore.compare
+    real_cleanup = worker.cancel_claimed_build
+    _projection, spools = _tracked_projection_spools(monkeypatch)
+
+    def capture_context(*args, **kwargs):
+        context = real_context(*args, **kwargs)
+        contexts.append(context)
+        return context
+
+    def record_signature(store, tokens):
+        reference = real_write(store, tokens)
+        signatures.add((id(store), reference["offset"], reference["length"]))
+        binary_spools.append(store._file)
+        return reference
+
+    def interrupt_comparison(store, left, right):
+        if not interrupted and left["offset"] != right["offset"] and all(
+            (id(store), reference["offset"], reference["length"]) in signatures
+            for reference in (left, right)
+        ):
+            assert len(contexts) == 1
+            assert min(left["length"], right["length"]) > projection._MAX_REDUCER_FACT_BYTES
+            interrupted.append(True)
+            if interruption == "cancel":
+                contexts[0].request_cancellation()
+            else:
+                with isolatedPostgres._connect(db.setup_url) as connection:
+                    expired = connection.execute(
+                        "update ops.jobs set lease_expires_at=clock_timestamp()-interval '1 second' "
+                        "where id=%s and attempt_count=%s and lease_token=%s returning id",
+                        (claim.job_id, claim.attempt, claim.lease_token),
+                    ).fetchone()
+                    assert expired == {"id": claim.job_id}
+                contexts[0].mark_lease_lost()
+        return real_compare(store, left, right)
+
+    def record_cleanup(**kwargs):
+        cleanup.append(kwargs["reason_code"])
+        return real_cleanup(**kwargs)
+
+    monkeypatch.setattr(f"{__name__}.ExecutionContext", capture_context)
+    monkeypatch.setattr(projection._ProblematicSignatureStore, "write_refs", record_signature)
+    monkeypatch.setattr(projection._ProblematicSignatureStore, "compare", interrupt_comparison)
+    monkeypatch.setattr(worker, "cancel_claimed_build", record_cleanup)
+    result = _run_topology_worker(worker, claim)
+
+    assert interrupted == [True]
+    assert result.next_state is JobState.CANCELED
+    assert result.reason_code == reason_code
+    assert spools and all(spool.closed for spool in spools)
+    assert binary_spools and all(spool.closed for spool in binary_spools)
+    assert cleanup == ([reason_code] if interruption == "cancel" else [])
+    with isolatedPostgres._connect(db.setup_url) as connection:
+        assert connection.execute(
+            "select committed_revision from ops.problematic_projection_state where library_id=%s",
+            (db.library_id,),
+        ).fetchone() == {"committed_revision": None}
+        assert connection.execute(
+            "select count(*) as count from ops.problematic_projection_headers where library_id=%s",
+            (db.library_id,),
+        ).fetchone() == {"count": 0}
+        scope = (claim.job_id, claim.attempt, build.revision)
+        for table in ("item_staging", "search_fact_staging"):
+            assert connection.execute(
+                f"select count(*) as count from ops.problematic_projection_{table} "
+                "where job_id=%s and attempt=%s and revision=%s", scope,
+            ).fetchone() == {"count": 0}
+        for table in ("source_staging", "group_accumulators", "group_facts"):
+            count = connection.execute(
+                f"select count(*) as count from ops.problematic_projection_{table} "
+                "where job_id=%s and attempt=%s and revision=%s", scope,
+            ).fetchone()["count"]
+            assert (count == 0) if interruption == "cancel" else (count > 0)
+
+
 def test_live_topology_source_stager_cannot_mark_a_prefix_complete(live_projection_database):
     db = live_projection_database
     album_id = _seed_topology_album(db, file_count=101)

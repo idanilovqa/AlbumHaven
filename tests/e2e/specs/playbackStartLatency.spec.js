@@ -18,6 +18,32 @@ const CLICK_TO_SOUND_BUDGET = defineTimingBudget({
 });
 
 // The selected song is shown, plays on past its start, and keeps rendering real samples.
+// Where a start spent its time, for diagnosis: each control and the first audio bytes after the click.
+function startStages(playbackEvidence, eventMark, clickedAtEpochMs) {
+  const seen = new Set();
+  return playbackEvidence.eventsSince(eventMark)
+    .filter((event) => ['probe', 'probe-result', 'open', 'metadata', 'rate-mismatch', 'encoded', 'pcm']
+      .includes(event.type))
+    .map((event) => ({
+      label: ['encoded', 'pcm'].includes(event.type) ? `first ${event.type} bytes` : event.type,
+      at: event.sentAtEpochMs || event.receivedAtEpochMs,
+    }))
+    .filter(({ label }) => (seen.has(label) ? false : seen.add(label)))
+    .map(({ label, at }) => `${label} +${Math.round(at - clickedAtEpochMs)}`)
+    .join(', ');
+}
+
+async function measureStart(context, rowIndex, label) {
+  const { page, trackModalActions, playbackEvidence } = context;
+  const eventMark = playbackEvidence.eventMark();
+  const clickedAtEpochMs = Date.now();
+  const attempt = await measureAlbumTrackPlaybackStart({
+    page, trackModalActions, traffic: playbackEvidence, rowIndex, label,
+  });
+  attempt.stages = startStages(playbackEvidence, eventMark, clickedAtEpochMs);
+  return attempt;
+}
+
 async function expectAudibleTrack({ attempt, globalPlayerActions, playbackEvidence }) {
   expect(attempt.diagnostics.currentPath).toBe(attempt.track.path);
   expect(attempt.diagnostics.paused).toBe(false);
@@ -58,17 +84,14 @@ test(`${CASE_ID} the first song after the page opens and a switch to another son
   const cdp = await page.context().newCDPSession(page);
   await cdp.send('Emulation.setCPUThrottlingRate', { rate: CPU_SLOWDOWN });
   try {
+    const context = { page, trackModalActions, playbackEvidence };
     const first = await stepLogger.step('Play the first song since the page opened', async () => (
-      measureAlbumTrackPlaybackStart({
-        page, trackModalActions, traffic: playbackEvidence, rowIndex: 0, label: 'first song',
-      })
+      measureStart(context, 0, 'first song')
     ));
     await expectAudibleTrack({ attempt: first, globalPlayerActions, playbackEvidence });
 
     const switched = await stepLogger.step('Switch to another song while the first one plays', async () => (
-      measureAlbumTrackPlaybackStart({
-        page, trackModalActions, traffic: playbackEvidence, rowIndex: 4, label: 'switch while playing',
-      })
+      measureStart(context, 4, 'switch while playing')
     ));
     await expectAudibleTrack({ attempt: switched, globalPlayerActions, playbackEvidence });
     expect(switched.track.path).not.toBe(first.track.path);
@@ -76,8 +99,9 @@ test(`${CASE_ID} the first song after the page opens and a switch to another son
     for (const attempt of [first, switched]) {
       testInfo.annotations.push({
         type: `click to sound, ${attempt.label} (ms)`,
-        description: String(Math.round(attempt.elapsedMs)),
+        description: `${Math.round(attempt.elapsedMs)} (${attempt.stages})`,
       });
+      stepLogger.note(`${attempt.label}: ${Math.round(attempt.elapsedMs)} ms; ${attempt.stages}`, 1);
     }
     expectTimingBudget(expect, first.elapsedMs, CLICK_TO_SOUND_BUDGET, 'First song click to sound');
     expectTimingBudget(expect, switched.elapsedMs, CLICK_TO_SOUND_BUDGET, 'Switch click to sound');

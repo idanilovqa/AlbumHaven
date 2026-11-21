@@ -1025,6 +1025,36 @@ test('a live artist-tree read keeps the artist gallery payload authoritative', a
   assert.equal(observer.read().activeRequestCount, 0);
 });
 
+test('a search Loose Tracks prefetch keeps the search gallery payload authoritative', async () => {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  const searchRequest = request('http://127.0.0.1/view-data?surface=albums&q=Ben&category=main_library');
+  const looseTracksRequest = request(
+    'http://127.0.0.1/view-data?surface=albums&q=Ben&category=main_library'
+    + '&omit_sidebar=1&include_non_album=1&include_library_wide_non_album=1',
+  );
+
+  page.emit('request', searchRequest);
+  page.emit('request', looseTracksRequest);
+  page.emit('response', response(searchRequest, {
+    payload_tier: 'full',
+    query: 'Ben',
+    selected_artist: 'Ben',
+    primary_artist_groups: [{ artist: 'Ben', albums: [{ key: 'ben-1', name: 'First' }] }],
+  }));
+  page.emit('requestfinished', searchRequest);
+  await flushPromises();
+  page.emit('response', response(looseTracksRequest, { non_album_tracks: [] }));
+  page.emit('requestfinished', looseTracksRequest);
+  await flushPromises();
+
+  const result = observer.read();
+  assert.equal(result.latestFullPayload.query, 'Ben');
+  assert.equal(result.activeRequestCount, 0);
+  assert.equal(result.pendingPayloadReadCount, 0);
+});
+
 test('production view observer exposes the in-flight latest full payload read for POM synchronization', async () => {
   const { ProductionViewObserver } = await import(observerUrl);
   const page = new FakePage();

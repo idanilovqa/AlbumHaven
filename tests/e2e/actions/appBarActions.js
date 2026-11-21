@@ -220,12 +220,16 @@ export class AppBarActions {
     await this.waitForIncrementalScanUiSettled(options);
   }
 
+  // `includeStartupAndLookups` also waits for the post-start relation check, relation
+  // publication, and every Cover Lookup task to finish, so a timing starts on a quiet server.
   async waitForScanAndCoverRefreshIdle(options = {}) {
+    const { page } = this.appBar;
     let lastStatus = null;
+    let activeLookups = null;
     await expect.poll(async () => {
       let response;
       try {
-        response = await authenticatedPageGet(this.appBar.page, '/status');
+        response = await authenticatedPageGet(page, '/status');
       } catch (error) {
         if (!isRetryableStatusProbeError(error)) throw error;
         lastStatus = { transport_error: String(error?.message || error) };
@@ -235,15 +239,29 @@ export class AppBarActions {
         throw new Error(`Status request failed with HTTP ${response.status()}.`);
       }
       lastStatus = await response.json();
-      return Boolean(
+      if (
         lastStatus.scan_in_progress
         || lastStatus.covers_in_progress
         || lastStatus.pending_cover_refresh_after_scan
+      ) return true;
+      if (!options.includeStartupAndLookups) return false;
+      if (
+        lastStatus.relations_in_progress
+        || lastStatus.relation_projection?.rebuild_reason === 'not_checked'
+      ) return true;
+      const lookups = await authenticatedPageGet(
+        page,
+        '/utilities/cover-lookup/tasks?active_only=true&limit=1',
       );
+      if (!lookups.ok()) {
+        throw new Error(`Cover Lookup task request failed with HTTP ${lookups.status()}.`);
+      }
+      activeLookups = Number((await lookups.json()).active_count);
+      return activeLookups !== 0;
     }, {
       message: () => (
         'Expected the production scan and automatic cover refresh to become idle. '
-        + `Last status: ${JSON.stringify(lastStatus)}`
+        + `Last status: ${JSON.stringify(lastStatus)}; active Cover Lookup tasks: ${activeLookups}`
       ),
       timeout: options.timeout || 120000,
       intervals: [500, 1000, 2000],

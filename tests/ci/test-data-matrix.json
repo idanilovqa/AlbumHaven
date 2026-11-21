@@ -658,7 +658,7 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/discPartFolderDuplicates.spec.js",
-    "case": "FTC-ALBUM-DETAILS-031 localized disc-part folders are one release while a real folder copy stays a duplicate",
+    "case": "FTC-ALBUM-DETAILS-031 localized disc-part folders are one release with every album-folder cover while a real folder copy stays a duplicate",
     "profile": "functional-core",
     "setupScope": "isolated",
     "stateMode": "owned-mutation",
@@ -675,6 +675,8 @@
     "expectedContracts": [
       "localized-disc-part-folders-form-one-release",
       "disc-part-folders-do-not-create-duplicate-sources",
+      "disc-part-album-cover-lookup-lists-every-album-folder-cover",
+      "disc-part-album-cover-save-lands-in-album-folder",
       "real-folder-copy-keeps-duplicate-warning",
       "disc-part-folder-release-persists-after-restart"
     ],

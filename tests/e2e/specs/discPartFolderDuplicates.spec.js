@@ -1,4 +1,6 @@
+import path from 'node:path';
 import { expect, test } from '../support/baseFixtures.js';
+import { coverPathForReference } from '../helpers/coverReferences.js';
 import { createWatchedAlbumFixture } from '../helpers/libraryFilesystemWatcherFixture.js';
 
 const ARTIST = 'Disc Part Folder Artist';
@@ -14,10 +16,67 @@ const PART_TRACKS = [
 ];
 const PART_DISCS = [1, 1, 2, 2, 2, 3, 3, 4];
 const COPIED_TRACKS = ['Copied First Song', 'Copied Second Song'];
+// The owner's album keeps four covers in the album folder above its "Часть N" folders.
+const PART_ALBUM_COVERS = ['cover.jpg', 'cover-existing-1.jpg', 'cover-existing-2.jpg', 'cover-existing-3.jpg'];
+const SAVED_IMAGE_NAME = 'album-haven-cloud-vinyl.png';
+const SAVED_IMAGE_PATH = path.resolve('music_app', 'static', 'images', SAVED_IMAGE_NAME);
 
 async function openAlbumGallery(galleryActions) {
   await galleryActions.goto(`/?surface=albums&artist=${encodeURIComponent(ARTIST)}`);
   await galleryActions.waitForGalleryReady();
+}
+
+async function expectLocalCoversInAlbumFolder(coverLookupActions, albumDirectory, count) {
+  await coverLookupActions.waitForModalResultsReady();
+  const candidates = await coverLookupActions.readLocalCoverCandidates();
+  expect(candidates).toHaveLength(count);
+  for (const candidate of candidates) {
+    expect(path.dirname(path.resolve(candidate.sourcePath))).toBe(path.resolve(albumDirectory));
+  }
+  return candidates;
+}
+
+async function saveComposerCover({ coverLookupActions, page }) {
+  const lookup = coverLookupActions.coverLookup;
+  await coverLookupActions.chooseComposerImages([SAVED_IMAGE_PATH]);
+  await expect(lookup.pendingAttachmentByName(SAVED_IMAGE_NAME)).toBeVisible();
+  await lookup.manualExtractButton.click();
+  const stagedCover = lookup.stagedCoverCardByName(SAVED_IMAGE_NAME);
+  await expect(stagedCover).toBeVisible();
+  await coverLookupActions.selectOnlyCover(stagedCover);
+  const saveResponsePromise = page.waitForResponse((response) => (
+    response.request().method() === 'POST'
+    && new URL(response.url()).pathname === '/utilities/cover-lookup/pasted-image-save'
+  ));
+  await lookup.saveRemoteButton.click();
+  const saveResponse = await saveResponsePromise;
+  expect(saveResponse.status()).toBe(200);
+  const payload = await saveResponse.json();
+  expect(payload.ok).toBe(true);
+  await expect(lookup.modal).toBeHidden();
+  return coverPathForReference(payload.selected_cover_ref);
+}
+
+async function expectAlbumDetailsCover({ coverLookupActions, trackModalActions }, coverPath) {
+  const shown = await coverLookupActions.readDisplayedImageEvidence(
+    trackModalActions.trackModal.detailedCoverImage, 'saved album cover', { expectedCoverPath: coverPath },
+  );
+  expect(shown.coverPath).toBe(coverPath);
+}
+
+async function expectPartAlbumCoversAfterSave(actions, albumDirectory, savedCoverPath) {
+  const { coverLookupActions, galleryActions, trackModalActions } = actions;
+  await galleryActions.selectAlbumDetailsByIdentity({ artist: ARTIST, album: PART_ALBUM, year: YEAR });
+  await trackModalActions.waitForInteractiveSummary();
+  await expectAlbumDetailsCover(actions, savedCoverPath);
+  await trackModalActions.openCoverLookup();
+  const candidates = await expectLocalCoversInAlbumFolder(
+    coverLookupActions, albumDirectory, PART_ALBUM_COVERS.length + 1,
+  );
+  expect(candidates.filter(candidate => candidate.isActive).map(candidate => candidate.sourcePath))
+    .toEqual([savedCoverPath]);
+  await coverLookupActions.closeModal();
+  await trackModalActions.close();
 }
 
 async function expectPartAlbumWithoutDuplicateWarning({ galleryActions, trackModalActions }) {
@@ -55,18 +114,22 @@ async function expectCopiedAlbumWithDuplicateWarning({ galleryActions, trackModa
 }
 
 test(
-  'FTC-ALBUM-DETAILS-031 localized disc-part folders are one release while a real folder copy stays a duplicate',
+  'FTC-ALBUM-DETAILS-031 localized disc-part folders are one release with every album-folder cover while a real folder copy stays a duplicate',
   { tag: '@area:album-details' },
   async ({
     appBarActions,
     context,
+    coverLookupActions,
     galleryActions,
     managedAppLifecycle,
+    page,
     stepLogger,
     trackModalActions,
   }) => {
-    test.setTimeout(240000);
+    test.setTimeout(300000);
+    const actions = { coverLookupActions, galleryActions, trackModalActions };
     let fixture;
+    let savedCoverPath;
     let originalFailure;
 
     try {
@@ -81,13 +144,14 @@ test(
           trackTitles: PART_TRACKS,
           discNumbers: PART_DISCS,
           discFolderName: (discNumber) => `Часть ${discNumber}`,
+          localArtNames: PART_ALBUM_COVERS,
           ownedDirectoryName: 'disc-part-folder-duplicates',
           context,
           managedAppLifecycle,
         });
         for (const folderName of [COPIED_ALBUM, `${COPIED_ALBUM} (second copy)`]) {
           await fixture.createSiblingAlbum({
-            album: COPIED_ALBUM, folderName, year: YEAR, trackTitles: COPIED_TRACKS, discNumbers: [1, 1],
+            album: COPIED_ALBUM, folderName, year: YEAR, trackTitles: COPIED_TRACKS, discNumbers: [1, 1], localArtNames: [],
           });
         }
         await managedAppLifecycle.restart();
@@ -102,6 +166,18 @@ test(
         await expectPartAlbumWithoutDuplicateWarning({ galleryActions, trackModalActions });
       });
 
+      await stepLogger.step('List the four album-folder covers in Cover Look Up and save a new one beside them', async () => {
+        await galleryActions.selectAlbumDetailsByIdentity({ artist: ARTIST, album: PART_ALBUM, year: YEAR });
+        await trackModalActions.waitForInteractiveSummary();
+        await trackModalActions.openCoverLookup();
+        await expectLocalCoversInAlbumFolder(coverLookupActions, fixture.albumDirectory, PART_ALBUM_COVERS.length);
+        savedCoverPath = await saveComposerCover({ coverLookupActions, page });
+        expect(path.dirname(path.resolve(savedCoverPath))).toBe(path.resolve(fixture.albumDirectory));
+        await expectAlbumDetailsCover(actions, savedCoverPath);
+        await trackModalActions.close();
+        await expectPartAlbumCoversAfterSave(actions, fixture.albumDirectory, savedCoverPath);
+      });
+
       await stepLogger.step('Still warn about the album copied into two folders', async () => {
         await expectCopiedAlbumWithDuplicateWarning({ galleryActions, trackModalActions });
       });
@@ -111,6 +187,7 @@ test(
         await appBarActions.waitForScanAndCoverRefreshIdle();
         await openAlbumGallery(galleryActions);
         await expectPartAlbumWithoutDuplicateWarning({ galleryActions, trackModalActions });
+        await expectPartAlbumCoversAfterSave(actions, fixture.albumDirectory, savedCoverPath);
         await expectCopiedAlbumWithDuplicateWarning({ galleryActions, trackModalActions });
       });
     } catch (error) {

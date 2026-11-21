@@ -43,7 +43,7 @@ from music_app.services.track_rows import (
     build_track_rows,
 )
 from music_app.services.track_preferences import default_track_preference_overlay, strip_private_track_rows
-from music_app.services.utils import safe_int, format_duration, repair_display_text
+from music_app.services.utils import DISC_PART_FOLDER_WORDS, safe_int, format_duration, repair_display_text
 from music_app.services.metadata import normalize_exception_value
 
 _NON_ALBUM_ALBUM_VALUE_RE = re.compile(r"^[!\-\s\[\(]*non[\s\-_]*album(?:\b.*)?$", re.IGNORECASE)
@@ -51,7 +51,7 @@ _DISC_FOLDER_RE = re.compile(r"(?<![A-Za-z0-9])(?:cd|disc|disk)\s*[-_.]?\s*(\d{1
 # A folder named only by a disc ordinal ("2", "Part 2", "Часть 2", "Teil 2").
 # Such siblings form one album only when every track's disc tag matches.
 _DISC_ORDINAL_FOLDER_RE = re.compile(
-    r"(?:(?:cd|disc|disk|disque|part|pt|parte|partie|teil|часть|диск)\.?\s*[-_.]?\s*)?(\d{1,2})",
+    rf"(?:(?:{DISC_PART_FOLDER_WORDS})\.?\s*[-_.]?\s*)?(\d{{1,2}})",
     re.IGNORECASE,
 )
 _VARIOUS_ARTIST_KEYS = {"va", "v.a.", "various artists", "various artist", "various"}

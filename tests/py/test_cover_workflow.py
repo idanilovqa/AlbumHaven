@@ -1517,3 +1517,29 @@ def test_delete_local_cover_and_choose_next_preserves_active_cover_when_non_acti
     assert not non_active_cover.exists()
     assert active_cover.exists()
     assert next_cover == active_cover
+
+
+@pytest.mark.parametrize("folder_name", ["CD{}", "Часть {}", "Part {}", "Teil {}", "Диск {}"])
+def test_resolve_album_root_uses_album_folder_above_disc_part_folders(config, tmp_path: Path, folder_name: str):
+    library_root = (tmp_path / "Library").resolve()
+    album_root = (library_root / "Folk Rock" / "Artist" / "2009 - Album").resolve()
+    track_paths = set()
+    for disc_number in range(1, 5):
+        track_path = album_root / folder_name.format(disc_number) / f"{disc_number:02d}.mp3"
+        track_path.parent.mkdir(parents=True, exist_ok=True)
+        track_path.write_bytes(b"track")
+        track_paths.add(str(track_path))
+
+    save_library_root_settings(
+        config,
+        {
+            "main_library_roots": [{
+                "id": "main-1",
+                "path": str(library_root),
+                "layout_mode": "genre/artist",
+            }],
+        },
+    )
+
+    assert resolve_album_root_from_track_paths(config, track_paths) == album_root
+    assert cover_workflow.resolve_album_write_root_from_track_paths(config, track_paths) == album_root

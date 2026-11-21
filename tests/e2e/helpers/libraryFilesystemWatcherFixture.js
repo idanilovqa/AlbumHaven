@@ -58,6 +58,17 @@ Image.new("RGB", (1200, 1200), "navy").save(album / "front-scan.jpg", format="JP
 Image.new("RGB", (2400, 2400), "red").save(album / "booklet-page.jpg", format="JPEG")
 `;
 
+// Distinct square album-root images, one per requested file name.
+const CREATE_NAMED_LOCAL_ART_SCRIPT = `
+import sys
+from pathlib import Path
+from PIL import Image
+
+album = Path(sys.argv[1])
+for index, name in enumerate(sys.argv[2:]):
+    Image.new("RGB", (1000 + index * 100, 1000 + index * 100), (40 + index * 50, 90, 160)).save(album / name, format="JPEG")
+`;
+
 const REMOVE_SCAN_SOURCE_SCRIPT = `
 import os
 import sys
@@ -240,6 +251,7 @@ async function buildWatchedAlbumFixture({
   discFolderName = (discNumber) => `CD${discNumber}`,
   removeEmbeddedArtwork = false,
   createLocalArt = false,
+  localArtNames = [],
   ownedDirectoryName = 'watcher-reconciliation',
 } = {}) {
   const mediaRoot = resolveWatcherFixtureMediaRoot();
@@ -260,6 +272,7 @@ async function buildWatchedAlbumFixture({
     albumArtist: albumOwner = albumArtist,
     discNumbers: albumDiscNumbers = discNumbers,
     discFolderName: albumDiscFolderName = discFolderName,
+    localArtNames: albumLocalArtNames = localArtNames,
   }) => {
     const directory = assertOwnedPath(
       mediaRoot,
@@ -280,6 +293,11 @@ async function buildWatchedAlbumFixture({
           if (createLocalArt) {
             await execFileAsync(resolvePlaywrightPython(process.env), [
               '-c', CREATE_LOCAL_ART_SCRIPT, stagedAlbum,
+            ], { encoding: 'utf8', windowsHide: true });
+          }
+          if (albumLocalArtNames.length) {
+            await execFileAsync(resolvePlaywrightPython(process.env), [
+              '-c', CREATE_NAMED_LOCAL_ART_SCRIPT, stagedAlbum, ...albumLocalArtNames,
             ], { encoding: 'utf8', windowsHide: true });
           }
           for (const [index, title] of titles.entries()) {

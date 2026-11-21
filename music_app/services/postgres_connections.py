@@ -30,7 +30,9 @@ _held: dict[int, int] = {}
 _DEFAULT_WORKLOAD_MAX_SIZE = 8
 _MAX_SIZE = 4
 # Gallery and search reads keep one connection open: a fresh backend spends 0.4-2.7 s planning the
-# search query, so a search after an idle spell would otherwise pay that again (owner, 11-19).
+# search query, so a search after an idle spell would otherwise pay that again (owner, 11-19). The pool
+# starts cold and keeps that connection only after one succeeded, so an unreachable database never
+# leaves a reconnect loop behind (shutdown waits on it).
 _WARM_WORKLOADS = frozenset({"browse"})
 
 
@@ -77,7 +79,7 @@ def pooled_connection(
         if pool is None:
             pool = ConnectionPool(
                 conninfo=database_url,
-                min_size=1 if depth == 0 and normalized_workload in _WARM_WORKLOADS else 0,
+                min_size=0,
                 max_size=_DEFAULT_WORKLOAD_MAX_SIZE if depth == 0 and normalized_workload == "default" else _MAX_SIZE,
                 max_waiting=32,
                 timeout=30, max_idle=120, max_lifetime=600,
@@ -106,6 +108,7 @@ def pooled_connection(
         pool=pool,
         workload=normalized_workload,
         lease_observer=lease_observer,
+        keep_warm=depth == 0 and normalized_workload in _WARM_WORKLOADS,
     )
 
 
@@ -116,6 +119,7 @@ def _lease_connection(
     pool,
     workload: str,
     lease_observer: Callable[[Mapping[str, object]], None] | None,
+    keep_warm: bool = False,
 ):
     wait_started = perf_counter()
     acquired = False
@@ -126,6 +130,8 @@ def _lease_connection(
             acquired = True
             holder = get_ident()
             _held[holder] = _held.get(holder, 0) + 1
+            if keep_warm and pool.min_size == 0:
+                pool.resize(1, pool.max_size)
             _observe_pool_lease(
                 lease_observer,
                 "acquired",

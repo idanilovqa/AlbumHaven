@@ -25,6 +25,8 @@ class _FakePool:
 
     def __init__(self, **options):
         self.options = options
+        self.min_size = options["min_size"]
+        self.max_size = options["max_size"]
         self.connection_calls = 0
         self.acquired = 0
         self.released = 0
@@ -36,6 +38,10 @@ class _FakePool:
 
     def get_stats(self):
         return {}
+
+    def resize(self, min_size, max_size=None):
+        self.min_size = min_size
+        self.max_size = max_size
 
 
 def test_connection_pool_prewarm_is_bounded_to_one_released_lease_per_workload(monkeypatch):
@@ -51,8 +57,9 @@ def test_connection_pool_prewarm_is_bounded_to_one_released_lease_per_workload(m
     }
     assert len(_FakePool.created) == 2
     assert [pool.options["max_size"] for pool in _FakePool.created] == [8, 4]
-    # Only gallery and search reads keep a warm connection.
-    assert [pool.options["min_size"] for pool in _FakePool.created] == [0, 1]
+    # Pools start cold; only gallery and search reads keep a connection once one succeeded.
+    assert [pool.options["min_size"] for pool in _FakePool.created] == [0, 0]
+    assert [pool.min_size for pool in _FakePool.created] == [0, 1]
     for pool in _FakePool.created:
         assert pool.options["max_waiting"] == 32
         assert pool.options["timeout"] == 30
@@ -115,3 +122,26 @@ def test_a_leased_connection_applies_settings_to_the_connection_it_wraps(monkeyp
         assert connection._connection.autocommit is True
         assert connection.autocommit is True
         assert "autocommit" not in vars(connection)
+
+
+def test_a_browse_pool_whose_connection_fails_stays_cold(monkeypatch):
+    class _FailingCheckout:
+        def __enter__(self):
+            raise OSError("database unreachable")
+
+        def __exit__(self, *_args):
+            return False
+
+    _FakePool.created = []
+    monkeypatch.setattr(postgres_connections, "ConnectionPool", _FakePool)
+    monkeypatch.setattr(postgres_connections, "_pools", {})
+    monkeypatch.setattr(_FakePool, "connection", lambda self: _FailingCheckout())
+
+    try:
+        with postgres_connections.pooled_connection("postgresql://isolated/test", workload="browse"):
+            pass
+    except OSError:
+        pass
+
+    # A warm minimum on an unreachable database would leave a reconnect loop that shutdown waits on.
+    assert [pool.min_size for pool in _FakePool.created] == [0]

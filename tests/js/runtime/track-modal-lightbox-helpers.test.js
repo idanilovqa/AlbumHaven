@@ -573,7 +573,7 @@ test('a gallery open never renders a split chooser, even from an older server', 
   assert.equal(context.showToastCalls.length, 1);
 });
 
-test('a gallery card whose album is gone gives way to the refreshed gallery without a notice', async () => {
+test('a gallery card whose album is gone closes Album Details and refreshes the gallery', async () => {
   const { context } = loadHelper({
     onFetchAlbumDetails: () => ({
       ok: false,
@@ -589,9 +589,10 @@ test('a gallery card whose album is gone gives way to the refreshed gallery with
 
   assert.equal(context.getTrackModalElements().overlay.hidden, true);
   assert.equal(galleryRefreshes, 1);
-  // Owner (2026-11-21): the changed-album notice belongs only to a modal already open on the old album.
-  assert.deepEqual(context.showToastCalls, []);
-  assert.doesNotMatch(String(context.getTrackModalElements().list.innerHTML || ''), /data-track-modal-current-release/);
+  assert.deepEqual(context.showToastCalls.map(({ message }) => message), [
+    'This album changed—choose it again in the gallery.',
+  ]);
+  assert.doesNotMatch(context.getTrackModalElements().list.innerHTML, /data-track-modal-current-release/);
 });
 
 function splitByThisSessionResponses(chosen) {

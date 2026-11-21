@@ -4,6 +4,14 @@ from music_app.services.client_layout_preferences import default_preferences, no
 from music_app.services.recent_albums import PostgresRecentAlbums
 
 
+def test_layout_preferences_use_shared_postgres_pool_by_default():
+    # The root HTML loads these on every request; a fresh connection costs 130-680 ms on Windows.
+    from music_app.services import client_layout_preferences
+    from music_app.services.postgres_connections import pooled_connection
+
+    assert client_layout_preferences._connect is pooled_connection
+
+
 def test_mobile_defaults_are_independent_from_desktop():
     mobile = default_preferences('mobile')
     desktop = default_preferences('web_desktop')

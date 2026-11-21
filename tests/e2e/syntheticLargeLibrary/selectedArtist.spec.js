@@ -5,7 +5,10 @@ import { expect, test } from '../support/performanceFixtures.js';
 import {
   collectResponseTrafficDuringAction,
   expectPostgresLibraryBrowseTelemetry,
+  evaluateTimingBudget,
   expectTimingBudget,
+  expectTimingBudgetOutcome,
+  formatTimingBudgetOutcome,
   measureActionTime,
   measureInteractionToPaint,
   performanceTimingBudget,
@@ -54,6 +57,17 @@ const COLD_SELECTED_GALLERY_BUDGET = Object.freeze(
 const COLD_HOME_BUDGET = Object.freeze(
   performanceTimingBudget('all-artists.startupPreviewSidebarMs'),
 );
+
+// Passing runs must still publish the timing: the gate summary reads {metricId, actualMs} attachments.
+async function expectAttachedTimingBudget(testInfo, name, actualMs, budget, label) {
+  const outcome = evaluateTimingBudget(actualMs, budget);
+  await testInfo.attach(name, {
+    body: JSON.stringify({ label, ...outcome }, null, 2),
+    contentType: 'application/json',
+  });
+  console.log(formatTimingBudgetOutcome(label, outcome));
+  return expectTimingBudgetOutcome(expect, outcome, label);
+}
 
 test.describe(`${CASE_ID} synthetic-large selected-artist browse`, () => {
   test.afterEach(async ({ navigationPanelActions }, testInfo) => {
@@ -111,8 +125,9 @@ test.describe(`${CASE_ID} synthetic-large selected-artist browse`, () => {
     });
     expect(typeof selectedGalleryReadyMs).toBe('number');
     expect(Number.isFinite(selectedGalleryReadyMs)).toBe(true);
-    expectTimingBudget(
-      expect,
+    await expectAttachedTimingBudget(
+      testInfo,
+      'cold-selected-gallery-timing',
       selectedGalleryReadyMs,
       COLD_SELECTED_GALLERY_BUDGET,
       'Cold selected-artist gallery',
@@ -138,7 +153,7 @@ test.describe(`${CASE_ID} synthetic-large selected-artist browse`, () => {
         ]),
       ),
     );
-    expectTimingBudget(expect, homeMs, COLD_HOME_BUDGET, 'Cold Home gallery');
+    await expectAttachedTimingBudget(testInfo, 'cold-home-timing', homeMs, COLD_HOME_BUDGET, 'Cold Home gallery');
     await expect.poll(
       // parity-check: allow-read-only-measurement-evaluate -- observe startup hydration completion
       () => page.evaluate(() => ({

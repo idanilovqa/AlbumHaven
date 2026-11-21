@@ -12947,6 +12947,22 @@
       "proof": "static"
     },
     {
+      "id": "py:services/http_compression.py#JsonGzipMiddleware.__call__",
+      "action": "Gzip each GET JSON response of at least 16 KB for clients that accept gzip, buffering that one response and compressing it once in the threadpool; every other response passes through",
+      "entrypoints": [
+        "py:music_app/services/http_compression.py#JsonGzipMiddleware.__call__:middleware:MIDDLEWARE asgi"
+      ],
+      "owners": [
+        "music_app/services/http_compression.py"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-08"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "py:services/lastfm_retry.py#start_lastfm_retry_worker.<locals>.worker",
       "action": "Send waiting Last.fm scrobbles on their own in batches of 50, after looking up the listens whose outcome is unknown on Last.fm in batches of 50, reading only the hours around their timestamps: at start-up, when a listen is left unsent or Submit asks, and after each capped, jittered backoff until none waits; idle on one query",
       "entrypoints": [

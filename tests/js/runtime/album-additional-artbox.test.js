@@ -313,3 +313,29 @@ test('Remove artbox empties the second artbox at once and puts it back if the se
   assert.deepEqual(JSON.parse(JSON.stringify(context.state.modalReleases[0].additional_artworks)), [back]);
   assert.deepEqual(calls.toasts, ['Locked by another save.']);
 });
+
+// Request-capture contract (tests/ci/bounded-interactions.json): saving and removing the second
+// artbox each post once to their own endpoint, however many releases Album Details holds.
+const { assertInteractionRequests, measureInteractionContract } = require('../helpers/request-capture');
+
+test('request capture: saving and removing the second artbox post once each to their own endpoint', async () => {
+  const id = 'js:runtime/album-additional-artbox.js#postAlbumAdditionalArtwork';
+  await measureInteractionContract(id, async (releases) => {
+    const saved = [{ slot: 1, source_kind: 'remote', remote_cover_url: 'https://img.example/back.jpg' }];
+    const { context, calls } = load({ savedArtworks: saved });
+    const album = testimony();
+    const others = Array.from({ length: releases }, (_, index) => ({ key: `other-${index}`, name: `Other ${index}` }));
+    context.state.modalReleases = [album, ...others];
+    context.state.coverLookup.modal = {
+      artboxSlot: 1, album, selectedRemoteId: 'c2',
+      possibleMatches: [{ id: 'c2', url: 'https://img.example/back.jpg' }],
+    };
+    await context.saveAdditionalArtworkFromLookup();
+    await context.removeAlbumAdditionalArtbox();
+    await new Promise(setImmediate);
+    const urls = calls.fetches.map(({ url }) => url);
+    assert.deepEqual(urls, ['/utilities/cover-lookup/additional-artwork', '/utilities/cover-lookup/additional-artwork/remove']);
+    assertInteractionRequests(id, urls);
+    return { requests: urls.length };
+  });
+});

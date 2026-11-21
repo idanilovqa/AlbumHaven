@@ -970,7 +970,7 @@
     },
     {
       "id": "js:runtime/album-additional-artbox.js#postAlbumAdditionalArtwork",
-      "action": "fetch requests installed by postAlbumAdditionalArtwork",
+      "action": "Save and remove the second artbox from Album Details",
       "entrypoints": [
         "js:music_app/static/js/runtime/album-additional-artbox.js#postAlbumAdditionalArtwork:request:fetch"
       ],
@@ -982,11 +982,28 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static",
+      "proof": "contract",
       "requestOwnership": {
-        "allowed": [],
+        "allowed": [
+          "/utilities/cover-lookup/additional-artwork",
+          "/utilities/cover-lookup/additional-artwork/remove"
+        ],
         "forbidden": []
-      }
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 50
+      },
+      "budgets": {
+        "requests": 2
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/album-additional-artbox.test.js",
+      "testIdentity": "request capture: saving and removing the second artbox post once each to their own endpoint",
+      "rollback": "Test-only request-capture contract; artbox requests are unchanged. Reverting returns the helper to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:runtime/album-additional-artbox.js#removeAlbumAdditionalArtbox",

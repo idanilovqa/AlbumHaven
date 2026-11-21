@@ -24,7 +24,13 @@ import java.util.concurrent.TimeUnit
 
 /** `PUT`/`DELETE /playback/state` as the `mobile` client surface. */
 class HttpPlaybackClaimApi(private val client: OkHttpClient, private val session: ShellSession) : PlaybackClaimApi {
-    override fun acquire(clientId: String, claimToken: String?, track: ClaimTrack): ClaimResponse {
+    override fun acquire(
+        clientId: String,
+        claimToken: String?,
+        track: ClaimTrack,
+        takeover: Boolean,
+        position: ClaimPosition?,
+    ): ClaimResponse {
         val body = JSONObject()
             .put("protocol", 1)
             .put("clientId", clientId)
@@ -40,6 +46,8 @@ class HttpPlaybackClaimApi(private val client: OkHttpClient, private val session
                     .put("album", track.album)
                     .put("artworkUrl", track.artworkUrl ?: JSONObject.NULL),
             )
+        if (takeover) body.put("takeover", true)
+        position?.let { body.put("position", JSONObject().put("ms", it.ms).put("durationMs", it.durationMs)) }
         return try {
             execute("PUT", body).use { response ->
                 when {

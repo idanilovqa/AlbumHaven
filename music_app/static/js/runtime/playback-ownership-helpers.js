@@ -1,8 +1,17 @@
 const PLAYBACK_OWNERSHIP_CHANNEL_NAME = 'albumhaven.playbackOwnership.v1';
 const PLAYBACK_OWNERSHIP_HEARTBEAT_MS = 10000;
+// A playing tab renews this often, so the server tells a live holder from a browser that closed
+// without a word (a holder silent for 10 s gives way to a press elsewhere).
+const PLAYBACK_OWNERSHIP_RENEW_MS = 4000;
 const PLAYBACK_HANDOFF_STORAGE_KEY = 'albumhaven.playbackHandoff.v1';
 const PLAYBACK_HANDOFF_WINDOW_MS = 15000;
 const PLAYBACK_HANDOFF_RETRY_MS = 100;
+// This tab's playback identity, kept when a page unloads so the next page of the same tab renews the
+// same claim instead of being refused while the old page's lease runs (sandbox5, 2026-11-19: Play after
+// a page load gave 409 and no sound; the unload beacon can always be dropped). Written only at unload
+// and taken at load, so a duplicated tab never shares a live tab's identity.
+const PLAYBACK_SAME_TAB_STORAGE_KEY = 'albumhaven.playbackSameTab.v1';
+let sameTabPlaybackClaim = takeSameTabPlaybackClaim();
 let pendingPlaybackOwnershipHandoff = takePlaybackOwnershipHandoffEnvelope();
 let playbackOwnershipRuntimeClaimToken = pendingPlaybackOwnershipHandoff.handoff
   ? createPlaybackOwnershipToken() : '';
@@ -41,6 +50,30 @@ function takePlaybackOwnershipHandoffEnvelope() {
   catch (_error) { return { found: true, handoff: null }; }
 }
 
+function takeSameTabPlaybackClaim() {
+  if (typeof getSessionStorageItem !== 'function') return null;
+  const raw = getSessionStorageItem(PLAYBACK_SAME_TAB_STORAGE_KEY);
+  if (typeof removeSessionStorageItem === 'function') removeSessionStorageItem(PLAYBACK_SAME_TAB_STORAGE_KEY);
+  try {
+    const { clientId, claimToken } = JSON.parse(raw || 'null') || {};
+    if (/^[0-9a-f-]{36}$/i.test(String(clientId || '')) && /^[A-Za-z0-9_-]{43}$/.test(String(claimToken || ''))) {
+      return { clientId: String(clientId), claimToken: String(claimToken) };
+    }
+  } catch (_error) {
+    // A damaged record is no identity.
+  }
+  return null;
+}
+
+/** At unload: the claim this page holds goes to the next page of the same tab. */
+function keepPlaybackClaimForThisTab() {
+  const ownership = getPlaybackOwnershipState();
+  const claimToken = ownership.activeClaim?.claimToken;
+  if (!claimToken || !ownership.tabId || typeof setSessionStorageItem !== 'function') return false;
+  return setSessionStorageItem(PLAYBACK_SAME_TAB_STORAGE_KEY,
+    JSON.stringify({ clientId: ownership.tabId, claimToken }));
+}
+
 function createPlaybackOwnershipHandoff() {
   const id = createPlaybackOwnershipTabId();
   const token = createPlaybackOwnershipToken();
@@ -73,7 +106,28 @@ function getPlaybackOwnershipTabId() {
   const engineClientId = playingEngine()?.claimClientId() || '';
   if (engineClientId) return engineClientId;
   const ownership = getPlaybackOwnershipState();
-  return ownership.tabId ||= createPlaybackOwnershipTabId();
+  return ownership.tabId ||= sameTabPlaybackClaim?.clientId || createPlaybackOwnershipTabId();
+}
+
+// The previous page of this tab held playback: its claim is renewed under the same identity. A
+// refusal (another client played since) leaves this page a new client.
+async function renewSameTabPlaybackClaim(prepared, track) {
+  const inherited = sameTabPlaybackClaim;
+  const ownership = getPlaybackOwnershipState();
+  if (!inherited || ownership.tabId !== inherited.clientId) return null;
+  try {
+    const result = await requestPlaybackClaim({ protocol: 1, clientId: inherited.clientId,
+      clientSurface: 'private_web', claimToken: inherited.claimToken, state: 'playing',
+      track: prepared.track, ...positionField(track) });
+    sameTabPlaybackClaim = null;
+    return result;
+  } catch (error) {
+    // Nobody answered: the next attempt asks again with the same identity.
+    if (error?.unanswered) throw error;
+    sameTabPlaybackClaim = null;
+    ownership.tabId = createPlaybackOwnershipTabId();
+    return null;
+  }
 }
 
 function normalizePlaybackOwnershipTrack(track) {
@@ -219,13 +273,19 @@ function isPlaybackClaimRenewable() {
 function startPlaybackOwnershipHeartbeat() {
   const ownership = getPlaybackOwnershipState();
   if (ownership.heartbeatTimer || ownership.recoveryPromise) return;
+  let checkedAt = Number.NEGATIVE_INFINITY;
   ownership.heartbeatTimer = setInterval(() => {
     if (ownership.recoveryPromise) return;
     if (ownership.activeClaim) {
       if (isPlaybackClaimRenewable()) void refreshPlaybackOwnershipClaim();
+      return;
     }
-    else void handlePlaybackOwnershipEvent();
-  }, PLAYBACK_OWNERSHIP_HEARTBEAT_MS);
+    // Without a claim, what another client plays is read every heartbeat, not every renewal tick.
+    const now = performance.now();
+    if (now - checkedAt < PLAYBACK_OWNERSHIP_HEARTBEAT_MS - 100) return;
+    checkedAt = now;
+    void handlePlaybackOwnershipEvent();
+  }, PLAYBACK_OWNERSHIP_RENEW_MS);
 }
 
 function recoverPlaybackOwnership(callback) {
@@ -320,12 +380,16 @@ async function refreshPlaybackOwnershipClaim(track = null) {
       if (version !== (ownership.requestVersion || 0)) return false;
       const result = await requestPlaybackClaim({ protocol: 1,
         clientId: getPlaybackOwnershipTabId(), clientSurface: 'private_web', claimToken: claim.claimToken,
-        state: 'playing', track: prepared.track });
+        state: 'playing', track: prepared.track, ...positionField(track || state.player.current) });
       if (ownership.activeClaim !== claim || version !== (ownership.requestVersion || 0)) return false;
       acceptPlaybackClaim(result, prepared);
       return true;
-    } catch (_error) {
-      if (ownership.activeClaim === claim && version === (ownership.requestVersion || 0)) losePlaybackOwnership();
+    } catch (error) {
+      if (ownership.activeClaim === claim && version === (ownership.requestVersion || 0)) {
+        losePlaybackOwnership();
+        // Taken over: show which client plays now, as "Playing in another tab".
+        if (error?.status === 409) await handlePlaybackOwnershipEvent();
+      }
       return false;
     }
   })().finally(() => { ownership.renewing = false; });
@@ -372,11 +436,16 @@ async function claimPlaybackOwnership(track, options = {}) {
       if (isShellPlaybackUnavailable()) throw new Error('Playback is unavailable in this app.');
       const prepared = await playbackOwnershipTrack(track, claim);
       if (version !== ownership.requestVersion) return false;
-      const result = handoff
+      const inherited = !claim && !options.takeover && sameTabPlaybackClaim
+        ? await renewSameTabPlaybackClaim(prepared, track)
+        : null;
+      const result = inherited || (handoff
         ? await acquirePlaybackOwnershipHandoff(prepared, handoff)
         : await requestPlaybackClaim({ protocol: 1,
           clientId: getPlaybackOwnershipTabId(), clientSurface: 'private_web',
-          claimToken: claim?.claimToken || null, state: 'playing', track: prepared.track });
+          claimToken: claim?.claimToken || null, state: 'playing', track: prepared.track,
+          ...(options.takeover && !claim ? { takeover: true } : {}),
+          ...positionField(track) }));
       if (version !== ownership.requestVersion) {
         if (!claim) await deletePlaybackClaim(result).catch(() => {});
         return false;
@@ -440,6 +509,8 @@ function canRestoreActivePlayback(parsedState) {
 
 function restorePlaybackOwnershipFromPageCache(playbackSnapshot = null) {
   const ownership = getPlaybackOwnershipState();
+  // Back from the page cache, this page is the tab's live owner again: nothing is handed on.
+  if (typeof removeSessionStorageItem === 'function') removeSessionStorageItem(PLAYBACK_SAME_TAB_STORAGE_KEY);
   ownership.handoffAttempted = false;
   const stored = takePlaybackOwnershipHandoffEnvelope();
   const handoff = stored.handoff;
@@ -463,7 +534,60 @@ function restorePlaybackOwnershipFromPageCache(playbackSnapshot = null) {
   });
 }
 
-function canStartPlaybackInThisTab(track) { return claimPlaybackOwnership(track); }
+function canStartPlaybackInThisTab(track, options = {}) {
+  return claimPlaybackOwnership(track, { takeover: options.takeover === true });
+}
+
+/**
+ * Play while another client plays (owner, 2026-11-17, playback.claim.takeover): that client's
+ * song continues here from where it last said it was, and this claim replaces its claim.
+ */
+async function takeOverPlaybackHere() {
+  let snapshot;
+  try {
+    snapshot = await playbackOwnershipRequest('GET',
+      `/playback/state?client_id=${encodeURIComponent(getPlaybackOwnershipTabId())}&include_path=true`);
+  } catch (_error) {
+    notifyBlockedPlaybackStart();
+    return false;
+  }
+  if (!snapshot?.is_playing_elsewhere) {
+    // It stopped meanwhile: the player shows what holds now, and the next Play starts here.
+    syncMirroredPlaybackState(snapshot);
+    return false;
+  }
+  if (!snapshot.path) {
+    if (typeof showToast === 'function') showToast('That song cannot be opened here.', 'error', 2800);
+    return false;
+  }
+  const song = normalizePlaybackOwnershipTrack(snapshot.track);
+  const position = snapshot.position;
+  state.player.playbackQueue = null;
+  return playTrackFromPayload({
+    src: `/track?path=${encodeURIComponent(snapshot.path)}`,
+    path: snapshot.path,
+    title: song.title || 'Track',
+    artist: song.artist,
+    albumArtist: '',
+    album: song.album,
+    coverRef: '',
+    durationSeconds: position ? position.durationMs / 1000 : 0,
+  }, { startSeconds: position ? position.ms / 1000 : 0, takeover: true });
+}
+
+/**
+ * Where [track] is, so another client can continue it there: `{ position }`, or nothing while the
+ * player still holds another song (a start claims before its song loads) or its length is unknown.
+ */
+function positionField(track) {
+  if (typeof getPlayerPlaybackSnapshot !== 'function') return {};
+  const playback = getPlayerPlaybackSnapshot();
+  if (track?.src && playback.src && playback.src !== track.src) return {};
+  const durationMs = Math.round((Number(playback.duration) || 0) * 1000);
+  if (durationMs < 1) return {};
+  const ms = Math.min(durationMs, Math.max(0, Math.round((Number(playback.currentTime) || 0) * 1000)));
+  return { position: { ms, durationMs } };
+}
 
 function isActivePlaybackOwner() {
   const claim = getPlaybackOwnershipState().activeClaim;
@@ -487,6 +611,11 @@ function getPlaybackClaimContext() {
 }
 
 function isPlaybackLockedByAnotherTab() { return getPlaybackOwnershipState().lockStatus === 'locked'; }
+/** Another client of this account plays now: this one may take playback over. */
+function isPlaybackPlayingElsewhere() {
+  const ownership = getPlaybackOwnershipState();
+  return ownership.lockStatus === 'locked' && ownership.blockedReason === 'playing_in_another_tab';
+}
 function getMirroredPlaybackTrack() { return getPlaybackOwnershipState().mirroredTrack; }
 
 function initPlaybackOwnershipCoordinator() {

@@ -462,11 +462,17 @@ def name_relation(local_name: object, candidate: dict[str, object]) -> str:
     return "different"
 
 
-def album_rank(album: dict[str, object]) -> tuple[int, int, int]:
-    """How strongly one album agrees: level, then how many signals, then track-level ones."""
+def album_rank(album: dict[str, object]) -> tuple[int, int, int, int]:
+    """How strongly one album agrees: level, then a certain tracklist (all titles and the
+    count), then track-level signals, then all signals.
+
+    Owner 2026-11-21: "user might have wrong years in the tags, that should not confuse our
+    matcher if it finds all tracks matching release group". The year is never needed for a
+    certain match (``_CERTAIN_SIGNALS``) and only breaks ties left by the tracks, such as
+    between two editions with the same tracklist."""
     signals = set(album.get("signals") or ()) & _EVIDENCE_SIGNALS
-    return (_LEVEL_RANK.get(str(album.get("level")), 0), len(signals),
-            len(signals & {"track_list", "durations"}))
+    return (_LEVEL_RANK.get(str(album.get("level")), 0), int(_CERTAIN_SIGNALS <= signals),
+            len(signals & {"track_list", "durations"}), len(signals))
 
 
 def assign_albums(candidates: list[dict[str, object]]) -> None:

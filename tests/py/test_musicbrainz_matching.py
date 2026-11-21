@@ -8,7 +8,9 @@ import pytest
 
 from music_app.services.musicbrainz_evidence import (
     album_level,
+    album_rank,
     album_signals,
+    assign_albums,
     candidate_name_keys,
     decide,
     group_title_keys,
@@ -491,3 +493,58 @@ def test_latin_and_cyrillic_names_get_no_romanized_name():
     assert romanized_name("天門", None) is None
     # The name already carries its Latin form.
     assert romanized_name("ナイトメア Nightmare", _artist("ナイトメア", aliases=[{"name": "Nightmare", "locale": "en", "primary": True}])) is None
+
+
+_MILLENIUM_TITLES = ("Together As One", "Believe In Love", "Marianne", "Come Back", "Almost Made It To Heaven",
+                     "Hold On", "Gabriella", "Gonna Let You Go", "Invincible")
+
+
+def _year_rule_album(year, titles, lengths=None):
+    lengths = lengths or [0] * len(titles)
+    return {"year": year, "tracks": [{"title": title, "duration_seconds": length} for title, length in zip(titles, lengths)]}
+
+
+def _year_rule_release(date, titles, lengths=None):
+    lengths = lengths or [0] * len(titles)
+    return {"first_release_date": date, "tracks": [{"title": title, "length": length * 1000} for title, length in zip(titles, lengths)]}
+
+
+def _year_rule_evidence(local, remote):
+    signals = album_signals(local, remote)
+    return {"signals": signals, "level": album_level("exact", signals)}
+
+
+def test_a_wrong_tag_year_never_vetoes_a_full_tracklist_match():
+    """Owner 2026-11-21 (Millenium: tagged 1998, MusicBrainz 1995, 9 of 9 tracks)."""
+    full = _year_rule_evidence(_year_rule_album(1998, _MILLENIUM_TITLES), _year_rule_release("1995", [title.lower() for title in _MILLENIUM_TITLES]))
+    assert "year" not in full["signals"] and {"track_list", "track_count"} <= full["signals"]
+    assert full["level"] == "strong"
+    # A release that agrees on the year, the count and the lengths but not the titles never
+    # outranks the full tracklist.
+    lengths = list(range(200, 209))
+    other = _year_rule_evidence(_year_rule_album(1998, _MILLENIUM_TITLES, lengths),
+                      _year_rule_release("1998", [f"Other {index}" for index in range(9)], lengths))
+    assert {"year", "track_count", "durations"} <= other["signals"] and "track_list" not in other["signals"]
+    assert album_rank(full) > album_rank(other)
+    assign_albums([{"albums": [other]}, {"albums": [full]}])
+    assert full["assigned"] and not other["assigned"]
+
+
+def test_a_different_year_with_a_partial_tracklist_stays_unmatched():
+    partial = _year_rule_evidence(_year_rule_album(1998, _MILLENIUM_TITLES),
+                        _year_rule_release("1995", [*_MILLENIUM_TITLES[:3], *(f"Other {index}" for index in range(9))]))
+    assert partial["signals"] == {"tracks_differ"}
+    assert partial["level"] is None
+
+
+def test_the_year_only_breaks_a_tie_between_editions_with_the_same_tracklist():
+    local = _year_rule_album(1998, _MILLENIUM_TITLES)
+    dated = _year_rule_evidence(local, _year_rule_release("1998", _MILLENIUM_TITLES))
+    other_edition = _year_rule_evidence(local, _year_rule_release("1995", _MILLENIUM_TITLES))
+    assert album_rank(dated) > album_rank(other_edition)
+    assign_albums([{"albums": [other_edition]}, {"albums": [dated]}])
+    assert dated["assigned"] and not other_edition["assigned"]
+    # Neither year agrees: the tracks decide nothing between them, as before.
+    first, second = (_year_rule_evidence(local, _year_rule_release(date, _MILLENIUM_TITLES)) for date in ("1995", "2004"))
+    assign_albums([{"albums": [first]}, {"albums": [second]}])
+    assert not first["assigned"] and not second["assigned"]

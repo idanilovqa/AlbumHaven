@@ -248,7 +248,8 @@ test('FTC-ALBUM-DETAILS-006 preserves mixed credits through an optimistic album-
       });
       expect(Math.abs(folderRowRightGap)).toBeLessThanOrEqual(1);
       await expect(tagEditorActions.tagEditor.folderLoadButton).toHaveText('Load all tracks from the folder');
-    await expect(tagEditorActions.tagEditor.folderLoadButton).toHaveCSS('font-size', '13.44px');
+    // Matches the folder path line above it (0.76rem), per the 2026-11-14 acceptance correction.
+    await expect(tagEditorActions.tagEditor.folderLoadButton).toHaveCSS('font-size', '12.16px');
     await expect(tagEditorActions.tagEditor.folderLoadButton).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
     await expect(tagEditorActions.tagEditor.folderLoadButton).toHaveCSS('border-top-width', '0px');
     await tagEditorActions.tagEditor.folderLoadButton.hover();

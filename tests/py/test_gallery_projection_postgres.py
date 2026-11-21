@@ -1059,3 +1059,70 @@ def test_builder_bump_serves_the_previous_builders_snapshot_from_its_own_scope(m
     assert metadata["projection_stale"] is True
     assert projection.load_gallery_projection_sidebar(Connection(), {}, context=context, allow_stale=True)[2] is True
     assert projection.load_gallery_projection_sidebar(Connection(), {}, context=context) is None
+
+
+@pytest.mark.parametrize("first_run_fails", [False, True])
+def test_refresh_completion_waits_for_the_run_that_includes_the_change(monkeypatch, first_run_fails):
+    """FTC-SEARCH-NAV-033: a change committed during a running refresh is published by the run
+    after it, so its on_published waits for that run, not the one already running."""
+    from music_app.services import cache, gallery_projection_postgres as projection
+    submitted, events = [], []
+
+    class Executor:
+        def submit(self, action):
+            future = Future()
+            submitted.append((action, future))
+            return future
+
+    monkeypatch.setattr(cache, "_CACHE_WRITE_EXECUTOR", Executor())
+    monkeypatch.setattr(projection, "_PENDING", {})
+    monkeypatch.setattr(projection, "ensure_gallery_projection_ready", lambda *args, **kwargs: events.append("run"))
+    config = {"ALBUM_HAVEN_APP_DATABASE_URL": "owned-test"}
+
+    projection.schedule_gallery_projection_refresh(config, on_published=lambda: events.append("first published"))
+    projection.schedule_gallery_projection_refresh(config, on_published=lambda: events.append("second published"))
+    submitted[0][0]()
+    if first_run_fails:
+        submitted[0][1].set_exception(RuntimeError("refresh failed"))
+        assert events == ["run", "first published", "second published"], "a failed refresh releases every waiter"
+        assert len(submitted) == 1 and not projection._PENDING
+        return
+    submitted[0][1].set_result(None)
+    assert events == ["run", "first published"]
+    submitted[1][1].set_result(submitted[1][0]())
+    assert events == ["run", "first published", "run", "second published"]
+    assert not projection._PENDING
+
+
+def test_refresh_completion_runs_at_once_when_nothing_can_be_queued(monkeypatch):
+    from music_app.services import gallery_projection_postgres as projection
+    events = []
+    monkeypatch.setattr(projection, "_PENDING", {})
+    assert projection.schedule_gallery_projection_refresh(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": ""}, on_published=lambda: events.append("published")) is None
+    assert events == ["published"]
+
+
+def test_status_revision_waits_for_the_gallery_that_includes_a_watcher_change(monkeypatch):
+    from music_app.services import state
+    published = []
+    monkeypatch.setattr(state, "schedule_gallery_projection_refresh",
+                        lambda config, *, on_published: published.append(on_published))
+    for name in ("invalidate_problematic_albums_payload_cache", "invalidate_utility_rules_payload_cache",
+                 "invalidate_postgres_utility_projection_cache", "library_browse_postgres_is_effective"):
+        monkeypatch.setattr(state, name, lambda *args, **kwargs: False)
+    library_state = {"inventory_mutation_revision": 4}
+    config = {"ALBUM_HAVEN_APP_DATABASE_URL": "owned-test"}
+
+    state.invalidate_targeted_library_projections(library_state, config, revision=5, affected_album_keys=("a",))
+    state.invalidate_targeted_library_projections(library_state, config, revision=6, affected_album_keys=("b",))
+    assert library_state["inventory_mutation_revision"] == 6, "writers keep the committed revision"
+    assert state.status_inventory_mutation_revision(library_state) == 4
+    published[0]()
+    assert state.status_inventory_mutation_revision(library_state) == 4
+    published[1]()
+    assert state.status_inventory_mutation_revision(library_state) == 6
+
+    state.invalidate_targeted_library_projections(library_state, config, revision=7, affected_album_keys=("c",))
+    monkeypatch.setattr(state, "_STATUS_REVISION_HOLD_SECONDS", 0.0)
+    assert state.status_inventory_mutation_revision(library_state) == 7, "a lost refresh never freezes /status"

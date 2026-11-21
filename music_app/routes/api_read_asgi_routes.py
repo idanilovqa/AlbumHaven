@@ -26,6 +26,7 @@ from music_app.services.loops import load_loops
 from music_app.services.state import (
     format_timestamp,
     request_library_hydration_for_state,
+    status_inventory_mutation_revision,
 )
 from music_app.services.opinion_read_seams import build_crowd_opinion_modal_payload
 from music_app.services.page_resource_seams import (
@@ -562,9 +563,7 @@ def _build_status_payload_from_state(library_state: dict[str, object]) -> dict[s
         "last_scan_display": format_timestamp(float(library_state.get("last_scan") or 0.0)),
         "last_error": library_state.get("last_error"),
         "album_total": len(browse_state.get("albums", []) or []),
-        "inventory_mutation_revision": int(
-            library_state.get("inventory_mutation_revision") or 0
-        ),
+        "inventory_mutation_revision": status_inventory_mutation_revision(library_state),
     }
 
 

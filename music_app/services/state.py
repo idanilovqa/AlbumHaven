@@ -90,6 +90,39 @@ def run_runtime_state_mutation_for_state(
         return mutation_action()
 
 
+# A client learns of a committed inventory change from /status and then reloads its gallery.
+# Until the gallery projection that includes the change is published, /status keeps reporting
+# the revision from before it, so the reload shows the change (FTC-SEARCH-NAV-033). The hold
+# lapses after this long, so a lost refresh cannot freeze what clients see.
+_STATUS_REVISION_HOLD_SECONDS = 60.0
+
+
+def _live_status_revision_hold(library_state: Mapping[str, object]) -> tuple[int, int, float] | None:
+    """(held revision, pending publications, last hold time), unless there is none or it lapsed.
+    Writers replace the tuple whole under _CACHE_LOCK, so readers need no lock."""
+    hold = library_state.get("_status_revision_hold")
+    if isinstance(hold, tuple) and time.monotonic() - hold[2] < _STATUS_REVISION_HOLD_SECONDS:
+        return hold
+    return None
+
+
+def status_inventory_mutation_revision(library_state: Mapping[str, object]) -> int:
+    """The inventory revision clients may act on: the committed one, or while its gallery
+    publication is pending, the one before it. Lock-free, for /status."""
+    revision = int(library_state.get("inventory_mutation_revision") or 0)
+    hold = _live_status_revision_hold(library_state)
+    return min(revision, hold[0]) if hold else revision
+
+
+def _release_status_revision_hold(library_state: dict[str, object]) -> None:
+    with _CACHE_LOCK:
+        hold = library_state.get("_status_revision_hold")
+        if isinstance(hold, tuple) and hold[1] > 1:
+            library_state["_status_revision_hold"] = (hold[0], hold[1] - 1, hold[2])
+        else:
+            library_state.pop("_status_revision_hold", None)
+
+
 def invalidate_targeted_library_projections(
     library_state: dict[str, object],
     config: dict[str, object],
@@ -98,17 +131,21 @@ def invalidate_targeted_library_projections(
     affected_album_keys: tuple[str, ...],
 ) -> None:
     """Invalidate only live projections affected by a committed watcher event."""
+    publishes_gallery = bool(str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip())
     with _CACHE_LOCK:
         browse_cache = library_state.get("_view_payload_root_browse_cache")
         if isinstance(browse_cache, dict):
             browse_cache.clear()
-        library_state["inventory_mutation_revision"] = max(
-            0, int(revision or 0),
-            int(library_state.get("inventory_mutation_revision") or 0),
-        )
+        previous_revision = int(library_state.get("inventory_mutation_revision") or 0)
+        library_state["inventory_mutation_revision"] = max(0, int(revision or 0), previous_revision)
         library_state["targeted_inventory_album_keys"] = tuple(affected_album_keys)
-    if str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip():
-        schedule_gallery_projection_refresh(config)
+        if publishes_gallery:
+            hold = _live_status_revision_hold(library_state)
+            library_state["_status_revision_hold"] = (
+                (hold[0], hold[1] + 1, time.monotonic()) if hold else (previous_revision, 1, time.monotonic()))
+    if publishes_gallery:
+        schedule_gallery_projection_refresh(
+            config, on_published=lambda: _release_status_revision_hold(library_state))
     invalidate_problematic_albums_payload_cache(library_state)
     invalidate_utility_rules_payload_cache(library_state)
     invalidate_postgres_utility_projection_cache(

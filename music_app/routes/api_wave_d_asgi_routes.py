@@ -1666,7 +1666,9 @@ async def utilities_cover_lookup_additional_artwork(request: Request) -> JSONRes
     remote_url = None
     if source_kind == "local":
         try:
-            resolved = validate_local_cover_source(
+            # Validation resolves and checks the file on disk: off the event loop (freeze guard BI-08).
+            resolved = await run_in_threadpool(
+                validate_local_cover_source,
                 config, album_context.album_root, str(payload.get("source_path") or "").strip(),
                 track_paths=album_context.track_paths,
             )

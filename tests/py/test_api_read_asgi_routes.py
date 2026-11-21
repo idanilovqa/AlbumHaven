@@ -1394,6 +1394,27 @@ def test_asgi_home_data_builds_the_payload_off_the_event_loop(asgi_app, monkeypa
     assert _decode_json(body)["kind"] == "home"
 
 
+def test_asgi_home_data_writes_its_request_log_off_the_event_loop(asgi_app, monkeypatch):
+    # Freeze guard (BI-08): the Home request log is a Postgres write; it ran on the event loop.
+    from music_app.routes import api_read_asgi_routes as asgi_read_routes
+
+    logged = []
+
+    def log_request(*_args):
+        _assert_off_event_loop()
+        logged.append(True)
+
+    _memory_home_data_route(monkeypatch, asgi_read_routes)
+    monkeypatch.setattr(asgi_read_routes, "build_home_payload", lambda **_kwargs: {"kind": "home"})
+    monkeypatch.setattr(asgi_read_routes, "_library_hydration_pending_for_asgi", lambda _request: None)
+    monkeypatch.setattr(asgi_read_routes, "_log_view_data_request_from_asgi", log_request)
+
+    status, _headers, _body = _run_asgi_request(asgi_app, "GET", "/home-data")
+
+    assert status == 200
+    assert logged == [True]
+
+
 def test_asgi_saved_loops_read_runs_off_the_event_loop(asgi_app, monkeypatch):
     from music_app.routes import api_read_asgi_routes as asgi_read_routes
 

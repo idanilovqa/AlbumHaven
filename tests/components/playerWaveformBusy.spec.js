@@ -1,4 +1,4 @@
-// The server builds one waveform at a time and answers 429 meanwhile. The shipped peak loader and
+// The server answers 429 while it builds other waveforms first. The shipped peak loader and
 // waveform drawing must keep waiting out a busy builder for the current track and then draw it.
 const path = require('node:path');
 const { test, expect } = require('@playwright/test');

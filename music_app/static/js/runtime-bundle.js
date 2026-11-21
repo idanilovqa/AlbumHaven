@@ -42945,6 +42945,10 @@ function renderTrackModalRelease(album) {
           placeholder.classList.add('cover-placeholder');
           placeholder.setAttribute('aria-hidden', 'true');
           visual.appendChild(placeholder);
+          // The loading shell's card image carries no load handler; without these the cover stayed hidden behind
+          // the placeholder once its bytes arrived (owner 2026-11-18, 2026-11-21).
+          reusableCoverImage.setAttribute('onload', 'handleTrackModalCoverImageLoad(this)');
+          reusableCoverImage.setAttribute('onerror', 'handleAlbumDisplayCoverImageError(this)');
         }
         if (localCoverRefRaw) reusableCoverImage.setAttribute('data-cover-ref', localCoverRefRaw);
         else reusableCoverImage.removeAttribute('data-cover-ref');

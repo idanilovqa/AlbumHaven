@@ -2135,10 +2135,10 @@ function browseTrackModalSelectedCover(value, options = {}) {
 
 // A selected local cover that a save downloaded keeps its provider's badge, unless the album page setting
 // "Display provider badge for local covers" is off (owner 2026-11-17).
-function buildAlbumDetailsLocalCoverSourceBadge(slot) {
+function buildAlbumDetailsLocalCoverSourceBadge(slot, context = {}) {
   if (slot?.kind !== 'local' || !slot.source || typeof buildTrackModalCoverSourceBadge !== 'function') return '';
   if (document.documentElement?.getAttribute?.('data-library-source-local-cover-badges') === 'false') return '';
-  return buildTrackModalCoverSourceBadge(slot.source);
+  return buildTrackModalCoverSourceBadge(slot.source, context);
 }
 
 function renderTrackModalRelease(album) {
@@ -2196,9 +2196,26 @@ function renderTrackModalRelease(album) {
       },
     })}
   `;
-  const coverSourceBadge = typeof buildTrackModalCoverSourceBadge === 'function'
-    ? buildTrackModalCoverSourceBadge(album?.remote_cover_source || '')
-    : '';
+  // A selected cover from the stack keeps only its provider, so its badge links to the provider's search.
+  const coverSourceContext = {
+    artist: typeof albumDisplayArtist === 'function' ? albumDisplayArtist(album) : String(album?.album_artist || ''),
+    album: album?.name || '',
+  };
+  const coverSourceBadge = activeSelectedCover
+    ? buildAlbumDetailsLocalCoverSourceBadge(activeSelectedCover, coverSourceContext)
+    : typeof buildTrackModalCoverSourceBadge === 'function'
+      ? buildTrackModalCoverSourceBadge(album?.remote_cover_source || '', {
+        ...coverSourceContext,
+        albumUrl: album?.remote_cover_album_url,
+        imageUrl: album?.remote_cover_url,
+      })
+      : '';
+  // Spotify's mark never sits on the artwork: it goes centred beneath the cover (owner 2026-11-19).
+  const coverSourceBadgeBeneath = Boolean(coverSourceBadge) && coverSourceBadgeSitsBeneathArt(
+    activeSelectedCover ? activeSelectedCover.source : album?.remote_cover_source,
+  );
+  const coverSourceBeneathHtml = coverSourceBadgeBeneath
+    ? `<div class="track-modal-cover-source-beneath">${coverSourceBadge}</div>` : '';
   const coverSourceMarkersHtml = buildAlbumCoverSourceMarkersHtml(album);
   const albumDetailsLayout = String(
     document.documentElement?.getAttribute('data-album-details-layout') || 'classic_bar'
@@ -2304,8 +2321,9 @@ function renderTrackModalRelease(album) {
     els.cover.innerHTML = `
       <div class="track-modal-cover-shell">
       ${coverPresentationHtml}
-      ${activeSelectedCover ? buildAlbumDetailsLocalCoverSourceBadge(activeSelectedCover) : coverSourceBadge}
+      ${coverSourceBadgeBeneath ? '' : coverSourceBadge}
       </div>
+      ${coverSourceBeneathHtml}
       ${coverSourceMarkersHtml}
     `;
     const coverImageSlot = typeof els.cover?.querySelector === 'function'
@@ -2363,6 +2381,7 @@ function renderTrackModalRelease(album) {
           handleAlbumDisplayCoverImageError(modalCoverImage);
         });
       }
+      if (typeof applyCoverSourceBadgeTone === 'function') applyCoverSourceBadgeTone(els.cover);
     }
   } else {
     const emptyCoverHtml = renderAlbumArtbox({
@@ -2458,6 +2477,9 @@ function renderTrackModalRelease(album) {
     : '';
   els.list.innerHTML = albumMissing ? '' : buildTrackListHtml(tracks, album, totalLength) + duplicateReview;
   if (typeof syncAlbumTrackCreditMotion === 'function') syncAlbumTrackCreditMotion(els.list);
+  if (!albumMissing && typeof requestSearchHighlights === 'function') {
+    refreshAlbumTrackSearchHighlights(els.list, tracks, album);
+  }
   if (els.footer) {
     els.footer.textContent = '';
     els.footer.hidden = true;
@@ -2593,6 +2615,36 @@ function groupAlbumTracks(tracks) {
 }
 
 
+// Album Details tracks are not in a search response: during a search, ask the server which of their titles and
+// artists it matched, then mark them in the table on screen. Rows are updated in place, never redrawn, so a play
+// click that lands while the answer arrives still reaches its button.
+function refreshAlbumTrackSearchHighlights(list, tracks, album) {
+  const query = activeSearchHighlightQuery();
+  const render = {};
+  list.albumTrackSearchHighlightRender = render;
+  if (!query) return;
+  const rows = Array.isArray(album?.track_rows) ? album.track_rows : [];
+  const texts = [...(tracks || []), ...rows].flatMap((track) => [track?.title, track?.secondary_artist]);
+  void requestSearchHighlights(texts).then((answered) => {
+    if (!answered || list.albumTrackSearchHighlightRender !== render || activeSearchHighlightQuery() !== query) return;
+    list.querySelectorAll('.album-track-table__row').forEach((row) => {
+      const title = row.querySelector('.album-track-table__title');
+      const titleText = title?.firstChild;
+      if (!titleText || titleText.nodeType !== Node.TEXT_NODE) return;
+      const ranges = searchHighlightRanges(titleText.textContent);
+      const secondary = title.querySelector('.album-track-table__secondary')?.textContent || '';
+      if (!ranges && !searchHighlightRanges(secondary)) return;
+      if (ranges) {
+        const markup = document.createElement('template');
+        markup.innerHTML = buildHighlightedTextHtml(titleText.textContent, ranges);
+        titleText.replaceWith(markup.content);
+      }
+      row.classList.add('album-track-table__row--search-match');
+      row.dataset.trackSearchMatch = 'true';
+    });
+  }).catch(() => {});
+}
+
 function buildTrackListHtml(tracks, album = null, totalLength = null) {
   const grouped = groupAlbumTracks(tracks);
   const playback = getPlayerPlaybackSnapshot();
@@ -2607,8 +2659,8 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
       .filter(Boolean)
   );
 
-  const query = String(state.view?.query || '').trim().toLocaleLowerCase();
   const albumPreference = album?.album_preference || {};
+  const highlightRanges = typeof searchHighlightRanges === 'function' ? searchHighlightRanges : () => null;
   const discRatingByKey = new Map(
     (Array.isArray(albumPreference.disc_ratings) ? albumPreference.disc_ratings : [])
       .map((discRating) => [discRating?.disc_key, discRating?.rating])
@@ -2658,7 +2710,10 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
         isCurrent: Boolean(isCurrentTrack),
         isPlaying: Boolean(isActivelyPlaying),
         isProblematic: Boolean(track.is_problematic),
-        isSearchMatch: Boolean(query && displayTitle.toLocaleLowerCase().includes(query)),
+        // The server's search matcher marks the title's matched characters; a match in the title or the
+        // track's own artist marks the row (owner 2026-11-18).
+        titleHighlightRanges: highlightRanges(displayTitle),
+        isSearchMatch: Boolean(highlightRanges(displayTitle) || highlightRanges(secondaryArtist)),
       };
     });
     return {

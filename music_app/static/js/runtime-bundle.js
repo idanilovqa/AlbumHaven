@@ -2291,6 +2291,75 @@ function parseUrlState(url) {
   return parseUrlStateFromUrl(url, window.location.origin);
 }
 
+// The highlight ranges the server reported, by search and display text. Search responses (view-data, Loose
+// Tracks, the Custom Collections catalog) carry them; /search/highlights answers for texts shown elsewhere. A
+// text the server was asked about and did not match is known, with no ranges. The latest few searches are kept:
+// a new search's catalog can arrive while the previous search's view is still shown.
+function searchHighlightState() {
+  state.searchHighlights ||= { byQuery: new Map(), viewSource: null };
+  return state.searchHighlights;
+}
+
+function searchHighlightTexts(query, create = false) {
+  const { byQuery } = searchHighlightState();
+  if (!byQuery.has(query) && create) {
+    byQuery.set(query, new Map());
+    while (byQuery.size > 3) byQuery.delete(byQuery.keys().next().value);
+  }
+  return byQuery.get(query) || null;
+}
+
+function activeSearchHighlightQuery() {
+  return String(state?.view?.query || '').trim();
+}
+
+function rememberSearchHighlights(highlights, askedTexts = []) {
+  const query = String(highlights?.query || '').trim();
+  const texts = highlights?.texts;
+  if (!query || !texts || typeof texts !== 'object') return;
+  const known = searchHighlightTexts(query, true);
+  for (const text of askedTexts) known.set(String(text), []);
+  for (const [text, ranges] of Object.entries(texts)) {
+    if (Array.isArray(ranges)) known.set(text, ranges);
+  }
+}
+
+function searchHighlightRanges(value) {
+  const query = activeSearchHighlightQuery();
+  if (!query) return null;
+  const viewHighlights = state.view?.search_highlights;
+  if (viewHighlights && viewHighlights !== searchHighlightState().viewSource) {
+    searchHighlightState().viewSource = viewHighlights;
+    rememberSearchHighlights(viewHighlights);
+  }
+  const ranges = searchHighlightTexts(query)?.get(String(value ?? ''));
+  return ranges?.length ? ranges : null;
+}
+
+async function requestSearchHighlights(values) {
+  const query = activeSearchHighlightQuery();
+  const known = searchHighlightTexts(query);
+  const texts = [...new Set((values || []).map((value) => String(value ?? '')).filter(Boolean))]
+    .filter((text) => !known?.has(text))
+    .slice(0, 1000);
+  if (!query || !texts.length) return false;
+  const response = await fetch('/search/highlights', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ q: query, texts }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || !payload?.ok || payload.search_highlights?.query !== query) return false;
+  rememberSearchHighlights(payload.search_highlights, texts);
+  return true;
+}
+
+// Markup for a label the active search matched, or '' when nothing in it matched.
+function searchHighlightedLabelHtml(value) {
+  const ranges = searchHighlightRanges(value);
+  return ranges ? buildHighlightedTextHtml(value, ranges) : '';
+}
+
 // END js/runtime/view-state-helpers.js
 
 // BEGIN js/runtime/browser-navigation-helpers.js
@@ -3149,6 +3218,24 @@ function renderStars(rating) {
       : '<span class="star">&#9734;</span>';
   }
   return html;
+}
+
+// Owner 2026-11-18: a search result shows, in a neutral highlight, the characters the search matched.
+// The ranges come from the server's search matcher as [start, end) code-point offsets; every part stays escaped.
+function buildHighlightedTextHtml(value, ranges) {
+  const text = String(value ?? '');
+  if (!Array.isArray(ranges) || !ranges.length) return escapeHtml(text);
+  const chars = Array.from(text);
+  let html = '';
+  let cursor = 0;
+  for (const range of ranges) {
+    const start = Math.max(cursor, Number(range?.[0]));
+    const end = Math.min(chars.length, Number(range?.[1]));
+    if (!Number.isInteger(start) || !Number.isInteger(end) || end <= start) continue;
+    html += `${escapeHtml(chars.slice(cursor, start).join(''))}<mark class="search-match-highlight">${escapeHtml(chars.slice(start, end).join(''))}</mark>`;
+    cursor = end;
+  }
+  return html + escapeHtml(chars.slice(cursor).join(''));
 }
 
 // END js/runtime/markup-format-helpers.js
@@ -4291,7 +4378,9 @@ function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
     html += `<div class="sidebar-virtual-spacer" data-sidebar-virtual-spacer="before" aria-hidden="true" style="height:${virtualWindow.before}px"></div>`;
   }
   html += visibleArtists.map((item, offset) => renderItem({
-    label: item.artist_display || item.artist, key: 'artist:' + item.artist,
+    label: item.artist_display || item.artist,
+    labelHtml: typeof searchHighlightedLabelHtml === 'function' ? searchHighlightedLabelHtml(item.artist_display || item.artist) : '',
+    key: 'artist:' + item.artist,
     count: item.count, selected: item.artist === selectedArtist,
     href: buildUrl({
       ...view,
@@ -4317,10 +4406,13 @@ function buildSidebarStructureSignature(sidebarArtists = [], options = {}) {
     && options.showAllArtistsOverride !== null
     ? (options.showAllArtistsOverride ? '1' : '0')
     : String(options.view?.show_all_artists_sidebar_link !== false ? '1' : '0');
+  const highlightRanges = typeof searchHighlightRanges === 'function' ? searchHighlightRanges : () => null;
   const artistSignature = sidebarArtists.map((item) => [
     String(item?.artist || ''),
     String(item?.artist_display || item?.artist || ''),
     String(item?.count ?? ''),
+    // A row redraws when its search highlight changes.
+    JSON.stringify(highlightRanges(item?.artist_display || item?.artist) || ''),
   ].join('\u001f')).join('\u001e');
   const virtualWindow = options.virtualWindow?.virtualized
     ? `${options.virtualWindow.start}:${options.virtualWindow.end}`
@@ -4926,12 +5018,20 @@ function buildGalleryRatingHtml(config = {}) {
 
 function buildGalleryCardInfoHtml(config = {}) {
   const count = Math.max(0, Number(config.trackCount || 0));
-  const metadata = [config.artist, config.year].map(value => String(value ?? '').trim()).filter(Boolean).join(' · ');
+  // Search highlights (owner 2026-11-18) mark the matched characters of the title and artist.
+  const highlighted = (value, ranges) => (ranges?.length ? buildHighlightedTextHtml(value, ranges) : escapeHtml(value));
+  const artist = String(config.artist ?? '').trim();
+  const year = String(config.year ?? '').trim();
+  const metadataHtml = [
+    artist ? highlighted(artist, config.artistHighlightRanges) : '',
+    escapeHtml(year),
+  ].filter(Boolean).join(' · ');
   const statusHtml = `${String(config.sourceActionsHtml || '')}${String(config.ratingHtml || '')}`;
+  const titleHtml = highlighted(config.title || '', config.titleHighlightRanges);
   const title = config.openAttributes
-    ? `<button class="album-open-trigger album-title-button" type="button" aria-label="${escapeHtml(config.title || '')}" ${config.openAttributes}><span data-gallery-metadata-text>${escapeHtml(config.title || '')}</span></button>`
-    : escapeHtml(config.title || '');
-  return `<div class="album-body gallery-card-info"><h3 class="album-title">${title}</h3><div class="album-meta-row"><div class="album-subtitle"><span data-gallery-metadata-text>${escapeHtml(metadata)}</span></div></div>${statusHtml ? `<div class="gallery-card__status-group">${statusHtml}</div>` : ''}<div class="chip-row"><span class="track-count">${count} track${count === 1 ? '' : 's'}</span><span class="album-length">${escapeHtml(config.lengthDisplay || '')}</span></div></div>`;
+    ? `<button class="album-open-trigger album-title-button" type="button" aria-label="${escapeHtml(config.title || '')}" ${config.openAttributes}><span data-gallery-metadata-text>${titleHtml}</span></button>`
+    : titleHtml;
+  return `<div class="album-body gallery-card-info"><h3 class="album-title">${title}</h3><div class="album-meta-row"><div class="album-subtitle"><span data-gallery-metadata-text>${metadataHtml}</span></div></div>${statusHtml ? `<div class="gallery-card__status-group">${statusHtml}</div>` : ''}<div class="chip-row"><span class="track-count">${count} track${count === 1 ? '' : 's'}</span><span class="album-length">${escapeHtml(config.lengthDisplay || '')}</span></div></div>`;
 }
 
 // END js/runtime/gallery-main-components.js
@@ -5217,7 +5317,7 @@ function buildGalleryCardHtml(config = {}) {
       ${sourceActions ? `<div class="gallery-card__source-actions gallery-card__source-actions--artwork">${sourceActions}</div>` : ''}
       ${releaseYear ? `<span class="gallery-card__hover-year" aria-hidden="true">${escapeHtml(releaseYear)}</span>` : ''}
       ${displayMode === 'covers'
-        ? `<span class="gallery-card__focus-title">${escapeHtml(config.title || '')}</span>`
+        ? `<span class="gallery-card__focus-title">${config.titleHighlightRanges?.length ? buildHighlightedTextHtml(config.title || '', config.titleHighlightRanges) : escapeHtml(config.title || '')}</span>`
         : buildGalleryCardInfoHtml({
             ...config,
             openAttributes,
@@ -11849,7 +11949,40 @@ function syncLibraryNavigationModePresentation(mode) {
 
 // The tree lists collection names and counts from their own bounded request. It never
 // waits for the library-wide Loose Tracks payload and never depends on the Artist tree.
-let customCollectionCatalog = { key: null, collections: null, request: null };
+// Each answer, with its All Loose Tracks total, is kept under the search it was asked for, so a late answer for
+// an older search can never stand in for the current one (audit 2026-11-18). A few recent searches are kept.
+const CUSTOM_COLLECTION_CATALOGS_KEPT = 8;
+const customCollectionCatalogs = new Map();
+const customCollectionCatalogRequests = new Map();
+let customCollectionCatalogGeneration = 0;
+
+function customCollectionInventoryRevision() {
+  const revision = Number(state.status?.inventory_mutation_revision);
+  return Number.isSafeInteger(revision) ? revision : null;
+}
+
+function currentCustomCollectionCatalog(view = state.view || {}) {
+  return customCollectionCatalogs.get(customCollectionCatalogUrl(view).search) || null;
+}
+
+function storeCustomCollectionCatalog(key, catalog) {
+  customCollectionCatalogs.delete(key);
+  customCollectionCatalogs.set(key, catalog);
+  while (customCollectionCatalogs.size > CUSTOM_COLLECTION_CATALOGS_KEPT) {
+    customCollectionCatalogs.delete(customCollectionCatalogs.keys().next().value);
+  }
+}
+
+// The current search's track total for a collection, or for All Loose Tracks without a name; undefined while
+// that search's catalog is not loaded, so no other search's number is shown.
+function customCollectionCatalogTrackCount(collectionName = '') {
+  const catalog = currentCustomCollectionCatalog();
+  if (!catalog) return undefined;
+  const count = collectionName
+    ? catalog.collections.find(({ name }) => name === collectionName)?.count
+    : catalog.looseTracksCount;
+  return Number.isInteger(count) ? count : undefined;
+}
 
 function customCollectionCatalogUrl(view = state.view || {}) {
   const url = new URL('/library/custom-collections', 'http://localhost');
@@ -11867,9 +12000,7 @@ function customCollectionCatalogUrl(view = state.view || {}) {
 // on first open (a skeleton for up to 2 s). It is loaded once the page is idle, so opening it paints at once.
 let customCollectionCatalogPrefetch = 0;
 function prefetchCustomCollectionCatalogWhenIdle() {
-  if (customCollectionCatalogPrefetch || customCollectionCatalog.request
-    || (customCollectionCatalog.key === customCollectionCatalogUrl().search
-      && Array.isArray(customCollectionCatalog.collections))) return;
+  if (customCollectionCatalogPrefetch || customCollectionCatalogRequests.size || currentCustomCollectionCatalog()) return;
   const run = () => {
     customCollectionCatalogPrefetch = 0;
     void loadCustomCollectionCatalog().catch(() => {});
@@ -11904,7 +12035,7 @@ async function syncCustomCollectionSearchIndicator() {
     return;
   }
   if (String(state.view?.query || '').trim() !== query) return;
-  mark(Number(state.ui?.libraryLooseTracksCount) > 0);
+  mark(Number(customCollectionCatalogTrackCount()) > 0);
   openBestCustomCollectionForSearch(query);
   if (deciding) setLibraryTreeSearchLoading(false);
 }
@@ -11922,10 +12053,10 @@ function openBestCustomCollectionForSearch(query) {
   if (pending && pending !== query && !state.ui.pendingViewTransition) state.ui.customCollectionSearchAutoOpenQuery = '';
   if (pending !== query || state.ui.pendingViewTransition) return;
   state.ui.customCollectionSearchAutoOpenQuery = '';
-  const collections = Array.isArray(customCollectionCatalog.collections) ? customCollectionCatalog.collections : [];
+  const collections = currentCustomCollectionCatalog()?.collections || [];
   const view = state.view || {};
   if (
-    !(Number(state.ui?.libraryLooseTracksCount) > 0)
+    !(Number(customCollectionCatalogTrackCount()) > 0)
     || (Array.isArray(view.artists_sidebar) && view.artists_sidebar.length)
     || (typeof isEffectivelyEmptyView === 'function' && !isEffectivelyEmptyView(view))
     || document.querySelector?.('#non-album-modal:not([hidden])')
@@ -11944,7 +12075,10 @@ function syncCustomCollectionsAfterTagEdit({ fresh = false } = {}) {
     if (state.ui.libraryNavigationMode === 'custom-collections') renderCustomCollectionNavigation(collections);
   };
   if (fresh) {
-    customCollectionCatalog = { ...customCollectionCatalog, collections: null, request: null };
+    // The saved library outdates every search's catalog, and any answer still on its way.
+    customCollectionCatalogs.clear();
+    customCollectionCatalogRequests.clear();
+    customCollectionCatalogGeneration += 1;
     // Only a tree on screen asks the server now; otherwise the next open fetches it, so a save never adds
     // a catalog query to the browsing that follows it.
     if (state.ui.libraryNavigationMode === 'custom-collections') {
@@ -11968,8 +12102,13 @@ function syncCustomCollectionsAfterTagEdit({ fresh = false } = {}) {
   const collections = [...counts.entries()]
     .map(([name, count]) => ({ name, count }))
     .sort((left, right) => left.name.localeCompare(right.name));
-  customCollectionCatalog = { ...customCollectionCatalog, key: customCollectionCatalogUrl().search, collections };
-  state.ui.libraryLooseTracksCount = tracks.length;
+  const key = customCollectionCatalogUrl().search;
+  // The recount keeps the loaded catalog's revision: it is a local estimate, not a newer server answer.
+  storeCustomCollectionCatalog(key, {
+    revision: customCollectionCatalogs.get(key)?.revision ?? null,
+    collections,
+    looseTracksCount: tracks.length,
+  });
   redraw(collections);
 }
 
@@ -11985,35 +12124,39 @@ function prefetchCustomCollectionCatalogForSearch(query) {
 function loadCustomCollectionCatalog({ fresh = false, view = state.view || {} } = {}) {
   const url = customCollectionCatalogUrl(view);
   const key = url.search;
-  if (customCollectionCatalog.request?.key === key) return customCollectionCatalog.request.promise;
+  const pending = customCollectionCatalogRequests.get(key);
+  if (pending) return pending;
   // A loaded catalog answers again: every sidebar redraw during a search used to refetch it and its artwork.
-  // Opening the Custom Collections tree still asks for a fresh one.
-  if (!fresh && customCollectionCatalog.key === key && Array.isArray(customCollectionCatalog.collections)) {
-    return Promise.resolve(customCollectionCatalog.collections);
-  }
+  const cached = customCollectionCatalogs.get(key);
+  if (!fresh && cached) return Promise.resolve(cached.collections);
+  const generation = customCollectionCatalogGeneration;
+  const revision = customCollectionInventoryRevision();
   const promise = (async () => {
     const response = await fetch(`${url.pathname}${url.search}`, { headers: { Accept: 'application/json' } });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok || payload?.ok === false) {
       throw new Error(payload?.error || `Custom Collections request failed: ${response.status}`);
     }
+    if (typeof rememberSearchHighlights === 'function') rememberSearchHighlights(payload.search_highlights);
     const collections = (Array.isArray(payload.custom_collections) ? payload.custom_collections : [])
       .map(({ name, count }) => ({ name: String(name || '').trim(), count: Number(count) || 0 }))
       .filter(({ name }) => name)
       .sort((left, right) => left.name.localeCompare(right.name));
     // null while the server's Loose Tracks snapshot is not current: show no number rather than a wrong one.
     const looseTracksCount = Number.isInteger(payload.loose_tracks_count) ? payload.loose_tracks_count : null;
-    state.ui.libraryLooseTracksCount = looseTracksCount;
-    customCollectionCatalog = { key, collections, request: null };
+    if (generation === customCollectionCatalogGeneration) {
+      storeCustomCollectionCatalog(key, { revision, collections, looseTracksCount });
+    }
     if (typeof prefetchCustomCollectionArtwork === 'function') {
       void prefetchCustomCollectionArtwork(collections.map(({ name }) => name));
     }
     return collections;
   })();
-  customCollectionCatalog.request = { key, promise };
-  promise.catch(() => {
-    if (customCollectionCatalog.request?.promise === promise) customCollectionCatalog.request = null;
-  });
+  customCollectionCatalogRequests.set(key, promise);
+  const release = () => {
+    if (customCollectionCatalogRequests.get(key) === promise) customCollectionCatalogRequests.delete(key);
+  };
+  promise.then(release, release);
   return promise;
 }
 
@@ -12080,8 +12223,8 @@ function syncLibraryNavigationAfterPageChange() {
 // Redraws the Custom Collections selection after its page opens or closes.
 function syncCustomCollectionNavigationSelection() {
   if (state.ui?.libraryNavigationMode !== 'custom-collections') return;
-  if (customCollectionCatalog.key !== customCollectionCatalogUrl().search) return;
-  renderCustomCollectionNavigation(customCollectionCatalog.collections);
+  const catalog = currentCustomCollectionCatalog();
+  if (catalog) renderCustomCollectionNavigation(catalog.collections);
 }
 
 // collections === null renders placeholders where the named rows will appear.
@@ -12092,8 +12235,9 @@ function renderCustomCollectionNavigation(collections, { failure = '' } = {}) {
   const activeCollectionName = pageOpen ? String(state.ui?.nonAlbumCollectionName || '').trim() : '';
   const allLooseTracksSelected = pageOpen && !activeCollectionName;
   list.dataset.navigationTree = 'custom-collections';
-  // Which search this tree shows, so a new search or a cleared one redraws it.
-  list.dataset.customCollectionsSearch = collections === null ? '' : customCollectionCatalogUrl().search;
+  // Which search this tree is for, so a new search or a cleared one redraws it. A loading or failed tree is stamped
+  // too: its own request redraws it, and status-poll redraws must not retry a failure (audit 2026-11-18).
+  list.dataset.customCollectionsSearch = customCollectionCatalogUrl().search;
   list.dataset.sidebarVirtualized = 'false';
   delete list.dataset.sidebarStructureSignature;
   const allLooseTracks = window.NavigationTree.renderItem({
@@ -12101,7 +12245,7 @@ function renderCustomCollectionNavigation(collections, { failure = '' } = {}) {
     variant: 'panel',
     key: 'all-loose-tracks',
     label: 'All Loose Tracks',
-    count: Number.isInteger(state.ui?.libraryLooseTracksCount) ? state.ui.libraryLooseTracksCount : undefined,
+    count: customCollectionCatalogTrackCount(),
     selected: allLooseTracksSelected,
     attributes: { 'data-open-loose-tracks': '1' },
   });
@@ -12117,6 +12261,7 @@ function renderCustomCollectionNavigation(collections, { failure = '' } = {}) {
         variant: 'panel',
         key: name,
         label: name,
+        labelHtml: typeof searchHighlightedLabelHtml === 'function' ? searchHighlightedLabelHtml(name) : '',
         count,
         selected: name === activeCollectionName,
         attributes: { 'data-open-custom-collection': name },
@@ -12126,6 +12271,7 @@ function renderCustomCollectionNavigation(collections, { failure = '' } = {}) {
 
 async function setLibraryNavigationMode(mode) {
   const normalized = mode === 'custom-collections' ? mode : 'artists';
+  const switched = state.ui.libraryNavigationMode !== normalized;
   state.ui.libraryNavigationMode = normalized;
   syncLibraryNavigationModePresentation(normalized);
   if (normalized === 'artists') {
@@ -12134,18 +12280,25 @@ async function setLibraryNavigationMode(mode) {
     renderSidebar();
     return normalized;
   }
-  const cached = customCollectionCatalog.key === customCollectionCatalogUrl().search
-    ? customCollectionCatalog.collections
-    : null;
-  renderCustomCollectionNavigation(cached);
-  setDesktopLibraryModeRailVisible(true);
+  const key = customCollectionCatalogUrl().search;
+  const cached = customCollectionCatalogs.get(key) || null;
+  renderCustomCollectionNavigation(cached ? cached.collections : null);
+  // Only a switch to this tree shows the auto-hidden view rail; redraws leave it as it is (audit 2026-11-18).
+  if (switched) setDesktopLibraryModeRailVisible(true);
+  // The server is asked again only when this search has no catalog or the library changed since it was loaded.
+  if (cached && cached.revision === customCollectionInventoryRevision()) return normalized;
+  // A newer search or the other tree owns the side bar once this answer arrives; its own redraw shows it.
+  const stillShown = () => state.ui.libraryNavigationMode === normalized && customCollectionCatalogUrl().search === key;
   try {
-    const collections = await loadCustomCollectionCatalog({ fresh: true });
+    await loadCustomCollectionCatalog({ fresh: true });
+    const loaded = customCollectionCatalogs.get(key);
     // The refreshed list replaces the drawn one only when it differs: redrawing the same rows made them blink.
-    const unchanged = cached !== null && JSON.stringify(cached) === JSON.stringify(collections);
-    if (state.ui.libraryNavigationMode === normalized && !unchanged) renderCustomCollectionNavigation(collections);
+    const unchanged = cached !== null && loaded !== undefined
+      && JSON.stringify([cached.collections, cached.looseTracksCount])
+        === JSON.stringify([loaded.collections, loaded.looseTracksCount]);
+    if (stillShown() && loaded && !unchanged) renderCustomCollectionNavigation(loaded.collections);
   } catch (error) {
-    if (state.ui.libraryNavigationMode === normalized && cached === null) {
+    if (stillShown() && cached === null) {
       renderCustomCollectionNavigation(null, { failure: error?.message || 'Unable to load Custom Collections.' });
     }
   }
@@ -15153,11 +15306,33 @@ function hideAlbumCardContextMenu() {
   if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(menu);
 }
 
+const CONTEXT_MENU_EDGE_GAP_PX = 8;
+
+// Shows a pointer-opened context menu at (x, y), moved up and left only as far as needed to stay inside the window
+// and above the bottom player, which would otherwise cover (and take the clicks of) its lower items.
+function showContextMenuAtPoint(menu, x, y) {
+  menu.style.left = `${x}px`;
+  menu.style.top = `${y}px`;
+  menu.hidden = false;
+  const rect = menu.getBoundingClientRect?.();
+  if (!rect) return;
+  const player = document.querySelector?.('.global-player');
+  const playerTop = player && !player.hidden ? player.getBoundingClientRect?.().top : undefined;
+  const viewportHeight = Number(window.innerHeight) || rect.bottom;
+  const bottomLimit = Math.min(viewportHeight, Number.isFinite(playerTop) && playerTop > 0 ? playerTop : viewportHeight)
+    - CONTEXT_MENU_EDGE_GAP_PX;
+  const rightLimit = (Number(window.innerWidth) || rect.right) - CONTEXT_MENU_EDGE_GAP_PX;
+  if (rect.bottom > bottomLimit) {
+    menu.style.top = `${Math.max(CONTEXT_MENU_EDGE_GAP_PX, y - (rect.bottom - bottomLimit))}px`;
+  }
+  if (rect.right > rightLimit) {
+    menu.style.left = `${Math.max(CONTEXT_MENU_EDGE_GAP_PX, x - (rect.right - rightLimit))}px`;
+  }
+}
+
 function showAlbumCardContextMenu(x, y, album) {
   if (isMobileClient() || usesMobilePageLayout()) { hideAlbumCardContextMenu(); return; }
   const menu = ensureAlbumCardContextMenu();
-  menu.style.left = `${x}px`;
-  menu.style.top = `${y}px`;
   menu.dataset.albumKey = getAlbumIdentity(album);
   const albumKey = String(album?.key || '');
   const manualVersionLinks = state.view?.manual_version_links && typeof state.view.manual_version_links === 'object'
@@ -15176,7 +15351,7 @@ function showAlbumCardContextMenu(x, y, album) {
       ? '<button type="button" class="album-card-context-menu-item" data-album-card-action="unmark-version">Unmark as a version</button>'
       : '<button type="button" class="album-card-context-menu-item" data-album-card-action="mark-version">Mark as a version</button>',
   ].join('');
-  menu.hidden = false;
+  showContextMenuAtPoint(menu, x, y);
   if (typeof activateTriggerSurface === 'function') {
     activateTriggerSurface(menu, hideAlbumCardContextMenu);
   }
@@ -15224,9 +15399,7 @@ function showLooseTracksContextMenu(event) {
   if (!path) return false;
   if (!controller.getSelectedPaths().includes(path)) controller.sync([path]);
   const menu = ensureLooseTracksContextMenu();
-  menu.style.left = `${event.clientX}px`;
-  menu.style.top = `${event.clientY}px`;
-  menu.hidden = false;
+  showContextMenuAtPoint(menu, event.clientX, event.clientY);
   if (typeof activateTriggerSurface === 'function') activateTriggerSurface(menu, hideLooseTracksContextMenu);
   return true;
 }
@@ -15241,10 +15414,8 @@ function hideArtistTreeContextMenu() {
 
 function showArtistTreeContextMenu(x, y, artist) {
   const menu = ensureArtistTreeContextMenu();
-  menu.style.left = `${x}px`;
-  menu.style.top = `${y}px`;
   menu.dataset.artist = String(artist || '');
-  menu.hidden = false;
+  showContextMenuAtPoint(menu, x, y);
   if (!state.ui?.artistsDrawerOpen && typeof activateTriggerSurface === 'function') {
     activateTriggerSurface(menu, hideArtistTreeContextMenu);
   }
@@ -15571,6 +15742,7 @@ async function fetchNonAlbumPayload(url) {
   if (!response.ok || payload?.ok === false) {
     throw new Error(payload?.error || `Loose tracks request failed: ${response.status}`);
   }
+  if (typeof rememberSearchHighlights === 'function') rememberSearchHighlights(payload?.search_highlights);
   return payload;
 }
 
@@ -15752,6 +15924,9 @@ function buildNonAlbumTrackRowsMarkup(items, startingIndex, problematicIndex = b
     const secondaryArtist = metadataArtist && metadataArtist.toLocaleLowerCase() !== 'unknown artist'
       ? metadataArtist
       : '';
+    // Owner 2026-11-18: a title shows its matched characters; a track found by its artist is highlighted whole.
+    const highlightRanges = typeof searchHighlightRanges === 'function' ? searchHighlightRanges : () => null;
+    const titleHighlightRanges = highlightRanges(title);
     return {
       path: trackPath,
       mediaRef,
@@ -15782,6 +15957,8 @@ function buildNonAlbumTrackRowsMarkup(items, startingIndex, problematicIndex = b
       isCurrent: isCurrentTrack,
       isPlaying: isActivelyPlaying,
       isProblematic: Boolean(problematicAlbum || item.is_problematic),
+      titleHighlightRanges,
+      isSearchMatch: Boolean(highlightRanges(metadataArtist)),
     };
   });
 }
@@ -16236,13 +16413,15 @@ function openNonAlbumModal(options = {}) {
   if (typeof syncAlbumHavenDocumentTitle === 'function') syncAlbumHavenDocumentTitle();
   const hydrationPending = needsNonAlbumHydration({ libraryWide });
   const looseTracks = getVisibleNonAlbumTracks({ libraryWide, collectionName });
-  // All Loose Tracks shows its total like a collection (owner 2026-11-16); before its rows load, the tree
-  // catalog's total stands in when it is known.
-  const trackTotal = libraryWide && !collectionName && hydrationPending
-    ? state.ui?.libraryLooseTracksCount
+  // All Loose Tracks shows its total like a collection (owner 2026-11-16). Before the rows load, the current
+  // search's tree catalog total stands in when it is known, and no number otherwise (audit 2026-11-18).
+  const trackTotal = libraryWide && hydrationPending
+    ? (typeof customCollectionCatalogTrackCount === 'function' ? customCollectionCatalogTrackCount(collectionName) : undefined)
     : looseTracks.length;
-  const subtitle = collectionName || (libraryWide && Number.isInteger(trackTotal))
+  const subtitle = (collectionName || libraryWide) && Number.isInteger(trackTotal)
     ? `${trackTotal} ${trackTotal === 1 ? 'track' : 'tracks'}`
+    : collectionName
+    ? ''
     : !libraryWide && state.view.selected_artist
     ? `Non-album tracks found in ${state.view.selected_artist} and family artist folders.`
     : 'Non-album tracks found in the selected library sources.';
@@ -17393,9 +17572,13 @@ const trackModalAlbumDetailsLoads = new Map();
 const trackModalSpeculativeAlbumDetailsLoadControllers = new Map();
 const trackModalHydratedAlbumDetails = new Map();
 const trackModalHydratedAlbumDetailsLru = new Map();
-const TRACK_MODAL_HYDRATED_ALBUM_DETAILS_LIMIT = 10;
+// Owner 2026-11-19: the details of the albums on screen load before the click. At most this many settled
+// visible cards are prefetched, two requests at a time; the cache keeps two screens of them.
+const TRACK_MODAL_VISIBLE_PREWARM_CARD_LIMIT = 24;
+const TRACK_MODAL_HYDRATED_ALBUM_DETAILS_LIMIT = TRACK_MODAL_VISIBLE_PREWARM_CARD_LIMIT * 2;
 const TRACK_MODAL_SPECULATIVE_PREWARM_LIMIT = 2;
 let trackModalActiveSpeculativePrewarms = 0;
+let trackModalQueuedPrewarmKeys = [];
 let trackModalCleanupGeneration = 0;
 const trackModalSpeculativePrewarmControllers = new Set();
 const trackModalCoverLoadSuspensionTokens = new Set();
@@ -17424,9 +17607,18 @@ function renderTrackModalLoadingState(album) {
     els.editTags.dataset.album = '';
     els.editTags.dataset.albumKey = String(getAlbumRequestKey(album) || getAlbumIdentity(album) || album?.key || '');
   }
+  // The card's own preview is already in the browser cache and is the image Album Details renders,
+  // which then reuses this element, so the cover shows at once instead of after the details load.
+  const coverSrc = albumHasDisplayCover(album) ? buildAlbumDisplayCoverUrl(album) : '';
   els.cover.innerHTML = `
     <div class="track-modal-cover-shell">
-      ${buildAlbumArtboxHtml({ state: 'loading', label: 'Loading cover art' })}
+      ${coverSrc
+    ? buildAlbumArtboxHtml({
+      state: 'ready',
+      label: `Album cover for ${album.name || 'Album'}`,
+      coverHtml: `<span class="track-modal-cover-visual"><img src="${escapeHtml(coverSrc)}" alt="" decoding="async" data-cover-visual-state="ready"></span>`,
+    })
+    : buildAlbumArtboxHtml({ state: 'loading', label: 'Loading cover art' })}
     </div>
   `;
   if (els.missingWarning) {
@@ -18027,7 +18219,13 @@ function queueTrackModalAlbumDetailsPrewarm(albumKey) {
     existingLoad.catch(() => {});
     return;
   }
-  if (trackModalActiveSpeculativePrewarms >= TRACK_MODAL_SPECULATIVE_PREWARM_LIMIT) return;
+  if (trackModalActiveSpeculativePrewarms >= TRACK_MODAL_SPECULATIVE_PREWARM_LIMIT) {
+    // The latest intent (a hover, then the visible cards in screen order) goes first once a slot frees.
+    trackModalQueuedPrewarmKeys = [normalizedAlbumKey, ...trackModalQueuedPrewarmKeys.filter(
+      (key) => key !== normalizedAlbumKey,
+    )].slice(0, TRACK_MODAL_VISIBLE_PREWARM_CARD_LIMIT);
+    return;
+  }
   const controller = typeof AbortController === 'function' ? new AbortController() : null;
   if (controller) trackModalSpeculativePrewarmControllers.add(controller);
   trackModalActiveSpeculativePrewarms += 1;
@@ -18041,10 +18239,25 @@ function queueTrackModalAlbumDetailsPrewarm(albumKey) {
   }).finally(() => {
     if (controller) trackModalSpeculativePrewarmControllers.delete(controller);
     trackModalActiveSpeculativePrewarms = Math.max(0, trackModalActiveSpeculativePrewarms - 1);
+    drainQueuedTrackModalAlbumDetailsPrewarms();
   });
 }
 
+function drainQueuedTrackModalAlbumDetailsPrewarms() {
+  while (
+    trackModalQueuedPrewarmKeys.length
+    && trackModalActiveSpeculativePrewarms < TRACK_MODAL_SPECULATIVE_PREWARM_LIMIT
+  ) {
+    queueTrackModalAlbumDetailsPrewarm(trackModalQueuedPrewarmKeys.shift());
+  }
+}
+
+function clearQueuedTrackModalAlbumDetailsPrewarms() {
+  trackModalQueuedPrewarmKeys = [];
+}
+
 function cancelTrackModalAlbumDetailsPrewarms() {
+  clearQueuedTrackModalAlbumDetailsPrewarms();
   // Unregister aborted loads now: their rejection can settle a task later, and an
   // open in between must start its own request instead of joining a doomed one.
   trackModalAlbumDetailsLoads.forEach((load, alias) => {
@@ -18072,14 +18285,14 @@ function visibleGalleryAlbumButtons(containerEl, scrollEl, limit) {
   return visibleButtons;
 }
 
-function queueVisibleTrackModalAlbumDetailsPrewarm(containerEl, scrollEl, limit = 2) {
-  const visibleButtons = visibleGalleryAlbumButtons(containerEl, scrollEl, limit);
-  if (!visibleButtons.length) return;
-  visibleButtons.forEach((button) => {
-    const albumKey = String(button.getAttribute('data-album-key') || '').trim();
-    if (!albumKey) return;
-    queueTrackModalAlbumDetailsPrewarm(albumKey);
-  });
+function queueVisibleTrackModalAlbumDetailsPrewarm(containerEl, scrollEl) {
+  // A settled range replaces the previous range's queue; requests already in flight finish.
+  trackModalQueuedPrewarmKeys = visibleGalleryAlbumButtons(
+    containerEl,
+    scrollEl,
+    TRACK_MODAL_VISIBLE_PREWARM_CARD_LIMIT,
+  ).map((button) => String(button.getAttribute('data-album-key') || '').trim()).filter(Boolean);
+  drainQueuedTrackModalAlbumDetailsPrewarms();
 }
 
 // Owner 2026-11-16: an album's other selected covers sit behind its main cover in Album Details. Their
@@ -23863,7 +24076,11 @@ function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
   const mobileTitleSupplement = typeof config.mobileTitleSupplement === 'function'
     ? String(config.mobileTitleSupplement(track, index) || '')
     : '';
-  const titleHtml = `<span class="album-track-table__title">${escapeHtml(track.title || '')}${secondary ? `<span class="album-track-table__secondary">${escapeHtml(secondary)}</span>` : ''}${mobileTitleSupplement ? `<span class="album-track-table__mobile-meta">${mobileTitleSupplement}</span>` : ''}</span>`;
+  // Search highlights (owner 2026-11-18): the matched characters of the title.
+  const titleTextHtml = track.titleHighlightRanges?.length
+    ? buildHighlightedTextHtml(track.title || '', track.titleHighlightRanges)
+    : escapeHtml(track.title || '');
+  const titleHtml = `<span class="album-track-table__title">${titleTextHtml}${secondary ? `<span class="album-track-table__secondary">${escapeHtml(secondary)}</span>` : ''}${mobileTitleSupplement ? `<span class="album-track-table__mobile-meta">${mobileTitleSupplement}</span>` : ''}</span>`;
   const problemHtml = track.isProblematic
     ? `<button class="track-problem-link" type="button" data-open-track-problematic="1" data-track-path="${escapeHtml(trackPath)}" title="Open this track in Problematic Files" aria-label="Open this track in Problematic Files">!</button>`
     : '';
@@ -36512,109 +36729,227 @@ function getCoverLookupActiveLocalRef() {
   );
 }
 
-function buildSpotifyGlyph() {
-  return `
-    <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
-      <circle cx="12" cy="12" r="10" fill="currentColor"></circle>
-      <path d="M7.2 9.3c3.3-1 6.8-.7 9.8.8" fill="none" stroke="#0b1411" stroke-width="1.6" stroke-linecap="round"></path>
-      <path d="M8.1 12.1c2.5-.7 5.2-.5 7.5.6" fill="none" stroke="#0b1411" stroke-width="1.45" stroke-linecap="round"></path>
-      <path d="M9 14.8c1.8-.4 3.7-.3 5.3.4" fill="none" stroke="#0b1411" stroke-width="1.3" stroke-linecap="round"></path>
-    </svg>
-  `;
-}
-
-function buildAppleMusicGlyph() {
-  return `
-    <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
-      <path d="M15.8 5.2v9.4a2.8 2.8 0 1 1-1.6-2.53V7.83l-5.2 1.18v7.09a2.8 2.8 0 1 1-1.6-2.53V7.75c0-.74.51-1.37 1.23-1.53l5.94-1.35a1.3 1.3 0 0 1 1.6 1.27Z" fill="currentColor"></path>
-    </svg>
-  `;
-}
-
-function buildDeezerGlyph() {
-  // The compact Deezer treatment uses the approved purple heart.
-  return `
-    <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
-      <path d="M12 20.2 4.8 13A4.7 4.7 0 0 1 11.4 6.3l.6.7.6-.7A4.7 4.7 0 0 1 19.2 13Z" fill="currentColor"></path>
-    </svg>
-  `;
-}
-
-function buildCaaGlyph() {
-  return '<span aria-hidden="true">CAA</span>';
-}
+// CoverSourceBadge: a provider's bare mark on Album Details and Cover Look Up cards; hover, focus or tap opens
+// its legal line and one link back to the release page (approved mockup cover-source-badges v003, owner
+// 2026-11-19). Icons are the providers' own files; sources and terms in static/images/icons/ notices.
+const COVER_SOURCE_NEUTRAL_MARK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><circle cx="12" cy="12" r="2.4"></circle><path d="M12 3a9 9 0 0 1 9 9"></path></svg>';
+const COVER_SOURCE_PROVIDERS = Object.freeze({
+  apple: Object.freeze({
+    label: 'Apple Music',
+    legal: ['Cover art from Apple Music.', 'Apple and Apple Music are trademarks of Apple Inc., registered in the U.S. and other countries.'],
+    linkLabel: 'Listen on Apple Music',
+    search: (query) => `https://music.apple.com/search?term=${query}`,
+    icon: '/static/images/icons/applemusic-icon-color.png',
+  }),
+  spotify: Object.freeze({
+    label: 'SPOTIFY',
+    legal: ['Cover art from Spotify.'],
+    linkLabel: 'Open on Spotify',
+    search: (query) => `https://open.spotify.com/search/${query}`,
+    // Spotify forbids its mark on top of artwork, so Album Details shows it beneath the cover.
+    beneathArt: true,
+    icon: '/static/images/icons/spotify-icon-green.svg',
+  }),
+  deezer: Object.freeze({
+    label: 'Deezer',
+    legal: ['Cover art from Deezer.'],
+    linkLabel: 'Open on Deezer',
+    search: (query) => `https://www.deezer.com/search/${query}`,
+    icon: '/static/images/icons/deezer-favicon-32.png',
+  }),
+  bandcamp: Object.freeze({
+    label: 'Bandcamp',
+    legal: ['Cover art from Bandcamp.'],
+    linkLabel: 'Open on Bandcamp',
+    search: (query) => `https://bandcamp.com/search?q=${query}&item_type=a`,
+    icon: '/static/images/icons/bandcamp-button-circle-aqua-64.png',
+  }),
+  discogs: Object.freeze({
+    label: 'Discogs',
+    legal: ['Data provided by Discogs.', 'Album Haven uses Discogs’ API but is not affiliated with, sponsored or endorsed by Discogs. ‘Discogs’ is a trademark of Zink Media, LLC.'],
+    linkLabel: 'Data provided by Discogs',
+    search: (query) => `https://www.discogs.com/search/?q=${query}&type=release`,
+    // Black or white by the cover's brightness under the mark (owner accepted the brand risk 2026-11-19).
+    toneAware: true,
+    icon: '/static/images/icons/discogs-favicon-32.png',
+  }),
+  cover_art_archive: Object.freeze({
+    label: 'Cover Art Archive',
+    legal: ['Cover art from the Cover Art Archive.', 'Image © its copyright owner.'],
+    linkLabel: 'Open release on MusicBrainz',
+    search: (query) => `https://musicbrainz.org/search?query=${query}&type=release`,
+    icon: '/static/images/icons/coverartarchive-icon.svg',
+  }),
+  youtube_music: Object.freeze({
+    label: 'YouTube Music',
+    legal: ['Cover art from YouTube Music.'],
+    linkLabel: 'Open on YouTube Music',
+    search: (query) => `https://music.youtube.com/search?q=${query}`,
+    icon: '/static/images/icons/youtubemusic-favicon-32.png',
+  }),
+  genius: Object.freeze({
+    label: 'Genius',
+    legal: ['Cover art from Genius.'],
+    linkLabel: 'Open on Genius',
+    search: (query) => `https://genius.com/search?q=${query}`,
+    // No published brand guidelines: neutral mark until the owner clears Genius' own mark.
+    mark: COVER_SOURCE_NEUTRAL_MARK,
+    neutral: true,
+  }),
+});
 
 function getRemoteCoverSourceLabel(source, fallback = '') {
-  return ({
-    apple: 'Apple Music',
-    spotify: 'SPOTIFY',
-    deezer: 'Deezer',
-    bandcamp: 'Bandcamp',
-    discogs: 'Discogs',
-    cover_art_archive: 'Cover Art Archive',
-    youtube_music: 'YouTube Music',
-  })[String(source || '').trim().toLowerCase()] || String(fallback || source || '').trim();
+  return COVER_SOURCE_PROVIDERS[String(source || '').trim().toLowerCase()]?.label
+    || String(fallback || source || '').trim();
 }
 
-function buildYouTubeMusicGlyph() {
-  return `
-    <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
-      <circle cx="12" cy="12" r="10" fill="currentColor"></circle>
-      <path d="M9.9 8.3 16.5 12l-6.6 3.7Z" fill="#ffffff"></path>
-    </svg>
-  `;
+function coverSourceReleasePageUrl(value) {
+  const text = String(value || '').trim();
+  if (!/^https?:\/\//i.test(text)) return '';
+  try {
+    const url = new URL(text);
+    // A release page, never the picture itself.
+    return /\.(?:jpe?g|png|gif|webp|avif|bmp)$/i.test(url.pathname) ? '' : url.href;
+  } catch (_error) {
+    return '';
+  }
 }
 
-function buildBandcampGlyph() {
-  return `
-    <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
-      <path d="M6 16.8 10.9 7.2H18l-4.9 9.6Z" fill="currentColor"></path>
-    </svg>
-  `;
+function coverArtArchiveReleaseMbid(imageUrl) {
+  const match = String(imageUrl || '').match(
+    /(?:coverartarchive\.org\/release\/|archive\.org\/(?:download|details)\/mbid-)([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i,
+  );
+  return match ? match[1].toLowerCase() : '';
 }
 
-function buildDiscogsGlyph() {
-  return `
-    <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
-      <circle cx="12" cy="12" r="9" fill="currentColor"></circle>
-      <circle cx="12" cy="12" r="5.1" fill="#0b0b0d"></circle>
-      <circle cx="12" cy="12" r="2.1" fill="currentColor"></circle>
-      <path d="M17.1 8.9a6 6 0 0 1 0 6.2" fill="none" stroke="currentColor" stroke-width="1.15" stroke-linecap="round"></path>
-      <path d="M6.9 15.1a6 6 0 0 1 0-6.2" fill="none" stroke="currentColor" stroke-width="1.15" stroke-linecap="round"></path>
-    </svg>
-  `;
+// The page a badge links to: the stored release page, a MusicBrainz release built from a Cover Art Archive
+// image's MBID, or else the provider's search for artist and album.
+function resolveCoverSourceReleaseUrl({ source, albumUrl, imageUrl, artist, album } = {}) {
+  const key = String(source || '').trim().toLowerCase();
+  const provider = COVER_SOURCE_PROVIDERS[key];
+  if (!provider) return '';
+  const stored = coverSourceReleasePageUrl(albumUrl);
+  if (stored) return stored;
+  if (key === 'cover_art_archive') {
+    const mbid = coverArtArchiveReleaseMbid(imageUrl);
+    if (mbid) return `https://musicbrainz.org/release/${mbid}`;
+  }
+  const query = [artist, album].map((part) => String(part || '').trim()).filter(Boolean).join(' ');
+  return provider.search(encodeURIComponent(query));
 }
 
-function buildRemoteCoverSourceBadge(source, className = 'cover-lookup-art-source-badge') {
-  const normalizedSource = String(source || '').trim();
-  if (normalizedSource === 'apple') {
-    return `<span class="${className} is-apple" aria-hidden="true">${buildAppleMusicGlyph()}</span>`;
-  }
-  if (normalizedSource === 'deezer') {
-    return `<span class="${className} is-deezer" aria-hidden="true">${buildDeezerGlyph()}</span>`;
-  }
-  if (normalizedSource === 'spotify') {
-    return `<span class="${className} is-spotify" aria-hidden="true">${buildSpotifyGlyph()}</span>`;
-  }
-  if (normalizedSource === 'youtube_music') {
-    return `<span class="${className} is-youtube-music" aria-hidden="true">${buildYouTubeMusicGlyph()}</span>`;
-  }
-  if (normalizedSource === 'bandcamp') {
-    return `<span class="${className} is-bandcamp" aria-hidden="true">${buildBandcampGlyph()}</span>`;
-  }
-  if (normalizedSource === 'discogs') {
-    return `<span class="${className} is-discogs" aria-hidden="true">${buildDiscogsGlyph()}</span>`;
-  }
-  if (normalizedSource === 'cover_art_archive') {
-    return `<span class="${className} is-caa" aria-hidden="true">${buildCaaGlyph()}</span>`;
-  }
-  return '';
+// placement: 'over' (Album Details, on the art), 'beneath' (Album Details, under the art) or 'inline' (cards).
+function buildCoverSourceBadgeHtml(config = {}) {
+  const key = String(config.source || '').trim().toLowerCase();
+  const provider = COVER_SOURCE_PROVIDERS[key];
+  if (!provider) return '';
+  const placement = ['over', 'beneath', 'inline'].includes(config.placement) ? config.placement : 'inline';
+  const href = resolveCoverSourceReleaseUrl({ ...config, source: key });
+  const legalHtml = provider.legal
+    .map((line) => `<span class="cover-source-badge__legal">${escapeHtml(line)}</span>`)
+    .join('');
+  const classes = [
+    'cover-source-badge',
+    `cover-source-badge--${placement}`,
+    `is-${key.replaceAll('_', '-')}`,
+    provider.neutral ? 'is-neutral' : '',
+  ].filter(Boolean).join(' ');
+  const toneAttr = provider.toneAware && placement === 'over' ? ' data-cover-source-tone="dark"' : '';
+  return `<span class="${classes}" data-cover-source-badge="${escapeHtml(key)}"${toneAttr}>`
+    + `<button type="button" class="cover-source-badge__trigger" aria-expanded="false" aria-label="${escapeHtml(`${provider.legal[0]} ${provider.linkLabel}`)}">`
+    + `<span class="cover-source-badge__mark" aria-hidden="true">${provider.icon
+      ? `<img src="${provider.icon}" alt="" width="24" height="24" decoding="async">` : provider.mark}</span></button>`
+    + `<span class="cover-source-badge__popover" role="tooltip" data-trigger-anchor-context="content">${legalHtml}`
+    + `<a class="cover-source-badge__link" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(provider.linkLabel)} ↗</a>`
+    + '</span></span>';
 }
 
-function buildTrackModalCoverSourceBadge(source) {
-  const normalizedSource = String(source || '').trim();
-  if (!normalizedSource) return '';
-  return buildRemoteCoverSourceBadge(normalizedSource, 'track-modal-cover-source-badge');
+function coverSourceBadgeSitsBeneathArt(source) {
+  return COVER_SOURCE_PROVIDERS[String(source || '').trim().toLowerCase()]?.beneathArt === true;
+}
+
+// Album Details: the badge for the shown cover, over the art or (Spotify) beneath it.
+function buildTrackModalCoverSourceBadge(source, context = {}) {
+  const key = String(source || '').trim().toLowerCase();
+  if (!key) return '';
+  return buildCoverSourceBadgeHtml({
+    ...context,
+    source: key,
+    placement: coverSourceBadgeSitsBeneathArt(key) ? 'beneath' : 'over',
+  });
+}
+
+// Mean Rec. 709 luma of RGBA pixels, 0..255; transparent pixels are skipped.
+function coverSourceToneFromPixels(data) {
+  let total = 0;
+  let count = 0;
+  for (let index = 0; index + 3 < (data?.length || 0); index += 4) {
+    if (data[index + 3] < 16) continue;
+    total += (0.2126 * data[index]) + (0.7152 * data[index + 1]) + (0.0722 * data[index + 2]);
+    count += 1;
+  }
+  if (!count) return 'dark';
+  return total / count >= 150 ? 'light' : 'dark';
+}
+
+// Samples the cover area under an over-art mark once per loaded image (a 12x12 draw of its top-left
+// corner); a cover the canvas may not read keeps the default white mark.
+function applyCoverSourceBadgeTone(root) {
+  const badge = root?.querySelector?.('.cover-source-badge--over[data-cover-source-tone]');
+  const image = root?.querySelector?.('.track-modal-cover-visual img');
+  if (!badge || !image) return;
+  const sample = () => {
+    if (!image.naturalWidth || !image.naturalHeight) return;
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = 12;
+      canvas.height = 12;
+      const context = canvas.getContext('2d', { willReadFrequently: true });
+      const side = Math.max(1, Math.round(Math.min(image.naturalWidth, image.naturalHeight) * 0.16));
+      context.drawImage(image, 0, 0, side, side, 0, 0, 12, 12);
+      badge.setAttribute('data-cover-source-tone', coverSourceToneFromPixels(context.getImageData(0, 0, 12, 12).data));
+    } catch (_error) {
+      badge.setAttribute('data-cover-source-tone', 'dark');
+    }
+  };
+  if (image.complete && image.naturalWidth) sample();
+  else image.addEventListener('load', sample, { once: true });
+}
+
+let openCoverSourceBadge = null;
+function setCoverSourceBadgeOpen(badge, open) {
+  badge.classList.toggle('is-open', open);
+  badge.querySelector('.cover-source-badge__trigger')?.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+
+function closeCoverSourceBadge() {
+  if (openCoverSourceBadge) setCoverSourceBadgeOpen(openCoverSourceBadge, false);
+  openCoverSourceBadge = null;
+}
+
+// Touch opens a badge with a tap; neither the tap nor its link selects the card or opens the lightbox.
+function handleCoverSourceBadgeClick(event) {
+  const badge = event.target?.closest?.('.cover-source-badge');
+  if (!badge) {
+    closeCoverSourceBadge();
+    return false;
+  }
+  event.stopPropagation();
+  if (event.target.closest('.cover-source-badge__link')) return true;
+  event.preventDefault();
+  const open = openCoverSourceBadge !== badge;
+  closeCoverSourceBadge();
+  if (open) {
+    setCoverSourceBadgeOpen(badge, true);
+    openCoverSourceBadge = badge;
+  }
+  return true;
+}
+
+function handleCoverSourceBadgeKeyDown(event) {
+  if (event.key !== 'Escape' || !openCoverSourceBadge) return false;
+  closeCoverSourceBadge();
+  return true;
 }
 
 function coverLookupHasManualLinks() {
@@ -37193,6 +37528,11 @@ function refreshCoverLookupAlbumArtwork(originalAlbum, updatedAlbums, options = 
   if (!updatedAlbum) return;
   state.ui = state.ui || {};
   state.ui.albumCoverMutationRevision = Number(state.ui.albumCoverMutationRevision || 0) + 1;
+  // A prefetched Album Details copy would reopen with the old cover. Dropping it first hands its gallery
+  // aliases back to the card objects that the patch below updates.
+  if (typeof invalidateHydratedTrackModalAlbumDetails === 'function') {
+    invalidateHydratedTrackModalAlbumDetails([originalAlbum, updatedAlbum]);
+  }
   const applyRefresh = () => {
     patchVisibleAlbumsByTrackPath(candidates);
     refreshRenderedAlbumCoverOnly(updatedAlbum);
@@ -38186,7 +38526,14 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
   const isOtherRemoteArt = isRemoteKind && String(item?.art_kind || 'cover') !== 'cover';
   const isSelectableOtherRemoteArt = isOtherRemoteArt && isSelectableRemoteCoverCandidate(item);
   const previewFallbackImageUrl = '/static/images/remote-preview-unavailable.png';
-  const sourceBadge = buildRemoteCoverSourceBadge(item?.source);
+  const sourceBadge = isRemoteKind ? buildCoverSourceBadgeHtml({
+    source: item?.source,
+    placement: 'inline',
+    albumUrl: item?.album_url,
+    imageUrl: item?.url,
+    artist: item?.artist || state.coverLookup.modal.album?.album_artist,
+    album: item?.album || state.coverLookup.modal.album?.name,
+  }) : '';
   const remoteSourceLabel = getRemoteCoverSourceLabel(item?.source, item?.source_label);
   const selectionKey = kind === 'local'
     ? `local:${String(item?.candidate_cover_ref || '')}`
@@ -38275,9 +38622,8 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
   const previewSourceAttr = kind === 'remote' && !prioritizeRemotePreview
     ? `data-cover-lookup-deferred-src="${escapeHtml(imageUrl)}"`
     : `src="${escapeHtml(imageUrl)}"`;
-  const actionLabel = kind === 'saved-remote'
-    ? (isActive ? 'Selected' : 'Linked remote cover')
-    : (isActive ? 'Selected' : 'Select');
+  // Remote cards carry the source badge instead of a Select word (owner 2026-11-19).
+  const actionLabel = isActive ? 'Selected' : 'Select';
   const selectionLimited = orderedLimitReached && !isActive;
   const roleAttr = isOtherRemoteArt && !isSelectableOtherRemoteArt
     ? 'role="group"'
@@ -38302,7 +38648,7 @@ function buildCoverLookupCard(item, kind = 'local', prioritizeRemotePreview = fa
           <span class="cover-lookup-art-name">${escapeHtml(item.relative_path || item.filename || item.album || (isPastedKind ? 'Pasted image' : 'Cover art'))}</span>
           <span class="cover-lookup-art-resolution">${escapeHtml(resolution)}</span>
           ${isRemoteKind ? `<span class="cover-lookup-art-source-row">${sourceBadge}<span class="cover-lookup-art-source">${escapeHtml(remoteSourceLabel)}</span></span>` : ''}
-          ${isOtherRemoteArt && !isSelectableOtherRemoteArt ? '' : `<span class="cover-lookup-art-action-label">${actionLabel}</span>`}
+          ${isRemoteKind || (isOtherRemoteArt && !isSelectableOtherRemoteArt) ? '' : `<span class="cover-lookup-art-action-label">${actionLabel}</span>`}
         </span>
       </div>
     </div>
@@ -42335,10 +42681,10 @@ function browseTrackModalSelectedCover(value, options = {}) {
 
 // A selected local cover that a save downloaded keeps its provider's badge, unless the album page setting
 // "Display provider badge for local covers" is off (owner 2026-11-17).
-function buildAlbumDetailsLocalCoverSourceBadge(slot) {
+function buildAlbumDetailsLocalCoverSourceBadge(slot, context = {}) {
   if (slot?.kind !== 'local' || !slot.source || typeof buildTrackModalCoverSourceBadge !== 'function') return '';
   if (document.documentElement?.getAttribute?.('data-library-source-local-cover-badges') === 'false') return '';
-  return buildTrackModalCoverSourceBadge(slot.source);
+  return buildTrackModalCoverSourceBadge(slot.source, context);
 }
 
 function renderTrackModalRelease(album) {
@@ -42396,9 +42742,26 @@ function renderTrackModalRelease(album) {
       },
     })}
   `;
-  const coverSourceBadge = typeof buildTrackModalCoverSourceBadge === 'function'
-    ? buildTrackModalCoverSourceBadge(album?.remote_cover_source || '')
-    : '';
+  // A selected cover from the stack keeps only its provider, so its badge links to the provider's search.
+  const coverSourceContext = {
+    artist: typeof albumDisplayArtist === 'function' ? albumDisplayArtist(album) : String(album?.album_artist || ''),
+    album: album?.name || '',
+  };
+  const coverSourceBadge = activeSelectedCover
+    ? buildAlbumDetailsLocalCoverSourceBadge(activeSelectedCover, coverSourceContext)
+    : typeof buildTrackModalCoverSourceBadge === 'function'
+      ? buildTrackModalCoverSourceBadge(album?.remote_cover_source || '', {
+        ...coverSourceContext,
+        albumUrl: album?.remote_cover_album_url,
+        imageUrl: album?.remote_cover_url,
+      })
+      : '';
+  // Spotify's mark never sits on the artwork: it goes centred beneath the cover (owner 2026-11-19).
+  const coverSourceBadgeBeneath = Boolean(coverSourceBadge) && coverSourceBadgeSitsBeneathArt(
+    activeSelectedCover ? activeSelectedCover.source : album?.remote_cover_source,
+  );
+  const coverSourceBeneathHtml = coverSourceBadgeBeneath
+    ? `<div class="track-modal-cover-source-beneath">${coverSourceBadge}</div>` : '';
   const coverSourceMarkersHtml = buildAlbumCoverSourceMarkersHtml(album);
   const albumDetailsLayout = String(
     document.documentElement?.getAttribute('data-album-details-layout') || 'classic_bar'
@@ -42504,8 +42867,9 @@ function renderTrackModalRelease(album) {
     els.cover.innerHTML = `
       <div class="track-modal-cover-shell">
       ${coverPresentationHtml}
-      ${activeSelectedCover ? buildAlbumDetailsLocalCoverSourceBadge(activeSelectedCover) : coverSourceBadge}
+      ${coverSourceBadgeBeneath ? '' : coverSourceBadge}
       </div>
+      ${coverSourceBeneathHtml}
       ${coverSourceMarkersHtml}
     `;
     const coverImageSlot = typeof els.cover?.querySelector === 'function'
@@ -42563,6 +42927,7 @@ function renderTrackModalRelease(album) {
           handleAlbumDisplayCoverImageError(modalCoverImage);
         });
       }
+      if (typeof applyCoverSourceBadgeTone === 'function') applyCoverSourceBadgeTone(els.cover);
     }
   } else {
     const emptyCoverHtml = renderAlbumArtbox({
@@ -42658,6 +43023,9 @@ function renderTrackModalRelease(album) {
     : '';
   els.list.innerHTML = albumMissing ? '' : buildTrackListHtml(tracks, album, totalLength) + duplicateReview;
   if (typeof syncAlbumTrackCreditMotion === 'function') syncAlbumTrackCreditMotion(els.list);
+  if (!albumMissing && typeof requestSearchHighlights === 'function') {
+    refreshAlbumTrackSearchHighlights(els.list, tracks, album);
+  }
   if (els.footer) {
     els.footer.textContent = '';
     els.footer.hidden = true;
@@ -42793,6 +43161,36 @@ function groupAlbumTracks(tracks) {
 }
 
 
+// Album Details tracks are not in a search response: during a search, ask the server which of their titles and
+// artists it matched, then mark them in the table on screen. Rows are updated in place, never redrawn, so a play
+// click that lands while the answer arrives still reaches its button.
+function refreshAlbumTrackSearchHighlights(list, tracks, album) {
+  const query = activeSearchHighlightQuery();
+  const render = {};
+  list.albumTrackSearchHighlightRender = render;
+  if (!query) return;
+  const rows = Array.isArray(album?.track_rows) ? album.track_rows : [];
+  const texts = [...(tracks || []), ...rows].flatMap((track) => [track?.title, track?.secondary_artist]);
+  void requestSearchHighlights(texts).then((answered) => {
+    if (!answered || list.albumTrackSearchHighlightRender !== render || activeSearchHighlightQuery() !== query) return;
+    list.querySelectorAll('.album-track-table__row').forEach((row) => {
+      const title = row.querySelector('.album-track-table__title');
+      const titleText = title?.firstChild;
+      if (!titleText || titleText.nodeType !== Node.TEXT_NODE) return;
+      const ranges = searchHighlightRanges(titleText.textContent);
+      const secondary = title.querySelector('.album-track-table__secondary')?.textContent || '';
+      if (!ranges && !searchHighlightRanges(secondary)) return;
+      if (ranges) {
+        const markup = document.createElement('template');
+        markup.innerHTML = buildHighlightedTextHtml(titleText.textContent, ranges);
+        titleText.replaceWith(markup.content);
+      }
+      row.classList.add('album-track-table__row--search-match');
+      row.dataset.trackSearchMatch = 'true';
+    });
+  }).catch(() => {});
+}
+
 function buildTrackListHtml(tracks, album = null, totalLength = null) {
   const grouped = groupAlbumTracks(tracks);
   const playback = getPlayerPlaybackSnapshot();
@@ -42807,8 +43205,8 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
       .filter(Boolean)
   );
 
-  const query = String(state.view?.query || '').trim().toLocaleLowerCase();
   const albumPreference = album?.album_preference || {};
+  const highlightRanges = typeof searchHighlightRanges === 'function' ? searchHighlightRanges : () => null;
   const discRatingByKey = new Map(
     (Array.isArray(albumPreference.disc_ratings) ? albumPreference.disc_ratings : [])
       .map((discRating) => [discRating?.disc_key, discRating?.rating])
@@ -42858,7 +43256,10 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
         isCurrent: Boolean(isCurrentTrack),
         isPlaying: Boolean(isActivelyPlaying),
         isProblematic: Boolean(track.is_problematic),
-        isSearchMatch: Boolean(query && displayTitle.toLocaleLowerCase().includes(query)),
+        // The server's search matcher marks the title's matched characters; a match in the title or the
+        // track's own artist marks the row (owner 2026-11-18).
+        titleHighlightRanges: highlightRanges(displayTitle),
+        isSearchMatch: Boolean(highlightRanges(displayTitle) || highlightRanges(secondaryArtist)),
       };
     });
     return {
@@ -45854,6 +46255,7 @@ function albumCardHtml(album, options = {}) {
     openLabel: `Open ${displayName} tracklist${albumMissing ? '. Album not found' : ''}`,
     title: displayName,
     artist: album.album_artist,
+    ...getAlbumCardHighlightRanges(album),
     year: displayYear,
     ratingHtml: ratingMarkup,
     trackCount: summary.trackCount,
@@ -45880,6 +46282,16 @@ function getAlbumCardSourceCategories(album) {
   return ['main', 'hoard', 'new_arrivals'].filter((category) => normalized.includes(category));
 }
 
+function getAlbumCardHighlightRanges(album) {
+  if (typeof searchHighlightRanges !== 'function') return {};
+  const titleHighlightRanges = searchHighlightRanges(album?.display_name || album?.name || '');
+  const artistHighlightRanges = searchHighlightRanges(album?.album_artist);
+  return {
+    ...(titleHighlightRanges ? { titleHighlightRanges } : {}),
+    ...(artistHighlightRanges ? { artistHighlightRanges } : {}),
+  };
+}
+
 function getAlbumCardRenderKey(album) {
   const summary = getAlbumCardSummary(album);
   return JSON.stringify([
@@ -45896,6 +46308,8 @@ function getAlbumCardRenderKey(album) {
     albumHasDisplayCover(album) ? buildAlbumDisplayCoverUrl(album) : '',
     String(album?.cover_ref || '').trim(),
     String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim(),
+    // Only a card whose own highlights change is rebuilt: leaving a search keeps unmatched cards and covers.
+    JSON.stringify(getAlbumCardHighlightRanges(album)),
     String(album?.inventory_status || ''),
     String(album?.missing_since || ''),
     getAlbumCardSourceCategories(album),
@@ -46277,6 +46691,9 @@ class VirtualArtistGrid {
 
   cancelVisibleAlbumDetailPrewarm() {
     this._albumDetailPrewarmGeneration += 1;
+    if (typeof clearQueuedTrackModalAlbumDetailsPrewarms === 'function') {
+      clearQueuedTrackModalAlbumDetailsPrewarms();
+    }
     if (this._albumDetailPrewarmRaf) {
       cancelBrowserAnimationFrame(this._albumDetailPrewarmRaf);
       this._albumDetailPrewarmRaf = 0;
@@ -46314,7 +46731,7 @@ class VirtualArtistGrid {
           ) {
             return;
           }
-          queueVisibleTrackModalAlbumDetailsPrewarm(this.containerEl, this.scrollEl, 2);
+          queueVisibleTrackModalAlbumDetailsPrewarm(this.containerEl, this.scrollEl);
           if (typeof preloadVisibleAlbumDetailsCovers === 'function') {
             preloadVisibleAlbumDetailsCovers(this.containerEl, this.scrollEl);
           }
@@ -47747,6 +48164,9 @@ class VirtualArtistGrid {
         return;
       }
       if (deferredSetGroups) return;
+      // Renders during the scroll skipped the prefetch; the cards the user stopped on get it now.
+      // A render that changes the range after measuring reschedules it for the new cards.
+      this.scheduleVisibleAlbumDetailPrewarm(this.lastKey, this.scrollEl?.scrollTop);
       this.scheduleMeasureRows(true);
     }, 96);
   }
@@ -53040,6 +53460,8 @@ function handleGalleryBootstrapClick(event) {
     // The logo is the library landing page (owner 2026-11-16): the All artists gallery it opens brings the side
     // panel back to the Artists tree through syncLibraryNavigationToMainPanel.
     const activeSearchQuery = isLibraryHome ? '' : String(state.view?.query || '').trim();
+    // The logo ends the search, and with it the phone library button's results pulse (audit 2026-11-18).
+    if (isLibraryHome) clearMobileLibrarySearchResultsMarker();
     clearPendingGallerySearchCommit();
     updateGallerySearchDraftQuery(activeSearchQuery);
     state.ui.pendingSearchClearOnBlur = false;
@@ -54308,6 +54730,12 @@ function revealArtistTreeForSearch() {
   }
 }
 
+function clearMobileLibrarySearchResultsMarker() {
+  const button = document?.getElementById?.('mobile-library-button');
+  button?.removeAttribute('data-search-results');
+  button?.removeAttribute('aria-description');
+}
+
 function handleGalleryBootstrapSearchSubmit(event) {
   event.preventDefault();
   if (typeof handleMobileSearchSubmit === 'function' && handleMobileSearchSubmit()) return;
@@ -54327,12 +54755,8 @@ function handleGalleryBootstrapSearchSubmit(event) {
     closeArtistsDrawer({ restoreFocus: false });
   }
   applyImmediateExactSearchArtistSelection(nextQuery);
-  const mobileArtistsButton = document?.getElementById?.('mobile-library-button');
   if (String(nextQuery).trim()) revealArtistTreeForSearch();
-  else {
-    mobileArtistsButton?.removeAttribute('data-search-results');
-    mobileArtistsButton?.removeAttribute('aria-description');
-  }
+  else clearMobileLibrarySearchResultsMarker();
   closeRecentSearchPopover();
   beginAlbumDetailPrewarmSearchSuspension();
   beginSearchCoverLoadSuspension();
@@ -56708,6 +57132,7 @@ function syncMobileHome() {
 // feature-owned bootstrap handler files rather than accumulating here.
 document.addEventListener('click', (event) => {
   if (consumeArtistTreeLongPressClick(event) || consumeAlbumCardLongPressClick(event)) return;
+  if (handleCoverSourceBadgeClick(event)) return;
   const closeScanPageButton = event.target?.closest?.('[data-close-scan-page]') || null;
   if (closeScanPageButton) {
     event.preventDefault();
@@ -56775,6 +57200,7 @@ document.addEventListener('mousedown', (event) => {
 });
 
 document.addEventListener('keydown', (event) => {
+  if (handleCoverSourceBadgeKeyDown(event)) return;
   handleUtilityBootstrapKeyDown(event);
 });
 

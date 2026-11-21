@@ -148,7 +148,7 @@ for (const [source, label] of [['apple', 'Apple Music'], ['cover_art_archive', '
     const labelMatch = markup.match(/<span class="cover-lookup-art-source">([^]*?)<\/span>/);
     assert.ok(labelMatch);
     assert.equal(labelMatch[1], label);
-    assert.match(markup, /<span class="cover-lookup-art-source-badge [^"]+" aria-hidden="true">/);
+    assert.match(markup, /<span class="cover-source-badge cover-source-badge--inline [^"]+" data-cover-source-badge="[^"]+">/);
     assert.doesNotMatch(labelMatch[1], /<|>/);
     const saved = context.buildCoverLookupCard({ id: source, source, album: 'Provider fixture' }, 'saved-remote');
     assert.equal(saved.match(/<span class="cover-lookup-art-source">([^]*?)<\/span>/)[1], label);
@@ -3517,7 +3517,6 @@ require('node:test')('closing cover lookup releases hidden candidate images and 
       buildCoverUrlCalls.push({ coverRef, revision, size });
       return `/cover/${encodeURIComponent(coverRef)}?${size ? `size=${size}&` : ''}v=${revision || 'session-fallback'}`;
     },
-    buildRemoteCoverSourceBadge: () => '',
     escapeHtml: (value) => String(value || ''),
     getCoverLookupActiveLocalRef: () => '',
   });
@@ -5913,6 +5912,31 @@ require('node:test')('publishing album artwork advances the cover mutation revis
   context.refreshCoverLookupAlbumArtwork(original, [updated]);
 
   assert.equal(context.state.ui.albumCoverMutationRevision, 1);
+});
+
+require('node:test')('a cover change drops only that album\'s prefetched details, before the views are patched', () => {
+  const original = { key: 'artist::album', tracks: [{ path: '/album/01.flac' }] };
+  const updated = { ...original, cover_ref: '/album/cover.jpg' };
+  const events = [];
+  const context = loadHelper({
+    state: {
+      ui: {},
+      coverLookup: { modal: { album: original, pastedImages: [], localCovers: [], otherArt: [] } },
+    },
+    getAlbumTrackPaths: (album) => (album?.tracks || []).map((track) => track.path),
+    getUpdatedAlbumForTrackPaths: (albums) => albums[0],
+    invalidateHydratedTrackModalAlbumDetails(albums) { events.push(['invalidate', albums]); },
+    patchVisibleAlbumsByTrackPath() { events.push(['patch']); },
+    refreshRenderedAlbumCoverOnly() {},
+    updateTrackModalIfStillShowingAlbum() {},
+  });
+
+  context.refreshCoverLookupAlbumArtwork(original, [updated]);
+
+  assert.deepEqual(events.map(([name]) => name), ['invalidate', 'patch'],
+    'a prefetched Album Details copy must not reopen with the old cover');
+  assert.equal(events[0][1][0], original);
+  assert.equal(events[0][1][1], updated);
 });
 
 require('node:test')('visible service cover previews receive eager browser priority', () => {

@@ -87,6 +87,7 @@ function albumCardHtml(album, options = {}) {
     openLabel: `Open ${displayName} tracklist${albumMissing ? '. Album not found' : ''}`,
     title: displayName,
     artist: album.album_artist,
+    ...getAlbumCardHighlightRanges(album),
     year: displayYear,
     ratingHtml: ratingMarkup,
     trackCount: summary.trackCount,
@@ -113,6 +114,16 @@ function getAlbumCardSourceCategories(album) {
   return ['main', 'hoard', 'new_arrivals'].filter((category) => normalized.includes(category));
 }
 
+function getAlbumCardHighlightRanges(album) {
+  if (typeof searchHighlightRanges !== 'function') return {};
+  const titleHighlightRanges = searchHighlightRanges(album?.display_name || album?.name || '');
+  const artistHighlightRanges = searchHighlightRanges(album?.album_artist);
+  return {
+    ...(titleHighlightRanges ? { titleHighlightRanges } : {}),
+    ...(artistHighlightRanges ? { artistHighlightRanges } : {}),
+  };
+}
+
 function getAlbumCardRenderKey(album) {
   const summary = getAlbumCardSummary(album);
   return JSON.stringify([
@@ -129,6 +140,8 @@ function getAlbumCardRenderKey(album) {
     albumHasDisplayCover(album) ? buildAlbumDisplayCoverUrl(album) : '',
     String(album?.cover_ref || '').trim(),
     String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim(),
+    // Only a card whose own highlights change is rebuilt: leaving a search keeps unmatched cards and covers.
+    JSON.stringify(getAlbumCardHighlightRanges(album)),
     String(album?.inventory_status || ''),
     String(album?.missing_since || ''),
     getAlbumCardSourceCategories(album),
@@ -510,6 +523,9 @@ class VirtualArtistGrid {
 
   cancelVisibleAlbumDetailPrewarm() {
     this._albumDetailPrewarmGeneration += 1;
+    if (typeof clearQueuedTrackModalAlbumDetailsPrewarms === 'function') {
+      clearQueuedTrackModalAlbumDetailsPrewarms();
+    }
     if (this._albumDetailPrewarmRaf) {
       cancelBrowserAnimationFrame(this._albumDetailPrewarmRaf);
       this._albumDetailPrewarmRaf = 0;
@@ -547,7 +563,7 @@ class VirtualArtistGrid {
           ) {
             return;
           }
-          queueVisibleTrackModalAlbumDetailsPrewarm(this.containerEl, this.scrollEl, 2);
+          queueVisibleTrackModalAlbumDetailsPrewarm(this.containerEl, this.scrollEl);
           if (typeof preloadVisibleAlbumDetailsCovers === 'function') {
             preloadVisibleAlbumDetailsCovers(this.containerEl, this.scrollEl);
           }
@@ -1980,6 +1996,9 @@ class VirtualArtistGrid {
         return;
       }
       if (deferredSetGroups) return;
+      // Renders during the scroll skipped the prefetch; the cards the user stopped on get it now.
+      // A render that changes the range after measuring reschedules it for the new cards.
+      this.scheduleVisibleAlbumDetailPrewarm(this.lastKey, this.scrollEl?.scrollTop);
       this.scheduleMeasureRows(true);
     }, 96);
   }

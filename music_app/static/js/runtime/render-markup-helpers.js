@@ -144,7 +144,9 @@ function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
     html += `<div class="sidebar-virtual-spacer" data-sidebar-virtual-spacer="before" aria-hidden="true" style="height:${virtualWindow.before}px"></div>`;
   }
   html += visibleArtists.map((item, offset) => renderItem({
-    label: item.artist_display || item.artist, key: 'artist:' + item.artist,
+    label: item.artist_display || item.artist,
+    labelHtml: typeof searchHighlightedLabelHtml === 'function' ? searchHighlightedLabelHtml(item.artist_display || item.artist) : '',
+    key: 'artist:' + item.artist,
     count: item.count, selected: item.artist === selectedArtist,
     href: buildUrl({
       ...view,
@@ -170,10 +172,13 @@ function buildSidebarStructureSignature(sidebarArtists = [], options = {}) {
     && options.showAllArtistsOverride !== null
     ? (options.showAllArtistsOverride ? '1' : '0')
     : String(options.view?.show_all_artists_sidebar_link !== false ? '1' : '0');
+  const highlightRanges = typeof searchHighlightRanges === 'function' ? searchHighlightRanges : () => null;
   const artistSignature = sidebarArtists.map((item) => [
     String(item?.artist || ''),
     String(item?.artist_display || item?.artist || ''),
     String(item?.count ?? ''),
+    // A row redraws when its search highlight changes.
+    JSON.stringify(highlightRanges(item?.artist_display || item?.artist) || ''),
   ].join('\u001f')).join('\u001e');
   const virtualWindow = options.virtualWindow?.virtualized
     ? `${options.virtualWindow.start}:${options.virtualWindow.end}`

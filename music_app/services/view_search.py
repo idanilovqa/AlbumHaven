@@ -60,7 +60,13 @@ def split_search_terms(value: str) -> list[str]:
 
 
 def compact_search_key(value: str) -> str:
-    return re.sub(r"[\W_]+", "", str(value or "").casefold(), flags=re.UNICODE)
+    return _compact_search_string(str(value or ""))
+
+
+# Every substring miss compacts the field: a searched Loose Tracks pass made ~10k of these regex calls.
+@lru_cache(maxsize=131072)
+def _compact_search_string(value: str) -> str:
+    return _SEARCH_PUNCT_RE.sub("", value.casefold())
 
 
 def _iter_source_text_variants(source: object) -> list[str]:
@@ -413,6 +419,109 @@ def search_terms_match_fields(terms: list[str], fields: list[str]) -> bool:
     if not terms or not normalized_fields:
         return False
     return all(any(search_term_matches_field(term, field) for field in normalized_fields) for term in terms)
+
+
+# Search highlighting: the characters of a displayed text that search matched, found with the same
+# normalization and word rules as search_term_matches_field so a highlight never disagrees with a result.
+# Ranges are [start, end) code-point offsets into the original text.
+_SEARCH_HIGHLIGHT_TEXT_KEYS = frozenset({
+    "name", "title", "filename", "artist", "artist_display", "album_artist", "display_artist", "secondary_artist",
+})
+_SEARCH_HIGHLIGHT_TEXT_LIMIT = 4000
+
+
+def _search_highlight_chars(text: str) -> list[tuple[str, tuple[int, int]]]:
+    """The compact search key of text (as compact_search_key(normalize_search_text(text))), one entry per
+    character, each with the span of the original character it came from."""
+    clusters: list[tuple[str, int, int]] = []
+    for index, char in enumerate(text):
+        if clusters and unicodedata.combining(char):
+            cluster, start, _ = clusters[-1]
+            clusters[-1] = (cluster + char, start, index + 1)
+        else:
+            clusters.append((char, index, index + 1))
+    chars: list[tuple[str, tuple[int, int]]] = []
+    for cluster, start, end in clusters:
+        composed = unicodedata.normalize("NFC", cluster).casefold()
+        chars.extend((char, (start, end)) for char in composed if not _SEARCH_PUNCT_RE.fullmatch(char))
+    return chars
+
+
+def _merge_search_ranges(ranges: list[tuple[int, int]]) -> list[list[int]]:
+    merged: list[list[int]] = []
+    for start, end in sorted(ranges):
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    return merged
+
+
+def search_match_ranges(query: str, text: str) -> list[list[int]]:
+    """The [start, end) ranges of text that the search for query matched, merged and in order.
+
+    search_term_matches_field matches a term found as written, or found once spaces and punctuation are
+    removed ("acdc" in "AC/DC"); the second includes the first, so every occurrence of the compact term in
+    the compact text is a match.
+    """
+    chars = _search_highlight_chars(str(text or ""))
+    compact_text = "".join(char for char, _ in chars)
+    ranges: list[tuple[int, int]] = []
+    for term in split_search_terms(str(query or "")):
+        compact_term = compact_search_key(term)
+        found = compact_text.find(compact_term) if compact_term else -1
+        while found >= 0:
+            ranges.append((chars[found][1][0], chars[found + len(compact_term) - 1][1][1]))
+            found = compact_text.find(compact_term, found + len(compact_term))
+    return _merge_search_ranges(ranges)
+
+
+def collect_search_highlight_texts(payload: object) -> list[str]:
+    """The display strings of a search response (names, titles, artists) that may carry highlights."""
+    texts: list[str] = []
+    pending = [payload]
+    while pending and len(texts) < _SEARCH_HIGHLIGHT_TEXT_LIMIT:
+        value = pending.pop()
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if isinstance(item, str):
+                    if key in _SEARCH_HIGHLIGHT_TEXT_KEYS and item.strip():
+                        texts.append(item)
+                elif isinstance(item, (dict, list)):
+                    pending.append(item)
+        elif isinstance(value, list):
+            pending.extend(item for item in value if isinstance(item, (dict, list)))
+    return texts
+
+
+def build_search_highlights(query: str, texts) -> dict[str, list[list[int]]]:
+    """Highlight ranges keyed by display text, for the texts the search matched."""
+    if not split_search_terms(str(query or "")):
+        return {}
+    highlights: dict[str, list[list[int]]] = {}
+    for text in dict.fromkeys(text for text in texts if isinstance(text, str) and text.strip()):
+        ranges = search_match_ranges(query, text)
+        if ranges:
+            highlights[text] = ranges
+    return highlights
+
+
+_SEARCH_HAYSTACK_SEPARATOR = "\x1f"
+
+
+@lru_cache(maxsize=65536)
+def search_haystack(values: tuple[str, ...]) -> str:
+    """The values' compact keys in one string, built once per distinct values. A normalised term is found in a
+    normalised field exactly when its compact key is in the field's compact key, and no compact key holds the
+    separator, so search_haystack_matches_terms gives search_terms_match_fields' answer with one substring test."""
+    keys = (compact_search_key(normalize_search_text(value)) for value in values)
+    return _SEARCH_HAYSTACK_SEPARATOR.join(key for key in keys if key)
+
+
+def search_haystack_matches_terms(terms: list[str], haystack: str) -> bool:
+    return bool(terms and haystack) and all(
+        (key := compact_search_key(term)) and key in haystack for term in terms
+    )
 
 
 def artist_match_rank(query: str, canonical_artist: str, aliases: set[str]) -> tuple[int, int, str]:

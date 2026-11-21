@@ -224,3 +224,72 @@ function parseUrlStateFromUrl(url, baseOrigin) {
 function parseUrlState(url) {
   return parseUrlStateFromUrl(url, window.location.origin);
 }
+
+// The highlight ranges the server reported, by search and display text. Search responses (view-data, Loose
+// Tracks, the Custom Collections catalog) carry them; /search/highlights answers for texts shown elsewhere. A
+// text the server was asked about and did not match is known, with no ranges. The latest few searches are kept:
+// a new search's catalog can arrive while the previous search's view is still shown.
+function searchHighlightState() {
+  state.searchHighlights ||= { byQuery: new Map(), viewSource: null };
+  return state.searchHighlights;
+}
+
+function searchHighlightTexts(query, create = false) {
+  const { byQuery } = searchHighlightState();
+  if (!byQuery.has(query) && create) {
+    byQuery.set(query, new Map());
+    while (byQuery.size > 3) byQuery.delete(byQuery.keys().next().value);
+  }
+  return byQuery.get(query) || null;
+}
+
+function activeSearchHighlightQuery() {
+  return String(state?.view?.query || '').trim();
+}
+
+function rememberSearchHighlights(highlights, askedTexts = []) {
+  const query = String(highlights?.query || '').trim();
+  const texts = highlights?.texts;
+  if (!query || !texts || typeof texts !== 'object') return;
+  const known = searchHighlightTexts(query, true);
+  for (const text of askedTexts) known.set(String(text), []);
+  for (const [text, ranges] of Object.entries(texts)) {
+    if (Array.isArray(ranges)) known.set(text, ranges);
+  }
+}
+
+function searchHighlightRanges(value) {
+  const query = activeSearchHighlightQuery();
+  if (!query) return null;
+  const viewHighlights = state.view?.search_highlights;
+  if (viewHighlights && viewHighlights !== searchHighlightState().viewSource) {
+    searchHighlightState().viewSource = viewHighlights;
+    rememberSearchHighlights(viewHighlights);
+  }
+  const ranges = searchHighlightTexts(query)?.get(String(value ?? ''));
+  return ranges?.length ? ranges : null;
+}
+
+async function requestSearchHighlights(values) {
+  const query = activeSearchHighlightQuery();
+  const known = searchHighlightTexts(query);
+  const texts = [...new Set((values || []).map((value) => String(value ?? '')).filter(Boolean))]
+    .filter((text) => !known?.has(text))
+    .slice(0, 1000);
+  if (!query || !texts.length) return false;
+  const response = await fetch('/search/highlights', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ q: query, texts }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || !payload?.ok || payload.search_highlights?.query !== query) return false;
+  rememberSearchHighlights(payload.search_highlights, texts);
+  return true;
+}
+
+// Markup for a label the active search matched, or '' when nothing in it matched.
+function searchHighlightedLabelHtml(value) {
+  const ranges = searchHighlightRanges(value);
+  return ranges ? buildHighlightedTextHtml(value, ranges) : '';
+}

@@ -558,54 +558,134 @@
   object-fit: var(--album-art-fit);
   display: block;
 }
-.cover-lookup-art-source-badge {
-  width: 18px;
-  height: 18px;
-  border-radius: 999px;
+/* CoverSourceBadge: a provider's bare mark (no chip, no outline) with a legal popover and one link back.
+   inline: Cover Look Up cards. over: Album Details, on the art's top-left corner while the cover is hovered or
+   focused (always on touch). beneath: Album Details, centred under the cover (Spotify). Approved v003. */
+.cover-source-badge {
+  position: relative;
   display: inline-flex;
-  align-items: center;
-  justify-content: center;
   flex: 0 0 auto;
-  color: #d6dde8;
-  background: rgba(24, 31, 42, 0.9);
-  border: 1px solid rgba(214, 221, 232, 0.14);
+  text-transform: none;
+  letter-spacing: normal;
 }
-.cover-lookup-art-source-badge svg {
-  width: 12px;
-  height: 12px;
+.cover-source-badge__trigger {
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  cursor: pointer;
 }
-.cover-lookup-art-source-badge.is-apple {
-  color: #f6f7fb;
-  background: linear-gradient(135deg, rgba(246, 247, 251, 0.18), rgba(255, 111, 145, 0.24));
-  border-color: rgba(255, 157, 181, 0.34);
+.cover-source-badge__trigger:focus-visible {
+  outline: 2px solid var(--appearance-interaction-outline, var(--appearance-accent, #72baff));
+  outline-offset: 3px;
 }
-.cover-lookup-art-source-badge.is-deezer {
-  color: #b46cff;
-  background: rgba(92, 35, 132, 0.34);
-  border-color: rgba(180, 108, 255, 0.42);
+.cover-source-badge__mark,
+.cover-source-badge__mark :is(svg, img) {
+  display: block;
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
 }
-.cover-lookup-art-source-badge.is-spotify {
-  color: #1ed760;
-  background: rgba(11, 20, 17, 0.84);
-  border-color: rgba(30, 215, 96, 0.35);
+.cover-source-badge:is(.cover-source-badge--over, .cover-source-badge--beneath) .cover-source-badge__mark,
+.cover-source-badge:is(.cover-source-badge--over, .cover-source-badge--beneath) .cover-source-badge__mark :is(svg, img) {
+  width: 24px;
+  height: 24px;
 }
-.cover-lookup-art-source-badge.is-youtube-music {
-  color: #ff3b30;
-  background: rgba(48, 10, 10, 0.9);
-  border-color: rgba(255, 59, 48, 0.4);
+.cover-source-badge.is-neutral { color: var(--text); }
+.cover-source-badge--over.is-neutral { color: #fff; }
+/* Discogs' black record turns white with the D2 external-link treatment: on dark themes, and over the art
+   unless the cover under it is light. */
+:root:not([data-appearance-mode='light']) .cover-source-badge.is-discogs:not(.cover-source-badge--over) img,
+.cover-source-badge--over.is-discogs:not([data-cover-source-tone='light']) img {
+  filter: invert(1);
 }
-.cover-lookup-art-source-badge.is-bandcamp {
-  color: #5dade2;
-  background: rgba(10, 29, 43, 0.92);
-  border-color: rgba(93, 173, 226, 0.36);
+.cover-source-badge__popover {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 8px);
+  left: -4px;
+  width: max-content;
+  max-width: min(280px, 70vw);
+  display: grid;
+  gap: 3px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+  font-size: 0.75rem;
+  font-weight: 400;
+  line-height: 1.45;
+  text-align: left;
+  white-space: normal;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-3px);
+  /* Closing waits 250 ms, so the pointer can travel from the mark to the link. */
+  transition: opacity 140ms ease 250ms, transform 140ms ease 250ms, visibility 0s linear 390ms;
 }
-.cover-lookup-art-source-badge.is-discogs {
-  color: #f5f5f6;
-  background: #0b0b0d;
-  border-color: rgba(255, 255, 255, 0.24);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+/* Bridges the gap between mark and popover so the pointer never crosses a dead zone. */
+.cover-source-badge__popover::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  height: 10px;
 }
-.cover-lookup-art-source-badge.is-caa { width: auto; min-width: 32px; padding-inline: 4px; color: #dce8ff; }
+.cover-source-badge__legal + .cover-source-badge__legal {
+  color: var(--muted);
+  font-size: 0.69rem;
+}
+.cover-source-badge__link {
+  margin-top: 4px;
+  color: var(--appearance-accent, #60a5fa);
+  font-weight: 600;
+  text-decoration: none;
+}
+.cover-source-badge__link:hover { text-decoration: underline; }
+.cover-source-badge:is(:hover, :focus-within, .is-open) .cover-source-badge__popover {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+  transition-delay: 0s;
+}
+.cover-source-badge--over {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 3;
+  opacity: 0;
+  transition: opacity 180ms ease 250ms;
+}
+.track-modal-cover-shell:is(:hover, :focus-within) .cover-source-badge--over,
+.cover-source-badge--over.is-open {
+  opacity: 1;
+  transition-delay: 0s;
+}
+@media (hover: none) {
+  .cover-source-badge--over { opacity: 1; }
+}
+.track-modal-cover-source-beneath {
+  display: flex;
+  justify-content: center;
+  margin-top: 8px;
+}
+.track-modal-cover-source-beneath .cover-source-badge__popover {
+  left: 50%;
+  transform: translate(-50%, -3px);
+}
+.track-modal-cover-source-beneath .cover-source-badge:is(:hover, :focus-within, .is-open) .cover-source-badge__popover {
+  transform: translateX(-50%);
+}
+@media (prefers-reduced-motion: reduce) {
+  .cover-source-badge--over { transition: none; }
+  .cover-source-badge__popover { transition: visibility 0s linear 250ms; }
+}
 .cover-lookup-art-preview-fallback {
   position: absolute;
   inset: 0;

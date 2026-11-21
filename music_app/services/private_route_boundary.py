@@ -64,6 +64,7 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("GET", "/api/live/library-events"): "library.browse.read",
     ("GET", "/library/loose-tracks"): "library.browse.read",
     ("GET", "/library/custom-collections"): "library.browse.read",
+    ("POST", "/search/highlights"): "library.browse.read",
     ("GET", "/loose-tracks"): "app.shell.read",
     ("GET", "/api/custom-collections/artwork"): "library.browse.read",
     ("GET", "/api/custom-collections/artwork/image"): "library.browse.read",

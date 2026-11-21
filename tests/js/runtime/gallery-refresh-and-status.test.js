@@ -7626,6 +7626,30 @@ test('IAR-W10: any view applied replaces one the server could not be reached for
   assert.equal(context.state.ui.galleryUnreachable, null);
 });
 
+// FTC-COVERS-019P: a `body:has(...)` rule hid the kept-library line above the unreachable view and
+// made Chrome re-check style on every change anywhere in the page (Cover Lookup's save went over
+// its 200 ms task budget). <body> is marked instead, written only when the view starts or ends.
+test('the unreachable view marks <body> while it shows, and the stylesheet never uses body:has()', async () => {
+  const { context, pendingRequests } = createArtistFamilyOwnershipContext();
+  useRealViewUrls(context);
+  const marks = [];
+  context.document.body = {
+    toggleAttribute(name, on) {
+      marks.push([name, on]);
+    },
+  };
+  const navigation = context.fetchAndRender('/view-data?artist=Chris+Buck', true);
+  pendingRequests[0].rejectWith(new TypeError('Failed to fetch'));
+  await navigation;
+  context.applyViewPayload({ ...context.state.view, selected_artist: 'Mono', artist_groups: [{ artist: 'Mono', albums: [{ key: 'mono::one' }] }] });
+  context.applyViewPayload({ ...context.state.view });
+
+  assert.deepEqual(marks, [['data-gallery-view-unreachable', true], ['data-gallery-view-unreachable', false]]);
+  const css = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'css', 'gallery-main.css'), 'utf8');
+  assert.doesNotMatch(css.replace(/\/\*[\s\S]*?\*\//g, ''), /body:has\(/);
+  assert.match(css, /body\[data-gallery-view-unreachable\] #app-copy-offline-notice \{ display: none; \}/);
+});
+
 test('IAR-W10: the app\'s own "not ready yet" (503) is never taken for an unreachable server', async () => {
   const { context, pendingRequests } = createContext();
   const request = context.fetchRetryingPendingProjection('/view-data', {});

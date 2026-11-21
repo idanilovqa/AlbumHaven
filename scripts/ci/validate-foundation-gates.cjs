@@ -9,7 +9,7 @@ const TEST_DATA_MATRIX = 'tests/ci/test-data-matrix.json';
 
 function jobSource(workflow, jobName, nextJobName) {
   const start = workflow.indexOf(`  ${jobName}:`);
-  const end = workflow.indexOf(`\n  ${nextJobName}:`, start);
+  const end = nextJobName ? workflow.indexOf(`\n  ${nextJobName}:`, start) : workflow.length;
   if (start === -1 || end === -1) return '';
   return workflow.slice(start, end);
 }
@@ -208,13 +208,34 @@ function validateWorkflowContract(workflow) {
     [/cache-dependency-path:\s*package-lock\.json/, 'package-lock.json cache dependency path'],
     [/cache:\s*pip/, 'pip cache'],
     [/npm run test:js:all/, 'complete glob-discovered Node suite'],
-    [/run: node scripts\/ci\/validate-bounded-interactions\.cjs\s*$/m, 'complete bounded interaction inventory validation'],
+    [/run: node scripts\/ci\/validate-bounded-interactions\.cjs(?: --native-proof-preflight)?\s*$/m, 'complete bounded interaction inventory validation'],
     [/run: node scripts\/run-bounded-interactions\.cjs --node-only\s*$/m, 'skip-free bounded interaction JavaScript contracts'],
     [/timeout-minutes:\s*45/, 'bounded timeout'],
     [/write-foundation-version-manifest\.cjs\s+--profile=component/, 'version manifest validation'],
     [/version-manifest/, 'version manifest artifact'],
     [/if:\s*\$\{\{\s*always\(\)\s*\}\}/, 'version manifest upload must always run'],
   ], 'portable JavaScript job', errors);
+  if (/run: node scripts\/ci\/validate-bounded-interactions\.cjs --native-proof-preflight\s*$/m.test(jobs.portable)) {
+    requirePatterns(jobs.python, [
+      [/^      - name: Bind successful Python proof to this pipeline\r?\n        env:\r?\n          BOUNDED_PROOF_SHARD: \$\{\{ matrix\.shard \}\}\r?\n          BOUNDED_PROOF_SHARD_TOTAL: \$\{\{ strategy\.job-total \}\}\r?\n        run: node scripts\/run-bounded-interactions\.cjs --write-python-proof-manifest "\$\{\{ runner\.temp \}\}\\foundation-version-manifest-python-windows\.json"\r?$/m, 'successful shard manifest binding'],
+      [/^          name: foundation-versions-python-windows-\$\{\{ matrix\.shard \}\}-\$\{\{ github\.run_attempt \}\}\r?$/m, 'run-attempt shard artifact'],
+      [/^            \$\{\{ runner\.temp \}\}\\foundation-version-manifest-python-windows\.json\r?$/m, 'bound manifest upload'],
+      [/^            \$\{\{ runner\.temp \}\}\\pytest-results\.xml\r?$/m, 'exact JUnit upload'],
+      [/^            \$\{\{ runner\.temp \}\}\\bounded-interactions-evidence\.jsonl\r?$/m, 'native measurement upload'],
+    ], 'native proof Python job', errors);
+    const cloud = jobSource(workflow, 'cloud_verification_gate');
+    requirePatterns(cloud, [
+      [/^      - name: Checkout trusted pull request\r?\n        if: \$\{\{ github\.event\.pull_request\.head\.repo\.full_name == github\.repository \}\}\r?\n        uses: actions\/checkout@v5\r?\n        with:\r?\n          ref: \$\{\{ github\.sha \}\}\r?$/m, 'trusted current-commit checkout'],
+      [/^      - name: Download Python contract evidence\r?\n        if: \$\{\{ github\.event\.pull_request\.head\.repo\.full_name == github\.repository && needs\.test_python\.result == 'success' \}\}\r?\n        uses: actions\/download-artifact@v4\r?\n        with:\r?\n          pattern: foundation-versions-python-windows-\*-\$\{\{ github\.run_attempt \}\}\r?\n          path: \$\{\{ runner\.temp \}\}\/python-shards\r?$/m, 'trusted current-attempt shard download'],
+    ], 'native proof cloud gate', errors);
+    const aggregates = [...cloud.matchAll(/^      - name: Verify bounded interaction Python contract evidence[ \t]*\r?$/gm)];
+    const aggregateStart = aggregates.length === 1 ? aggregates[0].index : -1;
+    const aggregateEnd = cloud.indexOf('\n      - ', aggregateStart + 1);
+    const aggregateStep = aggregateStart < 0 ? '' : cloud.slice(aggregateStart, aggregateEnd < 0 ? undefined : aggregateEnd);
+    requirePatterns(aggregateStep.trimEnd(), [
+      [/^      - name: Verify bounded interaction Python contract evidence\r?\n        if: \$\{\{ github\.event\.pull_request\.head\.repo\.full_name == github\.repository && needs\.test_python\.result == 'success' \}\}\r?\n        shell: bash\r?\n        env:\r?\n          BOUNDED_PROOF_SHARD_TOTAL: "3"\r?\n        run: \|\r?\n          npm ci\r?\n          node scripts\/run-bounded-interactions\.cjs --python-evidence-dir "\$RUNNER_TEMP\/python-shards"$/, 'one trusted complete native aggregate verification step'],
+    ], 'native proof cloud gate', errors);
+  }
   requirePatterns(jobs.components, [
     [/node-version:\s*["']22["']/, 'Node.js 22'],
     [/chrome-version:\s*["']151\.0\.7922\.138["']/, 'published pinned Chrome 151.0.7922.138'],

@@ -345,3 +345,86 @@ test('foundation validator rejects every test family losing its review-success d
       /cancellable job condition/);
   }
 });
+
+
+test('foundation validator accepts exact complete and deferred-native inventory commands only', () => {
+  const validator = require(validatorPath);
+  const workflow = fs.readFileSync(workflowPath, 'utf8');
+  const command = /run: node scripts\/ci\/validate-bounded-interactions\.cjs --native-proof-preflight\s*$/m;
+  assert.deepEqual(validator.validateWorkflowContract(workflow), []);
+  assert.deepEqual(validator.validateWorkflowContract(replaceInJob(workflow, 'test_js', command,
+    'run: node scripts/ci/validate-bounded-interactions.cjs')), []);
+
+  for (const replacement of [
+    'run: node scripts/ci/validate-bounded-interactions.cjs --unknown',
+    'run: node scripts/ci/validate-bounded-interactions.cjs --native-proof-preflight --unknown',
+    'run: node scripts/ci/validate-bounded-interactions.cjs --native-proof-preflight --changed-paths none.txt',
+    'run: echo "bounded interaction inventory removed"',
+  ]) {
+    assertWorkflowDrift(validator, workflow, replaceInJob(workflow, 'test_js', command, replacement),
+      /complete bounded interaction inventory/i);
+  }
+});
+
+test('foundation validator requires the trusted native proof chain before accepting preflight', () => {
+  const validator = require(validatorPath);
+  const workflow = fs.readFileSync(workflowPath, 'utf8');
+  assert.deepEqual(validator.validateWorkflowContract(workflow), []);
+  assert.deepEqual(validator.validateWorkflowContract(replaceInJob(workflow, 'test_js',
+    /(- name: Upload portable foundation version manifest\r?\n)/,
+    '$1        continue-on-error: true\n')), []);
+
+  const proofMutations = [
+    ['test_python',
+      /run: node scripts\/run-bounded-interactions\.cjs --write-python-proof-manifest "[^\r\n]+"/,
+      'run: echo "native proof manifest binding removed"'],
+    ['test_python', /BOUNDED_PROOF_SHARD: \$\{\{ matrix\.shard \}\}/,
+      'BOUNDED_PROOF_SHARD: "1"'],
+    ['test_python', /BOUNDED_PROOF_SHARD_TOTAL: \$\{\{ strategy\.job-total \}\}/,
+      'BOUNDED_PROOF_SHARD_TOTAL: "1"'],
+    ['test_python',
+      /^\s{12}\$\{\{ runner\.temp \}\}\\foundation-version-manifest-python-windows\.json\r?\n/m, ''],
+    ['test_python', /^\s{12}\$\{\{ runner\.temp \}\}\\pytest-results\.xml\r?\n/m, ''],
+    ['test_python', /^\s{12}\$\{\{ runner\.temp \}\}\\bounded-interactions-evidence\.jsonl\r?\n/m, ''],
+    ['cloud_verification_gate', /ref: \$\{\{ github\.sha \}\}/,
+      'ref: ${{ github.event.pull_request.head.sha }}'],
+    ['cloud_verification_gate',
+      /pattern: foundation-versions-python-windows-\*-\$\{\{ github\.run_attempt \}\}/,
+      'pattern: foundation-versions-python-windows-*'],
+    ['cloud_verification_gate', /path: \$\{\{ runner\.temp \}\}\/python-shards/,
+      'path: ${{ runner.temp }}/other-python-shards'],
+    ['cloud_verification_gate',
+      /(- name: Verify bounded interaction Python contract evidence\r?\n)        if:[^\r\n]+/,
+      '$1        if: ${{ always() }}'],
+    ['cloud_verification_gate', /BOUNDED_PROOF_SHARD_TOTAL: "3"/,
+      'BOUNDED_PROOF_SHARD_TOTAL: "1"'],
+    ['cloud_verification_gate',
+      /node scripts\/run-bounded-interactions\.cjs --python-evidence-dir "\$RUNNER_TEMP\/python-shards"/,
+      'node scripts/run-bounded-interactions.cjs --node-only'],
+    ['cloud_verification_gate',
+      /node scripts\/run-bounded-interactions\.cjs --python-evidence-dir "\$RUNNER_TEMP\/python-shards"/,
+      'node scripts/run-bounded-interactions.cjs --python-evidence-dir "$RUNNER_TEMP/python-shards" --unknown'],
+    ['cloud_verification_gate',
+      /(node scripts\/run-bounded-interactions\.cjs --python-evidence-dir "\$RUNNER_TEMP\/python-shards"\r?\n)/,
+      '$1        continue-on-error: true\n'],
+    ['cloud_verification_gate',
+      /(node scripts\/run-bounded-interactions\.cjs --python-evidence-dir "\$RUNNER_TEMP\/python-shards"\r?\n)/,
+      '$1        continue-on-error: ${{ true }}\n'],
+    ['cloud_verification_gate',
+      /(node scripts\/run-bounded-interactions\.cjs --python-evidence-dir "\$RUNNER_TEMP\/python-shards"\r?\n)/,
+      '$1        \'continue-on-error\': true\n'],
+    ['cloud_verification_gate',
+      /(node scripts\/run-bounded-interactions\.cjs --python-evidence-dir "\$RUNNER_TEMP\/python-shards"\r?\n)/,
+      '$1        "continue-on-error": true\n'],
+    ['cloud_verification_gate',
+      /(^      - name: Verify bounded interaction Python contract evidence\r?\n[\s\S]*?node scripts\/run-bounded-interactions\.cjs --python-evidence-dir "\$RUNNER_TEMP\/python-shards"\r?\n)/m,
+      '      - name: Verify bounded interaction Python contract evidence setup\n        run: echo setup\n\n$1        continue-on-error: true\n'],
+    ['cloud_verification_gate',
+      /^      - name: Verify bounded interaction Python contract evidence\r?\n/m,
+      '      - name: Verify bounded interaction Python contract evidence\n        run: echo duplicate\n\n$&'],
+  ];
+  for (const [job, pattern, replacement] of proofMutations) {
+    assertWorkflowDrift(validator, workflow, replaceInJob(workflow, job, pattern, replacement),
+      /native.proof/i);
+  }
+});

@@ -1,6 +1,6 @@
 function buildUtilityLogHistoryListItem(item, selected) {
   return window.NavigationTree.renderItem({ action: true, variant: 'panel', key: String(item.id), selected,
-    label: item.action || 'Activity', subtitle: [item.artist, item.album, item.title].filter(Boolean).join(' В· ') || item.source || '',
+    label: item.action || 'Activity', subtitle: [item.artist, item.album, item.title].filter(Boolean).join(' · ') || item.source || '',
     year: formatLogHistoryTimestamp(item.timestamp), attributes: { 'data-utility-log-history-id': String(item.id) } });
 }
 
@@ -47,9 +47,9 @@ function buildUtilityLoopEntry(loop) {
     <section class="utility-loop-entry ${repeatEnabled ? 'is-active' : ''}" data-utility-loop-entry="${escapeHtml(loop.id || '')}" data-loop-song-key="${escapeHtml(buildUtilityLoopGroupKey(loop))}" draggable="${canReorderUtilityLoop(loop)}">
       ${buildUtilityLoopMoveActions(loop)}
       <div class="utility-loop-heading">
-        <span class="utility-loop-drag-handle" aria-hidden="true">в‹®в‹®</span>
+        <span class="utility-loop-drag-handle" aria-hidden="true">⋮⋮</span>
         <h3 class="utility-detail-title">${escapeHtml(loop.name || 'Saved loop')}</h3>
-        <span class="utility-loop-original-times"><span>Original timestamps</span><strong>${loop.original_start_seconds != null && loop.original_end_seconds != null ? `${formatLoopTime(loop.original_start_seconds, true)} вЂ“ ${formatLoopTime(loop.original_end_seconds, true)}` : 'Unavailable'}</strong></span>
+        <span class="utility-loop-original-times"><span>Original timestamps</span><strong>${loop.original_start_seconds != null && loop.original_end_seconds != null ? `${formatLoopTime(loop.original_start_seconds, true)} – ${formatLoopTime(loop.original_end_seconds, true)}` : 'Unavailable'}</strong></span>
         ${state.utility.allowedActions?.['library.loops.delete'] === true ? window.ButtonComponent.renderActionButton({ icon: 'delete', semantic: 'destructive', ariaLabel: `Delete ${loop.name || 'Saved loop'}`, title: `Delete ${loop.name || 'Saved loop'}`, className: 'utility-loop-remove', attributes: { 'data-delete-saved-loop': loop.id || '' } }) : ''}
       </div>
       <div class="utility-loop-shell" data-utility-loop-shell="${escapeHtml(loop.id || '')}">
@@ -249,7 +249,7 @@ function buildVersionExceptionRuleDetail(rule) {
     columnsConfig: [{ key: 'target', label: 'Artist / Album' }, { key: 'effect', label: 'Rule' }, { key: 'action', label: 'Actions', header: 'screen-reader', action: true }],
     headers: 'visible', density: 'compact', overflow: 'local', mobile: 'stack', frame: 'outline', actionTrackWidth: '110px',
     rows: albums.map(album => ({ key: album.key, cells: {
-      target: `<span class="utility-rule-target">${buildUtilityAlbumArtbox(album, { label: `Artwork for ${album.name || 'album'}` })}<span><span class="utility-rule-album-title">${escapeHtml(album.name || album.key || 'Unknown album')}</span><span class="utility-rule-album-meta">${escapeHtml([album.album_artist, album.year].filter(Boolean).join(' В· '))}</span></span></span>`,
+      target: `<span class="utility-rule-target">${buildUtilityAlbumArtbox(album, { label: `Artwork for ${album.name || 'album'}` })}<span><span class="utility-rule-album-title">${escapeHtml(album.name || album.key || 'Unknown album')}</span><span class="utility-rule-album-meta">${escapeHtml([album.album_artist, album.year].filter(Boolean).join(' · '))}</span></span></span>`,
       effect: escapeHtml(album.edition ? `Edition: ${album.edition}` : 'Excluded from album version tabs'),
       action: ButtonComponent.renderButton({ label: 'Revert rule', className: 'utility-rule-revert', attributes: { 'data-revert-version-exception': album.key || '' } }),
     } })),
@@ -383,7 +383,7 @@ function buildUtilityCollapsibleSection(sectionKey, title, contentHtml) {
     <div class="utility-detail-section${cardClass} ${collapsed ? 'is-collapsed' : ''}">
       <button class="utility-section-toggle" type="button" data-utility-section-toggle="${escapeHtml(sectionKey)}" aria-expanded="${collapsed ? 'false' : 'true'}">
         <span class="utility-detail-section-title">${escapeHtml(title)}</span>
-        <span class="utility-section-chevron" aria-hidden="true">вЂє</span>
+        <span class="utility-section-chevron" aria-hidden="true">›</span>
       </button>
       <div class="utility-section-content" ${collapsed ? 'hidden' : ''}>
         ${contentHtml}
@@ -440,7 +440,7 @@ function buildDetectedProblemsHtml(album) {
     return {
       key: String(row.path || ''), dataAttributes: { 'problematic-track-path': String(row.path || '') },
       cells: {
-        filename: `<span class="utility-track-problem-file" data-problematic-track-path="${escapeHtml(row.path || '')}">${escapeHtml(track.title || row.filename || getFilenameFromPath(row.path) || 'Unknown file')}</span><span class="utility-detail-meta">${escapeHtml([track.artist, row.file_type].filter(Boolean).join(' В· '))}</span>`,
+        filename: `<span class="utility-track-problem-file" data-problematic-track-path="${escapeHtml(row.path || '')}">${escapeHtml(track.title || row.filename || getFilenameFromPath(row.path) || 'Unknown file')}</span><span class="utility-detail-meta">${escapeHtml([track.artist, row.file_type].filter(Boolean).join(' · '))}</span>`,
         reason: `<span class="utility-track-problem-labels">${reasons.map(reason => {
           const match = (row.ignorable_reasons || []).find(item => item.reason === reason);
           const rowKey = String(match?.row_key || '');
@@ -3636,7 +3636,7 @@ function buildMusicBrainzIdentityTableHtml(detail, ui) {
   const tableRows = rows.map((row) => {
     const selected = ui.selectedMbid === row.artist_mbid;
     const prefix = row.role === 'current' ? 'Currently assigned: ' : row.role === 'suggested' ? 'Suggested: ' : '';
-    const facts = [row.country, row.artist_kind, row.disambiguation].filter(Boolean).join(' В· ');
+    const facts = [row.country, row.artist_kind, row.disambiguation].filter(Boolean).join(' · ');
     const name = `${prefix}${row.canonical_name || 'Unknown artist'}`;
     return {
       key: row.artist_mbid,
@@ -3670,7 +3670,7 @@ function buildMusicBrainzManualResolutionHtml(detail, ui) {
   const searchUrl = `https://musicbrainz.org/search?query=${encodeURIComponent(detail.local_artist_name || '')}&type=artist&method=indexed`;
   const actionsAvailable = detail.actions_available !== false;
   const helper = !actionsAvailable ? 'MusicBrainz matching actions are unavailable in this read-only session.'
-    : ui.validating ? 'Verifying with MusicBrainzвЂ¦'
+    : ui.validating ? 'Verifying with MusicBrainz…'
     : ui.validationError ? ui.validationError
       : ui.validated ? `Verified: ${ui.validated.canonical_name || ui.validated.artist_mbid}`
         : 'Paste the selected artist page URL or MBID to verify it before assignment.';
@@ -3711,7 +3711,7 @@ function buildMusicBrainzArtistProblemDetail(item) {
   if (item?.musicbrainz_detail_failed) {
     return buildOnPageAlertHtml({ severity: 'error', title: 'Artist details unavailable', message: 'Unable to load this MusicBrainz artist issue.' });
   }
-  if (!detail) return '<div class="utility-empty-state">Loading artist identityвЂ¦</div>';
+  if (!detail) return '<div class="utility-empty-state">Loading artist identity…</div>';
   const ui = item.musicbrainz_ui || {};
   const actionsAvailable = detail.actions_available !== false;
   const view = getMusicBrainzArtistProblemView(detail);
@@ -3874,7 +3874,7 @@ function scheduleMusicBrainzManualValidation(item) {
 function syncMusicBrainzManualStatus(ui) {
   const helper = document.querySelector('.musicbrainz-manual-helper');
   if (helper) {
-    helper.textContent = ui.validating ? 'Verifying with MusicBrainzвЂ¦'
+    helper.textContent = ui.validating ? 'Verifying with MusicBrainz…'
       : ui.validationError ? ui.validationError
         : ui.validated ? `Verified: ${ui.validated.canonical_name || ui.validated.artist_mbid}`
           : 'Paste the selected artist page URL or MBID to verify it before assignment.';

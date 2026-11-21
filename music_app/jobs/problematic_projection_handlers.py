@@ -254,47 +254,65 @@ def build_problematic_projection_handler(
                     now=now(),
                 )
             )
-            for item_index, projected in enumerate(projected_items):
-                with projected:
-                    if item_index < persisted.next_batch_index:
-                        continue
-                    reason = claimed_build_stop_reason()
-                    if reason is not None:
-                        return _GroupProjectionResult.STOPPED, reason
-                    repository.stage_claimed_items(
-                        claim=claim,
-                        build=build,
-                        group_key=group_key,
-                        items=(projected,),
-                        batch_index=item_index,
-                        now=now(),
-                    )
-                    for reason_batch in _bounded_batches(projected.reason_facts):
-                        reason = claimed_build_stop_reason()
-                        if reason is not None:
-                            return _GroupProjectionResult.STOPPED, reason
-                        repository.stage_claimed_reason_facts(
-                            claim=claim,
-                            build=build,
-                            group_key=group_key,
-                            facts=reason_batch,
-                            now=now(),
-                        )
-                    persisted = repository.advance_claimed_group_accumulator(
-                        claim=claim,
-                        build=build,
-                        group_key=group_key,
-                        expected_after_stage_id=persisted.after_stage_id,
-                        after_stage_id=persisted.after_stage_id,
-                        next_batch_index=item_index + 1,
-                        row_count=persisted.row_count,
-                        now=now(),
-                    ) or type(persisted)(
-                        persisted.after_stage_id,
-                        item_index + 1,
-                        persisted.row_count,
-                        persisted.source_complete,
-                    )
+            try:
+                for item_index, projected in enumerate(projected_items):
+                    try:
+                        with projected:
+                            if item_index < persisted.next_batch_index:
+                                continue
+                            reason = claimed_build_stop_reason()
+                            if reason is not None:
+                                return _GroupProjectionResult.STOPPED, reason
+                            repository.stage_claimed_items(
+                                claim=claim,
+                                build=build,
+                                group_key=group_key,
+                                items=(projected,),
+                                batch_index=item_index,
+                                now=now(),
+                            )
+                            for reason_batch in _bounded_batches(projected.reason_facts):
+                                reason = claimed_build_stop_reason()
+                                if reason is not None:
+                                    return _GroupProjectionResult.STOPPED, reason
+                                repository.stage_claimed_reason_facts(
+                                    claim=claim,
+                                    build=build,
+                                    group_key=group_key,
+                                    facts=reason_batch,
+                                    now=now(),
+                                )
+                            for search_batch in _bounded_batches(projected.search_facts):
+                                reason = claimed_build_stop_reason()
+                                if reason is not None:
+                                    return _GroupProjectionResult.STOPPED, reason
+                                repository.stage_claimed_main_search_facts(
+                                    claim=claim, build=build, group_key=group_key,
+                                    facts=search_batch, now=now(),
+                                )
+                            persisted = repository.advance_claimed_group_accumulator(
+                                claim=claim,
+                                build=build,
+                                group_key=group_key,
+                                expected_after_stage_id=persisted.after_stage_id,
+                                after_stage_id=persisted.after_stage_id,
+                                next_batch_index=item_index + 1,
+                                row_count=persisted.row_count,
+                                now=now(),
+                            ) or type(persisted)(
+                                persisted.after_stage_id,
+                                item_index + 1,
+                                persisted.row_count,
+                                persisted.source_complete,
+                            )
+                    finally:
+                        close_item = getattr(projected, "close", None)
+                        if callable(close_item):
+                            close_item()
+            finally:
+                close_items = getattr(projected_items, "close", None)
+                if callable(close_items):
+                    close_items()
             search_cursor = ("", "", "")
             while True:
                 reason = claimed_build_stop_reason()

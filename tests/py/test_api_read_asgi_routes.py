@@ -9,6 +9,16 @@ from types import ModuleType
 from types import SimpleNamespace
 
 import pytest
+
+import base64
+from datetime import datetime, timezone
+import hashlib
+import unicodedata
+from uuid import uuid4
+from music_app.services.jobs.repository_postgres import PostgresJobRepository
+from music_app.services.problematic_projection_postgres import PostgresProblematicProjectionRepository
+from tests.e2e.support import isolatedPostgres
+from tests.py.test_problematic_projection_postgres import live_projection_database
 from starlette.concurrency import run_in_threadpool
 from tests.py.asgi_testing import create_test_asgi_app
 from tests.py.asgi_testing import configure_test_bootstrap_actor
@@ -6150,3 +6160,113 @@ def test_asgi_runtime_payload_builds_keep_health_responsive(app, asgi_app, monke
     status, _headers, _body = asyncio.run(exercise())
 
     assert status == 200
+
+
+def _main_search_publish_empty_v2(db):
+    reader = PostgresProblematicProjectionRepository(database_url=db.app_url)
+    worker = PostgresProblematicProjectionRepository(database_url=db.worker_url)
+    queued = reader.enqueue_rebuild(library_id=db.library_id, requested_by="raw-query-proof")
+    now = datetime.now(timezone.utc)
+    claim = PostgresJobRepository(database_url=db.worker_url).claim(
+        worker_id="raw-query-proof", now=now, lease_seconds=120,
+        kinds=("problematic_files_projection",),
+    )
+    assert claim is not None and claim.job_id == queued["job_id"]
+    build = worker.prepare_claimed_build(claim=claim, now=now)
+    assert worker.publish_claimed_snapshot(claim=claim, build=build, now=now)
+    with isolatedPostgres._connect(db.setup_url) as connection:
+        assert connection.execute(
+            "select builder_version from ops.problematic_projection_headers "
+            "where library_id=%s and revision=%s", (db.library_id, build.revision),
+        ).fetchone() == {"builder_version": 2}
+    return build
+
+
+def _main_search_historical_v3_token(library_id, revision, raw_query):
+    # Independent historical oracle: no candidate encoder/digest/normalizer.
+    query = " ".join(unicodedata.normalize("NFKC", raw_query).casefold().split())
+    digest = hashlib.sha256(json.dumps(
+        [query, [], "album"], ensure_ascii=False, separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()
+    payload = [3, library_id, str(revision), digest, 2, "legacy-anchor"]
+    return base64.urlsafe_b64encode(json.dumps(
+        payload, ensure_ascii=False, separators=(",", ":"),
+    ).encode("utf-8")).decode("ascii").rstrip("="), query
+
+
+def _main_search_seed_legacy_anchor(db, build, query):
+    revision = uuid4()
+    with isolatedPostgres._connect(db.setup_url) as connection:
+        connection.execute(
+            "insert into ops.problematic_projection_headers("
+            "library_id,revision,source_generation,rebuild_epoch,builder_version,"
+            "total,item_count,reason_facets,reason_fact_count,reason_fingerprint,"
+            "search_fact_count,search_fingerprint,verified,published_at) "
+            "values(%s,%s,%s,%s,1,2,2,'{}'::jsonb,0,0::bit(256),0,0::bit(256),true,now())",
+            (db.library_id, revision, build.source_generation, build.rebuild_epoch),
+        )
+        for key in ("legacy-anchor", "legacy-tail"):
+            connection.execute(
+                "insert into ops.problematic_projection_items("
+                "library_id,revision,item_key,sort_title,sort_artist,sort_year,"
+                "sort_album_key,search_text,reasons,summary) "
+                "values(%s,%s,%s,%s,'owner','1988',%s,%s,'{}'::text[],%s::jsonb)",
+                (db.library_id, revision, key, key, key, query,
+                 json.dumps({"key": key, "name": key})),
+            )
+    return revision
+
+
+@pytest.mark.parametrize("raw_query", ["\ufeffAlpha\ufeff", "Ａ" * 2000],
+                         ids=["feff-historical-scope", "nfkc-shrinks-raw-over-byte-limit"])
+@pytest.mark.parametrize("token_kind, status, code", [
+    ("valid", 409, "problematic_projection_cursor_expired"),
+    ("foreign", 400, "invalid_problematic_projection_cursor"),
+    ("malformed", 400, "invalid_problematic_projection_cursor"),
+])
+def test_native_adapter_preserves_historical_raw_query_until_v3_scope_validation(
+    app, live_projection_database, raw_query, token_kind, status, code,
+):
+    db = live_projection_database
+    build = _main_search_publish_empty_v2(db)
+    _unused, normalized = _main_search_historical_v3_token(db.library_id, uuid4(), raw_query)
+    assert len(normalized.encode("utf-8")) <= 4096
+    if raw_query.startswith("Ａ"):
+        assert len(raw_query.encode("utf-8")) > 4096
+    else:
+        assert normalized.startswith("\ufeff") and normalized.endswith("\ufeff")
+    revision = _main_search_seed_legacy_anchor(db, build, normalized)
+    token, _normalized = _main_search_historical_v3_token(
+        db.library_id + (token_kind == "foreign"), revision, raw_query,
+    )
+    if token_kind == "malformed":
+        token = "!" + token
+    app.config["ALBUM_HAVEN_APP_DATABASE_URL"] = db.app_url
+    app.config["PERSISTENCE_BACKENDS"] = {"library_browse": "postgres"}
+    asgi_app = _make_asgi_app()
+    serialized_filter = json.dumps({"query": raw_query, "reasons": []}, ensure_ascii=False)
+    assert len(serialized_filter) <= 4096, "browser-faithful outer filter must reach the per-version query codec"
+    actual_status, _headers, body = _run_asgi_request(
+        asgi_app, "GET", "/utilities/problematic-files",
+        query={"cursor": token, "filter": serialized_filter},
+    )
+    assert actual_status == status
+    assert _decode_json(body)["error_code"] == code
+
+
+@pytest.mark.parametrize("characters, expected_status", [(1365, 200), (1366, 400)])
+def test_native_adapter_keeps_new_v4_query_utf8_limit_strict(app, live_projection_database, characters, expected_status):
+    db = live_projection_database
+    _main_search_publish_empty_v2(db)
+    app.config["ALBUM_HAVEN_APP_DATABASE_URL"] = db.app_url
+    app.config["PERSISTENCE_BACKENDS"] = {"library_browse": "postgres"}
+    asgi_app = _make_asgi_app()
+    serialized_filter = json.dumps({"query": "Ａ" * characters, "reasons": []}, ensure_ascii=False)
+    assert len(serialized_filter) <= 4096, "outer filter must not mask the exact UTF-8 query boundary"
+    status, _headers, body = _run_asgi_request(
+        asgi_app, "GET", "/utilities/problematic-files",
+        query={"filter": serialized_filter},
+    )
+    assert status == expected_status
+    if status == 200:
+        assert _decode_json(body)["total"] == 0

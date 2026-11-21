@@ -69,7 +69,6 @@ from music_app.services.problematic_files_projection import (
     _ENCODED_PROBLEM_REASON_PREFIX,
     _PROBLEM_REASON_BY_IDENTITY_CODE,
     _PROBLEM_REASON_IDENTITY_CODES,
-    normalize_problematic_search_query,
     _album_file_year_mismatch,
     _album_separate_release_key,
     cached_problematic_text_reason as _cached_problematic_text_reason,
@@ -2886,8 +2885,9 @@ class PostgresLibraryBrowseRepository:
         if type(limit) is not int or limit < 1 or limit > 200:
             raise ProblematicProjectionRequestError("Invalid Problematic Files page limit.")
         try:
-            query, reasons = _problematic_page_filter_spec(filter)
-            query = normalize_problematic_search_query(query)
+            query, reasons = problematic_filter_spec(
+                filter, preserve_query=True,
+            )
         except (TypeError, ValueError) as exc:
             raise ProblematicProjectionRequestError(
                 "Invalid Problematic Files filter."

@@ -130,6 +130,7 @@ test('change-impact contract rejects unknown targets, invalid patterns, and unco
 
 test('Problematic Files dependencies require both real-app performance targets', () => {
   const paths = [
+    'migrations/postgres/0266_version_problematic_main_search.sql',
     'music_app/services/library_browse_postgres.py',
     'music_app/services/problematic_albums.py',
     'music_app/services/album_local_membership.py',

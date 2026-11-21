@@ -48,9 +48,11 @@ _BUILD_FUNCTION_PARAMETERS = (
 _PROJECTION_FUNCTION_PARAMETERS: Mapping[str, tuple[tuple[str, str], ...]] = {
     "enqueue_problematic_projection_rebuild": (
         ("library_id", "bigint"), ("requested_by", "text"),
+        ("builder_version", "integer"),
     ),
     "prepare_claimed_problematic_projection": (
         *_CLAIM_FUNCTION_PARAMETERS, ("observed_at", "timestamptz"),
+        ("builder_version", "integer"),
     ),
     "validate_claimed_problematic_projection": (
         *_CLAIM_FUNCTION_PARAMETERS, *_BUILD_FUNCTION_PARAMETERS,
@@ -115,8 +117,7 @@ _PROJECTION_FUNCTION_PARAMETERS: Mapping[str, tuple[tuple[str, str], ...]] = {
     "stage_claimed_problematic_projection_search_facts": (
         *_CLAIM_FUNCTION_PARAMETERS, *_BUILD_FUNCTION_PARAMETERS,
         ("group_kind", "text"), ("group_identity", "text"),
-        ("after_projection_id", "text"), ("after_fact_kind", "text"),
-        ("after_semantic_child_identity", "text"), ("limit", "integer"),
+        ("entries", "jsonb"),
         ("observed_at", "timestamptz"),
     ),
     "complete_claimed_problematic_projection_group": (
@@ -222,10 +223,7 @@ _PROJECTION_FUNCTION_RETURN_COLUMNS: Mapping[str, tuple[str, ...]] = {
     ),
     "stage_claimed_problematic_projection_items": (),
     "stage_claimed_problematic_projection_reason_facts": (),
-    "stage_claimed_problematic_projection_search_facts": (
-        "after_projection_id", "after_fact_kind",
-        "after_semantic_child_identity", "staged_count", "complete",
-    ),
+    "stage_claimed_problematic_projection_search_facts": ("accepted",),
     "complete_claimed_problematic_projection_group": (),
     "publish_claimed_problematic_projection": ("published",),
     "fail_claimed_problematic_projection": (),
@@ -266,7 +264,7 @@ _PROJECTION_FUNCTION_SUCCESS_KEYS: Mapping[str, str] = {
     "fail_claimed_problematic_projection": "recorded",
 }
 
-_PROBLEMATIC_PROJECTION_CURSOR_VERSION = 3
+_PROBLEMATIC_PROJECTION_CURSOR_VERSION = 4
 _PROBLEMATIC_PROJECTION_CURSOR_MAX_LENGTH = 4096
 _PROBLEMATIC_PROJECTION_ITEM_KEY_MAX_BYTES = 256
 _PROBLEMATIC_PROJECTION_SORT_TEXT_MAX_BYTES = 512
@@ -337,6 +335,7 @@ class ProblematicProjectionPageCursor:
     sort: str
     total: int
     anchor_item_key: str
+    version: int = _PROBLEMATIC_PROJECTION_CURSOR_VERSION
 
 
 @dataclass(frozen=True)
@@ -362,6 +361,7 @@ def _normalize_cursor_scope(
     reasons: object,
     sort: object,
     allow_pending_revision: bool = False,
+    legacy_query: bool = False,
 ) -> tuple[int, str, str, tuple[str, ...], str]:
     if (
         isinstance(library_id, bool)
@@ -398,7 +398,10 @@ def _normalize_cursor_scope(
         )
     )
     try:
-        normalized_query = normalize_problematic_search_query(query)
+        normalized_query = (normalize_problematic_text(query) if legacy_query
+                            else normalize_problematic_search_query(query))
+        if len(normalized_query.encode("utf-8")) > 4096:
+            raise ValueError("projection cursor query exceeds 4096 bytes")
     except (TypeError, ValueError) as exc:
         raise ProblematicProjectionCursorError(
             "invalid projection cursor scope"
@@ -480,13 +483,6 @@ def decode_problematic_projection_page_cursor(
     reasons: list[str] | tuple[str, ...],
     sort: str,
 ) -> ProblematicProjectionPageCursor:
-    expected_scope = _normalize_cursor_scope(
-        library_id=library_id,
-        revision=revision,
-        query=query,
-        reasons=reasons,
-        sort=sort,
-    )
     if (
         not isinstance(token, str)
         or not token
@@ -508,17 +504,27 @@ def decode_problematic_projection_page_cursor(
         not isinstance(payload, list)
         or len(payload) != 6
         or type(payload[0]) is not int
-        or payload[0] != _PROBLEMATIC_PROJECTION_CURSOR_VERSION
+        or payload[0] not in (3, _PROBLEMATIC_PROJECTION_CURSOR_VERSION)
+        or type(payload[1]) is not int
         or not isinstance(payload[3], str)
         or not isinstance(payload[5], str)
     ):
         raise ProblematicProjectionCursorError("invalid projection cursor")
+    expected_scope = _normalize_cursor_scope(
+        library_id=library_id,
+        revision=revision,
+        query=query,
+        reasons=reasons,
+        sort=sort,
+        legacy_query=payload[0] == 3,
+    )
     if (
         payload[1] != expected_scope[0]
         or payload[2] != expected_scope[1]
         or payload[3]
         != _cursor_filter_digest(
-            expected_scope[2], expected_scope[3], expected_scope[4]
+            (normalize_problematic_text(query) if payload[0] == 3 else expected_scope[2]),
+            expected_scope[3], expected_scope[4]
         )
     ):
         raise ProblematicProjectionCursorError("projection cursor scope changed")
@@ -534,6 +540,7 @@ def decode_problematic_projection_page_cursor(
         sort=expected_scope[4],
         total=total,
         anchor_item_key=anchor_item_key,
+        version=payload[0],
     )
 
 
@@ -583,6 +590,15 @@ def _database_uuid_text(name: str, value: object) -> str:
         raise ProblematicProjectionIntegrityError(f"invalid {name}") from None
 
 
+_LEGACY_SEARCH_STAGE_PARAMETERS = (
+        *_CLAIM_FUNCTION_PARAMETERS, *_BUILD_FUNCTION_PARAMETERS,
+        ("group_kind", "text"), ("group_identity", "text"),
+        ("after_projection_id", "text"), ("after_fact_kind", "text"),
+        ("after_semantic_child_identity", "text"), ("limit", "integer"),
+        ("observed_at", "timestamptz"),
+    )
+
+
 def _projection_function_call_sql(
     function_name: str,
     parameter_names: tuple[str, ...],
@@ -590,6 +606,9 @@ def _projection_function_call_sql(
     success_key: str | None = None,
 ) -> str:
     expected = _PROJECTION_FUNCTION_PARAMETERS.get(function_name)
+    if (function_name == "stage_claimed_problematic_projection_search_facts"
+            and parameter_names == tuple(name for name, _ in _LEGACY_SEARCH_STAGE_PARAMETERS)):
+        expected = _LEGACY_SEARCH_STAGE_PARAMETERS
     return_columns = _PROJECTION_FUNCTION_RETURN_COLUMNS.get(function_name)
     if (
         expected is None
@@ -835,13 +854,14 @@ class PostgresProblematicProjectionRepository:
         params = {
             "library_id": _positive_integer("library id", library_id),
             "requested_by": _nonempty_text("requested by", requested_by),
+            "builder_version": 2,
         }
         with self._connect() as connection:
             row = self._one(
                 connection,
                 _projection_function_call_sql(
                     "enqueue_problematic_projection_rebuild",
-                    ("library_id", "requested_by"),
+                    ("library_id", "requested_by", "builder_version"),
                 ),
                 params,
             )
@@ -856,13 +876,14 @@ class PostgresProblematicProjectionRepository:
         }
 
     def prepare_claimed_build(self, *, claim: object, now: object) -> ProblematicProjectionBuild:
-        params = {**_claim_parameters(claim), "observed_at": now}
+        params = {**_claim_parameters(claim), "observed_at": now, "builder_version": 2}
         with self._connect() as connection:
             row = self._one(
                 connection,
                 _projection_function_call_sql(
                     "prepare_claimed_problematic_projection",
-                    ("job_id", "attempt", "worker_id", "lease_token", "observed_at"),
+                    ("job_id", "attempt", "worker_id", "lease_token", "observed_at",
+                     "builder_version"),
                 ),
                 params,
             )
@@ -1335,6 +1356,44 @@ class PostgresProblematicProjectionRepository:
             ),
         )
 
+    def stage_claimed_main_search_facts(
+        self, *, claim: object, build: ProblematicProjectionBuild,
+        group_key: ProblematicProjectionGroupKey,
+        facts: Iterable[Mapping[str, object]], now: object,
+    ) -> None:
+        entries = [dict(fact) for fact in facts]
+        _validate_limit("search fact batch", len(entries), 100)
+        for entry in entries:
+            if (set(entry) != {"item_key", "fact_kind", "semantic_child_identity",
+                              "normalized_text"}
+                    or entry["fact_kind"] != "main_search"
+                    or not isinstance(entry["item_key"], str)
+                    or not entry["item_key"]
+                    or not isinstance(entry["semantic_child_identity"], str)
+                    or len(entry["semantic_child_identity"]) != 20
+                    or not entry["semantic_child_identity"].isascii()
+                    or not entry["semantic_child_identity"].isdecimal()
+                    or not isinstance(entry["normalized_text"], str)
+                    or len(entry["normalized_text"].encode("utf-8")) > 32768):
+                raise ProblematicProjectionIntegrityError("invalid main search fact")
+        group_kind, group_identity = _validate_group_key(group_key)
+        params = {
+            **_claim_parameters(claim), **_build_parameters(build),
+            "group_kind": group_kind, "group_identity": str(group_identity),
+            "entries": json.dumps(entries, ensure_ascii=False), "observed_at": now,
+        }
+        with self._connect() as connection:
+            row = self._one(
+                connection,
+                _projection_function_call_sql(
+                    "stage_claimed_problematic_projection_search_facts",
+                    tuple(params),
+                ),
+                params,
+            )
+        if row is None or row.get("accepted") is not True:
+            raise ProblematicProjectionIntegrityError("claimed search fact staging rejected")
+
     def stage_claimed_search_facts(
         self,
         *,
@@ -1398,6 +1457,7 @@ class PostgresProblematicProjectionRepository:
                 "claimed search fact staging exceeded batch limit"
             )
         return cursor[0], cursor[1], cursor[2], staged_count, row["complete"]
+
 
     def complete_claimed_source_group(
         self, *, claim: object, build: ProblematicProjectionBuild,
@@ -1716,18 +1776,20 @@ class PostgresProblematicProjectionRepository:
         reasons: Iterable[str] = (), sort: str = "album", cursor: str | None = None
     ) -> ProblematicProjectionReadPage | ProblematicProjectionCursorExpired:
         _validate_limit("projection page limit", limit, 200)
-        normalized_scope = _normalize_cursor_scope(
-            library_id=library_id, revision="pending", query=query,
-            reasons=tuple(reasons), sort=sort, allow_pending_revision=True,
-        )
-        if normalized_scope[4] != "album":
-            raise ProblematicProjectionCursorError("unsupported projection sort")
+        reason_values = tuple(reasons)
         decoded = None
         if cursor is not None:
             decoded = _decode_page_cursor_for_scope(
-                cursor, library_id=normalized_scope[0], query=normalized_scope[2],
-                reasons=normalized_scope[3], sort=normalized_scope[4],
+                cursor, library_id=library_id, query=query,
+                reasons=reason_values, sort=sort,
             )
+        normalized_scope = _normalize_cursor_scope(
+            library_id=library_id, revision="pending", query=query,
+            reasons=reason_values, sort=sort, allow_pending_revision=True,
+            legacy_query=decoded is not None and decoded.version == 3,
+        )
+        if normalized_scope[4] != "album":
+            raise ProblematicProjectionCursorError("unsupported projection sort")
         params = {
             "library_id": normalized_scope[0],
             "revision": decoded.revision if decoded else None,
@@ -1736,6 +1798,7 @@ class PostgresProblematicProjectionRepository:
             "reasons": list(normalized_scope[3]),
             "anchor_item_key": decoded.anchor_item_key if decoded else None,
             "has_position": decoded is not None,
+            "legacy_cursor": decoded is not None and decoded.version == 3,
             "include_filtered_total": decoded is None,
             "carried_total": decoded.total if decoded else None,
             "fetch_limit": limit + 1,
@@ -1801,7 +1864,8 @@ def _read_page_sql() -> str:
             select projection_header.revision,
                    projection_header.total as committed_total,
                    projection_header.reason_facets,
-                   (%(revision)s is not null and projection_header.revision is null)
+                   (%(legacy_cursor)s or
+                    (%(revision)s is not null and projection_header.revision is null))
                        as cursor_expired,
                    state.committed_revision as current_revision
             from ops.problematic_projection_state state
@@ -1809,6 +1873,7 @@ def _read_page_sql() -> str:
               on committed_header.library_id = state.library_id
              and committed_header.revision = state.committed_revision
              and committed_header.verified
+             and (committed_header.builder_version = 2 or %(legacy_cursor)s)
              and committed_header.total = state.committed_total
              and committed_header.item_count = committed_header.total
              and committed_header.reason_facets = state.reason_facets
@@ -1818,6 +1883,8 @@ def _read_page_sql() -> str:
              and projection_header.revision =
                  coalesce(%(revision)s, state.committed_revision)
              and projection_header.verified
+             and projection_header.builder_version = 2
+             and not %(legacy_cursor)s
              and projection_header.item_count = projection_header.total
             where state.library_id = %(library_id)s
               and state.verified
@@ -1843,7 +1910,7 @@ def _read_page_sql() -> str:
             join header on search_fact.revision = header.revision
             where %(query)s <> ''
               and search_fact.library_id = %(library_id)s
-              and search_fact.fact_kind <> 'private_path_locator'
+              and search_fact.fact_kind = 'main_search'
               and search_fact.normalized_text like %(query_pattern)s escape '\\'
         ), filtered as not materialized (
             select item.*

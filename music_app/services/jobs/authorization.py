@@ -130,6 +130,7 @@ def build_problematic_files_projection_resource_validator() -> ResourceValidator
             )
         source_generation = parameters.get("source_generation")
         rebuild_epoch = parameters.get("rebuild_epoch")
+        builder_version = parameters.get("builder_version", 1)
         valid = (
             claim.kind
             in {
@@ -144,7 +145,10 @@ def build_problematic_files_projection_resource_validator() -> ResourceValidator
             and claim.request_origin_id is None
             and claim.max_attempts == 3
             and set(parameters)
-            == {"projection_kind", "source_generation", "rebuild_epoch"}
+            == ({"projection_kind", "source_generation", "rebuild_epoch"}
+                | ({"builder_version"} if "builder_version" in parameters else set()))
+            and type(builder_version) is int
+            and builder_version in (1, 2)
             and parameters.get("projection_kind") == "problematic_files"
             and _positive_bigint(source_generation)
             and _positive_bigint(rebuild_epoch)
@@ -152,6 +156,7 @@ def build_problematic_files_projection_resource_validator() -> ResourceValidator
             == (
                 "problematic-files-projection:"
                 f"{claim.library_id}:{source_generation}:{rebuild_epoch}"
+                + (":v2" if builder_version == 2 else "")
             )
         )
         if not valid:

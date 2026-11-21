@@ -7,6 +7,20 @@ from copy import deepcopy
 
 import pytest
 
+import re
+from music_app.services import problematic_files_projection as projection
+from music_app.services.library_browse_postgres import (
+    _problematic_album_detail_payload,
+    _problematic_album_summary_payload,
+)
+from music_app.services.metadata import build_text_repairs_for_entry
+from music_app.services.problematic_files_projection import (
+    _normalized_problematic_search_chunks,
+    normalize_problematic_search_query,
+    normalize_problematic_text,
+    project_problematic_albums,
+)
+
 
 def _row(*, year: object, title: str, path: str, track_number: int | None = 1):
     base_key = "ДДТ::Студийные записи::Deluxe".lower()
@@ -308,7 +322,7 @@ def _persisted_summary_contract(item, eager_summary):
     ids=lambda sample: sample["id"],
 )
 def test_problematic_server_normalizer_characterization_is_distinct_from_main_ui(sample):
-    """Characterize the existing normalizer, not the desired final UI predicate."""
+    """Keep canonical identity characterization while search follows the main UI."""
     from music_app.services.problematic_files_projection import (
         _normalized_problematic_search_chunks,
         normalize_problematic_search_query,
@@ -317,12 +331,14 @@ def test_problematic_server_normalizer_characterization_is_distinct_from_main_ui
 
     assert normalize_problematic_text(sample["text"]) == sample["normalized_text"]
     query = normalize_problematic_search_query(sample["query"])
-    assert query == sample["normalized_query"]
-    assert any(query in chunk for chunk in _normalized_problematic_search_chunks(sample["text"])) is sample["server_match"]
+    assert normalize_problematic_text(sample["query"]) == sample["normalized_query"]
+    assert query == sample["query"].lower()
+    assert any(query in chunk for chunk in _normalized_problematic_search_chunks(sample["text"])) is sample["main_match"]
     assert query not in normalize_problematic_text("Unrelated record")
 
 
 def test_persisted_search_facts_use_reader_nfkc_casefold_whitespace_normalization():
+    """Search now preserves width/spacing; canonical identity remains NFKC."""
     from music_app.services.problematic_files_projection import (
         _normalized_problematic_search_chunks,
         normalized_problematic_search_text,
@@ -340,7 +356,9 @@ def test_persisted_search_facts_use_reader_nfkc_casefold_whitespace_normalizatio
         sort="default",
     )[2]
 
-    assert persisted_fact == persisted_item == reader == "alpha beta"
+    assert normalize_problematic_text(raw) == "alpha beta"
+    assert persisted_fact == reader == raw.lower()
+    assert persisted_item == raw.lower() + "\n" * 5
     assert sum(
         reader in document
         for document in (
@@ -351,6 +369,7 @@ def test_persisted_search_facts_use_reader_nfkc_casefold_whitespace_normalizatio
 
 
 def test_normalized_search_query_enforces_utf8_boundary_after_nfkc():
+    """The unchanged byte budget now applies after ordinary lowercase."""
     from music_app.services.problematic_files_projection import (
         normalize_problematic_search_query,
     )
@@ -360,7 +379,10 @@ def test_normalized_search_query_enforces_utf8_boundary_after_nfkc():
     )
 
     assert normalize_problematic_search_query("x" * 4096) == "x" * 4096
-    assert normalize_problematic_search_query("\uff21" * 4096) == "a" * 4096
+    assert normalize_problematic_text("\uff21" * 4096) == "a" * 4096
+    assert normalize_problematic_search_query("\uff21" * 1365) == "\uff41" * 1365
+    assert normalize_problematic_search_query("\uff21" * 1365 + "x") == "\uff41" * 1365 + "x"
+    assert normalize_problematic_search_query("\ufdfa" * 125) == "\ufdfa" * 125
     assert _normalize_cursor_scope(
         library_id=1,
         revision="00000000-0000-0000-0000-000000000001",
@@ -372,7 +394,9 @@ def test_normalized_search_query_enforces_utf8_boundary_after_nfkc():
     with pytest.raises(ValueError, match="query exceeds 4096 bytes"):
         normalize_problematic_search_query("x" * 4097)
     with pytest.raises(ValueError, match="query exceeds 4096 bytes"):
-        normalize_problematic_search_query("\ufdfa" * 125)
+        normalize_problematic_search_query("\uff21" * 1366)
+    with pytest.raises(ValueError, match="query exceeds 4096 bytes"):
+        normalize_problematic_search_query("\uff21" * 4096)
     with pytest.raises(
         ProblematicProjectionCursorError,
         match="invalid projection cursor scope",
@@ -1917,7 +1941,10 @@ def test_incremental_projection_keeps_search_facts_outside_bounded_summary():
         assert field in incremental
         assert field not in incremental["summary"]
     assert "compatibility title" in incremental["search_text"]
-    assert r"d:\music\compatibility\01.flac" in incremental["search_text"]
+    assert r"d:\music\compatibility\01.flac" not in incremental["search_text"]
+    with incremental:
+        expected, _detail = _main_search_single_row_document(row, [])
+        assert [fact["normalized_text"] for fact in incremental.search_facts] == [expected]
 
     missing = dict(row)
     missing.update(
@@ -1932,100 +1959,61 @@ def test_incremental_projection_keeps_search_facts_outside_bounded_summary():
 
 
 def test_incremental_projection_emits_exact_normalized_relational_search_facts():
-    from music_app.services.problematic_files_projection import (
-        ProblematicGroupAccumulator,
-    )
+    from music_app.services.problematic_files_projection import ProblematicGroupAccumulator
 
-    first = _row(
-        year=1988,
-        title="Café opener",
-        path=r"D:\Music\Café\01.flac",
-    )
+    first = _row(year=1988, title="Café opener", path=r"D:\Music\Café\01.flac")
     equivalent = _row(
-        year=1988,
-        title="Cafe\u0301 opener",
-        path="D:\\Music\\Cafe\u0301\\01.flac",
+        year=1988, title="Cafe\u0301 opener", path="D:\\Music\\Cafe\u0301\\01.flac",
     )
     equivalent.update(track_id=2, track_key="track-2")
-    tail = _row(
-        year=1988,
-        title="Needle tail title",
-        path=r"D:\Music\Needle\99.flac",
-    )
+    tail = _row(year=1988, title="Needle tail title", path=r"D:\Music\Needle\99.flac")
     tail.update(track_id=99, track_key="track-99")
-
-    facts = list(
-        ProblematicGroupAccumulator().consume(
-            enumerate((first, equivalent, tail), 1)
-        )
-    )
+    rows = (first, equivalent, tail)
+    accumulator = ProblematicGroupAccumulator()
+    source_facts = list(accumulator.consume(enumerate(rows, 1)))
     raw_facts = [
-        (kind, payload)
-        for _stage_id, kind, payload in facts
+        (kind, payload) for _stage_id, kind, payload in source_facts
         if kind in {"track_title", "private_path"}
     ]
-
-    search_facts = [
-        (kind, payload)
-        for _stage_id, kind, payload in facts
-        if kind in {"track_title_search", "private_path_search"}
-    ]
-
     assert len(raw_facts) == 6
-    assert len(search_facts) == 6
     assert all("normalized_text" not in payload for _, payload in raw_facts)
-    for kind, payload in search_facts:
-        assert payload["normalized_text"]
-        assert len(payload["normalized_text"].encode("utf-8")) <= 32_768
-        assert payload["semantic_child_identity"]
-        assert kind in {"track_title_search", "private_path_search"}
-    title_facts = [
-        payload for kind, payload in search_facts if kind == "track_title_search"
-    ]
-    path_facts = [
-        payload for kind, payload in search_facts if kind == "private_path_search"
-    ]
-    assert title_facts[0]["normalized_text"] == "café opener"
-    assert title_facts[1]["normalized_text"] == "café opener"
-    assert title_facts[0]["semantic_child_identity"] == title_facts[1][
-        "semantic_child_identity"
-    ]
-    assert path_facts[0]["normalized_text"] == r"d:\music\café\01.flac"
-    assert path_facts[1]["normalized_text"] == r"d:\music\café\01.flac"
-    assert path_facts[0]["semantic_child_identity"] == path_facts[1][
-        "semantic_child_identity"
-    ]
-    assert title_facts[-1]["normalized_text"] == "needle tail title"
-    assert path_facts[-1]["normalized_text"] == r"d:\music\needle\99.flac"
+    for kind in ("track_title", "private_path"):
+        canonical = [payload for fact_kind, payload in raw_facts if fact_kind == kind]
+        assert canonical[0]["semantic_child_identity"] == canonical[1]["semantic_child_identity"]
+    assert not any(kind.endswith("_search") for _, kind, _ in source_facts)
+
+    facts = _persist_semantic_facts(ProblematicGroupAccumulator(), enumerate(rows, 1))
+    projected, = accumulator.finalize(facts)
+    expected, _detail = _main_search_multirow_document(rows)
+    with projected:
+        search_facts = list(projected.search_facts)
+        assert search_facts
+        assert all(fact["fact_kind"] == "main_search" for fact in search_facts)
+        assert all(fact["item_key"] == projected["item_key"] for fact in search_facts)
+        assert all(fact["semantic_child_identity"] for fact in search_facts)
+        chunks = [fact["normalized_text"] for fact in search_facts]
+        assert chunks == [expected]
+        assert all(0 < len(chunk.encode("utf-8")) <= 32768 for chunk in chunks)
+        assert "café opener" in expected
+        assert "cafe\u0301 opener" in expected
+        assert "needle tail title" in expected
+        assert all(row["file_private_path"].lower() not in expected for row in rows)
 
 
 def test_incremental_projection_chunks_nfkc_expansion_without_duplicating_raw_text():
     from music_app.services.problematic_files_projection import (
-        ProblematicGroupAccumulator,
-        normalize_problematic_text,
+        ProblematicGroupAccumulator, normalize_problematic_text,
     )
 
-    raw_title = "START-" + ("\ufdfa" * 2000) + "-TAIL"
+    raw_title = "START-" + ("\ufdfa" * 5500) + "-TAIL"
     row = _row(
-        year=1988,
-        title=raw_title,
+        year=1988, title=raw_title,
         path="C:\\" + ("\ufdfa" * 2000) + "\\TAIL.flac",
     )
-
-    facts = list(ProblematicGroupAccumulator().consume([(1, row)]))
-    title_fact = next(payload for _, kind, payload in facts if kind == "track_title")
-    path_fact = next(payload for _, kind, payload in facts if kind == "private_path")
-    title_chunks = [
-        payload["normalized_text"]
-        for _, kind, payload in facts
-        if kind == "track_title_search"
-    ]
-    path_chunks = [
-        payload["normalized_text"]
-        for _, kind, payload in facts
-        if kind == "private_path_search"
-    ]
-
+    accumulator = ProblematicGroupAccumulator()
+    source_facts = list(accumulator.consume([(1, row)]))
+    title_fact = next(payload for _, kind, payload in source_facts if kind == "track_title")
+    path_fact = next(payload for _, kind, payload in source_facts if kind == "private_path")
     assert title_fact == {
         "title": raw_title,
         "projection_id": title_fact["projection_id"],
@@ -2036,87 +2024,73 @@ def test_incremental_projection_chunks_nfkc_expansion_without_duplicating_raw_te
         "projection_id": path_fact["projection_id"],
         "semantic_child_identity": path_fact["semantic_child_identity"],
     }
-    assert len(title_chunks) > 1
-    assert len(path_chunks) > 1
-    assert all(0 < len(chunk.encode("utf-8")) <= 32_768 for chunk in title_chunks)
-    assert all(0 < len(chunk.encode("utf-8")) <= 32_768 for chunk in path_chunks)
     assert all(
-        len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) <= 65_536
-        for _, _, payload in facts
+        len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) <= 65536
+        for _, _, payload in source_facts
     )
-
-    normalized_title = normalize_problematic_text(raw_title)
-    normalized_title_bytes = normalized_title.encode("utf-8")
-    first_boundary = len(title_chunks[0].encode("utf-8"))
-    start_query = normalized_title_bytes[:4096].decode("utf-8", errors="ignore")
-    crossing_query = normalized_title_bytes[
-        first_boundary - 2048 : first_boundary + 2048
-    ].decode("utf-8", errors="ignore")
-    tail_query = normalized_title_bytes[-4096:].decode("utf-8", errors="ignore")
-    title_queries = (start_query, crossing_query, tail_query)
-    assert all(len(query.encode("utf-8")) <= 4096 for query in title_queries)
-    assert all(any(query in chunk for chunk in title_chunks) for query in title_queries)
-    assert all(raw_title not in chunk for chunk in title_chunks)
-
-    normalized_path = normalize_problematic_text(row["file_private_path"])
-    normalized_path_bytes = normalized_path.encode("utf-8")
-    path_boundary = len(path_chunks[0].encode("utf-8"))
-    path_queries = (
-        normalized_path_bytes[:4096].decode("utf-8", errors="ignore"),
-        normalized_path_bytes[
-            path_boundary - 2048 : path_boundary + 2048
-        ].decode("utf-8", errors="ignore"),
-        normalized_path_bytes[-4096:].decode("utf-8", errors="ignore"),
-    )
-    assert all(len(query.encode("utf-8")) <= 4096 for query in path_queries)
-    assert all(any(query in chunk for chunk in path_chunks) for query in path_queries)
-    assert all(row["file_private_path"] not in chunk for chunk in path_chunks)
+    assert normalize_problematic_text(raw_title) != raw_title.lower()
+    facts = _persist_semantic_facts(ProblematicGroupAccumulator(), [(1, row)])
+    projected, = accumulator.finalize(facts)
+    expected, _detail = _main_search_single_row_document(row, [])
+    with projected:
+        search_facts = list(projected.search_facts)
+        chunks = [fact["normalized_text"] for fact in search_facts]
+        assert len(chunks) > 1
+        assert all(fact["fact_kind"] == "main_search" for fact in search_facts)
+        assert all(0 < len(chunk.encode("utf-8")) <= 32768 for chunk in chunks)
+        assert all(len(json.dumps(fact, ensure_ascii=False).encode("utf-8")) <= 65536
+                   for fact in search_facts)
+        expected_bytes = expected.encode("utf-8")
+        boundary = len(chunks[0].encode("utf-8"))
+        queries = (
+            expected_bytes[:4096].decode("utf-8", errors="ignore"),
+            expected_bytes[boundary - 2048:boundary + 2048].decode("utf-8", errors="ignore"),
+            expected_bytes[-4096:].decode("utf-8", errors="ignore"),
+        )
+        assert all(len(query.encode("utf-8")) <= 4096 for query in queries)
+        assert all(any(query in chunk for chunk in chunks) for query in queries)
+        assert all(raw_title not in chunk for chunk in chunks)
+        assert all(chunk in expected for chunk in chunks)
+        assert all(row["file_private_path"].lower() not in chunk for chunk in chunks)
+        assert any("ﷺ" in chunk for chunk in chunks)
 
 
 def test_incremental_projection_chunks_cover_complete_album_search_fields():
-    from music_app.services.problematic_files_projection import (
-        ProblematicGroupAccumulator,
-        normalize_problematic_text,
-    )
+    from music_app.services.problematic_files_projection import ProblematicGroupAccumulator
 
     row = _row(year=1988, title="Track", path=r"C:\Album\01.flac")
-    raw_title = "ALBUM-START-" + ("\ufdfa" * 2_000) + "-ALBUM-TAIL"
-    raw_artist = "ARTIST-START-" + ("\ufdfa" * 2_000) + "-ARTIST-TAIL"
-    raw_key = "KEY-START-" + ("\ufdfa" * 2_000) + "-KEY-TAIL"
+    raw_title = "ALBUM-START-" + ("\ufdfa" * 12000) + "-ALBUM-TAIL"
+    raw_artist = "ARTIST-START-" + ("\ufdfa" * 12000) + "-ARTIST-TAIL"
+    raw_key = "KEY-START-" + ("\ufdfa" * 2000) + "-KEY-TAIL"
     row.update(
-        album_title=raw_title,
-        album_key=raw_key,
-        artist_name=raw_artist,
+        album_title=raw_title, album_key=raw_key, artist_name=raw_artist,
         album_metadata={"album_artist": raw_artist},
     )
     row["file_entry"] = {
-        **row["file_entry"],
-        "album": raw_title,
-        "album_artist": raw_artist,
+        **row["file_entry"], "album": raw_title, "album_artist": raw_artist,
     }
-
-    facts = list(ProblematicGroupAccumulator().consume([(1, row)]))
-
-    for fact_kind, raw_value in (
-        ("album_title_search", raw_title),
-        ("album_artist_search", raw_artist),
-        ("album_key_search", raw_key),
-    ):
-        chunks = [
-            payload["normalized_text"]
-            for _, kind, payload in facts
-            if kind == fact_kind
-        ]
-        normalized = normalize_problematic_text(raw_value)
+    accumulator = ProblematicGroupAccumulator()
+    facts = _persist_semantic_facts(accumulator, [(1, row)])
+    projected, = accumulator.finalize(facts)
+    expected, _detail = _main_search_single_row_document(row, [])
+    with projected:
+        chunks = [fact["normalized_text"] for fact in projected.search_facts]
         assert len(chunks) > 1
         assert all(0 < len(chunk.encode("utf-8")) <= 32768 for chunk in chunks)
-        assert normalized[:64] in chunks[0]
-        assert normalized[-64:] in chunks[-1]
-        boundary = len(chunks[0].encode("utf-8"))
-        boundary_query = normalized.encode("utf-8")[
-            boundary - 2_048 : boundary + 2_048
-        ].decode("utf-8")
-        assert any(boundary_query in chunk for chunk in chunks)
+        for raw_value in (raw_title, raw_artist):
+            normalized = raw_value.lower()
+            assert any(normalized[:64] in chunk for chunk in chunks)
+            assert any(normalized[-64:] in chunk for chunk in chunks)
+            expected_bytes = expected.encode("utf-8")
+            start = expected_bytes.index(normalized.encode("utf-8"))
+            boundary = ((start // 32768) + 1) * 32768
+            boundary_query = expected_bytes[boundary - 2048:boundary + 2048].decode(
+                "utf-8", errors="ignore",
+            )
+            assert len(boundary_query.encode("utf-8")) <= 4096
+            assert any(boundary_query in chunk for chunk in chunks)
+        assert all(raw_key.lower() not in chunk for chunk in chunks)
+        assert all(row["file_private_path"].lower() not in chunk for chunk in chunks)
 
 
 def test_incremental_search_chunks_are_deterministic_across_replay():
@@ -2828,6 +2802,10 @@ def test_reason_stream_closes_after_full_consumption():
 
     assert projected.closed is False
     assert tuple(projected.reason_facts)
+    assert projected.reason_facts.closed is True
+    assert projected.search_facts.closed is False
+    assert projected.closed is False
+    assert tuple(projected.search_facts)
     assert projected.closed is True
 
 
@@ -3135,8 +3113,12 @@ def test_reducer_closes_all_owned_spools_after_full_consumption(monkeypatch):
 
     assert projected is not None
     tuple(projected.reason_facts)
+    assert projected.reason_facts.closed
+    assert not projected.search_facts.closed
+    tuple(projected.search_facts)
 
-    assert len(opened) == 4
+    # Includes the ordered source, track, repair and independent search spools.
+    assert len(opened) == 8
     assert all(spool.closed for spool in opened)
 
 
@@ -3157,7 +3139,7 @@ def test_reducer_close_owns_all_spools_after_partial_consumption(monkeypatch):
     next(reasons)
     projected.close()
 
-    assert len(opened) == 4
+    assert len(opened) == 8
     assert all(spool.closed for spool in opened)
 
 
@@ -3184,7 +3166,8 @@ def test_reducer_closes_all_owned_spools_when_row_projection_fails(monkeypatch):
     with pytest.raises(RuntimeError, match="projection failed"):
         reducer.consume("row", row_fact)
 
-    assert len(opened) == 3
+    # Failure precedes track/repair/search construction; the source spool exists.
+    assert len(opened) == 4
     assert all(spool.closed for spool in opened)
 
 
@@ -3208,7 +3191,7 @@ def test_finalize_closes_active_reducer_when_fact_iteration_fails(monkeypatch):
     with pytest.raises(RuntimeError, match="fact iteration failed"):
         tuple(projected)
 
-    assert len(opened) == 3
+    assert len(opened) == 4
     assert all(spool.closed for spool in opened)
 
 
@@ -3239,7 +3222,7 @@ def test_legacy_row_ignores_merge_into_fixed_hash_spool(monkeypatch):
     assert projected is not None
     assert "Missing track title" not in projected.item["reasons"]
     projected.close()
-    assert len(opened) == 4
+    assert len(opened) == 8
     assert all(spool.closed for spool in opened)
 def test_legacy_and_hashed_ignored_repair_facts_can_interleave():
     from music_app.services.problematic_files_projection import (
@@ -3410,3 +3393,316 @@ def test_legacy_ignored_repair_external_merge_uses_bounded_disk_runs(
         assert active_handles == 0
     finally:
         membership.close()
+
+
+def _main_search_compilation_row(title="Neutral track"):
+    row = _row(year=1988, title=title, path="/music/search-stream/neutral.flac")
+    row.update(album_key="opaque-key-not-searchable", album_title="Neutral compilation",
+               album_release_year=1988, album_edition="Edition-only sentinel",
+               album_metadata={"album_artist": "Release Artist", "is_compilation": True},
+               artist_name="Release Artist", separate_release_keys=[])
+    row["file_entry"].update(album="Neutral compilation", album_artist="Release Artist",
+                             artist="JosÃ© GarcÃ­a")
+    return row
+
+
+def _main_search_single_row_document(row, ignored_keys):
+    eager_row = deepcopy(row)
+    eager_row["ignored_repair_keys"] = list(ignored_keys)
+    album, = project_problematic_albums([eager_row])
+    summary = _problematic_album_summary_payload(album)
+    detail = _problematic_album_detail_payload(album)
+    assert summary is not None and detail is not None
+    merged = {**summary, **detail}
+    values = [merged.get("name"), merged.get("raw_name"), merged.get("album_artist"),
+              merged.get("raw_album_artist"), merged.get("year"),
+              *merged.get("problem_reasons", []), merged.get("search_text"),
+              *(track.get("title") for track in merged.get("tracks", [])),
+              *(value for repair in merged.get("repair_preview_rows", [])
+                for value in (repair.get("track_title"), repair.get("original"), repair.get("repaired")))]
+    return "\n".join("" if value is None else str(value) for value in values).lower(), detail
+
+
+@pytest.mark.parametrize("ignored", [False, True], ids=["real-repair", "late-ignored-repair"])
+def test_ordered_search_stream_matches_real_main_detail_after_late_ignore(ignored):
+    row = _main_search_compilation_row()
+    target = row["file_private_path"] + "::artist"
+    assert build_text_repairs_for_entry(row["file_entry"])["artist"] == "José García"
+    ignored_keys = [target] if ignored else []
+    expected, detail = _main_search_single_row_document(row, ignored_keys)
+    previews = detail["repair_preview_rows"]
+    assert any(repair["path"] == row["file_private_path"] and repair["field"] == "artist"
+               and repair["repaired"] == "José García" for repair in previews) is (not ignored)
+    # This existing helper appends persisted ignored_repair source facts after the row.
+    projected = _project_with_persisted_ignored_repairs(row, ignored_keys)
+    assert projected is not None
+    with projected:
+        reasons = list(projected.reason_facts)
+        assert reasons
+        facts = list(projected.search_facts)
+        assert facts
+        assert all(set(fact) == {"item_key", "fact_kind", "semantic_child_identity", "normalized_text"}
+                   for fact in facts)
+        assert all(fact["item_key"] == projected["item_key"] and fact["fact_kind"] == "main_search"
+                   for fact in facts)
+        chunks = [fact["normalized_text"] for fact in facts]
+        assert chunks == [expected]
+        assert ("josé garcía" in chunks[0]) is (not ignored)
+        assert projected["search_text"] == expected
+        assert "opaque-key-not-searchable" not in chunks[0]
+        assert "edition-only sentinel" not in chunks[0]
+        assert "/music/search-stream" not in chunks[0]
+
+
+def test_ordered_search_chunks_preserve_cross_field_newline_and_tail_after_reason_exhaustion():
+    row = _main_search_compilation_row("Title-" + "x" * 32720 + "-Tail")
+    row["file_entry"]["artist"] = "Ordinary credit only"
+    expected, _detail = _main_search_single_row_document(row, [])
+    assert "-tail\ntitle-" in expected
+    projected = _project_with_persisted_ignored_repairs(row, [])
+    assert projected is not None
+    with projected:
+        list(projected.reason_facts)
+        chunks = [fact["normalized_text"] for fact in projected.search_facts]
+        assert len(chunks) > 1
+        assert all(len(chunk.encode("utf-8")) <= 32768 for chunk in chunks)
+        assert any("-tail\ntitle-" in chunk for chunk in chunks)
+        assert any(chunk.endswith("-tail") for chunk in chunks)
+        assert "ordinary credit only" not in "".join(chunks)
+        assert projected["search_text"] == expected.encode("utf-8")[:32768].decode("utf-8", errors="ignore")
+
+
+@pytest.mark.parametrize(
+    "sample", json.loads((Path(__file__).resolve().parents[1] / "fixtures/problematic-search-normalization.json").read_text(encoding="utf-8")),
+    ids=lambda sample: sample["id"],
+)
+def test_existing_search_helpers_match_main_json_without_changing_canonical_identity(sample):
+    assert normalize_problematic_text(sample["text"]) == sample["normalized_text"]
+    query = normalize_problematic_search_query(sample["query"])
+    assert any(query in chunk for chunk in _normalized_problematic_search_chunks(sample["text"])) is sample["main_match"]
+
+
+@pytest.mark.parametrize("raw, expected", [
+    ("\ufeff  Alpha  \ufeff", "alpha"),
+    ("\u0085Alpha\u0085", "\u0085alpha\u0085"),
+    ("\u001cAlpha\u001c", "\u001calpha\u001c"),
+    ("  Alpha  Beta  ", "alpha  beta"),
+    ("ΟΣ", "ος"),
+])
+def test_existing_query_helper_uses_js_trim_and_ordinary_lower(raw, expected):
+    assert normalize_problematic_search_query(raw) == expected
+
+
+def test_existing_chunks_keep_contextual_lowercase_and_literal_separators_at_utf8_boundary():
+    raw = "a" * 32765 + "ΟΣ\nTail  Value"
+    chunks = _normalized_problematic_search_chunks(raw)
+    assert len(chunks) > 1
+    assert all(len(chunk.encode("utf-8")) <= 32768 for chunk in chunks)
+    assert any("ος\ntail  value" in chunk for chunk in chunks)
+
+
+def _main_search_multirow_document(rows):
+    album, = projection.project_problematic_albums(rows)
+    summary = _problematic_album_summary_payload(album)
+    detail = _problematic_album_detail_payload(album)
+    assert summary is not None and detail is not None
+    merged = {**summary, **detail}
+    values = [merged.get("name"), merged.get("raw_name"), merged.get("album_artist"),
+              merged.get("raw_album_artist"), merged.get("year"),
+              *merged.get("problem_reasons", []), merged.get("search_text"),
+              *(track.get("title") for track in merged.get("tracks", [])),
+              *(value for repair in merged.get("repair_preview_rows", [])
+                for value in (repair.get("track_title"), repair.get("original"), repair.get("repaired")))]
+    return "\n".join("" if value is None else str(value) for value in values).lower(), detail
+
+
+def test_multirow_document_preserves_real_order_dedup_and_raw_fields_across_merge_generations(monkeypatch):
+    rows = []
+    for index, (filename, number, title) in enumerate([
+        ("Z.flac", 3, "Repeated title"),
+        ("b.flac", 1, "Repeated title"),
+        ("A.flac", 2, "Different title"),
+        ("c.flac", 4, "Repeated title"),
+        ("B.flac", 5, "Repeated title"),
+        ("d.flac", 6, "Tie title"),
+    ], 1):
+        row = _main_search_compilation_row(title)
+        path = "/music/search-stream/multi/" + filename
+        row.update(track_id=index, track_key=f"multi-{index}", track_number=number,
+                   file_private_path=path)
+        row["file_entry"].update(path=path, track_number=number)
+        if filename == "A.flac":
+            row["file_entry"].update(album="CafÃ© Release", album_artist="RenÃ© GarcÃ­a")
+        rows.append(row)
+    rows.insert(4, deepcopy(rows[1]))
+    expected, detail = _main_search_multirow_document(rows)
+    assert len(detail["tracks"]) == 6
+    assert [track["path"] for track in detail["tracks"]] != [row["file_private_path"] for row in rows]
+    assert detail["raw_name"] == "CafÃ© Release"
+    assert detail["raw_album_artist"] == "RenÃ© GarcÃ­a"
+    assert sum(track["title"] == "Repeated title" for track in detail["tracks"]) == 4
+    previews = detail["repair_preview_rows"]
+    tied = [row for row in previews if row["track_title"] == "Repeated title"
+            and row["field"] == "artist" and row["original"] == "JosÃ© GarcÃ­a"]
+    assert len(tied) == 4
+    assert len({row["row_key"] for row in previews}) == len(previews)
+
+    # Existing production knobs, with enough runs for multiple merge generations.
+    monkeypatch.setattr(projection, "_MAX_REDUCER_FACT_BYTES", 128)
+    monkeypatch.setattr(projection, "_PROBLEMATIC_FACT_MERGE_FAN_IN", 2)
+    real_open = projection.Path.open
+    run_writes = []
+
+    def observe_run_open(path, mode="r", *args, **kwargs):
+        match = re.fullmatch(r"run-(\d+)-(\d+)\.jsonl", path.name)
+        if match and "w" in mode:
+            run_writes.append((int(match[1]), int(match[2])))
+        return real_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(projection.Path, "open", observe_run_open)
+    accumulator = projection.ProblematicGroupAccumulator()
+    facts = _persist_semantic_facts(accumulator, enumerate(rows, 1))
+    projected, = accumulator.finalize(facts)
+    with projected:
+        list(projected.reason_facts)
+        chunks = [fact["normalized_text"] for fact in projected.search_facts]
+        assert chunks == [expected]
+        assert projected["search_text"] == expected
+    assert len({number for generation, number in run_writes if generation == 0}) >= 4
+    assert max(generation for generation, _number in run_writes) >= 2
+
+
+@pytest.mark.parametrize("state", [
+    "unstarted", "partial-reasons", "partial-search", "reasons-exhausted", "search-exhausted",
+])
+def test_independent_search_and_reason_streams_keep_owned_spools_until_explicit_close(monkeypatch, state):
+    _module, opened = _tracked_projection_spools(monkeypatch)
+    projected = _project_with_persisted_ignored_repairs(_main_search_compilation_row(), [])
+    assert projected is not None
+    search_file = projected.search_facts._file
+    try:
+        if state == "partial-reasons":
+            next(iter(projected.reason_facts))
+        elif state == "partial-search":
+            next(iter(projected.search_facts))
+        elif state == "reasons-exhausted":
+            assert list(projected.reason_facts)
+            assert projected.reason_facts.closed
+            assert not projected.search_facts.closed
+            assert not projected.closed
+            assert list(projected.search_facts)
+            assert projected.closed
+        elif state == "search-exhausted":
+            assert list(projected.search_facts)
+            assert projected.search_facts.closed
+            assert not projected.reason_facts.closed
+            assert not projected.closed
+            assert list(projected.reason_facts)
+            assert projected.closed
+        else:
+            assert not projected.closed
+        if state not in {"reasons-exhausted", "search-exhausted"}:
+            assert not projected.closed
+    finally:
+        projected.close()
+    assert search_file.closed
+    assert projected.closed
+    assert opened and all(owner.closed for owner in opened)
+
+
+def test_sorter_exit_failure_explicitly_closes_completed_search_spool_and_preserves_primary(monkeypatch):
+    _module, opened = _tracked_projection_spools(monkeypatch)
+    constructed = []
+    real_init = projection._ProblematicSearchFactStream.__init__
+    real_sorter_close = projection._ProblematicSortedSearchValues.close
+    primary = RuntimeError("sorter exit failed after completed search construction")
+    failed = False
+
+    def capture_completed_stream(stream, *args, **kwargs):
+        real_init(stream, *args, **kwargs)
+        constructed.append(stream)
+
+    def fail_sorter_exit(sorter):
+        nonlocal failed
+        real_sorter_close(sorter)
+        if constructed and not failed:
+            failed = True
+            raise primary
+
+    monkeypatch.setattr(projection._ProblematicSearchFactStream, "__init__", capture_completed_stream)
+    monkeypatch.setattr(projection._ProblematicSortedSearchValues, "close", fail_sorter_exit)
+    with pytest.raises(RuntimeError) as caught:
+        _project_with_persisted_ignored_repairs(_main_search_compilation_row(), [])
+    assert caught.value is primary
+    assert failed and len(constructed) == 1
+    assert constructed[0].count > 0
+    assert constructed[0]._file.closed, "completed search spool must be explicitly closed before ownership is lost"
+    assert opened and all(owner.closed for owner in opened)
+
+
+@pytest.mark.parametrize("last_item", [False, True], ids=["group-boundary", "last-group"])
+@pytest.mark.parametrize("action", ["close", "throw"])
+def test_finalize_closes_suspended_item_streams(monkeypatch, last_item, action):
+    _module, opened = _tracked_projection_spools(monkeypatch)
+    row = _main_search_compilation_row()
+    accumulator = projection.ProblematicGroupAccumulator()
+    facts = _persist_semantic_facts(accumulator, [(1, row)])
+    if not last_item:
+        facts.append((2, "ignored_repair", {
+            "projection_id": "zz-next-group",
+            "semantic_child_identity": "a",
+            "repair_key": "/next.flac::title",
+        }))
+    items = accumulator.finalize(iter(facts))
+    projected = next(items)
+    assert not projected.closed
+    if action == "close":
+        items.close()
+    else:
+        primary = RuntimeError("consumer failed while item was suspended")
+        with pytest.raises(RuntimeError) as caught:
+            items.throw(primary)
+        assert caught.value is primary
+    assert projected.closed
+    assert list(projected.reason_facts) == []
+    assert list(projected.search_facts) == []
+    assert opened and all(owner.closed for owner in opened)
+
+
+@pytest.mark.parametrize("error_type", [ValueError, GeneratorExit])
+def test_finalize_preserves_thrown_error_when_suspended_item_cleanup_fails(monkeypatch, error_type):
+    row = _main_search_compilation_row()
+    accumulator = projection.ProblematicGroupAccumulator()
+    facts = _persist_semantic_facts(accumulator, [(1, row)])
+    items = accumulator.finalize(facts)
+    projected = next(items)
+    real_close = projection._ProblematicSearchFactStream.close
+
+    def fail_after_close(stream):
+        real_close(stream)
+        raise RuntimeError("search close failed")
+
+    monkeypatch.setattr(projection._ProblematicSearchFactStream, "close", fail_after_close)
+    primary = error_type("consumer failed")
+    with pytest.raises(error_type) as caught:
+        items.throw(primary)
+    assert caught.value is primary
+    assert projected.closed
+    assert any("search close failed" in note for note in primary.__notes__)
+
+
+def test_finalize_normal_exhaustion_transfers_both_streams_to_item(monkeypatch):
+    _module, opened = _tracked_projection_spools(monkeypatch)
+    accumulator = projection.ProblematicGroupAccumulator()
+    facts = _persist_semantic_facts(accumulator, [(1, _main_search_compilation_row())])
+    items = accumulator.finalize(facts)
+    projected = next(items)
+    with pytest.raises(StopIteration):
+        next(items)
+    with projected:
+        assert not projected.closed
+        assert list(projected.reason_facts)
+        assert not projected.search_facts.closed
+        assert list(projected.search_facts)
+    assert projected.closed
+    assert opened and all(owner.closed for owner in opened)

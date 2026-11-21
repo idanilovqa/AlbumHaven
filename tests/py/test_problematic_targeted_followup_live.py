@@ -459,3 +459,85 @@ def test_live_missing_detail_uses_canonical_library_with_older_nonlocal(prepared
     assert detail["album_artist"] == "Canonical Missing Artist"
     assert len(queries) == 1
     assert "ops.resolve_problematic_projection_library()" in queries[0]
+
+
+def test_live_indexed_search_finds_unopened_compilation_artist_repair(loose_catalog):
+    paths = sorted(_seed_files(
+        loose_catalog, 2, "neutral-repair-search",
+        album_title="Neutral compilation", membership_problem=False,
+    ))
+    credits = ("JosÃ© GarcÃ­a", "Ordinary credit only")
+    with isolatedPostgres._connect(loose_catalog.database.setup_url) as connection:
+        album_id = connection.execute(
+            "insert into library.local_albums"
+            "(library_id,artist_id,album_key,title,release_year,metadata) "
+            "values(%s,%s,'neutral-repair-search-compilation','Neutral compilation',2026,%s::jsonb) "
+            "returning id",
+            (loose_catalog.database.library_id, loose_catalog.artist_id,
+             json.dumps({"album_artist": "Targeted Followup", "is_compilation": True})),
+        ).fetchone()["id"]
+        for index, (path, artist) in enumerate(zip(paths, credits, strict=True)):
+            artist_id = connection.execute(
+                "insert into library.local_artists(library_id,artist_key,name) "
+                "values(%s,%s,%s) returning id",
+                (loose_catalog.database.library_id, f"repair-search-credit-{index}", artist),
+            ).fetchone()["id"]
+            assert connection.execute(
+                "update library.local_tracks t set album_id=%s,artist_id=%s,metadata=%s::jsonb "
+                "from library.local_track_files f where f.track_id=t.id and f.private_path=%s "
+                "returning t.id",
+                (album_id, artist_id, json.dumps({
+                    "album": "Neutral compilation", "album_artist": "Targeted Followup",
+                    "artist": artist, "artists": [artist],
+                }), path),
+            ).fetchone() is not None
+            connection.execute(
+                "update library.local_track_files "
+                "set metadata=jsonb_set(metadata,'{scan_cache,file_entry,artist}',"
+                "to_jsonb(%s::text),false) where private_path=%s",
+                (artist, path),
+            )
+            persisted = connection.execute(
+                "select t.album_id,a.name as artist_name,t.metadata->>'artist' as track_artist,"
+                "f.metadata #>> '{scan_cache,file_entry,artist}' as raw_artist,"
+                "f.scan_file_artist,f.scan_file_text_mojibake_candidate "
+                "from library.local_track_files f join library.local_tracks t on t.id=f.track_id "
+                "join library.local_artists a on a.id=t.artist_id where f.private_path=%s",
+                (path,),
+            ).fetchone()
+            assert persisted["album_id"] == album_id
+            assert persisted["artist_name"] == persisted["track_artist"] == artist
+            assert persisted["raw_artist"] == persisted["scan_file_artist"] == artist
+            assert persisted["scan_file_text_mojibake_candidate"] is (index == 0)
+    repository = PostgresLibraryBrowseRepository(loose_catalog.config)
+    published = publish_problematic_fixture(repository)
+    compilation = [item for item in published["items"]
+                   if item["name"] == "Neutral compilation"
+                   and item["album_artist"] == "Targeted Followup"]
+    assert len(compilation) == 1, "the actual assigned compilation must be published"
+    unopened = repository.build_problematic_files_page(
+        limit=50, filter=json.dumps({"query": "José", "reasons": []}),
+    )
+    # Only now open real detail: search must not depend on this hydration.
+    detail = repository.build_problematic_file_detail_payload(
+        projection_id=compilation[0]["projection_id"],
+    )
+    assert detail is not None, "published projection must resolve through real detail"
+    repair_rows = detail.get("repair_preview_rows", [])
+    assert any(row.get("path") == paths[0] and row.get("field") == "artist"
+               and row.get("original") == credits[0] and row.get("repaired") == "José García"
+               for row in repair_rows), "fixture must produce the real nonignored artist repair"
+    assert not any(row.get("path") == paths[1] and row.get("field") == "artist"
+                   for row in repair_rows)
+    opened = repository.build_problematic_files_page(
+        limit=50, filter=json.dumps({"query": "José", "reasons": []}),
+    )
+    expected = [compilation[0]["projection_id"]]
+    assert [item["projection_id"] for item in unopened["items"]] == expected
+    assert unopened["total"] == opened["total"] == 1
+    assert [item["projection_id"] for item in opened["items"]] == expected
+    ordinary = repository.build_problematic_files_page(
+        limit=50, filter=json.dumps({"query": "Ordinary credit only", "reasons": []}),
+    )
+    assert ordinary["items"] == []
+    assert ordinary["total"] == 0

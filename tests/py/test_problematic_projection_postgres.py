@@ -11,6 +11,22 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from music_app.services.jobs.repository_postgres import PostgresJobRepository
+from music_app.services.library_browse_postgres import (
+    PostgresLibraryBrowseRepository,
+    ProblematicProjectionPending,
+)
+from music_app.services.problematic_projection_postgres import (
+    PostgresProblematicProjectionRepository,
+    ProblematicProjectionIntegrityError,
+    ProblematicProjectionStorageError,
+)
+from tests.e2e.support import isolatedPostgres
+from tests.py.test_problematic_files_projection import (
+    _main_search_compilation_row,
+    _project_with_persisted_ignored_repairs,
+)
+
 
 class _Cursor:
     def __init__(self, rows=()):
@@ -6178,3 +6194,238 @@ def test_explain_continuation_uses_album_sort_projection_index(
     _assert_reader_plan_is_projection_only(natural)
     _assert_reader_plan_is_projection_only(maintained)
     assert natural["Actual Rows"] == 26
+
+
+def test_live_current_v1_snapshot_is_pending_instead_of_served(live_projection_database):
+    db = live_projection_database
+    revision = uuid4()
+    # Same real legacy-header fixture pattern as existing reader tests. Empty is
+    # a valid complete snapshot; no synthetic API or future migration is needed.
+    with isolatedPostgres._connect(db.setup_url) as connection:
+        connection.execute(
+            "insert into ops.problematic_projection_headers("
+            "library_id,revision,source_generation,rebuild_epoch,builder_version,"
+            "total,item_count,reason_facets,reason_fact_count,reason_fingerprint,"
+            "search_fact_count,search_fingerprint,verified,published_at) "
+            "values(%s,%s,1,1,1,0,0,'{}'::jsonb,0,0::bit(256),0,0::bit(256),true,now())",
+            (db.library_id, revision),
+        )
+        connection.execute(
+            "insert into ops.problematic_projection_state("
+            "library_id,source_generation,rebuild_epoch,committed_revision,"
+            "committed_total,reason_facets,verified) "
+            "values(%s,1,1,%s,0,'{}'::jsonb,true) "
+            "on conflict(library_id) do update set source_generation=1,rebuild_epoch=1,"
+            "committed_revision=excluded.committed_revision,committed_total=0,"
+            "reason_facets='{}'::jsonb,verified=true",
+            (db.library_id, revision),
+        )
+        assert connection.execute(
+            "select builder_version,verified,total from ops.problematic_projection_headers "
+            "where library_id=%s and revision=%s", (db.library_id, revision),
+        ).fetchone() == {"builder_version": 1, "verified": True, "total": 0}
+    reader = PostgresProblematicProjectionRepository(database_url=db.app_url)
+    with pytest.raises(ProblematicProjectionIntegrityError):
+        reader.read_page(library_id=db.library_id, limit=50)
+    browse = PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": db.app_url})
+    with pytest.raises(ProblematicProjectionPending):
+        browse.build_problematic_files_page(limit=50)
+
+
+
+
+def _main_search_claimed_v2(db):
+    app = PostgresProblematicProjectionRepository(database_url=db.app_url)
+    worker = PostgresProblematicProjectionRepository(database_url=db.worker_url)
+    queued = app.enqueue_rebuild(library_id=db.library_id, requested_by="v2-sql-proof")
+    now = datetime.now(timezone.utc)
+    claim = PostgresJobRepository(database_url=db.worker_url).claim(
+        worker_id="v2-sql-proof", now=now, lease_seconds=120,
+        kinds=("problematic_files_projection",),
+    )
+    assert claim is not None and claim.job_id == queued["job_id"]
+    assert claim.parameters["builder_version"] == 2
+    build = worker.prepare_claimed_build(claim=claim, now=now)
+    return worker, claim, build, now
+
+
+def _main_search_claimed_group(db, item_key):
+    worker, claim, build, now = _main_search_claimed_v2(db)
+    group = ("album", 77001)
+    # Source staging applies one cursor identity to every row in that call.
+    # Distinct files therefore use distinct file cursors, as the source loader does.
+    for file_identity, source in ((1, "first"), (2, "second")):
+        cursor = ("album", 77001, "file", file_identity)
+        worker.stage_claimed_source_chunk(
+            claim=claim, build=build, group_key=group, source_cursor=cursor,
+            rows=({"projection_id": item_key, "source": source},),
+            complete=file_identity == 2, now=now,
+        )
+    staged = tuple(worker.iter_claimed_source_group_entries(
+        claim=claim, build=build, group_key=group, after_stage_id=0,
+        batch_limit=100, now=now,
+    ))
+    assert len(staged) == 2
+    progress = worker.load_claimed_group_accumulator(
+        claim=claim, build=build, group_key=group, now=now,
+    )
+    return worker, claim, build, now, group, cursor, staged, progress
+
+
+def test_live_same_batch_semantic_repeats_coalesce_and_duplicate_root_primary_is_ored(live_projection_database):
+    db = live_projection_database
+    worker, claim, build, now, group, _cursor, staged, progress = _main_search_claimed_group(db, "same-fact")
+    first, last = (entry[0] for entry in staged)
+    track = {"projection_id": "same-fact", "semantic_child_identity": "track-identity", "title": "Same title"}
+    root = {"projection_id": "same-fact", "semantic_child_identity": "root-identity",
+            "root_id": "7", "category": "main_library_roots", "primary": False}
+    result = worker.checkpoint_claimed_group_facts(
+        claim=claim, build=build, group_key=group,
+        expected_after_stage_id=progress.after_stage_id,
+        entries=((first, "track", track), (last, "track", dict(track)),
+                 (first, "duplicate_root", root), (last, "duplicate_root", {**root, "primary": True})),
+        next_batch_index=0, row_count=2, now=now,
+    )
+    assert result.after_stage_id == last
+    facts = tuple(worker.iter_claimed_group_facts(
+        claim=claim, build=build, group_key=group, after_stage_id=0,
+        batch_limit=100, now=now,
+    ))
+    assert len(facts) == 2
+    by_kind = {kind: (stage_id, payload) for stage_id, kind, payload in facts}
+    assert by_kind["track"] == (first, track)
+    assert by_kind["duplicate_root"] == (first, {**root, "primary": True})
+
+
+@pytest.mark.parametrize("kind", ["track", "duplicate_root"])
+def test_live_same_batch_same_identity_with_different_other_payload_fails_closed(live_projection_database, kind):
+    db = live_projection_database
+    worker, claim, build, now, group, _cursor, staged, progress = _main_search_claimed_group(db, "conflicting-fact")
+    first, last = (entry[0] for entry in staged)
+    payload = {"projection_id": "conflicting-fact", "semantic_child_identity": "one-identity",
+               "value": "first", **({"primary": False} if kind == "duplicate_root" else {})}
+    with pytest.raises(ProblematicProjectionStorageError) as caught:
+        worker.checkpoint_claimed_group_facts(
+            claim=claim, build=build, group_key=group,
+            expected_after_stage_id=progress.after_stage_id,
+            entries=((first, kind, payload), (last, kind, {**payload, "value": "different"})),
+            next_batch_index=0, row_count=2, now=now,
+        )
+    assert getattr(caught.value.__cause__, "sqlstate", None) == "21000"
+    assert tuple(worker.iter_claimed_group_facts(
+        claim=claim, build=build, group_key=group, after_stage_id=0,
+        batch_limit=100, now=now,
+    )) == ()
+    assert worker.load_claimed_group_accumulator(
+        claim=claim, build=build, group_key=group, now=now,
+    ).after_stage_id == progress.after_stage_id
+
+
+@pytest.mark.parametrize("damage", ["missing-tail", "count-mismatch", "id-gap"])
+def test_live_partial_main_search_cannot_complete_or_publish(live_projection_database, damage):
+    projected = _project_with_persisted_ignored_repairs(_main_search_compilation_row("x" * 20000 + "TAIL"), [])
+    assert projected is not None
+    with projected:
+        item = dict(projected)
+        reasons = tuple(projected.reason_facts)
+        facts = [dict(fact) for fact in projected.search_facts]
+    assert len(facts) >= 2
+    assert item["search_document_count"] == len(facts)
+    if damage == "missing-tail":
+        facts = facts[:-1]
+    elif damage == "count-mismatch":
+        item["search_document_count"] += 1
+    else:
+        item["search_document_count"] += 1
+        facts[-1]["semantic_child_identity"] = f"{len(facts):020d}"
+    db = live_projection_database
+    worker, claim, build, now, group, cursor, _staged, _progress = _main_search_claimed_group(db, item["item_key"])
+    worker.stage_claimed_items(
+        claim=claim, build=build, group_key=group, items=(item,), batch_index=0, now=now,
+    )
+    worker.stage_claimed_reason_facts(
+        claim=claim, build=build, group_key=group, facts=reasons, now=now,
+    )
+    worker.stage_claimed_main_search_facts(
+        claim=claim, build=build, group_key=group, facts=facts, now=now,
+    )
+    with pytest.raises(ProblematicProjectionStorageError) as caught:
+        worker.complete_claimed_source_group(
+            claim=claim, build=build, group_key=group, source_cursor=cursor, now=now,
+        )
+    assert getattr(caught.value.__cause__, "sqlstate", None) == "55000"
+    assert not worker.publish_claimed_snapshot(claim=claim, build=build, now=now)
+    with isolatedPostgres._connect(db.setup_url) as connection:
+        assert connection.execute(
+            "select count(*) as count from ops.problematic_projection_headers "
+            "where library_id=%s and revision=%s", (db.library_id, build.revision),
+        ).fetchone() == {"count": 0}
+
+
+def test_live_complete_empty_library_publishes_verified_v2_snapshot(live_projection_database):
+    db = live_projection_database
+    worker, claim, build, now = _main_search_claimed_v2(db)
+    assert worker.publish_claimed_snapshot(claim=claim, build=build, now=now)
+    with isolatedPostgres._connect(db.setup_url) as connection:
+        assert connection.execute(
+            "select builder_version,total,item_count,search_fact_count,verified "
+            "from ops.problematic_projection_headers where library_id=%s and revision=%s",
+            (db.library_id, build.revision),
+        ).fetchone() == {"builder_version": 2, "total": 0, "item_count": 0,
+                         "search_fact_count": 0, "verified": True}
+
+
+def test_live_publication_rejects_tail_loss_after_successful_group_completion_and_source_drain(live_projection_database):
+    projected = _project_with_persisted_ignored_repairs(_main_search_compilation_row("x" * 20000 + "TAIL"), [])
+    assert projected is not None
+    with projected:
+        item = dict(projected)
+        reasons = tuple(projected.reason_facts)
+        facts = [dict(fact) for fact in projected.search_facts]
+    assert len(facts) >= 2
+    db = live_projection_database
+    worker, claim, build, now, group, cursor, _staged, _progress = _main_search_claimed_group(db, item["item_key"])
+    worker.stage_claimed_items(
+        claim=claim, build=build, group_key=group, items=(item,), batch_index=0, now=now,
+    )
+    worker.stage_claimed_reason_facts(
+        claim=claim, build=build, group_key=group, facts=reasons, now=now,
+    )
+    worker.stage_claimed_main_search_facts(
+        claim=claim, build=build, group_key=group, facts=facts, now=now,
+    )
+    worker.complete_claimed_source_group(
+        claim=claim, build=build, group_key=group, source_cursor=cursor, now=now,
+    )
+    drained = worker.load_claimed_source_page(
+        claim=claim, build=build, limit=100, child_limit=100, now=now,
+    )
+    assert drained.complete and drained.chunks == ()
+    assert worker.validate_claimed_build(claim=claim, build=build, now=now)
+    with isolatedPostgres._connect(db.setup_url) as connection:
+        assert connection.execute(
+            "select group_kind,group_identity from ops.problematic_projection_state "
+            "where library_id=%s", (db.library_id,),
+        ).fetchone() == {"group_kind": None, "group_identity": None}
+        for table in ("problematic_projection_source_staging",
+                      "problematic_projection_group_accumulators",
+                      "problematic_projection_group_facts"):
+            assert connection.execute(
+                f"select count(*) as count from ops.{table} "
+                "where job_id=%s and attempt=%s and revision=%s",
+                (claim.job_id, claim.attempt, build.revision),
+            ).fetchone() == {"count": 0}
+        deleted = connection.execute(
+            "delete from ops.problematic_projection_search_fact_staging "
+            "where job_id=%s and attempt=%s and revision=%s and item_key=%s "
+            "and fact_kind='main_search' and semantic_child_identity=%s returning semantic_child_identity",
+            (claim.job_id, claim.attempt, build.revision, item["item_key"],
+             facts[-1]["semantic_child_identity"]),
+        ).fetchall()
+        assert deleted == [{"semantic_child_identity": facts[-1]["semantic_child_identity"]}]
+    assert not worker.publish_claimed_snapshot(claim=claim, build=build, now=now)
+    with isolatedPostgres._connect(db.setup_url) as connection:
+        assert connection.execute(
+            "select count(*) as count from ops.problematic_projection_headers "
+            "where library_id=%s and revision=%s", (db.library_id, build.revision),
+        ).fetchone() == {"count": 0}

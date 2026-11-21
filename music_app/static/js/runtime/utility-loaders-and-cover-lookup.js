@@ -408,8 +408,8 @@ async function loadNextProblematicFilesPage() {
         const current = itemsByKey.get(key);
         const selectedDetail = state.utility.selectedProblematicDetail?.key === key
           ? state.utility.selectedProblematicDetail : null;
-        const committed = current?.detail_loaded === true
-          ? current : selectedDetail?.detail_loaded === true ? selectedDetail : item;
+        const committed = current?.detail_loaded === true || current?.musicbrainz_detail
+          ? current : selectedDetail?.detail_loaded === true || selectedDetail?.musicbrainz_detail ? selectedDetail : item;
         delete committed.problematic_search_facts_changed;
         itemsByKey.set(key, committed);
       }
@@ -536,6 +536,7 @@ async function loadProblematicAlbumDetail(albumKey, force = false, options = {})
   if (selectedOnly && currentAlbum && String(state.utility.selectedProblematicKey || '') === normalizedKey) {
     state.utility.selectedProblematicDetail = currentAlbum;
   }
+  const previousDetailLoadFailed = currentAlbum?.detail_load_failed;
   if (currentAlbum && String(state.utility.selectedProblematicKey || '') === normalizedKey) {
     currentAlbum.detail_load_failed = false;
   }
@@ -579,6 +580,11 @@ async function loadProblematicAlbumDetail(albumKey, force = false, options = {})
         parseMs = roundProblematicUtilityMs(getProblematicUtilityNow() - parseStartedAt);
       }
       if (!response.ok && options.allowMissing === true && responseStatus === 404) {
+        const detailAlbum = ownsDetail() ? readDetailAlbum() : null;
+        if (detailAlbum) {
+          if (previousDetailLoadFailed === undefined) delete detailAlbum.detail_load_failed;
+          else detailAlbum.detail_load_failed = previousDetailLoadFailed;
+        }
         return null;
       }
       if (!response.ok) {

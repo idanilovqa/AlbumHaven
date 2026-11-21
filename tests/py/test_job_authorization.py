@@ -1093,3 +1093,44 @@ def test_decisions_expose_only_bounded_canonical_reason_codes():
     assert "private-origin-key" not in rendered
     assert "C:\\Music\\Album" not in rendered
     assert "token" not in rendered
+
+
+def test_existing_resource_validator_accepts_exact_persisted_v2_job_scope():
+    service, repository = _service()
+    repository.actor = None
+    claim = _problematic_projection_claim(
+        parameters={"projection_kind": "problematic_files", "source_generation": 18,
+                    "rebuild_epoch": 2, "builder_version": 2},
+        idempotency_key="problematic-files-projection:9:18:2:v2",
+    )
+    assert service.authorize(claim, NOW) == AuthorizationDecision(
+        True, "problematic_projection_scope_current",
+    )
+
+
+def test_existing_resource_validator_retains_closed_legacy_v1_scope():
+    service, repository = _service()
+    repository.actor = None
+    assert service.authorize(_problematic_projection_claim(), NOW) == AuthorizationDecision(
+        True, "problematic_projection_scope_current",
+    )
+
+
+@pytest.mark.parametrize("version, key, extra", [
+    (True, "problematic-files-projection:9:18:2:v2", {}),
+    ("2", "problematic-files-projection:9:18:2:v2", {}),
+    (3, "problematic-files-projection:9:18:2:v2", {}),
+    (2, "problematic-files-projection:9:18:2", {}),
+    (2, "problematic-files-projection:9:18:2:v2", {"unrecognized": 1}),
+])
+def test_existing_resource_validator_rejects_incoherent_or_unclosed_version_scope(version, key, extra):
+    service, repository = _service()
+    repository.actor = None
+    claim = _problematic_projection_claim(
+        parameters={"projection_kind": "problematic_files", "source_generation": 18,
+                    "rebuild_epoch": 2, "builder_version": version, **extra},
+        idempotency_key=key,
+    )
+    assert service.authorize(claim, NOW) == AuthorizationDecision(
+        False, "problematic_projection_scope_invalid",
+    )

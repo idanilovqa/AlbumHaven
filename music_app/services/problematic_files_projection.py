@@ -322,24 +322,21 @@ def problematic_sort_key(
     )
 
 def normalized_problematic_search_text(item: Mapping[str, object]) -> str:
-    """Return the persisted, Unicode-normalized search document for one item."""
+    """Return the exact main UI haystack for the facts present on one item."""
+    reasons = item.get("problem_reasons")
+    tracks = item.get("tracks")
+    repairs = item.get("repair_preview_rows")
     values = [
-        item.get("name"),
-        item.get("raw_name"),
-        item.get("album_artist"),
-        item.get("raw_album_artist"),
-        item.get("year"),
-        item.get("edition"),
-        item.get("key"),
-        item.get("search_text"),
-        *(item.get("problem_reasons") or []),
-        *(item.get("track_paths") or []),
+        item.get("name"), item.get("raw_name"), item.get("album_artist"),
+        item.get("raw_album_artist"), item.get("year"),
+        *(reasons if isinstance(reasons, (list, tuple)) else ()), item.get("search_text"),
     ]
-    return "\n".join(
-        normalized
-        for value in values
-        if (normalized := normalize_problematic_text(value))
-    )
+    if isinstance(tracks, (list, tuple)):
+        values.extend(track.get("title") for track in tracks)
+    if isinstance(repairs, (list, tuple)):
+        values.extend(value for row in repairs
+                      for value in (row.get("track_title"), row.get("original"), row.get("repaired")))
+    return "\n".join(str(value or "") for value in values).lower()
 
 
 def _persisted_problematic_item(summary: Mapping[str, object]) -> dict[str, object]:
@@ -398,21 +395,26 @@ def normalize_problematic_reason(reason: object) -> str:
         return "Incomplete track order"
     return value
 
-def problematic_filter_spec(filter_value: object) -> tuple[str, tuple[str, ...]]:
-    raw_value = str(filter_value or "").strip()
+def problematic_filter_spec(
+    filter_value: object, *, preserve_query: bool = False,
+) -> tuple[str, tuple[str, ...]]:
+    normalize_query = ((lambda value: str(value or "")) if preserve_query
+                       else normalize_problematic_search_query)
+    filter_text = str(filter_value or "")
+    raw_value = filter_text.strip()
     if not raw_value:
-        return "", ()
+        return normalize_query(filter_text), ()
     if len(raw_value) > 4096:
         raise ValueError("Problematic Files filter is too long.")
     if not raw_value.startswith("{"):
-        return raw_value.casefold(), ()
+        return normalize_query(filter_text), ()
     try:
         payload = json.loads(raw_value)
     except json.JSONDecodeError as exc:
         raise ValueError("Invalid Problematic Files filter.") from exc
     if not isinstance(payload, Mapping) or set(payload) - {"query", "reasons"}:
         raise ValueError("Invalid Problematic Files filter.")
-    query = str(payload.get("query") or "").strip()
+    query = normalize_query(payload.get("query"))
     raw_reasons = payload.get("reasons", [])
     if not isinstance(raw_reasons, list) or len(raw_reasons) > 64:
         raise ValueError("Invalid Problematic Files filter reasons.")
@@ -423,7 +425,7 @@ def problematic_filter_spec(filter_value: object) -> tuple[str, tuple[str, ...]]
         reason = normalize_problematic_reason(raw_reason)
         if reason and reason not in reasons:
             reasons.append(reason)
-    return query.casefold(), tuple(reasons)
+    return query, tuple(reasons)
 
 def problematic_filter_matches(item: Mapping[str, object], filter_value: str) -> bool:
     query, required_reasons = problematic_filter_spec(filter_value)
@@ -436,13 +438,8 @@ def problematic_filter_matches(item: Mapping[str, object], filter_value: str) ->
         return False
     if not query:
         return True
-    values = [
-        item.get("name"), item.get("raw_name"), item.get("album_artist"),
-        item.get("raw_album_artist"), item.get("year"), item.get("key"),
-        item.get("search_text"), *(item.get("problem_reasons") or []),
-        *(item.get("track_paths") or []),
-    ]
-    return any(query in str(value or "").casefold() for value in values)
+    return query in normalized_problematic_search_text(item)
+
 
 def problematic_reason_facets(
     items: Iterable[Mapping[str, object]],
@@ -1801,6 +1798,7 @@ class _ProblematicReasonFactStream(Iterator[ProblematicProjectionReasonFact]):
 class ProblematicProjectedItem(Mapping[str, object]):
     item: Mapping[str, object]
     reason_facts: Iterable[ProblematicProjectionReasonFact] = field(compare=False)
+    search_facts: Iterable[Mapping[str, object]] = field(default=(), compare=False)
 
     def __getitem__(self, key: str) -> object:
         return self.item[key]
@@ -1813,12 +1811,23 @@ class ProblematicProjectedItem(Mapping[str, object]):
 
     @property
     def closed(self) -> bool:
-        return bool(getattr(self.reason_facts, "closed", False))
+        return bool(getattr(self.reason_facts, "closed", False)
+                    and getattr(self.search_facts, "closed", True))
 
     def close(self) -> None:
-        close_reason_facts = getattr(self.reason_facts, "close", None)
-        if close_reason_facts is not None:
-            close_reason_facts()
+        failure: BaseException | None = None
+        for facts in (self.reason_facts, self.search_facts):
+            close_facts = getattr(facts, "close", None)
+            if close_facts is not None:
+                try:
+                    close_facts()
+                except BaseException as error:
+                    if failure is None:
+                        failure = error
+                    else:
+                        failure.add_note(f"projection fact cleanup failed: {error!r}")
+        if failure is not None:
+            raise failure
 
     def __enter__(self) -> "ProblematicProjectedItem":
         return self
@@ -2178,35 +2187,204 @@ def normalize_problematic_text(value: object) -> str:
     return " ".join(unicodedata.normalize("NFKC", str(value or "")).split()).casefold()
 
 
+_ECMASCRIPT_TRIM_CHARACTERS = (
+    "\u0009\u000a\u000b\u000c\u000d\u0020\u00a0\u1680"
+    "\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007"
+    "\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
+)
+
+
 def normalize_problematic_search_query(value: object) -> str:
-    """Normalize one exact substring query within the relational chunk contract."""
-    normalized = normalize_problematic_text(value)
+    """Match the main UI's trim and ordinary lowercase without folding facts."""
+    normalized = str(value or "").strip(_ECMASCRIPT_TRIM_CHARACTERS).lower()
     if len(normalized.encode("utf-8")) > _MAX_SEARCH_QUERY_BYTES:
         raise ValueError("problematic projection search query exceeds 4096 bytes")
     return normalized
 
 
+def _problematic_search_chunks(parts: Iterable[str]) -> Iterator[str]:
+    pending = bytearray()
+    for part in parts:
+        encoded = part.encode("utf-8")
+        for offset in range(0, len(encoded), _MAX_SEARCH_DOCUMENT_BYTES):
+            pending.extend(encoded[offset:offset + _MAX_SEARCH_DOCUMENT_BYTES])
+            while len(pending) > _MAX_SEARCH_DOCUMENT_BYTES:
+                end = _MAX_SEARCH_DOCUMENT_BYTES
+                while pending[end] & 0xC0 == 0x80:
+                    end -= 1
+                yield pending[:end].decode("utf-8")
+                start = max(0, end - _SEARCH_FACT_OVERLAP_BYTES)
+                while start and pending[start] & 0xC0 == 0x80:
+                    start -= 1
+                if start <= 0:
+                    raise ValueError("problematic projection search chunk did not advance")
+                del pending[:start]
+    if pending:
+        yield pending.decode("utf-8")
+
+
 def _normalized_problematic_search_chunks(value: object) -> tuple[str, ...]:
-    normalized = normalize_problematic_text(value)
-    encoded = normalized.encode("utf-8")
-    if not encoded:
-        return ()
-    chunks: list[str] = []
-    start = 0
-    while start < len(encoded):
-        end = min(start + _MAX_SEARCH_DOCUMENT_BYTES, len(encoded))
-        while end < len(encoded) and end > start and encoded[end] & 0xC0 == 0x80:
-            end -= 1
-        chunks.append(encoded[start:end].decode("utf-8"))
-        if end == len(encoded):
-            break
-        next_start = max(start, end - _SEARCH_FACT_OVERLAP_BYTES)
-        while next_start > start and encoded[next_start] & 0xC0 == 0x80:
-            next_start -= 1
-        if next_start <= start:
-            raise ValueError("problematic projection search chunk did not advance")
-        start = next_start
-    return tuple(chunks)
+    return tuple(_problematic_search_chunks((str(value or "").lower(),)))
+
+
+class _ProblematicSortedSearchValues:
+    """Order complete search facts with bounded runs and merge fan-in."""
+
+    def __init__(self) -> None:
+        self._file = tempfile.SpooledTemporaryFile(
+            max_size=_MAX_REDUCER_FACT_BYTES, mode="w+t", encoding="utf-8", newline="\n",
+        )
+        self._sorted = False
+
+    def add(self, key: tuple[object, ...], value: object) -> None:
+        self._file.seek(0, 2)
+        self._file.write(json.dumps((key, value), ensure_ascii=False, separators=(",", ":")) + "\n")
+        self._sorted = False
+
+    @staticmethod
+    def _records(owner: object) -> Iterator[list[object]]:
+        for line in owner:
+            yield json.loads(line)
+
+    def _sort(self) -> None:
+        if _PROBLEMATIC_FACT_MERGE_FAN_IN < 2:
+            raise ValueError("problematic search merge fan-in is too small")
+        with tempfile.TemporaryDirectory(prefix="album-haven-problematic-search-") as directory:
+            root = Path(directory)
+            self._file.seek(0)
+            count = 0
+            batch = []
+            batch_bytes = 0
+
+            def flush() -> None:
+                nonlocal count, batch_bytes
+                batch.sort(key=lambda record: record[0])
+                with (root / f"run-0-{count}.jsonl").open("w", encoding="utf-8", newline="\n") as run:
+                    for _key, line in batch:
+                        run.write(line)
+                count += 1
+                batch.clear()
+                batch_bytes = 0
+
+            for line in self._file:
+                line_bytes = len(line.encode("utf-8"))
+                if batch and batch_bytes + line_bytes > _MAX_REDUCER_FACT_BYTES:
+                    flush()
+                batch.append((json.loads(line)[0], line))
+                batch_bytes += line_bytes
+            if batch:
+                flush()
+            generation = 0
+            while count > 1:
+                next_count = 0
+                for start in range(0, count, _PROBLEMATIC_FACT_MERGE_FAN_IN):
+                    inputs = [root / f"run-{generation}-{index}.jsonl"
+                              for index in range(start, min(start + _PROBLEMATIC_FACT_MERGE_FAN_IN, count))]
+                    with ExitStack() as stack:
+                        sources = [self._records(stack.enter_context(path.open("r", encoding="utf-8")))
+                                   for path in inputs]
+                        target = root / f"run-{generation + 1}-{next_count}.jsonl"
+                        with target.open("w", encoding="utf-8", newline="\n") as run:
+                            for record in heapq.merge(*sources, key=lambda record: record[0]):
+                                run.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+                    for path in inputs:
+                        path.unlink()
+                    next_count += 1
+                count = next_count
+                generation += 1
+            self._file.seek(0)
+            self._file.truncate()
+            if count:
+                with (root / f"run-{generation}-0.jsonl").open("r", encoding="utf-8") as run:
+                    for line in run:
+                        self._file.write(line)
+            self._sorted = True
+
+    def values(self) -> Iterator[object]:
+        if not self._sorted:
+            self._sort()
+        self._file.seek(0)
+        for record in self._records(self._file):
+            yield record[1]
+
+    def close(self) -> None:
+        self._file.close()
+
+    def __enter__(self) -> "_ProblematicSortedSearchValues":
+        return self
+
+    def __exit__(self, *_exc_info: object) -> None:
+        self.close()
+
+
+class _ProblematicSearchFactStream(Iterator[Mapping[str, object]]):
+    """Own complete chunks independently of the reducer's reason resources."""
+
+    def __init__(self, item_key: str, parts: Iterable[str]) -> None:
+        self._file = tempfile.SpooledTemporaryFile(
+            max_size=_MAX_REDUCER_FACT_BYTES, mode="w+t", encoding="utf-8", newline="\n",
+        )
+        self._item_key = item_key
+        self._index = 0
+        self.count = 0
+        self.prefix = ""
+        self.byte_count = 0
+        self.digest = hashlib.sha256()
+
+        def measured_parts() -> Iterator[str]:
+            for part in parts:
+                normalized = part.lower()
+                encoded = normalized.encode("utf-8")
+                self.byte_count += len(encoded)
+                self.digest.update(encoded)
+                yield normalized
+
+        try:
+            for chunk in _problematic_search_chunks(measured_parts()):
+                if self.count == 0:
+                    self.prefix = chunk
+                self._file.write(json.dumps(chunk, ensure_ascii=False) + "\n")
+                self.count += 1
+            self._file.seek(0)
+        except BaseException as error:
+            try:
+                self.close()
+            except BaseException as cleanup_error:
+                error.add_note(f"search stream cleanup failed: {cleanup_error!r}")
+            raise
+
+    @property
+    def closed(self) -> bool:
+        return self._file.closed
+
+    def __iter__(self) -> "_ProblematicSearchFactStream":
+        return self
+
+    def __next__(self) -> Mapping[str, object]:
+        if self.closed:
+            raise StopIteration
+        try:
+            line = self._file.readline()
+            if not line:
+                self.close()
+                raise StopIteration
+            fact = {
+                "item_key": self._item_key,
+                "fact_kind": "main_search",
+                "semantic_child_identity": f"{self._index:020d}",
+                "normalized_text": json.loads(line),
+            }
+            self._index += 1
+            return fact
+        except BaseException as error:
+            try:
+                self.close()
+            except BaseException as cleanup_error:
+                error.add_note(f"search stream cleanup failed: {cleanup_error!r}")
+            raise
+
+    def close(self) -> None:
+        self._file.close()
 
 
 class _ProblematicItemReducer:
@@ -2240,6 +2418,7 @@ class _ProblematicItemReducer:
         self._ignored_repair_facts = _SpooledIgnoredRepairMembership()
         self._track_title_facts = _BoundedFactValues()
         self._private_path_facts = _BoundedFactValues()
+        self._search_rows = _ProblematicSortedSearchValues()
         self._duplicate_topology = _BoundedDuplicateTopology()
 
     def _flush_track_order_reason(self) -> None:
@@ -2301,6 +2480,9 @@ class _ProblematicItemReducer:
 
     def _consume_row(self, row: Mapping[str, object]) -> None:
         row = dict(row)
+        path = str(row.get("file_private_path") or "").strip()
+        if path:
+            self._search_rows.add((path, self.path_count), {"position": self.path_count, "row": row})
         if self._featured_artist_facts.count:
             names = sorted(
                 self._featured_artist_facts.values(), key=str.casefold
@@ -2442,7 +2624,7 @@ class _ProblematicItemReducer:
 
     def close(self) -> None:
         failure: BaseException | None = None
-        for owner in (self._track_order_reason_file, self._ignored_repair_facts):
+        for owner in (self._track_order_reason_file, self._ignored_repair_facts, self._search_rows):
             try:
                 owner.close()
             except BaseException as error:
@@ -2453,6 +2635,80 @@ class _ProblematicItemReducer:
         if failure is not None:
             raise failure
 
+    def _build_search_facts(self, reasons: Iterable[str]) -> _ProblematicSearchFactStream:
+        search_facts: _ProblematicSearchFactStream | None = None
+        try:
+            with _ProblematicSortedSearchValues() as tracks, _ProblematicSortedSearchValues() as repairs:
+                previous_path = None
+                first_raw_fields: dict[str, tuple[tuple[object, ...], str]] = {}
+                for source in self._search_rows.values():
+                    row = source["row"]
+                    position = source["position"]
+                    path = str(row.get("file_private_path") or "").strip()
+                    if path == previous_path:
+                        continue
+                    previous_path = path
+                    entry = _problematic_file_entry_from_row(row)
+                    title = str(row.get("track_title") or "").strip()
+                    tracks.add((
+                        row.get("disc_number") is None,
+                        _coerce_int_or_default(row.get("disc_number"), 0),
+                        row.get("track_number") is None,
+                        _coerce_int_or_default(row.get("track_number"), 0),
+                        title.casefold(), path.casefold(), position,
+                    ), title)
+                    file_order = (path.casefold(), position)
+                    for target, field_name in (("raw_name", "album"), ("raw_album_artist", "album_artist")):
+                        value = str(entry.get(field_name) or "").strip()
+                        if value and (target not in first_raw_fields or file_order < first_raw_fields[target][0]):
+                            first_raw_fields[target] = (file_order, value)
+                    preview = _problematic_encoding_repair_preview({
+                        "_file_entries": [entry],
+                        "_ignored_repair_keys": self._ignored_repair_facts,
+                    }, include_preview_rows=True)
+                    for repair in preview["preview_rows"]:
+                        repairs.add((
+                            str(repair["track_title"]).casefold(), repair["field"],
+                            str(repair["original"]).casefold(), *file_order,
+                        ), (repair["track_title"], repair["original"], repair["repaired"]))
+                for target, fallback in (("raw_name", "name"), ("raw_album_artist", "album_artist")):
+                    self.summary[target] = first_raw_fields[target][1] if target in first_raw_fields else self.summary.get(fallback, "")
+
+                def parts() -> Iterator[str]:
+                    values = [self.summary.get(field_name) for field_name in (
+                        "name", "raw_name", "album_artist", "raw_album_artist", "year",
+                    )]
+                    for index, value in enumerate(itertools.chain(values, reasons)):
+                        if index:
+                            yield "\n"
+                        yield str(value or "")
+                    yield "\n"
+                    first_title = True
+                    for title in tracks.values():
+                        if not title.strip():
+                            continue
+                        if not first_title:
+                            yield "\n"
+                        yield title
+                        first_title = False
+                    for title in tracks.values():
+                        yield "\n"
+                        yield title
+                    for repair_values in repairs.values():
+                        for value in repair_values:
+                            yield "\n"
+                            yield str(value or "")
+
+                search_facts = _ProblematicSearchFactStream(self.projection_id, parts())
+        except BaseException as error:
+            if search_facts is not None:
+                try:
+                    search_facts.close()
+                except BaseException as cleanup_error:
+                    error.add_note(f"search stream cleanup failed: {cleanup_error!r}")
+            raise
+        return search_facts
+
     def finish(self) -> ProblematicProjectedItem | None:
         self._flush_track_order_reason()
         album_reasons: list[str] = []
@@ -2460,7 +2716,9 @@ class _ProblematicItemReducer:
             album_reasons.append("Duplicate files")
         if self.album_value_count > 1:
             album_reasons.append("Album name mismatch")
-        if self.artist_value_count > 1:
+        if self.artist_value_count > 1 and not bool(
+            _problematic_album_metadata_from_row(self.seed_row or {}).get("is_compilation")
+        ):
             album_reasons.append("Album artist mismatch")
         if self.valid_year_count > 1:
             album_reasons.append("Year mismatch")
@@ -2526,7 +2784,26 @@ class _ProblematicItemReducer:
         self._duplicate_topology.apply(self.summary)
         for compatibility_field in ("file_types",):
             self.summary.pop(compatibility_field, None)
-        item = _persisted_problematic_item(self.summary)
+        def search_reasons() -> Iterator[str]:
+            yield from exact_non_track_reasons
+            self._track_order_reason_file.seek(0)
+            for line in self._track_order_reason_file:
+                yield str(json.loads(line))
+
+        try:
+            search_facts = self._build_search_facts(search_reasons())
+        except BaseException:
+            self.close()
+            raise
+        try:
+            item = _persisted_problematic_item(self.summary)
+            item["search_text"] = search_facts.prefix
+            item["search_document_count"] = search_facts.count
+            item["search_document_digest"] = search_facts.digest.hexdigest()
+            item["search_document_truncated"] = search_facts.byte_count > _MAX_SEARCH_DOCUMENT_BYTES
+        except BaseException:
+            search_facts.close()
+            raise
         item_key = str(item.get("item_key") or "")
 
         def reason_facts() -> Iterable[ProblematicProjectionReasonFact]:
@@ -2557,6 +2834,7 @@ class _ProblematicItemReducer:
             reason_facts=_ProblematicReasonFactStream(
                 reason_facts(), self.close
             ),
+            search_facts=search_facts,
         )
 
 
@@ -2718,7 +2996,7 @@ class ProblematicGroupAccumulator:
                         "track_key",
                         (
                             f"{_problematic_fact_identity('track_key', track_key)}:"
-                            f"{row_semantic_identity}"
+                            f"{_problematic_fact_identity('row', path)}"
                         ),
                         {"grouped_track_identity": track_key},
                     )
@@ -2735,16 +3013,6 @@ class ProblematicGroupAccumulator:
                         title_identity,
                         {"title": title},
                     )
-                    for chunk_index, normalized_chunk in enumerate(
-                        _normalized_problematic_search_chunks(title)
-                    ):
-                        yield fact(
-                            "track_title_search",
-                            _problematic_fact_identity(
-                                "track_title_search", title_identity, chunk_index
-                            ),
-                            {"normalized_text": normalized_chunk},
-                        )
                 if path:
                     normalized_path = normalize_problematic_text(path)
                     path_identity = _problematic_fact_identity(
@@ -2760,47 +3028,6 @@ class ProblematicGroupAccumulator:
                         _problematic_fact_identity("private_path_locator", path),
                         {"normalized_text": path},
                     )
-                    for chunk_index, normalized_chunk in enumerate(
-                        _normalized_problematic_search_chunks(path)
-                    ):
-                        yield fact(
-                            "private_path_search",
-                            _problematic_fact_identity(
-                                "private_path_search", path_identity, chunk_index
-                            ),
-                            {"normalized_text": normalized_chunk},
-                        )
-                album_metadata = _mapping(payload.get("album_metadata"))
-                album_search_values = (
-                    (
-                        "album_title_search",
-                        payload.get("album_title") or entry.get("album"),
-                    ),
-                    (
-                        "album_artist_search",
-                        album_metadata.get("album_artist")
-                        or payload.get("artist_name")
-                        or entry.get("album_artist"),
-                    ),
-                    ("album_key_search", payload.get("album_key")),
-                )
-                for search_kind, raw_value in album_search_values:
-                    normalized_value = normalize_problematic_text(raw_value)
-                    if not normalized_value:
-                        continue
-                    value_identity = _problematic_fact_identity(
-                        search_kind, normalized_value
-                    )
-                    for chunk_index, normalized_chunk in enumerate(
-                        _normalized_problematic_search_chunks(raw_value)
-                    ):
-                        yield fact(
-                            search_kind,
-                            _problematic_fact_identity(
-                                search_kind, value_identity, chunk_index
-                            ),
-                            {"normalized_text": normalized_chunk},
-                        )
                 root_id = payload.get("file_library_root_id")
                 root_category = payload.get("file_library_root_category")
                 yield fact(
@@ -2906,14 +3133,28 @@ class ProblematicGroupAccumulator:
                         projected = reducer.finish()
                         reducer = None
                         if projected is not None:
-                            yield projected
+                            try:
+                                yield projected
+                            except BaseException as error:
+                                try:
+                                    projected.close()
+                                except BaseException as cleanup_error:
+                                    error.add_note(f"projection item cleanup failed: {cleanup_error!r}")
+                                raise
                     reducer = _ProblematicItemReducer(projection_id)
                 reducer.consume(fact_kind, fact_value)
             if reducer is not None:
                 projected = reducer.finish()
                 reducer = None
                 if projected is not None:
-                    yield projected
+                    try:
+                        yield projected
+                    except BaseException as error:
+                        try:
+                            projected.close()
+                        except BaseException as cleanup_error:
+                            error.add_note(f"projection item cleanup failed: {cleanup_error!r}")
+                        raise
         finally:
             if reducer is not None:
                 reducer.close()

@@ -10443,7 +10443,7 @@
       "offline-never-seen-album-says-offline",
       "online-again-data-comes-from-the-server"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.config.js",

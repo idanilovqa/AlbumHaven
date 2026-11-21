@@ -1797,6 +1797,8 @@ const applyMissingAlbumRemovalToViewDefault = function applyMissingAlbumRemovalT
     else state.gallery.albumIndex?.delete?.(normalizedKey);
   }
   if (state.utility) {
+    state.utility.problematicKnownBase = null;
+    state.utility.problematicFilesProjectionRevision = '';
     state.utility.problematicFiles = (Array.isArray(state.utility.problematicFiles)
       ? state.utility.problematicFiles
       : []).filter((album) => String(album?.key || '').trim() !== normalizedKey);
@@ -2732,6 +2734,8 @@ async function confirmProblemSuggestions() {
     const previousItems = state.utility.problematicFiles;
     const refreshed = await loadProblematicFiles(true, { render: false });
     if (!refreshed) {
+      state.utility.problematicKnownBase = null;
+      state.utility.problematicFilesProjectionRevision = '';
       state.utility.problematicFiles = previousItems;
       if (mutation) await settleProblematicSaveTaskMutation(data.save_task_id);
       throw new Error('Edits were saved, but Problems could not refresh. Reload before retrying.');

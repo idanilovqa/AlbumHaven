@@ -169,9 +169,9 @@ async function handleUtilityBootstrapClick(event) {
       reconcileProblematicSelectionForFilters(nextSelectedFilters);
       state.utility.problemDropdownOpen = false;
       state.utility.showRepairedDisplay = true;
-      await loadProblematicFiles(true, { preserveSelectedDetail: true });
-      renderUtilityModalContent();
+      const load = loadProblematicFiles(true, { preserveSelectedDetail: true });
       if (event.detail === 0) getUtilityModalElements().problemFilterButton?.focus();
+      await load;
     }
     return;
   }
@@ -186,8 +186,9 @@ async function handleUtilityBootstrapClick(event) {
     reconcileProblematicSelectionForFilters(nextSelectedFilters);
     state.utility.problemDropdownOpen = false;
     state.utility.showRepairedDisplay = true;
-    await loadProblematicFiles(true, { preserveSelectedDetail: true });
-    renderUtilityModalContent();
+    const load = loadProblematicFiles(true, { preserveSelectedDetail: true });
+    if (event.detail === 0) getUtilityModalElements().problemFilterButton?.focus();
+    await load;
     return;
   }
 

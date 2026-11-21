@@ -548,7 +548,35 @@ function buildProblematicAlbumDetail(album) {
 function getSelectedProblematicAlbum() {
   return (state.utility.problematicFiles || []).find((item) => item.key === state.utility.selectedProblematicKey)
     || (state.utility.selectedProblematicDetail?.key === state.utility.selectedProblematicKey
-      ? state.utility.selectedProblematicDetail : null);
+      ? state.utility.selectedProblematicDetail : null)
+    || getProblematicKnownView().items.find((item) => item.key === state.utility.selectedProblematicKey)
+    || null;
+}
+
+function prepareProblematicMutationItems(albumKey) {
+  const utility = state.utility;
+  const current = Array.isArray(utility.problematicFiles) ? utility.problematicFiles : [];
+  if (current.some((item) => String(item?.key || '') === String(albumKey || ''))) return current;
+  const view = getProblematicKnownView();
+  if (!view.items.some((item) => String(item?.key || '') === String(albumKey || ''))) return current;
+  const base = utility.problematicKnownBase;
+  const completeSource = base?.complete === true && base.signature === '';
+  utility.problematicFiles = completeSource ? base.items : view.items;
+  utility.problematicFilesTotal = completeSource ? base.total : view.total;
+  utility.problematicFilesComplete = completeSource;
+  utility.problematicFilesNextCursor = null;
+  utility.problematicFilesPageSignature = completeSource ? '' : null;
+  return utility.problematicFiles;
+}
+
+function markProblematicSearchFactsChanged(album, previousAlbum) {
+  if (album && (!previousAlbum || previousAlbum.problematic_search_facts_changed
+      || getProblematicMainSearchText(album) !== getProblematicMainSearchText(previousAlbum))) {
+    Object.defineProperty(album, 'problematic_search_facts_changed', {
+      value: true, enumerable: false, writable: true, configurable: true,
+    });
+  }
+  return album;
 }
 
 function getAlbumTrackPaths(album) {
@@ -1921,9 +1949,7 @@ function claimProblematicSaveTaskMutation(taskId, originalAlbum, expectedAlbumKe
     || !selectedKey
     || (normalizedExpectedAlbumKey && selectedKey !== normalizedExpectedAlbumKey)
   ) return null;
-  const selectedAlbum = (state.utility.problematicFiles || []).find((album) => (
-    String(album?.key || '').trim() === selectedKey
-  )) || null;
+  const selectedAlbum = getSelectedProblematicAlbum();
   const originalKey = String(originalAlbum?.key || '').trim();
   if (!selectedAlbum || !originalAlbum || (originalKey !== selectedKey && !albumsShareTrackPath(selectedAlbum, getAlbumTrackPaths(originalAlbum)))) {
     return null;
@@ -1935,6 +1961,7 @@ function claimProblematicSaveTaskMutation(taskId, originalAlbum, expectedAlbumKe
       ? existing
       : null;
   }
+  prepareProblematicMutationItems(selectedKey);
   const list = typeof getUtilityModalElements === 'function'
     ? getUtilityModalElements()?.list
     : null;
@@ -1946,6 +1973,8 @@ function claimProblematicSaveTaskMutation(taskId, originalAlbum, expectedAlbumKe
     priorScrollTop: Number(list?.scrollTop || 0),
     priorScrollHeight: Number(list?.scrollHeight || 0),
   };
+  state.utility.problematicKnownBase = null;
+  state.utility.problematicFilesProjectionRevision = '';
   state.utility.problematicMutation = mutation;
   if (typeof renderUtilityModalContent === 'function') renderUtilityModalContent();
   return mutation;
@@ -3026,9 +3055,13 @@ function updateTrackModalIfStillShowingAlbum(originalAlbum, updatedAlbums) {
 }
 
 function applyRepairResultToProblematicFiles(originalAlbum, updatedAlbum) {
+  prepareProblematicMutationItems(originalAlbum?.key);
+  state.utility.problematicKnownBase = null;
+  state.utility.problematicFilesProjectionRevision = '';
   const originalKey = String(originalAlbum?.key || '');
   const originalPaths = getAlbumTrackPaths(originalAlbum);
   const hasUpdatedAlbum = updatedAlbum && typeof updatedAlbum === 'object' && Object.keys(updatedAlbum).length;
+  if (hasUpdatedAlbum) markProblematicSearchFactsChanged(updatedAlbum, originalAlbum);
   const updatedKey = hasUpdatedAlbum ? String(updatedAlbum.key || '') : '';
   const previousItems = Array.isArray(state.utility.problematicFiles) ? state.utility.problematicFiles : [];
   const selectedKeyBefore = String(state.utility.selectedProblematicKey || '');
@@ -3054,6 +3087,8 @@ function applyRepairResultToProblematicFiles(originalAlbum, updatedAlbum) {
   }
 
   state.utility.problematicFiles = nextItems;
+  state.utility.problematicFilesTotal = Math.max(nextItems.length,
+    Number(state.utility.problematicFilesTotal || previousItems.length) + nextItems.length - previousItems.length);
   state.utility.loaded = true;
   if (hasUpdatedAlbum) {
     state.utility.selectedProblematicKey = String(updatedAlbum.key || '');
@@ -3165,12 +3200,68 @@ function renderProblemFilterControls(els) {
   }
 }
 
+function getProblematicMainSearchText(album) {
+  return [
+    album.name, album.raw_name, album.album_artist, album.raw_album_artist, album.year,
+    ...(album.problem_reasons || []), album.search_text,
+    ...(album.tracks || []).map((track) => track.title),
+    ...(album.repair_preview_rows || []).flatMap((row) => [row.track_title, row.original, row.repaired]),
+  ].join('\n').toLowerCase();
+}
+
+function getProblematicKnownView() {
+  const utility = state.utility;
+  const signature = utility.problematicFilesPageSignature;
+  const committedScope = typeof signature === 'string';
+  const committedFilter = committedScope && signature
+    ? JSON.parse(signature) : { query: '', reasons: [] };
+  const queryMatches = String(utility.searchQuery || '').trim() === committedFilter.query;
+  const selectedReasons = Array.from(new Set((utility.selectedProblemFilters || [])
+    .map((reason) => String(reason || '').trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+  const reasonsMatch = JSON.stringify(selectedReasons) === JSON.stringify(committedFilter.reasons);
+  const currentItems = Array.isArray(utility.problematicFiles) ? utility.problematicFiles : [];
+  const query = String(utility.searchQuery || '').trim().toLowerCase();
+  if (utility.loaded && committedScope && queryMatches && reasonsMatch) {
+    let unknown = false;
+    const items = currentItems.filter((album) => {
+      if (!album.problematic_search_facts_changed) return true;
+      if (!albumMatchesProblemFilters(album)) return false;
+      if (!query || getProblematicMainSearchText(album).includes(query)) return true;
+      if (album.detail_loaded !== true) unknown = true;
+      return false;
+    });
+    const total = utility.problematicFilesComplete ? items.length : Math.max(items.length,
+      Number(utility.problematicFilesTotal || currentItems.length) - currentItems.length + items.length);
+    return { items, pending: unknown, authoritative: !unknown, total };
+  }
+  const base = utility.problematicKnownBase;
+  const source = base ? base.items : currentItems;
+  let unknown = false;
+  const items = source.filter((album) => {
+    if (!albumMatchesProblemFilters(album)) return false;
+    if (!query) return true;
+    if (getProblematicMainSearchText(album).includes(query)) return true;
+    if (album.detail_loaded !== true) unknown = true;
+    return false;
+  });
+  if ((utility.selectedProblemFilters || []).length) {
+    items.sort((a, b) => getAlbumProblemFilterSortIndex(a) - getAlbumProblemFilterSortIndex(b)
+      || String(a.name || '').localeCompare(String(b.name || ''))
+      || String(a.album_artist || '').localeCompare(String(b.album_artist || ''))
+      || String(a.year || '').localeCompare(String(b.year || '')));
+  }
+  const complete = base ? base.complete && base.signature === '' : utility.loaded
+    && utility.problematicFilesComplete && signature === '';
+  const authoritative = Boolean(complete && !unknown);
+  return { items, pending: !authoritative, authoritative, total: items.length };
+}
+
 function getFilteredProblematicAlbums() {
-  return state.utility.problematicFiles || [];
+  return getProblematicKnownView().items;
 }
 
 function getProblematicAlbumIssueLabel(album) {
-  if (album?.detail_loading_deferred) return 'Loading issuesвЂ¦';
+  if (album?.detail_loading_deferred) return 'Loading issues…';
   const count = Array.isArray(album?.problem_reasons) ? album.problem_reasons.length : 0;
   return `${count} issue${count === 1 ? '' : 's'}`;
 }
@@ -3225,15 +3316,15 @@ async function openUtilityModalForTrack(trackPath) {
       )) || null;
     if (optimisticAlbum) {
       const optimisticKey = String(optimisticAlbum.key || '').trim();
-      const existingItems = Array.isArray(state.utility.problematicFiles)
-        ? state.utility.problematicFiles
-        : [];
+      const existingItems = prepareProblematicMutationItems(optimisticKey);
+      state.utility.problematicKnownBase = null;
+      state.utility.problematicFilesProjectionRevision = '';
       state.utility.problematicFiles = [
         ...existingItems.filter((item) => String(item?.key || '').trim() !== optimisticKey),
-        {
+        markProblematicSearchFactsChanged({
           ...optimisticAlbum,
           detail_loading_deferred: optimisticAlbum.detail_loaded !== true,
-        },
+        }, existingItems.find((item) => String(item?.key || '').trim() === optimisticKey)),
       ];
       state.utility.loaded = true;
       state.utility.loading = false;

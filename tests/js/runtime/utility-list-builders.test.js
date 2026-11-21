@@ -7273,6 +7273,11 @@ test('problematic list preserves server-owned filter and keyset order', () => {
   ];
   context.state.utility.selectedProblemFilters = ['Missing year'];
   context.state.utility.searchQuery = 'not present in this compact page';
+  context.state.utility.problematicFilesPageSignature = JSON.stringify({
+    query: 'not present in this compact page',
+    reasons: ['Missing year'],
+  });
+  context.state.utility.problematicFilesComplete = true;
 
   assert.deepEqual(
     Array.from(context.getFilteredProblematicAlbums(), (item) => item.key),
@@ -7944,6 +7949,10 @@ test('Problematic Files excludes library-wide warnings from album rows and count
           message: 'Some library changes may have been missed.',
           allowed_actions: { 'library.refresh': true },
         }],
+        problematicFiles: [],
+        problematicFilesPageSignature: '',
+        problematicFilesComplete: true,
+        problematicFilesTotal: 0,
         selectedProblematicKey: '',
         selectedProblemFilters: [],
         searchQuery: '',

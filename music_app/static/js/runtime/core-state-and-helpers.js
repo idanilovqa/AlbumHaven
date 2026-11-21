@@ -181,6 +181,8 @@ const state = {
     problematicFilesComplete: false,
     problematicFilesNextCursor: null,
     problematicFilesPageSignature: '',
+    problematicFilesProjectionRevision: '',
+    problematicKnownBase: null,
     problematicFilesTotal: 0,
     problematicReasonFacets: [],
     selectedProblematicDetail: null,

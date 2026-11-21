@@ -44,7 +44,7 @@ def _install_durable_projection(monkeypatch, durable):
 
 def test_problematic_page_reads_only_the_committed_durable_projection(monkeypatch):
     durable = _DurableProjectionRepository(ProblematicProjectionReadPage(
-        revision="revision-7",
+        revision="11111111-1111-4111-8111-111111111111",
         total=2,
         reason_facets={"Missing year": 2},
         items=({"key": "first"}, {"key": "second"}),
@@ -89,6 +89,7 @@ def test_problematic_page_reads_only_the_committed_durable_projection(monkeypatc
         "items": [{"key": "first"}, {"key": "second"}],
         "count": 2,
         "total": 2,
+        "projection_revision": "11111111-1111-4111-8111-111111111111",
         "next_cursor": "next-page",
         "complete": False,
         "reason_facets": [{"reason": "Missing year", "count": 2}],
@@ -98,6 +99,32 @@ def test_problematic_page_reads_only_the_committed_durable_projection(monkeypatc
         "persistence_seam": "library_browse",
         "view_data_source": "postgres_library_browse",
     }
+
+
+@pytest.mark.parametrize("next_cursor", [None, "next-page"])
+def test_problematic_page_exposes_existing_revision_for_cache_scope_without_extra_read(monkeypatch, next_cursor):
+    revision = "11111111-1111-4111-8111-111111111111"
+    durable = _DurableProjectionRepository(ProblematicProjectionReadPage(
+        revision=revision,
+        total=1 if next_cursor is None else 2,
+        reason_facets={"Missing year": 1 if next_cursor is None else 2},
+        items=({"key": "first", "detail_loaded": False},),
+        next_cursor=next_cursor,
+    ))
+    _install_durable_projection(monkeypatch, durable)
+    repository = browse.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "durable-reader"},
+        connect=lambda _url: (_ for _ in ()).throw(AssertionError("an extra authority read is forbidden")),
+    )
+
+    payload = repository.build_problematic_files_page(limit=1)
+
+    assert payload["projection_revision"] == revision
+    assert payload["items"] == [{"key": "first", "detail_loaded": False}]
+    assert payload["next_cursor"] == next_cursor
+    assert payload["complete"] is (next_cursor is None)
+    assert len(durable.reads) == 1
+    assert durable.enqueues == []
 
 
 def test_problematic_page_unavailable_projection_enqueues_once_and_reports_pending(monkeypatch):

@@ -28,14 +28,71 @@ function loadHelpers() {
   return context;
 }
 
-test('P04 server-owned page order is not filtered or resorted by stale client state', () => {
+test('P04 multiple selected problem filters include their union', () => {
+  const context = loadHelpers();
+  context.state.utility.selectedProblemFilters = ['Missing year', 'Encoding problem'];
+  assert.deepEqual(Array.from(context.getFilteredProblematicAlbums(), album => album.key).sort(), ['both', 'encoding-only', 'year-only']);
+  assert.equal(context.state.utility.selectedProblematicKey, 'year-only', 'matching navigation context remains valid');
+});
+
+test('P04 search intersects the union of selected problem types', () => {
   const context = loadHelpers();
   context.state.utility.selectedProblemFilters = ['Missing year', 'Encoding problem'];
   context.state.utility.searchQuery = 'selected';
-  assert.deepEqual(Array.from(context.getFilteredProblematicAlbums(), album => album.key), [
-    'year-only', 'encoding-only', 'both', 'unrelated',
-  ]);
+  assert.deepEqual(Array.from(context.getFilteredProblematicAlbums(), album => album.key).sort(), ['encoding-only', 'year-only']);
 });
+
+test('P04 clearing every filter includes all problem types while keeping search', () => {
+  const context = loadHelpers();
+  context.state.utility.searchQuery = 'selected';
+  assert.deepEqual(Array.from(context.getFilteredProblematicAlbums(), album => album.key), ['year-only', 'encoding-only', 'unrelated']);
+});
+
+const problematicSearchNormalization = JSON.parse(fs.readFileSync(
+  path.join(root, 'tests/fixtures/problematic-search-normalization.json'), 'utf8',
+));
+
+for (const [field, query] of [
+  ['track_title', 'Neutral problem track'],
+  ['original', 'JosÃ©'],
+  ['repaired', 'José'],
+]) {
+  test(`P04 known detail search preserves main repair-row ${field} matches`, () => {
+    const context = loadHelpers();
+    context.state.utility.problematicFiles = [
+      {
+        key: 'repair-match', name: 'Neutral album', album_artist: 'Release Artist',
+        detail_loaded: true, problem_reasons: ['Encoding problem'],
+        tracks: [{ path: 'track-1', title: 'Neutral problem track', artist: 'JosÃ©' }],
+        repair_preview_rows: [{
+          row_key: 'track-1::artist', path: 'track-1', field: 'artist',
+          track_title: 'Neutral problem track', original: 'JosÃ©', repaired: 'José',
+        }],
+      },
+      { key: 'nonmatch', name: 'Other album', album_artist: 'Release Artist', detail_loaded: true, tracks: [], problem_reasons: ['Encoding problem'] },
+    ];
+    context.state.utility.problematicFilesComplete = true;
+    context.state.utility.searchQuery = query;
+    assert.deepEqual(Array.from(context.getFilteredProblematicAlbums(), album => album.key), ['repair-match']);
+  });
+}
+
+for (const sample of problematicSearchNormalization) {
+  test(`P04 known album-name search preserves main normalization for ${sample.id}`, () => {
+    const context = loadHelpers();
+    context.state.utility.problematicFiles = [
+      { key: 'known-match', name: sample.text, album_artist: 'Artist', detail_loaded: true, tracks: [], problem_reasons: ['Missing year'] },
+      { key: 'known-nonmatch', name: 'Unrelated record', album_artist: 'Artist', detail_loaded: true, tracks: [], problem_reasons: ['Missing year'] },
+    ];
+    context.state.utility.problematicFilesComplete = true;
+    context.state.utility.problematicFilesPageSignature = '';
+    context.state.utility.searchQuery = sample.query;
+    assert.deepEqual(
+      Array.from(context.getFilteredProblematicAlbums(), album => album.key),
+      sample.main_match ? ['known-match'] : [],
+    );
+  });
+}
 
 test('P03 selecting a second problem preserves independently selected targets', () => {
   const context = loadHelpers();

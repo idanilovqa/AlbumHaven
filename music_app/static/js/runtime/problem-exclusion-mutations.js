@@ -31,8 +31,10 @@ function advanceProblemExclusionMutationRevision() {
 }
 
 function cloneProblemExclusionValue(value) {
-  if (typeof structuredClone === 'function') return structuredClone(value);
-  return JSON.parse(JSON.stringify(value));
+  const copy = typeof structuredClone === 'function' ? structuredClone(value) : JSON.parse(JSON.stringify(value));
+  if (value?.problematic_search_facts_changed) markProblematicSearchFactsChanged(copy);
+  if (value?.album?.problematic_search_facts_changed) markProblematicSearchFactsChanged(copy.album);
+  return copy;
 }
 
 function problemExclusionReason(item) {
@@ -251,9 +253,8 @@ function restoreProblematicAlbumSnapshot(operation) {
   const album = operation?.snapshot?.album;
   if (!album) return;
   const albumKey = String(album.key || '');
-  const items = Array.isArray(state.utility.problematicFiles)
-    ? state.utility.problematicFiles.slice()
-    : [];
+  const previousItems = Array.isArray(state.utility.problematicFiles) ? state.utility.problematicFiles : [];
+  const items = previousItems.slice();
   const currentIndex = items.findIndex((item) => String(item?.key || '') === albumKey);
   if (currentIndex >= 0) items.splice(currentIndex, 1);
   const insertionIndex = Math.min(
@@ -279,14 +280,20 @@ function restoreProblematicAlbumSnapshot(operation) {
     .sort((left, right) => Number(left.id) - Number(right.id))
     .forEach((candidate) => {
       if (!projectedAlbum) return;
+      const previousAlbum = projectedAlbum;
       projectedAlbum = projectProblemExclusionFromAlbum(
         projectedAlbum,
         candidate.items,
       ).updatedAlbum;
+      markProblematicSearchFactsChanged(projectedAlbum, previousAlbum);
     });
   if (projectedAlbum) items[insertionIndex] = projectedAlbum;
   else items.splice(insertionIndex, 1);
+  state.utility.problematicKnownBase = null;
+  state.utility.problematicFilesProjectionRevision = '';
   state.utility.problematicFiles = items;
+  state.utility.problematicFilesTotal = Math.max(items.length,
+    Number(state.utility.problematicFilesTotal || previousItems.length) + items.length - previousItems.length);
   state.utility.selectedProblematicKey = projectedAlbum
     ? String(operation.snapshot.selectedProblematicKey || '')
     : '';
@@ -360,14 +367,17 @@ function buildProblemExclusionItemFromAlbum(album, rowKey) {
 
 function applyOptimisticProblemExclusionCard(album, updatedAlbum) {
   const albumKey = String(album?.key || '');
-  const current = Array.isArray(state.utility.problematicFiles)
-    ? state.utility.problematicFiles
-    : [];
+  const current = prepareProblematicMutationItems(albumKey);
   const index = current.findIndex((item) => String(item?.key || '') === albumKey);
   if (index < 0) return;
+  markProblematicSearchFactsChanged(updatedAlbum, album);
+  state.utility.problematicKnownBase = null;
+  state.utility.problematicFilesProjectionRevision = '';
   state.utility.problematicFiles = updatedAlbum
     ? current.map((item, itemIndex) => (itemIndex === index ? updatedAlbum : item))
     : current.filter((_item, itemIndex) => itemIndex !== index);
+  state.utility.problematicFilesTotal = Math.max(state.utility.problematicFiles.length,
+    Number(state.utility.problematicFilesTotal || current.length) + state.utility.problematicFiles.length - current.length);
   if (!updatedAlbum && String(state.utility.selectedProblematicKey || '') === albumKey) {
     state.utility.selectedProblematicKey = '';
   }
@@ -429,7 +439,7 @@ async function queueProblemExclusionCreate({ album, items }) {
   const currentRules = state.utility.rules || [];
   const currentRule = currentRules.find((rule) => rule?.key === 'problem-ignores');
   const selectedKeys = new Set(selectedItems.map((item) => String(item?.row_key || '')));
-  const albumIndex = (state.utility.problematicFiles || []).findIndex((item) => (
+  const albumIndex = prepareProblematicMutationItems(album?.key).findIndex((item) => (
     String(item?.key || '') === String(album?.key || '')
   ));
   const projection = projectProblemExclusionFromAlbum(album, selectedItems);
@@ -501,6 +511,8 @@ async function queueProblemExclusionRevert(item) {
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data.ok) throw new Error(data.error || 'Problem exclusion revert failed');
       settleProblemExclusionMutation(operation);
+      state.utility.problematicKnownBase = null;
+      state.utility.problematicFilesProjectionRevision = '';
       state.utility.problematicSummaryRequestToken = Number(
         state.utility.problematicSummaryRequestToken || 0,
       ) + 1;

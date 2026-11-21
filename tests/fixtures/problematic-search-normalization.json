@@ -1,0 +1,10 @@
+[
+  { "id": "ascii", "text": "Selected Album", "query": "SELECTED", "main_match": true, "server_match": true, "normalized_text": "selected album", "normalized_query": "selected" },
+  { "id": "cyrillic", "text": "Премьера на Зиланте", "query": "ЗИЛАНТЕ", "main_match": true, "server_match": true, "normalized_text": "премьера на зиланте", "normalized_query": "зиланте" },
+  { "id": "composition", "text": "Cafe\u0301", "query": "Café", "main_match": false, "server_match": true, "normalized_text": "café", "normalized_query": "café" },
+  { "id": "compatibility-width", "text": "ＡＬＰＨＡ", "query": "alpha", "main_match": false, "server_match": true, "normalized_text": "alpha", "normalized_query": "alpha" },
+  { "id": "sharp-s", "text": "Straße", "query": "STRASSE", "main_match": false, "server_match": true, "normalized_text": "strasse", "normalized_query": "strasse" },
+  { "id": "sigma", "text": "ΟΣ", "query": "ος", "main_match": true, "server_match": true, "normalized_text": "οσ", "normalized_query": "οσ" },
+  { "id": "python-whitespace", "text": "Alpha\u0085\u001c Beta", "query": "Alpha Beta", "main_match": false, "server_match": true, "normalized_text": "alpha beta", "normalized_query": "alpha beta" },
+  { "id": "compatibility-ligature", "text": "ﬃ", "query": "ffi", "main_match": false, "server_match": true, "normalized_text": "ffi", "normalized_query": "ffi" }
+]

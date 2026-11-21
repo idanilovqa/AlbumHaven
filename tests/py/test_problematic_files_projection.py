@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import json
+from pathlib import Path
 from copy import deepcopy
 
 import pytest
@@ -297,6 +298,28 @@ def _persisted_summary_contract(item, eager_summary):
     assert item["summary"] == expected
     assert item["reasons"] == expected["problem_reasons"]
     assert item["item_key"] == expected["projection_id"]
+
+
+@pytest.mark.parametrize(
+    "sample",
+    json.loads(
+        (Path(__file__).resolve().parents[1] / "fixtures" / "problematic-search-normalization.json").read_text(encoding="utf-8")
+    ),
+    ids=lambda sample: sample["id"],
+)
+def test_problematic_server_normalizer_characterization_is_distinct_from_main_ui(sample):
+    """Characterize the existing normalizer, not the desired final UI predicate."""
+    from music_app.services.problematic_files_projection import (
+        _normalized_problematic_search_chunks,
+        normalize_problematic_search_query,
+        normalize_problematic_text,
+    )
+
+    assert normalize_problematic_text(sample["text"]) == sample["normalized_text"]
+    query = normalize_problematic_search_query(sample["query"])
+    assert query == sample["normalized_query"]
+    assert any(query in chunk for chunk in _normalized_problematic_search_chunks(sample["text"])) is sample["server_match"]
+    assert query not in normalize_problematic_text("Unrelated record")
 
 
 def test_persisted_search_facts_use_reader_nfkc_casefold_whitespace_normalization():

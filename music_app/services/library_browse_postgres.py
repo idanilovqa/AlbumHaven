@@ -2925,6 +2925,7 @@ class PostgresLibraryBrowseRepository:
             "items": items,
             "count": len(items),
             "total": page.total,
+            "projection_revision": page.revision,
             "next_cursor": page.next_cursor,
             "complete": page.next_cursor is None,
             "reason_facets": [

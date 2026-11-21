@@ -431,6 +431,8 @@ async function saveUtilityLibrarySettings() {
     librarySettingsState.draft = cloneLibrarySettingsDraft(librarySettingsState.settings);
     librarySettingsState.loaded = true;
     owner.loaded = false;
+    owner.problematicKnownBase = null;
+    owner.problematicFilesProjectionRevision = '';
     owner.problematicFiles = [];
     const ownsStatus = settleLibraryStatusAction(statusAction);
     if (ownsContext() && ownsStatus) {

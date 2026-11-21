@@ -33,6 +33,24 @@ const listBuilderPath = path.join(
   'utility-list-builders.js',
 );
 const listBuilderSource = fs.readFileSync(listBuilderPath, 'utf8');
+const problematicCompanionSource = [
+  listBuilderSource.slice(
+    listBuilderSource.indexOf('function getSelectedProblematicAlbum('),
+    listBuilderSource.indexOf('function markProblematicSearchFactsChanged('),
+  ),
+  listBuilderSource.slice(
+    listBuilderSource.indexOf('function markProblematicSearchFactsChanged('),
+    listBuilderSource.indexOf('function getAlbumTrackPaths('),
+  ),
+  listBuilderSource.slice(
+    listBuilderSource.indexOf('function normalizeProblemFilterReason('),
+    listBuilderSource.indexOf('const renderedProblemFilterOptions '),
+  ),
+  listBuilderSource.slice(
+    listBuilderSource.indexOf('function getProblematicMainSearchText('),
+    listBuilderSource.indexOf('function getSelectedUtilityRule('),
+  ),
+].join('\n');
 const problematicTrackNavigationSource = listBuilderSource.slice(
   listBuilderSource.indexOf('function getProblematicAlbumForTrackPath('),
   listBuilderSource.indexOf('function getIgnorableProblemRows('),
@@ -248,6 +266,7 @@ function loadHelper(overrides = {}) {
   Object.assign(context, overrides);
   vm.createContext(context);
   loadPendingProjectionFetch(context);
+  vm.runInContext(problematicCompanionSource, context, { filename: listBuilderPath });
   vm.runInContext(helperSource, context, { filename: helperPath });
   return { context, calls };
 }
@@ -683,6 +702,8 @@ test('loadNextProblematicFilesPage appends once and preserves selected detail', 
         loadPromise: null,
         completeLoadPromise: null,
         problematicFilesNextCursor: 'page-2',
+        problematicFilesPageSignature: '',
+        problematicFilesComplete: false,
         problematicFilesTotal: 2,
         problematicReasonFacets: ['Missing year'],
         problematicSummaryRequestToken: 7,
@@ -1414,6 +1435,7 @@ test('owned projection-pending response retains content and schedules one token-
         return {
           ok: false,
           status: 503,
+          clone() { return { ...this }; },
           headers: { get: (name) => name.toLowerCase() === 'retry-after' ? '1' : null },
           async json() {
             return {
@@ -1494,6 +1516,7 @@ test('stale projection-pending retry cannot request, mutate, or toast', async ()
       return {
         ok: false,
         status: 503,
+        clone() { return { ...this }; },
         headers: { get: () => '1' },
         async json() {
           return {
@@ -1549,6 +1572,7 @@ test('projection-pending retry that becomes obsolete in flight cannot commit or 
         return {
           ok: false,
           status: 503,
+          clone() { return { ...this }; },
           headers: { get: () => '1' },
           async json() {
             return {
@@ -1601,6 +1625,7 @@ test('projection-pending retry honors an explicit zero-second Retry-After', asyn
       return {
         ok: false,
         status: 503,
+        clone() { return { ...this }; },
         headers: { get: () => '0' },
         async json() {
           return {
@@ -1623,6 +1648,7 @@ function projectionRetryResponse(payload, status = 200) {
     ok: status === 200,
     status,
     headers: { get: () => status === 503 ? '1' : null },
+    clone() { return { ...this }; },
     async json() { return payload; },
   };
 }
@@ -1662,6 +1688,7 @@ function loadProjectionRetryHelper(responses, utility = {}) {
       catch (error) { inFlight -= 1; throw error; }
       return {
         ...response,
+        clone() { return response.clone(); },
         async json() {
           try { return await response.json(); }
           finally { inFlight -= 1; }
@@ -1774,6 +1801,40 @@ test('repeated projection-pending refresh retains content and selection until fr
   assert.equal(h.context.state.utility.selectedProblematicKey, retained.key);
   assert.equal(h.context.state.utility.loading, false);
   assert.equal(h.timers.size, 0);
+  assert.deepEqual(h.calls.toasts, []);
+});
+
+test('P04 a known empty query stays rendered through an owned projection-pending retry', async () => {
+  const pending = pendingProjectionResponse();
+  pending.clone = () => ({ json: pending.json });
+  const h = loadProjectionRetryHelper([
+    pending,
+    projectionRetryResponse({ items: [], count: 0, total: 0, next_cursor: null, complete: true }),
+  ], {
+    problematicFiles: [], loaded: true, problematicFilesComplete: true,
+    problematicFilesTotal: 0, problematicFilesPageSignature: '',
+  });
+  vm.runInContext(listBuilderSource, h.context, { filename: listBuilderPath });
+  vm.runInContext(rendererSource, h.context, { filename: rendererPath });
+  h.context.renderProblemFilterControls = () => {};
+  h.context.renderUtilityModalContent = () => h.context.renderProblematicFiles();
+  h.context.renderProblematicFiles();
+  const listBefore = h.elements.list.innerHTML;
+  const detailBefore = h.elements.detail.innerHTML;
+  assert.match(listBefore, /No matching problematic albums/);
+
+  await h.context.loadProblematicFiles(true);
+
+  assert.equal(h.elements.list.innerHTML, listBefore);
+  assert.equal(h.elements.detail.innerHTML, detailBefore);
+  assert.doesNotMatch(h.elements.list.innerHTML + h.elements.detail.innerHTML, /Loading/);
+  assert.equal(h.timers.size, 1);
+  h.takeRetry()();
+  await h.context.state.utility.loadPromise;
+  assert.equal(h.requestCount, 2);
+  assert.equal(h.timers.size, 0);
+  assert.equal(h.elements.list.innerHTML, listBefore);
+  assert.equal(h.elements.detail.innerHTML, detailBefore);
   assert.deepEqual(h.calls.toasts, []);
 });
 

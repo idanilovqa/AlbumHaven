@@ -45,6 +45,25 @@ class NativePcmEngineTest {
     }
 
     @Test
+    fun aReleasedEngineStillReferredToLetsGoOfItsRings() {
+        val harness = started()
+        val rings = listOf("currentRing", "continuityRing").map { name ->
+            val field = NativePcmEngine::class.java.getDeclaredField(name).apply { isAccessible = true }
+            java.lang.ref.WeakReference((field.get(harness.engine) as PcmRing).samples)
+        }
+
+        harness.engine.release()
+        repeat(20) {
+            if (rings.all { it.get() == null }) return@repeat
+            System.gc()
+            Thread.sleep(10)
+        }
+
+        // The harness still holds the engine, as a stack frame can on a device.
+        assertTrue(rings.all { it.get() == null })
+    }
+
+    @Test
     fun limitsMatchTheWebEngineAtFortyEightKilohertz() {
         val config = PcmEngineConfig(RATE)
 

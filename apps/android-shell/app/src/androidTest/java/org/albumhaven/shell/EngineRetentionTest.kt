@@ -11,6 +11,8 @@ import android.os.SystemClock
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.albumhaven.playback.engine.FakeAhpcServer
+import org.albumhaven.playback.engine.NativePcmEngine
+import org.albumhaven.playback.engine.PcmRing
 import org.albumhaven.playback.engine.SyntheticTrack
 import org.albumhaven.shell.playback.NativePlaybackController
 import org.albumhaven.shell.playback.NativePlaybackState
@@ -29,11 +31,12 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 /**
- * Run 44483610670 (API 29, 16 MB heap): a new engine's second PCM ring found no memory, so an
- * engine the controller had let go was still reachable. An engine holds two 12-second rings, about
- * 9 MB at 48 kHz, so two never fit that heap. An engine let go must be collectable at once: after a
- * rate change replaces it, and once the service that held it has ended. A retained one is written
- * as a heap dump to the run's additional test output.
+ * Runs 44483610670 and 44930900662 (API 29, 16 MB heap): a new engine's second PCM ring found no
+ * memory, so an engine the controller had let go still held its rings. An engine holds two 12-second
+ * rings, about 9 MB at 48 kHz, so two never fit that heap. The rings of an engine let go must be
+ * collectable at once, whatever still refers to the engine: after a rate change replaces it, and
+ * once the service that held it has ended. Retained rings are written as a heap dump to the run's
+ * additional test output; a pass notes whether the engine object itself was collected too.
  */
 @RunWith(AndroidJUnit4::class)
 class EngineRetentionTest {
@@ -57,7 +60,7 @@ class EngineRetentionTest {
     }
 
     @Test
-    fun anEngineARateChangeReplacedCanBeCollected() {
+    fun theRingsOfAnEngineARateChangeReplacedCanBeCollected() {
         bind()
         play(revision = 1, low)
         val replaced = engineRef()
@@ -67,7 +70,7 @@ class EngineRetentionTest {
     }
 
     @Test
-    fun theLastEngineCanBeCollectedOnceTheServiceEnds() {
+    fun theRingsOfTheLastEngineCanBeCollectedOnceTheServiceEnds() {
         bind()
         play(revision = 1, high)
         val last = engineRef()
@@ -116,12 +119,17 @@ class EngineRetentionTest {
         }
     }
 
-    // Each read of the engine stays inside its own frame, so the test itself never holds one.
-    private fun engineRef(): WeakReference<Any> = WeakReference(checkNotNull(ENGINE.get(controller())))
+    private class LetGo(val engine: WeakReference<Any>, val rings: List<WeakReference<FloatArray>>)
 
-    private fun currentEngineIsNot(ref: WeakReference<Any>): Boolean {
+    // Each read of the engine stays inside its own frame, so the test itself never holds one.
+    private fun engineRef(): LetGo {
+        val engine = checkNotNull(ENGINE.get(controller()))
+        return LetGo(WeakReference(engine), RINGS.map { WeakReference((it.get(engine) as PcmRing).samples) })
+    }
+
+    private fun currentEngineIsNot(letGo: LetGo): Boolean {
         val current = ENGINE.get(controller()) ?: return false
-        return current !== ref.get()
+        return current !== letGo.engine.get()
     }
 
     private fun controller(): NativePlaybackController {
@@ -130,24 +138,26 @@ class EngineRetentionTest {
         return CONTROLLER.get(service) as NativePlaybackController
     }
 
-    /** Collected within [COLLECT_MS] of being let go; otherwise the heap is dumped for the run's artifacts. */
-    private fun assertCollected(ref: WeakReference<Any>, name: String) {
+    /** The rings are collected within [COLLECT_MS] of being let go; otherwise the heap is dumped for the run's artifacts. */
+    private fun assertCollected(letGo: LetGo, name: String) {
         val startedAt = SystemClock.elapsedRealtime()
         while (SystemClock.elapsedRealtime() - startedAt < COLLECT_MS) {
             Runtime.getRuntime().gc()
             System.runFinalization()
-            if (ref.get() == null) {
-                // Kept with the run's reports: a pass records how long collection took. An unwritable note never fails the pass.
+            if (letGo.rings.all { it.get() == null }) {
+                // Kept with the run's reports. An unwritable note never fails the pass.
                 runCatching {
-                    File(outputDirectory(), "engine-retention-$name.txt")
-                        .writeText("collected after ${SystemClock.elapsedRealtime() - startedAt} ms\n")
+                    File(outputDirectory(), "engine-retention-$name.txt").writeText(
+                        "rings collected after ${SystemClock.elapsedRealtime() - startedAt} ms; " +
+                            "engine object collected: ${letGo.engine.get() == null}\n",
+                    )
                 }
                 return
             }
             SystemClock.sleep(50)
         }
         val dump = heapDump(name)
-        fail("The $name engine was still reachable ${COLLECT_MS} ms after it was let go; heap dump: $dump")
+        fail("The $name engine's rings were still reachable ${COLLECT_MS} ms after it was let go; heap dump: $dump")
     }
 
     private fun outputDirectory(): File =
@@ -172,5 +182,7 @@ class EngineRetentionTest {
         const val COLLECT_MS = 2_000L
         val CONTROLLER = PlaybackService::class.java.getDeclaredField("controller").apply { isAccessible = true }
         val ENGINE = NativePlaybackController::class.java.getDeclaredField("engine").apply { isAccessible = true }
+        val RINGS = listOf("currentRing", "continuityRing")
+            .map { NativePcmEngine::class.java.getDeclaredField(it).apply { isAccessible = true } }
     }
 }

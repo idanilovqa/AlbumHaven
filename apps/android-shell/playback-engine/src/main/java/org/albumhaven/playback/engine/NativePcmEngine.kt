@@ -318,6 +318,9 @@ class NativePcmEngine(
 
         /** A seek inside kept bytes cuts over once this much of the new place is decoded. */
         const val LOCAL_SEEK_READY_SECONDS = 0.1
+
+        /** What a released engine keeps in place of its rings. */
+        const val RELEASED_RING_FRAMES = 1
     }
 
     private data class LoopRange(val startFrame: Long, val endFrame: Long, val short: Boolean) {
@@ -489,10 +492,17 @@ class NativePcmEngine(
         sink.flush()
     }
 
+    /**
+     * Lets go of the output and of the PCM rings, about 9 MB at 48 kHz. Whatever still refers to a
+     * released engine, such as a debug build's interpreted stack frame, must not keep them: the next
+     * engine at a new rate needs that memory (run 44930900662, a 16 MB API 29 heap).
+     */
     fun release() {
         try {
             stop("released")
         } finally {
+            currentRing = PcmRing(RELEASED_RING_FRAMES)
+            continuityRing = PcmRing(RELEASED_RING_FRAMES)
             sink.release()
         }
     }

@@ -25,6 +25,11 @@ const STREAMING_LIVENESS_CHECK_MS = 500;
 // connection that is only slow to open must open at last (owner retest B-D4 round 6, CPU at 100%).
 const STREAMING_CONNECT_DEADLINE_MS = 4000;
 const STREAMING_CONNECT_DEADLINE_DOUBLINGS = 2;
+// While a reconnect attempt hangs, the server is asked this often whether it answers again. Once it
+// does, the hanging attempt (begun on the network that went) is replaced at once with the short
+// deadline: a network that froze and came back gives no other sign (owner retest, sandbox5
+// 2026-11-21: playback resumed 19.6 s after the network was back while a 16 s attempt hung).
+const STREAMING_REACHABILITY_PROBE_MS = 1500;
 // The server's own refusals: another socket would be refused too.
 const STREAMING_REFUSED_CLOSE_CODES = new Set([4400, 4401, 4403, 4404, 4408, 4409, 4429]);
 const STREAMING_QUEUED_NEXT_PREPARE_SECONDS = 3;
@@ -2656,6 +2661,39 @@ async function retireStreamingAudioGraph() {
   await context?.close();
 }
 
+// Asks the server, every STREAMING_REACHABILITY_PROBE_MS while [socket] still tries to connect,
+// whether it answers. An answer replaces the attempt with a fresh one on the short deadline.
+function probeStreamingReachability(socket) {
+  if (typeof fetch !== 'function') return 0;
+  let asking = false;
+  const timer = setInterval(async () => {
+    const engine = streamingEngineState();
+    if (engine.socket !== socket || !streamingSocketConnecting(socket) || !engine.detached) {
+      clearInterval(timer);
+      return;
+    }
+    if (asking) return;
+    asking = true;
+    const abort = typeof AbortController === 'function' ? new AbortController() : null;
+    const deadline = window.setTimeout(() => abort?.abort(), STREAMING_REACHABILITY_PROBE_MS);
+    try {
+      const response = await fetch('/playback/state', { cache: 'no-store', credentials: 'same-origin', signal: abort?.signal });
+      // A tunnel without its server answers 502/530: not reachable yet.
+      if (response.status >= 500 || engine.socket !== socket || !streamingSocketConnecting(socket)) return;
+      clearInterval(timer);
+      engine.detached.abandonedConnects = 0;
+      abandonStreamingConnectingSocket(socket);
+      reconnectStreamingTransport();
+    } catch (_error) {
+      // Still unreachable.
+    } finally {
+      window.clearTimeout(deadline);
+      asking = false;
+    }
+  }, STREAMING_REACHABILITY_PROBE_MS);
+  return timer;
+}
+
 // Opens the engine's playback socket; queued controls wait for it to open.
 function connectStreamingSocket() {
   const engine = streamingEngineState();
@@ -2667,8 +2705,10 @@ function connectStreamingSocket() {
     ? window.setTimeout(() => abandonStreamingConnectingSocket(socket, { timedOut: true }),
       STREAMING_CONNECT_DEADLINE_MS * 2 ** doublings)
     : 0;
+  const reachabilityProbe = engine.detached ? probeStreamingReachability(socket) : 0;
   socket.onopen = () => {
     window.clearTimeout(connectDeadline);
+    clearInterval(reachabilityProbe);
     socket.lastHeardMs = performance.now();
     watchStreamingSocketLiveness(socket);
     flushStreamingControls();
@@ -2687,6 +2727,7 @@ function connectStreamingSocket() {
   };
   socket.onclose = (event) => {
     window.clearTimeout(connectDeadline);
+    clearInterval(reachabilityProbe);
     if (engine.expectedSocketClose === socket) {
       engine.expectedSocketClose = null;
       return;

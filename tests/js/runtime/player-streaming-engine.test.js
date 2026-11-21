@@ -353,6 +353,7 @@ function createEngineHarness(options = {}) {
     handleStreamingPlaybackWaveformReady: options.handleStreamingPlaybackWaveformReady,
     ensureStreamingDecoders: options.ensureStreamingDecoders,
     updatePlayerUi: options.updatePlayerUi,
+    fetch: options.fetch,
     cancelWaveformPeakLoads: options.cancelWaveformPeakLoads,
     loadPlayingWaveformPeaks: options.loadPlayingWaveformPeaks,
   };
@@ -5137,6 +5138,56 @@ test('the next socket never gets a control for a stream that was not opened on i
   const sent = harness.sockets.at(-1).sent;
   assert.deepEqual(sent.filter(({ type }) => type === 'close'), [], 'no close for a stream the server never opened');
   assert.deepEqual(sent.filter(({ type }) => type === 'open').map(({ startFrame }) => startFrame), [200 * 48_000]);
+  assert.notEqual(harness.api.snapshot().mode, 'error');
+});
+
+// sandbox5 (2026-11-21): a network that froze and came back gave no sign, and playback resumed 19.6 s
+// later while an attempt with the doubled 16 s deadline hung. The server is asked every 1.5 s whether it
+// answers; once it does, the hanging attempt is replaced at once with the short deadline.
+test('after a frozen network, the hanging reconnect is replaced as soon as the server answers again', async () => {
+  let frozen = true;
+  const timers = manualTimers();
+  const probes = [];
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => (count > 1 && frozen ? 'hang' : false),
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+    fetch: async (url) => {
+      probes.push(url);
+      if (frozen) throw new TypeError('Failed to fetch');
+      return { ok: true, status: 200, json: async () => ({}) };
+    },
+  });
+  await startLocallySeekable(harness, 100_000);
+  await harness.api.resume();
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  // Three hung attempts double the next one's deadline to 16 s.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const deadline = timers.pending().find(({ delay }) => delay >= 4_000);
+    timers.fire(deadline);
+    await settleTwice(harness);
+    const retry = timers.pending().find(({ delay }) => delay <= 2_000);
+    if (retry) timers.fire(retry);
+    await settleTwice(harness);
+  }
+  assert.ok(timers.pending().some(({ delay }) => delay === 16_000), 'the hanging attempt has the long deadline');
+  const hanging = harness.sockets.length;
+
+  const probe = () => harness.intervals.filter(({ delay }) => delay === 1_500).at(-1).callback();
+  await probe();
+  await settleTwice(harness);
+  assert.equal(harness.sockets.length, hanging, 'while the server does not answer, the attempt waits');
+
+  frozen = false;
+  await probe();
+  await settleTwice(harness);
+  await settleTwice(harness);
+  assert.equal(harness.sockets.length, hanging + 1, 'the server answered: a fresh attempt at once');
+  assert.ok(probes.every((url) => url === '/playback/state'));
+  assert.equal(harness.sockets.at(-1).readyState, 1, 'the fresh attempt opened');
+  assert.ok(harness.sockets.at(-1).sent.some(({ type }) => type === 'open'), 'and the song goes on on it');
   assert.notEqual(harness.api.snapshot().mode, 'error');
 });
 

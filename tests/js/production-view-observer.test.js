@@ -2191,3 +2191,13 @@ test('browse telemetry accepts the actual SSR first-paint payload without a redu
   owner.readProductionBootstrapPayload = async () => null;
   await assert.rejects(() => GalleryPage.prototype.readLatestProductionViewPayload.call(owner), /Expected an observed production view/);
 });
+
+test('the search Loose Tracks prefetch never stands in for the gallery view-data answer', async () => {
+  const { isSearchLooseTracksPrefetchUrl } = await import(observerUrl);
+  const base = 'http://127.0.0.1/view-data?surface=albums&q=%D0%94%D0%94%D0%A2&gallery_scope=all';
+  // The request FTC-TAGS-026P and FTC-ALBUM-TASTE-013 mistook for the gallery's answer.
+  assert.equal(isSearchLooseTracksPrefetchUrl(`${base}&omit_sidebar=1&include_non_album=1&include_library_wide_non_album=1`), true);
+  assert.equal(isSearchLooseTracksPrefetchUrl(`${base}&omit_sidebar=1&include_non_album=1`), false);
+  assert.equal(isSearchLooseTracksPrefetchUrl(`${base}&payload_tier=sidebar&omit_sidebar=1&include_non_album=1&include_library_wide_non_album=1`), false);
+  assert.equal(isSearchLooseTracksPrefetchUrl('http://127.0.0.1/view-data?surface=albums&omit_sidebar=1&include_non_album=1&include_library_wide_non_album=1'), false);
+});

@@ -1,4 +1,5 @@
 import { expect } from '@playwright/test';
+import { isSearchLooseTracksPrefetchUrl } from '../helpers/productionViewObserver.js';
 
 export class SearchToolbarActions {
   constructor(searchToolbar) {
@@ -67,7 +68,8 @@ export class SearchToolbarActions {
       if (response.request().method() !== 'GET' || !response.ok()) return false;
       const url = new URL(response.url());
       return url.pathname === '/view-data'
-        && String(url.searchParams.get('q') || '').trim() === expectedQuery;
+        && String(url.searchParams.get('q') || '').trim() === expectedQuery
+        && !isSearchLooseTracksPrefetchUrl(url);
     });
     await this.search(expectedQuery, options);
     const response = await responsePromise;

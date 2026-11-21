@@ -1,8 +1,22 @@
 import { CDPDocumentEvents } from './cdpDocumentEvents.js';
 
+// The search's Loose Tracks prefetch shares /view-data and the query but carries no gallery
+// (server: _is_postgres_search_loose_tracks_prefetch_request), so it never answers for the view.
+export function isSearchLooseTracksPrefetchUrl(value) {
+  const requestUrl = value instanceof URL ? value : new URL(String(value));
+  const flag = (name) => ['1', 'true', 'yes', 'on'].includes(
+    String(requestUrl.searchParams.get(name) || '').trim().toLowerCase(),
+  );
+  return requestUrl.pathname === '/view-data'
+    && Boolean(String(requestUrl.searchParams.get('q') || '').trim())
+    && !String(requestUrl.searchParams.get('payload_tier') || '').trim()
+    && flag('omit_sidebar') && flag('include_non_album') && flag('include_library_wide_non_album');
+}
+
 function readViewDataRequest(request, sequence) {
   const requestUrl = new URL(request.url());
   if (!['/view-data', '/home-data'].includes(requestUrl.pathname)) return null;
+  if (isSearchLooseTracksPrefetchUrl(requestUrl)) return null;
   const scopeParams = new URLSearchParams(requestUrl.searchParams);
   for (const key of ['payload_tier', 'gallery_offset', 'gallery_cursor', 'omit_sidebar']) {
     scopeParams.delete(key);

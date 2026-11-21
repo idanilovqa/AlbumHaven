@@ -580,10 +580,17 @@ export class TagEditorActions {
     };
   }
 
+  // The Exception field is a read-only dropdown: open it and pick the option, as clearException does.
   async setException(exceptionType) {
-    await this.tagEditor.exceptionSelect.fill(exceptionType);
-    await this.tagEditor.exceptionSelect.blur();
-    await expect(this.tagEditor.exceptionSelect).toHaveValue(exceptionType);
+    const label = String(exceptionType || '').trim();
+    await this.tagEditor.exceptionSelect.click();
+    await expect(this.tagEditor.exceptionMenu).toBeVisible();
+    const option = this.tagEditor.exceptionMenu.locator('[data-tag-editor-exception-option]').filter({
+      hasText: new RegExp(`^\\s*${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'u'),
+    });
+    await expect(option).toHaveCount(1);
+    await option.click();
+    await expect(this.tagEditor.exceptionSelect).toHaveValue(label);
   }
 
   async clearException() {

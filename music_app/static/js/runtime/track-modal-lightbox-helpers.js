@@ -489,8 +489,9 @@ async function fetchTrackModalAlbumDetails(albumKey, options = {}) {
   return payload.album;
 }
 
-// A gallery album that is gone was split or merged meanwhile. The refreshed gallery shows every
-// current release as its own card, so the choice is made there, never in a chooser here.
+// The album an open modal shows was split or merged meanwhile. The refreshed gallery shows every
+// current release as its own card, so the choice is made there, never in a chooser here. Only a
+// modal already open on the old album says so (owner, 2026-11-21).
 function closeTrackModalForChangedAlbum() {
   closeTrackModal();
   showToast('This album changed—choose it again in the gallery.', 'info', 4200);
@@ -623,9 +624,15 @@ async function refreshOpenTrackModalAfterInventoryMutation() {
   if (loadError?.status === 404) {
     const release = await findLocallyEditedSplitRelease(albumKey, openAlbum);
     if (els.overlay.hidden || state.modalReleases?.[state.modalReleaseIndex] !== currentAlbum) return false;
+    if (release) {
+      openTrackModal(release);
+      return true;
+    }
+    // This session's own save rebinds the modal when it completes; a key derived before the server
+    // added a release discriminator (::year::) is not an album that changed elsewhere.
+    if (editedLocally) return false;
     // Otherwise the view that triggered this refresh already shows the current releases.
-    if (release) openTrackModal(release);
-    else closeTrackModalForChangedAlbum();
+    closeTrackModalForChangedAlbum();
     return true;
   }
   if (loadError) throw loadError;
@@ -806,7 +813,9 @@ function openTrackModal(album, options = {}) {
           openTrackModal(release);
           return;
         }
-        closeTrackModalForChangedAlbum();
+        // Owner (2026-11-21): "This album changed" belongs only to a modal that was already open on
+        // the old identity. A card opened after the change just gives way to the refreshed gallery.
+        closeTrackModal();
         if (typeof refreshCurrentViewAfterBackgroundCompletion === 'function') {
           refreshCurrentViewAfterBackgroundCompletion().catch((refreshError) => {
             console.error('[AlbumHaven][AlbumDetails] Failed to refresh the gallery.', refreshError);

@@ -144,7 +144,7 @@ class EngineRetentionTest {
         while (SystemClock.elapsedRealtime() - startedAt < COLLECT_MS) {
             Runtime.getRuntime().gc()
             System.runFinalization()
-            if (letGo.rings.all { it.get() == null }) {
+            if (ringsCollected(letGo)) {
                 // Kept with the run's reports. An unwritable note never fails the pass.
                 runCatching {
                     File(outputDirectory(), "engine-retention-$name.txt").writeText(
@@ -159,6 +159,10 @@ class EngineRetentionTest {
         val dump = heapDump(name)
         fail("The $name engine's rings were still reachable ${COLLECT_MS} ms after it was let go; heap dump: $dump")
     }
+
+    // Its own frame: read inline, the last ring still reachable stays in a register of the waiting
+    // frame and outlives every later collection (run 44936803885's heap dump).
+    private fun ringsCollected(letGo: LetGo): Boolean = letGo.rings.all { it.get() == null }
 
     private fun outputDirectory(): File =
         (InstrumentationRegistry.getArguments().getString("additionalTestOutputDir")?.let(::File)

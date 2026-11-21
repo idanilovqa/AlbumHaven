@@ -1079,7 +1079,8 @@ async def utilities_cover_lookup_gallery(request: Request) -> JSONResponse:
         if split_response is not None:
             return _json_response(split_response)
         return _json_response(({"ok": False, "error": "Album root could not be resolved"}, 400))
-    repository, album_id, identity_error = _resolved_snapshot_album_context(
+    repository, album_id, identity_error = await run_in_threadpool(
+        _resolved_snapshot_album_context,
         config,
         album,
         album_context.track_paths,
@@ -1116,7 +1117,9 @@ async def utilities_cover_lookup_gallery(request: Request) -> JSONResponse:
     candidate_snapshot = None
     if not album.get("_cover_lookup_task_scoped_context"):
         try:
-            candidate_snapshot = repository.get_for_album_context(album_id=int(album_id))
+            candidate_snapshot = await run_in_threadpool(
+                repository.get_for_album_context, album_id=int(album_id),
+            )
         except Exception:
             candidate_snapshot = _candidate_snapshot_read_failure(
                 "candidate_snapshot_read_failed"
@@ -1158,7 +1161,8 @@ async def utilities_cover_lookup_gallery_mark_seen(request: Request) -> JSONResp
             ({"ok": False, "error": "Album root could not be resolved"}, 400)
         )
     album_id = _album_id(album or {})
-    repository, album_id, identity_error = _resolved_snapshot_album_context(
+    repository, album_id, identity_error = await run_in_threadpool(
+        _resolved_snapshot_album_context,
         config,
         album or {},
         album_context.track_paths,
@@ -1166,10 +1170,12 @@ async def utilities_cover_lookup_gallery_mark_seen(request: Request) -> JSONResp
     if identity_error is not None:
         return _json_response(identity_error)
     try:
-        candidate_snapshot = repository.mark_seen(album_id=album_id)
+        candidate_snapshot = await run_in_threadpool(repository.mark_seen, album_id=album_id)
     except Exception:
         try:
-            candidate_snapshot = repository.get_for_album_context(album_id=album_id)
+            candidate_snapshot = await run_in_threadpool(
+                repository.get_for_album_context, album_id=album_id,
+            )
         except Exception:
             candidate_snapshot = None
         failed_snapshot = dict(

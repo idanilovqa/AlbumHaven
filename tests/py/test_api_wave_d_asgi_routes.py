@@ -897,6 +897,54 @@ def test_asgi_cover_lookup_gallery_rehydrates_compact_notification_album(app, mo
     assert snapshot_reads == [41, 41]
 
 
+def test_asgi_cover_lookup_gallery_reads_postgres_off_the_event_loop(app, monkeypatch):
+    """Owner 2026-11-21: Cover Look Up loaded very slowly after a cover save.
+
+    The save leaves background projection work on Postgres; a gallery read that waits for the
+    database on the event loop stalls every other request of the open (and the whole app) with it.
+    """
+    import threading
+
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    track_path = (app.config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    monkeypatch.setattr(
+        PostgresLibraryBrowseRepository,
+        "build_cover_state_entries_by_paths",
+        lambda _self, _paths: {},
+    )
+    event_loop_thread = threading.get_ident()
+    database_threads: dict[str, int] = {}
+
+    class FakeRepository:
+        def __init__(self, _config):
+            pass
+
+        def resolve_album_id_for_track_paths(self, *, track_paths):
+            database_threads["album identity"] = threading.get_ident()
+            return 41
+
+        def get_for_album_context(self, *, album_id):
+            database_threads["candidate snapshot"] = threading.get_ident()
+            return None
+
+    monkeypatch.setattr(asgi_routes, "AlbumCoverCandidateSnapshotRepository", FakeRepository)
+
+    status, _headers, _body = _run_asgi_request(
+        _make_wave_d_app(app),
+        "POST",
+        "/utilities/cover-lookup/gallery",
+        json_body={"album": {**_album_payload(track_path), "id": 41}},
+    )
+
+    assert status == 200
+    assert set(database_threads) == {"album identity", "candidate snapshot"}
+    assert [name for name, thread in database_threads.items() if thread == event_loop_thread] == []
+
+
 @pytest.mark.parametrize("snapshot_matches_task", [True, False])
 def test_asgi_cover_lookup_gallery_uses_only_matching_snapshot_for_exact_notification_album(
     app,

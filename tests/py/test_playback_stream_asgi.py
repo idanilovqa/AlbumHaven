@@ -1902,6 +1902,7 @@ def test_pcm_promotion_ack_does_not_wait_for_outgoing_credit_task_cleanup(playba
             self.cancel_calls += 1
 
     class RecordingWebSocketDouble:
+        query_params: dict[str, str] = {}
         def __init__(self) -> None:
             self.app = playback_app
             self.events: list[dict[str, object]] = []
@@ -2027,6 +2028,7 @@ def test_pcm_promotion_drops_outgoing_read_that_completes_after_retirement(
             self.cancel_calls += 1
 
     class RecordingWebSocketDouble:
+        query_params: dict[str, str] = {}
         def __init__(self) -> None:
             self.app = playback_app
             self.events: list[dict[str, object] | bytes] = []
@@ -2578,6 +2580,7 @@ def test_pcm_socket_serializes_current_and_continuity_websocket_sends():
             self.cancel_calls += 1
 
     class ConcurrentSendRejectingWebSocketDouble:
+        query_params: dict[str, str] = {}
         def __init__(self) -> None:
             self.send_in_progress = False
             self.overlapping_send_count = 0
@@ -2687,6 +2690,7 @@ def test_pcm_credit_drain_yields_without_timer_delay_amplification(monkeypatch):
             return PcmChunk(frame_count=1, pcm=struct.pack("<ff", 0.25, -0.25))
 
     class ImmediatelyWritableWebSocketDouble:
+        query_params: dict[str, str] = {}
         def __init__(self) -> None:
             self.send_count = 0
 
@@ -2758,6 +2762,7 @@ def test_disconnect_while_decoder_open_is_pending_does_not_raise_on_metadata_sen
     monkeypatch,
 ):
     class DisconnectingDuringOpenWebSocketDouble:
+        query_params: dict[str, str] = {}
         def __init__(self) -> None:
             self.app = playback_app
             self.client_closed = False
@@ -2819,6 +2824,7 @@ def test_unrelated_metadata_send_runtime_error_still_propagates(
     decoder_factory,
 ):
     class FailingMetadataWebSocketDouble:
+        query_params: dict[str, str] = {}
         def __init__(self) -> None:
             self.app = playback_app
             configure_authenticated_request_double(self)
@@ -2870,6 +2876,7 @@ def test_disconnect_during_stream_send_does_not_emit_decoder_error_and_releases_
     expected_finish_calls,
 ):
     class DisconnectingPcmWebSocketDouble:
+        query_params: dict[str, str] = {}
         def __init__(self) -> None:
             self.app = playback_app
             self.controls = [
@@ -2982,6 +2989,7 @@ def test_decoder_start_that_finishes_after_shutdown_is_cancelled_without_registr
                 self.shutdown_finished.set()
 
     class RecordingWebSocketDouble:
+        query_params: dict[str, str] = {}
         def __init__(self) -> None:
             self.app = playback_app
             self.events: list[dict[str, object]] = []
@@ -3034,6 +3042,7 @@ def test_decoder_start_that_finishes_after_shutdown_is_cancelled_without_registr
 
 def test_connection_accept_failure_releases_admitted_registry_slot():
     class AcceptFailureWebSocketDouble:
+        query_params: dict[str, str] = {}
         async def accept(self) -> None:
             raise RuntimeError("accept failed")
 
@@ -3065,6 +3074,7 @@ def test_registry_shutdown_waits_for_racing_reject_cleanup_when_close_raises():
                 self.shutdown_finished.set()
 
     class BlockingRejectWebSocketDouble:
+        query_params: dict[str, str] = {}
         def __init__(self) -> None:
             self.close_entered = asyncio.Event()
             self.allow_close = asyncio.Event()
@@ -3120,6 +3130,7 @@ def test_registry_shutdown_waits_for_racing_reject_cleanup_when_close_raises():
 @pytest.mark.parametrize("private_detail", ["", r"C:\private\music\track.flac Bearer secret-playback-token"])
 def test_registry_shutdown_raises_cleanup_failures_after_releasing_healthy_resources(private_detail, caplog):
     class ShutdownWebSocketDouble:
+        query_params: dict[str, str] = {}
         async def close(self, *, code: int) -> None:
             assert code == 1001
             raise RuntimeError("socket close failed")
@@ -3182,6 +3193,7 @@ def test_registry_shutdown_raises_cleanup_failures_after_releasing_healthy_resou
 
 def test_registry_shutdown_reports_cancelled_decoder_and_releases_healthy_resources():
     class ShutdownWebSocketDouble:
+        query_params: dict[str, str] = {}
         def __init__(self) -> None:
             self.close_calls = 0
 
@@ -3243,6 +3255,7 @@ def test_registry_shutdown_reports_cancelled_decoder_and_releases_healthy_resour
 
 def test_registry_shutdown_reports_cancelled_connection_shutdown_task():
     class ShutdownWebSocketDouble:
+        query_params: dict[str, str] = {}
         pass
 
     async def scenario() -> None:

@@ -19920,7 +19920,7 @@ def test_problematic_detail_for_track_path_reads_only_that_track_album(monkeypat
     class Connection:
         def execute(self, sql, params):
             executed.append(params)
-            return SimpleNamespace(fetchall=lambda: [{"album_key": "art zoyd::musique pour l'odyssée"}])
+            return SimpleNamespace(fetchall=lambda: [{"album_id": 42}])
 
     @contextmanager
     def connection_context():
@@ -19930,11 +19930,11 @@ def test_problematic_detail_for_track_path_reads_only_that_track_album(monkeypat
         {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
         connect=lambda _url: Connection(),
     )
-    loaded_keys = []
+    loaded_ids = []
     monkeypatch.setattr(repository, "_browse_connection_context", connection_context)
     monkeypatch.setattr(
         repository, "_load_problematic_file_rows",
-        lambda album_key=None, **_kwargs: loaded_keys.append(album_key) or ["rows"],
+        lambda album_ids=None, **_kwargs: loaded_ids.append(album_ids) or ["rows"],
     )
     monkeypatch.setattr(repository, "_load_relation_alias_maps", lambda **_kwargs: {"alias_to_canonical": {}})
     monkeypatch.setattr(browse, "_problematic_album_projection_payloads", lambda rows: [
@@ -19947,7 +19947,7 @@ def test_problematic_detail_for_track_path_reads_only_that_track_album(monkeypat
         "key": "art zoyd::musique pour l'odyssée",
     }
     assert executed == [{"path": track_path}]
-    assert loaded_keys == ["art zoyd::musique pour l'odyssée"]
+    assert loaded_ids == [[42]]
     assert repository.build_problematic_file_detail_payload_for_track_path("  ") is None
 
 

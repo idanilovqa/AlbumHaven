@@ -9,6 +9,7 @@ use; the filesystem, media, and library-building work is real and counted.
 
 from __future__ import annotations
 
+import contextlib
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
@@ -1221,8 +1222,22 @@ def test_problematic_file_detail_route_contract_reads_only_the_selected_album_at
             current["counts"].sql_statements += 1
             return {"alias_to_canonical": {}}
 
+        def load_missing_album_rows(_self, album_key=None, **_options):
+            # The keyed missing-album read (`where album_key = ...`); this album is present.
+            selected: list[dict[str, object]] = []
+            current["counts"].candidate_rows += len(selected)
+            return selected
+
+        @contextlib.contextmanager
+        def browse_connection_context(_self):
+            # The request leases one pooled connection for all of its reads.
+            current["counts"].pool_leases += 1
+            yield SimpleNamespace()
+
         monkeypatch.setattr(repository, "_load_problematic_file_rows", load_problematic_file_rows)
         monkeypatch.setattr(repository, "_load_relation_alias_maps", load_relation_alias_maps)
+        monkeypatch.setattr(repository, "_load_missing_album_rows", load_missing_album_rows)
+        monkeypatch.setattr(repository, "_browse_connection_context", browse_connection_context)
 
     def run(track_count: int) -> OperationCounts:
         if backend == "postgres":

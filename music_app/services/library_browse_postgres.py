@@ -3320,11 +3320,11 @@ class PostgresLibraryBrowseRepository:
         if not path:
             return None
         with self._browse_connection_context() as connection:
-            album_keys = [
-                str(_row_mapping(row)["album_key"])
+            album_ids = [
+                int(_row_mapping(row)["album_id"])
                 for row in connection.execute(
                     """
-                    select distinct library.local_albums.album_key
+                    select distinct library.local_albums.id as album_id
                     from library.local_track_files
                     join library.local_tracks
                       on library.local_tracks.id = library.local_track_files.track_id
@@ -3342,27 +3342,28 @@ class PostgresLibraryBrowseRepository:
                     {"path": path},
                 ).fetchall()
             ]
-            # Every read shares this connection; the aliases are read once, on the first match.
-            aliases = None
-            for album_key in album_keys:
-                for album in _problematic_album_projection_payloads(
-                    self._load_problematic_file_rows(album_key=album_key, connection=connection)
-                ):
-                    track_paths = {
-                        str(track.get("path") or "").strip()
-                        for track in album.get("tracks") or []
-                        if isinstance(track, Mapping)
-                    }
-                    if path not in track_paths:
-                        continue
-                    if aliases is None:
-                        aliases = self._load_relation_alias_maps(connection=connection).get(
-                            "alias_to_canonical", {}
-                        )
-                    album["_suggestion_aliases"] = aliases
-                    detail = _problematic_album_detail_payload(album)
-                    if detail is not None:
-                        return detail
+            if not album_ids:
+                return None
+            # One read covers every album holding the path; aliases are read once, on a match.
+            albums = [
+                album for album in _problematic_album_projection_payloads(
+                    self._load_problematic_file_rows(album_ids=album_ids, connection=connection)
+                )
+                if path in {
+                    str(track.get("path") or "").strip()
+                    for track in album.get("tracks") or []
+                    if isinstance(track, Mapping)
+                }
+            ]
+            aliases = (
+                self._load_relation_alias_maps(connection=connection).get("alias_to_canonical", {})
+                if albums else {}
+            )
+        for album in albums:
+            album["_suggestion_aliases"] = aliases
+            detail = _problematic_album_detail_payload(album)
+            if detail is not None:
+                return detail
         return None
 
     def build_problematic_file_detail_payload(self, album_key: object) -> dict[str, object] | None:

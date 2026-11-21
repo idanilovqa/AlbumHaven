@@ -64,13 +64,6 @@ test('split release choices are no longer rendered inside Cover Lookup', () => {
   assert.doesNotMatch(helperSource, /data-cover-lookup-current-release|chooseCoverLookupCurrentRelease/);
 });
 
-test('Album Details split choices use the current-release selector action', () => {
-  assert.match(
-    helperSource,
-    /closest\('\[data-track-modal-current-release\]'\)[\s\S]*?preventDefault\(\)[\s\S]*?selectTrackModalCurrentRelease\([\s\S]*?getAttribute\('data-track-modal-current-release'\)/,
-  );
-});
-
 test('Cover Lookup album link uses the shared album-details navigation action', () => {
   assert.match(
     helperSource,
@@ -1658,4 +1651,59 @@ test('returning to Problematic Files from Rules reuses the loaded list without a
 
   assert.equal(context.state.utility.activeTab, 'problematic-files');
   assert.equal(summaryRequests().length, loadedCount, `unexpected reload: ${requests.join(', ')}`);
+});
+
+test('bounded interaction: tag editor drag selection and field input update only changed rows among 1,000 tracks', async () => {
+  const { countedCollection, createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter.js');
+  const { createCountedDom } = require('../helpers/counted-dom.js');
+  const run = async (cardinality) => {
+    const counter = createInteractionCounter();
+    const { CountedElement } = createCountedDom(counter);
+    const { context } = createContext();
+    vm.runInContext(fs.readFileSync(path.join(path.dirname(utilityLoadersPath), 'markup-format-helpers.js'), 'utf8'), context);
+    vm.runInContext(utilityLoadersSource, context, { filename: utilityLoadersPath });
+    const paths = Array.from({ length: cardinality }, (_value, index) => `Music/Album/${String(index).padStart(4, '0')}.flac`);
+    const rows = new Map(paths.map(item => [item, new CountedElement('div', { selectors: { '.tag-editor-track-select': new CountedElement('button') } })]));
+    rows.forEach((row, item) => row.setAttribute('data-tag-editor-track', item));
+    const list = new CountedElement('div');
+    list.querySelector = (selector) => {
+      counter.count('domQueries');
+      return rows.get(selector.slice('[data-tag-editor-track="'.length, -'"]'.length)) || null;
+    };
+    list.querySelectorAll = () => { counter.count('domQueries'); return [...rows.values()]; };
+    const titleInput = new CountedElement('input', { value: '' });
+    titleInput.setAttribute('data-tag-field', 'title');
+    titleInput.closest = selector => (selector === '#tag-editor-form [data-tag-field]' ? titleInput : null);
+    const form = new CountedElement('form', { selectors: { 'all:[data-tag-field]': [titleInput] } });
+    context.getTagEditorElements = () => ({ overlay: new CountedElement(), list, form });
+    context.renderTagEditorArtwork = () => {};
+    context.syncTagEditorCollectionFields = () => {};
+    context.syncTagEditorPendingChanges = () => {};
+    context.syncTagEditorAutoNumberControls = () => {};
+    const tracks = countedCollection(paths.map(item => ({ path: item, title: item })), counter);
+    Object.assign(context.state.tagEditor, {
+      album: { name: 'Album' }, tracks, values: {}, selectedPaths: [paths[5]], anchorPath: paths[5],
+      dragSelecting: true, dragAnchorPath: paths[5], dragHoverPath: paths[5],
+    });
+    const hover = item => ({ target: { closest: selector => (selector === '[data-tag-editor-track]' ? rows.get(item) : null) } });
+    const work = await counter.measure(() => {
+      for (let move = 0; move < 10; move += 1) context.handleUtilityBootstrapMouseOver(hover(paths[5]));
+      context.handleUtilityBootstrapMouseOver(hover(paths[6]));
+      for (let move = 0; move < 10; move += 1) context.handleUtilityBootstrapMouseOver(hover(paths[6]));
+      titleInput.value = 'Edited';
+      context.handleUtilityBootstrapInput({ target: titleInput });
+    });
+    assert.deepEqual([...context.state.tagEditor.selectedPaths], [paths[5], paths[6]]);
+    assert.equal(rows.get(paths[6]).classList.contains('is-active'), true);
+    assert.equal(context.state.tagEditor.values[paths[6]].title, 'Edited');
+    return work;
+  };
+  await measureScalePair({
+    id: 'js:runtime/bootstrap-event-handlers.js#<top-level>',
+    small: 20,
+    large: 1000,
+    run,
+    budgets: { itemsVisited: 3015, domQueries: 3, domMutations: 2, renderCommits: 0 },
+    growth: { metric: 'domMutations', largeMinusSmallMax: 0 },
+  });
 });

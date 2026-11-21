@@ -72,7 +72,13 @@ export class SettingsIntegrations {
     const menuBox = await menu.boundingBox();
     expect(triggerBox).not.toBeNull();
     expect(menuBox).not.toBeNull();
-    expect(Math.abs(menuBox.width - triggerBox.width)).toBeLessThanOrEqual(1);
+    expect(menuBox.width).toBeGreaterThanOrEqual(triggerBox.width - 1);
+    expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(this.page.viewportSize().width);
+    // parity-check: allow-read-only-measurement-evaluate -- read whether any rendered choice text is clipped
+    const clipped = await menu.getByRole('menuitemradio').evaluateAll((rows) => rows
+      .filter((row) => [row, ...row.querySelectorAll('*')].some((node) => node.clientWidth > 0 && node.scrollWidth > node.clientWidth + 1))
+      .map((row) => row.textContent.trim()));
+    expect(clipped).toEqual([]);
     if (label === 'Library destination') {
       await expect(menu.getByRole('menuitemradio', { name: /Choose a Main Library root/u })).toHaveCount(0);
     }

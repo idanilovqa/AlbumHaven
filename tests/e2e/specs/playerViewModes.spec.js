@@ -1,3 +1,5 @@
+import { GlobalPlayerActions } from '../actions/globalPlayerActions.js';
+import { GlobalPlayer } from '../poms/globalPlayer.js';
 import { InteractionSurfaces, expectAlbumPauseFirstClick, expectSlowActivationLights, expectStableButtonHover } from '../poms/interactionSurfaces.js';
 import { expect, test } from '../support/baseFixtures.js';
 
@@ -113,7 +115,7 @@ test(`${CASE_ID} switches expanded, docked, and floating player views without sh
   trackModalActions,
   utilityAppearanceActions,
   utilityTabBarActions,
-}) => {
+}, testInfo) => {
   const surfaces = new InteractionSurfaces(page);
   let selectedTrack;
 
@@ -340,6 +342,11 @@ test(`${CASE_ID} switches expanded, docked, and floating player views without sh
       await expect(peerSurfaces.play).toBeDisabled();
       await expect(peerSurfaces.play).not.toContainText('Locked');
       await expect(peerSurfaces.play).toHaveAttribute('aria-label', 'Playback locked in another tab');
+      const peerPlayer = new GlobalPlayerActions(new GlobalPlayer(peer, testInfo));
+      if ((await peerPlayer.readViewCheckpoint()).mode !== 'expanded') await peerPlayer.expandPlayer();
+      await expect(peerPlayer.globalPlayer.loopAction).toHaveAttribute('data-loop-action-state', 'disabled');
+      const dwell = await peerPlayer.expectScissorsStayFoldedOnPlayHover();
+      expect(dwell.after.podBounds).toEqual(dwell.before.podBounds);
     } finally { await peer.close(); }
   });
 

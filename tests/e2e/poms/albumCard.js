@@ -169,7 +169,7 @@ export class AlbumCard extends BasePage {
       const committedProductionBlob = renderedUrl?.protocol === 'blob:'
         && renderedUrl.origin === new URL(document.baseURI).origin
         && productionUrl?.origin === renderedUrl.origin
-        && productionUrl.pathname === '/cover';
+        && productionUrl.pathname.startsWith('/cover/');
       const sourceCoherent = Boolean(
         resolvedProductionSrc
         && (resolvedRenderedSrc === resolvedProductionSrc || committedProductionBlob)

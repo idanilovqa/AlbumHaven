@@ -12,7 +12,9 @@ import urllib.request
 from collections.abc import Callable
 
 from config import Config
-from music_app.services.app_logging import log_app_event
+# Provider calls log per query, candidate and probe: application log only,
+# never a log-history write (one database connection each).
+from music_app.services.app_logging import log_app_message_event as log_provider_event
 from music_app.services.cover_provider_availability import provider_availability
 from music_app.services.cover_provider_candidates import CoverCandidate, normalize_remote_image_url
 from music_app.services.cover_provider_deadline import (
@@ -184,7 +186,7 @@ def spotify_request_json(
     data: bytes | None = None,
     context: str = "",
     logger=None,
-    log_event: LogEvent | None = log_app_event,
+    log_event: LogEvent | None = log_provider_event,
 ) -> dict | None:
     request = urllib.request.Request(url, data=data, method=method.upper(), headers=headers)
     active_logger = logger or _LOGGER
@@ -300,7 +302,7 @@ def spotify_access_token(
     config=Config,
     api_enabled: Callable[[], bool] | None = None,
     request_json: RequestJson | None = None,
-    log_event: LogEvent | None = log_app_event,
+    log_event: LogEvent | None = log_provider_event,
 ) -> str | None:
     enabled = api_enabled() if api_enabled is not None else spotify_api_enabled(config=config)
     if not enabled:
@@ -356,7 +358,7 @@ def spotify_api_get(
     params: dict[str, object] | None = None,
     access_token: Callable[[], str | None] | None = None,
     request_json: RequestJson | None = None,
-    log_event: LogEvent | None = log_app_event,
+    log_event: LogEvent | None = log_provider_event,
 ) -> dict | None:
     _emit(log_event, "Spotify API GET stage", stage="waiting_for_token", path=path)
     token = access_token() if access_token is not None else spotify_access_token(request_json=request_json, log_event=log_event)
@@ -451,7 +453,7 @@ def spotify_collect_album_matches(
     api_get: ApiGet,
     match_score: MatchScore,
     parse_year: ParseYear,
-    log_event: LogEvent | None = log_app_event,
+    log_event: LogEvent | None = log_provider_event,
 ) -> tuple[list[tuple[float, str, dict]], list[dict]]:
     data = api_get("/search", params={
         "q": query_text,
@@ -507,7 +509,7 @@ def spotify_collect_artist_album_matches(
     similarity: Similarity,
     match_score: MatchScore,
     parse_year: ParseYear,
-    log_event: LogEvent | None = log_app_event,
+    log_event: LogEvent | None = log_provider_event,
 ) -> tuple[list[tuple[float, str, dict]], list[dict]]:
     search = api_get("/search", params={
         "q": f'artist:"{query_artist}"',
@@ -602,7 +604,7 @@ def search_spotify(
     collect_album_matches: Callable[..., tuple[list[tuple[float, str, dict]], list[dict]]],
     collect_artist_album_matches: Callable[..., tuple[list[tuple[float, str, dict]], list[dict]]],
     select_largest_candidate: SelectCandidate,
-    log_event: LogEvent | None = log_app_event,
+    log_event: LogEvent | None = log_provider_event,
 ) -> CoverCandidate | None:
     if not api_enabled():
         _emit(
@@ -741,7 +743,7 @@ def search_spotify_candidates(
     collect_artist_album_matches: Callable[..., tuple[list[tuple[float, str, dict]], list[dict]]],
     probe_match_candidates: ProbeCandidates,
     dedupe_cover_candidates: DedupeCandidates,
-    log_event: LogEvent | None = log_app_event,
+    log_event: LogEvent | None = log_provider_event,
 ) -> list[CoverCandidate]:
     if not api_enabled():
         return []
@@ -826,7 +828,7 @@ def spotify_candidates_from_album_url(
     api_get: ApiGet,
     match_score: MatchScore,
     parse_year: ParseYear,
-    log_event: LogEvent | None = log_app_event,
+    log_event: LogEvent | None = log_provider_event,
 ) -> list[CoverCandidate]:
     spotify_album_id = spotify_album_id_from_url(normalized_url)
     enabled = api_enabled() if api_enabled is not None else spotify_api_enabled(config=config)

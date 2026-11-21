@@ -1074,7 +1074,7 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/albumTagRename.spec.js",
-              "case": "FTC-ALBUM-DETAILS-029 stale album references follow merges and require a current release after splits",
+              "case": "FTC-ALBUM-DETAILS-029 stale album references follow merges and return to the gallery after splits",
               "area": "tag-edit"
             },
             {
@@ -1430,7 +1430,7 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/musicbrainzArtistIdentity.spec.js",
-              "case": "FTC-MBID-002 a split name lists each MusicBrainz artist; a person and their band stay one artist",
+              "case": "FTC-MBID-002 a split name lists each MusicBrainz artist; a person and their band are separate artists",
               "area": "album-details"
             },
             {

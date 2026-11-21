@@ -1039,7 +1039,6 @@ class PostgresLibraryBrowseRepository:
             "gallery_scale_percent": view_state["gallery_scale_percent"],
             "local_tree_submode": "",
             "visible_library_categories": view_state["visible_library_categories"],
-            "music_dir": str(self._config_value("MUSIC_DIR")),
             "app_name": str(self._config_value("APP_NAME", "Album Haven")),
             "app_version": str(self._config_value("APP_VERSION", RELEASE_VERSION)),
             "ignored_version_keys": support_state["ignored_version_keys"],
@@ -1179,13 +1178,7 @@ class PostgresLibraryBrowseRepository:
                     "alias_to_canonical": _row_json_mapping(alias_row.get("alias_to_canonical")),
                     "canonical_to_aliases": _row_json_mapping(alias_row.get("canonical_to_aliases")),
                 }
-            root_alias_to_canonical = (
-                {}
-                if relation_alias_maps.get("projection_stale_reason")
-                else _root_browse_alias_to_canonical(
-                    relation_alias_maps["alias_to_canonical"]
-                )
-            )
+            root_alias_to_canonical = _servable_root_alias_to_canonical(relation_alias_maps)
             phase_ms["aliases"] = (perf_counter() - phase_started_at) * 1000
             phase_started_at = perf_counter()
             support_state = (
@@ -1396,7 +1389,6 @@ class PostgresLibraryBrowseRepository:
             "gallery_scale_percent": view_state["gallery_scale_percent"],
             "local_tree_submode": "",
             "visible_library_categories": view_state["visible_library_categories"],
-            "music_dir": str(self._config_value("MUSIC_DIR")),
             "app_name": str(self._config_value("APP_NAME", "Album Haven")),
             "app_version": str(self._config_value("APP_VERSION", RELEASE_VERSION)),
             "non_album_tracks": build_non_album_track_list(
@@ -1950,7 +1942,6 @@ class PostgresLibraryBrowseRepository:
             "gallery_scale_percent": view_state["gallery_scale_percent"],
             "local_tree_submode": "",
             "visible_library_categories": view_state["visible_library_categories"],
-            "music_dir": str(self._config_value("MUSIC_DIR")),
             "app_name": str(self._config_value("APP_NAME", "Album Haven")),
             "app_version": str(self._config_value("APP_VERSION", RELEASE_VERSION)),
             "ignored_version_keys": support_state["ignored_version_keys"],
@@ -2284,7 +2275,6 @@ class PostgresLibraryBrowseRepository:
             "gallery_scale_percent": view_state["gallery_scale_percent"],
             "local_tree_submode": "",
             "visible_library_categories": view_state["visible_library_categories"],
-            "music_dir": str(self._config_value("MUSIC_DIR")),
             "app_name": str(self._config_value("APP_NAME", "Album Haven")),
             "app_version": str(self._config_value("APP_VERSION", RELEASE_VERSION)),
             "ignored_version_keys": support_state["ignored_version_keys"],
@@ -2363,9 +2353,8 @@ class PostgresLibraryBrowseRepository:
         projection_stale_reason = str(
             relation_alias_maps.get("projection_stale_reason") or ""
         )
-        rebuilding_complete_projection = (
-            projection_stale_reason == "projection_not_ready"
-            and relation_alias_maps.get("projection_structure_complete") is True
+        rebuilding_complete_projection = bool(projection_stale_reason) and _relation_aliases_servable(
+            relation_alias_maps
         )
         runtime_rebuild_exact_lookup = (
             relation_alias_maps.get("projection_snapshot_missing") is True
@@ -2930,7 +2919,6 @@ class PostgresLibraryBrowseRepository:
             "gallery_scale_percent": view_state["gallery_scale_percent"],
             "local_tree_submode": "",
             "visible_library_categories": view_state["visible_library_categories"],
-            "music_dir": str(self._config_value("MUSIC_DIR")),
             "app_name": str(self._config_value("APP_NAME", "Album Haven")),
             "app_version": str(self._config_value("APP_VERSION", RELEASE_VERSION)),
             "ignored_version_keys": support_state["ignored_version_keys"],
@@ -3396,12 +3384,14 @@ class PostgresLibraryBrowseRepository:
                 self._load_problematic_file_rows(album_key=normalized_album_key, connection=connection)
             )
             requested_keys = set(_problematic_album_key_candidates(normalized_album_key))
-            for album in albums:
-                if str(album.get("key") or "") not in requested_keys:
-                    continue
-                album["_suggestion_aliases"] = self._load_relation_alias_maps(
-                    connection=connection,
-                ).get("alias_to_canonical", {})
+            matching_albums = [album for album in albums if str(album.get("key") or "") in requested_keys]
+            # One relation-alias read serves every matching album.
+            aliases = (
+                self._load_relation_alias_maps(connection=connection).get("alias_to_canonical", {})
+                if matching_albums else {}
+            )
+            for album in matching_albums:
+                album["_suggestion_aliases"] = aliases
                 detail = _problematic_album_detail_payload(album)
                 if detail is not None:
                     return detail
@@ -4093,12 +4083,7 @@ class PostgresLibraryBrowseRepository:
 
     def canonical_gallery_artist_names(self, artist_names: Iterable[object]) -> dict[str, str]:
         """Map local artist names to the canonical artist the Gallery groups them under."""
-        relation_alias_maps = self._load_relation_alias_maps()
-        aliases = (
-            {}
-            if relation_alias_maps.get("projection_stale_reason")
-            else _root_browse_alias_to_canonical(relation_alias_maps["alias_to_canonical"])
-        )
+        aliases = _servable_root_alias_to_canonical(self._load_relation_alias_maps())
         normalized_aliases = _normalized_artist_aliases(aliases)
         return {
             str(name): _canonical_artist_name(
@@ -7882,6 +7867,28 @@ def _canonical_artist_name(
     return str(canonical or artist_name).strip()
 
 
+def _relation_aliases_servable(relation_alias_maps: Mapping[str, object]) -> bool:
+    """Whether browse may group artists with these alias maps.
+
+    A complete projection marked stale (a watcher event or album move queued
+    its rebuild) keeps serving its last published families until the
+    background rebuild publishes the replacement; artists it does not know
+    yet stay ungrouped. Only a missing or partial projection serves none.
+    """
+    return (
+        not relation_alias_maps.get("projection_stale_reason")
+        or relation_alias_maps.get("projection_structure_complete") is True
+    )
+
+
+def _servable_root_alias_to_canonical(
+    relation_alias_maps: Mapping[str, object],
+) -> dict[str, object]:
+    if not _relation_aliases_servable(relation_alias_maps):
+        return {}
+    return _root_browse_alias_to_canonical(relation_alias_maps["alias_to_canonical"])
+
+
 def _root_browse_alias_to_canonical(
     alias_to_canonical: Mapping[str, object],
 ) -> dict[str, object]:
@@ -8362,7 +8369,7 @@ def _queue_display_cover_variants_for_groups(
                 ):
                     inventory_options = {}
                     recorder = config.get("_GENERATED_PREVIEW_INVENTORY_RECORDER")
-                    if recorder is not None:
+                    if recorder is not None and preview_policy is not None:
                         inventory_options["on_published"] = recorder
                     queue_cover_display_variant_generation(
                         source_path,
@@ -8662,18 +8669,6 @@ def _build_artist_page_seam(artist_ref: object, **kwargs: object) -> dict[str, o
     from music_app.services.page_resource_seams import build_artist_page_seam
 
     return build_artist_page_seam(artist_ref, **kwargs)
-
-
-def _ensure_relation_views(library_state: dict[str, object], config: dict[str, object]) -> bool:
-    from music_app.services.relation_state import ensure_relation_views
-
-    return ensure_relation_views(library_state, config)
-
-
-def _refresh_relation_views(library_state: dict[str, object], config: dict[str, object]) -> dict[str, object]:
-    from music_app.services.relation_state import refresh_relation_views_in_state
-
-    return refresh_relation_views_in_state(library_state, config)
 
 
 def _get_related_for_artist(
@@ -9306,10 +9301,6 @@ def _artist_musicbrainz_projection(
     if credit_name:
         # Matched through a release credit: "credited as 3 Crows".
         projection["credited_as"] = credit_name
-    associated = _projected_identities(row.get("artist_identities"))
-    if associated:
-        # A person's same-named band, whose albums keep its own MBID (Alice Cooper).
-        projection["associated"] = associated
     discogs_artist_id = row.get("artist_discogs_artist_id")
     if isinstance(discogs_artist_id, int) and not isinstance(discogs_artist_id, bool) and discogs_artist_id > 0:
         projection["discogs_url"] = f"https://www.discogs.com/artist/{discogs_artist_id}"
@@ -9851,9 +9842,7 @@ def _artist_musicbrainz_projection_joins_sql(
             join integration.musicbrainz_artists identity_artist
               on identity_artist.mbid = identity.artist_mbid
             -- The first test depends only on the outer row: other artists skip the scan.
-            where (split_match.local_artist_id is not null or artist_match.associated_artist_mbids is not null)
-              and (split_match.local_artist_id is not null
-                   or identity.artist_mbid = any(artist_match.associated_artist_mbids))
+            where split_match.local_artist_id is not null
               and identity_album.library_id = {library_id}
               and identity_album.artist_id = {artist_id}
             group by 1, 2, 3

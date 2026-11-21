@@ -17,16 +17,16 @@ test('loop artwork uses the scoped public cover URL for preview and enlargement 
 
 test('utility album artbox can defer its preview to the shared gallery cover loader', () => {
   const context = loadAlbumArtbox();
-  context.buildAlbumDisplayCoverUrl = () => '/cover?path=family-preview';
-  context.buildAlbumLightboxCoverUrl = () => '/cover?path=family-full';
+  context.buildAlbumDisplayCoverUrl = () => '/cover/family-preview';
+  context.buildAlbumLightboxCoverUrl = () => '/cover/family-full';
 
   const html = context.buildUtilityAlbumArtbox(
-    { cover_path: 'family-preview' },
+    { cover_ref: 'family-preview' },
     { label: 'Family artwork', deferPreview: true },
   );
 
-  assert.match(html, /data-gallery-cover-src="\/cover\?path=family-preview"/);
-  assert.match(html, /data-production-cover-src="\/cover\?path=family-preview"/);
+  assert.match(html, /data-gallery-cover-src="\/cover\/family-preview"/);
+  assert.match(html, /data-production-cover-src="\/cover\/family-preview"/);
   assert.doesNotMatch(html, /<img[^>]+\ssrc=/);
 });
 

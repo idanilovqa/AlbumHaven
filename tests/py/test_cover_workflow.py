@@ -994,7 +994,7 @@ def test_single_track_cd_album_gallery_excludes_sibling_album_cover(config, tmp_
         is_squareish_cover=lambda width, height: width == height,
     )
 
-    assert [candidate["path"] for candidate in payload["local_covers"]] == [str(album_cover)]
+    assert [candidate["candidate_cover_path"] for candidate in payload["local_covers"]] == [str(album_cover)]
 
 
 def test_single_track_cd_album_rejects_sibling_album_cover_selection(config, tmp_path: Path):
@@ -1056,7 +1056,7 @@ def test_late_cd_sibling_is_excluded_when_gallery_serializes(config, tmp_path: P
         is_squareish_cover=lambda width, height: width == height,
     )
 
-    assert [candidate["path"] for candidate in payload["local_covers"]] == [str(album_cover)]
+    assert [candidate["candidate_cover_path"] for candidate in payload["local_covers"]] == [str(album_cover)]
 
 
 def test_late_cd_sibling_cannot_be_selected(config, tmp_path: Path):
@@ -1563,8 +1563,8 @@ def test_replaced_pasted_cover_remains_in_gallery_and_can_be_reselected(tmp_path
         image_extensions={".jpg"}, image_dimensions=image_dimensions,
         is_squareish_cover=lambda width, height: width == height,
     )
-    previous = next(Path(row["path"]) for row in payload["local_covers"]
-                    if Path(row["path"]).read_bytes() == original)
+    previous = next(Path(row["candidate_cover_path"]) for row in payload["local_covers"]
+                    if Path(row["candidate_cover_path"]).read_bytes() == original)
     promotion = cover_workflow.begin_local_image_promotion(previous, album_root)
     cover_workflow.complete_local_image_promotion(promotion)
     assert current.read_bytes() == original
@@ -1661,3 +1661,82 @@ def test_part_folders_with_any_name_save_the_album_folder_cover(config, tmp_path
     assert validate_local_cover_source(config, album_root, str(cover), track_paths=track_paths) == cover
     with pytest.raises(ValueError, match="outside the album folder"):
         validate_local_cover_source(config, album_root, str(artist_cover), track_paths=track_paths)
+
+
+def test_delete_local_cover_contract_reselects_within_the_album_at_production_library_size(tmp_path: Path, monkeypatch):
+    from music_app.services import covers as covers_module
+    from tests.py.bounded_interactions import OperationCounts, measure_scale_pair
+    from tests.py.filesystem_operation_counting import count_filesystem_and_media
+
+    def write_jpeg(path: Path, size: tuple[int, int]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        buffer = io.BytesIO()
+        Image.new("RGB", size, (200, 40, 40)).save(buffer, format="JPEG")
+        path.write_bytes(buffer.getvalue())
+
+    def run(album_count: int) -> OperationCounts:
+        library_root = tmp_path / f"library-{album_count}"
+        for index in range(album_count):
+            write_jpeg(library_root / f"Artist {index:04d}" / "Album" / "cover.jpg", (8, 8))
+        album_root = (library_root / "Selected" / "Album").resolve()
+        active = album_root / "cover.jpg"
+        write_jpeg(active, (16, 16))
+        write_jpeg(album_root / "back.jpg", (16, 8))
+        write_jpeg(album_root / "scans" / "front.jpg", (12, 12))
+        counts = OperationCounts()
+        with count_filesystem_and_media(monkeypatch, counts, media_modules=(covers_module,)):
+            chosen = delete_local_cover_and_choose_next(
+                album_root=album_root,
+                source_path=active,
+                active_cover_path=active,
+                image_extensions={".jpg"},
+                image_dimensions=image_dimensions,
+                is_squareish_cover=lambda width, height: width == height,
+                score_image=score_image,
+            )
+        assert chosen == album_root / "scans" / "front.jpg"
+        return counts
+
+    small, production = measure_scale_pair(
+        interaction_id="py:routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_local_delete",
+        small=20,
+        large=1_000,
+        run=run,
+        budgets={"filesystem_enumerations": 1, "stat_calls": 9, "open_calls": 0, "media_parses": 2},
+        growth=("stat_calls", 0),
+    )
+    assert small == production
+
+
+def test_album_root_resolution_contract_probes_only_the_selected_disc_folder_at_production_library_size(config, tmp_path: Path, monkeypatch):
+    from tests.py.bounded_interactions import OperationCounts, measure_scale_pair
+    from tests.py.filesystem_operation_counting import count_filesystem_and_media
+
+    def run(album_count: int) -> OperationCounts:
+        main_root = (tmp_path / f"main-{album_count}").resolve()
+        for index in range(album_count):
+            sibling = main_root / f"Artist {index:04d}" / "Album" / "01.mp3"
+            sibling.parent.mkdir(parents=True)
+            sibling.write_bytes(b"track")
+        track_path = main_root / "Selected" / "Album" / "CD1" / "01.mp3"
+        track_path.parent.mkdir(parents=True)
+        track_path.write_bytes(b"track")
+        (main_root / "Selected" / "Album" / "CD2").mkdir()
+        save_library_root_settings(config, {
+            "main_library_roots": [{"id": "main", "path": str(main_root), "layout_mode": "artist"}],
+        })
+        counts = OperationCounts()
+        with count_filesystem_and_media(monkeypatch, counts):
+            album_root = resolve_album_root_from_track_paths(config, {str(track_path)})
+        assert album_root == track_path.parent
+        return counts
+
+    small, production = measure_scale_pair(
+        interaction_id="py:routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_start",
+        small=20,
+        large=1_000,
+        run=run,
+        budgets={"filesystem_enumerations": 1, "stat_calls": 14, "open_calls": 0},
+        growth=("stat_calls", 0),
+    )
+    assert small == production

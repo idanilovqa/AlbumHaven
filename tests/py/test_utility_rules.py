@@ -133,7 +133,8 @@ def test_build_utility_rules_payload_uses_explicit_dependencies_without_flask_co
 
     assert payload == {"ok": True, "rules": [], "ignored_version_keys": []}
     assert built_kwargs[0]["config"] is config
-    assert built_kwargs[0]["albums"] == st["albums"]
+    # Version-exception albums are read by key from the published index.
+    assert built_kwargs[0]["albums_with_keys"](["album-1"]) == st["albums"]
     assert has_cached_utility_rules_payload(st, config=config) is True
 
 

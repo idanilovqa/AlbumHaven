@@ -584,10 +584,9 @@ class MusicBrainzEnrichmentPostgresRepository:
         album_evidence: list[dict[str, object]] | None = None,
         album_identities: list[dict[str, object]] | None = None,
         identity_artists: list[dict[str, object]] | None = None,
-        associated_artist_mbids: list[str] | None = None,
     ) -> dict[str, object]:
         """``album_identities`` are the albums a MusicBrainz artist certainly holds;
-        ``identity_artists`` names those artists (a split's, or a person's band)."""
+        ``identity_artists`` names those artists (a split's)."""
         projection = _artist_projection(artist)
         aliases = projection["aliases"] if projection else []
         tags = projection["tags"] if projection else []
@@ -600,8 +599,6 @@ class MusicBrainzEnrichmentPostgresRepository:
             "observed_at": _aware_utc(observed_at),
             "credit_name": _bounded_text(credit_name, 512) or None,
             "album_evidence": _album_evidence(album_evidence),
-            "associated_artist_mbids": [mbid for mbid in map(_optional_mbid, associated_artist_mbids or ()) if mbid]
-            or None,
             "matcher_version": MATCHER_VERSION,
             **_projection_params(projection),
             **_alias_array_params(aliases),
@@ -1770,7 +1767,9 @@ def _automatic_outcome_sql() -> str:
                  %(observed_at)s, %(observed_at)s, %(observed_at)s,
                  case when %(match_state)s = 'matched' then %(credit_name)s else null end,
                  case when %(match_state)s = 'matched' then %(album_evidence)s::jsonb else null end,
-                 case when %(match_state)s = 'matched' then %(associated_artist_mbids)s::uuid[] else null end
+                 -- 0178's person-plus-band column is no longer written (owner 2026-11-14);
+                 -- every outcome clears a stale value.
+                 null::uuid[]
           from active_artist
           where active_artist.is_present or %(provider_state)s = 'not_present'
           on conflict (library_id, local_artist_id) do update

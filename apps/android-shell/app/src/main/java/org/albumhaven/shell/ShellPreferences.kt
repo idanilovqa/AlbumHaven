@@ -4,7 +4,7 @@ import android.content.Context
 import androidx.core.content.edit
 
 /** Non-secret shell selection; survives app updates and process death. */
-class ShellPreferences(context: Context) : SandboxSlots, AppCopyStore {
+class ShellPreferences(context: Context) : SandboxSlots, AppCopyStore, BatteryPromptStore {
     private val preferences = context.getSharedPreferences("shell", Context.MODE_PRIVATE)
 
     override val selectedSandboxSlot: Int?
@@ -37,12 +37,34 @@ class ShellPreferences(context: Context) : SandboxSlots, AppCopyStore {
         return url
     }
 
+    /**
+     * A build Update chose on another sandbox: the app switched there, and installs it from that
+     * sandbox's own manifest once its page connects (after any sign-in). Null when none waits.
+     */
+    var pendingBuild: PendingBuild?
+        get() {
+            val slot = preferences.getInt(KEY_PENDING_SLOT, 0).takeIf { it in OriginPolicy.SANDBOX_SLOTS } ?: return null
+            val versionCode = preferences.getLong(KEY_PENDING_CODE, 0L).takeIf { it > 0 } ?: return null
+            return PendingBuild(slot, versionCode)
+        }
+        set(value) = preferences.edit {
+            if (value == null) {
+                remove(KEY_PENDING_SLOT).remove(KEY_PENDING_CODE)
+            } else {
+                putInt(KEY_PENDING_SLOT, value.sandbox).putLong(KEY_PENDING_CODE, value.versionCode)
+            }
+        }
+
     /** True the first time [key] is asked, so each permission is requested once. */
     fun takeFirstAsk(key: String): Boolean {
         if (preferences.getBoolean(key, false)) return false
         preferences.edit { putBoolean(key, true) }
         return true
     }
+
+    override val batteryPromptAnswered: Boolean get() = preferences.getBoolean(KEY_BATTERY_ANSWERED, false)
+
+    override fun answerBatteryPrompt() = preferences.edit(commit = true) { putBoolean(KEY_BATTERY_ANSWERED, true) }
 
     override fun copySavedAt(origin: String): Long? =
         preferences.getLong(KEY_COPY_SAVED_AT + origin, 0L).takeIf { it > 0L }
@@ -67,5 +89,11 @@ class ShellPreferences(context: Context) : SandboxSlots, AppCopyStore {
         private const val KEY_CONNECTED = "connected_sandbox_slot"
         private const val KEY_COPY_SAVED_AT = "app_copy_saved_at:"
         private const val KEY_COPY_FORGET = "app_copy_forget"
+        private const val KEY_BATTERY_ANSWERED = "battery_prompt_answered"
+        private const val KEY_PENDING_SLOT = "pending_build_sandbox"
+        private const val KEY_PENDING_CODE = "pending_build_version_code"
     }
 }
+
+/** The build waiting to install once the app is on [sandbox]. */
+data class PendingBuild(val sandbox: Int, val versionCode: Long)

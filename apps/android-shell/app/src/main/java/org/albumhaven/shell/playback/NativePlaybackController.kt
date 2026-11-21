@@ -284,6 +284,10 @@ class NativePlaybackController(
     private var transportEpoch = 0L
     private var transportOpen = false
     private var lastCloseCode: Int? = null
+
+    /** Failed reconnects in a row while the received audio plays on, and when the next one is due. */
+    private var reconnectAttempts = 0
+    private var reconnectAtMs: Long? = null
     private var lastPositionEventMs = 0L
 
     /** Set once the engine drained the queue; [ended] waits until the output has played it. */
@@ -468,6 +472,7 @@ class NativePlaybackController(
         var written = 0
         guarded {
             claims.tick()
+            maybeReconnect()
             maybeRecoverStalledStart()
             // A stream may buffer while the claim is requested; only an owner is heard, and a pause
             // the owner made finishes its fade even once the claim is given back.
@@ -491,6 +496,7 @@ class NativePlaybackController(
         if (loaded && mayBeHeard()) return RENDER_WAIT_MS
         val next = listOfNotNull(
             claims.nextDeadlineMs(),
+            reconnectAtMs,
             shutdownDeadlineMs,
             warmUntilMs?.let { minOf(it, lastWarmMs + KEEP_WARM_MS) },
         ).minOrNull() ?: return Long.MAX_VALUE
@@ -576,6 +582,10 @@ class NativePlaybackController(
         }
     }
 
+    /** Whether the item after [itemIndex] is the next track of the same album: one web queue is one `queueGroup`. */
+    private fun consecutiveAlbumSuccessor(itemIndex: Int): Boolean =
+        queue.getOrNull(itemIndex + 1)?.queueGroup?.let { it == queue.getOrNull(itemIndex)?.queueGroup } == true
+
     /** The web keeps playing a track whose queue changed under it; only the queue around it is replaced. */
     private fun keepCurrent(load: QueueLoad): Boolean {
         val playingItem = queue.getOrNull(index) ?: return false
@@ -589,7 +599,7 @@ class NativePlaybackController(
         val successor = queue.getOrNull(index + 1)?.pcmTrack()
         // A successor prepared for the old queue is not heard yet; what plays next must be the one this queue names.
         if (current.preparedSuccessor.let { it != null && it != successor }) current.setQueuedNext(null)
-        current.setQueuedNext(successor)
+        current.setQueuedNext(successor, consecutiveAlbumSuccessor(index))
         emit { NativePlaybackEvent.CurrentItem(it, CurrentItemReason.LOAD) }
         return true
     }
@@ -680,9 +690,12 @@ class NativePlaybackController(
      */
     private fun mayBeHeard(): Boolean = claims.owned || (wantPlay && claims.acquiring)
 
-    /** Starts or resumes once the socket is ready and the claim is held or being asked for. */
+    /**
+     * Starts or resumes once the socket is ready, or the stream plays on without one, and the claim
+     * is held or being asked for.
+     */
     private fun startWhenReady() {
-        if (!wantPlay || !mayBeHeard() || !transportOpen) return
+        if (!wantPlay || !mayBeHeard() || !(transportOpen || engine?.detached == true)) return
         val current = engine
         if (loaded && current != null) {
             heldFrame = null
@@ -725,7 +738,7 @@ class NativePlaybackController(
             sink?.let { timing.outputReady(it.heardFrames(), queued = false) }
         }
         startMeasuring()
-        queue.getOrNull(itemIndex + 1)?.let { current.setQueuedNext(it.pcmTrack()) }
+        queue.getOrNull(itemIndex + 1)?.let { current.setQueuedNext(it.pcmTrack(), consecutiveAlbumSuccessor(itemIndex)) }
         loop?.let { applyEngineLoop(current, it, rate) }
         if (playWhenReady) {
             startWaitSinceMs = clock()
@@ -840,7 +853,7 @@ class NativePlaybackController(
             itemMarker = boundary
         }
         queue[index].let { claims.updateTrack(it.claimTrack()) }
-        queue.getOrNull(index + 1)?.let { engine?.setQueuedNext(it.pcmTrack()) }
+        queue.getOrNull(index + 1)?.let { engine?.setQueuedNext(it.pcmTrack(), consecutiveAlbumSuccessor(index)) }
         advanceListen(outgoing)
         emit { NativePlaybackEvent.CurrentItem(it, CurrentItemReason.ADVANCE) }
     }
@@ -989,6 +1002,10 @@ class NativePlaybackController(
                 loop?.let { applyEngineLoop(current, it, rate) }
             } else if (transportOpen) {
                 startEngineAt(index, target, playWhenReady = false)
+            } else if (current.detached) {
+                // Offline the received audio stays: it is sought on the device, or the head waits
+                // silently past it for the network (owner retest B-D4, 2026-11-17).
+                current.seek(msToFrames(target, rate))
             } else {
                 unload("seek-paused")
             }
@@ -1051,7 +1068,7 @@ class NativePlaybackController(
         recoveryAttempted = false
         changeListenTrack(outgoing, outgoingPositionMs)
         queue[index].let { claims.updateTrack(it.claimTrack()) }
-        queue.getOrNull(index + 1)?.let { current.setQueuedNext(it.pcmTrack()) }
+        queue.getOrNull(index + 1)?.let { current.setQueuedNext(it.pcmTrack(), consecutiveAlbumSuccessor(index)) }
         emit { NativePlaybackEvent.CurrentItem(it, CurrentItemReason.NEXT, source = source) }
         return true
     }
@@ -1099,6 +1116,8 @@ class NativePlaybackController(
 
     private fun transportOpened() {
         transportOpen = true
+        reconnectAttempts = 0
+        reconnectAtMs = null
         timing.socketOpen(clock(), reused = false)
         // A stream that played on through the lost socket hands over to one opened here.
         if (loaded && engine?.resume() == true) return
@@ -1111,9 +1130,14 @@ class NativePlaybackController(
         transportOpen = false
         lastCloseCode = code
         if (loaded) {
-            // A network change ends the socket mid-track: the received audio plays on while it reconnects.
-            if (wantPlay && code !in REFUSED_CLOSE_CODES && engine?.detach() != null) {
-                ensureTransport()
+            // A network change ends the socket mid-track: the received audio plays on while it
+            // reconnects. A reconnect that fails while it is down keeps it playing on; the next
+            // attempt waits a little longer each time (owner decision 2026-11-15: losing the
+            // network never stops playback). A paused stream keeps its received audio too, and
+            // reconnects once played (owner retest B-P3, 2026-11-17).
+            val engine = engine
+            if (code !in REFUSED_CLOSE_CODES && engine != null && (engine.redetach() ?: engine.detach()) != null) {
+                if (wantPlay) scheduleReconnect()
                 return
             }
             engine?.onTransportClosed(code)
@@ -1129,11 +1153,26 @@ class NativePlaybackController(
         }
     }
 
+    private fun scheduleReconnect() {
+        val delay = RECONNECT_DELAYS_MS[minOf(reconnectAttempts, RECONNECT_DELAYS_MS.lastIndex)]
+        reconnectAttempts += 1
+        if (delay == 0L) ensureTransport() else reconnectAtMs = clock() + delay
+    }
+
+    private fun maybeReconnect() {
+        val at = reconnectAtMs ?: return
+        if (clock() < at) return
+        reconnectAtMs = null
+        if (loaded && wantPlay) ensureTransport()
+    }
+
     private fun closeTransport() {
         transportEpoch += 1
         transport?.close()
         transport = null
         transportOpen = false
+        reconnectAttempts = 0
+        reconnectAtMs = null
     }
 
     // ---- Ownership and listen writes ----
@@ -1379,6 +1418,9 @@ class NativePlaybackController(
         const val START_STALL_MS = 15_000L
         /** How long a shutdown keeps the claim for the listen writes still in flight. */
         const val SHUTDOWN_CHECKPOINT_MS = 3_000L
+        /** Waits before each reconnect while the network stays down: at once, then longer, up to 5 seconds. */
+        private val RECONNECT_DELAYS_MS = longArrayOf(0, 500, 1_000, 2_000, 4_000, 5_000)
+
         private val REFUSED_CLOSE_CODES = setOf(
             PcmCloseCodes.UNAUTHENTICATED,
             PcmCloseCodes.FORBIDDEN,

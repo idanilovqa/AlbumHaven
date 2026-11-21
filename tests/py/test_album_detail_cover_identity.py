@@ -607,6 +607,25 @@ def test_cover_lookup_split_rejects_an_album_with_unrelated_paths(monkeypatch):
     assert response is None
 
 
+def test_cover_lookup_split_chooser_needs_a_lookup_notification():
+    """Without a task (an Album Details open) the gallery shows both releases instead."""
+    from music_app.routes import api_wave_d_asgi_routes as cover_routes
+
+    choices = [
+        {"album_id": 41, "album_key": "artist::left", "name": "Left"},
+        {"album_id": 42, "album_key": "artist::right", "name": "Right"},
+    ]
+
+    assert asyncio.run(
+        cover_routes._cover_lookup_album_split_response({}, set(), choices)
+    ) is None
+    payload, status = asyncio.run(
+        cover_routes._cover_lookup_album_split_response({}, {"old/01.flac"}, choices)
+    )
+    assert status == 409
+    assert [release["album_id"] for release in payload["current_releases"]] == [41, 42]
+
+
 def test_cover_lookup_task_identity_accepts_renamed_paths_for_same_album_id():
     from music_app.routes import api_wave_d_asgi_routes as cover_routes
 
@@ -655,7 +674,7 @@ def test_cover_lookup_labels_a_path_only_task_with_its_album_renamed_in_place(mo
     monkeypatch.setattr(cover_routes, "AlbumIdentityLineageRepository", FakeLineageRepository)
     monkeypatch.setattr(cover_routes, "resolve_album_context", lambda _config, _album: None)
     monkeypatch.setattr(
-        cover_routes, "_resolve_cover_album_context",
+        cover_routes, "_resolve_album_or_distributed_context",
         lambda _config, album: SimpleNamespace(album_root="main", track_paths=cover_routes._album_track_paths(album)),
     )
 

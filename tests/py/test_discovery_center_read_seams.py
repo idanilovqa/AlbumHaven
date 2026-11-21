@@ -561,10 +561,6 @@ def test_build_news_payload_promotes_discovery_center_to_main_content(config, lo
         lambda config: set(),
     )
     monkeypatch.setattr(
-        "music_app.services.view_payloads.get_primary_music_root",
-        lambda config: config["MUSIC_DIR"],
-    )
-    monkeypatch.setattr(
         "music_app.services.view_payloads.build_recent_listen_payloads",
         lambda config, albums: {},
     )

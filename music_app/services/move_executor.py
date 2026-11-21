@@ -6,22 +6,20 @@ from pathlib import Path
 import shutil
 
 from music_app.services.app_logging import log_app_event
-from music_app.services.cache import save_cache_to_disk_for_config
+from music_app.services.cache import persist_moved_album_inventory_for_config
 from music_app.services.covers import image_dimensions
 from music_app.services.exception_overrides import apply_exception_override, load_exception_overrides
 from music_app.services.library_hydration import find_cover_for_track_folder
 from music_app.services.library_roots import (
     get_library_roots,
     library_category_slug,
-    library_root_cache_identity,
     root_definition_for_path,
 )
 from music_app.services.metadata import read_metadata_for_file
 from music_app.services.move_planner import build_move_availability_payload
 from music_app.services.move_tasks import build_move_follow_up, build_move_response
-from music_app.services.problematic_albums import invalidate_problematic_albums_payload_cache
 from music_app.services.separate_releases import load_separate_release_keys
-from music_app.services.utility_rules import invalidate_utility_rules_payload_cache
+from music_app.services.state import invalidate_targeted_library_projections
 
 
 JsonDict = dict[str, object]
@@ -89,7 +87,7 @@ def execute_album_move(
     old_track_paths = _album_track_paths(live_album)
     track_path_map = _build_track_path_map(old_track_paths, source_folder, destination_folder)
 
-    _validate_move_request(
+    source_root_id, destination_root_id = _validate_move_request(
         config=config,
         source_folder=source_folder,
         destination_folder=destination_folder,
@@ -132,27 +130,33 @@ def execute_album_move(
         changed_paths,
         separate_release_keys,
     )
-    invalidate_problematic_albums_payload_cache(st)
-    invalidate_utility_rules_payload_cache(st)
-    committed_relation_state = save_cache_to_disk_for_config(
-        config,
-        config["CACHE_PATH"],
-        updated_file_cache,
-        library_root_cache_identity(config),
-        float(st.get("last_scan") or 0.0),
-        rebuild_relation_projection=True,
-    )
-    if not isinstance(committed_relation_state, dict) or not isinstance(
-        committed_relation_state.get("relation_views"),
-        dict,
-    ):
-        raise AlbumMoveError(
-            "Album move persistence returned no canonical relation projection state.",
-            status_code=500,
+    # Publish only the moved album. Relations stay stale until the queued
+    # gallery refresh rebuilds them in the background.
+    try:
+        persisted = persist_moved_album_inventory_for_config(
+            config,
+            root_id=destination_root_id,
+            active_file_entries={path: updated_file_cache[path] for path in new_track_paths},
+            moves=(
+                {
+                    "source_path": str(source_folder),
+                    "destination_path": str(destination_folder),
+                    "source_root_id": source_root_id,
+                    "destination_root_id": destination_root_id,
+                    "is_directory": True,
+                },
+            ),
         )
-    st["relation_views"] = dict(committed_relation_state["relation_views"])
-    st["relations_last_built"] = float(
-        committed_relation_state.get("relations_last_built") or 0.0
+    except Exception as exc:
+        raise AlbumMoveError(
+            f"Album folder moved but library publication failed: {exc}",
+            status_code=500,
+        ) from exc
+    invalidate_targeted_library_projections(
+        st,
+        config,
+        revision=int(persisted.get("inventory_mutation_revision") or 0),
+        affected_album_keys=tuple(persisted.get("affected_album_keys") or ()),
     )
 
     follow_up = build_follow_up(
@@ -187,7 +191,7 @@ def _validate_move_request(
     source_folder: Path,
     destination_folder: Path,
     destination_category: str,
-) -> None:
+) -> tuple[str, str]:
     if not source_folder.exists() or not source_folder.is_dir():
         raise AlbumMoveError("Album source folder is no longer available", status_code=409)
     matched_source_root = root_definition_for_path(get_library_roots(config), source_folder)
@@ -204,6 +208,7 @@ def _validate_move_request(
     matched_category = library_category_slug(matched_root.get("category"))
     if matched_category != destination_category:
         raise AlbumMoveError("Move planner destination no longer matches the configured library roots", status_code=409)
+    return str(matched_source_root.get("id") or ""), str(matched_root.get("id") or "")
 
 
 def _find_state_album(
@@ -283,6 +288,7 @@ def _refresh_cache_after_move(
     exception_overrides = load_exception_overrides(config)
     image_extensions = set(config["IMAGE_EXTENSIONS"])
     new_track_paths: set[str] = set()
+    covers_by_folder: dict[Path, Path | None] = {}
 
     for old_path, new_path in track_path_map.items():
         previous_entry = previous_file_cache.get(old_path)
@@ -304,7 +310,9 @@ def _refresh_cache_after_move(
             refreshed_entry["library_root_category"] = library_category_slug(matched_root.get("category"))
 
         apply_exception_override(refreshed_entry, exception_overrides)
-        cover_path = find_cover_for_track_folder(new_track.parent, image_extensions)
+        if new_track.parent not in covers_by_folder:
+            covers_by_folder[new_track.parent] = find_cover_for_track_folder(new_track.parent, image_extensions)
+        cover_path = covers_by_folder[new_track.parent]
         refreshed_entry["cover_path"] = str(cover_path) if cover_path else None
         if cover_path is not None and cover_path.exists():
             width, height = image_dimensions(cover_path)

@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginBottom="2dp"
+    android:background="@drawable/sheet_row"
+    android:baselineAligned="false"
+    android:clickable="true"
+    android:focusable="true"
+    android:minHeight="48dp"
+    android:orientation="horizontal"
+    android:padding="12dp">
+
+    <RadioButton
+        android:id="@+id/build_row_radio"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:buttonTint="@color/sheet_focus"
+        android:clickable="false"
+        android:focusable="false"
+        android:importantForAccessibility="no"
+        android:minWidth="0dp"
+        android:minHeight="0dp" />
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="8dp"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/build_row_title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="@color/sheet_ink"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/build_row_meta"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="@color/sheet_muted"
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/build_row_note"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="@color/sheet_muted"
+            android:textSize="12sp" />
+
+        <Button
+            android:id="@+id/build_row_rebuild"
+            style="@style/RecoveryAction"
+            android:layout_marginTop="8dp"
+            android:minHeight="36dp"
+            android:text="@string/build_rebuild"
+            android:textSize="13sp"
+            android:visibility="gone" />
+    </LinearLayout>
+</LinearLayout>

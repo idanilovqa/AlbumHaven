@@ -203,7 +203,7 @@ test('FTC-MBID-001 a matched artist shows its MusicBrainz name, country, genres 
     });
 });
 
-test('FTC-MBID-002 a split name lists each MusicBrainz artist; a person and their band stay one artist', { tag: '@area:album-details' }, async ({
+test('FTC-MBID-002 a split name lists each MusicBrainz artist; a person and their band are separate artists', { tag: '@area:album-details' }, async ({
   galleryActions,
   searchToolbarActions,
   stepLogger,
@@ -234,13 +234,14 @@ test('FTC-MBID-002 a split name lists each MusicBrainz artist; a person and thei
       await trackModalActions.closeIfOpen();
     });
 
-    await stepLogger.step('Delivery 1.1: a person and the same-named band they belong to are one artist', async () => {
+    await stepLogger.step('Delivery 2 S2a: a person and the same-named band they belong to are separate artists', async () => {
       await openArtist({ galleryActions, searchToolbarActions }, PERSON_BAND, `${PERSON_BAND} family`);
       await galleryActions.openArtistInfoPanel(PERSON_BAND);
       await expect.poll(() => galleryActions.readArtistInfoSnapshot(), { timeout: 60000 }).toEqual(
         expect.objectContaining({
-          identities: expect.stringContaining('Also on MusicBrainz as:'),
+          identities: expect.stringContaining('Your albums belong to 2 MusicBrainz artists:'),
           identityRows: [
+            expect.stringMatching(/Control Signal Lead · 1 album/),
             expect.stringMatching(/Control Signal Lead \(the band\) · 1 album/),
           ],
           links: expect.arrayContaining([

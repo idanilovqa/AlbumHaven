@@ -16,8 +16,8 @@ function load(overrides = {}) {
     escapeHtml: (value) => String(value ?? '').replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;'),
     state: { modalReleases: [], modalReleaseIndex: 0, coverLookup: { modal: {} } },
     ButtonComponent: require('../../../music_app/static/js/button-component.js'),
-    albumHasDisplayCover: (album) => Boolean(album?.cover_path),
-    buildAlbumDisplayCoverUrl: (album) => `/cover?path=${album.cover_path || album.remote_cover_url}`,
+    albumHasDisplayCover: (album) => Boolean(album?.cover_ref),
+    buildAlbumDisplayCoverUrl: (album) => `/cover/${album.cover_ref || album.remote_cover_url}`,
     ensureAlbumCardContextMenu: () => menu,
     hideAlbumCardContextMenu: () => { menu.hidden = true; },
     renderTrackModalRelease: () => { calls.renders += 1; },
@@ -25,7 +25,7 @@ function load(overrides = {}) {
     closeCoverLookupModal: () => { calls.closed += 1; },
     syncCoverLookupSaveButton: () => {},
     showToast: (message) => calls.toasts.push(message),
-    hasPendingLocalCoverSelection: () => Boolean(context.state.coverLookup.modal.pendingLocalPath),
+    hasPendingLocalCoverSelection: () => Boolean(context.state.coverLookup.modal.pendingLocalRef),
     fetch: async (url, options) => {
       calls.fetches.push({ url, body: JSON.parse(options.body) });
       return { ok: true, json: async () => ({ ok: true, additional_artworks: overrides.savedArtworks || [] }) };
@@ -37,7 +37,7 @@ function load(overrides = {}) {
   return { context, menu, calls };
 }
 
-const testimony = () => ({ key: 'neal-morse::testimony', name: 'Testimony', cover_path: 'D:/Music/Testimony/cover.jpg' });
+const testimony = () => ({ key: 'neal-morse::testimony', name: 'Testimony', cover_ref: 'D:/Music/Testimony/cover.jpg' });
 
 test('the first artbox offers Add another artbox only when it has art and no second artbox', () => {
   const { context, menu } = load();
@@ -48,7 +48,7 @@ test('the first artbox offers Add another artbox only when it has art and no sec
   context.state.modalReleases = [{ key: 'no-art', name: 'No art' }];
   assert.equal(context.showAlbumArtboxContextMenu(10, 20, 0), false, 'an album without art cannot add an artbox');
 
-  context.state.modalReleases = [{ ...testimony(), additional_artworks: [{ slot: 1, source_kind: 'local', cover_path: 'D:/Music/Testimony/back.jpg' }] }];
+  context.state.modalReleases = [{ ...testimony(), additional_artworks: [{ slot: 1, source_kind: 'local', cover_ref: 'D:/Music/Testimony/back.jpg' }] }];
   assert.equal(context.showAlbumArtboxContextMenu(10, 20, 0), false, 'at most two artboxes');
   assert.equal(context.showAlbumArtboxContextMenu(10, 20, 1), true);
   assert.match(menu.innerHTML, /data-album-card-action="remove-artbox">Remove artbox</);
@@ -71,24 +71,23 @@ test('a new second artbox shows a plain + Add art box and disappears when Album 
 
 test('a saved second artbox renders its own art and keeps the main cover separate', () => {
   const { context } = load();
-  const album = { ...testimony(), additional_artworks: [{ slot: 1, source_kind: 'local', cover_path: 'D:/Music/Testimony/back.jpg' }] };
+  const album = { ...testimony(), additional_artworks: [{ slot: 1, source_kind: 'local', cover_ref: 'D:/Music/Testimony/back.jpg' }] };
   const html = context.buildAlbumAdditionalArtboxHtml(album);
   assert.match(html, /data-artbox-slot="1"/);
-  assert.match(html, /src="\/cover\?path=D:\/Music\/Testimony\/back\.jpg"/);
+  assert.match(html, /src="\/cover\/D:\/Music\/Testimony\/back\.jpg"/);
   assert.doesNotMatch(html, /cover\.jpg/);
 });
 
 test('Cover Look Up for the second artbox blocks the first artbox art', () => {
   const { context } = load();
   context.state.coverLookup.modal = { artboxSlot: 1, album: { ...testimony(), remote_cover_url: 'https://img.example/front.jpg' } };
-  assert.equal(context.isCoverLookupItemInFirstArtbox({ path: 'D:/Music/Testimony/cover.jpg' }, 'local'), true);
-  assert.equal(context.isCoverLookupItemInFirstArtbox({ path: 'D:/Music/Testimony/back.jpg' }, 'local'), false);
+  assert.equal(context.isCoverLookupItemInFirstArtbox({ candidate_cover_ref: 'D:/Music/Testimony/cover.jpg' }, 'local'), true);
+  assert.equal(context.isCoverLookupItemInFirstArtbox({ candidate_cover_ref: 'D:/Music/Testimony/back.jpg' }, 'local'), false);
   assert.equal(context.isCoverLookupItemInFirstArtbox({ url: 'https://img.example/front.jpg' }, 'remote'), true);
   assert.equal(context.isCoverLookupItemInFirstArtbox({}, 'saved-remote'), true);
-  // UI-14 (owner, 11-09): the library spells one file as both n:\ and N:\; the album cover is still recognized.
-  assert.equal(context.isCoverLookupItemInFirstArtbox({ path: 'd:\\music\\testimony\\COVER.jpg' }, 'local'), true);
+  // Covers are opaque references now: one reference names one file and compares exactly.
   context.state.coverLookup.modal.artboxSlot = 0;
-  assert.equal(context.isCoverLookupItemInFirstArtbox({ path: 'D:/Music/Testimony/cover.jpg' }, 'local'), false, 'the album cover lookup is unchanged');
+  assert.equal(context.isCoverLookupItemInFirstArtbox({ candidate_cover_ref: 'D:/Music/Testimony/cover.jpg' }, 'local'), false, 'the album cover lookup is unchanged');
 });
 
 test('saving the second artbox posts slot 1 and updates Album Details', async () => {
@@ -113,7 +112,7 @@ test('saving the second artbox updates the hydrated Album Details cache used on 
   const second = {
     slot: 1,
     source_kind: 'local',
-    cover_path: 'N:\\Music\\Dragonland\\Holy War\\cover-existing-1.jpg',
+    cover_ref: 'N:\\Music\\Dragonland\\Holy War\\cover-existing-1.jpg',
   };
   const { context } = load({
     context: {
@@ -171,28 +170,28 @@ test('AlbumTrackTable renders a named section as a shaded row before its first t
 
 test('UI-14: a saved second artbox opens full size with Cover Look Up and quick search on hover', () => {
   const { context } = load();
-  const album = { ...testimony(), additional_artworks: [{ slot: 1, source_kind: 'local', cover_path: 'D:/Music/Testimony/back.jpg' }] };
+  const album = { ...testimony(), additional_artworks: [{ slot: 1, source_kind: 'local', cover_ref: 'D:/Music/Testimony/back.jpg' }] };
   const html = context.buildAlbumAdditionalArtboxHtml(album);
-  assert.match(html, /class="track-modal-cover-button" type="button" data-open-lightbox="1" data-cover-src="\/cover\?path=D:\/Music\/Testimony\/back\.jpg"/);
+  assert.match(html, /class="track-modal-cover-button" type="button" data-open-lightbox="1" data-cover-src="\/cover\/D:\/Music\/Testimony\/back\.jpg"/);
   assert.match(html, /album-artbox__overlay">[\s\S]*data-open-additional-artbox="1"[\s\S]*data-additional-artbox-quick-search="1"/);
 });
 
 test('UI-14: the album cover lookup dims the art in the second artbox', () => {
   const { context } = load();
-  context.state.coverLookup.modal = { artboxSlot: 0, album: { ...testimony(), additional_artworks: [{ slot: 1, cover_path: 'D:/Music/Testimony/back.jpg', remote_url: 'https://img.example/back.jpg' }] } };
-  assert.equal(context.isCoverLookupItemInSecondArtbox({ path: 'D:/Music/Testimony/back.jpg' }, 'local'), true);
-  assert.equal(context.isCoverLookupItemInSecondArtbox({ path: 'D:/Music/Testimony/cover.jpg' }, 'local'), false);
+  context.state.coverLookup.modal = { artboxSlot: 0, album: { ...testimony(), additional_artworks: [{ slot: 1, cover_ref: 'D:/Music/Testimony/back.jpg', remote_url: 'https://img.example/back.jpg' }] } };
+  assert.equal(context.isCoverLookupItemInSecondArtbox({ candidate_cover_ref: 'D:/Music/Testimony/back.jpg' }, 'local'), true);
+  assert.equal(context.isCoverLookupItemInSecondArtbox({ candidate_cover_ref: 'D:/Music/Testimony/cover.jpg' }, 'local'), false);
   assert.equal(context.isCoverLookupItemInSecondArtbox({ url: 'https://img.example/back.jpg' }, 'remote'), true);
   context.state.coverLookup.modal.artboxSlot = 1;
-  assert.equal(context.isCoverLookupItemInSecondArtbox({ path: 'D:/Music/Testimony/back.jpg' }, 'local'), false, 'its own lookup can choose it');
+  assert.equal(context.isCoverLookupItemInSecondArtbox({ candidate_cover_ref: 'D:/Music/Testimony/back.jpg' }, 'local'), false, 'its own lookup can choose it');
 });
 
 test('UI-14: a Cover Look Up opened with another copy of the album still sees the saved second artbox', () => {
   const { context } = load();
-  context.state.modalReleases = [{ ...testimony(), additional_artworks: [{ slot: 1, source_kind: 'local', cover_path: 'D:/Music/Testimony/back.jpg' }] }];
+  context.state.modalReleases = [{ ...testimony(), additional_artworks: [{ slot: 1, source_kind: 'local', cover_ref: 'D:/Music/Testimony/back.jpg' }] }];
   // A gallery card or notification copy of the album carries no additional_artworks of its own.
   context.state.coverLookup.modal = { artboxSlot: 0, album: testimony() };
-  assert.equal(context.isCoverLookupItemInSecondArtbox({ path: 'D:/Music/Testimony/back.jpg' }, 'local'), true);
+  assert.equal(context.isCoverLookupItemInSecondArtbox({ candidate_cover_ref: 'D:/Music/Testimony/back.jpg' }, 'local'), true);
 });
 
 test('UI-14: Holy War second artbox survives an empty gallery copy and virtual-key rebound', () => {
@@ -200,7 +199,7 @@ test('UI-14: Holy War second artbox survives an empty gallery copy and virtual-k
   const second = {
     slot: 1,
     source_kind: 'local',
-    cover_path: 'D:/Music/Dragonland/Holy War/back.jpg',
+    cover_ref: 'D:/Music/Dragonland/Holy War/back.jpg',
   };
   context.state.modalReleases = [
     {
@@ -213,7 +212,7 @@ test('UI-14: Holy War second artbox survives an empty gallery copy and virtual-k
       key: 'dragonland::holy-war::2002',
       album_id: 42,
       name: 'Holy War',
-      cover_path: 'D:/Music/Dragonland/Holy War/cover.jpg',
+      cover_ref: 'D:/Music/Dragonland/Holy War/cover.jpg',
       additional_artworks: [second],
     },
   ];
@@ -222,7 +221,7 @@ test('UI-14: Holy War second artbox survives an empty gallery copy and virtual-k
     album_ref: 'album:42',
     album_id: 42,
     name: 'Holy War',
-    cover_path: 'D:/Music/Dragonland/Holy War/cover.jpg',
+    cover_ref: 'D:/Music/Dragonland/Holy War/cover.jpg',
     additional_artworks: [],
   };
   context.state.coverLookup.modal = {
@@ -230,7 +229,7 @@ test('UI-14: Holy War second artbox survives an empty gallery copy and virtual-k
     album: lookupCopy,
     artboxCleared: false,
     selectedRemoteId: '',
-    pendingLocalPath: '',
+    pendingLocalRef: '',
     pendingPastedImageId: '',
   };
 
@@ -239,7 +238,7 @@ test('UI-14: Holy War second artbox survives an empty gallery copy and virtual-k
     second,
   );
   assert.equal(
-    context.isCoverLookupItemInFirstArtbox({ path: lookupCopy.cover_path }, 'local'),
+    context.isCoverLookupItemInFirstArtbox({ candidate_cover_ref: lookupCopy.cover_ref }, 'local'),
     true,
     'the first artbox remains independent',
   );
@@ -247,8 +246,8 @@ test('UI-14: Holy War second artbox survives an empty gallery copy and virtual-k
 
 test('UI-14: stable album ID wins when an earlier release shares a runtime alias', () => {
   const { context } = load();
-  const wrong = { slot: 1, cover_path: 'D:/Music/Other/back.jpg' };
-  const holyWar = { slot: 1, cover_path: 'D:/Music/Dragonland/Holy War/back.jpg' };
+  const wrong = { slot: 1, cover_ref: 'D:/Music/Other/back.jpg' };
+  const holyWar = { slot: 1, cover_ref: 'D:/Music/Dragonland/Holy War/back.jpg' };
   context.state.modalReleases = [
     {
       key: 'shared-release-alias',
@@ -275,7 +274,7 @@ test('UI-14: stable album ID wins when an earlier release shares a runtime alias
 test('UI-14: the second artbox lookup selects its saved remote art, and a click deselects it', () => {
   const { context } = load();
   const album = { ...testimony(), additional_artworks: [{ slot: 1, source_kind: 'remote', remote_cover_url: 'https://img.example/back.jpg' }] };
-  context.state.coverLookup.modal = { artboxSlot: 1, album, artboxCleared: false, selectedRemoteId: '', pendingLocalPath: '', pendingPastedImageId: '' };
+  context.state.coverLookup.modal = { artboxSlot: 1, album, artboxCleared: false, selectedRemoteId: '', pendingLocalRef: '', pendingPastedImageId: '' };
   const saved = { id: 'r1', url: 'https://img.example/back.jpg' };
   assert.equal(context.isSecondArtboxSavedRemoteActive(saved), true, 'blue frame on open');
   assert.equal(context.isSecondArtboxSavedRemoteActive({ id: 'r2', url: 'https://img.example/other.jpg' }), false);
@@ -287,10 +286,10 @@ test('UI-14: the second artbox lookup selects its saved remote art, and a click 
 });
 
 test('UI-14: saving the second artbox with nothing selected empties it', async () => {
-  const album = { ...testimony(), additional_artworks: [{ slot: 1, cover_path: 'D:/Music/Testimony/back.jpg' }] };
+  const album = { ...testimony(), additional_artworks: [{ slot: 1, cover_ref: 'D:/Music/Testimony/back.jpg' }] };
   const { context, calls } = load({ savedArtworks: [] });
   context.state.modalReleases = [album];
-  context.state.coverLookup.modal = { artboxSlot: 1, album, artboxCleared: true, pendingLocalPath: '', selectedRemoteId: '' };
+  context.state.coverLookup.modal = { artboxSlot: 1, album, artboxCleared: true, pendingLocalRef: '', selectedRemoteId: '' };
   await context.saveAdditionalArtworkFromLookup();
   assert.deepEqual(calls.fetches.map((call) => call.url), ['/utilities/cover-lookup/additional-artwork/remove']);
   assert.equal(calls.closed, 1);
@@ -301,7 +300,7 @@ test('Remove artbox empties the second artbox at once and puts it back if the se
   let answer;
   const pending = new Promise((resolve) => { answer = resolve; });
   const { context, calls } = load({ context: { fetch: async () => pending } });
-  const back = { slot: 1, source_kind: 'local', cover_path: 'D:/Music/Testimony/back.jpg' };
+  const back = { slot: 1, source_kind: 'local', cover_ref: 'D:/Music/Testimony/back.jpg' };
   context.state.modalReleases = [{ ...testimony(), additional_artworks: [back] }];
   const renders = calls.renders;
 

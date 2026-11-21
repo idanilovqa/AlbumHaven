@@ -20,8 +20,8 @@ export async function prepareDesktopCoverCandidates(page, testInfo) {
   await openCapabilityFixtureAlbum(gallery);
   await tracks.openCoverLookup();
   await expect(lookup.activeLocalCoverCard).toBeVisible();
-  const localPath = await lookup.activeLocalCoverCard.getAttribute('data-select-local-cover');
-  expect(localPath).toBeTruthy();
+  const localReference = await lookup.activeLocalCoverCard.getAttribute('data-select-local-cover');
+  expect(localReference).toBeTruthy();
   const providerUrl = new URL(testInfo.config.metadata.providerBaseURL);
   providerUrl.hostname = 'cover-fixture.example';
   await actions.enterManualUrls([new URL('/manual/phase7-manual/cover.jpg', providerUrl).href]);
@@ -33,7 +33,7 @@ export async function prepareDesktopCoverCandidates(page, testInfo) {
   const manualId = await lookup.manualCandidates.first().getAttribute('data-select-remote-cover');
   const taskTitle = 'Uninterrupted Session';
   await actions.closeModal();
-  return { actions, lookup, tracks, providerId, manualId, taskTitle, localPath };
+  return { actions, lookup, tracks, providerId, manualId, taskTitle, localReference };
 }
 
 

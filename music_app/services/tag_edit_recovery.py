@@ -217,7 +217,7 @@ def reconcile_unfinished_tag_edit_intents_on_startup(runtime: object) -> dict[st
 def _reconcile_claimed_tag_edit_intent(runtime, repository, claimed_intent, *, before_recovery):
     from music_app.services.cache import persist_structural_tag_edit_for_config
     from music_app.services.scan_cache_persistence import TARGETED_TAG_EDIT_FIELDS, select_scan_cache_adapter
-    from music_app.services.library_roots import resolve_configured_media_path
+    from music_app.services.library_roots import iter_library_root_paths, resolve_media_path_within_roots
     from music_app.services.metadata import (
         apply_text_repairs_to_file,
         read_editable_tag_values,
@@ -226,8 +226,10 @@ def _reconcile_claimed_tag_edit_intent(runtime, repository, claimed_intent, *, b
 
     config = getattr(runtime, "config")
     logger = getattr(runtime, "logger")
+    root_paths = iter_library_root_paths(config)
+
     def resolve_recovery_path(raw_path: str) -> Path:
-        resolved = resolve_configured_media_path(config, raw_path)
+        resolved = resolve_media_path_within_roots(raw_path, root_paths)
         if resolved is None:
             raise RuntimeError(
                 "Tag edit recovery path is not one configured existing media file: "

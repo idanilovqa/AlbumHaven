@@ -333,6 +333,8 @@ class BridgeControllerTest {
         assertTrue(ok(send(sandbox, load(revision = 4))))
         assertTrue(ok(send(sandbox, load(revision = 5, items = """[{"playbackRef":"opaque-ref","title":"T","artist":"A","album":"B","artworkUrl":null,"durationMs":1000,"trackNumber":"1","listenKey":"lk1-0123abcd","queueGroup":0,"year":"1999"}]"""))))
         assertEquals("stale_revision", errorCode(send(sandbox, command("playback.play", """{"queueRevision":2}"""))))
+        // Play while another device plays (playback.claim.takeover, owner 2026-11-17).
+        assertTrue(ok(send(sandbox, load(revision = 6, takeover = "true", keepCurrent = "false"))))
     }
 
     @Test
@@ -376,6 +378,8 @@ class BridgeControllerTest {
             load(items = "[" + item.replace("\"queueGroup\":0", "\"queueGroup\":0,\"year\":1999") + "]"),
             load(items = "[" + item.replace("\"queueGroup\":0", "\"queueGroup\":0,\"rating\":5") + "]"),
             load(keepCurrent = "1"),
+            load(takeover = "\"yes\""),
+            load(extra = "\"stealPlayback\":true"),
             command("playback.setLoop", """{"queueRevision":1,"startFrame":0,"endFrame":48000,"sampleRate":48000,"kind":"loop"}"""),
             // Loop points are counted at the track's own rate, which every loop names.
             command("playback.setLoop", """{"queueRevision":1,"startFrame":0,"endFrame":48000}"""),
@@ -482,11 +486,15 @@ class BridgeControllerTest {
         loop: String = "null",
         autoplay: String = "false",
         keepCurrent: String? = null,
+        takeover: String? = null,
+        extra: String? = null,
     ) = command(
         "playback.loadQueue",
         """{"queueRevision":$revision,"items":$items,"currentIndex":$currentIndex,""" +
             """"positionMs":$positionMs,"loop":$loop,"autoplay":$autoplay""" +
-            (keepCurrent?.let { ""","keepCurrent":$it""" } ?: "") + "}",
+            (keepCurrent?.let { ""","keepCurrent":$it""" } ?: "") +
+            (takeover?.let { ""","takeover":$it""" } ?: "") +
+            (extra?.let { ",$it" } ?: "") + "}",
     )
 
     private fun ok(reply: JSONObject?): Boolean = reply!!.getJSONObject("payload").getBoolean("ok")

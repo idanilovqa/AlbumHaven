@@ -73,7 +73,7 @@ class PlaybackBridge(private val port: NativePlaybackPort) {
 
     private fun parseLoad(payload: JSONObject): QueueLoad? {
         val fields = payload.fieldNames()
-        if (fields != LOAD_KEYS && fields != LOAD_KEYS + "keepCurrent") return null
+        if (!fields.containsAll(LOAD_KEYS) || !(fields - LOAD_KEYS).all { it in LOAD_OPTIONAL_KEYS }) return null
         val revision = positiveLong(payload.opt("queueRevision")) ?: return null
         val array = payload.opt("items") as? JSONArray ?: return null
         if (array.length() !in 1..MAX_QUEUE_ITEMS) return null
@@ -89,7 +89,8 @@ class PlaybackBridge(private val port: NativePlaybackPort) {
         }
         val autoplay = payload.opt("autoplay") as? Boolean ?: return null
         val keepCurrent = if ("keepCurrent" in fields) payload.opt("keepCurrent") as? Boolean ?: return null else false
-        return QueueLoad(revision, items, currentIndex, position, loop, autoplay, keepCurrent)
+        val takeover = if ("takeover" in fields) payload.opt("takeover") as? Boolean ?: return null else false
+        return QueueLoad(revision, items, currentIndex, position, loop, autoplay, keepCurrent, takeover)
     }
 
     private fun parseItem(raw: Any?): QueueItem? {
@@ -179,6 +180,7 @@ class PlaybackBridge(private val port: NativePlaybackPort) {
         private const val MAX_DURATION_MS = 7L * 24 * 60 * 60 * 1000
 
         private val LOAD_KEYS = setOf("queueRevision", "items", "currentIndex", "positionMs", "loop", "autoplay")
+        private val LOAD_OPTIONAL_KEYS = setOf("keepCurrent", "takeover")
         private val LOOP_KEYS = setOf("startFrame", "endFrame", "sampleRate")
         private val SET_LOOP_KEYS = LOOP_KEYS + "queueRevision"
         private const val MAX_SAMPLE_RATE = 192_000L

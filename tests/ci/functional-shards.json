@@ -1192,6 +1192,20 @@
               "test": "tests/e2e/specs/problematicFileNavigation.spec.js",
               "case": "FTC-UTIL-PROBLEMS-001 rolls back failed exclusion creation and reversion",
               "area": "problematic-files"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playbackTakeover.spec.js",
+              "case": "FTC-PLAYBACK-TAKEOVER-004 after a playing browser closes without a word, the first press in another browser plays the song and never stops it",
+              "area": "playback"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playbackTakeover.spec.js",
+              "case": "FTC-PLAYBACK-TAKEOVER-005 while another browser really plays, a press on a song shows the playing-elsewhere overlay at once and never starts the song here",
+              "area": "playback"
             }
           ]
         },
@@ -1337,6 +1351,13 @@
               "test": "tests/e2e/specs/musicbrainzArtistIdentity.spec.js",
               "case": "FTC-MBID-003 an Unconfirmed match and its filter are in the first Problematic Files page",
               "area": "problematic-files"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playbackTakeover.spec.js",
+              "case": "FTC-PLAYBACK-NAV-001 play, open another artist in a new page load, and one press on a song plays it at once",
+              "area": "playback"
             }
           ]
         },
@@ -1467,6 +1488,27 @@
               "project": "functional",
               "test": "tests/e2e/specs/playerArtworkSearchContext.spec.js",
               "case": "FTC-PLAYER-015 player artwork reopens the playing album after selecting an unrelated search result",
+              "area": "playback"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playbackTakeover.spec.js",
+              "case": "FTC-PLAYBACK-TAKEOVER-001 Play on the playing-elsewhere overlay continues the other device's song here at its place and stops the other device",
+              "area": "playback"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playbackTakeover.spec.js",
+              "case": "FTC-PLAYBACK-TAKEOVER-003 after a playing tab closes, one press on a song in another browser plays it within seconds",
+              "area": "playback"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playbackTakeover.spec.js",
+              "case": "FTC-PLAYBACK-TITLE-001 pressing another song while one plays never shows the playing song again once the pressed one shows",
               "area": "playback"
             }
           ]

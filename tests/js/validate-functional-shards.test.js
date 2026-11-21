@@ -904,28 +904,34 @@ validatorTest('playback restores three wave baselines and isolates conflicting e
   assert.deepEqual(
     waveInvocations(1).flatMap((invocation) => invocation.cases.map(({ case: name }) => name)).sort(),
     [
-      'FTC-SETTINGS-I02 Scrobbling statistics and readable Foobar help retain disabled playlist import',
-      'FTC-SETTINGS-H04 Period includes complete local dates across skipped midnight',
-      'FTC-SETTINGS-S06 searches preserve independent tab queries and unsaved editors',
       'FTC-ALBUM-DETAILS-022 touch artwork controls open full cover and Cover Lookup without hover',
+      "FTC-PLAYBACK-TAKEOVER-001 Play on the playing-elsewhere overlay continues the other device's song here at its place and stops the other device",
+      'FTC-PLAYBACK-TAKEOVER-004 after a playing browser closes without a word, the first press in another browser plays the song and never stops it',
+      'FTC-SETTINGS-H04 Period includes complete local dates across skipped midnight',
+      'FTC-SETTINGS-I02 Scrobbling statistics and readable Foobar help retain disabled playlist import',
+      'FTC-SETTINGS-S06 searches preserve independent tab queries and unsaved editors',
+      'FTC-TAGS-024 completes a verified Album and Exception intent during app restart',
+      'FTC-UTIL-PROBLEMS-001 scopes exclusions with optimistic persistence and reload',
       'FTC-UTIL-PROBLEMS-011 hides dead problem actions for a generated excluded album',
       'FTC-UTIL-PROBLEMS-011 opens the exact problematic track from album details',
-      'FTC-UTIL-PROBLEMS-001 scopes exclusions with optimistic persistence and reload',
-      'FTC-TAGS-024 completes a verified Album and Exception intent during app restart',
     ].sort(),
   );
   assert.deepEqual(
     waveInvocations(3).flatMap((invocation) => invocation.cases.map(({ case: name }) => name)).sort(),
     [
       'FTC-LIBROOTS-016 / 017 / 018 reconciles filesystem changes and confirms missing-album removal',
+      'FTC-PLAYBACK-TAKEOVER-005 while another browser really plays, a press on a song shows the playing-elsewhere overlay at once and never starts the song here',
       'FTC-UTIL-PROBLEMS-001 rolls back failed exclusion creation and reversion',
     ].sort(),
   );
   assert.deepEqual(waveInvocations(4).flatMap((invocation) => invocation.cases.map(({ case: name }) => name)), [
     'FTC-SETTINGS-I01 real folder picking preserves Cancel and validates saved root membership',
+    'FTC-PLAYBACK-NAV-001 play, open another artist in a new page load, and one press on a song plays it at once',
+    'FTC-PLAYBACK-TAKEOVER-003 after a playing tab closes, one press on a song in another browser plays it within seconds',
   ]);
   assert.deepEqual(waveInvocations(5).flatMap((invocation) => invocation.cases.map(({ case: name }) => name)), [
     'FTC-PREVIEW-STORAGE-001 / 002 relocates generated previews safely and denies non-owner access',
+    'FTC-PLAYBACK-TITLE-001 pressing another song while one plays never shows the playing song again once the pressed one shows',
   ]);
   const overflow = matrix.map(row => row.case.startsWith('FTC-SETTINGS-I01 ') ? { ...row, executionWave: 6 } : row);
   const overflowShard = shards.find((shard) => shard.invocations.some((invocation) => invocation.cases.some(

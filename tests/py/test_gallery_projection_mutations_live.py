@@ -751,6 +751,31 @@ def test_first_anchored_request_after_republish_ignores_stale_statistics(gallery
     assert explained["Plan"]["Shared Hit Blocks"] + explained["Plan"]["Shared Read Blocks"] < 1000
 
 
+def test_an_out_of_date_gallery_is_republished_once_and_a_current_one_is_left_alone(gallery_inventory):
+    """Owner 2026-11-21, live tree update: after a MusicBrainz pass the worker republishes a gallery
+    whose sources changed (as a split label does, 0258), giving open pages one publication to
+    reload; a current gallery is neither rebuilt nor reported."""
+    fixture = gallery_inventory
+    before = gallery.gallery_publication_revision()
+    assert not gallery.refresh_gallery_projection_if_out_of_date(fixture.config, connect=isolatedPostgres._connect)
+    assert gallery.gallery_publication_revision() == before
+
+    with isolatedPostgres._connect(fixture.setup_url) as writer:
+        assert writer.execute(MUTATIONS[0][1]).rowcount > 0
+    assert gallery.refresh_gallery_projection_if_out_of_date(fixture.config, connect=isolatedPostgres._connect)
+    deadline = monotonic() + 30
+    while gallery.gallery_publication_revision() == before and monotonic() < deadline:
+        sleep(0.05)
+    assert gallery.gallery_publication_revision() == before + 1
+    with isolatedPostgres._connect(fixture.runtime_url) as connection:
+        assert gallery._ready_header(connection, gallery.gallery_projection_context(connection),
+                                     fixture.view_state) is not None
+
+    assert not gallery.refresh_gallery_projection_if_out_of_date(fixture.config, connect=isolatedPostgres._connect)
+    sleep(0.2)
+    assert gallery.gallery_publication_revision() == before + 1
+
+
 def _bump_builder(monkeypatch, *, servable_previous):
     previous = gallery.BUILDER_VERSION
     monkeypatch.setattr(gallery, "BUILDER_VERSION", f"{previous}-next")

@@ -333,6 +333,30 @@ def test_refresh_scheduled_during_publication_runs_once_afterward(monkeypatch):
     assert projection._PENDING == {}
 
 
+def test_only_a_run_that_published_advances_the_publication_revision(monkeypatch):
+    """Open pages reload their tree once per publication; a refresh that found the gallery
+    current, or failed, gives them nothing to reload."""
+    from music_app.services import cache, gallery_projection_postgres as projection
+    submitted = []
+    class Executor:
+        def submit(self, action):
+            future = Future()
+            submitted.append((action, future))
+            return future
+    monkeypatch.setattr(cache, "_CACHE_WRITE_EXECUTOR", Executor())
+    monkeypatch.setattr(projection, "_PENDING", {})
+    config = {"ALBUM_HAVEN_APP_DATABASE_URL": "owned-test"}
+    before = projection.gallery_publication_revision()
+    for outcome in ({"built": 0}, RuntimeError("failed"), {"built": 2}, True, False):
+        projection._queue(config, "probe", lambda: None)
+        if isinstance(outcome, Exception):
+            submitted[-1][1].set_exception(outcome)
+        else:
+            submitted[-1][1].set_result(outcome)
+    assert projection.gallery_publication_revision() == before + 2
+    assert projection._PENDING == {}
+
+
 @pytest.mark.parametrize("generations, expected", [(range(100), [0, 99]), ([0, 2, 1], [0, 2])])
 def test_snapshot_queue_keeps_only_latest_generation_per_scope(monkeypatch, generations, expected):
     from music_app.services import cache, gallery_projection_postgres as projection

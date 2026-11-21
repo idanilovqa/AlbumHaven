@@ -231,6 +231,9 @@ updateStatusIndicator({
   ...(Number.isSafeInteger(bootstrap.inventoryMutationRevision)
     ? { inventory_mutation_revision: bootstrap.inventoryMutationRevision }
     : {}),
+  ...(Number.isSafeInteger(bootstrap.galleryPublicationRevision)
+    ? { gallery_publication_revision: bootstrap.galleryPublicationRevision }
+    : {}),
 });
 state.wasPollingBusy = Boolean(bootstrap.scanInProgress || bootstrap.relationsInProgress);
 state.wasCoverPollingBusy = Boolean(bootstrap.coversInProgress);

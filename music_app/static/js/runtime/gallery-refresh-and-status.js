@@ -2169,6 +2169,7 @@ async function pollStatus() {
     'inventory_mutation_revision',
   );
   const knownInventoryRevision = Number(knownStatus.inventory_mutation_revision || 0);
+  const knownGalleryRevision = knownStatus.gallery_publication_revision;
   const knownBusy = Boolean(
     knownStatus.scan_in_progress
     || knownStatus.relations_in_progress
@@ -2231,6 +2232,13 @@ async function pollStatus() {
         || appliedViewInventoryRevision < currentInventoryRevision) {
         state.ui.pendingInventoryMutationViewRefresh = true;
       }
+    }
+    // A republished gallery (a MusicBrainz label for a split name, say) reloads the tree once.
+    // Any change counts: the server's count restarts with its process.
+    if (Number.isSafeInteger(knownGalleryRevision)
+      && Number.isSafeInteger(normalizedStatus.gallery_publication_revision)
+      && normalizedStatus.gallery_publication_revision !== knownGalleryRevision) {
+      state.ui.pendingInventoryMutationViewRefresh = true;
     }
     const utility = state.utility;
     const healthChanged = knownWatcherHealth !== watcherHealthRefreshSignature(normalizedStatus);

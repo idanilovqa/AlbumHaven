@@ -23,6 +23,7 @@ from music_app.services.log_history import (
     load_log_history_snapshot,
 )
 from music_app.services.loops import load_loops
+from music_app.services.gallery_projection_postgres import gallery_publication_revision
 from music_app.services.state import (
     format_timestamp,
     request_library_hydration_for_state,
@@ -563,6 +564,8 @@ def _build_status_payload_from_state(library_state: dict[str, object]) -> dict[s
         "last_scan_display": format_timestamp(float(library_state.get("last_scan") or 0.0)),
         "last_error": library_state.get("last_error"),
         "album_total": len(browse_state.get("albums", []) or []),
+        # Before the inventory revision (see gallery_publication_revision).
+        "gallery_publication_revision": gallery_publication_revision(),
         "inventory_mutation_revision": status_inventory_mutation_revision(library_state),
     }
 

@@ -3658,6 +3658,73 @@ test('pollStatus does not reload a foreground view already read at the advanced 
   assert.equal(Boolean(context.state.ui.pendingInventoryMutationViewRefresh), false);
 });
 
+function galleryPublicationFixture(knownRevision) {
+  const fixture = createContext();
+  fixture.context.scheduleBrowserTimeout = () => {};
+  fixture.context.buildApiUrl = () => '/view-data?surface=albums';
+  fixture.context.state.view = {
+    ...fixture.context.state.view,
+    artists_sidebar: [{ artist: 'Amarok', artist_display: 'Amarok', count: 7 }],
+    artist_groups: [{ artist: 'Amarok', albums: [{ key: 'amarok::neo' }] }],
+  };
+  fixture.context.state.status = {
+    scan_in_progress: false, relations_in_progress: false, covers_in_progress: false,
+    inventory_mutation_revision: 12,
+    ...(knownRevision === undefined ? {} : { gallery_publication_revision: knownRevision }),
+  };
+  fixture.poll = async (galleryRevision, view = null) => {
+    const first = fixture.pendingRequests.length;
+    const statusRequest = fixture.context.pollStatus();
+    fixture.pendingRequests[first].resolveWith({
+      scan_in_progress: false, relations_in_progress: false, covers_in_progress: false,
+      inventory_mutation_revision: 12, gallery_publication_revision: galleryRevision,
+    });
+    for (let attempt = 0; attempt < 5 && fixture.pendingRequests.length === first + 1; attempt += 1) {
+      await flushMicrotasks();
+    }
+    if (fixture.pendingRequests.length > first + 1) {
+      fixture.pendingRequests[first + 1].resolveWith(view);
+    }
+    await statusRequest;
+    await flushMicrotasks();
+  };
+  return fixture;
+}
+
+test('a republished gallery reloads an open tree once, with no inventory change', async () => {
+  const { context, calls, poll } = galleryPublicationFixture(4);
+  await poll(5, {
+    artists_sidebar: [
+      { artist: 'Amarok', artist_display: 'Amarok (Poland)', count: 4 },
+      { artist: 'Amarok', artist_display: 'Amarok (Spain)', count: 3 },
+    ],
+    artist_groups: [{ artist: 'Amarok', albums: [{ key: 'amarok::neo' }] }],
+    album_count: 7,
+    payload_tier: 'full',
+    inventory_mutation_revision: 12,
+  });
+  assert.deepEqual(
+    Array.from(context.state.view.artists_sidebar, entry => [entry.artist_display, entry.count]),
+    [['Amarok (Poland)', 4], ['Amarok (Spain)', 3]],
+  );
+  await poll(5);
+  assert.deepEqual(calls.fetchRequests.map(request => request.url), [
+    '/status', '/view-data?surface=albums', '/status',
+  ]);
+  assert.equal(Boolean(context.state.ui.pendingInventoryMutationViewRefresh), false);
+});
+
+test('an unchanged gallery publication count, or a first one, never refetches the view', async () => {
+  for (const known of [4, undefined]) {
+    const { context, calls, poll } = galleryPublicationFixture(known);
+    await poll(4);
+    await poll(4);
+    assert.deepEqual(calls.fetchRequests.map(request => request.url), ['/status', '/status'], String(known));
+    assert.equal(Boolean(context.state.ui.pendingInventoryMutationViewRefresh), false);
+    assert.equal(context.state.view.artists_sidebar[0].count, 7);
+  }
+});
+
 test('pollStatus refreshes an open Album Details after applying an inventory mutation', async () => {
   const { context, pendingRequests } = createContext();
   context.scheduleBrowserTimeout = () => {};

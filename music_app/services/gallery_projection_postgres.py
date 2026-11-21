@@ -22,6 +22,9 @@ SERVABLE_PREVIOUS_BUILDER_VERSIONS = ("root-gallery-v4",)
 _LOGGER = logging.getLogger(__name__)
 _PENDING = {}
 _PENDING_LOCK = Lock()
+# Counts the queued runs that published a snapshot in this process. /status reports it, so an
+# open page reloads its tree once per publication, whatever changed the gallery's sources.
+_PUBLICATION_REVISION = 0
 _PREPARATIONS: dict[str | tuple[str, str], Future] = {}
 _PREPARATIONS_LOCK = Lock()
 _OCCURRENCE_FIELDS = frozenset({
@@ -312,11 +315,17 @@ def _queue(config, key, action, *, trailing=False, generation=None, on_done=None
         return None
 
     def finished(completed):
+        global _PUBLICATION_REVISION
         with _PENDING_LOCK:
             following, following_generation, following_callbacks = _PENDING.pop(identity)
         _run_callbacks(callbacks)
         try:
-            completed.result()
+            result = completed.result()
+            # After the callbacks: a page that sees this publication also sees the inventory
+            # revision whose hold the publication released.
+            if (result.get("built") if isinstance(result, dict) else result):
+                with _PENDING_LOCK:
+                    _PUBLICATION_REVISION += 1
         except Exception:
             _LOGGER.exception("Gallery projection publication failed; a later request may retry")
             if key == "refresh" or (isinstance(key, tuple) and key[0] == "refresh"):
@@ -329,6 +338,26 @@ def _queue(config, key, action, *, trailing=False, generation=None, on_done=None
             _run_callbacks(following_callbacks)
     future.add_done_callback(finished)
     return future
+
+
+def gallery_publication_revision() -> int:
+    """Lock-free, for /status: read it before the inventory revision (see ``_queue``)."""
+    return _PUBLICATION_REVISION
+
+
+def refresh_gallery_projection_if_out_of_date(config, *, connect=None) -> bool:
+    """Queue a refresh when the library gallery's sources changed since it was published, as a
+    MusicBrainz match that labels a split name does. Three small reads when it is current."""
+    from music_app.services.library_browse_postgres import _connect, _root_sidebar_view_state
+
+    if config.get("SHARED_LIBRARY_BROWSE_ONLY") or not config.get("ALBUM_HAVEN_APP_DATABASE_URL"):
+        return False
+    with (connect or _connect)(config["ALBUM_HAVEN_APP_DATABASE_URL"]) as connection:
+        context = gallery_projection_context(connection)
+        if not context or _ready_header(connection, context, _root_sidebar_view_state({})):
+            return False
+    schedule_gallery_projection_refresh(config, connect=connect)
+    return True
 
 
 def queue_gallery_projection_snapshot(config, context, view_state, snapshot, *, connect=None):

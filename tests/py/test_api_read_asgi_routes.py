@@ -125,6 +125,14 @@ def test_status_payload_keeps_post_scan_cover_handoff_busy():
     assert payload["covers_phase"] == "preparing"
 
 
+def test_status_reports_the_gallery_publication_revision(monkeypatch):
+    from music_app.routes.api_read_asgi_routes import _build_status_payload_from_state
+    from music_app.services import gallery_projection_postgres as gallery
+
+    monkeypatch.setattr(gallery, "_PUBLICATION_REVISION", 5)
+    assert _build_status_payload_from_state({})["gallery_publication_revision"] == 5
+
+
 def test_asgi_status_route_exposes_only_opaque_database_identity(app, monkeypatch):
     from music_app.routes import api_read_asgi_routes as asgi_read_routes
 

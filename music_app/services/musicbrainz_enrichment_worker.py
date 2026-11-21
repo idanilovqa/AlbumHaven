@@ -6,6 +6,7 @@ import uuid
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 
+from music_app.services.gallery_projection_postgres import refresh_gallery_projection_if_out_of_date
 from music_app.services.musicbrainz_client import MusicBrainzClient
 from music_app.services.musicbrainz_enrichment import (
     MusicBrainzArtistEnrichmentProcessor,
@@ -38,6 +39,7 @@ class MusicBrainzEnrichmentWorker:
         set_provider_cooldown: Callable[[float], None] | None = None,
         logger=None,
         concurrency: int = 1,
+        after_busy_pass: Callable[[], object] | None = None,
     ) -> None:
         if (
             isinstance(batch_size, bool)
@@ -60,6 +62,7 @@ class MusicBrainzEnrichmentWorker:
         self._poll_seconds = float(poll_seconds)
         self._set_provider_cooldown = set_provider_cooldown or (lambda _seconds: None)
         self._logger = logger or logging.getLogger(__name__)
+        self._after_busy_pass = after_busy_pass
         self._stopping = asyncio.Event()
         self.task: asyncio.Task | None = None
 
@@ -124,6 +127,8 @@ class MusicBrainzEnrichmentWorker:
                 summary = await self.run_once()
                 # Work was found and nothing asked to back off: claim the next batch at once.
                 busy = summary["processed"] > 0 and not summary["rate_limited"]
+                if summary["processed"] and self._after_busy_pass is not None:
+                    await asyncio.to_thread(self._after_busy_pass)
             except Exception as error:
                 # Name the error type only: its message can carry a provider payload.
                 self._logger.warning(
@@ -211,6 +216,8 @@ def build_musicbrainz_enrichment_worker(*, config: Mapping[str, object]):
             "rate_limited",
             cooldown_seconds=seconds,
         ),
+        # A match can label a split name ("Amarok (Poland)"); republish the tree for open pages.
+        after_busy_pass=lambda: refresh_gallery_projection_if_out_of_date(config),
     )
 
 

@@ -13674,6 +13674,22 @@
       "rollback": "Revert the contract test commit; no product code changed for this interaction."
     },
     {
+      "id": "py:services/gallery_projection_postgres.py#refresh_gallery_projection_if_out_of_date",
+      "action": "After a busy MusicBrainz pass, queue one gallery refresh when the published gallery is out of date",
+      "entrypoints": [
+        "py:music_app/services/gallery_projection_postgres.py#refresh_gallery_projection_if_out_of_date:refresh:name"
+      ],
+      "owners": [
+        "music_app/services/gallery_projection_postgres.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
+    },
+    {
       "id": "py:services/gallery_projection_postgres.py#schedule_gallery_projection_refresh",
       "action": "Run scheduler schedule_gallery_projection_refresh",
       "entrypoints": [

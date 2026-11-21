@@ -1684,7 +1684,9 @@ def _upsert_identity_artists_sql() -> str:
 
 def _replace_album_identities_sql() -> str:
     """An artist's automatic album identities become exactly this re-check's certain albums;
-    an owner's own album choice is kept."""
+    an owner's own album choice is kept. Only rows that change are written: 0258 marks the
+    gallery out of date when an identity is added, removed or names another artist, so a
+    re-check that decides the same albums must leave them untouched."""
     return _active_library_cte() + """
         , artist_albums as (
           select albums.id, albums.library_id, albums.album_key
@@ -1692,31 +1694,39 @@ def _replace_album_identities_sql() -> str:
           join library.local_albums albums
             on albums.library_id = active_library.library_id
            and albums.artist_id = %(local_artist_id)s
+        ), wanted as (
+          select artist_albums.library_id, artist_albums.album_key, rows.artist_mbid, rows.evidence, rows.tag_differs
+          from jsonb_to_recordset(%(album_identities)s::jsonb)
+            as rows(local_album_id bigint, artist_mbid uuid, tag_differs boolean, evidence jsonb)
+          join artist_albums on artist_albums.id = rows.local_album_id
         ), removed as (
           delete from library.local_album_artist_identities identities
           using artist_albums
           where identities.library_id = artist_albums.library_id
             and identities.album_key = artist_albums.album_key
             and identities.decision_source = 'automatic'
+            and not exists (select 1 from wanted where wanted.library_id = identities.library_id
+                                                   and wanted.album_key = identities.album_key)
           returning 1
         )
         insert into library.local_album_artist_identities (
           library_id, album_key, artist_mbid, decision_source, evidence, tag_differs,
           matcher_version, created_at, updated_at
         )
-        select artist_albums.library_id, artist_albums.album_key, rows.artist_mbid, 'automatic',
-               rows.evidence, rows.tag_differs, %(matcher_version)s, %(observed_at)s, %(observed_at)s
+        select wanted.library_id, wanted.album_key, wanted.artist_mbid, 'automatic',
+               wanted.evidence, wanted.tag_differs, %(matcher_version)s, %(observed_at)s, %(observed_at)s
         from (select count(*) from removed) removed_count
-        cross join jsonb_to_recordset(%(album_identities)s::jsonb)
-          as rows(local_album_id bigint, artist_mbid uuid, tag_differs boolean, evidence jsonb)
-        join artist_albums on artist_albums.id = rows.local_album_id
+        cross join wanted
         on conflict (library_id, album_key) do update
         set artist_mbid = excluded.artist_mbid,
             evidence = excluded.evidence,
             tag_differs = excluded.tag_differs,
             matcher_version = excluded.matcher_version,
             updated_at = excluded.updated_at
-        where library.local_album_artist_identities.decision_source <> 'manual';
+        where library.local_album_artist_identities.decision_source <> 'manual'
+          and (library.local_album_artist_identities.artist_mbid, library.local_album_artist_identities.evidence,
+               library.local_album_artist_identities.tag_differs, library.local_album_artist_identities.matcher_version)
+              is distinct from (excluded.artist_mbid, excluded.evidence, excluded.tag_differs, excluded.matcher_version);
     """
 
 

@@ -1237,3 +1237,47 @@ def test_a_split_name_s_context_carries_relative_folders_and_stores_recordings_a
         evidence = connection.execute(
             "select evidence from library.local_album_artist_identities where album_key = 'split-live'").fetchone()["evidence"]
     assert evidence["method"] == "folder" and "folder" not in evidence
+
+
+def test_a_split_label_change_marks_the_gallery_out_of_date_and_an_unchanged_recheck_does_not(
+        monkeypatch: pytest.MonkeyPatch):
+    """0258, owner 2026-11-21 ("Fix first, then test"): the tree files a split name's proven albums
+    under labelled entries ("Amarok (Poland)"), so deciding an album, or a change to what its label
+    is made of, must mark the gallery out of date; a re-check that changes nothing must not."""
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    library_id, artist_id = _seed_present_artist(setup_url, "amarok")
+    with isolatedPostgres._connect(setup_url) as connection:
+        album = connection.execute(
+            "select id from library.local_albums where album_key = 'amarok-album'").fetchone()["id"]
+    repository = MusicBrainzEnrichmentPostgresRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": runtime_url}, connect=lambda _url: isolatedPostgres._connect(runtime_url))
+
+    def generation():
+        with isolatedPostgres._connect(setup_url) as connection:
+            row = connection.execute("select generation from library.gallery_projection_state where library_id = %s",
+                                     (library_id,)).fetchone()
+        return row["generation"] if row else 0
+
+    def split(identities, polish_area="Poland"):
+        repository.record_automatic_outcome(
+            local_artist_id=artist_id, state="per_album", artist=None, confidence=1, observed_at=NOW,
+            evidence_summary="Your albums belong to 2 MusicBrainz artists.",
+            identity_artists=[{"mbid": GERMAN, "canonical_name": "Amarok", "area_name": "Spain"},
+                              {"mbid": TRANCE, "canonical_name": "Amarok", "area_name": polish_area}],
+            album_identities=identities)
+
+    decided = [{"local_album_id": album, "artist_mbid": TRANCE}]
+    before = generation()
+    split(decided)
+    after_decided = generation()
+    assert after_decided > before, "a newly decided split album moves to its labelled entry"
+    split(decided)
+    assert generation() == after_decided, "a re-check that changes nothing leaves the gallery current"
+    split(decided, polish_area="Warsaw")
+    after_area = generation()
+    assert after_area > after_decided, "the label's area changed"
+    split([{"local_album_id": album, "artist_mbid": GERMAN}], polish_area="Warsaw")
+    after_moved = generation()
+    assert after_moved > after_area, "the album now belongs to the other artist"
+    split([], polish_area="Warsaw")
+    assert generation() > after_moved, "the album is undecided again: back under the plain name"

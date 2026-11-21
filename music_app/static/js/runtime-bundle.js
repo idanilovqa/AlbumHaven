@@ -10907,13 +10907,18 @@ async function prepareStreamingPlaybackEngine(sampleRate = 0) {
 
 // The page's idle moment readies what a first press needs: verified decoders (so the first song
 // streams compressed), the socket, and an audio graph at the likely rate (so its open goes out at
-// the press). The graph stays suspended, rendering nothing, until a press resumes it.
+// the press). The graph stays suspended, rendering nothing, until a press resumes it. Inside the
+// APK the native engine plays, so only the socket is readied there.
 async function prepareIdleStreamingPlayback() {
   const engine = streamingEngineState();
+  if (typeof isInsideAndroidShell === 'function' && isInsideAndroidShell()) {
+    await prepareStreamingPlaybackEngine();
+    return;
+  }
   if (typeof ensureStreamingDecoders === 'function') void ensureStreamingDecoders();
   const startRequestId = engine.startRequestId;
   await prepareStreamingPlaybackEngine(guessedStreamingSampleRate());
-  if (engine.startRequestId === startRequestId && !engine.roles.current
+  if (engine.startRequestId === startRequestId && !engine.pendingStart && !engine.roles.current
       && engine.context?.state === 'running') {
     await engine.context.suspend();
   }

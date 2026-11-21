@@ -7,7 +7,26 @@ const STREAMING_PROCESSOR_NAME = 'album-haven-gapless-playback';
 const STREAMING_MAX_CREDIT_SECONDS = 1;
 const STREAMING_CREDIT_LOW_WATER_SECONDS = 0.25;
 const STREAMING_INITIAL_PLAYBACK_CUSHION_SECONDS = 2;
-const STREAMING_AUTOMATIC_RECONNECT_ATTEMPTS = 1;
+// A lost socket is replaced at once, then after each of these delays, then every last one.
+const STREAMING_RECONNECT_DELAYS_MS = [500, 1000, 2000];
+// The server sends a heartbeat this often (`/playback/pcm?heartbeat=`), however long its answers
+// take: a socket is judged by what it hears, never by how fast it is answered, because a busy
+// server answers slowly (owner retest B-D4 round 6, 2026-11-18, with the CPU at 100%).
+const STREAMING_HEARTBEAT_MS = 250;
+// A socket that heard nothing at all for this long died without closing; on a slow mobile network
+// one 16 KB frame of audio, and the heartbeats queued behind it, can take a few seconds to arrive.
+const STREAMING_SILENT_SOCKET_MS = 5000;
+// ...or for this long while a seek past the received audio waits on it: it is found sooner.
+const STREAMING_SEEK_ANSWER_MS = 750;
+// How often a socket's silence is checked, whether or not audio plays.
+const STREAMING_LIVENESS_CHECK_MS = 500;
+// A reconnect attempt begun on a network that is gone can hang for tens of seconds; it is given up.
+// Each attempt given up so allows the next one twice as long, up to 16 s: on a loaded machine a
+// connection that is only slow to open must open at last (owner retest B-D4 round 6, CPU at 100%).
+const STREAMING_CONNECT_DEADLINE_MS = 4000;
+const STREAMING_CONNECT_DEADLINE_DOUBLINGS = 2;
+// The server's own refusals: another socket would be refused too.
+const STREAMING_REFUSED_CLOSE_CODES = new Set([4400, 4401, 4403, 4404, 4408, 4409, 4429]);
 const STREAMING_QUEUED_NEXT_PREPARE_SECONDS = 3;
 const STREAMING_REPLACEMENT_PREPARE_SECONDS = 2;
 const STREAMING_ENCODED_REPLACEMENT_PREPARE_SECONDS = 1;
@@ -25,6 +44,11 @@ const STREAMING_ENCODED_BUFFER_MIN_BYTES = 1024 * 1024;
 const STREAMING_ENCODED_BUFFER_MAX_BYTES = 16 * 1024 * 1024;
 const STREAMING_FALLBACK_BYTES_PER_SECOND = 40_000;
 const STREAMING_ENCODED_CREDIT_BYTES = 64 * 1024;
+// Several credits stay in flight, so a start's cushion does not wait one round trip per credit.
+const STREAMING_ENCODED_CREDIT_WINDOW_BYTES = 4 * STREAMING_ENCODED_CREDIT_BYTES;
+// A start opens at the rate already playing (or this one) instead of asking first; the server
+// answers a wrong guess with the track's rate and the start runs again at it.
+const STREAMING_GUESSED_SAMPLE_RATE = 44_100;
 // The bytes of a stream kept for seeks inside it; a longer stream seeks through the server.
 const STREAMING_KEPT_INITIAL_BYTES = 256 * 1024;
 const STREAMING_KEPT_MAX_BYTES = 64 * 1024 * 1024;
@@ -396,40 +420,25 @@ function refreshPlayerAfterStreamingTransportChange() {
   if (typeof updatePlayerUi === 'function') updatePlayerUi();
 }
 
-async function recoverUnexpectedStreamingSocketClose(socket, event) {
+// Stops the engine after its transport was lost, keeping the error for the player.
+async function stopStreamingForLostTransport(message, { socketAlreadyClosed = false } = {}) {
   const engine = streamingEngineState();
-  if (engine.socket !== socket) return;
-  const current = engine.roles.current;
-  const startRequestId = engine.startRequestId;
-  const recovery = current ? {
-    track: current.track,
-    startSeconds: Math.max(0, Number(engine.snapshot.currentTime) || 0),
-    attempt: Math.max(0, Number(current.transportRecoveryAttempt) || 0),
-  } : null;
-  const wasPlaying = Boolean(current && !engine.snapshot.paused && !engine.snapshot.ended);
-  const detail = [event?.code, event?.reason]
-    .filter((value) => value !== undefined && value !== '')
-    .join(' ');
-  setStreamingError('socket', { message: detail || 'Playback socket closed unexpectedly' });
-
-  let cleanupError = null;
+  setStreamingError('socket', { message });
   try {
-    await beginStreamingCleanup('socket-closed', {
-      preserveError: true,
-      socketAlreadyClosed: true,
-    });
+    await beginStreamingCleanup('socket-closed', { preserveError: true, socketAlreadyClosed });
+    return null;
   } catch (error) {
-    cleanupError = error;
     engine.diagnostics.lastCleanupError = {
       name: error?.name || 'Error',
       message: error?.message || String(error),
     };
+    return error;
   }
+}
 
-  if (!recovery || engine.startRequestId !== startRequestId) {
-    refreshPlayerAfterStreamingTransportChange();
-    return;
-  }
+// Keeps the place a lost transport stopped at: the next play starts there.
+function holdStreamingTransportRecovery(recovery) {
+  const engine = streamingEngineState();
   engine.pendingTransportRecovery = recovery;
   Object.assign(engine.snapshot, {
     currentTime: recovery.startSeconds,
@@ -439,32 +448,484 @@ async function recoverUnexpectedStreamingSocketClose(socket, event) {
     src: String(recovery.track?.src || ''),
     readyState: 0,
   });
-  if (cleanupError
-      || !wasPlaying
-      || recovery.attempt >= STREAMING_AUTOMATIC_RECONNECT_ATTEMPTS) {
-    engine.mode = 'error';
-    refreshPlayerAfterStreamingTransportChange();
+}
+
+async function recoverUnexpectedStreamingSocketClose(socket, event) {
+  const engine = streamingEngineState();
+  if (engine.socket !== socket) return;
+  if (engine.detached) {
+    loseStreamingReconnectSocket(event?.code);
     return;
   }
-
-  engine.pendingTransportRecovery = null;
-  delete engine.diagnostics.lastError;
-  try {
-    const recovered = await startStreamingTrack(recovery.track, {
-      startSeconds: recovery.startSeconds,
-      autoplay: true,
-      transportRecoveryAttempt: recovery.attempt + 1,
-    });
-    if (recovered) {
-      engine.diagnostics.transportReconnects =
-        (Number(engine.diagnostics.transportReconnects) || 0) + 1;
-    }
-  } catch (error) {
-    engine.pendingTransportRecovery = recovery;
-    setStreamingError('socket', error);
-    engine.snapshot.paused = true;
+  if (detachStreamingTransport(event?.code)) return;
+  if (detachAtStreamingPlace(event?.code)) return;
+  // Refused, failed, or past the song's end: playback stops, and the next Play starts again at the
+  // place it stopped.
+  const current = engine.roles.current;
+  const startRequestId = engine.startRequestId;
+  const recovery = current ? {
+    track: current.track,
+    startSeconds: Math.max(0, Number(engine.snapshot.currentTime) || 0),
+  } : engine.pendingTransportRecovery;
+  const detail = [event?.code, event?.reason]
+    .filter((value) => value !== undefined && value !== '')
+    .join(' ');
+  await stopStreamingForLostTransport(detail || 'Playback socket closed unexpectedly', { socketAlreadyClosed: true });
+  if (recovery && engine.startRequestId === startRequestId) {
+    holdStreamingTransportRecovery(recovery);
+    engine.mode = 'error';
   }
   refreshPlayerAfterStreamingTransportChange();
+}
+
+// ---- Network switches (NativePcmEngine.detach / resume) ----
+// A lost socket is not the end of playback: the audio already here keeps playing while the next
+// socket connects. `engine.detached` holds that state:
+// - 'offline': all of the current song is here; the next socket only prepares what follows it.
+// - 'splice': the current stream was cut at `spliceFrame`, a frame its received bytes decode
+//   whole; a stream of the same track from that frame joins it gaplessly on the next socket.
+// - 'reopen': an offline seek past the received audio restarted the track there; its open waits
+//   for the next socket.
+
+function streamingTransportState(engine) {
+  if (!engine.detached) return 'connected';
+  return { offline: 'detached-offline', splice: 'detached-splice', reopen: 'detached-seek' }[engine.detached.kind];
+}
+
+// The track frame up to which a role's audio left its decoder.
+function streamingDecodedThroughFrame(encoded) {
+  const { wire } = encoded;
+  return wire.streamStart + wire.initialTotal - encoded.remainingFrames;
+}
+
+// Ends a role's audio at track frame `frame`, as the server's end of stream would; decoded audio
+// past it that the worklet has not taken yet is dropped.
+function endStreamingEncodedRoleAt(roleState, frame) {
+  const encoded = roleState.encoded;
+  let excessFrames = streamingDecodedThroughFrame(encoded) - frame;
+  encoded.remainingFrames = Math.max(0, -excessFrames);
+  encoded.decodedFrames -= Math.max(0, excessFrames);
+  while (excessFrames > 0) {
+    const tail = encoded.decodedPcm.at(-1);
+    const tailFrames = tail.length / 2;
+    if (tailFrames <= excessFrames) encoded.decodedPcm.pop();
+    else encoded.decodedPcm[encoded.decodedPcm.length - 1] = tail.subarray(0, (tailFrames - excessFrames) * 2);
+    excessFrames -= tailFrames;
+  }
+  encoded.eos = {
+    type: 'eos',
+    generation: roleState.generation,
+    streamId: roleState.streamId,
+    role: roleState.role,
+    emittedFrames: 0,
+    authoritativeTotalFrames: frame,
+  };
+  roleState.spliceFrame = frame;
+  void pumpStreamingEncodedRole(roleState);
+}
+
+// The socket closed under a playing stream. Returns false when nothing can play on, and the
+// engine restarts from the heard position as before.
+function detachStreamingTransport(code) {
+  const engine = streamingEngineState();
+  const current = engine.roles.current;
+  const encoded = current?.encoded;
+  const wire = encoded?.wire;
+  if (!wire || STREAMING_REFUSED_CLOSE_CODES.has(code) || engine.mode === 'error'
+      || engine.snapshot.ended || engine.pendingSeek
+      || engine.pendingBufferedSeek || engine.loopContinuity || current.spliceFrame !== undefined) return false;
+  const whole = Boolean(wire.serverless || wire.eos);
+  const spliceFrame = whole ? null : wire.table && wholeThroughStreamingSeekTable(wire.table, {
+    initialSkip: wire.initialSkip,
+    initialTotal: wire.initialTotal,
+    streamStart: wire.streamStart,
+    receivedBytes: wire.receivedBytes,
+  });
+  const deliveredThrough = streamingDecodedThroughFrame(encoded) - encoded.decodedFrames;
+  if (!whole && !(spliceFrame > deliveredThrough)) return false;
+
+  wire.lost = true;
+  forgetLostStreamingSocket();
+  const heldSeekSeconds = engine.pendingPromotion?.requestedSeekSeconds;
+  engine.pendingPromotion = null;
+  engine.detached = {
+    kind: whole ? 'offline' : 'splice',
+    spliceFrame,
+    failures: 0,
+    timer: 0,
+    // A paused player keeps what it received too, and tries the network again once played.
+    paused: Boolean(engine.snapshot.paused),
+  };
+  // A successor still streaming died with the socket; it is prepared again on the next one. A
+  // splice needs the successor's place, so there it always waits.
+  const continuity = engine.roles.continuity;
+  const continuityHere = continuity?.cachedTrack || continuity?.encoded?.wire.serverless
+    || continuity?.encoded?.wire.eos;
+  if (continuity && (!whole || !continuityHere)) {
+    closeStreamingContinuityRole('socket-lost');
+    engine.pendingContinuityTrack = continuity.track;
+    engine.pendingContinuityOptions = continuity.continuityOptions;
+  } else if (continuity) {
+    continuity.local = true;
+  }
+  if (!whole) {
+    endStreamingEncodedRoleAt(current, spliceFrame);
+    engine.diagnostics.lastSpliceFrame = spliceFrame;
+    // The cut stream's end waits for the rest of the track, whose timeline goes on from there.
+    engine.node.port.postMessage({
+      type: 'expect-continuity', generation: engine.generation, active: true, timelineStartFrame: spliceFrame,
+    });
+  } else if (engine.pendingContinuityTrack) {
+    // The song's end waits for its successor instead of ending the queue.
+    engine.node.port.postMessage({ type: 'expect-continuity', generation: engine.generation, active: true });
+  }
+  engine.diagnostics.transportDetaches = (Number(engine.diagnostics.transportDetaches) || 0) + 1;
+  if (!engine.detached.paused) connectStreamingSocket();
+  if (Number.isFinite(heldSeekSeconds)) void seekStreamingPlayback(heldSeekSeconds);
+  publishStreamingDiagnostics();
+  return true;
+}
+
+// Nothing may name the lost socket's streams on the next one.
+function forgetLostStreamingSocket() {
+  const engine = streamingEngineState();
+  engine.lostStreamIds ??= new Set();
+  for (const roleState of [engine.roles.current, engine.roles.continuity]) {
+    if (!roleState) continue;
+    engine.lostStreamIds.add(roleState.streamId);
+    if (roleState.encoded?.wire.streamId) engine.lostStreamIds.add(roleState.encoded.wire.streamId);
+  }
+  engine.socket = null;
+  engine.pendingControls = [];
+}
+
+// The socket was lost under a stream whose received audio cannot play on: a seek or a song start
+// still waiting for the server, or audio with no seek table to splice at. The head stays at the
+// place (a seek's or start's target) and waits there, silent, in the state the listener chose, and
+// the song opens there on the next socket, however long the server takes to answer again, as an
+// offline seek past the received audio does. Owner retest B-D4 round 7 (2026-11-18): "Then
+// playhead is being reset into the beginning of the track. The song does not restart when network
+// is back." Stopping, with one retry while the network was still gone, lost the place and the play.
+function detachAtStreamingPlace(code) {
+  const engine = streamingEngineState();
+  const seek = engine.pendingSeek;
+  const track = (seek?.kind === 'replacement' ? engine.roles.continuity?.track : null) || engine.roles.current?.track;
+  if (!track || STREAMING_REFUSED_CLOSE_CODES.has(code) || engine.mode === 'error' || engine.snapshot.ended) return false;
+  const startSeconds = seek
+    ? seek.startFrame / engine.sampleRate
+    : Math.max(0, Number(engine.snapshot.currentTime) || 0);
+  // A start on its way to playing is playing, though its snapshot says paused until it plays.
+  const starting = engine.mode === 'starting' && engine.roles.current?.autoplay === true;
+  // Another song's prepared start is restarted on the next socket; its press settles with that.
+  const press = seek?.kind === 'replacement' ? { resolve: seek.resolve, reject: seek.reject } : null;
+  if (press) Object.assign(seek, { resolve: null, reject: null });
+  // A start still on its way opens its song on the next socket itself: restarting the old song here
+  // would supersede it (hosted FTC-PLAYBACK-OFFLINE-002, round 8).
+  const inFlight = !press && engine.pendingStart;
+  forgetLostStreamingSocket();
+  engine.pendingPromotion = null;
+  engine.detached = {
+    kind: 'reopen',
+    spliceFrame: null,
+    failures: 0,
+    timer: 0,
+    paused: inFlight ? !inFlight.autoplay : Boolean(engine.snapshot.paused) && !starting,
+  };
+  engine.diagnostics.transportDetaches = (Number(engine.diagnostics.transportDetaches) || 0) + 1;
+  // Connected first: the restart then asks this socket instead of opening one of its own.
+  if (!engine.detached.paused) connectStreamingSocket();
+  if (inFlight) {
+    publishStreamingDiagnostics();
+    return true;
+  }
+  const restart = jumpWhileDetached(track, startSeconds);
+  if (press) void restart.then(press.resolve, press.reject);
+  publishStreamingDiagnostics();
+  return true;
+}
+
+function stopStreamingReconnectTimers(detached) {
+  window.clearTimeout(detached.timer);
+  detached.timer = 0;
+}
+
+function endStreamingDetach({ resumed = false } = {}) {
+  const engine = streamingEngineState();
+  const detached = engine.detached;
+  if (!detached) return;
+  stopStreamingReconnectTimers(detached);
+  engine.detached = null;
+  if (resumed) engine.diagnostics.transportResumes = (Number(engine.diagnostics.transportResumes) || 0) + 1;
+  publishStreamingDiagnostics();
+}
+
+function reconnectStreamingTransport() {
+  const engine = streamingEngineState();
+  const detached = engine.detached;
+  if (!detached || detached.paused || engine.socket) return;
+  window.clearTimeout(detached.timer);
+  detached.timer = 0;
+  connectStreamingSocket();
+}
+
+function scheduleStreamingReconnect() {
+  const engine = streamingEngineState();
+  const detached = engine.detached;
+  if (!detached || detached.paused || engine.socket || detached.timer) return;
+  const delays = STREAMING_RECONNECT_DELAYS_MS;
+  const delay = delays[Math.min(detached.failures, delays.length) - 1];
+  detached.timer = window.setTimeout(() => {
+    detached.timer = 0;
+    if (engine.detached === detached) reconnectStreamingTransport();
+  }, delay);
+}
+
+// A socket opened while detached closed again.
+function loseStreamingReconnectSocket(code) {
+  const engine = streamingEngineState();
+  const detached = engine.detached;
+  engine.socket = null;
+  if (STREAMING_REFUSED_CLOSE_CODES.has(code)) {
+    void failDetachedStreamingTransport();
+    return;
+  }
+  // An offline seek's open waits for the next socket; anything else queued named this one.
+  if (detached.kind !== 'reopen') engine.pendingControls = [];
+  const continuity = engine.roles.continuity;
+  if (continuity && !continuity.local) {
+    engine.lostStreamIds.add(continuity.streamId);
+    // The splice stream died with this socket; the cut stream still waits for its successor.
+    closeStreamingContinuityRole('socket-lost', { releaseWorklet: false });
+    engine.node.port.postMessage({
+      type: 'drop-continuity', generation: continuity.generation, streamId: continuity.streamId,
+    });
+  }
+  // A socket that opened and dropped again is a new loss: the next one is tried at once.
+  if (detached.connected) {
+    detached.connected = false;
+    reconnectStreamingTransport();
+    return;
+  }
+  detached.failures += 1;
+  scheduleStreamingReconnect();
+}
+
+// The next socket is open.
+function resumeStreamingTransport() {
+  const engine = streamingEngineState();
+  const detached = engine.detached;
+  if (!detached) return;
+  detached.failures = 0;
+  detached.connected = true;
+  if (detached.kind === 'splice') {
+    maybeOpenStreamingSplice();
+    return;
+  }
+  endStreamingDetach({ resumed: true });
+  maybeSchedulePendingStreamingContinuity();
+}
+
+// Opens the rest of a cut track from its splice frame once the role it needs is free.
+function maybeOpenStreamingSplice() {
+  const engine = streamingEngineState();
+  const detached = engine.detached;
+  const current = engine.roles.current;
+  if (detached?.kind !== 'splice' || !current || engine.roles.continuity || engine.pendingSeek
+      || engine.pendingPromotion || engine.socket?.readyState !== WebSocket.OPEN) return false;
+  const startSeconds = detached.spliceFrame / engine.sampleRate;
+  const splice = openStreamingRole('continuity', current.track, detached.spliceFrame, {
+    kind: 'splice', startSeconds, endSeconds: startSeconds,
+  });
+  if (!splice) return false;
+  splice.measuredListenSession = current.measuredListenSession;
+  return true;
+}
+
+// The worklet plays the splice stream from the cut stream's last frame on: the same song goes on.
+function joinStreamingSplice(current, continuity, message) {
+  const engine = streamingEngineState();
+  continuity.boundaryNotified = true;
+  takeOverStreamingCurrentRole(current, continuity, Number(message.renderedFrame) || 0);
+  engine.diagnostics.boundaryCapture = message.capture || null;
+  Object.assign(engine.snapshot, {
+    currentTime: message.timelineFrame / engine.sampleRate,
+    renderedFrame: message.timelineFrame,
+    ended: false,
+  });
+  refreshStreamingActiveRoles();
+  engine.pendingPromotion = { generation: message.generation, streamId: continuity.streamId };
+  promoteStreamingContinuityStream(continuity, current, message.generation);
+  endStreamingDetach({ resumed: true });
+}
+
+// The received audio ran out while the network is still gone: the player waits silently where it
+// is, however long, and plays on from there once the next socket opens (owner decision
+// 2026-11-17).
+function waitForStreamingTransport() {
+  const engine = streamingEngineState();
+  const detached = engine.detached;
+  if (!detached || detached.paused) return;
+  engine.mode = 'buffering';
+  publishStreamingDiagnostics();
+}
+
+async function failDetachedStreamingTransport() {
+  const engine = streamingEngineState();
+  const track = engine.roles.current?.track;
+  const startSeconds = Math.max(0, Number(engine.snapshot.currentTime) || 0);
+  endStreamingDetach();
+  await stopStreamingForLostTransport('Playback connection lost');
+  if (!track) return;
+  holdStreamingTransportRecovery({ track, startSeconds });
+  engine.mode = 'error';
+  refreshPlayerAfterStreamingTransportChange();
+}
+
+function pauseStreamingReconnect() {
+  const detached = streamingEngineState().detached;
+  if (!detached) return;
+  detached.paused = true;
+  stopStreamingReconnectTimers(detached);
+}
+
+function resumeStreamingReconnect() {
+  const detached = streamingEngineState().detached;
+  if (!detached?.paused) return;
+  detached.paused = false;
+  reconnectStreamingTransport();
+}
+
+// While detached, a seek inside the audio here plays at once; past it, the track restarts there
+// and its open waits for the next socket (the owner's choice: jump, and wait at the target). A
+// paused player stays paused there.
+function seekStreamingAudioHere(detached, startFrame) {
+  return detached.kind !== 'reopen'
+    && (detached.spliceFrame === null || startFrame < detached.spliceFrame);
+}
+
+// Owner retest B-D4 round 6 (2026-11-18, CPU at 100%): "delay before displaying where I clicked
+// [...] first clicks moves playhead slightly". The restart that opens the song at the place can
+// take a while on a loaded machine, so the head shows the place and the old audio stops at once,
+// and the old audio's last reports do not move the head until the restart replaces it.
+function jumpWhileDetached(track, startSeconds) {
+  const engine = streamingEngineState();
+  const detached = engine.detached;
+  stopStreamingReconnectTimers(detached);
+  detached.kind = 'reopen';
+  detached.spliceFrame = null;
+  engine.headHeldGeneration = engine.generation;
+  engine.node?.port.postMessage({ type: 'pause', generation: engine.generation });
+  Object.assign(engine.snapshot, {
+    currentTime: startSeconds,
+    requestedStartFrame: streamingFrames(startSeconds),
+  });
+  waitForStreamingTransport();
+  refreshPlayerAfterStreamingTransportChange();
+  return startStreamingTrack(track, { startSeconds, autoplay: !detached.paused, keepDetached: true });
+}
+
+/** The head was put at a place the old audio no longer reports: its reports do not move it. */
+function streamingHeadHeld() {
+  const engine = streamingEngineState();
+  return engine.headHeldGeneration === engine.generation;
+}
+
+function streamingSocketConnecting(socket) {
+  return socket?.readyState === (Number.isInteger(WebSocket.CONNECTING) ? WebSocket.CONNECTING : 0);
+}
+
+// Closes a socket presumed dead and handles it as lost now, instead of waiting for its close.
+function giveUpStreamingSocket(socket, reason) {
+  streamingEngineState().expectedSocketClose = socket;
+  socket.close();
+  void recoverUnexpectedStreamingSocketClose(socket, { code: 1006, reason });
+}
+
+// Gives up a reconnect attempt that has not opened: it counts as a lost reconnect.
+function abandonStreamingConnectingSocket(socket, { timedOut = false } = {}) {
+  const engine = streamingEngineState();
+  if (!engine.detached || engine.socket !== socket || !streamingSocketConnecting(socket)) return;
+  if (timedOut) engine.detached.abandonedConnects = (Number(engine.detached.abandonedConnects) || 0) + 1;
+  giveUpStreamingSocket(socket, 'connect timeout');
+}
+
+// After a network change, a socket that has heard nothing for a moment is presumed lost: it is
+// replaced rather than waited on until TCP gives up. Only Chromium reports a connection change;
+// elsewhere the socket's own silence finds it.
+function handleStreamingNetworkChange() {
+  const engine = streamingEngineState();
+  if (engine.detached) {
+    // An attempt begun on the previous network is replaced by one on this network.
+    abandonStreamingConnectingSocket(engine.socket);
+    reconnectStreamingTransport();
+    return;
+  }
+  const socket = engine.socket;
+  if (socket?.readyState === WebSocket.OPEN
+      && performance.now() - socket.lastHeardMs > STREAMING_SEEK_ANSWER_MS) replaceSilentStreamingSocket(socket);
+}
+
+// Owner retest B-D4 round 5 (2026-11-17): a laptop that keeps another network interface (a VPN or
+// a virtual adapter) never reports `offline` when its Wi-Fi goes, and its socket stays open but
+// silent. A socket that hears nothing, not even the server's heartbeat, is gone: it is replaced at
+// once instead of waited on until the keepalive, so the received audio plays on, a seek past it
+// waits silently at its target, and the next socket is tried at once. A seek past the received
+// audio finds it sooner. Checked as audio renders and every half second.
+function checkStreamingSocketLiveness() {
+  const engine = streamingEngineState();
+  const socket = engine.socket;
+  if (engine.detached || socket?.readyState !== WebSocket.OPEN) return;
+  const silentMs = performance.now() - socket.lastHeardMs;
+  const seek = engine.pendingSeek;
+  const seekRole = seek && engine.roles.continuity?.streamId === seek.streamId ? engine.roles.continuity : null;
+  const seekWaits = Boolean(seekRole && !seekRole.local && !seekRole.metadataAccepted);
+  if (silentMs > (seekWaits ? STREAMING_SEEK_ANSWER_MS : STREAMING_SILENT_SOCKET_MS)) replaceSilentStreamingSocket(socket);
+}
+
+// Audio from a silent socket detaches as from any lost socket; with none, or with a song's rate
+// still asked of it, a new socket simply takes over and what waited goes again on it.
+function replaceSilentStreamingSocket(socket) {
+  const engine = streamingEngineState();
+  if (engine.roles.current && !engine.sampleRateProbes?.size) {
+    giveUpStreamingSocket(socket, 'socket silent');
+    return;
+  }
+  forgetLostStreamingSocket();
+  engine.expectedSocketClose = socket;
+  socket.close();
+  connectStreamingSocket();
+}
+
+function watchStreamingSocketLiveness(socket) {
+  let checkedAtMs = performance.now();
+  const timer = setInterval(() => {
+    if (streamingEngineState().socket !== socket || socket.readyState !== WebSocket.OPEN) {
+      clearInterval(timer);
+      return;
+    }
+    // A check that ran late found a page too busy to have read what arrived: it decides nothing.
+    const now = performance.now();
+    const late = now - checkedAtMs > 2 * STREAMING_LIVENESS_CHECK_MS;
+    checkedAtMs = now;
+    if (!late) checkStreamingSocketLiveness();
+  }, STREAMING_LIVENESS_CHECK_MS);
+}
+
+// Offline, the open socket can deliver nothing, but with Wi-Fi off it may stay open and silent
+// until the keepalive gives up on it. It is given up at once, so the received audio plays on and a
+// seek past it waits silently at its target until the network is back.
+function handleStreamingOffline() {
+  const socket = streamingEngineState().socket;
+  if (socket?.readyState === WebSocket.OPEN) giveUpStreamingSocket(socket, 'offline');
+}
+
+function watchStreamingNetwork() {
+  const engine = streamingEngineState();
+  if (engine.networkWatched) return;
+  engine.networkWatched = true;
+  window.addEventListener?.('offline', handleStreamingOffline);
+  window.addEventListener?.('online', handleStreamingNetworkChange);
+  window.navigator?.connection?.addEventListener?.('change', handleStreamingNetworkChange);
 }
 
 function observeStreamingFacadeCallback(result, source) {
@@ -516,6 +977,7 @@ function protectedQueuedContinuityReady(engine, current, options) {
 
 function maybeSchedulePendingStreamingContinuity() {
   const engine = streamingEngineState();
+  if (engine.detached) return maybeOpenStreamingSplice();
   const current = engine.roles.current;
   const track = engine.pendingContinuityTrack;
   if (!current || !track || engine.pendingPromotion
@@ -534,7 +996,7 @@ function closeStreamingContinuityRole(reason, { releaseWorklet = true } = {}) {
   if (!closeStreamingRoleStream(continuity, reason)) return false;
   const options = continuity.continuityOptions;
   if (releaseWorklet && engine.node) {
-    if (options?.kind === 'queued-next') {
+    if (options?.kind === 'queued-next' || options?.kind === 'splice') {
       engine.node.port.postMessage({
         type: 'drop-continuity',
         generation: continuity.generation,
@@ -570,9 +1032,22 @@ function closeStreamingContinuityRole(reason, { releaseWorklet = true } = {}) {
 
 function sendStreamingControl(message) {
   const engine = streamingEngineState();
+  // A lost socket's streams died with it: no control names them on another socket.
+  if (engine.lostStreamIds?.has(message.streamId)) return true;
   const socket = engine.socket;
-  if (!socket) return false;
+  if (!socket) {
+    // An offline seek's stream opens on whichever socket connects next.
+    if (engine.detached?.kind !== 'reopen') return false;
+    engine.pendingControls.push(message);
+    return true;
+  }
   if (socket.readyState === WebSocket.OPEN) {
+    // The server knows only the streams opened on this socket: a control naming another one (a
+    // stream closed before its open ever left this page, round 8) is refused with 4400 and stops
+    // the player. Such a stream needs nothing.
+    socket.openedStreamIds ??= new Set();
+    if (message.type === 'open') socket.openedStreamIds.add(message.streamId);
+    else if (message.streamId !== undefined && !socket.openedStreamIds.has(message.streamId)) return true;
     try {
       socket.send(JSON.stringify(message));
       return true;
@@ -798,7 +1273,8 @@ function validateStreamingMetadata(message, roleState) {
 
 function handleStreamingControl(message) {
   const engine = streamingEngineState();
-  if (!message || typeof message !== 'object') return;
+  // A heartbeat says only that the socket lives, which its arrival already recorded.
+  if (!message || typeof message !== 'object' || message.type === 'heartbeat') return;
   if (message.type === 'probe-result') {
     settleStreamingSampleRateProbe(message.requestId, Number(message.sampleRate) || 0, {
       fallbackSampleRate: Number(message.fallbackSampleRate) || 0,
@@ -914,7 +1390,7 @@ function handleStreamingControl(message) {
     roleState.eosReceived = true;
     roleState.closed = true;
     engine.diagnostics.inFlightFrames[roleState.role] = 0;
-    if (roleState.role === 'current' && !roleState.seekTarget) {
+    if (roleState.role === 'current' && !roleState.seekTarget && roleState.spliceFrame === undefined) {
       engine.snapshot.duration = message.authoritativeTotalFrames / engine.sampleRate;
     }
     engine.node.port.postMessage({
@@ -960,6 +1436,22 @@ function leaveStreamingTrackForRateChange(track) {
   });
 }
 
+// The server opened nothing for a start at a guessed rate; once that start has returned, the
+// same track starts again at the rate the server reported.
+function restartStreamingStartAtTrackRate(roleState) {
+  const engine = streamingEngineState();
+  const { startSeconds, autoplay } = roleState.guessedStart;
+  void Promise.resolve(engine.startInFlight).catch(() => {}).then(() => {
+    if (engine.roles.current !== roleState) return null;
+    engine.roles.current = null;
+    refreshStreamingActiveRoles();
+    return startStreamingTrack(roleState.track, {
+      startSeconds,
+      autoplay: autoplay && engine.mode !== 'paused',
+    });
+  }).catch((error) => failStreamingEngine('socket', error, 'rate-mismatch'));
+}
+
 function handleStreamingRateMismatch(roleState, message) {
   const engine = streamingEngineState();
   rememberStreamingTrackFormat(String(roleState.track?.path || ''), message.sampleRate, {
@@ -973,6 +1465,10 @@ function handleStreamingRateMismatch(roleState, message) {
     refreshStreamingActiveRoles();
     startStreamingTrack(roleState.track, { startSeconds: roleState.continuityOptions.startSeconds })
       .then(replacement.resolve, replacement.reject);
+    return;
+  }
+  if (roleState.role === 'current' && roleState.guessedStart && engine.roles.current === roleState) {
+    restartStreamingStartAtTrackRate(roleState);
     return;
   }
   if (roleState.role !== 'continuity' || roleState.continuityOptions?.kind !== 'queued-next') {
@@ -1030,6 +1526,8 @@ function maybePrepareStreamingSeek(roleState) {
     generation: roleState.generation,
     streamId: roleState.streamId,
     timelineStartFrame: pendingSeek.startFrame,
+    // A switched-to track is buffered to its prepare target; it should not wait for more.
+    ...(pendingSeek.kind === 'replacement' ? { primed: true } : {}),
   });
   publishStreamingDiagnostics();
 }
@@ -1139,6 +1637,8 @@ function createStreamingWire(roleState, message) {
     nextSequence: 0,
     creditedBytes: Number(message.initialCreditBytes) || 0,
     lastArrivalMs: 0,
+    // Counted apart from `size`, which stops at the kept-bytes limit.
+    receivedBytes: 0,
     bytes: new Uint8Array(STREAMING_KEPT_INITIAL_BYTES),
     size: 0,
     table: roleState.pendingSeekTable || null,
@@ -1189,6 +1689,15 @@ function lookupStreamingSeekTable(table, { initialSkip, initialTotal, streamStar
     skipFrames: kept - table.samples[entry],
     totalFrames: initialTotal - offsetInStream,
   };
+}
+
+// `playback_seek_table.whole_through`: the track frame up to which `receivedBytes` decode whole, a
+// full seek stride short of the last received seek point; null when none lies inside the stream.
+function wholeThroughStreamingSeekTable(table, { initialSkip, initialTotal, streamStart, receivedBytes }) {
+  const spare = upperBoundStreamingSample(table.offsets, receivedBytes) - 2;
+  if (spare < 0) return null;
+  const kept = table.samples[spare] - initialSkip;
+  return kept > 0 ? streamStart + Math.min(kept, initialTotal) : null;
 }
 
 function parseStreamingSeekTable(message) {
@@ -1262,17 +1771,17 @@ function refillStreamingEncodedBytes(roleState) {
   if (streamingEngineState().pendingSeek?.currentStreamId === roleState.streamId) return;
   const { wire } = encoded;
   if (wire.eos) return;
-  const missingBytes = streamingEncodedBufferBytes(roleState)
-    - encoded.queuedBytes - wire.creditedBytes;
-  if (missingBytes < STREAMING_ENCODED_CREDIT_BYTES
-      || wire.creditedBytes >= STREAMING_ENCODED_CREDIT_BYTES) return;
   const frames = STREAMING_ENCODED_CREDIT_BYTES;
-  if (sendStreamingControl({
-    type: 'credit',
-    generation: roleState.generation,
-    streamId: wire.streamId,
-    frames,
-  })) wire.creditedBytes += frames;
+  while (streamingEncodedBufferBytes(roleState) - encoded.queuedBytes - wire.creditedBytes >= frames
+      && wire.creditedBytes + frames <= STREAMING_ENCODED_CREDIT_WINDOW_BYTES) {
+    if (!sendStreamingControl({
+      type: 'credit',
+      generation: roleState.generation,
+      streamId: wire.streamId,
+      frames,
+    })) return;
+    wire.creditedBytes += frames;
+  }
 }
 
 function appendStreamingDecodedAudio(encoded, decoded) {
@@ -1424,6 +1933,7 @@ function handleStreamingEncodedBytes(view, buffer, failProtocol) {
     }
   }
   wire.nextSequence += 1;
+  wire.receivedBytes += byteCount;
   wire.creditedBytes -= byteCount;
   wire.lastArrivalMs = wire.creditedBytes > 0 ? now : 0;
   const chunk = new Uint8Array(buffer, 24, byteCount);
@@ -1515,6 +2025,30 @@ function handleStreamingPcm(buffer) {
   } catch (error) {
     failProtocol(error?.message || 'PCM decode failed');
   }
+}
+
+// Makes `continuity` the current role in the engine's books once the worklet plays it.
+function takeOverStreamingCurrentRole(current, continuity, renderedFrameBase) {
+  const engine = streamingEngineState();
+  swapStreamingBackingCapacities(current, continuity);
+  continuity.role = 'current';
+  continuity.targetBufferFrames = streamingRoleCapacityFrames(continuity);
+  continuity.acceptsPromotedContinuityWireRole = true;
+  continuity.renderedFrameBase = renderedFrameBase;
+  engine.roles.current = continuity;
+  engine.roles.continuity = null;
+  keepHeardStreamingWire(continuity);
+  if (continuity.encoded) refillStreamingEncodedBytes(continuity);
+  promoteStreamingPcmEvidence(continuity);
+  engine.pcmEvidenceByStream?.delete(current.streamId);
+  engine.renderedPcmEvidenceByStream?.delete(current.streamId);
+  engine.diagnostics.bufferedFrames.current = engine.diagnostics.bufferedFrames.continuity;
+  engine.diagnostics.inFlightFrames.current = engine.diagnostics.inFlightFrames.continuity;
+  engine.diagnostics.bufferedFrames.continuity = 0;
+  engine.diagnostics.inFlightFrames.continuity = 0;
+  engine.deferredCreditFrames ??= { current: 0, continuity: 0 };
+  engine.deferredCreditFrames.current = engine.deferredCreditFrames.continuity;
+  engine.deferredCreditFrames.continuity = 0;
 }
 
 function handleStreamingWorkletMessage(message) {
@@ -1641,27 +2175,10 @@ function handleStreamingWorkletMessage(message) {
     }
     const wasPaused = engine.snapshot.paused;
     engine.diagnostics.cutoverPreparedFrames = engine.diagnostics.bufferedFrames.continuity;
-    swapStreamingBackingCapacities(current, continuity);
     continuity.boundaryNotified = true;
-    continuity.role = 'current';
-    continuity.acceptsPromotedContinuityWireRole = true;
-    continuity.renderedFrameBase = Number(message.renderedFrame) || 0;
-    continuity.targetBufferFrames = streamingRoleCapacityFrames(continuity);
     continuity.seekTarget = true;
     continuity.replacementPromotion = pendingSeek.kind === 'replacement';
-    engine.roles.current = continuity;
-    engine.roles.continuity = null;
-    keepHeardStreamingWire(continuity);
-    if (continuity.encoded) refillStreamingEncodedBytes(continuity);
-    promoteStreamingPcmEvidence(continuity);
-    engine.pcmEvidenceByStream?.delete(current.streamId);
-    engine.renderedPcmEvidenceByStream?.delete(current.streamId);
-    engine.diagnostics.bufferedFrames.current = engine.diagnostics.bufferedFrames.continuity;
-    engine.diagnostics.inFlightFrames.current = engine.diagnostics.inFlightFrames.continuity;
-    engine.diagnostics.bufferedFrames.continuity = 0;
-    engine.diagnostics.inFlightFrames.continuity = 0;
-    engine.deferredCreditFrames.current = engine.deferredCreditFrames.continuity;
-    engine.deferredCreditFrames.continuity = 0;
+    takeOverStreamingCurrentRole(current, continuity, Number(message.renderedFrame) || 0);
     engine.diagnostics.seekCapture = message.capture || null;
     engine.diagnostics.seekSilentFrames = Number(message.silentFrames) || 0;
     engine.diagnostics.seekCommittedAtMs = performance.now();
@@ -1685,10 +2202,13 @@ function handleStreamingWorkletMessage(message) {
       streamId: continuity.streamId,
       kind: pendingSeek.kind || 'seek',
     };
+    // A cut stream still waits for the rest of its track at the splice frame.
+    const spliceFrame = engine.detached?.kind === 'splice' ? engine.detached.spliceFrame : null;
     engine.node.port.postMessage({
       type: 'expect-continuity',
       generation: message.generation,
-      active: Boolean(engine.pendingContinuityTrack),
+      active: spliceFrame !== null || Boolean(engine.pendingContinuityTrack),
+      ...(spliceFrame !== null ? { timelineStartFrame: spliceFrame } : {}),
     });
     refreshStreamingActiveRoles();
     const promoted = promoteStreamingContinuityStream(continuity, current, message.generation);
@@ -1727,6 +2247,10 @@ function handleStreamingWorkletMessage(message) {
       engine.diagnostics.staleMessages += 1;
       return;
     }
+    if (continuity.continuityOptions?.kind === 'splice') {
+      joinStreamingSplice(current, continuity, message);
+      return;
+    }
     continuity.boundaryNotified = true;
     const outgoingTrackPath = String(current.track?.path || '');
     const incomingTrackPath = String(continuity.track?.path || '');
@@ -1753,26 +2277,8 @@ function handleStreamingWorkletMessage(message) {
       src: String(current.track?.src || engine.snapshot.src || ''),
     };
     engine.diagnostics.boundaryCapture = message.capture || null;
-    swapStreamingBackingCapacities(current, continuity);
-    engine.roles.current = continuity;
-    engine.roles.current.role = 'current';
-    engine.roles.current.targetBufferFrames = streamingRoleCapacityFrames(engine.roles.current);
-    engine.roles.current.acceptsPromotedContinuityWireRole = true;
-    engine.roles.current.renderedFrameBase = boundaryRenderedFrame;
-    engine.roles.continuity = null;
-    keepHeardStreamingWire(continuity);
-    if (engine.roles.current.encoded) refillStreamingEncodedBytes(engine.roles.current);
-    promoteStreamingPcmEvidence(continuity);
-    engine.pcmEvidenceByStream?.delete(current.streamId);
-    engine.renderedPcmEvidenceByStream?.delete(current.streamId);
+    takeOverStreamingCurrentRole(current, continuity, boundaryRenderedFrame);
     engine.waveformReadyIdentity = null;
-    engine.diagnostics.bufferedFrames.current = engine.diagnostics.bufferedFrames.continuity;
-    engine.diagnostics.inFlightFrames.current = engine.diagnostics.inFlightFrames.continuity;
-    engine.deferredCreditFrames ??= { current: 0, continuity: 0 };
-    engine.deferredCreditFrames.current = engine.deferredCreditFrames.continuity;
-    engine.deferredCreditFrames.continuity = 0;
-    engine.diagnostics.bufferedFrames.continuity = 0;
-    engine.diagnostics.inFlightFrames.continuity = 0;
     const promotedLoop = continuity.continuityOptions;
     const incomingBoundaryFrames = Number(message.capture?.incoming?.frames) || 0;
     const timelineFrame = Number.isInteger(message.timelineFrame) && message.timelineFrame >= 0
@@ -1833,7 +2339,9 @@ function handleStreamingWorkletMessage(message) {
       engine.diagnostics.staleMessages += 1;
       return;
     }
-    if (engine.pendingSeek?.currentStreamId === current.streamId) return;
+    checkStreamingSocketLiveness();
+    if (engine.roles.current !== current) return;
+    if (engine.pendingSeek?.currentStreamId === current.streamId || streamingHeadHeld()) return;
     const timelineFrame = streamingAbsoluteTimelineFrame(current, message.timelineFrame);
     const monotonicTimelineFrame = Math.max(
       timelineFrame,
@@ -1879,6 +2387,7 @@ function handleStreamingWorkletMessage(message) {
       return;
     }
     current.endedNotified = true;
+    endStreamingDetach();
     const timelineFrame = streamingAbsoluteTimelineFrame(current, message.timelineFrame);
     const currentTime = timelineFrame / engine.sampleRate;
     Object.assign(engine.snapshot, {
@@ -1919,7 +2428,7 @@ function handleStreamingWorkletMessage(message) {
       return;
     }
     roleState.firstFrameNotified = true;
-    if (roleState.role === 'current') roleState.transportRecoveryAttempt = 0;
+    if (roleState.role === 'current') engine.pendingTransportRecovery = null;
     if (!engine.diagnostics.firstFrameAtMs) {
       engine.diagnostics.firstFrameAtMs = performance.now();
     }
@@ -1981,6 +2490,7 @@ function handleStreamingWorkletMessage(message) {
   }
   if (message.type === 'underrun') {
     engine.diagnostics.underruns += 1;
+    if (roleState.role === 'current') waitForStreamingTransport();
     if (typeof breakMeasuredListenSegment === 'function') breakMeasuredListenSegment(roleState.measuredListenSession);
     return;
   }
@@ -2002,7 +2512,7 @@ function handleStreamingWorkletMessage(message) {
       Math.max(0, reconciledBufferedFrames),
       capacityFrames,
     );
-    if (roleState.role === 'current') {
+    if (roleState.role === 'current' && !streamingHeadHeld()) {
       engine.snapshot.currentTime = Math.max(
         0,
         (Number(engine.snapshot.currentTime) || 0) + (message.frames / engine.sampleRate),
@@ -2066,6 +2576,17 @@ function chooseStreamingQuality(track) {
     : 'original';
 }
 
+// A FLAC choosing its quality from the measured connection needs its size, which the probe reads.
+function streamingQualityNeedsTrackSize(track) {
+  const engine = streamingEngineState();
+  const path = String(track?.path || '');
+  return path.toLowerCase().endsWith('.flac')
+    && Boolean(engine.encodedCodecs?.includes('mp3'))
+    && engine.qualityPreference !== 'original' && engine.qualityPreference !== '320'
+    && Number(engine.transferMs) > 0 && Number(track.durationSeconds) > 0
+    && !(Number(engine.trackFormats?.get(path)?.sizeBytes) > 0);
+}
+
 function streamingPlaybackRate(track) {
   const engine = streamingEngineState();
   const nativeRate = knownStreamingSampleRate(track);
@@ -2102,11 +2623,24 @@ function requestStreamingSampleRate(track) {
   engine.nextSampleRateProbeId = (Number(engine.nextSampleRateProbeId) || 0) + 1;
   const requestId = engine.nextSampleRateProbeId;
   return new Promise((resolve) => {
-    engine.sampleRateProbes.set(requestId, { path: String(track?.path || ''), resolve });
-    if (!sendStreamingControl({ type: 'probe', requestId, path: track.path })) {
-      settleStreamingSampleRateProbe(requestId, 0);
-    }
+    const probe = { path: String(track?.path || ''), resolve, socket: null };
+    engine.sampleRateProbes.set(requestId, probe);
+    if (!sendStreamingProbe(requestId, probe)) settleStreamingSampleRateProbe(requestId, 0);
   });
+}
+
+// A probe sent to a socket that died without closing (round 5: a press on another song after the
+// network returned waited forever) goes again on the socket that replaces it.
+function sendStreamingProbe(requestId, probe) {
+  probe.socket = streamingEngineState().socket;
+  return sendStreamingControl({ type: 'probe', requestId, path: probe.path });
+}
+
+/** Probes still waiting that went to another socket go again on [socket], now open. */
+function resendStreamingProbes(socket) {
+  for (const [requestId, probe] of streamingEngineState().sampleRateProbes || []) {
+    if (probe.socket !== socket) sendStreamingProbe(requestId, probe);
+  }
 }
 
 async function retireStreamingAudioGraph() {
@@ -2120,6 +2654,64 @@ async function retireStreamingAudioGraph() {
     node.disconnect();
   }
   await context?.close();
+}
+
+// Opens the engine's playback socket; queued controls wait for it to open.
+function connectStreamingSocket() {
+  const engine = streamingEngineState();
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const socket = new WebSocket(`${protocol}//${window.location.host}/playback/pcm?heartbeat=${STREAMING_HEARTBEAT_MS}`);
+  socket.binaryType = 'arraybuffer';
+  const doublings = Math.min(Number(engine.detached?.abandonedConnects) || 0, STREAMING_CONNECT_DEADLINE_DOUBLINGS);
+  const connectDeadline = engine.detached
+    ? window.setTimeout(() => abandonStreamingConnectingSocket(socket, { timedOut: true }),
+      STREAMING_CONNECT_DEADLINE_MS * 2 ** doublings)
+    : 0;
+  socket.onopen = () => {
+    window.clearTimeout(connectDeadline);
+    socket.lastHeardMs = performance.now();
+    watchStreamingSocketLiveness(socket);
+    flushStreamingControls();
+    resendStreamingProbes(socket);
+    keepStreamingSocketAlive(socket);
+    if (engine.socket === socket) resumeStreamingTransport();
+  };
+  socket.onerror = (event) => {
+    if (engine.socket !== socket) return;
+    const detail = event?.error?.message || event?.message || 'Playback socket error';
+    engine.diagnostics.lastSocketError = {
+      message: String(detail),
+      atMs: performance.now(),
+    };
+    publishStreamingDiagnostics();
+  };
+  socket.onclose = (event) => {
+    window.clearTimeout(connectDeadline);
+    if (engine.expectedSocketClose === socket) {
+      engine.expectedSocketClose = null;
+      return;
+    }
+    if (engine.socket !== socket) return;
+    void recoverUnexpectedStreamingSocketClose(socket, event)
+      .catch((error) => console.error('Streaming socket recovery failed', error));
+  };
+  socket.onmessage = ({ data }) => {
+    socket.lastHeardMs = performance.now();
+    if (data instanceof ArrayBuffer) {
+      handleStreamingPcm(data);
+      return;
+    }
+    if (typeof data !== 'string') return;
+    try {
+      handleStreamingControl(JSON.parse(data));
+    } catch (error) {
+      failStreamingEngine('socket', error, 'json-protocol-error');
+    }
+  };
+  engine.socket = socket;
+  engine.pendingControls ??= [];
+  watchStreamingNetwork();
+  return socket;
 }
 
 async function prepareStreamingPlaybackEngine(sampleRate = 0) {
@@ -2137,6 +2729,12 @@ async function prepareStreamingPlaybackEngine(sampleRate = 0) {
     let node = null;
     let socket = null;
     try {
+      // The socket connects while the audio graph is built.
+      if (!engine.socket) {
+        socket = connectStreamingSocket();
+        engine.pendingControls = [];
+        engine.nextStreamId ??= 1;
+      }
       if (!audioGraphReady) {
         await retireStreamingAudioGraph();
         // 'playback' asks for large output buffers; the default suits games and calls.
@@ -2161,48 +2759,7 @@ async function prepareStreamingPlaybackEngine(sampleRate = 0) {
         engine.node = node;
         engine.backingCapacityFrames = initialStreamingBackingCapacities();
       }
-      if (engine.socket) return;
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      socket = new WebSocket(`${protocol}//${window.location.host}/playback/pcm`);
-      socket.binaryType = 'arraybuffer';
-      socket.onopen = () => {
-        flushStreamingControls();
-        keepStreamingSocketAlive(socket);
-      };
-      socket.onerror = (event) => {
-        if (engine.socket !== socket) return;
-        const detail = event?.error?.message || event?.message || 'Playback socket error';
-        engine.diagnostics.lastSocketError = {
-          message: String(detail),
-          atMs: performance.now(),
-        };
-        publishStreamingDiagnostics();
-      };
-      socket.onclose = (event) => {
-        if (engine.expectedSocketClose === socket) {
-          engine.expectedSocketClose = null;
-          return;
-        }
-        if (engine.socket !== socket) return;
-        void recoverUnexpectedStreamingSocketClose(socket, event)
-          .catch((error) => console.error('Streaming socket recovery failed', error));
-      };
-      socket.onmessage = ({ data }) => {
-        if (data instanceof ArrayBuffer) {
-          handleStreamingPcm(data);
-          return;
-        }
-        if (typeof data !== 'string') return;
-        try {
-          handleStreamingControl(JSON.parse(data));
-        } catch (error) {
-          failStreamingEngine('socket', error, 'json-protocol-error');
-        }
-      };
-      engine.socket = socket;
-      engine.pendingControls = [];
-      engine.nextStreamId ??= 1;
-      engine.mode = 'prepared';
+      if (socket) engine.mode = 'prepared';
     } catch (error) {
       if (engine.socket === socket) engine.socket = null;
       if (engine.node === node) engine.node = null;
@@ -2421,6 +2978,7 @@ function deliverCachedStreamingRole(roleState) {
     nextSequence: 0,
     creditedBytes: 0,
     lastArrivalMs: 0,
+    receivedBytes: entry.bytes.length,
     bytes: entry.bytes,
     size: entry.bytes.length,
     table: entry.table,
@@ -2456,7 +3014,9 @@ function deliverCachedStreamingRole(roleState) {
 function openLocalStreamingSeekRole(current, startFrame, continuityOptions) {
   const engine = streamingEngineState();
   const wire = current.encoded?.wire;
-  if (!wire?.bytes || !wire.table || engine.pendingSeek) return null;
+  // A lost stream's bytes end at its splice: only a detached player, which splices there, reads them.
+  if (!wire?.bytes || !wire.table || engine.pendingSeek
+      || (wire.lost && !wire.eos && !engine.detached)) return null;
   const window = lookupStreamingSeekTable(wire.table, {
     initialSkip: wire.initialSkip,
     initialTotal: wire.initialTotal,
@@ -2528,18 +3088,44 @@ function loadStreamingTrackWaveform(track) {
   }
 }
 
-async function startBrowserStreamingTrack(track, {
+// A start until its song's role opens: a socket lost meanwhile leaves the start to open it there.
+function startBrowserStreamingTrack(track, options = {}) {
+  const engine = streamingEngineState();
+  const pending = { autoplay: options.autoplay !== false };
+  engine.pendingStart = pending;
+  const start = openBrowserStreamingTrack(track, options, pending).finally(() => {
+    if (engine.pendingStart === pending) engine.pendingStart = null;
+  });
+  // A start refused for its guessed rate runs again only once this one has settled.
+  engine.startInFlight = start;
+  return start;
+}
+
+async function openBrowserStreamingTrack(track, {
   startSeconds = 0,
   autoplay = true,
   allowSuspendedAutoplayFallback = false,
   onAutoplayStarted = null,
-  transportRecoveryAttempt = null,
-} = {}) {
+  keepTransportRecovery = false,
+  keepDetached = false,
+} = {}, pending = null) {
   const engine = streamingEngineState();
   settlePendingBufferedSeek('superseded', { retainForAcknowledgement: true });
-  if (transportRecoveryAttempt === null) engine.pendingTransportRecovery = null;
+  if (!keepTransportRecovery) engine.pendingTransportRecovery = null;
   engine.startRequestId = (Number(engine.startRequestId) || 0) + 1;
   const startRequestId = engine.startRequestId;
+  // A start while the network is still gone (or the server not yet back) waits for the next socket
+  // as an offline seek past the received audio does: it opens on whichever socket connects next,
+  // with no second press (owner retest B-D4 round 7, 2026-11-18: "it took 6 clicks for another
+  // song to try"). Any other start leaves the lost socket's audio behind.
+  const detached = engine.detached;
+  if (detached && !keepDetached && engine.socket?.readyState !== WebSocket.OPEN) {
+    detached.kind = 'reopen';
+    detached.spliceFrame = null;
+    if (autoplay) resumeStreamingReconnect();
+  } else if (!keepDetached) {
+    endStreamingDetach();
+  }
   settleStreamingReplacementCushionWaiter(false);
   if (mayPrimeStreamingCachedTrack()) {
     await primeStreamingCachedTrack(track);
@@ -2635,11 +3221,17 @@ async function startBrowserStreamingTrack(track, {
   engine.lifecycleEpoch ??= 0;
   const lifecycleEpoch = engine.lifecycleEpoch;
   let sampleRate = 0;
+  const guessedSampleRate = !knownStreamingSampleRate(track)
+    && chooseStreamingQuality(track) === 'original' && !streamingQualityNeedsTrackSize(track);
   try {
-    await prepareStreamingPlaybackEngine();
     if (typeof ensureStreamingDecoders === 'function') void ensureStreamingDecoders();
-    await requestStreamingSampleRate(track);
-    sampleRate = streamingPlaybackRate(track);
+    if (guessedSampleRate) {
+      sampleRate = engine.sampleRate || STREAMING_GUESSED_SAMPLE_RATE;
+    } else {
+      await prepareStreamingPlaybackEngine();
+      await requestStreamingSampleRate(track);
+      sampleRate = streamingPlaybackRate(track);
+    }
     if (engine.startRequestId === startRequestId && !sampleRate) {
       throw new Error('The track sample rate could not be read');
     }
@@ -2691,9 +3283,17 @@ async function startBrowserStreamingTrack(track, {
     requestedStartFrame: startFrame,
     timelineStartFrame: startFrame,
   });
+  // A socket lost while this start was on its way left the old song's splice behind: this song
+  // opens whole, on whichever socket connects next.
+  if (engine.detached && !keepDetached) {
+    engine.detached.kind = 'reopen';
+    engine.detached.spliceFrame = null;
+  }
   const current = openStreamingRole('current', track, startFrame);
   if (!current) return null;
-  current.transportRecoveryAttempt = Math.max(0, Number(transportRecoveryAttempt) || 0);
+  current.autoplay = autoplay;
+  if (engine.pendingStart === pending) engine.pendingStart = null;
+  if (guessedSampleRate) current.guessedStart = { startSeconds: Math.max(0, startSeconds), autoplay };
   loadStreamingTrackWaveform(track);
   engine.node.port.postMessage({
     type: 'configure',
@@ -2790,6 +3390,7 @@ async function pauseBrowserStreaming() {
   if (!engine.context || !engine.node) return;
   settlePendingBufferedSeek('superseded', { retainForAcknowledgement: true });
   engine.snapshot.paused = true;
+  pauseStreamingReconnect();
   engine.node.port.postMessage({ type: 'pause', generation: engine.generation });
   if (engine.pendingSeek?.kind === 'replacement') {
     const currentTrack = engine.roles.current?.track;
@@ -2813,13 +3414,13 @@ async function resumeBrowserStreaming(
     ?? (Number(engine.startRequestId) || 0);
   const pendingRecovery = engine.pendingTransportRecovery;
   if (pendingRecovery && !engine.context && !engine.roles.current) {
-    engine.pendingTransportRecovery = null;
+    // Held until the restart plays: one lost before it opens keeps the place.
     delete engine.diagnostics.lastError;
     const recovered = await startStreamingTrack(pendingRecovery.track, {
       startSeconds: pendingRecovery.startSeconds,
       autoplay: true,
       onAutoplayStarted: onPlaybackStarted,
-      transportRecoveryAttempt: 0,
+      keepTransportRecovery: true,
     });
     return Boolean(recovered && !engine.snapshot.paused);
   }
@@ -2845,6 +3446,7 @@ async function resumeBrowserStreaming(
   }
   node.port.postMessage({ type: 'play', generation });
   engine.snapshot.paused = false;
+  resumeStreamingReconnect();
   maybeGrantDeferredReplacementCredit();
   maybeSchedulePendingStreamingContinuity();
   engine.deferredCreditFrames ??= { current: 0, continuity: 0 };
@@ -2865,6 +3467,14 @@ async function resumeBrowserStreaming(
 async function seekBrowserStreaming(seconds) {
   const engine = streamingEngineState();
   engine.diagnostics.seekRequestedAtMs = performance.now();
+  // Stopped by a lost connection: the seek moves the place the next play starts at.
+  const held = engine.pendingTransportRecovery;
+  if (held && !engine.roles.current) {
+    held.startSeconds = Math.max(0, Number(seconds) || 0);
+    engine.snapshot.currentTime = held.startSeconds;
+    publishStreamingDiagnostics();
+    return null;
+  }
   const currentTrack = engine.roles.current?.track;
   if (!currentTrack || !engine.node) return;
   const current = engine.roles.current;
@@ -2881,11 +3491,19 @@ async function seekBrowserStreaming(seconds) {
   }
   const startSeconds = Math.max(0, Number(seconds) || 0);
   const startFrame = streamingFrames(startSeconds);
+  const detached = engine.detached;
+  const offline = Boolean(detached) && engine.socket?.readyState !== WebSocket.OPEN;
+  if (offline && !seekStreamingAudioHere(detached, startFrame)) {
+    return jumpWhileDetached(currentTrack, startSeconds);
+  }
+  // The next socket is open: the seek asks it, and no splice is needed any more.
+  if (detached && !offline) endStreamingDetach();
   const currentFrame = Math.round(
     Math.max(0, Number(engine.snapshot.currentTime) || 0) * engine.sampleRate,
   );
   const queuedContinuity = engine.roles.continuity;
-  const bufferedSeekEligible = queuedContinuity?.continuityOptions?.kind === 'queued-next'
+  const bufferedSeekEligible = !offline
+    && queuedContinuity?.continuityOptions?.kind === 'queued-next'
     && engine.diagnostics.bufferedFrames.continuity > 0
     && !engine.snapshot.paused
     && !engine.loopContinuity
@@ -2963,8 +3581,10 @@ async function seekBrowserStreaming(seconds) {
   engine.waveformReadyIdentity = null;
   const seekOptions = { kind: 'seek', startSeconds, endSeconds: startSeconds };
   const replacement = openLocalStreamingSeekRole(current, startFrame, seekOptions)
-    || openStreamingRole('continuity', currentTrack, startFrame, seekOptions);
-  if (!replacement) return null;
+    || (offline ? null : openStreamingRole('continuity', currentTrack, startFrame, seekOptions));
+  if (!replacement) return offline ? jumpWhileDetached(currentTrack, startSeconds) : null;
+  // Audio read from a cut stream ends where the stream from the next socket will join it.
+  if (offline && detached.spliceFrame !== null) endStreamingEncodedRoleAt(replacement, detached.spliceFrame);
   engine.pendingSeek = {
     generation: engine.generation,
     currentStreamId: current.streamId,
@@ -3024,9 +3644,13 @@ async function scheduleBrowserStreamingContinuity(track, options = {}) {
     }
     return prepared;
   }
-  if (engine.pendingPromotion) {
+  if (engine.pendingPromotion || engine.detached) {
     engine.pendingContinuityTrack = track;
     engine.pendingContinuityOptions = normalized;
+    // Offline, the song's end waits for its successor; a splice keeps its own expectation.
+    if (engine.detached?.kind === 'offline' && normalized.kind === 'queued-next') {
+      engine.node.port.postMessage({ type: 'expect-continuity', generation: engine.generation, active: true });
+    }
     return null;
   }
   if (!protectedQueuedContinuityReady(engine, engine.roles.current, normalized)) {
@@ -3146,6 +3770,9 @@ async function cleanupStreamingResources(reason, {
   engine.waveformReadyIdentity = null;
   engine.pendingControls = [];
   engine.deferredCreditFrames = { current: 0, continuity: 0 };
+  endStreamingDetach();
+  const lostStreamIds = engine.lostStreamIds;
+  engine.lostStreamIds = null;
   sweepStreamingEncodedDecoders();
   if (!preserveError) {
     engine.mode = 'stopped';
@@ -3168,6 +3795,7 @@ async function cleanupStreamingResources(reason, {
   const cleanupErrors = [];
   if (socket && !socketAlreadyClosed && socket.readyState === WebSocket.OPEN) {
     for (const roleState of roles) {
+      if (lostStreamIds?.has(roleState.streamId)) continue;
       try {
         socket.send(JSON.stringify({
           type: 'close',
@@ -3279,6 +3907,7 @@ function getBrowserStreamingSnapshot() {
       continuityEosReceived: Boolean(engine.roles.continuity?.eosReceived),
       continuityTargetBufferFrames: Number(engine.roles.continuity?.targetBufferFrames || 0),
       contextState: String(engine.context?.state || ''),
+      transportState: streamingTransportState(engine),
     },
   };
 }

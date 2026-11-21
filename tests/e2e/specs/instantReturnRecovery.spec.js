@@ -67,8 +67,8 @@ async function provesRecovery({ page, galleryActions, navigationPanelActions, tr
   await galleryActions.waitForGalleryReady();
   await cutOff();
   const loadedBefore = await galleryPage.albumCards.count();
-  const { maxScrollTop } = await galleryActions.readGalleryScrollState();
-  await galleryActions.scrollGalleryBy(maxScrollTop);
+  const { maxScrollTop: endScrollTop } = await galleryActions.readGalleryScrollState();
+  await galleryActions.scrollGalleryBy(endScrollTop);
   await expect(galleryPage.galleryEndOffline).toHaveText("Offline. Can't load more albums, check your network or try again later");
   loadsBefore = loads;
   restored = Date.now();

@@ -7889,6 +7889,36 @@ test('paused, a start asked of a socket that hears nothing goes again on a new s
   assert.notEqual(harness.api.snapshot().mode, 'error');
 });
 
+// Sandbox5 2026-11-21, CPU at 100%: "Playing another track even on the same album sometimes takes
+// up to 10 s to start." A loaded server fell silent for about a second while a switch waited on its
+// open; the socket was given up after 750 ms, and the new socket's connect and open took 4-17 s more.
+// The old song still plays through a switch, so its socket gets the patience of any silent socket.
+test('a switch whose open a busy server leaves unanswered for a moment keeps its socket', async () => {
+  const harness = encodedHarness({ createStreamingDecoder: recordingDecoders().create });
+  const outgoing = await startLocallySeekable(harness, 400_000);
+  harness.setNow(1_000);
+  void harness.api.start(makeTrack('02.mp3'));
+  await settleTwice(harness);
+  const replacement = harness.sockets[0].sent.filter(({ type }) => type === 'open').at(-1);
+  assert.equal(replacement.path, makeTrack('02.mp3').path);
+  assert.equal(harness.engine.pendingSeek?.kind, 'replacement', 'the switch crosses over from the playing song');
+
+  for (let now = 1_500; now <= 5_500; now += 500) {
+    harness.setNow(now);
+    harness.nodes[0].port.dispatch({
+      type: 'position', generation: outgoing.generation, streamId: outgoing.streamId, timelineFrame: now,
+    });
+    liveness(harness).callback();
+  }
+  await settleTwice(harness);
+  assert.equal(harness.sockets[0].closeCalls, 0, 'a server silent for seconds is busy, not gone');
+  assert.equal(harness.sockets.length, 1);
+
+  checkLivenessUntil(harness, 6_000, 6_500);
+  await settleTwice(harness);
+  assert.equal(harness.sockets[0].closeCalls, 1, 'a socket silent for longer is still given up');
+});
+
 test('a busy server that only beats its heart is waited on, however long it takes to answer', async () => {
   const harness = encodedHarness();
   await startEncoded(harness, makeTrack('01.mp3'));

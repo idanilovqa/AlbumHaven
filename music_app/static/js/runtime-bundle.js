@@ -9035,7 +9035,9 @@ function checkStreamingSocketLiveness() {
   const silentMs = performance.now() - socket.lastHeardMs;
   const seek = engine.pendingSeek;
   const seekRole = seek && engine.roles.continuity?.streamId === seek.streamId ? engine.roles.continuity : null;
-  const seekWaits = Boolean(seekRole && !seekRole.local && !seekRole.metadataAccepted);
+  // A switch is no seek past the received audio: the old song plays on while its open is answered.
+  const seekWaits = Boolean(seekRole && seek.kind !== 'replacement'
+    && !seekRole.local && !seekRole.metadataAccepted);
   if (silentMs > (seekWaits ? STREAMING_SEEK_ANSWER_MS : STREAMING_SILENT_SOCKET_MS)) replaceSilentStreamingSocket(socket);
 }
 

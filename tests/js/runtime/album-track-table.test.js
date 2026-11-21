@@ -829,3 +829,16 @@ test('TrackSelectionController selects a mouse-held row without movement (owner 
   harness.dispatch('pointerup', harness.rows[3], { shiftKey: true });
   assert.deepEqual(Array.from(controller.getSelectedPaths()), ['two', 'three', 'four'], 'shift still selects a range');
 });
+
+test('Album Details marks a matching track row but never its letters; Loose Tracks marks the letters (owner 2026-11-21)', () => {
+  const read = name => fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', name), 'utf8');
+  const albumDetails = read('tag-editor-and-optimistic-updates.js');
+  const highlightPass = albumDetails.slice(albumDetails.indexOf('function refreshAlbumTrackSearchHighlights'),
+    albumDetails.indexOf('function buildTrackListHtml'));
+  assert.match(highlightPass, /row\.classList\.add\('album-track-table__row--search-match'\)/);
+  assert.doesNotMatch(highlightPass, /buildHighlightedTextHtml/);
+  const trackList = albumDetails.slice(albumDetails.indexOf('function buildTrackListHtml'));
+  assert.match(trackList, /isSearchMatch: Boolean\(highlightRanges\(displayTitle\)\)/);
+  assert.doesNotMatch(trackList.slice(0, trackList.indexOf('isSearchMatch')), /titleHighlightRanges/);
+  assert.match(read('modal-and-overlay-helpers.js'), /titleHighlightRanges/, 'Loose Tracks and collections keep letter marks');
+});

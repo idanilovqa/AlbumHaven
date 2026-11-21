@@ -43248,11 +43248,8 @@ function refreshAlbumTrackSearchHighlights(list, tracks, album) {
       const title = row.querySelector('.album-track-table__title');
       const titleText = title?.firstChild;
       if (!titleText || titleText.nodeType !== Node.TEXT_NODE) return;
-      const ranges = searchHighlightRanges(titleText.textContent);
-      if (!ranges) return;
-      const markup = document.createElement('template');
-      markup.innerHTML = buildHighlightedTextHtml(titleText.textContent, ranges);
-      titleText.replaceWith(markup.content);
+      // Album Details marks the matching track, not the letters in its title (owner 2026-11-21).
+      if (!searchHighlightRanges(titleText.textContent)) return;
       row.classList.add('album-track-table__row--search-match');
       row.dataset.trackSearchMatch = 'true';
     });
@@ -43324,9 +43321,8 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
         isCurrent: Boolean(isCurrentTrack),
         isPlaying: Boolean(isActivelyPlaying),
         isProblematic: Boolean(track.is_problematic),
-        // The server's search matcher marks the title's matched characters and its row; track titles only,
-        // never artists (owner 2026-11-21).
-        titleHighlightRanges: highlightRanges(displayTitle),
+        // A track whose title the search matched is marked as a whole row; Album Details never marks letters
+        // (owner 2026-11-21: partial text is marked only in Loose Tracks and collections).
         isSearchMatch: Boolean(highlightRanges(displayTitle)),
       };
     });

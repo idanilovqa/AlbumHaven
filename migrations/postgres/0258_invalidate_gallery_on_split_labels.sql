@@ -121,3 +121,14 @@ drop trigger if exists gallery_split_label_delete on integration.musicbrainz_art
 create trigger gallery_split_label_delete after delete on integration.musicbrainz_artist_countries
   referencing old table as gallery_old_rows
   for each statement execute function library.invalidate_gallery_projection_split_labels();
+
+-- A gallery published before this migration may file split albums under names from before their
+-- labels were known (sandbox6, 2026-11-21): mark each library with a split artist out of date once,
+-- so the stale gallery keeps serving until the queued refresh republishes it with the labels.
+insert into library.gallery_projection_state(library_id, generation, last_invalidation_xid)
+  select distinct matches.library_id, 1, pg_current_xact_id()
+  from library.local_artist_musicbrainz_matches matches
+  where matches.state = 'per_album'
+on conflict (library_id) do update
+  set generation = library.gallery_projection_state.generation + 1,
+      last_invalidation_xid = excluded.last_invalidation_xid;

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.43 - 2026-11-21
+
+- Signing in no longer gets stuck on the login page when the page was left open too long or another tab opened the login page. The app quietly gets a fresh sign-in token and signs you in with what you typed; if it still can't, it asks you to sign in again.
+
 ## 0.11.42 - 2026-11-19
 
 - Docs-only: contributor guidance now says that rerunning a failing gate to diagnose it or to verify a fix is expected; only rerunning unchanged code for a lucky pass is ruled out.

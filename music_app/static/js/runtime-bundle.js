@@ -27225,10 +27225,45 @@ function preserveHydratedModalTrackDetails(candidate, originalAlbum, enabled = f
   };
 }
 
+// FTC-TAGS-020: an edit that merges tracks into an existing album yields an optimistic destination
+// holding only the moved tracks. Album Details must show the whole album at once (owner rule), so
+// the destination takes the tracks a fully hydrated copy of it already holds; when none is known
+// but the gallery declares more tracks, it stays unhydrated so Album Details loads it.
+function completeTagEditMergeDestination(candidate) {
+  if (typeof getAlbumRequestKey !== 'function') return candidate;
+  const key = String(getAlbumRequestKey(candidate) || '').trim();
+  const candidateTracks = Array.isArray(candidate?.tracks) ? candidate.tracks : [];
+  if (!key || !candidateTracks.length) return candidate;
+  const cached = typeof getCachedHydratedTrackModalAlbum === 'function'
+    ? getCachedHydratedTrackModalAlbum(key)
+    : null;
+  const indexed = typeof getIndexedAlbum === 'function' ? getIndexedAlbum(key) : null;
+  const known = [cached, indexed].find((album) => (
+    album && album !== candidate
+    && albumIsDemonstrablyFullyHydrated(album)
+    && albumsShareLogicalReleaseIdentity(album, candidate)
+  ));
+  if (known) {
+    const merged = mergeVisibleAlbumWithOptimisticCandidate(known, candidate);
+    return merged.tracks.length > candidateTracks.length ? merged : candidate;
+  }
+  const declaredTrackCount = Number(indexed?.track_count_preview || 0);
+  if (indexed && indexed !== candidate && declaredTrackCount > candidateTracks.length) {
+    return { ...candidate, preview_only: true, track_count_preview: declaredTrackCount };
+  }
+  return candidate;
+}
+
 function updateOpenTrackModalAfterTagEdit(originalAlbum, updatedAlbums, options = {}) {
   const trackModal = document.getElementById('track-modal');
   const modalOpen = Boolean(trackModal && !trackModal.hidden);
-  const candidates = Array.isArray(updatedAlbums) ? updatedAlbums.filter(Boolean) : [];
+  // The source keeps only what the edit left it; only a destination it merged into gains tracks.
+  const candidates = (Array.isArray(updatedAlbums) ? updatedAlbums.filter(Boolean) : [])
+    .map((candidate) => (
+      albumsShareLogicalReleaseIdentity(candidate, originalAlbum)
+        ? candidate
+        : completeTagEditMergeDestination(candidate)
+    ));
   if (!candidates.length) return;
   if (!modalOpen) {
     if (typeof cacheHydratedTrackModalAlbum !== 'function') return;

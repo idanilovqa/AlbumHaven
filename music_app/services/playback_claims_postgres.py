@@ -13,6 +13,10 @@ from music_app.services.postgres_connections import pooled_connection
 
 
 _CLAIM_LEASE_SECONDS = 30
+# A holder that has not renewed for this long is gone (a browser closed or crashed without a word): the
+# first fresh claim replaces it, so a press elsewhere plays at once (sandbox5, 2026-11-21). Browsers
+# renew every 4 s, the Android app every 10 s; each limit leaves room for a slow renewal.
+_STALE_HOLDER_SECONDS = {"private_web": 10, "mobile": 16}
 _HANDOFF_LEASE_SECONDS = 15
 
 
@@ -186,9 +190,13 @@ class PostgresPlaybackClaims:
                       pending_handoff_expires_at = null
                     where %s or app.playback_claims.pending_handoff_id is not null
                       or app.playback_claims.expires_at <= %s
+                      or (app.playback_claims.client_surface = 'private_web' and app.playback_claims.expires_at <= %s)
+                      or (app.playback_claims.client_surface = 'mobile' and app.playback_claims.expires_at <= %s)
                     returning client_id, client_surface, expires_at, track""",
                     (account_id, library_id, client_id, client_surface, digest, expires,
-                     json.dumps(stored_track), takeover, now)).fetchone()
+                     json.dumps(stored_track), takeover, now,
+                     now + timedelta(seconds=_CLAIM_LEASE_SECONDS - _STALE_HOLDER_SECONDS["private_web"]),
+                     now + timedelta(seconds=_CLAIM_LEASE_SECONDS - _STALE_HOLDER_SECONDS["mobile"]))).fetchone()
             else:
                 # The token renews its claim even past the lease, as for a client that played on
                 # without a network: until another client's acquire replaces the row or its release

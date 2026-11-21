@@ -686,6 +686,32 @@ def test_the_owners_token_renewal_withdraws_a_staged_handoff(playback_inventory)
     service.release(fixture.actor, client_id=client_id, claim_token=claim["claimToken"])
 
 
+# sandbox5 (2026-11-21): a browser closed or crashed without a word kept its claim for 30 s, and a first
+# press in another browser was refused. A holder that stopped renewing (browsers every 4 s, the Android
+# app every 10 s) gives way to the first fresh claim; a live holder does not.
+@pytest.mark.parametrize("surface,alive_after,gone_after", [("private_web", 9, 11), ("mobile", 15, 17)])
+def test_a_holder_that_stopped_renewing_gives_way_to_a_fresh_claim(playback_inventory, surface, alive_after, gone_after):
+    fixture = playback_inventory
+    started_at = datetime(2026, 10, 25, tzinfo=timezone.utc)
+    clock = [started_at]
+    service = claims_service(fixture, lambda: clock[0])
+    reference = issue(reference_service(fixture, lambda: clock[0]), fixture)["tracks"][0]["playbackRef"]
+    track = {"playbackRef": reference, "title": "Track", "artist": "Owner", "album": "Album", "artworkUrl": None}
+    holder = str(uuid4())
+    service.acquire(fixture.actor, client_id=holder, client_surface=surface, track=track)
+
+    clock[0] = started_at + timedelta(seconds=alive_after)
+    with pytest.raises(ValueError) as refused:
+        service.acquire(fixture.actor, client_id=str(uuid4()), client_surface="private_web", track=track)
+    assert getattr(refused.value, "status_code", None) == 409
+
+    clock[0] = started_at + timedelta(seconds=gone_after)
+    press = str(uuid4())
+    claim = service.acquire(fixture.actor, client_id=press, client_surface="private_web", track=track)
+    assert service.get(fixture.actor, press)["is_playing_here"] is True
+    service.release(fixture.actor, client_id=press, claim_token=claim["claimToken"])
+
+
 def test_live_handoff_consumes_after_predecessor_lease_expires(playback_inventory):
     fixture = playback_inventory
     now = datetime(2026, 10, 25, tzinfo=timezone.utc)

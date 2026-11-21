@@ -170,6 +170,44 @@ test('a page hands its claim to the next page of its tab only while it holds one
   assert.deepEqual(JSON.parse(storage.get('albumhaven.playbackSameTab.v1')), { clientId: 'local-tab', claimToken: 'B'.repeat(43) });
 });
 
+// sandbox5 (2026-11-21): the server tells a live holder from a browser that closed without a word by
+// its renewals, so a playing tab renews every 4 s; a tab without a claim still reads the shared state
+// only every 10 s.
+test('a playing tab renews every 4 s, and a tab without a claim reads the shared state every 10 s', () => {
+  let heartbeat = null;
+  let delay = 0;
+  let now = 50_000;
+  const requests = [];
+  const { context } = loadHelper({
+    performance: { now: () => now },
+    getPlayerPlaybackSnapshot: () => ({ paused: false, ended: false, currentTime: 5 }),
+    setInterval: (callback, ms) => { heartbeat = callback; delay = ms; return 9; },
+    fetch: async (url, options = {}) => {
+      requests.push(options.method || 'GET');
+      return jsonResponse({ protocol: 1, is_playing_here: false, is_playing_elsewhere: false });
+    },
+  });
+  context.startPlaybackOwnershipHeartbeat();
+  assert.equal(delay, 4000);
+
+  heartbeat();
+  now += 4000;
+  heartbeat();
+  now += 4000;
+  heartbeat();
+  assert.equal(requests.filter((method) => method === 'GET').length, 1, 'no claim: one read in 8 s');
+  now += 4000;
+  heartbeat();
+  assert.equal(requests.filter((method) => method === 'GET').length, 2, 'and the next one after 10 s');
+
+  let renewals = 0;
+  context.refreshPlaybackOwnershipClaim = () => { renewals += 1; return Promise.resolve(true); };
+  context.state.player.ownership.activeClaim = { claimToken: 'C'.repeat(43), leaseDeadline: Number.POSITIVE_INFINITY };
+  heartbeat();
+  heartbeat();
+  assert.equal(renewals, 2, 'holding playback: a renewal on every 4 s tick');
+});
+
 test('rejected handoff beacon removes the unusable session envelope', () => {
   const storage = new Map();
   const removed = [];

@@ -1,5 +1,8 @@
 const PLAYBACK_OWNERSHIP_CHANNEL_NAME = 'albumhaven.playbackOwnership.v1';
 const PLAYBACK_OWNERSHIP_HEARTBEAT_MS = 10000;
+// A playing tab renews this often, so the server tells a live holder from a browser that closed
+// without a word (a holder silent for 10 s gives way to a press elsewhere).
+const PLAYBACK_OWNERSHIP_RENEW_MS = 4000;
 const PLAYBACK_HANDOFF_STORAGE_KEY = 'albumhaven.playbackHandoff.v1';
 const PLAYBACK_HANDOFF_WINDOW_MS = 15000;
 const PLAYBACK_HANDOFF_RETRY_MS = 100;
@@ -256,13 +259,19 @@ function isPlaybackClaimRenewable() {
 function startPlaybackOwnershipHeartbeat() {
   const ownership = getPlaybackOwnershipState();
   if (ownership.heartbeatTimer || ownership.recoveryPromise) return;
+  let checkedAt = Number.NEGATIVE_INFINITY;
   ownership.heartbeatTimer = setInterval(() => {
     if (ownership.recoveryPromise) return;
     if (ownership.activeClaim) {
       if (isPlaybackClaimRenewable()) void refreshPlaybackOwnershipClaim();
+      return;
     }
-    else void handlePlaybackOwnershipEvent();
-  }, PLAYBACK_OWNERSHIP_HEARTBEAT_MS);
+    // Without a claim, what another client plays is read every heartbeat, not every renewal tick.
+    const now = performance.now();
+    if (now - checkedAt < PLAYBACK_OWNERSHIP_HEARTBEAT_MS - 100) return;
+    checkedAt = now;
+    void handlePlaybackOwnershipEvent();
+  }, PLAYBACK_OWNERSHIP_RENEW_MS);
 }
 
 function recoverPlaybackOwnership(callback) {

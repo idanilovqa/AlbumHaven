@@ -355,10 +355,16 @@ async function playTrackFromPayload(track, options = {}) {
     && typeof isActivePlaybackOwner === 'function' && isActivePlaybackOwner();
   // Instant start, as Android's: the track starts while this tab's claim is asked for, and a
   // refusal pauses it again. A settled answer is never awaited, so rapid queue steps keep their starts.
+  // Except when another client is known to play: then the press waits for the answer instead of
+  // starting and then stopping (sandbox5, 2026-11-21). A holder gone silent (a browser closed without
+  // a word) gives way and the song plays; a live one keeps playback, and the overlay offers Play here.
+  const knownElsewhere = shouldAutoplay && !ownershipAlreadyClaimed && options.takeover !== true
+    && typeof isPlaybackLockedByAnotherTab === 'function' && isPlaybackLockedByAnotherTab();
   const pendingClaim = shouldAutoplay && !ownershipAlreadyClaimed && typeof canStartPlaybackInThisTab === 'function'
     ? canStartPlaybackInThisTab(track, { takeover: options.takeover === true })
     : true;
   if (pendingClaim === false) return false;
+  if (knownElsewhere && !await pendingClaim) return false;
   if (selectionToken !== playerTrackSelectionToken) return false;
   pendingPlayerPlaybackHandoff = null;
   if (!track?.path) return false;

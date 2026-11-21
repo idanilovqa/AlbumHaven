@@ -1101,6 +1101,20 @@
               "test": "tests/e2e/specs/problematicFileNavigation.spec.js",
               "case": "FTC-UTIL-PROBLEMS-001 rolls back failed exclusion creation and reversion",
               "area": "problematic-files"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playbackTakeover.spec.js",
+              "case": "FTC-PLAYBACK-TAKEOVER-004 after a playing browser closes without a word, the first press in another browser plays the song and never stops it",
+              "area": "playback"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playbackTakeover.spec.js",
+              "case": "FTC-PLAYBACK-TAKEOVER-005 while another browser really plays, a press on a song shows the playing-elsewhere overlay at once and never starts the song here",
+              "area": "playback"
             }
           ]
         },

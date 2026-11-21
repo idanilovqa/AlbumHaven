@@ -3,6 +3,42 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/playbackTakeover.spec.js",
+    "case": "FTC-PLAYBACK-TAKEOVER-004 after a playing browser closes without a word, the first press in another browser plays the song and never stops it",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 1,
+    "databaseScenarios": ["playback:silent-holder-closed-browser"],
+    "filesystemScenarios": ["audio-copy:playback-length-signals"],
+    "expectedContracts": ["silent-holder-gives-way", "first-press-plays", "no-refused-claim"],
+    "mutationOwnership": {
+      "databaseIdentity": "case:playback-silent-holder",
+      "filesystemCopy": "media/Playback Start Signals/Length And Repetition"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/playbackTakeover.spec.js",
+    "case": "FTC-PLAYBACK-TAKEOVER-005 while another browser really plays, a press on a song shows the playing-elsewhere overlay at once and never starts the song here",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 3,
+    "databaseScenarios": ["playback:live-holder-press"],
+    "filesystemScenarios": ["audio-copy:playback-length-signals"],
+    "expectedContracts": ["press-shows-overlay-at-once", "never-starts-then-stops"],
+    "mutationOwnership": {
+      "databaseIdentity": "case:playback-live-holder",
+      "filesystemCopy": "media/Playback Start Signals/Length And Repetition"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/playbackTakeover.spec.js",
     "case": "FTC-PLAYBACK-NAV-001 play, open another artist in a new page load, and one press on a song plays it at once",
     "profile": "functional-core",
     "setupScope": "isolated",

@@ -1143,6 +1143,30 @@ test('playTrackFromPayload claims ownership and dispatches streaming start witho
   assert.deepEqual(nativeSrcAssignments, []);
 });
 
+// sandbox5 (2026-11-21): a first press while another client's claim was held started the song and
+// stopped it 6 ms later on the refusal. With another client known to play, the press waits for the
+// answer: refused, nothing starts (the overlay shows Play here); granted (the holder went silent), it plays.
+for (const granted of [false, true]) {
+  test(`with another client known to play, a press ${granted ? 'that the server grants plays after the answer' : 'that the server refuses starts nothing'}`, async () => {
+    const order = [];
+    let answer;
+    const { context } = loadHelper({
+      isPlaybackLockedByAnotherTab: () => true,
+      canStartPlaybackInThisTab: () => new Promise((resolve) => { answer = resolve; }),
+      async startStreamingTrack(track) { order.push('start'); return { track }; },
+    });
+    const track = { path: 'C:\Music\Pressed.flac', src: '/track?path=Pressed.flac', title: 'Pressed', durationSeconds: 42 };
+
+    const press = context.playTrackFromPayload(track, { autoplay: true });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(order, [], 'nothing starts before the server answers');
+    order.push('answer');
+    answer(granted);
+    await press;
+    assert.deepEqual(order, granted ? ['answer', 'start'] : ['answer']);
+  });
+}
+
 test('BFCache resume uses consumed ownership once and opens one listen at the saved offset', async () => {
   const streamingStarts = [];
   const listenStarts = [];

@@ -13723,6 +13723,9 @@ function failStreamingEngine(source, event, reason) {
 
 const PLAYBACK_OWNERSHIP_CHANNEL_NAME = 'albumhaven.playbackOwnership.v1';
 const PLAYBACK_OWNERSHIP_HEARTBEAT_MS = 10000;
+// A playing tab renews this often, so the server tells a live holder from a browser that closed
+// without a word (a holder silent for 10 s gives way to a press elsewhere).
+const PLAYBACK_OWNERSHIP_RENEW_MS = 4000;
 const PLAYBACK_HANDOFF_STORAGE_KEY = 'albumhaven.playbackHandoff.v1';
 const PLAYBACK_HANDOFF_WINDOW_MS = 15000;
 const PLAYBACK_HANDOFF_RETRY_MS = 100;
@@ -13979,13 +13982,19 @@ function isPlaybackClaimRenewable() {
 function startPlaybackOwnershipHeartbeat() {
   const ownership = getPlaybackOwnershipState();
   if (ownership.heartbeatTimer || ownership.recoveryPromise) return;
+  let checkedAt = Number.NEGATIVE_INFINITY;
   ownership.heartbeatTimer = setInterval(() => {
     if (ownership.recoveryPromise) return;
     if (ownership.activeClaim) {
       if (isPlaybackClaimRenewable()) void refreshPlaybackOwnershipClaim();
+      return;
     }
-    else void handlePlaybackOwnershipEvent();
-  }, PLAYBACK_OWNERSHIP_HEARTBEAT_MS);
+    // Without a claim, what another client plays is read every heartbeat, not every renewal tick.
+    const now = performance.now();
+    if (now - checkedAt < PLAYBACK_OWNERSHIP_HEARTBEAT_MS - 100) return;
+    checkedAt = now;
+    void handlePlaybackOwnershipEvent();
+  }, PLAYBACK_OWNERSHIP_RENEW_MS);
 }
 
 function recoverPlaybackOwnership(callback) {
@@ -45357,10 +45366,16 @@ async function playTrackFromPayload(track, options = {}) {
     && typeof isActivePlaybackOwner === 'function' && isActivePlaybackOwner();
   // Instant start, as Android's: the track starts while this tab's claim is asked for, and a
   // refusal pauses it again. A settled answer is never awaited, so rapid queue steps keep their starts.
+  // Except when another client is known to play: then the press waits for the answer instead of
+  // starting and then stopping (sandbox5, 2026-11-21). A holder gone silent (a browser closed without
+  // a word) gives way and the song plays; a live one keeps playback, and the overlay offers Play here.
+  const knownElsewhere = shouldAutoplay && !ownershipAlreadyClaimed && options.takeover !== true
+    && typeof isPlaybackLockedByAnotherTab === 'function' && isPlaybackLockedByAnotherTab();
   const pendingClaim = shouldAutoplay && !ownershipAlreadyClaimed && typeof canStartPlaybackInThisTab === 'function'
     ? canStartPlaybackInThisTab(track, { takeover: options.takeover === true })
     : true;
   if (pendingClaim === false) return false;
+  if (knownElsewhere && !await pendingClaim) return false;
   if (selectionToken !== playerTrackSelectionToken) return false;
   pendingPlayerPlaybackHandoff = null;
   if (!track?.path) return false;

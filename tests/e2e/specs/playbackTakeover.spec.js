@@ -258,3 +258,116 @@ test('FTC-PLAYBACK-TITLE-001 pressing another song while one plays never shows t
     await globalPlayerActions.pauseToReleasePlaybackClaim();
   });
 });
+
+// sandbox5 (2026-11-21): a browser that closed without a word (a crash, a killed process) kept its claim,
+// and the first press in another browser started the song and stopped it 6 ms later on the refusal.
+// A holder that stopped renewing gives way: the press plays, with no stop and no refused claim.
+test('FTC-PLAYBACK-TAKEOVER-004 after a playing browser closes without a word, the first press in another browser plays the song and never stops it', {
+  tag: '@area:playback',
+}, async ({ playbackOwnershipSessions, stepLogger }) => {
+  const [first, second] = playbackOwnershipSessions;
+  const OTHER_TITLE = 'Medium Cold Signal 07';
+  // The server takes a browser that has not renewed for 10 s as gone.
+  const SILENT_HOLDER_MS = 11_000;
+  const paths = {};
+  let closedAt = 0;
+
+  await stepLogger.step('The first browser plays a song; the second has the album open', async () => {
+    for (const session of [first, second]) {
+      await session.galleryActions.goto();
+      await session.galleryActions.waitForGalleryReady();
+      await session.navigationPanelActions.selectSidebarArtistByName(ARTIST);
+      await session.navigationPanelActions.waitForSidebarSelection(ARTIST);
+      await session.galleryActions.clickAlbumDetailsByArtistAndAlbum(ARTIST, ALBUM);
+      await session.trackModalActions.waitForInteractiveSummary();
+    }
+    for (const title of [TITLE, OTHER_TITLE]) {
+      paths[title] = String(await second.trackModalActions.trackModal.trackRowByTitle(title).getAttribute('data-track-row-path') || '');
+    }
+    const mark = await first.playbackEvidence.playbackMark();
+    await first.trackModalActions.playTrackByTitle(TITLE);
+    await first.playbackEvidence.waitForTrackPlaybackEvidence({ after: mark, path: paths[TITLE] });
+    await first.globalPlayerActions.waitForPlaybackState({ paused: false, minimumCurrentTime: 3 });
+  });
+
+  await stepLogger.step('The first browser closes without a word, as a crash does', async () => {
+    await first.page.context().close();
+    closedAt = Date.now();
+  });
+
+  await stepLogger.step('Once the closed browser has gone silent, one press in the other browser plays the song and keeps playing', async () => {
+    const page = second.page;
+    const player = second.globalPlayerActions.globalPlayer;
+    const refused = [];
+    const record = (response) => {
+      if (new URL(response.url()).pathname === '/playback/state' && response.request().method() === 'PUT'
+          && response.status() !== 200) refused.push(response.status());
+    };
+    page.on('response', record);
+    await page.waitForTimeout(Math.max(0, SILENT_HOLDER_MS - (Date.now() - closedAt)));
+    const mark = await second.playbackEvidence.playbackMark();
+    await second.trackModalActions.playTrackByTitle(OTHER_TITLE);
+    const evidence = await second.playbackEvidence.waitForTrackPlaybackEvidence({ after: mark, path: paths[OTHER_TITLE] }, { timeout: 8000 });
+    expect(evidence.nonZeroSamples).toBeGreaterThan(0);
+    await second.trackModalActions.close();
+    // It keeps playing: a late refusal would stop it.
+    for (let read = 0; read < 6; read += 1) {
+      await page.waitForTimeout(500);
+      await expect(player.playButton).toHaveAttribute('aria-label', 'Pause');
+    }
+    const still = await second.playbackEvidence.playbackMark();
+    await page.waitForTimeout(1000);
+    expect((await second.playbackEvidence.playbackMark()).renderedFrame, 'still sounding').toBeGreaterThan(still.renderedFrame);
+    page.off('response', record);
+    expect(refused, 'no claim was refused').toEqual([]);
+    await expect(player.elsewhereOverlay).toBeHidden();
+    await second.globalPlayerActions.pauseToReleasePlaybackClaim();
+  });
+});
+
+// The same press while the other browser really plays: it never starts and stops; the player shows
+// "Playing in another tab" at once, with Play here, and the other browser plays on.
+test('FTC-PLAYBACK-TAKEOVER-005 while another browser really plays, a press on a song shows the playing-elsewhere overlay at once and never starts the song here', {
+  tag: '@area:playback',
+}, async ({ playbackOwnershipSessions, stepLogger }) => {
+  const [first, second] = playbackOwnershipSessions;
+  const OTHER_TITLE = 'Medium Cold Signal 07';
+  const paths = {};
+
+  await stepLogger.step('The first browser plays a song; the second shows it playing elsewhere', async () => {
+    for (const session of [first, second]) {
+      await session.galleryActions.goto();
+      await session.galleryActions.waitForGalleryReady();
+      await session.navigationPanelActions.selectSidebarArtistByName(ARTIST);
+      await session.navigationPanelActions.waitForSidebarSelection(ARTIST);
+      await session.galleryActions.clickAlbumDetailsByArtistAndAlbum(ARTIST, ALBUM);
+      await session.trackModalActions.waitForInteractiveSummary();
+    }
+    for (const title of [TITLE, OTHER_TITLE]) {
+      paths[title] = String(await second.trackModalActions.trackModal.trackRowByTitle(title).getAttribute('data-track-row-path') || '');
+    }
+    const mark = await first.playbackEvidence.playbackMark();
+    await first.trackModalActions.playTrackByTitle(TITLE);
+    await first.playbackEvidence.waitForTrackPlaybackEvidence({ after: mark, path: paths[TITLE] });
+    await first.trackModalActions.close();
+    await second.trackModalActions.close();
+    await second.globalPlayerActions.expectPlayingElsewhereOverlay({ artist: ARTIST, album: ALBUM, title: TITLE });
+  });
+
+  await stepLogger.step('One press on another song: the overlay stays with Play here, nothing sounds here, the first browser plays on', async () => {
+    const player = second.globalPlayerActions.globalPlayer;
+    await second.galleryActions.clickAlbumDetailsByArtistAndAlbum(ARTIST, ALBUM);
+    await second.trackModalActions.waitForInteractiveSummary();
+    const silentFrom = await second.playbackEvidence.playbackMark();
+    const firstFrom = await first.playbackEvidence.playbackMark();
+    await second.trackModalActions.playTrackByTitle(OTHER_TITLE);
+    await second.trackModalActions.close();
+    await expect(player.elsewhereOverlay).toBeVisible({ timeout: 2000 });
+    await expect(player.playButton).toHaveAttribute('aria-label', 'Play here');
+    await second.page.waitForTimeout(3000);
+    expect((await second.playbackEvidence.playbackMark()).renderedFrame, 'nothing started here').toBe(silentFrom.renderedFrame);
+    expect((await first.playbackEvidence.playbackMark()).renderedFrame, 'the first browser plays on')
+      .toBeGreaterThan(firstFrom.renderedFrame);
+    await first.globalPlayerActions.pauseToReleasePlaybackClaim();
+  });
+});

@@ -1025,6 +1025,36 @@ test('a live artist-tree read keeps the artist gallery payload authoritative', a
   assert.equal(observer.read().activeRequestCount, 0);
 });
 
+test('a search Loose Tracks prefetch keeps the search gallery payload authoritative', async () => {
+  const { ProductionViewObserver } = await import(observerUrl);
+  const page = new FakePage();
+  const observer = new ProductionViewObserver(page, page);
+  const searchRequest = request('http://127.0.0.1/view-data?surface=albums&q=Ben&category=main_library');
+  const looseTracksRequest = request(
+    'http://127.0.0.1/view-data?surface=albums&q=Ben&category=main_library'
+    + '&omit_sidebar=1&include_non_album=1&include_library_wide_non_album=1',
+  );
+
+  page.emit('request', searchRequest);
+  page.emit('request', looseTracksRequest);
+  page.emit('response', response(searchRequest, {
+    payload_tier: 'full',
+    query: 'Ben',
+    selected_artist: 'Ben',
+    primary_artist_groups: [{ artist: 'Ben', albums: [{ key: 'ben-1', name: 'First' }] }],
+  }));
+  page.emit('requestfinished', searchRequest);
+  await flushPromises();
+  page.emit('response', response(looseTracksRequest, { non_album_tracks: [] }));
+  page.emit('requestfinished', looseTracksRequest);
+  await flushPromises();
+
+  const result = observer.read();
+  assert.equal(result.latestFullPayload.query, 'Ben');
+  assert.equal(result.activeRequestCount, 0);
+  assert.equal(result.pendingPayloadReadCount, 0);
+});
+
 test('production view observer exposes the in-flight latest full payload read for POM synchronization', async () => {
   const { ProductionViewObserver } = await import(observerUrl);
   const page = new FakePage();
@@ -2190,4 +2220,14 @@ test('browse telemetry accepts the actual SSR first-paint payload without a redu
   owner.productionViewObserver.readLatestFullPayloadWhenSettled = async () => ({ latestFullPayload: null, latestFullPayloadError: null, activeRequestCount: 0, pendingPayloadReadCount: 0 });
   owner.readProductionBootstrapPayload = async () => null;
   await assert.rejects(() => GalleryPage.prototype.readLatestProductionViewPayload.call(owner), /Expected an observed production view/);
+});
+
+test('the search Loose Tracks prefetch never stands in for the gallery view-data answer', async () => {
+  const { isSearchLooseTracksPrefetchUrl } = await import(observerUrl);
+  const base = 'http://127.0.0.1/view-data?surface=albums&q=%D0%94%D0%94%D0%A2&gallery_scope=all';
+  // The request FTC-TAGS-026P and FTC-ALBUM-TASTE-013 mistook for the gallery's answer.
+  assert.equal(isSearchLooseTracksPrefetchUrl(`${base}&omit_sidebar=1&include_non_album=1&include_library_wide_non_album=1`), true);
+  assert.equal(isSearchLooseTracksPrefetchUrl(`${base}&omit_sidebar=1&include_non_album=1`), false);
+  assert.equal(isSearchLooseTracksPrefetchUrl(`${base}&payload_tier=sidebar&omit_sidebar=1&include_non_album=1&include_library_wide_non_album=1`), false);
+  assert.equal(isSearchLooseTracksPrefetchUrl('http://127.0.0.1/view-data?surface=albums&omit_sidebar=1&include_non_album=1&include_library_wide_non_album=1'), false);
 });

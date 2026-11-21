@@ -19936,7 +19936,7 @@ def test_problematic_detail_for_track_path_reads_only_that_track_album(monkeypat
         repository, "_load_problematic_file_rows",
         lambda album_key=None, **_kwargs: loaded_keys.append(album_key) or ["rows"],
     )
-    monkeypatch.setattr(repository, "_load_relation_alias_maps", lambda: {"alias_to_canonical": {}})
+    monkeypatch.setattr(repository, "_load_relation_alias_maps", lambda **_kwargs: {"alias_to_canonical": {}})
     monkeypatch.setattr(browse, "_problematic_album_projection_payloads", lambda rows: [
         {"key": "art zoyd::musique pour l'odyssée::year::1979", "tracks": [{"path": "other.flac"}]},
         {"key": "art zoyd::musique pour l'odyssée", "tracks": [{"path": track_path}]},

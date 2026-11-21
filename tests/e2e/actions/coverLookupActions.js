@@ -53,7 +53,10 @@ export async function waitForDisplayedImageDecode(element) {
       };
       element.addEventListener('load', onLoad, { once: true });
       element.addEventListener('error', onError, { once: true });
-      if (element.complete && !element.hasAttribute('data-cover-lookup-deferred-src')) {
+      // An image whose source is still being fetched has no src yet, which the browser also reports as complete.
+      const pending = element.hasAttribute('data-cover-lookup-deferred-src')
+        || (element.hasAttribute('data-gallery-cover-src') && !element.getAttribute('src'));
+      if (element.complete && !pending) {
         if (element.naturalWidth > 0) onLoad();
         else onError();
       }
@@ -1270,6 +1273,8 @@ export class CoverLookupActions {
 
   async openTaskWithKeyboard(taskTitle, key = 'Enter') {
     const opener = this.coverLookup.taskOpenButtonByTitle(taskTitle);
+    // A keyboard user works in the focused window; another session's page may hold window focus.
+    await opener.page().bringToFront();
     await opener.focus();
     await expect(opener).toBeFocused();
     await opener.press(key);

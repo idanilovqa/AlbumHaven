@@ -44,6 +44,7 @@ test.describe(`${PROBLEMATIC_CASE_ID} utility-problematic-files responsiveness`,
     try {
 
       await galleryActions.goto();
+      await utilityProblematicFilesActions.waitForIndexReady();
 
       const {
         coldProblematicApiMs,
@@ -81,7 +82,7 @@ test.describe(`${PROBLEMATIC_CASE_ID} utility-problematic-files responsiveness`,
         }, 'Expected the cold Problematic Files API response body to contain valid JSON.').not.toThrow();
         expectPostgresLibraryBrowseTelemetry(coldPayload);
         expect(Array.isArray(coldPayload.items), 'Expected the cold Problematic Files payload to expose summary items.').toBe(true);
-        expect(coldPayload.projection_cache_status, 'Expected the timed API request to be SQL-bounded.').toBe('bounded');
+        expect(coldPayload.projection_cache_status, 'Expected the timed API request to read the persisted index.').toBe('indexed');
         expect(coldPayload.complete).toBe(false);
         expect(coldPayload.items).toHaveLength(50);
         const completeResponseBody = await networkEvidence.completeSummaryResponse.text();
@@ -208,7 +209,7 @@ test.describe(`${PROBLEMATIC_CASE_ID} utility-problematic-files responsiveness`,
       const initialSummary = await stepLogger.step('Verify the core Problematic Files layout and first detail state', async () => {
         expect(problematicFilesPayload, 'Expected a live Problematic Files response during the visible Settings flow.').toBeTruthy();
         expectPostgresLibraryBrowseTelemetry(problematicFilesPayload);
-        expect(problematicFilesPayload.projection_cache_status).toBe('hit');
+        expect(problematicFilesPayload.projection_cache_status).toBe('indexed');
         expect(
           evaluateProblematicFilesDatasetContract(
             problematicFilesPayload,

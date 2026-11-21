@@ -1991,7 +1991,7 @@ test('broad Problematic Files benchmark retains timing classification before its
   assert.match(coldBlock, /readCompletedResponseDurationMs\(coldResponse\)/);
   assert.match(coldBlock, /await coldResponse\.text\(\)/);
   assert.match(coldBlock, /new TextEncoder\(\)\.encode\(coldResponseBody\)\.byteLength/);
-  assert.match(coldBlock, /projection_cache_status[^\n]+toBe\('bounded'\)/);
+  assert.match(coldBlock, /projection_cache_status[^\n]+toBe\('indexed'\)/);
   assert.match(coldBlock, /completeSummaryResponse\.text\(\)/);
   assert.match(coldBlock, /JSON\.parse\(completeResponseBody\)/);
   assert.match(coldBlock, /evaluateProblematicFilesDatasetContract\(/);

@@ -1562,7 +1562,9 @@ async function fetchAndRender(url, push = true, options = {}) {
       && Array.isArray(payloadToApply?.artists_sidebar)) {
       state.ui.appliedArtistTreeInventoryMutationRevision = appliedInventoryMutationRevision;
     }
-    if (Number.isSafeInteger(appliedInventoryMutationRevision)
+    // A stale projection's albums lag its revision; counting it as applied kept the gallery from refetching.
+    if (responseProjectionIsCurrent
+      && Number.isSafeInteger(appliedInventoryMutationRevision)
       && appliedInventoryMutationRevision >= 0) {
       state.ui.appliedViewInventoryMutationRevision = appliedInventoryMutationRevision;
       const observedInventoryMutationRevision = Number(

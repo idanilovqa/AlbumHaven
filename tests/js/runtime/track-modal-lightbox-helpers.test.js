@@ -575,7 +575,7 @@ test('a gallery open never renders a split chooser, even from an older server', 
   assert.equal(context.showToastCalls.length, 1);
 });
 
-test('a gallery card whose album is gone closes Album Details and refreshes the gallery', async () => {
+test('a gallery card whose album is gone gives way to the refreshed gallery without a notice', async () => {
   const { context } = loadHelper({
     onFetchAlbumDetails: () => ({
       ok: false,
@@ -591,10 +591,9 @@ test('a gallery card whose album is gone closes Album Details and refreshes the 
 
   assert.equal(context.getTrackModalElements().overlay.hidden, true);
   assert.equal(galleryRefreshes, 1);
-  assert.deepEqual(context.showToastCalls.map(({ message }) => message), [
-    'This album changed—choose it again in the gallery.',
-  ]);
-  assert.doesNotMatch(context.getTrackModalElements().list.innerHTML, /data-track-modal-current-release/);
+  // Owner (2026-11-21): the changed-album notice belongs only to a modal already open on the old album.
+  assert.deepEqual(context.showToastCalls, []);
+  assert.doesNotMatch(String(context.getTrackModalElements().list.innerHTML || ''), /data-track-modal-current-release/);
 });
 
 function splitByThisSessionResponses(chosen) {
@@ -655,6 +654,24 @@ test('inventory refresh follows the release this session split instead of closin
   await flushMicrotasks();
 
   assert.equal(context.fetchCalls.at(-1).url, '/album-details?album_key=artist%3A%3Aalbum%3A%3Ayear%3A%3A2004&album_id=93');
+  assert.equal(context.getTrackModalElements().overlay.hidden, false);
+  assert.deepEqual(context.showToastCalls, []);
+});
+
+test('inventory refresh keeps an album this session renamed open until its save rebinds it', async () => {
+  // FTC-TAGS-008: a rename and re-year derives "artist::renamed" while the server adds ::year::2027.
+  const open = { album_id: 17, key: 'artist::renamed', request_key: 'artist::renamed', name: 'Renamed', year: 2027,
+    preview_only: false, tracks: [{ path: 'one', title: 'Track' }] };
+  const notFound = { ok: false, status: 404, json: async () => ({ ok: false, error: 'Album not found' }) };
+  const { context } = loadHelper({ initialAlbums: [open], onFetchAlbumDetails: () => notFound });
+  context.rememberLocallyEditedAlbum(open);
+  context.state.modalReleases = [open];
+  context.state.modalReleaseIndex = 0;
+  context.getTrackModalElements().overlay.hidden = false;
+
+  assert.equal(await context.refreshOpenTrackModalAfterInventoryMutation(), false);
+  await flushMicrotasks();
+
   assert.equal(context.getTrackModalElements().overlay.hidden, false);
   assert.deepEqual(context.showToastCalls, []);
 });
@@ -1455,8 +1472,7 @@ test('inventory mutation refresh of a gallery-opened album never renders a split
     /This album was split/,
   );
   assert.doesNotMatch(context.fetchCalls[0].url, /resolve_lineage=1/);
-  // An untouched list has no markup at all in this harness.
-  assert.doesNotMatch(String(context.getTrackModalElements().list.innerHTML ?? ''), /data-track-modal-current-release/);
+  assert.doesNotMatch(String(context.getTrackModalElements().list.innerHTML || ''), /data-track-modal-current-release/);
 });
 
 test('in-flight details preserve an optimistic owner across inventory revisions until settlement', async () => {

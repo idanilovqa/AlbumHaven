@@ -1840,12 +1840,16 @@ test('FTC-UTIL-PROBLEMS-014 a watcher-found problem album appears in the open Pr
     });
 
     await stepLogger.step('The open list shows it, with its reason, in place', async () => {
-      await expect.poll(async () => (await utilityProblematicFilesActions.readCompleteListItems())
-        .filter((item) => item.title === WATCHER_PROBLEM_ALBUM).length, {
+      // The list is updating live while it is read; a walk that met a change reads again.
+      let listed = null;
+      await expect.poll(async () => {
+        const matches = (await utilityProblematicFilesActions.readCompleteListItems().catch(() => []))
+          .filter((item) => item.title === WATCHER_PROBLEM_ALBUM);
+        listed = matches[0] || null;
+        return matches.length;
+      }, {
         timeout: 30000, intervals: [500, 1000, 2000],
       }).toBe(1);
-      const listed = (await utilityProblematicFilesActions.readCompleteListItems())
-        .find((item) => item.title === WATCHER_PROBLEM_ALBUM);
       expect(listed.meta).toContain('Watcher Problem Artist');
       const detail = await utilityProblematicFilesActions.selectAlbumByTitle(WATCHER_PROBLEM_ALBUM);
       expect(detail.artist).toContain('Watcher Problem Artist');

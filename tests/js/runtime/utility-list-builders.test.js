@@ -1957,6 +1957,47 @@ test('updateOpenTrackModalAfterTagEdit reconciles stale modal aliases to the rem
   );
 });
 
+test('updateOpenTrackModalAfterTagEdit gives a merge destination the whole album, not only the moved track', () => {
+  // FTC-TAGS-020: restoring a split-off track into "Студийные записи" showed 1 track instead of 16.
+  const context = loadHelpers();
+  const path = (number) => `D:/Music/ДДТ/Студийные записи/${String(number).padStart(2, '0')}.mp3`;
+  const sourceTracks = Array.from({ length: 15 }, (_, index) => ({ path: path(index + 2), title: `Track ${index + 2}` }));
+  const destination = {
+    key: 'ддт::студийные записи', name: 'Студийные записи', album_artist: 'ДДТ', year: 1999,
+    preview_only: false, tracks: sourceTracks, track_count_preview: 15,
+  };
+  const suffixAlbum = {
+    key: 'ддт::студийные записи2', name: 'Студийные записи2', album_artist: 'ДДТ', year: 1999,
+    tracks: [{ path: path(1), title: 'Track 1' }],
+  };
+  const restored = { ...destination, tracks: [{ path: path(1), title: 'Track 1' }], track_count_preview: 1 };
+  const cacheCalls = [];
+  context.state.view.selected_artist = 'ДДТ';
+  context.state.view.related_artists = [];
+  context.getAlbumRequestKey = (album) => String(album?.key || '');
+  context.getAlbumIdentity = (album) => String(album?.key || '');
+  context.getIndexedAlbum = (key) => (key === destination.key ? destination : null);
+  context.cacheHydratedTrackModalAlbum = (albumKey, album) => cacheCalls.push({ albumKey, album });
+  context.getAlbumReleaseSet = (album) => ({ releases: [album], selectedIndex: 0 });
+  context.renderTrackModalRelease = () => {};
+
+  context.updateOpenTrackModalAfterTagEdit(suffixAlbum, [restored]);
+
+  const cachedDestination = cacheCalls.find(({ albumKey }) => albumKey === destination.key);
+  assert.ok(cachedDestination, 'the restored destination is cached for Album Details');
+  assert.equal(cachedDestination.album.tracks.length, 16);
+  assert.deepEqual(
+    new Set(cachedDestination.album.tracks.map((track) => track.path)),
+    new Set([path(1), ...sourceTracks.map((track) => track.path)]),
+  );
+
+  // A source that only lost tracks never takes them back from its earlier full copy.
+  cacheCalls.length = 0;
+  const remainder = { ...destination, tracks: sourceTracks.slice(1), track_count_preview: 14 };
+  context.updateOpenTrackModalAfterTagEdit(destination, [remainder]);
+  assert.equal(cacheCalls.find(({ albumKey }) => albumKey === destination.key).album.tracks.length, 14);
+});
+
 test('updateOpenTrackModalAfterTagEdit preserves the newly hydrated post-edit source over an empty canonical preview', () => {
   const context = loadHelpers();
   const originalTracks = Array.from({ length: 13 }, (_value, index) => ({

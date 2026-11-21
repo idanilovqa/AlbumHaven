@@ -9035,7 +9035,7 @@ function initGalleryMain() {
       const settled = galleryMainSurfaceController?.current?.();
       if (settled?.key?.startsWith?.('artist:') && settled.surface.getAttribute?.('aria-modal') !== 'true') {
         const previousAnchor = settled.anchor;
-        const artist = settled.key.slice('artist:'.length);
+        const artist = String(settled.key).slice('artist:'.length);
         const nextAnchor = resolveVisibleGalleryArtistInfoAnchor(settled, scroll);
         if (nextAnchor !== previousAnchor && String(nextAnchor?.dataset?.artist || '') === artist
             && isGalleryArtistInfoAnchorVisible(nextAnchor, scroll)) {
@@ -18249,8 +18249,9 @@ async function fetchTrackModalAlbumDetails(albumKey, options = {}) {
   return payload.album;
 }
 
-// A gallery album that is gone was split or merged meanwhile. The refreshed gallery shows every
-// current release as its own card, so the choice is made there, never in a chooser here.
+// The album an open modal shows was split or merged meanwhile. The refreshed gallery shows every
+// current release as its own card, so the choice is made there, never in a chooser here. Only a
+// modal already open on the old album says so (owner, 2026-11-21).
 function closeTrackModalForChangedAlbum() {
   closeTrackModal();
   showToast('This album changed—choose it again in the gallery.', 'info', 4200);
@@ -18383,9 +18384,15 @@ async function refreshOpenTrackModalAfterInventoryMutation() {
   if (loadError?.status === 404) {
     const release = await findLocallyEditedSplitRelease(albumKey, openAlbum);
     if (els.overlay.hidden || state.modalReleases?.[state.modalReleaseIndex] !== currentAlbum) return false;
+    if (release) {
+      openTrackModal(release);
+      return true;
+    }
+    // This session's own save rebinds the modal when it completes; a key derived before the server
+    // added a release discriminator (::year::) is not an album that changed elsewhere.
+    if (editedLocally) return false;
     // Otherwise the view that triggered this refresh already shows the current releases.
-    if (release) openTrackModal(release);
-    else closeTrackModalForChangedAlbum();
+    closeTrackModalForChangedAlbum();
     return true;
   }
   if (loadError) throw loadError;
@@ -18566,7 +18573,9 @@ function openTrackModal(album, options = {}) {
           openTrackModal(release);
           return;
         }
-        closeTrackModalForChangedAlbum();
+        // Owner (2026-11-21): "This album changed" belongs only to a modal that was already open on
+        // the old identity. A card opened after the change just gives way to the refreshed gallery.
+        closeTrackModal();
         if (typeof refreshCurrentViewAfterBackgroundCompletion === 'function') {
           refreshCurrentViewAfterBackgroundCompletion().catch((refreshError) => {
             console.error('[AlbumHaven][AlbumDetails] Failed to refresh the gallery.', refreshError);
@@ -22129,7 +22138,9 @@ async function fetchAndRender(url, push = true, options = {}) {
       && Array.isArray(payloadToApply?.artists_sidebar)) {
       state.ui.appliedArtistTreeInventoryMutationRevision = appliedInventoryMutationRevision;
     }
-    if (Number.isSafeInteger(appliedInventoryMutationRevision)
+    // A stale projection's albums lag its revision; counting it as applied kept the gallery from refetching.
+    if (responseProjectionIsCurrent
+      && Number.isSafeInteger(appliedInventoryMutationRevision)
       && appliedInventoryMutationRevision >= 0) {
       state.ui.appliedViewInventoryMutationRevision = appliedInventoryMutationRevision;
       const observedInventoryMutationRevision = Number(
@@ -27214,10 +27225,45 @@ function preserveHydratedModalTrackDetails(candidate, originalAlbum, enabled = f
   };
 }
 
+// FTC-TAGS-020: an edit that merges tracks into an existing album yields an optimistic destination
+// holding only the moved tracks. Album Details must show the whole album at once (owner rule), so
+// the destination takes the tracks a fully hydrated copy of it already holds; when none is known
+// but the gallery declares more tracks, it stays unhydrated so Album Details loads it.
+function completeTagEditMergeDestination(candidate) {
+  if (typeof getAlbumRequestKey !== 'function') return candidate;
+  const key = String(getAlbumRequestKey(candidate) || '').trim();
+  const candidateTracks = Array.isArray(candidate?.tracks) ? candidate.tracks : [];
+  if (!key || !candidateTracks.length) return candidate;
+  const cached = typeof getCachedHydratedTrackModalAlbum === 'function'
+    ? getCachedHydratedTrackModalAlbum(key)
+    : null;
+  const indexed = typeof getIndexedAlbum === 'function' ? getIndexedAlbum(key) : null;
+  const known = [cached, indexed].find((album) => (
+    album && album !== candidate
+    && albumIsDemonstrablyFullyHydrated(album)
+    && albumsShareLogicalReleaseIdentity(album, candidate)
+  ));
+  if (known) {
+    const merged = mergeVisibleAlbumWithOptimisticCandidate(known, candidate);
+    return merged.tracks.length > candidateTracks.length ? merged : candidate;
+  }
+  const declaredTrackCount = Number(indexed?.track_count_preview || 0);
+  if (indexed && indexed !== candidate && declaredTrackCount > candidateTracks.length) {
+    return { ...candidate, preview_only: true, track_count_preview: declaredTrackCount };
+  }
+  return candidate;
+}
+
 function updateOpenTrackModalAfterTagEdit(originalAlbum, updatedAlbums, options = {}) {
   const trackModal = document.getElementById('track-modal');
   const modalOpen = Boolean(trackModal && !trackModal.hidden);
-  const candidates = Array.isArray(updatedAlbums) ? updatedAlbums.filter(Boolean) : [];
+  // The source keeps only what the edit left it; only a destination it merged into gains tracks.
+  const candidates = (Array.isArray(updatedAlbums) ? updatedAlbums.filter(Boolean) : [])
+    .map((candidate) => (
+      albumsShareLogicalReleaseIdentity(candidate, originalAlbum)
+        ? candidate
+        : completeTagEditMergeDestination(candidate)
+    ));
   if (!candidates.length) return;
   if (!modalOpen) {
     if (typeof cacheHydratedTrackModalAlbum !== 'function') return;

@@ -1014,3 +1014,36 @@ def test_live_problematic_index_takes_a_large_watcher_batch_in_the_background(wa
     assert "Batch Renamed" in listed and "Batch 000" not in listed
     assert _as_served(_indexed_problematic_items(database_url)) == _as_served(
         _evaluated_problematic_items(fixture.config))
+
+
+def test_live_problematic_index_follows_a_legacy_album_rule_revert(watcher_repair_inventory):
+    """Gate run 44590187281 (FTC-UTIL-PROBLEMS-001): reverting a legacy album-level Rules
+    exclusion (`<album key>::problem-album::<reason>`, no album_key metadata) left the album
+    hidden, because the journal marked albums only through that metadata (fixed by 0266)."""
+    from music_app.services import library_browse_postgres as browse
+    from tests.e2e.support import isolatedPostgres
+
+    fixture = watcher_repair_inventory
+    database_url = fixture.config["ALBUM_HAVEN_APP_DATABASE_URL"]
+    fixture.seed({**fixture.entry("Owner/Legacy/01.flac", album="Legacy Album"), "year": None})
+    _ready_problematic_index(database_url)
+    listed = _indexed_by_name(database_url)["Legacy Album"]
+    assert "Missing year" in listed["problem_reasons"]
+    rule_key = browse._problem_identity_row_key(listed["key"], "Missing year", scope="album")
+
+    def set_rule(present):
+        with isolatedPostgres._connect(fixture.setup_url) as connection:
+            library_id = connection.execute(
+                "select id from library.libraries where library_kind = 'local' limit 1").fetchone()["id"]
+            if present:
+                connection.execute("insert into library.ignored_repairs (library_id, repair_key) values (%s, %s)",
+                                   (library_id, rule_key))
+            else:
+                connection.execute("delete from library.ignored_repairs where repair_key = %s", (rule_key,))
+
+    set_rule(True)
+    hidden = _indexed_by_name(database_url).get("Legacy Album")
+    assert hidden is None or "Missing year" not in hidden["problem_reasons"]
+    set_rule(False)
+    assert "Missing year" in _indexed_by_name(database_url)["Legacy Album"]["problem_reasons"]
+    assert _as_served(_indexed_problematic_items(database_url)) == _as_served(_evaluated_problematic_items(fixture.config))

@@ -1614,10 +1614,30 @@ def test_targeted_projection_invalidation_patches_problematic_files_by_complete_
 
 
 def test_targeted_reconcile_contract_reads_only_the_event_album_at_production_library_size(tmp_path, monkeypatch):
+    """A watcher event never does library-scale work. Owner (2026-11-21): the pass patches the
+    event album in place (its relation facts included), so it may read that album's files more
+    than once, but every file it opens belongs to the event album and the counts are the same
+    at 20 and 1,000 albums."""
+    import builtins
+    import os
+
     from music_app.services import metadata
     from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
     from tests.py.bounded_interactions import OperationCounts, measure_scale_pair
     from tests.py.filesystem_operation_counting import count_filesystem_and_media
+
+    opened: list[Path] = []
+
+    def recording(open_function):
+        def record(target, *args, **kwargs):
+            if isinstance(target, (str, os.PathLike)):
+                opened.append(Path(target))
+            return open_function(target, *args, **kwargs)
+        return record
+
+    original_path_open = Path.open
+    monkeypatch.setattr(builtins, "open", recording(builtins.open))
+    monkeypatch.setattr(Path, "open", lambda self, *args, **kwargs: (opened.append(self), original_path_open(self, *args, **kwargs))[1])
 
     def run(album_count: int) -> OperationCounts:
         root = tmp_path / f"Music-{album_count}"
@@ -1633,6 +1653,7 @@ def test_targeted_reconcile_contract_reads_only_the_event_album_at_production_li
         (album / "02.flac").write_bytes(b"two")
         (album / "cover.jpg").write_bytes(b"cover")
         repository = RecordingRepository()
+        opened.clear()  # only the reconcile's own reads, not the fixture's writes
         counts = OperationCounts()
         with count_filesystem_and_media(monkeypatch, counts, media_modules=(metadata,)):
             reconciler = TargetedLibraryReconciler(
@@ -1643,6 +1664,9 @@ def test_targeted_reconcile_contract_reads_only_the_event_album_at_production_li
             )
             reconciler.reconcile(_request(paths=(requested,)))
         assert set(repository.calls[0]["active_file_entries"]) == {str(requested), str(album / "02.flac")}
+        # Every file read is the event album's own; no sibling album is opened.
+        assert opened and all(path.resolve().is_relative_to(album.resolve()) for path in opened), opened
+        assert len(set(opened)) <= 3, opened
         return counts
 
     small, production = measure_scale_pair(
@@ -1650,7 +1674,8 @@ def test_targeted_reconcile_contract_reads_only_the_event_album_at_production_li
         small=20,
         large=1_000,
         run=run,
-        budgets={"filesystem_enumerations": 1, "stat_calls": 36, "open_calls": 3, "media_parses": 2},
+        budgets={"filesystem_enumerations": 1, "stat_calls": 36, "open_calls": 5, "media_parses": 2},
         growth=("stat_calls", 0),
     )
     assert small == production
+    assert small.open_calls == production.open_calls

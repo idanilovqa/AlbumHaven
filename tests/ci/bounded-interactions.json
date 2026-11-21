@@ -11761,7 +11761,7 @@
       "budgets": {
         "builder_calls": 0,
         "returned_rows": 92,
-        "sql_statements": 60,
+        "sql_statements": 66,
         "stat_calls": 0,
         "filesystem_enumerations": 0,
         "invalidations": 2,
@@ -14278,7 +14278,7 @@
       "budgets": {
         "filesystem_enumerations": 1,
         "stat_calls": 36,
-        "open_calls": 3,
+        "open_calls": 5,
         "media_parses": 2
       },
       "growth": {

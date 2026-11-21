@@ -2889,3 +2889,32 @@ test('request capture: loose-track hydration requests /view-data once per scope'
     return capture.counter.snapshot();
   });
 });
+
+// Request-capture contract (tests/ci/bounded-interactions.json): Loose Tracks requests stay on their
+// two endpoints, once per scope, and the search prefetch is reused instead of asked again.
+const { assertInteractionRequests: assertLooseTrackRequests, measureInteractionContract: measureLooseTrackContract } = require('../helpers/request-capture');
+
+test('request capture: loose tracks request each scope once and reuse the search prefetch', async () => {
+  const id = 'js:runtime/modal-and-overlay-helpers.js#fetchNonAlbumPayload';
+  await measureLooseTrackContract(id, async (tracks) => {
+    const { context } = loadHelper();
+    const requested = [];
+    context.updateGalleryMainControls = () => {};
+    context.URL = URL;
+    const looseTracks = Array.from({ length: tracks }, (_, index) => ({ path: `/music/agalloch/${index}.flac`, title: `Loose ${index}` }));
+    context.fetch = async (url) => {
+      requested.push(url);
+      return { ok: true, status: 200, json: async () => ({ selected_artist: 'Agalloch', non_album_tracks: looseTracks, non_album_tracks_deferred: false }) };
+    };
+    context.state.view = { selected_artist: 'Agalloch', non_album_tracks: [], non_album_tracks_deferred: true };
+    context.buildApiUrl = () => '/view-data?surface=albums&artist=Agalloch&omit_sidebar=1';
+    await context.hydrateDeferredNonAlbumTracks();
+    context.prefetchLibraryNonAlbumSearch('/view-data?surface=albums&q=agalloch');
+    const prefetchUrl = context.buildLibraryNonAlbumSearchUrl(new URL('/view-data?surface=albums&q=agalloch', 'http://localhost'));
+    await context.fetchLibraryNonAlbumPayload(prefetchUrl);
+    const paths = requested.map((url) => new URL(url, 'http://localhost').pathname);
+    assert.deepEqual(paths, ['/library/loose-tracks', '/view-data']);
+    assertLooseTrackRequests(id, paths);
+    return { requests: requested.length };
+  });
+});

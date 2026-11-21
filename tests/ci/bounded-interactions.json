@@ -4598,7 +4598,7 @@
     },
     {
       "id": "js:runtime/modal-and-overlay-helpers.js#fetchNonAlbumPayload",
-      "action": "fetch requests installed by fetchNonAlbumPayload",
+      "action": "Hydrate an artist's deferred Loose Tracks and reuse the search prefetch",
       "entrypoints": [
         "js:music_app/static/js/runtime/modal-and-overlay-helpers.js#fetchNonAlbumPayload:request:fetch"
       ],
@@ -4610,11 +4610,28 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static",
+      "proof": "contract",
       "requestOwnership": {
-        "allowed": [],
+        "allowed": [
+          "/library/loose-tracks",
+          "/view-data"
+        ],
         "forbidden": []
-      }
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 500
+      },
+      "budgets": {
+        "requests": 2
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/modal-and-overlay-helpers.test.js",
+      "testIdentity": "request capture: loose tracks request each scope once and reuse the search prefetch",
+      "rollback": "Test-only request-capture contract; Loose Tracks requests are unchanged. Reverting returns the helper to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:runtime/modal-and-overlay-helpers.js#hideGalleryFocusGlow",

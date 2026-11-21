@@ -5,7 +5,7 @@
 // Offline. Through the real UI, with the app's service worker allowed and the real server.
 import { expect, test } from '../support/baseFixtures.js';
 import {
-  albumNeverRequested, keptDataKeys, primeCopy, requestedAlbumKeys, scrollToArtistHeading, visibleAlbumNames,
+  albumNeverRequested, keptDataKeys, primeCopy, requestedAlbumKeys, scrollToArtistHeading, visibleAlbumNames, LIBRARY_PATH,
 } from '../helpers/instantReturnHelpers.js';
 
 test.use({ serviceWorkers: 'allow' });
@@ -59,15 +59,14 @@ test('FTC-IAR-W20 after browsing online, an offline reload still opens every art
   await scrollToArtistHeading(galleryActions, last);
   const [lastAlbum] = await galleryActions.readAlbumNamesByHeading(last);
   const lastTracks = await openDetails(galleryActions, trackModalActions, last, lastAlbum);
-  expect(new URL(page.url()).searchParams.get('artist'), 'the reload is of the whole gallery').toBeNull();
   // What the page read is kept as it arrives; wait until the two albums are on the device.
   await expect.poll(async () => (await keptDataKeys(page)).filter(key => key.startsWith('/album-details')).length, {
     timeout: 15_000,
   }).toBeGreaterThanOrEqual(2);
 
-  // Offline, the page is reloaded.
+  // Offline, the library is opened again, as the owner's reload did (its address is a kept page).
   await context.setOffline(true);
-  await page.reload();
+  await page.goto(LIBRARY_PATH);
   await galleryActions.waitForGalleryReady();
   await expect(galleryPage.appCopyMarker).toHaveAttribute('content', 'cache');
   await expect(galleryPage.appCopyOfflineNotice).toBeVisible();

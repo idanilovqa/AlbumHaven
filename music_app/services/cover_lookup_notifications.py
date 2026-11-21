@@ -122,6 +122,20 @@ def upsert_cover_lookup_notification(
     upsert_cover_lookup_notifications(config, [(task, persistence_revision)])
 
 
+def upsert_guarded_cover_lookup_notifications(
+    config: dict[str, object],
+    items: list[tuple[dict[str, object], int, str]],
+) -> None:
+    """Write each (task, revision, search generation) only while that search still owns it,
+    in one store transaction."""
+    items = [
+        item for item in items
+        if isinstance(item[0], dict) and str(item[0].get("id") or "").strip() and item[2]
+    ]
+    if items:
+        _cover_lookup_notifications_adapter(config).upsert_guarded_notifications(items)
+
+
 def upsert_cover_lookup_notifications(
     config: dict[str, object],
     tasks: list[tuple[dict[str, object], int]],

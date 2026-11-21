@@ -338,3 +338,22 @@ def test_rewritten_tracks_keep_their_album_art_folder_but_moved_or_removed_track
     assert inventory.watch_request_relocates_tracks(moved, images)
     removed_folder = TargetedReconciliationRequest(root_id="r", deleted_subtrees=frozenset({track.parent}))
     assert inventory.watch_request_relocates_tracks(removed_folder, images)
+
+
+def test_a_request_waiting_for_a_folder_is_woken_when_the_worker_lists_it():
+    import threading
+    import time
+    from music_app.services.local_cover_inventory import LocalCoverInventoryWorker, root_key
+
+    worker = LocalCoverInventoryWorker({}, repository=object())
+    started = time.monotonic()
+    waiter = threading.Thread(target=worker.wait_for_listing, args=("C:/Music/Album", 5.0))
+    waiter.start()
+    # The worker may finish before or after the request starts waiting; it keeps publishing until woken.
+    while waiter.is_alive() and time.monotonic() - started < 2.0:
+        worker._mark_finished(("root", root_key("C:/Music/Other")))
+        worker._mark_finished(("root", root_key("C:/Music/Album")))
+        time.sleep(0.01)
+    waiter.join(0.5)
+    assert not waiter.is_alive()
+    assert time.monotonic() - started < 2.0

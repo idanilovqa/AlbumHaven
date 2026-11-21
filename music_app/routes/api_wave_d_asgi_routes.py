@@ -508,9 +508,9 @@ def _is_squareish_cover(width: int, height: int) -> bool:
 
 # Owner (2026-11-18): a folder the index had never listed answered "not listed yet", and the page asked again a
 # second later. The request waits briefly for the worker's foreground listing instead; it never reads the folder.
-# A folder being re-indexed still answers at once with its previous listing.
+# A folder being re-indexed still answers at once with its previous listing. The worker wakes the request when it
+# finishes, so the wait costs one read before and one after, not a database poll (freeze guard BI-05).
 _UNLISTED_INVENTORY_WAIT_SECONDS = 1.5
-_UNLISTED_INVENTORY_POLL_SECONDS = 0.05
 
 
 async def _gallery_local_inventory(inventory_worker, album_root, track_paths: set[str]):
@@ -519,16 +519,16 @@ async def _gallery_local_inventory(inventory_worker, album_root, track_paths: se
     if album_root is None:
         context = await run_in_threadpool(inventory_worker.request_context, track_paths) or {}
         album_root = Path(context["root_path"]) if context.get("root_path") else None
-        while album_root is None and not context.get("error") and perf_counter() < deadline:
-            await asyncio.sleep(_UNLISTED_INVENTORY_POLL_SECONDS)
+        if album_root is None and not context.get("error"):
+            await run_in_threadpool(inventory_worker.wait_for_context, track_paths, deadline - perf_counter())
             album_root = await run_in_threadpool(repository.root_for_tracks, track_paths)
         if album_root is None:
             return None, {"available": False, "complete": False, "error": context.get("error")}
     inventory = await run_in_threadpool(repository.get, album_root)
     if not inventory or not inventory.get("complete"):
         await run_in_threadpool(inventory_worker.request, album_root)
-    while not (inventory or {}).get("available") and not (inventory or {}).get("error") and perf_counter() < deadline:
-        await asyncio.sleep(_UNLISTED_INVENTORY_POLL_SECONDS)
+    if not (inventory or {}).get("available") and not (inventory or {}).get("error"):
+        await run_in_threadpool(inventory_worker.wait_for_listing, album_root, deadline - perf_counter())
         inventory = await run_in_threadpool(repository.get, album_root)
     return album_root, inventory or {"available": False, "complete": False}
 
@@ -1666,7 +1666,9 @@ async def utilities_cover_lookup_additional_artwork(request: Request) -> JSONRes
     remote_url = None
     if source_kind == "local":
         try:
-            resolved = validate_local_cover_source(
+            # Validation resolves and checks the file on disk: off the event loop (freeze guard BI-08).
+            resolved = await run_in_threadpool(
+                validate_local_cover_source,
                 config, album_context.album_root, str(payload.get("source_path") or "").strip(),
                 track_paths=album_context.track_paths,
             )

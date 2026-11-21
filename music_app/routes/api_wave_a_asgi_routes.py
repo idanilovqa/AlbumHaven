@@ -219,11 +219,13 @@ async def rescan_missing_album(request: Request, album_key: str) -> JSONResponse
             status_code=503,
         )
     config = _app_config(request)
+
+    def rescan() -> dict[str, object]:
+        # Reading the roots takes a lock the watcher holds during disk work, so it stays off the event loop.
+        return MissingAlbumRescan(config, reconcile=reconcile, roots=get_library_roots(config)).rescan(normalized_key)
+
     try:
-        result = await run_in_threadpool(
-            MissingAlbumRescan(config, reconcile=reconcile, roots=get_library_roots(config)).rescan,
-            normalized_key,
-        )
+        result = await run_in_threadpool(rescan)
     except MissingAlbumNotFound:
         return JSONResponse({"ok": False, "error": "Album not found", "code": "album_not_found"}, status_code=404)
     return JSONResponse({"ok": True, **result})

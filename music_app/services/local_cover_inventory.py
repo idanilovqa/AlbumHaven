@@ -361,6 +361,30 @@ class LocalCoverInventoryWorker:
         self._foreground_at = time.monotonic()
         self._priority_checked_at = 0.0
         self._priority_waiting = False
+        # What the worker has finished since start, so a request waiting for one folder is woken by
+        # the worker instead of polling Postgres (freeze guard BI-05).
+        self._finished = threading.Condition()
+        self._finished_marks = {}
+
+    def _mark_finished(self, key):
+        with self._finished:
+            self._finished_marks[key] = self._finished_marks.get(key, 0) + 1
+            if len(self._finished_marks) > 512:
+                self._finished_marks.pop(next(iter(self._finished_marks)))
+            self._finished.notify_all()
+
+    def _wait_for_mark(self, key, timeout):
+        with self._finished:
+            seen = self._finished_marks.get(key, 0)
+            self._finished.wait_for(lambda: self._finished_marks.get(key, 0) != seen, timeout=max(0.0, timeout))
+
+    def wait_for_context(self, paths, timeout):
+        """Wait until the worker has resolved the folder of these tracks, or until `timeout`."""
+        self._wait_for_mark(("context", context_key(paths)), timeout)
+
+    def wait_for_listing(self, root, timeout):
+        """Wait until the worker has listed this folder, or until `timeout`."""
+        self._wait_for_mark(("root", root_key(root)), timeout)
 
     def note_foreground_activity(self):
         self._foreground_at = time.monotonic()
@@ -506,6 +530,7 @@ class LocalCoverInventoryWorker:
                                 self.repository.defer_context(context["context_key"], context["revision"], delay_seconds=3600, error=None)
                             else:
                                 self.repository.defer_context(context["context_key"], context["revision"])
+                            self._mark_finished(("context", context["context_key"]))
                         except InterruptedError:
                             self.repository.defer_context(context["context_key"], context["revision"], delay_seconds=0)
                         except (OSError, ValueError):
@@ -520,10 +545,12 @@ class LocalCoverInventoryWorker:
                             if cancelled():
                                 raise InterruptedError("Local cover inventory refresh cancelled")
                             self.repository.publish(pending["root_path"], pending["revision"], candidates)
+                            self._mark_finished(("root", root_key(pending["root_path"])))
                         except InterruptedError:
                             self.repository.defer(pending["root_path"], pending["revision"], delay_seconds=0)
                         except OSError:
                             self.repository.defer(pending["root_path"], pending["revision"])
+                            self._mark_finished(("root", root_key(pending["root_path"])))
                     elif not self._backfill_done and time.monotonic() - self._foreground_at > 5:
                         self._backfill_one()
             except Exception:

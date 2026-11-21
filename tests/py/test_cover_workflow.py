@@ -1740,3 +1740,24 @@ def test_album_root_resolution_contract_probes_only_the_selected_disc_folder_at_
         growth=("stat_calls", 0),
     )
     assert small == production
+
+
+def test_track_folder_check_reads_the_configured_roots_once_however_many_tracks(monkeypatch, tmp_path):
+    # Freeze guard (BI-05): the check read the library roots from Postgres once per track of the album.
+    from music_app.services import cover_workflow
+
+    album = tmp_path / "Music" / "Artist" / "Album"
+    album.mkdir(parents=True)
+    tracks = {str(album / f"{index:02d}.flac") for index in range(6)}
+    reads = []
+
+    def get_library_roots(_config):
+        reads.append(True)
+        return [str(tmp_path / "Music")]
+
+    monkeypatch.setattr(cover_workflow, "get_library_roots", get_library_roots)
+    monkeypatch.setattr(cover_workflow, "iter_library_root_paths", lambda _config: [tmp_path / "Music"])
+    monkeypatch.setattr(cover_workflow, "_is_valid_album_root", lambda *_args, **_kwargs: False)
+
+    assert cover_workflow._is_in_album_track_folder({}, album / "cover.jpg", tracks) is False
+    assert len(reads) == 1

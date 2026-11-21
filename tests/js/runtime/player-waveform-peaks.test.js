@@ -14,6 +14,7 @@ function loadPeaksRuntime(fetchImpl, overrides = {}) {
   const context = {
     AbortController,
     Map,
+    TextDecoder,
     setTimeout: overrides.setTimeout || setTimeout,
     URLSearchParams,
     console,
@@ -371,6 +372,174 @@ test('non-ok, invalid, and rejected requests are evicted so the same identity ca
   }
 });
 
+test('only the playing song asks the server for current priority', async () => {
+  const requests = [];
+  const context = loadPeaksRuntime(async (url) => {
+    requests.push(new URL(String(url), 'http://album-haven.test'));
+    return { ok: true, json: async () => peakPayload(0.5, 720) };
+  });
+
+  await context.loadWaveformPeaks('C:/Music/playing.flac', 720, 7, { current: true });
+  await context.loadWaveformPeaks('C:/Music/queued-next.flac', 720, 7);
+
+  assert.equal(requests[0].searchParams.get('priority'), 'current');
+  assert.equal(requests[1].searchParams.has('priority'), false, 'a prefetch must yield on the server');
+});
+
+function streamedResponse(lines, splitAt = 37) {
+  const bytes = new TextEncoder().encode(lines.map((line) => `${JSON.stringify(line)}\n`).join(''));
+  const pieces = [];
+  for (let index = 0; index < bytes.length; index += splitAt) pieces.push(bytes.slice(index, index + splitAt));
+  return {
+    ok: true,
+    status: 200,
+    headers: { get: (name) => (name.toLowerCase() === 'content-type' ? 'application/x-ndjson' : null) },
+    body: {
+      getReader: () => ({
+        read: async () => (pieces.length
+          ? { value: pieces.shift(), done: false }
+          : { value: undefined, done: true }),
+      }),
+    },
+  };
+}
+
+test('the playing song draws its waveform as it streams in, then keeps the complete one', async () => {
+  const requests = [];
+  const drawn = [];
+  const context = loadPeaksRuntime(async (url) => {
+    requests.push(new URL(String(url), 'http://album-haven.test'));
+    return streamedResponse([
+      { ...peakPayload(0.25, 720), complete: false },
+      { ...peakPayload(0.5, 720), complete: false },
+      { ...peakPayload(0.75, 720), complete: true },
+    ]);
+  });
+  context.state.player.current = { path: 'C:/Music/playing.mp3' };
+  context.state.player.waveform.compactPeaks = null;
+  context.updateWaveformAppearance = async () => {
+    drawn.push(context.state.player.waveform.compactPeaks.data.left[0]);
+  };
+
+  const peaks = await context.loadWaveformPeaks('C:/Music/playing.mp3', 720, 7, { current: true });
+
+  assert.equal(requests[0].searchParams.get('progressive'), '1');
+  assert.deepEqual(drawn, [0.25, 0.5], 'each partial waveform is drawn as it arrives');
+  assert.equal(context.state.player.waveform.compactPeaks.partial, true);
+  assert.equal(peaks.left[0], 0.75, 'the complete waveform is the result');
+});
+
+test('a streamed busy answer is retried like a 429', async () => {
+  let attempts = 0;
+  const context = loadPeaksRuntime(async () => {
+    attempts += 1;
+    return attempts === 1
+      ? streamedResponse([{ error: 'waveform peak build was stopped' }])
+      : { ok: true, status: 200, json: async () => peakPayload(0.5, 720) };
+  }, {
+    setTimeout(callback) {
+      callback();
+      return 1;
+    },
+  });
+  context.state.player.current = { path: 'C:/Music/playing.mp3' };
+
+  const peaks = await context.loadWaveformPeaks('C:/Music/playing.mp3', 720, 7, { current: true });
+
+  assert.equal(attempts, 2);
+  assert.equal(peaks.left[0], 0.5);
+});
+
+test('a partial waveform never replaces a finished one or shows for another song', async () => {
+  const finished = { sampleCount: 720, left: [1], right: [1] };
+  const context = loadPeaksRuntime(async () => streamedResponse([
+    { ...peakPayload(0.25, 720), complete: false },
+    { ...peakPayload(0.75, 720), complete: true },
+  ]));
+  context.updateWaveformAppearance = async () => {};
+  context.state.player.current = { path: 'C:/Music/seeked.mp3' };
+  context.state.player.waveform.compactPeaks = { path: 'C:/Music/seeked.mp3', generation: 6, data: finished };
+
+  await context.loadWaveformPeaks('C:/Music/seeked.mp3', 720, 7, { current: true });
+  assert.equal(context.state.player.waveform.compactPeaks.data, finished);
+
+  context.state.player.current = { path: 'C:/Music/skipped-to.mp3' };
+  context.state.player.waveform.compactPeaks = null;
+  await context.loadWaveformPeaks('C:/Music/earlier.mp3', 720, 7, { current: true });
+  assert.equal(context.state.player.waveform.compactPeaks, null);
+});
+
+test('a prefetch still building is replaced at current priority once its song plays', async () => {
+  const pending = [];
+  const context = loadPeaksRuntime((url, options) => new Promise((resolve) => {
+    pending.push({ url: new URL(String(url), 'http://album-haven.test'), options, resolve });
+  }));
+
+  const prefetch = context.loadWaveformPeaks('C:/Music/next.flac', 720, 7);
+  const repeatedPrefetch = context.loadWaveformPeaks('C:/Music/next.flac', 720, 7);
+  assert.equal(pending.length, 1, 'a repeated prefetch shares the request in flight');
+  const playing = context.loadWaveformPeaks('C:/Music/next.flac', 720, 7, { current: true });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(pending.length, 2);
+  assert.equal(pending[0].options.signal.aborted, true, 'the low-priority request is withdrawn');
+  assert.equal(pending[1].url.searchParams.get('priority'), 'current');
+  assert.equal(pending[1].options.signal.aborted, false);
+  pending[0].resolve({ ok: true, json: async () => peakPayload(0.125, 720) });
+  pending[1].resolve({ ok: true, json: async () => peakPayload(0.75, 720) });
+
+  assert.equal(await prefetch, null);
+  assert.equal(await repeatedPrefetch, null);
+  assert.equal((await playing).left[0], 0.75);
+  assert.equal(
+    (await context.loadWaveformPeaks('C:/Music/next.flac', 720, 7, { current: true })).left[0],
+    0.75,
+  );
+  assert.equal(pending.length, 2, 'the current peaks stay cached');
+});
+
+test('a generation change aborts every request of the previous generation', async () => {
+  const pending = [];
+  const context = loadPeaksRuntime((url, options) => new Promise((resolve) => {
+    pending.push({ options, resolve });
+  }));
+
+  void context.loadWaveformPeaks('C:/Music/playing.flac', 720, 7, { current: true });
+  void context.loadWaveformPeaks('C:/Music/next.flac', 720, 7);
+  context.state.player.streaming.generation = 8;
+  void context.loadWaveformPeaks('C:/Music/new.flac', 720, 8, { current: true });
+
+  assert.deepEqual(pending.map(({ options }) => options.signal.aborted), [true, true, false]);
+});
+
+test('boundary promotion upgrades the incoming prefetch to current priority', async () => {
+  const pending = [];
+  const context = loadPeaksRuntime((url, options) => new Promise((resolve) => {
+    pending.push({ url: new URL(String(url), 'http://album-haven.test'), options, resolve });
+  }));
+  context.state.player.waveform.compactPeaks = null;
+
+  const prefetch = context.loadWaveformPeaks('C:/Music/incoming.flac', 720, 7);
+  const promotion = context.promoteWaveformPeaks(
+    'C:/Music/outgoing.flac',
+    'C:/Music/incoming.flac',
+    7,
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(pending.length, 2);
+  assert.equal(pending[0].options.signal.aborted, true);
+  assert.equal(pending[1].url.searchParams.get('priority'), 'current');
+  pending[0].resolve({ ok: true, json: async () => peakPayload(0.125, 720) });
+  pending[1].resolve({ ok: true, json: async () => peakPayload(0.625, 720) });
+  const promoted = await promotion;
+
+  assert.equal(await prefetch, null);
+  assert.equal(promoted.left[0], 0.625);
+  assert.equal(context.state.player.waveform.compactPeaks.path, 'C:/Music/incoming.flac');
+  assert.equal(context.state.player.waveform.compactPeaks.data, promoted);
+});
+
 test('boundary promotion publishes prefetched current peaks and evicts the completed source', async () => {
   const requests = [];
   const context = loadPeaksRuntime(async (url) => {
@@ -463,4 +632,41 @@ test('stale boundary promotion does not retry or abort the active generation con
   assert.equal(pending[1].options.signal.aborted, false);
   pending[1].resolve({ ok: true, json: async () => peakPayload(0.5) });
   assert.equal((await activeGenerationLoad).left[0], 0.5);
+});
+
+test('pressing Play asks for the waveform at once and the playing generation takes over that request', async () => {
+  const requests = [];
+  const context = loadPeaksRuntime(async (url, options) => {
+    requests.push({ url: String(url), options });
+    return { ok: true, json: async () => peakPayload(0.5, 720) };
+  });
+  const track = 'C:/Music/Album/first-after-sign-in.flac';
+
+  context.startSelectedTrackWaveformPeaks(track);
+  assert.equal(requests.length, 1, 'the request leaves when Play is pressed, before the stream opens');
+  assert.match(requests[0].url, /priority=current/);
+  assert.match(requests[0].url, /progressive=1/);
+
+  context.state.player.streaming.generation = 8;
+  const peaks = await context.loadWaveformPeaks(track, 720, 8, { current: true });
+
+  assert.equal(requests.length, 1, 'the playing generation never asks for the same song again');
+  assert.equal(peaks.left[0], 0.5);
+});
+
+test('pressing Play on another song stops the previous Play request', async () => {
+  const requests = [];
+  const context = loadPeaksRuntime((url, options) => {
+    requests.push({ url: String(url), options });
+    return new Promise(() => {});
+  });
+
+  context.startSelectedTrackWaveformPeaks('C:/Music/Album/01.flac');
+  context.startSelectedTrackWaveformPeaks('C:/Music/Album/01.flac');
+  assert.equal(requests.length, 1, 'a second press of the same song keeps its request');
+  context.startSelectedTrackWaveformPeaks('C:/Music/Album/02.flac');
+
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].options.signal.aborted, true);
+  assert.equal(requests[1].options.signal.aborted, false);
 });

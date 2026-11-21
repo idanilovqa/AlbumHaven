@@ -2,6 +2,15 @@ import { existsSync, globSync, renameSync } from 'node:fs';
 import path from 'node:path';
 import { InteractionSurfaces, expectCombinedLoopWaveform, expectLoopPauseFirstClick, expectStableButtonHover } from '../poms/interactionSurfaces.js';
 import { expect, test } from '../support/baseFixtures.js';
+import { GlobalPlayerActions, SettingsModalAppBarActions, UtilityAppearanceActions, UtilityTabBarActions } from '../actions/index.js';
+import { GlobalPlayer, SettingsModalAppBar, UtilityAppearanceTab, UtilityTabBar } from '../poms/index.js';
+import { LoginPage } from '../phase7/poms/authPages.js';
+import { PERFORMANCE_AUTH_PASSWORD, PERFORMANCE_AUTH_USERNAME } from '../support/performanceAuthentication.js';
+import {
+  createLongPrefetchTrack,
+  removeLongPrefetchTrack,
+  startWaveformPrefetch,
+} from '../helpers/waveformPrefetchFixture.js';
 
 const CASE_ID = 'FTC-UTIL-LOOPS-021 / FTC-UTIL-LOOPS-023 / FTC-UTIL-LOOPS-024 / FTC-UTIL-LOOPS-026 / FTC-PLAYER-017 / FTC-PLAYER-011';
 const LOOP_ALBUM_TARGET = {
@@ -1297,4 +1306,118 @@ test('FTC-PLAYER-017 paused reload restores the current waveform', { tag: '@area
   expect(waveform.nonPlayheadPixels).toBeGreaterThan(0);
   expect(waveform.leftBins).toBe(720);
   expect(waveform.rightBins).toBe(720);
+});
+
+test.describe('a browser that has just signed in', () => {
+  test.use({ authenticateFreshBrowserSession: false });
+
+  test('FTC-PLAYER-025 the first song played right after sign-in draws its own waveform about a second after it starts', { tag: '@area:loops' }, async ({
+    freshBrowserSession,
+  }, testInfo) => {
+    test.setTimeout(180000);
+    const session = await freshBrowserSession.create();
+    const { page: signedInPage, galleryActions, trackModalActions } = session;
+    const globalPlayerActions = new GlobalPlayerActions(new GlobalPlayer(signedInPage, testInfo));
+    const settingsActions = new SettingsModalAppBarActions(new SettingsModalAppBar(signedInPage, testInfo));
+    const tabBarActions = new UtilityTabBarActions(new UtilityTabBar(signedInPage, testInfo));
+    const appearanceActions = new UtilityAppearanceActions(new UtilityAppearanceTab(signedInPage, testInfo));
+
+    const login = new LoginPage(signedInPage);
+    await login.open('/');
+    await login.signIn(PERFORMANCE_AUTH_USERNAME, PERFORMANCE_AUTH_PASSWORD);
+    await galleryActions.waitForGalleryReady();
+    // The seekbar style is a device preference, so this browser chooses the waveform itself.
+    await settingsActions.openSettings();
+    await tabBarActions.openTab('appearance');
+    await appearanceActions.waitForReady();
+    await appearanceActions.saveSeekbarMode('waveform');
+    await settingsActions.closeSettings();
+    await galleryActions.selectAlbumDetailsByIdentity(LOOP_ALBUM_TARGET);
+
+    const selectedTrack = await trackModalActions.playTrackByTitle(LOOP_TRACK_TITLE);
+    await globalPlayerActions.waitForCurrentTrack({
+      path: selectedTrack.path,
+      trackTitle: LOOP_TRACK_TITLE,
+      visibleTitle: LOOP_PLAYER_TITLE,
+    });
+    await trackModalActions.close();
+    const waveform = await globalPlayerActions.waitForRenderedWaveform({
+      path: selectedTrack.path,
+      timeout: 30000,
+    });
+
+    // The canvas shows this song's own peaks, not an empty or earlier waveform.
+    expect(waveform.path).toBe(selectedTrack.path);
+    expect(waveform.leftBins).toBe(720);
+    expect(waveform.rightBins).toBe(720);
+    expect(waveform.nonPlayheadPixels).toBeGreaterThan(0);
+    expect(waveform.leftPeaks.some((peak) => peak > 0)).toBe(true);
+    // It appears with playback: about a second after the first audio frame at most.
+    expect(waveform.firstFrameAtMs).toBeGreaterThan(0);
+    const afterAudioMs = Math.max(0, waveform.renderedAtMs - waveform.firstFrameAtMs);
+    testInfo.annotations.push({ type: 'waveform after first audio frame (ms)', description: String(Math.round(afterAudioMs)) });
+    expect(afterAudioMs).toBeLessThan(1500);
+    await globalPlayerActions.waitForPlaybackState({ paused: false, minimumCurrentTime: 0.02 });
+    await globalPlayerActions.pauseIfPlaying();
+  });
+});
+
+test('FTC-PLAYER-024 the playing song draws its waveform while a prefetch build runs and keeps it through a seek', { tag: '@area:loops' }, async ({
+  galleryActions,
+  globalPlayerActions,
+  page,
+  settingsModalAppBarActions,
+  trackModalActions,
+  utilityAppearanceActions,
+  utilityTabBarActions,
+}) => {
+  test.setTimeout(240000);
+  const longTrackPath = await createLongPrefetchTrack();
+  let prefetch = null;
+  try {
+    await galleryActions.goto();
+    await galleryActions.waitForGalleryReady();
+    await settingsModalAppBarActions.openSettings();
+    await utilityTabBarActions.openTab('appearance');
+    await utilityAppearanceActions.waitForReady();
+    await utilityAppearanceActions.saveSeekbarMode('waveform');
+    await settingsModalAppBarActions.closeSettings();
+    await galleryActions.selectAlbumDetailsByIdentity(LOOP_ALBUM_TARGET);
+
+    // A queued track's waveform starts building first, the way the player prefetches it.
+    prefetch = startWaveformPrefetch(page, longTrackPath);
+    const selectedTrack = await trackModalActions.playTrackByTitle(LOOP_TRACK_TITLE);
+    await globalPlayerActions.waitForCurrentTrack({
+      path: selectedTrack.path,
+      trackTitle: LOOP_TRACK_TITLE,
+      visibleTitle: LOOP_PLAYER_TITLE,
+    });
+    await trackModalActions.close();
+
+    const waveform = await globalPlayerActions.waitForRenderedWaveform({
+      path: selectedTrack.path,
+      timeout: 30000,
+    });
+    const prefetchStatusAtDraw = prefetch.status;
+
+    expect(waveform.path).toBe(selectedTrack.path);
+    expect(waveform.nonPlayheadPixels).toBeGreaterThan(0);
+    expect(waveform.leftBins).toBe(720);
+    expect(waveform.rightBins).toBe(720);
+    // The playing song never waits for the prefetch: that build is still running or it
+    // already yielded with a busy answer, and it never finished first.
+    expect([null, 429]).toContain(prefetchStatusAtDraw);
+
+    // A seek restarts playback of the same song; its waveform must stay drawn, not blank out.
+    await globalPlayerActions.seekToSeconds(7);
+    const afterSeek = await globalPlayerActions.globalPlayer.readRenderedWaveformCheckpoint();
+    expect(afterSeek.path).toBe(selectedTrack.path);
+    expect(afterSeek.leftBins).toBe(720);
+    expect(afterSeek.nonPlayheadPixels).toBeGreaterThan(0);
+    await globalPlayerActions.pauseIfPlaying();
+  } finally {
+    if (prefetch) await prefetch.done;
+    removeLongPrefetchTrack();
+  }
+  expect([200, 429]).toContain(prefetch.status);
 });

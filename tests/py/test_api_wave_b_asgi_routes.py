@@ -2412,3 +2412,45 @@ def test_lastfm_total_answers_from_memory_and_only_a_refresh_contacts_lastfm(mon
         assert len(calls) == 2
     finally:
         routes._LASTFM_TOTAL_CACHE.pop(987, None)
+
+
+def test_lastfm_submission_progress_reports_what_the_optimistic_page_confirms_or_rolls_back(app, monkeypatch):
+    """Owner (2026-11-21): the page shows Submit's expected result at once. Each progress
+    read must report the worker's state and the store's saved counts, so the page confirms
+    them when the run ends and rolls back with the readable error when it fails."""
+    from music_app.routes import api_wave_b_asgi_routes as routes
+    from music_app.services import lastfm_retry
+
+    submissions = {}
+    monkeypatch.setattr(lastfm_retry, "_SUBMISSIONS", submissions)
+    saved = {"listen_history_count": 17, "pending_scrobble_count": 120}
+    monkeypatch.setattr(routes, "build_listen_history_status_counts", lambda config, *, account_id, library_id: dict(saved))
+    monkeypatch.setattr(routes, "get_saved_lastfm_session", lambda *_args, **_kwargs: pytest.fail("progress reads never ask Last.fm"))
+    asgi_app = _make_asgi_app()
+    asgi_app.state.config = app.config
+    asgi_app.state.logger = app.logger
+    asgi_app.state.library_state = app.library_state
+
+    def progress():
+        status, _headers, body = _run_asgi_request(
+            asgi_app, "GET", "/utilities/integrations/lastfm/scrobbles", query={"progress": "1"},
+        )
+        assert status == 200
+        return _decode_json(body)
+
+    submissions[1] = {"state": "running", "error": ""}
+    assert progress() == {"ok": True, "scrobbled": 17, "pending": 120, "can_submit": True,
+                          "submission": {"state": "running", "error": ""}}
+
+    # Confirmed: the run ended and the counts are what the worker saved.
+    saved.update(listen_history_count=137, pending_scrobble_count=0)
+    submissions[1] = {"state": "idle", "error": ""}
+    assert progress()["submission"] == {"state": "idle", "error": ""}
+    assert (progress()["scrobbled"], progress()["pending"]) == (137, 0)
+
+    # Failed: the readable error, with the store's unchanged counts to roll back to.
+    saved.update(listen_history_count=17, pending_scrobble_count=120)
+    submissions[1] = {"state": "failed", "error": "Some pending scrobbles could not be submitted to Last.fm."}
+    failed = progress()
+    assert failed["submission"] == {"state": "failed", "error": "Some pending scrobbles could not be submitted to Last.fm."}
+    assert (failed["scrobbled"], failed["pending"]) == (17, 120)

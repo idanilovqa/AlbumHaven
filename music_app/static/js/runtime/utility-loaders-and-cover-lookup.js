@@ -1253,12 +1253,34 @@ function invalidateLastfmScrobbleSummary() {
   owner.requestGeneration += 1;
   owner.followToken += 1;
   owner.summary = null;
+  owner.preSubmitSummary = null;
   owner.rememberedTotal = null;
   owner.refreshingTotal = false;
   owner.loading = false;
   owner.loadPromise = null;
   owner.submitting = false;
   return owner;
+}
+
+// Owner (2026-11-21): Submit shows the expected result at once (every pending scrobble
+// sent); the worker's actual saved numbers replace it when the run ends, and a failed
+// run rolls back to the numbers shown before Submit.
+function applyOptimisticLastfmSubmission(owner) {
+  const before = owner.summary;
+  if (!before) return;
+  const pending = Number(before.pending) || 0;
+  owner.preSubmitSummary = { ...before };
+  owner.summary = {
+    ...before,
+    scrobbled: (Number(before.scrobbled) || 0) + pending,
+    lastfm_total: before.lastfm_total == null ? null : Number(before.lastfm_total) + pending,
+    pending: 0,
+  };
+}
+
+function rollBackOptimisticLastfmSubmission(owner) {
+  if (owner.preSubmitSummary) owner.summary = owner.preSubmitSummary;
+  owner.preSubmitSummary = null;
 }
 
 function isLastfmSubmissionActive(payload) {
@@ -1360,7 +1382,8 @@ async function loadLastfmScrobbleSummary(lastfm, { replace = false, preserveOnEr
         const summary = normalizeLastfmScrobbleSummary(data, lastfm);
         if (summary.lastfm_total == null) summary.lastfm_total = owner.summary?.lastfm_total ?? owner.rememberedTotal;
         else rememberLastfmTotal(username, summary.lastfm_total);
-        owner.summary = summary;
+        // An optimistic Submit keeps its expected numbers until the run ends.
+        if (!(owner.submitting && owner.preSubmitSummary)) owner.summary = summary;
         if (data.lastfm_total_current === false) void refreshLastfmTotal(owner, requestGeneration, username);
         // A run started earlier, or from another page, keeps reporting its progress here.
         if (!owner.submitting && isLastfmSubmissionActive(data)) followLastfmScrobbleSubmission(owner, lastfm);
@@ -1961,6 +1984,7 @@ async function submitPendingLastfmScrobbles() {
   owner.loading = false;
   owner.loadPromise = null;
   owner.submitting = true;
+  applyOptimisticLastfmSubmission(owner);
   renderUtilityModalContent();
   try {
     const response = await fetch('/utilities/integrations/lastfm/scrobbles/submit', {
@@ -1968,10 +1992,16 @@ async function submitPendingLastfmScrobbles() {
       headers: { Accept: 'application/json' },
     });
     const data = await response.json().catch(() => ({}));
-    if (state.utility.lastfmScrobbles === owner && owner.requestGeneration === submitGeneration) {
-      owner.summary = normalizeLastfmScrobbleSummary(data, owner.summary || lastfm);
+    const current = state.utility.lastfmScrobbles === owner && owner.requestGeneration === submitGeneration;
+    if (!response.ok || !data.ok) {
+      // A refused Submit rolls back and keeps the fresher counts the refusal carries.
+      if (current) {
+        rollBackOptimisticLastfmSubmission(owner);
+        owner.summary = normalizeLastfmScrobbleSummary(data, owner.summary || lastfm);
+      }
+      throw new Error(data.error || LASTFM_SUBMIT_ERROR);
     }
-    if (!response.ok || !data.ok) throw new Error(data.error || LASTFM_SUBMIT_ERROR);
+    if (current && !owner.preSubmitSummary) owner.summary = normalizeLastfmScrobbleSummary(data, owner.summary || lastfm);
     // The server sends the scrobbles in the background; Submit stays busy while the count falls.
     if (stillSubmitting()) followLastfmScrobbleSubmission(owner, lastfm);
     return true;
@@ -1987,6 +2017,9 @@ async function submitPendingLastfmScrobbles() {
 function followLastfmScrobbleSubmission(owner, lastfm) {
   const token = ++owner.followToken;
   let unchangedPolls = 0;
+  // The worker's real progress; an optimistic Submit shows its expected numbers meanwhile.
+  const shown = owner.preSubmitSummary || owner.summary;
+  let progress = { pending: shown?.pending, scrobbled: shown?.scrobbled };
   owner.submitting = true;
   renderUtilityModalContent();
   const following = () => state.utility.lastfmScrobbles === owner && owner.followToken === token;
@@ -2004,10 +2037,13 @@ function followLastfmScrobbleSubmission(owner, lastfm) {
     }
     if (!following()) return;
     const summary = normalizeLastfmScrobbleSummary(data, owner.summary || lastfm);
-    if (summary.pending !== owner.summary?.pending || summary.scrobbled !== owner.summary?.scrobbled) {
-      owner.summary = summary;
+    if (summary.pending !== progress.pending || summary.scrobbled !== progress.scrobbled) {
+      progress = { pending: summary.pending, scrobbled: summary.scrobbled };
       unchangedPolls = 0;
-      renderUtilityModalContent();
+      if (!owner.preSubmitSummary) {
+        owner.summary = summary;
+        renderUtilityModalContent();
+      }
     } else {
       unchangedPolls += 1;
     }
@@ -2018,7 +2054,13 @@ function followLastfmScrobbleSubmission(owner, lastfm) {
     } else if (unchangedPolls >= LASTFM_SUBMISSION_MAX_UNCHANGED_POLLS) {
       owner.followToken += 1;
       owner.submitting = false;
-      renderUtilityModalContent();
+      if (owner.preSubmitSummary) {
+        // Left to the server: the expected numbers are not confirmed, so show the store's.
+        rollBackOptimisticLastfmSubmission(owner);
+        await loadLastfmScrobbleSummary(lastfm, { replace: true, preserveOnError: true });
+      } else {
+        renderUtilityModalContent();
+      }
     } else {
       window.setTimeout(pollLastfmScrobbleSubmission, LASTFM_SUBMISSION_POLL_MS);
     }
@@ -2029,6 +2071,15 @@ function followLastfmScrobbleSubmission(owner, lastfm) {
 async function finishLastfmScrobbleSubmission(owner, lastfm, error) {
   owner.followToken += 1;
   owner.submitting = false;
+  if (error) {
+    // A failed run rolls back to the numbers before Submit; the refresh below then shows
+    // the store's numbers, which differ only if some batches were sent before the failure.
+    rollBackOptimisticLastfmSubmission(owner);
+    renderUtilityModalContent();
+  } else {
+    // Confirmed: the refresh below replaces the expected numbers with the saved ones.
+    owner.preSubmitSummary = null;
+  }
   await loadLastfmScrobbleSummary(lastfm, { replace: true, preserveOnError: true });
   if (error) {
     state.utility.logHistoryLoaded = false;

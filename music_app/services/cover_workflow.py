@@ -288,7 +288,11 @@ def _minimum_album_folder_depth(root: dict[str, object]) -> int:
     return 2
 
 
-def _is_shared_disc_parent_image(image: Path, disc_root: Path, library_roots) -> bool:
+def _is_shared_disc_parent_image(
+    image: Path,
+    disc_root: Path,
+    configured_roots: list[dict[str, object]],
+) -> bool:
     """UI-2 (owner): art beside the disc folders (Album/cover.jpg next to CD1..CD4) belongs to every disc.
 
     Cover Look Up lists it for an album that holds only some of those discs, so Save accepts it too. Only
@@ -298,7 +302,7 @@ def _is_shared_disc_parent_image(image: Path, disc_root: Path, library_roots) ->
     return (
         is_disc_like_folder(disc_root)
         and image.parent == shared
-        and _is_valid_album_root(shared, library_roots, enforce_layout_depth=True)
+        and _is_valid_album_root(shared, configured_roots, enforce_layout_depth=True)
     )
 
 
@@ -307,8 +311,7 @@ def _is_in_album_track_folder(config: dict[str, object], image: Path, track_path
     folders (two editions grouped as one album) lists the art of each, so art in any folder holding the album's
     own tracks qualifies, as does art beside its disc folders; always inside the configured library roots."""
     library_roots = tuple(iter_library_root_paths(config))
-    # Read the configured roots once: the per-track checks below would otherwise read them from
-    # Postgres for every track of the album (freeze guard BI-05).
+    # The root settings are read once per check, not once per track folder.
     configured_roots = get_library_roots(config)
     for raw_path in track_paths:
         if not str(raw_path or "").strip():

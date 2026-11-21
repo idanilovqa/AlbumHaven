@@ -1110,7 +1110,15 @@ class _OneAlbumLibraryDatabase:
 def test_queued_cache_update_contract_publishes_only_the_edited_album_and_coalesces_rapid_saves_at_production_track_count(
     tmp_path, monkeypatch, held_executor,
 ):
-    from music_app.services import gallery_projection_postgres, relation_projection_builder, scan_cache_persistence
+    """A save never does library-scale work. Owner (2026-11-21): its publication patches
+    the relation index in the same transaction, scoped to the edited album only, so the
+    rows patched, read and written stay the same at 20 and 160,000 library tracks."""
+    from music_app.services import (
+        gallery_projection_postgres,
+        relation_projection_builder,
+        scan_cache_persistence,
+        scoped_relation_projection,
+    )
     from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
     from tests.py.bounded_interactions import CountingConnection, OperationCounts, measure_scale_pair
     from tests.py.filesystem_operation_counting import count_filesystem_and_media
@@ -1127,11 +1135,22 @@ def test_queued_cache_update_contract_publishes_only_the_edited_album_and_coales
         original = getattr(module, name)
         monkeypatch.setattr(module, name, lambda *args, original=original, **kwargs: (
             current["counts"].count("builder_calls"), original(*args, **kwargs))[1])
-    # The background owner that rebuilds the stale relation projection.
+    # The background owner that refreshes the gallery after the publication.
     monkeypatch.setattr(
         gallery_projection_postgres, "schedule_gallery_projection_refresh",
         lambda _config, **_kwargs: current["counts"].count("invalidations"),
     )
+    # The in-transaction relation patch: it is handed only the albums the save touched.
+    relation_patches: list[set[str]] = []
+
+    def scoped_relation_patch(connection, *, album_ids=(), album_keys=(), track_paths=(), **_kwargs):
+        patched = {str(path) for path in track_paths}
+        relation_patches.append(patched)
+        current["counts"].count("membership_rows", len(patched))
+        current["counts"].count("unrelated_writes", len(patched - set(album)))
+        current["counts"].count("unrelated_writes", len(set(album_keys) - {"broadcast::tender buttons"}))
+
+    monkeypatch.setattr(scoped_relation_projection, "publish_affected_relation_projection", scoped_relation_patch)
     album_root = (tmp_path / "Broadcast" / "Tender Buttons").resolve()
     album = {
         str(album_root / f"{number:02d}.mp3"): {
@@ -1149,6 +1168,7 @@ def test_queued_cache_update_contract_publishes_only_the_edited_album_and_coales
     def run(track_count: int) -> OperationCounts:
         database = _OneAlbumLibraryDatabase(track_count=track_count, entries=album)
         counts = current["counts"] = OperationCounts()
+        relation_patches.clear()
         adapter = PostgresScanCacheAdapter(config, connect=lambda _url: CountingConnection(database, counts))
         monkeypatch.setattr(cache_module, "_select_runtime_scan_cache_adapter", lambda _config: adapter)
         hooks: list[int] = []
@@ -1181,6 +1201,9 @@ def test_queued_cache_update_contract_publishes_only_the_edited_album_and_coales
         assert hooks == list(range(rapid_save_count))
         assert database.entries[edited_path]["title"] == f"Title {rapid_save_count - 1}"
         assert all(database.entries[path]["title"] == entry["title"] for path, entry in album.items() if path != edited_path)
+        # One scoped patch per publication, each within the edited album.
+        assert len(relation_patches) == publications
+        assert all(edited_path in patched and patched <= set(album) for patched in relation_patches)
         return counts
 
     small, production = measure_scale_pair(
@@ -1188,3 +1211,7 @@ def test_queued_cache_update_contract_publishes_only_the_edited_album_and_coales
     )
     assert small.generation_changes == production.generation_changes == 2
     assert small.sql_statements == production.sql_statements
+    # The relation patch touches the same album rows whatever the library size, never another album's.
+    assert small.membership_rows == production.membership_rows <= 2 * len(album)
+    assert small.unrelated_writes == production.unrelated_writes == 0
+    assert small.builder_calls == production.builder_calls == 0

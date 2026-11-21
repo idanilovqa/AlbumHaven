@@ -11,6 +11,7 @@ import {
 import { setPastedCoverSaveHeld } from '../helpers/coverLookupProviderHelpers.js';
 import { MobileLayoutPage } from '../poms/mobileLayoutPage.js';
 import { coverPathForReference } from '../helpers/coverReferences.js';
+import { readRuntimeView } from '../helpers/realAppBenchmarkHelpers.js';
 
 const {
   cancelClear: CANCEL_CLEAR_TARGET,
@@ -2049,17 +2050,34 @@ test('FTC-COVERS-041 unhydrated notification opens the optimistic split chooser 
 test('FTC-COVERS-049 an in-app split from search results opens the split chooser from the notification', { tag: '@area:cover-providers' }, async ({
   coverLookupActions,
   galleryActions,
+  page,
   tagEditorActions,
   trackModalActions,
 }) => {
   test.setTimeout(300_000);
   const lookup = coverLookupActions.coverLookup;
+  const diagnose = async (label) => {
+    const names = (view) => [...(view?.primary_artist_groups || []), ...(view?.artist_groups || [])].map((group) => (
+      `${group.artist}: ${(group.albums || []).map((item) => `${item.name}[${item.year}](${(item.tracks || []).length}/${item.track_count_preview})`).join(', ')}`));
+    const view = await readRuntimeView(page);
+    const server = await page.request.get(`/view-data?surface=albums&q=${encodeURIComponent(SPLIT_FIXTURE.album)}`)
+      .then((response) => response.json()).catch((error) => ({ error: String(error) }));
+    console.log(`[covers-049-diag] ${label} ${JSON.stringify({
+      url: page.url(), query: view?.query, selected: view?.selected_artist, source: view?.search_context?.selected_artist_source,
+      page: names(view), serverSelected: server?.selected_artist, server: names(server), serverError: server?.error,
+    })}`);
+  };
   const splitFilenames = [12, 13, 14, 15, 16].map(
     (number) => `${String(number).padStart(2, '0')}. Студийная запись ${number}.mp3`,
   );
   const searchUrl = `/?surface=albums&q=${encodeURIComponent(SPLIT_FIXTURE.album)}`;
   const identity = { album: SPLIT_FIXTURE.album, artist: SPLIT_FIXTURE.artist, year: SPLIT_FIXTURE.year };
   const editAlbum = async ({ album, trackCount, filenames, newName }) => {
+    if (album === SPLIT_FIXTURE.splitAlbum) {
+      await diagnose('before reopening split');
+      await page.waitForTimeout(3000);
+      await diagnose('3 s later');
+    }
     await tagEditorActions.openForAlbum({
       ...identity, album, expectedTrackCount: trackCount, galleryActions, trackModalActions,
     });
@@ -2105,6 +2123,7 @@ test('FTC-COVERS-049 an in-app split from search results opens the split chooser
         await editAlbum({
           album: SPLIT_FIXTURE.album, trackCount: 16, filenames: splitFilenames, newName: SPLIT_FIXTURE.splitAlbum,
         });
+        await diagnose('right after split saved');
         split = true;
         await expectChooserFromNotification();
         if (round === 'first split') {

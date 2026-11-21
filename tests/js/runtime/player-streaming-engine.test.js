@@ -352,6 +352,8 @@ function createEngineHarness(options = {}) {
     handleStreamingPlaybackEnded: options.handleStreamingPlaybackEnded,
     handleStreamingPlaybackWaveformReady: options.handleStreamingPlaybackWaveformReady,
     ensureStreamingDecoders: options.ensureStreamingDecoders,
+    getLocalStorageItem: options.getLocalStorageItem,
+    setLocalStorageItem: options.setLocalStorageItem,
     updatePlayerUi: options.updatePlayerUi,
     fetch: options.fetch,
     cancelWaveformPeakLoads: options.cancelWaveformPeakLoads,
@@ -6326,6 +6328,40 @@ test('a same-rate queued track keeps the context and opens gapless continuity', 
   assert.equal(harness.contexts.length, 1);
   assert.equal(harness.sent('open').at(-1).role, 'continuity');
   assert.equal(harness.sent('open').at(-1).sampleRate, 44_100);
+});
+
+test('the idle preparation verifies decoders and builds a suspended graph at the remembered rate', async () => {
+  let decoderChecks = 0;
+  const harness = createEngineHarness({
+    trackSampleRates: new Map(),
+    ensureStreamingDecoders: () => { decoderChecks += 1; return Promise.resolve(['mp3']); },
+    getLocalStorageItem: (key) => (key === 'albumhaven.playbackSampleRate.v1' ? '48000' : ''),
+  });
+
+  await harness.context.prepareIdleStreamingPlayback();
+
+  assert.equal(decoderChecks, 1);
+  assert.equal(harness.sockets.length, 1);
+  assert.equal(harness.contexts.length, 1);
+  assert.equal(harness.contexts[0].sampleRate, 48_000);
+  assert.equal(harness.contexts[0].state, 'suspended', 'nothing renders before a press');
+
+  await harness.api.start(makeTrack('01.mp3'));
+  assert.equal(harness.contexts.length, 1, 'the press reuses the idle graph');
+  assert.equal(harness.sent('open')[0].sampleRate, 48_000);
+});
+
+test('the rate a song played at is remembered for the next page', async () => {
+  const stored = new Map();
+  const harness = createEngineHarness({
+    trackSampleRates: new Map(),
+    setLocalStorageItem: (key, value) => stored.set(key, value),
+  });
+  await harness.api.start(makeTrack('01.mp3'));
+
+  acceptMetadata(harness, harness.sent('open')[0], { sampleRate: 44_100 });
+
+  assert.equal(stored.get('albumhaven.playbackSampleRate.v1'), '44100');
 });
 
 test('a start at an unknown rate opens at once at the guessed rate without a probe', async () => {

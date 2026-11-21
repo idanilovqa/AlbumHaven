@@ -182,6 +182,11 @@ test('FTC-PLAYBACK-NAV-001 play, open another artist in a new page load, and one
   });
 
   await stepLogger.step('Another artist opens in a new page load; then one press on a song plays it at once', async () => {
+    const claimAnswers = [];
+    const recordClaim = (response) => {
+      if (new URL(response.url()).pathname === '/playback/state' && response.request().method() === 'PUT') claimAnswers.push(response.status());
+    };
+    page.on('response', recordClaim);
     await page.goto(`/?surface=albums&artist=${encodeURIComponent(OTHER_ARTIST)}&gallery_scope=all`);
     await galleryActions.waitForGalleryReady();
     await openAlbum();
@@ -192,6 +197,9 @@ test('FTC-PLAYBACK-NAV-001 play, open another artist in a new page load, and one
     expect(evidence.nonZeroSamples).toBeGreaterThan(0);
     expect(evidence.renderedFrameDelta).toBeGreaterThan(0);
     expect(Date.now() - pressedAt, 'the first press plays it').toBeLessThan(PLAYS_WITHIN_MS);
+    page.off('response', recordClaim);
+    expect(claimAnswers.length, 'the press asked for playback').toBeGreaterThan(0);
+    expect(claimAnswers.filter((status) => status !== 200), 'no claim was refused after the page load').toEqual([]);
     await trackModalActions.close();
     const player = globalPlayerActions.globalPlayer;
     await expect(player.title).toContainText(OTHER_TITLE);

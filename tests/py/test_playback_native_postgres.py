@@ -662,6 +662,30 @@ def test_an_unloaded_tabs_pending_handoff_gives_way_to_the_first_fresh_acquire(p
     assert service.get(fixture.actor, client_id)["is_playing_elsewhere"] is True
 
 
+# The next page of the same tab renews its claim by token (same-tab identity): it is not leaving any
+# more, so the handoff its previous page staged on unload no longer lets another client take over.
+def test_the_owners_token_renewal_withdraws_a_staged_handoff(playback_inventory):
+    fixture = playback_inventory
+    now = datetime(2026, 10, 25, tzinfo=timezone.utc)
+    service, track, client_id, claim = active_private_web_claim(fixture, now)
+    service.stage_handoff(
+        fixture.actor,
+        client_id=client_id,
+        claim_token=claim["claimToken"],
+        handoff_id=str(uuid4()),
+        handoff_token=opaque_test_token("withdrawn-handoff"),
+        completion_digest=NULL_HANDOFF_COMPLETION_DIGEST,
+    )
+
+    renewed = service.acquire(fixture.actor, client_id=client_id, client_surface="private_web", track=track,
+                              claim_token=claim["claimToken"])
+    assert renewed["claimToken"] == claim["claimToken"]
+    with pytest.raises(ValueError) as refused:
+        service.acquire(fixture.actor, client_id=str(uuid4()), client_surface="private_web", track=track)
+    assert getattr(refused.value, "status_code", None) == 409
+    service.release(fixture.actor, client_id=client_id, claim_token=claim["claimToken"])
+
+
 def test_live_handoff_consumes_after_predecessor_lease_expires(playback_inventory):
     fixture = playback_inventory
     now = datetime(2026, 10, 25, tzinfo=timezone.utc)

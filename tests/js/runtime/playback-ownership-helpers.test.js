@@ -106,6 +106,70 @@ function activeOwnershipState() {
   };
 }
 
+// sandbox5 (2026-11-19): Play right after a page load gave 409 and no sound while the previous page's
+// lease ran; its unload beacon had been dropped. The tab's identity now carries over in sessionStorage.
+function sameTabHarness({ refuseInherited = false, record } = {}) {
+  const storage = new Map([['albumhaven.playbackSameTab.v1', JSON.stringify(record)]]);
+  const puts = [];
+  const { context } = loadHelper({
+    state: { player: { current: null, ownership: { tabId: '', lockStatus: 'unlocked', blockedReason: '',
+      mirroredTrack: null, activeClaim: null, channel: null, heartbeatTimer: 0, initialized: true } } },
+    crypto: require('node:crypto').webcrypto,
+    window: { crypto: require('node:crypto').webcrypto },
+    getSessionStorageItem: key => storage.get(key) || '',
+    setSessionStorageItem: (key, value) => { storage.set(key, value); return true; },
+    removeSessionStorageItem: key => storage.delete(key),
+    fetch: async (url, options) => {
+      const body = options.body ? JSON.parse(options.body) : null;
+      if (url === '/playback/refs') {
+        return jsonResponse({ ...protocolFixture.valid.refsResponse, expiresAt: '2099-10-24T00:00:00Z',
+          tracks: [{ ...protocolFixture.valid.refsResponse.tracks[0], clientKey: body.tracks[0].clientKey }] });
+      }
+      if (options.method === 'PUT') {
+        puts.push(body);
+        if (refuseInherited && body.claimToken === record.claimToken) return jsonResponse({ ok: false }, { ok: false, status: 409 });
+        return jsonResponse({ ...protocolFixture.valid.claimResponse, expiresAt: '2099-10-23T23:00:30Z' });
+      }
+      return jsonResponse({ protocol: 1, ok: true });
+    },
+  });
+  return { context, storage, puts };
+}
+const sameTabRecord = { clientId: '7d0f6a52-3a61-4c9e-9d55-0c3b2b7e8a11', claimToken: 'A'.repeat(43) };
+
+test('the next page of a tab renews the claim its previous page held, under the same identity, with no fresh acquire', async () => {
+  const { context, storage, puts } = sameTabHarness({ record: sameTabRecord });
+  assert.equal(storage.has('albumhaven.playbackSameTab.v1'), false, 'taken at load, so a duplicated tab cannot share it');
+
+  assert.equal(await context.claimPlaybackOwnership(localTrack), true);
+  assert.equal(puts.length, 1);
+  assert.equal(puts[0].clientId, sameTabRecord.clientId);
+  assert.equal(puts[0].claimToken, sameTabRecord.claimToken);
+  assert.equal(context.state.player.ownership.activeClaim?.claimToken, protocolFixture.valid.claimResponse.claimToken);
+});
+
+test('a refused same-tab renewal leaves the page a new client that asks afresh at once', async () => {
+  const { context, puts } = sameTabHarness({ refuseInherited: true, record: sameTabRecord });
+
+  assert.equal(await context.claimPlaybackOwnership(localTrack), true);
+  assert.equal(puts.length, 2);
+  assert.equal(puts[1].claimToken, null);
+  assert.notEqual(puts[1].clientId, sameTabRecord.clientId, 'another client played since: this page is new');
+});
+
+test('a page hands its claim to the next page of its tab only while it holds one', () => {
+  const storage = new Map();
+  const { context } = loadHelper({
+    getSessionStorageItem: key => storage.get(key) || '',
+    setSessionStorageItem: (key, value) => { storage.set(key, value); return true; },
+    removeSessionStorageItem: key => storage.delete(key),
+  });
+  assert.equal(context.keepPlaybackClaimForThisTab(), false);
+  context.state.player.ownership.activeClaim = { claimToken: 'B'.repeat(43) };
+  assert.equal(context.keepPlaybackClaimForThisTab(), true);
+  assert.deepEqual(JSON.parse(storage.get('albumhaven.playbackSameTab.v1')), { clientId: 'local-tab', claimToken: 'B'.repeat(43) });
+});
+
 test('rejected handoff beacon removes the unusable session envelope', () => {
   const storage = new Map();
   const removed = [];
@@ -406,8 +470,12 @@ test('handoff retry reuses the same fresh runtime pair', async () => {
     crypto: require('node:crypto').webcrypto,
     window: { crypto: { randomUUID: () => 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' } },
     state: { player: { current: null, ownership: { tabId: '', initialized: true } } },
-    getSessionStorageItem: () => { storageEvents.push('get'); return JSON.stringify(envelope); },
-    removeSessionStorageItem: () => { storageEvents.push('remove'); },
+    getSessionStorageItem: (key) => {
+      if (key !== 'albumhaven.playbackHandoff.v1') return '';
+      storageEvents.push('get');
+      return JSON.stringify(envelope);
+    },
+    removeSessionStorageItem: (key) => { if (key === 'albumhaven.playbackHandoff.v1') storageEvents.push('remove'); },
     setTimeout: (callback, delay) => { if (delay === 100) callback(); return delay; },
     fetch: async (url, options = {}) => {
       const body = JSON.parse(options.body);

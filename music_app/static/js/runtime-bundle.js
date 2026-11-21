@@ -13726,6 +13726,12 @@ const PLAYBACK_OWNERSHIP_HEARTBEAT_MS = 10000;
 const PLAYBACK_HANDOFF_STORAGE_KEY = 'albumhaven.playbackHandoff.v1';
 const PLAYBACK_HANDOFF_WINDOW_MS = 15000;
 const PLAYBACK_HANDOFF_RETRY_MS = 100;
+// This tab's playback identity, kept when a page unloads so the next page of the same tab renews the
+// same claim instead of being refused while the old page's lease runs (sandbox5, 2026-11-19: Play after
+// a page load gave 409 and no sound; the unload beacon can always be dropped). Written only at unload
+// and taken at load, so a duplicated tab never shares a live tab's identity.
+const PLAYBACK_SAME_TAB_STORAGE_KEY = 'albumhaven.playbackSameTab.v1';
+let sameTabPlaybackClaim = takeSameTabPlaybackClaim();
 let pendingPlaybackOwnershipHandoff = takePlaybackOwnershipHandoffEnvelope();
 let playbackOwnershipRuntimeClaimToken = pendingPlaybackOwnershipHandoff.handoff
   ? createPlaybackOwnershipToken() : '';
@@ -13764,6 +13770,30 @@ function takePlaybackOwnershipHandoffEnvelope() {
   catch (_error) { return { found: true, handoff: null }; }
 }
 
+function takeSameTabPlaybackClaim() {
+  if (typeof getSessionStorageItem !== 'function') return null;
+  const raw = getSessionStorageItem(PLAYBACK_SAME_TAB_STORAGE_KEY);
+  if (typeof removeSessionStorageItem === 'function') removeSessionStorageItem(PLAYBACK_SAME_TAB_STORAGE_KEY);
+  try {
+    const { clientId, claimToken } = JSON.parse(raw || 'null') || {};
+    if (/^[0-9a-f-]{36}$/i.test(String(clientId || '')) && /^[A-Za-z0-9_-]{43}$/.test(String(claimToken || ''))) {
+      return { clientId: String(clientId), claimToken: String(claimToken) };
+    }
+  } catch (_error) {
+    // A damaged record is no identity.
+  }
+  return null;
+}
+
+/** At unload: the claim this page holds goes to the next page of the same tab. */
+function keepPlaybackClaimForThisTab() {
+  const ownership = getPlaybackOwnershipState();
+  const claimToken = ownership.activeClaim?.claimToken;
+  if (!claimToken || !ownership.tabId || typeof setSessionStorageItem !== 'function') return false;
+  return setSessionStorageItem(PLAYBACK_SAME_TAB_STORAGE_KEY,
+    JSON.stringify({ clientId: ownership.tabId, claimToken }));
+}
+
 function createPlaybackOwnershipHandoff() {
   const id = createPlaybackOwnershipTabId();
   const token = createPlaybackOwnershipToken();
@@ -13796,7 +13826,28 @@ function getPlaybackOwnershipTabId() {
   const engineClientId = playingEngine()?.claimClientId() || '';
   if (engineClientId) return engineClientId;
   const ownership = getPlaybackOwnershipState();
-  return ownership.tabId ||= createPlaybackOwnershipTabId();
+  return ownership.tabId ||= sameTabPlaybackClaim?.clientId || createPlaybackOwnershipTabId();
+}
+
+// The previous page of this tab held playback: its claim is renewed under the same identity. A
+// refusal (another client played since) leaves this page a new client.
+async function renewSameTabPlaybackClaim(prepared, track) {
+  const inherited = sameTabPlaybackClaim;
+  const ownership = getPlaybackOwnershipState();
+  if (!inherited || ownership.tabId !== inherited.clientId) return null;
+  try {
+    const result = await requestPlaybackClaim({ protocol: 1, clientId: inherited.clientId,
+      clientSurface: 'private_web', claimToken: inherited.claimToken, state: 'playing',
+      track: prepared.track, ...positionField(track) });
+    sameTabPlaybackClaim = null;
+    return result;
+  } catch (error) {
+    // Nobody answered: the next attempt asks again with the same identity.
+    if (error?.unanswered) throw error;
+    sameTabPlaybackClaim = null;
+    ownership.tabId = createPlaybackOwnershipTabId();
+    return null;
+  }
 }
 
 function normalizePlaybackOwnershipTrack(track) {
@@ -14084,13 +14135,16 @@ async function claimPlaybackOwnership(track, options = {}) {
       if (isShellPlaybackUnavailable()) throw new Error('Playback is unavailable in this app.');
       const prepared = await playbackOwnershipTrack(track, claim);
       if (version !== ownership.requestVersion) return false;
-      const result = handoff
+      const inherited = !claim && !options.takeover && sameTabPlaybackClaim
+        ? await renewSameTabPlaybackClaim(prepared, track)
+        : null;
+      const result = inherited || (handoff
         ? await acquirePlaybackOwnershipHandoff(prepared, handoff)
         : await requestPlaybackClaim({ protocol: 1,
           clientId: getPlaybackOwnershipTabId(), clientSurface: 'private_web',
           claimToken: claim?.claimToken || null, state: 'playing', track: prepared.track,
           ...(options.takeover && !claim ? { takeover: true } : {}),
-          ...positionField(track) });
+          ...positionField(track) }));
       if (version !== ownership.requestVersion) {
         if (!claim) await deletePlaybackClaim(result).catch(() => {});
         return false;
@@ -14154,6 +14208,8 @@ function canRestoreActivePlayback(parsedState) {
 
 function restorePlaybackOwnershipFromPageCache(playbackSnapshot = null) {
   const ownership = getPlaybackOwnershipState();
+  // Back from the page cache, this page is the tab's live owner again: nothing is handed on.
+  if (typeof removeSessionStorageItem === 'function') removeSessionStorageItem(PLAYBACK_SAME_TAB_STORAGE_KEY);
   ownership.handoffAttempted = false;
   const stored = takePlaybackOwnershipHandoffEnvelope();
   const handoff = stored.handoff;
@@ -39957,7 +40013,9 @@ function persistPlayerStateForUnload(reason) {
   if (playerUnloadWasPlaying === null) {
     playerUnloadWasPlaying = Boolean(state.player.lastKnownWasPlaying);
   }
-  // Let the lease expire: an unload release could overtake the final beacon.
+  // Let the lease expire: an unload release could overtake the final beacon. The next page of this
+  // tab renews the claim under the same identity, whether or not the beacon arrives.
+  if (typeof keepPlaybackClaimForThisTab === 'function') keepPlaybackClaimForThisTab();
   flushListenSessionOnUnload(reason, playbackSnapshot);
   persistPlayerState(true, {
     preservePlayingState: true,

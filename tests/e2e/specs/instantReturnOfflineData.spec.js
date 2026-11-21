@@ -16,7 +16,8 @@ async function openDetails(galleryActions, trackModalActions, artist, album) {
   await galleryActions.clickAlbumDetailsByArtistAndAlbum(artist, album);
   await trackModalActions.waitForLoadedSummary();
   await expect(trackModalActions.trackModal.unreachableNotice).toHaveCount(0);
-  await trackModalActions.waitForTitle(album);
+  // The details title names the album (with its artist and year).
+  await expect(trackModalActions.trackModal.title).toContainText(album);
   const titles = await trackModalActions.readTrackTitles();
   expect(titles.length, `${album} lists its tracks`).toBeGreaterThan(0);
   await trackModalActions.close();

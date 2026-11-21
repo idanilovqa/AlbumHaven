@@ -168,8 +168,11 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           working-directory: apps/android-shell
           script: |
-            ./gradlew --no-daemon --console=plain connectedStableDebugAndroidTest connectedSandboxDebugAndroidTest -PalbumHavenDevOrigin=http://127.0.0.1:18765 -Pandroid.testInstrumentationRunnerArguments.class=org.albumhaven.shell.PlaybackNotificationTest,org.albumhaven.shell.NetworkChangePlaybackTest,org.albumhaven.shell.MediaStoreDownloadsTest,org.albumhaven.shell.ShellSmokeTest#outdatedWebViewFailsClosedWithoutLoadingTheSite,org.albumhaven.shell.BatteryPromptTest#androidsOwnQuestionSetsUnrestrictedOnAllowAndNothingOnDeny,org.albumhaven.shell.EngineRetentionTest
+            ./gradlew --no-daemon --console=plain connectedStableDebugAndroidTest connectedSandboxDebugAndroidTest -PalbumHavenDevOrigin=http://127.0.0.1:18765 -Pandroid.testInstrumentationRunnerArguments.class=org.albumhaven.shell.PlaybackNotificationTest,org.albumhaven.shell.NetworkChangePlaybackTest,org.albumhaven.shell.MediaStoreDownloadsTest,org.albumhaven.shell.ShellSmokeTest#outdatedWebViewFailsClosedWithoutLoadingTheSite,org.albumhaven.shell.BatteryPromptTest#androidsOwnQuestionSetsUnrestrictedOnAllowAndNothingOnDeny
             ./gradlew --no-daemon --console=plain :playback-engine:connectedDebugAndroidTest -PalbumHavenDevOrigin=http://127.0.0.1:18765
+            # Only the first entry of a comma-separated class list runs, so this class gets its own run; it replaces the stable results kept here.
+            mkdir -p "$RUNNER_TEMP/reports/api-29/before-engine-retention" && cp -r app/build/outputs/androidTest-results "$RUNNER_TEMP/reports/api-29/before-engine-retention/"
+            ./gradlew --no-daemon --console=plain connectedStableDebugAndroidTest -PalbumHavenDevOrigin=http://127.0.0.1:18765 -Pandroid.testInstrumentationRunnerArguments.class=org.albumhaven.shell.EngineRetentionTest
 
       # The next emulator's run replaces these.
       - name: Keep the API 29 reports

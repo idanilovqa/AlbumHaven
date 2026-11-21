@@ -8,7 +8,6 @@ import android.content.ServiceConnection
 import android.os.Debug
 import android.os.IBinder
 import android.os.SystemClock
-import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.albumhaven.playback.engine.FakeAhpcServer
@@ -138,7 +137,11 @@ class EngineRetentionTest {
             Runtime.getRuntime().gc()
             System.runFinalization()
             if (ref.get() == null) {
-                Log.i(TAG, "$name engine collected after ${SystemClock.elapsedRealtime() - startedAt} ms")
+                // Kept with the run's reports: a pass records how long collection took. An unwritable note never fails the pass.
+                runCatching {
+                    File(outputDirectory(), "engine-retention-$name.txt")
+                        .writeText("collected after ${SystemClock.elapsedRealtime() - startedAt} ms\n")
+                }
                 return
             }
             SystemClock.sleep(50)
@@ -147,12 +150,12 @@ class EngineRetentionTest {
         fail("The $name engine was still reachable ${COLLECT_MS} ms after it was let go; heap dump: $dump")
     }
 
+    private fun outputDirectory(): File =
+        (InstrumentationRegistry.getArguments().getString("additionalTestOutputDir")?.let(::File)
+            ?: File(context.filesDir, "engine-retention")).apply { mkdirs() }
+
     private fun heapDump(name: String): String {
-        val directory = InstrumentationRegistry.getArguments().getString("additionalTestOutputDir")
-            ?.let(::File)
-            ?: File(context.filesDir, "engine-retention")
-        directory.mkdirs()
-        val file = File(directory, "engine-retention-$name.hprof")
+        val file = File(outputDirectory(), "engine-retention-$name.hprof")
         return try {
             Debug.dumpHprofData(file.path)
             file.path
@@ -164,7 +167,6 @@ class EngineRetentionTest {
     private fun onMain(block: () -> Unit) = InstrumentationRegistry.getInstrumentation().runOnMainSync(block)
 
     private companion object {
-        const val TAG = "EngineRetentionTest"
         const val LOW_RATE = 44_100
         const val HIGH_RATE = 48_000
         const val COLLECT_MS = 2_000L

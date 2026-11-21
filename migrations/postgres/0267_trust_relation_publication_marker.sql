@@ -141,10 +141,10 @@ begin
     )
     -- 0267: a copy this transaction's publisher patched from the same compatibility entries is
     -- proven by its md5; anything else is still compared with the full compatibility views.
-    and case when md5((new.metadata #> '{scan_cache,relation_views}')::text)
+    and (case when md5((new.metadata #> '{scan_cache,relation_views}')::text)
           = coalesce(current_setting('album_haven.relation_views_publication', true), '')
         then true
-        else new.metadata #> '{scan_cache,relation_views}' = library.local_relation_compatibility_views(new.id) end
+        else new.metadata #> '{scan_cache,relation_views}' = library.local_relation_compatibility_views(new.id) end)
     then return null;
   end if;
 

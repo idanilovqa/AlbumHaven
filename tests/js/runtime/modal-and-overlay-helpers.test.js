@@ -3006,3 +3006,45 @@ test('the Interviews page lists only Interview loose tracks under the title Inte
   assert.equal(context.looseTracksPageTitle(key), 'Interviews');
   assert.equal(context.looseTracksPageTitle('Night'), 'Night');
 });
+
+test('clearing a search keeps its selection and flashes the found track in the full list (owner 2026-11-21)', () => {
+  const { context } = loadHelper();
+  const row = (path) => {
+    const classes = new Set();
+    return { dataset: { trackRowPath: path }, scrolled: null,
+      classList: { add: name => classes.add(name), remove: name => classes.delete(name), has: name => classes.has(name) },
+      scrollIntoView(options) { this.scrolled = options; } };
+  };
+  const searchedRows = [row('b.mp3')];
+  const table = { dataset: { looseTracksQuery: 'night' }, querySelectorAll: () => searchedRows };
+  const els = { table };
+  let selected = ['b.mp3'];
+  const timers = [];
+  context.scheduleBrowserTimeout = (callback, delay) => timers.push([callback, delay]);
+  context.nonAlbumTrackSelectionController = { getSelectedPaths: () => selected };
+  context.state.ui = context.state.ui || {};
+  context.state.view = { query: '' };
+
+  context.captureLooseTracksSearchContext(els);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.state.ui.looseTracksSearchContext)),
+    { selectedPaths: ['b.mp3'], foundPaths: ['b.mp3'], cleared: true });
+
+  const fullRows = new Map([['a.mp3', row('a.mp3')], ['b.mp3', row('b.mp3')], ['c.mp3', row('c.mp3')]]);
+  const synced = [];
+  context.nonAlbumTrackSelectionController = { rowByPath: fullRows, sync: paths => synced.push([...paths]), getSelectedPaths: () => [] };
+  context.restoreLooseTracksSearchContext(els);
+
+  assert.deepEqual(synced, [['b.mp3']], 'the tracks selected during the search stay selected');
+  const found = fullRows.get('b.mp3');
+  assert.equal(JSON.stringify(found.scrolled), JSON.stringify({ block: 'center' }));
+  assert.equal(found.classList.has('album-track-table__row--found'), true);
+  assert.equal(timers[0][1], 2400);
+  timers[0][0]();
+  assert.equal(found.classList.has('album-track-table__row--found'), false);
+  assert.equal(context.state.ui.looseTracksSearchContext, null);
+
+  // A redraw for the same search (a tag edit) keeps nothing extra and flashes nothing.
+  table.dataset.looseTracksQuery = '';
+  context.captureLooseTracksSearchContext(els);
+  assert.equal(context.state.ui.looseTracksSearchContext, null);
+});

@@ -85,6 +85,14 @@
   box-shadow: inset 3px 0 0 var(--album-track-accent), inset 12px 0 18px -16px var(--album-track-accent);
 }
 .album-track-table .album-track-table__row--search-match:hover { background: color-mix(in srgb, var(--album-track-accent) 15%, transparent); }
+/* The track a cleared search had found flashes three times in the full list (owner 2026-11-21). */
+.album-track-table__row--found { animation: album-track-table-found .8s ease-in-out 3; }
+@keyframes album-track-table-found {
+  50% { background: color-mix(in srgb, currentColor 22%, transparent); box-shadow: inset 3px 0 0 var(--album-track-accent); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .album-track-table__row--found { animation: none; background: color-mix(in srgb, currentColor 14%, transparent); }
+}
 .album-track-table__row--playing {
   border-radius: 8px;
   outline: 1px solid color-mix(in srgb, var(--album-track-accent) 86%, transparent);

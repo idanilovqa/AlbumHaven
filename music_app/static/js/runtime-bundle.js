@@ -16294,6 +16294,41 @@ function installNonAlbumTrackSelection(els) {
     onCountChange: updateSelectionCount,
     onChange: paths => updateSelectionCount(paths.length),
   });
+  // The search this table was drawn for, so a redraw for another search knows what the user was looking at.
+  if (els.table.dataset) els.table.dataset.looseTracksQuery = String(state.view?.query || '').trim();
+}
+
+// Owner 2026-11-21: clearing a search on a collection page keeps the tracks selected during it, and the full list
+// scrolls to the track the search found and flashes it, so the user does not lose it.
+function captureLooseTracksSearchContext(els) {
+  const query = String(state.view?.query || '').trim();
+  const drawnQuery = String(els.table?.dataset?.looseTracksQuery ?? query);
+  if (drawnQuery === query || state.ui.looseTracksSearchContext) return;
+  state.ui.looseTracksSearchContext = {
+    selectedPaths: nonAlbumTrackSelectionController?.getSelectedPaths?.() || [],
+    foundPaths: drawnQuery
+      ? Array.from(els.table.querySelectorAll?.('[data-track-row-path]') || [], row => String(row.dataset?.trackRowPath || ''))
+        .filter(Boolean)
+      : [],
+    cleared: Boolean(drawnQuery && !query),
+  };
+}
+
+function restoreLooseTracksSearchContext(els) {
+  const context = state.ui.looseTracksSearchContext;
+  if (!context) return;
+  const rowFor = path => nonAlbumTrackSelectionController?.rowByPath?.get(path) || null;
+  const present = context.selectedPaths.filter(path => rowFor(path));
+  if (present.length) nonAlbumTrackSelectionController?.sync?.(present);
+  if (context.cleared) {
+    const row = context.foundPaths.map(rowFor).find(Boolean);
+    if (row) {
+      row.scrollIntoView?.({ block: 'center' });
+      row.classList?.add('album-track-table__row--found');
+      scheduleBrowserTimeout(() => row.classList?.remove('album-track-table__row--found'), 2400);
+    }
+  }
+  state.ui.looseTracksSearchContext = null;
 }
 
 function clearNonAlbumTrackSelection() {
@@ -16362,6 +16397,7 @@ function paintNonAlbumTrackTable(els, looseTracks, collectionName) {
       attachSharedPlayer();
       if (!complete) return;
       nonAlbumTrackSelectionController?.refreshRows?.();
+      restoreLooseTracksSearchContext(els);
       if (typeof refreshNonAlbumModalPlaybackState === 'function') refreshNonAlbumModalPlaybackState();
     },
   });
@@ -16379,6 +16415,7 @@ function refreshOpenLooseTracksPage() {
   const els = getNonAlbumModalElements();
   if (!els.overlay || els.overlay.hidden || !els.table || state.ui?.nonAlbumLibraryWide !== true) return false;
   const collectionName = String(state.ui.nonAlbumCollectionName || '').trim();
+  captureLooseTracksSearchContext(els);
   // The page's list for the current sources and search is not loaded yet (a cleared search): load it, then redraw.
   if (!currentLibraryLooseTracks() && needsNonAlbumHydration({ libraryWide: true })) {
     els.table.innerHTML = buildNonAlbumTrackLoadingMarkup();
@@ -16398,6 +16435,8 @@ function refreshOpenLooseTracksPage() {
   else els.table.innerHTML = looseTracksEmptyMarkup();
   installNonAlbumCollapsibleSections(els);
   installNonAlbumTrackSelection(els);
+  // A collection paints at once; All Loose Tracks restores once its last batch is in (paintNonAlbumTrackTable).
+  if (collectionName || !looseTracks.length) restoreLooseTracksSearchContext(els);
   attachSharedPlayer();
   return true;
 }

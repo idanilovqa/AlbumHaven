@@ -180,13 +180,14 @@ test('FTC-ALBUM-DETAILS-029 stale album references follow merges and return to t
   });
 
   // Owner rule: a gallery-opened album never offers the split chooser, because the
-  // gallery shows every release the split produced.
+  // gallery shows every release the split produced. Owner (2026-11-21): only a modal that was
+  // already open on the old album says "This album changed"; a stale card clicked afterwards
+  // just gives way to the refreshed gallery.
   for (const [label, session, comeOnline, notice] of [
     ['open source album', staleSplitSession, false, staleSplitNotice],
     ['rendered stale card', staleCardSession, true, undefined],
   ]) {
     await stepLogger.step(`Send the ${label} back to the refreshed gallery`, async () => {
-      const noticeShown = notice || session.trackModalActions.watchForChangedAlbumNotice();
       if (comeOnline) {
         await session.context.setOffline(false);
         await session.galleryActions.selectAlbumDetailsByIdentity({
@@ -194,8 +195,12 @@ test('FTC-ALBUM-DETAILS-029 stale album references follow merges and return to t
           album: FAILURE_FIXTURE_ALBUM,
           year: FIXTURE_YEAR,
         });
+        await session.trackModalActions.waitForClosed();
+        await expect(session.trackModalActions.trackModal.changedAlbumNotice).toHaveCount(0);
+        await expect(session.trackModalActions.trackModal.splitChooser).toHaveCount(0);
+      } else {
+        await session.trackModalActions.waitForChangedAlbumNotice(notice);
       }
-      await session.trackModalActions.waitForChangedAlbumNotice(noticeShown);
       await session.galleryActions.waitForAlbumHidden(FAILURE_FIXTURE_ALBUM);
       for (const album of [LINEAGE_SPLIT_ALBUM_A, LINEAGE_SPLIT_ALBUM_B]) {
         await session.galleryActions.waitForAlbumVisibleUnderHeading(FIXTURE_ARTIST, album);

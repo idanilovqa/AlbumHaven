@@ -331,7 +331,7 @@ function createEngineHarness(options = {}) {
     },
     window,
     createStreamingDecoder: options.createStreamingDecoder,
-    probeCachedWaveformPeaks: options.probeCachedWaveformPeaks,
+    loadPlayingWaveformPeaks: options.loadPlayingWaveformPeaks,
     handleStreamingPlaybackFirstFrame: options.handleStreamingPlaybackFirstFrame,
     handleStreamingPlaybackBoundary: options.handleStreamingPlaybackBoundary,
     handleStreamingPlaybackPosition: options.handleStreamingPlaybackPosition,
@@ -340,7 +340,7 @@ function createEngineHarness(options = {}) {
     ensureStreamingDecoders: options.ensureStreamingDecoders,
     updatePlayerUi: options.updatePlayerUi,
     cancelWaveformPeakLoads: options.cancelWaveformPeakLoads,
-    probeCachedWaveformPeaks: options.probeCachedWaveformPeaks,
+    loadPlayingWaveformPeaks: options.loadPlayingWaveformPeaks,
   };
   window.window = window;
   vm.createContext(context);
@@ -2534,6 +2534,7 @@ test('active replacement prepares two buffered seconds while paused replacement 
       generation: replacement.generation,
       streamId: replacement.streamId,
       timelineStartFrame: 0,
+      primed: true,
     });
     assert.equal(typeof starting.then, 'function');
   });
@@ -4197,10 +4198,10 @@ test('one buffering episode requests one coarse refill and preserves play intent
   assert.equal(harness.engine.diagnostics.buffering, false);
 });
 
-test('a new current generation starts its cached waveform probe before playback readiness', async () => {
+test('a new current generation asks for its waveform when its stream opens, before playback readiness', async () => {
   const probes = [];
   const harness = createEngineHarness({
-    probeCachedWaveformPeaks: (path, generation) => {
+    loadPlayingWaveformPeaks: (path, generation) => {
       probes.push({ path, generation });
       return Promise.resolve(null);
     },
@@ -6052,7 +6053,7 @@ test('a queued track at another rate opens no continuity and is handed over on e
   harness.engine.diagnostics.bufferedFrames.current = 44_100;
   const nextTrack = makeTrack('next.flac');
   await harness.api.continuity(nextTrack);
-  assert.equal(harness.sockets[0].probes.length, 1, 'the next track never waits for a probe');
+  assert.equal(harness.sockets[0].probes.length, 0, 'neither the start nor the next track waits for a probe');
   const refused = harness.sent('open').at(-1);
   assert.equal(refused.sampleRate, 44_100);
   harness.sockets[0].receive({
@@ -6102,13 +6103,64 @@ test('a same-rate queued track keeps the context and opens gapless continuity', 
   assert.equal(harness.sent('open').at(-1).sampleRate, 44_100);
 });
 
-test('an unreadable track rate fails the start instead of assuming one', async () => {
-  const harness = createEngineHarness({ trackSampleRates: new Map(), trackSampleRate: () => 0 });
+test('a start at an unknown rate opens at once at the guessed rate without a probe', async () => {
+  const harness = createEngineHarness({ trackSampleRates: new Map() });
 
-  await assert.rejects(harness.api.start(makeTrack()), /sample rate could not be read/);
+  await harness.api.start(makeTrack('01.mp3'));
 
-  assert.equal(harness.contexts.length, 0);
-  assert.equal(harness.sent('open').length, 0);
+  assert.equal(harness.sockets[0].probes.length, 0);
+  assert.equal(harness.contexts[0].sampleRate, 44_100);
+  assert.equal(harness.sent('open')[0].sampleRate, 44_100);
+});
+
+test('a start the server refuses for its rate starts again at the reported rate', async () => {
+  const harness = createEngineHarness({ trackSampleRates: new Map() });
+  const track = makeTrack('01.flac');
+  await harness.api.start(track, { startSeconds: 2 });
+  const guessed = harness.sent('open')[0];
+  assert.equal(guessed.startFrame, 88_200);
+
+  harness.sockets[0].receive({
+    type: 'rate-mismatch',
+    generation: guessed.generation,
+    streamId: guessed.streamId,
+    sampleRate: 96_000,
+    fallbackSampleRate: 48_000,
+  });
+  await harness.settle();
+
+  assert.equal(harness.engine.diagnostics.lastError, undefined);
+  assert.equal(harness.contexts[0].closeCalls, 1);
+  assert.equal(harness.contexts[1].sampleRate, 96_000);
+  assert.equal(harness.sockets.length, 1, 'the socket survives the rate change');
+  assert.equal(harness.sent('close').length, 0, 'the refused stream was never opened');
+  const restarted = harness.sent('open').at(-1);
+  assert.equal(restarted.role, 'current');
+  assert.equal(restarted.path, track.path);
+  assert.equal(restarted.sampleRate, 96_000);
+  assert.equal(restarted.startFrame, 192_000);
+  assert.equal(harness.engine.roles.current.streamId, restarted.streamId);
+  assert.equal(harness.contexts[1].state, 'running');
+});
+
+test('a guessed start paused before its refusal starts again paused', async () => {
+  const harness = createEngineHarness({ trackSampleRates: new Map() });
+  await harness.api.start(makeTrack('01.flac'));
+  const guessed = harness.sent('open')[0];
+  await harness.api.pause();
+
+  harness.sockets[0].receive({
+    type: 'rate-mismatch',
+    generation: guessed.generation,
+    streamId: guessed.streamId,
+    sampleRate: 48_000,
+    fallbackSampleRate: 48_000,
+  });
+  await harness.settle();
+
+  assert.equal(harness.sent('open').at(-1).sampleRate, 48_000);
+  assert.equal(harness.engine.mode, 'paused');
+  assert.equal(harness.api.snapshot().paused, true);
 });
 
 function encodedFrame(open, sequence, bytes) {
@@ -6199,18 +6251,22 @@ test('audio the server sends on open counts as already requested', async () => {
 
 test('encoded bytes are requested separately from decoded ring credit', async () => {
   const harness = encodedHarness();
-  await startEncoded(harness, makeTrack('01.mp3'));
+  const open = await startEncoded(harness, makeTrack('01.mp3'));
 
   const credit = harness.sent('credit');
-  assert.equal(credit.length, 1, 'one bounded byte request is outstanding at a time');
-  assert.equal(credit[0].frames, 64 * 1024);
+  assert.equal(credit.length, 4, 'a bounded window of byte requests is in flight');
+  assert.ok(credit.every(({ frames }) => frames === 64 * 1024));
+
+  harness.sockets[0].receive(encodedFrame(open, 0, new Uint8Array(64 * 1024)));
+  await harness.settle();
+  assert.equal(harness.sent('credit').length, 5, 'each answered request is replaced, never more');
 });
 
 test('encoded bytes beyond granted credit are a protocol failure', async () => {
   const harness = encodedHarness();
   const open = await startEncoded(harness, makeTrack('01.mp3'));
 
-  harness.sockets[0].receive(encodedFrame(open, 0, new Uint8Array((64 * 1024) + 1)));
+  harness.sockets[0].receive(encodedFrame(open, 0, new Uint8Array((256 * 1024) + 1)));
 
   assert.match(harness.engine.diagnostics.lastError.message, /byte credit/);
 });
@@ -6304,6 +6360,18 @@ test('a good connection keeps FLAC at original quality', async () => {
   await harness.api.start(makeTrack('hi.flac'));
 
   assert.equal(harness.sent('open').at(-1).quality, undefined);
+});
+
+test('a FLAC start on a measured slow connection still reads its size before choosing quality', async () => {
+  const harness = encodedHarness({ trackSampleRates: new Map(), trackSampleRate: () => 44_100 });
+  harness.engine.transferBytes = 125_000;
+  harness.engine.transferMs = 1_000;
+  const track = makeTrack('hi.flac');
+
+  await harness.api.start(track);
+
+  assert.deepEqual(harness.sockets[0].probes.map(({ path }) => path), [track.path]);
+  assert.equal(harness.sent('open').at(-1).sampleRate, 44_100);
 });
 
 test('a manual quality preference overrides the connection measurement', async () => {
@@ -6414,10 +6482,10 @@ test('audio output details are reported once and again only when dropouts grow',
   assert.equal(report.statsAvailable, true);
 });
 
-test('a prepared replacement checks the waveform cache before audio is ready', async () => {
+test('a prepared replacement asks for its waveform before audio is ready', async () => {
   const probes = [];
   const harness = createEngineHarness({
-    probeCachedWaveformPeaks: (path, generation) => probes.push({ path, generation }),
+    loadPlayingWaveformPeaks: (path, generation) => probes.push({ path, generation }),
   });
   await harness.api.start(makeTrack('01.flac'));
   const open = harness.sent('open')[0];
@@ -6463,7 +6531,10 @@ test('a seek stops the old position downloading so its audio arrives first', asy
 });
 
 test('a switch to an unknown encoded track opens at once and needs one second of head', async () => {
-  const harness = encodedHarness({ trackSampleRates: new Map(), trackSampleRate: () => 48_000 });
+  const harness = encodedHarness({
+    trackSampleRates: new Map([[makeTrack('01.mp3').path, 48_000]]),
+    trackSampleRate: () => 48_000,
+  });
   await harness.api.start(makeTrack('01.mp3'));
   const open = harness.sent('open')[0];
   acceptMetadata(harness, open, { codec: 'mp3', skipFrames: 0, totalFrames: 2_000_000 });

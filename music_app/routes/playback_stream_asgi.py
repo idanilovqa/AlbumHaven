@@ -8,17 +8,22 @@ from dataclasses import dataclass
 import json
 import logging
 import math
+from pathlib import Path
 import subprocess
 import time
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, WebSocket
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from starlette.websockets import WebSocketDisconnect
 
 from music_app.routes.playback_control_asgi import playback_config
-from music_app.services.library_roots import resolve_configured_media_path
+from music_app.services.library_roots import (
+    configured_library_root_paths_snapshot,
+    resolve_configured_media_path,
+)
 from music_app.services.loops import resolve_loop_media_path
+from music_app.services.mp3_stream_map import mp3_stream_map
 from music_app.services.playback_io import run_playback_io
 from music_app.services.playback_seek_table import flac_seek_table
 from music_app.services.playback_encoded import (
@@ -94,6 +99,8 @@ async def playback_waveform(
     loop_id: str = "",
     cachedOnly: str = "",
     bins: int = 280,
+    priority: str = "",
+    progressive: str = "",
 ) -> Response:
     if bins not in {280, 720}:
         return JSONResponse({"error": "Unsupported waveform sample count"}, status_code=400)
@@ -146,13 +153,7 @@ async def playback_waveform(
             _LOGGER.warning("Saved-loop waveform cache read failed: %s", error)
         else:
             if peaks is not None:
-                return JSONResponse(
-                    {
-                        "left": list(peaks.left),
-                        "right": list(peaks.right),
-                        "sampleCount": peaks.sample_count,
-                    }
-                )
+                return JSONResponse(_peaks_payload(peaks))
 
     if cachedOnly == "1":
         if loop_scope is not None:
@@ -166,18 +167,17 @@ async def playback_waveform(
             return JSONResponse({"error": str(error)}, status_code=429)
         if peaks is None:
             return Response(status_code=204)
-        return JSONResponse(
-            {
-                "left": list(peaks.left),
-                "right": list(peaks.right),
-                "sampleCount": peaks.sample_count,
-            }
-        )
+        return JSONResponse(_peaks_payload(peaks))
+
+    if priority == "current" and progressive == "1" and loop_scope is None:
+        return await _progressive_waveform_response(request, resolved_path, bins)
 
     peaks_task = asyncio.create_task(
         request.app.state.waveform_peaks_registry.run(
             resolved_path,
             bins=bins,
+            # Only the playing song's request may preempt other builds; prefetch yields.
+            current=priority == "current",
         )
     )
     disconnect_task = asyncio.create_task(_wait_for_http_disconnect(request))
@@ -220,13 +220,80 @@ async def playback_waveform(
             except Exception as error:
                 _LOGGER.warning("Saved-loop waveform cache write failed: %s", error)
 
-    return JSONResponse(
-        {
-            "left": list(peaks.left),
-            "right": list(peaks.right),
-            "sampleCount": peaks.sample_count,
-        }
+    return JSONResponse(_peaks_payload(peaks))
+
+
+def _peaks_payload(peaks: Any, **extra: object) -> dict[str, object]:
+    return {
+        "left": list(peaks.left),
+        "right": list(peaks.right),
+        "sampleCount": peaks.sample_count,
+        **extra,
+    }
+
+
+async def _progressive_waveform_response(request: Request, path: Path, bins: int) -> Response:
+    """Answer the playing song's peaks, streaming the waveform built so far while it builds.
+
+    A cached or already finished build answers as plain JSON, and a busy one as 429, so
+    only a running build streams: NDJSON lines with `complete` false, then the final line.
+    """
+    latest: list[Any] = []
+    changed = asyncio.Event()
+
+    def on_progress(peaks: Any) -> None:
+        latest[:] = [peaks]
+        changed.set()
+
+    peaks_task = asyncio.create_task(
+        request.app.state.waveform_peaks_registry.run(
+            path,
+            bins=bins,
+            current=True,
+            on_progress=on_progress,
+        )
     )
+
+    async def next_update() -> bool:
+        """Wait for progress or the end of the build; True once the build ended."""
+        changed_task = asyncio.create_task(changed.wait())
+        try:
+            await asyncio.wait({peaks_task, changed_task}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            changed_task.cancel()
+        changed.clear()
+        return peaks_task.done()
+
+    try:
+        finished = await next_update()
+    except BaseException:
+        peaks_task.cancel()
+        await asyncio.gather(peaks_task, return_exceptions=True)
+        raise
+    if finished:
+        try:
+            return JSONResponse(_peaks_payload(peaks_task.result()))
+        except WaveformPeaksBusyError as error:
+            return JSONResponse({"error": str(error)}, status_code=429)
+
+    async def lines():
+        try:
+            while True:
+                if latest:
+                    yield (json.dumps(_peaks_payload(latest[0], complete=False)) + "\n").encode()
+                if await next_update():
+                    break
+            try:
+                final = _peaks_payload(peaks_task.result(), complete=True)
+            except WaveformPeaksBusyError as error:
+                final = {"error": str(error)}
+            yield (json.dumps(final) + "\n").encode()
+        finally:
+            # A disconnect closes the stream; the build then waits briefly to be rejoined.
+            peaks_task.cancel()
+            await asyncio.gather(peaks_task, return_exceptions=True)
+
+    return StreamingResponse(lines(), media_type="application/x-ndjson")
 
 
 def _gathered_failures(results: list[object]) -> list[BaseException]:
@@ -299,6 +366,16 @@ def _encoded_fields(decoder: object) -> dict[str, object] | None:
         "totalFrames": decoder.total_frames,
         "initialCreditBytes": INITIAL_ENCODED_CREDIT_BYTES,
     }
+
+
+def _resolve_socket_media_path(config: dict[str, object], raw_path: str) -> Path | None:
+    """Resolves a client path against the roots snapshot root saves keep current, so a start
+    never reads the root settings from the database again."""
+    return resolve_configured_media_path(
+        config,
+        raw_path,
+        configured_root_paths=configured_library_root_paths_snapshot(config),
+    )
 
 
 def _decoder_name(decoder: object) -> str:
@@ -670,7 +747,9 @@ class _PlaybackPcmConnection:
             await self.reject(CLOSE_INVALID_CONTROL)
             return False
         resolved_path = (
-            resolve_configured_media_path(self._websocket.app.state.config, raw_path)
+            await run_playback_io(
+                _resolve_socket_media_path, self._websocket.app.state.config, raw_path
+            )
             if raw_path
             else None
         )
@@ -703,9 +782,46 @@ class _PlaybackPcmConnection:
         finally:
             self._pending_opens.discard(task)
 
+    def _resolve_while_authorizing(
+        self, control: dict[str, Any]
+    ) -> asyncio.Future[Path | None] | None:
+        """Resolves an open's path, and scans an MP3's frames, while the actor refresh runs.
+
+        Under load each waits on the database or the disk; side by side, the open waits for the
+        slower one instead of both. The socket was authorized when it connected, nothing is sent
+        before the refresh passes, and the scan only fills the frame-map cache the open reads.
+        """
+        raw_path = control.get("path")
+        if (
+            not isinstance(raw_path, str)
+            or not raw_path
+            or len(raw_path) > MAX_TRACK_PATH_CHARACTERS
+        ):
+            return None
+        config = self._websocket.app.state.config
+        codecs = control.get("codecs")
+        scan_mp3 = (
+            raw_path.lower().endswith(".mp3") and isinstance(codecs, list) and "mp3" in codecs
+        )
+
+        def resolve() -> Path | None:
+            resolved = _resolve_socket_media_path(config, raw_path)
+            if resolved is not None and scan_mp3:
+                with suppress(Exception):  # The open scans again and reports its own failure.
+                    mp3_stream_map(resolved)
+            return resolved
+
+        resolution = asyncio.ensure_future(run_playback_io(resolve))
+        self._pending_credit_tasks.add(resolution)
+        resolution.add_done_callback(self._pending_credit_tasks.discard)
+        return resolution
+
     async def _open_tracked(self, control: dict[str, Any]) -> bool:
         received_at = time.monotonic()
-        if self._closed or not await self._authorize_media_read():
+        if self._closed:
+            return False
+        resolution = self._resolve_while_authorizing(control)
+        if not await self._authorize_media_read():
             return False
         generation = _bounded_integer(
             control.get("generation"), minimum=1, maximum=_MAX_PROTOCOL_INTEGER
@@ -763,10 +879,7 @@ class _PlaybackPcmConnection:
                 return await self._reject_open(CLOSE_MEDIA_NOT_FOUND)
             if len(raw_path) > MAX_TRACK_PATH_CHARACTERS:
                 return await self._reject_open(CLOSE_INVALID_CONTROL)
-            resolved_path = resolve_configured_media_path(
-                self._websocket.app.state.config,
-                raw_path,
-            )
+            resolved_path = await resolution
         if resolved_path is None:
             return await self._reject_open(CLOSE_MEDIA_NOT_FOUND)
         timing.resolved_at = time.monotonic()

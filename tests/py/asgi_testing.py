@@ -164,6 +164,9 @@ class EventLoopWatchdog:
             self._worst_stall = stall
             self._worst_stall_collection = collection_wall
             self._stack = next((stack for stack, importing in reversed(samples) if not importing), "")
+            # TEMPORARY PR 80 stall diagnostics (remove before merge).
+            self._stack += (f"\nloop thread CPU during the stall: "
+                            f"{(now_cpu - self._last_beat_cpu - collection_cpu) * 1000:.0f} ms")
         self._last_beat = now
         self._last_beat_cpu = now_cpu
         self._last_beat_collections = collections
@@ -186,6 +189,16 @@ class EventLoopWatchdog:
             )
         sample = stacks[self._loop_thread]
         if sample is not None:
+            # TEMPORARY PR 80 stall diagnostics (remove before merge): which other threads run
+            # while the loop is overdue, so a GIL holder elsewhere is told apart from loop work.
+            others = "".join(
+                f"\n  [{thread.name}] " + " <- ".join(
+                    f"{Path(entry.filename).name}:{entry.lineno} {entry.name}"
+                    for entry in reversed(traceback.extract_stack(frame)[-4:]))
+                for thread in threading.enumerate()
+                if thread.ident not in (self._loop_thread, threading.get_ident())
+                and (frame := sys._current_frames().get(thread.ident)) is not None)
+            sample = (sample[0] + "other threads:" + (others or " none"), sample[1])
             with self._samples_lock:
                 self._samples.setdefault(beat, []).append(sample)
 

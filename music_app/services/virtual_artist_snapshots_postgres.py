@@ -3,7 +3,12 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from music_app.services.postgres_connections import leased_connection as _leased_connection
+try:  # pragma: no cover - exercised only when the optional runtime driver exists.
+    import psycopg
+    from psycopg.rows import dict_row
+except ImportError:  # pragma: no cover - keeps non-Postgres tooling importable.
+    psycopg = None
+    dict_row = None
 
 
 _APP_DATABASE_URL_KEY = "ALBUM_HAVEN_APP_DATABASE_URL"
@@ -101,7 +106,11 @@ class _NoopTransaction:
 
 
 def _connect(database_url: str) -> Any:
-    return _leased_connection(database_url)
+    if psycopg is None:
+        raise RuntimeError(
+            "Virtual artist snapshot runtime persistence is Postgres-only."
+        )
+    return psycopg.connect(database_url, row_factory=dict_row)
 
 
 def _transaction(connection: Any) -> Any:

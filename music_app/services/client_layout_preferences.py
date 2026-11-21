@@ -11,8 +11,6 @@ from copy import deepcopy
 import re
 from typing import Any
 
-from music_app.services.postgres_connections import leased_connection as _leased_connection
-
 PROFILES = ("web_desktop", "mobile", "tv")
 _DEFAULTS = {
     "galleryDisplayPreferences": {"defaultGalleryDisplayMode": "cards", "defaultGalleryScalePercent": 100},
@@ -119,7 +117,9 @@ def _owner(value: object) -> int:
 
 
 def _connect(database_url: str):
-    return _leased_connection(database_url)
+    import psycopg
+    from psycopg.rows import dict_row
+    return psycopg.connect(database_url, row_factory=dict_row)
 
 
 class PostgresClientLayoutPreferences:

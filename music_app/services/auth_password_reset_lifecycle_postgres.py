@@ -23,7 +23,13 @@ from music_app.services.auth_tokens import (
     hash_opaque_token,
     issue_opaque_token,
 )
-from music_app.services.postgres_connections import leased_connection as _leased_connection
+
+try:  # pragma: no cover - exercised when the optional runtime driver is present.
+    import psycopg
+    from psycopg.rows import dict_row
+except ImportError:  # pragma: no cover
+    psycopg = None
+    dict_row = None
 
 
 _DATABASE_URL_KEY = "ALBUM_HAVEN_APP_DATABASE_URL"
@@ -564,4 +570,6 @@ def _aware_utc(value: object) -> datetime:
 
 
 def _connect(database_url: str) -> Any:
-    return _leased_connection(database_url)
+    if psycopg is None:
+        raise RuntimeError("psycopg is required for password reset.")
+    return psycopg.connect(database_url, row_factory=dict_row)

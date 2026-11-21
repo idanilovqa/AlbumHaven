@@ -5,11 +5,11 @@ import hashlib
 import hmac
 import json
 
-from music_app.services.postgres_connections import leased_connection as _leased_connection
-
 
 def _connect(url):
-    return _leased_connection(url)
+    import psycopg
+    from psycopg.rows import dict_row
+    return psycopg.connect(url, row_factory=dict_row)
 
 
 class LogHistoryPostgresAdapter:

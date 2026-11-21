@@ -8106,7 +8106,6 @@ const STREAMING_REPLACEMENT_OUTGOING_CUSHION_SECONDS = 1;
 const STREAMING_REPLACEMENT_ACTIVE_OUTGOING_CUSHION_SECONDS = STREAMING_REPLACEMENT_PREPARE_SECONDS;
 const STREAMING_WAVEFORM_READY_SECONDS = 1;
 const STREAMING_RESTORE_AUTOPLAY_SETTLEMENT_MS = 750;
-const STREAMING_REPLACEMENT_CUSHION_WAIT_MS = 1000;
 // A kept track only saves a server stream; a slow or stuck browser cache must not hold the start.
 const STREAMING_CACHED_TRACK_PRIME_DEADLINE_MS = 500;
 const STREAMING_MAX_KNOWN_TRACK_RATES = 512;
@@ -9259,52 +9258,10 @@ function continuityCreditNeedsOutgoingRenderCushion(roleState) {
   return queuedNextNeedsCushion || replacementNeedsCushion;
 }
 
-function settleStreamingReplacementCushionWaiter(ready) {
-  const engine = streamingEngineState();
-  const waiter = engine.replacementCushionWaiter;
-  if (!waiter) return false;
-  engine.replacementCushionWaiter = null;
-  if (waiter.timeoutId) window.clearTimeout(waiter.timeoutId);
-  waiter.resolve(Boolean(ready));
-  return true;
-}
-
 function replacementOutgoingCushionReady(engine, current) {
   return current?.eosReceived === true
     || engine.diagnostics.bufferedFrames.current
       >= streamingFrames(STREAMING_REPLACEMENT_OUTGOING_CUSHION_SECONDS);
-}
-
-function maybeResolveStreamingReplacementCushion() {
-  const engine = streamingEngineState();
-  const waiter = engine.replacementCushionWaiter;
-  if (!waiter) return false;
-  const current = engine.roles.current;
-  if (engine.generation !== waiter.generation
-      || current?.streamId !== waiter.currentStreamId) {
-    return settleStreamingReplacementCushionWaiter(false);
-  }
-  if (!replacementOutgoingCushionReady(engine, current)) return false;
-  return settleStreamingReplacementCushionWaiter(true);
-}
-
-function waitForStreamingReplacementCushion(engine, current) {
-  if (replacementOutgoingCushionReady(engine, current)) return Promise.resolve(true);
-  settleStreamingReplacementCushionWaiter(false);
-  return new Promise((resolve) => {
-    const waiter = {
-      generation: engine.generation,
-      currentStreamId: current.streamId,
-      resolve,
-      timeoutId: 0,
-    };
-    engine.replacementCushionWaiter = waiter;
-    waiter.timeoutId = window.setTimeout(() => {
-      if (engine.replacementCushionWaiter === waiter) {
-        settleStreamingReplacementCushionWaiter(false);
-      }
-    }, STREAMING_REPLACEMENT_CUSHION_WAIT_MS);
-  });
 }
 
 function grantStreamingInitialCredit(roleState) {
@@ -9473,7 +9430,6 @@ function handleStreamingControl(message) {
       authoritativeTotalFrames: message.authoritativeTotalFrames,
     });
     if (roleState.role === 'current') {
-      maybeResolveStreamingReplacementCushion();
       maybeGrantDeferredReplacementCredit();
       maybeSchedulePendingStreamingContinuity();
     }
@@ -9659,7 +9615,6 @@ function acceptStreamingPcm(roleState, frameCount, pcm) {
   engine.diagnostics.inFlightFrames[role] -= frameCount;
   engine.diagnostics.bufferedFrames[role] += frameCount;
   if (role === 'current') {
-    maybeResolveStreamingReplacementCushion();
     maybeGrantDeferredReplacementCredit();
     maybeSchedulePendingStreamingContinuity();
   }
@@ -11221,7 +11176,6 @@ async function openBrowserStreamingTrack(track, {
   } else if (!keepDetached) {
     endStreamingDetach();
   }
-  settleStreamingReplacementCushionWaiter(false);
   if (mayPrimeStreamingCachedTrack()) {
     let primeDeadline = 0;
     await Promise.race([
@@ -11256,7 +11210,10 @@ async function openBrowserStreamingTrack(track, {
     if (engine.startRequestId !== startRequestId) return null;
   }
   preparedReplacement: {
+    // A switch crosses over from an outgoing song with a second of audio left; otherwise the
+    // new song starts at once instead of waiting for that cushion.
     if (!canPrepareReplacement()
+        || !replacementOutgoingCushionReady(engine, engine.roles.current)
         || (knownStreamingSampleRate(track)
           && streamingPlaybackRate(track) !== engine.sampleRate)) break preparedReplacement;
     cancelStreamingWaveformGeneration(engine.generation);
@@ -11266,17 +11223,6 @@ async function openBrowserStreamingTrack(track, {
     engine.pendingContinuityOptions = null;
     engine.loopContinuity = null;
     engine.waveformReadyIdentity = null;
-    const replacementGeneration = engine.generation;
-    const outgoingStreamId = engine.roles.current.streamId;
-    if (!replacementOutgoingCushionReady(engine, engine.roles.current)) {
-      const cushionReady = await waitForStreamingReplacementCushion(engine, engine.roles.current);
-      if (engine.startRequestId !== startRequestId
-          || engine.generation !== replacementGeneration
-          || engine.roles.current?.streamId !== outgoingStreamId
-          || !engine.node
-          || engine.socket?.readyState !== WebSocket.OPEN) return null;
-      if (!cushionReady) break preparedReplacement;
-    }
     const startFrame = streamingFrames(Math.max(0, startSeconds));
     const replacement = openStreamingRole('continuity', track, startFrame, {
       kind: 'seek', startSeconds: Math.max(0, startSeconds), endSeconds: Math.max(0, startSeconds),
@@ -11850,7 +11796,6 @@ async function cleanupStreamingResources(reason, {
   if (roles.length || engine.waveformReadyIdentity) {
     cancelStreamingWaveformGeneration(engine.generation);
   }
-  settleStreamingReplacementCushionWaiter(false);
   settlePendingBufferedSeek('superseded');
   discardSupersededBufferedSeek();
   settlePendingStreamingCutover(new Error(`Prepared track replacement stopped: ${reason}`));
@@ -11867,7 +11812,6 @@ async function cleanupStreamingResources(reason, {
   engine.pendingContinuityOptions = null;
   engine.pendingPromotion = null;
   engine.pendingSeek = null;
-  engine.replacementCushionWaiter = null;
   engine.loopContinuity = null;
   engine.waveformReadyIdentity = null;
   engine.pendingControls = [];

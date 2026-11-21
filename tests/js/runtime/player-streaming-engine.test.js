@@ -7737,6 +7737,34 @@ test('a rate probe asked of a socket that hears nothing goes again on a new sock
   assert.notEqual(harness.api.snapshot().mode, 'error');
 });
 
+test('a guessed-rate start asked of a socket that hears nothing opens the song on a new socket, so one press starts it', async () => {
+  const harness = encodedHarness({ trackSampleRates: new Map() });
+  await harness.api.start(makeTrack('01.mp3'));
+  acceptMetadata(harness, harness.sent('open').at(-1), {
+    sampleRate: 44_100, codec: 'mp3', skipFrames: 1_105, totalFrames: 2_000,
+  });
+  await harness.settle();
+  await harness.api.pause();
+  await harness.settle();
+
+  void harness.api.start(makeTrack('02.mp3'));
+  await settleTwice(harness);
+  const guessed = harness.sockets[0].sent.filter(({ type }) => type === 'open').at(-1);
+  assert.equal(guessed?.path, makeTrack('02.mp3').path, 'the new song opens at once, with no probe');
+  assert.equal(harness.sockets[0].probes.length, 0);
+  checkLivenessUntil(harness, 1_500, 6_500);
+  await settleTwice(harness);
+
+  assert.equal(harness.sockets[0].closeCalls, 1, 'the silent socket is replaced');
+  await settleTwice(harness);
+  await settleTwice(harness);
+  const reopened = harness.sockets[1].sent.filter(({ type }) => type === 'open').at(-1);
+  assert.equal(reopened?.path, makeTrack('02.mp3').path, 'the song opens again on the new socket');
+  assert.equal(reopened.sampleRate, 44_100);
+  assert.notEqual(reopened.streamId, guessed.streamId, 'a fresh stream, never one named on the old socket');
+  assert.notEqual(harness.api.snapshot().mode, 'error');
+});
+
 test('the browser going offline also gives up a reconnect socket still waiting to join the splice', async () => {
   const harness = encodedHarness({ createStreamingDecoder: recordingDecoders().create });
   await startLocallySeekable(harness, 100_000);

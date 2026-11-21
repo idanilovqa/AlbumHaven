@@ -1242,6 +1242,8 @@ export class CoverLookupActions {
 
   async openTaskWithKeyboard(taskTitle, key = 'Enter') {
     const opener = this.coverLookup.taskOpenButtonByTitle(taskTitle);
+    // A keyboard user works in the focused window; another session's page may hold window focus.
+    await opener.page().bringToFront();
     await opener.focus();
     await expect(opener).toBeFocused();
     await opener.press(key);

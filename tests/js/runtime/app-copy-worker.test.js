@@ -1162,6 +1162,21 @@ test('IAR-W13: images a kept stylesheet draws (icon masks) are kept, so they sho
   assert.equal(await icon.text(), '<svg>x</svg>');
 });
 
+// Sandbox5: right after signing in, the page the worker loads is never saved again, and its
+// stylesheets arrived before the copy existed; the close X showed as an empty square offline.
+test('IAR-W13: the page that starts the copy keeps its stylesheets and the images they draw, with no save', async () => {
+  let up = true;
+  const server = styledServer({ online: () => up });
+  const { handle, settled } = setup({ mode: 'web', respond: server.respond });
+  await handle(resource('/static/css/details.css?v=v1'));
+  await handle(navigation('/'));
+  await settled();
+  up = false;
+
+  assert.match(await (await handle(resource('/static/css/details.css?v=v1'))).text(), /tabler-x/);
+  assert.equal(await (await handle(resource('/static/images/icons/tabler-x.svg'))).text(), '<svg>x</svg>');
+});
+
 test('IAR-W13: a stylesheet kept before is read for its images once per worker, on the next save', async () => {
   const server = styledServer();
   const caches = fakeCaches();
@@ -1316,12 +1331,11 @@ test('request capture: saving the view fetches its page once and at most one bat
 
 test('request capture: saving the view fetches only the versioned assets its page loads that are not kept', async () => {
   await measureInteractionContract('js:app-copy-worker.js#fillAssets', async (keptAssets) => {
-    const scripts = ['/static/js/runtime/kept-0.js?v=v1', '/static/js/runtime/app.js?v=v1', '/static/css/app.css?v=v1'];
+    // The page that starts the copy keeps the [keptAssets] it loads; the page then loads two more.
+    const scripts = Array.from({ length: keptAssets }, (_, index) => `/static/js/runtime/kept-${index}.js?v=v1`);
     const captured = capturedWorker(0, { scripts });
     await captured.handle(navigation('/'));
-    for (let index = 0; index < keptAssets; index += 1) {
-      await captured.handle(resource(`/static/js/runtime/kept-${index}.js?v=v1`));
-    }
+    scripts.push('/static/js/runtime/app.js?v=v1', '/static/css/app.css?v=v1');
     const { metrics, paths } = await measureCaptured(captured, () => captured.worker.message({ type: 'save', url: `${ORIGIN}/` }));
     const [pagePath, ...assetPaths] = paths;
     assert.equal(pagePath, '/');

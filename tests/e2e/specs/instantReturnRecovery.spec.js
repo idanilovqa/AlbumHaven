@@ -5,7 +5,7 @@
 // loads again within the budget, without a reload and without anyone clicking again.
 import { expect, test } from '../support/baseFixtures.js';
 import { defineTimingBudget, expectTimingBudget } from '../helpers/timingBudget.js';
-import { setAppPageHold, visibleAlbumNames } from '../helpers/instantReturnHelpers.js';
+import { setAppPageHold } from '../helpers/instantReturnHelpers.js';
 
 // A short page, so the root gallery has more albums to load below the first ones.
 test.use({ serviceWorkers: 'allow', viewport: { width: 1024, height: 480 } });
@@ -50,7 +50,8 @@ async function provesRecovery({ page, galleryActions, navigationPanelActions, tr
   await restore();
   await expect(galleryPage.unreachable).toHaveCount(0, { timeout: 15_000 });
   await expect(galleryPage.galleryContextName).toHaveText(artist);
-  await expect.poll(async () => (await visibleAlbumNames(galleryPage)).length).toBeGreaterThan(0);
+  // Its albums are on screen (at this short height their titles are below the fold).
+  await expect(galleryPage.albumCards.first()).toBeInViewport();
   expectTimingBudget(expect, Date.now() - restored, RECOVERY_BUDGET, `${artist} loads again`);
   expect(loads, 'the artist recovers without a reload').toBe(loadsBefore);
 

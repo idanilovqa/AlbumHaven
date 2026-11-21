@@ -187,9 +187,11 @@
 
     // [page.running]: the page is the one starting now, so its version's assets stay while it runs.
     // [page.beside]: Home kept beside the saved view, which stays the last view.
+    // True when this page started the copy.
     async function keepPage(url, response, page, fetchedIn) {
       const text = await response.text();
-      if (PATH_COVER_URL.test(text)) return;
+      if (PATH_COVER_URL.test(text)) return false;
+      let started = false;
       await written(exclusive(async () => {
         if (fetchedIn !== generation) return;
         const html = withoutPaths(text.replace(NETWORK_MARKER, COPY_MARKER));
@@ -199,6 +201,7 @@
           await deleteCopies();
           target = null;
         }
+        started = !target;
         const cache = target ? target.cache : await caches.open(CACHE_PREFIX + account);
         const key = pageKey(url);
         await cache.put(new URL(key, origin).href, new Response(html, {
@@ -220,6 +223,7 @@
         await writeMeta(cache, meta);
         await pruneAssets(cache, meta);
       }));
+      return started;
     }
 
     // The app page as a copy request, answered as soon as it arrives; [page.kept] settles once the
@@ -239,7 +243,10 @@
       page.kept = later(event, async () => {
         const { signedOut, copy } = await arrived;
         if (signedOut) await forget();
-        else if (copy) await keepPage(url, copy, page, fetchedIn);
+        // The page's own stylesheets arrived before the copy existed, so none were kept, and a page
+        // the worker loaded is never saved again (app-copy.js): the copy it starts is filled now,
+        // or the close X and other icons stay missing offline until the tab is hidden.
+        else if (copy && await keepPage(url, copy, page, fetchedIn)) await fillAssets();
       });
       return arrived.then(({ answer }) => answer);
     }

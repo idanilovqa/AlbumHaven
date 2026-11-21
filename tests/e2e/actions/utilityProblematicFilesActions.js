@@ -441,19 +441,38 @@ export class UtilityProblematicFilesActions {
   }
 
   async openEnteredMusicBrainzArtist(expectedUrl) {
-    const opened = this.utilityProblematicFilesTab.page.waitForEvent('popup');
-    await this.utilityProblematicFilesTab.musicBrainzOpenEnteredArtistButton.click();
-    const popup = await opened;
-    await popup.waitForURL(expectedUrl, { timeout: 60000 });
-    await popup.close();
+    await this.openMusicBrainzPopup(this.utilityProblematicFilesTab.musicBrainzOpenEnteredArtistButton, expectedUrl);
   }
 
   async openMusicBrainzManualSearch(expectedUrl) {
-    const opened = this.utilityProblematicFilesTab.page.waitForEvent('popup');
-    await this.utilityProblematicFilesTab.musicBrainzFindManuallyButton.click();
-    const popup = await opened;
-    await popup.waitForURL(expectedUrl, { timeout: 60000 });
-    await popup.close();
+    await this.openMusicBrainzPopup(this.utilityProblematicFilesTab.musicBrainzFindManuallyButton, expectedUrl);
+  }
+
+  // The app's part ends when the popup navigates to the exact MusicBrainz URL. Waiting for the live
+  // musicbrainz.org page to load made CI depend on a third-party site, so the popup's first
+  // navigation request is asserted instead and the popup closes before any response matters.
+  async openMusicBrainzPopup(trigger, expectedUrl) {
+    const page = this.utilityProblematicFilesTab.page;
+    const context = page.context();
+    let openedUrl = null;
+    const recordPopupNavigation = (request) => {
+      if (openedUrl === null && request.isNavigationRequest() && request.frame().page() !== page) {
+        openedUrl = request.url();
+      }
+    };
+    context.on('request', recordPopupNavigation);
+    try {
+      const opened = page.waitForEvent('popup');
+      await trigger.click();
+      const popup = await opened;
+      try {
+        await expect.poll(() => openedUrl, { timeout: 30000 }).toBe(expectedUrl);
+      } finally {
+        await popup.close();
+      }
+    } finally {
+      context.off('request', recordPopupNavigation);
+    }
   }
 
   async selectMusicBrainzCandidate(name) {
@@ -489,11 +508,7 @@ export class UtilityProblematicFilesActions {
   }
 
   async openMusicBrainzCandidate(name, expectedUrl) {
-    const opened = this.utilityProblematicFilesTab.page.waitForEvent('popup');
-    await this.utilityProblematicFilesTab.musicBrainzArtistLink(name).click();
-    const popup = await opened;
-    await popup.waitForURL(expectedUrl, { timeout: 60000 });
-    await popup.close();
+    await this.openMusicBrainzPopup(this.utilityProblematicFilesTab.musicBrainzArtistLink(name), expectedUrl);
   }
 
   async assignSelectedMusicBrainzIdentity(artistName) {

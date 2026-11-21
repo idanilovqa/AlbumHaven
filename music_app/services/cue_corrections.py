@@ -247,23 +247,25 @@ class CueCorrectionService:
                     raise CueCorrectionError("Invalid CUE metadata correction.")
                 correction_payload = {"fields": dict(fields)}
 
+            # The active correction is retired by its own statement first: in one statement a data-modifying CTE
+            # need not run before the insert, so a second edit of a track hit cue_corrections_active_kind_idx
+            # (owner 2026-11-21, "Cannot edit CUE"). Both run in this connection's one transaction.
+            connection.execute(
+                """/* cue_retire_correction */
+                update library.cue_corrections
+                set status = 'restored', restored_at = now(), updated_at = now()
+                where library_id = %s and track_id = %s
+                  and correction_kind = %s and status = 'active'""",
+                (library_id, target["track_id"], kind),
+            )
             row = connection.execute(
                 """/* cue_store_correction */
-                with restored as (
-                    update library.cue_corrections
-                    set status = 'restored', restored_at = now(), updated_at = now()
-                    where library_id = %s and track_id = %s
-                      and correction_kind = %s and status = 'active'
-                )
                 insert into library.cue_corrections (
                     library_id, track_id, account_id, base_program_id,
                     correction_kind, payload
                 ) values (%s, %s, %s, %s, %s, %s)
                 returning id""",
                 (
-                    library_id,
-                    target["track_id"],
-                    kind,
                     library_id,
                     target["track_id"],
                     account_id,

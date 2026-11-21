@@ -25,6 +25,7 @@ class Cursor:
 class Connection:
     def __init__(self):
         self.writes = []
+        self.order = []
 
     def __enter__(self):
         return self
@@ -56,7 +57,11 @@ class Connection:
                 "media_path": "/music/Album/image.flac",
                 "metadata_correction": {"title": "Corrected title"},
             }])
+        if "cue_retire_correction" in sql:
+            self.order.append("retire")
+            return Cursor()
         if "cue_restore_correction" in sql or "cue_store_correction" in sql:
+            self.order.append("store" if "cue_store_correction" in sql else "restore")
             self.writes.append((sql, params))
             return Cursor(row={"id": 9})
         raise AssertionError(sql)
@@ -326,3 +331,23 @@ def test_default_write_check_reads_the_media_host_settings(monkeypatch):
 
     assert service._write_enabled(1) is True
     assert calls == [{}]
+
+
+def test_a_second_correction_retires_the_active_one_before_storing():
+    # Owner 2026-11-21 ("Cannot edit CUE"): in one statement the retiring CTE need not run before the insert, so a
+    # second boundary edit of a track violated cue_corrections_active_kind_idx.
+    connection = Connection()
+    service = CueCorrectionService(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://unused"},
+        connect=lambda _url: connection,
+        write_enabled=lambda _library_id: False,
+    )
+    for start_frame in (1050, 1100):
+        service.apply(actor=actor(), payload={
+            "cue_segment_ref": "cue:track-2",
+            "base_revision_sha256": REVISION,
+            "kind": "boundary",
+            "start_frame": start_frame,
+        })
+    assert connection.order == ["retire", "store", "retire", "store"]
+    assert all("with restored" not in sql for sql, _params in connection.writes)

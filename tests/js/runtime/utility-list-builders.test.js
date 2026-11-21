@@ -3236,7 +3236,7 @@ test('watchSaveTask routes a committed typo rename through destination reconcili
   );
 });
 
-test('watchSaveTask reports a saved rename once its destination shows, before the open album reloads', async () => {
+test('watchSaveTask reports a saved rename when the server accepts it, before the Gallery refetch', async () => {
   const context = loadHelpers();
   const trackPath = 'D:\\Synthetic Music\\Ovderhead\\Telepathic Minds\\01.flac';
   const originalAlbum = {
@@ -3268,7 +3268,9 @@ test('watchSaveTask reports a saved rename once its destination shows, before th
   const historyUrls = [];
   context.window.history = { state: {}, replaceState: (_state, _title, url) => historyUrls.push(url) };
   let finishOpenAlbumReload;
+  const events = [];
   context.fetchAndRender = async (_url, _push, options) => {
+    events.push('gallery');
     if (!options.shouldApplyResponse({ inventory_mutation_revision: 2 })) return false;
     const destinationGroup = { artist: 'Overhead', albums: [destinationAlbum] };
     context.state.view = {
@@ -3284,7 +3286,6 @@ test('watchSaveTask reports a saved rename once its destination shows, before th
     }));
     return true;
   };
-  const events = [];
   context.showRepairAlert = (message) => events.push(`alert:${message}`);
   context.updateOpenTrackModalAfterTagEdit = () => events.push('modal');
 
@@ -3305,11 +3306,12 @@ test('watchSaveTask reports a saved rename once its destination shows, before th
       updated_albums: [],
     },
   });
-  for (let attempt = 0; attempt < 20 && !events.length; attempt += 1) {
+  for (let attempt = 0; attempt < 20 && !finishOpenAlbumReload; attempt += 1) {
     await new Promise((resolve) => setImmediate(resolve));
   }
 
-  assert.deepEqual(events, ['alert:Saved changes to 1 track in “Telepathic Minds”.']);
+  // Owner (2026-11-19): "Saved" on accept; the Gallery refetch follows and corrects the cards.
+  assert.deepEqual(events, ['alert:Saved changes to 1 track in “Telepathic Minds”.', 'gallery']);
   assert.deepEqual(
     Array.from(context.state.view.artists_sidebar, (item) => item.artist),
     ['Overhead'],
@@ -3317,7 +3319,76 @@ test('watchSaveTask reports a saved rename once its destination shows, before th
   assert.deepEqual(historyUrls, ['/?artist=Overhead']);
   finishOpenAlbumReload();
   await watch;
-  assert.deepEqual(events.slice(1), ['modal']);
+  assert.deepEqual(events.slice(2), ['modal']);
+});
+
+test('watchSaveTask leaves a search started after Saved alone instead of refetching the old artist', async () => {
+  const context = loadHelpers();
+  const trackPath = 'D:\\Synthetic Music\\ДДТ\\Ремиксы2\\01.flac';
+  const originalAlbum = {
+    key: 'ддт::ремиксы2',
+    name: 'Ремиксы2',
+    album_artist: 'ДДТ',
+    tracks: [{ path: trackPath }],
+  };
+  const sourceGroup = { artist: 'ДДТ', albums: [originalAlbum] };
+  Object.assign(context.state, {
+    busy: false,
+    ui: { viewStateRevision: 7, activeViewRequestId: 10 },
+    view: {
+      ...context.state.view,
+      selected_artist: 'ДДТ',
+      query: '',
+      artist_groups: [sourceGroup],
+      primary_artist_groups: [sourceGroup],
+      family_artist_groups: [],
+    },
+  });
+  context.buildApiUrl = (view) => `/view-data?artist=${view.selected_artist || ''}&q=${view.query || ''}`;
+  context.waitForBrowserTimeout = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  // The person starts a search right after "Saved", before the save's Gallery refetch.
+  context.refreshLoadedProblematicFilesAfterSaveCompletion = async () => {
+    context.state.busy = true;
+    context.state.ui.activeViewRequestId = 11;
+  };
+  setTimeout(() => {
+    const searchGroup = { artist: 'Ария', albums: [{ key: 'ария::герой асфальта', name: 'Герой асфальта', album_artist: 'Ария', tracks: [] }] };
+    context.state.view = {
+      ...context.state.view,
+      selected_artist: 'Ария',
+      query: 'Ария',
+      artist_groups: [searchGroup],
+      primary_artist_groups: [searchGroup],
+    };
+    context.state.busy = false;
+  }, 150);
+  const fetchedUrls = [];
+  context.fetchAndRender = async (url) => {
+    fetchedUrls.push(url);
+    return true;
+  };
+  const alerts = [];
+  context.showRepairAlert = (message) => alerts.push(message);
+  context.updateOpenTrackModalAfterTagEdit = () => {};
+
+  await context.watchSaveTask('merge-task', {
+    originalAlbum,
+    originatingViewStateRevision: 7,
+    tagEdits: { [trackPath]: { album: 'Ремиксы' } },
+    tagEditAlert: { completionMessage: 'Saved changes to 1 track in “Ремиксы2”.' },
+    terminalPayload: {
+      ok: true,
+      save_task_id: 'merge-task',
+      save_task_status: 'completed',
+      requires_view_refresh: true,
+      inventory_mutation_revision: 2,
+      updated_albums: [],
+    },
+  });
+
+  assert.deepEqual(alerts, ['Saved changes to 1 track in “Ремиксы2”.']);
+  assert.deepEqual(fetchedUrls, []);
+  assert.equal(context.state.view.query, 'Ария');
 });
 
 test('watchSaveTask reconciles an open destination modal locally after a structural merge', async () => {

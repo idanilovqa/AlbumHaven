@@ -53285,6 +53285,8 @@ if (typeof prepareStreamingPlaybackEngine === 'function'
     && (!window.AlbumHavenCapabilities || window.AlbumHavenCapabilities.allows('library.media.read'))) {
   const prepareIdlePlayback = () => {
     if (idlePlaybackPreparationCancelled) return;
+    // Verified decoders let the first song stream compressed instead of waiting on server decoding.
+    if (typeof ensureStreamingDecoders === 'function') void ensureStreamingDecoders();
     void prepareStreamingPlaybackEngine().catch((error) => {
       console.error('[AlbumHaven][Playback] Failed to prepare streaming playback.', error);
     });

@@ -11190,7 +11190,13 @@ async function openBrowserStreamingTrack(track, {
   if (detached && !keepDetached && engine.socket?.readyState !== WebSocket.OPEN) {
     detached.kind = 'reopen';
     detached.spliceFrame = null;
-    if (autoplay) resumeStreamingReconnect();
+    if (autoplay) {
+      // A press is a fresh reason to try: an attempt begun before it may hang on the network that went
+      // (sandbox5 r20: a song pressed after a 10 s outage played 8.4 s later).
+      if (streamingSocketConnecting(engine.socket)) abandonStreamingConnectingSocket(engine.socket);
+      resumeStreamingReconnect();
+      reconnectStreamingTransport();
+    }
   } else if (!keepDetached) {
     endStreamingDetach();
   }

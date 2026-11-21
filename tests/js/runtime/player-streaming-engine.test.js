@@ -5266,6 +5266,33 @@ test('a reconnect that a probe started is left to connect, however slowly, while
   assert.equal(harness.sockets.at(-1).closeCalls, 0);
 });
 
+// sandbox5 r20 (2026-11-21): after a 10 s outage another song pressed at once played 8.4 s later, while
+// an attempt begun during the outage hung out its time. A press is a fresh reason to try: the attempt
+// begun before it is replaced at once.
+test('a press on another song while a reconnect hangs replaces that attempt at once', async () => {
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => (count === 2 ? 'hang' : false),
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+  });
+  await startLocallySeekable(harness, 100_000);
+  await harness.api.resume();
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  assert.equal(harness.sockets.length, 2);
+  assert.equal(harness.sockets[1].readyState, 0, 'the attempt begun in the outage hangs');
+
+  void harness.api.start(makeTrack('02.mp3'));
+  await settleTwice(harness);
+  await settleTwice(harness);
+  assert.equal(harness.sockets[1].closeCalls, 1, 'the hanging attempt is given up');
+  assert.equal(harness.sockets.length, 3, 'a fresh attempt starts at once');
+  const opened = harness.sockets[2].sent.filter(({ type }) => type === 'open').at(-1);
+  assert.equal(opened?.path, makeTrack('02.mp3').path);
+});
+
 test('a refused socket still stops playback with an error', async () => {
   const harness = createEngineHarness();
   await harness.api.start(makeTrack());

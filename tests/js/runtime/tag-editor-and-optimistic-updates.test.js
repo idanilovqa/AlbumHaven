@@ -5515,3 +5515,33 @@ test('request capture: missing album removal posts once and refreshes its own vi
     return capture.counter.snapshot();
   });
 });
+
+test('request capture: a missing album rescan refreshes its own view once', async () => {
+  const id = 'js:runtime/tag-editor-and-optimistic-updates.js#refreshMissingAlbumView';
+  await measureInteractionContract(id, async (albums) => {
+    const { context } = createGalleryRefreshContext();
+    useRealViewUrls(context);
+    vm.runInContext(fs.readFileSync(helperPath, 'utf8'), context, { filename: helperPath });
+    const capture = createRequestCapture(url => (url.startsWith('/api/')
+      ? jsonResponse({ status: 'restored' })
+      : jsonResponse({ artist_groups: [], payload_tier: 'full' })));
+    context.fetch = capture.fetch;
+    context.loadProblematicFiles = async () => {};
+    const album = { key: 'missing', inventory_status: 'missing' };
+    for (const view of [{}, { selected_artist: 'Owner' }]) {
+      context.state.busy = false;
+      context.state.view = {
+        ...view,
+        artist_groups: [{ artist: 'Owner', albums: [album, ...Array.from({ length: albums }, (_, index) => ({ key: `kept-${index}` }))] }],
+      };
+      assert.equal(await context.rescanMissingAlbum(album), true);
+    }
+    const urls = capture.urls();
+    const views = urls.filter(url => !url.startsWith('/api/'));
+    assert.deepEqual(urls.map(url => new URL(url, 'http://localhost').pathname), [
+      '/api/library/albums/missing/rescan', '/home-data', '/api/library/albums/missing/rescan', '/view-data',
+    ]);
+    assertInteractionRequests(id, views);
+    return { requests: views.length };
+  });
+});

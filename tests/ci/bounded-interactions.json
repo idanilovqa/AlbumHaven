@@ -6301,7 +6301,7 @@
     },
     {
       "id": "js:runtime/tag-editor-and-optimistic-updates.js#refreshMissingAlbumView",
-      "action": "fetchAndRender requests installed by refreshMissingAlbumView",
+      "action": "Re-scan a missing album, then refresh the view it was opened from",
       "entrypoints": [
         "js:music_app/static/js/runtime/tag-editor-and-optimistic-updates.js#refreshMissingAlbumView:request:fetchAndRender"
       ],
@@ -6313,13 +6313,31 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static",
+      "proof": "contract",
       "requestOwnership": {
         "allowed": [
-          "/"
+          "/",
+          "/home-data",
+          "/view-data"
         ],
-        "forbidden": []
-      }
+        "forbidden": [
+          "/album-details"
+        ]
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 500
+      },
+      "budgets": {
+        "requests": 2
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/tag-editor-and-optimistic-updates.test.js",
+      "testIdentity": "request capture: a missing album rescan refreshes its own view once",
+      "rollback": "Test-only request-capture contract; the missing-album refresh is unchanged. Reverting returns the entry to an unresolved dynamic target, which the guard rejects."
     },
     {
       "id": "js:runtime/tag-editor-and-optimistic-updates.js#rescanMissingAlbum",

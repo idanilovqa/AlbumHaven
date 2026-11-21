@@ -19,6 +19,7 @@ from music_app.services.playback_seek_table import (
     lookup,
     mp3_seek_table,
     read_flac_seek_table,
+    whole_through,
 )
 
 
@@ -105,7 +106,7 @@ def test_flac_entries_start_real_frames_after_the_streams_header(ffmpeg, tmp_pat
 
 def test_the_shared_client_vectors_are_the_reference_lookups_answers():
     fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
-    for section in (fixture, fixture["flac"]):
+    for section in (fixture, fixture["flac"], fixture["seekStream"]):
         raw = section["table"]
         table = SeekTable(raw["prefixBytes"], raw["prerollFrames"], tuple(raw["offsets"]), tuple(raw["samples"]))
         for case in section["cases"]:
@@ -185,3 +186,14 @@ def test_playback_refs_stream_preparation_contract_reads_only_the_issued_batch(t
         growth=("stat_calls", 0),
     )
     assert small == production
+
+def test_the_shared_splice_vectors_are_the_reference_whole_through_answers():
+    fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    for section in (fixture, fixture["flac"], fixture["seekStream"]):
+        raw = section["table"]
+        table = SeekTable(raw["prefixBytes"], raw["prerollFrames"], tuple(raw["offsets"]), tuple(raw["samples"]))
+        assert section["wholeThroughCases"]
+        for case in section["wholeThroughCases"]:
+            frame = whole_through(table, initial_skip=section["initialSkip"], initial_total=section["initialTotal"],
+                                  stream_start=section["streamStart"], received_bytes=case["receivedBytes"])
+            assert frame == case["frame"], case

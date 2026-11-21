@@ -3,6 +3,7 @@ const PLAYBACK_OWNERSHIP_HEARTBEAT_MS = 10000;
 const PLAYBACK_HANDOFF_STORAGE_KEY = 'albumhaven.playbackHandoff.v1';
 const PLAYBACK_HANDOFF_WINDOW_MS = 15000;
 const PLAYBACK_HANDOFF_RETRY_MS = 100;
+const PLAYBACK_OWNERSHIP_RETRY_MS = 2000;
 let pendingPlaybackOwnershipHandoff = takePlaybackOwnershipHandoffEnvelope();
 let playbackOwnershipRuntimeClaimToken = pendingPlaybackOwnershipHandoff.handoff
   ? createPlaybackOwnershipToken() : '';
@@ -86,12 +87,20 @@ async function playbackOwnershipRequest(method, url, payload, timeoutMs = PLAYBA
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(url, { method, credentials: 'same-origin', cache: 'no-store',
-      signal: controller.signal,
-      ...(payload ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) } : {}) });
+    let response;
+    try {
+      response = await fetch(url, { method, credentials: 'same-origin', cache: 'no-store',
+        signal: controller.signal,
+        ...(payload ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) } : {}) });
+    } catch (error) {
+      throw Object.assign(new Error(`Playback ownership request was not answered: ${error?.message || error}`),
+        { unanswered: true });
+    }
     if (!response.ok) {
       const error = new Error('Playback ownership is unavailable.');
       error.status = response.status;
+      // An overloaded server's answer says no more about the lease than no answer does.
+      error.unanswered = response.status >= 500 || response.status === 429;
       throw error;
     }
     return await response.json();
@@ -132,6 +141,7 @@ function losePlaybackOwnership(reason = 'ownership-lost', updateUi = true) {
   const ownership = getPlaybackOwnershipState();
   ownership.requestVersion = (ownership.requestVersion || 0) + 1;
   ownership.activeClaim = null;
+  ownership.unansweredRelease = null;
   if (ownership.expiryTimer) clearTimeout(ownership.expiryTimer);
   ownership.lockStatus = 'locked';
   ownership.blockedReason = 'playback_unavailable';
@@ -221,9 +231,8 @@ function startPlaybackOwnershipHeartbeat() {
   if (ownership.heartbeatTimer || ownership.recoveryPromise) return;
   ownership.heartbeatTimer = setInterval(() => {
     if (ownership.recoveryPromise) return;
-    if (ownership.activeClaim) {
-      if (isPlaybackClaimRenewable()) void refreshPlaybackOwnershipClaim();
-    }
+    // A paused claim, which keeps its token past the lease, still learns when another client plays.
+    if (ownership.activeClaim && isPlaybackClaimRenewable()) void refreshPlaybackOwnershipClaim();
     else void handlePlaybackOwnershipEvent();
   }, PLAYBACK_OWNERSHIP_HEARTBEAT_MS);
 }
@@ -270,6 +279,41 @@ async function requestPlaybackClaim(payload, timeoutMs) {
   return { ...await playbackOwnershipRequest('PUT', '/playback/state', payload, timeoutMs), sentAt };
 }
 
+// A token whose give-back went unanswered is refused once that give-back did arrive after all; only
+// an anonymous acquire then says whether another client holds playback.
+// [fields] go with every request (the playing song's position); [takeover] (playback.claim.takeover)
+// only with one that offers no token.
+async function requestOfferedPlaybackClaim(claim, track, { takeover = false, fields = {} } = {}) {
+  const payload = { protocol: 1, clientId: getPlaybackOwnershipTabId(), clientSurface: 'private_web',
+    state: 'playing', track, ...fields };
+  const fresh = takeover ? { claimToken: null, takeover: true } : { claimToken: null };
+  try {
+    return await requestPlaybackClaim(claim?.claimToken ? { ...payload, claimToken: claim.claimToken } : { ...payload, ...fresh });
+  } catch (error) {
+    if (!claim?.releaseUnanswered || error?.unanswered) throw error;
+    return requestPlaybackClaim({ ...payload, ...fresh });
+  }
+}
+
+// A start nobody answered is not refused (owner retest B-D4 round 6, 2026-11-18: "I had to click
+// into another song 6 TIMES before it started to play after Network came back"): the connections a
+// browser kept from before an outage can stay dead for a while after it, so every request on them
+// goes unanswered. The song plays on, and its claim is asked again every couple of seconds until the
+// server answers; only a refusal stops it.
+function askAgainUntilAnswered(track, options, error) {
+  if (!error?.unanswered) return false;
+  const ownership = getPlaybackOwnershipState();
+  const version = ownership.requestVersion;
+  if (ownership.retryTimer) clearTimeout(ownership.retryTimer);
+  ownership.retryTimer = setTimeout(() => {
+    ownership.retryTimer = 0;
+    if (version === ownership.requestVersion && !ownership.activeClaim && isPlaybackClaimRenewable()) {
+      void claimPlaybackOwnership(track, options);
+    }
+  }, PLAYBACK_OWNERSHIP_RETRY_MS);
+  return true;
+}
+
 function acceptPlaybackClaim(result, prepared) {
   if (result.protocol !== 1 || !result.claimToken || !Number.isFinite(Date.parse(result.expiresAt))
       || !(Number.isFinite(result.leaseMs) && result.leaseMs > 0)) {
@@ -282,6 +326,7 @@ function acceptPlaybackClaim(result, prepared) {
   const claim = { ...prepared, claimToken: result.claimToken, leaseDeadline, scrobblingAvailable };
   ownership.activeClaim = claim;
   const previousPresentation = playbackOwnershipPresentation();
+  ownership.unansweredRelease = null;
   clearBlockedPlaybackState();
   if (ownership.expiryTimer) clearTimeout(ownership.expiryTimer);
   ownership.expiryTimer = setTimeout(() => expirePlaybackClaim(claim),
@@ -299,9 +344,24 @@ async function expirePlaybackClaim(claim) {
   await ownership.pendingOperation;
   if (ownership.activeClaim !== claim || version !== (ownership.requestVersion || 0)) return;
   // A jump in this document's clock can reach this deadline while the server's lease still runs,
-  // so a playing claim asks the server once; the renewal drops it on refusal or failure.
+  // so a playing claim asks the server once; only a refusal drops it. A paused claim lapses quietly
+  // and keeps its token for the next play to renew.
   if (isPlaybackClaimRenewable()) await refreshPlaybackOwnershipClaim();
-  else losePlaybackOwnership();
+}
+
+// Losing the network never stops playback (owner decision, 2026-11-15): a claim request the server
+// did not answer keeps the claim at any age and retries in 2 s. Its token renews the claim even past
+// the lease until another client claims, so only the server's refusal gives it up; dropping it earlier
+// made the next play an anonymous acquire the server refuses while this client's own lease runs.
+function keepUnansweredPlaybackClaim(claim, error) {
+  if (!error?.unanswered) return false;
+  const ownership = getPlaybackOwnershipState();
+  if (ownership.retryTimer) clearTimeout(ownership.retryTimer);
+  ownership.retryTimer = setTimeout(() => {
+    ownership.retryTimer = 0;
+    if (ownership.activeClaim === claim && isPlaybackClaimRenewable()) void refreshPlaybackOwnershipClaim();
+  }, PLAYBACK_OWNERSHIP_RETRY_MS);
+  return true;
 }
 
 async function refreshPlaybackOwnershipClaim(track = null) {
@@ -318,14 +378,18 @@ async function refreshPlaybackOwnershipClaim(track = null) {
     try {
       const prepared = await playbackOwnershipTrack(track || state.player.current, claim);
       if (version !== (ownership.requestVersion || 0)) return false;
-      const result = await requestPlaybackClaim({ protocol: 1,
-        clientId: getPlaybackOwnershipTabId(), clientSurface: 'private_web', claimToken: claim.claimToken,
-        state: 'playing', track: prepared.track });
+      const result = await requestOfferedPlaybackClaim(claim, prepared.track,
+        { fields: positionField(track || state.player.current) });
       if (ownership.activeClaim !== claim || version !== (ownership.requestVersion || 0)) return false;
       acceptPlaybackClaim(result, prepared);
       return true;
-    } catch (_error) {
-      if (ownership.activeClaim === claim && version === (ownership.requestVersion || 0)) losePlaybackOwnership();
+    } catch (error) {
+      if (ownership.activeClaim === claim && version === (ownership.requestVersion || 0)
+          && !keepUnansweredPlaybackClaim(claim, error)) {
+        losePlaybackOwnership();
+        // Taken over: show which client plays now, as "Playing in another tab".
+        if (error?.status === 409) await handlePlaybackOwnershipEvent();
+      }
       return false;
     }
   })().finally(() => { ownership.renewing = false; });
@@ -365,7 +429,7 @@ async function claimPlaybackOwnership(track, options = {}) {
     const handshake = playingEngineHandshake();
     if (handshake) await handshake;
     if (version !== ownership.requestVersion) return false;
-    const claim = ownership.activeClaim;
+    const claim = ownership.activeClaim || ownership.unansweredRelease;
     // An engine that holds its own claim acquires, heartbeats and releases it before any output.
     if (playingEngine()?.holdsOwnClaim) return true;
     try {
@@ -374,17 +438,23 @@ async function claimPlaybackOwnership(track, options = {}) {
       if (version !== ownership.requestVersion) return false;
       const result = handoff
         ? await acquirePlaybackOwnershipHandoff(prepared, handoff)
-        : await requestPlaybackClaim({ protocol: 1,
-          clientId: getPlaybackOwnershipTabId(), clientSurface: 'private_web',
-          claimToken: claim?.claimToken || null, state: 'playing', track: prepared.track });
+        : await requestOfferedPlaybackClaim(claim, prepared.track,
+          { takeover: options.takeover === true, fields: positionField(track) });
       if (version !== ownership.requestVersion) {
         if (!claim) await deletePlaybackClaim(result).catch(() => {});
         return false;
       }
       acceptPlaybackClaim(result, prepared);
       return true;
-    } catch (_error) {
+    } catch (error) {
       if (version === ownership.requestVersion) {
+        // A claim given back with no answer is this client's again: the server may still hold it.
+        if (claim?.releaseUnanswered && !ownership.activeClaim && error?.unanswered) {
+          ownership.activeClaim = claim;
+          ownership.unansweredRelease = null;
+        }
+        if (claim && ownership.activeClaim === claim && keepUnansweredPlaybackClaim(claim, error)) return true;
+        if (!claim && !handoff && askAgainUntilAnswered(track, options, error)) return true;
         losePlaybackOwnership();
         await handlePlaybackOwnershipEvent();
         if (options.showBlockedToast !== false) notifyBlockedPlaybackStart();
@@ -413,7 +483,9 @@ async function releasePlaybackOwnership() {
     ownership.activeClaim = null;
     if (ownership.expiryTimer) clearTimeout(ownership.expiryTimer);
     clearBlockedPlaybackState();
-    await deletePlaybackClaim(claim).catch(() => {});
+    const unanswered = await deletePlaybackClaim(claim).then(() => false, error => Boolean(error?.unanswered));
+    // Its lease may still run there, as when a pause goes offline: the next play offers its token.
+    if (unanswered && claim && !ownership.activeClaim) ownership.unansweredRelease = { ...claim, releaseUnanswered: true };
     announcePlaybackOwnership();
     return Boolean(claim);
   })();
@@ -463,7 +535,60 @@ function restorePlaybackOwnershipFromPageCache(playbackSnapshot = null) {
   });
 }
 
-function canStartPlaybackInThisTab(track) { return claimPlaybackOwnership(track); }
+function canStartPlaybackInThisTab(track, options = {}) {
+  return claimPlaybackOwnership(track, { takeover: options.takeover === true });
+}
+
+/**
+ * Play while another client plays (owner, 2026-11-17, playback.claim.takeover): that client's
+ * song continues here from where it last said it was, and this claim replaces its claim.
+ */
+async function takeOverPlaybackHere() {
+  let snapshot;
+  try {
+    snapshot = await playbackOwnershipRequest('GET',
+      `/playback/state?client_id=${encodeURIComponent(getPlaybackOwnershipTabId())}&include_path=true`);
+  } catch (_error) {
+    notifyBlockedPlaybackStart();
+    return false;
+  }
+  if (!snapshot?.is_playing_elsewhere) {
+    // It stopped meanwhile: the player shows what holds now, and the next Play starts here.
+    syncMirroredPlaybackState(snapshot);
+    return false;
+  }
+  if (!snapshot.path) {
+    if (typeof showToast === 'function') showToast('That song cannot be opened here.', 'error', 2800);
+    return false;
+  }
+  const song = normalizePlaybackOwnershipTrack(snapshot.track);
+  const position = snapshot.position;
+  state.player.playbackQueue = null;
+  return playTrackFromPayload({
+    src: `/track?path=${encodeURIComponent(snapshot.path)}`,
+    path: snapshot.path,
+    title: song.title || 'Track',
+    artist: song.artist,
+    albumArtist: '',
+    album: song.album,
+    coverRef: '',
+    durationSeconds: position ? position.durationMs / 1000 : 0,
+  }, { startSeconds: position ? position.ms / 1000 : 0, takeover: true });
+}
+
+/**
+ * Where [track] is, so another client can continue it there: `{ position }`, or nothing while the
+ * player still holds another song (a start claims before its song loads) or its length is unknown.
+ */
+function positionField(track) {
+  if (typeof getPlayerPlaybackSnapshot !== 'function') return {};
+  const playback = getPlayerPlaybackSnapshot();
+  if (track?.src && playback.src && playback.src !== track.src) return {};
+  const durationMs = Math.round((Number(playback.duration) || 0) * 1000);
+  if (durationMs < 1) return {};
+  const ms = Math.min(durationMs, Math.max(0, Math.round((Number(playback.currentTime) || 0) * 1000)));
+  return { position: { ms, durationMs } };
+}
 
 function isActivePlaybackOwner() {
   const claim = getPlaybackOwnershipState().activeClaim;
@@ -487,6 +612,11 @@ function getPlaybackClaimContext() {
 }
 
 function isPlaybackLockedByAnotherTab() { return getPlaybackOwnershipState().lockStatus === 'locked'; }
+/** Another client of this account plays now: this one may take playback over. */
+function isPlaybackPlayingElsewhere() {
+  const ownership = getPlaybackOwnershipState();
+  return ownership.lockStatus === 'locked' && ownership.blockedReason === 'playing_in_another_tab';
+}
 function getMirroredPlaybackTrack() { return getPlaybackOwnershipState().mirroredTrack; }
 
 function initPlaybackOwnershipCoordinator() {
@@ -500,5 +630,9 @@ function initPlaybackOwnershipCoordinator() {
     ownership.channel.addEventListener('message', handlePlaybackOwnershipEvent);
   }
   startPlaybackOwnershipHeartbeat();
+  // Back online, a claim kept through the outage renews at once instead of at its next retry.
+  window.addEventListener?.('online', () => {
+    if (ownership.activeClaim && isPlaybackClaimRenewable()) void refreshPlaybackOwnershipClaim();
+  });
   void handlePlaybackOwnershipEvent();
 }

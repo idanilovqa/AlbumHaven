@@ -16,9 +16,9 @@ const EXPECTED_SHARDS = Object.freeze([
   ['cover-providers-1', 22],
   ['cover-providers-2', 15],
   ['metadata-mutations', 16],
-  ['playback-utilities-1', 14],
-  ['playback-utilities-2', 17],
-  ['playback-utilities-3', 14],
+  ['playback-utilities-1', 15],
+  ['playback-utilities-2', 22],
+  ['playback-utilities-3', 19],
 ]);
 const OWNER_RUNTIME_ENV_KEYS = Object.freeze([
   'MUSIC_DIR',

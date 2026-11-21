@@ -23,9 +23,9 @@ const EXPECTED_SHARD_COUNTS = new Map([
   ['cover-providers-1', 22],
   ['cover-providers-2', 15],
   ['metadata-mutations', 16],
-  ['playback-utilities-1', 14],
-  ['playback-utilities-2', 17],
-  ['playback-utilities-3', 14],
+  ['playback-utilities-1', 15],
+  ['playback-utilities-2', 22],
+  ['playback-utilities-3', 19],
 ]);
 const EXPECTED_SHARD_DISPLAY_NAMES = new Map([
   ['gallery-search-visual-1', 'Gallery, Search & Visual 1'],
@@ -912,6 +912,8 @@ validatorTest('playback restores three wave baselines and isolates conflicting e
       'FTC-UTIL-PROBLEMS-011 opens the exact problematic track from album details',
       'FTC-UTIL-PROBLEMS-001 scopes exclusions with optimistic persistence and reload',
       'FTC-TAGS-024 completes a verified Album and Exception intent during app restart',
+      'FTC-PLAYBACK-OFFLINE-001 a seek past the received audio offline stays playing silently, resumes by itself when the network returns, and one Play press continues a paused one',
+      "FTC-PLAYBACK-TAKEOVER-001 Play on the playing-elsewhere overlay continues the other device's song here at its place and stops the other device",
     ].sort(),
   );
   assert.deepEqual(
@@ -919,13 +921,19 @@ validatorTest('playback restores three wave baselines and isolates conflicting e
     [
       'FTC-LIBROOTS-016 / 017 / 018 reconciles filesystem changes and confirms missing-album removal',
       'FTC-UTIL-PROBLEMS-001 rolls back failed exclusion creation and reversion',
+      'FTC-PLAYBACK-OFFLINE-004 owner round 7 with Wi-Fi off and on: a click in the received audio plays at once, the head never jumps to the start, the song plays on by itself when the server is back, one Play continues it, and one press plays another song',
+      'FTC-PLAYBACK-OFFLINE-005 owner round 7 with the server answering 530 for a minute after Wi-Fi returns: a click in the received audio plays at once, the head never jumps to the start, the song plays on by itself when the server is back, one Play continues it, and one press plays another song',
     ].sort(),
   );
   assert.deepEqual(waveInvocations(4).flatMap((invocation) => invocation.cases.map(({ case: name }) => name)), [
     'FTC-SETTINGS-I01 real folder picking preserves Cancel and validates saved root membership',
+    'FTC-PLAYBACK-NAV-001 play, open another artist in a new page load, and one press on a song plays it at once',
+    'FTC-PLAYBACK-TAKEOVER-003 after a playing tab closes, one press on a song in another browser plays it within seconds',
   ]);
   assert.deepEqual(waveInvocations(5).flatMap((invocation) => invocation.cases.map(({ case: name }) => name)), [
+    'FTC-PLAYBACK-OFFLINE-006 offline, seeks forward and back inside the received audio play, seeks past it wait silently at their place, Play is never dimmed or disabled, and the song plays on by itself when the network returns',
     'FTC-PREVIEW-STORAGE-001 / 002 relocates generated previews safely and denies non-owner access',
+    'FTC-PLAYBACK-TITLE-001 pressing another song while one plays never shows the playing song again once the pressed one shows',
   ]);
   const overflow = matrix.map(row => row.case.startsWith('FTC-SETTINGS-I01 ') ? { ...row, executionWave: 6 } : row);
   const overflowShard = shards.find((shard) => shard.invocations.some((invocation) => invocation.cases.some(
@@ -982,9 +990,9 @@ validatorTest('all eight shards use explicit effect-compatible wave budgets', ()
     ['cover-providers-1', { cases: 22, waves: [1, 2, 4] }],
     ['cover-providers-2', { cases: 15, waves: [1, 2] }],
     ['metadata-mutations', { cases: 16, waves: [1, 2, 3] }],
-    ['playback-utilities-1', { cases: 14, waves: [1, 2, 3, 4] }],
-    ['playback-utilities-2', { cases: 17, waves: [1, 2, 5] }],
-    ['playback-utilities-3', { cases: 14, waves: [1, 2] }],
+    ['playback-utilities-1', { cases: 15, waves: [1, 2, 3, 4] }],
+    ['playback-utilities-2', { cases: 22, waves: [1, 2, 3, 4, 5] }],
+    ['playback-utilities-3', { cases: 19, waves: [1, 2, 3, 4, 5] }],
   ]);
   const matrixByCase = new Map(matrix.map((row) => [row.case, row]));
 

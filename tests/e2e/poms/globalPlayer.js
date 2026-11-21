@@ -66,6 +66,7 @@ export class GlobalPlayer extends BasePage {
     this.timelineWrap = this.player.locator('.player-timeline-wrap');
     this.waveformCanvas = page.locator(this.waveformCanvasSelector);
     this.time = page.locator('#player-time');
+    this.elsewhereOverlay = this.player.locator('[data-player-elsewhere]');
     this.blockedStartToast = page.locator('#toast-layer .toast.is-error').filter({ hasText: 'Playback is active in another tab.' });
     this.readinessErrorToasts = page.locator('#toast-layer .toast.is-error.is-visible').filter({
       hasText: /readiness/i,
@@ -617,6 +618,34 @@ export class GlobalPlayer extends BasePage {
           metadata,
         };
       });
+    });
+  }
+
+  /** Where the "Playing in another tab" overlay sits and what a press at Play and at the song would hit. */
+  async readElsewhereOverlayGeometry() {
+    // parity-check: allow-read-only-measurement-evaluate -- hit-test the rendered overlay without changing player state
+    return this.player.evaluate(root => {
+      const box = element => {
+        const rectangle = element.getBoundingClientRect();
+        return { left: rectangle.left, right: rectangle.right, top: rectangle.top, bottom: rectangle.bottom };
+      };
+      const overlay = root.querySelector('[data-player-elsewhere]');
+      const label = overlay.firstElementChild;
+      const play = root.querySelector('#player-play');
+      const title = root.querySelector('#player-title');
+      const hit = element => {
+        const rectangle = element.getBoundingClientRect();
+        return document.elementFromPoint(rectangle.left + rectangle.width / 2, rectangle.top + rectangle.height / 2);
+      };
+      const playHit = hit(play);
+      const titleHit = hit(title);
+      return {
+        player: box(root), overlay: box(overlay), label: box(label),
+        labelText: label.textContent.trim(),
+        playReceivesPress: Boolean(playHit && play.contains(playHit)),
+        titleCoveredByOverlay: Boolean(titleHit && overlay.contains(titleHit)),
+        overlayBackground: getComputedStyle(overlay).backgroundImage,
+      };
     });
   }
 

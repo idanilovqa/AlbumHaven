@@ -33,8 +33,8 @@ const ANDROID_NATIVE_PLAYBACK_ENGINE = Object.freeze({
   claimClientId: () => getAndroidNativePlaybackClientId(),
   ownsPlayback: () => isAndroidNativePlaybackOwner(),
   adopt: persistedState => attachAndroidNativePlayback(persistedState),
-  start: (track, { startSeconds = 0, autoplay = true } = {}) =>
-    startAndroidNativePlaybackTrack(track, { startSeconds, autoplay }),
+  start: (track, { startSeconds = 0, autoplay = true, takeover = false } = {}) =>
+    startAndroidNativePlaybackTrack(track, { startSeconds, autoplay, takeover }),
   pause: () => pauseAndroidNativePlayback(),
   resume: (_expectedStartRequestId, onPlaybackStarted) => resumeAndroidNativePlayback(onPlaybackStarted),
   seek: seconds => seekAndroidNativePlayback(seconds),

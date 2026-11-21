@@ -124,6 +124,9 @@
       this.configured = false;
       this.current = createRing(1);
       this.continuity = createRing(1);
+      // Streams this generation's current ring played and left: the engine learns of a cutover by
+      // message, so their next chunks may still arrive, and are dropped.
+      this.retiredStreamIds = new Set();
       this.renderedFrames = 0;
       this.timelineFrame = 0;
       this.playing = false;
@@ -152,12 +155,14 @@
       this.pendingSeek = null;
       this.pendingBufferedSeek = null;
       this.expectContinuity = false;
+      this.continuityTimelineStartFrame = 0;
       this.consecutiveAlbumContinuity = false;
       this.port.onmessage = ({ data }) => this.handleCommand(data);
     }
 
     reset(generation, timelineStartFrame = 0) {
       this.generation = generation;
+      this.retiredStreamIds.clear();
       clearRing(this.current);
       clearRing(this.continuity);
       this.renderedFrames = timelineStartFrame;
@@ -180,6 +185,7 @@
       this.pendingSeek = null;
       this.pendingBufferedSeek = null;
       this.expectContinuity = false;
+      this.continuityTimelineStartFrame = 0;
       this.consecutiveAlbumContinuity = false;
     }
 
@@ -211,6 +217,10 @@
       else if (message.type === 'reserve-buffered-seek') this.reserveBufferedSeek(message);
       else if (message.type === 'expect-continuity') {
         this.expectContinuity = message.active === true;
+        // A stream spliced into the same track continues its timeline; a new track starts at zero.
+        this.continuityTimelineStartFrame = isIntegerBetween(message.timelineStartFrame, 0, Number.MAX_SAFE_INTEGER)
+          ? message.timelineStartFrame
+          : 0;
         this.consecutiveAlbumContinuity = this.expectContinuity
           && message.consecutiveAlbumBoundary === true;
       }
@@ -259,6 +269,7 @@
     }
 
     enqueue(message) {
+      if (this.retiredStreamIds.has(message.streamId)) return;
       const ring = this.ringForRole(message.role);
       let rejection = '';
       if (!ring) rejection = 'unknown-role';
@@ -315,6 +326,7 @@
     }
 
     markEos(message) {
+      if (this.retiredStreamIds.has(message.streamId)) return;
       const ring = this.ringForRole(message.role);
       const validEmittedFrames = isIntegerBetween(
         message.emittedFrames,
@@ -609,6 +621,7 @@
 
     promoteContinuity() {
       const oldCurrent = this.current;
+      if (oldCurrent.streamId !== null) this.retiredStreamIds.add(oldCurrent.streamId);
       this.current = this.continuity;
       this.continuity = oldCurrent;
       clearRing(this.continuity);
@@ -926,7 +939,8 @@
             this.promoteContinuity();
             this.expectContinuity = false;
             this.consecutiveAlbumContinuity = false;
-            this.timelineFrame = 0;
+            this.timelineFrame = this.continuityTimelineStartFrame;
+            this.continuityTimelineStartFrame = 0;
             if (consecutiveAlbum) this.trimConsecutiveAlbumHead();
             continue;
           }

@@ -288,7 +288,11 @@ def _minimum_album_folder_depth(root: dict[str, object]) -> int:
     return 2
 
 
-def _is_shared_disc_parent_image(config: dict[str, object], image: Path, disc_root: Path) -> bool:
+def _is_shared_disc_parent_image(
+    image: Path,
+    disc_root: Path,
+    configured_roots: list[dict[str, object]],
+) -> bool:
     """UI-2 (owner): art beside the disc folders (Album/cover.jpg next to CD1..CD4) belongs to every disc.
 
     Cover Look Up lists it for an album that holds only some of those discs, so Save accepts it too. Only
@@ -298,7 +302,7 @@ def _is_shared_disc_parent_image(config: dict[str, object], image: Path, disc_ro
     return (
         is_disc_like_folder(disc_root)
         and image.parent == shared
-        and _is_valid_album_root(shared, get_library_roots(config), enforce_layout_depth=True)
+        and _is_valid_album_root(shared, configured_roots, enforce_layout_depth=True)
     )
 
 
@@ -307,6 +311,8 @@ def _is_in_album_track_folder(config: dict[str, object], image: Path, track_path
     folders (two editions grouped as one album) lists the art of each, so art in any folder holding the album's
     own tracks qualifies, as does art beside its disc folders; always inside the configured library roots."""
     library_roots = tuple(iter_library_root_paths(config))
+    # The root settings are read once per check, not once per track folder.
+    configured_roots = get_library_roots(config)
     for raw_path in track_paths:
         if not str(raw_path or "").strip():
             continue
@@ -314,9 +320,9 @@ def _is_in_album_track_folder(config: dict[str, object], image: Path, track_path
         if not any(_is_path_within(folder, root) for root in library_roots):
             continue
         if is_disc_like_folder(folder):
-            if _is_path_within(image, folder) or _is_shared_disc_parent_image(config, image, folder):
+            if _is_path_within(image, folder) or _is_shared_disc_parent_image(image, folder, configured_roots):
                 return True
-        elif _is_path_within(image, folder) and _is_valid_album_root(folder, get_library_roots(config), enforce_layout_depth=True):
+        elif _is_path_within(image, folder) and _is_valid_album_root(folder, configured_roots, enforce_layout_depth=True):
             return True
     return False
 
@@ -337,7 +343,7 @@ def validate_local_cover_source(
     candidate = Path(str(source_path or "").strip())
     resolved = candidate.resolve(strict=True)
     if not (_is_path_within(resolved, resolved_album_root)
-            or _is_shared_disc_parent_image(config, resolved, resolved_album_root)
+            or _is_shared_disc_parent_image(resolved, resolved_album_root, get_library_roots(config))
             or _is_in_album_track_folder(config, resolved, track_paths or set())):
         raise ValueError("Selected image is outside the album folder")
     if not resolved.is_file():

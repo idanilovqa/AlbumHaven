@@ -295,7 +295,7 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
             `${probe.name} returned HTTP ${probe.status}${probe.body ? `: ${probe.body}` : ''} during Edit Tags.`,
           ).toBe(true);
           expectTimingBudget(
-            expect,
+            expect.soft,
             probe.durationMs,
             CONCURRENT_PROBE_BUDGET,
             `${probe.name} during Edit Tags`,
@@ -306,13 +306,13 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
         const commitStages = result.payload.postgres_commit_stages_ms;
         expect(commitStages, 'The save task must report its Postgres stages.').toBeTruthy();
         expectTimingBudget(
-          expect,
+          expect.soft,
           result.payload.phase_timings_ms?.postgres_commit,
           SAVE_COMMIT_BUDGET,
           'Edit Tags Postgres commit',
         );
         expectTimingBudget(
-          expect,
+          expect.soft,
           commitStages['relation_publication.gallery_membership'],
           SAVE_GALLERY_PATCH_BUDGET,
           'Edit Tags gallery membership patch',

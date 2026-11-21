@@ -6769,10 +6769,13 @@ function fakeSeekTable(open, frames = 2_000_000) {
 function recordingDecoders() {
   const decoders = [];
   const create = () => {
-    const decoder = { inputs: [], ready: Promise.resolve(), free() {} };
+    const decoder = { inputs: [], ready: Promise.resolve(), free() {}, carried: 0 };
     decoder.decode = (bytes) => {
       decoder.inputs.push(bytes);
-      const samplesDecoded = Math.floor(bytes.length / 100) * 1_152;
+      // A frame split between two inputs decodes with the second, as a streaming decoder's does.
+      const available = decoder.carried + bytes.length;
+      decoder.carried = available % 100;
+      const samplesDecoded = Math.floor(available / 100) * 1_152;
       const left = new Float32Array(samplesDecoded);
       return { channelData: [left, left], samplesDecoded };
     };
@@ -6825,7 +6828,7 @@ test('a seek inside the received bytes decodes them here, from the seek table, w
   assert.equal(harness.portMessages('reserve-seek').at(-1).streamId, local.streamId);
   // 30 s is sample 1,440,000: decoding starts eight frames early, at frame 1,242's bytes.
   const fed = decoders.at(-1).inputs;
-  assert.equal(fed[0].length, 300_000 - 124_200);
+  assert.equal(fed[0].length, 16 * 1024, 'one decode slice, not the rest of the song');
   assert.equal(fed[0][0], 124_200 % 251);
 
   harness.nodes[0].port.dispatch({
@@ -6846,9 +6849,34 @@ test('a seek inside the received bytes decodes them here, from the seek table, w
   // Bytes the server keeps sending reach the role now reading the stream.
   harness.sockets[0].receive(encodedFrame(open, 1, new Uint8Array(100)));
   await harness.settle();
-  assert.equal(decoders.at(-1).inputs.at(-1).length, 100);
+  assert.equal(local.encoded.queue.at(-1).length, 100, 'queued behind the received bytes not yet decoded');
   // Its credits still name the server's stream.
   assert.ok(harness.sent('credit').every(credit => credit.streamId === open.streamId));
+});
+
+// Owner, 2026-11-21: "a bug delay before player displays that playhead is in a new place". The rest of
+// the song decoded in one call held the click's task, and the page's paint, for seconds.
+test('a local seek decodes only what its credit asks, a slice at a time, before the click returns', async () => {
+  const { decoders, create } = recordingDecoders();
+  const harness = encodedHarness({ createStreamingDecoder: create });
+  await startLocallySeekable(harness, 300_000);
+  const decodersBefore = decoders.length;
+
+  void harness.api.seek(10);
+  // The seek's own decoder, reading the received bytes.
+  assert.equal(decoders.length, decodersBefore + 1);
+  const decoder = decoders.at(-1);
+  const inClick = [...decoder.inputs];
+  await harness.settle();
+  const fed = decoder.inputs;
+
+  assert.equal(harness.engine.roles.continuity.local, true);
+  assert.ok(inClick.every((bytes) => bytes.length <= 16 * 1024), 'the click decodes at most a slice per call');
+  assert.ok(fed.every((bytes) => bytes.length <= 16 * 1024));
+  const decodedBytes = fed.reduce((total, bytes) => total + bytes.length, 0);
+  // 10 s starts at byte 41,000 (eight frames early): the rest of the received song is 259,000 bytes.
+  assert.ok(decodedBytes <= 2 * 16 * 1024, `decoded ${decodedBytes} bytes for a quarter second of credit`);
+  assert.equal(harness.engine.snapshot.currentTime, 10, 'the playhead is at the new place');
 });
 
 test('a seek past the received bytes still asks the server', async () => {
@@ -7001,7 +7029,7 @@ test('a kept track starts mid-track from its seek table', async () => {
 
   assert.equal(harness.sent('open').length, 0);
   assert.equal(decoders.at(-1).inputs[0][0], 124_200 % 251);
-  assert.equal(decoders.at(-1).inputs[0].length, 173_700 - 124_200);
+  assert.equal(decoders.at(-1).inputs[0].length, 16 * 1024, 'the kept bytes decode a slice at a time');
 });
 
 test('a successor prepared ahead is kept at the local audible boundary', async () => {

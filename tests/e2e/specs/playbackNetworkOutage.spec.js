@@ -14,6 +14,26 @@ const displayedSeconds = (text) => {
   return match ? Number(match[1]) * 60 + Number(match[2]) : Number.NaN;
 };
 
+// Every painted frame for a second after each press on the page: the seek bar's progress, in seconds.
+async function watchSeekPaint(page, durationSeconds) {
+  await page.evaluate((duration) => {
+    const bar = document.querySelector('#player-timeline');
+    document.addEventListener('pointerdown', () => {
+      const clickAt = performance.now();
+      const frames = [];
+      window.__seekPaint = frames;
+      const sample = () => {
+        const progress = parseFloat(bar.style.getPropertyValue('--player-seek-progress')) || 0;
+        frames.push({ afterMs: performance.now() - clickAt, seconds: progress / 100 * duration });
+        if (performance.now() - clickAt < 1000) requestAnimationFrame(sample);
+      };
+      requestAnimationFrame(sample);
+    }, { capture: true });
+  }, durationSeconds);
+}
+
+const readSeekPaint = (page) => page.evaluate(() => window.__seekPaint || []);
+
 // Owner retest B-D4 round 4 (2026-11-17), verbatim: "As i seeked into the zone that was not cached,
 // the player went into paused mode. I believe it should behave as on mobile - still be on play, just
 // not play. Because of that when I returned wifi it didn't start playing automatically. Also, even
@@ -616,12 +636,23 @@ test('FTC-PLAYBACK-SEEK-001 under full CPU load ten rapid seeks forward and back
       expect(durationSeconds).toBeGreaterThan(120);
     });
 
-    await stepLogger.step('Ten rapid seeks: each shows its place, never the start, and Play stays playing and enabled', async () => {
+    // Owner, sandbox5 2026-11-21, verbatim: "When seeking, there's a bug delay before player displays that
+    // playhead is in a new place - this has to be fixed, it is a regression. On main seeking is immediate".
+    await stepLogger.step('Ten rapid seeks: each paints its place within two frames, never the start, and Play stays playing and enabled', async () => {
       const fractions = [0.8, 0.3, 0.65, 0.15, 0.9, 0.5, 0.7, 0.2, 0.85, 0.4];
       const bounds = await player.timeline.boundingBox();
+      await watchSeekPaint(page, durationSeconds);
       for (const fraction of fractions) {
         const target = Math.floor(durationSeconds * fraction);
         await player.timeline.click({ position: { x: bounds.width * fraction, y: bounds.height / 2 } });
+        await expect.poll(async () => (await readSeekPaint(page)).length, { timeout: 5000 }).toBeGreaterThanOrEqual(2);
+        const frames = await readSeekPaint(page);
+        const painted = frames.findIndex(({ seconds }) => Math.abs(seconds - target) <= 2);
+        expect(painted, `the seek to ${target}s is on the bar in the first or second frame: ${JSON.stringify(frames.slice(0, 3))}`)
+          .toBeGreaterThanOrEqual(0);
+        expect(painted).toBeLessThanOrEqual(1);
+        // Main's player paints it within a few frames even at full load; the regression held the page for seconds.
+        expect(frames[painted].afterMs, `the seek to ${target}s is painted soon after the click`).toBeLessThan(500);
         await expect.poll(async () => displayedSeconds(await player.time.textContent()), { timeout: 2000 })
           .toBeGreaterThanOrEqual(target - 2);
         for (let read = 0; read < 4; read += 1) {

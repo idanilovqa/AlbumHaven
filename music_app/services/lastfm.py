@@ -94,8 +94,11 @@ def load_lastfm_settings(config: dict[str, Any], *, account_id=None) -> dict[str
     return _lastfm_settings_adapter(config).load_settings(**({"account_id": account_id} if account_id is not None else {}))
 
 
-def save_lastfm_settings(config: dict[str, Any], settings: dict[str, Any], *, account_id=None) -> dict[str, Any]:
-    return _lastfm_settings_adapter(config).save_settings(settings, **({"account_id": account_id} if account_id is not None else {}))
+def save_lastfm_settings(config: dict[str, Any], settings: dict[str, Any], *, account_id=None, reauthentication_context=None) -> dict[str, Any]:
+    scope = {"account_id": account_id} if account_id is not None else {}
+    if reauthentication_context is not None:
+        scope["reauthentication_context"] = reauthentication_context
+    return _lastfm_settings_adapter(config).save_settings(settings, **scope)
 
 
 def _lastfm_settings_adapter(config: dict[str, Any]) -> LastfmPostgresAdapter:
@@ -341,6 +344,7 @@ def authenticate_lastfm(
     connected_at: str,
     user_timezone: str = "",
     account_id=None,
+    reauthentication_context=None,
 ) -> dict[str, Any]:
     normalized_username = str(username or "").strip()
     normalized_password = str(password or "")
@@ -369,7 +373,8 @@ def authenticate_lastfm(
     normalized_timezone = normalize_lastfm_user_timezone(user_timezone) if str(user_timezone or "").strip() else get_lastfm_user_timezone(config, account_id=account_id)
     if normalized_timezone:
         settings["user_timezone"] = normalized_timezone
-    save_lastfm_settings(config, settings, account_id=account_id)
+    save_lastfm_settings(config, settings, account_id=account_id,
+                         **({"reauthentication_context": reauthentication_context} if reauthentication_context is not None else {}))
     return build_lastfm_status(config, account_id=account_id)
 
 
@@ -406,6 +411,20 @@ def scrobble_track(config: dict[str, Any], payload: dict[str, Any], *, session=_
         session = get_saved_lastfm_session(config)
     if session is None:
         return LastfmSubmissionOutcome(sent=False, outcome="not_connected", message="Last.fm account is not connected.")
+    return scrobble_track_with_session(config, payload, session.session_key)
+
+
+def scrobble_track_with_session(
+    config: dict[str, Any], payload: dict[str, Any], session_key: str
+) -> LastfmSubmissionOutcome:
+    """Submit with the secret already authorized for the claimed job."""
+
+    if not isinstance(session_key, str) or not session_key:
+        return LastfmSubmissionOutcome(
+            sent=False,
+            outcome="not_connected",
+            message="Last.fm account is not connected.",
+        )
     artist = str(payload.get("artist") or "").strip()
     track = str(payload.get("track") or "").strip()
     timestamp = int(payload.get("timestamp") or 0)
@@ -415,7 +434,7 @@ def scrobble_track(config: dict[str, Any], payload: dict[str, Any], *, session=_
         config,
         "track.scrobble",
         {
-            "sk": session.session_key,
+            "sk": session_key,
             "artist": artist,
             "track": track,
             "timestamp": timestamp,

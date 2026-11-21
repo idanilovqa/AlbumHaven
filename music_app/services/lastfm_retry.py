@@ -227,6 +227,7 @@ def retry_pending_lastfm_scrobbles(
                     eligible=lambda item: (
                         (account_id is None or item.account_id == account_id)
                         and (library_ids is None or item.library_id in library_ids)
+                        and not bool(item.entry.get("scrobble_durable_job_owned"))
                     ),
                 )
                 sessions = load_saved_lastfm_sessions(connection, {item.account_id for item in loaded})

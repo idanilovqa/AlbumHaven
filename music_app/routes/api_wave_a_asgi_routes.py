@@ -9,6 +9,7 @@ import inspect
 import logging
 from collections import ChainMap
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import Event
 from time import perf_counter
@@ -60,8 +61,9 @@ from music_app.services.missing_album_removal_postgres import (
     MissingAlbumRootUnavailable,
     PostgresMissingAlbumRemovalService,
 )
-from music_app.services.policy_asgi import allowed_actions_for_request, require_action
+from music_app.services.policy_asgi import allowed_actions_for_request, require_action, request_origin_ref_for_request
 from music_app.services.library_roots import (
+    get_library_roots,
     library_root_cache_identity,
     load_library_root_settings,
 )
@@ -79,6 +81,7 @@ from music_app.services.problem_exclusions import (
     revert_problem_exclusion,
 )
 from music_app.services.save_tasks import (
+    acquire_structural_tag_edit_reservation,
     acquire_structural_tag_edit_reservation_async,
     create_save_task,
     queue_finalize_save_task,
@@ -88,6 +91,7 @@ from music_app.services.save_tasks import (
     structural_tag_edit_resource_keys,
     update_save_task,
 )
+from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
 from music_app.services.separate_releases import load_separate_release_keys, save_separate_release_keys
 from music_app.services.tag_edit_intents_postgres import (
     PostgresTagEditIntentRepository,
@@ -254,6 +258,61 @@ def _start_background_refresh_for_asgi_request(request: Request):
         )
 
     return start_asgi_background_refresh
+
+
+def _start_library_settings_refresh_for_asgi_request(
+    request: Request,
+    *,
+    policy_evaluation: object,
+):
+    scan_jobs = getattr(request.app.state, "scan_job_repository", None)
+    if scan_jobs is None:
+        return _start_background_refresh_for_asgi_request(request)
+
+    audit = getattr(policy_evaluation, "audit", None)
+    library_id = getattr(audit, "library_id", None)
+    if not isinstance(library_id, int) or library_id < 1:
+        raise LibrarySettingsWorkflowError(
+            "Authorized library scope is unavailable.", status_code=403
+        )
+    origin_ref = request_origin_ref_for_request(request)
+
+    def enqueue_settings_refresh(
+        force: bool = False, *, scan_mode: str = "background"
+    ) -> None:
+        root_ids = tuple(
+            str(root.get("id") or "").strip()
+            for root in get_library_roots(_app_config(request))
+            if str(root.get("id") or "").strip()
+        )
+        if not root_ids:
+            raise LibrarySettingsWorkflowError(
+                "Configured library roots are unavailable.", status_code=400
+            )
+        try:
+            accepted = scan_jobs.enqueue_authorized_full_scan(
+                policy_evaluation=policy_evaluation,
+                library_id=library_id,
+                request_origin_ref=origin_ref,
+                root_ids=root_ids,
+                mode=scan_mode,
+                force=force,
+                scheduled_at=datetime.now(timezone.utc),
+            )
+        except LibrarySettingsWorkflowError:
+            raise
+        except Exception as exc:
+            raise LibrarySettingsWorkflowError(
+                "Library settings were saved, but the inventory refresh could not be queued.",
+                status_code=503,
+            ) from exc
+        if not accepted.created:
+            raise LibrarySettingsWorkflowError(
+                "Library settings were saved, but another library scan is already running.",
+                status_code=409,
+            )
+
+    return enqueue_settings_refresh
 
 
 async def _json_payload(request: Request) -> JsonDict | None:
@@ -584,6 +643,8 @@ async def library_settings_write(request: Request) -> JSONResponse:
             ({"ok": False, "error": "Library settings payload must be an object."}, 400)
         )
 
+    refresh_policy_evaluation = await require_action("library.refresh")(request)
+
     try:
         replace_live_watch_roots = getattr(
             request.app.state,
@@ -601,7 +662,10 @@ async def library_settings_write(request: Request) -> JSONResponse:
                 settings_payload,
                 **scope,
                 library_state=_library_state(request),
-                start_background_refresh=_start_background_refresh_for_asgi_request(request),
+                start_background_refresh=_start_library_settings_refresh_for_asgi_request(
+                    request,
+                    policy_evaluation=refresh_policy_evaluation,
+                ),
                 build_status_payload=lambda: _build_status_payload_from_state(_library_state(request)),
                 replace_watch_roots=(
                     replace_live_watch_roots
@@ -1047,7 +1111,7 @@ def _asgi_selected_postgres_media_write_queue_finalize_save_task_builder(request
 
 def _asgi_selected_postgres_structural_tag_edit_queue_finalize_save_task_builder(
     request: Request,
-    *, history_scope=None,
+    *, history_scope=None, suppress_album_fragments: bool = False,
 ):
     history_scope = history_scope or getattr(request.state, 'history_scope', None)
     def compensate_structural_tag_edit(
@@ -1163,7 +1227,11 @@ def _asgi_selected_postgres_structural_tag_edit_queue_finalize_save_task_builder
                 history_scope=history_scope,
                 **extra,
             ),
-            find_albums_by_track_paths=_postgres_album_finder_for_track_paths(request),
+            find_albums_by_track_paths=(
+                _empty_albums_by_track_paths
+                if suppress_album_fragments
+                else _postgres_album_finder_for_track_paths(request)
+            ),
             find_problematic_album_by_track_paths=_empty_problematic_album_by_track_paths,
             structural_edit_fields=set(_SELECTED_POSTGRES_MEDIA_WRITE_REFRESH_FIELDS),
             relation_projection_edit_fields=set(_RELATION_PROJECTION_EDIT_FIELDS),
@@ -1730,15 +1798,57 @@ def _repair_album_response(request: Request, payload: JsonDict, history_scope: H
         return _json_response(track_error)
     find_problematic_album, find_albums = _repair_album_embedded_response_matchers(request, payload)
     queue_finalize_save_task = _asgi_bridge_queue_finalize_save_task_builder(request)
-    if _is_selected_postgres_library_browse_request(request) and _has_repair_album_media_write_rows(payload):
-        queue_finalize_save_task = _asgi_selected_postgres_media_write_queue_finalize_save_task_builder(request)
-    result = handle_repair_album_request(
+    config = _app_config(request)
+    postgres_repair = _is_postgres_utility_rules_request(request) and _has_repair_album_media_write_rows(payload)
+    repair_options = {}
+    intent_lease = None
+    get_state = lambda: _library_state(request)
+    if postgres_repair:
+        repair_state = dict(_library_state(request))
+        repair_cache = repair_state.get("file_cache") or {}
+        if any(not isinstance(repair_cache.get(path), dict) for path in requested_track_paths):
+            try:
+                raw_state = PostgresScanCacheAdapter(config).load_tag_edit_state(
+                    requested_track_paths,
+                    include_album_siblings=True,
+                )
+            except (ValueError, RuntimeError) as exc:
+                return _json_response(({"ok": False, "error": str(exc)}, 400))
+            repair_cache = ChainMap({
+                path: {**entry, **raw_state["exception_overrides"][path]}
+                for path, entry in raw_state["file_entries"].items()
+            }, repair_cache)
+        repair_state["file_cache"] = repair_cache
+        get_state = lambda: repair_state
+        intent_repository = PostgresTagEditIntentRepository(config)
+        intent_lease = intent_repository.intent_lease()
+        repair_options = {
+            "acquire_repair_reservation": lambda updates: _EditTagsReservation(
+                intent_lease,
+                acquire_structural_tag_edit_reservation(_edit_tags_reservation_resource_keys(album, updates)),
+            ),
+            "prepare_tag_edit_intent": lambda *, changes: intent_lease.prepare_intent(
+                library_root_identity=library_root_cache_identity(config), changes=changes,
+            ),
+            "mark_tag_edit_files_verified": intent_repository.mark_files_verified,
+            "record_tag_edit_failure": lambda intent_id, error: (
+                intent_repository.mark_terminal(intent_id, status="rolled_back", last_error=str(error.get("error") or ""))
+                if error.get("edit_outcome") == "failed_rolled_back"
+                else intent_repository.mark_recovery_failed(intent_id, error.get("error"))
+            ),
+            "prevalidate_structural_tag_edit": lambda **options: validate_structural_tag_edit_for_config(config, **options),
+        }
+        queue_finalize_save_task = _asgi_selected_postgres_structural_tag_edit_queue_finalize_save_task_builder(
+            request,
+            suppress_album_fragments=_is_selected_postgres_library_browse_request(request),
+        )
+    handler_options = dict(
         payload=payload,
         album=album,
         requested_track_paths=requested_track_paths,
-        config=_app_config(request),
+        config=config,
         logger=_asgi_logger(request),
-        get_state=lambda: _library_state(request),
+        get_state=get_state,
         create_save_task=create_save_task,
         queue_finalize_save_task=queue_finalize_save_task,
         build_text_repairs_for_entry=build_text_repairs_for_entry,
@@ -1758,7 +1868,13 @@ def _repair_album_response(request: Request, payload: JsonDict, history_scope: H
         log_app_event=lambda config, logger, message, **extra: log_app_event(config, logger, message, history_scope=history_scope, **extra),
         structural_edit_fields=set(_STRUCTURAL_EDIT_FIELDS),
         edit_write_workers=_EDIT_WRITE_WORKERS,
+        **repair_options,
     )
+    try:
+        result = handle_repair_album_request(**handler_options)
+    finally:
+        if intent_lease is not None:
+            intent_lease.release()
     if _is_selected_postgres_library_browse_request(request) and _has_repair_album_media_write_rows(payload):
         result = _selected_postgres_media_write_response(result)
     return _json_response(result)

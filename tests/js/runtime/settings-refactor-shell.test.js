@@ -4,6 +4,8 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 const { loadPendingProjectionFetch } = require('../helpers/pending-projection-fetch');
+const { countedCollection, createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter');
+const { createRequestCapture, jsonResponse, assertInteractionRequests } = require('../helpers/request-capture');
 
 const root = path.resolve(__dirname, '../../..');
 const tabs = ['problematic-files', 'rules', 'loops', 'log-history', 'integrations', 'appearance'];
@@ -19,7 +21,7 @@ function element(attributes = {}) {
   };
 }
 
-function harness() {
+function harness({ fullProblematicRendering = false } = {}) {
   const els = {
     tabs: tabs.map((name) => element({ 'data-utility-tab': name })),
     problemFilterButton: element(), problemFilterMenu: element(), problemFilterChips: element(),
@@ -57,9 +59,11 @@ function harness() {
   for (const file of ['album-artbox', 'problematic-album-helpers', 'loop-range-controls', 'playback-control-cluster', 'player-and-waveform', 'utility-list-builders', 'utility-loop-playback', 'bootstrap-utility-event-handlers']) {
     vm.runInContext(read(`music_app/static/js/runtime/${file}.js`), context, { filename: `${file}.js` });
   }
-  // Table internals are outside the artwork contract; its real header builder is exercised.
-  context.buildDetectedProblemsHtml = () => '';
-  context.getProblematicAlbumIssueLabel = () => 'Missing year';
+  // Artwork-only cases omit table internals; runtime contracts keep the real builders.
+  if (!fullProblematicRendering) {
+    context.buildDetectedProblemsHtml = () => '';
+    context.getProblematicAlbumIssueLabel = () => 'Missing year';
+  }
   els.tabs.forEach((tab) => {
     tab.closest = (selector) => selector.includes('data-utility-tab') ? tab : null;
     tab.click = () => context.handleUtilityBootstrapClick({ target: tab, preventDefault() {} });
@@ -660,3 +664,181 @@ for (const success of [true, false]) {
     assert.match(pendingDetail, /Loading selected problematic album/);
   });
 }
+
+
+// This measures the supported HTML fallback with the real loader, renderers,
+// NavigationTree markup and detail builders. Virtualized DOM/layout keeps its
+// separate component and measured-browser gates.
+test('BI Problematic Files loader renders one cursor page and selected detail after an owned pending retry at production scale (HTML fallback)', async (t) => {
+  const id = 'js:runtime/utility-loaders-and-cover-lookup.js#loadProblematicFiles';
+  const run = async (remoteAlbumCount) => {
+    const { context, els } = harness({ fullProblematicRendering: true });
+    const counter = createInteractionCounter();
+    let measuring = false;
+    const count = (field, amount = 1) => { if (measuring) counter.count(field, amount); };
+    const timers = new Map();
+    let timerId = 0;
+    let frameId = 0;
+    const errors = [];
+    const toasts = [];
+    const renderStages = [];
+    Object.assign(els, {
+      overlay: element(), list: element(), detail: element(), count: element(),
+      search: element(), sidebarLabel: element(),
+    });
+    els.list.dataset = new Proxy({}, {
+      set(target, key, value) { count('domMutations'); target[key] = value; return true; },
+    });
+    els.list.scrollTop = 0;
+    els.detail.scrollTop = 0;
+    for (const target of [...els.tabs, ...Object.values(els).filter(value => !Array.isArray(value))]) {
+      for (const field of ['innerHTML', 'textContent', 'value', 'disabled', 'hidden', 'readOnly']) {
+        let value = target[field];
+        Object.defineProperty(target, field, {
+          configurable: true,
+          get: () => value,
+          set(next) { count('domMutations'); value = next; },
+        });
+      }
+      const setAttribute = target.setAttribute.bind(target);
+      target.setAttribute = (...args) => { count('domMutations'); return setAttribute(...args); };
+      target.removeAttribute = name => { count('domMutations'); delete target.attributes[name]; };
+      for (const method of ['toggle', 'remove']) {
+        const mutate = target.classList[method].bind(target.classList);
+        target.classList[method] = (...args) => { count('domMutations'); return mutate(...args); };
+      }
+      target.querySelector = () => null;
+      target.querySelectorAll = () => [];
+      target.addEventListener = () => count('listeners');
+    }
+    const countedArrays = new WeakSet();
+    const pageArray = value => {
+      if (!Array.isArray(value) || countedArrays.has(value)) return value;
+      const observed = countedCollection(value, counter);
+      countedArrays.add(observed);
+      return observed;
+    };
+    let loadedPage = pageArray([]);
+    Object.defineProperty(context.state.utility, 'problematicFiles', {
+      configurable: true,
+      get: () => loadedPage,
+      set: value => { loadedPage = pageArray(value); },
+    });
+    const unrelatedCounter = createInteractionCounter();
+    context.state.view = {
+      artist_groups: countedCollection(Array.from({ length: remoteAlbumCount }, (_, index) => ({ artist: `Unrelated ${index}`, albums: [] })), unrelatedCounter),
+    };
+    Object.assign(context.state.utility, {
+      activeTab: 'problematic-files', loaded: false, loading: false, loadPromise: null,
+      detailLoadPromises: {}, selectedProblematicKey: '', selectedProblemFilters: [],
+      problemDropdownOpen: false, searchQuery: '',
+      loops: countedCollection(Array.from({ length: remoteAlbumCount }, (_, index) => ({ id: `unrelated-loop-${index}` })), unrelatedCounter),
+    });
+    context.state.ui = { viewStateRevision: 0 };
+    context.performance = { now: () => 0 };
+    context.console = { info() {}, warn() {}, error: (...args) => errors.push(args) };
+    context.showToast = (...args) => toasts.push(args);
+    context.scheduleBrowserAnimationFrame = callback => { count('animationFrames'); callback(); return ++frameId; };
+    context.scheduleBrowserTimeout = (callback, delay) => {
+      count('timers');
+      timers.set(++timerId, { callback, delay });
+      return timerId;
+    };
+    context.clearBrowserTimeout = token => timers.delete(token);
+    const items = Array.from({ length: 50 }, (_, index) => ({
+      key: `album-${index}`, projection_id: `h1:album-${index}`, name: `Album ${index}`,
+      album_artist: 'Artist', inventory_status: 'missing', problem_reasons: ['Album not found'],
+      tracks: [], track_count: 0, detail_loaded: false,
+    }));
+    let summaryRequests = 0;
+    const capture = createRequestCapture(url => {
+      if (url === '/utilities/problematic-files?limit=50') {
+        summaryRequests += 1;
+        if (summaryRequests === 1) {
+          return jsonResponse({ error: 'Projection pending.', error_code: 'problematic_projection_pending' }, { status: 503 });
+        }
+        assert.equal(summaryRequests, 2, 'one owned retry replaces the pending request');
+        count('responseRows', items.length);
+        return jsonResponse({ items: pageArray(items), total: remoteAlbumCount, next_cursor: remoteAlbumCount > 50 ? 'next-50' : null,
+          reason_facets: [{ reason: 'Album not found', count: remoteAlbumCount }] });
+      }
+      assert.equal(url, '/utilities/problematic-files/detail?projection_id=h1%3Aalbum-0');
+      count('responseRows');
+      return jsonResponse({ ...items[0], detail_loaded: true, tracks: [], repair_preview_rows: [], track_problem_rows: [],
+        problematic_track_paths: [], track_paths: [], allowed_actions: {} });
+    });
+    context.fetch = capture.fetch;
+    vm.runInContext(read('music_app/static/js/runtime/utility-loaders-and-cover-lookup.js'), context);
+    vm.runInContext(read('music_app/static/js/runtime/utility-renderers-and-actions.js'), context);
+    const render = context.renderUtilityModalContent;
+    context.renderUtilityModalContent = (...args) => {
+      count('renderCommits');
+      renderStages.push({
+        requestCount: capture.requests.length,
+        token: context.state.utility.problematicSummaryRequestToken,
+        loaded: context.state.utility.loaded,
+        loading: context.state.utility.loading,
+      });
+      return render(...args);
+    };
+    const loadDetail = context.loadProblematicAlbumDetail;
+    let detailCompletion;
+    context.loadProblematicAlbumDetail = (...args) => {
+      detailCompletion = loadDetail(...args);
+      return detailCompletion;
+    };
+    measuring = true;
+    await Promise.all([context.loadProblematicFiles(true), context.loadProblematicFiles(true)]);
+    assert.equal(context.state.utility.loading, true);
+    assert.match(els.list.innerHTML, />Loading\.\.\.</);
+    assert.match(els.detail.innerHTML, /Loading problematic albums/);
+    assert.doesNotMatch(els.list.innerHTML + els.detail.innerHTML, /No matching problematic albums/);
+    assert.equal(timers.size, 1);
+    const [token, retry] = timers.entries().next().value;
+    assert.equal(retry.delay, 1000);
+    timers.delete(token);
+    retry.callback();
+    await context.state.utility.loadPromise;
+    assert.ok(detailCompletion, 'the real summary renderer requests its selected detail');
+    await detailCompletion;
+    assert.deepEqual(renderStages, [
+      { requestCount: 0, token: 1, loaded: false, loading: true },
+      { requestCount: 1, token: 1, loaded: false, loading: true },
+      { requestCount: 2, token: 2, loaded: true, loading: false },
+      { requestCount: 3, token: 2, loaded: true, loading: false },
+    ]);
+    assert.equal(context.state.utility.selectedProblematicKey, 'album-0');
+    assert.equal(context.state.utility.problematicFiles[0].detail_loaded, true);
+    assert.equal(context.state.utility.problematicFiles.length, 50);
+    assert.equal(context.state.utility.problematicFilesTotal, remoteAlbumCount);
+    assert.equal(context.state.utility.problematicFilesNextCursor, remoteAlbumCount > 50 ? 'next-50' : null);
+    assert.equal(els.count.textContent, String(remoteAlbumCount));
+    assert.match(els.detail.innerHTML, /Album 0/);
+    assert.match(els.detail.innerHTML, /Album not found/);
+    assert.equal((els.list.innerHTML.match(/data-problematic-album-key=/g) || []).length, 50);
+    assert.match(els.list.innerHTML, /data-problematic-album-key="album-0"/);
+    assert.equal(timers.size, 0);
+    assert.deepEqual(errors, []);
+    assert.deepEqual(toasts, []);
+    assert.equal(unrelatedCounter.snapshot().itemsVisited, 0, 'PF rendering never visits unrelated library or loop collections');
+    assert.deepEqual(capture.urls(), [
+      '/utilities/problematic-files?limit=50', '/utilities/problematic-files?limit=50',
+      '/utilities/problematic-files/detail?projection_id=h1%3Aalbum-0',
+    ]);
+    assertInteractionRequests(id, capture.urls());
+    const counts = counter.snapshot();
+    counts.requests = capture.counter.snapshot().requests;
+    return counts;
+  };
+  const samples = await measureScalePair({
+    id, small: 50, large: 5000, run,
+    // Loading, pending, summary and detail each render once. The three
+    // completion waits each cross three animation frames. One 50-row page
+    // permits sixteen collection passes, and six tabs plus fixed controls
+    // permit at most 256 sink writes across the four commits.
+    budgets: { requests: 3, responseRows: 51, renderCommits: 4, timers: 1, animationFrames: 9,
+      itemsVisited: 800, domMutations: 256, listeners: 8 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
+  });
+  t.diagnostic(JSON.stringify({ cardinalities: { small: 50, large: 5000 }, samples }));
+});

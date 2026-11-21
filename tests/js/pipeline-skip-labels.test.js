@@ -10,6 +10,15 @@ const { ANDROID_JOBS, REQUIRED_JOBS, validateCloudVerificationGate } = require('
 const scope = { mode: 'full', pipelineMode: 'full', functionalChange: true, functionalLines: 500 };
 const trusted = { repository: 'owner/app', headRepository: 'owner/app' };
 
+test('final proof checkout stays pinned to the original tested workflow commit', () => {
+  const workflow = fs.readFileSync(path.join(__dirname, '../../.github/workflows/pr-gates.yml'), 'utf8').replace(/\r\n/g, '\n');
+  const cloud = workflow.slice(workflow.indexOf('\n  cloud_verification_gate:'));
+  const checkout = cloud.match(/- name: Checkout trusted pull request\n([\s\S]*?)(?=\n      - name:|$)/)?.[1];
+  assert.ok(checkout, 'the authoritative proof gate must check out its tested code');
+  assert.match(checkout, /^          ref: \$\{\{ github\.sha \}\}$/m,
+    'a moving PR merge ref cannot authenticate artifacts from the original workflow commit');
+});
+
 for (const [labels, skipReviews, skipTests] of [
   [[], true, false], [['skip_reviews'], true, false], [['run_reviews'], false, false],
   [['skip_reviews', 'run_reviews'], false, false], [['skip_tests'], true, true],

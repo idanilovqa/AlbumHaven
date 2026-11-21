@@ -911,6 +911,7 @@ function getTrackModalLightboxSourceAlbumKey(button) {
 }
 
 let imageLightboxReturnFocus = null;
+let imageLightboxReturnIdentity = null;
 let imageLightboxHistoryOpen = false;
 let imageLightboxHistoryClosing = false;
 
@@ -951,7 +952,13 @@ function bindLightboxSwipe(overlay) {
 function openImageLightbox(src, alt, options = {}) {
   const els = getLightboxElements();
   if (!els.overlay || !els.image || !src) return;
-  if (els.overlay.hidden) imageLightboxReturnFocus = document.activeElement;
+  if (els.overlay.hidden) {
+    imageLightboxReturnFocus = document.activeElement;
+    const albumKey = imageLightboxReturnFocus?.getAttribute?.('data-album-key');
+    const container = imageLightboxReturnFocus?.parentElement?.closest?.('[id]');
+    imageLightboxReturnIdentity = albumKey && container?.id
+      ? { albumKey, containerId: container.id } : null;
+  }
   if (els.overlay.hidden && typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()
       && typeof window !== 'undefined' && window.history?.pushState) {
     window.history.pushState({ ...window.history.state, imageLightbox: true }, '');
@@ -1036,30 +1043,39 @@ function closeImageLightbox() {
   if (!trackModalOpen && !utilityModalOpen) {
     document.body.classList.remove('modal-open');
   }
-  const returnFocus = imageLightboxReturnFocus;
+  const lightboxTrigger = imageLightboxReturnFocus;
+  let returnFocus = lightboxTrigger;
+  const identity = imageLightboxReturnIdentity;
   imageLightboxReturnFocus = null;
-  let focusTarget = returnFocus?.isConnected ? returnFocus : null;
-  if (!focusTarget && returnFocus?.getAttribute) {
+  imageLightboxReturnIdentity = null;
+  const foreground = getTopmostOpenModal();
+  const canFocus = element => element?.isConnected && !element.disabled
+    && !element.closest?.('[hidden], [inert]') && element.getClientRects?.().length > 0
+    && !['hidden', 'collapse'].includes(getComputedStyle(element).visibility)
+    && (!foreground || foreground.contains?.(element));
+  if (!canFocus(returnFocus)
+      || identity && returnFocus.getAttribute?.('data-album-key') !== identity.albumKey) {
+    const container = identity && document.getElementById(identity.containerId);
+    returnFocus = Array.from(container?.querySelectorAll?.('[data-open-lightbox="1"][data-album-key]') || [])
+      .find(element => element.getAttribute('data-album-key') === identity.albumKey && canFocus(element));
+  }
+  if (!canFocus(returnFocus) && !identity && lightboxTrigger?.getAttribute) {
     const triggerAttribute = ['data-open-lightbox', 'data-cover-lookup-open-lightbox']
-      .find((attribute) => returnFocus.getAttribute(attribute) === '1');
+      .find(attribute => lightboxTrigger.getAttribute(attribute) === '1');
     if (triggerAttribute) {
-      const coverSrc = returnFocus.getAttribute('data-cover-src') || '';
-      const coverAlt = returnFocus.getAttribute('data-cover-alt') || '';
+      const coverSrc = lightboxTrigger.getAttribute('data-cover-src') || '';
+      const coverAlt = lightboxTrigger.getAttribute('data-cover-alt') || '';
       const replacements = Array.from(document.querySelectorAll(`[${triggerAttribute}="1"]`))
-        .filter((candidate) => {
-          const visibility = getComputedStyle(candidate).visibility;
-          return candidate.disabled !== true
-            && !candidate.closest('[hidden], [inert]')
-            && candidate.getClientRects().length > 0
-            && visibility !== 'hidden'
-            && visibility !== 'collapse'
-            && (candidate.getAttribute('data-cover-src') || '') === coverSrc
-            && (candidate.getAttribute('data-cover-alt') || '') === coverAlt;
-        });
-      if (replacements.length === 1) [focusTarget] = replacements;
+        .filter(candidate => canFocus(candidate)
+          && (candidate.getAttribute('data-cover-src') || '') === coverSrc
+          && (candidate.getAttribute('data-cover-alt') || '') === coverAlt);
+      if (replacements.length === 1) [returnFocus] = replacements;
     }
   }
-  focusTarget?.focus?.();
+  if (!returnFocus) {
+    returnFocus = foreground?.querySelector?.('#utility-modal-close, #track-modal-close');
+  }
+  if (canFocus(returnFocus)) returnFocus.focus?.();
 }
 
 function closeTrackModal() {

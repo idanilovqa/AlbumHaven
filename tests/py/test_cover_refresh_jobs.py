@@ -136,8 +136,6 @@ def test_log_cover_refresh_completion_uses_manual_single_fields():
                 "failed": 0,
                 "not_touched": 0,
                 "not_found": 0,
-                "downloaded_paths": ["cover.jpg"],
-                "files": ["cover.jpg"],
                 "mode": "manual-single",
                 "force_search": True,
                 "artist": "Artist B",
@@ -175,8 +173,6 @@ def test_log_cover_refresh_completion_uses_background_defaults():
                 "failed": 0,
                 "not_touched": 0,
                 "not_found": 0,
-                "downloaded_paths": [],
-                "files": [],
                 "mode": "background",
             },
         )

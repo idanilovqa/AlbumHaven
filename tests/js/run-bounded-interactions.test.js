@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const {
   buildCommands, evidenceErrors, nodeReportErrors, pytestReportErrors, runCommands,
+  pythonProofErrors, pythonProofIdentity,
 } = require('../../scripts/run-bounded-interactions.cjs');
 
 const registry = {
@@ -104,6 +105,36 @@ test('pytest reports fail on skipped tests and on selections that were not colle
   ]);
 });
 
+for (const status of ['failure', 'error']) {
+  test(`pytest proof rejects a collected exact contract with a ${status} result`, () => {
+    const file = report(`<testsuites><testsuite>
+      <testcase classname="tests.py.test_cover_batch_bounded_contracts"
+        name="test_recovered_cover_contract[manual]">
+        <${status} message="native proof did not complete"/>
+      </testcase>
+    </testsuite></testsuites>`);
+    const errors = pytestReportErrors(file, [
+      'tests/py/test_cover_batch_bounded_contracts.py::test_recovered_cover_contract[manual]',
+    ]);
+    assert.ok(errors.some(error => /fail|error/.test(error)),
+      `a ${status} testcase must never become passing native proof: ${JSON.stringify(errors)}`);
+  });
+}
+
+test('pytest proof requires every exact parametrized execution rather than a passing neighbor', () => {
+  const file = report(`<testsuites><testsuite>
+    <testcase classname="tests.py.test_cover_batch_bounded_contracts"
+      name="test_recovered_cover_contract[manual]"/>
+  </testsuite></testsuites>`);
+  const errors = pytestReportErrors(file, [
+    'tests/py/test_cover_batch_bounded_contracts.py::test_recovered_cover_contract[manual]',
+    'tests/py/test_cover_batch_bounded_contracts.py::test_recovered_cover_contract[post_scan]',
+  ]);
+  assert.deepEqual(errors, [
+    'pytest selection tests/py/test_cover_batch_bounded_contracts.py::test_recovered_cover_contract[post_scan] was not collected',
+  ]);
+});
+
 test('every selected contract entry must be measured under its own id by its own test', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bounded-runner-evidence-'));
   const file = path.join(dir, 'evidence.jsonl');
@@ -155,4 +186,108 @@ test('node-only runs just the JavaScript contracts and checks only their evidenc
   assert.ok(errors.every(error => !error.includes('route')), 'Python contracts are measured in the Python job');
   assert.ok(errors.some(error => error.includes('drag')), `missing JS evidence must still fail: ${errors.join('; ')}`);
   assert.equal(fs.existsSync(evidence), false);
+});
+
+function nativeCoverProofFixture(t) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'bounded-native-proof-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const shard = path.join(directory, 'foundation-versions-python-windows-1-2');
+  fs.mkdirSync(shard);
+  const identity = {
+    testedCommit: '1'.repeat(40), testedTree: '2'.repeat(40),
+    headSha: '3'.repeat(40), baseSha: '4'.repeat(40),
+    runId: '12345', runAttempt: '2', shardTotal: 1,
+  };
+  const manifest = { boundedProof: { schemaVersion: 1, ...identity, shard: 1 } };
+  const rows = [];
+  for (const kind of ['unit', 'real-postgres']) for (const mode of ['manual', 'post_scan']) {
+    const file = kind === 'unit' ? 'test_cover_batch_bounded_contracts' : 'test_cover_batch_bounded_contracts_postgres_live';
+    const testName = `${kind === 'unit' ? 'test' : 'test_live'}_claimed_cover_refresh_reuses_connections_for_recovered_existing_covers`;
+    rows.push({
+      id: 'py:services/cover_refresh_runtime.py#run_claimed_cover_refresh',
+      test: testName, nodeId: `tests/py/${file}.py::${testName}[${mode}]`,
+      proof: { schemaVersion: 1, kind, mode, scales: [20, 1000].map(cardinality => ({
+        cardinality, physicalConnections: 3, checkouts: cardinality + 2,
+        recoveryHits: cardinality, defaultConnectorCalls: 0, cleanupComplete: true,
+      })) },
+    });
+  }
+  const cases = rows.map(row => {
+    const [file, name] = row.nodeId.split('::');
+    return { classname: file.replace(/\.py$/, '').replaceAll('/', '.'), name, body: '' };
+  });
+  const write = () => {
+    fs.writeFileSync(path.join(shard, 'foundation-version-manifest-python-windows.json'), JSON.stringify(manifest));
+    fs.writeFileSync(path.join(shard, 'bounded-interactions-evidence.jsonl'), rows.map(row => JSON.stringify(row)).join('\n'));
+    fs.writeFileSync(path.join(shard, 'pytest-results.xml'), `<testsuites><testsuite>${cases.map(item =>
+      `<testcase classname="${item.classname}" name="${item.name}">${item.body}</testcase>`).join('')}</testsuite></testsuites>`);
+  };
+  write();
+  return { directory, identity, manifest, rows, cases, write,
+    errors: () => pythonProofErrors([], directory, identity, [{}]) };
+}
+
+test('native proof accepts complete same-shard exact identities and both kinds, modes, and scales', t => {
+  assert.deepEqual(nativeCoverProofFixture(t).errors(), []);
+});
+
+test('native proof accepts truthful connection reuse below both approved ceilings', t => {
+  const fixture = nativeCoverProofFixture(t);
+  for (const row of fixture.rows) {
+    for (const scale of row.proof.scales) {
+      scale.physicalConnections = 2;
+      scale.checkouts = scale.cardinality + 1;
+    }
+  }
+  fixture.write();
+  assert.deepEqual(fixture.errors(), [], 'lower measured cost must not require artificial opens or checkouts');
+});
+
+for (const field of ['physicalConnections', 'checkouts']) {
+  for (const [name, value] of [['negative', -1], ['fractional', 1.5], ['string', '2'], ['null', null], ['missing', undefined], ['boolean', true]]) {
+    test(`native proof rejects ${name} ${field} despite counts otherwise below ceilings`, t => {
+      const fixture = nativeCoverProofFixture(t);
+      fixture.rows[0].proof.scales[1][field] = value;
+      fixture.write();
+      assert.notDeepEqual(fixture.errors(), []);
+    });
+  }
+}
+
+for (const key of ['testedCommit', 'testedTree', 'headSha', 'baseSha', 'runId', 'runAttempt', 'shardTotal']) {
+  test(`native proof rejects a different ${key} despite passing measurements`, t => {
+    const fixture = nativeCoverProofFixture(t);
+    fixture.manifest.boundedProof[key] = key === 'shardTotal' ? 2 : 'different';
+    fixture.write();
+    assert.match(fixture.errors().join('\n'), /identity differs|shard/);
+  });
+}
+
+for (const [name, mutate] of [
+  ['missing native mode', fixture => fixture.rows.pop()],
+  ['unit evidence presented as real PostgreSQL', fixture => { fixture.rows[2].proof.kind = 'unit'; }],
+  ['duplicate exact proof row', fixture => fixture.rows.push(structuredClone(fixture.rows[0]))],
+  ['partial scale set', fixture => fixture.rows[0].proof.scales.pop()],
+  ['above physical-open ceiling', fixture => { fixture.rows[0].proof.scales[1].physicalConnections = 4; }],
+  ['above total-checkout ceiling', fixture => { fixture.rows[0].proof.scales[1].checkouts = fixture.rows[0].proof.scales[1].cardinality + 3; }],
+  ['missing real recovery', fixture => { fixture.rows[0].proof.scales[1].recoveryHits = 999; }],
+  ['default connector use', fixture => { fixture.rows[0].proof.scales[1].defaultConnectorCalls = 1; }],
+  ['unfinished cleanup', fixture => { fixture.rows[0].proof.scales[1].cleanupComplete = false; }],
+  ['skipped exact native execution', fixture => { fixture.cases[0].body = '<skipped type="pytest.skip"/>'; }],
+  ['failed exact native execution', fixture => { fixture.cases[0].body = '<failure message="failed"/>'; }],
+  ['missing exact native execution', fixture => fixture.cases.pop()],
+  ['passing neighboring parameter', fixture => { fixture.cases[0].name = fixture.cases[0].name.replace('[manual]', '[other]'); }],
+]) {
+  test(`native proof rejects ${name}`, t => {
+    const fixture = nativeCoverProofFixture(t);
+    mutate(fixture);
+    fixture.write();
+    assert.notDeepEqual(fixture.errors(), []);
+  });
+}
+
+test('native proof refuses local evidence authority even when a caller claims GitHub identity', () => {
+  assert.throws(() => pythonProofIdentity({
+    GITHUB_ACTIONS: 'false', GITHUB_EVENT_NAME: 'pull_request', GITHUB_RUN_ID: '12345',
+  }), /authoritative pull-request pipeline/);
 });

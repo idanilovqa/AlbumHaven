@@ -2,14 +2,18 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from concurrent.futures import TimeoutError as FutureTimeoutError
+from contextvars import ContextVar
 from dataclasses import replace
 from datetime import datetime, timezone
 import inspect
+import hashlib
+import json
 from types import MethodType
 import os
 from pathlib import Path
 from threading import Event, Lock
 import time
+import uuid
 
 from music_app.services import cover_provider_matching
 from music_app.services.album_cover_candidate_publisher import AlbumCoverCandidatePublisher
@@ -42,15 +46,21 @@ from music_app.services.cover_provider_registry import (
     CoverLookupProviderQuery,
 )
 from music_app.services.cover_remote_image_downloads import fetch_remote_image
+from music_app.services.cache import execute_cover_mutation_for_config
+from music_app.services.cover_mutation_coordinator import (
+    CoverArtifactIdentity,
+    CoverMutationOutcome,
+    CoverMutationStatus,
+)
 from music_app.services.cover_workflow import (
-    begin_external_cover_write_promotion,
-    begin_remote_cover_promotion,
+    begin_prepared_remote_cover_promotion,
     complete_local_image_promotion,
+    decode_image_bytes,
     download_remote_cover_to_folder,
-    record_external_cover_write,
+    prepare_cover_reservation,
+    prepare_remote_cover_bytes_for_authoritative_write,
     resolve_album_write_root_from_track_paths,
     rollback_local_image_promotion,
-    run_serialized_cover_selection,
 )
 
 
@@ -69,6 +79,9 @@ _COVER_LOOKUP_BANDCAMP_EXECUTOR = create_daemon_executor(
 )
 _CANDIDATE_LOOKUP_JOB_CONTRACT = build_cover_lookup_job_contract("candidate_lookup")
 _RUNTIME_PHASE_NAMES = ("discovery", "fetch", "scoring", "persistence")
+_CLAIMED_LOOKUP_PUBLISHER: ContextVar[Callable[..., bool] | None] = ContextVar(
+    "claimed_cover_lookup_publisher", default=None
+)
 
 
 def _new_runtime_phase_metrics() -> tuple[dict[str, float], dict[str, int]]:
@@ -139,7 +152,7 @@ def _publish_candidate_runtime_phase_metrics(
     timings: dict[str, float],
     counts: dict[str, int],
 ) -> None:
-    if not cover_lookup_result(task_id):
+    if _CLAIMED_LOOKUP_PUBLISHER.get() is None and not cover_lookup_result(task_id):
         return
     _update_candidate_lookup_task(
         task_id,
@@ -172,6 +185,13 @@ def _update_candidate_lookup_task(
 ) -> None:
     if "possible_matches" in changes:
         changes["candidate_updated_at"] = datetime.now(timezone.utc).isoformat()
+    claimed_publisher = _CLAIMED_LOOKUP_PUBLISHER.get()
+    if claimed_publisher is not None:
+        claimed_publisher(
+            job_contract=_CANDIDATE_LOOKUP_JOB_CONTRACT,
+            **changes,
+        )
+        return
     update_cover_lookup_task(
         task_id,
         config=config,
@@ -320,6 +340,181 @@ def queue_cover_lookup_save_remote_task(
     register_cover_lookup_future(task_id, future, config=config)
 
 
+def run_claimed_cover_remote_save(
+    *,
+    scope,
+    config: Mapping[str, object],
+    logger,
+    should_cancel: Callable[[], bool],
+    checkpoint: Callable[..., int | None],
+    persist_selection: Callable[..., int | None],
+    publish: Callable[..., bool],
+    library_id: int | None = None,
+    job_id: int | None = None,
+    attempt: int | None = None,
+    worker_id: str | None = None,
+    lease_token: str | None = None,
+    task_id: int | None = None,
+    checkpoint_revision: int | None = None,
+) -> CoverMutationOutcome | dict[str, object]:
+    """Execute one claimed remote selection with conservative crash recovery."""
+
+    del logger
+    if scope.checkpoint in {"promotion_completed", "publication_completed"}:
+        if scope.checkpoint == "promotion_completed" and should_cancel():
+            return {"status": "canceled", "reason_code": "canceled_before_publication"}
+        if publish(
+            expected_checkpoint_revision=scope.checkpoint_revision,
+            selected_cover_path=scope.selected_cover_path,
+            linked_remote=scope.selected_cover_path is None,
+        ):
+            return {"status": "succeeded"}
+        return {"status": "ambiguous", "reason_code": "legacy_publication_uncertain"}
+    if scope.checkpoint != "accepted":
+        return {"status": "ambiguous", "reason_code": "pre_authority_recovery_required"}
+    album_root = Path(scope.library_root_path)
+    track_paths = {str(path) for path in scope.track_paths}
+    try:
+        common_parent = Path(os.path.commonpath([str(Path(path).parent) for path in track_paths]))
+    except (ValueError, TypeError):
+        return {"status": "failed", "reason_code": "album_scope_invalid"}
+    if not track_paths or common_parent.resolve(strict=False) != album_root.resolve(strict=False):
+        return {"status": "failed", "reason_code": "album_scope_invalid"}
+    selected_image = selected_remote_image_from_lookup_match(
+        dict(scope.selected_candidate)
+    )
+    if should_cancel():
+        return {"status": "canceled", "reason_code": "canceled_before_download"}
+
+    remote_cover = {
+        "remote_cover_url": selected_image.url,
+        "remote_cover_thumbnail_url": selected_image.thumbnail_url or selected_image.url,
+        "remote_cover_source": selected_image.source,
+        "remote_cover_source_label": selected_image.source_label,
+        "remote_cover_album_url": selected_image.album_url,
+        "remote_cover_width": selected_image.width,
+        "remote_cover_height": selected_image.height,
+    }
+    remote_digest = hashlib.sha256(
+        json.dumps(remote_cover, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+    mutation: dict[str, object] = {}
+
+    def prepare(_request, _baseline):
+        if selected_image.display_only:
+            return selected_image.url.encode("utf-8")
+        revision = checkpoint("download_started")
+        if revision is None:
+            mutation["failure"] = ("ambiguous", "download_checkpoint_lost")
+            raise RuntimeError("durable download checkpoint was lost")
+        if should_cancel():
+            mutation["failure"] = ("canceled", "canceled_before_fetch")
+            raise RuntimeError("durable cover save was canceled")
+        raw_bytes, _mime_type = fetch_remote_cover_bytes(
+            selected_image.url,
+            config=config,
+        )
+        if not raw_bytes:
+            mutation["failure"] = ("failed", "download_failed")
+            raise RuntimeError("remote cover download failed")
+        prepared = prepare_remote_cover_bytes_for_authoritative_write(raw_bytes)
+        if prepared is None:
+            mutation["failure"] = ("failed", "image_validation_failed")
+            raise RuntimeError("remote cover image validation failed")
+        decoded = decode_image_bytes(prepared)
+        if decoded is None:
+            raise RuntimeError("prepared cover image validation failed")
+        image, width, height = decoded
+        try:
+            mutation["local_dimensions"] = (width, height)
+        finally:
+            image.close()
+        mutation["reservation"] = prepare_cover_reservation(album_root, prepared)
+        return prepared
+
+    def write_artifact(prepared, _baseline):
+        if selected_image.display_only:
+            return CoverArtifactIdentity(
+                private_path=None,
+                sha256=remote_digest,
+                post_write_exists=False,
+                selected_cover_path=None,
+                promoted_cover_revision=remote_digest,
+                prior_cover_existed=False,
+                prior_cover_bytes=None,
+            )
+        promotion = begin_prepared_remote_cover_promotion(
+            album_root,
+            prepared,
+            reservation=mutation.get("reservation"),
+            serialize_selection=False,
+        )
+        if promotion is None:
+            raise RuntimeError("remote cover image validation failed")
+        mutation["promotion"] = promotion
+        width, height = mutation["local_dimensions"]
+        return CoverArtifactIdentity(
+            private_path=promotion.cover_path,
+            sha256=promotion.promoted_cover_revision,
+            post_write_exists=True,
+            selected_cover_path=str(promotion.cover_path),
+            promoted_cover_revision=promotion.promoted_cover_revision,
+            prior_cover_existed=promotion.prior_cover_existed,
+            prior_cover_bytes=promotion.prior_cover_bytes,
+            local_cover_width=width,
+            local_cover_height=height,
+        )
+
+    def prepare_commit(artifact) -> int:
+        revision = checkpoint(
+            "artifact_written",
+            artifact_sha256=artifact.sha256,
+            cover_revision=artifact.promoted_cover_revision,
+        )
+        if revision is None:
+            mutation["failure"] = ("ambiguous", "artifact_checkpoint_lost")
+            raise RuntimeError("durable artifact checkpoint was lost")
+        return revision
+
+    def compensate_artifact(_artifact) -> None:
+        promotion = mutation.get("promotion")
+        if promotion is not None:
+            rollback_local_image_promotion(promotion)
+
+    try:
+        outcome = execute_cover_mutation_for_config(
+            dict(config),
+            library_id=library_id,
+            track_paths=track_paths,
+            album_root=album_root,
+            selected_origin="user",
+            explicit_selection=True,
+            clear_selection=False,
+            remote_cover=remote_cover if selected_image.display_only else None,
+            prepare=prepare,
+            cleanup_prepared=lambda _prepared: None,
+            write_artifact=write_artifact,
+            prepare_commit=prepare_commit,
+            compensate_artifact=compensate_artifact,
+            should_cancel=should_cancel,
+            job_id=job_id,
+            attempt=attempt,
+            worker_id=worker_id,
+            lease_token=lease_token,
+            task_id=task_id,
+            checkpoint_revision=checkpoint_revision,
+        )
+    except Exception:
+        failure = mutation.get("failure")
+        if isinstance(failure, tuple):
+            return {"status": failure[0], "reason_code": failure[1]}
+        return {"status": "failed", "reason_code": "selection_commit_uncertain"}
+    promotion = mutation.get("promotion")
+    if outcome.status is CoverMutationStatus.COMMITTED and promotion is not None:
+        complete_local_image_promotion(promotion)
+    return outcome
+
+
 def _run_cover_lookup_job(runtime_job: CoverLookupRuntimeJob) -> None:
     provider_deadline_at = build_cover_lookup_provider_deadline_at(runtime_job.config)
     _run_cover_lookup_task(
@@ -448,7 +643,59 @@ def _terminalize_canceled_cover_lookup_task(
             candidate_publisher.fail()
         except Exception:
             pass
-    finalize_cover_lookup_task_canceled(task_id, config=config)
+    claimed_publisher = _CLAIMED_LOOKUP_PUBLISHER.get()
+    if claimed_publisher is not None:
+        claimed_publisher(
+            cancel_requested=True,
+            status="canceled",
+            progress=100,
+            progress_label="Canceled",
+            finished_at=datetime.now(timezone.utc).isoformat(),
+            message="Cover art lookup canceled.",
+            job_contract=_CANDIDATE_LOOKUP_JOB_CONTRACT,
+        )
+    else:
+        finalize_cover_lookup_task_canceled(task_id, config=config)
+
+
+class _ClaimedLookupCancelSignal:
+    def __init__(self, should_cancel: Callable[[], bool]) -> None:
+        self._should_cancel = should_cancel
+
+    def is_set(self) -> bool:
+        return bool(self._should_cancel())
+
+
+def run_claimed_cover_lookup(
+    *,
+    task_id: str,
+    config: Mapping[str, object],
+    logger: object,
+    user_agent: str,
+    album: dict[str, object],
+    track_paths: set[str],
+    manual_urls: list[str],
+    provider_deadline_at: float,
+    should_cancel: Callable[[], bool],
+    publish: Callable[..., bool],
+) -> None:
+    """Run the existing provider pipeline inside one durable claim boundary."""
+
+    token = _CLAIMED_LOOKUP_PUBLISHER.set(publish)
+    try:
+        _run_cover_lookup_task(
+            task_id,
+            config,
+            logger,
+            user_agent,
+            album,
+            track_paths,
+            _ClaimedLookupCancelSignal(should_cancel),
+            manual_urls,
+            provider_deadline_at=provider_deadline_at,
+        )
+    finally:
+        _CLAIMED_LOOKUP_PUBLISHER.reset(token)
 
 
 def _run_provider_call_until_deadline(
@@ -529,9 +776,23 @@ def _run_cover_lookup_task(
     candidate_publisher = None
     candidate_snapshot_published = False
     candidate_snapshot_diagnostic = ""
+    candidate_repository_factory = config.get(
+        "COVER_CANDIDATE_SNAPSHOT_REPOSITORY_FACTORY"
+    )
+    candidate_persistence_required = bool(
+        config.get("COVER_CANDIDATE_SNAPSHOT_PERSISTENCE_REQUIRED")
+    )
     try:
-        repository = AlbumCoverCandidateSnapshotRepository(config)
         album_id = int(album.get("id") or 0)
+        repository = (
+            candidate_repository_factory(
+                album_id=album_id,
+                search_generation=task_id,
+                search_kind="manual",
+            )
+            if callable(candidate_repository_factory)
+            else AlbumCoverCandidateSnapshotRepository(config)
+        )
         if album_id <= 0:
             album_id = int(
                 repository.resolve_album_id_for_track_paths(
@@ -547,6 +808,8 @@ def _run_cover_lookup_task(
                 search_kind="manual",
             )
     except Exception:
+        if candidate_persistence_required:
+            raise
         candidate_publisher = None
         candidate_snapshot_diagnostic = "durable_candidate_persistence_failed"
 
@@ -557,10 +820,13 @@ def _run_cover_lookup_task(
         if candidate_publisher is None or not candidates:
             return candidates
         try:
-            candidate_snapshot_published = bool(
-                candidate_publisher.publish_candidates(candidates)
-            ) or candidate_snapshot_published
+            accepted = bool(candidate_publisher.publish_candidates(candidates))
+            if candidate_persistence_required and not accepted:
+                raise RuntimeError("candidate snapshot publication lost its claim")
+            candidate_snapshot_published = accepted or candidate_snapshot_published
         except Exception:
+            if candidate_persistence_required:
+                raise
             candidate_publisher = None
             candidate_snapshot_diagnostic = "durable_candidate_persistence_failed"
             return candidates
@@ -1052,8 +1318,12 @@ def _run_cover_lookup_task(
         close_candidate_publication()
         if candidate_publisher is not None and candidate_snapshot_published:
             try:
-                candidate_publisher.complete()
+                completed = bool(candidate_publisher.complete())
+                if candidate_persistence_required and not completed:
+                    raise RuntimeError("candidate snapshot completion lost its claim")
             except Exception:
+                if candidate_persistence_required:
+                    raise
                 candidate_snapshot_diagnostic = "durable_candidate_persistence_failed"
         phase_started = time.perf_counter()
         _update_candidate_lookup_task(
@@ -1097,7 +1367,11 @@ def _run_cover_lookup_task(
             task_id=task_id,
             artist=str(album.get("album_artist") or ""),
             album=str(album.get("name") or album.get("album") or ""),
-            error=str(exc),
+            error=(
+                type(exc).__name__
+                if _CLAIMED_LOOKUP_PUBLISHER.get() is not None
+                else str(exc)
+            ),
         )
         phase_started = time.perf_counter()
         _update_candidate_lookup_task(
@@ -1167,23 +1441,23 @@ def _run_cover_lookup_save_remote_task(
             return
         if selected_image.display_only:
             phase_started = time.perf_counter()
-            def persist_and_apply_linked_cover():
-                if persist_cover_selection_for_tracks is not None:
-                    persist_cover_selection_for_tracks(
-                        requested_track_paths,
-                        cover_path=None,
-                        cover_selection_origin=cover_selection_origin,
-                        explicit_selection=cover_selection_origin == "user",
-                        remote_cover_url=selected_image.url,
-                        remote_cover_thumbnail_url=selected_image.thumbnail_url or selected_image.url,
-                        remote_cover_source=selected_image.source,
-                        remote_cover_source_label=selected_image.source_label,
-                        remote_cover_album_url=selected_image.album_url,
-                        remote_cover_width=selected_image.width,
-                        remote_cover_height=selected_image.height,
-                        config=config,
-                        logger=logger,
-                    )
+            linked_updates: dict[str, object] = {}
+
+            def prepare(_request, _baseline):
+                return selected_image.url.encode("utf-8")
+
+            def write_artifact(prepared, _baseline):
+                return CoverArtifactIdentity(
+                    private_path=None,
+                    sha256=None,
+                    post_write_exists=False,
+                    selected_cover_path=None,
+                    promoted_cover_revision=None,
+                    prior_cover_existed=False,
+                    prior_cover_bytes=None,
+                )
+
+            def publish_committed(_outcome, _artifact) -> None:
                 apply_changes = {
                     "cover_path": None,
                     "remote_cover_url": selected_image.url,
@@ -1202,7 +1476,7 @@ def _run_cover_lookup_save_remote_task(
                     )
                 ):
                     apply_changes["schedule_cache_update"] = False
-                return _apply_cover_selection_for_tracks(
+                linked_updates["updates"] = _apply_cover_selection_for_tracks(
                     apply_cover_selection_for_tracks,
                     requested_track_paths,
                     config=config,
@@ -1211,10 +1485,34 @@ def _run_cover_lookup_save_remote_task(
                     **apply_changes,
                 )
 
-            updated_albums, updated_problematic_album = run_serialized_cover_selection(
-                validated_album_root,
-                persist_and_apply_linked_cover,
+            outcome = execute_cover_mutation_for_config(
+                dict(config),
+                track_paths=requested_track_paths,
+                album_root=validated_album_root,
+                selected_origin=(
+                    "automatic"
+                    if str(cover_selection_origin).casefold() == "automatic"
+                    else "user"
+                ),
+                explicit_selection=str(cover_selection_origin).casefold() == "user",
+                clear_selection=False,
+                remote_cover={
+                    "remote_cover_url": selected_image.url,
+                    "remote_cover_thumbnail_url": selected_image.thumbnail_url or selected_image.url,
+                    "remote_cover_source": selected_image.source,
+                    "remote_cover_source_label": selected_image.source_label,
+                    "remote_cover_album_url": selected_image.album_url,
+                    "remote_cover_width": selected_image.width,
+                    "remote_cover_height": selected_image.height,
+                },
+                prepare=prepare,
+                cleanup_prepared=lambda _prepared: None,
+                write_artifact=write_artifact,
+                publish_committed=publish_committed,
             )
+            if outcome.status is not CoverMutationStatus.COMMITTED:
+                raise RuntimeError("Linked cover selection was not committed.")
+            updated_albums, updated_problematic_album = linked_updates["updates"]
             update_cover_lookup_task(
                 task_id,
                 config=config,
@@ -1241,26 +1539,8 @@ def _run_cover_lookup_save_remote_task(
         phase_started = time.perf_counter()
         committed_updates = None
 
-        def persist_downloaded_cover(written_cover: Path) -> None:
-            if persist_cover_selection_for_tracks is not None:
-                persist_cover_selection_for_tracks(
-                    requested_track_paths,
-                    cover_path=written_cover,
-                    cover_selection_origin=cover_selection_origin,
-                    explicit_selection=cover_selection_origin == "user",
-                    remote_cover_url=None,
-                    remote_cover_thumbnail_url=None,
-                    remote_cover_source=None,
-                    remote_cover_source_label=None,
-                    remote_cover_album_url=None,
-                    remote_cover_width=None,
-                    remote_cover_height=None,
-                    config=config,
-                    logger=logger,
-                )
-
-        def apply_downloaded_cover(written_cover: Path):
-            apply_changes = {"cover_path": written_cover}
+        def apply_downloaded_cover(written_cover: Path, cover_revision: str | None):
+            apply_changes = {"cover_path": written_cover, "cover_revision": cover_revision}
             if (
                 persist_cover_selection_for_tracks is not None
                 and _callback_accepts_parameter(
@@ -1278,69 +1558,95 @@ def _run_cover_lookup_save_remote_task(
                 **apply_changes,
             )
 
-        def persist_then_apply_downloaded_cover(written_cover: Path):
-            persist_downloaded_cover(written_cover)
-            return apply_downloaded_cover(written_cover)
-
         def write_persist_and_apply(folder: Path, raw_bytes: bytes) -> Path | None:
             nonlocal committed_updates
+            mutation: dict[str, object] = {}
+            local_dimensions: tuple[int, int] | None = None
 
-            def serialized_action():
-                nonlocal committed_updates
-                promotion = begin_remote_cover_promotion(
+            def prepare(_request, _baseline):
+                nonlocal local_dimensions
+                prepared = prepare_remote_cover_bytes_for_authoritative_write(raw_bytes)
+                if prepared is None:
+                    raise RuntimeError("Remote cover image validation failed.")
+                decoded = decode_image_bytes(prepared)
+                if decoded is None:
+                    raise RuntimeError("Prepared cover image validation failed.")
+                image, width, height = decoded
+                try:
+                    local_dimensions = (width, height)
+                finally:
+                    image.close()
+                mutation["reservation"] = prepare_cover_reservation(folder, prepared)
+                return prepared
+
+            def write_artifact(prepared, _baseline):
+                assert local_dimensions is not None
+                promotion = begin_prepared_remote_cover_promotion(
                     folder,
-                    raw_bytes,
-                    serialize_selection=True,
+                    prepared,
+                    reservation=mutation.get("reservation"),
+                    serialize_selection=False,
                 )
                 if promotion is None:
-                    return None
-                try:
-                    persist_downloaded_cover(promotion.cover_path)
-                except Exception:
-                    rollback_local_image_promotion(promotion)
-                    raise
-                complete_local_image_promotion(promotion)
-                committed_updates = apply_downloaded_cover(promotion.cover_path)
-                return promotion.cover_path
+                    raise RuntimeError("Remote cover image validation failed.")
+                mutation["promotion"] = promotion
+                return CoverArtifactIdentity(
+                    private_path=promotion.cover_path,
+                    sha256=promotion.promoted_cover_revision,
+                    post_write_exists=True,
+                    selected_cover_path=str(promotion.cover_path),
+                    promoted_cover_revision=promotion.promoted_cover_revision,
+                    prior_cover_existed=promotion.prior_cover_existed,
+                    prior_cover_bytes=promotion.prior_cover_bytes,
+                    local_cover_width=local_dimensions[0],
+                    local_cover_height=local_dimensions[1],
+                )
 
-            return serialized_action()
+            def publish_committed(_outcome, artifact) -> None:
+                nonlocal committed_updates
+                promotion = mutation.get("promotion")
+                if promotion is not None:
+                    complete_local_image_promotion(promotion)
+                assert artifact.private_path is not None
+                committed_updates = apply_downloaded_cover(
+                    artifact.private_path, artifact.promoted_cover_revision
+                )
+                mutation["written"] = artifact.private_path
+
+            def compensate_artifact(_artifact) -> None:
+                promotion = mutation.get("promotion")
+                if promotion is not None:
+                    rollback_local_image_promotion(promotion)
+
+            outcome = execute_cover_mutation_for_config(
+                dict(config),
+                track_paths=requested_track_paths,
+                album_root=folder,
+                selected_origin=(
+                    "automatic"
+                    if str(cover_selection_origin).casefold() == "automatic"
+                    else "user"
+                ),
+                explicit_selection=str(cover_selection_origin).casefold() == "user",
+                clear_selection=False,
+                remote_cover=None,
+                prepare=prepare,
+                cleanup_prepared=lambda _prepared: None,
+                write_artifact=write_artifact,
+                compensate_artifact=compensate_artifact,
+                publish_committed=publish_committed,
+            )
+            if outcome.status is not CoverMutationStatus.COMMITTED:
+                raise RuntimeError("Remote cover selection was not committed.")
+            return mutation.get("written")
 
         download_kwargs = {
             "folder": validated_album_root,
             "image_url": selected_image.url,
             "user_agent": user_agent,
         }
-        downloader_accepts_writer = _callback_accepts_parameter(
-            download_remote_cover_to_folder,
-            "write_cover_func",
-        )
-        if downloader_accepts_writer:
-            download_kwargs["write_cover_func"] = write_persist_and_apply
-            written, detail = download_remote_cover_to_folder(**download_kwargs)
-        else:
-            promotion = begin_external_cover_write_promotion(validated_album_root)
-            try:
-                written, detail = download_remote_cover_to_folder(**download_kwargs)
-            except Exception:
-                try:
-                    record_external_cover_write(promotion)
-                finally:
-                    rollback_local_image_promotion(promotion)
-                raise
-            if written is None:
-                complete_local_image_promotion(promotion)
-                promotion = None
-            else:
-                try:
-                    record_external_cover_write(promotion)
-                    persist_downloaded_cover(written)
-                except Exception:
-                    rollback_local_image_promotion(promotion)
-                    promotion = None
-                    raise
-                complete_local_image_promotion(promotion)
-                promotion = None
-                committed_updates = apply_downloaded_cover(written)
+        download_kwargs["write_cover_func"] = write_persist_and_apply
+        written, detail = download_remote_cover_to_folder(**download_kwargs)
         _record_runtime_phase(phase_timings, phase_counts, "fetch", phase_started, count=1)
         if written is None:
             phase_started = time.perf_counter()
@@ -1364,10 +1670,7 @@ def _run_cover_lookup_save_remote_task(
             return
         phase_started = time.perf_counter()
         if committed_updates is None:
-            committed_updates = run_serialized_cover_selection(
-                validated_album_root,
-                lambda: persist_then_apply_downloaded_cover(written),
-            )
+            raise RuntimeError("Remote cover committed without runtime publication.")
         updated_albums, updated_problematic_album = committed_updates
         update_cover_lookup_task(
             task_id,

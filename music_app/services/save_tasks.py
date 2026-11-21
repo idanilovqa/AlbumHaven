@@ -987,9 +987,16 @@ def finalize_structural_tag_edit_save_task(
                 lambda: schedule_relation_projection_rebuild(rebuild_reason),
                 None,
             )
-        committed_separate_release_key = str(
-            persistence_result.get("separate_release_key") or ""
-        ).strip()
+        if "separate_release_keys" in persistence_result:
+            committed_separate_release_keys = {
+                str(key or "").strip()
+                for key in (persistence_result["separate_release_keys"] or [])
+            }
+        else:
+            committed_separate_release_keys = {
+                str(persistence_result.get("separate_release_key") or "").strip()
+            }
+        committed_separate_release_keys.discard("")
         committed_relation_views = persistence_result.get("relation_views")
         committed_relations_last_built = float(
             persistence_result.get("relations_last_built") or 0.0
@@ -1002,10 +1009,7 @@ def finalize_structural_tag_edit_save_task(
                 int(persistence_result.get("inventory_mutation_revision") or 0),
             )
             current_separate_release_keys = set(separate_release_keys)
-            if committed_separate_release_key:
-                current_separate_release_keys.add(
-                    committed_separate_release_key
-                )
+            current_separate_release_keys.update(committed_separate_release_keys)
             st["separate_release_keys"] = current_separate_release_keys
             operation_baseline = {
                 path: dict(previous_file_cache[path])
@@ -1029,7 +1033,12 @@ def finalize_structural_tag_edit_save_task(
                     ),
                 ),
             )
-            if persistence_result.get("cover_inherited_from_structural_edit") is True:
+            inherited_paths = set()
+            if "cover_inherited_paths" in persistence_result:
+                inherited_paths = set(persistence_result["cover_inherited_paths"]) & changed_paths
+            elif persistence_result.get("cover_inherited_from_structural_edit") is True:
+                inherited_paths = set(changed_paths)
+            if inherited_paths:
                 current_file_cache = _merge_file_cache_entries(
                     st,
                     _structurally_inherited_cover_entries(
@@ -1040,12 +1049,12 @@ def finalize_structural_tag_edit_save_task(
                             st,
                             previous_file_cache,
                             current_file_cache,
-                            changed_paths,
+                            inherited_paths,
                             current_separate_release_keys,
                         ),
                         previous_file_entries=previous_file_cache,
                         updated_file_entries=updated_file_cache,
-                        changed_paths=changed_paths,
+                        changed_paths=inherited_paths,
                     ),
                 )
             required_relation_fields = (
@@ -1170,6 +1179,9 @@ def finalize_structural_tag_edit_save_task(
         completion = {
             "status": "completed",
             "completed_at": datetime.now(timezone.utc).isoformat(),
+            "inventory_mutation_revision": int(
+                persistence_result.get("inventory_mutation_revision") or 0
+            ),
             "updated_albums": updated_albums,
             "updated_problematic_album": updated_problematic_album,
             "reconciliation_pending": reconciliation_pending,

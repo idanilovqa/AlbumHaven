@@ -274,7 +274,7 @@ jobs:
       # Every discovered interaction must be registered and statically clean or
       # covered by a contract; the contracts themselves run in the JS and Python suites.
       - name: Validate bounded interaction inventory
-        run: node scripts/ci/validate-bounded-interactions.cjs
+        run: node scripts/ci/validate-bounded-interactions.cjs --native-proof-preflight
 
       # The JavaScript contracts again, failing on any skipped or todo test and
       # on a contract that did not measure its registered entry.
@@ -513,6 +513,7 @@ jobs:
         run: |
           "PYTEST_DESTRUCTIVE_SETUP_DATABASE_URL=$env:DATABASE_MIGRATOR_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "PYTEST_DESTRUCTIVE_DATABASE_URL=$env:DATABASE_APP_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "PYTEST_DESTRUCTIVE_WORKER_DATABASE_URL=$env:ALBUM_HAVEN_WORKER_DATABASE_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "PYTEST_DESTRUCTIVE_PGPASSFILE=$env:PGPASSFILE" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Provision pristine PostgreSQL for persistent Python contracts
@@ -545,6 +546,8 @@ jobs:
           "PGPASSFILE=$combinedPgpass" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL=$env:PYTEST_DESTRUCTIVE_SETUP_DATABASE_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "ALBUM_HAVEN_FAKE_E2E_DATABASE_URL=$env:PYTEST_DESTRUCTIVE_DATABASE_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ALBUM_HAVEN_FAKE_E2E_WORKER_DATABASE_URL=$env:PYTEST_DESTRUCTIVE_WORKER_DATABASE_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ALBUM_HAVEN_WORKER_DATABASE_URL=$env:PYTEST_DESTRUCTIVE_WORKER_DATABASE_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "ALBUM_HAVEN_SCAN_PERFORMANCE_SETUP_DATABASE_URL=$env:PYTEST_DESTRUCTIVE_SETUP_DATABASE_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "ALBUM_HAVEN_SCAN_PERFORMANCE_DATABASE_URL=$env:PYTEST_DESTRUCTIVE_DATABASE_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "ALBUM_HAVEN_POSTGRES_CONTRACT_DATABASE_URL=$env:DATABASE_APP_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
@@ -611,6 +614,12 @@ jobs:
           if (Test-Path -LiteralPath $combinedPgpass -PathType Leaf) {
             Remove-Item -LiteralPath $combinedPgpass -Force
           }
+
+      - name: Bind successful Python proof to this pipeline
+        env:
+          BOUNDED_PROOF_SHARD: ${{ matrix.shard }}
+          BOUNDED_PROOF_SHARD_TOTAL: ${{ strategy.job-total }}
+        run: node scripts/run-bounded-interactions.cjs --write-python-proof-manifest "${{ runner.temp }}\foundation-version-manifest-python-windows.json"
 
       - name: Upload Python foundation evidence
         if: ${{ always() }}
@@ -2478,7 +2487,7 @@ jobs:
         if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
         uses: actions/checkout@v5
         with:
-          ref: refs/pull/${{ github.event.pull_request.number }}/merge
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Set up Node.js for Python contract evidence
@@ -2501,13 +2510,11 @@ jobs:
       - name: Verify bounded interaction Python contract evidence
         if: ${{ github.event.pull_request.head.repo.full_name == github.repository && needs.test_python.result == 'success' }}
         shell: bash
+        env:
+          BOUNDED_PROOF_SHARD_TOTAL: "3"
         run: |
-          evidence="$RUNNER_TEMP/bounded-interactions-evidence.jsonl"
-          for file in "$RUNNER_TEMP"/python-shards/*/bounded-interactions-evidence.jsonl; do
-            if [ -f "$file" ]; then cat "$file"; echo; fi
-          done > "$evidence"
           npm ci
-          node scripts/run-bounded-interactions.cjs --python-evidence "$evidence"
+          node scripts/run-bounded-interactions.cjs --python-evidence-dir "$RUNNER_TEMP/python-shards"
 
       - name: Validate trusted cloud conclusion
         if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}

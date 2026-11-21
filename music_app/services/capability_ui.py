@@ -24,8 +24,8 @@ ACTION_SELECTORS = MappingProxyType({
     "library.media.read": (
         ".global-player", ".compact-player-shell", ".play-track-button",
     ),
-    "library.refresh": ("#scan-indicator", '[data-status-action="full-rescan"]'),
-    "library.refresh.read": ('[data-status-action="go-to-scan-page"]',),
+    "library.refresh": ('[data-status-action="full-rescan"]',),
+    "library.refresh.read": ("#scan-indicator", '[data-status-action="go-to-scan-page"]'),
     "library.refresh.cancel": ('[data-status-action="cancel-scan"]',),
     "library.problems.read": ("[data-open-track-problematic]",),
     "library.files.edit_tags": (

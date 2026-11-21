@@ -12,11 +12,15 @@
 // a route reaching a registered library-scale operation, blocking I/O on the
 // ASGI event loop, a database connection opened per loop item in a route, or
 // per-item I/O over the whole library state outside background-batch work)
-// fail regardless of registration. There is no exemption mechanism.
+// fail regardless of ordinary registration. The two source-bound cover records
+// can become eligible for native proof; only the final trusted pipeline verdict
+// can satisfy them. Raw rejects remain visible throughout.
 
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { createHash } = require('node:crypto');
+const acorn = require('acorn');
 const { spawn } = require('node:child_process');
 const { once } = require('node:events');
 const { analyzeJavaScriptRepository, normalizeEndpoint } = require('./bounded-interaction-discovery.cjs');
@@ -25,7 +29,7 @@ const { syncRegistry } = require('./bounded-interaction-registry-sync.cjs');
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const REGISTRY_PATH = 'tests/ci/bounded-interactions.json';
 const WORK_CLASSES = ['constant', 'delta', 'page', 'selected-set', 'affected-set', 'background-batch'];
-const TOP_LEVEL_KEYS = new Set(['schemaVersion', 'allowedWorkClasses', 'libraryScaleOperations', 'libraryStateCollections', 'interactions']);
+const TOP_LEVEL_KEYS = new Set(['schemaVersion', 'allowedWorkClasses', 'libraryScaleOperations', 'libraryStateCollections', 'interactions', 'scopedCoverProofs']);
 const INTERACTION_KEYS = new Set([
   'id', 'action', 'entrypoints', 'owners', 'rules', 'workClass', 'proof', 'requestOwnership',
   'cardinalities', 'budgets', 'growth', 'command', 'testIdentity', 'measures', 'performanceTargets', 'rollback',
@@ -87,9 +91,270 @@ async function discoverRepository({ root = REPO_ROOT, registry, jsOverrides = {}
   const js = analyzeJavaScriptRepository(root, jsOverrides);
   const py = await python;
   return {
+    pythonSemanticsFingerprint: py.pythonSemanticsFingerprint,
+    pythonContractFingerprints: py.pythonContractFingerprints,
+    connectionGraphs: py.connectionGraphs,
+    coverConnectionContracts: py.coverConnectionContracts,
     entrypoints: [...js.entrypoints, ...py.entrypoints],
     hazards: [...js.hazards, ...py.hazards],
   };
+}
+
+const COVER_ENTRYPOINTS = [
+  'py:music_app/routes/api_wave_d_asgi_routes.py#utilities_fetch_cover:route:POST /utilities/fetch-cover',
+  'py:music_app/routes/api_wave_d_asgi_routes.py#utilities_fetch_covers_unsuccessful:route:POST /utilities/fetch-covers-unsuccessful',
+];
+const COVER_PROOF_KEYS = ['schemaVersion', 'id', 'entrypoint', 'rule', 'loopOwner', 'coverage', 'analyzerFingerprint', 'contractFingerprint', 'families'];
+const SCAN_OWNER = 'py:music_app/services/scan_cache_persistence.py#';
+const EXECUTION_OWNER = 'py:music_app/services/cover_refresh_execution.py#';
+const POOL_OWNER = 'py:music_app/services/postgres_connections.py#';
+const COVER_FAMILIES = [
+  { id: 'cover-mutation-shared-transaction', operation: 'database-connect-per-item:psycopg.connect@music_app/services/cover_mutations_postgres.py',
+    sinkOwner: 'py:music_app/services/cover_mutations_postgres.py#_default_connect',
+    context: { connector: 'scan_cache_transaction', databaseScope: 'matching-config-url', workerContext: 'copy_context', lifetime: 'claimed-cover-run' },
+    roles: { 'cache-injection': 'py:music_app/services/cache.py#execute_cover_mutation_for_config',
+      'recovery-injection': `${EXECUTION_OWNER}_recover_existing_cover_selection`, 'automatic-injection': `${EXECUTION_OWNER}_build_automatic_cover_write_guard`,
+      'matching-dsn': `${SCAN_OWNER}scan_cache_transaction`, 'run-scope': `${EXECUTION_OWNER}run_cover_jobs`,
+      'copied-worker-context': `${EXECUTION_OWNER}_run_cover_jobs`, 'scope-cleanup': `${SCAN_OWNER}shared_scan_cache_connection` } },
+  { id: 'shared-adapter-lazy-initializer', operation: 'database-connect-per-item:psycopg.connect@music_app/services/scan_cache_persistence.py',
+    sinkOwner: `${SCAN_OWNER}_connect`, context: { binding: 'sealed-shared-connection-v1', databaseScope: 'matching-config-url', initializer: 'guarded-lazy', lifetime: 'claimed-cover-run' },
+    roles: { 'sealed-constructor': `${SCAN_OWNER}shared_scan_cache_connection`, 'field-assignment': `${SCAN_OWNER}_SharedConnection.__init__`,
+      'lazy-guard': `${SCAN_OWNER}_SharedConnection.transaction`, initializer: `${SCAN_OWNER}_SharedConnection.transaction`,
+      'transaction-lock': `${SCAN_OWNER}_SharedConnection.transaction`, 'scope-cleanup': `${SCAN_OWNER}shared_scan_cache_connection` } },
+  { id: 'cover-advisory-lock-pool-initializer', operation: 'database-connect-per-item:psycopg_pool.ConnectionPool@music_app/services/postgres_connections.py',
+    sinkOwner: `${POOL_OWNER}cover_lock_connection`, context: { cacheKey: ['dedicated', 'database_url', 'cover-lock'], initializer: 'cache-miss-under-lock',
+      lifetime: 'process-cache-until-close_pools', channels: 'existing-active-cover-worker-bound' },
+    roles: Object.fromEntries(['cache-key', 'cache-lookup', 'cache-guard', 'initializer', 'cache-store', 'cache-lock', 'pool-cleanup']
+      .map(role => [role, `${POOL_OWNER}${role === 'pool-cleanup' ? 'close_pools' : 'cover_lock_connection'}`])) },
+];
+const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object'
+  ? Object.fromEntries(Object.keys(value).sort().filter(key => value[key] !== undefined).map(key => [key, canonical(value[key])])) : value;
+const digest = value => createHash('sha256').update(JSON.stringify(canonical(value)) ?? 'null').digest('hex');
+const isFingerprint = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+const structuralOperation = value => String(value).replace(/:\d+$/, '');
+
+function scopedCoverProofErrors(registry) {
+  const errors = [];
+  if (registry.scopedCoverProofs === undefined) return errors;
+  if (!Array.isArray(registry.scopedCoverProofs) || registry.scopedCoverProofs.length !== 2) return ['scopedCoverProofs must contain exactly the two reviewed cover entrypoints'];
+  const seen = new Set();
+  const ids = new Set();
+  for (const record of registry.scopedCoverProofs) {
+    const label = record?.id || 'scoped cover proof';
+    if (typeof record?.id !== 'string' || !record.id.trim() || ids.has(record.id)) errors.push(`${label}: unique scoped cover proof id required`);
+    ids.add(record?.id);
+    if (!record || Object.keys(record).some(key => !COVER_PROOF_KEYS.includes(key)) || COVER_PROOF_KEYS.some(key => record[key] === undefined)) errors.push(`${label}: invalid scoped cover proof record`);
+    if (record?.schemaVersion !== 3 || !COVER_ENTRYPOINTS.includes(record?.entrypoint) || seen.has(record?.entrypoint) || record?.rule !== 'BI-05' ||
+        record?.loopOwner !== 'music_app/services/cover_refresh_execution.py#_run_cover_jobs') errors.push(`${label}: not an exact reviewed cover edge`);
+    seen.add(record?.entrypoint);
+    const families = record?.families;
+    const coveredSinks = new Set();
+    if (!Array.isArray(families) || families.length !== COVER_FAMILIES.length || new Set(families.map(family => family?.id)).size !== COVER_FAMILIES.length) {
+      errors.push(`${label}: exactly three distinct reviewed cover families required`);
+    } else for (const family of families) {
+      const specification = COVER_FAMILIES.find(item => item.id === family?.id);
+      if (!exactKeys(family, ['id', 'operation', 'sinkIds', 'contractId', 'contractFingerprint', 'context']) || !specification ||
+          family.operation !== specification.operation || family.contractId !== `${specification.id}/v1` ||
+          !isFingerprint(family.contractFingerprint) || digest(family.context) !== digest(specification.context) ||
+          !Array.isArray(family.sinkIds) || !family.sinkIds.length || family.sinkIds.some(id => !isFingerprint(id))) {
+        errors.push(`${label}: invalid exact cover family operation/context/contract`);
+        continue;
+      }
+      for (const id of family.sinkIds) {
+        if (coveredSinks.has(id)) errors.push(`${label}: cover family sink coverage overlaps`);
+        coveredSinks.add(id);
+      }
+    }
+    if (!isFingerprint(record?.analyzerFingerprint) || !isFingerprint(record?.contractFingerprint)) errors.push(`${label}: source-bound analyzer and contract fingerprints required`);
+    const coverage = record?.coverage;
+    if (!coverage || Object.keys(coverage).sort().join(',') !== 'edgeIds,graphFingerprint,nodeIds,root,sinkIds' ||
+        !isFingerprint(coverage.graphFingerprint) || !isFingerprint(coverage.root) ||
+        ['nodeIds', 'edgeIds', 'sinkIds'].some(key => !Array.isArray(coverage[key]) || !coverage[key].length ||
+          coverage[key].some(id => !isFingerprint(id)) || new Set(coverage[key]).size !== coverage[key].length)) {
+      errors.push(`${label}: complete duplicate-free semantic graph coverage required`);
+    }
+    if (Array.isArray(coverage?.sinkIds) && digest([...coveredSinks].sort()) !== digest([...coverage.sinkIds].sort())) errors.push(`${label}: cover families must partition every covered sink`);
+  }
+  return errors;
+}
+
+function scopedCoverFingerprints(registry, discovery, readFile = file => fs.readFileSync(path.join(REPO_ROOT, file), 'utf8')) {
+  const semanticSource = file => JSON.parse(JSON.stringify(acorn.parse(readFile(file), { ecmaVersion: 'latest', sourceType: 'script' }),
+    (key, value) => ['start', 'end', 'loc', 'raw'].includes(key) ? undefined : value));
+  return {
+    analyzerFingerprint: digest({ python: discovery.pythonSemanticsFingerprint, javascript: [
+      semanticSource('scripts/ci/validate-bounded-interactions.cjs'), semanticSource('scripts/run-bounded-interactions.cjs'),
+    ] }),
+    contractFingerprint: digest({ registry: { ...registry, scopedCoverProofs: undefined }, pythonContracts: discovery.pythonContractFingerprints }),
+  };
+}
+
+function connectionGraphFingerprint(graph) {
+  const { fingerprint, ...semantic } = graph;
+  const sorted = (items, key) => [...items].sort((left, right) => left[key] < right[key] ? -1 : left[key] > right[key] ? 1 : 0);
+  return digest({ ...semantic, nodes: sorted(graph.nodes, 'id'), edges: sorted(graph.edges, 'id'),
+    sinks: sorted(graph.sinks, 'id'), sources: sorted(graph.sources, 'path') });
+}
+
+const exactKeys = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) &&
+  Object.keys(value).sort().join(',') === [...keys].sort().join(',');
+const validOwner = value => typeof value === 'string' && /^py:music_app\/[^#]+#.+$/.test(value) && !value.includes('..') && !value.includes('\\');
+const validSite = value => exactKeys(value, ['owner', 'astPath']) && validOwner(value.owner) &&
+  Array.isArray(value.astPath) && value.astPath.length > 0 && value.astPath.every(part =>
+    typeof part === 'string' && /^[A-Za-z_]\w*$/.test(part) || Number.isInteger(part) && part >= 0);
+
+function validConnectionGraph(graph) {
+  if (!exactKeys(graph, ['schemaVersion', 'id', 'entrypoint', 'root', 'nodes', 'edges', 'sinks', 'sources', 'fingerprint']) ||
+      graph.schemaVersion !== 1 || graph.id !== graph.entrypoint || !isFingerprint(graph.root) || !isFingerprint(graph.fingerprint) ||
+      ['nodes', 'edges', 'sinks', 'sources'].some(key => !Array.isArray(graph[key]) || !graph[key].length)) return false;
+  const nodes = new Map();
+  for (const node of graph.nodes) {
+    if (!exactKeys(node, ['id', 'owner', 'loop', 'scan', 'bound']) || !validOwner(node.owner) ||
+        !(node.loop === null || validSite(node.loop)) ||
+        !(node.scan === null || exactKeys(node.scan, ['collection', 'owner', 'astPath']) && typeof node.scan.collection === 'string' &&
+          validSite({ owner: node.scan.owner, astPath: node.scan.astPath })) ||
+        !(node.bound === null || Array.isArray(node.bound) && node.bound.every(name => typeof name === 'string') &&
+          new Set(node.bound).size === node.bound.length && digest(node.bound) === digest([...node.bound].sort())) || nodes.has(node.id)) return false;
+    const { id, ...state } = node;
+    if (id !== digest(state)) return false;
+    nodes.set(id, node);
+  }
+  if (!nodes.has(graph.root) || nodes.get(graph.root).owner !== graph.entrypoint.split(':route:')[0]) return false;
+  const edges = new Set(), sinks = new Set(), adjacency = new Map(graph.nodes.map(node => [node.id, []]));
+  for (const edge of graph.edges) {
+    if (!exactKeys(edge, ['id', 'from', 'to', 'site']) || !nodes.has(edge.from) || !nodes.has(edge.to) ||
+        !validSite(edge.site) || edge.site.owner !== nodes.get(edge.from).owner || edges.has(edge.id)) return false;
+    const { id, ...state } = edge;
+    if (id !== digest(state)) return false;
+    edges.add(id);
+    adjacency.get(edge.from).push(edge.to);
+  }
+  for (const sink of graph.sinks) {
+    if (!exactKeys(sink, ['id', 'node', 'operation', 'site', 'loop']) || !nodes.has(sink.node) ||
+        !validSite(sink.site) || !validSite(sink.loop) || sink.site.owner !== nodes.get(sink.node).owner ||
+        typeof sink.operation !== 'string' || sinks.has(sink.id)) return false;
+    const { id, ...state } = sink;
+    if (id !== digest(state)) return false;
+    sinks.add(id);
+  }
+  const sources = new Set();
+  for (const source of graph.sources) {
+    if (!exactKeys(source, ['path', 'astFingerprint']) || typeof source.path !== 'string' ||
+        (!/^music_app\/.+\.py$/.test(source.path) && source.path !== 'scripts/run_jobs_worker.py') || source.path.includes('..') || source.path.includes('\\') ||
+        !isFingerprint(source.astFingerprint) || sources.has(source.path)) return false;
+    sources.add(source.path);
+  }
+  if (graph.nodes.some(node => !sources.has(node.owner.slice(3).split('#')[0]))) return false;
+  const reached = new Set(), pending = [graph.root];
+  while (pending.length) {
+    const id = pending.pop();
+    if (reached.has(id)) continue;
+    reached.add(id);
+    pending.push(...adjacency.get(id));
+  }
+  return reached.size === nodes.size && graph.fingerprint === connectionGraphFingerprint(graph);
+}
+
+// This is structural eligibility only. Raw rejects remain in discovery, and
+// the default validator still rejects eligible witnesses until native proof.
+function coverFamilyProofErrors(record, graph, hazards, contracts) {
+  const errors = [];
+  if (!Array.isArray(record?.families) || record.families.length !== COVER_FAMILIES.length ||
+      !Array.isArray(contracts) || contracts.length !== COVER_FAMILIES.length || !validConnectionGraph(graph)) return ['cover family source contracts or complete graph are missing'];
+  const sourceHashes = new Map(graph.sources.map(source => [source.path, source.astFingerprint]));
+  const nodes = new Map(graph.nodes.map(node => [node.id, node]));
+  const sinks = new Map(graph.sinks.map(sink => [sink.id, sink]));
+  const allCovered = new Set();
+  const reachableWithout = excluded => {
+    const adjacency = new Map(graph.nodes.map(node => [node.id, []]));
+    for (const edge of graph.edges) if (!excluded.has(edge.id)) adjacency.get(edge.from).push(edge.to);
+    const reached = new Set(), pending = [graph.root];
+    while (pending.length) {
+      const node = pending.pop();
+      if (reached.has(node)) continue;
+      reached.add(node);
+      pending.push(...adjacency.get(node));
+    }
+    return reached;
+  };
+  for (const specification of COVER_FAMILIES) {
+    const families = record.families.filter(family => family?.id === specification.id);
+    if (families.length !== 1) { errors.push(`${specification.id}: exact family is missing or duplicated`); continue; }
+    const family = families[0];
+    const matches = contracts.filter(contract => contract?.id === `${specification.id}/v1`);
+    if (matches.length !== 1) { errors.push(`${specification.id}: source guard contract is missing or duplicated`); continue; }
+    const contract = matches[0];
+    const { fingerprint, ...semantic } = contract;
+    if (!exactKeys(family, ['id', 'operation', 'sinkIds', 'contractId', 'contractFingerprint', 'context']) ||
+        !exactKeys(contract, ['schemaVersion', 'id', 'status', 'sources', 'anchors', 'fingerprint']) || contract.schemaVersion !== 1 ||
+        contract.status !== 'matched' || fingerprint !== digest(semantic) || family.contractId !== contract.id || family.contractFingerprint !== fingerprint ||
+        family.operation !== specification.operation || digest(family.context) !== digest(specification.context)) {
+      errors.push(`${specification.id}: source guard or reviewed family identity does not match`);
+      continue;
+    }
+    const sources = contract.sources;
+    const anchors = contract.anchors;
+    if (!Array.isArray(sources) || !sources.length || new Set(sources.map(source => source?.path)).size !== sources.length ||
+        sources.some(source => !exactKeys(source, ['path', 'astFingerprint']) || !isFingerprint(source.astFingerprint) || sourceHashes.get(source.path) !== source.astFingerprint) ||
+        !Array.isArray(anchors) || anchors.length !== Object.keys(specification.roles).length ||
+        new Set(anchors.map(anchor => anchor?.role)).size !== anchors.length ||
+        anchors.some(anchor => !exactKeys(anchor, ['role', 'site']) || !validSite(anchor.site) ||
+          specification.roles[anchor.role] !== anchor.site.owner || !sources.some(source => source.path === anchor.site.owner.slice(3).split('#')[0]))) {
+      errors.push(`${specification.id}: guard anchors/cleanup sources differ from the actual graph`);
+      continue;
+    }
+    if (!Array.isArray(family.sinkIds) || !family.sinkIds.length || new Set(family.sinkIds).size !== family.sinkIds.length || family.sinkIds.some(id =>
+      allCovered.has(id) || !sinks.has(id) || sinks.get(id).site.owner !== specification.sinkOwner ||
+      `${sinks.get(id).operation}@${specification.sinkOwner.slice(3).split('#')[0]}` !== specification.operation)) {
+      errors.push(`${specification.id}: sink is not an exact reviewed family operation/owner`);
+      continue;
+    }
+    for (const id of family.sinkIds) allCovered.add(id);
+    const initializer = anchors.find(anchor => anchor.role === 'initializer')?.site;
+    if (specification.id === 'cover-advisory-lock-pool-initializer' && family.sinkIds.some(id => digest(sinks.get(id).site) !== digest(initializer))) {
+      errors.push(`${specification.id}: sink bypasses the known cached initializer`);
+    }
+    if (specification.id === 'shared-adapter-lazy-initializer') {
+      const edges = graph.edges.filter(edge => digest(edge.site) === digest(initializer) &&
+        nodes.get(edge.from).owner === `${SCAN_OWNER}_SharedConnection.transaction` &&
+        nodes.get(edge.to).owner === `${SCAN_OWNER}PostgresScanCacheAdapter._connect_to_database`);
+      const reached = reachableWithout(new Set(edges.map(edge => edge.id)));
+      if (!edges.length || family.sinkIds.some(id => reached.has(sinks.get(id).node))) errors.push(`${specification.id}: sink bypasses the sealed guarded initializer edge`);
+    }
+    if (specification.id === 'cover-mutation-shared-transaction') {
+      const owners = new Set(anchors.filter(anchor => anchor.role.endsWith('-injection')).map(anchor => anchor.site.owner));
+      const reached = reachableWithout(new Set(graph.edges.filter(edge => owners.has(nodes.get(edge.from).owner)).map(edge => edge.id)));
+      if (family.sinkIds.some(id => reached.has(sinks.get(id).node))) errors.push(`${specification.id}: sink bypasses the known injected authority owner`);
+    }
+  }
+  if (allCovered.size !== sinks.size || [...sinks.keys()].some(id => !allCovered.has(id)) ||
+      hazards.some(hazard => !allCovered.has(hazard.sinkId) || !record.families.some(family =>
+        family.sinkIds?.includes(hazard.sinkId) && structuralOperation(hazard.operation) === family.operation))) errors.push('cover families do not cover every exact raw rejecting sink');
+  return errors;
+}
+
+function scopedCoverStatus(registry, discovery, fingerprints) {
+  const records = Array.isArray(registry.scopedCoverProofs) ? registry.scopedCoverProofs : [];
+  const states = [];
+  for (const record of records) {
+    if (!record || typeof record !== 'object') continue;
+    const hazards = discovery.hazards.filter(hazard => hazard.reject && hazard.entrypoint === record.entrypoint);
+    const graphs = (Array.isArray(discovery.connectionGraphs) ? discovery.connectionGraphs : []).filter(graph => graph?.entrypoint === record.entrypoint);
+    const graph = graphs[0];
+    const sameIds = (actual, reviewed) => digest([...actual].sort()) === digest([...(reviewed || [])].sort());
+    const matches = scopedCoverProofErrors(registry).length === 0 && record.analyzerFingerprint === fingerprints?.analyzerFingerprint &&
+      record.contractFingerprint === fingerprints?.contractFingerprint && graphs.length === 1 && validConnectionGraph(graph) &&
+      graph.fingerprint === record.coverage.graphFingerprint && graph.root === record.coverage.root &&
+      sameIds(graph.nodes.map(node => node.id), record.coverage.nodeIds) &&
+      sameIds(graph.edges.map(edge => edge.id), record.coverage.edgeIds) &&
+      sameIds(graph.sinks.map(sink => sink.id), record.coverage.sinkIds) && hazards.length > 0 &&
+      sameIds(new Set(hazards.map(hazard => hazard.sinkId)), graph.sinks.map(sink => sink.id)) &&
+      graph.sinks.every(sink => sink.loop.owner === `py:${record.loopOwner}`) &&
+      hazards.every(hazard => hazard.graphId === graph.id && hazard.rule === record.rule && `${hazard.path}#${hazard.function}` === record.loopOwner) &&
+      coverFamilyProofErrors(record, graph, hazards, discovery.coverConnectionContracts).length === 0;
+    states.push({ id: record.id, entrypoint: record.entrypoint, state: matches ? 'native-proof-pending' : 'rejected', hazards });
+  }
+  return states;
 }
 
 function findExemptionKeys(value, trail = '$', found = []) {
@@ -128,7 +393,7 @@ function declaresTest(source, file, name) {
 }
 
 function validateSchema(registry, { fileExists, readFile }) {
-  const errors = [];
+  const errors = scopedCoverProofErrors(registry);
   if (registry?.schemaVersion !== 1) errors.push('schemaVersion must be 1');
   for (const key of Object.keys(registry || {})) if (!TOP_LEVEL_KEYS.has(key)) errors.push(`unknown top-level key ${key}`);
   if (JSON.stringify(registry?.allowedWorkClasses) !== JSON.stringify(WORK_CLASSES)) {
@@ -223,8 +488,10 @@ function rejection(hazard) {
   return `rejected ${hazard.rule} ${hazard.operation}${witness} at ${hazard.path}:${hazard.line} from ${hazard.entrypoint}${via}`;
 }
 
-function validateInventory(registry, discovery) {
+function validateInventory(registry, discovery, { nativeProofPreflight = false, nativeProofSatisfied = false, fingerprints } = {}) {
   const errors = [];
+  const statuses = fingerprints && scopedCoverProofErrors(registry).length === 0 ? scopedCoverStatus(registry, discovery, fingerprints) : [];
+  const eligible = new Set(statuses.filter(status => status.state === 'native-proof-pending').flatMap(status => status.hazards));
   const discovered = new Map(discovery.entrypoints.map(item => [item.key, item]));
   const registeredBy = new Map();
   for (const entry of registry.interactions || []) {
@@ -238,6 +505,7 @@ function validateInventory(registry, discovery) {
     if (!registeredBy.has(key)) errors.push(`unregistered entrypoint ${key}`);
   }
   for (const hazard of discovery.hazards.filter(item => item.reject)) {
+    if (eligible.has(hazard) && (nativeProofPreflight || nativeProofSatisfied)) continue;
     if (hazard.operation === 'unresolved-trigger') {
       errors.push(`unresolved-trigger at ${hazard.path}:${hazard.line}: discovery cannot resolve this listener's event name; `
         + 'make it a literal, a const, a constant list, or an object literal\'s keys so the listener can be registered');
@@ -295,13 +563,15 @@ function validateInventory(registry, discovery) {
   return errors;
 }
 
-async function validateRepository({ root = REPO_ROOT, registry = loadRegistry(root), jsOverrides, pyOverrides } = {}) {
+async function validateRepository({ root = REPO_ROOT, registry = loadRegistry(root), jsOverrides, pyOverrides, nativeProofPreflight = false, nativeProofSatisfied = false } = {}) {
   const fileExists = file => fs.existsSync(path.join(root, file));
   const readFile = file => fs.readFileSync(path.join(root, file), 'utf8');
   const schemaErrors = validateSchema(registry, { fileExists, readFile });
   if (schemaErrors.length) return { errors: schemaErrors, discovery: null };
   const discovery = await discoverRepository({ root, registry, jsOverrides, pyOverrides });
-  return { errors: validateInventory(registry, discovery), discovery };
+  const fingerprints = registry.scopedCoverProofs?.length ? scopedCoverFingerprints(registry, discovery, readFile) : undefined;
+  const proofStates = registry.scopedCoverProofs?.length ? scopedCoverStatus(registry, discovery, fingerprints) : [];
+  return { errors: validateInventory(registry, discovery, { nativeProofPreflight, nativeProofSatisfied, fingerprints }), discovery, proofStates, fingerprints };
 }
 
 // Contracts to rerun for a change: an entry is selected when a changed path is
@@ -335,7 +605,8 @@ async function main(argv = process.argv.slice(2)) {
     process.stdout.write(`${interactionsForPaths(registry, changed, discovery).join('\n')}\n`);
     return 0;
   }
-  const { errors, discovery } = await validateRepository({ registry });
+  const { errors, discovery, proofStates } = await validateRepository({ registry, nativeProofPreflight: argv.includes('--native-proof-preflight') });
+  for (const state of proofStates || []) process.stdout.write(`${state.id}: raw BI-05 retained; ${state.state}\n`);
   if (argv.includes('--list') && discovery) {
     for (const item of discovery.entrypoints) process.stdout.write(`${JSON.stringify(item)}\n`);
   }
@@ -344,7 +615,7 @@ async function main(argv = process.argv.slice(2)) {
     process.stderr.write(`bounded interaction validation failed with ${errors.length} error(s)\n`);
     return 1;
   }
-  process.stdout.write(`bounded interaction registry valid: ${discovery.entrypoints.length} entrypoints, ${registry.interactions.length} interactions\n`);
+  process.stdout.write(`bounded interaction registry ${proofStates?.some(state => state.state === 'native-proof-pending') ? 'structurally eligible, native proof pending' : 'valid'}: ${discovery.entrypoints.length} entrypoints, ${registry.interactions.length} interactions\n`);
   return 0;
 }
 
@@ -366,4 +637,9 @@ module.exports = {
   validateInventory,
   validateRepository,
   validateSchema,
+  scopedCoverStatus,
+  scopedCoverFingerprints,
+  scopedCoverProofErrors,
+  connectionGraphFingerprint,
+  coverFamilyProofErrors,
 };

@@ -8,7 +8,7 @@ import pytest
 from music_app.services.admin_account_creation import AdminAccountCreationService
 from music_app.services.admin_account_creation_postgres import PostgresAdminAccountRepository
 from tests.py.test_admin_account_creation import Repository, _owner
-from tests.py.test_admin_account_creation_postgres import Connection, Cursor
+from tests.py.test_admin_account_creation_postgres import Connection, Cursor, Jobs
 from tests.py.test_auth_preauth_postgres import RecordingConnection, RAW_TOKEN, _service
 
 
@@ -50,7 +50,8 @@ def test_creation_revalidates_live_session_without_an_extra_reauth_prompt(state)
 
     connection = SessionConnection()
     service = AdminAccountCreationService(repository=PostgresAdminAccountRepository(
-        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app"}, connect=lambda _url: connection),
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app"}, connect=lambda _url: connection,
+        job_repository=Jobs()),
         invitation_token_seconds=600)
     if state == "live_old_auth":
         assert _create(service).account_id == 41

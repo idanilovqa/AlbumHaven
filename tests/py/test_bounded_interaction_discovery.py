@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import sys
@@ -939,6 +940,519 @@ def tracks(request, paths):
     assert hazard["reject"] is True
     assert (hazard["path"], hazard["line"], hazard["function"]) == ("music_app/routes/tracks.py", 6, "tracks")
     assert hazard["operation"] == "database-connect-per-item:psycopg.connect@music_app/services/roots.py:5"
+
+
+@pytest.mark.parametrize("shared_connector", [False, True], ids=["distinct-connectors", "shared-connector"])
+@pytest.mark.parametrize("reverse_calls", [False, True], ids=["reviewed-first", "raw-first"])
+def test_connection_per_item_preserves_every_structural_witness_before_disposition(
+    tmp_path: Path, shared_connector: bool, reverse_calls: bool,
+):
+    _write(tmp_path, "music_app/services/cover.py", """
+import psycopg
+
+def reviewed_connect(config):
+    return psycopg.connect(config["url"])
+
+def raw_connect(config):
+    return psycopg.connect(config["url"])
+
+def reviewed_path(config):
+    return reviewed_connect(config)
+
+def raw_path(config):
+    return RAW_CONNECTOR(config)
+""".replace("RAW_CONNECTOR", "reviewed_connect" if shared_connector else "raw_connect"))
+    calls = ["reviewed_path(config)", "raw_path(config)"]
+    if reverse_calls:
+        calls.reverse()
+    _write(tmp_path, "music_app/routes/cover.py", """
+from music_app.services.cover import reviewed_path, raw_path
+
+@router.post('/covers')
+def covers(config, albums):
+    for album in albums:
+        CALLS
+""".replace("CALLS", "; ".join(calls)))
+
+    hazards = _hazards(tmp_path, "BI-05")
+    # A reviewed path cannot stand in for another path through the same loop,
+    # even when both paths eventually reach the same connector function.
+    assert len(hazards) == 2
+    assert {tuple(hazard["via"]) for hazard in hazards} == {
+        ("reviewed_path", "reviewed_connect"),
+        ("raw_path", "reviewed_connect" if shared_connector else "raw_connect"),
+    }
+    assert all(hazard["reject"] is True for hazard in hazards)
+    assert {hazard["entrypoint"] for hazard in hazards} == {
+        "py:music_app/routes/cover.py#covers:route:POST /covers",
+    }
+
+
+@pytest.mark.parametrize("reverse_calls", [False, True], ids=["reviewed-first", "raw-first"])
+def test_connection_graph_preserves_nested_converging_branch_coverage(tmp_path: Path, reverse_calls: bool):
+    _write(tmp_path, "music_app/services/converging.py", """
+import psycopg
+
+def connector(config):
+    return psycopg.connect(config["url"])
+
+def common(config):
+    return connector(config)
+
+def merge(config):
+    return common(config)
+
+def reviewed(config):
+    return merge(config)
+
+def raw(config):
+    return merge(config)
+""")
+    calls = ["reviewed(config)", "raw(config)"]
+    if reverse_calls:
+        calls.reverse()
+    _write(tmp_path, "music_app/routes/converging.py", """
+from music_app.services.converging import reviewed, raw
+
+@router.post('/covers')
+def covers(config, jobs):
+    return [(CALLS) for job in jobs]
+""".replace("CALLS", ", ".join(calls)))
+    analysis = discovery.analyze_python_repository(tmp_path)
+    entrypoint = "py:music_app/routes/converging.py#covers:route:POST /covers"
+    hazards = [hazard for hazard in analysis["hazards"] if hazard["entrypoint"] == entrypoint and hazard["rule"] == "BI-05"]
+    assert hazards and all(hazard["reject"] for hazard in hazards)
+    graph = next((graph for graph in analysis.get("connectionGraphs", []) if graph["entrypoint"] == entrypoint), None)
+    if graph is None:
+        # Exercise today's lossy behavior before requiring the new representation.
+        assert {tuple(hazard["via"]) for hazard in hazards} == {
+            ("reviewed", "merge", "common", "connector"), ("raw", "merge", "common", "connector"),
+        }, "one converging branch must not erase the other branch's connection work"
+    else:
+        nodes = {node["id"]: node for node in graph["nodes"]}
+        adjacency = {node_id: set() for node_id in nodes}
+        for edge in graph["edges"]:
+            adjacency[edge["from"]].add(edge["to"])
+        root_reached, root_pending = set(), [graph["root"]]
+        while root_pending:
+            node_id = root_pending.pop()
+            if node_id not in root_reached:
+                root_reached.add(node_id)
+                root_pending.extend(adjacency[node_id] - root_reached)
+        sink_nodes = {sink["node"] for sink in graph["sinks"]}
+        for branch in ("reviewed", "raw"):
+            starts = {node_id for node_id, node in nodes.items() if node["owner"].endswith("#" + branch)}
+            assert starts, f"the finite graph lost {branch}"
+            assert starts <= root_reached, f"the root no longer reaches {branch}"
+            reached, pending = set(), list(starts)
+            while pending:
+                node_id = pending.pop()
+                if node_id not in reached:
+                    reached.add(node_id)
+                    pending.extend(adjacency[node_id] - reached)
+            assert reached & sink_nodes, f"the {branch} branch no longer reaches its connection sink"
+        assert {hazard["graphId"] for hazard in hazards} == {graph["id"]}
+        assert {hazard["sinkId"] for hazard in hazards} == {sink["id"] for sink in graph["sinks"]}
+
+
+def _shared_connection_source_fixture(tmp_path, *, mutation=None, unrelated=0):
+    relative = "music_app/services/scan_cache_persistence.py"
+    tree = ast.parse((REPO_ROOT / relative).read_text(encoding="utf-8"))
+    shared = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "_SharedConnection")
+    constructor = next(node for node in shared.body if isinstance(node, ast.FunctionDef) and node.name == "__init__")
+    transaction = next(node for node in shared.body if isinstance(node, ast.FunctionDef) and node.name == "transaction")
+    factory = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "shared_scan_cache_connection")
+    [construction] = [node for node in ast.walk(factory) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_SharedConnection"]
+    if mutation == "omitted-callback":
+        construction.args.pop()
+    elif mutation == "default-callback":
+        constructor.args.defaults = [ast.Constant(None)]
+    elif mutation == "unknown-callback":
+        construction.args[1] = ast.Name("unknown_connector", ast.Load())
+    elif mutation == "alternate-callback":
+        construction.args[1] = ast.parse("lambda: object()", mode="eval").body
+    elif mutation == "different-config":
+        construction.args[1] = ast.parse("PostgresScanCacheAdapter(other_config)._connect_to_database", mode="eval").body
+    elif mutation in {"second-construction", "different-instance"}:
+        callback = "PostgresScanCacheAdapter(config)._connect_to_database" if mutation == "second-construction" else "unknown_connector"
+        tree.body.extend(ast.parse(f"def another_shared(config, database_url):\n    return _SharedConnection(database_url, {callback})\n").body)
+    elif mutation == "missing-assignment":
+        constructor.body = [node for node in constructor.body if not (isinstance(node, ast.Assign) and any(isinstance(target, ast.Attribute) and target.attr == "_connect" for target in node.targets))]
+    elif mutation == "field-reassignment":
+        transaction.body[:0] = ast.parse("self._connect = unknown_connector").body
+    elif mutation == "alias-reassignment":
+        transaction.body[:0] = ast.parse("alias = self\nalias._connect = unknown_connector").body
+    elif mutation == "reflective-reassignment":
+        transaction.body[:0] = ast.parse("setattr(self, '_connect', unknown_connector)").body
+    elif mutation == "class-alias":
+        tree.body.extend(ast.parse("SharedAlias = _SharedConnection").body)
+    elif mutation == "subclass":
+        tree.body.extend(ast.parse("class AnotherShared(_SharedConnection):\n    pass\n").body)
+    elif mutation is not None and mutation.startswith("constructor-"):
+        statements = {
+            "constructor-assignment": "connect = lambda: psycopg.connect('raw')",
+            "constructor-annotated-assignment": "connect: object = lambda: psycopg.connect('raw')",
+            "constructor-walrus": "(connect := lambda: psycopg.connect('raw'))",
+            "constructor-delete-rebind": "del connect\nconnect = lambda: psycopg.connect('raw')",
+            "constructor-loop-binding": "for connect in [lambda: psycopg.connect('raw')]:\n    pass",
+            "constructor-local-definition": "def connect():\n    return psycopg.connect('raw')",
+            "constructor-dsn-augmented-assignment": "database_url += '-another-database'",
+        }
+        constructor.body[:0] = ast.parse(statements[mutation]).body
+    elif mutation == "adapter-class-shadow":
+        tree.body.extend(ast.parse("class DifferentAdapter:\n    def __init__(self, config):\n        pass\n    def _connect_to_database(self):\n        return psycopg.connect('raw')\nPostgresScanCacheAdapter = DifferentAdapter\n").body)
+    elif mutation in {"shared-metaclass", "adapter-metaclass", "adapter-inherited-allocator"}:
+        adapter = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "PostgresScanCacheAdapter")
+        if mutation == "shared-metaclass":
+            tree.body[tree.body.index(shared):tree.body.index(shared)] = ast.parse("class ReplacementShared:\n    def __init__(self, database_url):\n        self.database_url = database_url\n    @contextmanager\n    def transaction(self):\n        with psycopg.connect('raw') as connection:\n            yield connection\n    def close(self):\n        pass\nclass SharedMeta(type):\n    def __call__(cls, database_url, connect):\n        return ReplacementShared(database_url)\n").body
+            shared.keywords.append(ast.keyword(arg="metaclass", value=ast.Name("SharedMeta", ast.Load())))
+        else:
+            tree.body[tree.body.index(adapter):tree.body.index(adapter)] = ast.parse("class ReplacementAdapter:\n    def _connect_to_database(self):\n        return psycopg.connect('raw')\n").body
+            if mutation == "adapter-metaclass":
+                tree.body[tree.body.index(adapter):tree.body.index(adapter)] = ast.parse("class AdapterMeta(type):\n    def __call__(cls, config):\n        return ReplacementAdapter()\n").body
+                adapter.keywords.append(ast.keyword(arg="metaclass", value=ast.Name("AdapterMeta", ast.Load())))
+            else:
+                tree.body[tree.body.index(adapter):tree.body.index(adapter)] = ast.parse("class AdapterAllocator:\n    def __new__(cls, config):\n        return ReplacementAdapter()\n").body
+                adapter.bases.append(ast.Name("AdapterAllocator", ast.Load()))
+    elif mutation == "shared-callback-lookup-hook":
+        shared.body.extend(ast.parse("def __getattribute__(self, name):\n    if name == '_connect':\n        return lambda: psycopg.connect('raw')\n    return super().__getattribute__(name)\n").body)
+    elif mutation in {"adapter-callback-property", "adapter-callback-member-rebind"}:
+        adapter = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "PostgresScanCacheAdapter")
+        method = next(node for node in adapter.body if isinstance(node, ast.FunctionDef) and node.name == "_connect_to_database")
+        if mutation == "adapter-callback-property":
+            method.decorator_list.append(ast.Name("property", ast.Load()))
+            method.body = ast.parse("return lambda: psycopg.connect('raw')").body
+        else:
+            tree.body[tree.body.index(adapter):tree.body.index(adapter)] = ast.parse("def replacement_callback():\n    return psycopg.connect('raw')\n").body
+            adapter.body.extend(ast.parse("_connect_to_database = staticmethod(replacement_callback)").body)
+    elif mutation is not None:
+        raise AssertionError(mutation)
+    _write(tmp_path, relative, ast.unparse(ast.fix_missing_locations(tree)))
+    if unrelated:
+        _write(tmp_path, "music_app/services/unrelated.py", "import psycopg\n" + "\n".join(
+            f"class Unrelated{index}:\n    def _connect(self):\n        return psycopg.connect('unrelated')\n" for index in range(unrelated)
+        ))
+    modules = discovery.load_modules(tmp_path)
+    index = discovery.Index(modules)
+    module = next(module for module in modules if module.path == relative)
+    definition = module.methods["_SharedConnection"]["transaction"]
+    [callback] = [node for node in ast.walk(definition.node) if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                  and isinstance(node.func.value, ast.Name) and node.func.value.id == "self" and node.func.attr == "_connect"]
+    return index, definition, callback
+
+
+def test_sealed_shared_constructor_resolves_actual_callback_without_unrelated_name_fanout(tmp_path: Path):
+    index, transaction, callback = _shared_connection_source_fixture(tmp_path, unrelated=7)
+    resolved = index.resolve(callback.func, transaction, call=callback)
+    assert [target.key for target in resolved] == [
+        "py:music_app/services/scan_cache_persistence.py#PostgresScanCacheAdapter._connect_to_database",
+    ], "the actual sealed constructor callback must not become seven unrelated repositories"
+
+
+@pytest.mark.parametrize("mutation", [
+    "omitted-callback", "default-callback", "unknown-callback", "alternate-callback", "different-config",
+    "second-construction", "different-instance", "missing-assignment", "field-reassignment",
+    "alias-reassignment", "reflective-reassignment", "class-alias", "subclass",
+])
+def test_unsealed_shared_callback_hard_rejects_without_any_name_fanout(tmp_path: Path, mutation):
+    _shared_connection_source_fixture(tmp_path, mutation=mutation)
+    _write(tmp_path, "music_app/routes/unsealed.py", """
+from music_app.services.scan_cache_persistence import _SharedConnection
+
+@router.post('/unsealed')
+def unsealed(shared: _SharedConnection, jobs):
+    for job in jobs:
+        with shared.transaction():
+            pass
+""")
+    hazards = discovery.analyze_python_repository(tmp_path)["hazards"]
+    assert any(hazard["reject"] and hazard["rule"] == "BI-05" and "unresolved-shared-connector" in hazard["operation"] for hazard in hazards), (
+        "a failed seal must stay a hard reject even when generic method-name fanout has no target"
+    )
+
+
+def test_shared_binding_correction_keeps_unrelated_raw_repository_connections_rejected(tmp_path: Path):
+    _shared_connection_source_fixture(tmp_path, unrelated=7)
+    _write(tmp_path, "music_app/routes/raw_repository.py", """
+from music_app.services.unrelated import Unrelated0
+
+@router.post('/raw-repository')
+def raw_repository(jobs):
+    repository = Unrelated0()
+    return [repository._connect() for job in jobs]
+""")
+    hazards = discovery.analyze_python_repository(tmp_path)["hazards"]
+    assert any(hazard["reject"] and hazard["rule"] == "BI-05" and "unrelated.py" in hazard["operation"] for hazard in hazards)
+
+
+@pytest.mark.parametrize("mutation", [
+    "constructor-assignment", "constructor-annotated-assignment", "constructor-walrus", "constructor-delete-rebind",
+    "constructor-loop-binding", "constructor-local-definition", "constructor-dsn-augmented-assignment", "adapter-class-shadow",
+])
+def test_sealed_shared_constructor_rejects_rebound_inputs_and_adapter_shadow(tmp_path: Path, mutation):
+    index, transaction, callback = _shared_connection_source_fixture(tmp_path, mutation=mutation)
+    resolved = index.resolve(callback.func, transaction, call=callback)
+    assert [target.key for target in resolved] != [
+        "py:music_app/services/scan_cache_persistence.py#PostgresScanCacheAdapter._connect_to_database",
+    ], "a rebinding must not be pruned to the original constructor callback"
+    assert index.shared_connection_binding() == {
+        "status": "rejected", "target": None, "reason": "unproven-shared-connector",
+    }
+
+
+@pytest.mark.parametrize("mutation", [
+    "shared-metaclass", "adapter-metaclass", "adapter-inherited-allocator", "shared-callback-lookup-hook",
+    "adapter-callback-property", "adapter-callback-member-rebind",
+])
+def test_sealed_shared_classes_reject_dynamic_callback_surfaces(tmp_path: Path, mutation):
+    index, transaction, callback = _shared_connection_source_fixture(tmp_path, mutation=mutation)
+    resolved = index.resolve(callback.func, transaction, call=callback)
+    assert [target.key for target in resolved] != [
+        "py:music_app/services/scan_cache_persistence.py#PostgresScanCacheAdapter._connect_to_database",
+    ], "unsupported class creation or lookup must not be resolved as the original plain callback"
+    assert index.shared_connection_binding() == {
+        "status": "rejected", "target": None, "reason": "unproven-shared-connector",
+    }
+
+
+def _actual_cover_guard_contracts(tmp_path, mutation=None):
+    paths = {
+        "scan": "music_app/services/scan_cache_persistence.py", "cache": "music_app/services/cache.py",
+        "execution": "music_app/services/cover_refresh_execution.py", "pools": "music_app/services/postgres_connections.py",
+        "mutations": "music_app/services/cover_mutations_postgres.py",
+    }
+    trees = {key: ast.parse((REPO_ROOT / relative).read_text(encoding="utf-8")) for key, relative in paths.items()}
+
+    def function(key, name):
+        return next(node for node in ast.walk(trees[key]) if isinstance(node, ast.FunctionDef) and node.name == name)
+
+    transaction = function("scan", "transaction")
+    pool = function("pools", "cover_lock_connection")
+    if mutation == "pool-lock-import-replaced":
+        imports = [node for node in trees["pools"].body if isinstance(node, ast.ImportFrom)
+                   and node.module == "threading" and any(alias.name == "Lock" for alias in node.names)]
+        assert len(imports) == 1
+        assert len(imports[0].names) == 1 and imports[0].names[0].asname is None
+        imports[0].module = "contextlib"
+        imports[0].names = [ast.alias(name="nullcontext", asname="Lock")]
+    elif mutation == "shared-lock-binding-replaced":
+        assert any(isinstance(node, ast.Import) and any(alias.name == "threading" and alias.asname is None
+                   for alias in node.names) for node in trees["scan"].body)
+        trees["scan"].body.extend(ast.parse("threading.Lock = nullcontext").body)
+    elif mutation == "lazy-bypassed-null-guard":
+        next(node for node in ast.walk(transaction) if isinstance(node, ast.If)).test = ast.Constant(True)
+    elif mutation == "lazy-missing-lock":
+        locked = next(node for node in transaction.body if isinstance(node, ast.With))
+        transaction.body = locked.body
+    elif mutation == "lazy-reset-per-operation":
+        locked = next(node for node in transaction.body if isinstance(node, ast.With))
+        locked.body[:0] = ast.parse("self._connection = None").body
+    elif mutation == "scope-missing-cleanup":
+        final = next(node for node in function("scan", "shared_scan_cache_connection").body if isinstance(node, ast.Try))
+        final.finalbody = [node for node in final.finalbody if not (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Attribute) and node.value.func.attr == "close")]
+    elif mutation == "mutation-wrong-dsn":
+        scope = function("scan", "scan_cache_transaction")
+        comparison = next(node for node in ast.walk(scope) if isinstance(node, ast.Compare) and isinstance(node.left, ast.Attribute) and node.left.attr == "database_url")
+        comparison.ops = [ast.NotEq()]
+    elif mutation in {"mutation-default-injection", "mutation-raw-injection"}:
+        call = next(node for node in ast.walk(trees["cache"]) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "PostgresCoverMutationRepository")
+        if mutation == "mutation-default-injection":
+            call.keywords = [keyword for keyword in call.keywords if keyword.arg != "connect_to_database"]
+        else:
+            next(keyword for keyword in call.keywords if keyword.arg == "connect_to_database").value = ast.Name("_connect", ast.Load())
+    elif mutation == "mutation-extra-constructor":
+        trees["cache"].body.extend(ast.parse("def extra_authority(config):\n    return PostgresCoverMutationRepository(database_url=config['ALBUM_HAVEN_APP_DATABASE_URL'], connect_to_database=scan_cache_transaction)\n").body)
+    elif mutation == "mutation-lost-worker-context":
+        submit = next(node for node in ast.walk(function("execution", "_run_cover_jobs")) if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                      and node.func.attr == "submit" and node.args and isinstance(node.args[0], ast.Attribute) and node.args[0].attr == "run")
+        submit.args = submit.args[1:]
+    elif mutation == "mutation-missing-run-scope":
+        scoped = next(node for node in function("execution", "run_cover_jobs").body if isinstance(node, ast.With))
+        scoped.items[0].context_expr = ast.parse("nullcontext()", mode="eval").body
+    elif mutation == "mutation-inner-config-mismatch":
+        scoped = next(node for node in function("execution", "run_cover_jobs").body if isinstance(node, ast.With))
+        run = next(node for node in ast.walk(scoped) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_run_cover_jobs")
+        next(keyword for keyword in run.keywords if keyword.arg == "config").value = ast.parse(
+            "{**config, 'ALBUM_HAVEN_APP_DATABASE_URL': 'another-database'}", mode="eval",
+        ).body
+    elif mutation == "pool-changed-key":
+        assignment = next(node for node in ast.walk(pool) if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "pool_key" for target in node.targets))
+        assignment.value = ast.parse("('dedicated', 'another-database', 'cover-lock')", mode="eval").body
+    elif mutation in {"pool-key-augmented-assignment", "pool-cleared-per-call"}:
+        position = next(index for index, node in enumerate(pool.body) if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "pool_key" for target in node.targets))
+        statement = "pool_key += (object(),)" if mutation == "pool-key-augmented-assignment" else "_pools.clear()"
+        pool.body[position + 1:position + 1] = ast.parse(statement).body
+    elif mutation == "pool-input-dsn-rebound":
+        position = next(index for index, node in enumerate(pool.body) if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "pool_key" for target in node.targets))
+        pool.body[position:position] = ast.parse(
+            "import uuid\ndatabase_url += ('&' if '?' in database_url else '?') + 'application_name=' + uuid.uuid4().hex"
+        ).body
+    elif mutation == "pool-bypassed-miss-guard":
+        branch = next(node for node in ast.walk(pool) if isinstance(node, ast.If) and isinstance(node.test, ast.Compare) and isinstance(node.test.left, ast.Name) and node.test.left.id == "pool")
+        branch.test = ast.Constant(True)
+    elif mutation == "pool-missing-cache-store":
+        branch = next(node for node in ast.walk(pool) if isinstance(node, ast.If) and isinstance(node.test, ast.Compare) and isinstance(node.test.left, ast.Name) and node.test.left.id == "pool")
+        branch.body = [node for node in branch.body if not (isinstance(node, ast.Assign) and any(isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name) and target.value.id == "_pools" for target in node.targets))]
+    elif mutation in {"pool-changed-lifetime", "pool-changed-channel-bound", "pool-not-autocommit"}:
+        initializer = next(node for node in ast.walk(pool) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "ConnectionPool")
+        key = {"pool-changed-lifetime": "max_lifetime", "pool-changed-channel-bound": "max_size", "pool-not-autocommit": "kwargs"}[mutation]
+        keyword = next(keyword for keyword in initializer.keywords if keyword.arg == key)
+        keyword.value = ast.parse("{'autocommit': False}", mode="eval").body if key == "kwargs" else ast.Constant(601 if key == "max_lifetime" else 5)
+    elif mutation == "pool-missing-cleanup":
+        function("pools", "close_pools").body = [ast.Pass()]
+    elif mutation is not None:
+        raise AssertionError(mutation)
+    for key, relative in paths.items():
+        _write(tmp_path, relative, ast.unparse(ast.fix_missing_locations(trees[key])))
+    modules = discovery.load_modules(tmp_path)
+    return discovery.discover_cover_connection_contracts(modules, discovery.Index(modules))
+
+
+@pytest.mark.parametrize("mutation,family", [
+    ("pool-lock-import-replaced", "cover-advisory-lock-pool-initializer"),
+    ("shared-lock-binding-replaced", "shared-adapter-lazy-initializer"),
+])
+def test_cover_connection_guards_reject_replaced_lock_bindings(tmp_path: Path, mutation, family):
+    baseline = _actual_cover_guard_contracts(tmp_path)
+    assert len(baseline) == 3 and all(contract["status"] == "matched" for contract in baseline)
+    contracts = _actual_cover_guard_contracts(tmp_path, mutation)
+    selected = [contract for contract in contracts if contract["id"] == family + "/v1"]
+    assert len(selected) == 1
+    assert selected[0]["status"] == "rejected", "a no-op lock must not attest serialized initialization"
+
+
+def test_cover_connection_guard_contracts_match_actual_live_sources(tmp_path: Path):
+    contracts = _actual_cover_guard_contracts(tmp_path)
+    assert {contract["id"] for contract in contracts} == {
+        "cover-mutation-shared-transaction/v1", "shared-adapter-lazy-initializer/v1", "cover-advisory-lock-pool-initializer/v1",
+    }
+    assert all(contract["status"] == "matched" for contract in contracts)
+    for contract in contracts:
+        assert set(contract) == {"schemaVersion", "id", "status", "sources", "anchors", "fingerprint"}
+        assert contract["schemaVersion"] == 1 and contract["sources"] and contract["anchors"]
+
+
+@pytest.mark.parametrize("mutation,family", [
+    ("pool-key-augmented-assignment", "cover-advisory-lock-pool-initializer"),
+    ("pool-cleared-per-call", "cover-advisory-lock-pool-initializer"),
+    ("mutation-inner-config-mismatch", "cover-mutation-shared-transaction"),
+    ("pool-input-dsn-rebound", "cover-advisory-lock-pool-initializer"),
+])
+def test_cover_connection_guard_rejects_reviewed_binding_bypasses(tmp_path: Path, mutation, family):
+    [baseline] = [contract for contract in _actual_cover_guard_contracts(tmp_path / "baseline") if contract["id"] == family + "/v1"]
+    assert baseline["status"] == "matched", "the unmodified responsible guard must match before exercising its bypass"
+    [changed] = [contract for contract in _actual_cover_guard_contracts(tmp_path / "changed", mutation) if contract["id"] == family + "/v1"]
+    assert changed["sources"] != baseline["sources"]
+    assert changed["status"] == "rejected", "fresh source fingerprints must not authorize a rebound cache key/lifetime or mismatched inner DSN"
+
+
+@pytest.mark.parametrize("mutation,family", [
+    ("lazy-bypassed-null-guard", "shared-adapter-lazy-initializer"),
+    ("lazy-missing-lock", "shared-adapter-lazy-initializer"),
+    ("lazy-reset-per-operation", "shared-adapter-lazy-initializer"),
+    ("scope-missing-cleanup", "shared-adapter-lazy-initializer"),
+    ("mutation-wrong-dsn", "cover-mutation-shared-transaction"),
+    ("mutation-default-injection", "cover-mutation-shared-transaction"),
+    ("mutation-raw-injection", "cover-mutation-shared-transaction"),
+    ("mutation-extra-constructor", "cover-mutation-shared-transaction"),
+    ("mutation-lost-worker-context", "cover-mutation-shared-transaction"),
+    ("mutation-missing-run-scope", "cover-mutation-shared-transaction"),
+    ("pool-changed-key", "cover-advisory-lock-pool-initializer"),
+    ("pool-bypassed-miss-guard", "cover-advisory-lock-pool-initializer"),
+    ("pool-missing-cache-store", "cover-advisory-lock-pool-initializer"),
+    ("pool-changed-lifetime", "cover-advisory-lock-pool-initializer"),
+    ("pool-changed-channel-bound", "cover-advisory-lock-pool-initializer"),
+    ("pool-not-autocommit", "cover-advisory-lock-pool-initializer"),
+    ("pool-missing-cleanup", "cover-advisory-lock-pool-initializer"),
+])
+def test_cover_connection_guard_contract_rejects_changed_actual_source(tmp_path: Path, mutation, family):
+    contracts = _actual_cover_guard_contracts(tmp_path, mutation)
+    [contract] = [contract for contract in contracts if contract["id"] == family + "/v1"]
+    assert contract["status"] == "rejected", "recomputed source fingerprints cannot authorize a bypassed guard"
+
+
+def test_connection_sink_coverage_does_not_collapse_identical_calls_on_one_line(tmp_path: Path):
+    _write(tmp_path, "music_app/services/repeated.py", """
+import psycopg
+
+def connect(config):
+    return psycopg.connect(config['url'])
+""")
+    relative = "music_app/routes/repeated.py"
+    source = """from music_app.services.repeated import connect
+
+@router.post('/repeated')
+def repeated(config, jobs):
+    for job in jobs:
+        connect(config); connect(config)
+"""
+    _write(tmp_path, relative, source)
+    inline = discovery.analyze_python_repository(tmp_path)
+    [inline_graph] = inline["connectionGraphs"]
+    assert len(inline_graph["sinks"]) == 2
+    inline_ids = {hazard["sinkId"] for hazard in inline["hazards"] if hazard["rule"] == "BI-05" and hazard["reject"]}
+    assert inline_ids == {sink["id"] for sink in inline_graph["sinks"]}, "diagnostic line/via equality must not erase a distinct semantic connection sink"
+    _write(tmp_path, relative, source.replace("connect(config); connect(config)", "connect(config)\n        connect(config)"))
+    multiline = discovery.analyze_python_repository(tmp_path)
+    [multiline_graph] = multiline["connectionGraphs"]
+    multiline_ids = {hazard["sinkId"] for hazard in multiline["hazards"] if hazard["rule"] == "BI-05" and hazard["reject"]}
+    assert multiline_graph == inline_graph
+    assert multiline_ids == inline_ids and len(multiline_ids) == 2
+
+
+def test_connection_graph_recursion_is_finite_and_retains_back_edges(tmp_path: Path):
+    _write(tmp_path, "music_app/routes/recursive.py", """
+import psycopg
+
+def descend(config, count):
+    if count:
+        descend(config, count - 1)
+    return psycopg.connect(config["url"])
+
+@router.post('/recursive')
+def recursive(config, jobs):
+    return [descend(config, job) for job in jobs]
+""")
+    analysis = discovery.analyze_python_repository(tmp_path)
+    entrypoint = "py:music_app/routes/recursive.py#recursive:route:POST /recursive"
+    [graph] = [graph for graph in analysis.get("connectionGraphs", []) if graph["entrypoint"] == entrypoint]
+    assert graph["schemaVersion"] == 1 and graph["id"] == entrypoint
+    assert len(graph["nodes"]) <= 4 and len(graph["edges"]) <= 6
+    owners = {node["id"]: node["owner"] for node in graph["nodes"]}
+    assert any(owners[edge["from"]].endswith("#descend") and owners[edge["to"]].endswith("#descend") for edge in graph["edges"])
+    assert graph["root"] in owners and graph["sinks"]
+    for field in ("nodes", "edges", "sinks"):
+        ids = [item["id"] for item in graph[field]]
+        assert len(ids) == len(set(ids))
+
+
+def test_connection_graph_addresses_and_fingerprints_ignore_comments_but_track_ast_edits(tmp_path: Path):
+    relative = "music_app/routes/stable.py"
+    source = """import psycopg
+
+@router.post('/stable')
+def stable(config, jobs):
+    return [psycopg.connect(config['url']) for job in jobs]
+"""
+    _write(tmp_path, relative, source)
+    entrypoint = "py:music_app/routes/stable.py#stable:route:POST /stable"
+
+    def graph_for_current_source():
+        graphs = discovery.analyze_python_repository(tmp_path).get("connectionGraphs", [])
+        [graph] = [graph for graph in graphs if graph["entrypoint"] == entrypoint]
+        return graph
+
+    original = graph_for_current_source()
+    _write(tmp_path, relative, "# harmless leading comment\n\n" + source.replace("    return", "    # harmless local comment\n    return"))
+    assert graph_for_current_source() == original
+    _write(tmp_path, relative, source.replace("config['url']", "config['other_url']"))
+    changed = graph_for_current_source()
+    assert changed["fingerprint"] != original["fingerprint"]
+    assert changed["sources"] != original["sources"]
+    for graph in (original, changed):
+        sites = [edge["site"] for edge in graph["edges"]] + [site for sink in graph["sinks"] for site in (sink["site"], sink["loop"])]
+        assert sites and all(set(site) == {"owner", "astPath"} and site["astPath"] for site in sites)
+        assert all(all(type(part) in (str, int) for part in site["astPath"]) for site in sites)
 
 
 def test_library_state_receivers_are_found_through_getters_and_call_sites(tmp_path: Path):

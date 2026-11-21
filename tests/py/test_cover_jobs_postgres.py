@@ -1,0 +1,993 @@
+from __future__ import annotations
+
+from contextlib import nullcontext
+from datetime import datetime, timezone
+import json
+from pathlib import Path
+from uuid import UUID
+
+import pytest
+import psycopg
+
+from music_app.services.cover_jobs_postgres import PostgresCoverJobRepository
+
+
+NOW = datetime(2026, 9, 6, 18, 0, tzinfo=timezone.utc)
+GENERATION = UUID("7fd1c5cc-6e48-41a1-8174-65bcb75d094e")
+
+
+class _Result:
+    def __init__(self, row=None):
+        self.row = row
+
+    def fetchone(self):
+        return self.row
+
+    def fetchall(self):
+        return self.row if isinstance(self.row, list) else []
+
+
+class _Connection:
+    def __init__(self, rows):
+        self.rows = list(rows)
+        self.executed = []
+        self.commits = 0
+        self.rollbacks = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, *_args):
+        if exc_type is None:
+            self.commits += 1
+        else:
+            self.rollbacks += 1
+
+    def transaction(self):
+        return nullcontext()
+
+    def commit(self):
+        pass
+
+    def execute(self, sql, parameters=None):
+        self.executed.append((" ".join(str(sql).casefold().split()), parameters))
+        return _Result(self.rows.pop(0) if self.rows else None)
+
+
+class _Jobs:
+    def __init__(self, *, job_id=88, failure=None):
+        self.job_id = job_id
+        self.failure = failure
+        self.calls = []
+
+    def enqueue_in_transaction(self, connection, command):
+        self.calls.append((connection, command))
+        if self.failure:
+            raise self.failure
+        return self.job_id
+
+
+def _repository(connection, jobs):
+    return PostgresCoverJobRepository(
+        database_url="postgresql://app@localhost/album_haven",
+        connect_to_database=lambda _url: connection,
+        job_repository=jobs,
+    )
+
+
+def _accept(repository):
+    return repository.accept_candidate_lookup(
+        task_key="lookup-opaque-42",
+        library_id=19,
+        album_key="scan-artist-001|album-001|2001",
+        account_id=7,
+        request_origin_ref="origin:accepted-42",
+        deployment_mode="self_hosted_private_web",
+        client_surface="web",
+        candidate_generation=GENERATION,
+        resource_revision=5,
+        scheduled_at=NOW,
+    )
+
+
+def test_claimed_cover_selection_reader_uses_only_typed_function_and_maps_authority():
+    connection = _Connection([[{
+        "album_id": 31, "cover_path": "C:/private/C.jpg",
+        "cover_selection_origin": "user", "cover_selection_provenance": "explicit",
+        "cover_revision": "owner-C", "remote_cover_url": None,
+        "remote_cover_width": None, "remote_cover_height": None,
+    }]])
+    selected = _repository(connection, _Jobs()).load_claimed_cover_refresh_selections(
+        task_id=51, library_id=19, job_id=88, attempt=2,
+        worker_id="worker-a", lease_token="lease-a", now=NOW, album_ids={31},
+    )
+    assert selected == {31: {
+        "selected_cover_path": "C:/private/C.jpg", "cover_selection_origin": "user",
+        "cover_selection_provenance": "explicit", "cover_revision": "owner-C",
+    }}
+    assert len(connection.executed) == 1
+    sql, values = connection.executed[0]
+    assert "ops.load_claimed_cover_refresh_selections(" in sql
+    assert "library.local_albums" not in sql and "app.bootstrap_owners" not in sql
+    assert values == {
+        "task_id": 51, "library_id": 19, "job_id": 88, "attempt": 2,
+        "worker_id": "worker-a", "lease_token": "lease-a", "now": NOW,
+        "album_ids": [31],
+    }
+
+
+def test_accept_candidate_lookup_resolves_scope_and_enqueues_atomically():
+    connection = _Connection(
+        [
+            {"task_id": 73, "row_revision": 1, "job_id": 88},
+        ]
+    )
+    jobs = _Jobs()
+
+    accepted = _accept(_repository(connection, jobs))
+
+    assert accepted.task_key == "lookup-opaque-42"
+    assert accepted.task_id == 73
+    assert accepted.job_id == 88
+    assert accepted.row_revision == 1
+    assert connection.commits == 1
+    assert connection.rollbacks == 0
+    assert jobs.calls == []
+    sql = " ".join(statement for statement, _ in connection.executed)
+    assert "ops.accept_cover_lookup" in sql
+    assert "insert into ops.jobs" not in sql
+
+
+def test_accept_candidate_lookup_rolls_back_domain_row_when_enqueue_fails():
+    class FailingConnection(_Connection):
+        def execute(self, sql, parameters=None):
+            self.executed.append((" ".join(str(sql).casefold().split()), parameters))
+            raise RuntimeError("acceptance unavailable")
+
+    connection = FailingConnection([])
+    jobs = _Jobs()
+
+    with pytest.raises(RuntimeError, match="acceptance unavailable"):
+        _accept(_repository(connection, jobs))
+
+    assert connection.commits == 0
+    assert connection.rollbacks == 1
+
+
+def test_get_task_is_scoped_by_library_and_task_identity():
+    connection = _Connection(
+        [
+            {
+                "id": 73,
+                "task_key": "lookup-opaque-42",
+                "library_id": 19,
+                "status": "running",
+                "row_revision": 4,
+                "provider_payload": {"possible_matches": []},
+                "metadata": {"source_payload": {"id": "lookup-opaque-42"}},
+            }
+        ]
+    )
+    repository = _repository(connection, _Jobs())
+
+    task = repository.get_task(task_key="lookup-opaque-42", library_id=19)
+
+    assert task["id"] == 73
+    assert task["task_key"] == "lookup-opaque-42"
+    assert task["row_revision"] == 4
+    sql, parameters = connection.executed[0]
+    assert "where library_id = %(library_id)s" in sql
+    assert "and task_key = %(task_key)s" in sql
+    assert parameters == {"library_id": 19, "task_key": "lookup-opaque-42"}
+
+
+def test_list_candidate_lookup_tasks_reloads_only_the_authorized_library():
+    connection = _Connection(
+        [[
+            {
+                "task_key": "lookup-opaque-42",
+                "status": "completed",
+                "requested_at": NOW,
+                "completed_at": NOW,
+                "provider_payload": {
+                    "id": "lookup-opaque-42",
+                    "status": "completed",
+                    "artist": "Artist",
+                },
+                "metadata": {
+                    "source_family": "durable_cover_lookup",
+                    "notification_action_taken": False,
+                },
+            }
+        ]]
+    )
+    repository = _repository(connection, _Jobs())
+
+    tasks = repository.list_candidate_lookup_tasks(
+        actor_account_id=7, library_id=19
+    )
+
+    assert tasks == [
+        {
+            "id": "lookup-opaque-42",
+            "status": "completed",
+            "artist": "Artist",
+            "notification_action_taken": False,
+            "notification_completed_at": NOW.isoformat(),
+            "notification_expires_at": "",
+        }
+    ]
+    sql, parameters = connection.executed[0]
+    assert "library_id = %(library_id)s" in sql
+    assert "source_family' = any(%(source_families)s::text[])" in sql
+    assert parameters["source_families"] == [
+        "cover_lookup_notifications",
+        "runtime_cover_lookup_notifications_adapter",
+        "durable_cover_lookup",
+    ]
+    assert "notification_cleared" in sql
+    assert "membership.account_id = %(actor_account_id)s" in sql
+    assert parameters["actor_account_id"] == 7
+    assert parameters["library_id"] == 19
+
+
+def test_candidate_lookup_notification_counts_are_actor_and_library_scoped():
+    connection = _Connection(
+        [{"total_count": 8, "active_count": 2, "finished_count": 6}]
+    )
+    repository = _repository(connection, _Jobs())
+
+    counts = repository.count_candidate_lookup_task_notifications(
+        actor_account_id=7, library_id=19
+    )
+
+    assert counts == {"total_count": 8, "active_count": 2, "finished_count": 6}
+    sql, parameters = connection.executed[0]
+    assert "library_id = %(library_id)s" in sql
+    assert "membership.account_id = %(actor_account_id)s" in sql
+    assert "notification_cleared" in sql
+    assert parameters["actor_account_id"] == 7
+    assert parameters["library_id"] == 19
+
+
+def test_candidate_lookup_notification_page_is_bounded_scoped_and_cursor_based():
+    first = {
+        "task_key": "lookup-2",
+        "status": "completed",
+        "requested_at": NOW,
+        "completed_at": NOW,
+        "effective_timestamp": NOW,
+        "provider_payload": {},
+        "metadata": {
+            "source_family": "cover_lookup_notifications",
+            "source_payload": {"artist": "Legacy Artist"},
+        },
+    }
+    second = {
+        **first,
+        "task_key": "lookup-1",
+        "metadata": {
+            "source_family": "durable_cover_lookup",
+            "source_payload": {"artist": "Durable Artist"},
+        },
+    }
+    connection = _Connection(
+        [
+            [first, second],
+            {"total_count": 2, "active_count": 0, "finished_count": 2},
+        ]
+    )
+    repository = _repository(connection, _Jobs())
+
+    page = repository.load_candidate_lookup_task_summary_page(
+        actor_account_id=7,
+        library_id=19,
+        limit=1,
+        cursor=None,
+        active_only=False,
+    )
+
+    assert page["items"] == [
+        {
+            "artist": "Legacy Artist",
+            "id": "lookup-2",
+            "status": "completed",
+            "notification_action_taken": False,
+            "notification_completed_at": NOW.isoformat(),
+            "notification_expires_at": "",
+        }
+    ]
+    assert page["next_cursor"]
+    assert page["counts"] == {
+        "total_count": 2,
+        "active_count": 0,
+        "finished_count": 2,
+    }
+    sql, parameters = connection.executed[0]
+    assert "limit %(page_limit)s" in sql
+    assert "membership.account_id = %(actor_account_id)s" in sql
+    assert parameters["page_limit"] == 2
+    assert parameters["library_id"] == 19
+
+    with pytest.raises(ValueError, match="invalid cover lookup notification cursor"):
+        repository.load_candidate_lookup_task_summary_page(
+            actor_account_id=7,
+            library_id=19,
+            limit=1,
+            cursor="not-a-cursor",
+            active_only=False,
+        )
+
+
+@pytest.mark.parametrize(
+    "task_keys", [None, [], [f"{index:03d}" + "x" * 197 for index in range(60)]]
+)
+def test_candidate_lookup_notification_page_filters_task_keys_before_limit(task_keys):
+    connection = _Connection([[], {}])
+    repository = _repository(connection, _Jobs())
+
+    page = repository.load_candidate_lookup_task_summary_page(
+        actor_account_id=7,
+        library_id=19,
+        limit=1,
+        cursor=None,
+        active_only=False,
+        task_keys=task_keys,
+    )
+
+    assert page["items"] == []
+    sql, parameters = connection.executed[0]
+    assert "not %(has_task_keys)s or task.task_key = any(%(task_keys)s::text[])" in sql
+    assert sql.index("task.task_key = any") < sql.index("limit %(page_limit)s")
+    assert sql.index("task.library_id = %(library_id)s") < sql.index("limit %(page_limit)s")
+    assert sql.index("membership.account_id = %(actor_account_id)s") < sql.index(
+        "limit %(page_limit)s"
+    )
+    assert parameters["has_task_keys"] is (task_keys is not None)
+    assert parameters["task_keys"] == (task_keys or [])
+
+
+@pytest.mark.parametrize("actioned_only", [False, True])
+def test_clear_completed_candidate_lookup_tasks_is_terminal_and_library_scoped(actioned_only):
+    class CheckpointConnection(_Connection):
+        def __init__(self):
+            super().__init__([[{"task_key": "lookup-opaque-42"}]])
+            self.remote_save_checkpoints = {
+                "lookup-opaque-42": "publication_completed"
+            }
+
+        def execute(self, sql, parameters=None):
+            if "delete from ops.cover_lookup_tasks" in " ".join(
+                str(sql).casefold().split()
+            ):
+                raise RuntimeError("remote-save checkpoint restricts task deletion")
+            return super().execute(sql, parameters)
+
+    connection = CheckpointConnection()
+    repository = _repository(connection, _Jobs())
+
+    removed = repository.clear_completed_candidate_lookup_tasks(
+        actor_account_id=7,
+        library_id=19,
+        task_keys=["lookup-opaque-42"],
+        actioned_only=actioned_only,
+    )
+
+    assert removed == {"lookup-opaque-42"}
+    sql, parameters = connection.executed[0]
+    assert "update ops.cover_lookup_tasks" in sql
+    assert "delete from ops.cover_lookup_tasks" not in sql
+    assert "'{notification_cleared}'" in sql
+    assert "status = any(%(terminal_statuses)s" in sql
+    assert "library_id = %(library_id)s" in sql
+    assert "source_family' = any(%(source_families)s::text[])" in sql
+    assert "membership.account_id = %(actor_account_id)s" in sql
+    assert parameters["task_keys"] == ["lookup-opaque-42"]
+    assert (
+        "not %(actioned_only)s or task.metadata ->> 'notification_action_taken' = 'true'"
+        in sql
+    )
+    assert parameters["actioned_only"] is actioned_only
+    assert connection.remote_save_checkpoints == {
+        "lookup-opaque-42": "publication_completed"
+    }
+
+
+def test_mark_candidate_lookup_notification_action_is_terminal_and_library_scoped():
+    connection = _Connection(
+        [
+            {
+                "task_key": "lookup-opaque-42",
+                "status": "completed",
+                "requested_at": NOW,
+                "completed_at": NOW,
+                "provider_payload": {"id": "lookup-opaque-42"},
+                "metadata": {
+                    "source_family": "durable_cover_lookup",
+                    "notification_action_taken": True,
+                },
+            }
+        ]
+    )
+    repository = _repository(connection, _Jobs())
+
+    task = repository.mark_candidate_lookup_notification_action_taken(
+        actor_account_id=7,
+        library_id=19,
+        task_key="lookup-opaque-42",
+    )
+
+    assert task is not None
+    assert task["id"] == "lookup-opaque-42"
+    assert task["notification_action_taken"] is True
+    sql, parameters = connection.executed[0]
+    assert "status = any(%(terminal_statuses)s" in sql
+    assert "library_id = %(library_id)s" in sql
+    assert "source_family' = any(%(source_families)s::text[])" in sql
+    assert "notification_cleared" in sql
+    assert "membership.account_id = %(actor_account_id)s" in sql
+    assert parameters["actor_account_id"] == 7
+
+
+def test_claimed_automatic_cover_selection_forwards_explicit_state_and_dimensions():
+    connection = _Connection(
+        [
+            {
+                "input_path_count": 1,
+                "resolved_path_count": 1,
+                "selected_album_count": 1,
+                "album_track_file_count": 1,
+                "album_rows_updated": 1,
+                "track_file_rows_updated": 1,
+                "blocked_by_user_selection": False,
+                "blocked_by_expected_cover_state": False,
+            }
+        ]
+    )
+    repository = _repository(connection, _Jobs())
+
+    repository.persist_claimed_automatic_cover_selection(
+        task_id=73,
+        library_id=19,
+        job_id=88,
+        attempt=1,
+        worker_id="cover-worker",
+        lease_token="cover-lease",
+        now=NOW,
+        track_paths={"C:/Music/Artist/Album/01.flac"},
+        selected_cover_path=Path("C:/Music/Artist/Album/cover.jpg"),
+        cover_revision="replacement-revision",
+        cover_selection_origin="automatic",
+        reject_if_user_controlled=False,
+        reject_if_explicit_selection=True,
+        expected_cover_state=("user", "legacy-revision"),
+        expected_library_id=19,
+        expected_album_id=23,
+        expected_inventory_revision=5,
+        expected_cover_mutation_revision=7,
+        local_cover_width=1200,
+        local_cover_height=1200,
+    )
+
+    sql, parameters = connection.executed[0]
+    assert "%(reject_if_explicit_selection)s" in sql
+    assert "%(local_cover_width)s" in sql
+    assert "%(local_cover_height)s" in sql
+    assert parameters["reject_if_explicit_selection"] is True
+    assert parameters["expected_cover_selection_origin"] == "user"
+    assert parameters["expected_cover_revision"] == "legacy-revision"
+    assert "%(expected_library_id)s" in sql
+    assert "%(expected_album_id)s" in sql
+    assert "%(expected_inventory_revision)s" in sql
+    assert "%(expected_cover_mutation_revision)s" in sql
+    assert parameters["expected_library_id"] == 19
+    assert parameters["expected_album_id"] == 23
+    assert parameters["expected_inventory_revision"] == 5
+    assert parameters["expected_cover_mutation_revision"] == 7
+    assert parameters["local_cover_width"] == 1200
+    assert parameters["local_cover_height"] == 1200
+
+
+def test_claimed_remote_cover_selection_forwards_atomic_baseline_and_dimensions():
+    connection = _Connection([{"row_revision": 8}])
+    repository = _repository(connection, _Jobs())
+    result = repository.persist_claimed_remote_cover_selection(
+        library_id=19, job_id=88, attempt=1, worker_id="cover-worker",
+        lease_token="cover-lease", now=NOW,
+        checkpoint_id=73, expected_checkpoint_revision=7,
+        selected_cover_path="C:/Music/Artist/Album/cover.jpg",
+        selected_cover_revision="replacement-revision", linked_remote=False,
+        local_cover_width=1200, local_cover_height=800,
+        expected_library_id=19, expected_album_id=23,
+        expected_inventory_revision=5, expected_cover_mutation_revision=7,
+        track_paths=("C:/Music/Artist/Album/01.flac",),
+    )
+    assert result == 8
+    sql, parameters = connection.executed[0]
+    assert sql.count("%(") == 17
+    for name, value in {
+        "expected_library_id": 19, "expected_album_id": 23,
+        "expected_inventory_revision": 5, "expected_cover_mutation_revision": 7,
+        "track_paths": ["C:/Music/Artist/Album/01.flac"],
+        "local_cover_width": 1200, "local_cover_height": 800,
+    }.items():
+        assert f"%({name})s" in sql
+        assert parameters[name] == value
+
+
+@pytest.mark.parametrize("fences", [
+    {},
+    {"expected_library_id": 20, "expected_album_id": 23,
+     "expected_inventory_revision": 5, "expected_cover_mutation_revision": 7,
+     "track_paths": ("C:/Music/Artist/Album/01.flac",)},
+])
+def test_claimed_remote_cover_selection_rejects_missing_or_cross_library_baseline(fences):
+    connection = _Connection([])
+    repository = _repository(connection, _Jobs())
+    with pytest.raises(psycopg.errors.SerializationFailure):
+        repository.persist_claimed_remote_cover_selection(
+            library_id=19, job_id=88, attempt=1, worker_id="cover-worker",
+            lease_token="cover-lease", now=NOW,
+            checkpoint_id=73, expected_checkpoint_revision=7,
+            selected_cover_path=None, selected_cover_revision=None,
+            linked_remote=True, **fences,
+        )
+    assert connection.executed == []
+
+
+def test_claimed_provider_outcomes_use_worker_function_without_direct_task_dml():
+    connection = _Connection([{"persisted": True}, {"persisted": True}])
+    repository = _repository(connection, _Jobs())
+
+    repository.persist_claimed_cover_provider_outcomes(
+        task_id=73,
+        library_id=19,
+        job_id=88,
+        attempt=1,
+        worker_id="cover-worker",
+        lease_token="cover-lease",
+        now=NOW,
+        album_id=31,
+        album_key="artist|album|2001",
+        outcomes={
+            "musicbrainz": {"category": "no_candidate", "http_status": 200},
+            "spotify": {"category": "rate_limit_quota", "http_status": 429},
+        },
+    )
+
+    assert len(connection.executed) == 2
+    assert all(
+        "ops.persist_claimed_cover_provider_outcome" in sql
+        and "insert into ops.cover_lookup_tasks" not in sql
+        for sql, _parameters in connection.executed
+    )
+    first = connection.executed[0][1]
+    second = connection.executed[1][1]
+    assert first["task_id"] == 73
+    assert first["library_id"] == 19
+    assert first["outcome_task_key"] == "31:musicbrainz"
+    assert first["outcome_status"] == "completed"
+    assert json.loads(first["metadata"])["source_family"] == (
+        "automatic_cover_provider_outcomes_v1"
+    )
+    assert second["outcome_task_key"] == "31:spotify"
+    assert second["outcome_status"] == "failed"
+
+
+def test_persist_candidate_authority_uses_one_atomic_postgres_boundary():
+    connection = _Connection(
+        [
+            {
+                "task_id": 73,
+                "row_revision": 6,
+                "candidate_generation": GENERATION,
+            }
+        ]
+    )
+    repository = _repository(connection, _Jobs())
+    candidate = {
+        "id": "candidate-1",
+        "url": "https://images.example/cover.jpg",
+        "art_kind": "cover",
+    }
+
+    authority = repository.persist_candidate_authority(
+        task_key="lookup-opaque-42",
+        library_id=19,
+        album_key="scan-artist-001|album-001|2001",
+        account_id=7,
+        request_origin_ref="origin:accepted-42",
+        deployment_mode="self_hosted_private_web",
+        client_surface="web",
+        candidate_generation=GENERATION,
+        resource_revision=5,
+        recorded_at=NOW,
+        task_payload={"possible_matches": [candidate]},
+        candidates=[candidate],
+        best_candidate_id="candidate-1",
+    )
+
+    assert authority["task_id"] == 73
+    assert authority["candidate_generation"] == GENERATION
+    sql, parameters = connection.executed[0]
+    assert "ops.persist_cover_candidate_authority" in sql
+    assert "insert into ops.cover_lookup_tasks" not in sql
+    assert parameters["candidate_generation"] == GENERATION
+    assert connection.commits == 1
+
+
+@pytest.mark.parametrize(
+    ("method_name", "function_name", "extra"),
+    [
+        (
+            "mutate_claimed_lookup_candidate_snapshot",
+            "ops.mutate_claimed_cover_lookup_candidate_snapshot",
+            {"task_key": "lookup-opaque-42", "task_id": 73},
+        ),
+        (
+            "mutate_claimed_refresh_candidate_snapshot",
+            "ops.mutate_claimed_cover_refresh_candidate_snapshot",
+            {"task_id": 73},
+        ),
+    ],
+)
+def test_claimed_candidate_snapshot_mutations_use_narrow_fenced_functions(
+    method_name, function_name, extra
+):
+    connection = _Connection([{"accepted": True}])
+    repository = _repository(connection, _Jobs())
+
+    accepted = getattr(repository, method_name)(
+        library_id=19,
+        job_id=88,
+        attempt=1,
+        worker_id="cover-worker-a",
+        lease_token="lease-a",
+        now=NOW,
+        album_id=101,
+        candidate_generation=GENERATION,
+        operation="publish",
+        search_kind="manual" if "lookup" in method_name else "automatic",
+        search_started_at=NOW.isoformat(),
+        candidates=[
+            {
+                "id": "candidate-1",
+                "url": "https://images.example/cover.jpg",
+                "art_kind": "cover",
+            }
+        ],
+        best_candidate_id="candidate-1",
+        automatic_improvement=False,
+        candidate_id=None,
+        **extra,
+    )
+
+    assert accepted is True
+    sql, parameters = connection.executed[0]
+    assert function_name in sql
+    assert "local_album_cover_candidate_snapshots" not in sql
+    assert parameters["lease_token"] == "lease-a"
+
+
+def test_begin_claimed_cover_refresh_returns_lease_fenced_separate_release_keys():
+    connection = _Connection(
+        [
+            {
+                "task_id": 51,
+                "task_key": "post-scan-12",
+                "row_revision": 2,
+                "file_cache": {},
+                "separate_release_keys": ["artist::same title"],
+                "progress_total": 0,
+                "mode": "post_scan",
+                "force_search": False,
+            }
+        ]
+    )
+    repository = _repository(connection, _Jobs())
+
+    scope = repository.begin_claimed_cover_refresh(
+        task_id=None,
+        library_id=19,
+        job_id=88,
+        attempt=1,
+        worker_id="cover-worker-a",
+        lease_token="lease-a",
+        now=NOW,
+        mode="post_scan",
+        inventory_revision=5,
+        task_key="revision-5",
+    )
+
+    assert scope is not None
+    assert scope.separate_release_keys == ("artist::same title",)
+    sql = connection.executed[0][0]
+    assert "ops.begin_claimed_cover_refresh" in sql
+
+
+def test_begin_claimed_cover_refresh_decodes_private_root_scope_without_leaking_transient_fields():
+    raw_cache = {
+        "C:/private/root-a/album/01.flac": {"album_id": 31, "library_root_path": "C:/private/root-a"},
+        "C:/private/root-a/album/02.flac": {"album_id": 31, "library_root_path": "C:/private/root-a"},
+        "C:/private/root-b/album/01.flac": {"album_id": 32, "library_root_path": "C:/private/root-b"},
+    }
+    connection = _Connection([{
+        "task_id": 51, "task_key": "bulk-a", "row_revision": 2,
+        "file_cache": raw_cache, "separate_release_keys": [],
+        "progress_total": 2, "mode": "manual", "force_search": False,
+    }])
+    scope = _repository(connection, _Jobs()).begin_claimed_cover_refresh(
+        task_id=51, library_id=19, job_id=88, attempt=1, worker_id="cover-worker-a",
+        lease_token="lease-a", now=NOW, mode="manual", inventory_revision=5, task_key="bulk-a",
+    )
+    assert scope is not None
+    assert set(scope.library_root_paths) == {"C:/private/root-a", "C:/private/root-b"}
+    assert len(scope.library_root_paths) == 2
+    assert scope.file_cache == {path: {"album_id": entry["album_id"]} for path, entry in raw_cache.items()}
+    assert all("library_root_path" in entry for entry in raw_cache.values())
+
+
+@pytest.mark.parametrize("root", [None, "", "   ", 7, True, "missing"],
+                         ids=["null", "empty", "blank", "integer", "boolean", "missing"])
+def test_begin_claimed_cover_refresh_rejects_nonempty_inventory_without_trusted_root(root):
+    entry = {"album_id": 31}
+    if root != "missing":
+        entry["library_root_path"] = root
+    connection = _Connection([{
+        "task_id": 51, "task_key": "bulk-a", "row_revision": 2,
+        "file_cache": {"C:/private/root/album/01.flac": entry}, "separate_release_keys": [],
+        "progress_total": 1, "mode": "manual", "force_search": False,
+    }])
+    with pytest.raises((RuntimeError, ValueError, TypeError)):
+        _repository(connection, _Jobs()).begin_claimed_cover_refresh(
+            task_id=51, library_id=19, job_id=88, attempt=1, worker_id="cover-worker-a",
+            lease_token="lease-a", now=NOW, mode="manual", inventory_revision=5, task_key="bulk-a",
+        )
+
+
+def test_claimed_cover_refresh_scope_root_paths_default_to_empty_tuple():
+    from music_app.services.cover_jobs_postgres import ClaimedCoverRefreshScope
+
+    scope = ClaimedCoverRefreshScope(
+        task_id=51, task_key="bulk-a", row_revision=2, file_cache={},
+        separate_release_keys=(), progress_total=0, mode="manual", force_search=False,
+    )
+    assert scope.library_root_paths == ()
+
+
+@pytest.mark.parametrize("checkpoint", ["authority_committed", "runtime_published", "publication_completed"])
+def test_load_claimed_finalization_maps_stored_identity_and_revision(checkpoint):
+    from music_app.services.cover_mutation_coordinator import CoverMutationStatus
+
+    connection = _Connection([{
+        "checkpoint_id": 61, "checkpoint": checkpoint, "checkpoint_revision": 7,
+        "library_id": 19, "local_album_id": 23, "task_id": 73,
+        "cover_mutation_revision": 12, "selected_cover_revision": "stored-revision",
+    }])
+    repository = _repository(connection, _Jobs())
+    claim = _finalization_claim()
+
+    outcome = repository.load_claimed_finalization(claim=claim, observed_at=NOW)
+
+    assert outcome.status is CoverMutationStatus.COMMITTED
+    assert outcome.checkpoint == checkpoint
+    assert outcome.finalization_checkpoint_id == 61
+    assert outcome.finalization_checkpoint_revision == 7
+    assert (outcome.library_id, outcome.local_album_id, outcome.task_id) == (19, 23, 73)
+    assert outcome.cover_mutation_revision == 12
+    assert outcome.selected_cover_revision == "stored-revision"
+    assert len(connection.executed) == 1
+    sql, parameters = connection.executed[0]
+    assert "ops.load_claimed_cover_finalization(" in sql
+    values = tuple(parameters.values()) if isinstance(parameters, dict) else tuple(parameters)
+    for value in (88, 3, "worker-cover", "lease-cover", NOW):
+        assert value in values
+
+
+def _finalization_claim():
+    from music_app.services.jobs.models import ClaimedJob
+
+    return ClaimedJob(
+        job_id=88, kind="cover_remote_save", subject_kind="cover_lookup_task",
+        subject_ref="lookup", parameters={"task_id": 73}, account_id=7, library_id=19,
+        capability_key="library.covers.write", request_origin_id=42,
+        deployment_mode="self_hosted_private_web", client_surface="web",
+        idempotency_key="remote:88", attempt=3, max_attempts=3,
+        worker_id="worker-cover", lease_token="lease-cover", lease_expires_at=NOW,
+        scheduled_at=NOW,
+    )
+
+
+@pytest.mark.parametrize("revision", [None, 8])
+def test_advance_finalization_forwards_exact_claim_and_nullable_revision(revision):
+    connection = _Connection([{"row_revision": revision}])
+    repository = _repository(connection, _Jobs())
+
+    assert repository.advance_finalization(
+        claim=_finalization_claim(), checkpoint_id=61,
+        expected_checkpoint_revision=7, checkpoint="runtime_published", observed_at=NOW,
+    ) == revision
+
+    sql, parameters = connection.executed[0]
+    assert "ops.advance_claimed_cover_finalization(" in sql
+    assert parameters == {
+        "job_id": 88, "attempt": 3, "worker_id": "worker-cover",
+        "lease_token": "lease-cover", "observed_at": NOW, "checkpoint_id": 61,
+        "expected_checkpoint_revision": 7, "checkpoint": "runtime_published",
+    }
+
+
+def test_load_claimed_finalization_accepts_zero_authority_and_missing_claim():
+    row = {
+        "checkpoint_id": 61, "checkpoint": "authority_committed", "checkpoint_revision": 7,
+        "library_id": 19, "local_album_id": 23, "task_id": 73,
+        "cover_mutation_revision": 0, "selected_cover_revision": "stored-revision",
+    }
+    connection = _Connection([row, None])
+    repository = _repository(connection, _Jobs())
+    assert repository.load_claimed_finalization(
+        claim=_finalization_claim(), observed_at=NOW,
+    ).cover_mutation_revision == 0
+    assert repository.load_claimed_finalization(
+        claim=_finalization_claim(), observed_at=NOW,
+    ) is None
+
+
+@pytest.mark.parametrize(
+    ("current_revision", "current_cover", "accepted"),
+    [(0, "stored-revision", True), (1, "later-cover", True), (0, "wrong-cover", False),
+     (None, "stored-revision", False)],
+)
+def test_finalization_runtime_publisher_checks_current_durable_baseline(
+    finalization_scope_row, current_revision, current_cover, accepted,
+):
+    finalization_scope_row.update(
+        current_cover_mutation_revision=current_revision, selected_cover_revision=current_cover,
+    )
+    connection = _Connection([finalization_scope_row])
+    repository = _repository(connection, _Jobs())
+    values = dict(
+        claim=_finalization_claim(), library_id=19, local_album_id=23,
+        cover_mutation_revision=0, selected_cover_revision="stored-revision",
+    )
+    if accepted:
+        repository.publish_runtime_if_revision(**values)
+    else:
+        with pytest.raises(ValueError, match="cover authority"):
+            repository.publish_runtime_if_revision(**values)
+    sql, parameters = connection.executed[0]
+    assert "ops.load_claimed_cover_remote_save(" in sql
+    assert " join " not in sql
+    assert parameters["library_id"] == 19
+    assert parameters["task_id"] == 73
+
+
+@pytest.fixture
+def finalization_scope_row():
+    return {
+        "checkpoint_id": 61, "checkpoint": "runtime_published", "checkpoint_revision": 7,
+        "task_revision": 9, "candidate_generation": GENERATION, "candidate_id": "candidate-1",
+        "selected_candidate": {"url": "https://covers.invalid/selected.jpg"},
+        "library_root_path": "C:/fixture", "track_paths": ["C:/fixture/01.flac"],
+        "library_id": 19, "local_album_id": 23, "task_id": 73,
+        "authority_cover_mutation_revision": 0, "current_cover_mutation_revision": 0,
+        "selected_cover_path": "current-cover.jpg", "selected_cover_revision": "stored-revision",
+        "committed_cover_revision": "stored-revision", "artifact_sha256": "a" * 64,
+    }
+
+
+@pytest.mark.parametrize("publish_row", [None, {"checkpoint_revision": 7, "task_revision": 9}])
+def test_finalization_task_publisher_uses_current_scoped_sql_context(finalization_scope_row, publish_row):
+    from music_app.services.jobs.models import JobLeaseLost
+
+    connection = _Connection([finalization_scope_row, publish_row])
+    repository = _repository(connection, _Jobs())
+    values = dict(
+        claim=_finalization_claim(), task_id=73, cover_mutation_revision=0,
+        terminal_state="completed",
+    )
+    if publish_row is None:
+        with pytest.raises(JobLeaseLost):
+            repository.publish_task_if_revision(**values)
+    else:
+        repository.publish_task_if_revision(**values)
+    load_sql, load_parameters = connection.executed[0]
+    assert "ops.load_claimed_cover_remote_save(" in load_sql
+    assert " join " not in load_sql
+    assert load_parameters["task_key"] == "lookup"
+    sql, parameters = connection.executed[1]
+    assert "ops.publish_claimed_cover_remote_save(" in sql
+    assert " join " not in sql
+    assert parameters["task_id"] == 73
+    assert parameters["expected_checkpoint_revision"] == 7
+    assert parameters["expected_task_revision"] == 9
+    assert parameters["selected_cover_path"] == "current-cover.jpg"
+    assert parameters["linked_remote"] is False
+    assert parameters["lease_token"] == "lease-cover"
+
+
+@pytest.mark.parametrize(
+    ("publisher", "field", "value"),
+    [("runtime", "library_id", 20), ("runtime", "local_album_id", 24),
+     ("runtime", "authority_cover_mutation_revision", 1),
+     ("runtime", "committed_cover_revision", "different-revision"),
+     ("task", "task_id", 74), ("task", "authority_cover_mutation_revision", 1)],
+)
+def test_finalization_publishers_reject_changed_loader_identity(finalization_scope_row, publisher, field, value):
+    finalization_scope_row[field] = value
+    connection = _Connection([finalization_scope_row])
+    repository = _repository(connection, _Jobs())
+    with pytest.raises(ValueError, match="identity changed"):
+        if publisher == "runtime":
+            repository.publish_runtime_if_revision(
+                claim=_finalization_claim(), library_id=19, local_album_id=23,
+                cover_mutation_revision=0, selected_cover_revision="stored-revision",
+            )
+        else:
+            repository.publish_task_if_revision(
+                claim=_finalization_claim(), task_id=73, cover_mutation_revision=0,
+                terminal_state="completed",
+            )
+    assert len(connection.executed) == 1
+
+
+@pytest.mark.parametrize("publisher", ["runtime", "task"])
+def test_finalization_publishers_reject_missing_claim_scope(publisher):
+    from music_app.services.jobs.models import JobLeaseLost
+
+    connection = _Connection([None])
+    repository = _repository(connection, _Jobs())
+    with pytest.raises(JobLeaseLost):
+        if publisher == "runtime":
+            repository.publish_runtime_if_revision(
+                claim=_finalization_claim(), library_id=19, local_album_id=23,
+                cover_mutation_revision=0, selected_cover_revision="stored-revision",
+            )
+        else:
+            repository.publish_task_if_revision(
+                claim=_finalization_claim(), task_id=73, cover_mutation_revision=0,
+                terminal_state="completed",
+            )
+    assert len(connection.executed) == 1
+
+
+@pytest.mark.parametrize("linked_remote", [False, True])
+def test_direct_remote_publisher_forwards_local_and_linked_context(linked_remote):
+    connection = _Connection([{"checkpoint_revision": 8, "task_revision": 10}, None])
+    repository = _repository(connection, _Jobs())
+    values = dict(
+        checkpoint_id=61, task_id=73, expected_checkpoint_revision=7,
+        expected_task_revision=9, selected_cover_path=None if linked_remote else "cover.jpg",
+        linked_remote=linked_remote, library_id=19, job_id=88, attempt=3,
+        worker_id="worker-cover", lease_token="lease-cover", now=NOW,
+    )
+    assert repository.publish_claimed_remote_save(**values) == (8, 10)
+    assert repository.publish_claimed_remote_save(**values) is None
+    sql, parameters = connection.executed[0]
+    assert "ops.publish_claimed_cover_remote_save(" in sql
+    assert parameters["selected_cover_path"] == values["selected_cover_path"]
+    assert parameters["linked_remote"] is linked_remote
+    assert parameters["library_id"] == 19
+    assert parameters["expected_checkpoint_revision"] == 7
+    assert parameters["expected_task_revision"] == 9
+
+
+@pytest.mark.parametrize("selected_path", [None, "current-cover.jpg"])
+def test_remote_save_scope_loads_current_album_context_for_linked_and_local_cover(finalization_scope_row, selected_path):
+    finalization_scope_row.update(selected_cover_path=selected_path)
+    connection = _Connection([finalization_scope_row])
+    repository = _repository(connection, _Jobs())
+    scope = repository.load_claimed_remote_save(
+        task_key="lookup", task_id=73, library_id=19, job_id=88, attempt=3,
+        worker_id="worker-cover", lease_token="lease-cover", now=NOW,
+    )
+    assert scope.selected_cover_path == selected_path
+    assert scope.track_paths == ("C:/fixture/01.flac",)
+    assert (scope.library_id, scope.local_album_id, scope.task_id) == (19, 23, 73)
+    assert scope.authority_cover_mutation_revision == 0
+    assert scope.current_cover_mutation_revision == 0
+    assert scope.selected_cover_revision == "stored-revision"
+    assert scope.committed_cover_revision == "stored-revision"
+    sql, _parameters = connection.executed[0]
+    assert "ops.load_claimed_cover_remote_save(" in sql
+    assert " join " not in sql

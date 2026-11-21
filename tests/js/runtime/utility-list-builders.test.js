@@ -627,6 +627,12 @@ function loadProblematicTrackNavigationHelpers() {
     },
     async loadProblematicFiles() {},
     async loadProblematicAlbumDetail() {},
+    async loadProblematicAlbumDetailForTrack(requestedTrackPath) {
+      const requestedPaths = new Set([String(requestedTrackPath || '')].filter(Boolean));
+      return context.state.utility.problematicFiles.find(
+        (item) => context.albumsShareTrackPath(item, requestedPaths),
+      ) || null;
+    },
     getSelectedProblematicAlbum() {
       return context.state.utility.problematicFiles.find(
         (item) => item.key === context.state.utility.selectedProblematicKey,
@@ -1427,6 +1433,76 @@ test('applyUpdatedAlbumsToCurrentView merges a second moved track into the stabl
     ...visibleDestination,
     tracks: [firstMovedTrack, secondMovedTrack],
   });
+});
+
+test('applyUpdatedAlbumsToCurrentView immediately merges a renamed selected-artist release into its destination', () => {
+  const context = loadHelpers();
+  const destinationTracks = Array.from({ length: 13 }, (_value, index) => ({
+    path: `D:\\Synthetic Music\\DDT\\Studio Records\\${String(index + 1).padStart(2, '0')}.mp3`,
+    title: `Studio Track ${index + 1}`,
+  }));
+  const movedTracks = Array.from({ length: 3 }, (_value, index) => ({
+    path: `D:\\Synthetic Music\\DDT\\Studio Records\\${String(index + 14).padStart(2, '0')}.mp3`,
+    title: `Studio Track ${index + 14}`,
+  }));
+  const visibleDestination = {
+    key: 'ddt::studio records',
+    album_ref: 'ddt::studio records',
+    name: 'Studio Records',
+    album_artist: 'DDT',
+    year: 1988,
+    track_count_preview: destinationTracks.length,
+    tracks: destinationTracks,
+  };
+  const visibleSource = {
+    key: 'ddt::studio records merge candidate',
+    album_ref: 'ddt::studio records merge candidate',
+    name: 'Studio Records merge candidate',
+    album_artist: 'DDT',
+    year: 1988,
+    track_count_preview: movedTracks.length,
+    tracks: movedTracks,
+  };
+  const optimisticDestination = {
+    ...visibleSource,
+    key: visibleDestination.key,
+    album_ref: undefined,
+    name: visibleDestination.name,
+  };
+  const selectedArtistGroups = [{
+    artist: 'DDT',
+    albums: [visibleDestination, visibleSource],
+  }];
+  context.state.view.selected_artist = 'DDT';
+  context.state.view.primary_artist_groups = selectedArtistGroups;
+  context.state.view.family_artist_groups = [];
+  context.state.view.artist_groups = selectedArtistGroups;
+  context.getAlbumRequestKey = (album) => String(album?.key || album?.album_ref || '');
+  context.getAlbumIdentity = (album) => context.getAlbumPathSignature(album)
+    || context.getAlbumRequestKey(album);
+
+  context.applyUpdatedAlbumsToCurrentView(
+    [optimisticDestination],
+    {
+      originalAlbum: visibleSource,
+      skipRender: true,
+      tagEdits: Object.fromEntries(movedTracks.map((track) => [
+        track.path,
+        { album: visibleDestination.name },
+      ])),
+    },
+  );
+
+  const publishedAlbums = JSON.parse(JSON.stringify(
+    context.state.view.artist_groups[0].albums,
+  ));
+  assert.equal(publishedAlbums.length, 1);
+  assert.equal(publishedAlbums[0].name, visibleDestination.name);
+  assert.equal(publishedAlbums[0].track_count_preview, 16);
+  assert.deepEqual(
+    publishedAlbums[0].tracks.map((track) => track.path),
+    [...destinationTracks, ...movedTracks].map((track) => track.path),
+  );
 });
 
 test('applyUpdatedAlbumsToCurrentView keeps mounted covers when finalized split payloads omit them', () => {
@@ -3582,15 +3658,15 @@ test('watchSaveTask rejects a stale partial-year split projection before applyin
     updated_albums: [finalizedDestination],
     inventory_mutation_revision: 3,
   };
-  let saveTaskPollCount = 0;
-  context.fetch = async () => {
-    saveTaskPollCount += 1;
-    return ({
-    ok: true,
-    async json() {
-        return terminalPayload;
-    },
-    });
+  let saveTaskStatusPollCount = 0;
+  let committedRevisionStatusReadCount = 0;
+  context.fetch = async (url) => {
+    if (url === '/status') {
+      committedRevisionStatusReadCount += 1;
+      return { ok: true, json: async () => ({ inventory_mutation_revision: 3 }) };
+    }
+    if (url.startsWith('/utilities/save-task/')) saveTaskStatusPollCount += 1;
+    return { ok: true, json: async () => terminalPayload };
   };
   context.waitForBrowserTimeout = async () => {};
   context.getAlbumRequestKey = (album) => String(album?.request_key || album?.key || '');
@@ -3611,12 +3687,237 @@ test('watchSaveTask rejects a stale partial-year split projection before applyin
   });
 
   assert.equal(refreshCalls.length, 2);
-  assert.equal(saveTaskPollCount, 0);
+  assert.equal(saveTaskStatusPollCount, 0);
+  assert.equal(committedRevisionStatusReadCount, 2);
   assert.equal(refreshCalls[0][2].preserveGalleryOptionsMenu, true);
   assert.equal(refreshCalls[1][2].preserveGalleryOptionsMenu, true);
   assert.deepEqual(
     Array.from(context.state.view.artist_groups[0].albums, (album) => album.year),
     [2004, 2014],
+  );
+});
+
+test('watchSaveTask waits for a canonical structural projection before replacing optimistic membership', async () => {
+  const context = loadHelpers();
+  const existingPaths = Array.from({ length: 13 }, (_value, index) => (
+    `D:\\Synthetic Music\\Merge Artist\\Target Album\\${String(index + 1).padStart(2, '0')} Existing.flac`
+  ));
+  const movedPaths = Array.from({ length: 3 }, (_value, index) => (
+    `D:\\Synthetic Music\\Merge Artist\\Source Album\\${String(index + 1).padStart(2, '0')} Moved.flac`
+  ));
+  const originalAlbum = {
+    key: 'merge-artist::source-album::2020',
+    name: 'Source Album',
+    album_artist: 'Merge Artist',
+    year: 2020,
+    tracks: movedPaths.map((path) => ({ path })),
+  };
+  const optimisticTarget = {
+    key: 'merge-artist::target-album::2020',
+    request_key: 'merge-artist::target-album::2020',
+    identity_key: 'merge-artist::target-album::2020',
+    name: 'Target Album',
+    album_artist: 'Merge Artist',
+    year: 2020,
+    tracks: [...existingPaths, ...movedPaths].map((path) => ({ path })),
+  };
+  const stalePayload = {
+    artist_groups: [{
+      artist: 'Merge Artist',
+      albums: [{ ...optimisticTarget, tracks: [], track_paths: [], track_count_preview: 13 }],
+    }],
+  };
+  const readyPayload = {
+    inventory_mutation_revision: 41,
+    artist_groups: [{
+      artist: 'Merge Artist',
+      albums: [{ ...optimisticTarget, tracks: [], track_paths: [], track_count_preview: 16 }],
+    }],
+  };
+  const evaluatedPayloads = [];
+  const refreshOptions = [];
+  context.state.view.artist_groups = [{ artist: 'Merge Artist', albums: [optimisticTarget] }];
+  context.state.view.primary_artist_groups = [];
+  context.state.view.family_artist_groups = [];
+  context.buildApiUrl = () => '/view-data?surface=albums&artist=Merge%20Artist';
+  context.waitForBrowserTimeout = async () => {};
+  let statusRequests = 0;
+  context.fetch = async () => ({
+    ok: true,
+    json: async () => ({ inventory_mutation_revision: ++statusRequests === 1 ? 40 : 41 }),
+  });
+  context.fetchAndRender = async (_url, _push, options) => {
+    refreshOptions.push(options);
+    const payload = readyPayload;
+    evaluatedPayloads.push(payload);
+    if (!options.shouldApplyResponse(payload)) return false;
+    context.state.view.artist_groups = payload.artist_groups;
+    return true;
+  };
+  context.document.getElementById = () => null;
+  context.renderView = () => {};
+  context.showRepairAlert = () => {};
+
+  await context.watchSaveTask('completed-structural-merge', {
+    originalAlbum,
+    optimisticAlbums: [optimisticTarget],
+    tagEdits: Object.fromEntries(movedPaths.map((path) => [path, { album: 'Target Album' }])),
+    terminalPayload: {
+      ok: true,
+      task_id: 'completed-structural-merge',
+      status: 'completed',
+      requires_view_refresh: true,
+      updated_albums: [],
+      inventory_mutation_revision: 41,
+    },
+  });
+
+  assert.equal(statusRequests, 2);
+  assert.equal(evaluatedPayloads.length, 1);
+  assert.equal(context.state.view.artist_groups[0].albums[0].track_count_preview, 16);
+  assert.equal(refreshOptions[0].preserveMountedGalleryChildren, false);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(refreshOptions[0], 'retainMountedGalleryIfEquivalent'),
+    false,
+  );
+});
+
+test('canonical readiness polling is bounded and never repeats the full view request', async () => {
+  const context = loadHelpers();
+  const delays = [];
+  let statusRequests = 0;
+  context.fetch = async () => {
+    statusRequests += 1;
+    return { ok: true, json: async () => ({ inventory_mutation_revision: 40 }) };
+  };
+  context.waitForBrowserTimeout = async (delay) => delays.push(delay);
+
+  await context.waitForCommittedInventoryRevision(41);
+
+  assert.equal(statusRequests, 6);
+  assert.deepEqual(delays, [125, 250, 500, 1000, 2000]);
+});
+
+test('canonical structural readiness accepts filtered absence only at the committed revision', () => {
+  const context = loadHelpers();
+  const expectedAlbum = {
+    key: 'artist::renamed-album', name: 'Renamed Album', album_artist: 'Artist',
+    tracks: [{ path: 'renamed-track.flac' }],
+  };
+  const emptyFilteredView = { artist_groups: [], primary_artist_groups: [], family_artist_groups: [] };
+
+  assert.equal(context.canonicalViewPayloadCoversExpectedTagEdit(
+    { ...emptyFilteredView, inventory_mutation_revision: 40 }, expectedAlbum, [expectedAlbum], 41,
+  ), false);
+  assert.equal(context.canonicalViewPayloadCoversExpectedTagEdit(
+    { ...emptyFilteredView, inventory_mutation_revision: 41 }, expectedAlbum, [expectedAlbum], 41,
+  ), true);
+  assert.equal(context.canonicalViewPayloadCoversExpectedTagEdit(
+    { ...emptyFilteredView, status: { inventory_mutation_revision: 41 } }, expectedAlbum, [expectedAlbum], 41,
+  ), false, 'process-global status does not prove the browse snapshot revision');
+});
+
+for (const filterQuery of ['q=Old%20Title', 'category=main_library']) {
+test(`watchSaveTask accepts a fresh filtered view after the edited album leaves ${filterQuery}`, async () => {
+  const context = loadHelpers();
+  const originalAlbum = {
+    key: 'artist::old-title', name: 'Old Title', album_artist: 'Artist',
+    tracks: [{ path: 'track.flac' }],
+  };
+  const optimisticAlbum = { ...originalAlbum, key: 'artist::new-title', name: 'New Title' };
+  context.state.view.artist_groups = [{ artist: 'Artist', albums: [optimisticAlbum] }];
+  context.state.view.primary_artist_groups = [];
+  context.state.view.family_artist_groups = [];
+  context.buildApiUrl = () => `/view-data?surface=albums&${filterQuery}`;
+  context.waitForBrowserTimeout = async () => {};
+  context.fetch = async () => ({
+    ok: true,
+    json: async () => ({ inventory_mutation_revision: 41 }),
+  });
+  let requests = 0;
+  context.fetchAndRender = async (_url, _push, options) => {
+    requests += 1;
+    const payload = {
+      artist_groups: [], primary_artist_groups: [], family_artist_groups: [],
+      inventory_mutation_revision: 41,
+    };
+    if (!options.shouldApplyResponse(payload)) return false;
+    context.state.view.artist_groups = payload.artist_groups;
+    return true;
+  };
+  context.document.getElementById = () => null;
+  context.renderView = () => {};
+  context.showRepairAlert = () => {};
+
+  await context.watchSaveTask('filtered-rename', {
+    originalAlbum, optimisticAlbums: [optimisticAlbum],
+    tagEdits: { 'track.flac': { album: 'New Title' } },
+    terminalPayload: {
+      ok: true, task_id: 'filtered-rename', status: 'completed',
+      requires_view_refresh: true, updated_albums: [], inventory_mutation_revision: 41,
+    },
+  });
+
+  assert.equal(requests, 1);
+  assert.equal(context.state.view.artist_groups.length, 0);
+});
+}
+
+test('canonical structural readiness rejects fragmented projections that only cover membership in aggregate', () => {
+  const context = loadHelpers();
+  const existingPaths = Array.from({ length: 13 }, (_value, index) => `existing-${index}`);
+  const movedPaths = Array.from({ length: 3 }, (_value, index) => `moved-${index}`);
+  const existingOptimisticProjection = {
+    key: 'stable-target',
+    name: 'Target',
+    album_artist: 'Artist',
+    year: 2020,
+    preview_only: true,
+    track_count_preview: 13,
+    tracks: [],
+  };
+  const movedOptimisticProjection = {
+    key: 'target::year::2020',
+    name: 'Target',
+    album_artist: 'Artist',
+    year: 2020,
+    tracks: movedPaths.map((path) => ({ path })),
+  };
+  const fragmentedPayload = {
+    artist_groups: [{
+      artist: 'Artist',
+      albums: [
+        existingOptimisticProjection,
+        { ...movedOptimisticProjection, key: 'stale-source-fragment' },
+      ],
+    }],
+  };
+  const consolidatedPayload = {
+    artist_groups: [{
+      artist: 'Artist',
+      albums: [{
+        ...existingOptimisticProjection,
+        track_count_preview: 16,
+        track_paths: [...existingPaths, ...movedPaths],
+      }],
+    }],
+  };
+
+  assert.equal(
+    context.canonicalViewPayloadCoversExpectedTagEdit(
+      fragmentedPayload,
+      movedOptimisticProjection,
+      [existingOptimisticProjection, movedOptimisticProjection],
+    ),
+    false,
+  );
+  assert.equal(
+    context.canonicalViewPayloadCoversExpectedTagEdit(
+      consolidatedPayload,
+      movedOptimisticProjection,
+      [existingOptimisticProjection, movedOptimisticProjection],
+    ),
+    true,
   );
 });
 
@@ -6964,27 +7265,24 @@ test('hydrated incomplete-order detail remains visible under the summary problem
   );
 });
 
-test('problematic search always includes structured summary fields beside compact track-title text', () => {
+test('problematic list preserves server-owned filter and keyset order', () => {
   const { context } = loadProblematicTrackNavigationHelpers();
-  context.state.utility.problematicFiles = [{
-    key: 'structured-search-album',
-    name: 'Structured Match Album',
-    album_artist: 'Structured Match Artist',
-    year: '2026',
-    raw_name: 'Structured Raw Album',
-    raw_album_artist: 'Structured Raw Artist',
-    problem_reasons: ['Incomplete track order'],
-    search_text: 'Only Track Title',
-  }];
-  context.state.utility.selectedProblemFilters = [];
+  context.state.utility.problematicFiles = [
+    { key: 'server-first', name: 'Zulu', problem_reasons: ['Other'] },
+    { key: 'server-second', name: 'Alpha', problem_reasons: ['Missing year'] },
+  ];
+  context.state.utility.selectedProblemFilters = ['Missing year'];
+  context.state.utility.searchQuery = 'not present in this compact page';
+  context.state.utility.problematicFilesPageSignature = JSON.stringify({
+    query: 'not present in this compact page',
+    reasons: ['Missing year'],
+  });
+  context.state.utility.problematicFilesComplete = true;
 
-  for (const query of ['structured match album', 'structured raw artist', '2026', 'incomplete track order']) {
-    context.state.utility.searchQuery = query;
-    assert.deepEqual(
-      Array.from(context.getFilteredProblematicAlbums(), (item) => item.key),
-      ['structured-search-album'],
-    );
-  }
+  assert.deepEqual(
+    Array.from(context.getFilteredProblematicAlbums(), (item) => item.key),
+    ['server-first', 'server-second'],
+  );
 });
 
 test('track problem navigation refreshes one stale loaded summary before selecting the exact track', async () => {
@@ -7030,6 +7328,7 @@ test('track problem navigation refreshes canonical membership when stale detail 
   };
   const summaryLoads = [];
   const detailLoads = [];
+  const targetedLoads = [];
   const opens = [];
   staleAlbum.detail_loaded = false;
   context.loadProblematicAlbumDetail = async (albumKey) => {
@@ -7047,20 +7346,25 @@ test('track problem navigation refreshes canonical membership when stale detail 
     context.state.utility.problematicFiles = [canonicalAlbum];
     return context.state.utility.problematicFiles;
   };
+  context.loadProblematicAlbumDetailForTrack = async (requestedTrackPath) => {
+    targetedLoads.push(requestedTrackPath);
+    return canonicalAlbum;
+  };
   context.openUtilityModal = () => {
     opens.push(context.state.utility.selectedProblematicKey);
   };
 
   await context.openUtilityModalForTrack(trackPath);
 
-  assert.deepEqual(summaryLoads, [true]);
-  assert.deepEqual(detailLoads, [staleAlbum.key, canonicalAlbum.key]);
+  assert.deepEqual(summaryLoads, []);
+  assert.deepEqual(detailLoads, [staleAlbum.key]);
+  assert.deepEqual(targetedLoads, [trackPath]);
   assert.deepEqual(opens, [canonicalAlbum.key]);
   assert.equal(context.state.utility.selectedProblematicKey, canonicalAlbum.key);
   assert.equal(context.state.utility.focusedTrackPath, trackPath);
 });
 
-test('track problem navigation waits out a stale summary before refreshing restored membership', async () => {
+test('track problem navigation uses targeted membership without waiting for a stale summary', async () => {
   const { context, album: staleAlbum, trackPath } = loadProblematicTrackNavigationHelpers();
   const canonicalAlbum = {
     ...staleAlbum,
@@ -7071,7 +7375,7 @@ test('track problem navigation waits out a stale summary before refreshing resto
   const staleSummary = new Promise((resolve) => {
     releaseStaleSummary = resolve;
   });
-  const summaryLoads = [];
+  const targetedLoads = [];
   const opens = [];
   staleAlbum.detail_loaded = false;
   context.state.utility.problematicFilesComplete = false;
@@ -7089,27 +7393,22 @@ test('track problem navigation waits out a stale summary before refreshing resto
     staleAlbum.track_paths = [];
     return staleAlbum;
   };
-  context.loadProblematicFiles = async () => {
-    if (context.state.utility.completeLoadPromise) {
-      summaryLoads.push('reused');
-      return context.state.utility.completeLoadPromise;
-    }
-    summaryLoads.push('fresh');
-    context.state.utility.problematicFiles = [canonicalAlbum];
-    return context.state.utility.problematicFiles;
+  context.loadProblematicAlbumDetailForTrack = async (requestedTrackPath) => {
+    targetedLoads.push(requestedTrackPath);
+    return canonicalAlbum;
   };
   context.openUtilityModal = () => {
     opens.push(context.state.utility.selectedProblematicKey);
   };
 
-  const navigation = context.openUtilityModalForTrack(trackPath);
-  setImmediate(() => releaseStaleSummary(context.state.utility.problematicFiles));
-  await navigation;
+  await context.openUtilityModalForTrack(trackPath);
 
-  assert.deepEqual(summaryLoads, ['fresh']);
+  assert.deepEqual(targetedLoads, [trackPath]);
   assert.deepEqual(opens, [canonicalAlbum.key]);
-  assert.equal(staleDetailLoads, 2);
+  assert.equal(staleDetailLoads, 1);
   assert.equal(context.state.utility.selectedProblematicKey, canonicalAlbum.key);
+  releaseStaleSummary(context.state.utility.problematicFiles);
+  await staleSummary;
 });
 
 test('track problem navigation reuses an in-flight summary before refreshing it again', async () => {
@@ -7167,6 +7466,7 @@ test('track problem navigation refreshes canonical membership when the stale det
   };
   const detailOptions = [];
   const summaryLoads = [];
+  const targetedLoads = [];
   const opens = [];
   staleAlbum.detail_loaded = false;
   context.loadProblematicAlbumDetail = async (_albumKey, _force, options) => {
@@ -7178,6 +7478,10 @@ test('track problem navigation refreshes canonical membership when the stale det
     context.state.utility.problematicFiles = [canonicalAlbum];
     return context.state.utility.problematicFiles;
   };
+  context.loadProblematicAlbumDetailForTrack = async (requestedTrackPath) => {
+    targetedLoads.push(requestedTrackPath);
+    return canonicalAlbum;
+  };
   context.openUtilityModal = () => {
     opens.push(context.state.utility.selectedProblematicKey);
   };
@@ -7188,7 +7492,8 @@ test('track problem navigation refreshes canonical membership when the stale det
     JSON.parse(JSON.stringify(detailOptions)),
     [{ render: false, allowMissing: true }],
   );
-  assert.deepEqual(summaryLoads, [true]);
+  assert.deepEqual(summaryLoads, []);
+  assert.deepEqual(targetedLoads, [trackPath]);
   assert.deepEqual(opens, [canonicalAlbum.key]);
   assert.equal(context.state.utility.selectedProblematicKey, canonicalAlbum.key);
 });
@@ -7599,6 +7904,28 @@ test('Problematic Files accepts a path-free stable-write warning', () => {
   );
 });
 
+test('Problematic Files accepts every durable watcher operational state', () => {
+  const context = {};
+  vm.createContext(context);
+  vm.runInContext(utilityLoaderSource, context, { filename: utilityLoaderPath });
+
+  for (const state of ['cross_root_uncertain', 'rollback_pending_work']) {
+    const result = context.validateProblematicSummaryPayload({
+      ok: true,
+      items: [],
+      operational_items: [{
+        state,
+        root_key: 'root_1234567890abcdef',
+        detected_at: '2026-10-09T12:00:00+00:00',
+        message: 'Some library changes may have been missed.',
+        allowed_actions: { 'library.refresh': true },
+      }],
+    });
+
+    assert.equal(result.operationalItems[0].state, state);
+  }
+});
+
 test('Problematic Files excludes library-wide warnings from album rows and counts', () => {
   const elements = {
     overlay: {},
@@ -7622,6 +7949,10 @@ test('Problematic Files excludes library-wide warnings from album rows and count
           message: 'Some library changes may have been missed.',
           allowed_actions: { 'library.refresh': true },
         }],
+        problematicFiles: [],
+        problematicFilesPageSignature: '',
+        problematicFilesComplete: true,
+        problematicFilesTotal: 0,
         selectedProblematicKey: '',
         selectedProblemFilters: [],
         searchQuery: '',

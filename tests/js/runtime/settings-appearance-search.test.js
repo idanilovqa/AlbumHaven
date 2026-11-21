@@ -51,3 +51,47 @@ test('Integration search filters mounted section rows without replacing the curr
   els.search.value='unmatched';listeners.input();assert.equal(empty.hidden,false);
   els.search.value='';listeners.search();assert.ok(rows.every(row=>!row.hidden));assert.equal(empty.hidden,true);
 });
+
+test('Problematic Files search requests one bounded server-filtered page before rerendering', async () => {
+  const listeners = {};
+  const timers = [];
+  const calls = [];
+  const els = {
+    overlay: { dataset: {}, hidden: false, addEventListener() {} },
+    search: {
+      value: '',
+      addEventListener(name, listener) { listeners[name] = listener; },
+    },
+  };
+  const context = vm.createContext({
+    state: { utility: { activeTab: 'problematic-files', searchQuery: '' } },
+    getUtilityModalElements: () => els,
+    bindOverlayPointerOrigin() {},
+    closeUtilityModal() {},
+    clearTimeout() {},
+    setTimeout(callback) {
+      timers.push(callback);
+      return timers.length;
+    },
+    async loadProblematicFiles(force, options) {
+      calls.push({ force, options });
+      return [];
+    },
+    invalidateProblematicFilesPaging() { calls.push('invalidate'); },
+    renderUtilityModalContent() { calls.push('render'); },
+  });
+  vm.runInContext(fs.readFileSync(path.join(root, 'track-modal-and-gallery.js'), 'utf8'), context);
+  context.attachUtilityModalEvents();
+
+  els.search.value = 'missing year';
+  listeners.input();
+  assert.deepEqual(calls, ['invalidate']);
+  await timers[0]();
+
+  assert.equal(context.state.utility.searchQuery, 'missing year');
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [
+    'invalidate',
+    { force: true, options: { preserveSelectedDetail: true } },
+    'render',
+  ]);
+});

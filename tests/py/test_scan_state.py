@@ -2301,6 +2301,128 @@ def test_fresh_snapshot_hydration_rebuilds_relations_without_rating_seed_intent(
     assert publication_intents == [False]
 
 
+def test_durable_scan_projection_preserves_legacy_status_fields_without_public_job_data():
+    private_path = "C:/Users/private/Music/Artist/Album/01.flac"
+    projected = scan_state.project_durable_full_scan_status(
+        {
+            "state": "running",
+            "progress_current": 3,
+            "progress_total": 8,
+            "current_path": private_path,
+            "phase": "indexing",
+            "mode": "manual_full_rescan",
+            "outcome_code": None,
+            "album_total": 11,
+            "elapsed_seconds": 2.5,
+            "estimated_remaining_seconds": 4.0,
+            "files_per_second": 1.2,
+            "album_folders_processed": 2,
+            "album_folders_total": 7,
+            "relations_processed": 5,
+            "relations_total": 5,
+            "relations_phase": "Artist Family ready",
+            "relations_source": "local",
+        }
+    )
+
+    assert projected == {
+        "scan_in_progress": True,
+        "scan_processed": 3,
+        "scan_total": 8,
+        "scan_percent": 37,
+        "scan_current_path": private_path,
+        "scan_phase": "indexing",
+        "scan_mode": "manual_full_rescan",
+        "scan_outcome": "running",
+        "album_total": 11,
+        "relations_in_progress": False,
+        "relations_processed": 5,
+        "relations_total": 5,
+        "relations_percent": 100,
+        "relations_phase": "Artist Family ready",
+        "relations_source": "local",
+        "scan_elapsed_seconds": 2.5,
+        "scan_estimated_remaining_seconds": 4.0,
+        "scan_files_per_second": 1.2,
+        "scan_album_folders_processed": 2,
+        "scan_album_folders_total": 7,
+    }
+    assert "job_id" not in projected
+    assert "subject_ref" not in projected
+    assert "parameters" not in projected
+
+
+def test_durable_scan_projection_marks_publication_as_relation_work():
+    projected = scan_state.project_durable_full_scan_status(
+        {
+            "state": "running",
+            "progress_current": 8,
+            "progress_total": 8,
+            "phase": "finalizing",
+            "mode": "manual_full_rescan",
+            "album_total": 11,
+        }
+    )
+
+    assert projected["relations_in_progress"] is True
+    assert projected["album_total"] == 11
+
+
+def test_durable_scan_preview_projects_private_file_cache_for_partial_browse(monkeypatch):
+    preview_albums = [SimpleNamespace(key="artist::album")]
+    monkeypatch.setattr(
+        scan_state,
+        "build_albums_from_file_cache",
+        lambda file_cache, separate_release_keys: (
+            preview_albums
+            if file_cache == {"private-track": {"artist": "Artist"}}
+            and separate_release_keys == {"release-a"}
+            else []
+        ),
+    )
+
+    projected = scan_state.project_durable_full_scan_preview(
+        {"albums": [], "file_cache": {}, "scan_in_progress": False},
+        {
+            "file_cache": {"private-track": {"artist": "Artist"}},
+            "separate_release_keys": ("release-a",),
+        },
+    )
+
+    assert projected["scan_in_progress"] is True
+    assert projected["file_cache"] == {"private-track": {"artist": "Artist"}}
+    assert projected["albums"] is preview_albums
+    assert projected["separate_release_keys"] == {"release-a"}
+
+
+def test_post_scan_cover_bridge_preserves_existing_domain_callback_and_revision():
+    calls = []
+
+    completed = scan_state.run_post_scan_cover_refresh_for_state(
+        library_id=19,
+        inventory_revision=41,
+        should_cancel=lambda: False,
+        bridge=lambda **kwargs: calls.append(kwargs) or True,
+    )
+
+    assert completed is True
+    assert calls[0]["library_id"] == 19
+    assert calls[0]["inventory_revision"] == 41
+
+
+def test_post_scan_cover_bridge_never_completes_absent_or_canceled_work():
+    assert scan_state.run_post_scan_cover_refresh_for_state(
+        library_id=19,
+        inventory_revision=41,
+        should_cancel=lambda: False,
+        bridge=None,
+    ) is None
+    assert scan_state.run_post_scan_cover_refresh_for_state(
+        library_id=19,
+        inventory_revision=41,
+        should_cancel=lambda: True,
+        bridge=lambda **_kwargs: pytest.fail("canceled work must not start"),
+    ) is False
 
 @pytest.mark.parametrize("failure_stage", ["scan", "relation"])
 @pytest.mark.parametrize("superseded", [False, True], ids=["current", "superseded"])
@@ -2310,6 +2432,7 @@ def test_scan_future_propagates_failure_without_overwriting_newer_state(
     failure = RuntimeError("scan operation persistence failed")
     followups = []
     newer_state = {}
+    newer_timings = {}
     library_state.update(file_cache={}, albums=[], last_scan=0.0, scan_generation=0)
     _install_scan_cache_adapter(monkeypatch)
     monkeypatch.setattr(scan_state, "load_separate_release_keys", lambda _cfg: set())
@@ -2323,8 +2446,13 @@ def test_scan_future_propagates_failure_without_overwriting_newer_state(
                 scan_mode="manual_full_rescan", scan_outcome="running",
                 scan_current_path="Newer/Album", last_error="newer status",
                 scan_committed_generation=2,
+                scan_elapsed_seconds=19.0,
                 active_scan_preview_state={"scan_generation": 2, "publication_state": {}},
             )
+            library_indexing.reset_scan_stage_timings(library_state)
+            for stage in ("discover", "metadata", "relations"):
+                library_indexing.start_scan_stage(library_state, stage, now=10.0)
+            newer_timings.update(deepcopy(library_state["scan_stage_timings"]))
             newer_state.update(library_state)
         raise failure
 
@@ -2355,6 +2483,8 @@ def test_scan_future_propagates_failure_without_overwriting_newer_state(
     if superseded:
         assert library_state == newer_state
         assert library_state["active_scan_preview_state"] is newer_state["active_scan_preview_state"]
+        assert library_state["scan_stage_timings"] == newer_timings
+        assert library_state["scan_elapsed_seconds"] == 19.0
     else:
         assert library_state["last_error"] == str(failure)
         assert library_state["scan_outcome"] == "failed"
@@ -2397,7 +2527,56 @@ def test_scan_future_cancellation_remains_normal(
     assert "active_scan_preview_state" not in library_state
 
 
-def test_scan_watcher_health_failure_remains_best_effort(
+@pytest.mark.parametrize("superseded_during", ["scan", "relation"])
+def test_superseded_success_preserves_newer_scan_timings_and_elapsed(
+    runtime_config, runtime_logger, library_state, monkeypatch, superseded_during,
+):
+    followups = []
+    newer_timings = {}
+    library_state.update(file_cache={}, albums=[], last_scan=0.0, scan_generation=0)
+    _install_scan_cache_adapter(monkeypatch)
+    monkeypatch.setattr(scan_state, "load_separate_release_keys", lambda _cfg: set())
+    monkeypatch.setattr(scan_state, "build_albums_from_file_cache", lambda *_args: [])
+    monkeypatch.setattr(scan_state, "log_app_event", lambda *_args, **_kwargs: None)
+
+    def supersede():
+        library_state.update(
+            scan_generation=2, scan_in_progress=True, scan_phase="discovering",
+            scan_mode="manual_full_rescan", scan_outcome="running",
+            scan_elapsed_seconds=19.0,
+        )
+        library_indexing.reset_scan_stage_timings(library_state)
+        for stage in ("discover", "metadata", "relations"):
+            library_indexing.start_scan_stage(library_state, stage, now=10.0)
+        newer_timings.update(deepcopy(library_state["scan_stage_timings"]))
+
+    def scan(**_kwargs):
+        if superseded_during == "scan":
+            supersede()
+        return {}, 55.0
+
+    def publish(**_kwargs):
+        assert superseded_during == "relation"
+        supersede()
+
+    scan_state.refresh_library_state(
+        library_state, config=runtime_config, logger=runtime_logger, force=True,
+        cache_lock=scan_state.Lock(), scan_music_incremental=scan,
+        refresh_relation_views=publish,
+        start_manual_cover_refresh=lambda **_kwargs: followups.append("manual"),
+        start_background_cover_refresh=lambda: followups.append("background"),
+        queue_mbid_assertion_follow_up=lambda *_args, **_kwargs: followups.append("mbid"),
+    )
+
+    assert followups == []
+    assert library_state["scan_generation"] == 2
+    assert library_state["scan_in_progress"] is True
+    assert library_state["scan_outcome"] == "running"
+    assert library_state["scan_stage_timings"] == newer_timings
+    assert library_state["scan_elapsed_seconds"] == 19.0
+
+
+def test_scan_publication_keeps_durable_guard_and_ignores_legacy_health_callback(
     runtime_config, runtime_logger, library_state, monkeypatch,
 ):
     followups = []
@@ -2407,9 +2586,20 @@ def test_scan_watcher_health_failure_remains_best_effort(
     monkeypatch.setattr(scan_state, "build_albums_from_file_cache", lambda *_args: [])
     monkeypatch.setattr(scan_state, "log_app_event", lambda *_args, **_kwargs: None)
 
-    def fail_health(**_kwargs):
-        followups.append("health")
-        raise RuntimeError("watcher health failed")
+    runtime_config["_LIBRARY_WATCH_MANUAL_RECOVERY_CALLBACK"] = (
+        lambda **_kwargs: pytest.fail("timestamp recovery must not bypass durable repair")
+    )
+    transaction = object()
+
+    def before_commit(connection):
+        assert connection is transaction
+        followups.append("guard")
+
+    def publish(**options):
+        assert options["before_commit"] is before_commit
+        assert options["expected_inventory_mutation_revision"] == 41
+        options["before_commit"](transaction)
+        followups.append("publication")
 
     def start_background_cover_refresh():
         assert library_state["post_scan_cover_refresh_pending"] is True
@@ -2419,17 +2609,19 @@ def test_scan_watcher_health_failure_remains_best_effort(
     scan_state.refresh_library_state(
         library_state, config=runtime_config, logger=runtime_logger, force=True,
         cache_lock=scan_state.Lock(), scan_music_incremental=lambda **_kwargs: ({}, 55.0),
-        refresh_relation_views=lambda **_kwargs: None,
+        refresh_relation_views=publish,
         start_manual_cover_refresh=lambda **_kwargs: followups.append("manual"),
         start_background_cover_refresh=start_background_cover_refresh,
         queue_mbid_assertion_follow_up=lambda *_args, **_kwargs: followups.append("mbid"),
-        recover_library_watch_health=fail_health,
+        expected_inventory_mutation_revision=41,
+        before_commit=before_commit,
     )
-    assert followups == ["health", "background", "mbid"]
+    assert followups == ["guard", "publication", "background", "mbid"]
     assert library_state["scan_outcome"] == "completed"
     assert library_state["scan_in_progress"] is False
     assert library_state["post_scan_cover_refresh_pending"] is False
     assert library_state["last_error"] is None
+
 
 @pytest.mark.parametrize("projection_ready", [False, True])
 @pytest.mark.parametrize("from_disk", [False, True])

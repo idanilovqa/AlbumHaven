@@ -63,7 +63,3153 @@ GENERATED_PREVIEW_STORAGE_CONSTRAINT_REPAIR_MIGRATION = (
 READONLY_ACCOUNT_PRIVILEGES_MIGRATION = (
     MIGRATIONS_DIR / "0062_narrow_readonly_account_privileges.sql"
 )
+DURABLE_JOBS_MIGRATION = (
+    MIGRATIONS_DIR / "0220_create_durable_job_foundation.sql"
+)
+DURABLE_JOB_CANCELLATION_MIGRATION = (
+    MIGRATIONS_DIR / "0221_request_durable_job_cancellation.sql"
+)
+DURABLE_JOB_BOUNDARY_HARDENING_MIGRATION = (
+    MIGRATIONS_DIR / "0222_harden_durable_job_boundaries.sql"
+)
+DURABLE_JOB_AUTHORIZATION_READS_MIGRATION = (
+    MIGRATIONS_DIR / "0223_grant_worker_authorization_reads.sql"
+)
+DURABLE_JOB_RETENTION_INDEX_MIGRATION = (
+    MIGRATIONS_DIR / "0224_add_job_transition_retention_index.sql"
+)
+SCAN_JOB_INTENTS_MIGRATION = (
+    MIGRATIONS_DIR / "0225_create_scan_job_intents.sql"
+)
+TARGETED_RECONCILIATION_WORKER_MIGRATION = (
+    MIGRATIONS_DIR / "0226_grant_worker_targeted_reconciliation.sql"
+)
+FULL_SCAN_LIFECYCLE_MIGRATION = (
+    MIGRATIONS_DIR / "0227_authorize_full_scan_lifecycle.sql"
+)
+FULL_SCAN_WORKER_MIGRATION = (
+    MIGRATIONS_DIR / "0228_grant_worker_full_scan_execution.sql"
+)
+DURABLE_COVER_STATE_MIGRATION = (
+    MIGRATIONS_DIR / "0229_create_durable_cover_job_state.sql"
+)
+COVER_LOOKUP_WORKER_MIGRATION = (
+    MIGRATIONS_DIR / "0230_grant_worker_cover_lookup.sql"
+)
+COVER_REFRESH_WORKER_MIGRATION = (
+    MIGRATIONS_DIR / "0231_grant_worker_cover_refresh.sql"
+)
+REMOTE_COVER_SAVE_MIGRATION = (
+    MIGRATIONS_DIR / "0232_create_remote_cover_save_checkpoints.sql"
+)
+DURABLE_SCAN_STATUS_MIGRATION = (
+    MIGRATIONS_DIR / "0233_complete_durable_scan_status_projection.sql"
+)
+LASTFM_RETRY_JOB_STATE_MIGRATION = (
+    MIGRATIONS_DIR / "0234_create_lastfm_retry_job_state.sql"
+)
+LASTFM_RETRY_WORKER_MIGRATION = (
+    MIGRATIONS_DIR / "0235_grant_worker_lastfm_retry.sql"
+)
+AUTH_MAIL_JOB_STATE_MIGRATION = (
+    MIGRATIONS_DIR / "0236_create_auth_mail_job_state.sql"
+)
+AUTH_MAIL_WORKER_MIGRATION = (
+    MIGRATIONS_DIR / "0237_grant_worker_auth_mail.sql"
+)
+DURABLE_WORKER_PREFLIGHT_MIGRATION = (
+    MIGRATIONS_DIR / "0238_validate_durable_worker_startup.sql"
+)
+VACATED_STRUCTURAL_ALBUM_MIGRATION = (
+    MIGRATIONS_DIR / "0239_retire_vacated_structural_album.sql"
+)
+WATCHER_RECOVERY_MIGRATION = (
+    MIGRATIONS_DIR / "0240_create_durable_watcher_recovery.sql"
+)
+WATCHER_SESSION_MIGRATION = (
+    MIGRATIONS_DIR / "0241_create_watcher_runtime_sessions.sql"
+)
+WATCHER_PRESERVED_ATTEMPT_RESTART_MIGRATION = (
+    MIGRATIONS_DIR / "0242_preserve_full_scan_progress_on_restart.sql"
+)
+COVER_CONSISTENCY_MIGRATION = (
+    MIGRATIONS_DIR / "0243_close_cover_consistency.sql"
+)
+LIBRARY_WARNING_ACKNOWLEDGEMENT_MIGRATION = (
+    MIGRATIONS_DIR / "0247_acknowledge_mixed_version_library_warnings.sql"
+)
+AUTHORITATIVE_EXCEPTION_CLEAR_MIGRATION = (
+    MIGRATIONS_DIR / "0248_restore_authoritative_exception_clear.sql"
+)
+PROBLEMATIC_PROJECTION_MIGRATION = (
+    MIGRATIONS_DIR / "0249_create_problematic_files_projection.sql"
+)
 BASELINE_MIGRATION = MIGRATIONS_DIR / "0001_create_current_stack_schemas.sql"
+
+
+def _watcher_recovery_sql() -> str:
+    assert WATCHER_RECOVERY_MIGRATION.is_file(), (
+        "missing additive watcher recovery migration 0119"
+    )
+    return _normalized_sql(WATCHER_RECOVERY_MIGRATION.read_text(encoding="utf-8"))
+
+
+def _watcher_function_sql(name: str) -> str:
+    sql = _watcher_recovery_sql()
+    marker = f"create or replace function {name}("
+    assert marker in sql, f"missing watcher function {name}"
+    return sql.split(marker, 1)[1].split(" $$;", 1)[0]
+
+
+def _problematic_projection_function_sql(name: str) -> str:
+    assert PROBLEMATIC_PROJECTION_MIGRATION.is_file(), (
+        "missing additive problematic projection migration 0128"
+    )
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    marker = f"create or replace function {name}("
+    assert marker in sql, f"missing problematic projection function {name}"
+    return sql.split(marker, 1)[1].split(" $$;", 1)[0]
+
+
+def _watcher_session_sql() -> str:
+    assert WATCHER_SESSION_MIGRATION.is_file(), (
+        "missing additive watcher runtime session migration 0120"
+    )
+    return _normalized_sql(WATCHER_SESSION_MIGRATION.read_text(encoding="utf-8"))
+
+
+def _watcher_session_function_sql(name: str) -> str:
+    sql = _watcher_session_sql()
+    marker = f"create or replace function {name}("
+    assert marker in sql, f"missing watcher session function {name}"
+    return sql.split(marker, 1)[1].split(" $$;", 1)[0]
+
+
+def _watcher_preserved_attempt_restart_sql() -> str:
+    assert WATCHER_PRESERVED_ATTEMPT_RESTART_MIGRATION.is_file(), (
+        "missing additive watcher preserved-attempt restart migration 0121"
+    )
+    return _normalized_sql(
+        WATCHER_PRESERVED_ATTEMPT_RESTART_MIGRATION.read_text(encoding="utf-8")
+    )
+
+
+def _cover_consistency_sql() -> str:
+    assert COVER_CONSISTENCY_MIGRATION.is_file(), (
+        "missing additive cover consistency migration 0122"
+    )
+    return _normalized_sql(COVER_CONSISTENCY_MIGRATION.read_text(encoding="utf-8"))
+
+
+def _cover_consistency_function_sql(name: str) -> str:
+    sql = _cover_consistency_sql()
+    marker = f"create or replace function {name}("
+    assert marker in sql, f"missing cover consistency function {name}"
+    return sql.split(marker, 1)[1].split("create or replace function", 1)[0]
+
+
+def test_0120_is_additive_and_keeps_released_0119_bytes():
+    released_0119 = WATCHER_RECOVERY_MIGRATION.read_bytes().replace(b"\r\n", b"\n")
+    while released_0119.startswith(b"-- depends on: "):
+        released_0119 = released_0119.partition(b"\n")[2]
+    assert hashlib.sha256(released_0119).hexdigest() == (
+        "c7a968f87b2d9841b5958cce16e6caca32ecb1e5a5b9708e2efa8046246a6ae6"
+    )
+    assert WATCHER_SESSION_MIGRATION.name == (
+        "0241_create_watcher_runtime_sessions.sql"
+    )
+    session_sql = _watcher_session_sql()
+    assert "alter table library.watcher_lanes" not in session_sql
+    assert "alter table library.watcher_generations" not in session_sql
+
+
+def test_0120_declares_only_session_and_participant_storage():
+    sql = _watcher_session_sql()
+    released_sql = _watcher_recovery_sql()
+
+    assert "create table library.watcher_runtime_sessions" in sql
+    assert "library_id bigint primary key" in sql
+    assert "session_token uuid not null" in sql
+    assert "started_at timestamptz not null" in sql
+    assert "started_at not in ('-infinity'::timestamptz, 'infinity'::timestamptz)" in sql
+    assert "create table library.watcher_runtime_session_participants" in sql
+    assert "primary key (library_id, root_id)" in sql
+    assert (
+        "foreign key (library_id, root_id) references "
+        "library.library_roots(library_id, id) on delete restrict"
+    ) in sql
+    assert (
+        "create unique index if not exists "
+        "library_roots_library_id_id_watcher_uniq"
+    ) in released_sql
+    assert "library_roots_library_id_id_watcher_uniq" not in sql
+    session_indexes = re.findall(
+        r"create\s+(?:unique\s+)?index\s+[^;]+watcher_runtime_session[^;]+;",
+        sql,
+    )
+    assert session_indexes == []
+
+
+def test_0120_definers_have_exact_signatures_and_hardened_search_paths():
+    sql = _watcher_session_sql()
+    signatures = (
+        "library.begin_watcher_runtime_session(bigint,uuid,text[],timestamptz)",
+        "library.expand_watcher_runtime_session_participants(bigint,uuid,text[])",
+        "library.set_watcher_runtime_session_participants(bigint,uuid,text[])",
+        "library.finish_watcher_runtime_session(bigint,uuid)",
+    )
+
+    for signature in signatures:
+        function_name = signature.split("(", 1)[0]
+        body = _watcher_session_function_sql(function_name)
+        assert "security definer" in body
+        assert "set search_path = pg_catalog" in body
+        assert "set search_path = pg_catalog, " not in body
+        assert f"revoke all on function {signature} from public" in sql
+        assert f"revoke all on function {signature} from album_haven_worker" in sql
+        assert f"revoke all on function {signature} from album_haven_readonly" in sql
+        assert f"grant execute on function {signature} to album_haven_app" in sql
+
+
+def test_0120_validates_identity_time_and_bounded_unique_roots():
+    begin = _watcher_session_function_sql(
+        "library.begin_watcher_runtime_session"
+    )
+    expand = _watcher_session_function_sql(
+        "library.expand_watcher_runtime_session_participants"
+    )
+    exact_set = _watcher_session_function_sql(
+        "library.set_watcher_runtime_session_participants"
+    )
+    finish = _watcher_session_function_sql(
+        "library.finish_watcher_runtime_session"
+    )
+
+    for body in (begin, expand, exact_set, finish):
+        assert "p_library_id < 1" in body
+        assert "p_session_token is null" in body
+        assert "errcode = '22023'" in body
+    assert "p_started_at is null" in begin
+    assert "isfinite(p_started_at)" in begin
+    for body in (begin, expand, exact_set):
+        assert "cardinality(p_logical_root_ids) > 256" in body
+        assert "pg_catalog.btrim" in body
+        assert "count(*) <> count(distinct" in body
+
+
+def test_0120_serializes_lifecycle_and_fences_stale_tokens():
+    released_lock = (
+        "perform pg_catalog.pg_advisory_xact_lock( "
+        "pg_catalog.hashtextextended('album-haven:watcher:' || "
+        "p_library_id::text, 0) );"
+    )
+    assert released_lock in _watcher_function_sql(
+        "library.mark_watcher_roots_dirty"
+    )
+    for name in (
+        "library.begin_watcher_runtime_session",
+        "library.expand_watcher_runtime_session_participants",
+        "library.set_watcher_runtime_session_participants",
+        "library.finish_watcher_runtime_session",
+    ):
+        body = _watcher_session_function_sql(name)
+        assert released_lock in body
+        lifecycle_access = min(
+            index
+            for marker in (
+                "library.watcher_runtime_sessions",
+                "library.watcher_runtime_session_participants",
+                "library.library_roots",
+            )
+            if (index := body.find(marker)) >= 0
+        )
+        assert body.index(released_lock) < lifecycle_access
+    for name in (
+        "library.expand_watcher_runtime_session_participants",
+        "library.set_watcher_runtime_session_participants",
+        "library.finish_watcher_runtime_session",
+    ):
+        body = _watcher_session_function_sql(name)
+        assert "session_token = p_session_token" in body
+        assert "errcode = '55000'" in body
+
+
+def test_0120_filters_inactive_prior_participants_before_dirty_recovery():
+    begin = _watcher_session_function_sql(
+        "library.begin_watcher_runtime_session"
+    )
+    active_partition = "root.is_active is true"
+    dirty_call = "library.mark_watcher_roots_dirty"
+
+    assert active_partition in begin
+    assert dirty_call in begin
+    assert begin.index(active_partition) < begin.index(dirty_call)
+    assert "order by root.id" in begin
+    assert "'overflow'" in begin
+    assert "recovered_logical_root_id" in begin
+
+
+def test_0120_rejects_ambiguous_active_prior_metadata_before_dirty_recovery():
+    begin = _watcher_session_function_sql(
+        "library.begin_watcher_runtime_session"
+    )
+    dirty_call = begin.index("library.mark_watcher_roots_dirty")
+
+    required_prior_scope_guards = (
+        "root.metadata ->> 'root_id' is null",
+        "pg_catalog.btrim(root.metadata ->> 'root_id') = ''",
+        "count(*) <> count(distinct root.metadata ->> 'root_id')",
+    )
+    for guard in required_prior_scope_guards:
+        assert guard in begin
+        assert begin.index(guard) < dirty_call
+
+
+def test_0120_denies_direct_dml_to_every_runtime_role():
+    sql = _watcher_session_sql()
+    relations = (
+        "library.watcher_runtime_sessions",
+        "library.watcher_runtime_session_participants",
+    )
+    roles = ("public", "album_haven_app", "album_haven_worker", "album_haven_readonly")
+
+    for relation in relations:
+        for role in roles:
+            assert f"revoke all on table {relation} from {role}" in sql
+
+
+def test_0121_is_the_exact_ordered_successor_to_unchanged_0120():
+    migration_names = sorted(
+        path.name
+        for path in MIGRATIONS_DIR.iterdir()
+        if path.is_file() and path.suffix.casefold() == ".sql"
+    )
+    predecessor_index = migration_names.index(
+        "0241_create_watcher_runtime_sessions.sql"
+    )
+    assert migration_names[predecessor_index : predecessor_index + 2] == [
+        "0241_create_watcher_runtime_sessions.sql",
+        "0242_preserve_full_scan_progress_on_restart.sql",
+    ]
+    released_0120 = WATCHER_SESSION_MIGRATION.read_bytes().replace(b"\r\n", b"\n")
+    while released_0120.startswith(b"-- depends on: "):
+        released_0120 = released_0120.partition(b"\n")[2]
+    assert hashlib.sha256(released_0120).hexdigest() == (
+        "c42e0f839996eecf12f5b76b48ad9383ddbba7e106148cff63521d0411d44aa0"
+    )
+
+
+def test_0121_only_redefines_the_hardened_scan_intent_sync_contract():
+    sql = _watcher_preserved_attempt_restart_sql()
+    function_names = re.findall(
+        r"create (?:or replace )?function ([a-z0-9_.]+)\(", sql
+    )
+    assert function_names == ["library.sync_scan_intent_job_state"]
+    assert re.findall(
+        r"\b(?:create|alter|drop) (?:index|schema|sequence|table|trigger|type)\b",
+        sql,
+    ) == []
+    assert "security definer" in sql
+    assert "set search_path = pg_catalog" in sql
+    assert "set search_path = pg_catalog, " not in sql
+
+    preserved_attempt = (
+        "when old.state = 'running' and new.state = 'retry_wait' "
+        "and new.attempt_count = old.attempt_count - 1 then null "
+        "else intent.execution_attempt end"
+    )
+    assert "if new.kind = 'full_scan'" in sql
+    assert preserved_attempt in sql
+    for progress_field in (
+        "progress_current",
+        "progress_total",
+        "progress_phase",
+        "current_path",
+    ):
+        assert progress_field not in sql
+
+
+@pytest.mark.parametrize("publication", ["full_scan", "targeted_reconciliation"])
+@pytest.mark.parametrize("inventory_helper", [False, True])
+def test_cover_consistency_replaces_existing_scan_publication_signatures(
+    publication, inventory_helper
+):
+    public_name = f"library.publish_claimed_{publication}"
+    name = public_name + ("_inventory_0106" if inventory_helper else "")
+    replacement = _cover_consistency_function_sql(name)
+    baseline = _watcher_function_sql(public_name)
+    assert replacement.split(") returns", 1)[0] == baseline.split(") returns", 1)[0]
+    assert f"drop function {public_name}(" not in _cover_consistency_sql()
+    if not inventory_helper:
+        assert replacement.split("language", 1)[0] == baseline.split("language", 1)[0]
+
+
+@pytest.mark.parametrize("publication", ["full_scan", "targeted_reconciliation"])
+def test_cover_consistency_scan_inventory_helpers_do_not_write_cover_authority(publication):
+    body = _cover_consistency_function_sql(
+        f"library.publish_claimed_{publication}_inventory_0106"
+    ).split("$$;", 1)[0]
+    assert "pg_advisory_xact_lock(hashtext('album-haven:local-inventory-publication'))" in "".join(body.split())
+    album_inserts = re.findall(r"insert into library\.local_albums\s*\((.*?)\)", body)
+    assert album_inserts, "inventory helper must retain album publication"
+    assert all("cover_path" not in columns for columns in album_inserts)
+    assert not re.search(r"\bcover_path\s*=", body)
+    stripped_arrays = re.findall(r"-\s*array\[(.*?)\]", body)
+    assert stripped_arrays, "inventory metadata must remove cover authority keys"
+    stripped_keys = " ".join(stripped_arrays)
+    for key in (
+        "cover_path", "cover_revision", "cover_selection_origin", "remote_cover_url",
+        "remote_cover_thumbnail_url", "remote_cover_source", "remote_cover_source_label",
+        "remote_cover_album_url", "remote_cover_width", "remote_cover_height",
+    ):
+        assert f"'{key}'" in stripped_keys, f"missing stripped cover metadata key {key}"
+    assert "scan_cache" in body and "file_entry" in body
+    assert "inventory_mutation_revision" in body
+    if publication == "targeted_reconciliation":
+        assert "targeted_album_key_map" in body
+        assert "watcher_generation_participants" in body
+        assert "source_root_ref" in body
+
+
+@pytest.mark.parametrize("publication", ["full_scan", "targeted_reconciliation"])
+def test_cover_consistency_scan_observations_precede_watcher_completion(publication):
+    body = _cover_consistency_function_sql(f"library.publish_claimed_{publication}").split("$$;", 1)[0]
+    assert "intent.captured_cover_mutation_revision" in body
+    for fence in (
+        "job.attempt_count = p_attempt", "job.lease_owner = p_worker_id",
+        "job.lease_token = p_lease_token", "job.lease_expires_at > pg_catalog.clock_timestamp()",
+        "library.watcher_repairs", "library.watcher_lanes", "for update",
+    ):
+        assert fence in body
+    helper = body.index(f"library.publish_claimed_{publication}_inventory_0106(")
+    apply = body.index("library.apply_scanned_cover_observations(")
+    assert helper < apply
+    assert "if coalesce(v_publication.publication_won, false) then" in body[helper:apply]
+    assert body.count("library.apply_scanned_cover_observations(") == 1
+    if publication == "full_scan":
+        assert apply < body.index("library.complete_watcher_repair_internal(")
+    else:
+        assert apply < body.index("library.retire_claimed_targeted_reconciliation_vacated_albums(")
+        assert apply < body.index("library.complete_watcher_generation(")
+        assert "pg_temp.targeted_album_key_map" in body
+        assert "intent.publication_attempt" in body
+        assert "intent.committed_inventory_revision" in body
+
+
+def test_cover_consistency_worker_startup_preserves_baseline_and_watcher_contracts():
+    body = _cover_consistency_function_sql("ops.validate_durable_worker_startup").split("$$;", 1)[0]
+    baseline = _watcher_function_sql("ops.validate_durable_worker_startup")
+    signatures = re.findall(r"'((?:library|ops)\.[^']+\([^']*\))'", baseline)
+    assert len(signatures) == 9
+    for signature in signatures:
+        assert f"'{signature}'" in body
+    for boundary in (
+        "ops.validate_durable_worker_startup_baseline_0105(p_registered_kinds)",
+        "to_regprocedure(required.signature)", "has_function_privilege(",
+        "session_user", "'execute'", "return false", "exception when others",
+    ):
+        assert boundary in body
+
+
+@pytest.mark.parametrize("signature", [
+    "ops.load_claimed_cover_finalization(bigint,integer,text,text,timestamptz)",
+    "ops.advance_claimed_cover_finalization(bigint,bigint,integer,text,text,bigint,text,timestamptz)",
+    "ops.retry_claimed_cover_finalization(bigint,integer,text,text,timestamptz,text,timestamptz)",
+    "ops.requeue_expired_cover_finalization(timestamptz)",
+    "ops.reconcile_stale_job_leases(timestamptz,integer)",
+])
+def test_cover_consistency_worker_startup_requires_finalization_functions_and_grants(signature):
+    body = _cover_consistency_function_sql("ops.validate_durable_worker_startup").split("$$;", 1)[0]
+    assert f"'{signature}'" in body or f"'{signature.replace('timestamptz', 'timestamp with time zone')}'" in body
+    sql = _cover_consistency_sql().replace(", ", ",")
+    for role in ("public", "album_haven_app", "album_haven_readonly"):
+        assert f"revoke all on function {signature} from {role}" in sql
+    assert f"grant execute on function {signature} to album_haven_worker" in sql
+
+
+def test_0128_is_the_exact_ordered_successor_to_0127():
+    migration_names = sorted(
+        path.name
+        for path in MIGRATIONS_DIR.iterdir()
+        if path.is_file() and path.suffix.casefold() == ".sql"
+    )
+
+    expected_tail = [
+        "0242_preserve_full_scan_progress_on_restart.sql",
+        "0243_close_cover_consistency.sql",
+        "0244_preserve_newer_watcher_incident_presentation.sql",
+        "0245_close_worker_preflight_cover_contract.sql",
+        "0246_preserve_cover_selection_metadata.sql",
+        "0247_acknowledge_mixed_version_library_warnings.sql",
+        "0248_restore_authoritative_exception_clear.sql",
+        "0249_create_problematic_files_projection.sql",
+        "0250_restore_incomplete_album_contract.sql",
+        "0262_create_lastfm_reauthentication_continuations.sql",
+        "0263_refresh_reconciled_album_cover_cache.sql",
+        "0264_preserve_invalid_legacy_scan_warnings.sql",
+        "0265_grant_claimed_cover_selection_read.sql",
+    ]
+
+
+    assert migration_names[-len(expected_tail):] == expected_tail
+
+
+def test_0128_declares_bounded_problematic_projection_storage_and_indexes():
+    assert PROBLEMATIC_PROJECTION_MIGRATION.is_file()
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    for table in (
+        "ops.problematic_projection_state",
+        "ops.problematic_projection_headers",
+        "ops.problematic_projection_items",
+        "ops.problematic_projection_source_staging",
+        "ops.problematic_projection_item_staging",
+    ):
+        assert f"create table if not exists {table}" in sql
+        for role in ("public", "album_haven_app", "album_haven_worker", "album_haven_readonly"):
+            assert f"revoke all on table {table} from {role}" in sql
+    for table in (
+        "ops.problematic_projection_state",
+        "ops.problematic_projection_headers",
+        "ops.problematic_projection_items",
+    ):
+        assert f"grant select on table {table} to album_haven_app" in sql
+        assert f"grant select on table {table} to album_haven_readonly" in sql
+    assert (
+        "grant select on table ops.problematic_projection_source_staging "
+        "to album_haven_app"
+    ) not in sql
+    assert (
+        "grant select on table ops.problematic_projection_item_staging "
+        "to album_haven_app"
+    ) not in sql
+    assert "using gin (reasons)" in sql
+    assert "using gin (search_text library.gin_trgm_ops)" in sql
+    assert "(library_id, revision, sort_title, sort_artist, sort_year, sort_album_key, item_key)" in sql
+    assert "jsonb_typeof(summary) = 'object'" in sql
+    assert "octet_length(summary::text) <= 65536" in sql
+    assert "requested_attempt integer" in sql
+    assert "source_xid_fence xid8" in sql
+    assert "audit_claim_token uuid" in sql
+
+
+def test_0128_declares_claim_owned_reason_fact_staging():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    marker = (
+        "create table if not exists "
+        "ops.problematic_projection_reason_fact_staging"
+    )
+    assert marker in sql
+    table_sql = sql.split(marker, 1)[1].split("create table if not exists", 1)[0]
+
+    assert (
+        "primary key ( job_id, attempt, revision, item_key, normalized_reason, "
+        "display_reason, category_reason )"
+    ) in table_sql
+    assert (
+        "foreign key (job_id, attempt, revision, item_key) references "
+        "ops.problematic_projection_item_staging( job_id, attempt, revision, "
+        "item_key ) on update cascade on delete cascade"
+    ) in table_sql
+    for field_name in ("normalized_reason", "display_reason"):
+        assert f"{field_name} <> ''" in table_sql
+        assert f"octet_length({field_name}) <= 4096" in table_sql
+    for role in (
+        "public",
+        "album_haven_app",
+        "album_haven_worker",
+        "album_haven_readonly",
+    ):
+        assert (
+            "revoke all on table ops.problematic_projection_reason_fact_staging "
+            f"from {role}"
+        ) in sql
+    assert (
+        "grant select on table ops.problematic_projection_reason_fact_staging"
+        not in sql
+    )
+    signature = (
+        "ops.stage_claimed_problematic_projection_reason_facts("
+        "bigint,integer,text,text,bigint,bigint,bigint,uuid,text,text,jsonb,"
+        "timestamptz)"
+    )
+    for role in ("public", "album_haven_app", "album_haven_readonly"):
+        assert f"revoke all on function {signature} from {role}" in sql
+    assert f"grant execute on function {signature} to album_haven_worker" in sql
+    assert f"grant execute on function {signature} to album_haven_app" not in sql
+    startup = _problematic_projection_function_sql(
+        "ops.validate_durable_worker_startup"
+    )
+    assert "'ops.stage_claimed_problematic_projection_reason_facts(" in startup
+
+
+def test_0128_reason_fact_staging_is_claim_fenced_group_scoped_and_idempotent():
+    function_sql = _problematic_projection_function_sql(
+        "ops.stage_claimed_problematic_projection_reason_facts"
+    )
+
+    assert "p_facts is null" in function_sql
+    assert "jsonb_typeof(p_facts) <> 'array'" in function_sql
+    assert "jsonb_array_length(p_facts) not between 1 and 100" in function_sql
+    assert "ops.validate_claimed_problematic_projection" in function_sql
+    assert "ops.problematic_projection_item_staging" in function_sql
+    for scope_column in (
+        "job_id",
+        "attempt",
+        "revision",
+        "group_kind",
+        "group_identity",
+        "item_key",
+    ):
+        assert scope_column in function_sql
+    for field_name in ("item_key", "normalized_reason", "display_reason"):
+        assert f"jsonb_typeof(fact -> '{field_name}') <> 'string'" in function_sql
+        assert f"fact ->> '{field_name}'" in function_sql
+        assert f"nullif(fact ->> '{field_name}', '') is null" in function_sql
+        assert f"octet_length(fact ->> '{field_name}') > 4096" in function_sql
+    assert "on conflict do nothing" in function_sql
+
+
+def test_0128_projection_staging_has_no_set_wide_ordinal_or_window_pass():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "row_number(" not in sql
+    assert "count(*) over" not in sql
+    assert "with ordinality" not in sql
+    assert not re.search(r"\bordinal\b", sql)
+
+    assert (
+        "from ops.problematic_projection_item_staging as item_staging "
+        "where item_staging.job_id = p_job_id"
+    ) in sql
+
+
+def test_0128_repairs_unbounded_scan_tag_numeric_casts_without_changing_index_contract():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    repair_sql = sql.split(
+        "create or replace function library.problematic_release_identity", 1
+    )[0]
+    assert "drop column if exists scan_file_metadata_problem_candidate" in repair_sql
+    assert "add column scan_file_metadata_problem_candidate boolean generated always as" in repair_sql
+    assert "::numeric" not in repair_sql
+    assert "regexp_replace(" in repair_sql
+    assert "!~ '^[1-9][0-9]?$'" in repair_sql
+    assert "create index local_track_files_active_track_id_idx" in repair_sql
+    assert "create index local_track_files_problem_candidate_v5_idx" in repair_sql
+
+
+def test_0128_coalesces_projection_invalidation_and_fences_publication():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "source_xid_fence xid8" in sql
+    assert "pg_catalog.pg_current_xact_id()" in sql
+    assert (
+        "problematic_projection_state.source_xid_fence is distinct from "
+        "current_fence"
+    ) in sql
+    assert "for update;" in sql
+    assert "requested_job_id = p_job_id" in sql
+    assert "requested_attempt = p_attempt" in sql
+    assert "requested_revision = p_revision" in sql
+
+
+def test_0128_claim_cleanup_retention_and_integrity_audit_are_bounded():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "for update skip locked" in sql
+    assert "audit_claim_token = p_audit_claim_token" in sql
+    assert "audit_after_item_key is not distinct from p_expected_after_item_key" in sql
+    assert "limit least(greatest(p_limit, 1), 100)" in sql
+    assert "delete from ops.problematic_projection_source_staging" in sql
+    assert "delete from ops.problematic_projection_item_staging" in sql
+
+
+    assert (
+        "order by predecessor.source_generation desc, "
+        "predecessor.rebuild_epoch desc, predecessor.revision desc"
+    ) in sql
+    assert "limit 2" in sql
+    assert "ops.reclaim_one_abandoned_problematic_projection" in sql
+    assert "job.state in ('succeeded', 'failed', 'canceled', 'ambiguous')" in sql
+    assert "database_now timestamptz := pg_catalog.clock_timestamp()" in sql
+    assert "job.state = 'running' and job.lease_expires_at < database_now" in sql
+    assert "state.live_job_id = job.id" in sql
+    assert "state.requested_attempt = job.attempt_count" in sql
+
+
+def test_problematic_projection_accumulator_is_scalar_and_persisted():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    table = sql.split(
+        "create table if not exists ops.problematic_projection_group_accumulators",
+        1,
+    )[1].split(");", 1)[0]
+
+    for column in (
+        "after_stage_id bigint not null",
+        "next_batch_index integer not null",
+        "row_count bigint not null",
+    ):
+        assert column in table
+    assert "json" not in table
+    assert "[]" not in table
+    assert "create table if not exists ops.problematic_projection_group_facts" in sql
+
+
+def test_0128_reason_identity_and_audit_leases_use_exact_database_owned_state():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    publish = sql.split(
+        "create or replace function ops.publish_claimed_problematic_projection(", 1
+    )[1].split("create or replace function", 1)[0]
+    load = sql.split(
+        "create or replace function ops.load_due_problematic_projection_integrity_audit(",
+        1,
+    )[1].split("create or replace function", 1)[0]
+    advance = sql.split(
+        "create or replace function ops.advance_problematic_projection_integrity_audit(",
+        1,
+    )[1].split("create or replace function", 1)[0]
+    page = sql.split(
+        "create or replace function ops.load_problematic_projection_integrity_page(",
+        1,
+    )[1].split("create or replace function", 1)[0]
+    complete = sql.split(
+        "create or replace function ops.complete_problematic_projection_integrity_audit(",
+        1,
+    )[1].split("revoke all on table", 1)[0]
+
+    assert "display_reason, category_reason" in sql
+    assert "category_reason as identity_three" in page
+    assert "fact.identity_three" in page
+    reason_key = ", ".join(
+        f'reason_fact.{column} collate "c"'
+        for column in ("item_key", "normalized_reason", "display_reason", "category_reason")
+    )
+    search_key = ", ".join(
+        f'search_fact.{column} collate "c"'
+        for column in ("item_key", "fact_kind", "semantic_child_identity")
+    )
+    assert f"and ( {reason_key} ) > (" in page
+    assert f"order by {reason_key}" in page
+    assert f"and ( {search_key}, ''::text collate \"c\" ) > (" in page
+    assert f"order by {search_key}" in page
+    for parameter in (
+        "p_after_fact_type", "p_after_item_key", "p_after_identity_one",
+        "p_after_identity_two", "p_after_identity_three",
+    ):
+        assert f"coalesce({parameter}, '') collate \"c\"" in page
+    assert (
+        'order by fact.fact_type collate "c", fact.item_key collate "c", '
+        'fact.identity_one collate "c", fact.identity_two collate "c", '
+        'fact.identity_three collate "c"'
+    ) in page
+    assert "category_reason" in publish.split(
+        "into projected_reason_fact_count", 1
+    )[0]
+    assert "audit_after_identity_three" in load
+    assert "audit_after_identity_three" in advance
+    assert "p_observed_at" not in load
+    assert "p_observed_at" not in advance
+    assert "p_observed_at" not in complete
+    assert "pg_catalog.clock_timestamp()" in load
+    assert "interval '5 minutes'" in load
+    assert "interval '5 minutes'" in advance
+    assert "interval '5 minutes'" in complete
+    assert "next_integrity_audit_at = pg_catalog.clock_timestamp()" in advance
+    assert "next_integrity_audit_at = database_now" in complete
+
+
+def test_problematic_projection_invalidation_is_column_and_predicate_specific():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "after update of requested_at, completed_at" not in sql
+    assert "after update of updated_at" not in sql
+    expected_columns = {
+        "library.library_roots": {"root_kind", "is_active"},
+        "library.local_albums": {
+            "artist_id",
+            "album_key",
+            "title",
+            "release_year",
+            "cover_path",
+        },
+        "library.local_artists": {"name"},
+        "library.local_tracks": {
+            "album_id",
+            "track_key",
+            "title",
+            "disc_number",
+            "track_number",
+            "duration_seconds",
+        },
+        "library.local_track_files": {
+            "track_id",
+            "private_path",
+            "file_size_bytes",
+            "library_root_id",
+        },
+        "library.separate_releases": {"release_key"},
+        "library.exception_overrides": {"track_id", "track_key"},
+        "library.ignored_repairs": {"repair_key"},
+    }
+    for table, expected in expected_columns.items():
+        trigger = re.search(
+            r"create trigger invalidate_problematic_projection_update "
+            rf"after update of (?P<columns>[a-z_, ]+) on {re.escape(table)} "
+            r"for each statement",
+            sql,
+        )
+        assert trigger is not None, f"missing scoped invalidation trigger for {table}"
+        assert {
+            column.strip() for column in trigger.group("columns").split(",")
+        } == expected
+
+    ownership_tables = {
+        "library.library_roots",
+        "library.local_albums",
+        "library.local_artists",
+        "library.local_tracks",
+        "library.separate_releases",
+        "library.exception_overrides",
+        "library.ignored_repairs",
+    }
+    assert sql.count(
+        "create trigger invalidate_problematic_projection_ownership_update"
+    ) == len(ownership_tables)
+    for table in ownership_tables:
+        assert re.search(
+            r"create trigger invalidate_problematic_projection_ownership_update "
+            rf"after update on {re.escape(table)} "
+            r"referencing old table as old_rows new table as new_rows "
+            r"for each statement execute function "
+            r"ops\.invalidate_problematic_projection_ownership_move\(\);",
+            sql,
+        ), f"missing statement-scoped ownership invalidation for {table}"
+
+    ownership_function = _problematic_projection_function_sql(
+        "ops.invalidate_problematic_projection_ownership_move"
+    )
+    assert ownership_function.count(
+        "from ops.resolve_problematic_projection_library() resolved"
+    ) == 1
+    assert "from old_rows as old_row" in ownership_function
+    assert "join new_rows as new_row using (id)" in ownership_function
+    assert "old_row.library_id is distinct from new_row.library_id" in ownership_function
+    assert ownership_function.count(
+        "perform ops.invalidate_problematic_projection_library(canonical_library_id)"
+    ) == 1
+
+
+def test_problematic_projection_cover_quota_transition_invalidates_once():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "on ops.cover_lookup_tasks" in sql
+    for predicate in (
+        "automatic_cover_provider_outcomes_v1",
+        "search_spotify",
+        "rate_limit_quota",
+        "status = 'failed'",
+        "source_xid_fence is distinct from current_fence",
+    ):
+        assert predicate in sql
+    assert "cover_lookup_tasks_problematic_quota_idx" in sql
+
+
+def test_0128_variable_driven_writes_qualify_target_columns():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    statements = re.findall(
+        r"(?:update|delete from) ops\.[a-z_]+.*?;",
+        sql,
+        flags=re.DOTALL,
+    )
+    target_columns = (
+        "library_id",
+        "job_id",
+        "attempt",
+        "revision",
+        "live_job_id",
+        "source_generation",
+        "rebuild_epoch",
+        "requested_job_id",
+        "requested_attempt",
+        "requested_revision",
+        "committed_revision",
+        "audit_revision",
+        "audit_claim_token",
+        "audit_after_item_key",
+    )
+
+    for statement in statements:
+        if not re.search(r"\b(?:p_[a-z_]+|selected_[a-z_]+|state_row)\b", statement):
+            continue
+        target = re.match(
+            r"(?:update|delete from) ops\.[a-z_]+ as ([a-z_]+)",
+            statement,
+        )
+        assert target is not None, statement
+        where_clause = statement.split(" where ", 1)[1]
+        for column in target_columns:
+            assert not re.search(
+                rf"(?<![.\w]){column}\b\s*(?:=|<>|is\b)",
+                where_clause,
+            ), statement
+
+
+@pytest.mark.parametrize(
+    "function_name",
+    (
+        "ops.stage_claimed_problematic_projection_source",
+        "ops.complete_claimed_problematic_projection_group",
+    ),
+)
+def test_0128_projection_state_mutations_are_atomically_claim_fenced(
+    function_name,
+):
+    function_sql = _problematic_projection_function_sql(function_name)
+    state_update = function_sql.split(
+        "update ops.problematic_projection_state", 1
+    )[1].split(";", 1)[0]
+    exact_fence = all(
+        predicate in state_update
+        for predicate in (
+            "projection_state.live_job_id = p_job_id",
+            "projection_state.source_generation = p_source_generation",
+            "projection_state.rebuild_epoch = p_rebuild_epoch",
+            "projection_state.build_revision = p_revision",
+            "projection_state.requested_job_id = p_job_id",
+            "projection_state.requested_attempt = p_attempt",
+            "projection_state.requested_revision = p_revision",
+        )
+    )
+    locked_recheck = (
+        "for update" in function_sql
+        and function_sql.count("ops.validate_claimed_problematic_projection") >= 2
+    )
+
+    assert exact_fence or locked_recheck
+
+
+def test_0128_source_selection_bounds_keys_before_library_diagnostics():
+    function_sql = _problematic_projection_function_sql(
+        "ops.load_claimed_problematic_projection_source"
+    )
+    first_bounded_keyset = function_sql.index(" limit ")
+
+    assert first_bounded_keyset < function_sql.index(
+        "selected_album_state as materialized"
+    )
+    assert first_bounded_keyset < function_sql.index(
+        "join library.local_track_files candidate_file"
+    )
+
+
+def test_0128_source_selection_persists_a_bounded_raw_album_scan_cursor():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    state_sql = sql.split(
+        "create table if not exists ops.problematic_projection_state", 1
+    )[1].split(");", 1)[0]
+    function_sql = _problematic_projection_function_sql(
+        "ops.load_claimed_problematic_projection_source"
+    )
+    first_album_scan = function_sql.index("from library.local_albums album")
+    first_file_classification = function_sql.index(
+        "join library.local_track_files", first_album_scan
+    )
+    first_album_limit = function_sql.index(" limit ", first_album_scan)
+
+    assert first_album_limit < first_file_classification
+    scan_kind = re.search(r"\b((?:scan|skip)[a-z_]*kind)\s+text\b", state_sql)
+    scan_identity = re.search(
+        r"\b((?:scan|skip)[a-z_]*identity)\s+text\b", state_sql
+    )
+    assert scan_kind is not None
+    assert scan_identity is not None
+    assert f"state.{scan_kind.group(1)}" in function_sql
+    assert f"state.{scan_identity.group(1)}" in function_sql
+
+
+def test_0128_source_selection_bounds_children_before_duplicate_expansion():
+    function_sql = _problematic_projection_function_sql(
+        "ops.load_claimed_problematic_projection_source"
+    )
+
+    child_page_limit = function_sql.index(
+        "limit least(p_limit, p_child_limit, 100)"
+    )
+    duplicate_expansion = function_sql.index(
+        "join library.local_track_files candidate_file"
+    )
+
+    assert child_page_limit < duplicate_expansion
+
+
+def test_0128_source_phases_probe_more_work_without_materializing_cap_plus_one():
+    function_sql = _problematic_projection_function_sql(
+        "ops.load_claimed_problematic_projection_source"
+    )
+    capped_phase_limits = re.findall(
+        r"limit least\(p_limit, p_child_limit, 100\)\s*\+\s*1",
+        function_sql,
+    )
+    completion_sql = function_sql.split("select source.group_kind", 1)[1]
+
+    assert not capped_phase_limits
+    assert completion_sql.count("exists (") >= 3
+    assert "from ops.problematic_projection_group_facts" in completion_sql
+    assert "from library.local_track_files" in completion_sql
+    assert "join library.local_tracks" in completion_sql
+
+
+def test_0128_source_rows_page_featured_artists_and_ignored_repairs_as_facts():
+    function_sql = _problematic_projection_function_sql(
+        "ops.load_claimed_problematic_projection_source"
+    )
+    source_rows_sql = function_sql.split("source_rows as materialized", 1)[1]
+
+    assert "array_agg(" not in source_rows_sql
+    assert "'featured_artist'" in function_sql
+    assert "'ignored_repair'" in function_sql
+
+
+def test_0128_companion_completion_checks_unconsumed_lookup_facts():
+    function_sql = _problematic_projection_function_sql(
+        "ops.load_claimed_problematic_projection_source"
+    )
+    completion_sql = function_sql.rsplit(
+        "union all select active.group_kind",
+        1,
+    )[1]
+
+    assert completion_sql.count(
+        "from ops.problematic_projection_group_facts"
+    ) >= 2
+    assert completion_sql.count("fact_kind = 'duplicate_lookup'") >= 2
+
+
+def test_0128_companion_discovery_crosses_roots_and_validates_container():
+    function_sql = _problematic_projection_function_sql(
+        "ops.load_claimed_problematic_projection_source"
+    )
+    companion_sql = function_sql.split(
+        "companion_candidates as materialized",
+        1,
+    )[1].split("source_keys as materialized", 1)[0]
+
+    assert "candidate_root.library_id = p_library_id" in companion_sql
+    assert (
+        "candidate_root.id = (lookup.fact_value ->> 'library_root_id')::bigint"
+        not in companion_sql
+    )
+    assert "problematic_physical_album_container" in companion_sql
+    assert "not exists" in companion_sql
+
+
+def test_0128_source_group_and_child_selection_are_bounded_before_aggregation():
+    function_sql = _problematic_projection_function_sql(
+        "ops.load_claimed_problematic_projection_source"
+    )
+    bounded_group_sql = function_sql.split(
+        "bounded_groups as materialized",
+        1,
+    )[1].split("active_group as materialized", 1)[0]
+
+    assert "exists (" not in bounded_group_sql
+    assert "join library.local_track_files" not in bounded_group_sql
+    assert "album_status as materialized" not in function_sql
+
+
+def test_0128_physical_container_uses_the_python_ascii_disc_boundary():
+    from music_app.services import library
+
+    function_sql = _problematic_projection_function_sql(
+        "library.problematic_physical_album_container"
+    )
+
+    assert "[a-za-z0-9]" in library._DISC_FOLDER_RE.pattern.casefold()
+    assert "[a-za-z0-9]" in function_sql
+    assert "[:alnum:]" not in function_sql
+
+
+def test_0128_disc_folder_digits_are_ascii_in_python_and_sql():
+    from music_app.services import library
+
+    function_sql = _problematic_projection_function_sql(
+        "library.problematic_physical_album_container"
+    )
+    unicode_disc_path = r"C:\Music\Album\Disc ЩЎ\song.flac"
+
+    assert library._DISC_FOLDER_RE.search("Disc 1") is not None
+    assert library._DISC_FOLDER_RE.search("Disc ЩЎ") is None
+    assert library._track_album_container(unicode_disc_path).casefold().endswith(
+        "disc ЩЎ"
+    )
+    assert "[0-9]{1,2}" in function_sql
+    assert "\\d" not in function_sql
+    assert "[:digit:]" not in function_sql
+
+
+def test_0128_cover_quota_update_requires_a_projection_relevant_change():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    trigger_sql = sql.split(
+        "create trigger invalidate_problematic_projection_quota_update", 1
+    )[1].split("execute function ops.invalidate_problematic_projection()", 1)[0]
+    qualifier_end = trigger_sql.index(
+        "and new.metadata ->> 'category' = 'rate_limit_quota'"
+    ) + len("and new.metadata ->> 'category' = 'rate_limit_quota'")
+
+    assert trigger_sql[qualifier_end:].lstrip().startswith(") ) and row(")
+
+
+def test_0128_fact_checkpoint_returns_the_persisted_source_completion_state():
+    function_sql = _problematic_projection_function_sql(
+        "ops.checkpoint_claimed_problematic_projection_group_facts"
+    )
+
+    assert "source_complete boolean" in function_sql.split("language plpgsql", 1)[0]
+    assert "accumulator.source_complete" in function_sql
+
+
+def test_0128_terminal_failure_atomically_queues_one_replacement_epoch():
+    function_sql = _problematic_projection_function_sql(
+        "ops.fail_claimed_problematic_projection"
+    )
+
+    assert function_sql.count("p_reason_code") >= 2
+    assert "insert into ops.jobs" in function_sql
+    assert "rebuild_epoch = projection_state.rebuild_epoch + 1" in function_sql
+
+
+def test_0128_abandoned_reclaim_uses_database_clock_for_lease_expiry():
+    function_sql = _problematic_projection_function_sql(
+        "ops.reclaim_one_abandoned_problematic_projection"
+    )
+
+    assert "database_now timestamptz := pg_catalog.clock_timestamp()" in function_sql
+    assert function_sql.count("lease_expires_at < database_now") == 2
+    assert "lease_expires_at < p_observed_at" not in function_sql
+
+
+def test_0128_terminal_replacement_keeps_the_closed_authorization_parameters():
+    function_sql = _problematic_projection_function_sql(
+        "ops.fail_claimed_problematic_projection"
+    )
+    job_parameters = function_sql.split(
+        "pg_catalog.jsonb_build_object(", 1
+    )[1].split("), p_library_id", 1)[0]
+
+    assert "'projection_kind'" in job_parameters
+    assert "'source_generation'" in job_parameters
+    assert "'rebuild_epoch'" in job_parameters
+    assert "'recovery_reason'" not in job_parameters
+
+
+def test_0128_new_retry_attempt_rebinds_resumable_staging_to_the_new_attempt():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    prepare_start = sql.index(
+        "create or replace function ops.prepare_claimed_problematic_projection"
+    )
+    prepare_end = sql.index(
+        "create or replace function ops.validate_claimed_problematic_projection",
+        prepare_start,
+    )
+    prepare_sql = sql[prepare_start:prepare_end]
+
+    assert "selected_state.requested_attempt is distinct from p_attempt" in prepare_sql
+    assert "update ops.problematic_projection_source_staging as source_staging" in prepare_sql
+    assert "update ops.problematic_projection_item_staging as item_staging" in prepare_sql
+    assert (
+        "update ops.problematic_projection_group_accumulators as accumulator"
+        in prepare_sql
+    )
+    assert "set attempt = p_attempt" in prepare_sql
+    assert "attempt = selected_state.requested_attempt" in prepare_sql
+    assert "revision = selected_state.build_revision" in prepare_sql
+    assert "build_revision = pg_catalog.gen_random_uuid()" in prepare_sql
+    assert "group_kind = null" in prepare_sql
+    assert "group_identity = null" in prepare_sql
+    assert "source_kind = null" in prepare_sql
+    assert "source_identity = null" in prepare_sql
+    assert "child_kind = null" in prepare_sql
+    assert "child_identity = null" in prepare_sql
+
+
+def test_0128_scopes_rule_arrays_to_each_source_album_and_file():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    source_start = sql.index(
+        "create or replace function ops.load_claimed_problematic_projection_source"
+    )
+    source_end = sql.index(
+        "create or replace function ops.stage_claimed_problematic_projection_source",
+        source_start,
+    )
+    source_sql = sql[source_start:source_end]
+
+    assert "global_inputs as" not in source_sql
+    assert "cross join global_inputs" not in source_sql
+    assert "separate_release.library_id = album.library_id" in source_sql
+    assert "separate_release.release_key = album.album_key" in source_sql
+    assert "ignored_repair.library_id = p_library_id" in source_sql
+    assert (
+        "split_part(ignored_repair.repair_key, '::', 1) = "
+        "row_projection.fact_value ->> 'file_private_path'"
+    ) in source_sql
+    assert (
+        "ignored_repair.metadata ->> 'album_key' = "
+        "row_projection.fact_value ->> 'album_key'"
+    ) in source_sql
+
+
+def test_0128_source_rows_project_compact_metadata_and_page_ignores_as_facts():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    source_start = sql.index(
+        "create or replace function ops.load_claimed_problematic_projection_source"
+    )
+    source_end = sql.index(
+        "create or replace function ops.stage_claimed_problematic_projection_source",
+        source_start,
+    )
+    source_sql = sql[source_start:source_end]
+    hydrated_rows = source_sql.split("source_rows as materialized (", 1)[1]
+    album_rows = hydrated_rows.split("union all select source_keys.group_kind", 1)[0]
+
+    assert "select album.*" not in source_sql
+    assert "select album.id, album.library_id" in source_sql
+    assert "'album_metadata', album.metadata" not in album_rows
+    assert "'file_entry', file.metadata #> '{scan_cache,file_entry}'" not in album_rows
+    for field in (
+        "'album_artist'",
+        "'album_edition'",
+        "'album_rating'",
+        "'file_entry_is_object'",
+        "'file_track_number'",
+        "'file_year'",
+        "'file_genre'",
+        "'file_disc_number'",
+    ):
+        assert field in album_rows
+    assert "'ignored_repair_keys'" not in hydrated_rows
+    assert "jsonb_agg(ignored_repair.repair_key" not in hydrated_rows
+    assert "ignored_repair_candidates as materialized" in source_sql
+    assert "from ignored_repair_candidates ignored" in source_sql
+    ignored_candidates = source_sql.split(
+        "ignored_repair_candidates as materialized (", 1
+    )[1].split("), duplicate_lookups as materialized", 1)[0]
+    ignored_rows = source_sql.split(
+        "from ignored_repair_candidates ignored", 1
+    )[0].rsplit("select ignored.group_kind", 1)[1]
+    assert "ignored_repair.repair_key as child_identity" not in ignored_candidates
+    assert "ignored_repair.repair_key as fact_value" not in ignored_candidates
+    assert "lpad(ignored_repair.id::text, 20, '0')" in ignored_candidates
+    assert "ignored_repair_hash" in ignored_candidates
+    assert "'ignored_repair_hash', ignored.fact_value" in ignored_rows
+
+
+def test_0128_persisted_sort_and_item_key_bounds_match_staging_validation():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    for contract in (
+        "octet_length(item_key) <= 256",
+        "octet_length(sort_title) <= 512",
+        "octet_length(sort_artist) <= 512",
+        "octet_length(sort_year) <= 64",
+        "octet_length(sort_album_key) <= 512",
+    ):
+        assert sql.count(contract) >= 2
+    stage_function = _problematic_projection_function_sql(
+        "ops.stage_claimed_problematic_projection_items"
+    )
+    assert "octet_length(item ->> 'item_key') > 256" in stage_function
+    assert "octet_length(coalesce(item ->> 'sort_title', '')) > 512" in stage_function
+    assert "invalid projection item sort contract" in stage_function
+
+
+def test_0128_stages_only_bounded_normalized_search_chunk_facts():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    function_sql = sql.split(
+        "create or replace function ops.stage_claimed_problematic_projection_items",
+        1,
+    )[1].split("create or replace function", 1)[0]
+
+    assert "octet_length(normalized_text) <= 32768" in sql
+    assert "problematic_projection_search_facts using gin" in sql
+    assert "(normalized_text library.gin_trgm_ops)" in sql
+
+    assert "problematic_projection_search_fact_staging" not in function_sql
+    search_stage = sql.split(
+        "create or replace function "
+        "ops.stage_claimed_problematic_projection_search_facts(",
+        1,
+    )[1].split("create or replace function", 1)[0]
+    assert "security definer" in search_stage
+    assert "set search_path = pg_catalog" in search_stage
+    assert "ops.validate_claimed_problematic_projection(" in search_stage
+    for search_fact_kind in (
+        "track_title_search",
+        "private_path_search",
+        "album_title_search",
+        "album_artist_search",
+        "album_key_search",
+    ):
+        assert f"'{search_fact_kind}'" in search_stage
+    assert "fact.fact_kind in ('track_title', 'private_path')" not in search_stage
+    assert "fact.fact_value ->> 'normalized_text'" in search_stage
+    assert "least(greatest(p_limit, 1), 100)" in search_stage
+    semantic_key = (
+        'fact.projection_id collate "c", fact.fact_kind collate "c", '
+        'fact.semantic_child_identity collate "c"'
+    )
+    assert f"order by {semantic_key}" in search_stage
+    assert f"( {semantic_key} ) > (" in search_stage
+    assert "fact.semantic_child_identity" in search_stage
+    assert "problematic_projection_item_staging" in search_stage
+    assert "problematic_projection_search_fact_staging" in search_stage
+    assert "on conflict" in search_stage
+    assert "return query select" in search_stage
+    assert "complete" in search_stage
+
+    complete_group = sql.split(
+        "create or replace function "
+        "ops.complete_claimed_problematic_projection_group(",
+        1,
+    )[1].split("create or replace function", 1)[0]
+    assert "track_title_search" in complete_group
+    assert "private_path_search" in complete_group
+    assert "album_title_search" in complete_group
+    assert "album_artist_search" in complete_group
+    assert "album_key_search" in complete_group
+    assert "projection search facts are not fully staged" in complete_group
+
+    headers = sql.split(
+        "create table if not exists ops.problematic_projection_headers (", 1
+    )[1].split(");", 1)[0]
+    assert "search_fact_count bigint not null" in headers
+    assert "search_fingerprint bit(256) not null" in headers
+
+    publish = sql.split(
+        "create or replace function ops.publish_claimed_problematic_projection(", 1
+    )[1].split("create or replace function", 1)[0]
+    assert "projected_search_fact_count" in publish
+    assert "projected_search_fingerprint" in publish
+    for value in (
+        "item_key",
+        "fact_kind",
+        "semantic_child_identity",
+        "normalized_text",
+    ):
+        assert f"convert_to({value}, 'utf8')" in publish
+    assert "search_fact_count, search_fingerprint" in publish
+
+    integrity_page = sql.split(
+        "create or replace function ops.load_problematic_projection_integrity_page(",
+        1,
+    )[1].split("create or replace function", 1)[0]
+    assert "'reason'::text as fact_type" in integrity_page
+    assert "'search'::text as fact_type" in integrity_page
+    assert "union all" in integrity_page
+    assert "problematic_projection_search_facts" in integrity_page
+    assert "limit least(greatest(p_limit, 1), 100)" in integrity_page
+
+    complete_audit = sql.split(
+        "create or replace function "
+        "ops.complete_problematic_projection_integrity_audit(",
+        1,
+    )[1].split("revoke all on table", 1)[0]
+    assert "expected_search_fact_count" in complete_audit
+    assert "expected_search_fingerprint" in complete_audit
+    assert "p_search_fact_count" in complete_audit
+    assert "p_search_fingerprint" in complete_audit
+
+    signature = (
+        "ops.stage_claimed_problematic_projection_search_facts("
+        "bigint,integer,text,text,bigint,bigint,bigint,uuid,text,text,"
+        "text,text,text,integer,timestamptz)"
+    )
+    assert f"revoke all on function {signature} from public" in sql
+    assert f"grant execute on function {signature} to album_haven_worker" in sql
+
+
+def test_0128_ownership_moves_invalidate_only_the_resolved_canonical_library():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    function_start = sql.index(
+        "create or replace function ops.invalidate_problematic_projection_ownership_move"
+    )
+    function_end = sql.index("drop trigger", function_start)
+    function_sql = sql[function_start:function_end]
+
+    assert "ops.resolve_problematic_projection_library()" in function_sql
+    assert "canonical_library_id" in function_sql
+    assert function_sql.count(
+        "perform ops.invalidate_problematic_projection_library(canonical_library_id)"
+    ) == 1
+    assert "old_row.library_id is not distinct from canonical_library_id" in function_sql
+    assert "new_row.library_id is not distinct from canonical_library_id" in function_sql
+    assert "invalidate_problematic_projection_library(old.library_id)" not in function_sql
+    assert "invalidate_problematic_projection_library(new.library_id)" not in function_sql
+
+
+def test_0128_ownership_moves_are_deduplicated_per_update_statement():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    function_start = sql.index(
+        "create or replace function ops.invalidate_problematic_projection_ownership_move"
+    )
+    function_end = sql.index("drop trigger", function_start)
+    function_sql = sql[function_start:function_end]
+
+    assert "from old_rows as old_row" in function_sql
+    assert "join new_rows as new_row using (id)" in function_sql
+    assert function_sql.count(
+        "perform ops.invalidate_problematic_projection_library(canonical_library_id)"
+    ) == 1
+    for table in (
+        "library.library_roots",
+        "library.local_albums",
+        "library.local_artists",
+        "library.local_tracks",
+        "library.separate_releases",
+        "library.exception_overrides",
+        "library.ignored_repairs",
+    ):
+        trigger = re.search(
+            rf"create trigger invalidate_problematic_projection_ownership_update "
+            rf"after update on {re.escape(table)} "
+            rf"referencing old table as old_rows new table as new_rows "
+            rf"for each statement execute function "
+            rf"ops\.invalidate_problematic_projection_ownership_move\(\);",
+            sql,
+        )
+        assert trigger is not None
+
+
+def test_0128_compact_metadata_invalidation_compares_only_projector_fields():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    invalidation = _problematic_projection_function_sql(
+        "ops.invalidate_problematic_projection_metadata_update"
+    )
+
+    assert "from old_rows as old_row" in invalidation
+    assert "join new_rows as new_row using (id)" in invalidation
+    assert "old_row.library_id is not distinct from $1" in invalidation
+    assert "old_row.metadata is distinct from new_row.metadata" not in invalidation
+    assert "old_row.scan_cache_stale" in invalidation
+    for unrelated_key in ("comment", "lyrics", "custom_tag"):
+        assert unrelated_key not in invalidation
+    for consumed_path in (
+        "album_artist",
+        "edition",
+        "album_rating",
+        "{scan_cache,file_entry,title}",
+        "{scan_cache,file_entry,track_number}",
+        "{scan_cache,file_entry,exception_type}",
+        "{scan_cache,stale_marked_at}",
+    ):
+        assert consumed_path in invalidation
+    assert invalidation.count(
+        "perform ops.invalidate_problematic_projection_library(canonical_library_id)"
+    ) == 1
+    assert "old_row.override_payload ->> 'exception_type'" in invalidation
+    assert sql.count("ops.invalidate_problematic_projection_metadata_update('") == 3
+    assert "after update of artist_id, album_key, title, release_year, cover_path " in sql
+    assert "after update of track_id, private_path, file_size_bytes, library_root_id " in sql
+    assert "after update of track_id, track_key on library.exception_overrides" in sql
+    assert "after update of repair_key on library.ignored_repairs" in sql
+
+
+def test_0128_invalidation_ignores_only_missing_canonical_bootstrap_state():
+    generic = _problematic_projection_function_sql(
+        "ops.invalidate_problematic_projection"
+    )
+    assert "when sqlstate '55000'" in generic
+    assert "tg_op = 'insert'" in generic
+    assert "('app', 'bootstrap_owners')" in generic
+    assert "('library', 'libraries')" in generic
+    assert "and not exists (" in generic
+    assert "owner.owner_key = 'local-bootstrap-owner'" in generic
+    assert "local_library.library_kind = 'local'" in generic
+    assert "raise;" in generic
+    for function_name in (
+        "ops.invalidate_problematic_projection_metadata_update",
+        "ops.invalidate_problematic_projection_ownership_move",
+    ):
+        body = _problematic_projection_function_sql(function_name)
+        assert "when sqlstate '55000'" not in body
+
+
+def test_0128_integrity_keyset_has_matching_c_collated_composite_indexes():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    assert (
+        'create index if not exists problematic_projection_reason_facts_integrity_idx '
+        'on ops.problematic_projection_reason_facts '
+        '(library_id, revision, item_key collate "c", normalized_reason collate "c", '
+        'display_reason collate "c", category_reason collate "c")'
+    ) in sql
+    assert (
+        'create index if not exists problematic_projection_search_facts_integrity_idx '
+        'on ops.problematic_projection_search_facts '
+        '(library_id, revision, item_key collate "c", fact_kind collate "c", '
+        'semantic_child_identity collate "c")'
+    ) in sql
+
+
+def test_0128_closes_projection_functions_to_exact_roles():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    ).replace(", ", ",")
+    app_functions = (
+        "ops.resolve_problematic_projection_library()",
+        "ops.enqueue_problematic_projection_rebuild(bigint,text)",
+    )
+    worker_functions = (
+        "ops.prepare_claimed_problematic_projection(bigint,integer,text,text,timestamptz)",
+        "ops.validate_claimed_problematic_projection(bigint,integer,text,text,bigint,bigint,bigint,uuid,timestamptz)",
+        "ops.load_claimed_problematic_projection_source(bigint,integer,text,text,bigint,bigint,bigint,uuid,integer,integer,timestamptz)",
+        "ops.stage_claimed_problematic_projection_source(bigint,integer,text,text,bigint,bigint,bigint,uuid,text,text,text,text,text,text,jsonb,boolean,timestamptz)",
+        "ops.load_claimed_problematic_projection_staged_group(bigint,integer,text,text,bigint,bigint,bigint,uuid,text,text,bigint,integer,timestamptz)",
+        "ops.load_claimed_problematic_projection_group_accumulator(bigint,integer,text,text,bigint,bigint,bigint,uuid,text,text,timestamptz)",
+        "ops.advance_claimed_problematic_projection_group_accumulator(bigint,integer,text,text,bigint,bigint,bigint,uuid,text,text,bigint,bigint,integer,bigint,timestamptz)",
+        "ops.checkpoint_claimed_problematic_projection_group_facts(bigint,integer,text,text,bigint,bigint,bigint,uuid,text,text,bigint,jsonb,integer,bigint,timestamptz)",
+        "ops.load_claimed_problematic_projection_group_facts(bigint,integer,text,text,bigint,bigint,bigint,uuid,text,text,text,text,text,integer,timestamptz)",
+        "ops.stage_claimed_problematic_projection_items(bigint,integer,text,text,bigint,bigint,bigint,uuid,text,text,jsonb,integer,timestamptz)",
+        "ops.stage_claimed_problematic_projection_search_facts(bigint,integer,text,text,bigint,bigint,bigint,uuid,text,text,text,text,text,integer,timestamptz)",
+        "ops.stage_claimed_problematic_projection_reason_facts(bigint,integer,text,text,bigint,bigint,bigint,uuid,text,text,jsonb,timestamptz)",
+        "ops.complete_claimed_problematic_projection_group(bigint,integer,text,text,bigint,bigint,bigint,uuid,text,text,text,text,text,text,timestamptz)",
+        "ops.publish_claimed_problematic_projection(bigint,integer,text,text,bigint,bigint,bigint,uuid,timestamptz)",
+        "ops.fail_claimed_problematic_projection(bigint,integer,text,text,bigint,bigint,bigint,uuid,text,timestamptz)",
+        "ops.cleanup_claimed_problematic_projection(bigint,integer,text,text,bigint,bigint,bigint,uuid,timestamptz)",
+        "ops.reclaim_one_abandoned_problematic_projection(timestamptz)",
+    )
+    for signature in (*app_functions, *worker_functions):
+        assert f"revoke all on function {signature} from public" in sql
+        assert f"revoke all on function {signature} from album_haven_readonly" in sql
+    for signature in app_functions:
+        assert f"grant execute on function {signature} to album_haven_app" in sql
+    for signature in worker_functions:
+        assert f"grant execute on function {signature} to album_haven_worker" in sql
+        assert f"grant execute on function {signature} to album_haven_app" not in sql
+
+
+def test_0128_extends_worker_startup_preflight_for_projection_handler():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "rename to validate_durable_worker_startup_baseline_0125" in sql
+    assert "create or replace function ops.validate_durable_worker_startup(" in sql
+    assert "'problematic_files_projection'" in sql
+    assert re.search(
+        r"ops\.validate_durable_worker_startup_baseline_0125\(\s*"
+        r"array_remove\(p_registered_kinds, 'problematic_files_projection'\)",
+        sql,
+    )
+    assert "ops.problematic_projection_claim_valid" in sql
+    assert "ops.load_due_problematic_projection_integrity_audit" in sql
+    assert "pg_catalog.to_regprocedure(required.signature)" in sql
+    assert "pg_catalog.has_function_privilege(" in sql
+    assert "grant execute on function ops.validate_durable_worker_startup(text[])" in sql
+
+
+def test_0128_worker_startup_accepts_exact_legacy_or_projection_kind_sets():
+    function_sql = _problematic_projection_function_sql(
+        "ops.validate_durable_worker_startup"
+    )
+
+    assert "baseline_kinds constant text[]" in function_sql
+    assert (
+        "p_registered_kinds is not distinct from baseline_kinds"
+        in function_sql
+    )
+    assert (
+        "ops.validate_durable_worker_startup_baseline_0125(p_registered_kinds)"
+        in function_sql
+    )
+    new_set_branch = function_sql.split(
+        "p_registered_kinds is not distinct from expected_kinds",
+        1,
+    )[1]
+    assert "pg_catalog.to_regprocedure(required.signature)" in new_set_branch
+
+
+def test_0128_extends_durable_job_kind_without_weakening_existing_policies():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    assert "'problematic_files_projection'" in sql
+    assert "kind = 'problematic_files_projection' and max_attempts = 3" in sql
+    assert "recovery_policy = 'retry_safe'" in sql
+    for existing in (
+        "full_scan", "targeted_reconciliation", "post_scan_cover_refresh",
+        "cover_lookup", "cover_bulk_refresh", "cover_remote_save",
+        "lastfm_scrobble_retry", "auth_welcome_delivery",
+        "auth_invitation_delivery", "auth_password_reset_delivery",
+    ):
+        assert f"'{existing}'" in sql
+
+
+def test_0249_job_recovery_constraint_matches_registered_policies():
+    from music_app.services.jobs.registry import JOB_POLICIES
+
+    definition = "add constraint jobs_kind_recovery_check check ("
+    for migration in reversed(sorted(MIGRATIONS_DIR.glob("*.sql"))):
+        sql = _normalized_sql(migration.read_text(encoding="utf-8"))
+        if definition in sql:
+            break
+    else:
+        pytest.fail("No migration defines jobs_kind_recovery_check")
+    constraint = sql.rsplit(definition, 1)[1].split(");", 1)[0]
+    policies = {}
+    for group in re.finditer(
+        r"kind\s+(?:in\s*\((?P<kinds>[^)]+)\)|=\s*'(?P<kind>[^']+)')"
+        r"\s+and\s+recovery_policy\s*=\s*'(?P<policy>[^']+)'",
+        constraint,
+    ):
+        kinds = re.findall(r"'([^']+)'", group["kinds"]) if group["kinds"] else [group["kind"]]
+        for kind in kinds:
+            assert kind not in policies
+            policies[kind] = group["policy"]
+    assert policies == {kind: policy.recovery_policy.value for kind, policy in JOB_POLICIES.items()}
+
+
+def test_0128_enqueue_matches_the_closed_projection_authorization_contract():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    enqueue_start = sql.index(
+        "create or replace function ops.enqueue_problematic_projection_rebuild"
+    )
+    enqueue_end = sql.index(
+        "create or replace function ops.invalidate_problematic_projection",
+        enqueue_start,
+    )
+    enqueue_sql = sql[enqueue_start:enqueue_end]
+
+    assert "'problematic_files_projection', 'problematic_files_projection'" in enqueue_sql
+    assert "'library:' || p_library_id::text" in enqueue_sql
+    assert "'projection_kind', 'problematic_files'" in enqueue_sql
+    assert "'source_generation', state_row.source_generation" in enqueue_sql
+    assert "'rebuild_epoch', state_row.rebuild_epoch" in enqueue_sql
+    assert "'library_id', p_library_id" not in enqueue_sql
+    assert "'requested_by', p_requested_by" not in enqueue_sql
+    assert "'self_hosted', 'private_web'" in enqueue_sql
+    assert "'server_worker'" not in enqueue_sql
+    assert (
+        "'problematic-files-projection:' || p_library_id::text || ':' || "
+        "state_row.source_generation::text || ':' || state_row.rebuild_epoch::text"
+    ) in enqueue_sql
+
+
+def test_0128_capability_verifier_is_migrator_only_and_uses_worker_registry():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    signature = "ops.problematic_projection_worker_ready(text)"
+    assert "from ops.worker_instances" in sql
+    assert "compatible_schema_version = 1" in sql
+    assert "registered_handler_fingerprint = p_expected_fingerprint" in sql
+    assert "lifecycle_state = 'running'" in sql
+    assert "drain_state = 'none'" in sql
+    assert "last_heartbeat_at >= pg_catalog.clock_timestamp() - interval '90 seconds'" in sql
+    for role in ("public", "album_haven_app", "album_haven_readonly", "album_haven_worker"):
+        assert f"revoke all on function {signature} from {role}" in sql
+    assert f"grant execute on function {signature} to album_haven_migrator" in sql
+
+
+def test_0127_restores_only_explicit_authoritative_exception_clears():
+    assert AUTHORITATIVE_EXCEPTION_CLEAR_MIGRATION.is_file(), (
+        "missing additive authoritative exception-clear migration 0127"
+    )
+    sql = _normalized_sql(
+        AUTHORITATIVE_EXCEPTION_CLEAR_MIGRATION.read_text(encoding="utf-8")
+    )
+    original_clause = (
+        "(nullif(btrim(files.metadata #>> "
+        "'{scan_cache,file_entry,album}'), '') is not null "
+        "and nullif(btrim(files.metadata #>> "
+        "'{scan_cache,file_entry,exception_type}'), '') is null)"
+    )
+    assert (
+        f"original_clause text := $fragment$ {original_clause} $fragment$;"
+        in sql
+    )
+    assert (
+        "pg_catalog.pg_get_functiondef( "
+        "'library.restore_detached_album_noncover(bigint,text[],bigint,jsonb,jsonb,"
+        "timestamp with time zone)'::regprocedure )"
+        in sql
+    )
+    assert (
+        "if pg_catalog.strpos(function_definition, replacement_clause) > 0 "
+        "then return; end if;"
+        in sql
+    )
+    assert (
+        "if pg_catalog.strpos(function_definition, original_clause) = 0 then "
+        "raise exception '0127 detached album eligibility source changed'; end if;"
+        in sql
+    )
+    assert (
+        "execute pg_catalog.replace( function_definition, original_clause, "
+        "replacement_clause );"
+        in sql
+    )
+
+    replacement_clause = sql.split(
+        "replacement_clause text := $fragment$", 1
+    )[1].split("$fragment$;", 1)[0]
+    assert original_clause in replacement_clause
+    assert "and not (" in replacement_clause
+    assert "incoming.file_entry ? 'exception_type'" in replacement_clause
+    assert (
+        "nullif(btrim(incoming.file_entry ->> 'exception_type'), '') is null"
+        in replacement_clause
+    )
+    assert "from library.exception_overrides as authoritative_override" in replacement_clause
+    assert "authoritative_override.library_id = requested_library_id" in replacement_clause
+    assert "authoritative_override.track_key = files.private_path" in replacement_clause
+    assert "authoritative_override.track_id = tracks.id" in replacement_clause
+    assert (
+        "order by case when authoritative_override.track_key = files.private_path "
+        "then 0 when authoritative_override.track_id = tracks.id then 1 else 2 end, "
+        "authoritative_override.updated_at desc, authoritative_override.id desc limit 1"
+        in replacement_clause
+    )
+    assert (
+        "nullif(btrim(authoritative_override.override_payload ->> "
+        "'exception_type'), '')"
+        in replacement_clause
+    )
+    assert replacement_clause.count("incoming.file_entry ? 'exception_type'") == 1
+
+
+def test_0126_exposes_only_restricted_mixed_version_warning_acknowledgements():
+    assert LIBRARY_WARNING_ACKNOWLEDGEMENT_MIGRATION.is_file(), (
+        "missing additive mixed-version warning acknowledgement migration 0126"
+    )
+    sql = _normalized_sql(
+        LIBRARY_WARNING_ACKNOWLEDGEMENT_MIGRATION.read_text(encoding="utf-8")
+    )
+    compact = sql.replace(", ", ",")
+    signatures = (
+        "library.load_library_warning_acknowledgement(bigint,bigint)",
+        "library.acknowledge_library_warning(bigint,bigint,text,timestamptz)",
+    )
+
+    for signature in signatures:
+        function_name = signature.split("(", 1)[0]
+        marker = f"create or replace function {function_name}("
+        assert marker in sql
+        body = sql.split(marker, 1)[1].split("$$;", 1)[0]
+        assert "security definer" in body
+        assert "set search_path = pg_catalog" in body
+        assert f"revoke all on function {signature} from public" in compact
+        assert (
+            f"revoke all on function {signature} from album_haven_worker" in compact
+        )
+        assert (
+            f"revoke all on function {signature} from album_haven_readonly" in compact
+        )
+        assert f"grant execute on function {signature} to album_haven_app" in compact
+
+    loader = sql.split(
+        "create or replace function library.load_library_warning_acknowledgement(",
+        1,
+    )[1].split("$$;", 1)[0]
+    saver = sql.split(
+        "create or replace function library.acknowledge_library_warning(",
+        1,
+    )[1].split("$$;", 1)[0]
+    watcher_lock = (
+        "perform pg_catalog.pg_advisory_xact_lock( "
+        "pg_catalog.hashtextextended("
+        "'album-haven:watcher:' || p_library_id::text, 0) );"
+    )
+    assert "returns text" in loader
+    assert "returns boolean" in saver
+    assert watcher_lock in saver
+    assert saver.index(watcher_lock) < saver.index("for update")
+    assert 'min(incident.warning_token::text collate "c")' in loader
+    assert 'min(nullif(visible.event_id, \'\') collate "c")' in saver
+    assert "grant update on table library.libraries" not in sql
+    assert "grant all" not in sql
+
+
+def test_cover_consistency_migration_is_additive_and_least_privilege():
+    sql = _cover_consistency_sql()
+
+    assert "create table if not exists library.cover_mutation_state" in sql
+    assert "cover_mutation_revision bigint not null default 0" in sql
+    assert "check (cover_mutation_revision >= 0)" in sql
+    assert "primary key (library_id)" in sql
+    for role in (
+        "public",
+        "album_haven_app",
+        "album_haven_worker",
+        "album_haven_readonly",
+    ):
+        assert (
+            f"revoke all on table library.cover_mutation_state from {role}"
+            in sql
+        )
+    assert "grant execute on function library.commit_cover_selection" in sql
+    assert "grant execute on function library.recover_cover_mutation" in sql
+    assert (
+        "grant execute on function library.read_cover_mutation_revision(bigint)"
+        in sql
+    )
+    assert "library.local_albums, library.local_track_files" in sql
+    assert "from album_haven_app" in sql
+    assert "from album_haven_worker" in sql
+    assert "persist_authorized_structural_tag_edit_noncover" in sql
+    drops = re.findall(r"\bdrop\s+table\s+(?:if\s+exists\s+)?([^;]+);", sql)
+    for drop in drops:
+        targets = re.sub(r"\s+(?:cascade|restrict)\s*$", "", drop).split(",")
+        assert all(re.fullmatch(r"pg_temp\.[a-z_][a-z_0-9]*", target.strip()) for target in targets), drop
+
+
+def test_cover_consistency_scan_cover_payload_maps_each_provenance_key_once():
+    sql = _cover_consistency_sql()
+
+    assert (
+        "'cover_selection_origin', submitted_album.metadata -> 'cover_selection_origin', "
+        "'cover_selection_provenance', submitted_album.metadata -> 'cover_selection_provenance'"
+    ) in sql
+    assert (
+        "'cover_selection_origin', 'cover_selection_provenance', "
+        "submitted_album.metadata -> 'cover_selection_origin'"
+    ) not in sql
+
+
+def test_cover_consistency_migration_preserves_job_limits_and_durable_digest():
+    sql = _cover_consistency_sql()
+
+    assert "add column if not exists artifact_sha256 varchar(64)" in sql
+    assert "artifact_sha256 is null or artifact_sha256 ~ '^[0-9a-f]{64}$'" in sql
+    assert "add column if not exists authority_cover_mutation_revision bigint" in sql
+    assert (
+        "authority_cover_mutation_revision is null or "
+        "authority_cover_mutation_revision >= 0"
+    ) in sql
+    for clause in (
+        "kind = 'full_scan' and max_attempts = 2",
+        "kind = 'targeted_reconciliation' and max_attempts = 3",
+        "kind = 'post_scan_cover_refresh' and max_attempts = 2",
+        "kind = 'cover_lookup' and max_attempts = 2",
+        "kind = 'cover_bulk_refresh' and max_attempts = 2",
+        "kind = 'cover_remote_save' and max_attempts >= 1",
+        "kind = 'lastfm_scrobble_retry' and max_attempts = 1",
+        "kind = 'auth_welcome_delivery' and max_attempts = 3",
+        "kind = 'auth_invitation_delivery' and max_attempts = 1",
+        "kind = 'auth_password_reset_delivery' and max_attempts = 1",
+    ):
+        assert clause in sql
+    assert "next_artifact_key uuid, next_artifact_sha256 text" in sql
+    assert (
+        "artifact_sha256 = coalesce(next_artifact_sha256, "
+        "checkpoint.artifact_sha256)"
+    ) in sql
+    assert "next_artifact_sha256 !~ '^[0-9a-f]{64}$'" in sql
+
+
+def test_cover_consistency_migration_revokes_every_new_public_execution_surface():
+    compact_sql = re.sub(r"\s+", "", _cover_consistency_sql())
+    signatures = (
+        "ops.checkpoint_claimed_cover_remote_save"
+        "(bigint,bigint,integer,text,text,timestamptz,bigint,text,uuid,text,text,text)",
+        "ops.load_claimed_cover_finalization(bigint,integer,text,text,timestamptz)",
+        "ops.advance_claimed_cover_finalization"
+        "(bigint,bigint,integer,text,text,bigint,text,timestamptz)",
+        "ops.retry_claimed_cover_finalization"
+        "(bigint,integer,text,text,timestamptz,text,timestamptz)",
+        "ops.requeue_expired_cover_finalization(timestamptz)",
+        "ops.reconcile_stale_job_leases(timestamptz,integer)",
+        "library.apply_scanned_cover_observations(bigint,bigint,jsonb,timestamptz)",
+        "library.persist_authorized_structural_tag_edit_noncover"
+        "(bigint,text[],bigint,jsonb,jsonb,text[],timestamptz)",
+        "library.publish_claimed_full_scan"
+        "(bigint,bigint,integer,varchar,varchar,bigint,jsonb,text[],timestamptz)",
+        "library.publish_claimed_targeted_reconciliation"
+        "(bigint,bigint,integer,varchar,varchar,jsonb,jsonb,timestamptz)",
+    )
+
+    for signature in signatures:
+        assert f"revokeallonfunction{signature}frompublic" in compact_sql
+
+
+def test_cover_consistency_migration_fences_scan_publication():
+    sql = _cover_consistency_sql()
+    compact_sql = "".join(sql.split())
+
+    assert "captured_cover_mutation_revision" in sql
+    lock = "pg_advisory_xact_lock(hashtext('album-haven:local-inventory-publication'))"
+    assert lock in compact_sql
+    assert compact_sql.count(f"perform{lock};") >= 4
+    assert (
+        "pg_advisory_xact_lock(hashtext('album-haven:local-inventory-publication'),"
+        not in compact_sql
+    )
+    assert "expected_cover_mutation_revision" in sql
+    assert "cover_publication_stale" in sql
+
+
+def test_cover_consistency_migration_captures_revision_at_every_intent_table_boundary():
+    sql = _cover_consistency_sql()
+    trigger_function = _cover_consistency_function_sql(
+        "library.capture_scan_intent_cover_revision"
+    )
+
+    assert "returns trigger" in trigger_function
+    assert "if new.captured_cover_mutation_revision is null" in trigger_function
+    assert "values (new.library_id)" in trigger_function
+    assert "into new.captured_cover_mutation_revision" in trigger_function
+    assert "state.library_id = new.library_id" in trigger_function
+    for table, trigger_name in (
+        (
+            "library.full_scan_intents",
+            "full_scan_intents_capture_cover_revision",
+        ),
+        (
+            "library.targeted_reconciliation_intents",
+            "targeted_reconciliation_intents_capture_cover_revision",
+        ),
+    ):
+        assert (
+            f"create trigger {trigger_name} before insert on {table} "
+            "for each row execute function "
+            "library.capture_scan_intent_cover_revision()"
+        ) in sql
+
+    # Keep creator coverage: the trigger is the common boundary for direct and
+    # nested creators, but every effective creator must still insert an intent.
+    baseline_sql = _normalized_sql(scan_job_intents_sql())
+    full_creator = baseline_sql.split(
+        "create or replace function library.create_full_scan_intent(", 1
+    )[1].split(" $$;", 1)[0]
+    assert "insert into library.full_scan_intents" in full_creator
+
+    creator_insert_counts = {
+        "library.create_targeted_reconciliation_intent": 1,
+        "library.mark_watcher_roots_dirty": 1,
+        "library.accept_watcher_event": 1,
+        "library.try_complete_watcher_repairs": 2,
+        "library.fail_claimed_watcher_generation": 1,
+        "library.reconcile_due_watcher_generations": 1,
+    }
+    for function_name, insert_count in creator_insert_counts.items():
+        source = (
+            baseline_sql
+            if function_name == "library.create_targeted_reconciliation_intent"
+            else _watcher_recovery_sql()
+        )
+        body = source.split(f"create or replace function {function_name}(", 1)[1].split(
+            " $$;", 1
+        )[0]
+        assert f"create or replace function {function_name}(" not in sql
+        assert body.count(
+            "insert into library.targeted_reconciliation_intents"
+        ) == insert_count
+
+
+def test_cover_consistency_migration_backfills_only_nonterminal_intents():
+    sql = _cover_consistency_sql()
+
+    for table in (
+        "library.full_scan_intents",
+        "library.targeted_reconciliation_intents",
+    ):
+        statements = [
+            statement
+            for statement in sql.split(";")
+            if f"update {table} as intent" in statement
+            and "captured_cover_mutation_revision" in statement
+        ]
+        assert len(statements) == 1
+        statement = statements[0]
+        assert "from library.cover_mutation_state as state" in statement
+        assert "state.library_id = intent.library_id" in statement
+        assert "intent.state in ('accepted', 'running', 'retry_wait')" in statement
+        assert "intent.captured_cover_mutation_revision is null" in statement
+        assert "'succeeded'" not in statement
+        assert "'failed'" not in statement
+        assert "'canceled'" not in statement
+
+
+def test_cover_consistency_migration_returns_nonnegative_captured_revision_from_both_claims():
+    sql = _cover_consistency_sql()
+
+    assert sql.count(
+        "add column if not exists captured_cover_mutation_revision bigint"
+    ) == 2
+    assert sql.count(
+        "captured_cover_mutation_revision is null or "
+        "captured_cover_mutation_revision >= 0"
+    ) >= 2
+    for loader in (
+        "library.load_claimed_full_scan_intent_v3",
+        "library.load_claimed_targeted_reconciliation_intent_v2",
+    ):
+        body = _cover_consistency_function_sql(loader)
+        assert "captured_cover_mutation_revision bigint" in body
+        assert "intent.captured_cover_mutation_revision" in body
+        assert "intent.captured_cover_mutation_revision is not null" in body
+
+
+def test_cover_consistency_structural_tag_function_is_typed_noncover_authority():
+    sql = _cover_consistency_sql()
+    compact_sql = re.sub(r"\s+", "", sql)
+    signature = (
+        "library.persist_authorized_structural_tag_edit_noncover"
+        "(bigint,text[],bigint,jsonb,jsonb,text[],timestamptz)"
+    )
+    body = _cover_consistency_function_sql(
+        "library.persist_authorized_structural_tag_edit_noncover"
+    )
+
+    assert f"createorreplacefunction{signature}" in compact_sql
+    assert "security definer" in body
+    assert "set search_path = pg_catalog" in body
+    for marker in (
+        "updated_albums",
+        "updated_tracks",
+        "updated_track_files",
+        "inventory_mutation_revision",
+    ):
+        assert marker in body
+    assert "changed_field_names" in body
+    assert "cover_path" in body
+    assert "remote_cover_" in body
+    assert not re.search(r"set\s+cover_path\s*=", body)
+    assert not re.search(
+        r"insert into library\.local_albums\s*\([^)]*\bcover_path\b",
+        body,
+    )
+    assert "validated_source_album.cover_path" not in body
+    assert "sql_fragment" not in body
+    assert "column_name" not in body
+
+
+def test_0120_creates_only_the_approved_schema_objects_and_overloads():
+    sql = _watcher_session_sql()
+
+    assert set(
+        re.findall(
+            r"create (?:temporary |temp )?table (?:if not exists )?"
+            r"([a-z0-9_.]+)",
+            sql,
+        )
+    ) == {
+        "library.watcher_runtime_sessions",
+        "library.watcher_runtime_session_participants",
+    }
+    assert re.findall(
+        r"create sequence (?:if not exists )?([a-z0-9_.]+)", sql
+    ) == []
+    assert re.findall(
+        r"create (?:unique )?index (?:concurrently )?"
+        r"(?:if not exists )?([a-z0-9_.]+)",
+        sql,
+    ) == []
+    function_names = re.findall(
+        r"create (?:or replace )?function ([a-z0-9_.]+)\(",
+        sql,
+    )
+    assert set(function_names) == {
+        "library.begin_watcher_runtime_session",
+        "library.expand_watcher_runtime_session_participants",
+        "library.set_watcher_runtime_session_participants",
+        "library.finish_watcher_runtime_session",
+    }
+    assert len(function_names) == len(set(function_names)) == 4
+    assert re.findall(
+        r"create (?:constraint )?trigger ([a-z0-9_]+)", sql
+    ) == []
+
+
+def test_0119_normalizes_crlf_before_splicing_targeted_authorization_source():
+    sql = _watcher_recovery_sql()
+    splice = sql.split("select pg_catalog.pg_get_functiondef(", 1)[1].split(
+        "execute function_definition;",
+        1,
+    )[0]
+    crlf_normalizer = (
+        "pg_catalog.replace(function_definition, e'\\r\\n', e'\\n')"
+    )
+
+    assert crlf_normalizer in splice
+    assert splice.index(crlf_normalizer) < splice.index(
+        "pg_catalog.strpos(function_definition, root_aware_scope)"
+    )
+
+
+def test_0119_authorizes_root_catch_up_stale_scope_from_active_participants():
+    sql = _watcher_recovery_sql()
+    root_aware_scope = sql.split(
+        "root_aware_scope text := $fragment$", 1
+    )[1].split("$fragment$;", 1)[0]
+
+    assert (
+        "select authorized_primary_root_id as root_id, "
+        "'path'::text as stale_kind, path from unnest(coalesce("
+        "authorized_deleted_paths, array[]::text[])) as item(path)"
+    ) in root_aware_scope
+    assert (
+        "select authorized_primary_root_id, 'subtree', path from unnest("
+        "coalesce(authorized_deleted_subtrees, array[]::text[])) as item(path)"
+    ) in root_aware_scope
+    assert (
+        "select move ->> 'source_root_ref', case when coalesce((move ->> "
+        "'is_directory')::boolean, false) then 'subtree' else 'path' end, "
+        "move ->> 'source_path' from jsonb_array_elements("
+        "coalesce(authorized_moves, '[]'::jsonb)) as item(move)"
+    ) in root_aware_scope
+    assert (
+        "select root.metadata ->> 'root_id', 'subtree', root.root_path"
+        in root_aware_scope
+    )
+    assert (
+        "join library.watcher_generation_participants as participant on "
+        "participant.generation_id = intent.id and participant.library_id = "
+        "intent.library_id"
+    ) in root_aware_scope
+    assert (
+        "join library.library_roots as root on "
+        "root.library_id = participant.library_id and "
+        "root.id = participant.root_id and root.is_active is true"
+    ) in root_aware_scope
+    assert "intent.id = p_intent_id" in root_aware_scope
+    assert (
+        "intent.watcher_generation_kind = 'root_catch_up'"
+        in root_aware_scope
+    )
+
+
+def test_0119_declares_lane_invariants_and_partial_indexes():
+    sql = _watcher_recovery_sql()
+
+    assert "primary key (library_id, root_id)" in sql
+    assert "applied_sequence <= accepted_sequence" in sql
+    assert "repaired_dirty_generation <= dirty_generation" in sql
+    assert "where successor_generation_id is not null" in sql
+    assert "where resolved_at is null" in sql
+    assert "watcher_incidents_identity_immutable" in sql
+    assert "revoke all on table library.watcher_lanes from public" in sql
+    assert (
+        "create index if not exists targeted_reconciliation_watcher_ready_idx "
+        "on library.targeted_reconciliation_intents (accepted_at, id) "
+        "where watcher_job_linked_at is null "
+        "and state = 'accepted' "
+        "and watcher_generation_kind in ('exact', 'root_catch_up');"
+    ) in sql
+
+
+def test_0119_migrates_watcher_scope_without_dropping_legacy_columns():
+    sql = _watcher_recovery_sql()
+
+    assert "add column if not exists root_id bigint" in sql
+    assert "add column if not exists relative_path text" in sql
+    assert "watcher_scope_root_keyed" in sql
+    assert "drop column path" not in sql
+    assert "drop column accepted_primary_root_path" not in sql
+
+
+def test_0119_recreates_mixed_version_targeted_scope_loader():
+    sql = _watcher_recovery_sql()
+    loader = _watcher_function_sql(
+        "library.load_claimed_targeted_reconciliation_intent_v2"
+    )
+
+    assert "scope.root_id" in loader
+    assert "scope.relative_path" in loader
+    assert "load_claimed_targeted_reconciliation_intent_legacy_0107" in loader
+    assert "move.source_root_id" in loader
+    assert "move.destination_root_id" in loader
+    assert "move.source_relative_path" in loader
+    assert "move.destination_relative_path" in loader
+    assert "root.metadata ->> 'root_id'" in loader
+    assert "drop column path" not in sql
+
+
+def test_0119_drops_and_recreates_exact_reserved_publication_identities():
+    sql = _watcher_recovery_sql()
+    full_arguments = (
+        "bigint, bigint, integer, varchar, varchar, bigint, jsonb, text[], "
+        "timestamptz"
+    )
+    targeted_arguments = (
+        "bigint, bigint, integer, varchar, varchar, jsonb, jsonb, timestamptz"
+    )
+
+    assert f"drop function library.publish_claimed_full_scan({full_arguments})" in sql
+    assert (
+        "drop function library.publish_claimed_targeted_reconciliation("
+        f"{targeted_arguments})"
+    ) in sql
+    assert sql.count("create or replace function library.publish_claimed_full_scan(") == 1
+    assert (
+        sql.count(
+            "create or replace function "
+            "library.publish_claimed_targeted_reconciliation("
+        )
+        == 1
+    )
+
+    full = _watcher_function_sql("library.publish_claimed_full_scan")
+    targeted = _watcher_function_sql(
+        "library.publish_claimed_targeted_reconciliation"
+    )
+    for parameter in (
+        "p_intent_id bigint",
+        "p_job_id bigint",
+        "p_attempt integer",
+        "p_worker_id varchar",
+        "p_lease_token varchar",
+        "p_expected_inventory_revision bigint",
+        "p_inventory jsonb",
+        "p_observed_root_ids text[]",
+        "p_now timestamptz",
+    ):
+        assert parameter in full
+    assert (
+        "returns table ( publication_won boolean, "
+        "inventory_mutation_revision bigint, cover_publication_stale boolean, "
+        "cover_mutation_revision bigint )"
+    ) in full
+    for parameter in (
+        "p_intent_id bigint",
+        "p_job_id bigint",
+        "p_attempt integer",
+        "p_worker_id varchar",
+        "p_lease_token varchar",
+        "p_inventory jsonb",
+        "p_stale_scopes jsonb",
+        "p_now timestamptz",
+    ):
+        assert parameter in targeted
+    assert (
+        "returns table ( publication_won boolean, "
+        "inventory_mutation_revision bigint, affected_album_keys text[], "
+        "cover_publication_stale boolean, cover_mutation_revision bigint )"
+    ) in targeted
+
+
+def test_0119_recreates_publication_shapes_and_worker_preflight():
+    sql = _watcher_recovery_sql()
+
+    assert "rename to publish_claimed_full_scan_inventory_0106" in sql
+    assert "rename to publish_claimed_targeted_reconciliation_inventory_0106" in sql
+    assert "from album_haven_worker" in sql
+    assert "create or replace function ops.validate_durable_worker_startup" in sql
+    assert "dispatch_ready_watcher_generations" in sql
+    assert "reconcile_due_watcher_generations" in sql
+
+
+def test_0119_links_manual_full_scans_to_captured_watcher_repairs():
+    sql = _watcher_recovery_sql()
+    creator = _watcher_function_sql("library.create_full_scan_intent_v2")
+    completer = _watcher_function_sql("library.try_complete_watcher_repairs")
+
+    assert "rename to create_full_scan_intent_baseline_0107" in sql
+    assert "library.create_full_scan_intent_baseline_0107(" in creator
+    assert "p_mode = 'manual_full_rescan'" in creator
+    assert "insert into library.watcher_repairs" in creator
+    assert "insert into library.watcher_repair_roots" in creator
+    assert "set watcher_repair_id = v_repair_id" in creator
+    assert "pg_advisory_xact_lock" in creator
+    assert "insert into library.full_scan_intent_roots" in creator
+    assert "on conflict on constraint full_scan_intent_roots_pkey" in creator
+    assert "v_job_state in ('queued', 'retry_wait')" in creator
+    assert "when v_job_state = 'running'" in creator
+    assert "lane.applied_sequence" in creator
+    assert "lane.repaired_dirty_generation" in creator
+    assert "from ops.jobs as job" in creator
+    assert "job.id = accepted.job_id" in creator
+    assert "job.state" in creator
+    assert "select intent.watcher_repair_id" in creator
+    assert "into v_repair_id" in creator
+    assert "watcher_repair_id is null" in creator
+    assert "for update" in creator
+    assert "library_watch_health" in completer
+    assert "watcher_repair_roots" in completer
+
+
+def test_0119_serializes_running_full_scan_repair_admission_with_publication():
+    creator = _watcher_function_sql("library.create_full_scan_intent_v2")
+    publisher = _watcher_function_sql("library.publish_claimed_full_scan")
+    completer = _watcher_function_sql("library.complete_watcher_repair_internal")
+
+    assert "intent.committed_inventory_revision" in creator
+    assert "library.complete_watcher_repair_internal(" in creator
+    assert "published full scan cannot accept watcher repair" not in creator
+    assert (
+        "revoke all on function library.complete_watcher_repair_internal(" in
+        _watcher_recovery_sql()
+    )
+    job_lock = publisher.index("from ops.jobs as job")
+    job_locked = publisher.index("for update of job")
+    intent_lock = publisher.index("from library.full_scan_intents as intent")
+    intent_locked = publisher.index("for update of intent")
+    repair_lock = publisher.index("from library.watcher_repairs as repair")
+    inventory_publication = publisher.index(
+        "library.publish_claimed_full_scan_inventory_0106("
+    )
+    assert (
+        job_lock
+        < job_locked
+        < intent_lock
+        < intent_locked
+        < repair_lock
+        < inventory_publication
+    )
+    assert (
+        completer.index("from ops.jobs as job")
+        < completer.index("for update of job")
+        < completer.index("from library.full_scan_intents as intent")
+        < completer.index("for update of intent")
+        < completer.index("from library.watcher_repairs as repair")
+        < completer.index("for update of repair")
+        < completer.index("from library.watcher_lanes as lane")
+        < completer.index("for update of lane")
+    )
+
+
+def test_0119_rebases_reused_root_catch_up_after_full_scan_publication():
+    completer = _watcher_function_sql("library.complete_watcher_repair_internal")
+    repair_completion = _watcher_function_sql("library.try_complete_watcher_repairs")
+
+    successor_lock = completer.index(
+        "from library.targeted_reconciliation_intents as successor"
+    )
+    participant_update = completer.index(
+        "update library.watcher_generation_participants as participant"
+    )
+    intent_update = completer.index(
+        "update library.targeted_reconciliation_intents as successor",
+        participant_update,
+    )
+    repair_completion_call = completer.index(
+        "library.try_complete_watcher_repairs(array[p_repair_id], p_now)",
+        intent_update,
+    )
+
+    assert completer.index("for update of lane") < successor_lock
+    assert "for update of successor" in completer[successor_lock:participant_update]
+    assert "accepted_sequence_lower = lane.applied_sequence + 1" in completer
+    assert "accepted_sequence_upper = lane.accepted_sequence" in completer
+    assert "dirty_generation = lane.dirty_generation" in completer
+    assert participant_update < intent_update < repair_completion_call
+    assert "delete from library.watcher_generation_repairs" in repair_completion
+
+
+def test_0119_exposes_unresolved_incidents_only_through_app_health_boundary():
+    sql = _watcher_recovery_sql()
+    legacy_loader = _watcher_function_sql("library.load_local_watcher_incidents")
+    durable_loader = _watcher_function_sql("library.load_watcher_status")
+
+    assert "incident.resolved_at is null" in legacy_loader
+    assert "incident.incident_id::text" in legacy_loader
+    assert "incident.warning_token" not in legacy_loader
+    assert "root.metadata ->> 'root_id'" in legacy_loader
+    assert "incident_id uuid, warning_token uuid" in durable_loader
+    assert "incident.incident_id" in durable_loader
+    assert "incident.warning_token" in durable_loader
+    assert "incident.resolved_at is null" in durable_loader
+    assert (
+        "grant execute on function library.load_local_watcher_incidents() "
+        "to album_haven_app"
+    ) in sql
+    assert (
+        "revoke execute on function library.load_local_watcher_incidents() "
+        "from album_haven_worker"
+    ) in sql
+
+
+def test_0119_exposes_incident_acknowledgements_only_through_app_boundaries():
+    sql = _watcher_recovery_sql()
+    loader = _watcher_function_sql(
+        "library.load_local_watcher_incident_acknowledgements"
+    )
+    saver = _watcher_function_sql("library.acknowledge_local_watcher_incidents")
+
+    assert "watcher_incident_acknowledgements" in loader
+    assert "acknowledgement.account_id = p_account_id" in loader
+    assert "incident.resolved_at is null" in loader
+    assert "insert into library.watcher_incident_acknowledgements" in saver
+    assert "incident.resolved_at is null" in saver
+    for function_name in (
+        "load_local_watcher_incident_acknowledgements",
+        "acknowledge_local_watcher_incidents",
+    ):
+        assert f"grant execute on function library.{function_name}(" in sql
+        assert f"revoke all on function library.{function_name}(" in sql
+        assert f"library.{function_name}(" in sql
+        assert "from album_haven_worker" in sql
+        assert "from album_haven_readonly" in sql
+
+
+def test_0119_worker_preflight_requires_every_watcher_boundary_and_grant():
+    sql = _watcher_recovery_sql()
+    preflight = _watcher_function_sql("ops.validate_durable_worker_startup")
+    required = (
+        "library.reconcile_due_watcher_generations(timestamp with time zone,integer)",
+        "library.dispatch_ready_watcher_generations(timestamp with time zone,integer)",
+        "library.load_claimed_watcher_generation(bigint,integer,character varying,character varying,timestamp with time zone)",
+        "library.fail_claimed_watcher_generation(bigint,bigint,integer,character varying,character varying,character varying,timestamp with time zone)",
+        "library.complete_watcher_repair(bigint,bigint,integer,character varying,character varying,bigint,timestamp with time zone)",
+    )
+    for signature in required:
+        assert signature in preflight
+    assert "has_function_privilege" in preflight
+    assert "session_user" in preflight
+    for function_name in (
+        "reconcile_due_watcher_generations",
+        "dispatch_ready_watcher_generations",
+        "load_claimed_watcher_generation",
+        "fail_claimed_watcher_generation",
+        "complete_watcher_repair",
+    ):
+        assert f"grant execute on function library.{function_name}(" in sql
+
+
+def test_0119_indexes_every_foreign_key():
+    sql = _watcher_recovery_sql()
+
+    for index in (
+        "watcher_lanes_root_id_idx",
+        "watcher_lanes_running_generation_idx",
+        "watcher_lanes_successor_generation_idx",
+        "watcher_lanes_running_job_idx",
+        "watcher_generation_participants_library_root_idx",
+        "watcher_generation_participants_root_id_idx",
+        "watcher_barriers_library_id_idx",
+        "watcher_barrier_participants_generation_id_idx",
+        "watcher_barrier_participants_library_root_idx",
+        "watcher_barrier_participants_root_id_idx",
+        "watcher_repair_roots_library_root_idx",
+        "watcher_repair_roots_root_id_idx",
+        "watcher_repair_roots_incident_id_idx",
+        "watcher_legacy_health_imports_root_id_idx",
+        "watcher_incidents_library_id_idx",
+        "watcher_incidents_root_id_idx",
+        "watcher_incident_acknowledgements_account_id_idx",
+        "watcher_generation_repairs_repair_idx",
+        "watcher_generation_repairs_library_id_idx",
+    ):
+        assert f"create index if not exists {index}" in sql
+
+
+def test_0119_keeps_repair_links_and_legacy_import_evidence_private():
+    sql = _watcher_recovery_sql()
+
+    assert "create table if not exists library.watcher_generation_repairs" in sql
+    assert "primary key (generation_id, repair_id)" in sql
+    assert "create table if not exists library.watcher_legacy_health_imports" in sql
+    assert "legacy_library_watch_health_v1" in sql
+    assert "legacy_health_imported" not in sql
+    for table in ("watcher_generation_repairs", "watcher_legacy_health_imports"):
+        assert f"revoke all on table library.{table} from public" in sql
+
+
+def test_0119_declares_every_watcher_relation_and_fk_policy():
+    sql = _watcher_recovery_sql()
+
+    tables = (
+        "watcher_lanes",
+        "watcher_generation_participants",
+        "watcher_barriers",
+        "watcher_barrier_participants",
+        "watcher_incidents",
+        "watcher_repairs",
+        "watcher_repair_roots",
+        "watcher_incident_acknowledgements",
+        "watcher_generation_repairs",
+        "watcher_legacy_health_imports",
+    )
+    for table in tables:
+        assert f"create table if not exists library.{table}" in sql
+        assert f"revoke all on table library.{table} from public" in sql
+    assert "references app.accounts(id) on delete cascade" in sql
+    assert (
+        "references library.watcher_incidents(incident_id, library_id) "
+        "on delete restrict"
+    ) in sql
+    assert "watcher_lanes_running_generation_fk" in sql
+    assert "watcher_lanes_successor_generation_fk" in sql
+    assert "primary key (barrier_id, root_id)" in sql
+    assert "add column if not exists barrier_id" not in sql
+
+
+def test_0119_uses_composite_tenant_fks_and_hardened_definers():
+    sql = _watcher_recovery_sql()
+
+    for target in (
+        "references library.library_roots(library_id, id)",
+        "references library.targeted_reconciliation_intents(id, library_id)",
+        "references library.watcher_barriers(id, library_id)",
+        "references library.watcher_repairs(id, library_id)",
+        "references library.watcher_incidents(incident_id, library_id)",
+    ):
+        assert target in sql
+    assert "set search_path = pg_catalog" in sql
+    assert "set search_path = pg_catalog, library" not in sql
+
+
+def test_0119_composite_tenant_foreign_keys_cover_every_cross_tenant_link():
+    sql = _watcher_recovery_sql()
+
+    for parent_key in (
+        "unique (id, library_id)",
+        "unique (incident_id, library_id)",
+    ):
+        assert parent_key in sql
+    for child_link in (
+        "foreign key (library_id, root_id) references library.library_roots(library_id, id)",
+        "foreign key (generation_id, library_id) references library.targeted_reconciliation_intents(id, library_id)",
+        "foreign key (barrier_id, library_id) references library.watcher_barriers(id, library_id)",
+        "foreign key (repair_id, library_id) references library.watcher_repairs(id, library_id)",
+        "foreign key (incident_id, library_id) references library.watcher_incidents(incident_id, library_id)",
+    ):
+        assert child_link in sql
+
+
+def test_0119_revokes_broad_inherited_runtime_privileges_before_grants():
+    sql = _watcher_recovery_sql()
+
+    for role in ("album_haven_app", "album_haven_worker", "album_haven_readonly"):
+        assert f"revoke all on table library.watcher_lanes from {role}" in sql
+        assert f"revoke all on sequence library.watcher_barriers_id_seq from {role}" in sql
+
+
+def test_0119_reserves_cover_compatible_publication_overloads():
+    sql = _watcher_recovery_sql()
+
+    assert "function library.publish_claimed_full_scan(" in sql
+    assert "function library.publish_claimed_targeted_reconciliation(" in sql
+    assert "publication_won boolean" in sql
+    assert "inventory_mutation_revision bigint" in sql
+    assert "cover_publication_stale boolean" in sql
+    assert "cover_mutation_revision bigint" in sql
+
+
+def test_0119_acceptance_uses_canonical_locking_and_bounded_dirty_conversion():
+    sql = _watcher_recovery_sql()
+
+    assert "function library.accept_watcher_event(" in sql
+    assert "pg_advisory_xact_lock_shared" not in sql
+    assert "pg_advisory_xact_lock(" in sql
+    assert "order by lane.library_id, lane.root_id" in sql
+    assert "for update" in sql
+    assert "watcher_generation_kind = 'root_catch_up'" in sql
+    assert "4096" in sql
+    assert "262144" in sql
+    assert "delete from library.targeted_reconciliation_intent_paths" in sql
+    assert "delete from library.targeted_reconciliation_intent_moves" in sql
+
+
+def test_0119_uses_valid_postgres_expression_and_conflict_syntax():
+    sql = _watcher_recovery_sql()
+
+    assert "pg_catalog.least(" not in sql
+    assert "pg_catalog.greatest(" not in sql
+    assert "pg_catalog.substring(" not in sql
+    assert "pg_catalog.session_user" not in sql
+    assert "on conflict (generation_id, root_id)" not in sql
+    assert "on conflict (generation_id, repair_id)" not in sql
+    assert "where generation_id = intent.id" not in sql
+
+
+def test_0119_scope_budget_is_accumulated_per_participant_root():
+    acceptance = _watcher_function_sql("library.accept_watcher_event")
+
+    assert re.search(
+        r"count\(\*\)[^;]+(?:scope|path)\.root_id\s*=\s*[^;]+\.root_id",
+        acceptance,
+    )
+    assert re.search(
+        r"sum\([^;]*octet_length\([^;]+(?:scope|path)\.root_id\s*=\s*[^;]+\.root_id",
+        acceptance,
+    )
+    assert re.search(r"(?:>=|>)\s*4096", acceptance)
+    assert re.search(r"(?:>=|>)\s*262144", acceptance)
+    assert "watcher_generation_kind = 'root_catch_up'" in acceptance
+
+
+def test_0119_mark_dirty_is_one_app_only_security_definer_boundary():
+    sql = _watcher_recovery_sql()
+
+    assert "function library.mark_watcher_roots_dirty(" in sql
+    assert "security definer" in sql
+    assert "set search_path = pg_catalog" in sql
+    assert "grant execute on function library.mark_watcher_roots_dirty(" in sql
+    assert "to album_haven_app" in sql
+    assert "from album_haven_worker" in sql
+    assert "from album_haven_readonly" in sql
+    for reason in ("overflow", "root_unavailable"):
+        assert f"'{reason}'" in sql
+
+
+def test_0123_normalizes_crlf_before_splicing_mark_dirty_source():
+    migration = (
+        MIGRATIONS_DIR / "0244_preserve_newer_watcher_incident_presentation.sql"
+    )
+    sql = " ".join(migration.read_text(encoding="utf-8").lower().split())
+    splice = sql.split("select pg_catalog.pg_get_functiondef(", 1)[1]
+    first_strpos = splice.index("pg_catalog.strpos(")
+
+    for variable in ("function_definition", "original_clause", "monotonic_clause"):
+        normalizer = (
+            f"{variable} := pg_catalog.replace({variable}, e'\\r\\n', e'\\n')"
+        )
+        assert normalizer in splice
+        assert splice.index(normalizer) < first_strpos
+
+
+def test_0123_mark_dirty_preserves_newer_incident_presentation():
+    migration = MIGRATIONS_DIR / "0244_preserve_newer_watcher_incident_presentation.sql"
+    assert migration.is_file()
+    sql = " ".join(migration.read_text(encoding="utf-8").split())
+
+    assert (
+        "reason_code = case when excluded.last_seen_at >= "
+        "library.watcher_incidents.last_seen_at then excluded.reason_code "
+        "else library.watcher_incidents.reason_code end"
+    ) in sql
+    assert (
+        "last_seen_at = greatest( library.watcher_incidents.last_seen_at, "
+        "excluded.last_seen_at )"
+    ) in sql
+
+
+def test_0124_normalizes_crlf_before_splicing_worker_preflight_source():
+    migration = MIGRATIONS_DIR / "0245_close_worker_preflight_cover_contract.sql"
+    sql = " ".join(migration.read_text(encoding="utf-8").lower().split())
+    splice = sql.split("select pg_catalog.pg_get_functiondef(", 1)[1]
+    first_strpos = splice.index("pg_catalog.strpos(")
+
+    for variable in ("function_definition", "previous_clause", "current_clause"):
+        normalizer = (
+            f"{variable} := pg_catalog.replace({variable}, e'\\r\\n', e'\\n')"
+        )
+        assert normalizer in splice
+        assert splice.index(normalizer) < first_strpos
+
+
+def test_0124_worker_preflight_requires_current_cover_worker_boundaries():
+    migration = MIGRATIONS_DIR / "0245_close_worker_preflight_cover_contract.sql"
+    assert migration.is_file()
+    sql = " ".join(migration.read_text(encoding="utf-8").split())
+
+    assert (
+        "ops.persist_claimed_automatic_cover_selection(bigint,bigint,bigint,integer,"
+        "text,text,timestamp with time zone,text[],text,text,text,boolean,boolean,integer,"
+        "integer,text,text)"
+    ) in sql
+    assert (
+        "ops.persist_claimed_cover_provider_outcome(bigint,bigint,bigint,integer,text,text,"
+        "timestamp with time zone,text,text,text,jsonb,text,jsonb)"
+    ) in sql
+    assert "0124 worker preflight source changed" in sql
+
+
+def test_0119_dispatch_is_worker_only_atomic_and_rechecks_every_lane():
+    sql = _watcher_recovery_sql()
+
+    assert "function library.dispatch_ready_watcher_generations(" in sql
+    assert "for update of candidate skip locked" in sql
+    assert "order by candidate.accepted_at, candidate.id" in sql
+    assert "perform library.link_scan_intent_job(" in sql
+    assert "watcher_job_linked_at" in sql
+    assert "lane promotion raced" in sql
+    assert "grant execute on function library.dispatch_ready_watcher_generations(" in sql
+    assert "to album_haven_worker" in sql
+    assert "from album_haven_app" in sql
+    assert "from album_haven_readonly" in sql
+
+
+def test_0119_dispatch_honors_lane_time_kind_barriers_and_job_context():
+    dispatch = _watcher_function_sql(
+        "library.dispatch_ready_watcher_generations"
+    )
+
+    assert "lane.next_eligible_at <= p_now" in dispatch
+    assert "candidate.watcher_generation_kind in ('exact', 'root_catch_up')" in dispatch
+    assert "candidate_barrier.generation_id = candidate.id" in dispatch
+    assert "peer_lane.applied_sequence < peer.accepted_sequence - 1" in dispatch
+    assert "pg_catalog.jsonb_build_object('intent_id', intent.id)" in dispatch
+    assert "'targeted_reconciliation_intent', intent.id::text" in dispatch
+    assert "intent.deployment_mode, intent.client_surface" in dispatch
+    assert "pg_catalog.max(participant.accepted_sequence_upper)" in dispatch
+    assert "'watcher-generation:' || intent.id::text" in dispatch
+
+
+def test_0119_claim_failure_completion_and_publication_use_generic_job_lease():
+    sql = _watcher_recovery_sql()
+
+    for function_name in (
+        "load_claimed_watcher_generation",
+        "fail_claimed_watcher_generation",
+        "complete_watcher_generation",
+    ):
+        assert f"function library.{function_name}(" in sql
+        function_sql = _watcher_function_sql(f"library.{function_name}")
+        for predicate in (
+            "job.attempt_count = p_attempt",
+            "job.lease_owner = p_worker_id",
+            "job.lease_token = p_lease_token",
+            "job.lease_expires_at > pg_catalog.clock_timestamp()",
+        ):
+            assert predicate in function_sql
+        assert "job.lease_expires_at > p_now" not in function_sql
+    assert "function library.heartbeat_watcher_generation(" not in sql
+    for reason in (
+        "root_unavailable",
+        "overflow",
+        "stable_write_unavailable",
+        "reconciliation_failed",
+        "cross_root_uncertain",
+    ):
+        assert f"'{reason}'" in sql
+
+
+def test_0119_cross_root_barriers_are_many_to_one_and_sequence_fenced():
+    sql = _watcher_recovery_sql()
+
+    assert "insert into library.watcher_barriers" in sql
+    assert "insert into library.watcher_barrier_participants" in sql
+    assert "accepted_sequence" in sql
+    assert "array_agg(distinct barrier.barrier_id order by barrier.barrier_id)" in sql
+    assert "lane.applied_sequence, participant.accepted_sequence_upper" in sql
+    assert "set generation_id = v_generation_id" in sql
+    assert "add column if not exists barrier_id" not in sql
+
+
+def test_0119_failure_rehomes_all_barriers_repairs_and_lanes_to_catch_up():
+    failure = _watcher_function_sql("library.fail_claimed_watcher_generation")
+
+    assert "watcher_generation_kind" in failure
+    assert "'root_catch_up'" in failure
+    assert "update library.watcher_barrier_participants" in failure
+    assert "set generation_id = v_successor_id" in failure
+    assert "insert into library.watcher_generation_repairs" in failure
+    assert "delete from library.watcher_generation_repairs" in failure
+    assert "running_generation_id = null" in failure
+    assert "running_job_id = null" in failure
+    assert "successor_generation_id = v_successor_id" in failure
+    assert "rollback_pending_work" not in failure
+
+
+def test_0119_terminal_cancellation_and_shutdown_recovery_release_running_lanes():
+    recovery = _watcher_function_sql(
+        "library.reconcile_due_watcher_generations"
+    )
+
+    for state in ("'canceled'", "'failed'", "'ambiguous'", "'succeeded'"):
+        assert state in recovery
+    assert "job.state in ('queued', 'retry_wait')" in recovery
+    assert "job.state = 'running'" in recovery
+    assert "job.lease_expires_at > pg_catalog.clock_timestamp()" in recovery
+    assert "update library.watcher_barrier_participants" in recovery
+    assert "insert into library.watcher_generation_repairs" in recovery
+    assert "delete from library.watcher_generation_repairs" in recovery
+    assert "running_generation_id = null" in recovery
+    assert "running_job_id = null" in recovery
+
+
+def test_0119_publication_keeps_retirement_and_watcher_completion_atomic_and_idempotent():
+    publication = _watcher_function_sql(
+        "library.publish_claimed_targeted_reconciliation"
+    )
+    completion = _watcher_function_sql("library.complete_watcher_generation")
+
+    for marker in (
+        "publication_attempt",
+        "committed_inventory_revision",
+        "retire_claimed_targeted_reconciliation_vacated_albums",
+        "complete_watcher_generation",
+    ):
+        assert marker in publication
+    assert "watcher_generation_repairs" in completion
+    assert "try_complete_watcher_repairs" in completion
+    assert "watcher_completed_at" in completion
+    assert "running_generation_id = null" in completion
+    assert "running_job_id = null" in completion
+    completion_call = publication.index("library.complete_watcher_generation")
+    completion_verification = publication.index(
+        "completed.watcher_completed_at is not null",
+        completion_call,
+    )
+    assert completion_call < completion_verification
+    retry_position = publication.index("publication_attempt")
+    retirement_position = publication.index(
+        "retire_claimed_targeted_reconciliation_vacated_albums"
+    )
+    assert "return query" in publication[retry_position:retirement_position]
+
+
+def test_0119_operator_rollback_is_the_only_rollback_pending_work_entry_point():
+    sql = _watcher_recovery_sql()
+    rollback = _watcher_function_sql("library.prepare_legacy_watcher_rollback")
+    failure = _watcher_function_sql("library.fail_claimed_watcher_generation")
+
+    assert "rollback_pending_work" in rollback
+    assert "rollback_pending_work" not in failure
+    assert "revoke all on function library.prepare_legacy_watcher_rollback(" in sql
+    assert "grant execute on function library.prepare_legacy_watcher_rollback(" not in sql
+
+
+def test_durable_scan_status_closes_inventory_relation_and_cover_handoff_gaps():
+    sql = _normalized_sql(DURABLE_SCAN_STATUS_MIGRATION.read_text(encoding="utf-8"))
+
+    assert "count(distinct album.id)" in sql
+    assert "file.metadata #>> '{scan_cache,stale}'" in sql
+    assert "function library.load_authorized_album_total(p_library_id bigint)" in sql
+    assert "function library.load_authorized_full_scan_relation_status(p_library_id bigint)" in sql
+    assert "count(distinct artist.id)" in sql
+    assert "function library.checkpoint_claimed_full_scan_v2(" in sql
+    assert "function library.load_authorized_full_scan_metrics(p_library_id bigint)" in sql
+    assert "job.kind = 'post_scan_cover_refresh'" in sql
+    assert "job.state in ('queued', 'running', 'retry_wait')" in sql
+    assert "coalesce(active_refresh.covers_in_progress, false) or coalesce(pending_follow_up.covers_in_progress, false)" in sql
+
+
+def test_lastfm_retry_job_state_preserves_stable_pending_identity_and_fences_attempts():
+    sql = _normalized_sql(LASTFM_RETRY_JOB_STATE_MIGRATION.read_text(encoding="utf-8"))
+
+    for column in (
+        "row_revision",
+        "accepted_attempt",
+        "current_job_id",
+        "active_session_id",
+        "request_origin_id",
+        "last_provider_disposition",
+        "repair_reason_code",
+    ):
+        assert f"add column if not exists {column}" in sql
+    assert "pending_scrobbles_source_identity_idx" in sql
+    assert "pending_scrobbles_due_retry_idx" in sql
+    assert "pending_scrobbles_current_job_id_key" in sql
+    assert "attempt_count >= 0" in sql
+    assert "accepted_attempt >= 1" in sql
+    assert "accepted_attempt <= 5" in sql
+    assert "orphaned_repair" in sql
+    assert "references ops.jobs(id) on delete set null" in sql
+    assert "references integration.lastfm_sessions(id) on delete set null" in sql
+    assert "references app.request_origins(id) on delete set null" in sql
+    assert "legacy_attempt_repaired" in sql
+    assert "legacy_status_repaired" in sql
+    due_index = sql.split("create index if not exists pending_scrobbles_due_retry_idx", 1)[1]
+    assert "where status in ('pending', 'retry_wait')" in due_index
+    assert "where status in ('pending', 'retry_wait', 'orphaned_repair')" not in due_index
+
+
+def test_lastfm_retry_worker_migration_exposes_only_claim_fenced_secret_access():
+    sql = _normalized_sql(LASTFM_RETRY_WORKER_MIGRATION.read_text(encoding="utf-8"))
+
+    assert "function ops.validate_claimed_lastfm_retry(" in sql
+    assert "function ops.load_claimed_lastfm_session_secret(" in sql
+    assert "job.kind = 'lastfm_scrobble_retry'" in sql
+    assert "job.state = 'running'" in sql
+    assert "job.lease_expires_at > p_now" in sql
+    assert "pending.current_job_id = job.id" in sql
+    assert "pending.row_revision = job.scope_version" in sql
+    assert "pending.accepted_attempt = job.resource_revision" in sql
+    assert "session.id = pending.active_session_id" in sql
+    assert "session.is_active" in sql
+    assert "revoke all on table integration.lastfm_sessions from album_haven_worker" in sql
+    assert "revoke all on table integration.pending_scrobbles from album_haven_worker" in sql
+    assert "grant execute on function ops.load_claimed_lastfm_session_secret" in sql
+    authorization_return = sql.split("returns table (", 1)[1].split(") language sql", 1)[0]
+    assert "integration_session_ref varchar" in authorization_return
+    assert "session_key_encrypted" not in authorization_return
+
+
+def test_auth_mail_job_state_adds_stable_checkpointed_outbox_ownership():
+    assert AUTH_MAIL_JOB_STATE_MIGRATION.is_file()
+    sql = _normalized_sql(AUTH_MAIL_JOB_STATE_MIGRATION.read_text(encoding="utf-8"))
+
+    for column in (
+        "row_revision",
+        "accepted_attempt",
+        "current_job_id",
+        "request_origin_id",
+        "actor_account_id",
+        "authorization_mode",
+        "delivery_checkpoint",
+        "provider_disposition",
+        "delivery_reason_code",
+        "updated_at",
+    ):
+        assert f"add column if not exists {column}" in sql
+    assert "mail_outbox_current_job_id_key" in sql
+    assert "mail_outbox_due_welcome_job_idx" in sql
+    assert "mail_outbox_tokenless_accepted_idx" in sql
+    assert "mail_outbox_stale_sending_job_idx" in sql
+    assert "references ops.jobs(id) on delete set null" in sql
+    assert "references app.request_origins(id) on delete set null" in sql
+    assert "accepted_attempt between 1 and 5" in sql
+    assert "accepted_attempt <= least(5, attempt_count + 1)" in sql
+    assert "updated_at >= created_at" in sql
+    assert "octet_length(delivery_reason_code) between 1 and 128" in sql
+    assert "legacy_token_unavailable" in sql
+    assert "delivery_status = 'unknown'" in sql
+    assert "message_category in ('account_invitation', 'password_reset')" in sql
+    assert "reset_token_id is null" in sql
+    assert "invitation_token_id is null" in sql
+
+
+def test_auth_mail_worker_migration_exposes_only_claim_fenced_delivery_access():
+    assert AUTH_MAIL_WORKER_MIGRATION.is_file()
+    sql = _normalized_sql(AUTH_MAIL_WORKER_MIGRATION.read_text(encoding="utf-8"))
+
+    assert "add column if not exists target_credential_version" in sql
+    assert "add column if not exists lifecycle_expires_at" in sql
+    assert "add column if not exists public_throttle_id" in sql
+    assert "mail_outbox_public_throttle_id_idx" in sql
+    assert "function ops.validate_claimed_auth_mail(" in sql
+    assert "function ops.load_claimed_auth_mail_context(" in sql
+    assert "function ops.issue_claimed_auth_mail_token_hash(" in sql
+    assert "function ops.reconcile_auth_mail_jobs(" in sql
+    assert "job.kind = expected_job_kind" in sql
+    assert "job.state = 'running'" in sql
+    assert "job.lease_expires_at > p_now" in sql
+    assert "outbox.current_job_id = job.id" in sql
+    assert "outbox.row_revision = job.scope_version" in sql
+    assert "outbox.accepted_attempt = job.resource_revision" in sql
+    assert "throttle.id = outbox.public_throttle_id" in sql
+    assert "octet_length(p_token_hash) <> 32" in sql
+    for table in (
+        "app.accounts",
+        "app.account_credentials",
+        "app.password_reset_tokens",
+        "app.account_invitation_tokens",
+        "app.auth_throttles",
+        "app.mail_outbox",
+        "app.security_audit_events",
+    ):
+        assert f"revoke all on table {table} from album_haven_worker" in sql
+    assert "grant execute on function ops.validate_claimed_auth_mail" in sql
+    assert "grant execute on function ops.load_claimed_auth_mail_context" in sql
+    assert "grant execute on function ops.issue_claimed_auth_mail_token_hash" in sql
+    assert "grant execute on function ops.reconcile_auth_mail_jobs" in sql
+    assert "for update of outbox skip locked" in sql
+    assert "generic_terminal_converged" in sql
+
+
+def test_durable_worker_preflight_checks_schema_handlers_and_worker_grants():
+    sql = _normalized_sql(
+        DURABLE_WORKER_PREFLIGHT_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "function ops.validate_durable_worker_startup(" in sql
+    assert "security definer" in sql
+    assert "set search_path = pg_catalog" in sql
+    for kind in (
+        "full_scan",
+        "targeted_reconciliation",
+        "post_scan_cover_refresh",
+        "cover_lookup",
+        "cover_bulk_refresh",
+        "cover_remote_save",
+        "lastfm_scrobble_retry",
+        "auth_welcome_delivery",
+        "auth_invitation_delivery",
+        "auth_password_reset_delivery",
+    ):
+        assert f"'{kind}'" in sql
+    assert "to_regprocedure(required.signature) is null" in sql
+    assert "ops.schema_migrations" not in sql
+    assert "has_function_privilege(session_user, required.signature, 'execute')" in sql
+    assert "has_table_privilege(session_user, 'ops.jobs', 'select')" in sql
+    assert "has_sequence_privilege(" in sql
+    assert "'ops.job_transitions_id_seq', 'usage'" in sql
+    assert "'state', 'scheduled_at', 'attempt_count', 'lease_owner', 'lease_token'" in sql
+    assert "has_column_privilege(" in sql
+    assert (
+        "library.retire_claimed_targeted_reconciliation_vacated_albums"
+        "(bigint,bigint,integer,character varying,character varying,"
+        "timestamp with time zone)"
+    ) in sql
+    assert (
+        "library.load_claimed_targeted_reconciliation_preparation"
+        "(bigint,bigint,bigint,integer,character varying,character varying,"
+        "timestamp with time zone)"
+        in sql
+    )
+    assert "grant execute on function ops.validate_durable_worker_startup(text[])" in sql
+    assert "owner to album_haven_migrator" not in sql
+
+
+def test_vacated_structural_album_retirement_is_narrow_and_dependency_complete():
+    sql = _normalized_sql(
+        VACATED_STRUCTURAL_ALBUM_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "function library.retire_vacated_structural_album(" in sql
+    assert "function library.retire_vacated_structural_album_internal(" in sql
+    assert "security definer" in sql
+    assert "set search_path = pg_catalog" in sql
+    assert "grant execute on function library.retire_vacated_structural_album(" in sql
+    assert "to album_haven_app" in sql
+    assert (
+        "grant execute on function library.retire_vacated_structural_album_internal("
+        not in sql
+    )
+    assert (
+        "revoke all on function library.retire_vacated_structural_album_internal("
+        in sql
+    )
+    app_wrapper = sql.split(
+        "create or replace function library.retire_vacated_structural_album(", 1
+    )[1].split("create or replace function", 1)[0]
+    assert "app.bootstrap_owners.owner_key = 'local-bootstrap-owner'" in app_wrapper
+    assert "library.libraries.name = 'local library'" in app_wrapper
+    assert "library.libraries.library_kind = 'local'" in app_wrapper
+    assert "p_library_id is distinct from bootstrap_library_id" in app_wrapper
+    assert "library.retire_vacated_structural_album_internal(" in app_wrapper
+    assert "grant delete on" not in sql
+    assert "preserved_track_tombstone" in sql
+    assert "preserved_cover_checkpoint" in sql
+    for durable_relation in (
+        "app.album_ratings",
+        "library.local_album_featured_artists",
+        "library.local_mbid_assertions",
+        "library.ignored_versions",
+        "library.manual_versions",
+        "ops.cover_remote_save_checkpoints",
+        "ops.cover_lookup_tasks",
+        "library.local_album_cover_candidate_snapshots",
+    ):
+        assert durable_relation in sql
+    assert "delete from library.local_albums" in sql
+
+
+def test_vacated_structural_album_retirement_blocks_only_active_cover_save_checkpoints():
+    sql = _normalized_sql(
+        VACATED_STRUCTURAL_ALBUM_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    terminal_checkpoints = "('publication_completed', 'rolled_back', 'ambiguous')"
+    assert (
+        "ops.cover_remote_save_checkpoints.checkpoint not in "
+        f"{terminal_checkpoints}"
+    ) in sql
+    assert "update ops.cover_remote_save_checkpoints" in sql
+    assert "set local_album_id = p_destination_album_id" in sql
+    assert (
+        "ops.cover_remote_save_checkpoints.checkpoint in "
+        f"{terminal_checkpoints}"
+    ) in sql
+
+
+def test_vacated_structural_album_sibling_sweep_is_exact_bounded_and_family_marker_safe():
+    sql = _normalized_sql(
+        VACATED_STRUCTURAL_ALBUM_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "function library.retire_vacated_structural_album_siblings(" in sql
+    assert "function library.retire_vacated_structural_album_siblings_internal(" in sql
+    assert "grant execute on function library.retire_vacated_structural_album_siblings(" in sql
+    assert "to album_haven_app" in sql
+    assert (
+        "grant execute on function library.retire_vacated_structural_album_siblings_internal("
+        not in sql
+    )
+    assert (
+        "revoke all on function "
+        "library.retire_vacated_structural_album_siblings_internal("
+        in sql
+    )
+    app_wrapper = sql.split(
+        "create or replace function library.retire_vacated_structural_album_siblings(",
+        1,
+    )[1].split("create or replace function", 1)[0]
+    assert "app.bootstrap_owners.owner_key = 'local-bootstrap-owner'" in app_wrapper
+    assert "p_library_id is distinct from bootstrap_library_id" in app_wrapper
+    assert "library.retire_vacated_structural_album_siblings_internal(" in app_wrapper
+    assert "pg_advisory_xact_lock" in sql
+    assert "candidate_album.artist_id = destination.artist_id" in sql
+    assert "destination.artist_id is null" in sql
+    assert "nullif(btrim(destination.title), '') is null" in sql
+    assert "lower(btrim(candidate_album.title)) = lower(btrim(destination.title))" in sql
+    assert "candidate_album.release_year is not distinct from destination.release_year" in sql
+    assert "candidate_album.metadata ->> 'edition'" in sql
+    assert "not exists ( select 1 from library.local_tracks" in sql
+    assert (
+        "not exists ( select 1 from library.separate_releases as separate "
+        "where separate.library_id = candidate_album.library_id "
+        "and separate.release_key = candidate_album.album_key )"
+        in sql
+    )
+    assert "order by candidate_album.id" in sql
+    assert "for update of candidate_album" in sql
+    assert "library.retire_vacated_structural_album(" in sql
+
+
+def test_targeted_reconciliation_album_retirement_is_claim_and_lease_scoped():
+    sql = _normalized_sql(
+        VACATED_STRUCTURAL_ALBUM_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "function library.retire_claimed_targeted_reconciliation_vacated_albums(" in sql
+    assert "job.kind = 'targeted_reconciliation'" in sql
+    assert "job.state = 'running'" in sql
+    assert "job.attempt_count = p_attempt" in sql
+    assert "job.lease_owner = p_worker_id" in sql
+    assert "job.lease_token = p_lease_token" in sql
+    assert "job.lease_expires_at > p_now" in sql
+    assert "intent.publication_attempt = p_attempt" in sql
+    assert "intent.committed_inventory_revision is not null" in sql
+    worker_wrapper = sql.split(
+        "create or replace function "
+        "library.retire_claimed_targeted_reconciliation_vacated_albums(",
+        1,
+    )[1].split("revoke all on function", 1)[0]
+    assert "library.retire_vacated_structural_album_siblings_internal(" in worker_wrapper
+    assert "library.retire_vacated_structural_album_siblings(" not in worker_wrapper
+    assert "grant execute on function library.retire_claimed_targeted_reconciliation_vacated_albums(" in sql
+    assert "to album_haven_worker" in sql
 LOCAL_MBID_ASSERTIONS_MIGRATION = MIGRATIONS_DIR / "0002_create_local_mbid_assertions.sql"
 LOCAL_MBID_PROJECTION_PROVENANCE_MIGRATION = (
     MIGRATIONS_DIR / "0003_add_local_mbid_projection_provenance.sql"
@@ -458,17 +3604,16 @@ def baseline_sql() -> str:
 
 def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered():
     migration_names = sorted(
-        path.name
-        for path in MIGRATIONS_DIR.iterdir()
+        path.name for path in MIGRATIONS_DIR.iterdir()
         if path.is_file() and path.suffix.lower() == ".sql"
     )
     migration_numbers = [int(name[:4]) for name in migration_names]
-
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
-    # Owner rule (2026-11-10): numbers may be applied out of order and may leave gaps,
-    # but no two migrations ever share a number.
+    # Migration numbers may have gaps, but each number has one owner.
     assert len(set(migration_numbers)) == len(migration_numbers)
-    assert migration_names[-78:] == [
+    expected_tail = [
+        "0040_repair_ignored_repairs_delete_grant.sql",
+        "0041_create_local_album_cover_candidate_snapshots.sql",
         "0042_track_distinct_cover_improvement_alerts.sql",
         "0043_create_local_track_waveform_peaks.sql",
         "0044_create_tag_edit_intents.sql",
@@ -547,7 +3692,297 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0200_create_cover_references.sql",
         "0201_backfill_cover_references.sql",
         "0210_create_schema_migration_attestations.sql",
+        "0220_create_durable_job_foundation.sql",
+        "0221_request_durable_job_cancellation.sql",
+        "0222_harden_durable_job_boundaries.sql",
+        "0223_grant_worker_authorization_reads.sql",
+        "0224_add_job_transition_retention_index.sql",
+        "0225_create_scan_job_intents.sql",
+        "0226_grant_worker_targeted_reconciliation.sql",
+        "0227_authorize_full_scan_lifecycle.sql",
+        "0228_grant_worker_full_scan_execution.sql",
+        "0229_create_durable_cover_job_state.sql",
+        "0230_grant_worker_cover_lookup.sql",
+        "0231_grant_worker_cover_refresh.sql",
+        "0232_create_remote_cover_save_checkpoints.sql",
+        "0233_complete_durable_scan_status_projection.sql",
+        "0234_create_lastfm_retry_job_state.sql",
+        "0235_grant_worker_lastfm_retry.sql",
+        "0236_create_auth_mail_job_state.sql",
+        "0237_grant_worker_auth_mail.sql",
+        "0238_validate_durable_worker_startup.sql",
+        "0239_retire_vacated_structural_album.sql",
+        "0240_create_durable_watcher_recovery.sql",
+        "0241_create_watcher_runtime_sessions.sql",
+        "0242_preserve_full_scan_progress_on_restart.sql",
+        "0243_close_cover_consistency.sql",
+        "0244_preserve_newer_watcher_incident_presentation.sql",
+        "0245_close_worker_preflight_cover_contract.sql",
+        "0246_preserve_cover_selection_metadata.sql",
+        "0247_acknowledge_mixed_version_library_warnings.sql",
+        "0248_restore_authoritative_exception_clear.sql",
+        "0249_create_problematic_files_projection.sql",
+        "0250_restore_incomplete_album_contract.sql",
+        "0262_create_lastfm_reauthentication_continuations.sql",
+        "0263_refresh_reconciled_album_cover_cache.sql",
+        "0264_preserve_invalid_legacy_scan_warnings.sql",
+        "0265_grant_claimed_cover_selection_read.sql",
     ]
+
+    assert migration_names[-len(expected_tail):] == expected_tail
+
+
+def test_cover_lookup_worker_migration_keeps_private_scope_behind_claim_fences():
+    sql = _normalized_sql(COVER_LOOKUP_WORKER_MIGRATION.read_text(encoding="utf-8"))
+
+    for function_name in (
+        "accept_cover_lookup",
+        "validate_claimed_cover_lookup",
+        "load_claimed_cover_lookup",
+        "claimed_cover_lookup_cancel_requested",
+        "load_claimed_cover_lookup_cancellation",
+        "publish_claimed_cover_lookup",
+        "finalize_claimed_cover_lookup_canceled",
+    ):
+        assert f"function ops.{function_name}" in sql
+    assert "job.lease_expires_at > clock_timestamp()" in sql
+    assert "job.lease_token = requested_lease_token" in sql
+    assert "task.row_revision = expected_row_revision" in sql
+    assert "array_agg(file.private_path" in sql
+    assert "grant execute on function ops.load_claimed_cover_lookup" in sql
+    assert "grant select on library.local_track_files" not in sql
+    assert "grant select on ops.cover_lookup_tasks" not in sql
+
+
+def test_cover_refresh_worker_migration_uses_one_fenced_core_and_private_status():
+    sql = _normalized_sql(COVER_REFRESH_WORKER_MIGRATION.read_text(encoding="utf-8"))
+
+    for function_name in (
+        "accept_cover_bulk_refresh",
+        "begin_claimed_cover_refresh",
+        "checkpoint_claimed_cover_refresh",
+        "finish_claimed_cover_refresh",
+        "persist_claimed_automatic_cover_selection",
+        "persist_claimed_cover_provider_outcome",
+        "load_authorized_cover_refresh_status",
+    ):
+        assert f"function ops.{function_name}" in sql
+    assert "job.kind in ('cover_bulk_refresh', 'post_scan_cover_refresh')" in sql
+    assert "#variable_conflict use_column" in sql
+    assert "count(distinct album.id) filter (where file.id is not null)::integer" in sql
+    assert "job.lease_expires_at > clock_timestamp()" in sql
+    assert "refresh.row_revision = expected_row_revision" in sql
+    assert "grant execute on function ops.begin_claimed_cover_refresh" in sql
+    assert "grant execute on function ops.persist_claimed_automatic_cover_selection" in sql
+    assert "grant execute on function ops.persist_claimed_cover_provider_outcome" in sql
+    assert "grant select on library.local_track_files" not in sql
+    assert "pg_advisory_xact_lock(hashtext('album-haven:local-inventory-publication'))" in sql
+    assert "insert into library.cover_mutation_state as state" in sql
+
+
+def test_remote_cover_save_migration_has_private_checkpoints_and_claim_fences():
+    sql = _normalized_sql(REMOTE_COVER_SAVE_MIGRATION.read_text(encoding="utf-8"))
+
+    assert "create table if not exists ops.cover_remote_save_checkpoints" in sql
+    for checkpoint in (
+        "accepted",
+        "download_started",
+        "artifact_written",
+        "selection_committed",
+        "promotion_completed",
+        "publication_completed",
+        "rolled_back",
+        "ambiguous",
+    ):
+        assert f"'{checkpoint}'" in sql
+    for function_name in (
+        "accept_cover_remote_save",
+        "load_claimed_cover_remote_save",
+        "checkpoint_claimed_cover_remote_save",
+        "persist_claimed_remote_cover_selection",
+        "publish_claimed_cover_remote_save",
+    ):
+        assert f"function ops.{function_name}" in sql
+    assert "job.lease_token = requested_lease_token" in sql
+    assert "job.lease_expires_at > clock_timestamp()" in sql
+    assert "grant select on library.local_track_files" not in sql
+    assert "pg_advisory_xact_lock(hashtext('album-haven:local-inventory-publication'))" in sql
+    assert "update library.cover_mutation_state as state" in sql
+
+
+@pytest.mark.parametrize(
+    "migration",
+    (
+        COVER_LOOKUP_WORKER_MIGRATION,
+        COVER_REFRESH_WORKER_MIGRATION,
+        REMOTE_COVER_SAVE_MIGRATION,
+    ),
+)
+def test_cover_worker_lease_checks_use_post_lock_database_time(migration):
+    sql = _normalized_sql(migration.read_text(encoding="utf-8"))
+
+    assert "lease_expires_at > observed_at" not in sql
+    assert "lease_expires_at <= observed_at" not in sql
+    assert "clock_timestamp()" in sql
+
+
+def test_claimed_publication_rechecks_wall_clock_after_blocking_locks():
+    targeted_sql = _normalized_sql(
+        TARGETED_RECONCILIATION_WORKER_MIGRATION.read_text(encoding="utf-8")
+    )
+    targeted_fence = targeted_sql.split(
+        "create or replace function library.fence_targeted_reconciliation_publication", 1
+    )[1].split("create or replace function", 1)[0]
+    fence_lock = targeted_fence.rindex(
+        "for update;",
+        0,
+        targeted_fence.index("update library.targeted_reconciliation_intents"),
+    )
+    fence_recheck = targeted_fence.index(
+        "job.lease_expires_at > clock_timestamp()", fence_lock
+    )
+    assert fence_recheck < targeted_fence.index(
+        "update library.targeted_reconciliation_intents", fence_recheck
+    )
+
+    targeted = targeted_sql.split(
+        "create or replace function library.publish_claimed_targeted_reconciliation", 1
+    )[1].split("revoke all on function", 1)[0]
+    targeted_lock = targeted.index(
+        "pg_advisory_xact_lock( hashtext('album-haven:local-inventory-publication')"
+    )
+    targeted_recheck = targeted.index(
+        "job.lease_expires_at > clock_timestamp()", targeted_lock
+    )
+    assert targeted_recheck < targeted.index(
+        "create temporary table targeted_album_key_map", targeted_recheck
+    )
+
+    full_scan = _normalized_sql(
+        FULL_SCAN_WORKER_MIGRATION.read_text(encoding="utf-8")
+    ).split(
+        "create or replace function library.publish_claimed_full_scan", 1
+    )[1].split(
+        "create or replace function library.validate_claimed_post_scan_cover_refresh", 1
+    )[0]
+    full_scan_lock = full_scan.index(
+        "from library.libraries where id = claimed_library_id for update"
+    )
+    full_scan_recheck = full_scan.index(
+        "job.lease_expires_at > clock_timestamp()", full_scan_lock
+    )
+    assert full_scan_recheck < full_scan.index(
+        "insert into library.local_artists", full_scan_recheck
+    )
+
+
+@pytest.mark.parametrize(
+    ("migration", "function_name", "last_lock", "first_mutation"),
+    (
+        (
+            REMOTE_COVER_SAVE_MIGRATION,
+            "ops.publish_claimed_cover_remote_save",
+            "for update;",
+            "update ops.cover_lookup_tasks",
+        ),
+        (
+            REMOTE_COVER_SAVE_MIGRATION,
+            "ops.persist_claimed_remote_cover_selection",
+            "for update;",
+            "update library.local_albums",
+        ),
+        (
+            LASTFM_RETRY_WORKER_MIGRATION,
+            "ops.finish_claimed_lastfm_attempt",
+            "for update;",
+            "insert into ops.jobs",
+        ),
+        (
+            AUTH_MAIL_WORKER_MIGRATION,
+            "ops.finish_claimed_auth_mail",
+            "for update;",
+            "insert into ops.jobs",
+        ),
+    ),
+)
+def test_claimed_finalizers_recheck_wall_clock_after_domain_lock(
+    migration, function_name, last_lock, first_mutation
+):
+    function_sql = _normalized_sql(migration.read_text(encoding="utf-8")).split(
+        f"create or replace function {function_name}", 1
+    )[1].split("create or replace function", 1)[0]
+    lock_position = function_sql.rindex(
+        last_lock, 0, function_sql.index(first_mutation)
+    )
+    recheck_position = function_sql.index(
+        "lease_expires_at <= clock_timestamp()", lock_position
+    )
+    assert recheck_position < function_sql.index(first_mutation, recheck_position)
+
+
+def test_cover_refresh_cancellation_uses_job_then_refresh_lock_order():
+    function_sql = _normalized_sql(
+        COVER_REFRESH_WORKER_MIGRATION.read_text(encoding="utf-8")
+    ).split(
+        "create or replace function ops.request_cover_bulk_refresh_cancellation", 1
+    )[1].split("create or replace function ops.begin_claimed_cover_refresh", 1)[0]
+
+    job_lock = function_sql.index("from ops.request_job_cancellation(")
+    refresh_lock = function_sql.index("for update;", job_lock)
+    assert job_lock < refresh_lock < function_sql.index(
+        "update ops.cover_bulk_refreshes", refresh_lock
+    )
+
+
+def test_cover_lookup_cancellation_uses_job_then_task_lock_order_and_revalidates_binding():
+    function_sql = _normalized_sql(
+        COVER_LOOKUP_WORKER_MIGRATION.read_text(encoding="utf-8")
+    ).split(
+        "create or replace function ops.request_cover_lookup_cancellation", 1
+    )[1].split(
+        "create or replace function ops.finalize_claimed_cover_lookup_canceled", 1
+    )[0]
+
+    job_lock = function_sql.index("from ops.request_job_cancellation(")
+    assert "for update" not in function_sql[:job_lock]
+    task_lock = function_sql.index("for update;", job_lock)
+    task_update = function_sql.index("update ops.cover_lookup_tasks", task_lock)
+    rebound_scope = function_sql[job_lock:task_update]
+
+    assert job_lock < task_lock < task_update
+    assert "job_id = selected_job_id" in rebound_scope
+    assert "task_key = requested_task_key" in rebound_scope
+    assert "library_id = requested_library_id" in rebound_scope
+    assert "initiating_account_id = actor_account_id" in rebound_scope
+
+
+def test_remote_cover_publication_is_fenced_by_job_and_task_cancellation_under_locks():
+    function_sql = _normalized_sql(
+        REMOTE_COVER_SAVE_MIGRATION.read_text(encoding="utf-8")
+    ).split(
+        "create or replace function ops.publish_claimed_cover_remote_save", 1
+    )[1].split(
+        "create or replace function ops.persist_claimed_remote_cover_selection", 1
+    )[0]
+
+    job_lock = function_sql.index("for update;")
+    task_query = function_sql.index("from ops.cover_lookup_tasks", job_lock)
+    task_lock = function_sql.index("for update;", task_query)
+
+    assert "job.cancel_requested_at is null" in function_sql[:job_lock]
+    assert "task.cancel_requested_at is null" in function_sql[task_query:task_lock]
+
+
+def test_lastfm_presend_cancellation_requires_current_active_lease():
+    function_sql = _normalized_sql(
+        LASTFM_RETRY_WORKER_MIGRATION.read_text(encoding="utf-8")
+    ).split(
+        "create or replace function ops.cancel_claimed_lastfm_before_send", 1
+    )[1].split("create or replace function ops.finish_claimed_lastfm_attempt", 1)[0]
+
+    assert "job.kind = 'lastfm_scrobble_retry'" in function_sql
+    assert "job.lease_expires_at > p_now" in function_sql
+    assert "job.lease_expires_at <= clock_timestamp()" in function_sql
 
 
 def test_gallery_projection_artist_lookup_migration_indexes_anchor_and_boundary_queries():
@@ -838,7 +4273,12 @@ def test_album_raw_artist_search_index_verifier_checks_the_complete_definition()
     assert "index_state.indnkeyatts = 1" in sql
     assert "index_state.indkey::text = '0'" in sql
     assert "index_state.indpred is null" in sql
-    assert "index_state.operator_schema = 'library'" in sql
+    assert "pg_catalog.pg_extension" in sql
+    assert "pg_catalog.pg_depend" in sql
+    assert "extension.extname = 'pg_trgm'" in sql
+    assert "operator_dependency.deptype = 'e'" in sql
+    assert "operator_dependency.objid = operator_class.oid" in sql
+    assert "index_state.operator_schema = 'library'" not in sql
     assert "index_state.operator_class_name = 'gin_trgm_ops'" in sql
     assert "lower(btrim(coalesce(metadata->>''artists'','''')))" in sql
     assert "then 'ready'" in sql
@@ -928,6 +4368,90 @@ def test_readonly_account_privilege_migration_is_upgrade_safe_and_identity_priva
         "metadata",
     ):
         assert private_column not in grant_columns
+
+
+def test_full_scan_publication_uses_the_authorized_root_path_style():
+    sql = _normalized_sql(FULL_SCAN_WORKER_MIGRATION.read_text(encoding="utf-8"))
+
+    assert (
+        "library.local_path_key(root.root_path) || case "
+        "library.local_path_style(root.root_path) when 'windows' then e'\\\\' else '/' end"
+    ) in sql
+
+
+def test_full_scan_worker_migration_can_reapply_after_authorization_shape_expands():
+    sql = _normalized_sql(FULL_SCAN_WORKER_MIGRATION.read_text(encoding="utf-8"))
+    signature = (
+        "app.load_claimed_job_authorization_context( bigint, integer, varchar, "
+        "varchar, timestamptz )"
+    )
+
+    drop_position = sql.index(f"drop function if exists {signature}")
+    create_position = sql.index(
+        "create or replace function app.load_claimed_job_authorization_context("
+    )
+    assert drop_position < create_position
+
+
+def test_full_scan_publication_uses_shared_account_lifecycle_lock():
+    sql = _normalized_sql(FULL_SCAN_WORKER_MIGRATION.read_text(encoding="utf-8"))
+    function_sql = sql.split(
+        "create or replace function library.publish_claimed_full_scan(", 1
+    )[1].split("create or replace function library.full_scan_publication_scope_current(", 1)[0]
+    account_lock = function_sql.split(
+        "perform 1 from app.accounts as account", 1
+    )[1].split("if not found", 1)[0]
+
+    assert "for share" in account_lock
+    assert "for update" not in account_lock
+
+
+def test_durable_cover_state_migration_extends_jobs_without_weakening_existing_kinds():
+    sql = _normalized_sql(DURABLE_COVER_STATE_MIGRATION.read_text(encoding="utf-8"))
+
+    assert "drop constraint if exists jobs_kind_check" in sql
+    assert "drop constraint if exists jobs_kind_attempts_check" in sql
+    assert "drop constraint if exists jobs_kind_recovery_check" in sql
+    for kind in (
+        "full_scan",
+        "targeted_reconciliation",
+        "post_scan_cover_refresh",
+        "cover_lookup",
+        "cover_bulk_refresh",
+        "cover_remote_save",
+        "lastfm_scrobble_retry",
+        "auth_welcome_delivery",
+        "auth_invitation_delivery",
+        "auth_password_reset_delivery",
+    ):
+        assert f"'{kind}'" in sql
+    assert "kind = 'cover_bulk_refresh' and max_attempts = 2" in sql
+    assert "'cover_bulk_refresh'" in sql and "recovery_policy = 'retry_safe'" in sql
+
+
+def test_durable_cover_state_migration_adds_stable_authority_and_scrubs_paths():
+    sql = _normalized_sql(DURABLE_COVER_STATE_MIGRATION.read_text(encoding="utf-8"))
+
+    for column in (
+        "local_album_id",
+        "library_root_id",
+        "initiating_account_id",
+        "request_origin_id",
+        "candidate_generation",
+        "resource_revision",
+        "cancel_requested_at",
+        "row_revision",
+        "job_id",
+    ):
+        assert f"add column if not exists {column}" in sql
+    assert "create table if not exists ops.cover_bulk_refreshes" in sql
+    assert "create table if not exists library.cover_mutation_state" in sql
+    assert "revoke all on table library.cover_mutation_state from public" in sql
+    assert "cover_bulk_refreshes_one_active_per_library_idx" in sql
+    assert "metadata #- '{track_paths}'" in sql
+    assert "#- '{source_payload,track_paths}'" in sql
+    assert "#- '{source_payload,album_payload}'" in sql
+    assert "drop column if exists selected_cover_private_path" not in sql
 
 
 def test_album_details_appearance_migration_has_closed_defaults():
@@ -3348,6 +6872,1213 @@ def test_tag_edit_intents_migration_creates_recoverable_least_privilege_journal(
     assert "grant all" not in sql
 
 
+def test_durable_job_foundation_migration_file_exists():
+    assert DURABLE_JOBS_MIGRATION.is_file(), (
+        "durable job foundation migration SQL is not present yet; "
+        "Task 2 requires 0220_create_durable_job_foundation.sql"
+    )
+
+
+@pytest.fixture
+def durable_jobs_sql() -> str:
+    if not DURABLE_JOBS_MIGRATION.exists():
+        pytest.skip(
+            "durable job foundation migration SQL is not present yet; "
+            "test_durable_job_foundation_migration_file_exists captures the TDD red state"
+        )
+    return DURABLE_JOBS_MIGRATION.read_text(encoding="utf-8")
+
+
+def test_durable_job_migration_creates_private_operational_tables(durable_jobs_sql):
+    sql = _normalized_sql(durable_jobs_sql)
+
+    for table_name in ("ops.jobs", "ops.job_transitions", "ops.worker_instances"):
+        assert f"create table if not exists {table_name}" in sql
+    assert "for update skip locked" not in sql
+    assert "album_move" not in sql
+
+
+def test_durable_job_migration_closes_job_kinds_and_states(durable_jobs_sql):
+    sql = _normalized_sql(durable_jobs_sql)
+
+    expected_kinds = {
+        "full_scan",
+        "targeted_reconciliation",
+        "post_scan_cover_refresh",
+        "cover_lookup",
+        "cover_remote_save",
+        "lastfm_scrobble_retry",
+        "auth_welcome_delivery",
+        "auth_invitation_delivery",
+        "auth_password_reset_delivery",
+    }
+    expected_states = {
+        "queued",
+        "running",
+        "retry_wait",
+        "succeeded",
+        "failed",
+        "canceled",
+        "ambiguous",
+    }
+
+    for value in expected_kinds | expected_states:
+        assert f"'{value}'" in sql
+    assert "constraint jobs_kind_check" in sql
+    assert "constraint jobs_state_check" in sql
+    assert "constraint job_transitions_prior_state_check" in sql
+    assert "constraint job_transitions_next_state_check" in sql
+
+
+def test_durable_job_migration_uses_bounded_types_and_named_coherence_constraints(
+    durable_jobs_sql,
+):
+    sql = _normalized_sql(durable_jobs_sql)
+    jobs_sql = _table_sql(sql, "ops.jobs")
+    transitions_sql = _table_sql(sql, "ops.job_transitions")
+    workers_sql = _table_sql(sql, "ops.worker_instances")
+
+    assert "id bigint generated always as identity primary key" in jobs_sql
+    assert "created_at timestamptz" in jobs_sql
+    assert "scheduled_at timestamptz" in jobs_sql
+    assert "updated_at timestamptz" in jobs_sql
+    for bounded_column in (
+        "kind varchar(",
+        "state varchar(",
+        "subject_kind varchar(",
+        "subject_ref varchar(",
+        "capability_key varchar(",
+        "idempotency_key varchar(",
+        "lease_owner varchar(",
+        "lease_token varchar(",
+    ):
+        assert bounded_column in jobs_sql
+    assert "parameters jsonb not null" in jobs_sql
+    assert "jsonb_typeof(parameters) = 'object'" in jobs_sql
+    assert "octet_length(parameters::text) <= 4096" in jobs_sql
+    for constraint_name in (
+        "jobs_parameters_shape_check",
+        "jobs_parameters_size_check",
+        "jobs_attempts_check",
+        "jobs_lease_coherence_check",
+        "jobs_terminal_coherence_check",
+    ):
+        assert f"constraint {constraint_name}" in jobs_sql
+
+    assert "id bigint generated always as identity primary key" in transitions_sql
+    assert "reason_code varchar(" in transitions_sql
+    assert "transitioned_at timestamptz" in transitions_sql
+    assert "constraint job_transitions_attempt_check" in transitions_sql
+    assert "instance_id varchar(" in workers_sql
+    assert "started_at timestamptz" in workers_sql
+    assert "last_heartbeat_at timestamptz" in workers_sql
+    assert "constraint worker_instances_lifecycle_state_check" in workers_sql
+
+
+def test_durable_job_migration_enforces_attempt_lease_and_terminal_coherence(
+    durable_jobs_sql,
+):
+    sql = _normalized_sql(durable_jobs_sql)
+    jobs_sql = _table_sql(sql, "ops.jobs")
+
+    assert re.search(r"attempt_count\s*>=\s*0", jobs_sql)
+    assert re.search(r"max_attempts\s*>\s*0", jobs_sql)
+    assert re.search(r"attempt_count\s*<=\s*max_attempts", jobs_sql)
+    for lease_column in (
+        "lease_owner",
+        "lease_token",
+        "lease_expires_at",
+        "heartbeat_at",
+    ):
+        assert lease_column in jobs_sql
+    assert "state = 'running'" in jobs_sql
+    assert "completed_at is not null" in jobs_sql
+    for terminal_state in ("succeeded", "failed", "canceled", "ambiguous"):
+        assert f"'{terminal_state}'" in jobs_sql
+
+
+def test_durable_job_migration_declares_indexed_foreign_keys_with_deletion_rules(
+    durable_jobs_sql,
+):
+    sql = _normalized_sql(durable_jobs_sql)
+    jobs_sql = _table_sql(sql, "ops.jobs")
+
+    foreign_keys = (
+        ("account_id", "app.accounts"),
+        ("library_id", "library.libraries"),
+        ("request_origin_id", "app.request_origins"),
+    )
+    for column_name, referenced_table in foreign_keys:
+        assert re.search(
+            rf"{column_name}\s+bigint\s+references\s+{re.escape(referenced_table)}\(id\)\s+"
+            rf"on\s+delete\s+(?:restrict|set null)",
+            jobs_sql,
+        )
+        assert _qualified_index_pattern("ops.jobs", (column_name,)).search(
+            durable_jobs_sql
+        )
+    assert "on delete cascade" not in jobs_sql
+
+    transitions_sql = _table_sql(sql, "ops.job_transitions")
+    assert "job_id bigint not null references ops.jobs(id) on delete cascade" in transitions_sql
+    assert _qualified_index_pattern("ops.job_transitions", ("job_id",)).search(
+        durable_jobs_sql
+    )
+
+
+def test_durable_job_migration_uses_null_safe_scoped_idempotency(durable_jobs_sql):
+    sql = _normalized_sql(durable_jobs_sql)
+
+    index_match = re.search(
+        r"create unique index if not exists jobs_idempotency_idx\s+on ops\.jobs\s*\((?P<columns>[^;]+)\);",
+        sql,
+    )
+    assert index_match is not None
+    columns = index_match.group("columns")
+    for fragment in (
+        "kind",
+        "coalesce(account_id, 0)",
+        "coalesce(library_id, 0)",
+        "subject_kind",
+        "subject_ref",
+        "idempotency_key",
+    ):
+        assert fragment in columns
+
+
+def test_durable_job_migration_adds_claim_status_retention_and_heartbeat_indexes(
+    durable_jobs_sql,
+):
+    sql = _normalized_sql(durable_jobs_sql)
+
+    for index_name in (
+        "jobs_runnable_claim_idx",
+        "jobs_active_lease_idx",
+        "jobs_owner_library_status_idx",
+        "jobs_retry_due_idx",
+        "jobs_terminal_retention_idx",
+        "job_transitions_job_id_idx",
+        "worker_instances_heartbeat_idx",
+    ):
+        assert f"create index if not exists {index_name}" in sql
+    assert re.search(
+        r"jobs_runnable_claim_idx.+priority\s+desc.+scheduled_at.+id.+where.+state\s+in\s*\('queued',\s*'retry_wait'\)",
+        sql,
+    )
+    assert re.search(
+        r"jobs_active_lease_idx.+lease_expires_at.+where.+state\s*=\s*'running'",
+        sql,
+    )
+    assert re.search(
+        r"jobs_terminal_retention_idx.+completed_at.+where.+state\s+in\s*\([^)]*'succeeded'[^)]*'failed'[^)]*'canceled'[^)]*\)",
+        sql,
+    )
+
+
+def test_durable_job_migration_applies_least_privilege_grants(durable_jobs_sql):
+    sql = _normalized_sql(durable_jobs_sql)
+
+    for table_name in ("ops.jobs", "ops.job_transitions", "ops.worker_instances"):
+        assert f"revoke all on table {table_name} from public" in sql
+        assert f"revoke all on table {table_name} from album_haven_readonly" in sql
+    assert "grant usage on schema ops to album_haven_worker" in sql
+    assert "grant select, update on table ops.jobs to album_haven_worker" in sql
+    assert (
+        "grant select, insert on table ops.job_transitions to album_haven_worker"
+        in sql
+    )
+    assert (
+        "grant select, insert, update on table ops.worker_instances to album_haven_worker"
+        in sql
+    )
+    assert (
+        "grant usage, select on sequence ops.job_transitions_id_seq to album_haven_worker"
+        in sql
+    )
+    assert "grant delete on table ops.jobs to album_haven_worker" not in sql
+    assert "grant delete" not in " ".join(
+        fragment
+        for fragment in sql.split(";")
+        if "to album_haven_worker" in fragment
+    )
+    assert "grant all" not in sql
+
+
+def test_durable_job_migration_limits_app_to_enqueue_and_cancel_columns(
+    durable_jobs_sql,
+):
+    sql = _normalized_sql(durable_jobs_sql)
+
+    assert not re.search(
+        r"grant\s+[^;()]*\bupdate\b[^;()]*\bon\s+table\s+ops\.jobs\s+"
+        r"to\s+album_haven_app",
+        sql,
+    )
+    insert_grant = re.search(
+        r"grant\s+insert\s*\((?P<columns>[^)]+)\)\s+on\s+table\s+"
+        r"ops\.jobs\s+to\s+album_haven_app",
+        sql,
+    )
+    assert insert_grant is not None
+    insert_columns = {
+        column.strip() for column in insert_grant.group("columns").split(",")
+    }
+    assert {
+        "kind",
+        "subject_kind",
+        "subject_ref",
+        "parameters",
+        "account_id",
+        "library_id",
+        "capability_key",
+        "request_origin_id",
+        "deployment_mode",
+        "client_surface",
+        "idempotency_key",
+        "priority",
+        "scheduled_at",
+        "max_attempts",
+        "recovery_policy",
+    }.issubset(insert_columns)
+    assert insert_columns.isdisjoint(
+        {
+            "state",
+            "attempt_count",
+            "lease_owner",
+            "lease_token",
+            "lease_expires_at",
+            "heartbeat_at",
+            "completed_at",
+            "outcome_code",
+            "audit_hold",
+            "tombstoned_at",
+        }
+    )
+
+    update_grant = re.search(
+        r"grant\s+update\s*\((?P<columns>[^)]+)\)\s+on\s+table\s+"
+        r"ops\.jobs\s+to\s+album_haven_app",
+        sql,
+    )
+    assert update_grant is not None
+    assert {
+        column.strip() for column in update_grant.group("columns").split(",")
+    } == {
+        "cancel_requested_at",
+        "cancel_requested_by_account_id",
+        "cancel_reason_code",
+        "updated_at",
+    }
+
+
+def test_durable_job_cancellation_migration_file_exists():
+    assert DURABLE_JOB_CANCELLATION_MIGRATION.is_file(), (
+        "durable job cancellation migration SQL is not present yet; "
+        "Task 3 requires 0221_request_durable_job_cancellation.sql"
+    )
+
+
+@pytest.fixture
+def durable_job_cancellation_sql() -> str:
+    if not DURABLE_JOB_CANCELLATION_MIGRATION.exists():
+        pytest.skip(
+            "durable job cancellation migration SQL is not present yet; "
+            "test_durable_job_cancellation_migration_file_exists captures the TDD red state"
+        )
+    return DURABLE_JOB_CANCELLATION_MIGRATION.read_text(encoding="utf-8")
+
+
+def test_durable_job_cancellation_function_is_atomic_validated_and_narrowly_granted(
+    durable_job_cancellation_sql,
+):
+    sql = _normalized_sql(durable_job_cancellation_sql)
+    signature = "ops.request_job_cancellation(bigint, bigint, timestamptz)"
+
+    assert "create or replace function ops.request_job_cancellation(" in sql
+    assert "returns table (" in sql
+    for result_field in (
+        "job_id bigint",
+        "prior_state varchar(",
+        "next_state varchar(",
+        "reason_code varchar(",
+        "transition_recorded boolean",
+    ):
+        assert result_field in sql
+    assert "language plpgsql" in sql
+    assert "security definer" in sql
+    assert "set search_path = pg_catalog" in sql
+    assert "from ops.jobs" in sql
+    assert "for update" in sql
+    assert "update ops.jobs" in sql
+    assert "insert into ops.job_transitions" in sql
+
+    for parameter_check in (
+        "p_job_id is null or p_job_id <= 0",
+        "p_actor_account_id is null or p_actor_account_id <= 0",
+        "p_requested_at is null",
+    ):
+        assert parameter_check in sql
+    for result_code in (
+        "'canceled'",
+        "'cancel_requested'",
+        "'terminal_noop'",
+        "'not_found'",
+    ):
+        assert result_code in sql
+
+    revoke_update = re.search(
+        r"revoke\s+update\s*\((?P<columns>[^)]+)\)\s+on\s+table\s+"
+        r"ops\.jobs\s+from\s+album_haven_app",
+        sql,
+    )
+    assert revoke_update is not None
+    assert {
+        column.strip() for column in revoke_update.group("columns").split(",")
+    } == {
+        "cancel_requested_at",
+        "cancel_requested_by_account_id",
+        "cancel_reason_code",
+        "updated_at",
+    }
+    assert f"revoke all on function {signature} from public" in sql
+    assert f"grant execute on function {signature} to album_haven_app" in sql
+    assert f"grant execute on function {signature} to album_haven_worker" not in sql
+    assert f"grant execute on function {signature} to album_haven_readonly" not in sql
+
+
+def test_durable_job_migration_explicitly_revokes_readonly_sequence_access(
+    durable_jobs_sql,
+):
+    sql = _normalized_sql(durable_jobs_sql)
+
+    for sequence_name in ("ops.jobs_id_seq", "ops.job_transitions_id_seq"):
+        assert (
+            f"revoke all on sequence {sequence_name} from album_haven_readonly"
+            in sql
+        )
+
+
+def test_durable_job_worker_status_and_retention_indexes_are_partial(
+    durable_jobs_sql,
+):
+    sql = _normalized_sql(durable_jobs_sql)
+
+    assert re.search(
+        r"create index if not exists worker_instances_heartbeat_idx\s+"
+        r"on ops\.worker_instances\s*\(last_heartbeat_at,\s*instance_id\)\s+"
+        r"where lifecycle_state in\s*\('starting',\s*'running',\s*'draining'\)",
+        sql,
+    )
+    assert re.search(
+        r"create index if not exists worker_instances_retention_idx\s+"
+        r"on ops\.worker_instances\s*\(last_heartbeat_at,\s*instance_id\)\s+"
+        r"where lifecycle_state = 'stopped'",
+        sql,
+    )
+
+
+def test_durable_job_boundary_hardening_migration_file_exists():
+    assert DURABLE_JOB_BOUNDARY_HARDENING_MIGRATION.is_file(), (
+        "Task 3 requires additive migration 0222_harden_durable_job_boundaries.sql"
+    )
+
+
+def test_durable_job_boundary_hardening_enforces_transitions_and_worker_columns():
+    if not DURABLE_JOB_BOUNDARY_HARDENING_MIGRATION.exists():
+        pytest.skip("durable job boundary hardening migration is not present yet")
+    sql = _normalized_sql(
+        DURABLE_JOB_BOUNDARY_HARDENING_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "constraint job_transitions_legal_pair_check" in sql
+    assert "prior_state is null and next_state = 'queued'" in sql
+    for legal_pair in (
+        "prior_state = 'queued' and next_state in ('running', 'canceled')",
+        "prior_state = 'retry_wait' and next_state in ('running', 'canceled')",
+        "prior_state = 'running' and next_state in ('succeeded', 'failed', 'retry_wait', 'canceled', 'ambiguous')",
+    ):
+        assert legal_pair in sql
+    assert "revoke update on table ops.jobs from album_haven_app" in sql
+    assert "revoke update on table ops.jobs from album_haven_worker" in sql
+    worker_update = re.search(
+        r"grant update\s*\((?P<columns>[^)]+)\)\s+on table ops\.jobs\s+"
+        r"to album_haven_worker",
+        sql,
+    )
+    assert worker_update is not None
+    assert {
+        column.strip() for column in worker_update.group("columns").split(",")
+    } == {
+        "state", "scheduled_at", "attempt_count", "lease_owner", "lease_token",
+        "lease_expires_at", "heartbeat_at", "started_at", "completed_at",
+        "outcome_code", "updated_at",
+    }
+    assert "grant select on table ops.jobs to album_haven_worker" in sql
+    assert "cancel_requested_at = coalesce(jobs.cancel_requested_at" in sql
+    assert "cancel_requested_by_account_id = coalesce(" in sql
+
+
+def test_worker_authorization_read_migration_file_exists():
+    assert DURABLE_JOB_AUTHORIZATION_READS_MIGRATION.is_file(), (
+        "Task 4 requires additive migration "
+        "0223_grant_worker_authorization_reads.sql"
+    )
+
+
+def test_worker_authorization_reads_are_column_scoped_private_and_upgrade_safe():
+    if not DURABLE_JOB_AUTHORIZATION_READS_MIGRATION.exists():
+        pytest.skip("worker authorization read migration is not present yet")
+    sql = _normalized_sql(
+        DURABLE_JOB_AUTHORIZATION_READS_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "do $$" in sql
+    assert (
+        "if exists (select 1 from pg_roles where rolname = 'album_haven_worker') then"
+        in sql
+    )
+    assert "grant usage on schema app, library to album_haven_worker" in sql
+    expected_grants = {
+        "app.accounts": {"id", "is_active", "disabled_at"},
+        "app.bootstrap_owners": {"account_id", "owner_key"},
+        "library.libraries": {"id", "owner_account_id"},
+        "library.library_memberships": {
+            "library_id",
+            "account_id",
+            "membership_role",
+        },
+        "app.capabilities": {
+            "account_id",
+            "capability_key",
+            "scope_kind",
+            "scope_id",
+            "revoked_at",
+        },
+        "app.request_origins": {
+            "id",
+            "account_id",
+            "client_surface_class",
+            "origin_type",
+        },
+    }
+    for table_name, expected_columns in expected_grants.items():
+        revoke = f"revoke select on table {table_name} from album_haven_worker"
+        assert revoke in sql
+        grant = re.search(
+            rf"grant\s+select\s*\((?P<columns>[^)]+)\)\s+on\s+table\s+"
+            rf"{re.escape(table_name)}\s+to\s+album_haven_worker",
+            sql,
+        )
+        assert grant is not None
+        assert sql.index(revoke) < grant.start()
+        assert {
+            column.strip() for column in grant.group("columns").split(",")
+        } == expected_columns
+        assert not re.search(
+            rf"grant\s+select\s+on\s+table\s+{re.escape(table_name)}\s+"
+            r"to\s+album_haven_worker",
+            sql,
+        )
+
+    for private_column in (
+        "password_hash",
+        "session_token_hash",
+        "token_hash",
+        "origin_key",
+        "root_path",
+        "display_name",
+        "username_display",
+        "name",
+    ):
+        assert not re.search(rf"\b{re.escape(private_column)}\b", sql)
+
+
+def test_durable_job_retention_index_migration_file_exists():
+    assert DURABLE_JOB_RETENTION_INDEX_MIGRATION.is_file(), (
+        "Task 7 requires additive migration "
+        "0224_add_job_transition_retention_index.sql"
+    )
+
+
+def test_durable_job_retention_index_is_ordered_and_does_not_broaden_privileges():
+    if not DURABLE_JOB_RETENTION_INDEX_MIGRATION.exists():
+        pytest.skip("durable job transition retention index migration is not present yet")
+    sql = _normalized_sql(
+        DURABLE_JOB_RETENTION_INDEX_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert re.search(
+        r"create index if not exists job_transitions_retention_idx\s+"
+        r"on ops\.job_transitions\s*\(transitioned_at,\s*id\)",
+        sql,
+    )
+    for runtime_role in (
+        "album_haven_app",
+        "album_haven_worker",
+        "album_haven_readonly",
+    ):
+        assert not re.search(rf"\bgrant\b[^;]*\bto\s+{runtime_role}\b", sql)
+    assert not re.search(r"\bgrant\s+delete\b", sql)
+
+
+def scan_job_intents_sql() -> str:
+    assert SCAN_JOB_INTENTS_MIGRATION.is_file(), (
+        "Task 1 requires additive migration "
+        "0225_create_scan_job_intents.sql"
+    )
+    return SCAN_JOB_INTENTS_MIGRATION.read_text(encoding="utf-8")
+
+
+def test_scan_job_intent_migration_creates_private_normalized_domain_records():
+    sql = _normalized_sql(scan_job_intents_sql())
+    tables = (
+        "library.full_scan_intents",
+        "library.full_scan_intent_roots",
+        "library.targeted_reconciliation_intents",
+        "library.targeted_reconciliation_intent_paths",
+        "library.targeted_reconciliation_intent_moves",
+    )
+    for table in tables:
+        assert f"create table if not exists {table}" in sql
+        assert f"revoke all on table {table} from public" in sql
+
+    full_scan = _table_sql(sql, "library.full_scan_intents")
+    for fragment in (
+        "library_id bigint not null references library.libraries(id) on delete restrict",
+        "initiating_account_id bigint not null references app.accounts(id) on delete restrict",
+        "mode varchar(",
+        "force boolean not null",
+        "state varchar(",
+        "progress_current",
+        "progress_total",
+        "committed_inventory_revision bigint",
+        "job_id bigint",
+    ):
+        assert fragment in full_scan
+    assert "'library_settings_update'" in full_scan
+    assert "check (state in (" in full_scan
+
+    roots = _table_sql(sql, "library.full_scan_intent_roots")
+    assert "intent_id bigint not null references library.full_scan_intents(id)" in roots
+    assert "root_id bigint not null references library.library_roots(id) on delete restrict" in roots
+    assert "ordinal" in roots
+
+    paths = _table_sql(sql, "library.targeted_reconciliation_intent_paths")
+    assert "intent_id bigint not null references library.targeted_reconciliation_intents(id)" in paths
+    assert "path_kind varchar(" in paths
+    assert (
+        "path_kind in ('active', 'deleted', 'deleted_subtree', 'preserved_subtree')"
+        in paths
+    )
+    assert "path text not null" in paths
+    assert "ordinal" in paths
+
+    moves = _table_sql(sql, "library.targeted_reconciliation_intent_moves")
+    for fragment in (
+        "source_path text not null",
+        "destination_path text not null",
+        "source_root_id bigint not null references library.library_roots(id) on delete restrict",
+        "destination_root_id bigint not null references library.library_roots(id) on delete restrict",
+        "is_directory boolean not null",
+        "ordinal",
+    ):
+        assert fragment in moves
+
+
+def test_scan_job_intent_migration_indexes_foreign_keys_and_active_full_scan_exclusion():
+    sql = _normalized_sql(scan_job_intents_sql())
+
+    for index_name in (
+        "full_scan_intents_library_id_idx",
+        "full_scan_intents_job_id_idx",
+        "full_scan_intent_roots_root_id_idx",
+        "targeted_reconciliation_intents_library_id_idx",
+        "targeted_reconciliation_intents_job_id_idx",
+        "targeted_reconciliation_intent_paths_intent_id_idx",
+        "targeted_reconciliation_intent_moves_source_root_id_idx",
+        "targeted_reconciliation_intent_moves_destination_root_id_idx",
+    ):
+        assert f"index if not exists {index_name}" in sql
+
+    active_index = re.search(
+        r"create unique index if not exists jobs_one_active_full_scan_per_library_idx\s+"
+        r"on ops\.jobs\s*\(library_id\)\s+where\s+(?P<predicate>[^;]+)",
+        sql,
+    )
+    assert active_index is not None
+    predicate = active_index.group("predicate")
+    assert "kind = 'full_scan'" in predicate
+    assert re.search(r"state\s+in\s*\('queued',\s*'running',\s*'retry_wait'\)", predicate)
+    assert "library_id is not null" in predicate
+
+
+def test_scan_job_intent_migration_uses_narrow_function_grants_for_private_paths():
+    sql = _normalized_sql(scan_job_intents_sql())
+    private_tables = (
+        "library.full_scan_intents",
+        "library.full_scan_intent_roots",
+        "library.targeted_reconciliation_intents",
+        "library.targeted_reconciliation_intent_paths",
+        "library.targeted_reconciliation_intent_moves",
+    )
+    for table in private_tables:
+        for role in ("album_haven_app", "album_haven_worker", "album_haven_readonly"):
+            assert not re.search(
+                rf"grant\s+(?:select|insert|update|delete|truncate|references|trigger|all)"
+                rf"[^;]*on table {re.escape(table)}[^;]*to {role}",
+                sql,
+            )
+
+    producer_functions = (
+        "library.create_full_scan_intent",
+        "library.create_targeted_reconciliation_intent",
+        "library.link_scan_intent_job",
+    )
+    for function in producer_functions:
+        assert f"create or replace function {function}" in sql
+        assert re.search(
+            rf"grant execute on function {re.escape(function)}\([^;]+to album_haven_app",
+            sql,
+        )
+        assert re.search(
+            rf"revoke all on function {re.escape(function)}\([^;]+from public",
+            sql,
+        )
+
+    for loader in (
+        "library.load_claimed_full_scan_intent",
+        "library.load_claimed_targeted_reconciliation_intent",
+    ):
+        assert f"create or replace function {loader}" in sql
+        assert re.search(
+            rf"grant execute on function {re.escape(loader)}\([^;]+to album_haven_worker",
+            sql,
+        )
+        assert not re.search(
+            rf"grant execute on function {re.escape(loader)}\([^;]+to album_haven_(?:app|readonly)",
+            sql,
+        )
+    assert "security definer" in sql
+    assert "set search_path" in sql
+
+
+def test_scan_job_intent_migration_revokes_inherited_table_and_sequence_privileges():
+    sql = _normalized_sql(scan_job_intents_sql())
+    roles = ("album_haven_app", "album_haven_worker", "album_haven_readonly")
+    tables = (
+        "library.full_scan_intents",
+        "library.full_scan_intent_roots",
+        "library.targeted_reconciliation_intents",
+        "library.targeted_reconciliation_intent_paths",
+        "library.targeted_reconciliation_intent_moves",
+    )
+    sequences = (
+        "library.full_scan_intents_id_seq",
+        "library.targeted_reconciliation_intents_id_seq",
+    )
+    table_revokes = re.findall(r"revoke all on table ([^;]+) from ([a-z_]+)", sql)
+    for table in tables:
+        for role in roles:
+            assert any(
+                role == revoked_role and table in revoked_tables
+                for revoked_tables, revoked_role in table_revokes
+            )
+    sequence_revokes = re.findall(
+        r"revoke all on sequence ([^;]+) from ([a-z_]+)", sql
+    )
+    for sequence in sequences:
+        for role in ("public", *roles):
+            assert any(
+                role == revoked_role and sequence in revoked_sequences
+                for revoked_sequences, revoked_role in sequence_revokes
+            )
+
+
+def test_scan_job_intent_migration_gives_targeted_requests_a_stable_producer_identity():
+    sql = _normalized_sql(scan_job_intents_sql())
+    targeted = _table_sql(sql, "library.targeted_reconciliation_intents")
+
+    assert "producer_request_key varchar(" in targeted
+    assert "producer_request_key" in sql
+    assert re.search(
+        r"create unique index if not exists "
+        r"targeted_reconciliation_intents_producer_request_idx\s+"
+        r"on library\.targeted_reconciliation_intents\s*"
+        r"\(library_id,\s*producer_request_key\)",
+        sql,
+    )
+    create_function = sql.split(
+        "create or replace function library.create_targeted_reconciliation_intent",
+        1,
+    )[1].split("create or replace function library.link_scan_intent_job", 1)[0]
+    assert "p_producer_request_key varchar" in create_function
+    assert "on conflict" in create_function
+    assert "producer_request_key" in create_function
+
+
+def test_scan_job_intent_migration_coalesces_identical_active_watcher_requests():
+    sql = _normalized_sql(scan_job_intents_sql())
+    create_function = sql.split(
+        "create or replace function library.create_targeted_reconciliation_intent",
+        1,
+    )[1].split("create or replace function library.link_scan_intent_job", 1)[0]
+
+    assert "album-haven:targeted-reconciliation-payload:" in create_function
+    assert "p_client_surface = 'library_watcher'" in create_function
+    assert "intent.request_digest = p_request_digest" in create_function
+    assert "job.state in ('queued', 'retry_wait')" in create_function
+    assert "'running'" not in create_function.split(
+        "intent.request_digest = p_request_digest", 1
+    )[1].split("limit 1", 1)[0]
+
+
+def test_scan_job_link_function_binds_exact_library_account_and_parameters():
+    sql = _normalized_sql(scan_job_intents_sql())
+    function_sql = sql.split(
+        "create or replace function library.link_scan_intent_job", 1
+    )[1].split(
+        "create or replace function library.load_claimed_targeted_reconciliation_intent",
+        1,
+    )[0]
+
+    full_branch = function_sql.split("if p_kind = 'full_scan' then", 1)[1].split(
+        "elsif p_kind = 'targeted_reconciliation' then", 1
+    )[0]
+    targeted_branch = function_sql.split(
+        "elsif p_kind = 'targeted_reconciliation' then", 1
+    )[1]
+
+    assert re.search(
+        r"job\.library_id\s*=\s*(?:intent|library\.full_scan_intents)\.library_id",
+        full_branch,
+    )
+    assert re.search(
+        r"job\.account_id\s*=\s*"
+        r"(?:intent|library\.full_scan_intents)\.initiating_account_id",
+        full_branch,
+    )
+    assert re.search(
+        r"job\.library_id\s*=\s*"
+        r"(?:intent|library\.targeted_reconciliation_intents)\.library_id",
+        targeted_branch,
+    )
+    assert "job.account_id is null" in targeted_branch
+    assert "job.capability_key is null" in targeted_branch
+    assert "job.request_origin_id is null" in targeted_branch
+    assert re.search(
+        r"job\.parameters\s*=\s*(?:pg_catalog\.)?jsonb_build_object\("
+        r"\s*'intent_id',\s*p_intent_id\s*\)",
+        function_sql,
+    )
+
+
+def test_scan_job_intent_migration_atomically_mirrors_every_job_state():
+    sql = _normalized_sql(scan_job_intents_sql())
+    trigger_function = sql.split(
+        "create or replace function library.sync_scan_intent_job_state()", 1
+    )[1].split("create trigger jobs_sync_scan_intent_state", 1)[0]
+
+    assert "returns trigger" in trigger_function
+    assert "security definer" in trigger_function
+    assert "set search_path = pg_catalog" in trigger_function
+    assert "new.kind not in ('full_scan', 'targeted_reconciliation')" in trigger_function
+    for job_state, intent_state in (
+        ("queued", "accepted"),
+        ("running", "running"),
+        ("retry_wait", "retry_wait"),
+        ("succeeded", "succeeded"),
+        ("canceled", "canceled"),
+    ):
+        assert re.search(
+            rf"when '{job_state}' then '{intent_state}'", trigger_function
+        )
+    assert "else 'failed'" in trigger_function
+    assert "outcome_code" in trigger_function
+    assert "completed_at" in trigger_function
+    assert "outcome_code varchar(128)" in _table_sql(
+        sql, "library.full_scan_intents"
+    )
+    assert "outcome_code varchar(128)" in _table_sql(
+        sql, "library.targeted_reconciliation_intents"
+    )
+    assert re.search(
+        r"create trigger jobs_sync_scan_intent_state\s+"
+        r"after update of state on ops\.jobs",
+        sql,
+    )
+
+
+def test_claimed_scan_checkpoint_is_lease_scoped_and_compare_and_set():
+    sql = _normalized_sql(scan_job_intents_sql())
+    function_sql = sql.split(
+        "create or replace function library.checkpoint_claimed_scan_intent(", 1
+    )[1].split("create or replace function library.repair_orphaned_scan_intents", 1)[0]
+
+    for parameter in (
+        "p_kind varchar",
+        "p_intent_id bigint",
+        "p_job_id bigint",
+        "p_attempt integer",
+        "p_worker_id varchar",
+        "p_lease_token varchar",
+        "p_expected_state varchar",
+        "p_progress_current bigint",
+        "p_progress_total bigint",
+        "p_inventory_revision bigint",
+        "p_now timestamptz",
+    ):
+        assert parameter in function_sql
+    for predicate in (
+        "job.attempt_count = p_attempt",
+        "job.lease_owner = p_worker_id",
+        "job.lease_token = p_lease_token",
+        "job.lease_expires_at > p_now",
+        "intent.state = p_expected_state",
+    ):
+        assert predicate in function_sql
+    assert "job.state = 'running'" in function_sql
+    assert "progress_current" in function_sql
+    assert "progress_total" in function_sql
+    assert "committed_inventory_revision" in function_sql
+    assert "p_progress_current >= intent.progress_current" in function_sql
+    assert "p_progress_total >= intent.progress_total" in function_sql
+    assert "p_inventory_revision >= intent.committed_inventory_revision" in function_sql
+    assert "p_now >= intent.updated_at" in function_sql
+    assert "security definer" in function_sql
+
+
+def test_orphan_scan_intent_repair_is_old_unlinked_accepted_and_bounded():
+    sql = _normalized_sql(scan_job_intents_sql())
+    function_sql = sql.split(
+        "create or replace function library.repair_orphaned_scan_intents(", 1
+    )[1].split("revoke all on function", 1)[0]
+
+    assert "p_now timestamptz" in function_sql
+    assert "p_limit integer" in function_sql
+    assert (
+        re.search(r"p_limit[^;]+between 1 and 1000", function_sql)
+        or ("p_limit < 1" in function_sql and "p_limit > 1000" in function_sql)
+    )
+    assert "job_id is null" in function_sql
+    assert "state = 'accepted'" in function_sql
+    assert re.search(r"accepted_at\s*<=?\s*p_now\s*-\s*interval", function_sql)
+    assert "order by accepted_at, id" in function_sql
+    assert "limit p_limit" in function_sql
+    assert "for update" in function_sql
+    assert "skip locked" in function_sql
+    assert "security definer" in function_sql
+
+
+def test_full_scan_intent_stores_and_link_validates_exact_accepted_authority():
+    sql = _normalized_sql(scan_job_intents_sql())
+    full_scan = _table_sql(sql, "library.full_scan_intents")
+    for column in (
+        "capability_key varchar(128) not null",
+        "request_origin_id bigint not null references app.request_origins(id)",
+        "deployment_mode varchar(128) not null",
+        "client_surface varchar(128) not null",
+    ):
+        assert column in full_scan
+    targeted = _table_sql(sql, "library.targeted_reconciliation_intents")
+    assert "deployment_mode varchar(128) not null" in targeted
+    assert "client_surface varchar(128) not null" in targeted
+
+    link_sql = sql.split(
+        "create or replace function library.link_scan_intent_job", 1
+    )[1].split("create or replace function library.load_claimed", 1)[0]
+    full_branch = link_sql.split("if p_kind = 'full_scan' then", 1)[1].split(
+        "elsif p_kind = 'targeted_reconciliation' then", 1
+    )[0]
+    targeted_branch = link_sql.split(
+        "elsif p_kind = 'targeted_reconciliation' then", 1
+    )[1]
+    assert "job.capability_key = 'library.refresh'" in full_branch
+    for field in (
+        "request_origin_id",
+        "deployment_mode",
+        "client_surface",
+    ):
+        assert re.search(rf"job\.{field}\s*=\s*intent\.{field}", full_branch)
+    for field in ("deployment_mode", "client_surface"):
+        assert re.search(rf"job\.{field}\s*=\s*intent\.{field}", targeted_branch)
+
+
+def targeted_reconciliation_worker_sql() -> str:
+    assert TARGETED_RECONCILIATION_WORKER_MIGRATION.is_file(), (
+        "Task 2 requires migration 0226_grant_worker_targeted_reconciliation.sql"
+    )
+    return TARGETED_RECONCILIATION_WORKER_MIGRATION.read_text(encoding="utf-8")
+
+
+def test_targeted_worker_migration_exposes_only_claim_scoped_functions():
+    sql = _normalized_sql(targeted_reconciliation_worker_sql())
+    scope_function = "library.load_claimed_targeted_reconciliation_scope"
+    fence_function = "library.fence_targeted_reconciliation_publication"
+
+    preparation_function = (
+        "library.load_claimed_targeted_reconciliation_preparation"
+    )
+
+    for function in (scope_function, preparation_function, fence_function):
+        assert f"create or replace function {function}" in sql
+        assert re.search(
+            rf"revoke all on function {re.escape(function)}\([^;]+from public", sql
+        )
+        assert re.search(
+            rf"grant execute on function {re.escape(function)}\([^;]+"
+            r"to album_haven_worker",
+            sql,
+        )
+        assert not re.search(
+            rf"grant execute on function {re.escape(function)}\([^;]+"
+            r"to album_haven_(?:app|readonly)",
+            sql,
+        )
+    assert "security definer" in sql
+    assert "set search_path = pg_catalog" in sql
+    for sensitive_table in (
+        "library.library_roots",
+        "library.libraries",
+        "library.separate_releases",
+        "library.local_track_files",
+        "library.local_tracks",
+        "library.local_albums",
+        "library.local_artists",
+        "app.accounts",
+        "app.capabilities",
+        "app.request_origins",
+    ):
+        assert not re.search(
+            rf"grant\s+(?:select|insert|update|delete|all)[^;]*"
+            rf"on table {re.escape(sensitive_table)}[^;]*to album_haven_worker",
+            sql,
+        )
+    for fragment in (
+        "revoke select (id, is_active, disabled_at) on table app.accounts from album_haven_worker",
+        "revoke select (account_id, owner_key) on table app.bootstrap_owners from album_haven_worker",
+        "revoke select (id, owner_account_id) on table library.libraries from album_haven_worker",
+        "revoke select (library_id, account_id, membership_role) on table library.library_memberships from album_haven_worker",
+        "revoke select (account_id, capability_key, scope_kind, scope_id, revoked_at) on table app.capabilities from album_haven_worker",
+        "revoke select (id, account_id, client_surface_class, origin_type) on table app.request_origins from album_haven_worker",
+    ):
+        assert fragment in sql
+
+
+def test_targeted_worker_preparation_is_lease_fenced_without_private_table_grants():
+    sql = _normalized_sql(targeted_reconciliation_worker_sql())
+    function_sql = sql.split(
+        "create or replace function library.load_claimed_targeted_reconciliation_preparation",
+        1,
+    )[1].split("create or replace function", 1)[0]
+
+    for predicate in (
+        "intent.id = p_intent_id",
+        "intent.library_id = p_library_id",
+        "job.id = p_job_id",
+        "job.attempt_count = p_attempt",
+        "job.lease_owner = p_worker_id",
+        "job.lease_token = p_lease_token",
+        "job.lease_expires_at > p_now",
+    ):
+        assert predicate in function_sql
+    assert "library.separate_releases" in function_sql
+    assert "library.local_track_files" in function_sql
+    assert "existing_memberships" in function_sql
+    assert "event_path.path_kind in ('active', 'preserved_subtree')" in function_sql
+    assert "event_path.path_kind = 'preserved_subtree' as is_subtree" in function_sql
+    assert "move.destination_path" in function_sql
+    assert "library.local_path_key" in function_sql
+    assert "limit 16385" in function_sql
+    assert not re.search(
+        r"grant\s+select[^;]*on table library\.separate_releases[^;]*"
+        r"to album_haven_worker",
+        sql,
+    )
+
+
+def test_targeted_preserved_subtrees_are_private_bounded_and_lease_scoped():
+    intent_sql = _normalized_sql(scan_job_intents_sql())
+    create_function = intent_sql.split(
+        "create or replace function library.create_targeted_reconciliation_intent",
+        1,
+    )[1].split("create or replace function library.link_scan_intent_job", 1)[0]
+    assert "p_preserved_subtrees text[]" in create_function
+    assert "array_length(p_preserved_subtrees, 1), 0) > 4096" in create_function
+    assert "'preserved_subtree'::varchar" in create_function
+    assert "targeted reconciliation preserved subtree scope is invalid" in create_function
+
+    worker_sql = _normalized_sql(targeted_reconciliation_worker_sql())
+    loader = worker_sql.split(
+        "create or replace function library.load_claimed_targeted_reconciliation_intent_v2",
+        1,
+    )[1].split("create or replace function", 1)[0]
+    assert "preserved_subtrees text[]" in loader
+    assert "path.path_kind = 'preserved_subtree'" in loader
+    for predicate in (
+        "job.state = 'running'",
+        "job.lease_owner = p_worker_id",
+        "job.lease_token = p_lease_token",
+        "job.lease_expires_at > now()",
+    ):
+        assert predicate in loader
+
+    publication = worker_sql.split(
+        "create or replace function library.publish_claimed_targeted_reconciliation",
+        1,
+    )[1].split("revoke all on function", 1)[0]
+    assert "authorized_preserved_subtrees text[]" in publication
+    assert "coalesce(authorized_preserved_subtrees, array[]::text[])" in publication
+    assert "library.local_path_key(submitted_files.private_path)" in publication
+
+
+def test_targeted_publication_fence_checks_exact_live_claim_in_mutation_transaction():
+    sql = _normalized_sql(targeted_reconciliation_worker_sql())
+    function_sql = sql.split(
+        "create or replace function library.fence_targeted_reconciliation_publication",
+        1,
+    )[1].split("revoke all on function", 1)[0]
+    for parameter in (
+        "p_intent_id bigint",
+        "p_job_id bigint",
+        "p_attempt integer",
+        "p_worker_id varchar",
+        "p_lease_token varchar",
+        "p_now timestamptz",
+    ):
+        assert parameter in function_sql
+    for predicate in (
+        "job.id = p_job_id",
+        "job.kind = 'targeted_reconciliation'",
+        "job.state = 'running'",
+        "job.attempt_count = p_attempt",
+        "job.lease_owner = p_worker_id",
+        "job.lease_token = p_lease_token",
+        "job.lease_expires_at > p_now",
+        "intent.id = p_intent_id",
+        "intent.job_id = p_job_id",
+        "intent.state = 'running'",
+    ):
+        assert predicate in function_sql
+    assert "publication_attempt" in function_sql
+    assert "return" in function_sql
+
+
+def test_targeted_publication_reuses_one_unseparated_semantic_album_identity():
+    sql = _normalized_sql(targeted_reconciliation_worker_sql())
+    function_sql = sql.split(
+        "create or replace function library.publish_claimed_targeted_reconciliation",
+        1,
+    )[1].split("revoke all on function", 1)[0]
+
+    assert "create temporary table targeted_album_key_map" in function_sql
+    assert "input_album_key text primary key" in function_sql
+    assert "target_album_key text not null" in function_sql
+    assert "existing.album_key = input.album_key" in function_sql
+    assert "not exists ( select 1 from library.separate_releases" in function_sql
+    assert "join pg_temp.targeted_album_key_map as album_map" in function_sql
+    assert "album.album_key = album_map.target_album_key" in function_sql
+
+
+def test_claimed_targeted_scope_revalidates_library_roots_and_watcher_health():
+    sql = _normalized_sql(targeted_reconciliation_worker_sql())
+    function_sql = sql.split(
+        "create or replace function library.load_claimed_targeted_reconciliation_scope",
+        1,
+    )[1].split("create or replace function", 1)[0]
+    assert "library.library_roots" in function_sql
+    assert "is_active is true" in function_sql
+    assert "library_id" in function_sql
+    assert "library_watch_health" in function_sql
+    for predicate in (
+        "job.state = 'running'",
+        "job.attempt_count = p_attempt",
+        "job.lease_owner = p_worker_id",
+        "job.lease_token = p_lease_token",
+        "job.lease_expires_at > p_now",
+    ):
+        assert predicate in function_sql
+        assert predicate in function_sql
+
+
+def test_full_scan_lifecycle_migration_returns_atomic_acceptance_disposition():
+    sql = _normalized_sql(FULL_SCAN_LIFECYCLE_MIGRATION.read_text(encoding="utf-8"))
+
+    assert "create or replace function library.create_full_scan_intent_v2(" in sql
+    assert "returns table (intent_id bigint, job_id bigint, created boolean)" in sql
+    assert "from library.create_full_scan_intent(" in sql
+    assert "accepted.job_id is null" in sql
+    assert "grant execute on function library.create_full_scan_intent_v2(" in sql
+
+
+def test_full_scan_lifecycle_cancellation_is_domain_linked_and_progress_preserving():
+    sql = _normalized_sql(FULL_SCAN_LIFECYCLE_MIGRATION.read_text(encoding="utf-8"))
+    function_sql = sql.split(
+        "create or replace function library.request_active_full_scan_cancellation(",
+        1,
+    )[1].split("revoke all on function", 1)[0]
+
+    assert "security definer" in function_sql
+    assert "from library.full_scan_intents as intent" in function_sql
+    assert "join ops.jobs as job on job.id = intent.job_id" in function_sql
+    assert "job.subject_kind = 'full_scan_intent'" in function_sql
+    assert "job.subject_ref = intent.id::text" in function_sql
+    assert "job.parameters = jsonb_build_object('intent_id', intent.id)" in function_sql
+    assert "cancel_requested_by_account_id = p_actor_account_id" in function_sql
+    assert "job.account_id = p_actor_account_id" not in function_sql
+    assert "progress_current" not in function_sql
+    assert "progress_total" not in function_sql
+    assert (
+        "grant execute on function library.request_active_full_scan_cancellation("
+        in sql
+    )
+    worker_privileges = sql.split(
+        "rolname = 'album_haven_worker'", 1
+    )[1].split("rolname = 'album_haven_readonly'", 1)[0]
+    assert "grant execute" not in worker_privileges
+
+
+def test_scan_publications_share_one_inventory_serialization_lock():
+    targeted_sql = _normalized_sql(
+        TARGETED_RECONCILIATION_WORKER_MIGRATION.read_text(encoding="utf-8")
+    )
+    full_sql = _normalized_sql(
+        FULL_SCAN_WORKER_MIGRATION.read_text(encoding="utf-8")
+    )
+    lock = "pg_advisory_xact_lock( hashtext('album-haven:local-inventory-publication') )"
+
+    assert lock in targeted_sql
+    assert lock in full_sql
+
+
+def test_obsolete_revision_only_full_scan_fence_is_not_granted_to_worker():
+    sql = _normalized_sql(
+        FULL_SCAN_WORKER_MIGRATION.read_text(encoding="utf-8")
+    )
+    signature = (
+        "library.fence_full_scan_publication(bigint, bigint, integer, varchar, "
+        "varchar, bigint, timestamptz)"
+    )
+
+    assert f"revoke all on function {signature} from public" in sql
+    assert f"revoke execute on function {signature} from album_haven_worker" in sql
+    assert f"grant execute on function {signature} to album_haven_worker" not in sql
+
+
+def test_full_scan_publication_atomically_enqueues_revision_keyed_cover_follow_up():
+    sql = _normalized_sql(
+        FULL_SCAN_WORKER_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "'post_scan_cover_refresh'" in sql
+    assert "'inventory_revision'" in sql
+    assert "'revision-' || committed_revision::text" in sql
+    assert (
+        "'post-scan-cover-refresh:' || claimed_library_id::text || ':' || "
+        "committed_revision::text"
+    ) in sql
+    assert "resource_revision" in sql
+    assert "on conflict do nothing" in sql
+    assert "post-scan cover follow-up identity conflict" in sql
 def test_missing_album_candidate_index_matches_generated_stale_predicate():
     sql = _normalized_sql((MIGRATIONS_DIR / "0085_add_stale_track_file_candidate_index.sql").read_text(encoding="utf-8"))
     assert "create index if not exists local_track_files_stale_track_id_idx" in sql
@@ -3355,6 +8086,550 @@ def test_missing_album_candidate_index_matches_generated_stale_predicate():
     assert "update " not in sql and "delete " not in sql
     assert "grant " not in sql
 
+
+def test_problematic_projection_extracts_active_loose_membership_sources():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    assert "'loose_source'::text as group_kind" in sql
+    assert "local_album_membership_problem" in sql
+    assert "album_id is null" in sql
+    assert "scan_cache_stale is false" in sql
+
+
+def test_problematic_projection_stages_duplicate_companion_topology():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    companion_sql = sql.split(
+        "companion_candidates as materialized (", 1
+    )[1].split("), source_keys as materialized", 1)[0]
+
+    assert "'duplicate_companion'::text as child_kind" in companion_sql
+    assert (
+        "lookup.semantic_child_identity || ':' || "
+        "lpad(candidate_file.id::text, 20, '0') as child_identity"
+    ) in companion_sql
+    assert re.search(
+        r"\(\s*lookup\.semantic_child_identity\s*,\s*candidate_file\.id\s*\)\s*>\s*"
+        r"\(\s*split_part\(state\.child_identity, ':', 1\)\s*,\s*"
+        r"\(case when state\.child_kind = 'duplicate_companion' then "
+        r"split_part\(state\.child_identity, ':', 2\) else '0' end\)::bigint\s*\)",
+        companion_sql,
+    )
+    assert "order by lookup.semantic_child_identity, candidate_file.id" in companion_sql
+    assert "candidate_root.library_id = p_library_id" in companion_sql
+    assert "candidate_file.library_root_id = candidate_root.id" in companion_sql
+    assert "candidate_track.id = candidate_file.track_id" in companion_sql
+    assert "candidate_track.library_id = p_library_id" in companion_sql
+    assert "companion_album.id = candidate_track.album_id" in companion_sql
+    assert "companion_album.id <> active_group.group_identity" in companion_sql
+    assert (
+        "problematic_physical_album_container(candidate_file.private_path) "
+        "<> lookup.fact_value ->> 'physical_album_container'"
+    ) in companion_sql
+    assert "where not exists (" in companion_sql
+    assert "candidate_root.is_active is true" in companion_sql
+    assert "container_track.id = container_member.track_id" in companion_sql
+    assert "container_track.library_id = p_library_id" in companion_sql
+    assert "container_root.id = container_member.library_root_id" in companion_sql
+    assert "container_root.library_id = p_library_id" in companion_sql
+    assert "container_root.is_active is true" in companion_sql
+    assert "container_member.scan_cache_stale is false" in companion_sql
+    assert (
+        "pg_catalog.md5(library.problematic_physical_album_container( "
+        "container_member.private_path )) in ( "
+        "pg_catalog.md5(lookup.fact_value ->> 'physical_album_container'), "
+        "pg_catalog.md5(library.problematic_physical_album_container( "
+        "candidate_file.private_path )) )"
+    ) in companion_sql
+    assert (
+        "library.problematic_physical_album_container( "
+        "container_member.private_path ) in ( "
+        "lookup.fact_value ->> 'physical_album_container', "
+        "library.problematic_physical_album_container(candidate_file.private_path) )"
+    ) in companion_sql
+    assert "container_member.library_root_id = candidate_file.library_root_id" not in companion_sql
+    assert "limit least(p_limit, p_child_limit, 100)" in companion_sql
+    for field in (
+        "companion_file_id",
+        "companion_private_path",
+        "companion_library_root_id",
+        "companion_root_category",
+    ):
+        assert f"'{field}'" in sql
+
+
+def test_problematic_projection_normalizes_replay_safe_child_facts():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    facts = sql.split(
+        "create table if not exists ops.problematic_projection_group_facts", 1
+    )[1].split("create index", 1)[0]
+    assert "projection_id text not null" in facts
+    assert "semantic_child_identity text not null" in facts
+    assert "references ops.problematic_projection_group_accumulators" in facts
+    assert "on update cascade" in facts
+    assert "on delete cascade" in facts
+    assert "unique (" in facts
+    assert "projection_id, fact_kind, semantic_child_identity" in facts
+
+    checkpoint = sql.split(
+        "create or replace function "
+        "ops.checkpoint_claimed_problematic_projection_group_facts", 1
+    )[1].split("create or replace function", 1)[0]
+    assert "entry ->> 'projection_id'" in checkpoint
+    assert "entry ->> 'semantic_child_identity'" in checkpoint
+    assert "on conflict (" in checkpoint
+    assert "projection_id, fact_kind, semantic_child_identity" in checkpoint
+
+
+def test_problematic_projection_fact_read_uses_semantic_keyset_and_hard_batch_cap():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    loader = sql.split(
+        "create or replace function "
+        "ops.load_claimed_problematic_projection_group_facts", 1
+    )[1].split("create or replace function", 1)[0]
+
+    assert "fact.projection_id" in loader
+    assert "fact.fact_kind" in loader
+    assert "fact.semantic_child_identity" in loader
+    semantic_key = (
+        'fact.projection_id collate "c", fact.fact_kind collate "c", '
+        'fact.semantic_child_identity collate "c"'
+    )
+    assert f"order by {semantic_key}" in loader
+    assert f"( {semantic_key} ) > (" in loader
+    assert "limit least(greatest(p_limit, 1), 100)" in loader
+
+
+def test_problematic_projection_source_drain_and_worker_grants_are_bounded():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    source = sql.split(
+        "create or replace function ops.load_claimed_problematic_projection_source",
+        1,
+    )[1].split("create or replace function", 1)[0]
+
+    assert "active_group as materialized" in source
+    assert "join active_group" in source
+    assert "limit least(p_limit, p_child_limit, 100)" in source
+    assert "grant execute on function ops.load_claimed_problematic_projection_source" in sql
+    assert "to album_haven_worker" in sql
+    assert "grant select on table ops.problematic_projection_group_facts" not in sql
+
+
+def test_problematic_projection_publish_replays_committed_revision_after_lost_reply():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    publish = sql.split(
+        "create or replace function ops.publish_claimed_problematic_projection", 1
+    )[1].split("create or replace function", 1)[0]
+
+    assert "locked_state.committed_revision = p_revision" in publish
+    assert "locked_state.source_generation = p_source_generation" in publish
+    assert "locked_state.rebuild_epoch = p_rebuild_epoch" in publish
+    assert "return query select true" in publish
+
+
+def test_problematic_projection_publish_certifies_every_durable_build_stage_is_drained():
+    publish = _problematic_projection_function_sql(
+        "ops.publish_claimed_problematic_projection"
+    ).split("insert into ops.problematic_projection_headers", 1)[0]
+
+    for relation in (
+        "ops.problematic_projection_source_staging",
+        "ops.problematic_projection_group_accumulators",
+        "ops.problematic_projection_group_facts",
+    ):
+        assert relation in publish
+        assert re.search(
+            rf"not exists \( select 1 from {re.escape(relation)}",
+            publish,
+        )
+    assert "locked_state.group_kind is null" in publish
+    assert "ops.load_claimed_problematic_projection_source(" in publish
+    assert "page_complete" in publish
+
+
+def test_problematic_projection_ownership_moves_do_not_use_noncanonical_libraries():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    for table in (
+        "library.library_roots",
+        "library.local_albums",
+        "library.local_artists",
+        "library.local_tracks",
+        "library.separate_releases",
+        "library.exception_overrides",
+        "library.ignored_repairs",
+    ):
+        match = re.search(
+            rf"create trigger invalidate_problematic_projection_update "
+            rf".*? on {re.escape(table)} .*?;",
+            sql,
+        )
+        assert match is not None
+        trigger = match.group(0)
+        assert "update of" in trigger
+        assert "library_id" not in trigger
+    ownership = _problematic_projection_function_sql(
+        "ops.invalidate_problematic_projection_ownership_move"
+    )
+    assert "ops.resolve_problematic_projection_library()" in ownership
+    assert "canonical_library_id" in ownership
+    assert "old_row.library_id is not distinct from canonical_library_id" in ownership
+    assert "new_row.library_id is not distinct from canonical_library_id" in ownership
+    assert "invalidate_problematic_projection_library(old.library_id)" not in ownership
+    assert "invalidate_problematic_projection_library(new.library_id)" not in ownership
+    assert "old_row.library_id is distinct from new_row.library_id" in ownership
+
+
+def test_problematic_projection_duplicate_root_conflict_never_demotes_primary():
+    checkpoint = _problematic_projection_function_sql(
+        "ops.checkpoint_claimed_problematic_projection_group_facts"
+    )
+    conflict = checkpoint.split("on conflict", 1)[1]
+
+    assert "excluded.fact_value ->> 'primary'" in conflict
+    assert "problematic_projection_group_facts.fact_value ->> 'primary'" in conflict
+    assert re.search(r"primary[^\n]+ or [^\n]+primary", conflict)
+
+
+def test_problematic_projection_reclaim_uses_one_database_timestamp():
+    reclaim = _problematic_projection_function_sql(
+        "ops.reclaim_one_abandoned_problematic_projection"
+    )
+
+    assert "database_now timestamptz := pg_catalog.clock_timestamp()" in reclaim
+    assert "job.lease_expires_at < database_now" in reclaim
+    assert "scheduled_at = database_now" in reclaim
+    assert "updated_at = database_now" in reclaim
+    assert "p_observed_at" not in reclaim
+
+
+@pytest.mark.parametrize(
+    "function_name",
+    (
+        "load_claimed_problematic_projection_group_accumulator",
+        "advance_claimed_problematic_projection_group_accumulator",
+        "checkpoint_claimed_problematic_projection_group_facts",
+        "load_claimed_problematic_projection_group_facts",
+        "stage_claimed_problematic_projection_items",
+        "stage_claimed_problematic_projection_reason_facts",
+        "complete_claimed_problematic_projection_group",
+        "publish_claimed_problematic_projection",
+    ),
+)
+def test_problematic_projection_preflight_closes_each_live_handler_dependency(
+    function_name,
+):
+    startup = _problematic_projection_function_sql(
+        "ops.validate_durable_worker_startup"
+    )
+
+    assert f"'ops.{function_name}(" in startup
+    assert "pg_catalog.to_regprocedure(required.signature) is null" in startup
+    assert (
+        "not pg_catalog.has_function_privilege( session_user, "
+        "required.signature, 'execute' )"
+    ) in startup
+
+
+def test_problematic_projection_retry_rebinds_same_build_without_restart():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    prepare = sql.split(
+        "create or replace function ops.prepare_claimed_problematic_projection", 1
+    )[1].split("create or replace function", 1)[0]
+
+    assert "update ops.problematic_projection_source_staging" in prepare
+    assert "update ops.problematic_projection_item_staging" in prepare
+    assert "update ops.problematic_projection_group_accumulators" in prepare
+    assert "set attempt = p_attempt" in prepare
+    assert "requested_attempt = p_attempt" in prepare
+    assert "delete from ops.problematic_projection_" not in prepare
+
+
+def test_problematic_projection_fact_payload_has_per_row_octet_ceiling():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    facts = sql.split(
+        "create table if not exists ops.problematic_projection_group_facts", 1
+    )[1].split("create index", 1)[0]
+
+    assert "octet_length(fact_value::text) <= 65536" in facts
+
+
+def test_problematic_projection_source_and_fact_reads_fence_exact_build_scope():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    for function_name in (
+        "load_claimed_problematic_projection_source",
+        "load_claimed_problematic_projection_group_facts",
+    ):
+        function_sql = sql.split(
+            f"create or replace function ops.{function_name}", 1
+        )[1].split("create or replace function", 1)[0]
+        assert "ops.validate_claimed_problematic_projection" in function_sql
+        for parameter in (
+            "p_library_id",
+            "p_source_generation",
+            "p_rebuild_epoch",
+            "p_revision",
+        ):
+            assert parameter in function_sql
+
+
+def test_problematic_projection_retry_rebind_cascades_child_fact_attempts():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    facts = sql.split(
+        "create table if not exists ops.problematic_projection_group_facts", 1
+    )[1].split("create index", 1)[0]
+    prepare = sql.split(
+        "create or replace function ops.prepare_claimed_problematic_projection", 1
+    )[1].split("create or replace function", 1)[0]
+
+    assert "references ops.problematic_projection_group_accumulators" in facts
+    assert "on update cascade" in facts
+    assert "update ops.problematic_projection_group_accumulators" in prepare
+    assert "set attempt = p_attempt" in prepare
+    assert "update ops.problematic_projection_group_facts" not in prepare
+
+
+def test_problematic_projection_prepare_recovers_committed_build_for_lost_ack_retry():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    state = sql.split(
+        "create table if not exists ops.problematic_projection_state", 1
+    )[1].split(");", 1)[0]
+    prepare = sql.split(
+        "create or replace function ops.prepare_claimed_problematic_projection", 1
+    )[1].split("create or replace function", 1)[0]
+
+    assert "committed_job_id bigint" in state
+    assert "selected_state.committed_job_id = p_job_id" in prepare
+    assert "selected_state.committed_revision is not null" in prepare
+    assert "selected_state.live_job_id is null" in prepare
+    assert "selected_state.committed_revision" in prepare
+
+
+def test_problematic_projection_publish_replay_fences_committed_owner_and_build():
+    sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    publish = sql.split(
+        "create or replace function ops.publish_claimed_problematic_projection", 1
+    )[1].split("create or replace function", 1)[0]
+    replay = publish.split("return query select true", 1)[0]
+
+    assert "locked_state.committed_job_id = p_job_id" in replay
+    assert "locked_state.library_id = p_library_id" in replay
+    assert "locked_state.committed_revision = p_revision" in replay
+    assert "locked_state.source_generation = p_source_generation" in replay
+    assert "locked_state.rebuild_epoch = p_rebuild_epoch" in replay
+    assert "ops.problematic_projection_claim_valid" in replay
+
+
+def test_problematic_projection_reason_filter_uses_canonical_category_relation():
+    from music_app.services.problematic_projection_postgres import _read_page_sql
+
+    migration_sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    reader_sql = _normalized_sql(_read_page_sql())
+
+    assert "ops.problematic_projection_reason_facts" in migration_sql
+    assert "normalized_reason text not null" in migration_sql
+    assert "category_reason text not null" in migration_sql
+    assert "ops.problematic_projection_reason_facts" in reader_sql
+    assert "normalized_reason = any (%(reasons)s::text[])" in reader_sql
+    assert "reasons && %(reasons)s::text[]" not in reader_sql
+
+
+def test_problematic_projection_separate_release_membership_is_paged_relational_input():
+    source_sql = _problematic_projection_function_sql(
+        "ops.load_claimed_problematic_projection_source"
+    )
+
+    assert "jsonb_agg(" not in source_sql
+    assert "'separate_release'" in source_sql
+    assert "separate_release_keys" not in source_sql
+    assert "limit least(p_limit, p_child_limit, 100)" in source_sql
+
+
+def test_problematic_projection_cleanup_keeps_committed_and_one_predecessor_on_replay():
+    migration_sql = _normalized_sql(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")
+    )
+    publish_sql = _problematic_projection_function_sql(
+        "ops.publish_claimed_problematic_projection"
+    )
+    replay_prefix = publish_sql.split("if not found", 1)[0]
+    revision_cleanup = publish_sql.split(
+        "delete from ops.problematic_projection_headers as old_header", 1
+    )[1]
+
+    assert re.search(
+        r"foreign key\s*\(library_id,\s*committed_revision\)\s*"
+        r"references ops\.problematic_projection_headers\(library_id,\s*revision\)",
+        migration_sql,
+    )
+    assert "return query select true" not in replay_prefix
+    assert "locked_state.committed_revision" in revision_cleanup
+    assert "limit 1" in revision_cleanup
+    assert "published_at" not in revision_cleanup
+
+
+def test_0128_terminal_failure_derives_locked_state_before_prepare_succeeds():
+    failure_sql = _problematic_projection_function_sql(
+        "ops.fail_claimed_problematic_projection"
+    )
+
+    assert "selected_state ops.problematic_projection_state%rowtype" in failure_sql
+    assert "select projection_state.* into selected_state" in failure_sql
+    assert "for update" in failure_sql
+    assert "p_source_generation is null or" in failure_sql
+    assert "p_rebuild_epoch is null or" in failure_sql
+    assert "p_revision is null or" in failure_sql
+    assert (
+        "projection_state.build_revision is null or "
+        "projection_state.requested_attempt = p_attempt"
+    ) in failure_sql
+    assert (
+        "projection_state.requested_attempt = selected_state.requested_attempt"
+        in failure_sql
+    )
+    assert "selected_state.source_generation" in failure_sql
+    assert "selected_state.library_id" in failure_sql
+
+
+def test_problematic_projection_integrity_audit_pages_the_exact_reason_relation():
+    sql = " ".join(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8").lower().split()
+    )
+    state_table = sql.split(
+        "create table if not exists ops.problematic_projection_state",
+        1,
+    )[1].split("create table", 1)[0]
+    assert "audit_reason_facets" not in state_table
+    load_due = sql.split(
+        "create or replace function ops.load_due_problematic_projection_integrity_audit",
+        1,
+    )[1].split("create or replace function", 1)[0]
+    advance = sql.split(
+        "create or replace function ops.advance_problematic_projection_integrity_audit",
+        1,
+    )[1].split("create or replace function", 1)[0]
+    page = sql.split(
+        "create or replace function ops.load_problematic_projection_integrity_page",
+        1,
+    )[1].split("create or replace function", 1)[0]
+
+    for column in (
+        "audit_after_fact_type text",
+        "audit_after_item_key text",
+        "audit_after_identity_one text",
+        "audit_after_identity_two text",
+        "audit_after_identity_three text",
+        "audit_last_counted_item_key text",
+        "audit_search_fact_count bigint",
+        "audit_search_fingerprint bit(256)",
+    ):
+        assert column in state_table
+
+    for cursor in (
+        "audit_after_fact_type",
+        "audit_after_item_key",
+        "audit_after_identity_one",
+        "audit_after_identity_two",
+        "audit_after_identity_three",
+        "audit_last_counted_item_key",
+        "audit_search_fact_count",
+        "audit_search_fingerprint",
+    ):
+        assert cursor in load_due
+        assert cursor in advance
+
+    assert "from ops.problematic_projection_reason_facts" in page
+    assert "from ops.problematic_projection_search_facts" in page
+    assert "problematic_projection_items" not in page
+    assert "p_after_fact_type text" in page
+    assert "p_after_identity_one text" in page
+    assert "p_after_identity_two text" in page
+    assert "p_after_identity_three text" in page
+    assert (
+        "reason_fact.normalized_reason as identity_one, "
+        "reason_fact.display_reason as identity_two, "
+        "reason_fact.category_reason as identity_three"
+    ) in page
+    assert (
+        "search_fact.fact_kind as identity_one, "
+        "search_fact.semantic_child_identity as identity_two, "
+        "''::text as identity_three"
+    ) in page
+    assert (
+        "select fact.fact_type, fact.item_key, fact.normalized_reason, "
+        "fact.display_reason, fact.category_reason, fact.fact_kind, "
+        "fact.semantic_child_identity, fact.normalized_text"
+    ) in page
+    exact_cursor = (
+        'fact.fact_type collate "c", fact.item_key collate "c", '
+        'fact.identity_one collate "c", fact.identity_two collate "c", '
+        'fact.identity_three collate "c"'
+    )
+    assert (
+        'reason_fact.item_key collate "c", '
+        'reason_fact.normalized_reason collate "c", '
+        'reason_fact.display_reason collate "c", '
+        'reason_fact.category_reason collate "c"'
+    ) in page
+    assert (
+        'search_fact.item_key collate "c", search_fact.fact_kind collate "c", '
+        'search_fact.semantic_child_identity collate "c"'
+    ) in page
+    assert "select * from reason_facts union all select * from search_facts" in page
+    assert f"order by {exact_cursor}" in page
+    assert page.count("limit least(greatest(p_limit, 1), 100)") == 3
+
+
+def test_problematic_projection_integrity_revision_reset_clears_composite_cursor():
+    sql = " ".join(
+        PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8").lower().split()
+    )
+    publish = sql.split(
+        "create or replace function ops.publish_claimed_problematic_projection",
+        1,
+    )[1].split("create or replace function", 1)[0]
+    complete = sql.split(
+        "create or replace function ops.complete_problematic_projection_integrity_audit",
+        1,
+    )[1].split("create or replace function", 1)[0]
+
+    for cursor in (
+        "audit_after_fact_type = null",
+        "audit_after_item_key = null",
+        "audit_after_identity_one = null",
+        "audit_after_identity_two = null",
+        "audit_last_counted_item_key = null",
+        "audit_search_fact_count = 0",
+        "audit_search_fingerprint = 0::bit(256)",
+    ):
+        assert cursor in publish
+        assert cursor in complete
 SCHEMA_MIGRATION_ATTESTATIONS_MIGRATION = (
     MIGRATIONS_DIR / "0210_create_schema_migration_attestations.sql"
 )
@@ -3389,4 +8664,3 @@ def test_schema_migration_attestations_are_append_only_and_owner_written():
     for statement in ("update ops.schema_migrations", "delete from ops.schema_migrations",
                       "insert into ops.schema_migrations", "truncate ops.schema_migrations"):
         assert statement not in sql
-

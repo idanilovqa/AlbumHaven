@@ -2,14 +2,15 @@
 // mechanisms into real application sources (in memory only) and require the
 // real registry validator to report every one of them. A defect the guard
 // does not catch fails this test. Each defect lands in its own function so
-// one report can never stand in for another, and the unmodified repository
-// must validate cleanly, so a defect is never "caught" by a pre-existing error.
+// one report can never stand in for another. The unmodified repository must
+// pass explicit structural preflight; strict validation still requires native
+// proof. A defect is never "caught" by a pre-existing preflight error.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { validateRepository } = require('../../scripts/ci/validate-bounded-interactions.cjs');
+const { loadRegistry, validateInventory, validateRepository } = require('../../scripts/ci/validate-bounded-interactions.cjs');
 
 const ROOT = path.resolve(__dirname, '..', '..');
 
@@ -357,8 +358,8 @@ const DEFECTS = [
     id: 'BI-H05/H06/H14 status request that synchronously rebuilds relation views',
     language: 'py',
     file: 'music_app/routes/api_read_asgi_routes.py',
-    anchor: '    library_state = _library_state(request)\n    # Status is observational',
-    replacement: '    library_state = _library_state(request)\n    build_relation_views(list(library_state.get("albums") or []), request.app.state.config)\n    # Status is observational',
+    anchor: 'async def status(request: Request) -> JSONResponse:\n    library_state = _library_state(request)\n',
+    replacement: 'async def status(request: Request) -> JSONResponse:\n    library_state = _library_state(request)\n    build_relation_views(list(library_state.get("albums") or []), request.app.state.config)\n',
     prelude: 'from music_app.services.relations import build_relation_views\n',
     expected: /^rejected BI-04 library-scale:py:music_app\/services\/relations\.py#build_relation_views at music_app\/services\/relations\.py:\d+ from py:music_app\/routes\/api_read_asgi_routes\.py#status:route:GET \/status via build_relation_views$/,
   },
@@ -658,7 +659,7 @@ const DEFECTS = [
       + '                            st,\n'
       + '                            previous_file_cache,\n'
       + '                            current_file_cache,\n'
-      + '                            changed_paths,\n'
+      + '                            inherited_paths,\n'
       + '                            current_separate_release_keys,\n'
       + '                        ),\n',
     replacement: '                        candidate_paths=st.get("file_cache", {}) or {},\n',
@@ -773,13 +774,35 @@ function seededOverrides() {
 
 let runs = null;
 const validations = () => {
-  runs ??= Promise.all([validateRepository(), validateRepository(seededOverrides())]);
+  if (!runs) {
+    const overrides = seededOverrides();
+    runs = Promise.all([
+      validateRepository({ nativeProofPreflight: true }),
+      validateRepository({ ...overrides, nativeProofPreflight: true }),
+    ]);
+  }
   return runs;
 };
 
-test('the unmodified repository validates cleanly, so no seeded defect hides behind an existing error', { timeout: 300_000 }, async () => {
+test('the unmodified repository passes explicit cover preflight while strict validation retains every native-pending rejection', { timeout: 300_000 }, async () => {
   const [clean] = await validations();
   assert.deepEqual(clean.errors, []);
+  const routes = [
+    'py:music_app/routes/api_wave_d_asgi_routes.py#utilities_fetch_cover:route:POST /utilities/fetch-cover',
+    'py:music_app/routes/api_wave_d_asgi_routes.py#utilities_fetch_covers_unsuccessful:route:POST /utilities/fetch-covers-unsuccessful',
+  ];
+  assert.deepEqual(clean.proofStates.map(({ entrypoint, state }) => ({ entrypoint, state })),
+    routes.map(entrypoint => ({ entrypoint, state: 'native-proof-pending' })));
+  const raw = clean.discovery.hazards.filter(hazard => hazard.reject && hazard.rule === 'BI-05');
+  assert.equal(raw.length, 24);
+  assert.deepEqual(new Set(clean.proofStates.flatMap(state => state.hazards)), new Set(raw));
+  const strict = validateInventory(loadRegistry(), clean.discovery, { fingerprints: clean.fingerprints });
+  assert.equal(strict.length, 24);
+  assert.ok(strict.every(error => error.startsWith('rejected BI-05 database-connect-per-item:')));
+  for (const route of routes) {
+    assert.equal(raw.filter(hazard => hazard.entrypoint === route).length, 12);
+    assert.equal(strict.filter(error => error.includes(` from ${route}`)).length, 12);
+  }
 });
 
 // Registry-side bypasses: a contract that "proves" an entry with a test that

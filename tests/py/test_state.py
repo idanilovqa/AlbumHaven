@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import hashlib
 import threading
 from pathlib import Path
@@ -10,6 +11,80 @@ import pytest
 from music_app.services import cover_refresh_execution
 from music_app.services import state as state_module
 from tests.py.runtime_testing import configure_test_app_paths
+
+
+def test_durable_sync_hydrates_library_identity_with_zero_revisions(monkeypatch):
+    publication = {"library_id": 7, "inventory_mutation_revision": 0, "cover_mutation_revision": 0}
+    adapter = SimpleNamespace(load_inventory_publication=lambda: publication)
+    monkeypatch.setattr(state_module, "select_scan_cache_adapter", lambda _config: adapter)
+    st = {"inventory_mutation_revision": 0, "cover_mutation_revision": 0}
+
+    assert state_module.sync_durable_inventory_revision(st, {}) == 0
+    assert st["library_id"] == 7
+    assert st["inventory_mutation_revision"] == 0
+    assert st["cover_mutation_revision"] == 0
+
+
+def test_durable_sync_does_not_inherit_previous_library_revisions(monkeypatch):
+    publication = {"library_id": 8, "inventory_mutation_revision": 2, "cover_mutation_revision": 1}
+    adapter = SimpleNamespace(load_inventory_publication=lambda: publication)
+    monkeypatch.setattr(state_module, "select_scan_cache_adapter", lambda _config: adapter)
+    invalidations = []
+
+    def invalidate(library_state, _config, **values):
+        invalidations.append(values)
+        library_state["inventory_mutation_revision"] = values["revision"]
+
+    monkeypatch.setattr(state_module, "invalidate_targeted_library_projections", invalidate)
+    st = {"library_id": 7, "inventory_mutation_revision": 41, "cover_mutation_revision": 13}
+
+    assert state_module.sync_durable_inventory_revision(st, {}) == 2
+    assert st["library_id"] == 8
+    assert st["inventory_mutation_revision"] == 2
+    assert st["cover_mutation_revision"] == 1
+    assert len(invalidations) == 1
+
+
+def test_durable_inventory_sync_ignores_legacy_timestamp_recovery_marker(monkeypatch):
+    marker = {
+        "inventory_mutation_revision": 41,
+        "scan_started_at": "2026-09-24T10:00:00+00:00",
+        "observed_root_ids": ["root-a"],
+    }
+    adapter = SimpleNamespace(
+        load_inventory_mutation_revision=lambda: 41,
+        load_inventory_publication=lambda: {
+            "inventory_mutation_revision": 41,
+            "manual_scan_recovery": marker,
+        },
+    )
+    monkeypatch.setattr(state_module, "select_scan_cache_adapter", lambda _config: adapter)
+    calls = []
+
+    library_state = {"inventory_mutation_revision": 41}
+    config = {
+        "_LIBRARY_WATCH_MANUAL_RECOVERY_CALLBACK": lambda **values: calls.append(values)
+    }
+
+    assert state_module.sync_durable_inventory_revision(library_state, config) == 41
+
+    assert calls == []
+    assert "_manual_scan_recovery_revision" not in library_state
+    assert not hasattr(state_module, "_WATCH_RECOVERY_LOCK")
+
+
+def test_durable_inventory_without_manual_recovery_does_not_restart_watcher(monkeypatch):
+    adapter = SimpleNamespace(
+        load_inventory_mutation_revision=lambda: 41,
+        load_inventory_publication=lambda: {"inventory_mutation_revision": 41},
+    )
+    monkeypatch.setattr(state_module, "select_scan_cache_adapter", lambda _config: adapter)
+    calls = []
+    state_module.sync_durable_inventory_revision(
+        {"inventory_mutation_revision": 41},
+        {"_LIBRARY_WATCH_MANUAL_RECOVERY_CALLBACK": lambda **values: calls.append(values)},
+    )
+    assert calls == []
 
 
 class _LoggerStub:
@@ -84,6 +159,8 @@ def test_state_tests_do_not_depend_on_flask_runtime_helpers():
 def test_execute_cover_job_returns_local_cover_when_remote_lookup_raises(tmp_path: Path, monkeypatch, selected):
     folder = tmp_path / "Artist" / "Album"
     folder.mkdir(parents=True)
+    track_path = folder / "song.mp3"
+    track_path.write_bytes(b"track")
     cover_path = folder / "cover.jpg"
     cover_path.write_bytes(b"cover")
     selected_path = tmp_path / "selected.png"
@@ -96,6 +173,9 @@ def test_execute_cover_job_returns_local_cover_when_remote_lookup_raises(tmp_pat
         lambda **kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
     )
 
+    def automatic_write_guard(write_action, **_kwargs):
+        return write_action()
+
     resolved_cover, downloaded, detail = cover_refresh_execution.execute_cover_job(
         job={
             "folder": folder,
@@ -104,6 +184,7 @@ def test_execute_cover_job_returns_local_cover_when_remote_lookup_raises(tmp_pat
             "edition": "",
             "year": 1999,
             "selected_cover_path": str(selected_path) if selected else None,
+            "track_paths": [str(track_path)],
         },
         image_extensions={".jpg"},
         user_agent="Album Haven Test",
@@ -112,6 +193,7 @@ def test_execute_cover_job_returns_local_cover_when_remote_lookup_raises(tmp_pat
         allow_apple_web_fallback=False,
         allow_apple_web_fallback_when_has_cover=False,
         negative_cache_ttl_seconds=None,
+        automatic_write_guard=automatic_write_guard,
     )
 
     assert resolved_cover == (selected_path if selected == "valid" else None if selected else cover_path)
@@ -126,8 +208,14 @@ def test_execute_cover_job_returns_local_cover_when_remote_lookup_raises(tmp_pat
 def test_execute_cover_job_uses_extracted_refresh_provider_seam(tmp_path: Path, monkeypatch):
     folder = tmp_path / "Artist" / "Album"
     folder.mkdir(parents=True)
+    track_path = folder / "song.mp3"
+    track_path.write_bytes(b"track")
     cover_path = folder / "cover.jpg"
     cover_cache = object()
+
+    def automatic_write_guard(write_action, **_kwargs):
+        return write_action()
+
     captured = []
 
     def fake_ensure_best_cover_for_folder(**kwargs):
@@ -147,6 +235,7 @@ def test_execute_cover_job_uses_extracted_refresh_provider_seam(tmp_path: Path, 
             "album": "Album",
             "edition": "Deluxe",
             "year": 1999,
+            "track_paths": [str(track_path)],
         },
         image_extensions={".jpg"},
         user_agent="Album Haven Test",
@@ -155,6 +244,7 @@ def test_execute_cover_job_uses_extracted_refresh_provider_seam(tmp_path: Path, 
         allow_apple_web_fallback=True,
         allow_apple_web_fallback_when_has_cover=False,
         negative_cache_ttl_seconds=12.5,
+        automatic_write_guard=automatic_write_guard,
     )
 
     assert resolved_cover == cover_path
@@ -173,6 +263,7 @@ def test_execute_cover_job_uses_extracted_refresh_provider_seam(tmp_path: Path, 
         "allow_apple_web_fallback": True,
         "allow_apple_web_fallback_when_has_cover": False,
         "negative_cache_ttl_seconds": 12.5,
+        "automatic_write_guard": automatic_write_guard,
     }]
 
 
@@ -259,6 +350,152 @@ def test_execute_cover_job_preserves_user_origin_for_comparison_only_search(
     assert captured["reject_if_user_controlled"] is True
 
 
+@pytest.mark.parametrize(
+    ("job", "extra_options"),
+    [
+        pytest.param(
+            {
+                "cover_selection_origin": "automatic",
+                "track_paths": [],
+            },
+            {"config": {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://test"}},
+            id="configured-automatic",
+        ),
+        pytest.param(
+            {
+                "cover_selection_origin": "automatic",
+                "track_paths": [],
+            },
+            {"automatic_write_guard": lambda *_args, **_kwargs: None},
+            id="supplied-guard",
+        ),
+        pytest.param(
+            {
+                "cover_selection_origin": "automatic",
+                "track_paths": [],
+            },
+            {},
+            id="missing-config",
+        ),
+        pytest.param(
+            {"track_paths": []},
+            {"config": {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://test"}},
+            id="missing-origin",
+        ),
+    ],
+)
+def test_execute_cover_job_with_empty_track_paths_never_calls_provider_or_writer(
+    tmp_path: Path,
+    monkeypatch,
+    job,
+    extra_options,
+):
+    folder = tmp_path / "Artist" / "Album"
+    folder.mkdir(parents=True)
+    provider_calls = []
+    monkeypatch.setattr(
+        cover_refresh_execution.cover_refresh_provider,
+        "ensure_best_cover_for_folder",
+        lambda **kwargs: provider_calls.append(kwargs),
+    )
+
+    resolved_cover, downloaded, detail = cover_refresh_execution.execute_cover_job(
+        job={
+            "folder": folder,
+            "artist": "Artist",
+            "album": "Album",
+            **job,
+        },
+        image_extensions={".jpg"},
+        user_agent="Album Haven Test",
+        cover_cache=object(),
+        force_search=False,
+        allow_apple_web_fallback=False,
+        allow_apple_web_fallback_when_has_cover=False,
+        negative_cache_ttl_seconds=None,
+        **extra_options,
+    )
+
+    assert provider_calls == []
+    assert resolved_cover is None
+    assert downloaded is False
+    assert detail["reason"] == "automatic_write_guard_unavailable"
+
+
+def _install_cover_authority_repository(
+    monkeypatch,
+    *,
+    selected_cover_path: Path,
+    selected_cover_revision: str,
+    cover_mutation_revision: int = 1,
+) -> None:
+    from music_app.services import cache as cache_service
+    from music_app.services import cover_mutation_coordinator
+    from music_app.services.cover_mutation_coordinator import (
+        CoverMutationBaseline,
+        CoverMutationIdentity,
+    )
+
+    expected_identity = CoverMutationIdentity(library_id=1, local_album_id=2)
+
+    class FakeCoverMutationRepository:
+        def __init__(self, *, database_url):
+            self.database_url = database_url
+
+        def resolve_identity(self, *, library_id, track_paths):
+            assert library_id == expected_identity.library_id
+            assert track_paths
+            return expected_identity
+
+        def load_baseline(self, *, identity):
+            assert identity == expected_identity
+            return CoverMutationBaseline(
+                inventory_revision=0,
+                cover_mutation_revision=0,
+                selected_cover_revision=None,
+                selected_cover_path=None,
+            )
+
+        def recover_ambiguous(self, *, request):
+            raise AssertionError(f"Unexpected generic recovery: {request!r}")
+
+    class FakeAuthorityRepository:
+        def __init__(self, *, database_url):
+            self.database_url = database_url
+
+        def load_baseline(self, *, identity):
+            return SimpleNamespace(
+                cover_mutation_revision=cover_mutation_revision,
+                selected_cover_path=str(selected_cover_path),
+                selected_cover_revision=selected_cover_revision,
+            )
+
+    monkeypatch.setattr(
+        cover_refresh_execution,
+        "PostgresCoverMutationRepository",
+        FakeAuthorityRepository,
+    )
+    monkeypatch.setattr(
+        cache_service,
+        "PostgresCoverMutationRepository",
+        FakeCoverMutationRepository,
+    )
+    monkeypatch.setattr(
+        cache_service,
+        "_select_runtime_scan_cache_adapter",
+        lambda _config: SimpleNamespace(
+            load_inventory_publication=lambda: {
+                "library_id": expected_identity.library_id
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        cover_mutation_coordinator,
+        "serialize_cover_mutation",
+        lambda **options: options["acquire_local_lock"](),
+    )
+
+
 def test_automatic_write_guard_preserves_user_origin_for_same_art_upgrade(
     tmp_path: Path,
     monkeypatch,
@@ -303,6 +540,11 @@ def test_automatic_write_guard_preserves_user_origin_for_same_art_upgrade(
         "images_are_visually_similar",
         lambda existing_path, raw_bytes: existing_path == cover_path and raw_bytes == upgraded_bytes,
         raising=False,
+    )
+    _install_cover_authority_repository(
+        monkeypatch,
+        selected_cover_path=cover_path,
+        selected_cover_revision=write_action.provisional_cover_revision,
     )
 
     guard = cover_refresh_execution._build_automatic_cover_write_guard(
@@ -353,6 +595,11 @@ def test_automatic_write_guard_rolls_back_cover_and_new_reserve_when_commit_fail
         "persist_cover_selection_in_shared_transaction",
         persist,
     )
+    _install_cover_authority_repository(
+        monkeypatch,
+        selected_cover_path=cover_path,
+        selected_cover_revision=write_action.provisional_cover_revision,
+    )
     guard = cover_refresh_execution._build_automatic_cover_write_guard(
         config={"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://commit-failure"},
         folder=folder,
@@ -365,6 +612,377 @@ def test_automatic_write_guard_rolls_back_cover_and_new_reserve_when_commit_fail
     assert exc_info.value is commit_error
     assert cover_path.read_bytes() == prior_cover_bytes
     assert reserve_path.exists() is False
+
+
+def test_automatic_write_guard_uses_claimed_selection_persister(
+    tmp_path: Path,
+    monkeypatch,
+):
+    folder = tmp_path / "Artist" / "Album"
+    folder.mkdir(parents=True)
+    cover_path = folder / "cover.jpg"
+    replacement_bytes = b"claimed-cover-bytes"
+    captured = {}
+
+    def write_action():
+        cover_path.write_bytes(replacement_bytes)
+        return cover_path
+
+    write_action.selected_cover_path = cover_path
+    write_action.provisional_cover_revision = hashlib.sha256(
+        replacement_bytes
+    ).hexdigest()
+
+    def persist(track_paths, selected_cover_path, **kwargs):
+        captured.update(
+            track_paths=track_paths,
+            selected_cover_path=selected_cover_path,
+            **kwargs,
+        )
+        return kwargs["commit_guard"](lambda: None) or {
+            "album_rows_updated": 1,
+            "track_file_rows_updated": 1,
+        }
+
+    _install_cover_authority_repository(
+        monkeypatch,
+        selected_cover_path=cover_path,
+        selected_cover_revision=write_action.provisional_cover_revision,
+    )
+
+    guard = cover_refresh_execution._build_automatic_cover_write_guard(
+        config={"CLAIMED_COVER_SELECTION_PERSISTER": persist},
+        folder=folder,
+        track_paths={str(folder / "song.mp3")},
+    )
+
+    assert guard(write_action, cover_selection_origin="automatic") == cover_path
+    assert captured["selected_cover_path"] == cover_path
+    assert captured["cover_selection_origin"] == "automatic"
+
+
+@pytest.mark.parametrize(
+    (
+        "authority_revision",
+        "expected_cover_state",
+        "expected_cover_selection_origin",
+        "expected_cover_revision",
+    ),
+    [
+        (17, ("automatic", "previous-revision"), None, None),
+        (41, None, "automatic", "previous-revision"),
+    ],
+)
+def test_claimed_automatic_commit_returns_authoritative_revision_and_guards(
+    tmp_path: Path,
+    authority_revision: int,
+    expected_cover_state: tuple[str, str] | None,
+    expected_cover_selection_origin: str | None,
+    expected_cover_revision: str | None,
+):
+    cover_path = tmp_path / "cover.jpg"
+    cover_path.write_bytes(b"claimed-cover")
+    promoted_revision = hashlib.sha256(cover_path.read_bytes()).hexdigest()
+    request = SimpleNamespace(
+        identity=SimpleNamespace(library_id=1, local_album_id=2),
+        selected_cover_path=str(cover_path),
+        promoted_cover_revision=promoted_revision,
+        selected_origin="automatic",
+        expected_inventory_revision=5,
+        expected_cover_mutation_revision=3,
+    )
+    captured: dict[str, object] = {}
+
+    def persist(track_paths, selected_cover_path, **options):
+        captured.update(
+            track_paths=track_paths,
+            selected_cover_path=selected_cover_path,
+            **options,
+        )
+        return {
+            "album_rows_updated": 1,
+            "track_file_rows_updated": 1,
+            "cover_mutation_revision": authority_revision,
+        }
+
+    outcome = cover_refresh_execution._commit_claimed_automatic_selection(
+        persist_selection=persist,
+        load_authority=lambda *, identity: SimpleNamespace(
+            cover_mutation_revision=authority_revision,
+            selected_cover_path=str(cover_path),
+            selected_cover_revision=promoted_revision,
+        ),
+        request=request,
+        track_paths={str(tmp_path / "song.flac")},
+        reject_if_user_controlled=True,
+        reject_if_explicit_selection=True,
+        expected_cover_state=expected_cover_state,
+        expected_cover_selection_origin=expected_cover_selection_origin,
+        expected_cover_revision=expected_cover_revision,
+        local_cover_width=1200,
+        local_cover_height=1200,
+    )
+
+    assert outcome.status.value == "committed"
+    assert outcome.cover_mutation_revision == authority_revision
+    assert outcome.cover_mutation_revision != request.expected_cover_mutation_revision + 1
+    assert outcome.selected_cover_revision == promoted_revision
+    assert captured["track_paths"] == {str(tmp_path / "song.flac")}
+    assert captured["selected_cover_path"] == cover_path
+    assert captured["reject_if_user_controlled"] is True
+    assert captured["reject_if_explicit_selection"] is True
+    assert captured["expected_cover_state"] == expected_cover_state
+    assert (
+        captured["expected_cover_selection_origin"]
+        == expected_cover_selection_origin
+    )
+    assert captured["expected_cover_revision"] == expected_cover_revision
+    assert captured["local_cover_width"] == 1200
+    assert captured["local_cover_height"] == 1200
+    assert captured["expected_library_id"] == 1
+    assert captured["expected_album_id"] == 2
+    assert captured["expected_inventory_revision"] == 5
+    assert captured["expected_cover_mutation_revision"] == 3
+    assert callable(captured["commit_guard"])
+
+
+def test_claimed_automatic_commit_replay_returns_unchanged_authoritative_revision(
+    tmp_path: Path,
+):
+    cover_path = tmp_path / "cover.jpg"
+    cover_path.write_bytes(b"claimed-cover")
+    request = SimpleNamespace(
+        identity=SimpleNamespace(library_id=1, local_album_id=2),
+        selected_cover_path=str(cover_path),
+        promoted_cover_revision=hashlib.sha256(cover_path.read_bytes()).hexdigest(),
+        selected_origin="automatic",
+        expected_inventory_revision=7,
+        expected_cover_mutation_revision=11,
+    )
+
+    outcome = cover_refresh_execution._commit_claimed_automatic_selection(
+        persist_selection=lambda *_args, **_kwargs: {
+            "album_rows_updated": 0,
+            "track_file_rows_updated": 0,
+            "cover_mutation_revision": 11,
+        },
+        load_authority=lambda *, identity: SimpleNamespace(
+            cover_mutation_revision=11,
+            selected_cover_path=str(cover_path),
+            selected_cover_revision=request.promoted_cover_revision,
+        ),
+        request=request,
+        track_paths={str(tmp_path / "song.flac")},
+        reject_if_user_controlled=True,
+    )
+
+    assert outcome.status.value == "committed"
+    assert outcome.cover_mutation_revision == 11
+    assert outcome.selected_cover_revision == request.promoted_cover_revision
+
+
+def test_claimed_automatic_lost_ack_matching_authority_remains_ambiguous(
+    tmp_path: Path,
+    monkeypatch,
+):
+    from music_app.services import cache as cache_service
+    from music_app.services.cover_mutation_coordinator import (
+        CommitOutcomeUnknown,
+        CoverArtifactIdentity,
+    )
+
+    album_root = tmp_path / "Artist" / "Album"
+    album_root.mkdir(parents=True)
+    track_path = album_root / "song.flac"
+    track_path.write_bytes(b"track")
+    cover_path = album_root / "cover.jpg"
+    cover_path.write_bytes(b"claimed-cover")
+    promoted_revision = hashlib.sha256(cover_path.read_bytes()).hexdigest()
+    _install_cover_authority_repository(
+        monkeypatch,
+        selected_cover_path=cover_path,
+        selected_cover_revision=promoted_revision,
+        cover_mutation_revision=12,
+    )
+    publications = []
+    compensations = []
+
+    def commit_selection(_request):
+        raise CommitOutcomeUnknown("commit acknowledgement was lost")
+
+    outcome = cache_service.execute_cover_mutation_for_config(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://lost-ack"},
+        library_id=1,
+        track_paths={str(track_path)},
+        album_root=album_root,
+        selected_origin="automatic",
+        clear_selection=False,
+        remote_cover=None,
+        prepare=lambda _request, _baseline: b"prepared",
+        cleanup_prepared=lambda _prepared: None,
+        write_artifact=lambda _prepared, _baseline: CoverArtifactIdentity(
+            private_path=cover_path,
+            sha256=promoted_revision,
+            post_write_exists=True,
+            selected_cover_path=str(cover_path),
+            promoted_cover_revision=promoted_revision,
+            prior_cover_existed=False,
+            prior_cover_bytes=None,
+        ),
+        commit_selection=commit_selection,
+        recover_selection=lambda request, artifact: (
+            cover_refresh_execution._recover_claimed_automatic_selection(
+                request,
+                artifact,
+            )
+        ),
+        compensate_artifact=lambda artifact: compensations.append(artifact),
+        publish_committed=lambda outcome, artifact: publications.append(
+            (outcome, artifact)
+        ),
+        job_id=1,
+        attempt=1,
+        worker_id="worker-1",
+        lease_token="lease-1",
+        task_id=1,
+        checkpoint_revision=0,
+    )
+
+    assert outcome.status.value == "ambiguous"
+    assert outcome.cover_mutation_revision is None
+    assert outcome.selected_cover_revision is None
+    assert publications == []
+    assert compensations == []
+
+
+@pytest.mark.parametrize("existing_recovery", [False, True], ids=["download", "existing-recovery"])
+def test_bulk_refresh_lost_ack_preserves_artifact_without_reporting_success(
+    config, logger, library_state, monkeypatch, existing_recovery,
+):
+    import io
+    from copy import deepcopy
+    from PIL import Image
+    from music_app.jobs.cover_handlers import build_cover_refresh_handler
+    from music_app.services.jobs.models import JobState
+    from music_app.services import cover_refresh_provider
+    from music_app.services.cover_provider_candidates import CoverCandidate
+    from music_app.services.cover_mutation_coordinator import CommitOutcomeUnknown
+    from tests.py.test_cover_job_handlers import _claim, _Context, NOW
+
+    folder = config["MUSIC_DIR"] / "Artist" / "Lost Ack"
+    folder.mkdir(parents=True)
+    cover = folder / "cover.jpg"
+    size = 1600 if existing_recovery else 300
+    Image.new("RGB", (size, size), "blue").save(cover)
+    prior_bytes = cover.read_bytes()
+    track = str(folder / "01.flac")
+    entries = {track: {
+        "path": track, "album_id": 2, "artist": "Artist", "album": "Lost Ack",
+        "cover_path": None if existing_recovery else str(cover),
+        "cover_revision": None if existing_recovery else hashlib.sha256(prior_bytes).hexdigest(),
+        "cover_selection_origin": "automatic",
+    }}
+    library_state.update(file_cache=deepcopy(entries), covers_in_progress=True)
+    before = deepcopy(entries)
+    _install_cover_authority_repository(
+        monkeypatch, selected_cover_path=cover,
+        selected_cover_revision=entries[track]["cover_revision"],
+    )
+    raw = io.BytesIO()
+    Image.new("RGB", (1600, 1600), "red").save(raw, format="PNG")
+    candidate = CoverCandidate(
+        source="apple", url="https://images.example/lost-ack.png",
+        width=1600, height=1600, score=0.99,
+        matched_artist="Artist", matched_album="Lost Ack",
+    )
+    real_provider = cover_refresh_provider.ensure_best_cover_for_folder
+
+    def provider_with_fake_network(**kwargs):
+        def search(**_options):
+            assert not existing_recovery, "satisfactory untracked cover must recover without a download"
+            return candidate, []
+        kwargs["search_remote_cover_func"] = search
+        kwargs["http_get_bytes_func"] = lambda *_args, **_options: raw.getvalue()
+        return real_provider(**kwargs)
+
+    monkeypatch.setattr(cover_refresh_provider, "ensure_best_cover_for_folder", provider_with_fake_network)
+    compensations, publications, finished, results, details = [], [], [], [], []
+    monkeypatch.setattr(cover_refresh_execution, "rollback_local_image_promotion", compensations.append)
+    monkeypatch.setattr(cover_refresh_execution, "complete_local_image_promotion", publications.append)
+    real_execute = cover_refresh_execution.execute_cover_job
+
+    def observe_execute(**kwargs):
+        result = real_execute(**kwargs)
+        details.append(result[2])
+        return result
+
+    monkeypatch.setattr(cover_refresh_execution, "execute_cover_job", observe_execute)
+    monkeypatch.setattr(
+        cover_refresh_execution, "save_cache_to_disk_for_config",
+        lambda *_args, **_kwargs: pytest.fail("ambiguous cover must not publish inventory"),
+    )
+    authority = {}
+
+    def lose_ack(**kwargs):
+        assert kwargs["track_paths"] == {track}
+        assert kwargs["expected_album_id"] == 2
+        authority.update(path=str(kwargs["selected_cover_path"]), revision=kwargs["cover_revision"])
+        raise CommitOutcomeUnknown("commit acknowledgement was lost")
+
+    scope = SimpleNamespace(task_id=51, task_key="lost-ack", row_revision=1,
+                            file_cache=entries, progress_total=1, mode="manual", force_search=not existing_recovery)
+    repository = SimpleNamespace(
+        begin_claimed_cover_refresh=lambda **_kwargs: scope,
+        cover_refresh_cancel_requested=lambda **_kwargs: False,
+        checkpoint_claimed_cover_refresh=lambda **kwargs: kwargs["expected_row_revision"] + 1,
+        finish_claimed_cover_refresh=lambda **kwargs: finished.append(kwargs) or True,
+        persist_claimed_automatic_cover_selection=lose_ack,
+        mutate_claimed_refresh_candidate_snapshot=lambda **_kwargs: True,
+        persist_claimed_cover_provider_outcomes=lambda **_kwargs: None,
+    )
+
+    def run_refresh(**kwargs):
+        result = cover_refresh_execution.run_cover_jobs(
+            get_state=lambda: library_state, config=kwargs["config"], logger=logger,
+            cache_lock=threading.Lock(), jobs=[{
+                "folder": folder, "artist": "Artist", "album": "Lost Ack", "album_id": 2,
+                "track_paths": [track], "cover_selection_origin": "automatic",
+                "selected_cover_path": None if existing_recovery else str(cover),
+                "selected_cover_revision": entries[track]["cover_revision"],
+            }],
+            file_cache=entries, separate_release_keys=set(), image_extensions={".jpg"},
+            user_agent="AlbumHavenTests/1.0", force_search=not existing_recovery,
+            cover_cache=SimpleNamespace(get=lambda *_args, **_kwargs: {}, set=lambda *_args, **_kwargs: None, save=lambda: None),
+        )
+        results.append(result)
+        return result
+
+    outcome = build_cover_refresh_handler(
+        cover_repository=repository, config={**config, "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://lost-ack"},
+        logger=logger, run_refresh=run_refresh, clock=lambda: NOW,
+    )(_claim(
+        kind="cover_bulk_refresh", subject_kind="cover_bulk_refresh", subject_ref="lost-ack",
+        parameters={"task_id": 51, "mode": "manual", "force_search": not existing_recovery},
+        capability_key="library.covers.fetch", resource_revision=0, library_id=1,
+        idempotency_key="cover-bulk-refresh:1:lost-ack",
+    ), _Context())
+
+    assert authority
+    assert (cover.read_bytes() == prior_bytes) is existing_recovery
+    assert hashlib.sha256(cover.read_bytes()).hexdigest() == authority["revision"]
+    assert authority["path"] == str(cover)
+    assert compensations == []
+    assert publications == []
+    assert entries == before
+    assert library_state["file_cache"] == before
+    assert len(details) == 1
+    assert details[0]["reason"] != "automatic_write_blocked_by_user_selection"
+    if not existing_recovery:
+        assert results[0]["failed"] == 1
+        assert results[0]["downloaded"] == 0
+    assert outcome.next_state == JobState.FAILED
+    assert finished[0]["next_status"] == "failed"
+    assert finished[0]["failed_count"] == 1
 
 
 def test_automatic_write_guard_removes_new_cover_when_commit_fails_without_prior_cover(
@@ -396,6 +1014,11 @@ def test_automatic_write_guard_removes_new_cover_when_commit_fails_without_prior
         cover_refresh_execution,
         "persist_cover_selection_in_shared_transaction",
         persist,
+    )
+    _install_cover_authority_repository(
+        monkeypatch,
+        selected_cover_path=cover_path,
+        selected_cover_revision=write_action.provisional_cover_revision,
     )
     guard = cover_refresh_execution._build_automatic_cover_write_guard(
         config={"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://commit-failure"},
@@ -2032,6 +2655,17 @@ def test_refresh_library_worker_uses_explicit_dependencies_without_flask_context
     ]
 
 
+def _install_relation_refresh_adapter(monkeypatch, refresh):
+    monkeypatch.setattr(
+        state_module, "select_scan_cache_adapter",
+        lambda _config: SimpleNamespace(refresh_relation_projection=refresh),
+    )
+    monkeypatch.setattr(
+        state_module, "save_cache_to_disk_for_config",
+        lambda *_args, **_kwargs: pytest.fail("relation-only refresh must use its adapter"),
+    )
+
+
 def test_postgres_relation_refresh_uses_canonical_rebuild_and_adopts_committed_state(
     config,
     monkeypatch,
@@ -2068,18 +2702,14 @@ def test_postgres_relation_refresh_uses_canonical_rebuild_and_adopts_committed_s
     )
     monkeypatch.setattr(state_module, "library_root_cache_identity", lambda config_arg: f"root-{id(config_arg)}")
 
-    def save_snapshot(config_arg, cache_path, file_cache, root_identity, last_scan, **kwargs):
-        saved.append((config_arg, cache_path, file_cache, root_identity, last_scan, kwargs))
+    def save_snapshot(**kwargs):
+        saved.append(kwargs)
         return {
             "relation_views": canonical_views,
             "relations_last_built": 456.75,
         }
 
-    monkeypatch.setattr(
-        state_module,
-        "save_cache_to_disk_for_config",
-        save_snapshot,
-    )
+    _install_relation_refresh_adapter(monkeypatch, save_snapshot)
 
     state_module.refresh_relation_views_for_state(
         library_state,
@@ -2087,18 +2717,15 @@ def test_postgres_relation_refresh_uses_canonical_rebuild_and_adopts_committed_s
         expected_inventory_mutation_revision=23,
     )
 
-    assert saved == [(
-        config,
-        config["CACHE_PATH"],
-        {"track-1": {"path": "track-1", "album": "Album"}},
-        f"root-{id(config)}",
-        789.5,
-        {
-            "separate_release_keys": {"artist::album"},
-            "rebuild_relation_projection": True,
-            "expected_inventory_mutation_revision": 23,
-        },
-    )]
+    assert len(saved) == 1
+    assert saved[0]["expected_inventory_mutation_revision"] == 23
+    assert callable(saved[0]["publication_commit_guard"])
+    committed = []
+    saved[0]["publication_commit_guard"](lambda: committed.append(True))
+    assert committed == [True]
+    assert library_state["file_cache"] == {"track-1": {"path": "track-1", "album": "Album"}}
+    assert library_state["last_scan"] == 789.5
+    assert library_state["separate_release_keys"] == {"artist::album"}
     assert library_state["relation_views"] == canonical_views
     assert library_state["relations_last_built"] == 456.75
     assert library_state["relation_projection_ready"] is True
@@ -2194,10 +2821,7 @@ def test_postgres_relation_refresh_publishes_terminal_status_from_committed_arti
         "library_root_cache_identity",
         lambda _config: "root",
     )
-    monkeypatch.setattr(
-        state_module,
-        "save_cache_to_disk_for_config",
-        lambda *_args, **_kwargs: {
+    _install_relation_refresh_adapter(monkeypatch, lambda *_args, **_kwargs: {
             "relation_views": canonical_views,
             "relations_last_built": 456.75,
         },
@@ -2210,6 +2834,295 @@ def test_postgres_relation_refresh_publishes_terminal_status_from_committed_arti
     assert library_state["relations_phase"] == "Artist Family ready"
     assert library_state["relations_source"] == "local"
     assert library_state["relations_in_progress"] is False
+
+
+def test_postgres_pure_relation_refresh_uses_relation_only_adapter_without_inventory_payload(
+    config,
+    monkeypatch,
+):
+    config["ALBUM_HAVEN_APP_DATABASE_URL"] = (
+        "postgresql://album_haven_app@localhost/album_haven_test"
+    )
+    library_state = {
+        "file_cache": {"track-1": {"path": "track-1", "album": "Album"}},
+        "last_scan": 789.5,
+        "scan_generation": 7,
+        "relation_projection_ready": False,
+    }
+    canonical_views = {
+        "artists": ["Canonical Artist"],
+        "artists_sidebar": [{"artist": "Canonical Artist", "count": 1}],
+        "family_to_artists": {},
+        "folder_related": {},
+        "sidebar_families": [],
+        "alias_to_canonical": {"Canonical Artist": "Canonical Artist"},
+        "canonical_to_aliases": {"Canonical Artist": ["Canonical Artist"]},
+    }
+    calls = []
+
+    class RelationOnlyAdapter:
+        def refresh_relation_projection(self, **kwargs):
+            calls.append(kwargs)
+            kwargs["publication_commit_guard"](lambda: None)
+            return {
+                "relation_views": canonical_views,
+                "relations_last_built": 456.75,
+            }
+
+    monkeypatch.setattr(
+        state_module,
+        "select_scan_cache_adapter",
+        lambda _config: RelationOnlyAdapter(),
+    )
+    monkeypatch.setattr(
+        state_module,
+        "save_cache_to_disk_for_config",
+        lambda *_args, **_kwargs: pytest.fail(
+            "pure PostgreSQL relation refresh must not publish an inventory snapshot"
+        ),
+    )
+    monkeypatch.setattr(
+        state_module,
+        "library_root_cache_identity",
+        lambda _config: "pure-relation-test-root",
+    )
+    monkeypatch.setattr(
+        state_module,
+        "refresh_relation_views_in_state",
+        lambda *_args, **_kwargs: pytest.fail(
+            "pure PostgreSQL relation refresh must build from authoritative rows"
+        ),
+    )
+
+    state_module.refresh_relation_views_for_state(
+        library_state,
+        config,
+        expected_scan_generation=7,
+        expected_cover_mutation_revision=11,
+        expected_inventory_mutation_revision=23,
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["expected_cover_mutation_revision"] == 11
+    assert calls[0]["expected_inventory_mutation_revision"] == 23
+    assert callable(calls[0]["publication_commit_guard"])
+    assert set(calls[0]) == {
+        "expected_cover_mutation_revision",
+        "expected_inventory_mutation_revision",
+        "publication_commit_guard",
+    }
+    assert library_state["file_cache"] == {
+        "track-1": {"path": "track-1", "album": "Album"}
+    }
+    assert library_state["relation_views"] == canonical_views
+    assert library_state["relations_last_built"] == 456.75
+    assert library_state["relation_projection_ready"] is True
+
+
+def test_postgres_pure_relation_refresh_generation_fence_rejects_stale_commit(
+    config,
+    monkeypatch,
+):
+    config["ALBUM_HAVEN_APP_DATABASE_URL"] = (
+        "postgresql://album_haven_app@localhost/album_haven_test"
+    )
+    previous_views = {"artists": ["Last Good Artist"]}
+    library_state = {
+        "file_cache": {},
+        "scan_generation": 7,
+        "relation_views": previous_views,
+        "relations_last_built": 123.0,
+    }
+
+    class RelationOnlyAdapter:
+        def refresh_relation_projection(self, **kwargs):
+            library_state["scan_generation"] = 8
+            kwargs["publication_commit_guard"](
+                lambda: pytest.fail("a stale generation must not commit")
+            )
+            return {
+                "relation_views": {"artists": ["Stale Artist"]},
+                "relations_last_built": 456.0,
+            }
+
+    monkeypatch.setattr(
+        state_module,
+        "select_scan_cache_adapter",
+        lambda _config: RelationOnlyAdapter(),
+    )
+    monkeypatch.setattr(
+        state_module,
+        "save_cache_to_disk_for_config",
+        lambda *_args, **_kwargs: pytest.fail(
+            "pure PostgreSQL relation refresh must not publish an inventory snapshot"
+        ),
+    )
+    monkeypatch.setattr(
+        state_module,
+        "library_root_cache_identity",
+        lambda _config: "pure-relation-test-root",
+    )
+
+    with pytest.raises(state_module.ScanCancelled):
+        state_module.refresh_relation_views_for_state(
+            library_state,
+            config,
+            expected_scan_generation=7,
+        )
+
+    assert library_state["relation_views"] is previous_views
+    assert library_state["relations_last_built"] == 123.0
+
+
+def test_postgres_pure_relation_refresh_implicitly_fences_current_generation(
+    config,
+    monkeypatch,
+):
+    config["ALBUM_HAVEN_APP_DATABASE_URL"] = (
+        "postgresql://album_haven_app@localhost/album_haven_test"
+    )
+    previous_views = {"artists": ["Last Good Artist"]}
+    library_state = {
+        "file_cache": {},
+        "scan_generation": 7,
+        "relation_views": previous_views,
+        "relations_last_built": 123.0,
+    }
+    commit_actions = []
+
+    class RelationOnlyAdapter:
+        def refresh_relation_projection(self, **kwargs):
+            library_state["scan_generation"] = 8
+
+            def commit_action():
+                commit_actions.append(True)
+
+            kwargs["publication_commit_guard"](commit_action)
+            return {
+                "relation_views": {"artists": ["Stale Artist"]},
+                "relations_last_built": 456.0,
+            }
+
+    monkeypatch.setattr(
+        state_module,
+        "select_scan_cache_adapter",
+        lambda _config: RelationOnlyAdapter(),
+    )
+    monkeypatch.setattr(
+        state_module,
+        "save_cache_to_disk_for_config",
+        lambda *_args, **_kwargs: pytest.fail(
+            "pure PostgreSQL relation refresh must not publish an inventory snapshot"
+        ),
+    )
+    monkeypatch.setattr(
+        state_module,
+        "library_root_cache_identity",
+        lambda _config: "pure-relation-test-root",
+    )
+
+    with pytest.raises(state_module.ScanCancelled):
+        state_module.refresh_relation_views_for_state(library_state, config)
+
+    assert commit_actions == []
+    assert library_state["relation_views"] is previous_views
+    assert library_state["relations_last_built"] == 123.0
+
+
+@pytest.mark.parametrize("publication_mode", ["scan", "rating-seed"])
+def test_postgres_scan_publication_and_rating_seed_keep_snapshot_publication_path(
+    config,
+    monkeypatch,
+    publication_mode,
+):
+    from music_app.services import cache as cache_service
+    from music_app.services import gallery_projection_postgres, scan_cache_persistence
+    from tests.py.test_scan_cache_persistence import FakeConnection
+
+    config["ALBUM_HAVEN_APP_DATABASE_URL"] = (
+        "postgresql://album_haven_app@localhost/album_haven_test"
+    )
+    library_state = {"file_cache": {}, "last_scan": 10.0, "scan_generation": 7}
+    publication_state = dict(library_state)
+    saved = []
+    seed_calls = []
+
+    class RelationOnlyAdapter:
+        def refresh_relation_projection(self, **_kwargs):
+            pytest.fail("scan and rating-seed publication must keep their snapshot owner")
+
+    monkeypatch.setattr(state_module, "select_scan_cache_adapter", lambda _config: RelationOnlyAdapter())
+    monkeypatch.setattr(state_module, "library_root_cache_identity", lambda _config: "root")
+    monkeypatch.setattr(gallery_projection_postgres, "ensure_gallery_projection_ready", lambda _config: None)
+    original_save = state_module.save_cache_to_disk_for_config
+
+    if publication_mode == "rating-seed":
+        class SnapshotConnection(FakeConnection):
+            active = False
+
+            def __enter__(self):
+                self.active = True
+                return super().__enter__()
+
+            def __exit__(self, *args):
+                self.active = False
+                return super().__exit__(*args)
+
+        connection = SnapshotConnection()
+        adapter = scan_cache_persistence.PostgresScanCacheAdapter(
+            config, connect=lambda _url: connection,
+            build_albums=lambda _entries, _separate: [SimpleNamespace(
+                key="artist::album", name="Album", album_artist="Artist", artists=["Artist"],
+                year=2020, cover_path=None, edition=None, root_provenance=None,
+                album_rating=8, tracks=[],
+            )],
+        )
+        monkeypatch.setattr(cache_service, "_select_runtime_scan_cache_adapter", lambda _config: adapter)
+        monkeypatch.setattr(scan_cache_persistence, "Jsonb", None)
+        monkeypatch.setattr(scan_cache_persistence, "_load_cover_mutation_revision", lambda _connection: 11)
+        monkeypatch.setattr(scan_cache_persistence, "_load_inventory_mutation_revision", lambda _connection: 23)
+        monkeypatch.setattr(gallery_projection_postgres, "schedule_gallery_projection_refresh", lambda *_args, **_kwargs: None)
+
+        def seed(method, active_connection, candidates, *, source):
+            assert active_connection is connection
+            assert connection.active is True
+            assert connection.commit_calls == 0
+            assert any("jsonb_build_object('scan_cache'" in sql for sql, _params in connection.executed)
+            seed_calls.append((method, list(candidates), source))
+
+        for method in ("seed_missing_album_ratings_in_transaction", "seed_missing_album_disc_ratings_in_transaction"):
+            monkeypatch.setattr(
+                scan_cache_persistence.PostgresAlbumRatingsService, method,
+                lambda _self, *args, method=method, **kwargs: seed(method, *args, **kwargs),
+            )
+
+    def save_snapshot(*args, **kwargs):
+        saved.append(kwargs)
+        if publication_mode == "rating-seed":
+            return original_save(*args, **kwargs)
+        return {"relation_views": {"artists": []}, "relations_last_built": 12.0}
+
+    monkeypatch.setattr(state_module, "save_cache_to_disk_for_config", save_snapshot)
+    state_module.refresh_relation_views_for_state(
+        library_state, config, expected_scan_generation=7,
+        expected_cover_mutation_revision=11, expected_inventory_mutation_revision=23,
+        publication_state=publication_state,
+    )
+
+    assert len(saved) == 1
+    assert saved[0]["rebuild_relation_projection"] is True
+    assert saved[0]["expected_cover_mutation_revision"] == 11
+    assert saved[0]["expected_inventory_mutation_revision"] == 23
+    assert "publication_commit_guard" not in saved[0]
+    if publication_mode == "rating-seed":
+        assert seed_calls == [
+            ("seed_missing_album_ratings_in_transaction", [
+                {"album_key": "artist::album", "tag_album_rating": 8},
+            ], "file_tag_scan"),
+            ("seed_missing_album_disc_ratings_in_transaction", [], "file_tag_scan"),
+        ]
+        assert connection.active is False
+        assert connection.exit_exc_type is None
 
 
 def test_postgres_scan_publication_waits_for_gallery_projection(config, monkeypatch):
@@ -2280,7 +3193,7 @@ def test_postgres_cover_repair_publishes_committed_cache_and_rebuilds_albums(
     library_state = {"file_cache": {eligible: old, excluded: rejected},
                      "albums": ["old"], "scan_generation": 7, "last_scan": 10.0}
     monkeypatch.setattr(state_module, "library_root_cache_identity", lambda _config: "root")
-    monkeypatch.setattr(state_module, "save_cache_to_disk_for_config", lambda *_args, **_kwargs: {
+    _install_relation_refresh_adapter(monkeypatch, lambda *_args, **_kwargs: {
         "relation_views": {"artists": []}, "relations_last_built": 456.75,
         "repaired_cover_entries": {eligible: canonical},
     })
@@ -2323,7 +3236,10 @@ def test_postgres_cover_repair_does_not_overwrite_manual_save_after_commit(
                     "cover_selection_origin": "user", "cover_selection_provenance": "explicit"}}}
 
     monkeypatch.setattr(state_module, "library_root_cache_identity", lambda _config: "root")
-    monkeypatch.setattr(state_module, "save_cache_to_disk_for_config", persist)
+    if detached_publication:
+        monkeypatch.setattr(state_module, "save_cache_to_disk_for_config", persist)
+    else:
+        _install_relation_refresh_adapter(monkeypatch, persist)
     with pytest.raises(state_module.ScanCancelled):
         state_module.refresh_relation_views_for_state(
             library_state, config, expected_scan_generation=7, publication_state=publication,
@@ -2356,11 +3272,7 @@ def test_postgres_relation_refresh_fails_loudly_without_committed_canonical_stat
         ),
     )
     monkeypatch.setattr(state_module, "library_root_cache_identity", lambda _config: "root")
-    monkeypatch.setattr(
-        state_module,
-        "save_cache_to_disk_for_config",
-        lambda *_args, **_kwargs: None,
-    )
+    _install_relation_refresh_adapter(monkeypatch, lambda *_args, **_kwargs: None)
 
     with pytest.raises(RuntimeError, match="canonical relation projection"):
         state_module.refresh_relation_views_for_state(library_state, config)
@@ -2434,10 +3346,7 @@ def test_refresh_relation_views_for_state_keeps_existing_projection_freshness_ma
         ),
     )
     monkeypatch.setattr(state_module, "library_root_cache_identity", lambda _config_arg: "root")
-    monkeypatch.setattr(
-        state_module,
-        "save_cache_to_disk_for_config",
-        lambda *_args, **_kwargs: {
+    _install_relation_refresh_adapter(monkeypatch, lambda *_args, **_kwargs: {
             "relation_views": relation_views,
             "relations_last_built": 321.25,
         },
@@ -2933,6 +3842,11 @@ def test_run_cover_jobs_updates_cache_and_state(config, logger, library_state, m
     track_path.parent.mkdir(parents=True, exist_ok=True)
     track_path.write_bytes(b"track")
     cover_path.write_bytes(b"cover")
+    _install_cover_authority_repository(
+        monkeypatch,
+        selected_cover_path=cover_path,
+        selected_cover_revision=cover_refresh_execution.cover_revision_for_path(cover_path),
+    )
 
     library_state["file_cache"] = {
         str(track_path): {
@@ -3019,6 +3933,11 @@ def recovered_cover_case(config, logger, library_state, monkeypatch):
     folder.mkdir(parents=True)
     cover = folder / "cover.jpg"
     cover.write_bytes(b"recovered-cover-bytes")
+    _install_cover_authority_repository(
+        monkeypatch,
+        selected_cover_path=cover,
+        selected_cover_revision=cover_refresh_execution.cover_revision_for_path(cover),
+    )
     tracks = [str(folder / "01.mp3"), str(folder / "02.mp3")]
     entries = {
         path: {"path": path, "title": Path(path).stem, "artist": "Artist",
@@ -3288,13 +4207,22 @@ def test_automatic_cover_guard_rechecks_currentness_inside_album_lock(
     current = [True]
     writes = []
 
-    def run_after_waiting_for_lock(_folder, action):
-        current[0] = False
-        return action()
+    from music_app.services import cover_mutation_coordinator
+
+    _install_cover_authority_repository(
+        monkeypatch, selected_cover_path=tmp_path / "cover.jpg",
+        selected_cover_revision="candidate-revision",
+    )
+
+    @contextmanager
+    def run_after_waiting_for_lock(**options):
+        with options["acquire_local_lock"]():
+            current[0] = False
+            yield
 
     monkeypatch.setattr(
-        cover_refresh_execution,
-        "run_serialized_cover_selection",
+        cover_mutation_coordinator,
+        "serialize_cover_mutation",
         run_after_waiting_for_lock,
     )
     monkeypatch.setattr(
@@ -3331,33 +4259,29 @@ def test_automatic_cover_guard_rechecks_currentness_immediately_before_commit(
     writes = []
     selection_commits = []
     selected_cover = tmp_path / "cover.jpg"
-    promotion = object()
+    _install_cover_authority_repository(
+        monkeypatch, selected_cover_path=selected_cover,
+        selected_cover_revision=hashlib.sha256(b"stale-cover").hexdigest(),
+    )
+    begin = cover_refresh_execution.begin_external_cover_write_promotion
+    record = cover_refresh_execution.record_external_cover_write
+    rollback = cover_refresh_execution.rollback_local_image_promotion
 
-    monkeypatch.setattr(
-        cover_refresh_execution,
-        "run_serialized_cover_selection",
-        lambda _folder, action: action(),
-    )
-    monkeypatch.setattr(
-        cover_refresh_execution,
-        "begin_external_cover_write_promotion",
-        lambda *_args, **_kwargs: promotions.append("begin") or promotion,
-    )
-    monkeypatch.setattr(
-        cover_refresh_execution,
-        "record_external_cover_write",
-        lambda _promotion: promotions.append("record"),
-    )
-    monkeypatch.setattr(
-        cover_refresh_execution,
-        "complete_local_image_promotion",
-        lambda _promotion: promotions.append("complete"),
-    )
-    monkeypatch.setattr(
-        cover_refresh_execution,
-        "rollback_local_image_promotion",
-        lambda _promotion: promotions.append("rollback"),
-    )
+    def begin_promotion(*args, **kwargs):
+        promotions.append("begin")
+        return begin(*args, **kwargs)
+
+    def record_promotion(value):
+        promotions.append("record")
+        return record(value)
+
+    def rollback_promotion(value):
+        promotions.append("rollback")
+        return rollback(value)
+
+    monkeypatch.setattr(cover_refresh_execution, "begin_external_cover_write_promotion", begin_promotion)
+    monkeypatch.setattr(cover_refresh_execution, "record_external_cover_write", record_promotion)
+    monkeypatch.setattr(cover_refresh_execution, "rollback_local_image_promotion", rollback_promotion)
 
     def persist_selection(*_args, commit_guard=None, **_kwargs):
         if commit_guard is not None:
@@ -3389,8 +4313,8 @@ def test_automatic_cover_guard_rechecks_currentness_immediately_before_commit(
     with pytest.raises(RuntimeError, match="changed before commit"):
         guard(write_action, cover_selection_origin="automatic")
 
-    assert promotions == []
-    assert writes == []
+    assert promotions == ["begin", "record", "rollback"]
+    assert writes == ["write"]
     assert selection_commits == []
     assert not selected_cover.exists()
 
@@ -3411,6 +4335,10 @@ def test_automatic_cover_commit_blocks_generation_invalidation_until_committed(
     track_path.parent.mkdir(parents=True, exist_ok=True)
     track_path.write_bytes(b"track")
     selected_cover = track_path.parent / "cover.jpg"
+    _install_cover_authority_repository(
+        monkeypatch, selected_cover_path=selected_cover,
+        selected_cover_revision=hashlib.sha256(b"current-cover").hexdigest(),
+    )
     file_cache = {
         str(track_path): {
             "path": str(track_path),
@@ -3467,13 +4395,15 @@ def test_automatic_cover_commit_blocks_generation_invalidation_until_committed(
     def persist_selection(*_args, commit_guard=None, **_kwargs):
         if commit_guard is not None:
             persistence_started[0] = True
-            commit_guard(lambda: events.append("commit"))
+            def commit():
+                assert invalidation_attempted.wait(timeout=2)
+                assert not invalidation_finished.is_set()
+                events.append("commit")
+            commit_guard(commit)
         return {"album_rows_updated": 1}
 
     def ensure_best_cover_for_folder(**kwargs):
         def write_action():
-            assert invalidation_attempted.wait(timeout=2)
-            invalidation_finished.wait(timeout=2)
             events.append("write")
             selected_cover.write_bytes(b"current-cover")
             return selected_cover
@@ -3988,6 +4918,11 @@ def test_planned_cover_folder_checks_identity_before_provider_search(
     baseline = {path: dict(entry) for path, entry in entries.items()}
     library_state.update(file_cache=entries, covers_in_progress=True)
     jobs = cover_refresh_planning.build_cover_refresh_jobs(entries)
+    _install_cover_authority_repository(
+        monkeypatch,
+        selected_cover_path=tmp_path / "Following" / "cover.jpg",
+        selected_cover_revision="planned-cover-revision",
+    )
     searches = []
     writes = []
 
@@ -4072,6 +5007,21 @@ def test_recovered_cover_planned_folder_requires_album_identity_agreement(
     processed = []
     persisted = []
     events = []
+    authority = {
+        "cover_mutation_revision": 1,
+        "selected_cover_path": str(case.cover),
+        "selected_cover_revision": cover_refresh_execution.cover_revision_for_path(
+            case.cover
+        ),
+    }
+
+    class AuthorityRepository:
+        def __init__(self, *, database_url):
+            self.database_url = database_url
+
+        def load_baseline(self, *, identity):
+            assert identity.local_album_id == 2
+            return SimpleNamespace(**authority)
 
     def execute(**kwargs):
         processed.append(kwargs["job"]["folder"])
@@ -4081,10 +5031,23 @@ def test_recovered_cover_planned_folder_requires_album_identity_agreement(
         if mixed:
             assert paths == {next_track}, "Mixed persisted album identities must not reach persistence"
         persisted.append((set(paths), selected))
-        options["commit_guard"](lambda: None)
+
+        def commit():
+            authority.update(
+                cover_mutation_revision=authority["cover_mutation_revision"] + 1,
+                selected_cover_path=str(selected),
+                selected_cover_revision=options["cover_revision"],
+            )
+
+        options["commit_guard"](commit)
         return {"album_rows_updated": 1, "track_file_rows_updated": len(paths)}
 
     monkeypatch.setattr(cover_refresh_execution, "execute_cover_job", execute)
+    monkeypatch.setattr(
+        cover_refresh_execution,
+        "PostgresCoverMutationRepository",
+        AuthorityRepository,
+    )
     monkeypatch.setattr(cover_refresh_execution, "persist_cover_selection_in_shared_transaction", persist)
     monkeypatch.setattr(cover_refresh_execution, "log_job_event", lambda _config, _logger, action, **fields: events.append((action, fields)))
     result = cover_refresh_execution.run_cover_jobs(**case.kwargs)
@@ -4252,11 +5215,17 @@ def test_recovered_cover_rechecks_state_at_persistence_commit(recovered_cover_ca
         return options["commit_guard"](commit)
 
     monkeypatch.setattr(cover_refresh_execution, "persist_cover_selection_in_shared_transaction", persist)
-    with pytest.raises(RuntimeError, match="Recovered cover selection changed before commit"):
+    expected_error = (
+        "Recovered cover selection commit outcome is uncertain"
+        if mutation == "image" else "Recovered cover selection changed before commit"
+    )
+    with pytest.raises(RuntimeError, match=expected_error):
         cover_refresh_execution.run_cover_jobs(**case.kwargs)
 
     assert len(attempts) == 1
     assert committed == []
+    if mutation == "image":
+        assert case.cover.read_bytes() == b"newer-uncommitted-image"
     if mutation == "runtime_selection":
         baseline[case.tracks[0]].update(
             cover_selection_origin="user", cover_revision="new-user-revision",
@@ -4784,7 +5753,7 @@ def test_run_cover_jobs_serializes_authority_writes_with_progress_ownership(
             return True
 
     def execute(**kwargs):
-        if authority_write == "candidate":
+        if authority_write in {"candidate", "terminal"}:
             kwargs["candidate_callback"]({
                 "id": "candidate-1",
                 "source": "apple",
@@ -5394,6 +6363,42 @@ def test_cover_request_persisted_no_candidate_is_completed(provider_outcome_requ
     assert len(request.completions) == 1
 
 
+def test_cover_request_prefers_claimed_provider_outcome_persister(
+    provider_outcome_request, monkeypatch
+):
+    request = provider_outcome_request
+    recorded = []
+    request.case.kwargs["config"][
+        "CLAIMED_COVER_PROVIDER_OUTCOME_PERSISTER"
+    ] = lambda **outcome: recorded.append(outcome)
+    monkeypatch.setattr(
+        cover_refresh_execution,
+        "execute_cover_job",
+        lambda **_kwargs: (
+            None,
+            False,
+            {
+                "reason": "remote_search_returned_no_candidate",
+                "resolver_trace": [
+                    {"resolver": "_search_spotify", "status": "no_candidate"}
+                ],
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        cover_refresh_execution,
+        "persist_cover_provider_outcomes",
+        lambda *_args, **_kwargs: pytest.fail(
+            "claimed workers must not use direct provider-outcome DML"
+        ),
+    )
+
+    result = request.run()
+
+    assert recorded[0]["outcomes"]["search_spotify"]["category"] == "no_candidate"
+    assert result["job_results"][0]["reason"] == "remote_search_returned_no_candidate"
+
+
 def test_run_cover_jobs_logs_publisher_failure_and_continues_cover_processing(
     config,
     logger,
@@ -5556,6 +6561,8 @@ def test_run_cover_jobs_uses_explicit_dependencies_without_request_context(confi
 def test_run_cover_jobs_counts_disabled_remote_provider_group_as_skipped(config, logger, tmp_path, monkeypatch):
     folder = tmp_path / "Artist" / "Album"
     folder.mkdir(parents=True)
+    track_path = folder / "song.mp3"
+    track_path.write_bytes(b"track")
     provider_calls = []
 
     def fail_provider(*args, **kwargs):
@@ -5573,7 +6580,12 @@ def test_run_cover_jobs_counts_disabled_remote_provider_group_as_skipped(config,
         config=config,
         logger=logger,
         cache_lock=threading.Lock(),
-        jobs=[{"folder": folder, "artist": "Artist", "album": "Album", "track_paths": []}],
+        jobs=[{
+            "folder": folder,
+            "artist": "Artist",
+            "album": "Album",
+            "track_paths": [str(track_path)],
+        }],
         file_cache={},
         separate_release_keys=set(),
         image_extensions={".jpg"},
@@ -5745,3 +6757,39 @@ def test_relation_projection_rebuild_scheduler_repeats_for_request_arriving_duri
 
     assert rebuilt == ["rebuild", "rebuild"]
     assert len(submitted) == 1
+
+
+def test_durable_cover_publication_invalidates_once_without_advancing_inventory(monkeypatch):
+    publications = iter([
+        {"inventory_mutation_revision": 41, "cover_mutation_revision": 8},
+        {"inventory_mutation_revision": 41, "cover_mutation_revision": 8},
+        {"inventory_mutation_revision": 40, "cover_mutation_revision": 7},
+        {"inventory_mutation_revision": 42, "cover_mutation_revision": 9},
+    ])
+    adapter = SimpleNamespace(load_inventory_publication=lambda: next(publications))
+    monkeypatch.setattr(state_module, "select_scan_cache_adapter", lambda _config: adapter)
+    invalidations = []
+
+    def invalidate(library_state, _config, **values):
+        invalidations.append(values)
+        library_state["inventory_mutation_revision"] = values["revision"]
+
+    monkeypatch.setattr(state_module, "invalidate_targeted_library_projections", invalidate)
+    library_state = {"inventory_mutation_revision": 41, "cover_mutation_revision": 7,
+                     "relation_projection_ready": True}
+
+    assert state_module.sync_durable_inventory_revision(library_state, {}) == 41
+    assert library_state["cover_mutation_revision"] == 8
+    assert library_state["inventory_mutation_revision"] == 41
+    assert library_state["relation_projection_ready"] is False
+    assert len(invalidations) == 1
+    assert state_module.sync_durable_inventory_revision(library_state, {}) == 41
+    assert state_module.sync_durable_inventory_revision(library_state, {}) == 41
+    assert library_state["cover_mutation_revision"] == 8
+    assert len(invalidations) == 1
+    assert state_module.sync_durable_inventory_revision(library_state, {}) == 42
+    assert library_state["cover_mutation_revision"] == 9
+    assert invalidations == [
+        {"revision": 41, "affected_album_keys": (), "expected_library_id": None},
+        {"revision": 42, "affected_album_keys": (), "expected_library_id": None},
+    ]

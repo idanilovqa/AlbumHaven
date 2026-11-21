@@ -3,6 +3,7 @@ import { BasePage } from './basePage.js';
 export class ScanPage extends BasePage {
   constructor(page, testInfo = null) {
     super(page, testInfo);
+    this.appShell = page.locator('#app-shell');
     this.loader = page.locator(this.loaderSelector);
     this.statusGalleryBar = page.getByRole('region', { name: 'Library Status Page controls', exact: true });
     this.libraryGalleryBar = page.locator('[data-gallery-bar-instance="gallery"]');
@@ -10,6 +11,10 @@ export class ScanPage extends BasePage {
       .filter({ hasText: 'Library watcher needs attention' });
     this.dismissHealthWarning = this.healthWarningToast.getByRole('button', { name: 'Dismiss', exact: true });
     this.healthWarning = page.locator('#library-scan-warning');
+    this.repairLibraryButton = this.healthWarning.getByRole('button', {
+      name: 'Repair library', exact: true,
+    });
+    this.problemItems = page.locator('#library-scan-warning [data-operational-item]');
     this.terminalError = page.locator('#library-loader .on-page-alert--error');
     this.openStatusPage = page.locator('[data-status-action="go-to-scan-page"]:visible');
     this.title = page.locator(this.titleSelector);

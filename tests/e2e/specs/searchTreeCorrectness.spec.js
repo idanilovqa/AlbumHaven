@@ -740,9 +740,7 @@ test('FTC-SEARCH-NAV-003 direct query links hydrate the same one-family tree as 
     await navigationPanelActions.waitForSidebarArtistNames(directUrlTrees.rootNames);
     await navigationPanelActions.waitForSidebarSelection(FAMILY_ARTIST);
     await galleryActions.waitForSelectedArtistGallery(FAMILY_ARTIST);
-    expect(await searchToolbarActions.readCanonicalSearchState({
-      source: 'bootstrap',
-    })).toEqual(
+    expect(await searchToolbarActions.readCanonicalSearchState()).toEqual(
       expect.objectContaining({
         query: '',
         searchContext: null,

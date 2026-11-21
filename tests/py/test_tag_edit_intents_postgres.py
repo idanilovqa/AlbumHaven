@@ -176,6 +176,35 @@ def test_load_unfinished_intents_filters_by_active_library_root_identity():
     assert "order by created_at, id" in sql
 
 
+def test_load_intent_for_recovery_reads_exact_journal_without_mutation():
+    row = {
+        "id": "intent-1",
+        "library_root_identity": "X:/SyntheticMusic",
+        "status": "completed",
+        "changes": changes(),
+        "created_at": "2026-08-13T12:00:00+00:00",
+        "updated_at": "2026-08-13T12:01:00+00:00",
+        "completed_at": "2026-08-13T12:01:00+00:00",
+        "last_error": None,
+    }
+    connection = FakeConnection([FakeCursor(row=row)])
+
+    loaded = repository_for(connection).load_intent_for_recovery(
+        "intent-1",
+        library_root_identity="X:/SyntheticMusic",
+    )
+
+    assert loaded == row
+    sql, params = connection.calls[0]
+    assert "where id = %(intent_id)s::uuid" in sql
+    assert "library_root_identity = %(library_root_identity)s" in sql
+    assert "update " not in sql
+    assert params == {
+        "intent_id": "intent-1",
+        "library_root_identity": "X:/SyntheticMusic",
+    }
+
+
 def test_repository_rejects_empty_or_malformed_changes_before_opening_postgres():
     repository = PostgresTagEditIntentRepository(
         {"ALBUM_HAVEN_APP_DATABASE_URL": DATABASE_URL},

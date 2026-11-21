@@ -26,21 +26,24 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
   };
 
   const mobileIndex = typeof usesMobilePageLayout === 'function' && usesMobilePageLayout();
-  if (mobileIndex) disposeProblematicFilesVirtualList();
-  const virtualListApi = mobileIndex ? null : typeof window !== 'undefined'
+  const virtualListApi = typeof window !== 'undefined'
     ? window.ProblematicFilesVirtualList
     : globalThis.ProblematicFilesVirtualList;
   const mountedRows = preserveProblematicTree && !virtualListApi?.create
     ? Array.from(els.list.querySelectorAll?.('[data-problematic-album-key]') || []) : [];
-  const albumsByKey = new Map((state.utility.problematicFiles || []).map(album => [String(album.key), album]));
+  const knownView = getProblematicKnownView();
+  const albumsByKey = new Map(knownView.items.map(album => [String(album.key), album]));
   const mountedItems = mountedRows.map(row => albumsByKey.get(row.getAttribute('data-problematic-album-key')));
   const retainTree = mountedRows.length > 0 && mountedItems.every(Boolean);
-  const items = retainTree ? mountedItems : getFilteredProblematicAlbums();
+  const items = retainTree ? mountedItems : knownView.items;
   const renderTree = selectedKey => {
     if (!problematicFilesVirtualList && virtualListApi?.create) {
       problematicFilesVirtualList = virtualListApi.create({
         list: els.list,
         renderRow: (album, selected) => buildProblematicAlbumListItem(album, selected),
+        onNearEnd: () => {
+          if (state.utility.problematicFilesNextCursor) void loadNextProblematicFilesPage();
+        },
       });
     }
     if (problematicFilesVirtualList) {
@@ -65,7 +68,9 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     });
   };
   if (els.sidebarLabel) els.sidebarLabel.textContent = 'Albums';
-  els.count.textContent = String(items.length);
+  const total = Number(knownView.total);
+  els.count.textContent = String(Number.isSafeInteger(total) && total >= items.length
+    ? total : items.length);
   if (els.search) {
     els.search.disabled = false;
     els.search.placeholder = 'Filter artist, album, or track';
@@ -92,7 +97,7 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
   els.detail.removeAttribute?.('aria-busy');
   els.detail.removeAttribute?.('inert');
 
-  if (state.utility.loading && !state.utility.loaded) {
+  if (!items.length && knownView.pending && !state.utility.problematicLoadError) {
     replaceListContents('<div class="utility-empty-state compact">Loading...</div>');
     els.detail.innerHTML = '<div class="utility-empty-state">Loading problematic albums...</div>';
     return;
@@ -122,7 +127,8 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
   }
 
   const selectedProblematicMissing = !state.utility.selectedProblematicKey
-    || !items.some((item) => item.key === state.utility.selectedProblematicKey);
+    || (!items.some((item) => item.key === state.utility.selectedProblematicKey)
+      && state.utility.selectedProblematicDetail?.key !== state.utility.selectedProblematicKey);
   if (selectedProblematicMissing && state.utility.deferProblematicAutoSelection && (state.utility.selectedProblemFilters || []).length) {
     renderTree('');
     els.detail.innerHTML = '<div class="utility-empty-state">Select an album to inspect its problematic tags.</div>';
@@ -160,7 +166,7 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     state.utility.showRepairedDisplay = true;
   }
 
-  const selectedAlbum = getSelectedProblematicAlbumFrom(items);
+  const selectedAlbum = getSelectedProblematicAlbum() || getSelectedProblematicAlbumFrom(items);
   renderTree(state.utility.selectedProblematicKey);
   if (state.utility.focusedTrackPath
       && selectedAlbum?.detail_loading_deferred

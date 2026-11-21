@@ -649,6 +649,55 @@ def test_asgi_library_settings_write_uses_asgi_state_without_bridge_context(app,
     ]]
 
 
+def test_library_settings_refresh_uses_authorized_durable_scan_when_available(
+    monkeypatch,
+):
+    from music_app.routes import api_wave_a_asgi_routes as routes
+
+    enqueues = []
+    repository = SimpleNamespace(
+        enqueue_authorized_full_scan=lambda **kwargs: (
+            enqueues.append(kwargs)
+            or SimpleNamespace(created=True, job_id=91, intent_id=92)
+        )
+    )
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                scan_job_repository=repository,
+                config={},
+                library_state={},
+                logger=SimpleNamespace(),
+            )
+        )
+    )
+    evaluation = SimpleNamespace(audit=SimpleNamespace(library_id=7))
+    monkeypatch.setattr(
+        routes,
+        "get_library_roots",
+        lambda _config: [{"id": "updated-root", "path": "C:/Music"}],
+    )
+    monkeypatch.setattr(
+        routes,
+        "request_origin_ref_for_request",
+        lambda _request: "network:settings-request",
+    )
+
+    start_refresh = routes._start_library_settings_refresh_for_asgi_request(
+        request,
+        policy_evaluation=evaluation,
+    )
+    start_refresh(force=True, scan_mode="library_settings_update")
+
+    assert len(enqueues) == 1
+    assert enqueues[0]["policy_evaluation"] is evaluation
+    assert enqueues[0]["library_id"] == 7
+    assert enqueues[0]["request_origin_ref"] == "network:settings-request"
+    assert enqueues[0]["root_ids"] == ("updated-root",)
+    assert enqueues[0]["mode"] == "library_settings_update"
+    assert enqueues[0]["force"] is True
+
+
 def test_asgi_library_settings_post_persists_settings_and_starts_refresh(app, asgi_app, monkeypatch, ledger):
     from music_app.routes import api_wave_a_asgi_routes as asgi_routes
     from music_app.services.current_actor import ActorState, CurrentActor, LibraryRelationship
@@ -2917,8 +2966,9 @@ def test_asgi_repair_album_rejects_ignored_payload_when_mutation_seam_is_selecte
     }
 
 
+@pytest.mark.parametrize("cold_cache", [False, True], ids=["warm-cache", "cold-raw-cache"])
 def test_asgi_repair_album_selected_rows_require_refresh_without_legacy_fragments_with_postgres_browse(
-    app, asgi_app, monkeypatch
+    app, asgi_app, monkeypatch, request, cold_cache,
 ):
     from music_app.routes import api_wave_a_asgi_routes as asgi_routes
 
@@ -2929,14 +2979,15 @@ def test_asgi_repair_album_selected_rows_require_refresh_without_legacy_fragment
         "library_browse": "postgres",
         "separate_releases": "postgres",
     }
-    app.library_state["file_cache"] = {
+    raw_file_cache = {
         track_path: {
             "path": track_path,
-            "title": "Mojibake Title",
+            "title": "FrÃ©quence",
             "album": "Album",
             "album_artist": "Artist",
         }
     }
+    app.library_state["file_cache"] = {} if cold_cache else raw_file_cache
     app.library_state["relation_views"] = {"alias_to_canonical": {}}
     app.library_state["separate_release_keys"] = set()
 
@@ -2948,9 +2999,23 @@ def test_asgi_repair_album_selected_rows_require_refresh_without_legacy_fragment
     ignored_saves: list[set[str]] = []
     separate_saves: list[set[str]] = []
     queued_tasks: list[dict[str, object]] = []
+    raw_loads = []
+
+    class RawTagEditAdapter:
+        def __init__(self, _config):
+            assert cold_cache, "warm repairs must use the complete runtime cache"
+
+        def load_tag_edit_state(self, paths, *, include_album_siblings=False):
+            raw_loads.append((paths, include_album_siblings))
+            return {
+                "inventory_mutation_revision": 8,
+                "file_entries": raw_file_cache,
+                "exception_overrides": {track_path: {"exception_type": "", "custom_collection_name": ""}},
+            }
 
     def fake_build_text_repairs(entry):
         assert entry["path"] == track_path
+        assert entry["title"] == "FrÃ©quence"
         return {"title": "Fixed Title"}
 
     def fake_apply_repairs_worker(path, repairs):
@@ -2963,12 +3028,17 @@ def test_asgi_repair_album_selected_rows_require_refresh_without_legacy_fragment
         updated["path"] = str(path)
         return updated
 
+    def capture_queue(**kwargs):
+        queued_tasks.append(dict(kwargs))
+        request.addfinalizer(kwargs["structural_tag_edit_reservation"].release)
+
     def fail_legacy_album_builder(*_args, **_kwargs):
         raise AssertionError(
             "selected Postgres media-write repair responses must not use legacy file-cache album fragments"
         )
 
     monkeypatch.setattr(asgi_routes, "PostgresLibraryBrowseRepository", FailingPostgresBrowseRepository, raising=False)
+    monkeypatch.setattr(asgi_routes, "PostgresScanCacheAdapter", RawTagEditAdapter)
     monkeypatch.setattr(asgi_routes, "build_text_repairs_for_entry", fake_build_text_repairs)
     monkeypatch.setattr(asgi_routes, "_build_artist_alias_repairs_for_entry", lambda _entry, _aliases: {})
     monkeypatch.setattr(asgi_routes, "_build_disc_marker_repairs_for_entry", lambda _entry: {})
@@ -2984,8 +3054,8 @@ def test_asgi_repair_album_selected_rows_require_refresh_without_legacy_fragment
     monkeypatch.setattr(asgi_routes, "create_save_task", lambda task_type: f"task-{task_type}")
     monkeypatch.setattr(
         asgi_routes,
-        "_bridge_queue_finalize_save_task",
-        lambda **kwargs: queued_tasks.append(dict(kwargs)),
+        "queue_finalize_structural_tag_edit_save_task",
+        capture_queue,
     )
 
     status, _headers, body = _run_asgi_request(
@@ -3002,6 +3072,7 @@ def test_asgi_repair_album_selected_rows_require_refresh_without_legacy_fragment
 
     payload = _decode_json(body)
     assert status == 200
+    assert raw_loads == ([({track_path}, True)] if cold_cache else [])
     assert payload["changed_files"] == [{"path": track_path, "fields": ["title"]}]
     assert payload["updated_album"] is None
     assert payload["updated_albums"] == []
@@ -3061,15 +3132,18 @@ def test_asgi_repair_album_selected_postgres_save_task_completion_requires_refre
 
     def immediate_queue_finalize_save_task(**kwargs):
         track_paths = set(kwargs["requested_track_paths"])
-        update_save_task(
-            kwargs["task_id"],
-            status="completed",
-            updated_albums=kwargs["find_albums_by_track_paths"](track_paths),
-            updated_problematic_album=kwargs["find_problematic_album_by_track_paths"](track_paths),
-            requires_view_refresh=bool(
-                set(kwargs["changed_field_names"]) & set(kwargs["structural_edit_fields"])
-            ),
-        )
+        try:
+            update_save_task(
+                kwargs["task_id"],
+                status="completed",
+                updated_albums=kwargs["find_albums_by_track_paths"](track_paths),
+                updated_problematic_album=kwargs["find_problematic_album_by_track_paths"](track_paths),
+                requires_view_refresh=bool(
+                    set(kwargs["changed_field_names"]) & set(kwargs["structural_edit_fields"])
+                ),
+            )
+        finally:
+            kwargs["structural_tag_edit_reservation"].release()
 
     monkeypatch.setattr(asgi_routes, "PostgresLibraryBrowseRepository", FailingPostgresBrowseRepository, raising=False)
     monkeypatch.setattr(asgi_routes, "build_text_repairs_for_entry", fake_build_text_repairs)
@@ -3091,7 +3165,7 @@ def test_asgi_repair_album_selected_postgres_save_task_completion_requires_refre
     monkeypatch.setattr(asgi_routes, "append_log_history", lambda *args, **kwargs: None)
     monkeypatch.setattr(asgi_routes, "log_app_event", lambda *args, **kwargs: None)
     monkeypatch.setattr(asgi_routes, "create_save_task", lambda _task_type: "task-repair-tags-postgres-media")
-    monkeypatch.setattr(asgi_routes, "queue_finalize_save_task", immediate_queue_finalize_save_task)
+    monkeypatch.setattr(asgi_routes, "queue_finalize_structural_tag_edit_save_task", immediate_queue_finalize_save_task)
 
     edit_status, _edit_headers, edit_body = _run_asgi_request(
         asgi_app,

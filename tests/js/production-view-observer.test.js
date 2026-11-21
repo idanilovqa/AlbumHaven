@@ -2149,6 +2149,391 @@ test('bounded gallery pages expose browse telemetry without claiming a complete 
   assert.equal(hasCompleteCanonicalAlbumInventory(null), false);
 });
 
+test('search readiness defers full runtime projection while a request is active', async () => {
+  const { SearchToolbar } = await import(new URL('../poms/searchToolbar.js', observerUrl));
+  const groups = ['Lead', 'Partner'].map((artist) => ({
+    artist,
+    albums: [{ key: `${artist}:solo`, name: `${artist} Solo` }],
+  }));
+  const source = {
+    payload_tier: 'full',
+    query: 'Partner',
+    selected_artist: 'Partner',
+    visible_library_categories: ['main_library'],
+    artist_groups: groups,
+    primary_artist_groups: groups.slice(1),
+    family_artist_groups: groups.slice(0, 1),
+  };
+  const settledObservation = {
+    activeRequestCount: 0,
+    pendingPayloadReadCount: 0,
+    latestFullPayload: null,
+    bootstrapPresenceEligible: true,
+  };
+  const stale = {
+    query: 'Stale',
+    surface: 'albums',
+    artists: ['Stale'],
+    sidebarArtists: ['Stale'],
+  };
+  const final = {
+    query: source.query,
+    surface: 'albums',
+    artists: groups.map((group) => group.artist),
+    sidebarArtists: groups.map((group) => group.artist),
+  };
+  const busyPolls = 3;
+  let observationReads = 0;
+  let bootstrapReads = 0;
+  let runtimeProjectionReads = 0;
+  let inputReads = 0;
+  let urlReads = 0;
+  let artistHeadingReads = 0;
+  let sidebarReads = 0;
+  let readsWhenBusyEnded = null;
+
+  await SearchToolbar.prototype.waitForQuerySettled.call({
+    productionViewObserver: {
+      read() {
+        observationReads += 1;
+        if (observationReads <= busyPolls) {
+          return { ...settledObservation, activeRequestCount: 1, stateRevision: 1 };
+        }
+        readsWhenBusyEnded ||= {
+          bootstrapReads,
+          runtimeProjectionReads,
+          artistHeadingReads,
+          sidebarReads,
+        };
+        const settledPoll = Math.floor((observationReads - busyPolls - 1) / 3);
+        return { ...settledObservation, stateRevision: settledPoll + 2 };
+      },
+      acceptBootstrapPresence: () => true,
+    },
+    readProductionBootstrapPayload: async () => {
+      bootstrapReads += 1;
+      const view = bootstrapReads === 1 ? stale : source;
+      return { bootstrap: { startupHydration: { required: false } }, initial_view: view };
+    },
+    input: { inputValue: async () => (++inputReads === 1 ? stale.query : source.query) },
+    libraryLoaderSelector: '#library-loader',
+    libraryLoaderSpinnerSelector: '#library-loader .library-loader-spinner',
+    libraryLoaderTitleSelector: '#library-loader-title',
+    libraryLoaderStatusSelector: '#library-loader-status',
+    artistHeadingSelector: '#artist-headings',
+    sidebarArtistNameSelector: '#sidebar-artists',
+    page: {
+      url: () => `http://localhost/?q=${++urlReads === 1 ? stale.query : source.query}`,
+      evaluate: async () => {
+        runtimeProjectionReads += 1;
+        return runtimeProjectionReads === 1 ? stale : final;
+      },
+      locator: (selector) => ({
+        isVisible: async () => false,
+        textContent: async () => '',
+        allTextContents: async () => {
+          if (selector === '#artist-headings') {
+            artistHeadingReads += 1;
+            return artistHeadingReads <= 2 ? stale.artists : final.artists;
+          }
+          if (selector === '#sidebar-artists') {
+            sidebarReads += 1;
+            return sidebarReads <= 2 ? stale.sidebarArtists : final.sidebarArtists;
+          }
+          return [];
+        },
+      }),
+    },
+  }, source.query, { timeout: 1000 });
+
+  assert.deepEqual(readsWhenBusyEnded, {
+    bootstrapReads: 0,
+    runtimeProjectionReads: 0,
+    artistHeadingReads: 0,
+    sidebarReads: 0,
+  });
+  assert.equal(bootstrapReads, 2);
+  assert.equal(runtimeProjectionReads, 2);
+  assert.equal(inputReads, 2);
+  assert.equal(urlReads, 2);
+  assert.equal(artistHeadingReads, 4);
+  assert.equal(sidebarReads, 4);
+});
+
+test('search readiness rechecks request activity after the bootstrap read', async () => {
+  const { SearchToolbar } = await import(new URL('../poms/searchToolbar.js', observerUrl));
+  const groups = ['Lead', 'Partner'].map((artist) => ({
+    artist,
+    albums: [{ key: `${artist}:solo`, name: `${artist} Solo` }],
+  }));
+  const source = {
+    payload_tier: 'full',
+    query: 'Partner',
+    selected_artist: 'Partner',
+    visible_library_categories: ['main_library'],
+    artist_groups: groups,
+    primary_artist_groups: groups.slice(1),
+    family_artist_groups: groups.slice(0, 1),
+  };
+  const runtimeView = {
+    query: source.query,
+    surface: 'albums',
+    artists: groups.map((group) => group.artist),
+    sidebarArtists: groups.map((group) => group.artist),
+  };
+  let requestPhase = 'idle';
+  let busyReadsRemaining = 3;
+  let stateRevision = 1;
+  let observationReads = 0;
+  let bootstrapReads = 0;
+  let bootstrapAcceptanceCalls = 0;
+  let runtimeProjectionReads = 0;
+  let artistProjectionReads = 0;
+  let sidebarProjectionReads = 0;
+  const projectionReadsWhileActive = [];
+
+  await SearchToolbar.prototype.waitForQuerySettled.call({
+    productionViewObserver: {
+      read() {
+        observationReads += 1;
+        const observation = {
+          activeRequestCount: requestPhase === 'busy' ? 1 : 0,
+          pendingPayloadReadCount: 0,
+          latestFullPayload: requestPhase === 'settled' ? source : null,
+          bootstrapPresenceEligible: true,
+          stateRevision,
+        };
+        if (requestPhase === 'busy' && --busyReadsRemaining === 0) {
+          requestPhase = 'settled';
+          stateRevision += 1;
+        }
+        return observation;
+      },
+      acceptBootstrapPresence: () => {
+        bootstrapAcceptanceCalls += 1;
+        assert.equal(observationReads, 1);
+        requestPhase = 'busy';
+        return true;
+      },
+    },
+    readProductionBootstrapPayload: async () => {
+      bootstrapReads += 1;
+      return { bootstrap: { startupHydration: { required: false } }, initial_view: source };
+    },
+    input: { inputValue: async () => source.query },
+    libraryLoaderSelector: '#library-loader',
+    libraryLoaderSpinnerSelector: '#library-loader .library-loader-spinner',
+    libraryLoaderTitleSelector: '#library-loader-title',
+    libraryLoaderStatusSelector: '#library-loader-status',
+    artistHeadingSelector: '#artist-headings',
+    sidebarArtistNameSelector: '#sidebar-artists',
+    page: {
+      url: () => `http://localhost/?q=${source.query}`,
+      evaluate: async () => {
+        runtimeProjectionReads += 1;
+        if (requestPhase === 'busy') projectionReadsWhileActive.push('runtime');
+        return runtimeView;
+      },
+      locator: (selector) => ({
+        isVisible: async () => false,
+        textContent: async () => '',
+        allTextContents: async () => {
+          if (selector === '#artist-headings') {
+            artistProjectionReads += 1;
+            if (requestPhase === 'busy') projectionReadsWhileActive.push('artists');
+            return runtimeView.artists;
+          }
+          if (selector === '#sidebar-artists') {
+            sidebarProjectionReads += 1;
+            if (requestPhase === 'busy') projectionReadsWhileActive.push('sidebar');
+            return runtimeView.sidebarArtists;
+          }
+          return [];
+        },
+      }),
+    },
+  }, source.query, { timeout: 1000 });
+
+  assert.deepEqual(projectionReadsWhileActive, []);
+  assert.equal(bootstrapReads, 1);
+  assert.equal(bootstrapAcceptanceCalls, 1);
+  assert.equal(runtimeProjectionReads, 1);
+  assert.equal(artistProjectionReads, 2);
+  assert.equal(sidebarProjectionReads, 2);
+});
+
+test('search readiness rechecks state revision after the bootstrap read', async () => {
+  const { SearchToolbar } = await import(new URL('../poms/searchToolbar.js', observerUrl));
+  const groups = ['Lead', 'Partner'].map((artist) => ({
+    artist,
+    albums: [{ key: `${artist}:solo`, name: `${artist} Solo` }],
+  }));
+  const source = {
+    payload_tier: 'full',
+    query: 'Partner',
+    selected_artist: 'Partner',
+    visible_library_categories: ['main_library'],
+    artist_groups: groups,
+    primary_artist_groups: groups.slice(1),
+    family_artist_groups: groups.slice(0, 1),
+  };
+  const runtimeView = {
+    query: source.query,
+    surface: 'albums',
+    artists: groups.map((group) => group.artist),
+    sidebarArtists: groups.map((group) => group.artist),
+  };
+  let stateRevision = 1;
+  let observationReads = 0;
+  let bootstrapReads = 0;
+  let bootstrapAcceptanceCalls = 0;
+  let runtimeProjectionReads = 0;
+  let artistProjectionReads = 0;
+  let sidebarProjectionReads = 0;
+  const projectionReadsBeforeStablePoll = [];
+
+  await SearchToolbar.prototype.waitForQuerySettled.call({
+    productionViewObserver: {
+      read() {
+        observationReads += 1;
+        return {
+          activeRequestCount: 0,
+          pendingPayloadReadCount: 0,
+          latestFullPayload: null,
+          bootstrapPresenceEligible: true,
+          stateRevision,
+        };
+      },
+      acceptBootstrapPresence: () => {
+        bootstrapAcceptanceCalls += 1;
+        if (bootstrapAcceptanceCalls === 1) stateRevision = 2;
+        return true;
+      },
+    },
+    readProductionBootstrapPayload: async () => {
+      bootstrapReads += 1;
+      return { bootstrap: { startupHydration: { required: false } }, initial_view: source };
+    },
+    input: { inputValue: async () => source.query },
+    libraryLoaderSelector: '#library-loader',
+    libraryLoaderSpinnerSelector: '#library-loader .library-loader-spinner',
+    libraryLoaderTitleSelector: '#library-loader-title',
+    libraryLoaderStatusSelector: '#library-loader-status',
+    artistHeadingSelector: '#artist-headings',
+    sidebarArtistNameSelector: '#sidebar-artists',
+    page: {
+      url: () => `http://localhost/?q=${source.query}`,
+      evaluate: async () => {
+        runtimeProjectionReads += 1;
+        if (observationReads < 4) projectionReadsBeforeStablePoll.push('runtime');
+        return runtimeView;
+      },
+      locator: (selector) => ({
+        isVisible: async () => false,
+        textContent: async () => '',
+        allTextContents: async () => {
+          if (selector === '#artist-headings') {
+            artistProjectionReads += 1;
+            if (observationReads < 4) projectionReadsBeforeStablePoll.push('artists');
+            return runtimeView.artists;
+          }
+          if (selector === '#sidebar-artists') {
+            sidebarProjectionReads += 1;
+            if (observationReads < 4) projectionReadsBeforeStablePoll.push('sidebar');
+            return runtimeView.sidebarArtists;
+          }
+          return [];
+        },
+      }),
+    },
+  }, source.query, { timeout: 1000 });
+
+  assert.deepEqual(projectionReadsBeforeStablePoll, []);
+  assert.equal(bootstrapReads, 2);
+  assert.equal(bootstrapAcceptanceCalls, 2);
+  assert.equal(runtimeProjectionReads, 1);
+  assert.equal(artistProjectionReads, 2);
+  assert.equal(sidebarProjectionReads, 2);
+});
+
+test('search readiness waits for the runtime projection to stop being busy', async () => {
+  const { SearchToolbar } = await import(new URL('../poms/searchToolbar.js', observerUrl));
+  const groups = ['Lead', 'Partner'].map((artist) => ({
+    artist,
+    albums: [{ key: `${artist}:solo`, name: `${artist} Solo` }],
+  }));
+  const source = {
+    payload_tier: 'full',
+    query: 'Partner',
+    selected_artist: 'Partner',
+    visible_library_categories: ['main_library'],
+    artist_groups: groups,
+    primary_artist_groups: groups.slice(1),
+    family_artist_groups: groups.slice(0, 1),
+  };
+  const runtimeView = {
+    query: source.query,
+    surface: 'albums',
+    artists: groups.map((group) => group.artist),
+    sidebarArtists: groups.map((group) => group.artist),
+  };
+  let observationReads = 0;
+  let runtimeProjectionReads = 0;
+  let artistProjectionReads = 0;
+  let sidebarProjectionReads = 0;
+
+  await SearchToolbar.prototype.waitForQuerySettled.call({
+    productionViewObserver: {
+      read() {
+        observationReads += 1;
+        return {
+          activeRequestCount: 0,
+          pendingPayloadReadCount: 0,
+          latestFullPayload: source,
+          bootstrapPresenceEligible: true,
+          stateRevision: 1,
+        };
+      },
+      acceptBootstrapPresence: () => true,
+    },
+    readProductionBootstrapPayload: async () => null,
+    input: { inputValue: async () => source.query },
+    libraryLoaderSelector: '#library-loader',
+    libraryLoaderSpinnerSelector: '#library-loader .library-loader-spinner',
+    libraryLoaderTitleSelector: '#library-loader-title',
+    libraryLoaderStatusSelector: '#library-loader-status',
+    artistHeadingSelector: '#artist-headings',
+    sidebarArtistNameSelector: '#sidebar-artists',
+    page: {
+      url: () => `http://localhost/?q=${source.query}`,
+      evaluate: async () => ({
+        ...runtimeView,
+        busy: ++runtimeProjectionReads === 1,
+      }),
+      locator: (selector) => ({
+        isVisible: async () => false,
+        textContent: async () => '',
+        allTextContents: async () => {
+          if (selector === '#artist-headings') {
+            artistProjectionReads += 1;
+            return runtimeView.artists;
+          }
+          if (selector === '#sidebar-artists') {
+            sidebarProjectionReads += 1;
+            return runtimeView.sidebarArtists;
+          }
+          return [];
+        },
+      }),
+    },
+  }, source.query, { timeout: 1000 });
+
+  assert.equal(runtimeProjectionReads, 2);
+  assert.equal(observationReads, 6);
+  assert.equal(artistProjectionReads, 4);
+  assert.equal(sidebarProjectionReads, 4);
+});
+
 test('browse telemetry accepts the actual SSR first-paint payload without a redundant full request', async () => {
   const { GalleryPage } = await import(pathToFileURL(path.join(__dirname, '..', 'e2e', 'poms', 'galleryPage.js')).href);
   const payload = { payload_tier: 'gallery_page', persistence_backend: 'postgres', artist_count: 6045, album_count: 14674 };

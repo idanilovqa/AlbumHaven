@@ -1,6 +1,15 @@
 from __future__ import annotations
 
-from music_app.services.utils import collect_text_repairs, looks_like_mojibake, repair_display_text
+from music_app.services.utils import (
+    collect_text_repairs,
+    looks_like_mojibake,
+    repair_display_text,
+    safe_int,
+)
+
+
+def test_safe_int_rejects_digit_strings_beyond_python_conversion_limit():
+    assert safe_int("9" * 150_000) is None
 
 
 def _byte_swapped_utf16(text: str) -> str:

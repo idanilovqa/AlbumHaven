@@ -63,6 +63,7 @@ def is_pending_scrobble_entry(item: object) -> bool:
         and bool(item.get("scrobble_eligible"))
         and not bool(item.get("scrobbled"))
         and bool(item.get("scrobble_retryable", True))
+        and not bool(item.get("scrobble_durable_job_owned"))
         and not bool(item.get("scrobble_retry_exhausted"))
         and str(item.get("scrobble_submission_state") or "") not in SETTLED_SUBMISSION_STATES
     )

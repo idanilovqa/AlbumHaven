@@ -19,15 +19,16 @@ lambda (`run_guard or (lambda action: action())`). Library-state evidence
 reaches closures and `**kwargs` forwarding, and a collection parameter counts
 only where the followed call passes a collection for it.
 
-The traversal is exhaustive: every (function, looped) pair reachable from an
-entrypoint is analyzed once, so no call chain is left unexamined and no depth
-limit is needed.
+The traversal retains finite semantic edges for each reachable state. A
+converging caller does not erase a connection witness; recursion terminates
+without enumerating exponentially many complete paths or imposing a depth cap.
 """
 
 from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import json
 import logging
 import sys
@@ -189,6 +190,7 @@ class Module:
     # The annotation of each module-level name declared with one
     # (`_WAKE: threading.Event | None = None`).
     annotations: dict[str, ast.AST] = field(default_factory=dict)
+    tree: ast.Module | None = None
 
 
 def _relative(path: Path, root: Path) -> str:
@@ -224,7 +226,7 @@ def _load_module(path: Path, relative: str, overrides: dict[str, str]) -> Module
     if source is None:
         source = path.read_text(encoding="utf-8")
     tree = ast.parse(source, filename=relative)
-    module = Module(path=relative, name=_module_name(relative))
+    module = Module(path=relative, name=_module_name(relative), tree=tree)
     package = module.name.rsplit(".", 1)[0] if "." in module.name else module.name
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -279,16 +281,265 @@ def _binding_targets(node: ast.AST) -> list[ast.AST]:
     return []
 
 
+def _shared_callback(owner: Definition, target: ast.AST) -> bool:
+    return (owner.key == "py:music_app/services/scan_cache_persistence.py#_SharedConnection.transaction"
+            and isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name)
+            and target.value.id == "self" and target.attr == "_connect")
+
+
+_SHARED_CONSTRUCTOR_BODY = """self.database_url = database_url
+self._connect = connect
+self._lock = threading.Lock()
+self._connection: Any = None"""
+_ADAPTER_CONSTRUCTOR_BODY = '''self._config = config
+self._database_url = str(config.get(_APP_DATABASE_URL_KEY) or "").strip()
+self._connect = connect or _connect
+self._build_albums = build_albums'''
+_SHARED_FACTORY_BODY = '''database_url = str(config.get(_APP_DATABASE_URL_KEY) or "").strip() if isinstance(config, dict) else ""
+if not database_url or _SHARED_CONNECTION.get() is not None:
+    yield
+    return
+shared = _SharedConnection(database_url, PostgresScanCacheAdapter(config)._connect_to_database)
+token = _SHARED_CONNECTION.set(shared)
+try:
+    yield
+finally:
+    _SHARED_CONNECTION.reset(token)
+    shared.close()'''
+
+
+def _body_matches(node: ast.AST, source: str) -> bool:
+    body = node.body
+    if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) and isinstance(body[0].value.value, str):
+        body = body[1:]
+    return ast.dump(ast.Module(body=body, type_ignores=[]), include_attributes=False) == ast.dump(ast.parse(source), include_attributes=False)
+
+
 class Index:
     def __init__(self, modules: list[Module]):
         self.modules = {module.name: module for module in modules}
         self._local_types: dict[tuple[int, str], tuple[str, str] | None] = {}
         self.methods_by_name: dict[str, list[Definition]] = {}
+        self._shared_binding: dict[str, object] | None = None
         for module in modules:
             for methods in module.methods.values():
                 for name, definition in methods.items():
                     if not name.startswith("__"):
                         self.methods_by_name.setdefault(name, []).append(definition)
+
+    def shared_connection_binding(self) -> dict[str, object]:
+        """The one sealed callback contract, not a general instance model."""
+        if self._shared_binding is None:
+            target = self._sealed_shared_connection_target()
+            self._shared_binding = {"status": "resolved" if target else "rejected", "target": target,
+                                    "reason": "unique-unmodified-factory" if target else "unproven-shared-connector"}
+        return self._shared_binding
+
+    def _known_adapter_connector_read(self, module: Module, owner_name: str, call: ast.Call) -> bool:
+        # This existing getter reads a separately constructed adapter; it never
+        # receives the shared instance. Unknown reads remain conservative.
+        if module.path != "music_app/services/cache.py" or owner_name != "_persist_cache_updates" or call.keywords or ast.dump(call, include_attributes=False) != ast.dump(ast.parse('getattr(adapter, "_connect", None)', mode="eval").body, include_attributes=False):
+            return False
+        owner = module.functions.get(owner_name)
+        wrapper = module.functions.get("_select_runtime_scan_cache_adapter")
+        scan = self.modules.get("music_app.services.scan_cache_persistence")
+        selector = scan.functions.get("select_scan_cache_adapter") if scan else None
+        if not owner or not wrapper or not selector or owner.node.decorator_list or wrapper.node.decorator_list or selector.node.decorator_list:
+            return False
+        if "select_scan_cache_adapter" in scan.assignments or "select_scan_cache_adapter" in scan.imports or sum(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "select_scan_cache_adapter" for node in ast.walk(scan.tree)) != 1:
+            return False
+        if not _body_matches(wrapper.node, "from music_app.services.scan_cache_persistence import select_scan_cache_adapter\nreturn select_scan_cache_adapter(config)"):
+            return False
+        if [arg.arg for arg in wrapper.node.args.args] != ["config"] or wrapper.node.args.defaults or wrapper.node.args.kwonlyargs or wrapper.node.args.vararg or wrapper.node.args.kwarg:
+            return False
+        if any(name in module.assignments or name in module.imports for name in ("getattr", "_select_runtime_scan_cache_adapter")) or "getattr" in module.functions:
+            return False
+        if sum(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == "_select_runtime_scan_cache_adapter" for node in ast.walk(module.tree)) != 1:
+            return False
+        stores = [node for node in ast.walk(owner.node) if isinstance(node, ast.Name) and node.id == "adapter" and isinstance(node.ctx, (ast.Store, ast.Del))]
+        parents = {id(child): parent for parent in ast.walk(owner.node) for child in ast.iter_child_nodes(parent)}
+        if len(stores) != 1:
+            return False
+        assignment = parents[id(stores[0])]
+        if not isinstance(assignment, ast.Assign) or assignment.targets != stores or ast.dump(assignment.value, include_attributes=False) != ast.dump(ast.parse("_select_runtime_scan_cache_adapter(config)", mode="eval").body, include_attributes=False):
+            return False
+        if any(isinstance(node, ast.Name) and node.id == "getattr" and isinstance(node.ctx, (ast.Store, ast.Del)) or isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "getattr" for node in ast.walk(owner.node)):
+            return False
+        if any(arg.arg == "getattr" for arg in [*owner.node.args.args, *owner.node.args.posonlyargs, *owner.node.args.kwonlyargs]):
+            return False
+        if [arg.arg for arg in selector.node.args.args] != ["config"] or selector.node.args.posonlyargs or selector.node.args.defaults or selector.node.args.kwonlyargs or selector.node.args.vararg or selector.node.args.kwarg:
+            return False
+        returns = [node for node in _own_nodes(selector) if isinstance(node, ast.Return)]
+        return len(returns) == 1 and returns[0].value is not None and ast.dump(returns[0].value, include_attributes=False) == ast.dump(ast.parse("PostgresScanCacheAdapter(config)", mode="eval").body, include_attributes=False)
+
+    def _sealed_shared_connection_target(self) -> Definition | None:
+        module = self.modules.get("music_app.services.scan_cache_persistence")
+        if module is None or module.tree is None:
+            return None
+        classes = [node for node in ast.walk(module.tree) if isinstance(node, ast.ClassDef) and node.name == "_SharedConnection"]
+        factories = [node for node in module.tree.body if isinstance(node, ast.FunctionDef) and node.name == "shared_scan_cache_connection"]
+        if len(classes) != 1 or classes[0] not in module.tree.body or len(factories) != 1 or classes[0].bases or classes[0].keywords or classes[0].decorator_list:
+            return None
+        shared, factory = classes[0], factories[0]
+        adapters = [node for node in ast.walk(module.tree) if isinstance(node, ast.ClassDef) and node.name == "PostgresScanCacheAdapter"]
+        if len(adapters) != 1 or adapters[0] not in module.tree.body or adapters[0].bases or adapters[0].keywords or adapters[0].decorator_list:
+            return None
+        adapter = adapters[0]
+        for node in shared.body:
+            if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                continue
+            if not isinstance(node, ast.FunctionDef) or node.name not in {"__init__", "transaction", "_discard", "close"}:
+                return None
+            expected_decorators = [ast.Name(id="contextmanager", ctx=ast.Load())] if node.name == "transaction" else []
+            if [ast.dump(value, include_attributes=False) for value in node.decorator_list] != [ast.dump(value, include_attributes=False) for value in expected_decorators]:
+                return None
+        if len([node for node in shared.body if isinstance(node, ast.FunctionDef)]) != 4:
+            return None
+        for node in adapter.body:
+            if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                continue
+            if ast.dump(node, include_attributes=False) == ast.dump(ast.parse("backend = PERSISTENCE_BACKEND_POSTGRES").body[0], include_attributes=False):
+                continue
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if node.name.startswith("__") and node.name != "__init__" or node.name in {"_connect", "_database_url", "_config", "_build_albums"}:
+                    return None
+                if node.name in {"__init__", "_connect_to_database"} and (not isinstance(node, ast.FunctionDef) or node.decorator_list):
+                    return None
+            else:
+                return None
+        adapter_initializers = [node for node in adapter.body if isinstance(node, ast.FunctionDef) and node.name == "__init__"]
+        adapter_connectors = [node for node in adapter.body if isinstance(node, ast.FunctionDef) and node.name == "_connect_to_database"]
+        if len(adapter_initializers) != 1 or len(adapter_connectors) != 1:
+            return None
+        adapter_init = adapter_initializers[0]
+        adapter_args = adapter_init.args
+        if [arg.arg for arg in adapter_args.args] != ["self", "config"] or adapter_args.posonlyargs or adapter_args.defaults or adapter_args.vararg or adapter_args.kwarg or [arg.arg for arg in adapter_args.kwonlyargs] != ["connect", "build_albums"] or ast.dump(ast.List(elts=adapter_args.kw_defaults, ctx=ast.Load()), include_attributes=False) != ast.dump(ast.parse("[None, build_albums_from_file_cache]", mode="eval").body, include_attributes=False) or not _body_matches(adapter_init, _ADAPTER_CONSTRUCTOR_BODY):
+            return None
+        adapter_assignment = next(node.targets[0] for node in adapter_init.body if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Attribute) and node.targets[0].attr == "_connect")
+        if [ast.dump(node, include_attributes=False) for node in factory.decorator_list] != [ast.dump(ast.Name(id="contextmanager", ctx=ast.Load()), include_attributes=False)] or module.imports.get("contextmanager") != ("contextlib", "contextmanager") or "contextmanager" in module.assignments:
+            return None
+        if [arg.arg for arg in factory.args.args] != ["config"] or factory.args.posonlyargs or factory.args.kwonlyargs or factory.args.defaults or factory.args.vararg or factory.args.kwarg or not _body_matches(factory, _SHARED_FACTORY_BODY):
+            return None
+        for node in ast.walk(module.tree):
+            if isinstance(node, ast.Name) and node.id == "PostgresScanCacheAdapter" and isinstance(node.ctx, (ast.Store, ast.Del)) or isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in {"PostgresScanCacheAdapter", "_SharedConnection"}:
+                return None
+            if isinstance(node, (ast.Import, ast.ImportFrom)) and any((alias.asname or alias.name.split('.')[0]) in {"PostgresScanCacheAdapter", "_SharedConnection", "contextmanager"} and not (isinstance(node, ast.ImportFrom) and node.module == "contextlib" and alias.name == "contextmanager" and alias.asname is None) for alias in node.names):
+                return None
+        constructors = [node for node in shared.body if isinstance(node, ast.FunctionDef) and node.name == "__init__"]
+        if len(constructors) != 1:
+            return None
+        constructor = constructors[0]
+        args = constructor.args
+        if constructor.decorator_list or [arg.arg for arg in args.args] != ["self", "database_url", "connect"] or args.posonlyargs or args.kwonlyargs or args.defaults or args.vararg or args.kwarg or not _body_matches(constructor, _SHARED_CONSTRUCTOR_BODY):
+            return None
+        threading_imports = [node for node in ast.walk(module.tree) if isinstance(node, (ast.Import, ast.ImportFrom)) and
+                             any((alias.asname or alias.name.split('.')[0]) == "threading" for alias in node.names)]
+        if len(threading_imports) != 1 or threading_imports[0] not in module.tree.body or ast.dump(threading_imports[0], include_attributes=False) != ast.dump(ast.parse("import threading").body[0], include_attributes=False):
+            return None
+        lock_module = next(node for node in ast.walk(constructor) if isinstance(node, ast.Name) and node.id == "threading")
+        if any(isinstance(node, ast.Name) and node.id == "threading" and node is not lock_module or isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == "threading" for node in ast.walk(module.tree)):
+            return None
+        assignments = [node for node in ast.walk(constructor) if isinstance(node, ast.Assign) and
+                       len(node.targets) == 1 and ast.dump(node.targets[0], include_attributes=False) ==
+                       "Attribute(value=Name(id='self', ctx=Load()), attr='_connect', ctx=Store())"]
+        if len(assignments) != 1 or not isinstance(assignments[0].value, ast.Name) or assignments[0].value.id != "connect":
+            return None
+        assignment = assignments[0].targets[0]
+        construction = [node for node in ast.walk(factory) if isinstance(node, ast.Call) and
+                        isinstance(node.func, ast.Name) and node.func.id == "_SharedConnection"]
+        expected = ast.parse("_SharedConnection(database_url, PostgresScanCacheAdapter(config)._connect_to_database)", mode="eval").body
+        if len(construction) != 1 or ast.dump(construction[0], include_attributes=False) != ast.dump(expected, include_attributes=False):
+            return None
+        parent_map = {id(child): parent for parent in ast.walk(module.tree) for child in ast.iter_child_nodes(parent)}
+        if not isinstance(parent_map[id(construction[0])], ast.Assign) or len(parent_map[id(construction[0])].targets) != 1 or not isinstance(parent_map[id(construction[0])].targets[0], ast.Name) or parent_map[id(construction[0])].targets[0].id != "shared":
+            return None
+        annotation = next((node for node in module.tree.body if isinstance(node, ast.AnnAssign) and
+                           isinstance(node.target, ast.Name) and node.target.id == "_SHARED_CONNECTION"), None)
+        annotation_nodes = {id(node) for node in ast.walk(annotation.annotation)} if annotation else set()
+        shared_nodes = {id(node) for node in ast.walk(shared)}
+        known_context_owners = {"persist_cover_selection_in_shared_transaction", "scan_cache_transaction", "shared_scan_cache_connection"}
+        for candidate in self.modules.values():
+            if candidate.tree is None:
+                return None
+            parents = {id(child): parent for parent in ast.walk(candidate.tree) for child in ast.iter_child_nodes(parent)}
+            owners = {}
+
+            def visit(node, owner=None, class_name=None, function=None, cls=None):
+                if isinstance(node, ast.ClassDef):
+                    class_name = node.name
+                    cls = node
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    owner = node.name
+                    function = node
+                owners[id(node)] = (owner, class_name, function, cls)
+                for child in ast.iter_child_nodes(node):
+                    visit(child, owner, class_name, function, cls)
+
+            visit(candidate.tree)
+            module_aliases = {name for name, (source, attr) in candidate.imports.items()
+                              if source == module.name and attr is None or f"{source}.{attr}" == module.name}
+            other_owners = {}
+
+            def known_other_self(function, cls):
+                key = id(function)
+                if key not in other_owners:
+                    valid = (isinstance(function, ast.FunctionDef) and isinstance(cls, ast.ClassDef)
+                             and cls in candidate.tree.body and parents.get(id(function)) is cls
+                             and cls.name not in {"_SharedConnection", "PostgresScanCacheAdapter"}
+                             and not cls.bases and not cls.keywords and not cls.decorator_list
+                             and function.name == "__init__" and not function.decorator_list
+                             and [*function.args.posonlyargs, *function.args.args]
+                             and [*function.args.posonlyargs, *function.args.args][0].arg == "self"
+                             and cls.name not in candidate.assignments and cls.name not in candidate.imports and cls.name not in candidate.functions)
+                    if valid:
+                        valid = (sum(isinstance(node, ast.ClassDef) and node.name == cls.name for node in ast.walk(candidate.tree)) == 1
+                                 and not any(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in {"__new__", "__getattribute__", "__getattr__", "__setattr__", "__delattr__"} for node in cls.body)
+                                 and all(isinstance(parents.get(id(node)), ast.Attribute) and parents[id(node)].value is node and parents[id(node)].attr != "__class__" for node in ast.walk(function) if isinstance(node, ast.Name) and node.id == "self"))
+                    other_owners[key] = bool(valid)
+                return other_owners[key]
+
+            for node in ast.walk(candidate.tree):
+                parent = parents.get(id(node))
+                owner, class_name, function, cls = owners[id(node)]
+                local = candidate is module
+                if isinstance(node, ast.Name) and node.id in module_aliases and not (isinstance(parent, ast.Attribute) and parent.value is node and parent.attr not in {"_SharedConnection", "_SHARED_CONNECTION", "__dict__"}):
+                    return None
+                if isinstance(node, ast.ImportFrom) and node.module == module.name and any(alias.name in {"_SharedConnection", "*"} for alias in node.names):
+                    return None
+                if isinstance(node, ast.Attribute) and node.attr == "_SharedConnection":
+                    return None
+                if isinstance(node, ast.Name) and node.id == "_SharedConnection" and not (local and (id(node) in annotation_nodes or node is construction[0].func)):
+                    return None
+                if isinstance(node, ast.Constant) and node.value in {"_SharedConnection", "_SHARED_CONNECTION"}:
+                    return None
+                if isinstance(node, ast.Attribute) and node.attr == "_connect":
+                    own_self = isinstance(node.value, ast.Name) and node.value.id == "self"
+                    if isinstance(node.ctx, (ast.Store, ast.Del)) and node is not assignment and node is not adapter_assignment and not (own_self and known_other_self(function, cls)):
+                        return None
+                    if local and id(node) in shared_nodes and node is not assignment and not (own_self and isinstance(parent, ast.Call) and parent.func is node and not parent.args and not parent.keywords):
+                        return None
+                if isinstance(node, ast.Attribute) and node.attr == "_connect_to_database" and isinstance(node.ctx, (ast.Store, ast.Del)):
+                    if not (isinstance(node.value, ast.Name) and node.value.id == "self" and known_other_self(function, cls)):
+                        return None
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in {"setattr", "delattr", "getattr"} and any(isinstance(arg, ast.Constant) and arg.value in {"_connect", "_connect_to_database"} for arg in node.args):
+                    if not (node.args and isinstance(node.args[0], ast.Name) and node.args[0].id == "self" and known_other_self(function, cls)) and not (node.func.id == "getattr" and self._known_adapter_connector_read(candidate, owner, node)):
+                        return None
+                if local and id(node) in shared_nodes and isinstance(node, ast.Name) and node.id == "self" and not (isinstance(parent, ast.Attribute) and parent.value is node):
+                    return None
+                if isinstance(node, ast.Name) and node.id == "_SHARED_CONNECTION" and not (local and
+                        (owner in known_context_owners and isinstance(parent, ast.Attribute) and parent.value is node and parent.attr in {"get", "set", "reset"}
+                         or isinstance(parent, ast.AnnAssign) and parent.target is node)):
+                    return None
+                if local and owner in known_context_owners and isinstance(node, ast.Name) and node.id == "shared":
+                    stored = isinstance(node.ctx, ast.Store) and isinstance(parent, ast.Assign) and parent.targets == [node] and (
+                        parent.value is construction[0] or isinstance(parent.value, ast.Call) and
+                        ast.dump(parent.value, include_attributes=False) == ast.dump(ast.parse("_SHARED_CONNECTION.get()", mode="eval").body, include_attributes=False))
+                    compared = isinstance(parent, ast.Compare) and len(parent.ops) == 1 and isinstance(parent.ops[0], (ast.Is, ast.IsNot)) and parent.left is node and len(parent.comparators) == 1 and isinstance(parent.comparators[0], ast.Constant) and parent.comparators[0].value is None
+                    allowed = stored or isinstance(parent, ast.Attribute) and parent.value is node or compared
+                    allowed = allowed or isinstance(parent, ast.Call) and isinstance(parent.func, ast.Attribute) and isinstance(parent.func.value, ast.Name) and parent.func.value.id == "_SHARED_CONNECTION" and parent.func.attr == "set" and parent.args == [node]
+                    if not allowed:
+                        return None
+        return module.methods.get("PostgresScanCacheAdapter", {}).get("_connect_to_database")
 
     def module_function(self, module_name: str, name: str, depth: int = 0) -> Definition | None:
         """A function a module defines, imports, or aliases (`_ALIAS = run`)."""
@@ -448,6 +699,10 @@ class Index:
         builtin container name (CONTAINER_METHODS) or an ambiguous builtin
         protocol name (PROTOCOL_METHODS) is not."""
         module = self.modules[owner.module]
+        if _shared_callback(owner, call_target):
+            binding = self.shared_connection_binding()
+            if binding["status"] == "resolved" and (call is None or not call.args and not call.keywords):
+                return [binding["target"]]
         if isinstance(call_target, ast.Name):
             found = self.module_function(module.name, call_target.id)
             return [found] if found else self.constructor(self.class_ref(module.name, call_target.id))
@@ -956,14 +1211,16 @@ def _filesystem_operation(node: ast.Call) -> str | None:
     return None
 
 
-def _direct_hazards(definition: Definition, looped: bool, module: Module | None = None) -> list[dict[str, object]]:
+def _direct_hazards(definition: Definition, looped: bool, module: Module | None = None, index: Index | None = None) -> list[dict[str, object]]:
     """Directory enumeration always counts. A single stat/open/media parse of a
     selected file is bounded; the same probe repeated per item is not. A new
     database connection opened per item (BI-05) is an N+1 connection storm."""
     hazards = []
     for node, in_loop in _facts(definition).calls:
-        connect = _database_connect(node, module) if module is not None else None
-        if connect is not None and (in_loop or looped):
+        unresolved = index is not None and _shared_callback(definition, node.func) and (
+            index.shared_connection_binding()["status"] != "resolved" or node.args or node.keywords)
+        connect = "unresolved-shared-connector" if unresolved else _database_connect(node, module) if module is not None else None
+        if connect is not None and (in_loop or looped or unresolved):
             hazards.append({
                 "rule": "BI-05",
                 "operation": f"database-connect-per-item:{connect}",
@@ -972,6 +1229,7 @@ def _direct_hazards(definition: Definition, looped: bool, module: Module | None 
                 "line": node.lineno,
                 "enumeration": False,
                 "per_item_connect": True,
+                "_site_node": node,
             })
             continue
         operation = _filesystem_operation(node)
@@ -1251,14 +1509,14 @@ class LibraryStateEvidence:
             if _library_collection(argument, is_state, aliases, self.collections)
         )
 
-    def scan_calls(self, definition: Definition, bound: frozenset[str] | None = None) -> dict[int, tuple[str, int]]:
+    def scan_calls(self, definition: Definition, bound: frozenset[str] | None = None) -> dict[int, tuple[str, int, ast.AST]]:
         """Calls made once per item of a loop or comprehension over a library
-        state collection in this definition: {id(call): (collection, loop line)}."""
+        state collection: {id(call): (collection, loop line, source AST)}."""
         if not self.collections:
             return {}
         is_state = self._state_predicate(definition)
         aliases = self.aliases(definition, is_state, bound)
-        found: dict[int, tuple[str, int]] = {}
+        found: dict[int, tuple[str, int, ast.AST]] = {}
         for item in _own_nodes(definition):
             if isinstance(item, (ast.For, ast.AsyncFor)):
                 sources, bodies = [item.iter], [item.body]
@@ -1288,7 +1546,7 @@ class LibraryStateEvidence:
                 if isinstance(node, (*NESTED_SCOPES, ast.Lambda)):
                     continue
                 if isinstance(node, ast.Call):
-                    found.setdefault(id(node), (collection, sources[0].lineno))
+                    found.setdefault(id(node), (collection, sources[0].lineno, sources[0]))
                 inner = nested_loop or isinstance(node, LOOP_NODES)
                 for name in node._fields:
                     value = getattr(node, name, None)
@@ -1886,13 +2144,256 @@ def load_modules(root: Path, overrides: dict[str, str] | None = None) -> list[Mo
     ]
 
 
+def _semantic_digest(value: object) -> str:
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def discover_cover_connection_contracts(modules: list[Module], index: Index) -> list[dict]:
+    """Closed source guards for the three reviewed cover connection families."""
+    by_path = {module.path: module for module in modules}
+    prefix = "music_app/services/"
+    scan, cache, execution, pools, mutations = [prefix + name + ".py" for name in
+        ("scan_cache_persistence", "cache", "cover_refresh_execution", "postgres_connections", "cover_mutations_postgres")]
+
+    def require(condition):
+        if not condition:
+            raise ValueError("unmatched-cover-source-guard")
+
+    def one(nodes):
+        values = list(nodes)
+        require(len(values) == 1)
+        return values[0]
+
+    def definition(path, name):
+        module = by_path.get(path)
+        require(module is not None and module.tree is not None)
+        if "." in name:
+            cls, method = name.split(".", 1)
+            value = module.methods.get(cls, {}).get(method)
+        else:
+            value = module.functions.get(name)
+        require(value is not None)
+        return value
+
+    def expression(node, source):
+        return ast.dump(node, include_attributes=False) == ast.dump(ast.parse(source, mode="eval").body, include_attributes=False)
+
+    def statements(nodes, source):
+        return ast.dump(ast.Module(body=nodes, type_ignores=[]), include_attributes=False) == ast.dump(ast.parse(source), include_attributes=False)
+
+    def calls(owner, name):
+        return [node for node in ast.walk(owner.node) if isinstance(node, ast.Call) and
+                (isinstance(node.func, ast.Name) and node.func.id == name or isinstance(node.func, ast.Attribute) and node.func.attr == name)]
+
+    def anchor(anchors, role, owner, node):
+        pending = [(owner.node, [])]
+        while pending:
+            current, path = pending.pop()
+            if current is node:
+                anchors.append({"role": role, "site": {"owner": owner.key, "astPath": path}})
+                return
+            for name, value in ast.iter_fields(current):
+                if isinstance(value, ast.AST):
+                    pending.append((value, [*path, name]))
+                elif isinstance(value, list):
+                    pending.extend((child, [*path, name, position]) for position, child in enumerate(value) if isinstance(child, ast.AST))
+        raise ValueError("unowned-cover-source-site")
+
+    def cleanup(anchors):
+        factory = definition(scan, "shared_scan_cache_connection")
+        require(_body_matches(factory.node, _SHARED_FACTORY_BODY))
+        final = one(node for node in factory.node.body if isinstance(node, ast.Try))
+        require(statements(final.finalbody, "_SHARED_CONNECTION.reset(token)\nshared.close()"))
+        anchor(anchors, "scope-cleanup", factory, final)
+
+    def mutation_guards(anchors):
+        expected = [(cache, "execute_cover_mutation_for_config", "cache-injection"),
+                    (execution, "_recover_existing_cover_selection", "recovery-injection"),
+                    (execution, "_build_automatic_cover_write_guard", "automatic-injection")]
+        known_calls = []
+        for path, name, role in expected:
+            owner = definition(path, name)
+            call = one(calls(owner, "PostgresCoverMutationRepository"))
+            keywords = {item.arg: item.value for item in call.keywords}
+            require(not call.args and len(keywords) == len(call.keywords) and set(keywords) == {"database_url", "connect_to_database"})
+            require(expression(keywords["connect_to_database"], "scan_cache_transaction"))
+            url = "database_url" if path == cache else 'str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()'
+            require(expression(keywords["database_url"], url))
+            known_calls.append(call)
+            anchor(anchors, role, owner, call)
+        # There is no fourth authority construction/alias inside these owners.
+        for path in (cache, execution):
+            for node in ast.walk(by_path[path].tree):
+                if isinstance(node, ast.Call) and (isinstance(node.func, ast.Name) and node.func.id == "PostgresCoverMutationRepository" or isinstance(node.func, ast.Attribute) and node.func.attr == "PostgresCoverMutationRepository"):
+                    require(node in known_calls)
+        cache_owner = definition(cache, "execute_cover_mutation_for_config")
+        url_assignment = one(node for node in cache_owner.node.body if isinstance(node, ast.Assign) and
+                             len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id == "database_url")
+        require(expression(url_assignment.value, 'str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()'))
+        scope = definition(scan, "scan_cache_transaction")
+        branch = one(node for node in scope.node.body if isinstance(node, ast.If) and isinstance(node.test, ast.BoolOp))
+        require(expression(branch.test, "shared is not None and shared.database_url == database_url"))
+        require(statements(branch.body, "with shared.transaction() as connection:\n    yield connection"))
+        anchor(anchors, "matching-dsn", scope, branch)
+        runner = definition(execution, "run_cover_jobs")
+        scoped = one(node for node in runner.node.body if isinstance(node, ast.With))
+        require(len(scoped.items) == 1 and expression(scoped.items[0].context_expr, "shared_scan_cache_connection(config)"))
+        require(len(scoped.body) == 1 and isinstance(scoped.body[0], ast.Return) and isinstance(scoped.body[0].value, ast.Call) and expression(scoped.body[0].value.func, "_run_cover_jobs"))
+        require(all(node is scoped or isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str) for node in runner.node.body))
+        forwarded = [item.value for item in scoped.body[0].value.keywords if item.arg == "config"]
+        require(len(forwarded) == 1 and expression(forwarded[0], "config") and all(item.arg is not None for item in scoped.body[0].value.keywords))
+        require(not any(isinstance(node, ast.Name) and node.id == "config" and isinstance(node.ctx, (ast.Store, ast.Del)) for node in ast.walk(runner.node)))
+        anchor(anchors, "run-scope", runner, scoped)
+        worker = definition(execution, "_run_cover_jobs")
+        submit = one(node for node in calls(worker, "submit") if node.args and expression(node.args[0], "contextvars.copy_context().run"))
+        require(len(submit.args) >= 2 and expression(submit.args[1], "execute_cover_job"))
+        anchor(anchors, "copied-worker-context", worker, submit)
+        cleanup(anchors)
+
+    def lazy_guards(anchors):
+        require(index.shared_connection_binding()["status"] == "resolved")
+        factory = definition(scan, "shared_scan_cache_connection")
+        anchor(anchors, "sealed-constructor", factory, one(calls(factory, "_SharedConnection")))
+        constructor = definition(scan, "_SharedConnection.__init__")
+        field = one(node for node in constructor.node.body if isinstance(node, ast.Assign) and
+                    any(isinstance(target, ast.Attribute) and target.attr == "_connect" for target in node.targets))
+        anchor(anchors, "field-assignment", constructor, field)
+        require(any(isinstance(node, ast.Assign) and statements([node], "self._lock = threading.Lock()") for node in constructor.node.body))
+        initial = one(node for node in constructor.node.body if isinstance(node, (ast.Assign, ast.AnnAssign)) and
+                      any(isinstance(target, ast.Attribute) and target.attr == "_connection" for target in _binding_targets(node)))
+        require(isinstance(initial.value, ast.Constant) and initial.value.value is None)
+        transaction = definition(scan, "_SharedConnection.transaction")
+        locked = one(node for node in transaction.node.body if isinstance(node, ast.With))
+        require(len(locked.items) == 1 and expression(locked.items[0].context_expr, "self._lock"))
+        branch = one(node for node in locked.body if isinstance(node, ast.If))
+        require(expression(branch.test, "self._connection is None") and not branch.orelse)
+        require(statements(branch.body, "self._connection = self._connect()"))
+        stores = [node for node in ast.walk(transaction.node) if isinstance(node, ast.Attribute) and node.attr == "_connection" and isinstance(node.ctx, (ast.Store, ast.Del))]
+        require(len(stores) == 1 and stores[0] is branch.body[0].targets[0])
+        initializer = one(calls(transaction, "_connect"))
+        anchor(anchors, "lazy-guard", transaction, branch)
+        anchor(anchors, "initializer", transaction, initializer)
+        anchor(anchors, "transaction-lock", transaction, locked)
+        close = definition(scan, "_SharedConnection.close")
+        require(statements(close.node.body, "with self._lock:\n    if self._connection is not None:\n        self._discard()"))
+        discard = definition(scan, "_SharedConnection._discard")
+        require(statements(discard.node.body, "connection, self._connection = self._connection, None\ntry:\n    connection.close()\nexcept Exception:\n    pass"))
+        allowed_stores = {id(node) for owner in (constructor, transaction, discard) for node in ast.walk(owner.node)
+                          if isinstance(node, ast.Attribute) and node.attr == "_connection" and isinstance(node.ctx, ast.Store)}
+        shared_class = one(node for node in by_path[scan].tree.body if isinstance(node, ast.ClassDef) and node.name == "_SharedConnection")
+        require(all(id(node) in allowed_stores for node in ast.walk(shared_class) if isinstance(node, ast.Attribute) and node.attr == "_connection" and isinstance(node.ctx, (ast.Store, ast.Del))))
+        cleanup(anchors)
+
+    def pool_guards(anchors):
+        owner = definition(pools, "cover_lock_connection")
+        pool_module = by_path[pools]
+        require([arg.arg for arg in owner.node.args.args] == ["database_url"] and not owner.node.args.posonlyargs and not owner.node.args.defaults and not owner.node.args.kwonlyargs and not owner.node.args.vararg and not owner.node.args.kwarg)
+        require([ast.dump(node, include_attributes=False) for node in owner.node.decorator_list] == [ast.dump(ast.Name(id="contextmanager", ctx=ast.Load()), include_attributes=False)] and pool_module.imports.get("contextmanager") == ("contextlib", "contextmanager") and "contextmanager" not in pool_module.assignments)
+        require(_body_matches(owner.node, '''if not isinstance(database_url, str) or not database_url.strip():
+    raise RuntimeError("Postgres configuration required.")
+if ConnectionPool is None:
+    raise RuntimeError("psycopg pool support required; install requirements.")
+pool_key = ("dedicated", database_url, "cover-lock")
+with _lock:
+    pool = _pools.get(pool_key)
+    if pool is None:
+        pool = ConnectionPool(conninfo=database_url, min_size=0, max_size=4, max_waiting=32, timeout=30, max_idle=120, max_lifetime=600, kwargs={"autocommit": True}, open=True)
+        _pools[pool_key] = pool
+with ExitStack() as stack:
+    try:
+        connection = stack.enter_context(pool.connection())
+    except PoolTimeout as exc:
+        raise RuntimeError("Postgres connection pool exhausted.") from exc
+    yield connection'''))
+        imports = one(node for node in pool_module.tree.body if isinstance(node, ast.Try) and
+                      any(isinstance(child, ast.ImportFrom) and child.module == "psycopg_pool" for child in node.body))
+        require(statements([imports], '''try:
+    from psycopg.rows import dict_row
+    from psycopg_pool import ConnectionPool, PoolTimeout
+except ImportError:
+    ConnectionPool = None
+    PoolTimeout = TimeoutError
+    dict_row = None'''))
+        fallback = imports.handlers[0].body[0].targets[0]
+        pool_parents = {id(child): parent for parent in ast.walk(pool_module.tree) for child in ast.iter_child_nodes(parent)}
+        for node in ast.walk(pool_module.tree):
+            if isinstance(node, ast.Name) and node.id == "ConnectionPool" and isinstance(node.ctx, (ast.Store, ast.Del)):
+                require(node is fallback)
+            if isinstance(node, ast.Name) and node.id == "ConnectionPool" and isinstance(node.ctx, ast.Load):
+                parent = pool_parents[id(node)]
+                require(isinstance(parent, ast.Call) and parent.func is node or isinstance(parent, ast.Compare) and parent.left is node and len(parent.ops) == 1 and isinstance(parent.ops[0], ast.Is) and len(parent.comparators) == 1 and isinstance(parent.comparators[0], ast.Constant) and parent.comparators[0].value is None)
+            if isinstance(node, (ast.Import, ast.ImportFrom)) and any((alias.asname or alias.name.split('.')[0]) == "ConnectionPool" for alias in node.names):
+                require(node is imports.body[1])
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == "ConnectionPool":
+                require(False)
+        for name, source in (("_pools", "{}"), ("_lock", "Lock()")):
+            assignment = one(node for node in pool_module.tree.body if isinstance(node, ast.Assign) and
+                             len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id == name)
+            require(expression(assignment.value, source))
+            require(sum(isinstance(node, ast.Name) and node.id == name and isinstance(node.ctx, (ast.Store, ast.Del)) for node in ast.walk(pool_module.tree)) == 1)
+            if name == "_lock":
+                lock_initializer = assignment.value.func
+        lock_imports = [node for node in ast.walk(pool_module.tree) if isinstance(node, (ast.Import, ast.ImportFrom)) and
+                        any((alias.asname or alias.name.split('.')[0]) == "Lock" for alias in node.names)]
+        require(len(lock_imports) == 1 and lock_imports[0] in pool_module.tree.body and
+                statements(lock_imports, "from threading import Lock") and pool_module.imports.get("Lock") == ("threading", "Lock"))
+        require(not any(isinstance(node, ast.Name) and node.id == "Lock" and node is not lock_initializer or
+                        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == "Lock" for node in ast.walk(pool_module.tree)))
+        key = one(node for node in owner.node.body if isinstance(node, ast.Assign) and
+                  len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id == "pool_key")
+        require(expression(key.value, '("dedicated", database_url, "cover-lock")'))
+        locked = one(node for node in owner.node.body if isinstance(node, ast.With) and len(node.items) == 1 and expression(node.items[0].context_expr, "_lock"))
+        lookup = one(node for node in locked.body if isinstance(node, ast.Assign))
+        require(statements([lookup], "pool = _pools.get(pool_key)"))
+        branch = one(node for node in locked.body if isinstance(node, ast.If))
+        require(expression(branch.test, "pool is None") and not branch.orelse and len(branch.body) == 2)
+        require(isinstance(branch.body[0], ast.Assign) and len(branch.body[0].targets) == 1 and isinstance(branch.body[0].targets[0], ast.Name) and branch.body[0].targets[0].id == "pool")
+        initializer = branch.body[0].value
+        require(expression(initializer, 'ConnectionPool(conninfo=database_url,min_size=0,max_size=4,max_waiting=32,timeout=30,max_idle=120,max_lifetime=600,kwargs={"autocommit":True},open=True)'))
+        require(calls(owner, "ConnectionPool") == [initializer])
+        require(sum(isinstance(node, ast.Name) and node.id == "pool" and isinstance(node.ctx, ast.Store) for node in ast.walk(owner.node)) == 2)
+        require(statements([branch.body[1]], "_pools[pool_key] = pool"))
+        require(len(locked.body) == 2)
+        require(sum(isinstance(node, ast.Name) and node.id == "pool_key" and isinstance(node.ctx, (ast.Store, ast.Del)) for node in ast.walk(owner.node)) == 1)
+        cache_uses = {id(lookup.value.func.value), id(branch.body[1].targets[0].value)}
+        require(all(id(node) in cache_uses for node in ast.walk(owner.node) if isinstance(node, ast.Name) and node.id == "_pools"))
+        close = definition(pools, "close_pools")
+        require(statements(close.node.body, "with _lock:\n    pools = list(_pools.values())\n    _pools.clear()\nfor pool in pools:\n    pool.close()"))
+        require(sum(isinstance(node, ast.Call) and expression(node, "atexit.register(close_pools)") for node in ast.walk(by_path[pools].tree)) == 1)
+        for role, node in (("cache-key", key), ("cache-lookup", lookup), ("cache-guard", branch),
+                           ("initializer", initializer), ("cache-store", branch.body[1]), ("cache-lock", locked)):
+            anchor(anchors, role, owner, node)
+        anchor(anchors, "pool-cleanup", close, close.node.body[0])
+
+    contracts = []
+    for family, paths, check in (
+        ("cover-mutation-shared-transaction", [cache, execution, scan, mutations], mutation_guards),
+        ("shared-adapter-lazy-initializer", [scan], lazy_guards),
+        ("cover-advisory-lock-pool-initializer", [pools], pool_guards),
+    ):
+        anchors = []
+        sources = [{"path": path, "astFingerprint": hashlib.sha256(ast.dump(by_path[path].tree, include_attributes=False).encode()).hexdigest()
+                    if path in by_path and by_path[path].tree is not None else None} for path in sorted(paths)]
+        try:
+            require(all(source["astFingerprint"] for source in sources))
+            check(anchors)
+            status = "matched"
+        except ValueError:
+            status = "rejected"
+        contract = {"schemaVersion": 1, "id": family + "/v1", "status": status,
+                    "sources": sources, "anchors": sorted(anchors, key=lambda anchor: anchor["role"])}
+        contract["fingerprint"] = _semantic_digest(contract)
+        contracts.append(contract)
+    return contracts
+
+
 def analyze_python_repository(
     root: Path,
     *,
     library_scale_operations: list[str] | tuple[str, ...] = (),
     library_state_collections: list[str] | tuple[str, ...] = (),
     overrides: dict[str, str] | None = None,
-) -> dict[str, list[dict[str, object]]]:
+) -> dict[str, object]:
     _FACTS.clear()
     _OWN_NODES.clear()
     _PARENTS.clear()
@@ -1909,16 +2410,51 @@ def analyze_python_repository(
     hazards: list[dict[str, object]] = []
     hazard_cache: dict[tuple[int, bool], list[dict[str, object]]] = {}
     callee_cache: dict[int, list[tuple[Definition, bool, int, ast.Call]]] = {}
-    scan_cache: dict[tuple[int, frozenset[str] | None], dict[int, tuple[str, int]]] = {}
+    scan_cache: dict[tuple[int, frozenset[str] | None], dict[int, tuple[str, int, ast.AST]]] = {}
     event_loop = EventLoopAnalysis(index, library_scale)
     event_loop.find_locks_held_across_io(modules)
     library_state = LibraryStateEvidence(modules, index, collections)
+    source_fingerprints = {}
+    connection_graphs = []
+    site_cache = {}
+
+    def semantic_site(owner: Definition, node: ast.AST) -> dict[str, object]:
+        if id(owner.node) not in site_cache:
+            paths = {}
+
+            def collect(current, address):
+                paths[id(current)] = address
+                for name, value in ast.iter_fields(current):
+                    if isinstance(value, ast.AST):
+                        collect(value, [*address, name])
+                    elif isinstance(value, list):
+                        for position, child in enumerate(value):
+                            if isinstance(child, ast.AST):
+                                collect(child, [*address, name, position])
+
+            collect(owner.node, [])
+            site_cache[id(owner.node)] = paths
+        return {"owner": owner.key, "astPath": site_cache[id(owner.node)][id(node)]}
+
     for entry, definition in _all_entrypoints(modules, index):
         entrypoints.append(entry)
         interactive = entry["kind"] in {"route", "middleware"}
         hazards.extend(event_loop.hazards(entry, definition))
         queue = deque([(definition, [], None, None, None)])
         seen = set()
+        graph_nodes, graph_edges, graph_sinks = {}, {}, {}
+
+        def state_node(current, loop, scan, bound):
+            state = {"owner": current.key, "loop": loop[3] if loop else None,
+                     "scan": {"collection": scan[0], **scan[4]} if scan else None,
+                     "bound": sorted(bound) if bound is not None else None}
+            node_id = _semantic_digest(state)
+            graph_nodes[node_id] = {"id": node_id, **state}
+            return node_id
+
+        root_node = state_node(definition, None, None, None)
+        reachable_sources = set()
+        entry_hazards = []
         while queue:
             # `loop` is the call site (path, line, function), inside a loop
             # body, through which the current definition runs once per item
@@ -1929,16 +2465,17 @@ def analyze_python_repository(
             # collection for (None when that is not known).
             current, via, loop, scan, bound = queue.popleft()
             looped = loop is not None
-            visit = (id(current.node), looped, scan is not None, bound)
+            visit = state_node(current, loop, scan, bound)
             if visit in seen:
                 continue
             seen.add(visit)
+            reachable_sources.add(current.path)
             depth = "direct" if not via else "indirect"
             # A route never reaches library-scale work; a background entrypoint
             # may, but only under a contract proving its batching, coalescing,
             # and convergence.
             if current.key in library_scale:
-                hazards.append({
+                entry_hazards.append({
                     "rule": "BI-04",
                     "operation": f"library-scale:{current.key}",
                     "path": current.path,
@@ -1953,16 +2490,22 @@ def analyze_python_repository(
             cache_key = (id(current.node), looped, bound)
             if cache_key not in hazard_cache:
                 hazard_cache[cache_key] = [
-                    *_direct_hazards(current, looped, index.modules[current.module]),
+                    *_direct_hazards(current, looped, index.modules[current.module], index),
                     *library_state.scans(current, bound),
                 ]
             for hazard in hazard_cache[cache_key]:
-                record = {key: value for key, value in hazard.items() if key not in {"enumeration", "per_item_connect"}}
+                record = {key: value for key, value in hazard.items() if key not in {"enumeration", "per_item_connect", "_site_node"}}
                 if hazard.get("per_item_connect"):
                     # Reported at the loop that repeats the connection: the
                     # place to load once and pass the result down.
-                    loop_path, loop_line, loop_function = loop or (hazard["path"], hazard["line"], hazard["function"])
+                    loop_path, loop_line, loop_function = loop[:3] if loop else (hazard["path"], hazard["line"], hazard["function"])
+                    sink_site = semantic_site(current, hazard["_site_node"])
+                    sink = {"node": visit, "operation": hazard["operation"], "site": sink_site,
+                            "loop": loop[3] if loop else sink_site}
+                    sink_id = _semantic_digest(sink)
+                    graph_sinks[sink_id] = {"id": sink_id, **sink}
                     record.update({
+                        "graphId": entry["key"], "sinkId": sink_id,
                         "operation": f"{hazard['operation']}@{hazard['path']}:{hazard['line']}",
                         "path": loop_path,
                         "line": loop_line,
@@ -1971,7 +2514,7 @@ def analyze_python_repository(
                 # A route rejects direct enumeration, and a connection opened per
                 # item at any depth: one request must not open N connections.
                 rejected = (depth == "direct" and bool(hazard["enumeration"])) or bool(hazard.get("per_item_connect"))
-                hazards.append({
+                entry_hazards.append({
                     **record,
                     "entrypoint": entry["key"],
                     "depth": depth,
@@ -1984,7 +2527,7 @@ def analyze_python_repository(
 
             def scan_of(call: ast.Call):
                 local = scanned.get(id(call))
-                return scan or (local and (local[0], current.path, local[1], current.qualname))
+                return scan or (local and (local[0], current.path, local[1], current.qualname, semantic_site(current, local[2])))
 
             # Per-item I/O inside a scan of the whole library state: library-sized
             # I/O on one interaction. Reported at the scan, the place to bound;
@@ -1996,8 +2539,8 @@ def analyze_python_repository(
                 site = scan_of(node)
                 io = site and _blocking_operation(node, module, current)
                 if io and io[0] in SCAN_IO_FAMILIES:
-                    collection, scan_path, scan_line, scan_function = site
-                    hazards.append({
+                    collection, scan_path, scan_line, scan_function = site[:4]
+                    entry_hazards.append({
                         "rule": "BI-04",
                         "operation": f"library-state-scan-io:{collection}",
                         "witness": f"{io[1]}@{current.path}:{node.lineno}",
@@ -2014,15 +2557,52 @@ def analyze_python_repository(
             if id(current.node) not in callee_cache:
                 callee_cache[id(current.node)] = _callees(current, index)
             for callee, call_in_loop, line, call in callee_cache[id(current.node)]:
-                callee_loop = loop or ((current.path, line, current.qualname) if call_in_loop else None)
+                call_site = semantic_site(current, call)
+                callee_loop = loop or ((current.path, line, current.qualname, call_site) if call_in_loop else None)
                 callee_bound = library_state.bound_collections(current, bound, call, callee)
-                queue.append((callee, [*via, callee.qualname], callee_loop, scan_of(call), callee_bound))
+                callee_scan = scan_of(call)
+                edge = {"from": visit, "to": state_node(callee, callee_loop, callee_scan, callee_bound), "site": call_site}
+                edge_id = _semantic_digest(edge)
+                graph_edges[edge_id] = {"id": edge_id, **edge}
+                # Retain every state edge before seen-state collapse. A merged
+                # relay need not be expanded once per complete incoming path.
+                queue.append((callee, [*via, callee.qualname], callee_loop, callee_scan, callee_bound))
+        connection_hazards = [hazard for hazard in entry_hazards if hazard["rule"] == "BI-05"]
+        if connection_hazards:
+            # These bindings are precisely what this analyzer cannot infer.
+            # Include their complete AST in the reviewed context identity.
+            if entry["key"] in {
+                "py:music_app/routes/api_wave_d_asgi_routes.py#utilities_fetch_cover:route:POST /utilities/fetch-cover",
+                "py:music_app/routes/api_wave_d_asgi_routes.py#utilities_fetch_covers_unsuccessful:route:POST /utilities/fetch-covers-unsuccessful",
+            }:
+                reachable_sources.update({
+                    "music_app/services/cache.py", "music_app/services/cover_refresh_execution.py",
+                    "music_app/services/scan_cache_persistence.py", "music_app/services/cover_mutations_postgres.py",
+                    "music_app/services/cover_refresh_runtime.py", "music_app/jobs/cover_handlers.py",
+                    "scripts/run_jobs_worker.py",
+                })
+            for source in reachable_sources - source_fingerprints.keys():
+                text = (overrides or {}).get(source)
+                if text is None:
+                    if not (root / source).is_file():
+                        source_fingerprints[source] = None
+                        continue
+                    text = (root / source).read_text(encoding="utf-8-sig")
+                source_fingerprints[source] = hashlib.sha256(ast.dump(ast.parse(text), include_attributes=False).encode()).hexdigest()
+            graph = {"schemaVersion": 1, "id": entry["key"], "entrypoint": entry["key"], "root": root_node,
+                     "nodes": [graph_nodes[key] for key in sorted(graph_nodes)],
+                     "edges": [graph_edges[key] for key in sorted(graph_edges)],
+                     "sinks": [graph_sinks[key] for key in sorted(graph_sinks)],
+                     "sources": [{"path": source, "astFingerprint": source_fingerprints[source]} for source in sorted(reachable_sources)]}
+            graph["fingerprint"] = _semantic_digest(graph)
+            connection_graphs.append(graph)
+        hazards.extend(entry_hazards)
     unique: dict[str, dict[str, object]] = {}
     for hazard in hazards:
         site = f"{hazard['path']}#{hazard['function']}"
         if hazard["rule"] == "BI-05":
-            # One N+1 per loop, whichever connection it reaches first.
-            hazard["key"] = f"{hazard['entrypoint']}:BI-05:database-connect-per-item@{site}:{hazard['line']}"
+            # Representative paths and diagnostic lines cannot erase a sink.
+            hazard["key"] = f"{hazard['graphId']}:BI-05:{hazard['sinkId']}"
         else:
             hazard["key"] = f"{hazard['entrypoint']}:{hazard['rule']}:{hazard['operation']}@{site}"
         if hazard["rule"] == "BI-08":
@@ -2033,7 +2613,22 @@ def analyze_python_repository(
     deduped: dict[str, dict[str, object]] = {}
     for item in entrypoints:
         deduped.setdefault(str(item["key"]), item)
+    contract_fingerprints = {}
+    for source in (
+        "tests/py/test_cover_batch_bounded_contracts.py",
+        "tests/py/test_cover_batch_bounded_contracts_postgres_live.py",
+        "tests/py/bounded_interactions.py",
+    ):
+        text = (overrides or {}).get(source)
+        if text is None and (root / source).is_file():
+            text = (root / source).read_text(encoding="utf-8-sig")
+        if text is not None:
+            contract_fingerprints[source] = hashlib.sha256(ast.dump(ast.parse(text), include_attributes=False).encode()).hexdigest()
     return {
+        "pythonSemanticsFingerprint": hashlib.sha256(ast.dump(ast.parse(Path(__file__).read_text(encoding="utf-8")), include_attributes=False).encode()).hexdigest(),
+        "pythonContractFingerprints": contract_fingerprints,
+        "coverConnectionContracts": discover_cover_connection_contracts(modules, index),
+        "connectionGraphs": sorted(connection_graphs, key=lambda graph: graph["id"]),
         "entrypoints": list(deduped.values()),
         "hazards": sorted(unique.values(), key=lambda item: (item["key"], item["line"])),
     }
@@ -2050,7 +2645,7 @@ def find_python_hazards(path: Path) -> list[dict[str, object]]:
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             hazards.extend(_direct_hazards(Definition(relative, node.name, node, ""), looped=True))
-    return sorted(hazards, key=lambda item: item["line"])
+    return sorted(({key: value for key, value in hazard.items() if key != "_site_node"} for hazard in hazards), key=lambda item: item["line"])
 
 
 def _registry_names(registry_path: Path | None, key: str, field: str) -> list[str]:

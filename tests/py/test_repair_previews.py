@@ -6,8 +6,93 @@ from music_app.services.repair_previews import (
     _build_artist_alias_repairs_for_entry,
     _build_disc_marker_repairs_for_entry,
     _build_encoding_repair_preview,
+    _collect_track_level_problem_reasons,
     _collect_track_problem_rows,
 )
+
+
+def test_track_problem_collectors_share_the_valid_track_number_boundary():
+    valid_path = r"C:\Music\Artist\Album\99.flac"
+    invalid_path = r"C:\Music\Artist\Album\100.flac"
+    album = SimpleNamespace(
+        is_compilation=False,
+        tracks=[
+            SimpleNamespace(path=valid_path),
+            SimpleNamespace(path=invalid_path),
+        ],
+    )
+    file_cache = {
+        valid_path: {
+            "path": valid_path,
+            "album": "Album",
+            "album_artist": "Artist",
+            "artist": "Artist",
+            "title": "Track 99",
+            "year": "2001",
+            "track_number": 99,
+        },
+        invalid_path: {
+            "path": invalid_path,
+            "album": "Album",
+            "album_artist": "Artist",
+            "artist": "Artist",
+            "title": "Track 100",
+            "year": "2001",
+            "track_number": 100,
+        },
+    }
+
+    aggregate_reasons = _collect_track_level_problem_reasons(
+        album,
+        file_cache,
+        ignored_row_keys=set(),
+    )
+    rows = _collect_track_problem_rows(
+        album,
+        file_cache,
+        ignored_row_keys=set(),
+    )
+
+    assert aggregate_reasons == ["Invalid track number"]
+    assert [(row["path"], row["reasons"]) for row in rows] == [
+        (invalid_path, ["Invalid track number"]),
+    ]
+
+
+def test_track_problem_collectors_reject_boolean_and_fractional_track_numbers():
+    for index, track_number in enumerate((True, False, 1.5, -1.5), start=1):
+        track_path = rf"C:\Music\Artist\Album\invalid-{index}.flac"
+        album = SimpleNamespace(
+            is_compilation=False,
+            tracks=[SimpleNamespace(path=track_path)],
+        )
+        file_cache = {
+            track_path: {
+                "path": track_path,
+                "album": "Album",
+                "album_artist": "Artist",
+                "artist": "Artist",
+                "title": f"Invalid {index}",
+                "year": "2001",
+                "track_number": track_number,
+            }
+        }
+
+        aggregate_reasons = _collect_track_level_problem_reasons(
+            album,
+            file_cache,
+            ignored_row_keys=set(),
+        )
+        rows = _collect_track_problem_rows(
+            album,
+            file_cache,
+            ignored_row_keys=set(),
+        )
+
+        assert aggregate_reasons == ["Invalid track number"]
+        assert [(row["path"], row["reasons"]) for row in rows] == [
+            (track_path, ["Invalid track number"]),
+        ]
 
 
 def test_build_disc_marker_repairs_for_entry_extracts_clean_album_and_disc_number():

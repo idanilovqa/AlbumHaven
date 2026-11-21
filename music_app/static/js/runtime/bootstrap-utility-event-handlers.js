@@ -139,9 +139,7 @@ async function handleUtilityBootstrapClick(event) {
   const reconcileProblematicSelectionForFilters = (nextSelectedFilters) => {
     const selectedKey = String(state.utility.selectedProblematicKey || '');
     if (!selectedKey) return;
-    const selectedAlbum = (state.utility.problematicFiles || []).find((album) => (
-      String(album?.key || '') === selectedKey
-    )) || null;
+    const selectedAlbum = getSelectedProblematicAlbum();
     if (selectedAlbum && albumMatchesProblemFilters(selectedAlbum, nextSelectedFilters)) {
       return;
     }
@@ -171,8 +169,9 @@ async function handleUtilityBootstrapClick(event) {
       reconcileProblematicSelectionForFilters(nextSelectedFilters);
       state.utility.problemDropdownOpen = false;
       state.utility.showRepairedDisplay = true;
-      renderUtilityModalContent();
+      const load = loadProblematicFiles(true, { preserveSelectedDetail: true });
       if (event.detail === 0) getUtilityModalElements().problemFilterButton?.focus();
+      await load;
     }
     return;
   }
@@ -187,7 +186,9 @@ async function handleUtilityBootstrapClick(event) {
     reconcileProblematicSelectionForFilters(nextSelectedFilters);
     state.utility.problemDropdownOpen = false;
     state.utility.showRepairedDisplay = true;
-    renderUtilityModalContent();
+    const load = loadProblematicFiles(true, { preserveSelectedDetail: true });
+    if (event.detail === 0) getUtilityModalElements().problemFilterButton?.focus();
+    await load;
     return;
   }
 

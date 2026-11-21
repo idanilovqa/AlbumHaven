@@ -91,6 +91,15 @@ export function observeProblematicDetails(page) {
   const details = new Map();
   const pending = new Set();
   const errors = [];
+  const summaries = [];
+  let disposed = false;
+  let resolveChange;
+  let change = new Promise(resolve => { resolveChange = resolve; });
+  const signalChange = () => {
+    const resolve = resolveChange;
+    change = new Promise(nextResolve => { resolveChange = nextResolve; });
+    resolve();
+  };
   let summary = null;
   // Arrival order of summaries. Chrome may drop an older body before the capture
   // reads it; that is tolerated only while a newer complete summary is captured.
@@ -123,15 +132,22 @@ export function observeProblematicDetails(page) {
       } else {
         assert.ok(Array.isArray(payload.items), 'Normal summary must expose its complete items');
         // A bounded first page (complete: false) is never the complete summary.
-        if (payload.complete !== false && sequence > capturedSummarySequence) {
-          capturedSummarySequence = sequence;
-          summary = JSON.stringify(payload.items);
+        if (payload.complete !== false) {
+          const captured = JSON.stringify(payload.items);
+          summaries.push(captured);
+          if (sequence > capturedSummarySequence) {
+            capturedSummarySequence = sequence;
+            summary = captured;
+          }
         }
         assert.ok(!payload.initial_detail || payload.items.some(item => item.key === payload.initial_detail.key),
           'Any initial detail must belong to captured summary');
         if (payload.initial_detail) remember(payload.initial_detail.key, payload.initial_detail);
       }
-    })().catch(error => errors.push(error)).finally(() => pending.delete(task));
+    })().catch(error => errors.push(error)).finally(() => {
+      pending.delete(task);
+      signalChange();
+    });
     pending.add(task);
   };
   page.on('response', responseListener);
@@ -140,34 +156,50 @@ export function observeProblematicDetails(page) {
     if (errors.length) throw new AggregateError(errors, 'Problematic evidence capture failed');
   };
   return {
-    async summary() {
-      await settle();
-      if (!summary) {
-        // Let a complete response queued behind a bounded first page reach the listener.
-        await new Promise(resolve => setImmediate(resolve));
+    async summary(version) {
+      if (version !== undefined) {
+        assert.ok(Number.isInteger(version) && version > 0, 'Complete summary version must be a positive integer');
+      }
+      while (true) {
+        const observedChange = change;
         await settle();
+        if (version !== undefined && summaries[version - 1]) return JSON.parse(summaries[version - 1]);
+        if (version === undefined && summary) {
+          assert.ok(capturedSummarySequence > droppedSummarySequence, 'The newest complete summary body must be captured');
+          return JSON.parse(summary);
+        }
+        if (version === undefined && page.request && typeof page.request.get === 'function') {
+          // Drain a complete response queued behind a bounded first page before recovery.
+          await new Promise(resolve => setImmediate(resolve));
+          await settle();
+          if (summary) continue;
+          const response = await authenticatedPageGet(page, '/utilities/problematic-files');
+          assert.equal(response.ok(), true, 'Fallback problematic summary request must succeed');
+          const payload = await response.json();
+          assert.notEqual(payload.complete, false, 'Fallback problematic summary must be complete');
+          assert.ok(Array.isArray(payload.items), 'Fallback problematic summary must expose items');
+          const keys = payload.items.map(item => String(item?.key || ''));
+          assert.ok(keys.every(Boolean), 'Fallback problematic summary identities must be nonempty');
+          assert.equal(new Set(keys).size, keys.length, 'Fallback problematic summary identities must be unique');
+          assert.ok(!payload.initial_detail || payload.items.some(item => item.key === payload.initial_detail.key),
+            'Fallback initial detail must belong to its summary');
+          if (payload.initial_detail) remember(payload.initial_detail.key, payload.initial_detail);
+          capturedSummarySequence = ++summarySequence;
+          summary = JSON.stringify(payload.items);
+          summaries.push(summary);
+          continue;
+        }
+        assert.equal(disposed, false, `Problematic evidence capture disposed before complete summary version ${version}`);
+        await observedChange;
       }
-      if (!summary) {
-        const response = await authenticatedPageGet(page, '/utilities/problematic-files');
-        assert.equal(response.ok(), true, 'Fallback problematic summary request must succeed');
-        const payload = await response.json();
-        assert.notEqual(payload.complete, false, 'Fallback problematic summary must be complete');
-        assert.ok(Array.isArray(payload.items), 'Fallback problematic summary must expose items');
-        const keys = payload.items.map(item => String(item?.key || ''));
-        assert.ok(keys.every(Boolean), 'Fallback problematic summary identities must be nonempty');
-        assert.equal(new Set(keys).size, keys.length, 'Fallback problematic summary identities must be unique');
-        assert.ok(!payload.initial_detail || payload.items.some(item => item.key === payload.initial_detail.key),
-          'Fallback initial detail must belong to its summary');
-        if (payload.initial_detail) remember(payload.initial_detail.key, payload.initial_detail);
-        capturedSummarySequence = ++summarySequence;
-        summary = JSON.stringify(payload.items);
-      }
-      assert.ok(summary, 'Capture must be installed before the normal summary request');
-      assert.ok(capturedSummarySequence > droppedSummarySequence, 'The newest complete summary body must be captured');
-      return JSON.parse(summary);
     },
     async detail(key) { await settle(); return details.has(key) ? JSON.parse(details.get(key)) : null; },
-    async dispose() { page.off('response', responseListener); await settle(); },
+    async dispose() {
+      disposed = true;
+      page.off('response', responseListener);
+      signalChange();
+      await settle();
+    },
   };
 }
 

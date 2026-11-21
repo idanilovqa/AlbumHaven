@@ -199,37 +199,8 @@ def normalize_email_address(value: str, key: str) -> str:
     return _normalize_email(value, key)
 
 
-def build_auth_config(env: Mapping[str, str]) -> dict[str, Any]:
-    """Build the immutable policy values consumed by authentication services."""
-
-    username = env.get("ALBUM_HAVEN_BOOTSTRAP_USERNAME")
-    if not username:
-        raise ValueError("ALBUM_HAVEN_BOOTSTRAP_USERNAME is required")
-    if username != "Rendref":
-        raise ValueError(
-            "ALBUM_HAVEN_BOOTSTRAP_USERNAME must be the fixed visible username Rendref"
-        )
-    email = _normalize_email(
-        _required(env, "ALBUM_HAVEN_BOOTSTRAP_EMAIL"),
-        "ALBUM_HAVEN_BOOTSTRAP_EMAIL",
-    )
-    public_base_url = validate_public_base_url(
-        _required(env, "ALBUM_HAVEN_PUBLIC_BASE_URL")
-    )
-
-    trusted_origins_raw = env.get("ALBUM_HAVEN_TRUSTED_ORIGINS", "").strip()
-    if trusted_origins_raw:
-        origins = tuple(
-            _validated_https_url(
-                item.strip(), "ALBUM_HAVEN_TRUSTED_ORIGINS", origin_only=True
-            )
-            for item in trusted_origins_raw.split(",")
-        )
-        if len(set(origins)) != len(origins):
-            raise ValueError("ALBUM_HAVEN_TRUSTED_ORIGINS must contain distinct origins")
-    else:
-        parsed_base = urlsplit(public_base_url)
-        origins = (f"{parsed_base.scheme}://{parsed_base.netloc}",)
+def build_password_hash_config(env: Mapping[str, str]) -> dict[str, Any]:
+    """Build the policy values required to validate and hash a password."""
 
     argon2 = {
         "memory_cost": _integer(
@@ -294,6 +265,49 @@ def build_auth_config(env: Mapping[str, str]) -> dict[str, Any]:
             "minimum password length"
         )
 
+    return {
+        "argon2": argon2,
+        "argon2_policy_version": _integer(
+            env, "ALBUM_HAVEN_ARGON2_POLICY_VERSION", 1, minimum=1
+        ),
+        "password": password,
+    }
+
+
+def build_auth_config(env: Mapping[str, str]) -> dict[str, Any]:
+    """Build the immutable policy values consumed by authentication services."""
+
+    username = env.get("ALBUM_HAVEN_BOOTSTRAP_USERNAME")
+    if not username:
+        raise ValueError("ALBUM_HAVEN_BOOTSTRAP_USERNAME is required")
+    if username != "Rendref":
+        raise ValueError(
+            "ALBUM_HAVEN_BOOTSTRAP_USERNAME must be the fixed visible username Rendref"
+        )
+    email = _normalize_email(
+        _required(env, "ALBUM_HAVEN_BOOTSTRAP_EMAIL"),
+        "ALBUM_HAVEN_BOOTSTRAP_EMAIL",
+    )
+    public_base_url = validate_public_base_url(
+        _required(env, "ALBUM_HAVEN_PUBLIC_BASE_URL")
+    )
+
+    trusted_origins_raw = env.get("ALBUM_HAVEN_TRUSTED_ORIGINS", "").strip()
+    if trusted_origins_raw:
+        origins = tuple(
+            _validated_https_url(
+                item.strip(), "ALBUM_HAVEN_TRUSTED_ORIGINS", origin_only=True
+            )
+            for item in trusted_origins_raw.split(",")
+        )
+        if len(set(origins)) != len(origins):
+            raise ValueError("ALBUM_HAVEN_TRUSTED_ORIGINS must contain distinct origins")
+    else:
+        parsed_base = urlsplit(public_base_url)
+        origins = (f"{parsed_base.scheme}://{parsed_base.netloc}",)
+
+    password_hash = build_password_hash_config(env)
+
     absolute_seconds = _integer(
         env,
         "ALBUM_HAVEN_SESSION_ABSOLUTE_SECONDS",
@@ -352,10 +366,8 @@ def build_auth_config(env: Mapping[str, str]) -> dict[str, Any]:
         "trusted_origins": origins,
         "trusted_proxies": _trusted_proxies(env),
         "hmac": _auth_hmac_config(env),
-        "argon2": argon2,
-        "argon2_policy_version": _integer(
-            env, "ALBUM_HAVEN_ARGON2_POLICY_VERSION", 1, minimum=1
-        ),
+        "argon2": password_hash["argon2"],
+        "argon2_policy_version": password_hash["argon2_policy_version"],
         "verification_semaphore": _integer(
             env,
             "ALBUM_HAVEN_AUTH_VERIFICATION_SEMAPHORE",
@@ -366,7 +378,7 @@ def build_auth_config(env: Mapping[str, str]) -> dict[str, Any]:
         "active_session_cap": _integer(
             env, "ALBUM_HAVEN_ACTIVE_SESSION_CAP", 10, minimum=1, maximum=10
         ),
-        "password": password,
+        "password": password_hash["password"],
         "session": session,
         "reset_token_seconds": reset_token_seconds,
         "invitation_token_seconds": invitation_token_seconds,

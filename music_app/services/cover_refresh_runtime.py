@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass
 from functools import partial
+from pathlib import Path
 import time
 
 from music_app.services.cover_provider_cache import CoverSearchCache
@@ -18,7 +19,12 @@ def cover_pass_file_cache_snapshot(file_cache, config):
         entry["album_id"] for entry in snapshot.values()
         if type(entry.get("album_id")) is int and entry["album_id"] > 0
     }
-    selections = select_scan_cache_adapter(config).load_cover_selections(album_ids) if album_ids else {}
+    loader = config.get("CLAIMED_COVER_SELECTION_LOADER")
+    selections = (
+        (loader(album_ids=album_ids) if loader is not None
+         else select_scan_cache_adapter(config).load_cover_selections(album_ids))
+        if album_ids else {}
+    )
     # An album without a persisted selection has no canonical override yet.
     # Treat that as an unselected album instead of aborting the whole refresh;
     # explicit rows still supply the authoritative path and origin below.
@@ -60,6 +66,113 @@ class CoverRefreshContext:
     user_agent: str
     scan_generation: int
     cover_generation: int
+
+
+class _DurableCoverRefreshState(dict):
+    def __init__(self, *args, progress: Callable[..., bool], should_cancel: Callable[[], bool], **kwargs):
+        super().__init__(*args, **kwargs)
+        self._progress = progress
+        self._should_cancel = should_cancel
+        self._publishing = False
+
+    def __setitem__(self, key, value):
+        super().__setitem__(key, value)
+        if key not in {
+            "covers_processed",
+            "covers_total",
+            "covers_downloaded",
+            "covers_current_folder",
+        }:
+            return
+        self.publish_progress()
+
+    def publish_progress(self):
+        if self._publishing:
+            return
+        self._publishing = True
+        try:
+            label = Path(str(self.get("covers_current_folder") or "")).name
+            if not self._progress(
+                current=max(0, int(self.get("covers_processed") or 0)),
+                total=max(0, int(self.get("covers_total") or 0)),
+                downloaded=max(0, int(self.get("covers_downloaded") or 0)),
+                safe_label=label,
+            ) or self._should_cancel():
+                super().__setitem__(
+                    "cover_generation", int(self.get("cover_generation") or 0) + 1
+                )
+        finally:
+            self._publishing = False
+
+
+def run_claimed_cover_refresh(
+    *,
+    scope,
+    config: Mapping[str, object],
+    logger,
+    should_cancel: Callable[[], bool],
+    progress: Callable[..., bool],
+) -> dict[str, object]:
+    """Run either durable bulk mode through the existing bounded refresh engine."""
+
+    from music_app.services import state as state_service
+    from music_app.services.library import build_albums_from_file_cache
+    from music_app.services.scan_cache_persistence import shared_scan_cache_connection
+
+    config = dict(config)
+    root_paths = getattr(scope, "library_root_paths", None)
+    if root_paths is not None:
+        config["_library_root_paths_snapshot"] = tuple(Path(path) for path in root_paths)
+    with shared_scan_cache_connection(config):
+        file_cache = {str(path): dict(entry) for path, entry in scope.file_cache.items()}
+        separate_release_keys = {
+            str(key)
+            for key in getattr(scope, "separate_release_keys", ())
+            if str(key).strip()
+        }
+        library_state = _DurableCoverRefreshState(
+            {
+                "file_cache": file_cache,
+                "albums": build_albums_from_file_cache(
+                    file_cache, separate_release_keys
+                ),
+                "separate_release_keys": separate_release_keys,
+                "scan_generation": 0,
+                "scan_in_progress": False,
+                "cover_generation": 1,
+                "covers_in_progress": True,
+                "covers_processed": 0,
+                "covers_total": max(0, int(scope.progress_total)),
+                "covers_downloaded": 0,
+                "covers_current_folder": "",
+            },
+            progress=progress,
+            should_cancel=should_cancel,
+        )
+        if should_cancel():
+            return {"processed": 0, "downloaded": 0, "failed": 0}
+        if scope.mode == "manual":
+            return state_service.refresh_unsuccessful_cover_artwork_for_state(
+                library_state,
+                dict(config),
+                logger,
+                force_search=bool(scope.force_search),
+            )
+        return state_service.refresh_cover_artwork_request(
+            get_state=lambda: library_state,
+            cache_lock=state_service._CACHE_LOCK,
+            config=dict(config),
+            logger=logger,
+            log_app_event=state_service.log_app_event,
+            select_background_cover_refresh_jobs=state_service.select_background_cover_refresh_jobs,
+            build_cover_jobs=state_service.build_cover_refresh_jobs,
+            run_cover_jobs=state_service.run_cover_jobs,
+            log_cover_refresh_completion=state_service.log_cover_refresh_completion,
+            bulk_negative_cache_ttl_seconds=config.get(
+                "BULK_COVER_NEGATIVE_CACHE_TTL_SECONDS", 86400
+            ),
+            job_workers=config.get("BULK_COVER_JOB_WORKERS", 1),
+        )
 
 
 PreparedCoverRefresh = tuple[CoverRefreshContext, list[dict[str, object]]]

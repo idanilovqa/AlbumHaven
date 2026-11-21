@@ -32,6 +32,7 @@ ListenHistoryAppender = Callable[[ConfigDict, JsonDict], JsonDict]
 ListenHistoryUpdater = Callable[[ConfigDict, str, JsonDict], JsonDict | None]
 LastfmScrobbler = Callable[[ConfigDict, JsonDict], object]
 LastfmScrobbleLogger = Callable[..., None]
+RetryableScrobbleRecorder = Callable[..., object]
 
 _BASE_RETRY_DELAY_SECONDS = 30
 _MAX_RETRY_DELAY_SECONDS = 15 * 60
@@ -153,12 +154,14 @@ def record_playback_session_complete(
     account_id: int | None = None,
     library_id: int | None = None,
     lastfm_session=None,
+    lastfm_credentials=None,
     normalize_playback_track_payload: PlaybackTrackNormalizer,
     is_meaningful_listen_session: ListenHistoryMeaningChecker,
     append_listen_history_entry: ListenHistoryAppender,
     update_listen_history_entry: ListenHistoryUpdater,
     scrobble_track: LastfmScrobbler,
     log_lastfm_scrobble_event: LastfmScrobbleLogger,
+    record_retryable_scrobble: RetryableScrobbleRecorder | None = None,
     persisted_entry: JsonDict | None = None,
 ) -> tuple[JsonDict, int]:
     """``persisted_entry`` is the prepared measured entry a caller already committed; its stored
@@ -197,7 +200,10 @@ def record_playback_session_complete(
         scrobbled = bool(stored.get("scrobbled"))
         if scrobbled:
             error = ""
-        elif stored.get("scrobble_submission_state") in ("attempting", "sent", "uncertain"):
+        elif (
+            stored.get("scrobble_submission_state") in ("attempting", "sent", "uncertain")
+            or bool(stored.get("scrobble_durable_job_owned"))
+        ):
             error = str(stored.get("scrobble_error") or "Previous Last.fm submission outcome is uncertain")
         elif entry["scrobble_eligible"] and lastfm_session is not None:
             retryable = False
@@ -215,7 +221,11 @@ def record_playback_session_complete(
                 error = "" if scrobbled else str(getattr(submission, "message", "Last.fm did not accept this listen"))
                 sent = submission is None or bool(getattr(submission, "sent", False))
                 submission_state = "accepted" if scrobbled else "sent" if sent else "not_sent"
-                retryable = not sent
+                retryable = (
+                    not sent
+                    and str(getattr(submission, "outcome", "") or "")
+                    not in {"not_connected", "invalid_payload"}
+                )
             except LastfmError as exc:
                 error = str(exc)
                 reauthentication_required = exc.reauthentication_required
@@ -228,7 +238,31 @@ def record_playback_session_complete(
                 "Last.fm scrobble succeeded" if scrobbled else "Last.fm scrobble failed",
                 level="info" if scrobbled else "warning", payload=payload, error=error,
             )
-        if entry["scrobble_eligible"] and not scrobbled:
+        if (
+            record_retryable_scrobble is not None
+            and stored.get("scrobble_submission_state") == "not_sent"
+            and bool(stored.get("scrobble_retryable"))
+            and not bool(stored.get("scrobbled"))
+            and not bool(stored.get("scrobble_durable_job_owned"))
+        ):
+            retry_values = {
+                "listen_id": str(stored.get("id") or ""),
+                "entry": stored,
+                "retry_count": int(stored.get("scrobble_retry_count") or 0),
+                "error": str(stored.get("scrobble_error") or ""),
+            }
+            if bool(stored.get("scrobble_reauthentication_required")):
+                retry_values["reauthentication_required"] = True
+                if lastfm_credentials is not None:
+                    retry_values["active_session_id"] = lastfm_credentials.active_session_id
+                    retry_values["reauthentication_generation"] = lastfm_credentials.reauthentication_generation
+            accepted = record_retryable_scrobble(config, **retry_values)
+            if accepted is not None:
+                stored = {**stored, "scrobble_durable_job_owned": True}
+        if (
+            entry["scrobble_eligible"] and not scrobbled
+            and not bool(stored.get("scrobble_durable_job_owned"))
+        ):
             wake_lastfm_retry()
         public = {key: value for key, value in stored.items() if key not in ("path", "track_ref")}
         return {

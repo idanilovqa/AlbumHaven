@@ -218,6 +218,28 @@ class PostgresTagEditIntentRepository:
             )
         return [_intent_from_row(row) for row in rows]
 
+    def load_intent_for_recovery(
+        self,
+        intent_id: str,
+        *,
+        library_root_identity: str,
+    ) -> dict[str, object] | None:
+        normalized_intent_id = str(intent_id or "").strip()
+        normalized_identity = str(library_root_identity or "").strip()
+        if not normalized_intent_id or not normalized_identity:
+            raise ValueError("Tag edit recovery requires an intent and library root identity.")
+        with self._connect_to_database() as connection:
+            row = _first_row(
+                connection.execute(
+                    _load_intent_for_recovery_sql(),
+                    {
+                        "intent_id": normalized_intent_id,
+                        "library_root_identity": normalized_identity,
+                    },
+                )
+            )
+        return _intent_from_row(row) if row is not None else None
+
     def _connect_to_database(self) -> Any:
         if not self._database_url:
             raise RuntimeError(
@@ -416,6 +438,16 @@ def _load_unfinished_sql() -> str:
         where status in ('prepared', 'files_verified', 'recovery_failed')
           and library_root_identity = %(library_root_identity)s
         order by created_at, id
+    """
+
+
+def _load_intent_for_recovery_sql() -> str:
+    return """
+        select id::text as id, library_root_identity, status, changes,
+               created_at, updated_at, completed_at, last_error
+        from library.tag_edit_intents
+        where id = %(intent_id)s::uuid
+          and library_root_identity = %(library_root_identity)s
     """
 
 

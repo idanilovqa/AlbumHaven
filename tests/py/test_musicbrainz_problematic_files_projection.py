@@ -19,7 +19,7 @@ def _actor(*, owner=True):
     )
 
 
-def _request(rows, *, owner=True, fail=False):
+def _request(rows, *, owner=True, fail=False, filter_value=""):
     def list_present_artist_review(*, include_gallery_artist=True):
         assert include_gallery_artist is False, "Problematic Files never loads the Gallery alias map"
         if fail:
@@ -28,6 +28,7 @@ def _request(rows, *, owner=True, fail=False):
 
     service = SimpleNamespace(list_artist_attention=list_present_artist_review)
     return SimpleNamespace(
+        query_params={"filter": filter_value},
         state=SimpleNamespace(current_actor=_actor(owner=owner)),
         app=SimpleNamespace(state=SimpleNamespace(
             musicbrainz_enrichment_api_service=service,
@@ -104,3 +105,54 @@ def test_preloaded_artist_rows_are_merged_without_another_query():
     assert [item["key"] for item in payload["items"]] == [
         "musicbrainz-artist:7", "album-b", "album-k",
     ]
+
+
+def test_artist_overlay_counts_unique_filtered_rows_and_keeps_global_facets_and_album_cursor():
+    payload = {
+        "items": [dict(ALBUMS[1])],
+        "count": 1,
+        "total": 5,
+        "next_cursor": "canonical-album-cursor",
+        "reason_facets": [{"reason": "Missing year", "count": 5}],
+    }
+    rows = [*ROWS, dict(ROWS[0]), {
+        "local_artist_id": 9,
+        "local_artist_name": "Unrelated",
+        "unresolved_reason": "MBID: Multiple matches",
+        "problem_occurrence_id": 20,
+    }]
+
+    project_artist_problems_into_problematic_files(
+        _request(rows, filter_value=json.dumps({"query": "axxis"})), payload
+    )
+
+    assert [item["key"] for item in payload["items"]] == [
+        "musicbrainz-artist:7", "album-k",
+    ]
+    assert payload["count"] == 2
+    assert payload["total"] == 6
+    assert payload["next_cursor"] == "canonical-album-cursor"
+    assert payload["reason_facets"] == [
+        {"reason": "MBID: Multiple matches", "count": 2},
+        {"reason": "Missing year", "count": 5},
+    ]
+
+
+def test_artist_overlay_unmatched_filter_keeps_album_totals_and_cursor():
+    payload = {
+        "items": [],
+        "count": 0,
+        "total": 0,
+        "next_cursor": "canonical-album-cursor",
+    }
+
+    project_artist_problems_into_problematic_files(
+        _request(ROWS, filter_value=json.dumps({"query": "unmatched"})), payload
+    )
+
+    assert payload == {
+        "items": [],
+        "count": 0,
+        "total": 0,
+        "next_cursor": "canonical-album-cursor",
+    }

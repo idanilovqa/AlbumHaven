@@ -3,12 +3,14 @@ from __future__ import annotations
 from collections import ChainMap
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
 import uuid
 
 from music_app.services.edit_tag_timings import EditTagTimingRecorder
+from music_app.services.metadata import normalize_exception_value as _normalize_exception_value
 from music_app.services.scan_cache_persistence import (
     StructuralTagEditDestinationConflict,
 )
@@ -277,6 +279,11 @@ def handle_repair_album_request(
     log_app_event: AppEventLogger,
     structural_edit_fields: set[str],
     edit_write_workers: int,
+    acquire_repair_reservation: Callable[[dict[str, dict[str, str]]], object] | None = None,
+    prevalidate_structural_tag_edit: StructuralTagEditPrevalidator | None = None,
+    prepare_tag_edit_intent: TagEditIntentPreparer | None = None,
+    mark_tag_edit_files_verified: TagEditIntentCheckpoint | None = None,
+    record_tag_edit_failure: Callable[[str, JsonDict], None] | None = None,
 ) -> JsonDict | tuple[JsonDict, int]:
     selected_rows = payload.get("selected_rows")
     if not isinstance(selected_rows, list):
@@ -366,87 +373,147 @@ def handle_repair_album_request(
             continue
         repair_jobs.append((raw_path, entry, repairs))
 
-    changed_files, job_skipped_files, job_error = _run_edit_jobs(
-        album=album,
-        repair_jobs=repair_jobs,
-        config=config,
-        logger=logger,
-        apply_repairs_worker=apply_repairs_worker,
-        update_cache_entry_after_repairs=update_cache_entry_after_repairs,
-        append_log_history=append_log_history,
-        log_app_event=log_app_event,
-        updated_file_cache=updated_entries,
-        action_name="Tag repair failed",
-        failure_prefix="Failed to repair",
-        edit_write_workers=edit_write_workers,
-    )
-    if job_error is not None:
-        return job_error, 500
-    skipped_files.extend(job_skipped_files)
-
-    separate_release_keys = set(st.get("separate_release_keys") or load_separate_release_keys(config))
-    if separate_release_keys_to_save:
-        separate_release_keys.update(separate_release_keys_to_save)
-        save_separate_release_keys(config, separate_release_keys)
-        st["separate_release_keys"] = separate_release_keys
-        log_app_event(
-            config,
-            logger,
-            "Release exception created",
-            level="info",
-            history=True,
-            separate_release_keys=sorted(separate_release_keys_to_save),
+    with ExitStack() as resources:
+        repairs_by_path = {path: dict(repairs) for path, _entry, repairs in repair_jobs}
+        reservation = (
+            acquire_repair_reservation(repairs_by_path)
+            if repair_jobs and acquire_repair_reservation is not None
+            else None
         )
-
-    changed_paths = {str(item.get("path") or "") for item in changed_files if str(item.get("path") or "")}
-    changed_field_names = {
-        str(field or "")
-        for item in changed_files
-        for field in item.get("fields", [])
-        if str(field or "")
-    }
-    requires_view_refresh = bool(separate_release_keys_to_save or (changed_field_names & structural_edit_fields))
-    updated_albums = build_affected_album_dicts(
-        file_cache,
-        ChainMap(updated_entries, file_cache),
-        requested_track_paths,
-        changed_paths or requested_track_paths,
-        separate_release_keys,
-    )
-    task_id = ""
-    if changed_files:
-        task_id = create_save_task("repair-tags")
-        queue_finalize_save_task(
-            task_id=task_id,
+        if reservation is not None:
+            resources.callback(reservation.release)
+        if repair_jobs and prevalidate_structural_tag_edit is not None:
+            prospective_entries = {}
+            for path, entry, repairs in repair_jobs:
+                prospective_entries[path] = {
+                    **entry,
+                    **{field: _normalize_exception_value(value) if field == "exception_type" else value
+                       for field, value in repairs.items()},
+                }
+                if "year" in repairs:
+                    prospective_entries[path]["release_date"] = repairs["year"]
+            try:
+                prevalidate_structural_tag_edit(
+                    changed_paths=set(repairs_by_path),
+                    previous_file_entries=file_cache,
+                    updated_file_entries=ChainMap(prospective_entries, file_cache),
+                    changed_field_names={field for repairs in repairs_by_path.values() for field in repairs},
+                )
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}, 409 if isinstance(exc, StructuralTagEditDestinationConflict) else 500
+        tag_edit_intent_id = ""
+        if repair_jobs and prepare_tag_edit_intent is not None:
+            try:
+                tag_edit_intent_id = str(prepare_tag_edit_intent(changes=[
+                    {
+                        "path": path,
+                        "old_values": {field: str(entry.get(field) or "").strip() for field in repairs},
+                        "requested_values": dict(repairs),
+                    }
+                    for path, entry, repairs in repair_jobs
+                ]) or "").strip()
+                if not tag_edit_intent_id:
+                    raise RuntimeError("Repair intent persistence returned no intent ID.")
+            except Exception as exc:
+                return {"ok": False, "error": f"Failed to persist repair intent: {exc}"}, 500
+        changed_files, job_skipped_files, job_error = _run_edit_jobs(
+            album=album,
+            repair_jobs=repair_jobs,
             config=config,
             logger=logger,
-            updated_file_cache=dict(updated_entries),
-            previous_file_cache={path: dict(file_cache[path]) for path in changed_paths},
-            changed_paths=set(changed_paths),
-            requested_track_paths=set(requested_track_paths),
-            separate_release_keys=set(separate_release_keys),
-            changed_field_names=set(changed_field_names),
-            log_entry={
-                "id": uuid.uuid4().hex,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "action": "Tags repaired",
-                **_album_log_context(album),
-                "file_count": len(changed_paths),
-                "files": sorted(changed_paths),
-            },
+            apply_repairs_worker=apply_repairs_worker,
+            update_cache_entry_after_repairs=update_cache_entry_after_repairs,
+            append_log_history=append_log_history,
+            log_app_event=log_app_event,
+            updated_file_cache=updated_entries,
+            action_name="Tag repair failed",
+            failure_prefix="Failed to repair",
+            edit_write_workers=edit_write_workers,
         )
+        if job_error is not None:
+            if tag_edit_intent_id and record_tag_edit_failure is not None:
+                try:
+                    record_tag_edit_failure(tag_edit_intent_id, job_error)
+                except Exception as exc:
+                    logger.exception("Could not record repair compensation outcome: %s", exc)
+            return job_error, 500
+        skipped_files.extend(job_skipped_files)
+        if tag_edit_intent_id and mark_tag_edit_files_verified is not None:
+            try:
+                mark_tag_edit_files_verified(tag_edit_intent_id)
+            except Exception as exc:
+                logger.exception("Repair files-verified checkpoint failed: %s", exc)
 
-    return {
-        "ok": True,
-        "changed_files": changed_files,
-        "skipped_files": skipped_files,
-        "changed_count": len(changed_files),
-        "updated_album": updated_albums[0] if updated_albums else None,
-        "updated_albums": updated_albums,
-        "updated_problematic_album": None,
-        "requires_view_refresh": requires_view_refresh,
-        "save_task_id": task_id,
-    }
+        separate_release_keys = set(st.get("separate_release_keys") or load_separate_release_keys(config))
+        if separate_release_keys_to_save:
+            separate_release_keys.update(separate_release_keys_to_save)
+            save_separate_release_keys(config, separate_release_keys)
+            st["separate_release_keys"] = separate_release_keys
+            log_app_event(
+                config,
+                logger,
+                "Release exception created",
+                level="info",
+                history=True,
+                separate_release_keys=sorted(separate_release_keys_to_save),
+            )
+
+        changed_paths = {str(item.get("path") or "") for item in changed_files if str(item.get("path") or "")}
+        changed_field_names = {
+            str(field or "")
+            for item in changed_files
+            for field in item.get("fields", [])
+            if str(field or "")
+        }
+        requires_view_refresh = bool(separate_release_keys_to_save or (changed_field_names & structural_edit_fields))
+        updated_albums = build_affected_album_dicts(
+            file_cache,
+            ChainMap(updated_entries, file_cache),
+            requested_track_paths,
+            changed_paths or requested_track_paths,
+            separate_release_keys,
+        )
+        task_id = ""
+        if changed_files:
+            task_id = create_save_task("repair-tags")
+            finalizer_options = {}
+            if reservation is not None:
+                finalizer_options["structural_tag_edit_reservation"] = reservation
+            if tag_edit_intent_id:
+                finalizer_options["tag_edit_intent_id"] = tag_edit_intent_id
+            queue_finalize_save_task(
+                task_id=task_id,
+                config=config,
+                logger=logger,
+                updated_file_cache={**_request_loaded_entries(file_cache), **updated_entries},
+                previous_file_cache={path: dict(file_cache[path]) for path in changed_paths},
+                changed_paths=set(changed_paths),
+                requested_track_paths=set(requested_track_paths),
+                separate_release_keys=set(separate_release_keys),
+                changed_field_names=set(changed_field_names),
+                **finalizer_options,
+                log_entry={
+                    "id": uuid.uuid4().hex,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "action": "Tags repaired",
+                    **_album_log_context(album),
+                    "file_count": len(changed_paths),
+                    "files": sorted(changed_paths),
+                },
+            )
+            resources.pop_all()
+
+        return {
+            "ok": True,
+            "changed_files": changed_files,
+            "skipped_files": skipped_files,
+            "changed_count": len(changed_files),
+            "updated_album": updated_albums[0] if updated_albums else None,
+            "updated_albums": updated_albums,
+            "updated_problematic_album": None,
+            "requires_view_refresh": requires_view_refresh,
+            "save_task_id": task_id,
+        }
 
 
 def handle_edit_tags_request(

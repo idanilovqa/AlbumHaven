@@ -179,6 +179,13 @@ const state = {
     loadPromise: null,
     completeLoadPromise: null,
     problematicFilesComplete: false,
+    problematicFilesNextCursor: null,
+    problematicFilesPageSignature: '',
+    problematicFilesProjectionRevision: '',
+    problematicKnownBase: null,
+    problematicFilesTotal: 0,
+    problematicReasonFacets: [],
+    selectedProblematicDetail: null,
     detailLoadPromises: {},
     problematicDiagnostics: {
       summaryLoad: null,
@@ -778,7 +785,8 @@ function renderLibraryLoader(data = {}, options = {}) {
   });
   const finalizingActiveScan = scanPageVisible
     && Boolean(data.scan_in_progress)
-    && String(data.scan_phase || '').trim().toLowerCase() === 'finalizing';
+    && String(data.scan_phase || '').trim().toLowerCase() === 'finalizing'
+    && Number(data.album_total || 0) > 0;
   // The dedicated page hides, but deliberately retains, the previous gallery and
   // query. Its Browse action must not wait for that retained view to become empty.
   const retainedBrowseAvailable = scanPageVisible

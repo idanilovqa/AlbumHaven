@@ -9,72 +9,11 @@ from watchdog.events import FileModifiedEvent
 from watchdog.observers.api import BaseObserver, EventEmitter
 
 from music_app.services import library_watch
+from music_app.services.library_event_coordinator import LibraryEventCoordinator
 from tests.py.test_library_reconciliation import _native_watch_health
 
 
-@pytest.mark.parametrize("health_write_fails", [False, True], ids=["persisted", "pending"])
-def test_manual_recovery_stop_timeout_restores_unhealthy_roots(tmp_path, health_write_fails):
-    from datetime import datetime, timedelta, timezone
-    from types import SimpleNamespace
-    from music_app import _recover_library_watch_after_manual_scan
-    from music_app.services.library_event_coordinator import CoordinatorProblem
-
-    entered, release = Event(), Event()
-    health = _native_watch_health()
-    initial = datetime(2026, 9, 10, tzinfo=timezone.utc)
-    clock = [initial]
-    health._now = lambda: clock[0]
-    roots = [{"id": "main", "path": str(tmp_path)},
-        {"id": "second", "path": str(tmp_path)}]
-    for root in roots:
-        health.record_problem(CoordinatorProblem("reconciliation_failed", root["id"]))
-
-    class IdleEmitter(EventEmitter):
-        def queue_events(self, _timeout):
-            self.stopped_event.wait(2)
-
-    observer = BaseObserver(IdleEmitter)
-
-    def publish(_event):
-        entered.set()
-        release.wait(2)
-
-    source = library_watch.WatchdogLibraryEventSource(roots, observer_factory=lambda: observer)
-    watcher = library_watch.LibraryWatchService(source, publish, stop_timeout=0.05)
-    emitters = ()
-    replaced = []
-    try:
-        watcher.start()
-        emitters = tuple(observer.emitters)
-        observer.event_queue.put((FileModifiedEvent(str(tmp_path / "song.flac")), emitters[0].watch))
-        assert entered.wait(1)
-        clock[0] = initial + timedelta(seconds=2)
-        if health_write_fails:
-            def unavailable(_problem):
-                raise OSError("health persistence unavailable")
-            health._store.upsert = unavailable
-        with pytest.raises(RuntimeError, match="deadline"):
-            _recover_library_watch_after_manual_scan(health_service=health,
-                targeted_reconciler=SimpleNamespace(replace_roots=replaced.append),
-                watch_service=watcher, root_definitions=roots, scan_mode="manual_full_rescan",
-                scan_started_at=initial + timedelta(seconds=1), observed_root_ids={"main", "second"})
-        assert replaced == [tuple(roots)]
-        assert source._stopping.is_set() and source._observer is observer
-        problems = health.load_problems()
-        assert {problem.root_id for problem in problems} == {"main", "second"}
-        assert all(problem.detected_at == clock[0].isoformat() for problem in problems)
-        assert all(not health.root_allows_destructive_reconciliation(root["id"]) for root in roots)
-    finally:
-        release.set()
-        watcher._stop_timeout = 2
-        watcher.stop()
-        assert source._observer is None
-        assert not observer.is_alive()
-        assert all(not emitter.is_alive() for emitter in emitters)
-
-
-@pytest.mark.parametrize("failure", ["normalization", "publication"])
-def test_dispatch_failure_records_root_health_without_losing_dispatcher(tmp_path, monkeypatch, failure):
+def test_normalization_failure_records_root_health_without_losing_dispatcher(tmp_path, monkeypatch):
     health = _native_watch_health()
     recorded = Event()
     delivered = Event()
@@ -91,7 +30,7 @@ def test_dispatch_failure_records_root_health_without_losing_dispatcher(tmp_path
 
     def normalize(event, **kwargs):
         nonlocal failed
-        if failure == "normalization" and not failed:
+        if not failed:
             failed = True
             raise RuntimeError("cyclic link cannot resolve")
         return original_publish(event, **kwargs)
@@ -101,9 +40,6 @@ def test_dispatch_failure_records_root_health_without_losing_dispatcher(tmp_path
         if event.kind is library_watch.LibraryEventKind.ROOT_UNAVAILABLE:
             health.record_event(event)
             recorded.set()
-        elif failure == "publication" and not failed:
-            failed = True
-            raise OSError("publication callback failed")
         else:
             delivered.set()
 
@@ -122,6 +58,74 @@ def test_dispatch_failure_records_root_health_without_losing_dispatcher(tmp_path
         assert observer.is_alive() and all(emitter.is_alive() for emitter in emitters)
         observer.event_queue.put((FileModifiedEvent(str(tmp_path / "second.flac")), watch))
         assert delivered.wait(1), "one bad event must not silently terminate intake"
+        assert exceptions == []
+    finally:
+        source.stop(timeout=2)
+        assert not observer.is_alive()
+        assert all(not emitter.is_alive() for emitter in emitters)
+
+
+def test_exact_admission_failure_is_reported_without_losing_dispatcher(tmp_path, monkeypatch):
+    original = OSError("publication callback failed")
+    attempted = []
+    accepted = []
+    reported = []
+    problems = []
+    caught = []
+    failure_reported = Event()
+    delivered = Event()
+    exceptions = []
+    monkeypatch.setattr("threading.excepthook", exceptions.append)
+
+    class IdleEmitter(EventEmitter):
+        def queue_events(self, _timeout):
+            self.stopped_event.wait(2)
+
+    observer = BaseObserver(IdleEmitter)
+
+    def accept_event(event):
+        attempted.append(event)
+        if len(attempted) == 1:
+            raise original
+        accepted.append(event)
+        delivered.set()
+
+    def report_admission_failure(root_ids):
+        reported.append(root_ids)
+        failure_reported.set()
+        raise LookupError("recovery reporter unavailable")
+
+    coordinator = LibraryEventCoordinator(
+        accept_event,
+        record_problem=problems.append,
+        report_admission_failure=report_admission_failure,
+    )
+
+    def publish(event):
+        try:
+            coordinator.accept(event)
+        except Exception as exc:
+            caught.append(exc)
+            raise
+
+    source = library_watch.WatchdogLibraryEventSource(
+        [{"id": "main", "path": str(tmp_path)}], observer_factory=lambda: observer,
+    )
+    emitters = ()
+    try:
+        source.start(publish)
+        emitters = tuple(observer.emitters)
+        watch = emitters[0].watch
+        observer.event_queue.put((FileModifiedEvent(str(tmp_path / "first.flac")), watch))
+        assert failure_reported.wait(1), "failed exact admission must report its root scope"
+        observer.event_queue.put((FileModifiedEvent(str(tmp_path / "second.flac")), watch))
+        assert delivered.wait(1), "one failed admission must not terminate intake"
+        assert [event.path.name for event in attempted] == ["first.flac", "second.flac"]
+        assert reported == [("main",)]
+        assert caught == [original]
+        assert problems == []
+        assert accepted == [attempted[1]]
+        assert observer.is_alive() and all(emitter.is_alive() for emitter in emitters)
         assert exceptions == []
     finally:
         source.stop(timeout=2)

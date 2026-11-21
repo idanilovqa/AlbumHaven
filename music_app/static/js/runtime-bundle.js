@@ -3752,12 +3752,18 @@ function renderLibraryWarning(data = {}, options = {}) {
   const problems = health.problems || [];
   const unavailable = problems.some(problem => problem.state === 'root_unavailable');
   const canRefresh = problems.some(problem => problem.allowed_actions?.['library.refresh'] === true);
+  const actionLabel = health.repair_required ? 'Repair library' : 'Full Rescan';
+  const operationalItemsHtml = problems.length
+    ? `<ul>${problems.map(() => '<li data-operational-item>Library recovery is required.</li>').join('')}</ul>`
+    : '';
+  const actionHtml = canRefresh
+    ? ButtonComponent.renderButton({label:actionLabel,attributes:{'data-status-action':'full-rescan'}})
+    : '';
   const message = unavailable
-    ? `A watched library folder became unavailable. Reconnect it${canRefresh ? ', then run Full Rescan' : ''}.`
-    : `Some library changes may have been missed.${canRefresh ? ' Run Full Rescan to reconcile them.' : ''}`;
+    ? `A watched library folder became unavailable. Reconnect it${canRefresh ? `, then run ${actionLabel}` : ''}.`
+    : `Some library changes may have been missed.${canRefresh ? ` Run ${actionLabel} to reconcile them.` : ''}`;
   const notice = buildOnPageAlertHtml({severity:'warning',title:'',message,className:'on-page-alert--compact',
-    actionsHtml: canRefresh
-      ? ButtonComponent.renderButton({label:'Full Rescan',attributes:{'data-status-action':'full-rescan'}}) : ''});
+    detailsHtml: operationalItemsHtml, actionsHtml: actionHtml});
   if (scanNotice.innerHTML !== notice) scanNotice.innerHTML = notice;
 }
 
@@ -4603,10 +4609,11 @@ function buildOnPageAlertHtml(config = {}) {
   const title = String(config.title || '').trim();
   const message = String(config.message || '').trim();
   const className = String(config.className || '').trim();
+  const detailsHtml = String(config.detailsHtml || '');
   const actionsHtml = String(config.actionsHtml || '');
   const role = config.role === 'status' ? 'status' : 'alert';
   const messageId = config.messageId ? ` id="${escapeAlertHtml(String(config.messageId))}"` : '';
-  return `<section class="on-page-alert on-page-alert--${severity}${className ? ` ${escapeAlertHtml(className)}` : ''}" role="${role}" data-on-page-alert="${severity}"><span class="on-page-alert__icon">${buildAlertIconHtml(severity)}</span><div class="on-page-alert__content">${title ? `<strong class="on-page-alert__title">${escapeAlertHtml(title)}</strong>` : ''}<p class="on-page-alert__message"${messageId}>${escapeAlertHtml(message)}</p>${actionsHtml ? `<div class="on-page-alert__actions">${actionsHtml}</div>` : ''}${buildAlertProgressHtml(config.progress)}</div></section>`;
+  return `<section class="on-page-alert on-page-alert--${severity}${className ? ` ${escapeAlertHtml(className)}` : ''}" role="${role}" data-on-page-alert="${severity}"><span class="on-page-alert__icon">${buildAlertIconHtml(severity)}</span><div class="on-page-alert__content">${title ? `<strong class="on-page-alert__title">${escapeAlertHtml(title)}</strong>` : ''}<p class="on-page-alert__message"${messageId}>${escapeAlertHtml(message)}</p>${detailsHtml}${actionsHtml ? `<div class="on-page-alert__actions">${actionsHtml}</div>` : ''}${buildAlertProgressHtml(config.progress)}</div></section>`;
 }
 
 // StatusBadge: short, non-interactive state text. Consumers choose only its label and variant;
@@ -4672,7 +4679,7 @@ function buildUtilityAlbumArtbox(album, {
     coverHtml: preview ? `<img class="utility-detail-cover-image" ${previewSourceAttributes} alt="${escapeHtml(label)}" loading="${interactive ? 'eager' : 'lazy'}" decoding="async" data-cover-ref="${escapeHtml(album?.cover_ref || '')}" data-remote-cover-url="${escapeHtml(album?.remote_cover_url || album?.remote_cover_thumbnail_url || '')}" onerror="handleUtilityAlbumArtboxError(this)">` : '',
   });
   return interactive && preview
-    ? `<button type="button" class="utility-artbox-trigger" data-open-lightbox="1" data-cover-src="${escapeHtml(fullSource)}" data-cover-alt="${escapeHtml(label)}" aria-label="${escapeHtml(`Enlarge ${label}`)}">${artbox}</button>`
+    ? `<button type="button" class="utility-artbox-trigger" data-open-lightbox="1"${album?.key ? ` data-album-key="${escapeHtml(album.key)}"` : ''} data-cover-src="${escapeHtml(fullSource)}" data-cover-alt="${escapeHtml(label)}" aria-label="${escapeHtml(`Enlarge ${label}`)}">${artbox}</button>`
     : artbox;
 }
 
@@ -5799,6 +5806,13 @@ const state = {
     loadPromise: null,
     completeLoadPromise: null,
     problematicFilesComplete: false,
+    problematicFilesNextCursor: null,
+    problematicFilesPageSignature: '',
+    problematicFilesProjectionRevision: '',
+    problematicKnownBase: null,
+    problematicFilesTotal: 0,
+    problematicReasonFacets: [],
+    selectedProblematicDetail: null,
     detailLoadPromises: {},
     problematicDiagnostics: {
       summaryLoad: null,
@@ -6398,7 +6412,8 @@ function renderLibraryLoader(data = {}, options = {}) {
   });
   const finalizingActiveScan = scanPageVisible
     && Boolean(data.scan_in_progress)
-    && String(data.scan_phase || '').trim().toLowerCase() === 'finalizing';
+    && String(data.scan_phase || '').trim().toLowerCase() === 'finalizing'
+    && Number(data.album_total || 0) > 0;
   // The dedicated page hides, but deliberately retains, the previous gallery and
   // query. Its Browse action must not wait for that retained view to become empty.
   const retainedBrowseAvailable = scanPageVisible
@@ -17088,6 +17103,7 @@ function getTrackModalLightboxSourceAlbumKey(button) {
 }
 
 let imageLightboxReturnFocus = null;
+let imageLightboxReturnIdentity = null;
 let imageLightboxHistoryOpen = false;
 let imageLightboxHistoryClosing = false;
 
@@ -17128,7 +17144,13 @@ function bindLightboxSwipe(overlay) {
 function openImageLightbox(src, alt, options = {}) {
   const els = getLightboxElements();
   if (!els.overlay || !els.image || !src) return;
-  if (els.overlay.hidden) imageLightboxReturnFocus = document.activeElement;
+  if (els.overlay.hidden) {
+    imageLightboxReturnFocus = document.activeElement;
+    const albumKey = imageLightboxReturnFocus?.getAttribute?.('data-album-key');
+    const container = imageLightboxReturnFocus?.parentElement?.closest?.('[id]');
+    imageLightboxReturnIdentity = albumKey && container?.id
+      ? { albumKey, containerId: container.id } : null;
+  }
   if (els.overlay.hidden && typeof usesMobilePageLayout === 'function' && usesMobilePageLayout()
       && typeof window !== 'undefined' && window.history?.pushState) {
     window.history.pushState({ ...window.history.state, imageLightbox: true }, '');
@@ -17213,30 +17235,39 @@ function closeImageLightbox() {
   if (!trackModalOpen && !utilityModalOpen) {
     document.body.classList.remove('modal-open');
   }
-  const returnFocus = imageLightboxReturnFocus;
+  const lightboxTrigger = imageLightboxReturnFocus;
+  let returnFocus = lightboxTrigger;
+  const identity = imageLightboxReturnIdentity;
   imageLightboxReturnFocus = null;
-  let focusTarget = returnFocus?.isConnected ? returnFocus : null;
-  if (!focusTarget && returnFocus?.getAttribute) {
+  imageLightboxReturnIdentity = null;
+  const foreground = getTopmostOpenModal();
+  const canFocus = element => element?.isConnected && !element.disabled
+    && !element.closest?.('[hidden], [inert]') && element.getClientRects?.().length > 0
+    && !['hidden', 'collapse'].includes(getComputedStyle(element).visibility)
+    && (!foreground || foreground.contains?.(element));
+  if (!canFocus(returnFocus)
+      || identity && returnFocus.getAttribute?.('data-album-key') !== identity.albumKey) {
+    const container = identity && document.getElementById(identity.containerId);
+    returnFocus = Array.from(container?.querySelectorAll?.('[data-open-lightbox="1"][data-album-key]') || [])
+      .find(element => element.getAttribute('data-album-key') === identity.albumKey && canFocus(element));
+  }
+  if (!canFocus(returnFocus) && !identity && lightboxTrigger?.getAttribute) {
     const triggerAttribute = ['data-open-lightbox', 'data-cover-lookup-open-lightbox']
-      .find((attribute) => returnFocus.getAttribute(attribute) === '1');
+      .find(attribute => lightboxTrigger.getAttribute(attribute) === '1');
     if (triggerAttribute) {
-      const coverSrc = returnFocus.getAttribute('data-cover-src') || '';
-      const coverAlt = returnFocus.getAttribute('data-cover-alt') || '';
+      const coverSrc = lightboxTrigger.getAttribute('data-cover-src') || '';
+      const coverAlt = lightboxTrigger.getAttribute('data-cover-alt') || '';
       const replacements = Array.from(document.querySelectorAll(`[${triggerAttribute}="1"]`))
-        .filter((candidate) => {
-          const visibility = getComputedStyle(candidate).visibility;
-          return candidate.disabled !== true
-            && !candidate.closest('[hidden], [inert]')
-            && candidate.getClientRects().length > 0
-            && visibility !== 'hidden'
-            && visibility !== 'collapse'
-            && (candidate.getAttribute('data-cover-src') || '') === coverSrc
-            && (candidate.getAttribute('data-cover-alt') || '') === coverAlt;
-        });
-      if (replacements.length === 1) [focusTarget] = replacements;
+        .filter(candidate => canFocus(candidate)
+          && (candidate.getAttribute('data-cover-src') || '') === coverSrc
+          && (candidate.getAttribute('data-cover-alt') || '') === coverAlt);
+      if (replacements.length === 1) [returnFocus] = replacements;
     }
   }
-  focusTarget?.focus?.();
+  if (!returnFocus) {
+    returnFocus = foreground?.querySelector?.('#utility-modal-close, #track-modal-close');
+  }
+  if (canFocus(returnFocus)) returnFocus.focus?.();
 }
 
 function closeTrackModal() {
@@ -20269,6 +20300,14 @@ async function fetchAndRender(url, push = true, options = {}) {
     if (requestTagEditMutationRevision !== Number(state.ui.tagEditOptimisticMutationRevision || 0)) {
       return false;
     }
+    if (
+      !push
+      && typeof requestOptions.shouldApplyResponse !== 'function'
+      && typeof hasActiveTagEditViewMutation === 'function'
+      && hasActiveTagEditViewMutation()
+    ) {
+      return false;
+    }
     // Artwork published after this request started owns the album cover state.
     if (requestCoverMutationRevision !== Number(state.ui.albumCoverMutationRevision || 0)) {
       return false;
@@ -20750,6 +20789,7 @@ function openScanPage() {
   }
   suspendScanPageGalleryCoverLoads();
   state.ui.forceScanPageVisible = true;
+  scheduleStatusPoll(0);
   const searchInput = document.getElementById('search-input');
   if (searchInput) {
     searchInput.value = '';
@@ -21083,6 +21123,7 @@ async function pollStatus() {
   try {
     if (
       !knownBusy
+      && !state.ui.scanPageReturnContext
       && coverScheduler?.isForegroundIdle?.() === false
       && typeof coverScheduler.whenForegroundIdle === 'function'
     ) {
@@ -22389,7 +22430,7 @@ function activateAlbumTrackRow(event, { restart = false } = {}) {
 
 function buildUtilityLogHistoryListItem(item, selected) {
   return window.NavigationTree.renderItem({ action: true, variant: 'panel', key: String(item.id), selected,
-    label: item.action || 'Activity', subtitle: [item.artist, item.album, item.title].filter(Boolean).join(' · ') || item.source || '',
+    label: item.action || 'Activity', subtitle: [item.artist, item.album, item.title].filter(Boolean).join(' В· ') || item.source || '',
     year: formatLogHistoryTimestamp(item.timestamp), attributes: { 'data-utility-log-history-id': String(item.id) } });
 }
 
@@ -22436,9 +22477,9 @@ function buildUtilityLoopEntry(loop) {
     <section class="utility-loop-entry ${repeatEnabled ? 'is-active' : ''}" data-utility-loop-entry="${escapeHtml(loop.id || '')}" data-loop-song-key="${escapeHtml(buildUtilityLoopGroupKey(loop))}" draggable="${canReorderUtilityLoop(loop)}">
       ${buildUtilityLoopMoveActions(loop)}
       <div class="utility-loop-heading">
-        <span class="utility-loop-drag-handle" aria-hidden="true">⋮⋮</span>
+        <span class="utility-loop-drag-handle" aria-hidden="true">в‹®в‹®</span>
         <h3 class="utility-detail-title">${escapeHtml(loop.name || 'Saved loop')}</h3>
-        <span class="utility-loop-original-times"><span>Original timestamps</span><strong>${loop.original_start_seconds != null && loop.original_end_seconds != null ? `${formatLoopTime(loop.original_start_seconds, true)} – ${formatLoopTime(loop.original_end_seconds, true)}` : 'Unavailable'}</strong></span>
+        <span class="utility-loop-original-times"><span>Original timestamps</span><strong>${loop.original_start_seconds != null && loop.original_end_seconds != null ? `${formatLoopTime(loop.original_start_seconds, true)} вЂ“ ${formatLoopTime(loop.original_end_seconds, true)}` : 'Unavailable'}</strong></span>
         ${state.utility.allowedActions?.['library.loops.delete'] === true ? window.ButtonComponent.renderActionButton({ icon: 'delete', semantic: 'destructive', ariaLabel: `Delete ${loop.name || 'Saved loop'}`, title: `Delete ${loop.name || 'Saved loop'}`, className: 'utility-loop-remove', attributes: { 'data-delete-saved-loop': loop.id || '' } }) : ''}
       </div>
       <div class="utility-loop-shell" data-utility-loop-shell="${escapeHtml(loop.id || '')}">
@@ -22638,7 +22679,7 @@ function buildVersionExceptionRuleDetail(rule) {
     columnsConfig: [{ key: 'target', label: 'Artist / Album' }, { key: 'effect', label: 'Rule' }, { key: 'action', label: 'Actions', header: 'screen-reader', action: true }],
     headers: 'visible', density: 'compact', overflow: 'local', mobile: 'stack', frame: 'outline', actionTrackWidth: '110px',
     rows: albums.map(album => ({ key: album.key, cells: {
-      target: `<span class="utility-rule-target">${buildUtilityAlbumArtbox(album, { label: `Artwork for ${album.name || 'album'}` })}<span><span class="utility-rule-album-title">${escapeHtml(album.name || album.key || 'Unknown album')}</span><span class="utility-rule-album-meta">${escapeHtml([album.album_artist, album.year].filter(Boolean).join(' · '))}</span></span></span>`,
+      target: `<span class="utility-rule-target">${buildUtilityAlbumArtbox(album, { label: `Artwork for ${album.name || 'album'}` })}<span><span class="utility-rule-album-title">${escapeHtml(album.name || album.key || 'Unknown album')}</span><span class="utility-rule-album-meta">${escapeHtml([album.album_artist, album.year].filter(Boolean).join(' В· '))}</span></span></span>`,
       effect: escapeHtml(album.edition ? `Edition: ${album.edition}` : 'Excluded from album version tabs'),
       action: ButtonComponent.renderButton({ label: 'Revert rule', className: 'utility-rule-revert', attributes: { 'data-revert-version-exception': album.key || '' } }),
     } })),
@@ -22772,7 +22813,7 @@ function buildUtilityCollapsibleSection(sectionKey, title, contentHtml) {
     <div class="utility-detail-section${cardClass} ${collapsed ? 'is-collapsed' : ''}">
       <button class="utility-section-toggle" type="button" data-utility-section-toggle="${escapeHtml(sectionKey)}" aria-expanded="${collapsed ? 'false' : 'true'}">
         <span class="utility-detail-section-title">${escapeHtml(title)}</span>
-        <span class="utility-section-chevron" aria-hidden="true">›</span>
+        <span class="utility-section-chevron" aria-hidden="true">вЂє</span>
       </button>
       <div class="utility-section-content" ${collapsed ? 'hidden' : ''}>
         ${contentHtml}
@@ -22829,7 +22870,7 @@ function buildDetectedProblemsHtml(album) {
     return {
       key: String(row.path || ''), dataAttributes: { 'problematic-track-path': String(row.path || '') },
       cells: {
-        filename: `<span class="utility-track-problem-file" data-problematic-track-path="${escapeHtml(row.path || '')}">${escapeHtml(track.title || row.filename || getFilenameFromPath(row.path) || 'Unknown file')}</span><span class="utility-detail-meta">${escapeHtml([track.artist, row.file_type].filter(Boolean).join(' · '))}</span>`,
+        filename: `<span class="utility-track-problem-file" data-problematic-track-path="${escapeHtml(row.path || '')}">${escapeHtml(track.title || row.filename || getFilenameFromPath(row.path) || 'Unknown file')}</span><span class="utility-detail-meta">${escapeHtml([track.artist, row.file_type].filter(Boolean).join(' В· '))}</span>`,
         reason: `<span class="utility-track-problem-labels">${reasons.map(reason => {
           const match = (row.ignorable_reasons || []).find(item => item.reason === reason);
           const rowKey = String(match?.row_key || '');
@@ -22935,7 +22976,37 @@ function buildProblematicAlbumDetail(album) {
 }
 
 function getSelectedProblematicAlbum() {
-  return (state.utility.problematicFiles || []).find((item) => item.key === state.utility.selectedProblematicKey) || null;
+  return (state.utility.problematicFiles || []).find((item) => item.key === state.utility.selectedProblematicKey)
+    || (state.utility.selectedProblematicDetail?.key === state.utility.selectedProblematicKey
+      ? state.utility.selectedProblematicDetail : null)
+    || getProblematicKnownView().items.find((item) => item.key === state.utility.selectedProblematicKey)
+    || null;
+}
+
+function prepareProblematicMutationItems(albumKey) {
+  const utility = state.utility;
+  const current = Array.isArray(utility.problematicFiles) ? utility.problematicFiles : [];
+  if (current.some((item) => String(item?.key || '') === String(albumKey || ''))) return current;
+  const view = getProblematicKnownView();
+  if (!view.items.some((item) => String(item?.key || '') === String(albumKey || ''))) return current;
+  const base = utility.problematicKnownBase;
+  const completeSource = base?.complete === true && base.signature === '';
+  utility.problematicFiles = completeSource ? base.items : view.items;
+  utility.problematicFilesTotal = completeSource ? base.total : view.total;
+  utility.problematicFilesComplete = completeSource;
+  utility.problematicFilesNextCursor = null;
+  utility.problematicFilesPageSignature = completeSource ? '' : null;
+  return utility.problematicFiles;
+}
+
+function markProblematicSearchFactsChanged(album, previousAlbum) {
+  if (album && (!previousAlbum || previousAlbum.problematic_search_facts_changed
+      || getProblematicMainSearchText(album) !== getProblematicMainSearchText(previousAlbum))) {
+    Object.defineProperty(album, 'problematic_search_facts_changed', {
+      value: true, enumerable: false, writable: true, configurable: true,
+    });
+  }
+  return album;
 }
 
 function getAlbumTrackPaths(album) {
@@ -22979,6 +23050,90 @@ function finalizedAlbumsCoverExpectedTrackPaths(originalAlbum, optimisticAlbums,
     getAlbumTrackPaths(album).forEach((path) => finalizedPaths.add(path));
   });
   return Array.from(expectedPaths).every((path) => finalizedPaths.has(path));
+}
+
+function albumDeclaredMembershipCount(album) {
+  const explicitMembershipCount = getAlbumTrackPaths(album).size;
+  const declaredCounts = [album?.track_count_preview, album?.track_count]
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value) && value >= 0);
+  return Math.max(explicitMembershipCount, ...declaredCounts, 0);
+}
+
+function collectAlbumsFromViewPayload(payload) {
+  return ['primary_artist_groups', 'family_artist_groups', 'artist_groups']
+    .flatMap((field) => (Array.isArray(payload?.[field]) ? payload[field] : []))
+    .flatMap((group) => (Array.isArray(group?.albums) ? group.albums : []));
+}
+
+function canonicalViewPayloadCoversExpectedTagEdit(payload, originalAlbum, optimisticAlbums, committedInventoryRevision) {
+  const committedRevision = Number(committedInventoryRevision);
+  const snapshotRevision = Number(payload?.inventory_mutation_revision);
+  if (Number.isSafeInteger(committedRevision) && committedRevision > 0
+    && Number.isSafeInteger(snapshotRevision) && snapshotRevision >= 0) {
+    return snapshotRevision >= committedRevision;
+  }
+  const expectedAlbums = Array.isArray(optimisticAlbums) && optimisticAlbums.length
+    ? optimisticAlbums
+    : [originalAlbum].filter(Boolean);
+  const canonicalAlbums = collectAlbumsFromViewPayload(payload);
+  if (!expectedAlbums.length || !canonicalAlbums.length) return false;
+  const expectedReleaseGroups = [];
+  expectedAlbums.forEach((expectedAlbum) => {
+    const matchingGroup = expectedReleaseGroups.find((group) => (
+      albumsShareLogicalReleaseIdentity(group[0], expectedAlbum)
+      || albumsShareRuntimeIdentityAlias(group[0], expectedAlbum)
+    ));
+    if (matchingGroup) matchingGroup.push(expectedAlbum);
+    else expectedReleaseGroups.push([expectedAlbum]);
+  });
+  return expectedReleaseGroups.every((expectedReleaseGroup) => {
+    const expectedAlbum = expectedReleaseGroup[0];
+    const expectedAliases = new Set();
+    const expectedPaths = new Set();
+    let opaqueMembershipCount = 0;
+    expectedReleaseGroup.forEach((album) => {
+      getAlbumRuntimeIdentityAliases(album).forEach((alias) => expectedAliases.add(alias));
+      const albumPaths = getAlbumTrackPaths(album);
+      albumPaths.forEach((path) => expectedPaths.add(path));
+      opaqueMembershipCount += Math.max(
+        0,
+        albumDeclaredMembershipCount(album) - albumPaths.size,
+      );
+    });
+    const expectedCount = expectedPaths.size + opaqueMembershipCount;
+    if (!expectedCount) return false;
+    return canonicalAlbums.some((canonicalAlbum) => {
+      const canonicalAliases = getAlbumRuntimeIdentityAliases(canonicalAlbum);
+      const aliasesMatch = Array.from(expectedAliases)
+        .some((alias) => canonicalAliases.has(alias));
+      return (
+        (aliasesMatch || albumsShareLogicalReleaseIdentity(expectedAlbum, canonicalAlbum))
+        && albumDeclaredMembershipCount(canonicalAlbum) >= expectedCount
+      );
+    });
+  });
+}
+
+const CANONICAL_VIEW_STATUS_RETRY_DELAYS_MS = [125, 250, 500, 1000, 2000];
+
+async function waitForCommittedInventoryRevision(committedInventoryRevision) {
+  const targetRevision = Number(committedInventoryRevision);
+  if (!Number.isSafeInteger(targetRevision) || targetRevision <= 0) return;
+  for (let attempt = 0; attempt <= CANONICAL_VIEW_STATUS_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      const response = await fetch('/status');
+      if (response.ok) {
+        const status = await response.json();
+        if (Number(status?.inventory_mutation_revision || 0) >= targetRevision) return;
+      }
+    } catch (_error) {
+      // The canonical view request below remains the final source of truth.
+    }
+    if (attempt < CANONICAL_VIEW_STATUS_RETRY_DELAYS_MS.length) {
+      await waitForBrowserTimeout(CANONICAL_VIEW_STATUS_RETRY_DELAYS_MS[attempt]);
+    }
+  }
 }
 
 function albumsShareTrackPath(left, rightPaths) {
@@ -23202,11 +23357,17 @@ function getAlbumRuntimeIdentityAliases(album) {
 let tagEditViewMutationGeneration = 0;
 const tagEditViewMutationResourceClaims = new Map();
 const settledTagEditViewMutations = new Set();
+const activeTagEditViewMutations = new Set();
+
+function hasActiveTagEditViewMutation() {
+  return activeTagEditViewMutations.size > 0;
+}
 
 function claimTagEditViewMutation(album, editedTrackPaths = [], updates = {}) {
-  if (Object.values(updates || {}).some((edits) => (
+  const hasEdits = Object.values(updates || {}).some((edits) => (
     edits && typeof edits === 'object' && Object.keys(edits).length > 0
-  ))) {
+  ));
+  if (hasEdits) {
     state.ui = state.ui || {};
     state.ui.tagEditOptimisticMutationRevision = Number(
       state.ui.tagEditOptimisticMutationRevision || 0,
@@ -23214,6 +23375,7 @@ function claimTagEditViewMutation(album, editedTrackPaths = [], updates = {}) {
   }
   tagEditViewMutationGeneration += 1;
   const generation = tagEditViewMutationGeneration;
+  if (hasEdits) activeTagEditViewMutations.add(generation);
   const resourceKeys = new Set();
   getAlbumRuntimeIdentityAliases(album).forEach((alias) => {
     resourceKeys.add(`album:${alias.toLocaleLowerCase()}`);
@@ -23304,6 +23466,7 @@ function pruneSettledTagEditViewMutationClaims() {
 function settleTagEditViewMutation(claim) {
   const generation = Number(claim?.generation || 0);
   if (!generation) return;
+  activeTagEditViewMutations.delete(generation);
   settledTagEditViewMutations.add(generation);
   pruneSettledTagEditViewMutationClaims();
 }
@@ -23311,6 +23474,7 @@ function settleTagEditViewMutation(claim) {
 function releaseFailedTagEditViewMutation(claim) {
   const generation = Number(claim?.generation || 0);
   if (!generation) return;
+  activeTagEditViewMutations.delete(generation);
   tagEditViewMutationResourceClaims.forEach((claims, resourceKey) => {
     const remainingClaims = claims.filter((value) => value !== generation);
     if (remainingClaims.length) {
@@ -24215,9 +24379,7 @@ function claimProblematicSaveTaskMutation(taskId, originalAlbum, expectedAlbumKe
     || !selectedKey
     || (normalizedExpectedAlbumKey && selectedKey !== normalizedExpectedAlbumKey)
   ) return null;
-  const selectedAlbum = (state.utility.problematicFiles || []).find((album) => (
-    String(album?.key || '').trim() === selectedKey
-  )) || null;
+  const selectedAlbum = getSelectedProblematicAlbum();
   const originalKey = String(originalAlbum?.key || '').trim();
   if (!selectedAlbum || !originalAlbum || (originalKey !== selectedKey && !albumsShareTrackPath(selectedAlbum, getAlbumTrackPaths(originalAlbum)))) {
     return null;
@@ -24229,6 +24391,7 @@ function claimProblematicSaveTaskMutation(taskId, originalAlbum, expectedAlbumKe
       ? existing
       : null;
   }
+  prepareProblematicMutationItems(selectedKey);
   const list = typeof getUtilityModalElements === 'function'
     ? getUtilityModalElements()?.list
     : null;
@@ -24240,6 +24403,8 @@ function claimProblematicSaveTaskMutation(taskId, originalAlbum, expectedAlbumKe
     priorScrollTop: Number(list?.scrollTop || 0),
     priorScrollHeight: Number(list?.scrollHeight || 0),
   };
+  state.utility.problematicKnownBase = null;
+  state.utility.problematicFilesProjectionRevision = '';
   state.utility.problematicMutation = mutation;
   if (typeof renderUtilityModalContent === 'function') renderUtilityModalContent();
   return mutation;
@@ -24830,21 +24995,36 @@ async function watchSaveTask(taskId, context = {}) {
               if (restoresAllSearchResults) {
                 refreshView = { ...state.view, selected_artist: '', all_artists_active: true };
               }
+              if (structuralPartialMembershipRequiresCanonicalRefresh) {
+                await waitForCommittedInventoryRevision(data.inventory_mutation_revision);
+              }
               rememberCurrentRuntimeAlbumCoverAuthority(state.view);
               viewRefreshed = await fetchAndRender(
                 buildApiUrl(refreshView, { rootFullPayload: true }),
                 false,
                 {
                   ...currentViewRenderOptions(),
-                  preserveMountedGalleryChildren: true,
                   preserveMissingAlbumCoverAuthority: true,
-                  ...(!structuralTagEditRequiresCanonicalView
+                  preserveMountedGalleryChildren: !structuralPartialMembershipRequiresCanonicalRefresh,
+                  ...(
+                    !structuralTagEditRequiresCanonicalView
+                    && !structuralPartialMembershipRequiresCanonicalRefresh
                     ? { retainMountedGalleryIfEquivalent: true }
-                    : {}),
+                    : {}
+                  ),
                   restartIfSameUrl: true,
-                  shouldApplyResponse: responseData => (
+                  shouldApplyResponse: (payload) => (
                     !mutationWasSuperseded()
-                    && responseContainsCommittedInventoryMutation(responseData)
+                    && responseContainsCommittedInventoryMutation(payload)
+                    && (
+                      !structuralPartialMembershipRequiresCanonicalRefresh
+                      || canonicalViewPayloadCoversExpectedTagEdit(
+                        payload,
+                        originalAlbum,
+                        context.optimisticAlbums,
+                        data.inventory_mutation_revision,
+                      )
+                    )
                   ),
                 },
               );
@@ -25305,9 +25485,13 @@ function updateTrackModalIfStillShowingAlbum(originalAlbum, updatedAlbums) {
 }
 
 function applyRepairResultToProblematicFiles(originalAlbum, updatedAlbum) {
+  prepareProblematicMutationItems(originalAlbum?.key);
+  state.utility.problematicKnownBase = null;
+  state.utility.problematicFilesProjectionRevision = '';
   const originalKey = String(originalAlbum?.key || '');
   const originalPaths = getAlbumTrackPaths(originalAlbum);
   const hasUpdatedAlbum = updatedAlbum && typeof updatedAlbum === 'object' && Object.keys(updatedAlbum).length;
+  if (hasUpdatedAlbum) markProblematicSearchFactsChanged(updatedAlbum, originalAlbum);
   const updatedKey = hasUpdatedAlbum ? String(updatedAlbum.key || '') : '';
   const previousItems = Array.isArray(state.utility.problematicFiles) ? state.utility.problematicFiles : [];
   const selectedKeyBefore = String(state.utility.selectedProblematicKey || '');
@@ -25333,6 +25517,8 @@ function applyRepairResultToProblematicFiles(originalAlbum, updatedAlbum) {
   }
 
   state.utility.problematicFiles = nextItems;
+  state.utility.problematicFilesTotal = Math.max(nextItems.length,
+    Number(state.utility.problematicFilesTotal || previousItems.length) + nextItems.length - previousItems.length);
   state.utility.loaded = true;
   if (hasUpdatedAlbum) {
     state.utility.selectedProblematicKey = String(updatedAlbum.key || '');
@@ -25367,12 +25553,10 @@ function getAlbumProblemFilterReasons(album) {
 }
 
 function getProblemReasonTypes() {
-  const reasons = new Set();
-  (state.utility.problematicFiles || []).forEach((album) => {
-    getAlbumProblemFilterReasons(album).forEach((reason) => {
-      if (reason) reasons.add(reason);
-    });
-  });
+  const reasons = new Set([
+    ...(state.utility.problematicReasonFacets || []),
+    ...(state.utility.selectedProblemFilters || []),
+  ].map(normalizeProblemFilterReason).filter(Boolean));
   return Array.from(reasons).sort((a, b) => a.localeCompare(b));
 }
 
@@ -25446,40 +25630,64 @@ function renderProblemFilterControls(els) {
   }
 }
 
-function getFilteredProblematicAlbums() {
-  const items = state.utility.problematicFiles || [];
-  const query = (state.utility.searchQuery || '').trim().toLowerCase();
+function getProblematicMainSearchText(album) {
+  return [
+    album.name, album.raw_name, album.album_artist, album.raw_album_artist, album.year,
+    ...(album.problem_reasons || []), album.search_text,
+    ...(album.tracks || []).map((track) => track.title),
+    ...(album.repair_preview_rows || []).flatMap((row) => [row.track_title, row.original, row.repaired]),
+  ].join('\n').toLowerCase();
+}
 
-  const filtered = items.filter((album) => {
+function getProblematicKnownView() {
+  const utility = state.utility;
+  const signature = utility.problematicFilesPageSignature;
+  const committedScope = typeof signature === 'string';
+  const committedFilter = committedScope && signature
+    ? JSON.parse(signature) : { query: '', reasons: [] };
+  const queryMatches = String(utility.searchQuery || '').trim() === committedFilter.query;
+  const selectedReasons = Array.from(new Set((utility.selectedProblemFilters || [])
+    .map((reason) => String(reason || '').trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+  const reasonsMatch = JSON.stringify(selectedReasons) === JSON.stringify(committedFilter.reasons);
+  const currentItems = Array.isArray(utility.problematicFiles) ? utility.problematicFiles : [];
+  const query = String(utility.searchQuery || '').trim().toLowerCase();
+  if (utility.loaded && committedScope && queryMatches && reasonsMatch) {
+    let unknown = false;
+    const items = currentItems.filter((album) => {
+      if (!album.problematic_search_facts_changed) return true;
+      if (!albumMatchesProblemFilters(album)) return false;
+      if (!query || getProblematicMainSearchText(album).includes(query)) return true;
+      if (album.detail_loaded !== true) unknown = true;
+      return false;
+    });
+    const total = utility.problematicFilesComplete ? items.length : Math.max(items.length,
+      Number(utility.problematicFilesTotal || currentItems.length) - currentItems.length + items.length);
+    return { items, pending: unknown, authoritative: !unknown, total };
+  }
+  const base = utility.problematicKnownBase;
+  const source = base ? base.items : currentItems;
+  let unknown = false;
+  const items = source.filter((album) => {
     if (!albumMatchesProblemFilters(album)) return false;
     if (!query) return true;
-    const repairRows = Array.isArray(album.repair_preview_rows) ? album.repair_preview_rows : [];
-    const trackTitles = Array.isArray(album.tracks) ? album.tracks.map((track) => String(track.title || '')) : [];
-    const haystack = [
-      String(album.name || ''),
-      String(album.raw_name || ''),
-      String(album.album_artist || ''),
-      String(album.raw_album_artist || ''),
-      String(album.year || ''),
-      ...(Array.isArray(album.problem_reasons) ? album.problem_reasons.map((reason) => String(reason || '')) : []),
-      String(album.search_text || ''),
-      ...trackTitles,
-      ...repairRows.flatMap((row) => [
-        String(row.track_title || ''),
-        String(row.original || ''),
-        String(row.repaired || ''),
-      ]),
-    ].join('\n').toLowerCase();
-    return haystack.includes(query);
+    if (getProblematicMainSearchText(album).includes(query)) return true;
+    if (album.detail_loaded !== true) unknown = true;
+    return false;
   });
+  if ((utility.selectedProblemFilters || []).length) {
+    items.sort((a, b) => getAlbumProblemFilterSortIndex(a) - getAlbumProblemFilterSortIndex(b)
+      || String(a.name || '').localeCompare(String(b.name || ''))
+      || String(a.album_artist || '').localeCompare(String(b.album_artist || ''))
+      || String(a.year || '').localeCompare(String(b.year || '')));
+  }
+  const complete = base ? base.complete && base.signature === '' : utility.loaded
+    && utility.problematicFilesComplete && signature === '';
+  const authoritative = Boolean(complete && !unknown);
+  return { items, pending: !authoritative, authoritative, total: items.length };
+}
 
-  if (!(state.utility.selectedProblemFilters || []).length) return filtered;
-  return filtered.slice().sort((a, b) => (
-    getAlbumProblemFilterSortIndex(a) - getAlbumProblemFilterSortIndex(b)
-    || String(a.name || '').localeCompare(String(b.name || ''))
-    || String(a.album_artist || '').localeCompare(String(b.album_artist || ''))
-    || String(a.year || '').localeCompare(String(b.year || ''))
-  ));
+function getFilteredProblematicAlbums() {
+  return getProblematicKnownView().items;
 }
 
 function getProblematicAlbumIssueLabel(album) {
@@ -25538,15 +25746,15 @@ async function openUtilityModalForTrack(trackPath) {
       )) || null;
     if (optimisticAlbum) {
       const optimisticKey = String(optimisticAlbum.key || '').trim();
-      const existingItems = Array.isArray(state.utility.problematicFiles)
-        ? state.utility.problematicFiles
-        : [];
+      const existingItems = prepareProblematicMutationItems(optimisticKey);
+      state.utility.problematicKnownBase = null;
+      state.utility.problematicFilesProjectionRevision = '';
       state.utility.problematicFiles = [
         ...existingItems.filter((item) => String(item?.key || '').trim() !== optimisticKey),
-        {
+        markProblematicSearchFactsChanged({
           ...optimisticAlbum,
           detail_loading_deferred: optimisticAlbum.detail_loaded !== true,
-        },
+        }, existingItems.find((item) => String(item?.key || '').trim() === optimisticKey)),
       ];
       state.utility.loaded = true;
       state.utility.loading = false;
@@ -25597,25 +25805,38 @@ async function openUtilityModalForTrack(trackPath) {
           > summaryRequestTokenBeforePendingTasks
       )
     );
+    state.utility.searchQuery = '';
+    state.utility.selectedProblemFilters = [];
     const loadTrackSummary = async () => {
-      const complete = loadProblematicFiles(true, { render: false });
-      const initial = state.utility.initialLoadPromise || complete;
-      if (initial !== complete) {
-        complete.then((result) => {
-          if (result !== null && openedCanonicalTarget && ownsNavigation()
-              && state.utility.activeTab === 'problematic-files'
-              && state.utility.focusedTrackPath === String(trackPath || '')) {
-            renderUtilityModalContent();
-          }
-        });
-      }
-      const result = await initial;
+      const request = loadProblematicFiles(true, { render: false });
+      const result = await request;
       if (result === null || !ownsNavigation()
-          || (initial.problematicSummaryRequestToken !== undefined
-            && initial.problematicSummaryRequestToken !== Number(state.utility.problematicSummaryRequestToken || 0))) return null;
-      if (getProblematicAlbumForTrackPath(trackPath)) return result;
-      // Only returned canonical track membership may identify the target.
-      return complete;
+          || (request.problematicSummaryRequestToken !== undefined
+            && request.problematicSummaryRequestToken !== Number(state.utility.problematicSummaryRequestToken || 0))) return null;
+      return result;
+    };
+    const loadTargetedAlbum = async () => {
+      let detail;
+      try {
+        detail = await loadProblematicAlbumDetailForTrack(trackPath);
+      } catch (error) {
+        if (ownsNavigation()) {
+          console.error('[AlbumHaven][Utilities] Failed to locate a problematic track.', error);
+          showToast('Unable to load problematic album detail.', 'error', 3200);
+        }
+        return null;
+      }
+      if (!detail || !ownsNavigation()) return null;
+      const targetPaths = new Set([String(trackPath || '')].filter(Boolean));
+      const pageItems = (state.utility.problematicFiles || []).filter((item) => (
+        String(item?.key || '') === String(detail.key || '')
+        || !albumsShareTrackPath(item, targetPaths)
+      ));
+      const pageIndex = pageItems.findIndex((item) => String(item?.key || '') === String(detail.key || ''));
+      if (pageIndex >= 0) pageItems[pageIndex] = detail;
+      state.utility.problematicFiles = pageItems;
+      state.utility.selectedProblematicDetail = pageIndex >= 0 ? null : detail;
+      return detail;
     };
     if (!state.utility.loaded || (pendingTasks.length && !pendingTaskRefreshedSummary)) {
       const loadResult = await loadTrackSummary();
@@ -25627,6 +25848,7 @@ async function openUtilityModalForTrack(trackPath) {
       if (refreshResult === null || !ownsNavigation()) return;
       album = getProblematicAlbumForTrackPath(trackPath);
     }
+    if (!album) album = await loadTargetedAlbum();
     if (!ownsNavigation()) return;
     if (!album) {
       showToast('This track is not currently listed in Problematic Files.', 'error', 3200);
@@ -25639,6 +25861,7 @@ async function openUtilityModalForTrack(trackPath) {
     state.utility.selectedProblemFilters = [];
     state.utility.problemDropdownOpen = false;
     setUtilityActiveTab('problematic-files');
+    const detailSummaryOwner = Number(state.utility.problematicSummaryRequestToken || 0);
     let refreshedStaleDetailTarget = false;
     let retriedCanonicalDetailTarget = false;
     if (!album.detail_loaded) {
@@ -25702,6 +25925,22 @@ async function openUtilityModalForTrack(trackPath) {
         if (!ownsNavigation()) return;
         album = getProblematicAlbumForTrackPath(trackPath);
       }
+      if (Number(state.utility.problematicSummaryRequestToken || 0) !== detailSummaryOwner) {
+        const currentSummary = state.utility.loadPromise;
+        if (currentSummary) await currentSummary;
+        if (!ownsNavigation() || !state.utility.loaded) return;
+        album = getProblematicAlbumForTrackPath(trackPath);
+        if (!album?.detail_loaded) album = await loadTargetedAlbum();
+      }
+      if (!album) album = await loadTargetedAlbum();
+    }
+    const hydratedProblematicPaths = [
+      ...(Array.isArray(album?.problematic_track_paths) ? album.problematic_track_paths : []),
+      ...(Array.isArray(album?.track_paths) ? album.track_paths : []),
+    ].map(path => String(path || ''));
+    if (album && !hydratedProblematicPaths.includes(String(trackPath || ''))) {
+      album = await loadTargetedAlbum();
+      if (!ownsNavigation()) return;
     }
     if (!album) return;
     state.utility.selectedProblematicKey = album.key || '';
@@ -25827,7 +26066,7 @@ function buildMusicBrainzIdentityTableHtml(detail, ui) {
   const tableRows = rows.map((row) => {
     const selected = ui.selectedMbid === row.artist_mbid;
     const prefix = row.role === 'current' ? 'Currently assigned: ' : row.role === 'suggested' ? 'Suggested: ' : '';
-    const facts = [row.country, row.artist_kind, row.disambiguation].filter(Boolean).join(' · ');
+    const facts = [row.country, row.artist_kind, row.disambiguation].filter(Boolean).join(' В· ');
     const name = `${prefix}${row.canonical_name || 'Unknown artist'}`;
     return {
       key: row.artist_mbid,
@@ -25861,7 +26100,7 @@ function buildMusicBrainzManualResolutionHtml(detail, ui) {
   const searchUrl = `https://musicbrainz.org/search?query=${encodeURIComponent(detail.local_artist_name || '')}&type=artist&method=indexed`;
   const actionsAvailable = detail.actions_available !== false;
   const helper = !actionsAvailable ? 'MusicBrainz matching actions are unavailable in this read-only session.'
-    : ui.validating ? 'Verifying with MusicBrainz…'
+    : ui.validating ? 'Verifying with MusicBrainzвЂ¦'
     : ui.validationError ? ui.validationError
       : ui.validated ? `Verified: ${ui.validated.canonical_name || ui.validated.artist_mbid}`
         : 'Paste the selected artist page URL or MBID to verify it before assignment.';
@@ -25902,7 +26141,7 @@ function buildMusicBrainzArtistProblemDetail(item) {
   if (item?.musicbrainz_detail_failed) {
     return buildOnPageAlertHtml({ severity: 'error', title: 'Artist details unavailable', message: 'Unable to load this MusicBrainz artist issue.' });
   }
-  if (!detail) return '<div class="utility-empty-state">Loading artist identity…</div>';
+  if (!detail) return '<div class="utility-empty-state">Loading artist identityвЂ¦</div>';
   const ui = item.musicbrainz_ui || {};
   const actionsAvailable = detail.actions_available !== false;
   const view = getMusicBrainzArtistProblemView(detail);
@@ -26065,7 +26304,7 @@ function scheduleMusicBrainzManualValidation(item) {
 function syncMusicBrainzManualStatus(ui) {
   const helper = document.querySelector('.musicbrainz-manual-helper');
   if (helper) {
-    helper.textContent = ui.validating ? 'Verifying with MusicBrainz…'
+    helper.textContent = ui.validating ? 'Verifying with MusicBrainzвЂ¦'
       : ui.validationError ? ui.validationError
         : ui.validated ? `Verified: ${ui.validated.canonical_name || ui.validated.artist_mbid}`
           : 'Paste the selected artist page URL or MBID to verify it before assignment.';
@@ -26368,8 +26607,10 @@ function advanceProblemExclusionMutationRevision() {
 }
 
 function cloneProblemExclusionValue(value) {
-  if (typeof structuredClone === 'function') return structuredClone(value);
-  return JSON.parse(JSON.stringify(value));
+  const copy = typeof structuredClone === 'function' ? structuredClone(value) : JSON.parse(JSON.stringify(value));
+  if (value?.problematic_search_facts_changed) markProblematicSearchFactsChanged(copy);
+  if (value?.album?.problematic_search_facts_changed) markProblematicSearchFactsChanged(copy.album);
+  return copy;
 }
 
 function problemExclusionReason(item) {
@@ -26588,9 +26829,8 @@ function restoreProblematicAlbumSnapshot(operation) {
   const album = operation?.snapshot?.album;
   if (!album) return;
   const albumKey = String(album.key || '');
-  const items = Array.isArray(state.utility.problematicFiles)
-    ? state.utility.problematicFiles.slice()
-    : [];
+  const previousItems = Array.isArray(state.utility.problematicFiles) ? state.utility.problematicFiles : [];
+  const items = previousItems.slice();
   const currentIndex = items.findIndex((item) => String(item?.key || '') === albumKey);
   if (currentIndex >= 0) items.splice(currentIndex, 1);
   const insertionIndex = Math.min(
@@ -26616,14 +26856,20 @@ function restoreProblematicAlbumSnapshot(operation) {
     .sort((left, right) => Number(left.id) - Number(right.id))
     .forEach((candidate) => {
       if (!projectedAlbum) return;
+      const previousAlbum = projectedAlbum;
       projectedAlbum = projectProblemExclusionFromAlbum(
         projectedAlbum,
         candidate.items,
       ).updatedAlbum;
+      markProblematicSearchFactsChanged(projectedAlbum, previousAlbum);
     });
   if (projectedAlbum) items[insertionIndex] = projectedAlbum;
   else items.splice(insertionIndex, 1);
+  state.utility.problematicKnownBase = null;
+  state.utility.problematicFilesProjectionRevision = '';
   state.utility.problematicFiles = items;
+  state.utility.problematicFilesTotal = Math.max(items.length,
+    Number(state.utility.problematicFilesTotal || previousItems.length) + items.length - previousItems.length);
   state.utility.selectedProblematicKey = projectedAlbum
     ? String(operation.snapshot.selectedProblematicKey || '')
     : '';
@@ -26697,14 +26943,17 @@ function buildProblemExclusionItemFromAlbum(album, rowKey) {
 
 function applyOptimisticProblemExclusionCard(album, updatedAlbum) {
   const albumKey = String(album?.key || '');
-  const current = Array.isArray(state.utility.problematicFiles)
-    ? state.utility.problematicFiles
-    : [];
+  const current = prepareProblematicMutationItems(albumKey);
   const index = current.findIndex((item) => String(item?.key || '') === albumKey);
   if (index < 0) return;
+  markProblematicSearchFactsChanged(updatedAlbum, album);
+  state.utility.problematicKnownBase = null;
+  state.utility.problematicFilesProjectionRevision = '';
   state.utility.problematicFiles = updatedAlbum
     ? current.map((item, itemIndex) => (itemIndex === index ? updatedAlbum : item))
     : current.filter((_item, itemIndex) => itemIndex !== index);
+  state.utility.problematicFilesTotal = Math.max(state.utility.problematicFiles.length,
+    Number(state.utility.problematicFilesTotal || current.length) + state.utility.problematicFiles.length - current.length);
   if (!updatedAlbum && String(state.utility.selectedProblematicKey || '') === albumKey) {
     state.utility.selectedProblematicKey = '';
   }
@@ -26766,7 +27015,7 @@ async function queueProblemExclusionCreate({ album, items }) {
   const currentRules = state.utility.rules || [];
   const currentRule = currentRules.find((rule) => rule?.key === 'problem-ignores');
   const selectedKeys = new Set(selectedItems.map((item) => String(item?.row_key || '')));
-  const albumIndex = (state.utility.problematicFiles || []).findIndex((item) => (
+  const albumIndex = prepareProblematicMutationItems(album?.key).findIndex((item) => (
     String(item?.key || '') === String(album?.key || '')
   ));
   const projection = projectProblemExclusionFromAlbum(album, selectedItems);
@@ -26838,6 +27087,8 @@ async function queueProblemExclusionRevert(item) {
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data.ok) throw new Error(data.error || 'Problem exclusion revert failed');
       settleProblemExclusionMutation(operation);
+      state.utility.problematicKnownBase = null;
+      state.utility.problematicFilesProjectionRevision = '';
       state.utility.problematicSummaryRequestToken = Number(
         state.utility.problematicSummaryRequestToken || 0,
       ) + 1;
@@ -27292,6 +27543,8 @@ async function saveUtilityLibrarySettings() {
     librarySettingsState.draft = cloneLibrarySettingsDraft(librarySettingsState.settings);
     librarySettingsState.loaded = true;
     owner.loaded = false;
+    owner.problematicKnownBase = null;
+    owner.problematicFilesProjectionRevision = '';
     owner.problematicFiles = [];
     const ownsStatus = settleLibraryStatusAction(statusAction);
     if (ownsContext() && ownsStatus) {
@@ -27876,6 +28129,7 @@ function mountAlertsAppearanceEditor(detail) {
   function create({
     list,
     renderRow,
+    onNearEnd,
     rowStride = DEFAULT_ROW_STRIDE,
     overscan = DEFAULT_OVERSCAN,
   }) {
@@ -27965,6 +28219,9 @@ function mountAlertsAppearanceEditor(detail) {
       for (const [key, value] of Object.entries(metadata)) {
         if (list.dataset[key] !== value) list.dataset[key] = value;
       }
+      if (typeof onNearEnd === 'function' && items.length && range.end >= items.length - overscan) {
+        onNearEnd();
+      }
     };
 
     const schedule = () => {
@@ -27998,10 +28255,13 @@ function mountAlertsAppearanceEditor(detail) {
 
     const render = (nextItems, nextSelectedKey) => {
       const previousSelectedKey = selectedKey;
+      if (frame) renderNow();
+      const selectedWasMounted = mountedRows.has(String(nextSelectedKey || ''));
       items = Array.isArray(nextItems) ? nextItems : [];
       selectedKey = String(nextSelectedKey || '');
       renderNow();
-      if (selectedKey !== previousSelectedKey) {
+      if (selectedKey !== previousSelectedKey
+        || (selectedKey && selectedWasMounted && !mountedRows.has(selectedKey))) {
         reveal(selectedKey);
         renderNow();
       }
@@ -28352,21 +28612,24 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
   };
 
   const mobileIndex = typeof usesMobilePageLayout === 'function' && usesMobilePageLayout();
-  if (mobileIndex) disposeProblematicFilesVirtualList();
-  const virtualListApi = mobileIndex ? null : typeof window !== 'undefined'
+  const virtualListApi = typeof window !== 'undefined'
     ? window.ProblematicFilesVirtualList
     : globalThis.ProblematicFilesVirtualList;
   const mountedRows = preserveProblematicTree && !virtualListApi?.create
     ? Array.from(els.list.querySelectorAll?.('[data-problematic-album-key]') || []) : [];
-  const albumsByKey = new Map((state.utility.problematicFiles || []).map(album => [String(album.key), album]));
+  const knownView = getProblematicKnownView();
+  const albumsByKey = new Map(knownView.items.map(album => [String(album.key), album]));
   const mountedItems = mountedRows.map(row => albumsByKey.get(row.getAttribute('data-problematic-album-key')));
   const retainTree = mountedRows.length > 0 && mountedItems.every(Boolean);
-  const items = retainTree ? mountedItems : getFilteredProblematicAlbums();
+  const items = retainTree ? mountedItems : knownView.items;
   const renderTree = selectedKey => {
     if (!problematicFilesVirtualList && virtualListApi?.create) {
       problematicFilesVirtualList = virtualListApi.create({
         list: els.list,
         renderRow: (album, selected) => buildProblematicAlbumListItem(album, selected),
+        onNearEnd: () => {
+          if (state.utility.problematicFilesNextCursor) void loadNextProblematicFilesPage();
+        },
       });
     }
     if (problematicFilesVirtualList) {
@@ -28391,7 +28654,9 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     });
   };
   if (els.sidebarLabel) els.sidebarLabel.textContent = 'Albums';
-  els.count.textContent = String(items.length);
+  const total = Number(knownView.total);
+  els.count.textContent = String(Number.isSafeInteger(total) && total >= items.length
+    ? total : items.length);
   if (els.search) {
     els.search.disabled = false;
     els.search.placeholder = 'Filter artist, album, or track';
@@ -28418,7 +28683,7 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
   els.detail.removeAttribute?.('aria-busy');
   els.detail.removeAttribute?.('inert');
 
-  if (state.utility.loading && !state.utility.loaded) {
+  if (!items.length && knownView.pending && !state.utility.problematicLoadError) {
     replaceListContents('<div class="utility-empty-state compact">Loading...</div>');
     els.detail.innerHTML = '<div class="utility-empty-state">Loading problematic albums...</div>';
     return;
@@ -28448,7 +28713,8 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
   }
 
   const selectedProblematicMissing = !state.utility.selectedProblematicKey
-    || !items.some((item) => item.key === state.utility.selectedProblematicKey);
+    || (!items.some((item) => item.key === state.utility.selectedProblematicKey)
+      && state.utility.selectedProblematicDetail?.key !== state.utility.selectedProblematicKey);
   if (selectedProblematicMissing && state.utility.deferProblematicAutoSelection && (state.utility.selectedProblemFilters || []).length) {
     renderTree('');
     els.detail.innerHTML = '<div class="utility-empty-state">Select an album to inspect its problematic tags.</div>';
@@ -28486,7 +28752,7 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     state.utility.showRepairedDisplay = true;
   }
 
-  const selectedAlbum = getSelectedProblematicAlbumFrom(items);
+  const selectedAlbum = getSelectedProblematicAlbum() || getSelectedProblematicAlbumFrom(items);
   renderTree(state.utility.selectedProblematicKey);
   if (state.utility.focusedTrackPath
       && selectedAlbum?.detail_loading_deferred
@@ -29372,6 +29638,14 @@ function setUtilityActiveTab(nextTab, skipAppearanceGuard = false) {
   }
   if (state.utility.activeTab !== 'loops' && normalizedTab === 'loops') {
     collapseAllUtilityLoopGroups();
+  }
+  if (state.utility.activeTab !== normalizedTab) {
+    if (typeof utilityOpenGeneration !== 'undefined') utilityOpenGeneration += 1;
+    if (state.utility.pendingOpenLoadTimer) {
+      clearBrowserTimeout(state.utility.pendingOpenLoadTimer);
+      state.utility.pendingOpenLoadTimer = 0;
+      if (!state.utility.loadPromise) state.utility.loading = false;
+    }
   }
   state.utility.activeTab = normalizedTab;
   return normalizedTab;
@@ -30522,51 +30796,146 @@ function reorderTagEditorTracksByPath(tracks, draggedPath, beforePath = null) {
 
 // BEGIN js/runtime/utility-loaders-and-cover-lookup.js
 
+function getProblematicFilesPageFilter() {
+  const query = String(state.utility.searchQuery || '').trim();
+  const reasons = Array.from(new Set(
+    (state.utility.selectedProblemFilters || [])
+      .map((reason) => String(reason || '').trim())
+      .filter(Boolean),
+  )).sort((a, b) => a.localeCompare(b));
+  return query || reasons.length ? JSON.stringify({ query, reasons }) : '';
+}
+
+function buildProblematicFilesPageUrl(cursor = '', filter = getProblematicFilesPageFilter()) {
+  const params = ['limit=50'];
+  if (filter) params.push(`filter=${encodeURIComponent(filter)}`);
+  if (cursor) params.push(`cursor=${encodeURIComponent(cursor)}`);
+  return `/utilities/problematic-files?${params.join('&')}`;
+}
+
+async function fetchProblematicFilesPage(url) {
+  const requestStartedAt = getProblematicUtilityNow();
+  const response = await fetchRetryingPendingProjection(url, { headers: { Accept: 'application/json' } });
+  const requestMs = roundProblematicUtilityMs(getProblematicUtilityNow() - requestStartedAt);
+  const parseStartedAt = getProblematicUtilityNow();
+  let data;
+  try {
+    data = await response.json();
+  } catch (error) {
+    error.problematicResponseStatus = Number(response.status || 0);
+    error.problematicRequestMs = requestMs;
+    error.problematicParseMs = roundProblematicUtilityMs(getProblematicUtilityNow() - parseStartedAt);
+    throw error;
+  }
+  const parseMs = roundProblematicUtilityMs(getProblematicUtilityNow() - parseStartedAt);
+  if (!response.ok) {
+    const error = new Error(readProblematicPayloadError(data, 'Unable to load problematic files.'));
+    error.problematicResponseStatus = Number(response.status || 0);
+    error.problematicErrorCode = String(data?.error_code || '');
+    const retryAfterValue = String(response.headers?.get?.('Retry-After') || '').trim();
+    const retryAfter = Number(retryAfterValue);
+    error.problematicRetryAfterMs = retryAfterValue && Number.isFinite(retryAfter) && retryAfter >= 0
+      ? Math.min(retryAfter * 1000, 30_000) : 1000;
+    error.problematicRequestMs = requestMs;
+    error.problematicParseMs = parseMs;
+    throw error;
+  }
+  return { data, status: Number(response.status || 0), requestMs, parseMs };
+}
+
+function readProblematicFilesPageState(data, summaryItems) {
+  const nextCursor = data.next_cursor == null ? '' : String(data.next_cursor);
+  const parsedTotal = Number(data.total);
+  const total = Number.isSafeInteger(parsedTotal) && parsedTotal >= summaryItems.length
+    ? parsedTotal
+    : summaryItems.length;
+  return { nextCursor, total };
+}
+
+function normalizeProblematicReasonFacets(facets) {
+  return facets
+    .map((facet) => String(typeof facet === 'string' ? facet : facet?.reason || '').trim())
+    .filter(Boolean);
+}
+
+function retainProblematicKnownBase() {
+  const utility = state.utility;
+  if (!utility.problematicKnownBase && utility.loaded && Array.isArray(utility.problematicFiles)) {
+    utility.problematicKnownBase = Object.freeze({
+      items: Object.freeze(utility.problematicFiles),
+      signature: typeof utility.problematicFilesPageSignature === 'string' ? utility.problematicFilesPageSignature : null,
+      revision: utility.problematicFilesProjectionRevision || '',
+      complete: utility.problematicFilesComplete === true,
+      total: utility.problematicFilesTotal,
+      sourceToken: Number(utility.problematicSummaryRequestToken || 0),
+      openGeneration: utilityOpenGeneration,
+      maximumRows: utility.problematicFiles.length,
+    });
+  }
+}
+
+function invalidateProblematicFilesPaging({ forgetKnownBase = true } = {}) {
+  if (forgetKnownBase) {
+    state.utility.problematicKnownBase = null;
+    state.utility.problematicFilesProjectionRevision = '';
+    state.utility.problematicFilesNextCursor = null;
+    state.utility.problematicFilesComplete = false;
+    state.utility.completeLoadPromise = null;
+  } else retainProblematicKnownBase();
+  state.utility.problematicSummaryRequestToken = Number(
+    state.utility.problematicSummaryRequestToken || 0,
+  ) + 1;
+}
+
 async function loadProblematicFiles(force = false, options = {}) {
+  const utilityOwner = state.utility;
+  retainProblematicKnownBase();
   const shouldRender = () => options.render !== false && state.utility.activeTab === 'problematic-files';
   const shouldRenderInitialPage = () => (
-    options.renderInitialPage === true
-    && state.utility.activeTab === 'problematic-files'
-    && !String(state.utility.searchQuery || '').trim()
-    && !(state.utility.selectedProblemFilters || []).length
-  );
-  const canRenderBoundedPage = () => (
-    !String(state.utility.searchQuery || '').trim()
-    && !(state.utility.selectedProblemFilters || []).length
+    options.renderInitialPage === true && state.utility.activeTab === 'problematic-files'
   );
   const navigationOwnsRendering = () => Boolean(
     state.utility.problematicNavigationActiveToken,
   );
+  const requestSignature = getProblematicFilesPageFilter();
   if (state.utility.loading) {
     const pendingLoad = state.utility.loadPromise;
-    const result = await pendingLoad;
-    if (pendingLoad && !state.utility.loaded
-      && pendingLoad.problematicSummaryRequestToken !== Number(state.utility.problematicSummaryRequestToken || 0)) {
-      return loadProblematicFiles(force, options);
-    }
-    return result;
-  }
-  const pendingCompleteLoad = state.utility.completeLoadPromise;
-  if (
-    state.utility.problematicFilesComplete === false
-    && pendingCompleteLoad
-    && pendingCompleteLoad.problematicSummaryRequestToken
+    const pendingOwnsCurrentRequest = pendingLoad?.problematicSummaryRequestToken
       === Number(state.utility.problematicSummaryRequestToken || 0)
-  ) {
-    return pendingCompleteLoad;
+      && pendingLoad.utilityOpenGeneration === utilityOpenGeneration;
+    if (pendingOwnsCurrentRequest
+        && (!force || pendingLoad?.problematicPageSignature === requestSignature)) {
+      return pendingLoad;
+    }
   }
   if (state.utility.loaded && !force) {
     if (shouldRender() && !navigationOwnsRendering()) renderUtilityModalContent();
-    return;
+    return state.utility.problematicFiles;
   }
-  // A refresh keeps the complete list it replaces on screen; only a first load paints a bounded page.
-  const refreshesCompleteList = state.utility.loaded === true
-    && state.utility.problematicFilesComplete === true;
+  if (state.utility.pendingOpenLoadTimer) {
+    clearBrowserTimeout(state.utility.pendingOpenLoadTimer);
+    state.utility.pendingOpenLoadTimer = 0;
+  }
+  const openGeneration = utilityOpenGeneration;
+  const ownsRetryScope = () => (
+    state.utility === utilityOwner
+    && openGeneration === utilityOpenGeneration
+    && state.utility.activeTab === 'problematic-files'
+    && getProblematicFilesPageFilter() === requestSignature
+    && getUtilityModalElements()?.overlay?.hidden === false
+  );
   state.utility.loading = true;
-  state.utility.problematicFilesComplete = false;
   const requestToken = Number(state.utility.problematicSummaryRequestToken || 0) + 1;
   state.utility.problematicSummaryRequestToken = requestToken;
-  if (shouldRender() && !navigationOwnsRendering()) renderUtilityModalContent();
+  const ownsRequest = () => (
+    Number(state.utility.problematicSummaryRequestToken || 0) === requestToken
+    && state.utility === utilityOwner
+    && openGeneration === utilityOpenGeneration
+    && getProblematicFilesPageFilter() === requestSignature
+    && (!options.problematicProjectionRetryCount || ownsRetryScope())
+  );
+  // An owned retry keeps the loading state already painted by the pending response.
+  if (!options.problematicProjectionRetryCount && shouldRender() && !navigationOwnsRendering()) renderUtilityModalContent();
   let settleInitialSummary;
   const initialSummaryPromise = new Promise((resolve) => { settleInitialSummary = resolve; });
   initialSummaryPromise.problematicSummaryRequestToken = requestToken;
@@ -30582,34 +30951,25 @@ async function loadProblematicFiles(force = false, options = {}) {
     let responseStatus = 0;
     let loadSucceeded = false;
     let loadError = '';
-    let boundedPayloadCommitted = false;
-    let previousSummaryItems = [];
+    let projectionPending = false;
+    let previousSummaryItems = Array.isArray(state.utility.problematicFiles)
+      ? state.utility.problematicFiles
+      : [];
     try {
-      const fetchSummary = async (url) => {
-        const requestStartedAt = getProblematicUtilityNow();
-        const response = await fetchRetryingPendingProjection(url, { headers: { Accept: 'application/json' } });
-        requestMs += roundProblematicUtilityMs(getProblematicUtilityNow() - requestStartedAt);
-        responseStatus = Number(response.status || 0);
-        const parseStartedAt = getProblematicUtilityNow();
-        let data;
-        try {
-          data = await response.json();
-        } finally {
-          parseMs += roundProblematicUtilityMs(getProblematicUtilityNow() - parseStartedAt);
-        }
-        if (!response.ok) {
-          throw new Error(readProblematicPayloadError(data, 'Unable to load problematic files.'));
-        }
-        return data;
-      };
       const commitSummary = (data, preserveSelectedDetail, continuation = false) => {
-        const { summaryItems, initialDetail, operationalItems } = validateProblematicSummaryPayload(data);
+        const { summaryItems, initialDetail, operationalItems, revision } = validateProblematicSummaryPayload(data);
+        if (!revision || state.utility.problematicKnownBase?.revision !== revision) {
+          state.utility.problematicKnownBase = null;
+        }
+        state.utility.problematicFilesProjectionRevision = revision;
         const stateCommitStartedAt = getProblematicUtilityNow();
         initialDetailKey = String(initialDetail?.key || '').trim();
         const selectedKey = String(state.utility.selectedProblematicKey || '');
         const selectedDetail = preserveSelectedDetail
-          ? state.utility.problematicFiles.find(item => item.key === selectedKey
-            && (item.detail_loaded === true || item.musicbrainz_detail))
+          ? (state.utility.problematicFiles.find(item => item.key === selectedKey && (item.detail_loaded === true || item.musicbrainz_detail))
+            || (state.utility.selectedProblematicDetail?.key === selectedKey
+              && (state.utility.selectedProblematicDetail?.detail_loaded === true || state.utility.selectedProblematicDetail?.musicbrainz_detail)
+              ? state.utility.selectedProblematicDetail : null))
           : null;
         const selectedSummary = selectedDetail && selectedKey !== initialDetailKey
           ? summaryItems.find(item => item.key === selectedKey) : null;
@@ -30628,43 +30988,52 @@ async function loadProblematicFiles(force = false, options = {}) {
             initialDetailMerged = true;
             return { ...item, ...initialDetail, detail_loaded: true };
           }
-          return item === selectedSummary && (!continuation || unchangedSelection) ? selectedDetail : item;
+          if (item === selectedSummary) {
+            selectedDetail.projection_id = item.projection_id;
+            delete selectedDetail.problematic_search_facts_changed;
+            return selectedDetail;
+          }
+          return item;
         });
+        state.utility.selectedProblematicDetail = selectedDetail && !selectedSummary
+          ? selectedDetail : null;
         state.utility.libraryWatchHealthProblems = operationalItems;
+        if (Array.isArray(data.reason_facets)) {
+          state.utility.problematicReasonFacets = normalizeProblematicReasonFacets(data.reason_facets);
+        }
         state.utility.detailLoadPromises = selectedPendingDetail
           ? { [selectedKey]: selectedPendingDetail } : {};
-        previousSummaryItems = summaryItems.map(item => ({ ...item }));
+        state.utility.completeLoadPromise = null;
+        previousSummaryItems = summaryItems;
       state.utility.loaded = true;
       state.utility.problematicLoadError = '';
         stateCommitMs += roundProblematicUtilityMs(getProblematicUtilityNow() - stateCommitStartedAt);
+        const { nextCursor, total } = readProblematicFilesPageState(data, summaryItems);
+        state.utility.problematicFilesNextCursor = nextCursor || null;
+        state.utility.problematicFilesPageSignature = requestSignature;
+        state.utility.problematicFilesTotal = total;
+        state.utility.problematicFilesComplete = !nextCursor;
         return { selectedKey, selectedDetail,
           selectedSummary: (continuation && unchangedSelection) ? null : selectedSummary,
           refreshChangedSelection };
       };
 
-      let data = await fetchSummary('/utilities/problematic-files?limit=50');
-      if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
-      let committedSelection = commitSummary(data, options.preserveSelectedDetail === true);
-      boundedPayloadCommitted = data.complete === false;
+      const pageResult = await fetchProblematicFilesPage(buildProblematicFilesPageUrl());
+      responseStatus = pageResult.status;
+      requestMs = pageResult.requestMs;
+      parseMs = pageResult.parseMs;
+      const data = pageResult.data;
+      if (!ownsRequest()) return null;
+      const committedSelection = commitSummary(
+        data,
+        options.preserveSelectedDetail === true,
+        options.preserveSelectedDetail === true,
+      );
       settleInitialSummary(state.utility.problematicFiles);
-      if (boundedPayloadCommitted) {
-        state.utility.problematicFilesComplete = false;
-        const completePayloadPromise = fetchSummary('/utilities/problematic-files');
-        if (state.utility.loadPromise === requestPromise) {
-          state.utility.loading = false;
-          state.utility.loadPromise = null;
-        }
-        if (canRenderBoundedPage()
-            && ((shouldRender() && !navigationOwnsRendering() && !refreshesCompleteList)
-              || shouldRenderInitialPage())) {
-          renderUtilityModalContent();
-          await waitForProblematicUtilityRenderFrame();
-        }
-        data = await completePayloadPromise;
-        if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
-        committedSelection = commitSummary(data, true, true);
+      if (shouldRenderInitialPage()) {
+        renderUtilityModalContent();
+        await waitForProblematicUtilityRenderFrame();
       }
-      state.utility.problematicFilesComplete = true;
       loadSucceeded = true;
       const { selectedKey, selectedDetail, selectedSummary, refreshChangedSelection } = committedSelection;
       if (selectedSummary || refreshChangedSelection) {
@@ -30675,12 +31044,21 @@ async function loadProblematicFiles(force = false, options = {}) {
         });
         const detailRequestToken = Number(state.utility.problematicDetailRequestToken || 0);
         const refreshedDetail = await detailRequest;
-        if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
+        if (!ownsRequest()) return null;
         if (!refreshedDetail) {
           const stillOwnsDetail = Number(state.utility.problematicDetailRequestToken || 0) === detailRequestToken;
+          const pendingDetail = state.utility.detailLoadPromises?.[selectedKey];
+          const newerDetailPending = !stillOwnsDetail
+            && pendingDetail?.problematicDetailRequestToken === Number(state.utility.problematicDetailRequestToken || 0)
+            && pendingDetail.problematicUtilityOwner === state.utility
+            && pendingDetail.utilityOpenGeneration === utilityOpenGeneration
+            && String(state.utility.selectedProblematicKey || '') === selectedKey
+            && pendingDetail.problematicSnapshotRevision === (state.utility.problematicFilesProjectionRevision || '');
           // Discard retained stale detail, but never replace a newer navigation result.
           state.utility.problematicFiles = state.utility.problematicFiles.map(item => (
             item.key === selectedKey && (item === selectedDetail || stillOwnsDetail)
+              && !(newerDetailPending && pendingDetail.problematicSourceAlbum === item
+                && pendingDetail.problematicProjectionId === String(item?.projection_id || '').trim())
               ? { ...(selectedSummary || item), detail_load_failed: stillOwnsDetail && state.utility.selectedProblematicKey === selectedKey }
               : item
           ));
@@ -30688,14 +31066,43 @@ async function loadProblematicFiles(force = false, options = {}) {
       }
       return state.utility.problematicFiles;
     } catch (error) {
-      if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
+      if (!ownsRequest()) return null;
+      responseStatus = Number(error?.problematicResponseStatus || responseStatus || 0);
+      requestMs = Number(error?.problematicRequestMs || requestMs || 0);
+      parseMs = Number(error?.problematicParseMs || parseMs || 0);
       loadError = String(error?.message || error || 'Unable to load problematic files.');
-      console.error('[AlbumHaven][Utilities] Failed to load problematic files.', error);
-      if (!boundedPayloadCommitted) {
-        state.utility.problematicFiles = [];
-        state.utility.libraryWatchHealthProblems = [];
-        state.utility.detailLoadPromises = {};
+      if (responseStatus === 503 && error?.problematicErrorCode === 'problematic_projection_pending') {
+        if (!ownsRetryScope()) return null;
+        projectionPending = true;
+        const retryDelayMs = Number(error.problematicRetryAfterMs ?? 1000);
+        const retryTimer = scheduleBrowserTimeout(() => {
+          if (state.utility.pendingOpenLoadTimer !== retryTimer) return;
+          state.utility.pendingOpenLoadTimer = 0;
+          if (!ownsRequest() || !ownsRetryScope()) {
+            if (Number(state.utility.problematicSummaryRequestToken || 0) === requestToken) {
+              state.utility.loading = false;
+            }
+            return;
+          }
+          void loadProblematicFiles(true, {
+            ...options,
+            problematicProjectionRetryCount: 1,
+          });
+        }, retryDelayMs);
+        state.utility.pendingOpenLoadTimer = retryTimer;
+        return null;
       }
+      console.error('[AlbumHaven][Utilities] Failed to load problematic files.', error);
+      state.utility.problematicKnownBase = null;
+      state.utility.problematicFilesProjectionRevision = '';
+      state.utility.problematicFiles = [];
+      state.utility.libraryWatchHealthProblems = [];
+      state.utility.detailLoadPromises = {};
+      state.utility.problematicFilesNextCursor = null;
+      state.utility.problematicFilesPageSignature = '';
+      state.utility.problematicFilesTotal = 0;
+      state.utility.problematicReasonFacets = [];
+      state.utility.selectedProblematicDetail = null;
       state.utility.loaded = false;
       state.utility.problematicFilesComplete = false;
       state.utility.problematicLoadError = loadError;
@@ -30706,11 +31113,11 @@ async function loadProblematicFiles(force = false, options = {}) {
       if (state.utility.initialLoadPromise === initialSummaryPromise) {
         state.utility.initialLoadPromise = null;
       }
-      const stillOwner = Number(state.utility.problematicSummaryRequestToken || 0) === requestToken;
+      const stillOwner = ownsRequest();
       // A mutation can invalidate payload ownership while this request still
       // owns the loading slot. Release that slot without touching a newer load.
       if (state.utility.loadPromise === requestPromise) {
-        state.utility.loading = false;
+        state.utility.loading = projectionPending && stillOwner;
         state.utility.loadPromise = null;
       }
       if (state.utility.completeLoadPromise === requestPromise) {
@@ -30739,23 +31146,166 @@ async function loadProblematicFiles(force = false, options = {}) {
     }
   })();
   requestPromise.problematicSummaryRequestToken = requestToken;
+  requestPromise.problematicPageSignature = requestSignature;
+  requestPromise.utilityOpenGeneration = openGeneration;
   state.utility.loadPromise = requestPromise;
-  state.utility.completeLoadPromise = requestPromise;
   return requestPromise;
 }
 
-async function waitForProblematicFilesComplete() {
-  if (state.utility.problematicFilesComplete !== false) return true;
-  const pending = state.utility.completeLoadPromise || state.utility.loadPromise;
-  if (!pending) return false;
-  await pending;
-  return state.utility.problematicFilesComplete === true;
+async function loadNextProblematicFilesPage() {
+  const utilityOwner = state.utility;
+  if (utilityOwner.loading) return utilityOwner.problematicFiles || [];
+  const openGeneration = utilityOpenGeneration;
+  const pageSignature = utilityOwner.problematicFilesPageSignature;
+  if (typeof pageSignature !== 'string' || getProblematicFilesPageFilter() !== pageSignature) {
+    return utilityOwner.problematicFiles || [];
+  }
+  const cursor = String(state.utility.problematicFilesNextCursor || '');
+  if (!cursor) {
+    state.utility.problematicFilesComplete = true;
+    return state.utility.problematicFiles || [];
+  }
+  const owner = Number(state.utility.problematicSummaryRequestToken || 0);
+  const existing = state.utility.completeLoadPromise;
+  if (
+    existing
+    && existing.problematicSummaryRequestToken === owner
+    && existing.problematicPageCursor === cursor
+    && existing.problematicPageSignature === pageSignature
+    && existing.utilityOpenGeneration === openGeneration
+  ) return existing;
+
+  let pagePromise;
+  pagePromise = (async () => {
+    try {
+      const { data } = await fetchProblematicFilesPage(
+        buildProblematicFilesPageUrl(cursor, pageSignature),
+      );
+      if (
+        state.utility !== utilityOwner
+        || utilityOpenGeneration !== openGeneration
+        || Number(state.utility.problematicSummaryRequestToken || 0) !== owner
+        || String(state.utility.problematicFilesNextCursor || '') !== cursor
+        || state.utility.problematicFilesPageSignature !== pageSignature
+        || getProblematicFilesPageFilter() !== pageSignature
+      ) return null;
+      const { summaryItems, operationalItems, revision } = validateProblematicSummaryPayload(data);
+      const previousRevision = state.utility.problematicFilesProjectionRevision || '';
+      if (revision && previousRevision && revision !== previousRevision) {
+        state.utility.problematicKnownBase = null;
+        return loadProblematicFiles(true, { preserveSelectedDetail: true });
+      }
+      if (!revision) state.utility.problematicKnownBase = null;
+      state.utility.problematicFilesProjectionRevision = revision;
+      const existingItems = Array.isArray(state.utility.problematicFiles)
+        ? state.utility.problematicFiles
+        : [];
+      const itemsByKey = new Map(existingItems.map((item) => [String(item?.key || ''), item]));
+      for (const item of summaryItems) {
+        const key = String(item?.key || '');
+        const current = itemsByKey.get(key);
+        const selectedDetail = state.utility.selectedProblematicDetail?.key === key
+          ? state.utility.selectedProblematicDetail : null;
+        const committed = current?.detail_loaded === true
+          ? current : selectedDetail?.detail_loaded === true ? selectedDetail : item;
+        delete committed.problematic_search_facts_changed;
+        itemsByKey.set(key, committed);
+      }
+      state.utility.problematicFiles = Array.from(itemsByKey.values());
+      if (itemsByKey.has(String(state.utility.selectedProblematicDetail?.key || ''))) {
+        state.utility.selectedProblematicDetail = null;
+      }
+      state.utility.libraryWatchHealthProblems = operationalItems;
+      if (Array.isArray(data.reason_facets)) {
+        state.utility.problematicReasonFacets = normalizeProblematicReasonFacets(data.reason_facets);
+      }
+      const { nextCursor, total } = readProblematicFilesPageState(data, state.utility.problematicFiles);
+      state.utility.problematicFilesNextCursor = nextCursor || null;
+      state.utility.problematicFilesTotal = total;
+      state.utility.problematicFilesComplete = !nextCursor;
+      if (state.utility.activeTab === 'problematic-files') {
+        renderUtilityModalContent({ preserveProblematicTree: true });
+      }
+      return state.utility.problematicFiles;
+    } catch (error) {
+      const stillOwner = (
+        state.utility === utilityOwner
+        && utilityOpenGeneration === openGeneration
+        && Number(state.utility.problematicSummaryRequestToken || 0) === owner
+        && String(state.utility.problematicFilesNextCursor || '') === cursor
+        && state.utility.problematicFilesPageSignature === pageSignature
+        && getProblematicFilesPageFilter() === pageSignature
+      );
+      if (stillOwner && error?.problematicErrorCode === 'problematic_projection_cursor_expired') {
+        state.utility.problematicFilesNextCursor = null;
+        return loadProblematicFiles(true, {
+          preserveSelectedDetail: true,
+        });
+      }
+      if (stillOwner) {
+        console.error('[AlbumHaven][Utilities] Failed to load the next problematic-files page.', error);
+        showToast('Unable to load more problematic files.', 'error', 3200);
+      }
+      return null;
+    } finally {
+      if (state.utility.completeLoadPromise === pagePromise) {
+        state.utility.completeLoadPromise = null;
+      }
+    }
+  })();
+  pagePromise.problematicSummaryRequestToken = owner;
+  pagePromise.utilityOpenGeneration = openGeneration;
+  pagePromise.problematicPageCursor = cursor;
+  pagePromise.problematicPageSignature = pageSignature;
+  state.utility.completeLoadPromise = pagePromise;
+  return pagePromise;
+}
+
+async function loadProblematicAlbumDetailForTrack(trackPath) {
+  const normalizedPath = String(trackPath || '').trim();
+  if (!normalizedPath) return null;
+  const response = await fetch(
+    `/utilities/problematic-files/detail?track_path=${encodeURIComponent(normalizedPath)}`,
+    { headers: { Accept: 'application/json' } },
+  );
+  const data = await response.json();
+  if (response.status === 404) return null;
+  if (!response.ok) {
+    throw new Error(readProblematicPayloadError(data, 'Unable to load problematic album detail.'));
+  }
+  const key = String(data?.key || '').trim();
+  if (!key) throw new Error('Problematic album detail is missing its key.');
+  const detail = validateProblematicDetailPayload(data, key);
+  const returnedPaths = [
+    ...(Array.isArray(detail.problematic_track_paths) ? detail.problematic_track_paths : []),
+    ...(Array.isArray(detail.track_paths) ? detail.track_paths : []),
+  ].map((path) => String(path || ''));
+  if (!returnedPaths.includes(normalizedPath)) {
+    throw new Error('Problematic album detail does not contain the requested track.');
+  }
+  return detail;
 }
 
 async function loadProblematicAlbumDetail(albumKey, force = false, options = {}) {
   const normalizedKey = String(albumKey || '').trim();
   if (!normalizedKey) return null;
-  const currentAlbum = (state.utility.problematicFiles || []).find((item) => String(item?.key || '') === normalizedKey) || null;
+  const utilityOwner = state.utility;
+  const openGeneration = utilityOpenGeneration;
+  const currentPageAlbum = (state.utility.problematicFiles || []).find((item) => String(item?.key || '') === normalizedKey);
+  const currentAlbum = currentPageAlbum
+    || (String(state.utility.selectedProblematicDetail?.key || '') === normalizedKey
+      ? state.utility.selectedProblematicDetail : null)
+    || (String(state.utility.selectedProblematicKey || '') === normalizedKey
+      ? getSelectedProblematicAlbum() : null);
+  const selectedOnly = !currentPageAlbum;
+  const projectionId = String(currentAlbum?.projection_id || '').trim();
+  const snapshotRevision = utilityOwner.problematicFilesProjectionRevision || '';
+  const knownBase = utilityOwner.problematicKnownBase;
+  const knownBaseRevision = knownBase?.revision || '';
+  const knownBaseRow = knownBaseRevision && projectionId
+    ? knownBase.items.find((item) => String(item?.key || '') === normalizedKey
+      && String(item?.projection_id || '').trim() === projectionId)
+    : null;
   if (currentAlbum?.detail_loaded === true && !force) {
     return currentAlbum;
   }
@@ -30769,6 +31319,11 @@ async function loadProblematicAlbumDetail(albumKey, force = false, options = {})
   const existingPromise = state.utility.detailLoadPromises?.[normalizedKey];
   if (
     existingPromise
+    && existingPromise.problematicUtilityOwner === utilityOwner
+    && existingPromise.utilityOpenGeneration === openGeneration
+    && existingPromise.problematicProjectionId === projectionId
+    && existingPromise.problematicSnapshotRevision === snapshotRevision
+    && existingPromise.problematicSourceAlbum === currentAlbum
     && Number(existingPromise.problematicDetailRequestToken || 0)
       === Number(state.utility.problematicDetailRequestToken || 0)
   ) {
@@ -30776,6 +31331,26 @@ async function loadProblematicAlbumDetail(albumKey, force = false, options = {})
   }
   const requestToken = Number(state.utility.problematicDetailRequestToken || 0) + 1;
   state.utility.problematicDetailRequestToken = requestToken;
+  if (selectedOnly && currentAlbum && String(state.utility.selectedProblematicKey || '') === normalizedKey) {
+    state.utility.selectedProblematicDetail = currentAlbum;
+  }
+  if (currentAlbum && String(state.utility.selectedProblematicKey || '') === normalizedKey) {
+    currentAlbum.detail_load_failed = false;
+  }
+  let ownedAlbum = currentAlbum;
+  const readDetailAlbum = () => (state.utility.problematicFiles || []).find((item) => String(item?.key || '') === normalizedKey)
+    || (String(state.utility.selectedProblematicDetail?.key || '') === normalizedKey
+      ? state.utility.selectedProblematicDetail : null);
+  const ownsDetail = () => {
+    if (state.utility !== utilityOwner || utilityOpenGeneration !== openGeneration
+        || state.utility.detailLoadPromises?.[normalizedKey] !== nextPromise
+        || Number(state.utility.problematicDetailRequestToken || 0) !== requestToken
+        || (state.utility.problematicFilesProjectionRevision || '') !== snapshotRevision
+        || String(state.utility.selectedProblematicKey || '') !== normalizedKey) return false;
+    const latest = readDetailAlbum();
+    return (!projectionId || String(latest?.projection_id || '').trim() === projectionId)
+      && (Boolean(snapshotRevision) || latest === ownedAlbum);
+  };
   const nextPromise = Promise.resolve().then(async () => {
     const startedAt = getProblematicUtilityNow();
     let requestMs = 0;
@@ -30786,7 +31361,10 @@ async function loadProblematicAlbumDetail(albumKey, force = false, options = {})
     let loadError = '';
     try {
       const requestStartedAt = getProblematicUtilityNow();
-      const response = await fetchRetryingPendingProjection(`/utilities/problematic-files/detail?album_key=${encodeURIComponent(normalizedKey)}`, {
+      const detailSelector = projectionId
+        ? `projection_id=${encodeURIComponent(projectionId)}`
+        : `album_key=${encodeURIComponent(normalizedKey)}`;
+      const response = await fetchRetryingPendingProjection(`/utilities/problematic-files/detail?${detailSelector}`, {
         headers: { Accept: 'application/json' },
       });
       requestMs = roundProblematicUtilityMs(getProblematicUtilityNow() - requestStartedAt);
@@ -30805,45 +31383,63 @@ async function loadProblematicAlbumDetail(albumKey, force = false, options = {})
         throw new Error(readProblematicPayloadError(data, 'Unable to load problematic album detail.'));
       }
       const detail = validateProblematicDetailPayload(data, normalizedKey);
-      if (
-        state.utility.detailLoadPromises?.[normalizedKey] !== nextPromise
-        || Number(state.utility.problematicDetailRequestToken || 0) !== requestToken
-        || String(state.utility.selectedProblematicKey || '') !== normalizedKey
-      ) return null;
+      if (!ownsDetail()) return null;
+      if (projectionId && detail.projection_id && String(detail.projection_id).trim() !== projectionId) {
+        throw new Error('Problematic Files detail projection does not match the requested album.');
+      }
       const stateCommitStartedAt = getProblematicUtilityNow();
+      const mergeDetail = (item) => {
+        const merged = { ...item, ...detail, detail_loaded: true, detail_load_failed: false };
+        if (item.problematic_search_facts_changed) markProblematicSearchFactsChanged(merged);
+        return merged;
+      };
+      if (knownBaseRow && utilityOwner.problematicKnownBase === knownBase
+          && knownBase.revision === knownBaseRevision
+          && String(knownBaseRow.key || '') === normalizedKey
+          && String(knownBaseRow.projection_id || '').trim() === projectionId) {
+        Object.assign(knownBaseRow, detail, { detail_loaded: true, detail_load_failed: false });
+      }
       state.utility.problematicFiles = (state.utility.problematicFiles || []).map((item) => (
         String(item?.key || '') === normalizedKey
-          ? {
-            ...item,
-            ...detail,
-            detail_loaded: true,
-            detail_load_failed: false,
-          }
+          ? mergeDetail(item)
           : item
       ));
+      if (String(state.utility.selectedProblematicDetail?.key || '') === normalizedKey) {
+        state.utility.selectedProblematicDetail = mergeDetail(state.utility.selectedProblematicDetail);
+      }
+      ownedAlbum = readDetailAlbum();
       loadSucceeded = true;
       stateCommitMs = roundProblematicUtilityMs(getProblematicUtilityNow() - stateCommitStartedAt);
-      return (state.utility.problematicFiles || []).find((item) => String(item?.key || '') === normalizedKey) || null;
+      return ownedAlbum;
     } catch (error) {
       if (Number(state.utility.problematicDetailRequestToken || 0) !== requestToken) return null;
       loadError = String(error?.message || error || 'Unable to load problematic album detail.');
+      if (!ownsDetail()) return null;
       console.error('[AlbumHaven][Utilities] Failed to load problematic album detail.', error);
       if (state.utility.detailLoadPromises?.[normalizedKey] === nextPromise) {
         state.utility.problematicFiles = (state.utility.problematicFiles || []).map((item) => (
           String(item?.key || '') === normalizedKey
-            ? { ...item, detail_load_failed: true }
+            ? markProblematicSearchFactsChanged({ ...item, detail_load_failed: true }, item)
             : item
         ));
+        if (String(state.utility.selectedProblematicDetail?.key || '') === normalizedKey) {
+          state.utility.selectedProblematicDetail = markProblematicSearchFactsChanged({
+            ...state.utility.selectedProblematicDetail,
+            detail_load_failed: true,
+          }, state.utility.selectedProblematicDetail);
+        }
+        ownedAlbum = readDetailAlbum();
         showToast('Unable to load the selected problematic album.', 'error', 3200);
       }
       return null;
     } finally {
+      const ownsResult = ownsDetail();
       if (state.utility.detailLoadPromises?.[normalizedKey] === nextPromise) {
         delete state.utility.detailLoadPromises[normalizedKey];
       }
       let renderMs = 0;
       if (
-        Number(state.utility.problematicDetailRequestToken || 0) === requestToken
+        ownsResult
         &&
         options.render !== false
         &&
@@ -30865,11 +31461,20 @@ async function loadProblematicAlbumDetail(albumKey, force = false, options = {})
         stateCommitMs,
         renderMs,
         totalMs: roundProblematicUtilityMs(getProblematicUtilityNow() - startedAt),
-        detailLoaded: Boolean((state.utility.problematicFiles || []).find((item) => String(item?.key || '') === normalizedKey)?.detail_loaded),
+        detailLoaded: Boolean(
+          (state.utility.problematicFiles || []).find((item) => String(item?.key || '') === normalizedKey)?.detail_loaded
+          || (String(state.utility.selectedProblematicDetail?.key || '') === normalizedKey
+            && state.utility.selectedProblematicDetail?.detail_loaded),
+        ),
       });
     }
   });
   nextPromise.problematicDetailRequestToken = requestToken;
+  nextPromise.problematicUtilityOwner = utilityOwner;
+  nextPromise.utilityOpenGeneration = openGeneration;
+  nextPromise.problematicProjectionId = projectionId;
+  nextPromise.problematicSnapshotRevision = snapshotRevision;
+  nextPromise.problematicSourceAlbum = currentAlbum;
   state.utility.detailLoadPromises[normalizedKey] = nextPromise;
   return nextPromise;
 }
@@ -30887,6 +31492,11 @@ function readProblematicPayloadError(payload, fallback) {
 function validateProblematicSummaryPayload(payload) {
   if (!isProblematicPayloadObject(payload)) {
     throw new Error('Problematic Files summary response must be a JSON object.');
+  }
+  const revision = payload.projection_revision;
+  if (revision !== undefined && (typeof revision !== 'string'
+      || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(revision))) {
+    throw new Error('Problematic Files projection revision is invalid.');
   }
   if (payload.ok === false) {
     throw new Error(readProblematicPayloadError(payload, 'Unable to load problematic files.'));
@@ -30915,8 +31525,10 @@ function validateProblematicSummaryPayload(payload) {
     const rootKey = String(item.root_key || '').trim();
     if (
       ![
+        'cross_root_uncertain',
         'overflow',
         'reconciliation_failed',
+        'rollback_pending_work',
         'root_unavailable',
         'stable_write_unavailable',
       ].includes(stateValue)
@@ -30936,7 +31548,7 @@ function validateProblematicSummaryPayload(payload) {
   });
   const initialDetailValue = payload.initial_detail;
   if (initialDetailValue === undefined || initialDetailValue === null) {
-    return { summaryItems: payload.items, initialDetail: null, operationalItems };
+    return { summaryItems: payload.items, initialDetail: null, operationalItems, revision: revision || '' };
   }
   if (!isProblematicPayloadObject(initialDetailValue)) {
     throw new Error('Problematic Files initial detail must be a JSON object or null.');
@@ -30946,6 +31558,7 @@ function validateProblematicSummaryPayload(payload) {
     throw new Error('Problematic Files initial detail key must match a summary item.');
   }
   return {
+    revision: revision || '',
     summaryItems: payload.items,
     initialDetail: validateProblematicDetailPayload(initialDetailValue, initialDetailKey),
     operationalItems,
@@ -32116,6 +32729,11 @@ function closeUtilityModal(skipAppearanceGuard = false) {
   if (typeof disposeMountedLoopActions === 'function') disposeMountedLoopActions(getUtilityModalElements()?.detail);
   const els = getUtilityModalElements();
   if (!els.overlay) return;
+  if (state.utility.pendingOpenLoadTimer) {
+    clearBrowserTimeout(state.utility.pendingOpenLoadTimer);
+    state.utility.pendingOpenLoadTimer = 0;
+    if (!state.utility.loadPromise) state.utility.loading = false;
+  }
   utilityOpenGeneration += 1;
   if (typeof disposeUtilityTabAlignment === 'function') disposeUtilityTabAlignment(els);
   if (typeof disposeProblematicFilesVirtualList === 'function') disposeProblematicFilesVirtualList();
@@ -38223,6 +38841,17 @@ async function confirmManualTagEdit() {
   const tagEditMutationClaim = claimTagEditViewMutation(album, editedPaths, updates);
   settleTagEditorSessionMutationClaim();
   const optimisticUpdatedAlbums = buildOptimisticUpdatedAlbumsFromEdits(album, updates);
+  const preEditCanonicalReadinessAlbums = (
+    typeof collectVisibleAlbumsUnique === 'function'
+    && typeof getAlbumTrackPaths === 'function'
+    && typeof albumsShareTrackPath === 'function'
+    && typeof albumsShareRuntimeIdentityAlias === 'function'
+  )
+    ? collectVisibleAlbumsUnique().filter((visibleAlbum) => (
+      !albumsShareTrackPath(visibleAlbum, getAlbumTrackPaths(album))
+      && !albumsShareRuntimeIdentityAlias(visibleAlbum, album)
+    ))
+    : [];
   const pendingProblematicEntry = registerPendingProblematicOptimisticEdit(
     album,
     optimisticUpdatedAlbums,
@@ -38266,6 +38895,11 @@ async function confirmManualTagEdit() {
       originalAlbum: album,
       tagEdits: updates,
     },
+  );
+  const optimisticCanonicalReadinessAlbums = (
+    preEditCanonicalReadinessAlbums.length
+      ? [...preEditCanonicalReadinessAlbums, ...optimisticUpdatedAlbums]
+      : reconciledOptimisticAlbums
   );
   if (typeof applyTagEditsToNonAlbumView === 'function') {
     applyTagEditsToNonAlbumView(album, updates);
@@ -38367,7 +39001,7 @@ async function confirmManualTagEdit() {
         ? { absoluteScrollOwnerGeneration }
         : {}),
       problematicMutationOriginKey,
-      optimisticAlbums: optimisticUpdatedAlbums,
+      optimisticAlbums: optimisticCanonicalReadinessAlbums,
       pendingProblematicEntry,
       tagEditAlert,
     };
@@ -39176,6 +39810,8 @@ const applyMissingAlbumRemovalToViewDefault = function applyMissingAlbumRemovalT
     else state.gallery.albumIndex?.delete?.(normalizedKey);
   }
   if (state.utility) {
+    state.utility.problematicKnownBase = null;
+    state.utility.problematicFilesProjectionRevision = '';
     state.utility.problematicFiles = (Array.isArray(state.utility.problematicFiles)
       ? state.utility.problematicFiles
       : []).filter((album) => String(album?.key || '').trim() !== normalizedKey);
@@ -40111,6 +40747,8 @@ async function confirmProblemSuggestions() {
     const previousItems = state.utility.problematicFiles;
     const refreshed = await loadProblematicFiles(true, { render: false });
     if (!refreshed) {
+      state.utility.problematicKnownBase = null;
+      state.utility.problematicFilesProjectionRevision = '';
       state.utility.problematicFiles = previousItems;
       if (mutation) await settleProblematicSaveTaskMutation(data.save_task_id);
       throw new Error('Edits were saved, but Problems could not refresh. Reload before retrying.');
@@ -47635,7 +48273,7 @@ function reconcileBrowserPlaybackOnForeground() {
 
 // BEGIN js/runtime/track-modal-and-gallery.js
 
-﻿function attachCoverLookupModalEvents() {
+function attachCoverLookupModalEvents() {
   const els = getCoverLookupModalElements();
   if (!els.overlay || els.overlay.dataset.bound === '1') return;
   els.overlay.dataset.bound = '1';
@@ -47671,11 +48309,16 @@ function attachUtilityModalEvents() {
     clearTimeout(searchRenderTimer);
     const owner = state.utility;
     const tab = owner.activeTab;
+    const openGeneration = utilityOpenGeneration;
     searchRenderTimer = setTimeout(async () => {
       searchRenderTimer = null;
-      if (tab === 'problematic-files' && owner.problematicFilesComplete === false
-          && !(await waitForProblematicFilesComplete())) return;
-      if (state.utility === owner && owner.activeTab === tab && !els.overlay.hidden) render();
+      if (state.utility !== owner || owner.activeTab !== tab || els.overlay.hidden
+          || utilityOpenGeneration !== openGeneration) return;
+      if (tab === 'problematic-files') {
+        void loadProblematicFiles(true, { preserveSelectedDetail: true });
+        return;
+      }
+      render();
     }, 80);
   };
   els.search?.addEventListener('input', () => {
@@ -47695,7 +48338,10 @@ function attachUtilityModalEvents() {
       return;
     }
     if (state.utility.activeTab === 'rules') state.utility.rulesSearchQuery = els.search.value || '';
-    else if (state.utility.activeTab === 'problematic-files') state.utility.searchQuery = els.search.value || '';
+    else if (state.utility.activeTab === 'problematic-files') {
+      state.utility.searchQuery = els.search.value || '';
+      invalidateProblematicFilesPaging({ forgetKnownBase: false });
+    }
     else return;
     scheduleSearchRender();
   });
@@ -47716,7 +48362,10 @@ function attachUtilityModalEvents() {
       return;
     }
     if (state.utility.activeTab === 'rules') state.utility.rulesSearchQuery = els.search.value || '';
-    else if (state.utility.activeTab === 'problematic-files') state.utility.searchQuery = els.search.value || '';
+    else if (state.utility.activeTab === 'problematic-files') {
+      state.utility.searchQuery = els.search.value || '';
+      invalidateProblematicFilesPaging({ forgetKnownBase: false });
+    }
     else return;
     scheduleSearchRender();
   });
@@ -47884,9 +48533,7 @@ async function handleUtilityBootstrapClick(event) {
   const reconcileProblematicSelectionForFilters = (nextSelectedFilters) => {
     const selectedKey = String(state.utility.selectedProblematicKey || '');
     if (!selectedKey) return;
-    const selectedAlbum = (state.utility.problematicFiles || []).find((album) => (
-      String(album?.key || '') === selectedKey
-    )) || null;
+    const selectedAlbum = getSelectedProblematicAlbum();
     if (selectedAlbum && albumMatchesProblemFilters(selectedAlbum, nextSelectedFilters)) {
       return;
     }
@@ -47916,8 +48563,9 @@ async function handleUtilityBootstrapClick(event) {
       reconcileProblematicSelectionForFilters(nextSelectedFilters);
       state.utility.problemDropdownOpen = false;
       state.utility.showRepairedDisplay = true;
-      renderUtilityModalContent();
+      const load = loadProblematicFiles(true, { preserveSelectedDetail: true });
       if (event.detail === 0) getUtilityModalElements().problemFilterButton?.focus();
+      await load;
     }
     return;
   }
@@ -47932,7 +48580,9 @@ async function handleUtilityBootstrapClick(event) {
     reconcileProblematicSelectionForFilters(nextSelectedFilters);
     state.utility.problemDropdownOpen = false;
     state.utility.showRepairedDisplay = true;
-    renderUtilityModalContent();
+    const load = loadProblematicFiles(true, { preserveSelectedDetail: true });
+    if (event.detail === 0) getUtilityModalElements().problemFilterButton?.focus();
+    await load;
     return;
   }
 
@@ -49637,6 +50287,8 @@ function handleGalleryBootstrapClick(event) {
     ) {
       return;
     }
+    if (window.AlbumHavenCapabilities
+      && !window.AlbumHavenCapabilities.allows('library.refresh')) return;
     triggerLibraryRefresh();
     return;
   }

@@ -11,6 +11,10 @@ from fastapi.responses import JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
 from music_app.services.current_actor_asgi import current_actor_from_request
+from music_app.services.problematic_files_projection import (
+    problematic_filter_matches,
+    problematic_reason_facets,
+)
 from music_app.services.musicbrainz_enrichment_postgres import (
     APP_PROBLEM_LABELS,
     MusicBrainzEnrichmentPostgresRepository,
@@ -281,19 +285,46 @@ def project_artist_problems_into_problematic_files(
     payload: object,
     artist_items: list[dict[str, object]] | None = None,
 ) -> object:
-    """Merge the owner's ``Artist`` rows into every page, the bounded first one
-    included, so their filters are ready with the album filters."""
+    """Overlay current owner issues while retaining the album projection cursor.
+
+    Owner issues are materialized per request and have no shared generation with
+    the album projection. Global ordering and cross-source snapshot isolation
+    remain part of the foreground/background isolation work.
+    """
     if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
         return payload
     if artist_items is None:
         artist_items = load_problematic_artist_items(request)
-    if artist_items:
-        # Stable sort by name keeps the existing Album/Folder order intact.
+    unique_artists = {
+        str(item["key"]): item
+        for item in artist_items
+        if isinstance(item, dict) and item.get("key")
+    }
+    filter_value = str(request.query_params.get("filter") or "")
+    matching_artists = [
+        item for item in unique_artists.values()
+        if problematic_filter_matches(item, filter_value)
+    ]
+    if matching_artists:
         payload["items"] = sorted(
-            [*payload["items"], *artist_items],
+            [*payload["items"], *matching_artists],
             key=lambda item: str(item.get("name") or "").lower(),
         )
         payload["count"] = len(payload["items"])
+    if isinstance(payload.get("total"), int):
+        payload["total"] += len(matching_artists)
+    if isinstance(payload.get("reason_facets"), list):
+        facets = {
+            str(facet["reason"]): int(facet["count"])
+            for facet in payload["reason_facets"]
+        }
+        for facet in problematic_reason_facets(unique_artists.values()):
+            reason = str(facet["reason"])
+            facets[reason] = facets.get(reason, 0) + int(facet["count"])
+        payload["reason_facets"] = [
+            {"reason": reason, "count": count}
+            for reason, count in sorted(facets.items(), key=lambda pair: pair[0].casefold())
+        ]
     return payload
 
 

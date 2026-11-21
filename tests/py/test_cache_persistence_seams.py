@@ -525,6 +525,49 @@ def test_queued_cache_update_never_rebases_authoritative_cover_fields():
     }
 
 
+def test_queued_cache_update_preserves_newer_explicit_cover_provenance():
+    track_path = "C:/Music/song.mp3"
+    baseline = {
+        "path": track_path,
+        "title": "Old Title",
+        "cover_selection_origin": "auto",
+        "cover_selection_provenance": "legacy",
+    }
+    latest = {
+        **baseline,
+        "cover_selection_origin": "user",
+        "cover_selection_provenance": "explicit",
+    }
+
+    rebased = cache_module._rebase_non_cover_cache_entry_changes(
+        baseline_file_cache={track_path: baseline},
+        changed_entries={track_path: {
+            **baseline,
+            "title": "New Title",
+            "cover_selection_origin": None,
+            "cover_selection_provenance": None,
+        }},
+        latest_file_cache={track_path: latest},
+    )
+
+    assert rebased[track_path]["title"] == "New Title"
+    assert rebased[track_path]["cover_selection_origin"] == "user"
+    assert rebased[track_path]["cover_selection_provenance"] == "explicit"
+
+
+def test_queued_cache_update_accepts_committed_trimmed_collection_name():
+    track_path = "C:/Music/song.mp3"
+    baseline = {"path": track_path, "custom_collection_name": "Old Collection"}
+
+    rebased = cache_module._rebase_non_cover_cache_entry_changes(
+        baseline_file_cache={track_path: baseline},
+        changed_entries={track_path: {**baseline, "custom_collection_name": "  New Collection  "}},
+        latest_file_cache={track_path: {**baseline, "custom_collection_name": "New Collection"}},
+    )
+
+    assert rebased[track_path]["custom_collection_name"] == "  New Collection  "
+
+
 def test_queued_cache_update_rejects_divergent_same_field_conflict():
     track_path = "C:/Music/song.mp3"
 
@@ -1027,6 +1070,55 @@ def test_structural_tag_persistence_invalidates_utility_projections(monkeypatch)
     ]
 
 
+@pytest.mark.parametrize("structural_fields", [set(), {"album"}])
+def test_recovered_tag_edit_uses_one_adapter_call_and_narrow_post_commit_effects(
+    monkeypatch,
+    structural_fields,
+):
+    from music_app.services import cache as cache_module
+    from music_app.services import gallery_projection_postgres as gallery_module
+    from music_app.services import library_browse_postgres as browse_module
+
+    calls = []
+
+    class Adapter:
+        def persist_recovered_tag_edit(self, **options):
+            calls.append(options)
+            return {"inventory_mutation_revision": 3}
+
+    invalidations = []
+    gallery_refreshes = []
+    monkeypatch.setattr(
+        cache_module,
+        "_select_runtime_scan_cache_adapter",
+        lambda _config: Adapter(),
+    )
+    monkeypatch.setattr(
+        browse_module,
+        "invalidate_postgres_utility_projection_cache",
+        lambda **options: invalidations.append(options),
+    )
+    monkeypatch.setattr(
+        gallery_module,
+        "schedule_gallery_projection_refresh",
+        lambda config: gallery_refreshes.append(config),
+    )
+
+    config = {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://runtime/library"}
+    result = cache_module.persist_recovered_tag_edit_for_config(
+        config,
+        changed_paths={"track.flac"},
+        previous_file_entries={"track.flac": {"album": "Before"}},
+        resolved_file_entries={"track.flac": {"album": "After"}},
+        structural_field_names=structural_fields,
+        inventory_field_names={"title"},
+        before_commit=lambda _connection: None,
+    )
+
+    assert result == {"inventory_mutation_revision": 3}
+    assert calls[0]["structural_field_names"] == structural_fields
+    assert invalidations == [{"database_url": config["ALBUM_HAVEN_APP_DATABASE_URL"]}]
+    assert gallery_refreshes == ([config] if structural_fields else [])
 class _Rows:
     description = ("rows",)
     rowcount = -1

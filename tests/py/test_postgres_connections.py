@@ -1,3 +1,5 @@
+import pytest
+
 from music_app.services import postgres_connections
 
 
@@ -54,3 +56,72 @@ def test_connection_pool_prewarm_is_bounded_to_one_released_lease_per_workload(m
         assert pool.connection_calls == 1
         assert pool.acquired == 1
         assert pool.released == 1
+
+
+@pytest.mark.parametrize("failure_point", ["connection", "enter"])
+def test_cover_lock_connection_translates_pool_checkout_timeout(
+    monkeypatch,
+    failure_point,
+) -> None:
+    timeout = postgres_connections.PoolTimeout("checkout timed out")
+
+    class TimeoutCheckout:
+        def __enter__(self):
+            raise timeout
+
+        def __exit__(self, *_args):
+            return False
+
+    class TimeoutPool(_FakePool):
+        def connection(self):
+            if failure_point == "connection":
+                raise timeout
+            return TimeoutCheckout()
+
+    monkeypatch.setattr(postgres_connections, "ConnectionPool", TimeoutPool)
+    monkeypatch.setattr(postgres_connections, "_pools", {})
+
+    with pytest.raises(RuntimeError, match="connection pool exhausted") as exc_info:
+        with postgres_connections.cover_lock_connection("postgresql://isolated/test"):
+            pass
+
+    assert exc_info.value.__cause__ is timeout
+
+
+def test_cover_lock_connection_preserves_pool_timeout_from_mutation_body(
+    monkeypatch,
+) -> None:
+    body_timeout = postgres_connections.PoolTimeout("mutation body timed out")
+    monkeypatch.setattr(postgres_connections, "ConnectionPool", _FakePool)
+    monkeypatch.setattr(postgres_connections, "_pools", {})
+
+    with pytest.raises(postgres_connections.PoolTimeout) as exc_info:
+        with postgres_connections.cover_lock_connection("postgresql://isolated/test"):
+            raise body_timeout
+
+    assert exc_info.value is body_timeout
+
+
+def test_cover_lock_pool_is_separate_from_cover_lock_workload_pool(monkeypatch) -> None:
+    _FakePool.created = []
+    monkeypatch.setattr(postgres_connections, "ConnectionPool", _FakePool)
+    monkeypatch.setattr(postgres_connections, "_pools", {})
+    database_url = "postgresql://isolated/test"
+
+    with postgres_connections.pooled_connection(database_url, workload="cover-lock"):
+        pass
+    workload_pool = _FakePool.created[0]
+    with postgres_connections.cover_lock_connection(database_url):
+        pass
+
+    assert len(_FakePool.created) == 2
+    assert len(postgres_connections._pools) == 2
+    cover_lock_pool = _FakePool.created[1]
+    assert cover_lock_pool is not workload_pool
+    assert cover_lock_pool.options["min_size"] == 0
+    assert cover_lock_pool.options["max_size"] == 4
+    assert cover_lock_pool.options["max_waiting"] == 32
+    assert cover_lock_pool.options["timeout"] == 30
+    assert cover_lock_pool.options["max_idle"] == 120
+    assert cover_lock_pool.options["max_lifetime"] == 600
+    assert cover_lock_pool.options["kwargs"] == {"autocommit": True}

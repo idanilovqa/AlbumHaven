@@ -1,0 +1,294 @@
+from __future__ import annotations
+
+import io
+
+from scripts import run_jobs_worker
+
+
+def test_worker_connector_reuses_only_matching_cover_scope_and_commits_each_read(monkeypatch):
+    from contextlib import contextmanager
+    import pytest
+    from types import SimpleNamespace
+    from music_app.services import scan_cache_persistence
+
+
+    class Connection:
+        def __init__(self):
+            self.commits = 0
+            self.rollbacks = 0
+            self.closed = False
+
+        def commit(self):
+            self.commits += 1
+
+        def rollback(self):
+            self.rollbacks += 1
+
+        def close(self):
+            self.closed = True
+
+    shared_connection = Connection()
+    borrowed = []
+
+    class Pool:
+        @contextmanager
+        def connection(self):
+            connection = Connection()
+            borrowed.append(connection)
+            try:
+                yield connection
+            finally:
+                connection.close()
+
+    pool = Pool()
+    connect = lambda database_url: run_jobs_worker._worker_database_connection(pool, database_url)
+    monkeypatch.setattr(scan_cache_persistence, "PostgresScanCacheAdapter",
+                        lambda _config: SimpleNamespace(_connect_to_database=lambda: shared_connection))
+    with connect(WORKER_URL) as outside:
+        assert outside is not shared_connection
+    with scan_cache_persistence.shared_scan_cache_connection({"ALBUM_HAVEN_APP_DATABASE_URL": WORKER_URL}):
+        with connect(WORKER_URL) as first:
+            assert first is shared_connection
+        assert shared_connection.commits == 1
+        with connect(WORKER_URL) as second:
+            assert second is shared_connection
+        assert shared_connection.commits == 2
+        with pytest.raises(RuntimeError, match="read failed"):
+            with connect(WORKER_URL) as failed:
+                assert failed is shared_connection
+                raise RuntimeError("read failed")
+        assert shared_connection.rollbacks == 1
+        with connect("postgresql://different-scope") as different:
+            assert different is not shared_connection
+        assert len(borrowed) == 2
+        assert shared_connection.closed is False
+    assert shared_connection.closed is True
+    assert all(connection.closed for connection in borrowed)
+
+
+WORKER_URL = "postgresql://worker-role:private@db.example/album_haven"
+
+
+class Worker:
+    def __init__(self, error=None):
+        self.error = error
+        self.stop_events = []
+
+    def run(self, stop_event):
+        self.stop_events.append(stop_event)
+        if self.error is not None:
+            raise self.error
+
+
+def test_windows_worker_registers_break_signal_for_process_group_shutdown():
+    if hasattr(run_jobs_worker.signal, "SIGBREAK"):
+        assert run_jobs_worker.signal.SIGBREAK in run_jobs_worker._shutdown_signals()
+
+
+def test_command_returns_two_for_invalid_configuration_without_echoing_value():
+    stderr = io.StringIO()
+
+    exit_code = run_jobs_worker.main(
+        [],
+        environ={
+            "ALBUM_HAVEN_WORKER_DATABASE_URL": WORKER_URL,
+            "ALBUM_HAVEN_WORKER_CONCURRENCY": "secret-invalid-value",
+        },
+        stdout=io.StringIO(),
+        stderr=stderr,
+        worker_factory=lambda _: (_ for _ in ()).throw(AssertionError()),
+    )
+
+    assert exit_code == 2
+    assert stderr.getvalue() == "Durable jobs worker configuration is invalid.\n"
+    assert "secret" not in stderr.getvalue()
+    assert WORKER_URL not in stderr.getvalue()
+
+
+def test_command_returns_one_for_runtime_failure_with_bounded_redacted_output():
+    stderr = io.StringIO()
+
+    exit_code = run_jobs_worker.main(
+        [],
+        environ={"ALBUM_HAVEN_WORKER_DATABASE_URL": WORKER_URL},
+        stdout=io.StringIO(),
+        stderr=stderr,
+        worker_factory=lambda _: Worker(RuntimeError("secret subject parameters")),
+    )
+
+    assert exit_code == 1
+    assert stderr.getvalue() == "Durable jobs worker failed.\n"
+    assert "secret" not in stderr.getvalue()
+    assert WORKER_URL not in stderr.getvalue()
+    assert len(stderr.getvalue()) <= 128
+
+
+def test_command_returns_zero_after_clean_shutdown():
+    stdout = io.StringIO()
+    created = []
+
+    exit_code = run_jobs_worker.main(
+        [],
+        environ={"ALBUM_HAVEN_WORKER_DATABASE_URL": WORKER_URL},
+        stdout=stdout,
+        stderr=io.StringIO(),
+        worker_factory=lambda config: created.append((config, Worker())) or created[-1][1],
+    )
+
+    assert exit_code == 0
+    assert len(created) == 1
+    assert created[0][0].database_url == WORKER_URL
+    assert len(created[0][1].stop_events) == 1
+    assert stdout.getvalue() == "Durable jobs worker stopped cleanly.\n"
+    assert WORKER_URL not in stdout.getvalue()
+
+
+def test_command_output_never_includes_url_subject_or_parameters():
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    sensitive_values = (WORKER_URL, "subject:private", "parameter-secret")
+
+    run_jobs_worker.main(
+        [],
+        environ={"ALBUM_HAVEN_WORKER_DATABASE_URL": WORKER_URL},
+        stdout=stdout,
+        stderr=stderr,
+        worker_factory=lambda _: Worker(RuntimeError(" ".join(sensitive_values))),
+    )
+
+    output = stdout.getvalue() + stderr.getvalue()
+    assert all(value not in output for value in sensitive_values)
+    assert len(output) <= 256
+
+
+def test_worker_heartbeat_failure_maps_to_redacted_runtime_exit():
+    stderr = io.StringIO()
+
+    exit_code = run_jobs_worker.main(
+        [],
+        environ={"ALBUM_HAVEN_WORKER_DATABASE_URL": WORKER_URL},
+        stdout=io.StringIO(),
+        stderr=stderr,
+        worker_factory=lambda _: Worker(
+            RuntimeError("worker heartbeat failed: private subject secret")
+        ),
+    )
+
+    assert exit_code == 1
+    assert stderr.getvalue() == "Durable jobs worker failed.\n"
+    assert "heartbeat" not in stderr.getvalue().casefold()
+    assert "secret" not in stderr.getvalue().casefold()
+
+
+def test_worker_bootstrap_registers_the_closed_targeted_reconciliation_handler():
+    import inspect
+
+    source = inspect.getsource(run_jobs_worker._build_worker)
+
+    assert "build_targeted_reconciliation_handler" in source
+    assert "DurableTargetedReconciliationPreparationAdapter" in source
+    assert "repository=PostgresScanCacheAdapter" not in source
+    assert "JobKind.TARGETED_RECONCILIATION" in source
+    assert "handlers.register" in source
+    assert "load_claimed_targeted_reconciliation_scope" in source
+    assert "resource_validators" in source
+
+
+def test_worker_bootstrap_registers_shared_post_scan_cover_handler_and_validator():
+    import inspect
+
+    source = inspect.getsource(run_jobs_worker._build_worker)
+
+    assert "build_cover_refresh_handler" in source
+    assert "build_post_scan_cover_refresh_resource_validator" in source
+    assert "JobKind.POST_SCAN_COVER_REFRESH" in source
+    assert "run_claimed_cover_refresh" in source
+    assert "handlers.register(JobKind.POST_SCAN_COVER_REFRESH" in source
+    assert "handlers.register(JobKind.COVER_BULK_REFRESH" in source
+    assert "claim_kinds=handlers.registered_kinds" in source
+
+
+def test_worker_bootstrap_registers_durable_cover_lookup_handler_and_validator():
+    import inspect
+
+    source = inspect.getsource(run_jobs_worker._build_worker)
+
+    assert "build_cover_lookup_handler" in source
+    assert "build_cover_lookup_resource_validator" in source
+    assert "JobKind.COVER_LOOKUP" in source
+    assert "run_claimed_cover_lookup" in source
+
+
+def test_worker_bootstrap_registers_lastfm_retry_handler_and_validator():
+    import inspect
+
+    source = inspect.getsource(run_jobs_worker._build_worker)
+
+    assert "PostgresLastfmRetryJobRepository" in source
+    assert "build_lastfm_retry_resource_validator" in source
+    assert "build_lastfm_retry_handler" in source
+    assert "JobKind.LASTFM_SCROBBLE_RETRY" in source
+    assert "combine_due_reconcilers" in source
+    assert "lastfm_retry_repository.reconcile_due_pending" in source
+    assert "auth_mail_repository.reconcile_due_pending" in source
+
+
+def test_worker_bootstrap_registers_all_auth_mail_handlers_and_validators():
+    import inspect
+
+    source = inspect.getsource(run_jobs_worker._build_worker)
+
+    assert "PostgresAuthMailJobRepository" in source
+    assert "build_auth_mail_resource_validator" in source
+    assert "build_auth_mail_handler" in source
+    assert "JobKind.AUTH_WELCOME_DELIVERY" in source
+    assert "JobKind.AUTH_INVITATION_DELIVERY" in source
+    assert "JobKind.AUTH_PASSWORD_RESET_DELIVERY" in source
+
+
+def test_worker_bootstrap_composes_durable_watcher_due_reconciliation():
+    import inspect
+
+    source = inspect.getsource(run_jobs_worker._build_worker)
+
+    assert "PostgresWatcherRecoveryRepository" in source
+    assert "watcher_recovery.reconcile_due" in source
+    assert "combine_due_reconcilers" in source
+
+
+def test_worker_bootstrap_wires_problematic_projection_handler_and_reconciler():
+    import inspect
+
+    source = inspect.getsource(run_jobs_worker._build_worker)
+
+    assert "PostgresProblematicProjectionRepository" in source
+    assert "build_problematic_files_projection_resource_validator" in source
+    assert "build_problematic_projection_handler" in source
+    assert "JobKind.PROBLEMATIC_FILES_PROJECTION" in source
+    assert "ProblematicProjectionIntegrityReconciler" in source
+    assert "problematic_projection_integrity.reconcile_due" in source
+    assert source.count("problematic_projection_integrity.reconcile_due") == 1
+    assert "closeables=(pool,)" in source
+
+
+def test_worker_bootstrap_forwards_optional_worker_id_to_worker():
+    import ast
+    import inspect
+    import textwrap
+
+    signature = inspect.signature(run_jobs_worker._build_worker)
+    assert signature.parameters["worker_id"].default is None
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(run_jobs_worker._build_worker)))
+    worker_call = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "Worker"
+    )
+    worker_id_keyword = next(
+        keyword for keyword in worker_call.keywords if keyword.arg == "worker_id"
+    )
+    assert isinstance(worker_id_keyword.value, ast.Name)
+    assert worker_id_keyword.value.id == "worker_id"

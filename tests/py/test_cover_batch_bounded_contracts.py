@@ -143,16 +143,20 @@ def _run_converging_waves(trigger_wave, library_state, executor, searches) -> No
     assert_plateau(searches_after_wave, warmup_samples=1, label="cover provider searches")
 
 
-@pytest.mark.parametrize("interaction_id", [
-    "py:services/cover_refresh_runtime.py#start_manual_cover_refresh_request",
-    "py:services/cover_refresh_runtime.py#start_manual_cover_refresh",
+@pytest.mark.parametrize(("interaction_id", "claimed_commits"), [
+    ("py:services/cover_refresh_runtime.py#start_manual_cover_refresh_request", False),
+    ("py:services/cover_refresh_runtime.py#start_manual_cover_refresh", False),
     # The batch worker the reservation runs, through its state.py wiring.
-    "py:services/cover_refresh_runtime.py#refresh_unsuccessful_cover_artwork_request",
-    "py:services/state.py#refresh_unsuccessful_cover_artwork_for_state",
+    ("py:services/cover_refresh_runtime.py#refresh_unsuccessful_cover_artwork_request", False),
+    ("py:services/state.py#refresh_unsuccessful_cover_artwork_for_state", False),
+    pytest.param("py:services/cover_refresh_runtime.py#refresh_unsuccessful_cover_artwork_request", True, id="claimed-commits"),
 ])
 def test_unsuccessful_cover_batch_contract_coalesces_triggers_and_converges_at_production_trigger_count(
-    cover_state, tmp_path, monkeypatch, interaction_id,
+    cover_state, tmp_path, monkeypatch, interaction_id, claimed_commits,
 ):
+    if claimed_commits:
+        _measure_claimed_cover_commit_batch(cover_state, tmp_path, monkeypatch, interaction_id)
+        return
     from music_app.services import cover_refresh_runtime as runtime
     from music_app.services import state as state_service
 
@@ -454,15 +458,25 @@ def test_fetch_cover_refresh_contract_reads_and_republishes_only_the_selected_al
 
 class _CountingCoverDatabase:
     """Stands in for Postgres behind the scan-cache adapter's cover commits.
-    Counts every connection opened (`pool_leases`) and statement run, and
+    Counts every checkout, physical connection opened, and statement run, and
     answers each statement the way a one-album cover commit expects."""
 
     def __init__(self, counts: OperationCounts):
         self.counts = counts
         self.cleared: list[set[str]] = []
+        self.album_ids: dict[str, int] = {}
+        self.selections: dict[int, dict[str, object]] = {}
+        self.cover_revision = 0
+        self.claimed_commits: list[dict[str, object]] = []
+        self.selection_reads = 0
+        self.connections = []
 
     def connect(self, _database_url):
         self.counts.pool_leases += 1
+        return self.open_connection()
+
+    def open_connection(self):
+        self.counts.physical_connections += 1
         database = self
 
         class Rows:
@@ -470,13 +484,71 @@ class _CountingCoverDatabase:
                 self._row = row
 
             def fetchone(self):
-                return self._row
+                row = (self._row[0] if self._row else None) if isinstance(self._row, list) else self._row
+                database.counts.returned_rows += int(row is not None)
+                return row
+
+            def fetchall(self):
+                rows = self._row if isinstance(self._row, list) else [self._row]
+                database.counts.returned_rows += len(rows)
+                return rows
 
         class Connection:
             closed = False
+            autocommit = False
+
+            def __init__(self):
+                self.advisory_locks = set()
 
             def execute(self, sql, params=None):
                 database.counts.sql_statements += 1
+                if "pg_advisory_unlock(" in sql:
+                    assert tuple(params) in self.advisory_locks
+                    self.advisory_locks.remove(tuple(params))
+                    return Rows({"pg_advisory_unlock": True})
+                if "pg_advisory_lock(" in sql:
+                    assert tuple(params) not in self.advisory_locks
+                    self.advisory_locks.add(tuple(params))
+                    return Rows({"pg_advisory_lock": None})
+                if isinstance(params, dict) and "album_ids" in params:
+                    database.selection_reads += 1
+                    return Rows([
+                        {"album_id": album_id, "selected_cover_path": database.selections[album_id]["cover_path"],
+                         "cover_selection_origin": "automatic", "cover_revision": database.selections[album_id]["cover_revision"]}
+                        for album_id in params["album_ids"]
+                    ])
+                if "library.resolve_cover_mutation_identity(" in sql:
+                    album_ids = {database.album_ids[path] for path in params["track_paths"]}
+                    assert len(album_ids) == 1
+                    return Rows({"library_id": 1, "local_album_id": album_ids.pop()})
+                if "library.load_cover_mutation_baseline(" in sql:
+                    selection = database.selections[params["album_id"]]
+                    return Rows({
+                        "inventory_revision": 0,
+                        "cover_mutation_revision": database.cover_revision,
+                        "selected_cover_path": selection["cover_path"],
+                        "selected_cover_revision": selection["cover_revision"],
+                    })
+                if "ops.persist_claimed_automatic_cover_selection(" in sql:
+                    assert params["library_id"] == params["expected_library_id"] == 1
+                    assert params["task_id"] == 7 and params["job_id"] == 11
+                    assert params["attempt"] == 1 and params["worker_id"] == "contract-worker"
+                    assert params["lease_token"] == "contract-lease"
+                    assert params["expected_inventory_revision"] == 0
+                    assert params["expected_cover_mutation_revision"] == database.cover_revision
+                    paths = set(params["track_paths"])
+                    assert {database.album_ids[path] for path in paths} == {params["expected_album_id"]}
+                    database.cover_revision += 1
+                    database.selections[params["expected_album_id"]] = {
+                        "cover_path": params["selected_cover_path"],
+                        "cover_revision": params["cover_revision"],
+                    }
+                    database.claimed_commits.append(dict(params))
+                    return Rows({
+                        "input_path_count": len(paths), "resolved_path_count": len(paths),
+                        "selected_album_count": 1, "album_rows_updated": 1,
+                        "album_track_file_count": len(paths), "track_file_rows_updated": len(paths),
+                    })
                 if isinstance(params, dict) and "track_paths" in params:
                     count = len(params["track_paths"])
                     if params.get("selected_cover_path") is None:
@@ -486,7 +558,7 @@ class _CountingCoverDatabase:
                         "album_track_file_count": count, "album_rows_updated": 1, "track_file_rows_updated": count,
                     })
                 if "inventory_mutation_revision" in str(sql):
-                    return Rows({"inventory_mutation_revision": 0})
+                    return Rows({"library_id": 1, "inventory_mutation_revision": 0, "cover_mutation_revision": database.cover_revision})
                 return Rows({"ready": True})
 
             def commit(self):
@@ -496,6 +568,7 @@ class _CountingCoverDatabase:
                 pass
 
             def close(self):
+                assert not self.advisory_locks
                 self.closed = True
 
             # As psycopg: leaving the block commits (or rolls back) and closes.
@@ -503,11 +576,15 @@ class _CountingCoverDatabase:
                 return self
 
             def __exit__(self, exc_type, *_exc):
+                if self.autocommit:
+                    return False
                 self.rollback() if exc_type else self.commit()
                 self.close()
                 return False
 
-        return Connection()
+        connection = Connection()
+        self.connections.append(connection)
+        return connection
 
 
 def _with_counting_cover_database(app, monkeypatch, counts: OperationCounts) -> _CountingCoverDatabase:
@@ -548,6 +625,255 @@ def _with_library_roots(monkeypatch, *roots: Path) -> None:
     from music_app.services import cover_refresh_execution
 
     monkeypatch.setattr(cover_refresh_execution, "configured_library_root_paths_snapshot", lambda _config: tuple(roots))
+
+
+@pytest.mark.parametrize("mode", ["manual", "post_scan"])
+def test_claimed_cover_refresh_contract_runs_real_worker_at_production_album_count(
+    cover_state, tmp_path, monkeypatch, mode,
+):
+    _measure_claimed_cover_commit_batch(
+        cover_state, tmp_path, monkeypatch,
+        "py:services/cover_refresh_runtime.py#run_claimed_cover_refresh", runtime_mode=mode,
+    )
+
+
+@pytest.mark.parametrize("mode", ["manual", "post_scan"])
+def test_claimed_cover_refresh_reuses_connections_for_recovered_existing_covers(
+    cover_state, tmp_path, monkeypatch, mode, request,
+):
+    _measure_claimed_cover_commit_batch(
+        cover_state, tmp_path, monkeypatch,
+        "py:services/cover_refresh_runtime.py#run_claimed_cover_refresh",
+        runtime_mode=mode, recover_existing=True, proof_node_id=request.node.nodeid,
+    )
+
+
+def _measure_claimed_cover_commit_batch(
+    cover_state, tmp_path, monkeypatch, interaction_id, *, runtime_mode=None, recover_existing=False,
+    proof_node_id=None,
+):
+    from datetime import datetime, timezone
+    from io import BytesIO
+
+    from PIL import Image
+
+    from music_app.services import cover_jobs_postgres, cover_mutations_postgres, cover_refresh_provider, postgres_connections
+    from music_app.services import state as state_service
+    from music_app.services import cover_refresh_execution, cover_refresh_planning, cover_refresh_runtime, library
+    from music_app.services.cover_provider_candidates import CoverCandidate
+
+    app, _executor, searches = cover_state
+    real_album_builder = library.build_albums_from_file_cache
+    real_job_planner = cover_refresh_planning.build_cover_refresh_jobs
+    real_execute = cover_refresh_runtime.execute_cover_refresh_request
+    real_recover = cover_refresh_execution._recover_existing_cover_selection
+    image_bytes = BytesIO()
+    with Image.new("RGB", (1200, 1200), "teal") as image:
+        image.save(image_bytes, format="JPEG")
+    candidate = CoverCandidate(
+        source="bandcamp", url="https://covers.example.test/cover.jpg",
+        width=1200, height=1200, raw_bytes=image_bytes.getvalue(),
+    )
+
+    def search_remote_cover(*, artist, album, **_kwargs):
+        searches.append((artist, album))
+        if recover_existing:
+            return None, [{"status": "not_found"}]
+        return candidate, [{"status": "candidate"}]
+
+    monkeypatch.setattr(cover_refresh_provider, "search_primary_remote_cover", search_remote_cover)
+
+    proof_scales = []
+
+    def run(album_count: int) -> OperationCounts:
+        searches.clear()
+        counts = OperationCounts()
+        database = _with_counting_cover_database(app, monkeypatch, counts)
+        default_mutation_connects = []
+
+        def default_mutation_connect(database_url):
+            default_mutation_connects.append(database_url)
+            return database.connect(database_url)
+
+        monkeypatch.setattr(cover_mutations_postgres, "_default_connect", default_mutation_connect)
+        monkeypatch.setattr(cover_jobs_postgres, "_default_connect", database.connect)
+
+        from types import SimpleNamespace
+        from psycopg.pq import TransactionStatus
+        from psycopg_pool import ConnectionPool
+
+        lock_connections = []
+        lock_checkouts = []
+
+        class LockTransport:
+            @classmethod
+            def connect(cls, _conninfo, **options):
+                assert options["autocommit"] is True
+                connection = database.open_connection()
+                connection.autocommit = True
+                connection.pgconn = SimpleNamespace(transaction_status=TransactionStatus.IDLE)
+                lock_connections.append(connection)
+                return connection
+
+        class CountedPool(ConnectionPool):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, connection_class=LockTransport, **kwargs)
+
+            def getconn(self, timeout=None):
+                connection = super().getconn(timeout=timeout)
+                counts.pool_leases += 1
+                lock_checkouts.append(connection)
+                return connection
+
+        pools = {}
+        monkeypatch.setattr(postgres_connections, "ConnectionPool", CountedPool)
+        monkeypatch.setattr(postgres_connections, "_pools", pools)
+        root = tmp_path / f"claimed-library-{album_count}"
+        _with_library_roots(monkeypatch, root)
+        file_cache = _missing_cover_albums(root, album_count)
+        recovered_paths = []
+        if recover_existing:
+            for path, entry in file_cache.items():
+                entry["cover_path"] = entry["cover_revision"] = None
+                Path(path).with_name("cover.jpg").write_bytes(image_bytes.getvalue())
+
+            def recover_existing_selection(**options):
+                assert options["cover_path"].is_file()
+                assert not options["job"].get("selected_cover_path")
+                result = real_recover(**options)
+                assert result == (True, False)
+                recovered_paths.append(options["cover_path"])
+                return result
+
+            monkeypatch.setattr(cover_refresh_execution, "_recover_existing_cover_selection", recover_existing_selection)
+        database.album_ids = {path: index for index, path in enumerate(file_cache, start=1)}
+        if runtime_mode is not None:
+            for path, entry in file_cache.items():
+                entry["album_id"] = database.album_ids[path]
+        database.selections = {database.album_ids[path]: dict(entry) for path, entry in file_cache.items()}
+        config = app.state.config
+        config["COVER_CACHE_PATH"] = tmp_path / f"claimed-cache-{album_count}.json"
+        repository = cover_jobs_postgres.PostgresCoverJobRepository(database_url=config["ALBUM_HAVEN_APP_DATABASE_URL"])
+
+        def persist_claimed(track_paths, selected_cover_path, **options):
+            return repository.persist_claimed_automatic_cover_selection(
+                task_id=7, library_id=1, job_id=11, attempt=1,
+                worker_id="contract-worker", lease_token="contract-lease", now=datetime.now(timezone.utc),
+                track_paths=track_paths, selected_cover_path=selected_cover_path, **options,
+            )
+
+        config["CLAIMED_COVER_SELECTION_PERSISTER"] = persist_claimed
+        state = app.state.library_state
+        state.update({"file_cache": file_cache, "covers_in_progress": False, "scan_in_progress": False})
+        observed_states = []
+        progress_updates = []
+
+        def observe_execute(**options):
+            worker_state = options["context"].library_state
+            assert isinstance(worker_state, cover_refresh_runtime._DurableCoverRefreshState)
+            observed_states.append(worker_state)
+            counts.queue_claims += len(options["jobs"])
+            assert database.selection_reads == 1
+            assert counts.pool_leases == counts.physical_connections == 1
+            return real_execute(**options)
+
+        def count_album_builder(entries, *args, **kwargs):
+            counts.builder_calls += 1
+            counts.membership_rows += len(entries)
+            return real_album_builder(entries, *args, **kwargs)
+
+        def count_job_planner(entries, *args, **kwargs):
+            counts.builder_calls += 1
+            counts.membership_rows += len(entries)
+            return real_job_planner(entries, *args, **kwargs)
+
+        try:
+            if runtime_mode is None:
+                state_service.refresh_unsuccessful_cover_artwork_for_state(state, config, app.state.logger, force_search=True)
+            else:
+                source = _CountingFileCache(file_cache)
+                source.counts = counts
+                with monkeypatch.context() as patch:
+                    patch.setattr(library, "build_albums_from_file_cache", count_album_builder)
+                    patch.setattr(cover_refresh_planning, "build_cover_refresh_jobs", count_job_planner)
+                    patch.setattr(state_service, "build_cover_refresh_jobs", count_job_planner)
+                    patch.setattr(cover_refresh_runtime, "execute_cover_refresh_request", observe_execute)
+                    result = cover_refresh_runtime.run_claimed_cover_refresh(
+                        scope=SimpleNamespace(file_cache=source, separate_release_keys=(), progress_total=album_count,
+                                              mode=runtime_mode, force_search=True),
+                        config=config, logger=app.state.logger, should_cancel=lambda: False,
+                        progress=lambda **values: progress_updates.append(values) or True,
+                    )
+                assert len(observed_states) == 1
+                state = observed_states[0]
+                assert state is not app.state.library_state
+                assert state["file_cache"] is not source
+                assert all(entry["cover_revision"] == (None if recover_existing else "gone") for entry in file_cache.values())
+                assert result["processed"] == album_count
+                assert result["downloaded"] == (0 if recover_existing else album_count)
+                assert progress_updates
+                assert counts.candidate_rows == album_count
+                assert counts.builder_calls == 2
+                assert counts.membership_rows == 2 * album_count
+                assert counts.queue_claims == album_count
+                assert database.selection_reads == 1
+                counts.provider_calls = len(searches)
+        finally:
+            for pool in pools.values():
+                pool.close()
+        assert len(lock_checkouts) == album_count
+        assert len(lock_connections) == 1
+        assert all(connection.closed and not connection.advisory_locks for connection in lock_connections)
+        assert all(connection.closed and not connection.advisory_locks for connection in database.connections)
+        preparation_read = int(runtime_mode is not None)
+        assert counts.pool_leases == album_count + 1 + preparation_read
+        assert counts.physical_connections == 2 + preparation_read
+        expected_searches = 0 if recover_existing and runtime_mode == "post_scan" else album_count
+        assert len(searches) == expected_searches
+        assert len(database.claimed_commits) == album_count
+        assert database.cleared == []
+        if recover_existing:
+            assert len(recovered_paths) == len(set(recovered_paths)) == album_count
+            assert default_mutation_connects == []
+        for path, entry in state["file_cache"].items():
+            saved = database.selections[database.album_ids[path]]
+            assert entry["cover_path"] == saved["cover_path"]
+            assert entry["cover_revision"] == saved["cover_revision"]
+            assert Path(saved["cover_path"]).is_file()
+            if recover_existing:
+                assert Path(saved["cover_path"]).read_bytes() == image_bytes.getvalue()
+        if proof_node_id is not None:
+            proof_scales.append({
+                "cardinality": album_count,
+                "physicalConnections": counts.physical_connections,
+                "checkouts": counts.pool_leases,
+                "recoveryHits": len(recovered_paths),
+                "defaultConnectorCalls": len(default_mutation_connects),
+                "cleanupComplete": True,
+            })
+        return counts
+
+    measure_scale_pair(run=run, **_registered(interaction_id))
+    if proof_node_id is not None:
+        _record_recovered_cover_proof(
+            node_id=proof_node_id, kind="unit", mode=runtime_mode, scales=proof_scales,
+        )
+
+
+def _record_recovered_cover_proof(*, node_id, kind, mode, scales):
+    """Record scoped native measurements only after their teardown assertions."""
+    import json
+    import os
+
+    evidence = os.environ.get("BOUNDED_INTERACTION_EVIDENCE")
+    if evidence:
+        with Path(evidence).open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps({
+                "id": "py:services/cover_refresh_runtime.py#run_claimed_cover_refresh",
+                "test": node_id.split("::")[-1].split("[")[0],
+                "nodeId": node_id,
+                "proof": {"schemaVersion": 1, "kind": kind, "mode": mode, "scales": scales},
+            }) + "\n")
 
 
 def test_fetch_cover_keeps_a_missing_cover_selection_and_writes_nothing_at_production_album_count(

@@ -42,21 +42,60 @@ function utilityState(items = []) {
   };
 }
 
-test('request capture: Problematic Files loads one bounded page and one complete summary', async () => {
-  const id = 'js:runtime/utility-loaders-and-cover-lookup.js#fetchSummary';
+test('request capture: Problematic Files loads one cursor page shared by concurrent loads', async () => {
+  const id = 'js:runtime/utility-loaders-and-cover-lookup.js#fetchProblematicFilesPage';
   await measureInteractionContract(id, async (problematicAlbums) => {
     const items = Array.from({ length: problematicAlbums }, (_, index) => ({ key: `album-${index}`, name: `Album ${index}`, detail_loaded: false }));
-    const capture = createRequestCapture(url => jsonResponse(url.endsWith('?limit=50')
-      ? { complete: false, items: items.slice(0, 50) }
-      : { complete: true, items }));
+    const pageItems = items.slice(0, 50);
+    const nextCursor = problematicAlbums > pageItems.length ? 'next-50' : null;
+    const capture = createRequestCapture(() => {
+      capture.counter.count('responseRows', pageItems.length);
+      return jsonResponse({ items: pageItems, total: problematicAlbums, next_cursor: nextCursor });
+    });
     const context = loadUtilityLoaders(capture, utilityState());
     await Promise.all([context.loadProblematicFiles(true), context.loadProblematicFiles(true)]);
     await context.loadProblematicFiles();
-    assert.equal(context.state.utility.problematicFiles.length, problematicAlbums);
-    assert.deepEqual(capture.urls(), ['/utilities/problematic-files?limit=50', '/utilities/problematic-files']);
+    assert.equal(context.state.utility.problematicFiles.length, Math.min(problematicAlbums, 50));
+    assert.equal(context.state.utility.problematicFilesTotal, problematicAlbums);
+    assert.equal(context.state.utility.problematicFilesNextCursor, nextCursor);
+    assert.equal(context.state.utility.problematicFilesComplete, nextCursor === null);
+    assert.deepEqual(capture.urls(), ['/utilities/problematic-files?limit=50']);
     assertInteractionRequests(id, capture.urls());
     return capture.counter.snapshot();
   });
+});
+
+test('request capture: Problematic Files requests one encoded cursor page per explicit continuation', async () => {
+  const id = 'js:runtime/utility-loaders-and-cover-lookup.js#fetchProblematicFilesPage';
+  const items = Array.from({ length: 130 }, (_, index) => ({ key: `album-${index}`, name: `Album ${index}`, detail_loaded: false }));
+  const cursor = 'page:50/next?part=2';
+  const capture = createRequestCapture((url) => {
+    const requestedCursor = new URL(url, 'http://localhost').searchParams.get('cursor');
+    assert.ok(requestedCursor === null || requestedCursor === cursor);
+    const start = requestedCursor === null ? 0 : 50;
+    const pageItems = items.slice(start, start + 50);
+    capture.counter.count('responseRows', pageItems.length);
+    return jsonResponse({ items: pageItems, total: items.length, next_cursor: start === 0 ? cursor : 'next-100' });
+  });
+  const context = loadUtilityLoaders(capture, utilityState());
+  await context.loadProblematicFiles(true);
+  assert.deepEqual(capture.urls(), ['/utilities/problematic-files?limit=50']);
+  assert.equal(context.state.utility.problematicFiles.length, 50);
+  const beforeContinuation = capture.counter.snapshot();
+  await Promise.all([context.loadNextProblematicFilesPage(), context.loadNextProblematicFilesPage()]);
+  assert.deepEqual(capture.urls(), [
+    '/utilities/problematic-files?limit=50',
+    `/utilities/problematic-files?limit=50&cursor=${encodeURIComponent(cursor)}`,
+  ]);
+  assert.equal(context.state.utility.problematicFiles.length, 100);
+  assert.deepEqual(Array.from(context.state.utility.problematicFiles, item => item.key), items.slice(0, 100).map(item => item.key));
+  assert.equal(context.state.utility.problematicFilesTotal, 130);
+  assert.equal(context.state.utility.problematicFilesNextCursor, 'next-100');
+  assert.equal(context.state.utility.problematicFilesComplete, false);
+  const afterContinuation = capture.counter.snapshot();
+  assert.equal(afterContinuation.requests - beforeContinuation.requests, 1);
+  assert.equal(afterContinuation.responseRows - beforeContinuation.responseRows, 50);
+  assertInteractionRequests(id, capture.urls());
 });
 
 test('Problematic Files summary and detail repeat a pending answer from a cold server until it loads', async () => {

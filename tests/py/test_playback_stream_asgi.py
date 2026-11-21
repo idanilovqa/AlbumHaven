@@ -133,14 +133,6 @@ def playback_app(tmp_path, monkeypatch, request):
         lambda _runtime: None,
     )
     monkeypatch.setattr(
-        "music_app.services.lastfm_retry.start_lastfm_retry_worker",
-        lambda _runtime: None,
-    )
-    monkeypatch.setattr(
-        "music_app.services.lastfm_retry.stop_lastfm_retry_worker",
-        lambda _runtime: None,
-    )
-    monkeypatch.setattr(
         "music_app.services.runtime_shutdown.request_runtime_shutdown",
         lambda _runtime: None,
     )

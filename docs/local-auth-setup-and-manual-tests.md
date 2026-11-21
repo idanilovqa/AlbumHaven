@@ -37,17 +37,27 @@ Generate the HMAC secret with a local password manager or a cryptographically
 secure random generator. Keep it stable between server restarts and outside
 Git. Changing it invalidates derived security state.
 
-Apply every SQL migration in filename order with the migrator connection. Set
+Apply migrations in filename order with the migrator connection. Set
 `PGPASSFILE` to a protected libpq password file, then put the password-free
 migrator URL in the current shell. This keeps the password out of command and
-PowerShell history:
+PowerShell history.
+
+Do not pipe every migration file directly to `psql`. Migration 0083 contains a
+concurrent index and its released SQL names the original `pg_trgm` schema. An
+upgrade must discover the extension-owned `gin_trgm_ops` operator class from
+`pg_extension`, `pg_namespace`, `pg_opclass`, and its `pg_depend` extension
+membership, safely qualify that operator class in an in-memory copy of 0083,
+run it outside a transaction, and require
+`scripts/postgres/verify_0083_album_raw_artist_index.sql` to return `ready`.
+Only then record the original 0083 filename and file SHA-256 in
+`ops.schema_migrations`. Continue later migrations in filename order. The
+repository's isolated PostgreSQL and capabilities-demo migration runners, and
+the Windows CI PostgreSQL bootstrap, implement this compatibility path without
+modifying the released migration or its checksum:
 
 ```powershell
 $env:PGPASSFILE = 'C:\secure\album-haven-pgpass.conf'
 $env:ALBUM_HAVEN_MIGRATOR_DATABASE_URL = 'postgresql://album_haven_migrator@localhost:5432/album_haven_core'
-Get-ChildItem migrations\postgres\*.sql |
-  Sort-Object Name |
-  ForEach-Object { psql -X -v ON_ERROR_STOP=1 $env:ALBUM_HAVEN_MIGRATOR_DATABASE_URL -f $_.FullName }
 ```
 
 The migrations are idempotent, but you should still back up a database that

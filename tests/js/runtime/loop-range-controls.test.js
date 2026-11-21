@@ -604,7 +604,7 @@ test('saved-loop green controls use a thin subdued hover outline below pressed i
     __dirname, '..', '..', '..', 'music_app', 'static', 'css', 'appearance-backgrounds.css',
   ), 'utf8');
   const genericHoverRule = css.match(
-    /:root :is\(button,[^{]+:hover:not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{([^}]*)\}/s,
+    /:root :is\(button,[^{]+:hover:not\(:active\):not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{([^}]*)\}/s,
   )?.[0] || '';
   const loopHoverRule = css.match(
     /:root :is\(\.utility-loop-pitch-control button, \.utility-loop-repeat, \.utility-loop-speed-step, \.utility-loop-speed-value\):hover:not\(:disabled\)\s*\{([^}]*)\}/s,

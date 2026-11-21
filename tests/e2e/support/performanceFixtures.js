@@ -662,7 +662,7 @@ async function useSyntheticPerformanceReportFixture({ page, performanceReport },
       return recorder.checkpoints;
     },
     async recordTimingCheckpoint({ key, label, timingMs, details = null }) {
-      const memorySample = await sampleMemoryPoint(page);
+      const memorySample = await sampleMemoryPoint(page, { collectGarbage: false });
       return recorder.recordTimingCheckpoint({
         key,
         label,

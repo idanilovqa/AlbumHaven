@@ -1,4 +1,4 @@
-﻿function attachCoverLookupModalEvents() {
+function attachCoverLookupModalEvents() {
   const els = getCoverLookupModalElements();
   if (!els.overlay || els.overlay.dataset.bound === '1') return;
   els.overlay.dataset.bound = '1';
@@ -34,11 +34,16 @@ function attachUtilityModalEvents() {
     clearTimeout(searchRenderTimer);
     const owner = state.utility;
     const tab = owner.activeTab;
+    const openGeneration = utilityOpenGeneration;
     searchRenderTimer = setTimeout(async () => {
       searchRenderTimer = null;
-      if (tab === 'problematic-files' && owner.problematicFilesComplete === false
-          && !(await waitForProblematicFilesComplete())) return;
-      if (state.utility === owner && owner.activeTab === tab && !els.overlay.hidden) render();
+      if (state.utility !== owner || owner.activeTab !== tab || els.overlay.hidden
+          || utilityOpenGeneration !== openGeneration) return;
+      if (tab === 'problematic-files') {
+        void loadProblematicFiles(true, { preserveSelectedDetail: true });
+        return;
+      }
+      render();
     }, 80);
   };
   els.search?.addEventListener('input', () => {
@@ -58,7 +63,10 @@ function attachUtilityModalEvents() {
       return;
     }
     if (state.utility.activeTab === 'rules') state.utility.rulesSearchQuery = els.search.value || '';
-    else if (state.utility.activeTab === 'problematic-files') state.utility.searchQuery = els.search.value || '';
+    else if (state.utility.activeTab === 'problematic-files') {
+      state.utility.searchQuery = els.search.value || '';
+      invalidateProblematicFilesPaging({ forgetKnownBase: false });
+    }
     else return;
     scheduleSearchRender();
   });
@@ -79,7 +87,10 @@ function attachUtilityModalEvents() {
       return;
     }
     if (state.utility.activeTab === 'rules') state.utility.rulesSearchQuery = els.search.value || '';
-    else if (state.utility.activeTab === 'problematic-files') state.utility.searchQuery = els.search.value || '';
+    else if (state.utility.activeTab === 'problematic-files') {
+      state.utility.searchQuery = els.search.value || '';
+      invalidateProblematicFilesPaging({ forgetKnownBase: false });
+    }
     else return;
     scheduleSearchRender();
   });

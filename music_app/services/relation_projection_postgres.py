@@ -13,6 +13,7 @@ from time import perf_counter, sleep
 from typing import Any
 
 from music_app.services.artist_family_postgres import (
+    artist_family_projection_matches_in_transaction,
     replace_artist_family_projection_in_transaction,
 )
 from music_app.services.cache import serialize_relation_views
@@ -425,6 +426,28 @@ def relation_projection_readiness_stale_reason(scan_cache: object) -> str:
     )
 
 
+def relation_projection_matches_source(
+    connection: Any, native_snapshot: object, source_fingerprint: str,
+) -> bool:
+    """Validate a caller-loaded native snapshot and current persisted family edges."""
+    if not isinstance(native_snapshot, Mapping):
+        return False
+    metadata = native_snapshot.get(RELATION_PROJECTION_METADATA_KEY)
+    if not isinstance(metadata, Mapping) or metadata.get("status") not in ("ready", "stale"):
+        return False
+    candidate = {**native_snapshot, RELATION_PROJECTION_METADATA_KEY: {**metadata, "status": "ready"}}
+    if (relation_projection_stale_reason(candidate)
+            or metadata["built_from_fingerprint"] != source_fingerprint):
+        return False
+    try:
+        relations_last_built = float(native_snapshot.get("relations_last_built") or 0.0)
+    except (TypeError, ValueError):
+        return False
+    return artist_family_projection_matches_in_transaction(
+        connection, native_snapshot["relation_views"], relations_last_built=relations_last_built,
+    )
+
+
 def relation_source_fingerprint(
     rows: list[object],
     *,
@@ -619,7 +642,10 @@ def _ensure_relation_projection_ready(
                 ) * 1000
                 # An inventory publication marks the projection stale without
                 # checking its relation inputs; unchanged inputs need no rebuild.
-                source_unchanged = _restorable_ready_metadata(baseline_scan_cache, source_fingerprint) is not None
+                with _cancel_active_connection_on_request(source_connection, cancel_requested):
+                    source_unchanged = relation_projection_matches_source(
+                        source_connection, baseline_scan_cache, source_fingerprint,
+                    )
                 if not source_unchanged:
                     phase_started_at = perf_counter()
                     if cancel_requested is None:
@@ -671,8 +697,12 @@ def _ensure_relation_projection_ready(
                         str(locked_metadata.get("built_from_fingerprint") or ""),
                     )
                     if (
-                        str(locked_metadata.get("status") or "") == "stale"
-                        and locked_publication_identity != baseline_publication_identity
+                        _int_value(locked_snapshot_row, "inventory_mutation_revision")
+                        != _int_value(baseline_snapshot_row, "inventory_mutation_revision")
+                        or (
+                            str(locked_metadata.get("status") or "") == "stale"
+                            and locked_publication_identity != baseline_publication_identity
+                        )
                     ):
                         retry_with_current_sources = True
                     else:
@@ -689,7 +719,10 @@ def _ensure_relation_projection_ready(
                             )
                         if source_unchanged:
                             restored_metadata = _restorable_ready_metadata(locked_scan_cache, source_fingerprint)
-                            if restored_metadata is not None:
+                            if (restored_metadata is not None
+                                    and relation_projection_matches_source(
+                                        connection, locked_scan_cache, source_fingerprint,
+                                    )):
                                 return _restore_unchanged_projection(
                                     connection,
                                     locked_scan_cache,
@@ -916,7 +949,7 @@ def _restorable_ready_metadata(
 ) -> dict[str, object] | None:
     """Ready metadata for a projection marked stale whose sources did not change."""
     metadata = scan_cache.get(RELATION_PROJECTION_METADATA_KEY)
-    if not isinstance(metadata, Mapping) or metadata.get("status") != "stale":
+    if not isinstance(metadata, Mapping) or metadata.get("status") not in ("ready", "stale"):
         return None
     ready = {**metadata, "status": "ready"}
     if (
@@ -943,7 +976,10 @@ def _restore_unchanged_projection(
     }
     next_scan_cache[RELATION_PROJECTION_METADATA_KEY] = dict(metadata)
     connection.execute(_save_scan_cache_sql(), {"scan_cache": _jsonb(next_scan_cache)})
-    if artist_search_projection_stale_reason({**scan_cache, RELATION_PROJECTION_METADATA_KEY: metadata}):
+    search_rebuild_reason = artist_search_projection_stale_reason(
+        {**scan_cache, RELATION_PROJECTION_METADATA_KEY: metadata},
+    )
+    if search_rebuild_reason:
         replace_artist_search_projection_in_transaction(
             connection,
             next_scan_cache["relation_views"],
@@ -953,8 +989,8 @@ def _restore_unchanged_projection(
     return _projection_result(
         scan_cache.get("relation_views"),
         metadata,
-        startup_rebuilt=False,
-        reason="source_unchanged",
+        startup_rebuilt=bool(search_rebuild_reason),
+        reason=search_rebuild_reason or "source_unchanged",
         duration_ms=duration_ms,
     )
 

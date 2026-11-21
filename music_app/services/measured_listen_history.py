@@ -182,9 +182,9 @@ def append_measured(adapter, entry, *, account_id, library_id, connection=None):
                     or (current["finalized"] and not item["finalized"])):
                 raise MeasuredListenError("Listen counters cannot regress", 409)
             # Provider state belongs to the server's exact-row update path.
-            for key in _SERVER_FIELDS:
-                if key in previous:
-                    item[key] = previous[key]
+            for key, value in previous.items():
+                if key in _SERVER_FIELDS or key.startswith("scrobble_"):
+                    item[key] = value
         item.setdefault("recorded_at", datetime.now(timezone.utc).isoformat())
         metadata = Jsonb({"source_payload": item})
         values = (item["measured_listened_seconds"], item["max_measured_contiguous_seconds"],

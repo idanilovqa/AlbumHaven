@@ -191,14 +191,14 @@ def _claim_row(**overrides):
 def test_mail_delivery_keeps_event_loop_responsive_during_database_work(
     outbox, category, blocked_stage,
 ):
-    from music_app.services.auth_password_reset_request_postgres import PasswordResetDelivery
-
     invitation = _invitation_delivery()
     delivery = {
         "welcome": invitation.outbox_id,
-        "password_reset": PasswordResetDelivery(
-            invitation.outbox_id, invitation.account_id,
-            invitation.recipient, invitation.raw_token,
+        "password_reset": SimpleNamespace(
+            outbox_id=invitation.outbox_id,
+            account_id=invitation.account_id,
+            recipient=invitation.recipient,
+            raw_token=invitation.raw_token,
         ),
         "invitation": invitation,
     }[category]
@@ -476,12 +476,11 @@ def test_delivery_is_non_gating_when_transport_raises(outbox):
 
 
 def test_password_reset_delivery_claims_matching_active_token_and_finalizes_once(outbox):
-    from music_app.services.auth_password_reset_request_postgres import (
-        PasswordResetDelivery,
-    )
-
     events = []
-    delivery = PasswordResetDelivery(81, 41, "member@example.test", "r" * 43)
+    delivery = SimpleNamespace(
+        outbox_id=81, account_id=41,
+        recipient="member@example.test", raw_token="r" * 43,
+    )
     claim = outbox.PasswordResetClaim(
         outbox_id=81,
         account_id=41,
@@ -529,13 +528,15 @@ def test_password_reset_delivery_claims_matching_active_token_and_finalizes_once
 
 
 def test_password_reset_repository_claim_requires_matching_active_digest_and_is_not_retryable(outbox):
-    from music_app.services.auth_password_reset_request_postgres import (
-        PasswordResetDelivery,
+    connection = Connection(claim_rows=(_claim_row(
+        id=81,
+        username_display="member.one",
+        expires_at=NOW + timedelta(minutes=15),
+    ),))
+    delivery = SimpleNamespace(
+        outbox_id=81, account_id=41,
+        recipient="Rendref+owner@example.test", raw_token="s" * 43,
     )
-
-    connection = Connection(claim_rows=(_claim_row(id=81, username_display="member.one",
-        expires_at=NOW + timedelta(minutes=15)),))
-    delivery = PasswordResetDelivery(81, 41, "Rendref+owner@example.test", "s" * 43)
 
     claim = _reset_service(outbox, connection).claim_password_reset(delivery)
 
@@ -567,10 +568,14 @@ def test_password_reset_repository_claim_requires_matching_active_digest_and_is_
 
 
 def test_password_reset_claim_locks_account_before_reading_token_eligibility(outbox):
-    from music_app.services.auth_password_reset_request_postgres import PasswordResetDelivery
     connection = Connection(claim_rows=(_claim_row(id=81,
         expires_at=NOW + timedelta(minutes=15)),))
-    delivery = PasswordResetDelivery(81, 41, "Rendref+owner@example.test", "s" * 43)
+    delivery = SimpleNamespace(
+        outbox_id=81,
+        account_id=41,
+        recipient="Rendref+owner@example.test",
+        raw_token="s" * 43,
+    )
     assert _reset_service(outbox, connection).claim_password_reset(delivery) is not None
     statements = [sql for sql, _params in connection.operations]
     account_lock = next(i for i, sql in enumerate(statements)
@@ -580,12 +585,13 @@ def test_password_reset_claim_locks_account_before_reading_token_eligibility(out
 
 
 def test_password_reset_claim_reconciles_expired_sending_lease_as_unknown(outbox):
-    from music_app.services.auth_password_reset_request_postgres import (
-        PasswordResetDelivery,
-    )
-
     raw_token = "A" * 43
-    delivery = PasswordResetDelivery(81, 41, "member@example.test", raw_token)
+    delivery = SimpleNamespace(
+        outbox_id=81,
+        account_id=41,
+        recipient="member@example.test",
+        raw_token=raw_token,
+    )
     connection = Connection(stale_rows=({"id": 81},))
 
     outcome = _reset_service(outbox, connection).claim_password_reset(delivery)
@@ -608,12 +614,13 @@ def test_password_reset_claim_reconciles_expired_sending_lease_as_unknown(outbox
 
 
 def test_password_reset_delivery_does_not_retry_reconciled_sending_claim(outbox):
-    from music_app.services.auth_password_reset_request_postgres import (
-        PasswordResetDelivery,
-    )
-
     raw_token = "A" * 43
-    delivery = PasswordResetDelivery(81, 41, "member@example.test", raw_token)
+    delivery = SimpleNamespace(
+        outbox_id=81,
+        account_id=41,
+        recipient="member@example.test",
+        raw_token=raw_token,
+    )
     connection = Connection(stale_rows=({"id": 81},))
 
     result = asyncio.run(

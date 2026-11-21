@@ -48,10 +48,12 @@ class LastfmPostgresAdapter:
             return {}
         return _settings_from_row(row)
 
-    def save_settings(self, settings: dict[str, object], *, account_id=None) -> dict[str, object]:
+    def save_settings(self, settings: dict[str, object], *, account_id=None, reauthentication_context=None) -> dict[str, object]:
         if account_id is not None:
             from music_app.services.lastfm_account_settings import save_account_settings
-            return save_account_settings(self, settings, account_id)
+            return save_account_settings(self, settings, account_id, reauthentication_context=reauthentication_context)
+        if reauthentication_context is not None:
+            raise ValueError("Authenticated Last.fm account is required")
         normalized = dict(settings)
         username = _text(normalized.get("username")) or None
         session_key = _text(normalized.get("session_key")) or None
@@ -125,7 +127,6 @@ class LastfmPostgresAdapter:
         with self._connect_to_database() as connection:
             with _transaction(connection):
                 _ensure_bootstrap_library_context(connection)
-                connection.execute(_delete_pending_scrobbles_sql())
                 connection.execute(_delete_scrobble_retry_state_sql())
                 for source_key, payload in sorted(normalized["pending_scrobbles"].items()):
                     if not isinstance(payload, dict):
@@ -145,6 +146,10 @@ class LastfmPostgresAdapter:
                             ),
                         ),
                     )
+                connection.execute(
+                    _delete_absent_pending_scrobbles_sql(),
+                    (list(sorted(normalized["pending_scrobbles"])),),
+                )
                 for source_key, payload in sorted(normalized["sync_problems"].items()):
                     if not isinstance(payload, dict):
                         continue
@@ -520,7 +525,7 @@ def _load_scrobble_retry_state_sql() -> str:
     )
 
 
-def _delete_pending_scrobbles_sql() -> str:
+def _delete_absent_pending_scrobbles_sql() -> str:
     return (
         _bootstrap_library_context_sql()
         + f"""
@@ -528,7 +533,8 @@ def _delete_pending_scrobbles_sql() -> str:
         using bootstrap_context
         where integration.pending_scrobbles.library_id = bootstrap_context.library_id
           and integration.pending_scrobbles.account_id = bootstrap_context.account_id
-          and integration.pending_scrobbles.payload ->> 'source_family' in ('{_SYNC_SOURCE}', '{_SYNC_BACKFILL_SOURCE}');
+          and integration.pending_scrobbles.payload ->> 'source_family' in ('{_SYNC_SOURCE}', '{_SYNC_BACKFILL_SOURCE}')
+          and integration.pending_scrobbles.payload ->> 'source_key' <> all(%s::text[]);
     """
     )
 

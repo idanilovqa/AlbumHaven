@@ -21,7 +21,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 from music_app.routes.playback_control_asgi import require_playback_claim, resolve_listen_track
-from music_app.services.lastfm import get_saved_lastfm_session, get_lastfm_total_scrobbles
+from music_app.services.lastfm import LastfmSession, get_saved_lastfm_session, get_lastfm_total_scrobbles
 
 from music_app.routes.api_loop_helpers import (
     parse_pitch_semitones,
@@ -56,6 +56,7 @@ from music_app.services.lastfm_retry import (
     request_lastfm_reconnect_retry,
     request_lastfm_submission,
 )
+from music_app.services.policy_asgi import request_origin_ref_for_request
 from music_app.services.lastfm_sync_bridge import (
     build_lastfm_integration_status,
     record_playback_session_complete,
@@ -110,6 +111,59 @@ def _app_logger(request: Request):
 
 def _library_state(request: Request) -> dict[str, object]:
     return request.app.state.library_state
+
+
+def _durable_lastfm_request_context(request: Request):
+    repository = getattr(request.app.state, "lastfm_retry_job_repository", None)
+    evaluation = getattr(request.state, "policy_evaluation", None)
+    audit = getattr(evaluation, "audit", None)
+    actor = getattr(request.state, "current_actor", None)
+    account_id = getattr(audit, "account_id", None)
+    library_id = getattr(audit, "library_id", None) or getattr(
+        actor, "current_library_id", None
+    )
+    if (
+        repository is None
+        or getattr(audit, "action", None)
+        not in {
+            "integration.lastfm.complete",
+            "integration.lastfm.manage",
+            "integration.lastfm.scrobble",
+        }
+        or not isinstance(account_id, int)
+        or not isinstance(library_id, int)
+    ):
+        return None
+    return repository, audit, account_id, library_id
+
+
+def _durable_lastfm_retry_recorder(request: Request):
+    def record_retryable(_config, **values):
+        durable = _durable_lastfm_request_context(request)
+        if durable is None:
+            raise RuntimeError("durable Last.fm retry context is unavailable")
+        repository, audit, account_id, library_id = durable
+        return repository.accept_playback_failure(
+            **values,
+            account_id=account_id,
+            library_id=library_id,
+            request_origin_ref=request_origin_ref_for_request(request),
+            deployment_mode=audit.deployment_mode,
+            client_surface=audit.client_surface_class,
+            now=datetime.now(timezone.utc),
+        )
+
+    return record_retryable
+
+
+def _measured_lastfm_credentials(request: Request, account_id: int, library_id: int):
+    repository = getattr(request.app.state, "lastfm_retry_job_repository", None)
+    if repository is None:
+        return None, None
+    credentials = repository.load_session_credentials(account_id=account_id, library_id=library_id)
+    if credentials is None:
+        return None, None
+    return credentials, LastfmSession(credentials.username, credentials.session_key, credentials.connected_at)
 
 
 def _first_query_value(request: Request, key: str) -> str | None:
@@ -606,6 +660,20 @@ async def utilities_lastfm_settings(request: Request) -> JSONResponse:
     if not username or not password:
         return _json_response(({"ok": False, "error": "Last.fm username and password are required."}, 400))
 
+    durable = _durable_lastfm_request_context(request)
+    reconnect = {}
+    if durable is not None:
+        _repository, audit, _account_id, library_id = durable
+        reconnect["reauthentication_context"] = {
+            "library_id": library_id,
+            "request_origin_ref": request_origin_ref_for_request(request),
+            "deployment_mode": audit.deployment_mode,
+            "client_surface": audit.client_surface_class,
+            "request_ref": uuid.uuid4().hex,
+            "expected_generation": await run_in_threadpool(
+                _repository.load_reauthentication_generation,
+                account_id=history_scope.account_id, library_id=library_id),
+        }
     try:
         integration = await run_in_threadpool(
             authenticate_lastfm,
@@ -615,6 +683,7 @@ async def utilities_lastfm_settings(request: Request) -> JSONResponse:
             connected_at=datetime.now(timezone.utc).isoformat(),
             user_timezone=timezone_name,
             account_id=history_scope.account_id,
+            **reconnect,
         )
     except LastfmError as exc:
         try:
@@ -666,7 +735,17 @@ async def utilities_lastfm_settings(request: Request) -> JSONResponse:
         raise
 
     request_lastfm_reconnect_retry(history_scope.account_id)
-    return JSONResponse({"ok": True, "integration": await run_in_threadpool(_enrich_lastfm_status, config, integration, **owner)})
+    return JSONResponse(
+        {
+            "ok": True,
+            "integration": await run_in_threadpool(
+                _enrich_lastfm_status,
+                config,
+                integration,
+                **owner,
+            ),
+        }
+    )
 
 
 @router.post("/playback/session/now-playing")
@@ -716,7 +795,11 @@ async def playback_session_scrobble(request: Request) -> JSONResponse:
     await require_playback_claim(request, payload)
     payload = await resolve_listen_track(request, payload)
     trusted = await history_scope_for_request(request)
-    session = await run_in_threadpool(get_saved_lastfm_session, config, account_id=trusted.account_id)
+    credentials = None
+    if payload.get("measurement_version") is not None:
+        credentials, session = await run_in_threadpool(_measured_lastfm_credentials, request, trusted.account_id, trusted.library_id)
+    else:
+        session = await run_in_threadpool(get_saved_lastfm_session, config, account_id=trusted.account_id)
     if payload.get("measurement_version") is not None and session is None:
         return JSONResponse({"ok": False, "error": "account_scoped_scrobble_unavailable", "retryable": False}, status_code=409)
     captured = {"session": session}
@@ -724,13 +807,20 @@ async def playback_session_scrobble(request: Request) -> JSONResponse:
         try:
             result, status = await run_in_threadpool(record_playback_session_complete, config,
                 {**payload, "finalized": payload.get("finalized", False)}, account_id=trusted.account_id, library_id=trusted.library_id,
-                lastfm_session=session, user_timezone="UTC",
+                lastfm_session=session, lastfm_credentials=credentials, user_timezone="UTC",
                 normalize_playback_track_payload=normalize_playback_track_payload,
                 is_meaningful_listen_session=is_meaningful_listen_session,
                 append_listen_history_entry=append_listen_history_entry,
                 update_listen_history_entry=update_listen_history_entry,
-                scrobble_track=scrobble_track, log_lastfm_scrobble_event=lambda *args, **kwargs: None)
+                scrobble_track=scrobble_track,
+                log_lastfm_scrobble_event=lambda *args, **kwargs: None,
+                record_retryable_scrobble=_durable_lastfm_retry_recorder(request),
+            )
             return JSONResponse(result, status_code=status)
+        except RuntimeError:
+            return _json_response(
+                ({"ok": False, "error": "Last.fm retry could not be queued."}, 503)
+            )
         except ValueError as error:
             return JSONResponse({"ok": False, "error": "Invalid or conflicting listen snapshot"}, status_code=getattr(error, "status_code", 400))
     # An older tab's unmeasured scrobble is held to the same Last.fm threshold as a measured listen.
@@ -773,12 +863,18 @@ async def playback_session_complete(request: Request) -> JSONResponse:
     await require_playback_claim(request, payload)
     payload = await resolve_listen_track(request, payload)
     if payload.get("measurement_version") != "rendered-pcm-v1":
-        return JSONResponse({"ok": False, "error": "unsupported_measurement"}, status_code=400)
-    scope = {}
-    if payload.get("measurement_version") is not None:
-        trusted = await history_scope_for_request(request)
-        scope = {"account_id": trusted.account_id, "library_id": trusted.library_id}
-        scope["lastfm_session"] = await run_in_threadpool(get_saved_lastfm_session, config, account_id=trusted.account_id)
+        return JSONResponse(
+            {"ok": False, "error": "unsupported_measurement"},
+            status_code=400,
+        )
+    trusted = await history_scope_for_request(request)
+    credentials, session = await run_in_threadpool(_measured_lastfm_credentials, request, trusted.account_id, trusted.library_id)
+    scope = {
+        "account_id": trusted.account_id,
+        "library_id": trusted.library_id,
+        "lastfm_session": session,
+        "lastfm_credentials": credentials,
+    }
     try:
         response_payload, status_code = await run_in_threadpool(
             record_playback_session_complete,
@@ -796,10 +892,19 @@ async def playback_session_complete(request: Request) -> JSONResponse:
                 logger,
                 action,
                 **kwargs,
-             history_scope=history_scope),
+                history_scope=history_scope,
+            ),
+            record_retryable_scrobble=_durable_lastfm_retry_recorder(request),
+        )
+    except RuntimeError:
+        return _json_response(
+            ({"ok": False, "error": "Last.fm retry could not be queued."}, 503)
         )
     except ValueError as error:
-        return JSONResponse({"ok": False, "error": "Invalid or conflicting listen completion"}, status_code=getattr(error, "status_code", 400))
+        return JSONResponse(
+            {"ok": False, "error": "Invalid or conflicting listen completion"},
+            status_code=getattr(error, "status_code", 400),
+        )
     return JSONResponse(response_payload, status_code=status_code)
 
 

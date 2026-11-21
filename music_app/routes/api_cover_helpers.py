@@ -18,7 +18,7 @@ from music_app.services.cover_state import (
     find_albums_by_track_paths as find_albums_by_track_paths_in_albums,
 )
 from music_app.services.covers import image_dimensions
-from music_app.services.repair_previews import build_problematic_album_detail_payload
+from music_app.services.repair_previews import find_problematic_album_by_track_paths
 
 
 def apply_cover_path_for_tracks(
@@ -37,6 +37,7 @@ def apply_cover_path_for_tracks(
     remote_cover_width: int | None = None,
     remote_cover_height: int | None = None,
     schedule_cache_update: bool = True,
+    selection_authority: Mapping[str, object] | None = None,
     include_problematic_album: bool = True,
 ) -> tuple[list[dict[str, object]], dict[str, object] | None]:
     return apply_cover_selection_for_tracks(
@@ -54,8 +55,9 @@ def apply_cover_path_for_tracks(
         remote_cover_width=remote_cover_width,
         remote_cover_height=remote_cover_height,
         schedule_cache_update=schedule_cache_update,
+        manual_selection=selection_authority is None,
+        selection_authority=selection_authority,
         include_problematic_album=include_problematic_album,
-        manual_selection=True,
     )
 
 
@@ -122,6 +124,7 @@ def apply_cover_selection_for_tracks(
     cover_revision: str | None = None,
     schedule_cache_update: bool = True,
     manual_selection: bool = False,
+    selection_authority: Mapping[str, object] | None = None,
     include_problematic_album: bool = True,
 ) -> tuple[list[dict[str, object]], dict[str, object] | None]:
     if config is None or logger is None or library_state is None:
@@ -137,12 +140,8 @@ def apply_cover_selection_for_tracks(
     def find_problematic_album(updated_track_paths: set[str]) -> dict[str, object] | None:
         if not include_problematic_album:
             return None
-        updated_albums = find_updated_albums(updated_track_paths)
-        album_key = str(updated_albums[0].get("key") or "") if updated_albums else ""
-        if not album_key:
-            return None
-        return build_problematic_album_detail_payload(
-            album_key,
+        return find_problematic_album_by_track_paths(
+            updated_track_paths,
             config=resolved_config,
             library_state=resolved_state,
             logger=resolved_logger,
@@ -168,4 +167,5 @@ def apply_cover_selection_for_tracks(
         cover_revision=cover_revision,
         persist_cache_update=schedule_cache_update,
         manual_selection=manual_selection,
+        selection_authority=selection_authority,
     )

@@ -17,6 +17,9 @@ from tests.py.asgi_testing import collect_route_paths as _collect_route_paths
 from tests.py.asgi_testing import run_asgi_request as _run_asgi_request
 from tests.py.asgi_testing import runtime_app_from_asgi_app
 
+from music_app.services.current_actor import ActorState, CapabilityGrant, CurrentActor
+from music_app.routes import api_read_asgi_routes as asgi_read_routes
+
 
 @pytest.fixture
 def app(tmp_path, monkeypatch):
@@ -69,6 +72,20 @@ def test_asgi_status_route_preserves_current_payload_shape(app):
     assert status == 200
     assert headers["content-type"].startswith("application/json")
     payload = _decode_json(body)
+    assert payload["worker_status"] == "worker_unavailable"
+    assert payload["job_status"] == {
+        "worker_status": "worker_unavailable",
+        "worker": None,
+        "jobs": {
+            "queued_count": 0,
+            "running_count": 0,
+            "retry_count": 0,
+            "failed_count": 0,
+            "ambiguous_count": 0,
+            "oldest_queue_age_seconds": 0,
+            "claim_lag_seconds": 0,
+        },
+    }
     assert payload["scan_in_progress"] is False
     assert payload["scan_percent"] == 0
     assert payload["scan_mode"] == "idle"
@@ -78,6 +95,404 @@ def test_asgi_status_route_preserves_current_payload_shape(app):
     assert payload["album_total"] == 0
     assert payload["last_scan_display"] == "Never"
     assert payload["log_history_revision"] == ""
+
+
+def test_asgi_status_syncs_worker_committed_inventory_revision(monkeypatch, app):
+    from music_app.routes import api_read_asgi_routes
+
+    calls = []
+
+    def sync(library_state, config):
+        calls.append((library_state, config))
+        library_state["inventory_mutation_revision"] = 27
+        library_state["cover_mutation_revision"] = 13
+        library_state["library_id"] = 7
+        return 27
+
+    monkeypatch.setattr(
+        api_read_asgi_routes, "sync_durable_inventory_revision", sync
+    )
+    asgi_app = _make_asgi_app()
+
+    status, _headers, body = _run_asgi_request(asgi_app, "GET", "/status")
+
+    assert status == 200
+    payload = _decode_json(body)
+    assert payload["inventory_mutation_revision"] == 27
+    assert payload["cover_mutation_revision"] == 13
+    assert type(payload["cover_mutation_revision"]) is int
+    assert "library_id" not in payload
+    assert len(calls) == 1
+
+
+def test_authenticated_status_keeps_private_current_path_out_of_job_projection():
+    from music_app.routes import api_read_asgi_routes
+
+    private_path = "C:/Users/private/Music/Artist/Album/01.flac"
+    payload = api_read_asgi_routes._build_status_payload_from_state(
+        {
+            "scan_in_progress": True,
+            "scan_current_path": private_path,
+            "scan_processed": 1,
+            "scan_total": 2,
+        }
+    )
+
+    assert payload["scan_current_path"] == private_path
+    assert "job_status" not in payload
+    assert "worker_status" not in payload
+
+
+def test_request_scan_browse_state_loads_private_durable_preview(monkeypatch):
+    from music_app.routes import api_read_asgi_routes
+
+    evaluation = SimpleNamespace(audit=SimpleNamespace(library_id=7))
+    preview = {
+        "file_cache": {"private-track": {"artist": "Artist"}},
+        "separate_release_keys": ("release-a",),
+    }
+    repository = SimpleNamespace(
+        load_authorized_full_scan_preview=lambda **kwargs: (
+            preview
+            if kwargs == {"policy_evaluation": evaluation, "library_id": 7}
+            else None
+        )
+    )
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                library_state={"albums": [], "file_cache": {}},
+                scan_job_repository=repository,
+            )
+        ),
+        state=SimpleNamespace(policy_evaluation=evaluation),
+    )
+    projected = {"scan_in_progress": True, "albums": ["partial"]}
+    monkeypatch.setattr(
+        api_read_asgi_routes,
+        "project_durable_full_scan_preview",
+        lambda library_state, loaded_preview: (
+            projected
+            if library_state == {"albums": [], "file_cache": {}}
+            and loaded_preview is preview
+            else {}
+        ),
+    )
+
+    assert api_read_asgi_routes._request_scan_browse_state(request) is projected
+
+
+def test_request_scan_browse_state_keeps_committed_albums_without_loading_preview(monkeypatch):
+    from music_app.routes import api_read_asgi_routes
+
+    library_state = {"albums": ["committed-album"], "scan_in_progress": True}
+    repository = SimpleNamespace(
+        load_authorized_full_scan_preview=lambda **_kwargs: pytest.fail(
+            "committed browsing must not materialize a full scan preview"
+        )
+    )
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(
+            library_state=library_state, scan_job_repository=repository,
+        )),
+        state=SimpleNamespace(policy_evaluation=SimpleNamespace(
+            audit=SimpleNamespace(library_id=7),
+        )),
+    )
+    monkeypatch.setattr(
+        api_read_asgi_routes, "project_durable_full_scan_preview",
+        lambda *_args: pytest.fail("committed browsing must not rebuild preview albums"),
+    )
+
+    assert api_read_asgi_routes._request_scan_browse_state(request) is library_state
+
+
+def test_request_scan_browse_state_retains_local_preview_when_durable_preview_is_absent(monkeypatch):
+    from music_app.routes import api_read_asgi_routes
+
+    preview = {"albums": ["partial-album"], "scan_in_progress": True}
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(
+            library_state={"albums": []},
+            scan_job_repository=SimpleNamespace(
+                load_authorized_full_scan_preview=lambda **_kwargs: None,
+            ),
+        )),
+        state=SimpleNamespace(policy_evaluation=SimpleNamespace(
+            audit=SimpleNamespace(library_id=7),
+        )),
+    )
+    monkeypatch.setattr(api_read_asgi_routes, "resolve_active_scan_browse_state", lambda _state: preview)
+
+    assert api_read_asgi_routes._request_scan_browse_state(request) is preview
+
+
+class _ActorResolver:
+    def __init__(self, actor):
+        self.actor = actor
+
+    def resolve(self, _raw_token):
+        return self.actor
+
+
+class _JobStatusService:
+    def __init__(self, *, worker_status="worker_ready", fail=False):
+        self.worker_status = worker_status
+        self.fail = fail
+        self.public_calls = []
+        self.operator_calls = []
+
+    def public_health(self, now):
+        self.public_calls.append(now)
+        if self.fail:
+            raise RuntimeError("postgresql://user:password@private-host/jobs")
+        return {"status": "ok", "worker_status": self.worker_status}
+
+    def operator_status(self, now):
+        self.operator_calls.append(now)
+        if self.fail:
+            raise RuntimeError("postgresql://user:password@private-host/jobs")
+        return {
+            "worker_status": self.worker_status,
+            "scan_current_path": "C:/Users/private/Music/Artist/Album/01.flac",
+            "worker": {
+                "instance_id": "worker-opaque-a",
+                "lifecycle_state": "running",
+                "heartbeat_age_seconds": 12,
+            },
+            "jobs": {
+                "queued_count": 3,
+                "running_count": 2,
+                "retry_count": 1,
+                "failed_count": 4,
+                "ambiguous_count": 1,
+                "oldest_queue_age_seconds": 120,
+                "claim_lag_seconds": 45,
+                "current_path": "C:/Users/private/Music/Artist/Album/01.flac",
+            },
+        }
+
+
+def _status_actor(*, bootstrap=False, include_operator_capability=False):
+    grants = [CapabilityGrant("library.browse.read", "global", None)]
+    if include_operator_capability:
+        grants.append(CapabilityGrant("ops.jobs.status.read", "global", None))
+    return CurrentActor(
+        state=ActorState.ACTIVE,
+        account_id=7,
+        session_id=11,
+        username_display="Operator",
+        is_bootstrap_owner=bootstrap,
+        capability_grants=tuple(grants),
+    )
+
+
+def test_asgi_status_gives_ordinary_status_reader_only_coarse_worker_health():
+    asgi_app = _make_asgi_app()
+    service = _JobStatusService(worker_status="worker_degraded")
+    asgi_app.state.current_actor_resolver = _ActorResolver(_status_actor())
+    asgi_app.state.job_status_service = service
+
+
+    status, _headers, body = _run_asgi_request(asgi_app, "GET", "/status")
+
+    assert status == 200
+    payload = _decode_json(body)
+    assert payload["worker_status"] == "worker_degraded"
+    assert "job_status" not in payload
+    assert len(service.public_calls) == 1
+    assert service.operator_calls == []
+    private_names = {
+        "instance_id",
+        "heartbeat_age_seconds",
+        "queued_count",
+        "running_count",
+        "retry_count",
+        "failed_count",
+        "ambiguous_count",
+        "oldest_queue_age_seconds",
+        "claim_lag_seconds",
+    }
+    assert private_names.isdisjoint(payload)
+
+
+@pytest.mark.parametrize(
+    "actor",
+    [
+        pytest.param(_status_actor(bootstrap=True), id="bootstrap-owner"),
+        pytest.param(
+            _status_actor(include_operator_capability=True),
+            id="explicit-capability",
+        ),
+    ],
+)
+def test_asgi_status_adds_one_sanitized_nested_projection_for_authorized_operator(actor):
+    asgi_app = _make_asgi_app()
+    service = _JobStatusService()
+    asgi_app.state.current_actor_resolver = _ActorResolver(actor)
+    asgi_app.state.job_status_service = service
+
+
+    status, _headers, body = _run_asgi_request(asgi_app, "GET", "/status")
+
+    assert status == 200
+    payload = _decode_json(body)
+    assert payload["worker_status"] == "worker_ready"
+    assert payload["job_status"] == {
+        "worker_status": "worker_ready",
+        "worker": {
+            "instance_id": "worker-opaque-a",
+            "lifecycle_state": "running",
+            "heartbeat_age_seconds": 12,
+        },
+        "jobs": {
+            "queued_count": 3,
+            "running_count": 2,
+            "retry_count": 1,
+            "failed_count": 4,
+            "ambiguous_count": 1,
+            "oldest_queue_age_seconds": 120,
+            "claim_lag_seconds": 45,
+        },
+    }
+    assert "scan_current_path" not in payload["job_status"]
+    assert "current_path" not in payload["job_status"]["jobs"]
+    assert service.public_calls == []
+    assert len(service.operator_calls) == 1
+    assert "subject_ref" not in repr(payload["job_status"])
+    assert "parameters" not in repr(payload["job_status"])
+    assert "account_id" not in repr(payload["job_status"])
+
+
+def test_asgi_operator_status_includes_only_bounded_path_free_watcher_metrics():
+    asgi_app = _make_asgi_app()
+    secret = r"D:\Private Music\Secret Library\credential.txt"
+    metrics = SimpleNamespace(
+        ready=2,
+        running=1,
+        coalesced=3,
+        dirty=1,
+        barrier_waiting=1,
+        lag_1_9=4,
+        lag_10_99=2,
+        lag_100_plus=1,
+        coalesced_events=19,
+        catch_ups=5,
+        oldest_ready_seconds=12.5,
+        oldest_repair_seconds=31.25,
+        root_id=secret,
+        path=secret,
+        exception=secret,
+        warning_token=secret,
+    )
+    calls = []
+    asgi_app.state.current_actor_resolver = _ActorResolver(
+        _status_actor(bootstrap=True)
+    )
+    asgi_app.state.watcher_recovery_repository = SimpleNamespace(
+        load_metrics=lambda **kwargs: calls.append(kwargs) or metrics
+    )
+    asgi_app.state.media_host_library_id = 7
+
+    status, _headers, body = _run_asgi_request(asgi_app, "GET", "/status")
+
+    assert status == 200
+    payload = _decode_json(body)
+    assert payload["watcher_metrics"] == {
+        "ready": 2,
+        "running": 1,
+        "coalesced": 3,
+        "dirty": 1,
+        "barrier_waiting": 1,
+        "lag_1_9": 4,
+        "lag_10_99": 2,
+        "lag_100_plus": 1,
+        "coalesced_events": 19,
+        "catch_ups": 5,
+        "oldest_ready_seconds": 12.5,
+        "oldest_repair_seconds": 31.25,
+    }
+    assert calls == [{"library_id": 7}]
+    assert secret not in body.decode("utf-8")
+    assert "library_id" not in repr(payload["job_status"])
+
+
+@pytest.mark.parametrize("worker_status", ["worker_ready", "worker_degraded"])
+def test_asgi_status_fails_closed_when_operator_worker_details_are_missing(worker_status):
+    asgi_app = _make_asgi_app()
+    secret = "postgresql://user:password@private-host/jobs"
+    service = _JobStatusService(worker_status=worker_status)
+
+    def inconsistent_operator_status(now):
+        service.operator_calls.append(now)
+        return {
+            "worker_status": worker_status,
+            "worker": None,
+            "jobs": {
+                "queued_count": 3,
+                "running_count": 2,
+                "retry_count": 1,
+                "failed_count": 4,
+                "ambiguous_count": 1,
+                "oldest_queue_age_seconds": 120,
+                "claim_lag_seconds": 45,
+            },
+            "diagnostic": secret,
+        }
+
+    service.operator_status = inconsistent_operator_status
+    asgi_app.state.current_actor_resolver = _ActorResolver(_status_actor(bootstrap=True))
+    asgi_app.state.job_status_service = service
+
+    status, _headers, body = _run_asgi_request(asgi_app, "GET", "/status")
+
+    assert status == 200
+    payload = _decode_json(body)
+    assert payload["worker_status"] == "worker_unavailable"
+    assert payload["job_status"] == {
+        "worker_status": "worker_unavailable",
+        "worker": None,
+        "jobs": {
+            "queued_count": 0,
+            "running_count": 0,
+            "retry_count": 0,
+            "failed_count": 0,
+            "ambiguous_count": 0,
+            "oldest_queue_age_seconds": 0,
+            "claim_lag_seconds": 0,
+        },
+    }
+    assert len(service.operator_calls) == 1
+    assert secret not in body.decode("utf-8")
+
+
+def test_asgi_status_service_failure_is_sanitized_and_preserves_existing_payload():
+    asgi_app = _make_asgi_app()
+    secret = "postgresql://user:password@private-host/jobs"
+    asgi_app.state.current_actor_resolver = _ActorResolver(_status_actor(bootstrap=True))
+    asgi_app.state.job_status_service = _JobStatusService(fail=True)
+
+    status, _headers, body = _run_asgi_request(asgi_app, "GET", "/status")
+
+    assert status == 200
+    payload = _decode_json(body)
+    assert payload["scan_in_progress"] is False
+    assert payload["worker_status"] == "worker_unavailable"
+    assert payload["job_status"] == {
+        "worker_status": "worker_unavailable",
+        "worker": None,
+        "jobs": {
+            "queued_count": 0,
+            "running_count": 0,
+            "retry_count": 0,
+            "failed_count": 0,
+            "ambiguous_count": 0,
+            "oldest_queue_age_seconds": 0,
+            "claim_lag_seconds": 0,
+        },
+    }
+    assert secret not in body.decode("utf-8")
+
 
 
 @pytest.mark.parametrize("owner", [True, False])
@@ -2067,6 +2482,7 @@ def test_asgi_selected_artist_root_sidebar_retries_while_projection_is_rebuildin
     request = SimpleNamespace(
         query_params=QueryParams("surface=albums&artist=Broadcast&root_sidebar=1"),
         app=SimpleNamespace(state=SimpleNamespace(config={}, library_state={})),
+        state=SimpleNamespace(),
     )
     monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", PendingRepository)
     monkeypatch.setattr(asgi_read_routes, "_is_postgres_root_album_browse_request", lambda _request: False)
@@ -4642,209 +5058,6 @@ def test_asgi_album_details_preserves_album_setup_and_viewer_opinions_without_fl
     assert album_payload["gallery_list_block"]["summary"]["album_popularity"]["is_visible"] is True
 
 
-def test_asgi_utility_read_routes_preserve_payloads_statuses_and_problematic_fallback_without_flask_bridge(
-    app,
-    asgi_app,
-    monkeypatch,
-):
-    from music_app.routes import api_read_asgi_routes as asgi_read_routes
-    loops_path = Path(app.config["DATA_DIR"]) / "loops" / "loops.json"
-    loops_path.parent.mkdir(parents=True, exist_ok=True)
-    loops_path.write_text(
-        json.dumps({"loops": [{"id": "loop-1", "name": "Intro loop"}]}),
-        encoding="utf-8",
-    )
-    asgi_config = {
-        **app.config,
-        "ASGI_CONFIG_MARKER": "explicit-problematic-fallback-config",
-    }
-    asgi_library_state = {
-        **app.library_state,
-        "albums": [{"key": "from-asgi-state"}],
-        "file_cache": {"from-asgi-state": {"path": "from-asgi-state"}},
-    }
-    asgi_logger = SimpleNamespace(name="problematic-fallback-logger")
-    asgi_app.state.config = asgi_config
-    asgi_app.state.library_state = asgi_library_state
-    asgi_app.state.logger = asgi_logger
-    asgi_app.state.library_watch_health_service = SimpleNamespace(
-        load_problems=lambda: [],
-    )
-
-    detail_calls: list[str] = []
-    fallback_calls: list[tuple[str, dict[str, object], dict[str, object], object]] = []
-
-    def fail_flask_app(_request):
-        raise AssertionError("ASGI problematic-files fallback must not read through the Flask bridge")
-
-    def fail_test_request_context(*_args, **_kwargs):
-        raise AssertionError("ASGI problematic-files fallback must not enter Flask test_request_context")
-
-    def fake_build_problematic_albums_payload(
-        *,
-        config=None,
-        library_state=None,
-        logger=None,
-    ) -> dict[str, object]:
-        fallback_calls.append(("list", config, library_state, logger))
-        return {
-            "count": 1,
-            "context_music_dir": str(config["MUSIC_DIR"]),
-            "state_album_count": len(library_state["albums"]),
-            "logger_name": logger.name,
-        }
-
-    def fake_build_problematic_album_detail_payload(
-        album_key: str,
-        *,
-        config=None,
-        library_state=None,
-        logger=None,
-    ) -> dict[str, object] | None:
-        detail_calls.append(album_key)
-        fallback_calls.append((album_key, config, library_state, logger))
-        if album_key == "missing":
-            return None
-        return {
-            "key": album_key,
-            "config_marker": config["ASGI_CONFIG_MARKER"],
-            "state_album_count": len(library_state["albums"]),
-            "logger_name": logger.name,
-            "detail_loaded": True,
-        }
-
-    monkeypatch.setattr(
-        asgi_read_routes,
-        "build_problematic_albums_payload",
-        fake_build_problematic_albums_payload,
-    )
-    monkeypatch.setattr(
-        asgi_read_routes,
-        "build_problematic_album_detail_payload",
-        fake_build_problematic_album_detail_payload,
-    )
-    monkeypatch.setattr(
-        asgi_read_routes,
-        "load_loops",
-        lambda config, **_scope: [{"id": "loop-1", "name": "Intro loop"}],
-    )
-    monkeypatch.setattr(
-        asgi_read_routes,
-        "load_log_history_snapshot",
-        lambda config, **_scope: {
-            "items": [{"id": "entry-1", "message": "Refresh started"}],
-            "revision": "test-process:4",
-        },
-    )
-    assert not hasattr(asgi_read_routes, "_flask_app")
-    monkeypatch.setattr(
-        asgi_read_routes,
-        "select_runtime_persistence_adapter",
-        lambda seam_id, config: type(
-            "Selection",
-            (),
-            {"seam_id": seam_id, "effective_backend": "unavailable"},
-        )(),
-    )
-
-    list_status, _list_headers, list_body = _run_asgi_request(
-        asgi_app,
-        "GET",
-        "/utilities/problematic-files",
-    )
-    path_detail_status, _path_detail_headers, path_detail_body = _run_asgi_request(
-        asgi_app,
-        "GET",
-        "/utilities/problematic-files/artist/album",
-    )
-    query_detail_status, _query_detail_headers, query_detail_body = _run_asgi_request(
-        asgi_app,
-        "GET",
-        "/utilities/problematic-files/detail",
-        query={"album_key": "query-album"},
-    )
-    missing_key_status, _missing_key_headers, missing_key_body = _run_asgi_request(
-        asgi_app,
-        "GET",
-        "/utilities/problematic-files/detail",
-    )
-    missing_album_status, _missing_album_headers, missing_album_body = _run_asgi_request(
-        asgi_app,
-        "GET",
-        "/utilities/problematic-files/missing",
-    )
-    loops_status, _loops_headers, loops_body = _run_asgi_request(
-        asgi_app,
-        "GET",
-        "/utilities/loops",
-    )
-    log_status, log_headers, log_body = _run_asgi_request(
-        asgi_app,
-        "GET",
-        "/utilities/log-history",
-    )
-
-    assert list_status == 200
-    assert _decode_json(list_body) == {
-        "count": 1,
-        "context_music_dir": str(asgi_config["MUSIC_DIR"]),
-        "state_album_count": 1,
-        "logger_name": "problematic-fallback-logger",
-        "watcher_health": {"state": "healthy", "problems": []},
-        "operational_items": [],
-        "operational_count": 0,
-    }
-    assert path_detail_status == 200
-    assert _decode_json(path_detail_body) == {
-        "key": "artist/album",
-        "config_marker": "explicit-problematic-fallback-config",
-        "state_album_count": 1,
-        "logger_name": "problematic-fallback-logger",
-        "detail_loaded": True,
-    }
-    assert query_detail_status == 200
-    assert _decode_json(query_detail_body) == {
-        "key": "query-album",
-        "config_marker": "explicit-problematic-fallback-config",
-        "state_album_count": 1,
-        "logger_name": "problematic-fallback-logger",
-        "detail_loaded": True,
-    }
-    assert missing_key_status == 400
-    assert _decode_json(missing_key_body) == {"ok": False, "error": "Missing album_key."}
-    assert missing_album_status == 404
-    assert _decode_json(missing_album_body) == {
-        "ok": False,
-        "error": "Problematic album not found.",
-    }
-    assert loops_status == 200
-    assert _decode_json(loops_body) == {
-        "ok": True,
-        "loops": [{"id": "loop-1", "name": "Intro loop", "cover_url": ""}],
-        "allowed_actions": {
-            "library.loops.read": True,
-            "library.loops.create": True,
-            "library.loops.delete": True,
-            "library.loops.reorder": True,
-        },
-    }
-    assert log_status == 200
-    assert _decode_json(log_body) == {
-        "ok": True,
-        "items": [{"id": "entry-1", "message": "Refresh started"}],
-        "revision": "test-process:4",
-        "allowed_actions": {"library.logs.read": True, "library.logs.export": True},
-    }
-    assert log_headers["cache-control"] == "no-store"
-    assert detail_calls == ["artist/album", "query-album", "missing"]
-    assert fallback_calls == [
-        ("list", asgi_config, asgi_library_state, asgi_logger),
-        ("artist/album", asgi_config, asgi_library_state, asgi_logger),
-        ("query-album", asgi_config, asgi_library_state, asgi_logger),
-        ("missing", asgi_config, asgi_library_state, asgi_logger),
-    ]
-
-
 def test_asgi_loops_and_log_history_use_asgi_config_without_flask_bridge(app, asgi_app, monkeypatch):
     from music_app.routes import api_read_asgi_routes as asgi_read_routes
 
@@ -4969,8 +5182,11 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
                 "view_data_source": "postgres_library_browse",
             }
 
-        def build_problematic_files_page(self, *, limit):
+        def build_problematic_files_page(self, *, limit, cursor=None, filter="", sort="album"):
             assert limit == 50
+            assert cursor is None
+            assert filter == ""
+            assert sort == "album"
             return {
                 "count": 1,
                 "items": [{"key": "bounded-album", "detail_loaded": False}],
@@ -5059,20 +5275,9 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
     list_payload = _decode_json(list_body)
     assert list_payload == {
         "count": 1,
-        "items": [
-            {
-                "key": "broken-album",
-                "detail_loaded": False,
-            }
-        ],
-        "initial_detail": {
-            "key": "broken-album",
-            "detail_loaded": True,
-            "track_problem_rows": [{"filename": "01.flac"}],
-            "persistence_backend": "postgres",
-            "persistence_seam": "library_browse",
-            "view_data_source": "postgres_library_browse",
-        },
+        "items": [{"key": "bounded-album", "detail_loaded": False}],
+        "initial_detail": {"key": "bounded-album", "detail_loaded": True},
+        "complete": False,
         "persistence_backend": "postgres",
         "persistence_seam": "library_browse",
         "view_data_source": "postgres_library_browse",
@@ -5114,13 +5319,264 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
         "view_data_source": "postgres_library_browse",
     }
     assert missing_key_status == 400
-    assert _decode_json(missing_key_body) == {"ok": False, "error": "Missing album_key."}
+    assert _decode_json(missing_key_body) == {
+        "ok": False,
+        "error": "Provide exactly one projection_id, album_key, or track_path.",
+    }
     assert missing_album_status == 404
     assert _decode_json(missing_album_body) == {
         "ok": False,
         "error": "Problematic album not found.",
     }
     assert repository_configs == [app.config, app.config, app.config, app.config, app.config]
+
+
+def test_asgi_problematic_files_default_and_scoped_reads_are_always_bounded(
+    app,
+    asgi_app,
+    monkeypatch,
+):
+    from music_app.routes import api_read_asgi_routes as asgi_read_routes
+
+    page_calls = []
+
+    class FakePostgresRepository:
+        def __init__(self, _config):
+            pass
+
+        def build_problematic_files_payload(self):
+            raise AssertionError("interactive Problematic Files must not build an unbounded projection")
+
+        def build_problematic_files_page(self, *, limit, cursor=None, filter="", sort="album"):
+            page_calls.append({
+                "limit": limit,
+                "cursor": cursor,
+                "filter": filter,
+                "sort": sort,
+            })
+            return {
+                "count": 0,
+                "items": [],
+                "initial_detail": None,
+                "next_cursor": None,
+                "total": 0,
+                "complete": True,
+            }
+
+    app.config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://album_haven_app@localhost/app"
+    app.config["PERSISTENCE_BACKENDS"] = {"library_browse": "postgres"}
+    monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FakePostgresRepository)
+    asgi_app.state.library_watch_health_service = SimpleNamespace(load_problems=lambda: [])
+
+    default_status, _headers, _body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/utilities/problematic-files",
+    )
+    scoped_status, _headers, _body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/utilities/problematic-files",
+        query={"cursor": "page-2", "filter": "wanted", "sort": "album"},
+    )
+
+    assert default_status == scoped_status == 200
+    assert page_calls == [
+        {"limit": 50, "cursor": None, "filter": "", "sort": "album"},
+        {"limit": 50, "cursor": "page-2", "filter": "wanted", "sort": "album"},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("raised", "expected_status", "expected_code"),
+    [
+        ("pending", 503, "problematic_projection_pending"),
+        ("expired", 409, "problematic_projection_cursor_expired"),
+        ("invalid", 400, "invalid_problematic_projection_cursor"),
+    ],
+)
+def test_problematic_projection_route_maps_typed_reader_failures(
+    app, monkeypatch, raised, expected_status, expected_code
+):
+    asgi_app = _make_asgi_app()
+
+    class FakePostgresRepository:
+        def __init__(self, _config):
+            pass
+
+        def build_problematic_files_page(self, **_kwargs):
+            if raised == "pending":
+                raise asgi_read_routes.ProblematicProjectionPending("private storage detail")
+            if raised == "expired":
+                raise asgi_read_routes.ProblematicProjectionCursorExpiredError(
+                    "private revision detail"
+                )
+            raise asgi_read_routes.ProblematicProjectionCursorError("private cursor detail")
+
+    app.config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://album_haven_app@localhost/app"
+    app.config["PERSISTENCE_BACKENDS"] = {"library_browse": "postgres"}
+    monkeypatch.setattr(
+        asgi_read_routes, "PostgresLibraryBrowseRepository", FakePostgresRepository
+    )
+    status, headers, body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/utilities/problematic-files",
+        query={"cursor": "opaque"},
+    )
+
+    assert status == expected_status
+    assert _decode_json(body)["error_code"] == expected_code
+    assert "private" not in body.decode("utf-8")
+    projected_headers = {str(key).lower(): str(value) for key, value in headers.items()}
+    if raised == "pending":
+        assert projected_headers["retry-after"] == "1"
+        assert projected_headers["cache-control"] == "no-store"
+
+
+def test_problematic_projection_route_rejects_nfkc_expanded_query_before_storage(
+    app,
+    monkeypatch,
+):
+    asgi_app = _make_asgi_app()
+    app.config["ALBUM_HAVEN_APP_DATABASE_URL"] = (
+        "postgresql://album_haven_app@localhost/unused"
+    )
+    app.config["PERSISTENCE_BACKENDS"] = {"library_browse": "postgres"}
+    status, headers, body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/utilities/problematic-files",
+        query={"filter": "\ufdfa" * 125},
+    )
+
+    assert status == 400
+    assert _decode_json(body)["error_code"] == "invalid_problematic_files_request"
+    assert {str(key).lower(): str(value) for key, value in headers.items()}[
+        "cache-control"
+    ] == "no-store"
+
+
+def test_problematic_detail_route_passes_opaque_projection_id_unchanged(
+    app,
+    monkeypatch,
+):
+    asgi_app = _make_asgi_app()
+    calls = []
+    projection_id = "h1:Vf8Yp5xA5N7b3Qn2dG4uL6rS9mK1cT0wE2jH8aB4zXQ"
+
+    class FakePostgresRepository:
+        def __init__(self, _config):
+            pass
+
+        def build_problematic_file_detail_payload(self, **selectors):
+            calls.append(selectors)
+            return {
+                "projection_id": selectors["projection_id"],
+                "detail_loaded": True,
+                "tracks": [{"path": "C:/Música/Björk/01 - Jóga.flac"}],
+            }
+
+    app.config["ALBUM_HAVEN_APP_DATABASE_URL"] = (
+        "postgresql://album_haven_app@localhost/app"
+    )
+    app.config["PERSISTENCE_BACKENDS"] = {"library_browse": "postgres"}
+    monkeypatch.setattr(
+        asgi_read_routes,
+        "PostgresLibraryBrowseRepository",
+        FakePostgresRepository,
+    )
+    status, _headers, body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/utilities/problematic-files/detail",
+        query={"projection_id": projection_id},
+    )
+
+    assert status == 200
+    assert calls == [{"projection_id": projection_id}]
+    assert _decode_json(body)["tracks"] == [
+        {"path": "C:/Música/Björk/01 - Jóga.flac"}
+    ]
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        {},
+        {"projection_id": "   "},
+        {"projection_id": "h1:item", "album_key": "legacy"},
+        {"projection_id": "h1:item", "track_path": "/music/01.flac"},
+        {"album_key": "legacy", "track_path": "/music/01.flac"},
+        {
+            "projection_id": "h1:item",
+            "album_key": "legacy",
+            "track_path": "/music/01.flac",
+        },
+    ],
+)
+def test_problematic_detail_route_requires_exactly_one_selector(
+    app,
+    monkeypatch,
+    query,
+):
+    asgi_app = _make_asgi_app()
+
+    class FailIfCalledRepository:
+        def __init__(self, _config):
+            pass
+
+        def build_problematic_file_detail_payload(self, **_selectors):
+            pytest.fail("invalid detail selector reached album detail storage")
+
+        def build_problematic_album_payload_by_track_paths(self, _paths):
+            pytest.fail("invalid detail selector reached track detail storage")
+
+    app.config["PERSISTENCE_BACKENDS"] = {"library_browse": "postgres"}
+    monkeypatch.setattr(
+        asgi_read_routes,
+        "PostgresLibraryBrowseRepository",
+        FailIfCalledRepository,
+    )
+    status, _headers, body = _run_asgi_request(
+        asgi_app,
+        "GET",
+        "/utilities/problematic-files/detail",
+        query=query,
+    )
+
+    assert status == 400
+    assert _decode_json(body) == {
+        "ok": False,
+        "error": "Provide exactly one projection_id, album_key, or track_path.",
+    }
+
+
+def test_problematic_detail_path_rejects_whitespace_selector(app, monkeypatch):
+    class FailIfCalledRepository:
+        def __init__(self, _config):
+            pass
+
+        def build_problematic_file_detail_payload(self, **_selectors):
+            pytest.fail("whitespace detail selector reached storage")
+
+    app.config["PERSISTENCE_BACKENDS"] = {"library_browse": "postgres"}
+    monkeypatch.setattr(
+        asgi_read_routes,
+        "PostgresLibraryBrowseRepository",
+        FailIfCalledRepository,
+    )
+
+    response = asgi_read_routes.utilities_problematic_file_detail(
+        SimpleNamespace(),
+        "   ",
+    )
+
+    assert response.status_code == 400
+    assert _decode_json(response.body) == {
+        "ok": False,
+        "error": "Provide a non-empty album_key.",
+    }
 
 
 def test_asgi_album_note_reserved_mutation_routes_preserve_fail_closed_contract(app):

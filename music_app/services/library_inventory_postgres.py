@@ -79,6 +79,7 @@ class PostgresLibraryInventoryRepository:
         limit: object = DEFAULT_NON_ALBUM_CANDIDATE_LIMIT,
         connection: Any | None = None,
         unassigned_only: bool = False,
+        canonical_library: bool = False,
     ) -> list[dict[str, object]]:
         """Load bounded raw inventory candidates without shaping browse payloads."""
         normalized_track_ids = sorted(
@@ -90,7 +91,7 @@ class PostgresLibraryInventoryRepository:
         )
         normalized_private_paths = sorted(
             {
-                str(private_path).strip()
+                str(private_path)
                 for private_path in (private_paths or ())
                 if str(private_path or "").strip()
             }
@@ -126,6 +127,8 @@ class PostgresLibraryInventoryRepository:
             params["query_patterns"] = [f"%{term}%" for term in normalized_query_terms]
         sql = _non_album_candidates_sql(
             unassigned_only=unassigned_only,
+            canonical_library=canonical_library,
+            scope_private_paths=bool(normalized_private_paths),
             filter_artists=bool(normalized_artist_names),
             filter_query=bool(normalized_query_terms),
         )
@@ -222,7 +225,16 @@ def _non_album_candidates_sql(
     unassigned_only: bool = False,
     filter_artists: bool = False,
     filter_query: bool = False,
+    canonical_library: bool = False,
+    scope_private_paths: bool = False,
 ) -> str:
+    library_scope = (
+        "select library_id from ops.resolve_problematic_projection_library()"
+        if canonical_library else _bootstrap_context_sql()
+    )
+    path_predicate = "library.local_track_files.private_path = any(%(private_paths)s::text[])"
+    path_and = f"and {path_predicate}" if scope_private_paths else ""
+    path_where = f"where {path_predicate}" if scope_private_paths else ""
     stored_file_album = "coalesce(library.local_track_files.scan_file_album, '')"
     stored_non_album_predicate = _non_album_value_predicate_sql(stored_file_album)
     effective_album = """coalesce(
@@ -266,9 +278,9 @@ def _non_album_candidates_sql(
     """ if filter_query else ""
     return f"""
         with bootstrap_context as (
-          {_bootstrap_context_sql()}
+          {library_scope}
         ),
-        {local_album_membership_ctes_sql()},
+        {local_album_membership_ctes_sql(scope_private_paths=scope_private_paths)},
         eligible_track_file_ids as (
           select file_id as track_file_id from local_album_membership
           where problem is not null
@@ -280,6 +292,7 @@ def _non_album_candidates_sql(
           join library.local_track_files
             on library.local_track_files.track_id = library.local_tracks.id
           where library.local_track_files.scan_cache_stale is false
+            {path_and}
             and (%(track_id_count)s = 0 or library.local_tracks.id = any(%(track_ids)s::bigint[]))
             and {stored_non_album_predicate}
 
@@ -292,6 +305,7 @@ def _non_album_candidates_sql(
           join library.local_track_files
             on library.local_track_files.track_id = library.local_tracks.id
           where library.local_track_files.scan_cache_stale is false
+            {path_and}
             and (%(track_id_count)s = 0 or library.local_tracks.id = any(%(track_ids)s::bigint[]))
             and {scanned_exception_predicate}
 
@@ -306,6 +320,7 @@ def _non_album_candidates_sql(
           join library.local_tracks
             on library.local_tracks.id = library.local_track_files.track_id
            and library.local_tracks.library_id = library.exception_overrides.library_id
+          {path_where}
 
           union
 
@@ -318,6 +333,7 @@ def _non_album_candidates_sql(
            and library.local_tracks.library_id = library.exception_overrides.library_id
           join library.local_track_files
             on library.local_track_files.track_id = library.local_tracks.id
+          {path_where}
         ),
         active_track_files as (
           select

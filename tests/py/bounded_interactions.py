@@ -25,6 +25,7 @@ class OperationCounts:
     returned_rows: int = 0
     affected_rows: int = 0
     pool_leases: int = 0
+    physical_connections: int = 0
     pool_lease_ms: float = 0.0
     leases_held_across_io: int = 0
     builder_calls: int = 0

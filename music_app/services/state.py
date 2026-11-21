@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from music_app.services.log_history import resolve_media_host_history_scope
 
+import logging
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -96,16 +97,21 @@ def invalidate_targeted_library_projections(
     *,
     revision: int,
     affected_album_keys: tuple[str, ...],
+    expected_library_id: int | None = None,
 ) -> None:
     """Invalidate only live projections affected by a committed watcher event."""
     with _CACHE_LOCK:
         browse_cache = library_state.get("_view_payload_root_browse_cache")
         if isinstance(browse_cache, dict):
             browse_cache.clear()
-        library_state["inventory_mutation_revision"] = max(
-            0, int(revision or 0),
-            int(library_state.get("inventory_mutation_revision") or 0),
-        )
+        if (
+            expected_library_id is None
+            or library_state.get("library_id") == expected_library_id
+        ):
+            library_state["inventory_mutation_revision"] = max(
+                0, int(revision or 0),
+                int(library_state.get("inventory_mutation_revision") or 0),
+            )
         library_state["targeted_inventory_album_keys"] = tuple(affected_album_keys)
     if str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip():
         schedule_gallery_projection_refresh(config)
@@ -402,6 +408,79 @@ def _drain_watcher_cover_refresh_queue(
             return
 
 
+def sync_durable_inventory_revision(
+    library_state: dict[str, object],
+    config: dict[str, object],
+) -> int:
+    """Observe worker commits and invalidate this web process once per revision."""
+
+    with _CACHE_LOCK:
+        observed_library_id = library_state.get("library_id")
+        current_revision = max(
+            0, int(library_state.get("inventory_mutation_revision") or 0)
+        )
+        current_cover_revision = max(
+            0, int(library_state.get("cover_mutation_revision") or 0)
+        )
+    durable_library_id = observed_library_id
+    durable_cover_revision = current_cover_revision
+    try:
+        adapter = select_scan_cache_adapter(config)
+        load_publication = getattr(adapter, "load_inventory_publication", None)
+        if callable(load_publication):
+            publication = load_publication()
+            durable_library_id = publication.get("library_id", observed_library_id)
+            durable_revision = max(
+                0, int(publication.get("inventory_mutation_revision") or 0)
+            )
+            durable_cover_revision = max(
+                0, int(publication.get("cover_mutation_revision") or 0)
+            )
+        else:
+            load_revision = getattr(adapter, "load_inventory_mutation_revision", None)
+            if not callable(load_revision):
+                return current_revision
+            durable_revision = max(0, int(load_revision() or 0))
+    except Exception:
+        return current_revision
+    with _CACHE_LOCK:
+        current_library_id = library_state.get("library_id")
+        current_revision = max(
+            0, int(library_state.get("inventory_mutation_revision") or 0)
+        )
+        current_cover_revision = max(
+            0, int(library_state.get("cover_mutation_revision") or 0)
+        )
+        if (
+            current_library_id != observed_library_id
+            and durable_library_id != current_library_id
+        ):
+            return current_revision
+        if durable_library_id == current_library_id:
+            durable_revision = max(current_revision, durable_revision)
+            durable_cover_revision = max(current_cover_revision, durable_cover_revision)
+        if (
+            durable_library_id == current_library_id
+            and durable_revision == current_revision
+            and durable_cover_revision == current_cover_revision
+        ):
+            return current_revision
+        library_state.update(
+            library_id=durable_library_id,
+            inventory_mutation_revision=durable_revision,
+            cover_mutation_revision=durable_cover_revision,
+            relation_projection_ready=False,
+        )
+    invalidate_targeted_library_projections(
+        library_state,
+        config,
+        revision=durable_revision,
+        affected_album_keys=(),
+        expected_library_id=durable_library_id,
+    )
+    return durable_revision
+
+
 def _bounded_file_error_history_recorder(
     config: dict[str, object],
     logger: object,
@@ -413,12 +492,36 @@ def _bounded_file_error_history_recorder(
     history_scope=None,
 ) -> Callable[..., None]:
     counters = counter_state if counter_state is not None else {}
-    counter_key = f"{summary_id_prefix}:{getattr(history_scope, 'library_id', 'unattributed')}:{scan_generation}"
+    counter_key = (
+        f"{summary_id_prefix}:"
+        f"{getattr(history_scope, 'library_id', 'unattributed')}:"
+        f"{scan_generation}"
+    )
+    durable_reason_codes = {
+        "Library cover file inspection failed": "cover_file_inspection_failed",
+        "Library cover image decode failed": "cover_image_decode_failed",
+        "Library metadata read failed": "metadata_read_failed",
+        "Library directory read failed": "directory_read_failed",
+        "Library directory entry inspection failed": "directory_entry_inspection_failed",
+        "Library candidate file stat failed": "candidate_file_stat_failed",
+    }
 
     def record_file_error(action: str, **fields: object) -> None:
         recorded_file_errors = int(counters.get(counter_key) or 0) + 1
         counters[counter_key] = recorded_file_errors
         if recorded_file_errors <= _SCAN_FILE_ERROR_HISTORY_LIMIT:
+            if config.get("DURABLE_WORKER_SAFE_LOGGING") is True:
+                log_app_event(
+                    config,
+                    logger,
+                    "Durable library file error",
+                    level="error",
+                    history=True,
+                    history_scope=history_scope,
+                    scan_generation=scan_generation,
+                    reason_code=durable_reason_codes.get(action, "scan_file_error"),
+                )
+                return
             log_app_event(
                 config,
                 logger,
@@ -491,6 +594,9 @@ def _call_hydrate_library_state_from_disk(
 
 def init_state(app) -> None:
     app.library_state = {
+        "library_id": None,
+        "inventory_mutation_revision": 0,
+        "cover_mutation_revision": 0,
         "albums": [],
         "file_cache": {},
         "last_scan": 0.0,
@@ -518,6 +624,8 @@ def init_state(app) -> None:
         "cold_scan_handoff_error": "",
         "cold_scan_claim_token": 0,
         "cold_scan_claimed_at": 0.0,
+        "cold_scan_force": False,
+        "cold_scan_is_cold_start": True,
         "rescan_ignore_existing_cache": False,
         "scan_metadata_repair_required": False,
         "relation_views": empty_relation_views(),
@@ -825,10 +933,22 @@ def refresh_relation_views_for_state(
     expected_scan_generation: int | None = None,
     expected_cover_mutation_revision: int | None = None,
     expected_inventory_mutation_revision: int | None = None,
+    before_commit: Callable[[object], object] | None = None,
     publication_state: dict[str, object] | None = None,
 ) -> None:
     if config.get("SHARED_LIBRARY_BROWSE_ONLY") is True:
         raise RuntimeError("Shared browsing cannot rebuild library relations")
+    postgres_relation_projection = bool(
+        str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()
+    )
+    pure_relation_refresh = (
+        postgres_relation_projection
+        and publication_state is None
+        and not final_scan_publication
+    )
+    if pure_relation_refresh and expected_scan_generation is None:
+        with _CACHE_LOCK:
+            expected_scan_generation = int(library_state.get("scan_generation") or 0)
     guarded_live_repair = (
         expected_scan_generation is not None
         and publication_state is None
@@ -839,24 +959,21 @@ def refresh_relation_views_for_state(
         if guarded_live_repair
         else publication_state if publication_state is not None else library_state
     )
-    postgres_relation_projection = bool(
-        str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()
-    )
-    snapshot_options: dict[str, object] = {
-        "separate_release_keys": set(
+    snapshot_options: dict[str, object] = {}
+    if not pure_relation_refresh:
+        snapshot_options["separate_release_keys"] = set(
             target_state.get("separate_release_keys") or set()
-        ),
-    }
-    observed_library_root_ids = target_state.get("observed_library_root_ids")
-    if isinstance(observed_library_root_ids, (set, list, tuple)):
-        snapshot_options["observed_library_root_ids"] = {
-            str(root_id).strip()
-            for root_id in observed_library_root_ids
-            if str(root_id).strip()
-        }
-    if postgres_relation_projection:
+        )
+        observed_library_root_ids = target_state.get("observed_library_root_ids")
+        if isinstance(observed_library_root_ids, (set, list, tuple)):
+            snapshot_options["observed_library_root_ids"] = {
+                str(root_id).strip()
+                for root_id in observed_library_root_ids
+                if str(root_id).strip()
+            }
+    if postgres_relation_projection and not pure_relation_refresh:
         snapshot_options["rebuild_relation_projection"] = True
-    else:
+    elif not postgres_relation_projection:
         relation_views = refresh_relation_views_in_state(target_state, config)
         target_state["relation_views"] = relation_views
         snapshot_options["relation_views"] = relation_views
@@ -871,6 +988,8 @@ def refresh_relation_views_for_state(
         snapshot_options["expected_inventory_mutation_revision"] = (
             expected_inventory_mutation_revision
         )
+    if before_commit is not None:
+        snapshot_options["before_commit"] = before_commit
     if final_scan_publication:
         if expected_scan_generation is None:
             raise ValueError(
@@ -896,14 +1015,19 @@ def refresh_relation_views_for_state(
 
     def save_relation_snapshot() -> None:
         nonlocal repaired_cover_published
-        committed_relation_state = save_cache_to_disk_for_config(
-            config,
-            config["CACHE_PATH"],
-            dict(target_state.get("file_cache") or {}),
-            library_root_cache_identity(config),
-            float(target_state.get("last_scan") or 0.0),
-            **snapshot_options,
-        )
+        if pure_relation_refresh:
+            committed_relation_state = select_scan_cache_adapter(
+                config
+            ).refresh_relation_projection(**snapshot_options)
+        else:
+            committed_relation_state = save_cache_to_disk_for_config(
+                config,
+                config["CACHE_PATH"],
+                dict(target_state.get("file_cache") or {}),
+                library_root_cache_identity(config),
+                float(target_state.get("last_scan") or 0.0),
+                **snapshot_options,
+            )
         repaired_entries = (committed_relation_state or {}).get("repaired_cover_entries")
         if isinstance(repaired_entries, dict) and repaired_entries:
             from music_app.services.library import build_albums_from_file_cache
@@ -1015,17 +1139,31 @@ def scan_music_incremental(
     expected_scan_generation: int | None = None,
     publication_state: dict[str, object] | None = None,
     publish_partial_snapshot: Callable[[], None] | None = None,
+    root_definitions: list[dict[str, object]] | None = None,
+    progress_callback: Callable[..., None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+    exception_overrides: dict[str, object] | None = None,
 ) -> tuple[dict[str, dict[str, object]], float]:
     history_scope = resolve_media_host_history_scope(config)
     cfg = config
-    configured_roots = iter_library_root_paths(cfg)
+    selected_root_definitions = (
+        list(root_definitions) if root_definitions is not None else get_library_roots(cfg)
+    )
+    configured_roots = (
+        [
+            Path(str(root.get("path") or "")).resolve(strict=False)
+            for root in selected_root_definitions
+        ]
+        if root_definitions is not None
+        else [Path(root).resolve(strict=False) for root in iter_library_root_paths(cfg)]
+    )
     scan_roots = [root for root in configured_roots if root.exists()]
     if not scan_roots:
         raise FileNotFoundError(
             "No configured library roots are currently available: "
             + ", ".join([str(root) for root in configured_roots] or [str(cfg["MUSIC_DIR"])])
         )
-    root_definitions = get_library_roots(cfg)
+    root_definitions = selected_root_definitions
     available_paths = {
         normcase(str(Path(root).resolve(strict=False)))
         for root in scan_roots
@@ -1078,13 +1216,19 @@ def scan_music_incremental(
         roots=scan_roots,
         supported_extensions=cfg["SUPPORTED_EXTENSIONS"],
         image_extensions=cfg["IMAGE_EXTENSIONS"],
-        exception_overrides=load_exception_overrides(cfg),
+        exception_overrides=(
+            dict(exception_overrides)
+            if exception_overrides is not None
+            else load_exception_overrides(cfg)
+        ),
         use_existing_cache=use_existing_cache,
         expected_scan_generation=expected_scan_generation,
         root_definitions=root_definitions,
         publication_state=publication_state,
         publish_partial_snapshot=publish_partial_snapshot,
         record_file_error=record_file_error,
+        progress_callback=progress_callback,
+        should_cancel=should_cancel,
     )
     if publication_state is not None and traversal_failed_root_ids:
         observed_root_ids = publication_state.get("observed_library_root_ids")
@@ -1220,6 +1364,11 @@ def refresh_library_for_state(
     logger: object,
     *,
     force: bool = False,
+    root_definitions: list[dict[str, object]] | None = None,
+    progress_callback: Callable[..., None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+    expected_inventory_mutation_revision: int | None = None,
+    before_commit: Callable[[object], object] | None = None,
 ) -> None:
     def refresh_relation_views(
         *,
@@ -1227,6 +1376,7 @@ def refresh_library_for_state(
         expected_scan_generation: int | None = None,
         expected_cover_mutation_revision: int | None = None,
         expected_inventory_mutation_revision: int | None = None,
+        before_commit: Callable[[object], object] | None = None,
         publication_state: dict[str, object] | None = None,
     ) -> None:
         options: dict[str, object] = {}
@@ -1240,6 +1390,8 @@ def refresh_library_for_state(
             options["expected_inventory_mutation_revision"] = (
                 expected_inventory_mutation_revision
             )
+        if before_commit is not None:
+            options["before_commit"] = before_commit
         if publication_state is not None:
             options["publication_state"] = publication_state
         refresh_relation_views_for_state(
@@ -1258,6 +1410,9 @@ def refresh_library_for_state(
             config=config,
             logger=logger,
             library_state=library_state,
+            root_definitions=root_definitions,
+            progress_callback=progress_callback,
+            should_cancel=should_cancel,
             **kwargs,
         ),
         refresh_relation_views=refresh_relation_views,
@@ -1325,6 +1480,8 @@ def refresh_library_for_state(
                 kwargs,
             ),
         ),
+        expected_inventory_mutation_revision=expected_inventory_mutation_revision,
+        before_commit=before_commit,
         queue_musicbrainz_enrichment=config.get(
             "_MUSICBRAINZ_ENRICHMENT_SCHEDULER"
         ),

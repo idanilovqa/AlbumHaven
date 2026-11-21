@@ -1,6 +1,6 @@
 function buildUtilityLogHistoryListItem(item, selected) {
   return window.NavigationTree.renderItem({ action: true, variant: 'panel', key: String(item.id), selected,
-    label: item.action || 'Activity', subtitle: [item.artist, item.album, item.title].filter(Boolean).join(' · ') || item.source || '',
+    label: item.action || 'Activity', subtitle: [item.artist, item.album, item.title].filter(Boolean).join(' В· ') || item.source || '',
     year: formatLogHistoryTimestamp(item.timestamp), attributes: { 'data-utility-log-history-id': String(item.id) } });
 }
 
@@ -47,9 +47,9 @@ function buildUtilityLoopEntry(loop) {
     <section class="utility-loop-entry ${repeatEnabled ? 'is-active' : ''}" data-utility-loop-entry="${escapeHtml(loop.id || '')}" data-loop-song-key="${escapeHtml(buildUtilityLoopGroupKey(loop))}" draggable="${canReorderUtilityLoop(loop)}">
       ${buildUtilityLoopMoveActions(loop)}
       <div class="utility-loop-heading">
-        <span class="utility-loop-drag-handle" aria-hidden="true">⋮⋮</span>
+        <span class="utility-loop-drag-handle" aria-hidden="true">в‹®в‹®</span>
         <h3 class="utility-detail-title">${escapeHtml(loop.name || 'Saved loop')}</h3>
-        <span class="utility-loop-original-times"><span>Original timestamps</span><strong>${loop.original_start_seconds != null && loop.original_end_seconds != null ? `${formatLoopTime(loop.original_start_seconds, true)} – ${formatLoopTime(loop.original_end_seconds, true)}` : 'Unavailable'}</strong></span>
+        <span class="utility-loop-original-times"><span>Original timestamps</span><strong>${loop.original_start_seconds != null && loop.original_end_seconds != null ? `${formatLoopTime(loop.original_start_seconds, true)} вЂ“ ${formatLoopTime(loop.original_end_seconds, true)}` : 'Unavailable'}</strong></span>
         ${state.utility.allowedActions?.['library.loops.delete'] === true ? window.ButtonComponent.renderActionButton({ icon: 'delete', semantic: 'destructive', ariaLabel: `Delete ${loop.name || 'Saved loop'}`, title: `Delete ${loop.name || 'Saved loop'}`, className: 'utility-loop-remove', attributes: { 'data-delete-saved-loop': loop.id || '' } }) : ''}
       </div>
       <div class="utility-loop-shell" data-utility-loop-shell="${escapeHtml(loop.id || '')}">
@@ -249,7 +249,7 @@ function buildVersionExceptionRuleDetail(rule) {
     columnsConfig: [{ key: 'target', label: 'Artist / Album' }, { key: 'effect', label: 'Rule' }, { key: 'action', label: 'Actions', header: 'screen-reader', action: true }],
     headers: 'visible', density: 'compact', overflow: 'local', mobile: 'stack', frame: 'outline', actionTrackWidth: '110px',
     rows: albums.map(album => ({ key: album.key, cells: {
-      target: `<span class="utility-rule-target">${buildUtilityAlbumArtbox(album, { label: `Artwork for ${album.name || 'album'}` })}<span><span class="utility-rule-album-title">${escapeHtml(album.name || album.key || 'Unknown album')}</span><span class="utility-rule-album-meta">${escapeHtml([album.album_artist, album.year].filter(Boolean).join(' · '))}</span></span></span>`,
+      target: `<span class="utility-rule-target">${buildUtilityAlbumArtbox(album, { label: `Artwork for ${album.name || 'album'}` })}<span><span class="utility-rule-album-title">${escapeHtml(album.name || album.key || 'Unknown album')}</span><span class="utility-rule-album-meta">${escapeHtml([album.album_artist, album.year].filter(Boolean).join(' В· '))}</span></span></span>`,
       effect: escapeHtml(album.edition ? `Edition: ${album.edition}` : 'Excluded from album version tabs'),
       action: ButtonComponent.renderButton({ label: 'Revert rule', className: 'utility-rule-revert', attributes: { 'data-revert-version-exception': album.key || '' } }),
     } })),
@@ -383,7 +383,7 @@ function buildUtilityCollapsibleSection(sectionKey, title, contentHtml) {
     <div class="utility-detail-section${cardClass} ${collapsed ? 'is-collapsed' : ''}">
       <button class="utility-section-toggle" type="button" data-utility-section-toggle="${escapeHtml(sectionKey)}" aria-expanded="${collapsed ? 'false' : 'true'}">
         <span class="utility-detail-section-title">${escapeHtml(title)}</span>
-        <span class="utility-section-chevron" aria-hidden="true">›</span>
+        <span class="utility-section-chevron" aria-hidden="true">вЂє</span>
       </button>
       <div class="utility-section-content" ${collapsed ? 'hidden' : ''}>
         ${contentHtml}
@@ -440,7 +440,7 @@ function buildDetectedProblemsHtml(album) {
     return {
       key: String(row.path || ''), dataAttributes: { 'problematic-track-path': String(row.path || '') },
       cells: {
-        filename: `<span class="utility-track-problem-file" data-problematic-track-path="${escapeHtml(row.path || '')}">${escapeHtml(track.title || row.filename || getFilenameFromPath(row.path) || 'Unknown file')}</span><span class="utility-detail-meta">${escapeHtml([track.artist, row.file_type].filter(Boolean).join(' · '))}</span>`,
+        filename: `<span class="utility-track-problem-file" data-problematic-track-path="${escapeHtml(row.path || '')}">${escapeHtml(track.title || row.filename || getFilenameFromPath(row.path) || 'Unknown file')}</span><span class="utility-detail-meta">${escapeHtml([track.artist, row.file_type].filter(Boolean).join(' В· '))}</span>`,
         reason: `<span class="utility-track-problem-labels">${reasons.map(reason => {
           const match = (row.ignorable_reasons || []).find(item => item.reason === reason);
           const rowKey = String(match?.row_key || '');
@@ -546,7 +546,37 @@ function buildProblematicAlbumDetail(album) {
 }
 
 function getSelectedProblematicAlbum() {
-  return (state.utility.problematicFiles || []).find((item) => item.key === state.utility.selectedProblematicKey) || null;
+  return (state.utility.problematicFiles || []).find((item) => item.key === state.utility.selectedProblematicKey)
+    || (state.utility.selectedProblematicDetail?.key === state.utility.selectedProblematicKey
+      ? state.utility.selectedProblematicDetail : null)
+    || getProblematicKnownView().items.find((item) => item.key === state.utility.selectedProblematicKey)
+    || null;
+}
+
+function prepareProblematicMutationItems(albumKey) {
+  const utility = state.utility;
+  const current = Array.isArray(utility.problematicFiles) ? utility.problematicFiles : [];
+  if (current.some((item) => String(item?.key || '') === String(albumKey || ''))) return current;
+  const view = getProblematicKnownView();
+  if (!view.items.some((item) => String(item?.key || '') === String(albumKey || ''))) return current;
+  const base = utility.problematicKnownBase;
+  const completeSource = base?.complete === true && base.signature === '';
+  utility.problematicFiles = completeSource ? base.items : view.items;
+  utility.problematicFilesTotal = completeSource ? base.total : view.total;
+  utility.problematicFilesComplete = completeSource;
+  utility.problematicFilesNextCursor = null;
+  utility.problematicFilesPageSignature = completeSource ? '' : null;
+  return utility.problematicFiles;
+}
+
+function markProblematicSearchFactsChanged(album, previousAlbum) {
+  if (album && (!previousAlbum || previousAlbum.problematic_search_facts_changed
+      || getProblematicMainSearchText(album) !== getProblematicMainSearchText(previousAlbum))) {
+    Object.defineProperty(album, 'problematic_search_facts_changed', {
+      value: true, enumerable: false, writable: true, configurable: true,
+    });
+  }
+  return album;
 }
 
 function getAlbumTrackPaths(album) {
@@ -590,6 +620,90 @@ function finalizedAlbumsCoverExpectedTrackPaths(originalAlbum, optimisticAlbums,
     getAlbumTrackPaths(album).forEach((path) => finalizedPaths.add(path));
   });
   return Array.from(expectedPaths).every((path) => finalizedPaths.has(path));
+}
+
+function albumDeclaredMembershipCount(album) {
+  const explicitMembershipCount = getAlbumTrackPaths(album).size;
+  const declaredCounts = [album?.track_count_preview, album?.track_count]
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value) && value >= 0);
+  return Math.max(explicitMembershipCount, ...declaredCounts, 0);
+}
+
+function collectAlbumsFromViewPayload(payload) {
+  return ['primary_artist_groups', 'family_artist_groups', 'artist_groups']
+    .flatMap((field) => (Array.isArray(payload?.[field]) ? payload[field] : []))
+    .flatMap((group) => (Array.isArray(group?.albums) ? group.albums : []));
+}
+
+function canonicalViewPayloadCoversExpectedTagEdit(payload, originalAlbum, optimisticAlbums, committedInventoryRevision) {
+  const committedRevision = Number(committedInventoryRevision);
+  const snapshotRevision = Number(payload?.inventory_mutation_revision);
+  if (Number.isSafeInteger(committedRevision) && committedRevision > 0
+    && Number.isSafeInteger(snapshotRevision) && snapshotRevision >= 0) {
+    return snapshotRevision >= committedRevision;
+  }
+  const expectedAlbums = Array.isArray(optimisticAlbums) && optimisticAlbums.length
+    ? optimisticAlbums
+    : [originalAlbum].filter(Boolean);
+  const canonicalAlbums = collectAlbumsFromViewPayload(payload);
+  if (!expectedAlbums.length || !canonicalAlbums.length) return false;
+  const expectedReleaseGroups = [];
+  expectedAlbums.forEach((expectedAlbum) => {
+    const matchingGroup = expectedReleaseGroups.find((group) => (
+      albumsShareLogicalReleaseIdentity(group[0], expectedAlbum)
+      || albumsShareRuntimeIdentityAlias(group[0], expectedAlbum)
+    ));
+    if (matchingGroup) matchingGroup.push(expectedAlbum);
+    else expectedReleaseGroups.push([expectedAlbum]);
+  });
+  return expectedReleaseGroups.every((expectedReleaseGroup) => {
+    const expectedAlbum = expectedReleaseGroup[0];
+    const expectedAliases = new Set();
+    const expectedPaths = new Set();
+    let opaqueMembershipCount = 0;
+    expectedReleaseGroup.forEach((album) => {
+      getAlbumRuntimeIdentityAliases(album).forEach((alias) => expectedAliases.add(alias));
+      const albumPaths = getAlbumTrackPaths(album);
+      albumPaths.forEach((path) => expectedPaths.add(path));
+      opaqueMembershipCount += Math.max(
+        0,
+        albumDeclaredMembershipCount(album) - albumPaths.size,
+      );
+    });
+    const expectedCount = expectedPaths.size + opaqueMembershipCount;
+    if (!expectedCount) return false;
+    return canonicalAlbums.some((canonicalAlbum) => {
+      const canonicalAliases = getAlbumRuntimeIdentityAliases(canonicalAlbum);
+      const aliasesMatch = Array.from(expectedAliases)
+        .some((alias) => canonicalAliases.has(alias));
+      return (
+        (aliasesMatch || albumsShareLogicalReleaseIdentity(expectedAlbum, canonicalAlbum))
+        && albumDeclaredMembershipCount(canonicalAlbum) >= expectedCount
+      );
+    });
+  });
+}
+
+const CANONICAL_VIEW_STATUS_RETRY_DELAYS_MS = [125, 250, 500, 1000, 2000];
+
+async function waitForCommittedInventoryRevision(committedInventoryRevision) {
+  const targetRevision = Number(committedInventoryRevision);
+  if (!Number.isSafeInteger(targetRevision) || targetRevision <= 0) return;
+  for (let attempt = 0; attempt <= CANONICAL_VIEW_STATUS_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      const response = await fetch('/status');
+      if (response.ok) {
+        const status = await response.json();
+        if (Number(status?.inventory_mutation_revision || 0) >= targetRevision) return;
+      }
+    } catch (_error) {
+      // The canonical view request below remains the final source of truth.
+    }
+    if (attempt < CANONICAL_VIEW_STATUS_RETRY_DELAYS_MS.length) {
+      await waitForBrowserTimeout(CANONICAL_VIEW_STATUS_RETRY_DELAYS_MS[attempt]);
+    }
+  }
 }
 
 function albumsShareTrackPath(left, rightPaths) {
@@ -813,11 +927,17 @@ function getAlbumRuntimeIdentityAliases(album) {
 let tagEditViewMutationGeneration = 0;
 const tagEditViewMutationResourceClaims = new Map();
 const settledTagEditViewMutations = new Set();
+const activeTagEditViewMutations = new Set();
+
+function hasActiveTagEditViewMutation() {
+  return activeTagEditViewMutations.size > 0;
+}
 
 function claimTagEditViewMutation(album, editedTrackPaths = [], updates = {}) {
-  if (Object.values(updates || {}).some((edits) => (
+  const hasEdits = Object.values(updates || {}).some((edits) => (
     edits && typeof edits === 'object' && Object.keys(edits).length > 0
-  ))) {
+  ));
+  if (hasEdits) {
     state.ui = state.ui || {};
     state.ui.tagEditOptimisticMutationRevision = Number(
       state.ui.tagEditOptimisticMutationRevision || 0,
@@ -825,6 +945,7 @@ function claimTagEditViewMutation(album, editedTrackPaths = [], updates = {}) {
   }
   tagEditViewMutationGeneration += 1;
   const generation = tagEditViewMutationGeneration;
+  if (hasEdits) activeTagEditViewMutations.add(generation);
   const resourceKeys = new Set();
   getAlbumRuntimeIdentityAliases(album).forEach((alias) => {
     resourceKeys.add(`album:${alias.toLocaleLowerCase()}`);
@@ -915,6 +1036,7 @@ function pruneSettledTagEditViewMutationClaims() {
 function settleTagEditViewMutation(claim) {
   const generation = Number(claim?.generation || 0);
   if (!generation) return;
+  activeTagEditViewMutations.delete(generation);
   settledTagEditViewMutations.add(generation);
   pruneSettledTagEditViewMutationClaims();
 }
@@ -922,6 +1044,7 @@ function settleTagEditViewMutation(claim) {
 function releaseFailedTagEditViewMutation(claim) {
   const generation = Number(claim?.generation || 0);
   if (!generation) return;
+  activeTagEditViewMutations.delete(generation);
   tagEditViewMutationResourceClaims.forEach((claims, resourceKey) => {
     const remainingClaims = claims.filter((value) => value !== generation);
     if (remainingClaims.length) {
@@ -1826,9 +1949,7 @@ function claimProblematicSaveTaskMutation(taskId, originalAlbum, expectedAlbumKe
     || !selectedKey
     || (normalizedExpectedAlbumKey && selectedKey !== normalizedExpectedAlbumKey)
   ) return null;
-  const selectedAlbum = (state.utility.problematicFiles || []).find((album) => (
-    String(album?.key || '').trim() === selectedKey
-  )) || null;
+  const selectedAlbum = getSelectedProblematicAlbum();
   const originalKey = String(originalAlbum?.key || '').trim();
   if (!selectedAlbum || !originalAlbum || (originalKey !== selectedKey && !albumsShareTrackPath(selectedAlbum, getAlbumTrackPaths(originalAlbum)))) {
     return null;
@@ -1840,6 +1961,7 @@ function claimProblematicSaveTaskMutation(taskId, originalAlbum, expectedAlbumKe
       ? existing
       : null;
   }
+  prepareProblematicMutationItems(selectedKey);
   const list = typeof getUtilityModalElements === 'function'
     ? getUtilityModalElements()?.list
     : null;
@@ -1851,6 +1973,8 @@ function claimProblematicSaveTaskMutation(taskId, originalAlbum, expectedAlbumKe
     priorScrollTop: Number(list?.scrollTop || 0),
     priorScrollHeight: Number(list?.scrollHeight || 0),
   };
+  state.utility.problematicKnownBase = null;
+  state.utility.problematicFilesProjectionRevision = '';
   state.utility.problematicMutation = mutation;
   if (typeof renderUtilityModalContent === 'function') renderUtilityModalContent();
   return mutation;
@@ -2441,21 +2565,36 @@ async function watchSaveTask(taskId, context = {}) {
               if (restoresAllSearchResults) {
                 refreshView = { ...state.view, selected_artist: '', all_artists_active: true };
               }
+              if (structuralPartialMembershipRequiresCanonicalRefresh) {
+                await waitForCommittedInventoryRevision(data.inventory_mutation_revision);
+              }
               rememberCurrentRuntimeAlbumCoverAuthority(state.view);
               viewRefreshed = await fetchAndRender(
                 buildApiUrl(refreshView, { rootFullPayload: true }),
                 false,
                 {
                   ...currentViewRenderOptions(),
-                  preserveMountedGalleryChildren: true,
                   preserveMissingAlbumCoverAuthority: true,
-                  ...(!structuralTagEditRequiresCanonicalView
+                  preserveMountedGalleryChildren: !structuralPartialMembershipRequiresCanonicalRefresh,
+                  ...(
+                    !structuralTagEditRequiresCanonicalView
+                    && !structuralPartialMembershipRequiresCanonicalRefresh
                     ? { retainMountedGalleryIfEquivalent: true }
-                    : {}),
+                    : {}
+                  ),
                   restartIfSameUrl: true,
-                  shouldApplyResponse: responseData => (
+                  shouldApplyResponse: (payload) => (
                     !mutationWasSuperseded()
-                    && responseContainsCommittedInventoryMutation(responseData)
+                    && responseContainsCommittedInventoryMutation(payload)
+                    && (
+                      !structuralPartialMembershipRequiresCanonicalRefresh
+                      || canonicalViewPayloadCoversExpectedTagEdit(
+                        payload,
+                        originalAlbum,
+                        context.optimisticAlbums,
+                        data.inventory_mutation_revision,
+                      )
+                    )
                   ),
                 },
               );
@@ -2916,9 +3055,13 @@ function updateTrackModalIfStillShowingAlbum(originalAlbum, updatedAlbums) {
 }
 
 function applyRepairResultToProblematicFiles(originalAlbum, updatedAlbum) {
+  prepareProblematicMutationItems(originalAlbum?.key);
+  state.utility.problematicKnownBase = null;
+  state.utility.problematicFilesProjectionRevision = '';
   const originalKey = String(originalAlbum?.key || '');
   const originalPaths = getAlbumTrackPaths(originalAlbum);
   const hasUpdatedAlbum = updatedAlbum && typeof updatedAlbum === 'object' && Object.keys(updatedAlbum).length;
+  if (hasUpdatedAlbum) markProblematicSearchFactsChanged(updatedAlbum, originalAlbum);
   const updatedKey = hasUpdatedAlbum ? String(updatedAlbum.key || '') : '';
   const previousItems = Array.isArray(state.utility.problematicFiles) ? state.utility.problematicFiles : [];
   const selectedKeyBefore = String(state.utility.selectedProblematicKey || '');
@@ -2944,6 +3087,8 @@ function applyRepairResultToProblematicFiles(originalAlbum, updatedAlbum) {
   }
 
   state.utility.problematicFiles = nextItems;
+  state.utility.problematicFilesTotal = Math.max(nextItems.length,
+    Number(state.utility.problematicFilesTotal || previousItems.length) + nextItems.length - previousItems.length);
   state.utility.loaded = true;
   if (hasUpdatedAlbum) {
     state.utility.selectedProblematicKey = String(updatedAlbum.key || '');
@@ -2978,12 +3123,10 @@ function getAlbumProblemFilterReasons(album) {
 }
 
 function getProblemReasonTypes() {
-  const reasons = new Set();
-  (state.utility.problematicFiles || []).forEach((album) => {
-    getAlbumProblemFilterReasons(album).forEach((reason) => {
-      if (reason) reasons.add(reason);
-    });
-  });
+  const reasons = new Set([
+    ...(state.utility.problematicReasonFacets || []),
+    ...(state.utility.selectedProblemFilters || []),
+  ].map(normalizeProblemFilterReason).filter(Boolean));
   return Array.from(reasons).sort((a, b) => a.localeCompare(b));
 }
 
@@ -3057,40 +3200,64 @@ function renderProblemFilterControls(els) {
   }
 }
 
-function getFilteredProblematicAlbums() {
-  const items = state.utility.problematicFiles || [];
-  const query = (state.utility.searchQuery || '').trim().toLowerCase();
+function getProblematicMainSearchText(album) {
+  return [
+    album.name, album.raw_name, album.album_artist, album.raw_album_artist, album.year,
+    ...(album.problem_reasons || []), album.search_text,
+    ...(album.tracks || []).map((track) => track.title),
+    ...(album.repair_preview_rows || []).flatMap((row) => [row.track_title, row.original, row.repaired]),
+  ].join('\n').toLowerCase();
+}
 
-  const filtered = items.filter((album) => {
+function getProblematicKnownView() {
+  const utility = state.utility;
+  const signature = utility.problematicFilesPageSignature;
+  const committedScope = typeof signature === 'string';
+  const committedFilter = committedScope && signature
+    ? JSON.parse(signature) : { query: '', reasons: [] };
+  const queryMatches = String(utility.searchQuery || '').trim() === committedFilter.query;
+  const selectedReasons = Array.from(new Set((utility.selectedProblemFilters || [])
+    .map((reason) => String(reason || '').trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+  const reasonsMatch = JSON.stringify(selectedReasons) === JSON.stringify(committedFilter.reasons);
+  const currentItems = Array.isArray(utility.problematicFiles) ? utility.problematicFiles : [];
+  const query = String(utility.searchQuery || '').trim().toLowerCase();
+  if (utility.loaded && committedScope && queryMatches && reasonsMatch) {
+    let unknown = false;
+    const items = currentItems.filter((album) => {
+      if (!album.problematic_search_facts_changed) return true;
+      if (!albumMatchesProblemFilters(album)) return false;
+      if (!query || getProblematicMainSearchText(album).includes(query)) return true;
+      if (album.detail_loaded !== true) unknown = true;
+      return false;
+    });
+    const total = utility.problematicFilesComplete ? items.length : Math.max(items.length,
+      Number(utility.problematicFilesTotal || currentItems.length) - currentItems.length + items.length);
+    return { items, pending: unknown, authoritative: !unknown, total };
+  }
+  const base = utility.problematicKnownBase;
+  const source = base ? base.items : currentItems;
+  let unknown = false;
+  const items = source.filter((album) => {
     if (!albumMatchesProblemFilters(album)) return false;
     if (!query) return true;
-    const repairRows = Array.isArray(album.repair_preview_rows) ? album.repair_preview_rows : [];
-    const trackTitles = Array.isArray(album.tracks) ? album.tracks.map((track) => String(track.title || '')) : [];
-    const haystack = [
-      String(album.name || ''),
-      String(album.raw_name || ''),
-      String(album.album_artist || ''),
-      String(album.raw_album_artist || ''),
-      String(album.year || ''),
-      ...(Array.isArray(album.problem_reasons) ? album.problem_reasons.map((reason) => String(reason || '')) : []),
-      String(album.search_text || ''),
-      ...trackTitles,
-      ...repairRows.flatMap((row) => [
-        String(row.track_title || ''),
-        String(row.original || ''),
-        String(row.repaired || ''),
-      ]),
-    ].join('\n').toLowerCase();
-    return haystack.includes(query);
+    if (getProblematicMainSearchText(album).includes(query)) return true;
+    if (album.detail_loaded !== true) unknown = true;
+    return false;
   });
+  if ((utility.selectedProblemFilters || []).length) {
+    items.sort((a, b) => getAlbumProblemFilterSortIndex(a) - getAlbumProblemFilterSortIndex(b)
+      || String(a.name || '').localeCompare(String(b.name || ''))
+      || String(a.album_artist || '').localeCompare(String(b.album_artist || ''))
+      || String(a.year || '').localeCompare(String(b.year || '')));
+  }
+  const complete = base ? base.complete && base.signature === '' : utility.loaded
+    && utility.problematicFilesComplete && signature === '';
+  const authoritative = Boolean(complete && !unknown);
+  return { items, pending: !authoritative, authoritative, total: items.length };
+}
 
-  if (!(state.utility.selectedProblemFilters || []).length) return filtered;
-  return filtered.slice().sort((a, b) => (
-    getAlbumProblemFilterSortIndex(a) - getAlbumProblemFilterSortIndex(b)
-    || String(a.name || '').localeCompare(String(b.name || ''))
-    || String(a.album_artist || '').localeCompare(String(b.album_artist || ''))
-    || String(a.year || '').localeCompare(String(b.year || ''))
-  ));
+function getFilteredProblematicAlbums() {
+  return getProblematicKnownView().items;
 }
 
 function getProblematicAlbumIssueLabel(album) {
@@ -3149,15 +3316,15 @@ async function openUtilityModalForTrack(trackPath) {
       )) || null;
     if (optimisticAlbum) {
       const optimisticKey = String(optimisticAlbum.key || '').trim();
-      const existingItems = Array.isArray(state.utility.problematicFiles)
-        ? state.utility.problematicFiles
-        : [];
+      const existingItems = prepareProblematicMutationItems(optimisticKey);
+      state.utility.problematicKnownBase = null;
+      state.utility.problematicFilesProjectionRevision = '';
       state.utility.problematicFiles = [
         ...existingItems.filter((item) => String(item?.key || '').trim() !== optimisticKey),
-        {
+        markProblematicSearchFactsChanged({
           ...optimisticAlbum,
           detail_loading_deferred: optimisticAlbum.detail_loaded !== true,
-        },
+        }, existingItems.find((item) => String(item?.key || '').trim() === optimisticKey)),
       ];
       state.utility.loaded = true;
       state.utility.loading = false;
@@ -3208,25 +3375,38 @@ async function openUtilityModalForTrack(trackPath) {
           > summaryRequestTokenBeforePendingTasks
       )
     );
+    state.utility.searchQuery = '';
+    state.utility.selectedProblemFilters = [];
     const loadTrackSummary = async () => {
-      const complete = loadProblematicFiles(true, { render: false });
-      const initial = state.utility.initialLoadPromise || complete;
-      if (initial !== complete) {
-        complete.then((result) => {
-          if (result !== null && openedCanonicalTarget && ownsNavigation()
-              && state.utility.activeTab === 'problematic-files'
-              && state.utility.focusedTrackPath === String(trackPath || '')) {
-            renderUtilityModalContent();
-          }
-        });
-      }
-      const result = await initial;
+      const request = loadProblematicFiles(true, { render: false });
+      const result = await request;
       if (result === null || !ownsNavigation()
-          || (initial.problematicSummaryRequestToken !== undefined
-            && initial.problematicSummaryRequestToken !== Number(state.utility.problematicSummaryRequestToken || 0))) return null;
-      if (getProblematicAlbumForTrackPath(trackPath)) return result;
-      // Only returned canonical track membership may identify the target.
-      return complete;
+          || (request.problematicSummaryRequestToken !== undefined
+            && request.problematicSummaryRequestToken !== Number(state.utility.problematicSummaryRequestToken || 0))) return null;
+      return result;
+    };
+    const loadTargetedAlbum = async () => {
+      let detail;
+      try {
+        detail = await loadProblematicAlbumDetailForTrack(trackPath);
+      } catch (error) {
+        if (ownsNavigation()) {
+          console.error('[AlbumHaven][Utilities] Failed to locate a problematic track.', error);
+          showToast('Unable to load problematic album detail.', 'error', 3200);
+        }
+        return null;
+      }
+      if (!detail || !ownsNavigation()) return null;
+      const targetPaths = new Set([String(trackPath || '')].filter(Boolean));
+      const pageItems = (state.utility.problematicFiles || []).filter((item) => (
+        String(item?.key || '') === String(detail.key || '')
+        || !albumsShareTrackPath(item, targetPaths)
+      ));
+      const pageIndex = pageItems.findIndex((item) => String(item?.key || '') === String(detail.key || ''));
+      if (pageIndex >= 0) pageItems[pageIndex] = detail;
+      state.utility.problematicFiles = pageItems;
+      state.utility.selectedProblematicDetail = pageIndex >= 0 ? null : detail;
+      return detail;
     };
     if (!state.utility.loaded || (pendingTasks.length && !pendingTaskRefreshedSummary)) {
       const loadResult = await loadTrackSummary();
@@ -3238,6 +3418,7 @@ async function openUtilityModalForTrack(trackPath) {
       if (refreshResult === null || !ownsNavigation()) return;
       album = getProblematicAlbumForTrackPath(trackPath);
     }
+    if (!album) album = await loadTargetedAlbum();
     if (!ownsNavigation()) return;
     if (!album) {
       showToast('This track is not currently listed in Problematic Files.', 'error', 3200);
@@ -3250,6 +3431,7 @@ async function openUtilityModalForTrack(trackPath) {
     state.utility.selectedProblemFilters = [];
     state.utility.problemDropdownOpen = false;
     setUtilityActiveTab('problematic-files');
+    const detailSummaryOwner = Number(state.utility.problematicSummaryRequestToken || 0);
     let refreshedStaleDetailTarget = false;
     let retriedCanonicalDetailTarget = false;
     if (!album.detail_loaded) {
@@ -3313,6 +3495,22 @@ async function openUtilityModalForTrack(trackPath) {
         if (!ownsNavigation()) return;
         album = getProblematicAlbumForTrackPath(trackPath);
       }
+      if (Number(state.utility.problematicSummaryRequestToken || 0) !== detailSummaryOwner) {
+        const currentSummary = state.utility.loadPromise;
+        if (currentSummary) await currentSummary;
+        if (!ownsNavigation() || !state.utility.loaded) return;
+        album = getProblematicAlbumForTrackPath(trackPath);
+        if (!album?.detail_loaded) album = await loadTargetedAlbum();
+      }
+      if (!album) album = await loadTargetedAlbum();
+    }
+    const hydratedProblematicPaths = [
+      ...(Array.isArray(album?.problematic_track_paths) ? album.problematic_track_paths : []),
+      ...(Array.isArray(album?.track_paths) ? album.track_paths : []),
+    ].map(path => String(path || ''));
+    if (album && !hydratedProblematicPaths.includes(String(trackPath || ''))) {
+      album = await loadTargetedAlbum();
+      if (!ownsNavigation()) return;
     }
     if (!album) return;
     state.utility.selectedProblematicKey = album.key || '';
@@ -3438,7 +3636,7 @@ function buildMusicBrainzIdentityTableHtml(detail, ui) {
   const tableRows = rows.map((row) => {
     const selected = ui.selectedMbid === row.artist_mbid;
     const prefix = row.role === 'current' ? 'Currently assigned: ' : row.role === 'suggested' ? 'Suggested: ' : '';
-    const facts = [row.country, row.artist_kind, row.disambiguation].filter(Boolean).join(' · ');
+    const facts = [row.country, row.artist_kind, row.disambiguation].filter(Boolean).join(' В· ');
     const name = `${prefix}${row.canonical_name || 'Unknown artist'}`;
     return {
       key: row.artist_mbid,
@@ -3472,7 +3670,7 @@ function buildMusicBrainzManualResolutionHtml(detail, ui) {
   const searchUrl = `https://musicbrainz.org/search?query=${encodeURIComponent(detail.local_artist_name || '')}&type=artist&method=indexed`;
   const actionsAvailable = detail.actions_available !== false;
   const helper = !actionsAvailable ? 'MusicBrainz matching actions are unavailable in this read-only session.'
-    : ui.validating ? 'Verifying with MusicBrainz…'
+    : ui.validating ? 'Verifying with MusicBrainzвЂ¦'
     : ui.validationError ? ui.validationError
       : ui.validated ? `Verified: ${ui.validated.canonical_name || ui.validated.artist_mbid}`
         : 'Paste the selected artist page URL or MBID to verify it before assignment.';
@@ -3513,7 +3711,7 @@ function buildMusicBrainzArtistProblemDetail(item) {
   if (item?.musicbrainz_detail_failed) {
     return buildOnPageAlertHtml({ severity: 'error', title: 'Artist details unavailable', message: 'Unable to load this MusicBrainz artist issue.' });
   }
-  if (!detail) return '<div class="utility-empty-state">Loading artist identity…</div>';
+  if (!detail) return '<div class="utility-empty-state">Loading artist identityвЂ¦</div>';
   const ui = item.musicbrainz_ui || {};
   const actionsAvailable = detail.actions_available !== false;
   const view = getMusicBrainzArtistProblemView(detail);
@@ -3676,7 +3874,7 @@ function scheduleMusicBrainzManualValidation(item) {
 function syncMusicBrainzManualStatus(ui) {
   const helper = document.querySelector('.musicbrainz-manual-helper');
   if (helper) {
-    helper.textContent = ui.validating ? 'Verifying with MusicBrainz…'
+    helper.textContent = ui.validating ? 'Verifying with MusicBrainzвЂ¦'
       : ui.validationError ? ui.validationError
         : ui.validated ? `Verified: ${ui.validated.canonical_name || ui.validated.artist_mbid}`
           : 'Paste the selected artist page URL or MBID to verify it before assignment.';

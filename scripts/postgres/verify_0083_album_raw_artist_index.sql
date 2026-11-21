@@ -7,7 +7,19 @@ with target_index as (
     table_relation.relname as table_name,
     access_method.amname as access_method_name,
     operator_namespace.nspname as operator_schema,
-    operator_class.opcname as operator_class_name
+    operator_class.opcname as operator_class_name,
+    exists (
+      select 1
+      from pg_catalog.pg_depend as operator_dependency
+      join pg_catalog.pg_extension as extension
+        on extension.oid = operator_dependency.refobjid
+      where operator_dependency.classid = 'pg_catalog.pg_opclass'::regclass
+        and operator_dependency.objid = operator_class.oid
+        and operator_dependency.refclassid = 'pg_catalog.pg_extension'::regclass
+        and operator_dependency.deptype = 'e'
+        and extension.extname = 'pg_trgm'
+        and extension.extnamespace = operator_namespace.oid
+    ) as operator_class_owned_by_pg_trgm
   from pg_catalog.pg_class as index_relation
   join pg_catalog.pg_namespace as index_namespace
     on index_namespace.oid = index_relation.relnamespace
@@ -43,8 +55,8 @@ select case
       and index_state.indkey::text = '0'
       and index_state.indexprs is not null
       and index_state.indpred is null
-      and index_state.operator_schema = 'library'
       and index_state.operator_class_name = 'gin_trgm_ops'
+      and index_state.operator_class_owned_by_pg_trgm
       and pg_catalog.regexp_replace(
         pg_catalog.lower(
           pg_catalog.pg_get_expr(index_state.indexprs, index_state.indrelid, true)

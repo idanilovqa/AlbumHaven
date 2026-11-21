@@ -164,6 +164,23 @@ test('Problematic Files dependencies require both real-app performance targets',
   }
 });
 
+test('Problematic Files shared owners require both real-app performance targets', () => {
+  for (const changedPath of [
+    'music_app/services/library_inventory_postgres.py',
+    'music_app/services/repair_previews.py',
+    'music_app/routes/api_cover_helpers.py',
+    'music_app/routes/api_wave_a_asgi_routes.py',
+    'music_app/static/js/runtime/bootstrap-utility-event-handlers.js',
+    'music_app/static/js/runtime/track-modal-and-gallery.js',
+    'music_app/static/js/runtime/utility-loop-playback.js',
+  ]) {
+    assert.ok(contract.requiredPaths.includes(changedPath), `${changedPath} must remain an explicit performance owner`);
+    const targets = resolveRequiredPerformanceTargets(contract, [changedPath]);
+    assert.ok(targets.includes('utility-problematic-files'), changedPath);
+    assert.ok(targets.includes('problematic-files-focused'), changedPath);
+  }
+});
+
 test('agent guidance requires all PF performance layers without weakening the budget', () => {
   const guidance = fs.readFileSync(path.join(repoRoot, 'AGENTS.md'), 'utf8');
   const checks = fs.readFileSync(path.join(repoRoot, 'docs/problematic-files-regression-checks.md'), 'utf8');
@@ -185,6 +202,40 @@ test('backend publication and invalidation owners require family and search gate
     const targets = resolveRequiredPerformanceTargets(contract, [changedPath]);
     for (const target of ['artist-family', 'search-all-artists', 'search-browse']) {
       assert.ok(targets.includes(target), `${owner} must require ${target}`);
+    }
+  }
+});
+
+test('Phase 8 mutation owners retain search and Problematic Files performance gates', () => {
+  const searchAndProblematicOwners = [
+    'music_app/jobs/scan_handlers.py',
+    'music_app/services/library_watch.py',
+    'music_app/services/targeted_library_reconciliation.py',
+    'music_app/services/targeted_reconciliation_scheduler.py',
+  ];
+  const requiredTargets = [
+    'artist-family',
+    'search-all-artists',
+    'search-browse',
+    'utility-problematic-files',
+    'problematic-files-focused',
+  ];
+  for (const changedPath of searchAndProblematicOwners) {
+    assert.ok(contract.requiredPaths.includes(changedPath), `${changedPath} must remain an explicit performance owner`);
+    const targets = resolveRequiredPerformanceTargets(contract, [changedPath]);
+    for (const target of requiredTargets) {
+      assert.ok(targets.includes(target), `${changedPath} must require ${target}`);
+    }
+  }
+
+  for (const changedPath of [
+    'music_app/jobs/cover_handlers.py',
+    'music_app/services/cover_refresh_execution.py',
+  ]) {
+    assert.ok(contract.requiredPaths.includes(changedPath), `${changedPath} must remain an explicit performance owner`);
+    const targets = resolveRequiredPerformanceTargets(contract, [changedPath]);
+    for (const target of ['utility-problematic-files', 'problematic-files-focused']) {
+      assert.ok(targets.includes(target), `${changedPath} must require ${target}`);
     }
   }
 });

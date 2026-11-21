@@ -828,6 +828,17 @@ async function confirmManualTagEdit() {
   const tagEditMutationClaim = claimTagEditViewMutation(album, editedPaths, updates);
   settleTagEditorSessionMutationClaim();
   const optimisticUpdatedAlbums = buildOptimisticUpdatedAlbumsFromEdits(album, updates);
+  const preEditCanonicalReadinessAlbums = (
+    typeof collectVisibleAlbumsUnique === 'function'
+    && typeof getAlbumTrackPaths === 'function'
+    && typeof albumsShareTrackPath === 'function'
+    && typeof albumsShareRuntimeIdentityAlias === 'function'
+  )
+    ? collectVisibleAlbumsUnique().filter((visibleAlbum) => (
+      !albumsShareTrackPath(visibleAlbum, getAlbumTrackPaths(album))
+      && !albumsShareRuntimeIdentityAlias(visibleAlbum, album)
+    ))
+    : [];
   const pendingProblematicEntry = registerPendingProblematicOptimisticEdit(
     album,
     optimisticUpdatedAlbums,
@@ -871,6 +882,11 @@ async function confirmManualTagEdit() {
       originalAlbum: album,
       tagEdits: updates,
     },
+  );
+  const optimisticCanonicalReadinessAlbums = (
+    preEditCanonicalReadinessAlbums.length
+      ? [...preEditCanonicalReadinessAlbums, ...optimisticUpdatedAlbums]
+      : reconciledOptimisticAlbums
   );
   if (typeof applyTagEditsToNonAlbumView === 'function') {
     applyTagEditsToNonAlbumView(album, updates);
@@ -972,7 +988,7 @@ async function confirmManualTagEdit() {
         ? { absoluteScrollOwnerGeneration }
         : {}),
       problematicMutationOriginKey,
-      optimisticAlbums: optimisticUpdatedAlbums,
+      optimisticAlbums: optimisticCanonicalReadinessAlbums,
       pendingProblematicEntry,
       tagEditAlert,
     };
@@ -1781,6 +1797,8 @@ const applyMissingAlbumRemovalToViewDefault = function applyMissingAlbumRemovalT
     else state.gallery.albumIndex?.delete?.(normalizedKey);
   }
   if (state.utility) {
+    state.utility.problematicKnownBase = null;
+    state.utility.problematicFilesProjectionRevision = '';
     state.utility.problematicFiles = (Array.isArray(state.utility.problematicFiles)
       ? state.utility.problematicFiles
       : []).filter((album) => String(album?.key || '').trim() !== normalizedKey);
@@ -2716,6 +2734,8 @@ async function confirmProblemSuggestions() {
     const previousItems = state.utility.problematicFiles;
     const refreshed = await loadProblematicFiles(true, { render: false });
     if (!refreshed) {
+      state.utility.problematicKnownBase = null;
+      state.utility.problematicFilesProjectionRevision = '';
       state.utility.problematicFiles = previousItems;
       if (mutation) await settleProblematicSaveTaskMutation(data.save_task_id);
       throw new Error('Edits were saved, but Problems could not refresh. Reload before retrying.');

@@ -115,6 +115,11 @@ def test_problematic_file_projection_migration_upgrades_and_reruns_idempotently(
 
     with psycopg.connect(database_url) as connection:
         try:
+            # This migration predates the durable projection view. Remove later
+            # dependents inside the rolled-back upgrade simulation.
+            connection.execute(
+                "drop view if exists ops.problematic_projection_source_rows cascade"
+            )
             connection.execute(
                 "alter table library.local_tracks drop column if exists scan_title_problem_candidate"
             )
@@ -236,11 +241,11 @@ def test_problematic_text_candidate_function_matches_python_strong_signal_contra
     assert actual == expected
 
 
-def test_album_haven_app_upsert_executes_generated_candidate_function():
-    database_url = _isolated_runtime_url_or_skip()
+def test_migrator_upsert_executes_generated_candidate_function():
+    runtime_url = _isolated_runtime_url_or_skip()
     setup_url = _isolated_migrator_url_or_skip()
-    isolatedPostgres.prepare_isolated_database(setup_url, database_url)
-    with psycopg.connect(database_url) as connection:
+    isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+    with psycopg.connect(setup_url) as connection:
         try:
             library_id = connection.execute(
                 "select id from library.libraries order by id limit 1"

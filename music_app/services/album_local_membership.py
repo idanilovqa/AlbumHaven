@@ -128,22 +128,24 @@ def physical_album_root_sql(path_expression: str) -> str:
       then regexp_replace({parent}, '/[^/]*$', '') else {parent} end"""
 
 
-def local_album_membership_ctes_sql(*, scope_album_key: bool = False) -> str:
+def local_album_membership_ctes_sql(*, scope_album_key: bool = False, scope_private_paths: bool = False) -> str:
     """Classify existing inventory without changing tags or deleting files."""
     if not scope_album_key:
         # Scan publication owns full physical classification. Browse reads its
         # durable projection instead of rebuilding every source on each request.
-        return """
+        path_scope = "and private_path = any(%(private_paths)s::text[])" if scope_private_paths else ""
+        return f"""
         local_album_membership as materialized (
           select files.id as file_id, files.track_id, files.private_path, files.problem
           from (
             -- Planned alone so the sparse partial index from 0112 drives it; joined
             -- to the roots first, it read every file's metadata root by root.
             select id, track_id, private_path, library_root_id,
-              metadata #>> '{scan_cache,file_entry,local_album_membership_problem}' as problem
+              metadata #>> '{{scan_cache,file_entry,local_album_membership_problem}}' as problem
             from library.local_track_files
             where scan_cache_stale is false
-              and nullif(metadata #>> '{scan_cache,file_entry,local_album_membership_problem}', '') is not null
+              and nullif(metadata #>> '{{scan_cache,file_entry,local_album_membership_problem}}', '') is not null
+            {path_scope}
             offset 0
           ) files
           join library.library_roots roots on roots.id = files.library_root_id and roots.is_active is true

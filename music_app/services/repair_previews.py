@@ -16,8 +16,8 @@ from music_app.services.metadata import build_text_repairs_for_entry
 from music_app.services.problematic_albums import (
     build_problematic_album_detail_payload as _build_problematic_album_detail_payload,
     build_problematic_albums_payload as _build_problematic_albums_payload,
-    find_problematic_album_by_track_paths as _service_find_problematic_album_by_track_paths,
 )
+from music_app.services.problematic_files_projection import _track_number_problem
 from music_app.services.utils import title_case_tag_value
 from music_app.services.problem_suggestions import build_problem_suggestions
 
@@ -284,16 +284,9 @@ def _collect_track_level_problem_reasons(
             if "Edition descriptor in album name" not in reasons:
                 reasons.append("Edition descriptor in album name")
 
-        if track_number in (None, ""):
-            if "Missing track number" not in reasons:
-                reasons.append("Missing track number")
-        else:
-            try:
-                if int(track_number) <= 0 and "Invalid track number" not in reasons:
-                    reasons.append("Invalid track number")
-            except Exception:
-                if "Invalid track number" not in reasons:
-                    reasons.append("Invalid track number")
+        track_number_reason = _track_number_problem(track_number)
+        if track_number_reason and track_number_reason not in reasons:
+            reasons.append(track_number_reason)
 
     return reasons
 
@@ -390,15 +383,7 @@ def _collect_track_problem_rows(
         add_reason(year_reason)
         add_ignorable_reason(year_reason, "year")
 
-        track_number = entry.get("track_number")
-        if track_number in (None, ""):
-            add_reason("Missing track number")
-        else:
-            try:
-                if int(track_number) <= 0:
-                    add_reason("Invalid track number")
-            except Exception:
-                add_reason("Invalid track number")
+        add_reason(_track_number_problem(entry.get("track_number")))
 
         if reasons:
             rows.append({

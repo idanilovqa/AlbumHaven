@@ -497,7 +497,9 @@ def _repairable_library(app, root: Path, track_count: int) -> tuple[list[str], O
     return sorted(album_cache), counts
 
 
-@pytest.mark.parametrize("repair", ["separate-release", "selected-rows"])
+@pytest.mark.parametrize("repair", [
+    "separate-release", "selected-rows", "postgres-selected-warm", "postgres-selected-cold",
+])
 def test_repair_album_route_contract_reads_only_the_repaired_album_at_production_track_count(
     library_app, tmp_path, monkeypatch, repair,
 ):
@@ -506,14 +508,16 @@ def test_repair_album_route_contract_reads_only_the_repaired_album_at_production
     from music_app.services.library_album_index import library_album_index
 
     select_backend = api_wave_a_asgi_routes.select_runtime_persistence_adapter
-    # The in-memory library browse path, as on a file-backed host.
-    monkeypatch.setattr(
-        api_wave_a_asgi_routes, "select_runtime_persistence_adapter",
-        lambda seam_id, config: (
-            SimpleNamespace(seam_id=seam_id, effective_backend="file")
-            if seam_id == "library_browse" else select_backend(seam_id, config)
-        ),
-    )
+    postgres_repair = repair.startswith("postgres-")
+    if not postgres_repair:
+        # The in-memory library browse path, as on a file-backed host.
+        monkeypatch.setattr(
+            api_wave_a_asgi_routes, "select_runtime_persistence_adapter",
+            lambda seam_id, config: (
+                SimpleNamespace(seam_id=seam_id, effective_backend="file")
+                if seam_id == "library_browse" else select_backend(seam_id, config)
+            ),
+        )
     saved_separate_keys: list[set[str]] = []
     # The Postgres rule-state store keeps the separate releases it is given
     # and holds no ignored repairs.
@@ -530,10 +534,39 @@ def test_repair_album_route_contract_reads_only_the_repaired_album_at_production
     )
     finalized: list[dict[str, object]] = []
     # The save task finalizes on its own registered worker.
-    monkeypatch.setattr(api_wave_a_asgi_routes, "queue_finalize_save_task", lambda **kwargs: finalized.append(kwargs))
+    def capture_finalizer(**kwargs):
+        finalized.append(kwargs)
+        reservation = kwargs.get("structural_tag_edit_reservation")
+        if reservation is not None:
+            reservation.release()
+
+    monkeypatch.setattr(api_wave_a_asgi_routes, "queue_finalize_save_task", capture_finalizer)
+    monkeypatch.setattr(api_wave_a_asgi_routes, "queue_finalize_structural_tag_edit_save_task", capture_finalizer)
 
     def run(track_count: int) -> OperationCounts:
         album_paths, counts = _repairable_library(library_app, tmp_path / f"library-{track_count}", track_count)
+        if postgres_repair:
+            file_cache = library_app.state.library_state["file_cache"]
+            selected_entries = {path: dict(dict.__getitem__(file_cache, path)) for path in album_paths}
+            database = _EditTagsDatabase(selected_entries, "broadcast::tender buttons", album_paths, counts)
+            if repair.endswith("cold"):
+                for path in album_paths:
+                    dict.__delitem__(file_cache, path)
+
+            def load_raw_state(paths, *, include_album_siblings=False):
+                assert set(paths) == set(album_paths)
+                assert include_album_siblings is True
+                database.statement(read=len(selected_entries))
+                return {
+                    "file_entries": selected_entries,
+                    "exception_overrides": {path: {} for path in selected_entries},
+                    "inventory_mutation_revision": 0,
+                }
+
+            monkeypatch.setattr(api_wave_a_asgi_routes, "PostgresScanCacheAdapter", lambda _config: SimpleNamespace(load_tag_edit_state=load_raw_state))
+            monkeypatch.setattr(api_wave_a_asgi_routes, "PostgresTagEditIntentRepository", database.intent_repository())
+            monkeypatch.setattr(api_wave_a_asgi_routes, "validate_structural_tag_edit_for_config", database.validate_structural_tag_edit)
+            monkeypatch.setattr(api_wave_a_asgi_routes, "library_root_cache_identity", lambda _config: "contract-root")
         payload = {"confirmed": True, "album": {"name": "Tender Buttons", "tracks": [{"path": path} for path in album_paths]}}
         if repair == "separate-release":
             payload.update(selected_rows=[], separate_release_keys=["broadcast::tender buttons"])
@@ -553,8 +586,15 @@ def test_repair_album_route_contract_reads_only_the_repaired_album_at_production
         else:
             assert written[-1] == (album_paths[0], {"title": "Été"})
             assert result["changed_count"] == 1
-            assert result["updated_album"]["tracks"][0]["title"] == "Été"
-            assert set(finalized[-1]["updated_file_cache"]) == set(finalized[-1]["previous_file_cache"]) == {album_paths[0]}
+            if postgres_repair:
+                assert result["requires_view_refresh"] is True
+                expected_entries = set(album_paths) if repair.endswith("cold") else {album_paths[0]}
+                assert set(finalized[-1]["updated_file_cache"]) == expected_entries
+                assert finalized[-1]["updated_file_cache"][album_paths[0]]["title"] == "Été"
+                assert set(finalized[-1]["previous_file_cache"]) == {album_paths[0]}
+            else:
+                assert result["updated_album"]["tracks"][0]["title"] == "Été"
+                assert set(finalized[-1]["updated_file_cache"]) == set(finalized[-1]["previous_file_cache"]) == {album_paths[0]}
         return counts
 
     measure_scale_pair(run=run, **_registered("py:routes/api_wave_a_asgi_routes.py#utilities_repair_album"))

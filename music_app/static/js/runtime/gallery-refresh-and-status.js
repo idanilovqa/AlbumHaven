@@ -314,6 +314,22 @@ function scheduleStatusPoll(delay) {
   }, delay);
 }
 
+// A live change from another tab or device refreshes exactly like an inventory change seen by
+// the status poll, but now instead of at the next poll; the poll keeps its busy and navigation
+// guards and owns the view, album and Problematic Files refreshes.
+function requestLibraryChangeViewRefresh() {
+  if (typeof invalidateAllHydratedTrackModalAlbumDetails === 'function') {
+    invalidateAllHydratedTrackModalAlbumDetails();
+  }
+  state.ui.pendingInventoryMutationViewRefresh = true;
+  state.ui.pendingLiveChangeModalRefresh = true;
+  const utility = state.utility;
+  if (utility.loaded || utility.loading) {
+    utility.problematicStatusRefreshRevision = Number(utility.problematicStatusRefreshRevision || 0) + 1;
+  }
+  scheduleStatusPoll(0);
+}
+
 function claimLibraryStatusAction(pendingStart) {
   libraryStatusAction = { pendingStart };
   state.ui.scanCancellationPending = false;
@@ -2494,6 +2510,7 @@ async function pollStatus() {
       && !hasPendingSidebarNavigation()
     ) {
       state.ui.pendingInventoryMutationViewRefresh = false;
+      const appliedRevisionBeforeRefresh = state.ui.appliedViewInventoryMutationRevision;
       try {
         const refreshApplied = await refreshCurrentViewAfterBackgroundCompletion({
           preserveScroll: true,
@@ -2504,6 +2521,18 @@ async function pollStatus() {
           state.ui.pendingInventoryMutationViewRefresh = true;
         } else if (typeof invalidateAllHydratedTrackModalAlbumDetails === 'function') {
           invalidateAllHydratedTrackModalAlbumDetails();
+          // A live change that moved no inventory revision (a cover, a rating) still has to
+          // reach the open album; a newer revision already refreshed it while applying.
+          const refreshOpenAlbum = state.ui.pendingLiveChangeModalRefresh
+            && state.ui.appliedViewInventoryMutationRevision === appliedRevisionBeforeRefresh;
+          state.ui.pendingLiveChangeModalRefresh = false;
+          if (refreshOpenAlbum) {
+            // The refreshed view stands even if the open album cannot be reloaded.
+            await refreshOpenTrackModalAfterInventoryMutation().catch((modalRefreshError) => {
+              console.error('[AlbumHaven][LiveEvents] Failed to refresh the open album.', modalRefreshError);
+            });
+            if (!ownsStatus()) return;
+          }
         }
       } catch (inventoryRefreshError) {
         if (!ownsStatus()) return;

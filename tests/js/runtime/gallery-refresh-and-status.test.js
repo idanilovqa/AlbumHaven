@@ -7983,3 +7983,39 @@ test('status changes that only add or remove actions never refetch Problematic F
 
   assert.deepEqual(fixture.refreshes, [], 'only inventory or watcher-health changes refresh the list');
 });
+
+test('a live library change refreshes the view and the open album now, even without a newer inventory revision', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  const scheduled = [];
+  const modalRefreshes = [];
+  context.scheduleBrowserTimeout = (callback, delayMs) => { scheduled.push({ callback, delayMs }); return scheduled.length; };
+  context.refreshOpenTrackModalAfterInventoryMutation = async () => { modalRefreshes.push(true); return true; };
+  context.buildApiUrl = () => '/view-data?surface=albums';
+  context.state.view.artist_groups = [{ artist: 'Artist', albums: [{ key: 'album', name: 'Old cover' }] }];
+  const status = { scan_in_progress: false, relations_in_progress: false, covers_in_progress: false, inventory_mutation_revision: 12 };
+  context.state.status = { ...status };
+  context.state.ui.appliedViewInventoryMutationRevision = 12;
+  context.state.utility.loaded = false;
+
+  context.requestLibraryChangeViewRefresh();
+
+  assert.equal(context.state.ui.pendingInventoryMutationViewRefresh, true);
+  assert.deepEqual(scheduled.map(({ delayMs }) => delayMs), [0], 'the next status read is due now');
+  const poll = scheduled[0].callback();
+  pendingRequests[0].resolveWith({ ...status });
+  for (let attempt = 0; attempt < 10 && pendingRequests.length < 2; attempt += 1) await flushMicrotasks();
+  assert.equal(pendingRequests.length, 2, 'the unchanged revision still refreshes the current view');
+  pendingRequests[1].resolveWith({
+    ...context.state.view,
+    inventory_mutation_revision: 12,
+    artist_groups: [{ artist: 'Artist', albums: [{ key: 'album', name: 'New cover' }] }],
+  });
+  await poll;
+  await flushMicrotasks();
+
+  assert.deepEqual(calls.consoleErrors, []);
+  assert.equal(context.state.view.artist_groups[0].albums[0].name, 'New cover');
+  assert.equal(modalRefreshes.length, 1);
+  assert.equal(context.state.ui.pendingInventoryMutationViewRefresh, false);
+  assert.equal(context.state.ui.pendingLiveChangeModalRefresh, false);
+});

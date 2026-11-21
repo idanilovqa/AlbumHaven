@@ -53,6 +53,7 @@ const RUNTIME_SCRIPT_PATHS = [
   'js/runtime/loop-edit-session-expiry.js',
   'js/runtime/player-and-waveform.js',
   'js/runtime/gallery-refresh-and-status.js',
+  'js/runtime/library-live-events.js',
   'js/runtime/problematic-album-helpers.js',
   'js/runtime/browser-log-history-store.js',
   'js/runtime/utility-log-history-query.js',

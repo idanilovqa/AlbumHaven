@@ -127,3 +127,22 @@ test('external Request preserves all original credentials and headers', async ()
   assert.equal(calls[0][1], undefined);
   assert.equal(request.headers.has('X-Album-Haven-CSRF'), false);
 });
+
+test('same-origin writes are counted while in flight so live events can wait for them', async () => {
+  const releases = [];
+  const { window } = load(undefined, () => new Promise((resolve, reject) => releases.push({ resolve, reject })));
+
+  const saved = window.fetch('/utilities/edit-tags', { method: 'POST' });
+  const failed = window.fetch('/loops/create', { method: 'POST' });
+  const read = window.fetch('/status');
+  assert.equal(window.albumHavenWritesInFlight, 2, 'reads are not counted');
+  releases[2].resolve({ ok: true });
+  await read;
+
+  releases[0].resolve({ ok: true });
+  await saved;
+  assert.equal(window.albumHavenWritesInFlight, 1);
+  releases[1].reject(new TypeError('offline'));
+  await assert.rejects(failed);
+  assert.equal(window.albumHavenWritesInFlight, 0);
+});

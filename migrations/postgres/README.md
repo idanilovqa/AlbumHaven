@@ -517,3 +517,27 @@ and insert or restore corrections; it receives no broad table privileges or
 program/source/correction delete grant. Roll back application readers and
 writers first. Retaining these tables is harmless; a later contraction may drop
 them only after preserving any correction and revision history still required.
+
+`0189_create_library_change_events.sql` adds the live library change log behind
+`GET /api/live/library-events`. Triggers record, inside the writer's own
+transaction, which library or account surfaces changed: inventory and cover
+revision bumps on `library.libraries`, Custom Collection artwork, library root
+and move-policy settings, MusicBrainz artist matches, album and disc ratings,
+track preferences, saved loops and Appearance. Rows carry kinds and identities
+already present in view payloads, never values, paths or media. A deferred
+trigger writes one row per audience at commit under an advisory lock, so
+revisions become visible in order, and announces the newest revision on the
+`album_haven_library_changes` channel. The running app prunes rows older than
+24 hours and records the highest pruned revision in
+`library.change_event_watermark`; readers below it resync.
+
+The recording functions run as the migration owner, so writers need no
+privileges on the log and a missing grant can never make a library write fail.
+The running app's role reads and prunes it: `select, delete` on
+`library.change_events` and `select, update` on
+`library.change_event_watermark`, granted to `album_haven_app`. A deployment
+with its own app role (for example a sandbox copy) grants the same to that
+role; without them live updates stay off and the status poll keeps pages
+current. Rolling back the application leaves the triggers recording
+harmlessly; a later contraction may drop the triggers, functions and tables
+together.

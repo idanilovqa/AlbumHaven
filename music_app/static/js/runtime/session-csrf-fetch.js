@@ -51,10 +51,13 @@
     }
     const headers = new Headers(requestInit?.headers || input?.headers || undefined);
     headers.set('X-Album-Haven-CSRF', csrfToken);
+    // Live change events wait while this tab's own writes are in flight.
+    window.albumHavenWritesInFlight = Number(window.albumHavenWritesInFlight || 0) + 1;
+    const settle = () => { window.albumHavenWritesInFlight -= 1; };
     return originalFetch(input, {
       ...(requestInit || {}),
       credentials: requestInit?.credentials ?? input?.credentials ?? 'same-origin',
       headers,
-    });
+    }).finally(settle);
   };
 })();

@@ -153,6 +153,23 @@ def _start_library_warmup(
     return _LibraryWarmupHandle(worker, stop_requested)
 
 
+def _start_library_change_broker(runtime):
+    """The change log and its listener, or (None, None) without a database; never blocks startup."""
+    database_url = str(runtime.config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()
+    if not database_url:
+        return None, None
+    from music_app.services.library_change_broker import LibraryChangeBroker, close_streams_on_exit_signal
+    from music_app.services.library_change_events_postgres import LibraryChangeEventRepository
+
+    repository = LibraryChangeEventRepository(runtime.config)
+    broker = LibraryChangeBroker.for_database(
+        database_url, read_head=repository.head, prune=repository.prune, logger=runtime.logger,
+    )
+    broker.start()
+    close_streams_on_exit_signal(broker, asyncio.get_running_loop())
+    return repository, broker
+
+
 def _stop_library_watch_runtime(
     *,
     watch_service,
@@ -269,6 +286,7 @@ def _configure_asgi_app(app, runtime) -> None:
         router as playback_stream_asgi_router,
     )
     from music_app.routes.playback_control_asgi import router as playback_control_router
+    from music_app.routes.live_events_asgi import router as live_events_asgi_router
     from music_app.routes.android_artifacts_asgi import router as android_artifacts_router
     from music_app.routes.download_links_asgi import router as download_links_router
     from music_app.services.waveform_peak_cache_postgres import (
@@ -399,6 +417,7 @@ def _configure_asgi_app(app, runtime) -> None:
     app.include_router(api_wave_c_asgi_router)
     app.include_router(api_wave_d_asgi_router)
     app.include_router(playback_stream_asgi_router)
+    app.include_router(live_events_asgi_router)
     app.include_router(playback_control_router)
     app.include_router(android_artifacts_router)
     app.include_router(download_links_router)
@@ -527,6 +546,9 @@ def create_asgi_app():
             runtime.config,
             logger=runtime.logger,
         )
+        _app.state.library_change_repository, _app.state.library_change_broker = (
+            _start_library_change_broker(runtime)
+        )
         _app.state.generated_preview_relocation = None
         if preview_storage_repository is not None:
             preview_relocation_active: bool | None = None
@@ -625,6 +647,11 @@ def create_asgi_app():
                 (
                     "MusicBrainz enrichment worker",
                     lambda: stop_musicbrainz_enrichment_worker(_app),
+                ),
+                (
+                    "live library change broker",
+                    lambda: getattr(_app.state, "library_change_broker", None)
+                    and _app.state.library_change_broker.stop(),
                 ),
                 ("waveform peaks", _app.state.waveform_peaks_registry.shutdown),
                 ("playback PCM", _app.state.playback_pcm_registry.shutdown),

@@ -19,14 +19,14 @@ async function provesRecovery({ page, galleryActions, navigationPanelActions, tr
   const { trackModal } = trackModalActions;
   await galleryActions.goto('/');
   await galleryActions.waitForGalleryReady();
-  const [album] = await visibleAlbumNames(galleryPage);
   // Full page loads: recovering must never reload the page.
   let loads = 0;
   page.on('load', () => { loads += 1; });
 
   // Album Details.
   await cutOff();
-  await galleryActions.clickAlbumDetailsByAlbumName(album);
+  // The first album by position: at this short height its title is below the fold.
+  await galleryActions.clickAlbumDetailsAt(0);
   await expect(trackModal.unreachableTitle).toHaveText('Offline');
   await expect(trackModal.unreachableDetail).toHaveText("Can't load the details, check your network or try again later");
   let loadsBefore = loads;

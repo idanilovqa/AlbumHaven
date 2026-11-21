@@ -10453,7 +10453,7 @@
     "expectedContracts": [
       "offline-surfaces-recover-without-reload"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.config.js",
@@ -10469,6 +10469,6 @@
     "expectedContracts": [
       "server-down-surfaces-recover-without-reload"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   }
 ]

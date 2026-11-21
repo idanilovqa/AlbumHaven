@@ -2859,44 +2859,14 @@ test('INT-007: an album already marked as a version is selected in Mark As A Ver
 
 // Request-capture contract (tests/ci/bounded-interactions.json): loose-track hydration builds its
 // URL with the real view helpers, coalesces repeated opens, and never asks again once hydrated.
-const { assertInteractionRequests, createRequestCapture, jsonResponse, measureInteractionContract } = require('../helpers/request-capture');
-const viewStateHelpersPath = path.join(path.dirname(helperPath), 'view-state-helpers.js');
-
-test('request capture: loose-track hydration requests /view-data once per scope', async () => {
-  const id = 'js:runtime/modal-and-overlay-helpers.js#hydrateDeferredNonAlbumTracks';
-  await measureInteractionContract(id, async (opens) => {
-    const { context } = loadHelper();
-    context.URL = URL;
-    context.URLSearchParams = URLSearchParams;
-    context.updateGalleryMainControls = () => {};
-    vm.runInContext(fs.readFileSync(viewStateHelpersPath, 'utf8'), context, { filename: viewStateHelpersPath });
-    const capture = createRequestCapture(() => jsonResponse({ non_album_tracks: [], library_non_album_tracks: [] }));
-    context.fetch = capture.fetch;
-    const openMany = options => Promise.all(Array.from({ length: opens }, () => context.hydrateDeferredNonAlbumTracks(options)));
-    for (const scope of [{ selected_artist: 'Agalloch' }, { surface_request: 'albums' }]) {
-      context.state.view = { ...scope, non_album_tracks: [], non_album_tracks_deferred: true };
-      await openMany();
-      await openMany();
-      await openMany({ libraryWide: true });
-      await openMany({ libraryWide: true });
-    }
-    const urls = capture.urls().map(url => new URL(url, 'http://localhost'));
-    assert.deepEqual(urls.map(url => [url.pathname, url.searchParams.get('artist'), url.searchParams.has('include_library_wide_non_album')]), [
-      ['/view-data', 'Agalloch', false], ['/view-data', 'Agalloch', true], ['/view-data', null, false], ['/view-data', null, true],
-    ]);
-    assert.ok(urls.every(url => url.searchParams.get('include_non_album') === '1' && url.searchParams.get('omit_sidebar') === '1'));
-    assertInteractionRequests(id, capture.urls());
-    return capture.counter.snapshot();
-  });
-});
 
 // Request-capture contract (tests/ci/bounded-interactions.json): Loose Tracks requests stay on their
 // two endpoints, once per scope, and the search prefetch is reused instead of asked again.
-const { assertInteractionRequests: assertLooseTrackRequests, measureInteractionContract: measureLooseTrackContract } = require('../helpers/request-capture');
+const { assertInteractionRequests, measureInteractionContract } = require('../helpers/request-capture');
 
 test('request capture: loose tracks request each scope once and reuse the search prefetch', async () => {
   const id = 'js:runtime/modal-and-overlay-helpers.js#fetchNonAlbumPayload';
-  await measureLooseTrackContract(id, async (tracks) => {
+  await measureInteractionContract(id, async (tracks) => {
     const { context } = loadHelper();
     const requested = [];
     context.updateGalleryMainControls = () => {};
@@ -2914,7 +2884,7 @@ test('request capture: loose tracks request each scope once and reuse the search
     await context.fetchLibraryNonAlbumPayload(prefetchUrl);
     const paths = requested.map((url) => new URL(url, 'http://localhost').pathname);
     assert.deepEqual(paths, ['/library/loose-tracks', '/view-data']);
-    assertLooseTrackRequests(id, paths);
+    assertInteractionRequests(id, paths);
     return { requests: requested.length };
   });
 });

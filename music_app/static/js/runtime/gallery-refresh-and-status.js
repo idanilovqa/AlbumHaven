@@ -135,6 +135,24 @@ function rootGalleryViewportArtists(groups = [], scrollAnchor = null, scrollTop 
   return { artists: artists.slice(0, ROOT_GALLERY_ANCHOR_RECOVERY_REQUEST_LIMIT) };
 }
 
+// A refreshed root window must not end inside an artist the gallery already shows: the page would
+// replace that artist's mounted albums with its first few until the next page arrived, so a just
+// edited album vanished for a moment (FTC-TAGS-011/012). From the anchor, the page covers 50
+// mounted albums and then the rest of the artist the 50th falls in, within the server's limit.
+const ROOT_GALLERY_WINDOW_PAGE_SIZE = 50;
+const ROOT_GALLERY_MAX_PAGE_SIZE = 100;
+
+function rootGalleryWindowPageSize(groups = [], anchorArtist = '') {
+  const start = groups.findIndex(group => String(group?.artist || '').trim() === anchorArtist);
+  if (start < 0) return ROOT_GALLERY_WINDOW_PAGE_SIZE;
+  let albums = 0;
+  for (let index = start; index < groups.length; index += 1) {
+    albums += (groups[index]?.albums || []).length;
+    if (albums >= ROOT_GALLERY_WINDOW_PAGE_SIZE) return Math.min(ROOT_GALLERY_MAX_PAGE_SIZE, albums);
+  }
+  return ROOT_GALLERY_WINDOW_PAGE_SIZE;
+}
+
 function retainRootGalleryAnchorMetadata(currentPage = {}, nextPage = {}) {
   if (String(nextPage.anchor_artist || '').trim()) return nextPage;
   if (!String(currentPage.anchor_artist || '').trim()) return nextPage;
@@ -1184,6 +1202,9 @@ async function fetchAndRender(url, push = true, options = {}) {
     const refreshUrl = new URL(apiUrl, 'http://localhost');
     if (!refreshUrl.searchParams.has('gallery_anchor_artist')) {
       refreshUrl.searchParams.set('gallery_anchor_artist', rootWindow.artists[0]);
+      refreshUrl.searchParams.set('gallery_page_size', String(
+        rootGalleryWindowPageSize(state.view.artist_groups, rootWindow.artists[0]),
+      ));
       apiUrl = `${refreshUrl.pathname}${refreshUrl.search}`;
     }
   }

@@ -7629,3 +7629,15 @@ test('BI scan completion refresh retry requests the current view once at product
 test('BI cover completion refresh retry requests the current view once at production scale', () => (
   measureCompletionRefreshRetry('Cover')
 ));
+
+test('a refreshed root window ends after the artist its 50th album belongs to, never inside it', () => {
+  // FTC-TAGS-011/012: a post-save refresh anchored above an edited album cut that artist after its
+  // first albums, so the edited album vanished until the next page arrived.
+  const { context } = createContext();
+  const artist = (name, count) => ({ artist: name, albums: Array.from({ length: count }, (_, index) => ({ key: `${name}-${index}` })) });
+  const groups = [artist('Above', 3), artist('Compilation Signal Guest', 45), artist('E2E Rarity Artist', 7), artist('Below', 9)];
+  assert.equal(context.rootGalleryWindowPageSize(groups, 'Compilation Signal Guest'), 52);
+  assert.equal(context.rootGalleryWindowPageSize(groups, 'E2E Rarity Artist'), 50, 'too few mounted albums keeps the default');
+  assert.equal(context.rootGalleryWindowPageSize([artist('Huge', 140)], 'Huge'), 100, 'never above the server limit');
+  assert.equal(context.rootGalleryWindowPageSize(groups, 'Unmounted'), 50);
+});

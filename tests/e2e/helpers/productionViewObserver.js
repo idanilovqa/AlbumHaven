@@ -332,6 +332,8 @@ export class ProductionViewObserver {
       if (!detail) return;
       // A live artist-tree refresh reads only the sidebar; the gallery keeps its authority.
       if (request.headers?.()['x-album-haven-view-purpose'] === 'artist-tree') return;
+      // A search's Loose Tracks prefetch carries only library-wide non-album tracks.
+      if (new URL(request.url()).searchParams.get('include_library_wide_non_album') === '1') return;
       detail.documentGeneration = this.documentGeneration;
       detail.mutationGeneration = this.mutationGeneration;
       this.nextRequestSequence = detail.sequence;

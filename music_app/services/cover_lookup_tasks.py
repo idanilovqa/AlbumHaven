@@ -26,7 +26,7 @@ from music_app.services.cover_lookup_notifications import (
     load_cover_lookup_notification,
     load_reusable_cover_lookup_notification,
     save_cover_lookup_notifications,
-    upsert_cover_lookup_notification,
+    upsert_guarded_cover_lookup_notifications,
     upsert_cover_lookup_notifications,
 )
 from music_app.services.cover_lookup_jobs import build_cover_lookup_job_contract
@@ -381,14 +381,14 @@ def _save_cover_lookup_notification_tasks(
                 # A task carrying its search generation is written only while that
                 # search still owns its stored notification.
                 unguarded = []
+                guarded = []
                 for task, revision in current:
                     generation = str(task.get("search_generation") or "")
                     if generation:
-                        upsert_cover_lookup_notification(
-                            config, task, persistence_revision=revision, expected_search_generation=generation,
-                        )
+                        guarded.append((task, revision, generation))
                     else:
                         unguarded.append((task, revision))
+                upsert_guarded_cover_lookup_notifications(config, guarded)
             if unguarded:
                 upsert_cover_lookup_notifications(config, unguarded)
         return

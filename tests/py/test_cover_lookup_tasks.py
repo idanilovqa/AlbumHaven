@@ -2085,3 +2085,53 @@ def test_admission_resolves_paths_without_holding_the_task_lock_request_routes_t
 
     assert tasks.cover_lookup_admission_state({str(track)}) == ("running", "")
     assert resolved_under_lock and not any(resolved_under_lock)
+
+
+def test_guarded_notification_writes_share_one_connection_however_many_tasks_change(monkeypatch):
+    # Freeze guard (BI-05): each task carrying a search generation opened its own connection, so a
+    # request that touched N notifications opened N connections.
+    from music_app.services import cover_lookup_notifications, cover_lookup_tasks as tasks
+    from music_app.services.cover_lookup_tasks_postgres import CoverLookupTasksPostgresAdapter
+
+    class _Cursor:
+        def __init__(self, rows=()):
+            self._rows = list(rows)
+
+        def fetchone(self):
+            return self._rows[0] if self._rows else None
+
+    class _Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return None
+
+        def execute(self, sql, params=None):
+            if "bootstrap_context_ready" in str(sql).lower():
+                return _Cursor([{"bootstrap_context_ready": 1}])
+            return _Cursor()
+
+    connections = []
+
+    def connect(_url):
+        connections.append(_Connection())
+        return connections[-1]
+
+    config = {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://isolated/test"}
+    monkeypatch.setattr(
+        cover_lookup_notifications, "_cover_lookup_notifications_adapter",
+        lambda _config: CoverLookupTasksPostgresAdapter(config, connect=connect),
+    )
+    snapshots = []
+    for index in range(5):
+        task_id = f"task-{index}"
+        monkeypatch.setitem(tasks._COVER_LOOKUP_TASK_REVISIONS, task_id, 1)
+        snapshots.append(({
+            "id": task_id, "status": "running", "type": "cover-art-lookup",
+            "track_paths": [f"C:/Music/Album {index}/01.flac"], "search_generation": f"generation-{index}",
+        }, 1))
+
+    tasks._save_cover_lookup_notification_tasks(snapshots, config=config, guard_search_generation=True)
+
+    assert len(connections) == 1

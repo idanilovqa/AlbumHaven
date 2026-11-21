@@ -290,6 +290,123 @@ def test_a_lapsed_claim_renews_by_its_token_until_another_client_claims(playback
     assert service.get(fixture.actor, client_id)["can_start_here"] is True
 
 
+def test_a_takeover_replaces_another_clients_live_claim_of_the_same_account(playback_inventory):
+    # Owner, 2026-11-17 (playback.claim.takeover): Play on the "Playing in another tab" overlay
+    # moves playback here at once, and the other client's token no longer holds the claim.
+    fixture = playback_inventory
+    clock = [datetime(2026, 11, 17, tzinfo=timezone.utc)]
+    service = claims_service(fixture, lambda: clock[0])
+    reference = issue(reference_service(fixture, lambda: clock[0]), fixture)["tracks"][0]["playbackRef"]
+    track = {"playbackRef": reference, "title": "Track", "artist": "Owner", "album": "Album", "artworkUrl": None}
+    phone, laptop = str(uuid4()), str(uuid4())
+    phone_claim = service.acquire(fixture.actor, client_id=phone, client_surface="mobile", track=track)
+    with pytest.raises(ValueError) as plain_start:
+        service.acquire(fixture.actor, client_id=laptop, client_surface="private_web", track=track)
+    assert getattr(plain_start.value, "status_code", None) == 409
+
+    taken = service.acquire(fixture.actor, client_id=laptop, client_surface="private_web",
+                            track={**track, "title": "Here now"}, takeover=True)
+
+    assert taken["playbackState"]["is_playing_here"] is True
+    service.require_claim(fixture.actor, client_id=laptop, claim_token=taken["claimToken"])
+    with pytest.raises(ValueError):
+        service.require_claim(fixture.actor, client_id=phone, claim_token=phone_claim["claimToken"])
+    with pytest.raises(ValueError) as renew:
+        service.acquire(fixture.actor, client_id=phone, client_surface="mobile", track=track,
+                        claim_token=phone_claim["claimToken"])
+    assert getattr(renew.value, "status_code", None) == 409
+    phone_view = service.get(fixture.actor, phone)
+    assert phone_view["is_playing_elsewhere"] is True
+    assert phone_view["track"]["title"] == "Here now"
+
+    # The phone takes it back the same way.
+    back = service.acquire(fixture.actor, client_id=phone, client_surface="mobile", track=track, takeover=True)
+    service.require_claim(fixture.actor, client_id=phone, claim_token=back["claimToken"])
+    with pytest.raises(ValueError):
+        service.require_claim(fixture.actor, client_id=laptop, claim_token=taken["claimToken"])
+    service.release(fixture.actor, client_id=phone, claim_token=back["claimToken"])
+
+
+def test_another_client_sees_where_the_claims_song_is_and_how_to_open_it(playback_inventory):
+    # Owner, 2026-11-17: after a takeover the other device's song continues here from where it was,
+    # so each renewal carries its position and the claim state names the song for this client.
+    fixture = playback_inventory
+    clock = [datetime(2026, 11, 17, tzinfo=timezone.utc)]
+    service = claims_service(fixture, lambda: clock[0])
+    reference = issue(reference_service(fixture, lambda: clock[0]), fixture)["tracks"][0]["playbackRef"]
+    track = {"playbackRef": reference, "title": "Track", "artist": "Owner", "album": "Album", "artworkUrl": None}
+    phone, laptop = str(uuid4()), str(uuid4())
+    claim = service.acquire(fixture.actor, client_id=phone, client_surface="mobile", track=track,
+                            position={"ms": 61_000, "durationMs": 300_000})
+
+    clock[0] += timedelta(seconds=4)
+    seen = service.get(fixture.actor, laptop)
+    assert seen["track"] == track, "the track keeps its contract shape"
+    assert seen["position"] == {"ms": 65_000, "durationMs": 300_000}, "the song played on since the renewal"
+    assert "path" not in seen, "the shared state stays path-free for native clients"
+    # Only a browser asks for the path it opens the song by, as its library browse names it.
+    assert service.get(fixture.actor, laptop, include_path=True)["path"] == fixture.paths[0]
+    assert "path" not in service.get(fixture.actor, phone, include_path=True), "only another client's song"
+
+    service.acquire(fixture.actor, client_id=phone, client_surface="mobile", track=track,
+                    claim_token=claim["claimToken"], position={"ms": 10_000, "durationMs": 300_000})
+    assert service.get(fixture.actor, laptop)["position"]["ms"] == 10_000, "a renewal reports the new place"
+    clock[0] += timedelta(minutes=10)
+    service.acquire(fixture.actor, client_id=phone, client_surface="mobile", track=track,
+                    claim_token=claim["claimToken"], position={"ms": 290_000, "durationMs": 300_000})
+    clock[0] += timedelta(seconds=20)
+    assert service.get(fixture.actor, laptop)["position"]["ms"] == 300_000, "never past the song's end"
+
+    service.acquire(fixture.actor, client_id=phone, client_surface="mobile", track=track,
+                    claim_token=claim["claimToken"])
+    assert service.get(fixture.actor, laptop)["position"] is None, "a renewal without a place reports none"
+    service.release(fixture.actor, client_id=phone, claim_token=claim["claimToken"])
+
+
+@pytest.mark.parametrize("position", [{"ms": -1, "durationMs": 1}, {"ms": 1}, {"ms": "1", "durationMs": 2},
+                                      {"ms": 1, "durationMs": 0}, {"ms": True, "durationMs": 2}, [1, 2]])
+def test_a_claim_refuses_a_malformed_position(playback_inventory, position):
+    fixture = playback_inventory
+    clock = lambda: datetime.now(timezone.utc)
+    service = claims_service(fixture, clock)
+    reference = issue(reference_service(fixture, clock), fixture)["tracks"][0]["playbackRef"]
+    track = {"playbackRef": reference, "title": "Track", "artist": "Owner", "album": "Album", "artworkUrl": None}
+    with pytest.raises(ValueError) as refused:
+        service.acquire(fixture.actor, client_id=str(uuid4()), client_surface="mobile", track=track, position=position)
+    assert getattr(refused.value, "status_code", None) == 400
+
+
+def test_a_takeover_never_reaches_another_account(playback_inventory):
+    fixture = playback_inventory
+    member = create_member(fixture)
+    clock = lambda: datetime.now(timezone.utc)
+    service = claims_service(fixture, clock)
+    reference = issue(reference_service(fixture, clock), fixture)["tracks"][0]["playbackRef"]
+    track = {"playbackRef": reference, "title": "Owner track", "artist": "Owner", "album": "Album", "artworkUrl": None}
+    owner_client, member_client = str(uuid4()), str(uuid4())
+    owner_claim = service.acquire(fixture.actor, client_id=owner_client, client_surface="private_web", track=track)
+
+    member_claim = service.acquire(member, client_id=member_client, client_surface="mobile", track=track, takeover=True)
+
+    service.require_claim(fixture.actor, client_id=owner_client, claim_token=owner_claim["claimToken"])
+    assert service.get(fixture.actor, owner_client)["is_playing_here"] is True
+    service.release(fixture.actor, client_id=owner_client, claim_token=owner_claim["claimToken"])
+    service.release(member, client_id=member_client, claim_token=member_claim["claimToken"])
+
+
+@pytest.mark.parametrize("extra", [{"claim_token": "x" * 43}, {"takeover": "yes"}, {"takeover": 1}])
+def test_a_takeover_is_only_a_fresh_boolean_request(playback_inventory, extra):
+    fixture = playback_inventory
+    clock = lambda: datetime.now(timezone.utc)
+    service = claims_service(fixture, clock)
+    reference = issue(reference_service(fixture, clock), fixture)["tracks"][0]["playbackRef"]
+    track = {"playbackRef": reference, "title": "Track", "artist": "Owner", "album": "Album", "artworkUrl": None}
+    arguments = {"takeover": True, **extra}
+    with pytest.raises(ValueError) as refused:
+        service.acquire(fixture.actor, client_id=str(uuid4()), client_surface="private_web", track=track, **arguments)
+    assert getattr(refused.value, "status_code", None) == 400
+
+
 def test_concurrent_clients_cannot_both_acquire_playback(playback_inventory):
     fixture = playback_inventory
     now = datetime(2026, 10, 23, tzinfo=timezone.utc)
@@ -504,7 +621,8 @@ def test_stage_handoff_requires_exact_private_web_predecessor(playback_inventory
     assert getattr(failure.value, "status_code", None) == 403
 
 
-def test_live_pending_handoff_blocks_null_acquire_until_it_expires(playback_inventory):
+# sandbox5 (2026-11-18): closing a playing tab, then Play in another browser, was refused for 15-30 s.
+def test_an_unloaded_tabs_pending_handoff_gives_way_to_the_first_fresh_acquire(playback_inventory):
     fixture = playback_inventory
     started_at = datetime(2026, 10, 25, tzinfo=timezone.utc)
     clock = [started_at]
@@ -536,14 +654,36 @@ def test_live_pending_handoff_blocks_null_acquire_until_it_expires(playback_inve
     )
     assert datetime.fromisoformat(staged["expiresAt"].replace("Z", "+00:00")) == started_at + timedelta(seconds=44)
 
-    clock[0] = started_at + timedelta(seconds=31)
-    with pytest.raises(ValueError) as failure:
-        service.acquire(fixture.actor, client_id=str(uuid4()), client_surface="private_web", track=track)
-    assert getattr(failure.value, "status_code", None) == 409
-
-    clock[0] = started_at + timedelta(seconds=45)
-    acquired = service.acquire(fixture.actor, client_id=str(uuid4()), client_surface="private_web", track=track)
+    clock[0] = started_at + timedelta(seconds=29, milliseconds=500)
+    other_client = str(uuid4())
+    acquired = service.acquire(fixture.actor, client_id=other_client, client_surface="private_web", track=track)
     assert acquired["claimToken"]
+    assert service.get(fixture.actor, other_client)["is_playing_here"] is True
+    assert service.get(fixture.actor, client_id)["is_playing_elsewhere"] is True
+
+
+# The next page of the same tab renews its claim by token (same-tab identity): it is not leaving any
+# more, so the handoff its previous page staged on unload no longer lets another client take over.
+def test_the_owners_token_renewal_withdraws_a_staged_handoff(playback_inventory):
+    fixture = playback_inventory
+    now = datetime(2026, 10, 25, tzinfo=timezone.utc)
+    service, track, client_id, claim = active_private_web_claim(fixture, now)
+    service.stage_handoff(
+        fixture.actor,
+        client_id=client_id,
+        claim_token=claim["claimToken"],
+        handoff_id=str(uuid4()),
+        handoff_token=opaque_test_token("withdrawn-handoff"),
+        completion_digest=NULL_HANDOFF_COMPLETION_DIGEST,
+    )
+
+    renewed = service.acquire(fixture.actor, client_id=client_id, client_surface="private_web", track=track,
+                              claim_token=claim["claimToken"])
+    assert renewed["claimToken"] == claim["claimToken"]
+    with pytest.raises(ValueError) as refused:
+        service.acquire(fixture.actor, client_id=str(uuid4()), client_surface="private_web", track=track)
+    assert getattr(refused.value, "status_code", None) == 409
+    service.release(fixture.actor, client_id=client_id, claim_token=claim["claimToken"])
 
 
 def test_live_handoff_consumes_after_predecessor_lease_expires(playback_inventory):

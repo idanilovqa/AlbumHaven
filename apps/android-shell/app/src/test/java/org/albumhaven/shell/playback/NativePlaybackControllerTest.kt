@@ -26,15 +26,25 @@ const val TEST_DEVICE_ID = "6f1c8a51-2a2c-4d2f-9a61-0d4f1f2b6a01"
 class FakeClaimApi : PlaybackClaimApi {
     val calls = mutableListOf<String>()
     val tracks = mutableListOf<ClaimTrack>()
+    val takeovers = mutableListOf<Boolean>()
+    val positions = mutableListOf<ClaimPosition?>()
     var acquireResponse: () -> ClaimResponse = { ClaimResponse.Granted("token-${++issued}") }
     var renewResponse: (String) -> ClaimResponse = { ClaimResponse.Granted(it) }
     var releaseAnswered = true
     private var issued = 0
 
-    override fun acquire(clientId: String, claimToken: String?, track: ClaimTrack): ClaimResponse {
+    override fun acquire(
+        clientId: String,
+        claimToken: String?,
+        track: ClaimTrack,
+        takeover: Boolean,
+        position: ClaimPosition?,
+    ): ClaimResponse {
         check(clientId == TEST_CLIENT_ID)
         calls += "acquire:$claimToken"
         tracks += track
+        takeovers += takeover
+        positions += position
         return if (claimToken == null) acquireResponse() else renewResponse(claimToken)
     }
 
@@ -235,6 +245,18 @@ class NativePlaybackControllerTest {
         assertTrue(harness.server.texts.filter { it.contains("\"open\"") }.all { it.contains("playbackRef") })
         assertEquals(emptyList<String>(), harness.server.violations)
         assertEquals(1, harness.controller.snapshot.currentIndex)
+    }
+
+    // Owner, 2026-11-17 (playback.claim.takeover): Play while another device plays moves its song
+    // here; the claim replaces the other device's and reports where this device's song is.
+    @Test
+    fun aTakeoverQueueClaimsOnceAsATakeoverAndReportsWhereTheSongIs() {
+        val harness = ControllerHarness(first)
+        harness.controller.loadQueue(QueueLoad(1, listOf(harness.item(first)), 0, 1_000, null, autoplay = true, takeover = true))
+        harness.runUntil { harness.state() == NativePlaybackState.PLAYING }
+        assertEquals(listOf(true), harness.claims.takeovers)
+        assertEquals(1_000L, harness.claims.positions.single()!!.ms)
+        assertEquals(3_000L, harness.claims.positions.single()!!.durationMs)
     }
 
     @Test

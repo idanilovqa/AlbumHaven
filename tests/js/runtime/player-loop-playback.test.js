@@ -324,7 +324,63 @@ test('never-played player hides its timestamp until a track is available', () =>
   assert.equal(time.textContent, '3 / 60');
 });
 
-test('mirrored playback keeps metadata unobscured while showing its locked status', () => {
+// Owner, mockup playback-elsewhere-status v003 (2026-11-17): "Playing in another tab" sits over the
+// dimmed player, and Play stays pressable above the dimming: it takes playback over here.
+test('playback on another device shows the elsewhere overlay over the player and keeps Play pressable', () => {
+  const player = new FakeElement();
+  const elsewhere = new FakeElement();
+  const timelineWrap = new FakeElement();
+  const timeline = new FakeElement({ tagName: 'INPUT', type: 'range', parentElement: timelineWrap });
+  const time = new FakeElement();
+  const play = new FakeElement({ tagName: 'BUTTON' });
+  const title = new FakeElement();
+  const albumLink = new FakeElement();
+  let blockedReason = 'playing_in_another_tab';
+  const { context } = loadHelper({
+    getPlayerElements: () => ({ player, elsewhere, timeline, time, play, title, albumLink }),
+    isPlaybackLockedByAnotherTab: () => true,
+    getPlaybackOwnershipState: () => ({ blockedReason }),
+    getMirroredPlaybackTrack: () => ({ artist: 'Artist', title: 'Song', album: 'Album' }),
+  });
+
+  context.updatePlayerUi();
+
+  assert.equal(elsewhere.hidden, false);
+  assert.equal(player.classList.contains('is-playing-elsewhere'), true);
+  assert.equal(timelineWrap.classList.contains('is-idle'), false,
+    'the empty-player label must not cover the other device\'s song');
+  assert.equal(title.textContent, 'Artist - Song /', 'the other device\'s song stays under the dimming');
+  assert.equal(albumLink.textContent, 'Album');
+  assert.equal(time.hidden, true, 'the overlay carries the status');
+  assert.equal(play.disabled, false);
+  assert.equal(play.getAttribute('aria-label'), 'Play here');
+  assert.equal(play.title, 'Play in this tab instead', 'hovering Play says what it does');
+  assert.equal(timeline.disabled, true);
+
+  context.state.player.loopActive = true;
+  context.updatePlayerUi();
+  assert.equal(elsewhere.hidden, false, 'the overlay takes precedence over the local loop range');
+
+  blockedReason = 'playback_unavailable';
+  context.updatePlayerUi();
+  assert.equal(elsewhere.hidden, true, 'unavailable playback is not playback elsewhere');
+  assert.equal(player.classList.contains('is-playing-elsewhere'), false);
+  assert.equal(play.title, '', 'only playback elsewhere offers to play here instead');
+  assert.equal(time.textContent, 'Playback unavailable');
+  assert.equal(play.disabled, true);
+
+  context.isPlaybackLockedByAnotherTab = () => false;
+  context.state.player.loopStart = 10;
+  context.state.player.loopEnd = 20;
+  context.updatePlayerUi();
+  assert.equal(elsewhere.hidden, true);
+  assert.equal(time.textContent, '10 - 20');
+});
+
+// Owner, 2026-11-19: "When I click play on a new song, in the player name of the song blinks and
+// return to the currently playing befoire changing again to the one that I started."
+test('a refresh while a pressed song starts keeps showing the pressed song, not the one it replaces', () => {
+  const player = new FakeElement();
   const timelineWrap = new FakeElement();
   const timeline = new FakeElement({ tagName: 'INPUT', type: 'range', parentElement: timelineWrap });
   const time = new FakeElement();
@@ -332,31 +388,16 @@ test('mirrored playback keeps metadata unobscured while showing its locked statu
   const title = new FakeElement();
   const albumLink = new FakeElement();
   const { context } = loadHelper({
-    getPlayerElements: () => ({ timeline, time, play, title, albumLink }),
-    isPlaybackLockedByAnotherTab: () => true,
-    getMirroredPlaybackTrack: () => ({ artist: 'Artist', title: 'Song', album: 'Album' }),
+    getPlayerElements: () => ({ player, timeline, time, play, title, albumLink }),
+    getPlayerPlaybackSnapshot: () => ({ currentTime: 40, duration: 300, paused: false, ended: false, src: '/track?path=a.mp3' }),
   });
-
+  context.state.player.current = { path: 'a.mp3', src: '/track?path=a.mp3', artist: 'Artist', title: 'Playing Song', album: 'Album' };
   context.updatePlayerUi();
+  assert.equal(title.textContent, 'Artist - Playing Song /');
 
-  assert.equal(timelineWrap.classList.contains('is-idle'), false,
-    'the empty-player overlay must not cover mirrored metadata');
-  assert.equal(title.textContent, 'Artist - Song /');
-  assert.equal(albumLink.textContent, 'Album');
-  assert.equal(time.textContent, 'Playing in another tab');
-  assert.equal(time.hidden, false);
-  assert.equal(play.disabled, true);
-  assert.equal(timeline.disabled, true);
-
-  context.state.player.loopActive = true;
-  context.state.player.loopStart = 10;
-  context.state.player.loopEnd = 20;
+  context.state.player.selectedTrack = { path: 'b.mp3', src: '/track?path=b.mp3', artist: 'Artist', title: 'Pressed Song', album: 'Album' };
   context.updatePlayerUi();
-  assert.equal(time.textContent, 'Playing in another tab',
-    'mirrored ownership status takes precedence over the local loop range');
-  context.isPlaybackLockedByAnotherTab = () => false;
-  context.updatePlayerUi();
-  assert.equal(time.textContent, '10 - 20');
+  assert.equal(title.textContent, 'Artist - Pressed Song /', 'the pressed song stays shown while it starts');
 });
 
 test('playback held by another tab or lost to the server disables the scissors for this tab', () => {

@@ -37,6 +37,45 @@ class PlaybackClaimOwnerTest {
         assertEquals(2 * PlaybackClaimOwner.HEARTBEAT_MS, owner.nextDeadlineMs())
     }
 
+    // Owner, 2026-11-17 (playback.claim.takeover): Play while another device plays moves its song here.
+    @Test
+    fun aTakeoverAcquireAsksOnceToReplaceTheOtherClaimAndEveryRequestReportsWhereTheSongIs() {
+        var heard: ClaimPosition? = ClaimPosition(61_000, 300_000)
+        val reporting = PlaybackClaimOwner(api, TEST_CLIENT_ID, io::addLast, posted::addLast, { now }, events::add) { heard }
+        val outcomes = mutableListOf<ClaimOutcome>()
+        reporting.acquire(track, true, outcomes::add)
+        drain()
+        assertEquals(listOf(ClaimOutcome.GRANTED), outcomes)
+        assertEquals(listOf(true), api.takeovers)
+        assertEquals(listOf<ClaimPosition?>(ClaimPosition(61_000, 300_000)), api.positions)
+
+        heard = ClaimPosition(71_000, 300_000)
+        now = PlaybackClaimOwner.HEARTBEAT_MS
+        reporting.tick()
+        drain()
+        assertEquals("a renewal never takes over again", listOf(true, false), api.takeovers)
+        assertEquals(ClaimPosition(71_000, 300_000), api.positions.last())
+    }
+
+    @Test
+    fun anUnansweredTakeoverIsSentAgainAsOneAndAnAnswerSettlesIt() {
+        api.acquireResponse = { ClaimResponse.Unreachable }
+        owner.acquire(track, true) {}
+        drain()
+        api.acquireResponse = { ClaimResponse.Granted("token-taken") }
+        now = PlaybackClaimOwner.RETRY_MS
+        owner.tick()
+        drain()
+        assertEquals(listOf(true, true), api.takeovers)
+        assertTrue(owner.owned)
+
+        owner.release()
+        drain()
+        owner.acquire(track) {}
+        drain()
+        assertEquals("a later Play is an ordinary acquire", false, api.takeovers.last())
+    }
+
     @Test
     fun concurrentRequestsShareOneAcquisition() {
         val outcomes = mutableListOf<ClaimOutcome>()

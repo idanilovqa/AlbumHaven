@@ -292,7 +292,7 @@ function validatePerformanceTargets(contract, expectedCases, expectedNames) {
 
   const defaults = contract.targets.filter((target) => target.defaultMember === true);
   const omissions = contract.targets.filter((target) => target.defaultMember === false);
-  if (defaults.length !== 29) errors.push('default performance group must expose all 29 targets');
+  if (defaults.length !== 31) errors.push('default performance group must expose all 31 targets');
   if (omissions.length !== 0) errors.push('default performance group must not omit a reviewed target');
   return errors;
 }
@@ -581,6 +581,8 @@ test('performance target contract owns every performance case across the approve
     'scan-metadata',
     'scan-page',
     'scan-health', 'scan-error',
+    'edit-tags-split-merge',
+    'edit-tags-api-consecutive',
   ]);
   const contract = readJson(performanceTargetsPath);
   const errors = validatePerformanceTargets(contract, expectedCases, expectedNames);

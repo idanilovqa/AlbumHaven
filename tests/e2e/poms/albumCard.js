@@ -209,7 +209,15 @@ export class AlbumCard extends BasePage {
     const singleArtistSection = singleArtistContext
       .locator('xpath=following::*[@id="artist-groups"][1]')
       .locator(':scope > .artist-section:only-child:not(:has(.artist-name))');
-    return explicitSection.or(singleArtistSection).first();
+    // All-artists search results with one artist render that artist's section without a heading;
+    // its cards name the artist.
+    const unheadedOnlyArtistSection = this.page
+      .locator('#artist-groups > .artist-section:only-child:not(:has(.artist-name))')
+      .filter({
+        has: this.page.locator('.gallery-card__artist').filter({ hasText: normalizedHeading }),
+        hasNot: this.page.locator('.gallery-card__artist').filter({ hasNotText: normalizedHeading }),
+      });
+    return explicitSection.or(singleArtistSection).or(unheadedOnlyArtistSection).first();
   }
 
   cardsByArtistAndAlbum(artistName, albumName, options = {}) {

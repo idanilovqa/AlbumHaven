@@ -5398,21 +5398,6 @@
       "proof": "static"
     },
     {
-      "id": "js:runtime/player-streaming-engine.js#waitForStreamingReplacementCushion",
-      "action": "setTimeout timers installed by waitForStreamingReplacementCushion",
-      "entrypoints": [
-        "js:music_app/static/js/runtime/player-streaming-engine.js#waitForStreamingReplacementCushion:timer:setTimeout"
-      ],
-      "owners": [
-        "music_app/static/js/runtime/player-streaming-engine.js"
-      ],
-      "rules": [
-        "BI-03"
-      ],
-      "workClass": "constant",
-      "proof": "static"
-    },
-    {
       "id": "js:runtime/player-waveform-peaks.js#loadSavedLoopWaveformPeaks",
       "action": "fetch requests, setTimeout timers installed by loadSavedLoopWaveformPeaks",
       "entrypoints": [

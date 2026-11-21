@@ -12102,6 +12102,9 @@ function prefetchCustomCollectionCatalogForSearch(query) {
   void loadCustomCollectionCatalog({ view: { ...(state.view || {}), query: normalized } }).catch(() => {});
 }
 
+const CUSTOM_COLLECTION_CATALOG_DEFERRED_RETRIES = 20;
+const CUSTOM_COLLECTION_CATALOG_DEFERRED_DELAY_MS = 750;
+
 function loadCustomCollectionCatalog({ fresh = false, view = state.view || {} } = {}) {
   const url = customCollectionCatalogUrl(view);
   const key = url.search;
@@ -12113,10 +12116,20 @@ function loadCustomCollectionCatalog({ fresh = false, view = state.view || {} } 
   const generation = customCollectionCatalogGeneration;
   const revision = customCollectionInventoryRevision();
   const promise = (async () => {
-    const response = await fetch(`${url.pathname}${url.search}`, { headers: { Accept: 'application/json' } });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok || payload?.ok === false) {
-      throw new Error(payload?.error || `Custom Collections request failed: ${response.status}`);
+    let payload = null;
+    // A search's tree waits while the server is still building the stored Loose Tracks list (owner 2026-11-21):
+    // the skeleton stays and the request is repeated, a few times, instead of showing unsearched counts.
+    for (let attempt = 0; ; attempt += 1) {
+      const response = await fetch(`${url.pathname}${url.search}`, { headers: { Accept: 'application/json' } });
+      payload = await response.json().catch(() => ({}));
+      if (!response.ok || payload?.ok === false) {
+        throw new Error(payload?.error || `Custom Collections request failed: ${response.status}`);
+      }
+      if (payload?.deferred !== true) break;
+      if (attempt >= CUSTOM_COLLECTION_CATALOG_DEFERRED_RETRIES || generation !== customCollectionCatalogGeneration) {
+        throw new Error('Custom Collections are still loading. Try again in a moment.');
+      }
+      await new Promise(resolve => scheduleBrowserTimeout(resolve, CUSTOM_COLLECTION_CATALOG_DEFERRED_DELAY_MS));
     }
     const collections = (Array.isArray(payload.custom_collections) ? payload.custom_collections : [])
       .map(({ name, count }) => ({ name: String(name || '').trim(), count: Number(count) || 0 }))

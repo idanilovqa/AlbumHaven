@@ -19410,3 +19410,27 @@ def test_cover_lookup_track_path_reads_lease_the_shared_browse_pool(monkeypatch)
     assert repository.build_cover_state_entries_by_paths({"N:/Album/01.flac"}) == {}
     assert repository.build_album_payloads_by_track_paths({"N:/Album/01.flac"}) == []
     assert leases == ["browse", "browse"]
+
+
+def test_searched_custom_collection_tree_is_deferred_until_the_loose_tracks_list_exists(monkeypatch):
+    # Owner 2026-11-21 ("Alas"): the tree showed the unsearched collection counts while the list was not built.
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def execute(self, *_args):
+            raise AssertionError("a search must not fall back to the plain catalog query")
+
+    repository = PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://unused"})
+    monkeypatch.setattr(repository, "_connect_to_database", lambda: Connection())
+    monkeypatch.setattr(repository, "_load_non_album_track_snapshot", lambda _connection: None)
+
+    payload = repository.build_custom_collection_catalog_payload(query_params={"q": "alas"})
+
+    assert payload == {"custom_collections": [], "loose_tracks_count": None, "interviews_count": None,
+                       "deferred": True, "query": "alas"}

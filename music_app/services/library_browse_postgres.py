@@ -518,8 +518,13 @@ class PostgresLibraryBrowseRepository:
         query = str((query_params or {}).get("q") or "").strip()
         if query:
             searched = self._searched_custom_collection_catalog(categories, query)
-            if searched is not None:
-                return searched
+            # Until the stored Loose Tracks list exists, a search's tree is not known yet: it is never the unsearched
+            # catalog, whose full counts contradicted the search (owner 2026-11-21, "Alas"). The search's own
+            # Loose Tracks request builds the list; the client asks again.
+            return searched if searched is not None else {
+                "custom_collections": [], "loose_tracks_count": None, "interviews_count": None,
+                "deferred": True, "query": query,
+            }
         with self._connect_to_database() as connection:
             # A few hundred rows: parallel worker startup would cost more than the query.
             connection.execute("set local max_parallel_workers_per_gather = 0")

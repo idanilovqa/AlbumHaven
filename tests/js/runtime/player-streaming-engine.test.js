@@ -2853,7 +2853,7 @@ test('second rapid replacement reuses the promoted current before its exact prom
   const stopCountBeforeSecondSelection = harness.portMessages('stop').length;
   const resumeCallsBeforeSecondSelection = context.resumeCalls;
   const playCountBeforeSecondSelection = harness.portMessages('play').length;
-  const secondStarting = harness.api.start(secondReplacementTrack);
+  // The promoted current has a second buffered, so the next switch crosses over from it.
   receivePcmAndAssertEnqueue(harness, {
     role: 1,
     generation: firstReplacement.generation,
@@ -2861,6 +2861,7 @@ test('second rapid replacement reuses the promoted current before its exact prom
     sequence: 1,
     samples: new Array(36_000 * 2).fill(0.5),
   }, { role: 'current' });
+  const secondStarting = harness.api.start(secondReplacementTrack);
   await harness.settle();
 
   assert.equal(harness.sent('close').length, closeCountBeforeSecondSelection);
@@ -3879,8 +3880,15 @@ test('prepared replacement preserves its buffered outgoing cushion while retaini
   );
 });
 
-test('replacement decoder opens only after the outgoing stream has an actual render cushion', async () => {
-  const harness = createEngineHarness();
+test('a switch from an outgoing song with under a second buffered starts the new song at once', async () => {
+  const timers = [];
+  const harness = createEngineHarness({
+    setTimeout(callback, delay) {
+      timers.push({ callback, delay });
+      return timers.length;
+    },
+    clearTimeout() {},
+  });
   await harness.api.start(makeTrack('outgoing-vbr.mp3'));
   const outgoing = harness.sent('open')[0];
   acceptMetadata(harness, outgoing);
@@ -3897,31 +3905,22 @@ test('replacement decoder opens only after the outgoing stream has an actual ren
     renderedFrame: 0,
     contextTime: 12.5,
   });
-  harness.api.start(makeTrack('replacement.flac'));
 
-  assert.equal(
-    harness.sent('open').length,
-    1,
-    'the replacement decoder must not compete while only outgoing credit is pending',
-  );
-
-  receivePcmAndAssertEnqueue(harness, {
-    generation: outgoing.generation,
-    streamId: outgoing.streamId,
-    sequence: 1,
-    samples: new Array(46_801 * 2).fill(0.25),
-  });
+  const starting = harness.api.start(makeTrack('replacement.flac'));
   await harness.settle();
-  const replacement = harness.sent('open').at(-1);
-  acceptMetadata(harness, replacement);
 
-  assert.deepEqual(
-    harness.sent('credit')
-      .filter(({ streamId }) => streamId === replacement.streamId)
-      .map(({ frames }) => frames),
-    [48_000],
-    'replacement decoding begins once one second of outgoing audio is actually buffered',
-  );
+  assert.equal(timers.filter(({ delay }) => delay === 1000).length, 0, 'nothing waits for the outgoing cushion');
+  const fresh = harness.sent('open').at(-1);
+  assert.equal(fresh.role, 'current', 'the new song opens as the current stream, not a cross-over');
+  assert.equal(fresh.path, makeTrack('replacement.flac').path);
+  assert.notEqual(fresh.generation, outgoing.generation);
+  acceptMetadata(harness, fresh);
+  receivePcmAndAssertEnqueue(harness, {
+    generation: fresh.generation,
+    streamId: fresh.streamId,
+    samples: new Array(12_000 * 2).fill(0.5),
+  });
+  assert.equal((await starting).streamId, fresh.streamId);
 });
 
 test('replacement remains live when outgoing ended races worklet seek reservation', async () => {
@@ -4018,53 +4017,6 @@ test('paused replacement suppresses raced outgoing ended without restarting the 
   assert.equal(harness.api.snapshot().paused, true);
   assert.deepEqual(ended, []);
   assert.equal(harness.portMessages('play').length, playCount);
-});
-
-test('stalled outgoing replacement cushion falls back to a cold replacement start', async () => {
-  const timers = [];
-  const harness = createEngineHarness({
-    setTimeout(callback, delay) {
-      timers.push({ callback, delay, cleared: false });
-      return timers.length;
-    },
-    clearTimeout(id) {
-      if (timers[id - 1]) timers[id - 1].cleared = true;
-    },
-  });
-  await harness.api.start(makeTrack('stalled-outgoing.flac'));
-  const outgoing = harness.sent('open')[0];
-  acceptMetadata(harness, outgoing);
-  receivePcmAndAssertEnqueue(harness, {
-    generation: outgoing.generation,
-    streamId: outgoing.streamId,
-    samples: new Array(1_199 * 2).fill(0.25),
-  });
-  harness.nodes[0].port.dispatch({
-    type: 'first-frame',
-    generation: outgoing.generation,
-    streamId: outgoing.streamId,
-    renderedFrame: 0,
-    contextTime: 12.5,
-  });
-
-  const starting = harness.api.start(makeTrack('fallback.flac'));
-  assert.equal(harness.sent('open').length, 1);
-  assert.equal(timers.length, 1);
-  assert.equal(timers[0].delay, 1000);
-  timers[0].callback();
-  await harness.settle();
-
-  const fallback = harness.sent('open').at(-1);
-  assert.equal(fallback.role, 'current');
-  assert.equal(fallback.path, makeTrack('fallback.flac').path);
-  assert.notEqual(fallback.generation, outgoing.generation);
-  acceptMetadata(harness, fallback);
-  receivePcmAndAssertEnqueue(harness, {
-    generation: fallback.generation,
-    streamId: fallback.streamId,
-    samples: new Array(12_000 * 2).fill(0.5),
-  });
-  assert.equal((await starting).streamId, fallback.streamId);
 });
 
 test('consumed audio replenishes a promoted current stream in coarse windows', async () => {

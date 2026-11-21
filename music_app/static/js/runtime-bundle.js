@@ -18097,9 +18097,7 @@ function openTrackModal(album, options = {}) {
       if (error.status === 404) {
         closeTrackModalForChangedAlbum();
         if (typeof refreshCurrentViewAfterBackgroundCompletion === 'function') {
-          refreshCurrentViewAfterBackgroundCompletion().catch((refreshError) => {
-            console.error('[AlbumHaven][AlbumDetails] Failed to refresh the gallery.', refreshError);
-          });
+          void refreshCurrentViewAfterBackgroundCompletion();
         }
         return;
       }

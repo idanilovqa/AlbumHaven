@@ -230,6 +230,7 @@ function stubCollectionTree(context) {
   context.window.NavigationTree = {
     renderSeparator: ({ label }) => `<div class="navigation-tree-separator" role="separator" aria-label="${label}"></div>`,
     renderSkeleton: ({ count }) => `<div data-navigation-tree-skeleton="${count}"></div>`,
+    renderEmpty: ({ text }) => `<p class="navigation-tree-empty">${text}</p>`,
     renderItem: (options) => {
       renderedOptions.push(options);
       const collection = options.attributes['data-open-custom-collection'];
@@ -326,7 +327,7 @@ test('a search narrows the collections tree and dots the Custom Collections butt
   await context.syncCustomCollectionSearchIndicator();
   assert.deepEqual(buttons.map(button => button.attributes.has('data-search-results')), [false, false]);
   await context.setLibraryNavigationMode('custom-collections');
-  assert.match(artistList.innerHTML, /No collection matches “nothing”\./);
+  assert.match(artistList.innerHTML, /<p class="navigation-tree-empty">No match found<\/p>/);
 
   context.state.view.query = '';
   await context.syncCustomCollectionSearchIndicator();

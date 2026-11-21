@@ -4,7 +4,7 @@
   if (window.NavigationTree) return;
   const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
   // HTML slots contain component-rendered markup; resource text uses escaped fields.
-  function renderItem({ label, href = '#', key = '', selected = false, icon = '', count = null, variant = 'artists', attributes = {}, action = false, artworkHtml = '', subtitle = '', year = '', countHidden = false, trailingHtml = '', draggable = false, className = '' } = {}) {
+  function renderItem({ label, href = '#', key = '', selected = false, icon = '', count = null, variant = 'artists', attributes = {}, action = false, artworkHtml = '', subtitle = '', year = '', countHidden = false, trailingHtml = '', draggable = false, className = '', disabled = false } = {}) {
     const template = document.getElementById('navigation-tree-item-template')?.textContent;
     if (!template) throw new Error('NavigationTreeItem template is missing.');
     const settings = variant === 'settings';
@@ -18,7 +18,11 @@
       'data-navigation-tree-key': key,
     };
     if (action) values.type = panel ? 'button' : 'submit';
-    else values.href = /^(?:\/(?!\/)|#)/.test(String(href)) ? href : '#';
+    else if (!disabled) values.href = /^(?:\/(?!\/)|#)/.test(String(href)) ? href : '#';
+    // A row with nothing behind it (a search's 0) cannot be opened (owner 2026-11-21): a button is disabled; a link
+    // loses its target and its tab stop.
+    if (disabled && action) values.disabled = 'disabled';
+    else if (disabled) Object.assign(values, { 'aria-disabled': 'true', tabindex: '-1' });
     if (draggable) values.draggable = 'true';
     for (const [name, value] of Object.entries(attributes)) {
       if (/^data-[a-z0-9-]+$/.test(name) && !name.startsWith('data-navigation-tree-')) values[name] = value;
@@ -35,6 +39,10 @@
   }
   function renderSeparator({ label } = {}) {
     return '<div class="navigation-tree-separator" role="separator" aria-label="' + escape(label) + '"></div>';
+  }
+  // A tree's own empty answer, set close under its leading row (owner 2026-11-21: "No match found").
+  function renderEmpty({ text } = {}) {
+    return '<p class="navigation-tree-empty" role="status">' + escape(text) + '</p>';
   }
   // Placeholder rows where items will appear while a tree's catalog is still loading.
   function renderSkeleton({ count = 4 } = {}) {
@@ -97,5 +105,5 @@
       if (item.classList.contains('is-selected') !== selected) setItemSelected(item, selected);
     });
   }
-  window.NavigationTree = { renderItem, renderItems: items => items.map(renderItem).join(''), renderSeparator, renderSkeleton, updateItem, setItemSelected, setSelection };
+  window.NavigationTree = { renderItem, renderItems: items => items.map(renderItem).join(''), renderSeparator, renderEmpty, renderSkeleton, updateItem, setItemSelected, setSelection };
 })();

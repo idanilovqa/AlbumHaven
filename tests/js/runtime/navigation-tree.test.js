@@ -285,3 +285,18 @@ test('retained navigation metadata keeps subtitle and year structure through upd
   tree.updateItem(row, {});
   assert.equal(meta.children.length, 0);
 });
+
+test('a disabled row cannot be opened and the empty answer is a compact status (owner 2026-11-21)', () => {
+  const tree = harness();
+  const button = tree.renderItem({ label: 'All Loose Tracks', key: 'all', action: true, variant: 'panel', count: 0, disabled: true });
+  assert.match(button, /<button [^>]*disabled="disabled"/);
+  const link = tree.renderItem({ label: 'All artists', key: 'all-artists', href: '/?surface=albums', disabled: true });
+  assert.match(link, /aria-disabled="true"/);
+  assert.match(link, /tabindex="-1"/);
+  assert.doesNotMatch(link, /href=/);
+  assert.doesNotMatch(tree.renderItem({ label: 'All artists', key: 'a', href: '/' }), /disabled/);
+  assert.equal(tree.renderEmpty({ text: 'No <match>' }), '<p class="navigation-tree-empty" role="status">No &lt;match&gt;</p>');
+  const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/navigation-tree.css'), 'utf8');
+  assert.match(css, /\.navigation-tree-item:disabled, \.navigation-tree-item\[aria-disabled="true"\] \{[^}]*pointer-events: none/);
+  assert.match(css, /\.navigation-tree-empty \{ margin: 0; padding: 8px 13px;/);
+});

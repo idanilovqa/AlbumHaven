@@ -4358,7 +4358,11 @@ function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
   let html = showAllArtistsLink ? renderItem({
     label: 'All artists', href: '/?surface=albums', key: 'all-artists', count: artistCount,
     selected: allArtistsActive, attributes: { 'data-nav': '1', 'data-sidebar-all-artists': '1' },
-  }) : '';
+    disabled: !sidebarArtists.length && Boolean(String(view.query || '').trim()),
+  }) + window.NavigationTree.renderSeparator({ label: 'Artists' }) : '';
+  if (!sidebarArtists.length && String(view.query || '').trim()) {
+    html += window.NavigationTree.renderEmpty({ text: 'No match found' });
+  }
   if (virtualWindow.virtualized && virtualWindow.before > 0) {
     html += `<div class="sidebar-virtual-spacer" data-sidebar-virtual-spacer="before" aria-hidden="true" style="height:${virtualWindow.before}px"></div>`;
   }
@@ -4397,7 +4401,9 @@ function buildSidebarStructureSignature(sidebarArtists = [], options = {}) {
   const virtualWindow = options.virtualWindow?.virtualized
     ? `${options.virtualWindow.start}:${options.virtualWindow.end}`
     : 'all';
-  return `${showAllArtistsLink}\u001d${artistSignature}\u001c${virtualWindow}`;
+  // An empty search answer shows "No match found", so whether a search is on is part of an empty tree's shape.
+  const emptySearch = !sidebarArtists.length && String(options.view?.query || '').trim() ? '1' : '0';
+  return `${showAllArtistsLink}\u001d${artistSignature}\u001c${virtualWindow}\u001b${emptySearch}`;
 }
 
 function applySidebarSelectionMarkup(container, options = {}) {
@@ -12218,6 +12224,7 @@ function renderCustomCollectionNavigation(collections, { failure = '' } = {}) {
     label: 'All Loose Tracks',
     count: customCollectionCatalogTrackCount(),
     selected: allLooseTracksSelected,
+    disabled: Boolean(String(state.view?.query || '').trim()) && customCollectionCatalogTrackCount() === 0,
     attributes: { 'data-open-loose-tracks': '1' },
   });
   const query = String(state.view?.query || '').trim();
@@ -12226,7 +12233,7 @@ function renderCustomCollectionNavigation(collections, { failure = '' } = {}) {
     : collections === null
       ? window.NavigationTree.renderSkeleton({ count: 3 })
       : !collections.length && query
-        ? `<p class="utility-empty-state compact">No collection matches “${escapeHtml(query)}”.</p>`
+        ? window.NavigationTree.renderEmpty({ text: 'No match found' })
       : collections.map(({ name, count }) => window.NavigationTree.renderItem({
         action: true,
         variant: 'panel',
@@ -15790,13 +15797,8 @@ function hydrateLibraryNonAlbumTracks({ resolveLibrary = false } = {}) {
         if (typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
         return [];
       }
-      // A search narrows Loose Tracks only when it found loose tracks.
-      tracks = libraryTracks(await fetchNonAlbumPayload(
-        buildLibraryNonAlbumRequestUrl(view, { withQuery: false }),
-      ));
-      if (getLibraryNonAlbumScopeKey(state.view || {}) !== scopeKey) {
-        return state.view?.library_non_album_tracks || [];
-      }
+      // A search that matched no loose track lists none, as the tree's 0 says (owner 2026-11-21: the page showed every
+      // loose track while the tree said 0). It used to fall back to the whole library.
     }
     state.view.library_non_album_tracks = tracks;
     state.view.library_non_album_tracks_search_matched = searchMatched;
@@ -16340,6 +16342,12 @@ function paintNonAlbumTrackTable(els, looseTracks, collectionName) {
 
 // Owner 2026-11-18: a tag edit shows at once on the open Loose Tracks or collection page: tracks that left
 // the collection go, its count follows. The page is redrawn in place, without a new history entry.
+// A search with no loose track says so in the tree's words (owner 2026-11-21).
+function looseTracksEmptyMarkup() {
+  const text = String(state.view?.query || '').trim() ? 'No match found' : 'No non-album tracks found in this view.';
+  return `<div class="utility-empty-state">${text}</div>`;
+}
+
 function refreshOpenLooseTracksPage() {
   const els = getNonAlbumModalElements();
   if (!els.overlay || els.overlay.hidden || !els.table || state.ui?.nonAlbumLibraryWide !== true) return false;
@@ -16360,7 +16368,7 @@ function refreshOpenLooseTracksPage() {
   const subtitle = document.getElementById('non-album-modal-subtitle');
   if (subtitle) subtitle.textContent = `${looseTracks.length} ${looseTracks.length === 1 ? 'track' : 'tracks'}`;
   if (looseTracks.length) paintNonAlbumTrackTable(els, looseTracks, collectionName);
-  else els.table.innerHTML = '<div class="utility-empty-state">No non-album tracks found in this view.</div>';
+  else els.table.innerHTML = looseTracksEmptyMarkup();
   installNonAlbumCollapsibleSections(els);
   installNonAlbumTrackSelection(els);
   attachSharedPlayer();
@@ -16421,7 +16429,7 @@ function openNonAlbumModal(options = {}) {
     : buildNonAlbumTrackLoadingMarkup();
   els.table.innerHTML = hydrationPending || populated
     ? loadingMarkup
-    : '<div class="utility-empty-state">No non-album tracks found in this view.</div>';
+    : looseTracksEmptyMarkup();
   const enhancementRevision = String((Number(els.table.dataset.enhancementRevision) || 0) + 1);
   els.table.dataset.enhancementRevision = enhancementRevision;
   els.overlay.hidden = false;

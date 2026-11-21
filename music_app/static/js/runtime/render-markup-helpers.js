@@ -139,7 +139,11 @@ function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
   let html = showAllArtistsLink ? renderItem({
     label: 'All artists', href: '/?surface=albums', key: 'all-artists', count: artistCount,
     selected: allArtistsActive, attributes: { 'data-nav': '1', 'data-sidebar-all-artists': '1' },
-  }) : '';
+    disabled: !sidebarArtists.length && Boolean(String(view.query || '').trim()),
+  }) + window.NavigationTree.renderSeparator({ label: 'Artists' }) : '';
+  if (!sidebarArtists.length && String(view.query || '').trim()) {
+    html += window.NavigationTree.renderEmpty({ text: 'No match found' });
+  }
   if (virtualWindow.virtualized && virtualWindow.before > 0) {
     html += `<div class="sidebar-virtual-spacer" data-sidebar-virtual-spacer="before" aria-hidden="true" style="height:${virtualWindow.before}px"></div>`;
   }
@@ -178,7 +182,9 @@ function buildSidebarStructureSignature(sidebarArtists = [], options = {}) {
   const virtualWindow = options.virtualWindow?.virtualized
     ? `${options.virtualWindow.start}:${options.virtualWindow.end}`
     : 'all';
-  return `${showAllArtistsLink}\u001d${artistSignature}\u001c${virtualWindow}`;
+  // An empty search answer shows "No match found", so whether a search is on is part of an empty tree's shape.
+  const emptySearch = !sidebarArtists.length && String(options.view?.query || '').trim() ? '1' : '0';
+  return `${showAllArtistsLink}\u001d${artistSignature}\u001c${virtualWindow}\u001b${emptySearch}`;
 }
 
 function applySidebarSelectionMarkup(container, options = {}) {

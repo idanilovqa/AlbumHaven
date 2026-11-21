@@ -447,6 +447,7 @@ function renderCustomCollectionNavigation(collections, { failure = '' } = {}) {
     label: 'All Loose Tracks',
     count: customCollectionCatalogTrackCount(),
     selected: allLooseTracksSelected,
+    disabled: Boolean(String(state.view?.query || '').trim()) && customCollectionCatalogTrackCount() === 0,
     attributes: { 'data-open-loose-tracks': '1' },
   });
   const query = String(state.view?.query || '').trim();
@@ -455,7 +456,7 @@ function renderCustomCollectionNavigation(collections, { failure = '' } = {}) {
     : collections === null
       ? window.NavigationTree.renderSkeleton({ count: 3 })
       : !collections.length && query
-        ? `<p class="utility-empty-state compact">No collection matches “${escapeHtml(query)}”.</p>`
+        ? window.NavigationTree.renderEmpty({ text: 'No match found' })
       : collections.map(({ name, count }) => window.NavigationTree.renderItem({
         action: true,
         variant: 'panel',

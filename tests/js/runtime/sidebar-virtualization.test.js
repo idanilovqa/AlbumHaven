@@ -270,3 +270,23 @@ test('window replacement restores keyboard focus to the same artist link', () =>
   context.__restore(sidebarList, focusIdentity);
   assert.equal(focused, true);
 });
+
+test('a search with no artist says No match found under a disabled All artists and its separator (owner 2026-11-21)', () => {
+  const context = loadHelpers();
+  const searched = { surface: { active: 'albums' }, query: 'dragonland', artist_count: 0, show_all_artists_sidebar_link: true };
+  const empty = context.buildSidebarHtml(searched, [], {});
+  assert.match(empty, /aria-disabled="true"[^>]*data-sidebar-all-artists="1"/);
+  assert.doesNotMatch(empty, /<a[^>]*data-sidebar-all-artists="1"[^>]*href=/);
+  assert.match(empty, /role="separator" aria-label="Artists"><\/div><p class="navigation-tree-empty" role="status">No match found<\/p>$/);
+
+  const found = context.buildSidebarHtml(searched, artists(2), {});
+  assert.doesNotMatch(found, /aria-disabled|No match found/);
+  assert.match(found, /role="separator" aria-label="Artists"/, 'All artists keeps the All Loose Tracks separator');
+  const browsing = context.buildSidebarHtml({ surface: { active: 'albums' }, show_all_artists_sidebar_link: true }, [], {});
+  assert.doesNotMatch(browsing, /No match found|aria-disabled/, 'an empty library without a search is not a failed search');
+  assert.notEqual(
+    context.buildSidebarStructureSignature([], { view: searched }),
+    context.buildSidebarStructureSignature([], { view: { ...searched, query: '' } }),
+    'clearing a search with no artist redraws the empty tree',
+  );
+});

@@ -1081,7 +1081,7 @@ test('library-wide Loose Tracks bypasses selected artist while artist menu retai
   assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks({ libraryWide: true })), tracks);
 });
 
-test('library-wide Loose Tracks keep the whole library when a search found no loose tracks', async () => {
+test('library-wide Loose Tracks list nothing when a search found no loose tracks (owner 2026-11-21)', async () => {
   const { context } = loadHelper();
   const requested = [];
   context.updateGalleryMainControls = () => {};
@@ -1099,14 +1099,13 @@ test('library-wide Loose Tracks keep the whole library when a search found no lo
   await context.hydrateDeferredNonAlbumTracks({ libraryWide: true });
   await context.hydrateDeferredNonAlbumTracks({ libraryWide: true });
   assert.equal(requested.length, 1);
-  assert.equal(context.hasHydratedLibraryNonAlbumTracks(), false, 'the button stays enabled for the whole library');
-  // Opening Loose Tracks resolves the whole library without repeating the probe.
+  assert.equal(context.hasHydratedLibraryNonAlbumTracks(), false);
+  // Opening Loose Tracks during that search lists nothing, as the tree's 0 says; it never asks for the whole library.
   await context.hydrateDeferredNonAlbumTracks({ libraryWide: true, resolveLibrary: true });
   // The query-scoped request never depends on the auto-selected artist.
-  assert.deepEqual(requested.map((url) => new URL(url, 'http://localhost').searchParams.get('artist')), [null, null]);
-  assert.deepEqual(requested.map((url) => new URL(url, 'http://localhost').searchParams.get('q')), ['lost', null]);
-  assert.equal(new URL(requested[1], 'http://localhost').pathname, '/library/loose-tracks');
-  assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks({ libraryWide: true }), (track) => track.title), ['Тебя ждала']);
+  assert.deepEqual(requested.map((url) => new URL(url, 'http://localhost').searchParams.get('artist')), [null]);
+  assert.deepEqual(requested.map((url) => new URL(url, 'http://localhost').searchParams.get('q')), ['lost']);
+  assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks({ libraryWide: true })), []);
   assert.equal(context.hasNonAlbumSearchMatches({ libraryWide: true }), false);
 });
 

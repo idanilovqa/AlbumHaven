@@ -8,6 +8,8 @@
   background: var(--navigation-tree-separator-background) center / 100% 1px no-repeat;
 }
 .navigation-tree-item { min-width: 0; position: relative; }
+.navigation-tree-empty { margin: 0; padding: 8px 13px; color: var(--muted); }
+.navigation-tree-item:disabled, .navigation-tree-item[aria-disabled="true"] { opacity: .45; cursor: default; pointer-events: none; }
 /* Loading placeholders occupy the same row height as items, then are replaced in place. */
 .navigation-tree-skeleton { display: flex; align-items: center; gap: 12px; min-height: 42px; padding: 0 13px; }
 .navigation-tree-skeleton > span {

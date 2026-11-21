@@ -22,7 +22,7 @@ const tracks = ['Signal A', 'Signal B', 'Signal C'].map((title, index) => ({
   durationSeconds: 180,
 }));
 
-function createHarness({ shell = true, refs = null, respond = null, listen = false } = {}) {
+function createHarness({ shell = true, refs = null, respond = null, listen = false, queue = tracks } = {}) {
   const calls = [];
   const fetches = [];
   const bridge = {
@@ -58,7 +58,7 @@ function createHarness({ shell = true, refs = null, respond = null, listen = fal
     WebSocket: window.WebSocket,
     state: {
       player: {
-        playbackQueue: { tracks, currentIndex: 0 },
+        playbackQueue: { tracks: queue, currentIndex: 0 },
         current: null,
         streaming: {
           mode: 'stopped', generation: 0, roles: { current: null, continuity: null },
@@ -582,6 +582,147 @@ test('a skip from Android controls selects the item Android moved to', async () 
   // The web's own skips load a queue, so their echoes change nothing.
   bridge.event('playback.currentItem', { ...state(1, 'playing', 0, 1), reason: 'next' });
   assert.equal(player.tracks.length, 2);
+});
+
+test('a pause Android makes itself, as for a call, is followed without being sent back', async () => {
+  const { api, bridge, context } = createHarness();
+  const { player } = withPlayer(context);
+  await api.start(tracks[0]);
+  bridge.event('playback.state', state(1, 'playing', 1000));
+
+  bridge.event('playback.state', { ...state(1, 'paused', 4000), initiator: 'system' });
+  await settle();
+  // The web's pause path ran, but Android keeps the resume it holds for the end of the call.
+  assert.equal(player.pauses.length, 1);
+  assert.equal(api.snapshot().paused, true);
+  assert.equal(commands(bridge, 'playback.pause').length, 0);
+  assert.equal(commands(bridge, 'playback.stop').length, 0);
+
+  // Focus came back and Android resumed; the user's own pause afterwards is still sent.
+  bridge.event('playback.state', { ...state(1, 'playing', 4000), initiator: 'system' });
+  await api.pause();
+  assert.equal(commands(bridge, 'playback.pause').length, 1);
+});
+
+test('a pause Android makes during a pending switch leaves the switch to Android', async () => {
+  let answerLoad = null;
+  const { api, bridge, context } = createHarness({
+    respond: message => (message.name === 'playback.loadQueue' && message.payload.queueRevision === 2
+      ? new Promise(resolve => { answerLoad = resolve; }) : null),
+  });
+  withPlayer(context);
+  await api.start(tracks[0]);
+  bridge.event('playback.state', state(1, 'playing', 1000));
+  const switching = api.start(tracks[1]);
+  await settle();
+  assert.equal(api.native.startingRevision, 2);
+
+  bridge.event('playback.state', { ...state(1, 'paused', 2000), initiator: 'system' });
+  await settle();
+  assert.equal(commands(bridge, 'playback.stop').length, 0);
+  assert.equal(commands(bridge, 'playback.pause').length, 0);
+  answerLoad({ ok: true, queueRevision: 2 });
+  await switching;
+});
+
+const album = ['Turn', 'Kostyor', 'Lights', 'Candle', 'Fifth'].map((title, index) => ({
+  path: `C:/Music/Android Acceptance/Resync/0${index + 1} ${title}.flac`,
+  src: `/track?id=resync-${index}`,
+  title,
+  artist: 'Android Acceptance',
+  album: 'Background Advance',
+  durationSeconds: 225,
+}));
+
+function resyncHarness(live) {
+  const harness = createHarness({
+    queue: album,
+    respond: message => (message.name === 'playback.snapshot'
+      ? Promise.resolve(live()).then(answer => ({ ...answer, ok: true })) : null),
+  });
+  return { ...harness, ...withPlayer(harness.context) };
+}
+
+test('returning to the app shows the track Android advanced to while the page was not following', async () => {
+  let live = null;
+  const { api, bridge, context, player } = resyncHarness(() => live);
+  await api.start(album[0]);
+  bridge.event('playback.state', state(1, 'playing', 0));
+  // Android plays on through three tracks while the page hears none of it.
+  live = { ...state(1, 'playing', 42000, 3), durationMs: 225000 };
+  context.requestAnimationFrame = () => {};
+
+  assert.equal(context.window.AlbumHavenForegroundHealth(5), true);
+  await settle();
+  await settle();
+
+  assert.equal(api.native.index, 3);
+  assert.equal(context.state.player.playbackQueue.currentIndex, 3);
+  assert.equal(player.tracks.at(-1)[0], album[3].path);
+  assert.equal(api.snapshot().src, album[3].src);
+  assert.equal(api.snapshot().currentTime, 42);
+  assert.equal(api.snapshot().paused, false);
+  // The page takes Android's state; it neither restarts nor pauses what Android plays.
+  assert.equal(commands(bridge, 'playback.loadQueue').length, 1);
+  assert.equal(commands(bridge, 'playback.pause').length, 0);
+  assert.equal(player.pauses.length, 0);
+});
+
+test('returning to the app shows a pause Android made while the page was not following, without sending it back', async () => {
+  let live = null;
+  const { api, bridge, context, player } = resyncHarness(() => live);
+  await api.start(album[0]);
+  bridge.event('playback.state', state(1, 'playing', 0));
+  live = { ...state(1, 'paused', 61000, 1), durationMs: 225000 };
+
+  assert.equal(await vm.runInContext('resyncAndroidNativePlayback()', context), true);
+  assert.equal(api.native.index, 1);
+  assert.equal(player.tracks.at(-1)[0], album[1].path);
+  assert.equal(api.snapshot().paused, true);
+  assert.equal(api.snapshot().currentTime, 61);
+  assert.equal(player.pauses.length, 1);
+  assert.equal(commands(bridge, 'playback.pause').length, 0);
+
+  // A snapshot of another queue revision belongs to a queue the page has not applied.
+  live = { ...state(2, 'playing', 1000, 4), durationMs: 225000 };
+  assert.equal(await vm.runInContext('resyncAndroidNativePlayback()', context), false);
+  assert.equal(api.native.index, 1);
+});
+
+test('a pause or skip the user makes while Android answers is not undone by the older snapshot', async () => {
+  let answer = null;
+  const { api, bridge, context, player } = resyncHarness(() => new Promise(resolve => { answer = resolve; }));
+  await api.start(album[0]);
+  bridge.event('playback.state', state(1, 'playing', 0));
+
+  const paused = vm.runInContext('resyncAndroidNativePlayback()', context);
+  await settle();
+  await api.pause();
+  answer({ ...state(1, 'playing', 42000, 3), durationMs: 225000 });
+  assert.equal(await paused, false);
+  assert.equal(api.native.index, 0);
+  assert.equal(api.snapshot().paused, true);
+  assert.equal(player.toggles.length, 0);
+
+  // A queue still loading is newer than any snapshot, so none is asked for.
+  const sent = commands(bridge, 'playback.snapshot').length;
+  api.native.revision += 1;
+  assert.equal(await vm.runInContext('resyncAndroidNativePlayback()', context), false);
+  assert.equal(commands(bridge, 'playback.snapshot').length, sent);
+});
+
+test('an advance after advances the page missed moves straight to the item Android plays', async () => {
+  const { api, bridge, player } = resyncHarness(() => null);
+  await api.start(album[0]);
+  bridge.event('playback.state', state(1, 'playing', 0));
+
+  bridge.event('playback.currentItem', { ...state(1, 'playing', 0, 3), reason: 'advance' });
+  assert.equal(api.native.index, 3);
+  assert.equal(player.tracks.at(-1)[0], album[3].path);
+  // An advance older than the item the page already shows changes nothing.
+  bridge.event('playback.currentItem', { ...state(1, 'playing', 0, 2), reason: 'advance' });
+  assert.equal(api.native.index, 3);
+  assert.equal(player.tracks.length, 1);
 });
 test('a closing document leaves playback to the media session that outlives it', async () => {
   const { api, bridge } = createHarness();

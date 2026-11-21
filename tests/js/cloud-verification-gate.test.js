@@ -297,7 +297,9 @@ test('workflow runs the Android jobs behind reviews only for Android changes and
   const instrumentation = workflow.slice(workflow.indexOf('  test_android_instrumentation:'), workflow.indexOf('  test_js:'));
   assert.match(instrumentation, /api-level: 29/);
   assert.match(instrumentation, /connectedStableDebugAndroidTest connectedSandboxDebugAndroidTest -PalbumHavenDevOrigin=http:\/\/127\.0\.0\.1:18765 -Pandroid\.testInstrumentationRunnerArguments\.class=org\.albumhaven\.shell\.PlaybackNotificationTest,org\.albumhaven\.shell\.NetworkChangePlaybackTest,org\.albumhaven\.shell\.MediaStoreDownloadsTest,org\.albumhaven\.shell\.ShellSmokeTest#outdatedWebViewFailsClosedWithoutLoadingTheSite/);
-  assert.match(instrumentation, /ShellSmokeTest#outdatedWebViewFailsClosedWithoutLoadingTheSite,org\.albumhaven\.shell\.BatteryPromptTest#androidsOwnQuestionSetsUnrestrictedOnAllowAndNothingOnDeny\r?\n/);
+  assert.match(instrumentation, /ShellSmokeTest#outdatedWebViewFailsClosedWithoutLoadingTheSite,org\.albumhaven\.shell\.BatteryPromptTest#androidsOwnQuestionSetsUnrestrictedOnAllowAndNothingOnDeny,org\.albumhaven\.shell\.EngineRetentionTest\r?\n/);
+  // A heap dump from a retained engine reaches the run's API 29 reports.
+  assert.match(instrumentation, /connected_android_test_additional_output "\$RUNNER_TEMP\/reports\/api-29\/"/);
   assert.match(instrumentation, /:playback-engine:connectedDebugAndroidTest -PalbumHavenDevOrigin=http:\/\/127\.0\.0\.1:18765/);
   assert.match(instrumentation, /connectedStableDebugAndroidTest connectedSandboxDebugAndroidTest -PalbumHavenDevOrigin=http:\/\/127\.0\.0\.1:18765 -Pandroid\.testInstrumentationRunnerArguments\.class=org\.albumhaven\.shell\.ShellSmokeTest#handshakeNegotiatesOverRealBridge,[^\n]+org\.albumhaven\.shell\.LeaveForSettingsTest/);
   assert.match(instrumentation, /org\.albumhaven\.shell\.LeaveForSettingsTest,org\.albumhaven\.shell\.BatteryPromptTest\r?\n/);

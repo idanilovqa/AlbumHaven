@@ -168,7 +168,7 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           working-directory: apps/android-shell
           script: |
-            ./gradlew --no-daemon --console=plain connectedStableDebugAndroidTest connectedSandboxDebugAndroidTest -PalbumHavenDevOrigin=http://127.0.0.1:18765 -Pandroid.testInstrumentationRunnerArguments.class=org.albumhaven.shell.PlaybackNotificationTest,org.albumhaven.shell.NetworkChangePlaybackTest,org.albumhaven.shell.MediaStoreDownloadsTest,org.albumhaven.shell.ShellSmokeTest#outdatedWebViewFailsClosedWithoutLoadingTheSite,org.albumhaven.shell.BatteryPromptTest#androidsOwnQuestionSetsUnrestrictedOnAllowAndNothingOnDeny
+            ./gradlew --no-daemon --console=plain connectedStableDebugAndroidTest connectedSandboxDebugAndroidTest -PalbumHavenDevOrigin=http://127.0.0.1:18765 -Pandroid.testInstrumentationRunnerArguments.class=org.albumhaven.shell.PlaybackNotificationTest,org.albumhaven.shell.NetworkChangePlaybackTest,org.albumhaven.shell.MediaStoreDownloadsTest,org.albumhaven.shell.ShellSmokeTest#outdatedWebViewFailsClosedWithoutLoadingTheSite,org.albumhaven.shell.BatteryPromptTest#androidsOwnQuestionSetsUnrestrictedOnAllowAndNothingOnDeny,org.albumhaven.shell.EngineRetentionTest
             ./gradlew --no-daemon --console=plain :playback-engine:connectedDebugAndroidTest -PalbumHavenDevOrigin=http://127.0.0.1:18765
 
       # The next emulator's run replaces these.
@@ -176,7 +176,7 @@ jobs:
         if: ${{ always() }}
         run: |
           mkdir -p "$RUNNER_TEMP/reports/api-29"
-          cp -r apps/android-shell/app/build/reports/androidTests apps/android-shell/app/build/outputs/androidTest-results "$RUNNER_TEMP/reports/api-29/" 2>/dev/null || true
+          cp -r apps/android-shell/app/build/reports/androidTests apps/android-shell/app/build/outputs/androidTest-results apps/android-shell/app/build/outputs/connected_android_test_additional_output "$RUNNER_TEMP/reports/api-29/" 2>/dev/null || true
 
       # The in-app update replaces this debug build with the same build at a higher version code.
       - name: Build the in-app update's installed and offered APKs

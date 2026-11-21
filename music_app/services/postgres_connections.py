@@ -27,7 +27,7 @@ _lock = Lock()
 # on another thread (a shared connection handed between workers) still unwinds its own thread's count.
 _held: dict[int, int] = {}
 # The default workload carries every request-path repository; the others keep their small pools.
-_DEFAULT_WORKLOAD_MAX_SIZE = 8
+_DEFAULT_WORKLOAD_MAX_SIZE = 32
 _MAX_SIZE = 4
 # Gallery and search reads keep one connection open: a fresh backend spends 0.4-2.7 s planning the
 # search query, so a search after an idle spell would otherwise pay that again (owner, 11-19).

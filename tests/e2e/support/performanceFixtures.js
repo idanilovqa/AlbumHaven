@@ -371,6 +371,11 @@ function buildCoverLookupLocalSummaryCards(_checkpoints, metricsPayload) {
       value: `${Math.round(Number(metricsPayload?.saveAcceptedMs || 0))} ms`,
       note: 'Save action to accepted response and closed modal',
     },
+    {
+      label: 'Reopen After Save',
+      value: `${Math.round(Number(metricsPayload?.reopenAfterSaveMs || 0))} ms`,
+      note: 'Cover Lookup action after a save to its loaded gallery',
+    },
   ];
 }
 
@@ -1146,6 +1151,7 @@ export const test = base.extend({
         'cover-lookup.candidateReadyMs',
         'cover-lookup.candidateSelectionMs',
         'cover-lookup.saveAcceptedMs',
+        'cover-lookup.reopenAfterSaveMs',
       ],
     });
   },

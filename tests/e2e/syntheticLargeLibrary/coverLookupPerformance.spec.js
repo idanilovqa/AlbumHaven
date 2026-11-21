@@ -13,6 +13,7 @@ const TIMING_BUDGETS = Object.freeze(Object.fromEntries([
   'candidateReadyMs',
   'candidateSelectionMs',
   'saveAcceptedMs',
+  'reopenAfterSaveMs',
 ].map((key) => [key, Object.freeze(performanceTimingBudget(`cover-lookup.${key}`))])));
 const MAX_INTERACTION_LONG_TASK_MS = 200;
 
@@ -92,6 +93,16 @@ test.describe(`${CASE_ID} Cover Lookup interaction timing`, () => {
     expect(saved?.remoteSource).toBe('spotify');
     expect(thirdPartyRequestEvidence.snapshot()).toEqual([]);
 
+    // Owner 2026-11-21: "After album cover save Cover Look Up loads tremendously slow".
+    await trackModalActions.prepareCoverLookup();
+    const reopenAfterSave = await stepLogger.step('Measure Cover Lookup reopening with its gallery after the save', async () => (
+      measureInteractionToPaint(
+        page,
+        () => trackModalActions.activateCoverLookup(),
+        () => coverLookupActions.waitForModalResultsReady(),
+      )
+    ));
+
     const reopened = await stepLogger.step(
       'Verify the saved Spotify link remains active after reopening Cover Lookup',
       async () => coverLookupActions.reopenUntilSavedRemoteCoverIsActive(
@@ -111,6 +122,7 @@ test.describe(`${CASE_ID} Cover Lookup interaction timing`, () => {
       candidateReadyMs,
       candidateSelectionMs: candidateSelection.durationMs,
       saveAcceptedMs: saveAccepted.durationMs,
+      reopenAfterSaveMs: reopenAfterSave.durationMs,
       selectedCandidateId: selectedCandidate.id,
       selectedCandidateSource: selectedCandidate.source,
       targetArtist: TARGET.artist,
@@ -140,6 +152,7 @@ test.describe(`${CASE_ID} Cover Lookup interaction timing`, () => {
       ['modal open', modalVisible],
       ['candidate selection', candidateSelection],
       ['save acceptance', saveAccepted],
+      ['reopen after save', reopenAfterSave],
     ]) {
       expect.soft(
         measurement.maxLongTaskMs,

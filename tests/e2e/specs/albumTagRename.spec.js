@@ -97,6 +97,8 @@ test('FTC-ALBUM-DETAILS-029 stale album references follow merges and return to t
       FIXTURE_ARTIST,
       FAILURE_FIXTURE_ALBUM,
     );
+    // Status polling would otherwise replace the card as soon as the split lands.
+    await staleCardSession.context.setOffline(true);
   });
 
   const liveSession = await freshBrowserSession.create();

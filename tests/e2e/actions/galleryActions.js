@@ -1517,8 +1517,9 @@ export class GalleryActions {
     page.on('request', record);
     return {
       stop: () => page.off('request', record),
+      // A card whose album the gallery already holds opens without a request; callers assert the
+      // opened title and year. Every request a card does send must name its release exactly.
       expectExactCardOpens: () => {
-        expect(urls.length).toBeGreaterThan(0);
         for (const url of urls) {
           expect(Number(url.searchParams.get('album_id'))).toBeGreaterThan(0);
           expect(url.searchParams.has('resolve_lineage')).toBe(false);

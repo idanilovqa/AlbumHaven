@@ -18,8 +18,12 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from starlette.websockets import WebSocketDisconnect
 
 from music_app.routes.playback_control_asgi import playback_config
-from music_app.services.library_roots import resolve_configured_media_path
+from music_app.services.library_roots import (
+    configured_library_root_paths_snapshot,
+    resolve_configured_media_path,
+)
 from music_app.services.loops import resolve_loop_media_path
+from music_app.services.mp3_stream_map import mp3_stream_map
 from music_app.services.playback_io import run_playback_io
 from music_app.services.playback_seek_table import flac_seek_table
 from music_app.services.playback_encoded import (
@@ -49,6 +53,9 @@ MAX_PLAYBACK_CONNECTIONS = 6
 MAX_PLAYBACK_DECODERS = 8
 MAX_DECODERS_PER_CONNECTION = 2
 MAX_CONTROL_MESSAGE_BYTES = 16_384
+# A client that asks (`/playback/pcm?heartbeat=<ms>`) hears from the server at least this often.
+MIN_HEARTBEAT_MS = 100
+MAX_HEARTBEAT_MS = 10_000
 MIN_PCM_SAMPLE_RATE = 8_000
 MAX_PCM_SAMPLE_RATE = 192_000
 MAX_CREDIT_FRAMES_PER_MESSAGE = MAX_PCM_SAMPLE_RATE
@@ -364,6 +371,16 @@ def _encoded_fields(decoder: object) -> dict[str, object] | None:
     }
 
 
+def _resolve_socket_media_path(config: dict[str, object], raw_path: str) -> Path | None:
+    """Resolves a client path against the roots snapshot root saves keep current, so a start
+    never reads the root settings from the database again."""
+    return resolve_configured_media_path(
+        config,
+        raw_path,
+        configured_root_paths=configured_library_root_paths_snapshot(config),
+    )
+
+
 def _decoder_name(decoder: object) -> str:
     return f"encoded-{decoder.codec}" if isinstance(decoder, EncodedStream) else "ffmpeg-pcm"
 
@@ -509,6 +526,7 @@ class _PlaybackPcmConnection:
         self._pending_credit_tasks: set[asyncio.Task[None]] = set()
         self._retire_tasks: set[asyncio.Task[None]] = set()
         self._transport_failed = asyncio.Event()
+        self._heartbeat_task: asyncio.Task[None] | None = None
         self._closed = False
         self._finalized = False
 
@@ -570,9 +588,34 @@ class _PlaybackPcmConnection:
         await self._registry.release_decoder()
         return True
 
+    def _requested_heartbeat_seconds(self) -> float | None:
+        requested = self._websocket.query_params.get("heartbeat", "")
+        milliseconds = _bounded_integer(
+            int(requested) if requested.isdecimal() else None,
+            minimum=MIN_HEARTBEAT_MS,
+            maximum=MAX_HEARTBEAT_MS,
+        )
+        return None if milliseconds is None else milliseconds / 1000
+
+    async def _beat(self, interval_seconds: float) -> None:
+        """Tells the client its connection lives, however long the server takes to answer.
+
+        A client cannot tell a connection that died without closing from a busy server by how long
+        its answers take (owner retest B-D4 round 6, 2026-11-18, with the CPU at 100%); it can by
+        hearing nothing at all.
+        """
+        with suppress(WebSocketDisconnect, OSError, RuntimeError):
+            while not self._closed:
+                await asyncio.sleep(interval_seconds)
+                if not self._closed:
+                    await self._send_json({"type": "heartbeat"})
+
     async def run(self) -> None:
         try:
             await self._websocket.accept()
+            heartbeat_seconds = self._requested_heartbeat_seconds()
+            if heartbeat_seconds is not None:
+                self._heartbeat_task = asyncio.create_task(self._beat(heartbeat_seconds))
             while not self._closed:
                 message = await self._receive_or_transport_failure()
                 message_type = message.get("type")
@@ -733,7 +776,9 @@ class _PlaybackPcmConnection:
             await self.reject(CLOSE_INVALID_CONTROL)
             return False
         resolved_path = (
-            resolve_configured_media_path(self._websocket.app.state.config, raw_path)
+            await run_playback_io(
+                _resolve_socket_media_path, self._websocket.app.state.config, raw_path
+            )
             if raw_path
             else None
         )
@@ -766,9 +811,46 @@ class _PlaybackPcmConnection:
         finally:
             self._pending_opens.discard(task)
 
+    def _resolve_while_authorizing(
+        self, control: dict[str, Any]
+    ) -> asyncio.Future[Path | None] | None:
+        """Resolves an open's path, and scans an MP3's frames, while the actor refresh runs.
+
+        Under load each waits on the database or the disk; side by side, the open waits for the
+        slower one instead of both. The socket was authorized when it connected, nothing is sent
+        before the refresh passes, and the scan only fills the frame-map cache the open reads.
+        """
+        raw_path = control.get("path")
+        if (
+            not isinstance(raw_path, str)
+            or not raw_path
+            or len(raw_path) > MAX_TRACK_PATH_CHARACTERS
+        ):
+            return None
+        config = self._websocket.app.state.config
+        codecs = control.get("codecs")
+        scan_mp3 = (
+            raw_path.lower().endswith(".mp3") and isinstance(codecs, list) and "mp3" in codecs
+        )
+
+        def resolve() -> Path | None:
+            resolved = _resolve_socket_media_path(config, raw_path)
+            if resolved is not None and scan_mp3:
+                with suppress(Exception):  # The open scans again and reports its own failure.
+                    mp3_stream_map(resolved)
+            return resolved
+
+        resolution = asyncio.ensure_future(run_playback_io(resolve))
+        self._pending_credit_tasks.add(resolution)
+        resolution.add_done_callback(self._pending_credit_tasks.discard)
+        return resolution
+
     async def _open_tracked(self, control: dict[str, Any]) -> bool:
         received_at = time.monotonic()
-        if self._closed or not await self._authorize_media_read():
+        if self._closed:
+            return False
+        resolution = self._resolve_while_authorizing(control)
+        if not await self._authorize_media_read():
             return False
         generation = _bounded_integer(
             control.get("generation"), minimum=1, maximum=_MAX_PROTOCOL_INTEGER
@@ -826,10 +908,7 @@ class _PlaybackPcmConnection:
                 return await self._reject_open(CLOSE_MEDIA_NOT_FOUND)
             if len(raw_path) > MAX_TRACK_PATH_CHARACTERS:
                 return await self._reject_open(CLOSE_INVALID_CONTROL)
-            resolved_path = resolve_configured_media_path(
-                self._websocket.app.state.config,
-                raw_path,
-            )
+            resolved_path = await resolution
         if resolved_path is None:
             return await self._reject_open(CLOSE_MEDIA_NOT_FOUND)
         timing.resolved_at = time.monotonic()
@@ -1237,6 +1316,9 @@ class _PlaybackPcmConnection:
                 return
             self._closed = True
             failures: list[BaseException] = []
+            if self._heartbeat_task is not None:
+                self._heartbeat_task.cancel()
+                await asyncio.gather(self._heartbeat_task, return_exceptions=True)
             try:
                 current = asyncio.current_task()
                 pending = [task for task in self._pending_opens if task is not current]

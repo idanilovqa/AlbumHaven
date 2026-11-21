@@ -320,6 +320,112 @@ def test_pcm_socket_revalidates_durable_authority_before_each_open(
     assert decoder_factory.instances == []
 
 
+def test_pcm_socket_scans_an_mp3_open_while_its_authority_refresh_is_pending(
+    playback_app,
+    decoder_factory,
+    monkeypatch,
+):
+    import threading
+
+    from music_app.services import playback_encoded
+    from music_app.services.current_actor import (
+        ActorState,
+        CapabilityGrant,
+        CurrentActor,
+        LibraryRelationship,
+    )
+
+    mp3_path = Path(playback_app.state.config["MUSIC_DIR"]) / "Artist" / "Album" / "track.mp3"
+    mp3_path.parent.mkdir(parents=True, exist_ok=True)
+    mp3_path.write_bytes(b"not-really-mp3")
+    scan_started = threading.Event()
+    scanned: list[Path] = []
+
+    def scan(path):
+        scanned.append(path)
+        scan_started.set()
+        return None
+
+    monkeypatch.setattr(playback_stream_asgi, "mp3_stream_map", scan)
+    monkeypatch.setattr(playback_encoded, "mp3_stream_map", scan)
+
+    class SlowRefreshResolver:
+        calls = 0
+        refresh_saw_scan: bool | None = None
+
+        def resolve(self, _token):
+            self.calls += 1
+            if self.calls > 1 and self.refresh_saw_scan is None:
+                # The refresh answers only after the scan began, or after 5 s without it.
+                self.refresh_saw_scan = scan_started.wait(5)
+            return CurrentActor(
+                state=ActorState.ACTIVE,
+                account_id=41,
+                session_id=73,
+                username_display="Listener",
+                current_library_id=23,
+                library_relationships=(LibraryRelationship(23, "member", False),),
+                capability_grants=(CapabilityGrant("library.media.read", "library", 23),),
+            )
+
+    resolver = SlowRefreshResolver()
+    playback_app.state.current_actor_resolver = resolver
+
+    async def scenario():
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            await socket.send_json(open_command(mp3_path.resolve(), codecs=["mp3"]))
+            metadata = await socket.receive_json()
+            assert metadata["type"] == "metadata"
+
+    asyncio.run(scenario())
+    assert resolver.refresh_saw_scan is True
+    assert scanned[0] == mp3_path.resolve()
+    assert len(decoder_factory.instances) == 1
+
+
+def test_pcm_socket_opens_never_reread_the_library_root_settings(
+    playback_app,
+    media_path,
+    decoder_factory,
+    monkeypatch,
+):
+    from music_app.services import library_roots
+
+    store_type = library_roots.PostgresLibraryRootSettingsStore
+    loads = []
+    original_load = store_type.load_settings
+
+    def counted_load(self, *args, **kwargs):
+        loads.append(1)
+        return original_load(self, *args, **kwargs)
+
+    monkeypatch.setattr(store_type, "load_settings", counted_load)
+    # The test runtime stubs the roots reader; a start must use neither it nor the store.
+    stubbed_roots = library_roots.get_library_roots
+
+    def counted_roots(config):
+        loads.append(1)
+        return stubbed_roots(config)
+
+    monkeypatch.setattr(library_roots, "get_library_roots", counted_roots)
+
+    async def scenario():
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            await socket.send_json(open_command(media_path))
+            assert (await socket.receive_json())["type"] == "metadata"
+            loads_after_first_open = len(loads)
+            await socket.send_json(open_command(media_path, generation=2, streamId=2))
+            assert (await socket.receive_json())["type"] == "metadata"
+            await socket.send_json({"type": "probe", "requestId": 1, "path": str(media_path)})
+            await socket.receive_json()
+            return loads_after_first_open
+
+    loads_after_first_open = asyncio.run(scenario())
+    assert loads_after_first_open <= 1
+    assert len(loads) == loads_after_first_open, "a later start reads the roots snapshot"
+    assert len(decoder_factory.instances) == 2
+
+
 def test_waveform_route_resolves_configured_media_path_and_returns_compact_fixed_bins(
     playback_app,
     media_path,
@@ -1940,6 +2046,7 @@ def test_pcm_promotion_ack_does_not_wait_for_outgoing_credit_task_cleanup(playba
             self.cancel_calls += 1
 
     class RecordingWebSocketDouble:
+        query_params: dict[str, str] = {}
         def __init__(self) -> None:
             self.app = playback_app
             self.events: list[dict[str, object]] = []
@@ -2065,6 +2172,7 @@ def test_pcm_promotion_drops_outgoing_read_that_completes_after_retirement(
             self.cancel_calls += 1
 
     class RecordingWebSocketDouble:
+        query_params: dict[str, str] = {}
         def __init__(self) -> None:
             self.app = playback_app
             self.events: list[dict[str, object] | bytes] = []
@@ -2616,6 +2724,7 @@ def test_pcm_socket_serializes_current_and_continuity_websocket_sends():
             self.cancel_calls += 1
 
     class ConcurrentSendRejectingWebSocketDouble:
+        query_params: dict[str, str] = {}
         def __init__(self) -> None:
             self.send_in_progress = False
             self.overlapping_send_count = 0
@@ -2725,6 +2834,7 @@ def test_pcm_credit_drain_yields_without_timer_delay_amplification(monkeypatch):
             return PcmChunk(frame_count=1, pcm=struct.pack("<ff", 0.25, -0.25))
 
     class ImmediatelyWritableWebSocketDouble:
+        query_params: dict[str, str] = {}
         def __init__(self) -> None:
             self.send_count = 0
 
@@ -2796,6 +2906,7 @@ def test_disconnect_while_decoder_open_is_pending_does_not_raise_on_metadata_sen
     monkeypatch,
 ):
     class DisconnectingDuringOpenWebSocketDouble:
+        query_params: dict[str, str] = {}
         def __init__(self) -> None:
             self.app = playback_app
             self.client_closed = False
@@ -2857,6 +2968,7 @@ def test_unrelated_metadata_send_runtime_error_still_propagates(
     decoder_factory,
 ):
     class FailingMetadataWebSocketDouble:
+        query_params: dict[str, str] = {}
         def __init__(self) -> None:
             self.app = playback_app
             configure_authenticated_request_double(self)
@@ -2908,6 +3020,7 @@ def test_disconnect_during_stream_send_does_not_emit_decoder_error_and_releases_
     expected_finish_calls,
 ):
     class DisconnectingPcmWebSocketDouble:
+        query_params: dict[str, str] = {}
         def __init__(self) -> None:
             self.app = playback_app
             self.controls = [
@@ -3020,6 +3133,7 @@ def test_decoder_start_that_finishes_after_shutdown_is_cancelled_without_registr
                 self.shutdown_finished.set()
 
     class RecordingWebSocketDouble:
+        query_params: dict[str, str] = {}
         def __init__(self) -> None:
             self.app = playback_app
             self.events: list[dict[str, object]] = []
@@ -3072,6 +3186,7 @@ def test_decoder_start_that_finishes_after_shutdown_is_cancelled_without_registr
 
 def test_connection_accept_failure_releases_admitted_registry_slot():
     class AcceptFailureWebSocketDouble:
+        query_params: dict[str, str] = {}
         async def accept(self) -> None:
             raise RuntimeError("accept failed")
 
@@ -3103,6 +3218,7 @@ def test_registry_shutdown_waits_for_racing_reject_cleanup_when_close_raises():
                 self.shutdown_finished.set()
 
     class BlockingRejectWebSocketDouble:
+        query_params: dict[str, str] = {}
         def __init__(self) -> None:
             self.close_entered = asyncio.Event()
             self.allow_close = asyncio.Event()
@@ -3158,6 +3274,7 @@ def test_registry_shutdown_waits_for_racing_reject_cleanup_when_close_raises():
 @pytest.mark.parametrize("private_detail", ["", r"C:\private\music\track.flac Bearer secret-playback-token"])
 def test_registry_shutdown_raises_cleanup_failures_after_releasing_healthy_resources(private_detail, caplog):
     class ShutdownWebSocketDouble:
+        query_params: dict[str, str] = {}
         async def close(self, *, code: int) -> None:
             assert code == 1001
             raise RuntimeError("socket close failed")
@@ -3220,6 +3337,7 @@ def test_registry_shutdown_raises_cleanup_failures_after_releasing_healthy_resou
 
 def test_registry_shutdown_reports_cancelled_decoder_and_releases_healthy_resources():
     class ShutdownWebSocketDouble:
+        query_params: dict[str, str] = {}
         def __init__(self) -> None:
             self.close_calls = 0
 
@@ -3281,6 +3399,7 @@ def test_registry_shutdown_reports_cancelled_decoder_and_releases_healthy_resour
 
 def test_registry_shutdown_reports_cancelled_connection_shutdown_task():
     class ShutdownWebSocketDouble:
+        query_params: dict[str, str] = {}
         pass
 
     async def scenario() -> None:
@@ -3379,6 +3498,32 @@ def test_a_keepalive_keeps_the_socket_and_any_other_field_is_refused(playback_ap
             return await socket.receive_close()
 
     assert asyncio.run(scenario()) == 4400
+
+
+def test_a_client_that_asks_hears_a_heartbeat_however_long_answers_take(playback_app, media_path):
+    async def scenario() -> list[str]:
+        heard = []
+        async with websocket_session(playback_app, "/playback/pcm?heartbeat=100") as socket:
+            for _ in range(2):
+                heard.append((await asyncio.wait_for(socket.receive_json(), 2))["type"])
+            await socket.send_json({"type": "probe", "requestId": 1, "path": str(media_path)})
+            while (event := await asyncio.wait_for(socket.receive_json(), 2))["type"] == "heartbeat":
+                pass
+            heard.append(event["type"])
+        return heard
+
+    assert asyncio.run(scenario()) == ["heartbeat", "heartbeat", "probe-result"]
+
+
+def test_no_heartbeat_unless_asked_or_outside_its_bounds(playback_app, media_path):
+    async def scenario(path: str) -> str:
+        async with websocket_session(playback_app, path) as socket:
+            await asyncio.sleep(0.3)
+            await socket.send_json({"type": "probe", "requestId": 1, "path": str(media_path)})
+            return (await asyncio.wait_for(socket.receive_json(), 2))["type"]
+
+    for path in ("/playback/pcm", "/playback/pcm?heartbeat=50", "/playback/pcm?heartbeat=x"):
+        assert asyncio.run(scenario(path)) == "probe-result", path
 
 
 def test_a_seek_table_request_must_be_a_boolean(playback_app, media_path, decoder_factory):

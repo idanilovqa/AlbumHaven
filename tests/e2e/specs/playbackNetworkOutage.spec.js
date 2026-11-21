@@ -689,8 +689,22 @@ test('FTC-PLAYBACK-OFFLINE-006 offline, seeks forward and back inside the receiv
       .toBeGreaterThan(target);
     await expectPlayingEnabled();
   };
+  const dump006 = async (label) => console.log(`[DIAG006 ${label}] ` + await page.evaluate(() => {
+    const e = state.player.streaming;
+    const snap = getStreamingPlaybackSnapshot();
+    return JSON.stringify({
+      t: snap.currentTime, mode: snap.mode, paused: snap.paused, gen: e.generation, held: e.headHeldGeneration,
+      shown: document.querySelector('#player-time')?.textContent, ui: getPlayerPlaybackSnapshot().currentTime,
+      detached: e.detached && { kind: e.detached.kind, splice: e.detached.spliceFrame, paused: e.detached.paused },
+      pendingSeek: e.pendingSeek && { kind: e.pendingSeek.kind, start: e.pendingSeek.startFrame, stream: e.pendingSeek.streamId },
+      roles: Object.fromEntries(Object.entries(e.roles).map(([k, v]) => [k, v && { s: v.streamId, g: v.generation, start: v.startFrame, local: Boolean(v.local), cached: Boolean(v.cachedTrack), first: Boolean(v.firstFrameNotified) }])),
+      rendered: snap.renderedFrame, pending: Boolean(e.pendingStart), startId: e.startRequestId,
+    });
+  }));
   const expectWaitsSilentlyAt = async (target) => {
+    await dump006(`before ${target}`);
     await seekTo(target);
+    for (let k = 0; k < 6; k += 1) { await dump006(`hold ${target} +${k * 500}ms`); await page.waitForTimeout(500); }
     await page.waitForTimeout(1000);
     const silentFrom = await playbackEvidence.playbackMark();
     for (let read = 0; read < 4; read += 1) {

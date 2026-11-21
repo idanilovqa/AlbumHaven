@@ -586,6 +586,15 @@ export class GalleryPage extends BasePage {
       return {
         artistMetaText,
         renderedIdentities,
+        diag: {
+          allCardTitles: [...element.querySelectorAll(selectors.albumCardSelector)]
+            .map((card) => String(card.querySelector(selectors.albumTitleSelector)?.textContent || '').trim()),
+          sectionCount: document.querySelectorAll(selectors.artistSectionSelector).length,
+          sectionHtmlLength: element.innerHTML.length,
+          url: location.href,
+          now: Math.round(performance.now()),
+          requests: (window.__diagLog || []).slice(-40),
+        },
       };
     }, {
       albumCardSelector: this.albumCardWithinSectionSelector,
@@ -600,6 +609,7 @@ export class GalleryPage extends BasePage {
     return {
       albumCount: parseArtistAlbumCount(observation.artistMetaText),
       renderedIdentities: observation.renderedIdentities,
+      diag: { ...observation.diag, artistMetaText: observation.artistMetaText },
     };
   }
 

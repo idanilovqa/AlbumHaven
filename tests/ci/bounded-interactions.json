@@ -1004,7 +1004,9 @@
       "workClass": "constant",
       "proof": "static",
       "requestOwnership": {
-        "allowed": [],
+        "allowed": [
+          "/utilities/cover-lookup/additional-artwork/remove"
+        ],
         "forbidden": []
       }
     },
@@ -1024,7 +1026,9 @@
       "workClass": "constant",
       "proof": "static",
       "requestOwnership": {
-        "allowed": [],
+        "allowed": [
+          "/utilities/cover-lookup/additional-artwork"
+        ],
         "forbidden": []
       }
     },
@@ -3365,7 +3369,9 @@
       "workClass": "constant",
       "proof": "static",
       "requestOwnership": {
-        "allowed": [],
+        "allowed": [
+          "/home-data"
+        ],
         "forbidden": []
       }
     },
@@ -3870,7 +3876,10 @@
       "workClass": "constant",
       "proof": "static",
       "requestOwnership": {
-        "allowed": [],
+        "allowed": [
+          "/home-data",
+          "/view-data"
+        ],
         "forbidden": []
       }
     },
@@ -5039,7 +5048,10 @@
       "workClass": "constant",
       "proof": "static",
       "requestOwnership": {
-        "allowed": [],
+        "allowed": [
+          "/utilities/edit-tags",
+          "/utilities/edit-tags/requests/*"
+        ],
         "forbidden": []
       }
     },
@@ -5836,7 +5848,9 @@
       "workClass": "constant",
       "proof": "static",
       "requestOwnership": {
-        "allowed": [],
+        "allowed": [
+          "/admin/server/preview-storage"
+        ],
         "forbidden": []
       }
     },
@@ -6199,7 +6213,9 @@
       "workClass": "constant",
       "proof": "static",
       "requestOwnership": {
-        "allowed": [],
+        "allowed": [
+          "/api/library/albums/*/keep-missing"
+        ],
         "forbidden": []
       }
     },
@@ -6242,7 +6258,10 @@
       "workClass": "constant",
       "proof": "static",
       "requestOwnership": {
-        "allowed": [],
+        "allowed": [
+          "/home-data",
+          "/view-data"
+        ],
         "forbidden": []
       }
     },
@@ -6262,7 +6281,9 @@
       "workClass": "constant",
       "proof": "static",
       "requestOwnership": {
-        "allowed": [],
+        "allowed": [
+          "/"
+        ],
         "forbidden": []
       }
     },
@@ -6282,7 +6303,9 @@
       "workClass": "constant",
       "proof": "static",
       "requestOwnership": {
-        "allowed": [],
+        "allowed": [
+          "/api/library/albums/*/rescan"
+        ],
         "forbidden": []
       }
     },
@@ -7120,7 +7143,9 @@
       "workClass": "constant",
       "proof": "static",
       "requestOwnership": {
-        "allowed": [],
+        "allowed": [
+          "/utilities/problematic-files"
+        ],
         "forbidden": []
       }
     },
@@ -7140,7 +7165,9 @@
       "workClass": "constant",
       "proof": "static",
       "requestOwnership": {
-        "allowed": [],
+        "allowed": [
+          "/utilities/problematic-files"
+        ],
         "forbidden": []
       }
     },
@@ -7160,7 +7187,9 @@
       "workClass": "constant",
       "proof": "static",
       "requestOwnership": {
-        "allowed": [],
+        "allowed": [
+          "/utilities/problematic-files"
+        ],
         "forbidden": []
       }
     },
@@ -7203,7 +7232,9 @@
       "workClass": "constant",
       "proof": "static",
       "requestOwnership": {
-        "allowed": [],
+        "allowed": [
+          "/utilities/problematic-files/detail"
+        ],
         "forbidden": []
       }
     },
@@ -7398,7 +7429,9 @@
       "workClass": "constant",
       "proof": "static",
       "requestOwnership": {
-        "allowed": [],
+        "allowed": [
+          "/utilities/integrations/lastfm/scrobbles"
+        ],
         "forbidden": []
       }
     },
@@ -7418,7 +7451,9 @@
       "workClass": "constant",
       "proof": "static",
       "requestOwnership": {
-        "allowed": [],
+        "allowed": [
+          "/utilities/tag-editor/folder-files"
+        ],
         "forbidden": []
       }
     },
@@ -7610,7 +7645,9 @@
       "workClass": "constant",
       "proof": "static",
       "requestOwnership": {
-        "allowed": [],
+        "allowed": [
+          "/utilities/problematic-files"
+        ],
         "forbidden": []
       }
     },

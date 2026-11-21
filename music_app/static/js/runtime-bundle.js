@@ -8098,6 +8098,9 @@ const STREAMING_CONNECT_DEADLINE_DOUBLINGS = 2;
 // deadline: a network that froze and came back gives no other sign (owner retest, sandbox5
 // 2026-11-21: playback resumed 19.6 s after the network was back while a 16 s attempt hung).
 const STREAMING_REACHABILITY_PROBE_MS = 1500;
+// Only an attempt hung this long is replaced: through a tunnel, on a loaded machine, a healthy connect
+// takes up to about 3 s, and replacing it would start over again and again (sandbox5 r19).
+const STREAMING_REACHABILITY_MIN_HANG_MS = 3000;
 // The server's own refusals: another socket would be refused too.
 const STREAMING_REFUSED_CLOSE_CODES = new Set([4400, 4401, 4403, 4404, 4408, 4409, 4429]);
 const STREAMING_QUEUED_NEXT_PREPARE_SECONDS = 3;
@@ -10706,7 +10709,7 @@ function probeStreamingReachability(socket) {
       clearInterval(timer);
       return;
     }
-    if (asking) return;
+    if (asking || performance.now() - socket.connectStartedMs < STREAMING_REACHABILITY_MIN_HANG_MS) return;
     asking = true;
     const abort = typeof AbortController === 'function' ? new AbortController() : null;
     const deadline = window.setTimeout(() => abort?.abort(), STREAMING_REACHABILITY_PROBE_MS);
@@ -10717,6 +10720,8 @@ function probeStreamingReachability(socket) {
       clearInterval(timer);
       engine.detached.abandonedConnects = 0;
       abandonStreamingConnectingSocket(socket);
+      // The next attempt is on the network that answers: it is left to connect.
+      engine.detached.probedReconnect = true;
       reconnectStreamingTransport();
     } catch (_error) {
       // Still unreachable.
@@ -10739,7 +10744,10 @@ function connectStreamingSocket() {
     ? window.setTimeout(() => abandonStreamingConnectingSocket(socket, { timedOut: true }),
       STREAMING_CONNECT_DEADLINE_MS * 2 ** doublings)
     : 0;
-  const reachabilityProbe = engine.detached ? probeStreamingReachability(socket) : 0;
+  socket.connectStartedMs = performance.now();
+  const probed = Boolean(engine.detached?.probedReconnect);
+  if (engine.detached) engine.detached.probedReconnect = false;
+  const reachabilityProbe = engine.detached && !probed ? probeStreamingReachability(socket) : 0;
   socket.onopen = () => {
     window.clearTimeout(connectDeadline);
     clearInterval(reachabilityProbe);

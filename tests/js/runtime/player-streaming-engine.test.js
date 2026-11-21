@@ -5171,6 +5171,8 @@ test('after a frozen network, the hanging reconnect is replaced as soon as the s
   const hanging = harness.sockets.length;
 
   const probe = () => harness.intervals.filter(({ delay }) => delay === 1_500).at(-1).callback();
+  // The attempt has hung for a while: well past a healthy connect.
+  harness.setNow(5_000);
   await probe();
   await settleTwice(harness);
   assert.equal(harness.sockets.length, hanging, 'while the server does not answer, the attempt waits');
@@ -5219,6 +5221,49 @@ test('a socket that reopens after an outage has a claim waiting out its retry as
   await settleTwice(harness);
   assert.equal(harness.sockets.at(-1).readyState, 1);
   assert.equal(retriedNow, 1, 'the claim asks as soon as the socket is back');
+});
+
+// sandbox5 r19 (2026-11-21): once the server answered again, every probe replaced the attempt then
+// connecting, which takes 1.6-2 s through the tunnel, so no socket ever opened. The attempt a probe
+// starts is on the network that answers and is left to connect; another is replaced only once it
+// has hung for 3 s.
+test('a reconnect that a probe started is left to connect, however slowly, while the server answers', async () => {
+  let reachable = false;
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => (count > 1 ? 'hang' : false),
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+    fetch: async () => {
+      if (!reachable) throw new TypeError('Failed to fetch');
+      return { ok: true, status: 200, json: async () => ({}) };
+    },
+  });
+  await startLocallySeekable(harness, 100_000);
+  await harness.api.resume();
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  const probe = () => harness.intervals.filter(({ delay }) => delay === 1_500).at(-1)?.callback();
+
+  harness.setNow(1_000);
+  reachable = true;
+  await probe();
+  await settleTwice(harness);
+  assert.equal(harness.sockets.length, 2, 'an attempt connecting for a second is not replaced');
+
+  harness.setNow(4_000);
+  await probe();
+  await settleTwice(harness);
+  assert.equal(harness.sockets.length, 3, 'one hung for 3 s is replaced');
+
+  for (let now = 5_500; now <= 9_000; now += 1_500) {
+    harness.setNow(now);
+    await probe();
+    await settleTwice(harness);
+  }
+  assert.equal(harness.sockets.length, 3, 'the attempt the probe started is left to connect');
+  assert.equal(harness.sockets.at(-1).closeCalls, 0);
 });
 
 test('a refused socket still stops playback with an error', async () => {

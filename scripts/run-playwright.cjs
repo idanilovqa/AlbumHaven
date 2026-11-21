@@ -1320,6 +1320,41 @@ async function waitForFunctionalFixtureBackgroundIdle(child, port, options = {})
   );
 }
 
+// A restored fixture database fills the Problematic Files index once after startup (about
+// 3.5 min on a real library); tests start once it is ready, outside their own time limits.
+const MANAGED_PROBLEMATIC_INDEX_TIMEOUT_MS = 15 * 60 * 1000;
+
+async function waitForProblematicIndexReady(child, port, options = {}) {
+  const timeoutMs = Number(options.timeoutMs || MANAGED_PROBLEMATIC_INDEX_TIMEOUT_MS);
+  const fetchHttpResponseCompleteFn = options.fetchHttpResponseCompleteFn || fetchHttpResponseComplete;
+  const sleepFn = options.sleepFn || sleep;
+  const nowFn = options.nowFn || Date.now;
+  const statusUrl = `http://127.0.0.1:${port}/status`;
+  const deadline = nowFn() + timeoutMs;
+  let lastStatus = null;
+  while (nowFn() <= deadline) {
+    if (child.exitCode !== null && child.exitCode !== undefined) {
+      throw new Error(`Managed app exited before its Problematic Files index was ready (code ${String(child.exitCode)}).`);
+    }
+    const response = await fetchHttpResponseCompleteFn(statusUrl, {
+      requestTimeoutMs: 5000,
+      headers: { ...(options.requestHeaders || {}) },
+    });
+    try {
+      lastStatus = response?.ok ? JSON.parse(String(response.body || '')) : null;
+    } catch {
+      lastStatus = null;
+    }
+    // An app without the index omits the flag.
+    if (lastStatus && lastStatus.problematic_index_in_progress !== true) return;
+    await sleepFn(1000);
+  }
+  throw new Error(
+    `Timed out after ${timeoutMs} ms waiting for the Problematic Files index at ${statusUrl}. `
+    + `Last status: ${JSON.stringify(lastStatus?.problematic_index_in_progress)}`,
+  );
+}
+
 async function waitForManagedIsolatedAppReady(child, port, options = {}) {
   const timeoutMs = Number(options.timeoutMs || MANAGED_ISOLATED_APP_STARTUP_TIMEOUT_MS);
   const pollIntervalMs = Number(options.pollIntervalMs || 100);
@@ -1460,6 +1495,21 @@ async function startManagedIsolatedApp(childEnv, options = {}) {
         || waitForFunctionalFixtureBackgroundIdle
       );
       await waitForFunctionalFixtureBackgroundIdleFn(child, port, {
+        fetchHttpResponseCompleteFn: options.fetchHttpResponseCompleteFn,
+        requestHeaders,
+      });
+    } else if (options.waitForProblematicIndex !== false && childEnv.ALBUM_HAVEN_FIXTURE_PROFILE) {
+      const authenticateFn = options.authenticateFunctionalFixtureFn || authenticateFunctionalFixture;
+      let requestHeaders = {};
+      try {
+        requestHeaders = await authenticateFn(port, {
+          fetchHttpResponseCompleteFn: options.fetchHttpResponseCompleteFn,
+        });
+      } catch (error) {
+        // A profile without the fixture login keeps the specs' own wait.
+        stderr.write(`[run-playwright] Problematic Files index wait skipped: ${error.message}\n`);
+      }
+      if (Object.keys(requestHeaders || {}).length) await (options.waitForProblematicIndexReadyFn || waitForProblematicIndexReady)(child, port, {
         fetchHttpResponseCompleteFn: options.fetchHttpResponseCompleteFn,
         requestHeaders,
       });

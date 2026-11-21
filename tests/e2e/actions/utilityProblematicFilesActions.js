@@ -107,8 +107,10 @@ export class UtilityProblematicFilesActions {
 
   async waitForBoundedPageEvidence(problemType, albumTitle, options = {}) {
     const timeout = options.timeout || 60000;
+    // The first bounded response proves the page; with the indexed list the complete list can
+    // replace that page before a check of the rendered state runs, so the screen is only
+    // required to show the filter and the row.
     const rendered = this.utilityProblematicFilesTab.waitForPageCondition((expected) => {
-      if (typeof state === 'undefined' || state.utility?.problematicFilesComplete !== false) return false;
       const filter = Array.from(document.querySelectorAll(expected.filterOptionSelector))
         .find((option) => option.getAttribute('data-problem-filter-value') === expected.problemType);
       const item = Array.from(document.querySelectorAll(expected.listItemSelector)).find((candidate) => {

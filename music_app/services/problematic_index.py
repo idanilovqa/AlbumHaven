@@ -460,7 +460,12 @@ def in_progress(repository: Any) -> bool:
         return False
     database_url = repository._database_url
     with _QUEUED_LOCK:
-        return database_url not in _READY or database_url in _QUEUED or database_url in _RUNNING
+        pending = database_url not in _READY
+        busy = database_url in _QUEUED or database_url in _RUNNING
+    if pending and not busy:
+        # Nothing has checked this database yet (no startup pass, no Problematic Files read).
+        queue_maintenance(repository)
+    return pending or busy
 
 
 def queue_maintenance(repository: Any) -> None:

@@ -87,7 +87,7 @@ def test_separate_release_summary_key_resolves_composite_persisted_credit(monkey
         connect=lambda _url: Connection(),
     )
     monkeypatch.setattr(browse, "_duplicate_inventory_fingerprint", lambda _connection: None)
-    monkeypatch.setattr(repository, "_load_relation_alias_maps", lambda: {})
+    monkeypatch.setattr(repository, "_load_relation_alias_maps", lambda **_kwargs: {})
     monkeypatch.setattr(repository, "_load_missing_album_rows", lambda **_kwargs: [])
     summary = [browse._problematic_album_summary_payload(album)
                for album in browse._problematic_album_projection_payloads(

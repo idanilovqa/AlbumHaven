@@ -760,7 +760,7 @@ def _undecided_album_identities(decision: dict[str, object], albums: list[dict[s
                 "method": outcome["method"], "sampled_titles": sample, "found": outcome["found"],
                 "release_mbid": outcome.get("release_mbid")}))
             note_decided(index, mbid)
-        elif outcome["outcome"] != "tie":
+        elif outcome["outcome"] not in {"tie", "mixed"}:
             fallback.append((index, {mbid for mbid, count in outcome["found"].items() if count}))
     for index, weak_artists in fallback:
         folders = album_folders(albums[index].get("folders") or [])

@@ -644,7 +644,8 @@ def decide_by_recordings(sample: list[str], results: dict[str, list[dict[str, ob
     """``results`` maps each sampled title to the recordings a search returned. Exactly one
     candidate with two or more sampled titles takes the album; when several do, the one with a
     release holding two or more of the sample takes it. ``outcome`` is "decided", "tie" (several
-    qualify: stops here, no folder fallback), "weak" (some recordings evidence, under two) or
+    qualify: stops here, no folder fallback), "mixed" (each of two candidates holds a sampled
+    title the other lacks: stops here too), "weak" (some recordings evidence, under two) or
     "none" (nothing found)."""
     found: dict[str, set[str]] = {mbid: set() for mbid in candidates}
     releases: dict[str, dict[str, set[str]]] = {mbid: {} for mbid in candidates}
@@ -659,6 +660,12 @@ def decide_by_recordings(sample: list[str], results: dict[str, list[dict[str, ob
                     for release in recording.get("release_mbids") or []:
                         releases[mbid].setdefault(release, set()).add(title)
     counts = {mbid: len(titles) for mbid, titles in found.items()}
+    # Owner 2026-11-21 (Millenium, interim until albums are grouped by MBID): when each of two
+    # candidates holds a sampled title the other lacks, the local album mixes two releases
+    # (same tags in two folders), so no artist takes it, and neither does its folder.
+    if any(found[first] - found[second] and found[second] - found[first]
+           for index, first in enumerate(candidates) for second in candidates[index + 1:]):
+        return {"outcome": "mixed", "found": counts}
     shared = {mbid: next((release for release, titles in sorted(held.items()) if len(titles) >= 2), None)
               for mbid, held in releases.items()}
     qualified = [mbid for mbid in candidates if counts[mbid] >= 2]

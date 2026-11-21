@@ -159,3 +159,25 @@ def test_an_owner_s_choice_is_kept_and_never_looked_up():
         "Dawn Over the Northern Sea": [_recording("Dawn Over the Northern Sea", TRANCE)],
         "The Long Way Home Tonight": [_recording("The Long Way Home Tonight", TRANCE)]})
     assert 3 not in by_album and searched == []
+
+
+def test_titles_split_between_two_artists_are_a_mixed_album():
+    """Owner 2026-11-21 (Millenium): two sampled titles under one artist and one under the other
+    mean the local album holds two releases, so it stays undecided."""
+    sample = ["Dawn Over the Northern Sea", "The Long Way Home Tonight", "Ashes in the Harbour"]
+    results = {sample[0]: [{"title": sample[0], "artist_mbids": [GERMAN], "release_mbids": ["g"]}],
+               sample[1]: [{"title": sample[1], "artist_mbids": [GERMAN], "release_mbids": ["g"]}],
+               sample[2]: [{"title": sample[2], "artist_mbids": [TRANCE], "release_mbids": ["t"]}]}
+    assert decide_by_recordings(sample, results, [GERMAN, TRANCE]) == {
+        "outcome": "mixed", "found": {GERMAN: 2, TRANCE: 1}}
+    # The same song under both (a band and its singer) is not a mix: the old rules decide.
+    shared = {**results, sample[2]: [{"title": sample[2], "artist_mbids": [GERMAN, TRANCE], "release_mbids": ["g"]}]}
+    assert decide_by_recordings(sample, shared, [GERMAN, TRANCE])["outcome"] == "decided"
+
+
+def test_a_mixed_album_never_falls_back_to_the_folder():
+    by_album, _searched = _resolve(_split_context(LIVE_TRACKS, ["3:Axxis Trance/Bootleg Live"]), {
+        "Dawn Over the Northern Sea": [_recording("Dawn Over the Northern Sea", GERMAN)],
+        "The Long Way Home Tonight": [_recording("The Long Way Home Tonight", GERMAN)],
+        "Ashes in the Harbour": [_recording("Ashes in the Harbour", TRANCE)]})
+    assert 3 not in by_album, "neither the recordings' leader nor the folder's artist takes it"

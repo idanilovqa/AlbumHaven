@@ -1680,6 +1680,48 @@ test('IAR-W25: a slow server is waited for; the kept data answers only when the 
   await assert.rejects(handle(resource('/album-details?album_key=never-kept')).finally(() => release()), TypeError);
 });
 
+// Owner steps on sandbox5 r23: behind a Wi-Fi cut every kept album waited the full check delay.
+test('IAR-W25: once a check found the server unreachable, kept data answers without the wait; a server that answers the check again is waited for', async () => {
+  const url = '/view-data?surface=albums&artist=Broadcast';
+  let mode = 'quick';
+  let reachable = true;
+  let release = () => {};
+  const { handle } = setup({
+    mode: 'web',
+    dataCheckMs: 400,
+    respond: (request) => {
+      if (new URL(request.url).pathname === '/app-copy/account') {
+        return reachable ? new Response('{}') : new TypeError('Failed to fetch');
+      }
+      const answer = dataAnswer({ ok: true, artist_groups: [{ artist: mode, albums: [] }] });
+      return mode === 'quick' || mode === 'back' ? answer : new Promise((resolve) => { release = () => resolve(answer); });
+    },
+  });
+  await handle(resource(url));
+  mode = 'hung';
+  reachable = false;
+  const timed = async () => {
+    const started = Date.now();
+    const response = await handle(resource(url));
+    return { ms: Date.now() - started, response };
+  };
+  const first = await timed();
+  assert.ok(first.ms >= 400, `the first waits for the server (${first.ms} ms)`);
+  const second = await timed();
+  assert.ok(second.ms < 200, `known unreachable, kept data answers at once (${second.ms} ms)`);
+  assert.equal(second.response.headers.get(COPY_HEADER), 'cache');
+  assert.deepEqual(artistsOf(await json(second.response)), ['quick']);
+
+  reachable = true;
+  mode = 'slow';
+  const waiting = handle(resource(url));
+  await new Promise(resolve => setTimeout(resolve, 50));
+  release();
+  const slow = await waiting;
+  assert.notEqual(slow.headers.get(COPY_HEADER), 'cache');
+  assert.deepEqual(artistsOf(await json(slow)), ['slow']);
+});
+
 test('a data request the page cancels is never answered from the copy', async () => {
   const url = '/view-data?surface=albums&artist=Broadcast';
   let online = true;

@@ -67,6 +67,9 @@
   // copy answers only if it cannot (a slow server is never replaced by what was kept).
   const DATA_CHECK_MS = 3000;
   const CHECK_TIMEOUT_MS = 800;
+  // After a failed check, data requests this soon after ask at once instead of waiting first: the
+  // copy still answers only after a check fails, so a slow but reachable server is waited for.
+  const UNREACHABLE_KNOWN_MS = 60000;
   // What places one page of the paged gallery, or names one artist in it, rather than naming a
   // different gallery (other categories, scope or display).
   const GALLERY_PAGE_PARAMS = [
@@ -144,6 +147,8 @@
     };
     // Raised by every forget: a page or cover fetched before it is never stored after it.
     let generation = 0;
+    // When the last reachability check failed; 0 once the server answers it.
+    let unreachableAt = 0;
 
     // Work that continues after the answer; a storage failure only means nothing is kept.
     const keeping = new Set();
@@ -947,8 +952,11 @@
         const response = await fetch(new Request(new URL('/app-copy/account', origin).href, {
           credentials: 'same-origin', cache: 'no-store', redirect: 'manual', signal: controller.signal,
         }));
-        return !gatewayFailure(response.status);
+        const reachable = !gatewayFailure(response.status);
+        unreachableAt = reachable ? 0 : now();
+        return reachable;
       } catch (_error) {
+        unreachableAt = now();
         return false;
       } finally {
         clearTimeout(timer);
@@ -975,7 +983,10 @@
       let timer;
       let outcome = await Promise.race([
         settled,
-        new Promise((resolve) => { timer = setTimeout(() => resolve(NO_ANSWER), dataCheckMs); }),
+        new Promise((resolve) => {
+          const known = unreachableAt && now() - unreachableAt < UNREACHABLE_KNOWN_MS;
+          timer = setTimeout(() => resolve(NO_ANSWER), known ? 0 : dataCheckMs);
+        }),
       ]);
       clearTimeout(timer);
       if (outcome === NO_ANSWER) {

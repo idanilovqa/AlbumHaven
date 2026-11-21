@@ -130,7 +130,11 @@ export class UtilityProblematicFilesActions {
       return candidate.ok()
         && candidate.request().method() === 'GET'
         && url.pathname === '/utilities/problematic-files'
-        && url.searchParams.has('limit');
+        && url.searchParams.has('limit')
+        // The Artist rows page shares the path; only the first album page proves the case.
+        && !url.searchParams.has('artists')
+        && !url.searchParams.has('cursor')
+        && !url.searchParams.has('q');
     }, { timeout });
     const [response] = await Promise.all([responsePromise, rendered]);
     const payload = await response.json();

@@ -5974,6 +5974,13 @@ def main() -> None:
             app.state.config, temp_root, fixture_media_root=fixture_media_root
         )
         provider_service.gate_pasted_cover_saves()
+        # A restored fixture database fills its Problematic Files index once, as a production
+        # server does after the 0188 deploy; tests then start on a ready index, outside their
+        # own time limits.
+        from music_app.services import problematic_index
+        from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+        problematic_index.maintain_now(PostgresLibraryBrowseRepository(app.state.config))
         provider_service.gate_problematic_complete_list()
         print(
             f"Album Haven production E2E app listening on http://127.0.0.1:{args.port} "

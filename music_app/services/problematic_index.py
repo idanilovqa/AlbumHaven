@@ -450,6 +450,15 @@ def indexing_progress(repository: Any) -> dict[str, int] | None:
     return dict(_PROGRESS.get(repository._database_url) or {"done": 0, "total": 0})
 
 
+def maintain_now(repository: Any) -> bool:
+    """One maintenance pass in this thread (fixture preparation); whether the index is ready."""
+    if not _available(repository):
+        return False
+    _maintain(repository)
+    with _QUEUED_LOCK:
+        return repository._database_url in _READY
+
+
 def in_progress(repository: Any) -> bool:
     """For /status: index work is pending (no ready index seen yet, or a pass queued or running).
 

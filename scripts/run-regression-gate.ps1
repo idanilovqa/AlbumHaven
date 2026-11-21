@@ -231,6 +231,7 @@ function Invoke-MeasuredTargets([string]$TargetList, [string]$FixtureProfile, [s
         $env:ALBUM_HAVEN_APPROVED_COVER_ROOT = $approvedCoverRoot
         Remove-Item Env:ALBUM_HAVEN_FIXTURE_ROOT, Env:ALBUM_HAVEN_MEDIA_ROOT -ErrorAction SilentlyContinue
     } else {
+        Remove-Item Env:ALBUM_HAVEN_APPROVED_COVER_ROOT -ErrorAction SilentlyContinue
         $env:ALBUM_HAVEN_FIXTURE_ROOT = Get-ProfileRoot $FixtureProfile
         $env:ALBUM_HAVEN_MEDIA_ROOT = Join-Path $env:ALBUM_HAVEN_FIXTURE_ROOT 'media'
     }

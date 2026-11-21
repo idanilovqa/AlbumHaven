@@ -32908,8 +32908,14 @@ async function loadProblematicFiles(force = false, options = {}) {
         const selectedAlbum = preserveSelectedDetail
           ? (state.utility.problematicFiles || []).find(item => item.key === selectedKey)
           : null;
+        // A kept detail must still describe the album: once its problems changed (an exclusion
+        // reverted, say), the fresh summary replaces it and the detail reloads at once.
+        const freshSelectedSummary = summaryItems.find(item => item.key === selectedKey);
+        const sameProblems = (left, right) => JSON.stringify([...(left?.problem_reasons || [])].sort())
+          === JSON.stringify([...(right?.problem_reasons || [])].sort());
         const selectedDetail = selectedAlbum
           && (selectedAlbum.detail_loaded === true || selectedAlbum.musicbrainz_detail)
+          && (!freshSelectedSummary || sameProblems(selectedAlbum, freshSelectedSummary))
           ? selectedAlbum : null;
         const selectedSummary = selectedDetail && selectedKey !== initialDetailKey
           ? summaryItems.find(item => item.key === selectedKey) : null;

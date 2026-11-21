@@ -1218,6 +1218,7 @@ export class GalleryPage extends BasePage {
       observedAlbums: canonicalEvidence.observedAlbums,
       observedArtists: canonicalEvidence.observedArtists,
       pendingViewTransition: busy || (!startupHydrating && !canonicalApplied),
+      diagProjectionQuery: projection?.query, diagProjectionArtist: projection?.selected_artist, diagObserverTrace: finalObservation.diagTrace,
       settledEmpty,
       startupHydrating,
     };

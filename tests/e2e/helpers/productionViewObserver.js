@@ -280,6 +280,8 @@ export class ProductionViewObserver {
     this.mutationGeneration = 0;
     this.galleryPayloadObserved = false;
     this.bootstrapPresenceEligible = false;
+    this.diagTrace = [];
+    const diag = (entry) => { this.diagTrace.push({ t: Date.now() % 100000, mg: this.mutationGeneration, gg: this.galleryGeneration, ...entry }); if (this.diagTrace.length > 40) this.diagTrace.shift(); };
 
     this.documentGeneration = 0;
     const resetDocumentObservation = () => {
@@ -365,6 +367,7 @@ export class ProductionViewObserver {
         this.latestGalleryPageError = null;
       }
       detail.galleryGeneration = this.galleryGeneration;
+      diag({ e: 'req', seq: detail.sequence, full: detail.full, gallery: detail.gallery, url: decodeURIComponent(new URL(detail.url).pathname + new URL(detail.url).search).slice(0, 110) });
       this.requestDetails.set(request, detail);
       this.activeRequests.set(request, detail);
       this.stateRevision += 1;
@@ -395,6 +398,7 @@ export class ProductionViewObserver {
             if (detail.authorityGeneration !== this.authorityGeneration) return;
             if (detail.documentGeneration !== this.documentGeneration) return;
             if (payload?.ok !== true || String(payload?.status || '').trim().toLowerCase() !== 'completed') return;
+            diag({ e: 'save-task-completed', seq: detail.sequence, url: detail.url.slice(-40) });
             // A completed write invalidates pre-write reads even when no album remains.
             if (this.latestFullPayload || this.galleryPayloadObserved || this.observedFamilyAlbums.size) {
               this.topologyRevision += 1;
@@ -446,7 +450,8 @@ export class ProductionViewObserver {
       }
       if (!detail || (!detail.full && !detail.gallery)) return;
       if (detail.mutationGeneration !== this.mutationGeneration
-        || detail.galleryGeneration !== this.galleryGeneration) return;
+        || detail.galleryGeneration !== this.galleryGeneration) { diag({ e: 'resp-dropped-generation', seq: detail.sequence, dmg: detail.mutationGeneration, dgg: detail.galleryGeneration }); return; }
+      diag({ e: 'resp', seq: detail.sequence, status: response.status() });
       if (!response.ok()) {
         const recordHttpFailure = () => {
           if (detail.mutationGeneration !== this.mutationGeneration || detail.galleryGeneration !== this.galleryGeneration) return;
@@ -486,6 +491,7 @@ export class ProductionViewObserver {
       this.stateRevision += 1;
       const payloadRead = Promise.resolve(response.json())
         .then((payload) => {
+          diag({ e: 'payload', seq: detail.sequence, latestFull: this.latestFullRequestSequence, query: payload?.query, sel: payload?.selected_artist, tier: payload?.payload_tier, groups: ['artist_groups', 'primary_artist_groups', 'family_artist_groups'].map((k) => (payload?.[k] || []).length).join('/'), dmg: detail.mutationGeneration, dgg: detail.galleryGeneration });
           if (detail.documentGeneration !== this.documentGeneration
             || detail.mutationGeneration !== this.mutationGeneration
             || detail.galleryGeneration !== this.galleryGeneration) return;
@@ -655,6 +661,7 @@ export class ProductionViewObserver {
       topologyRevision: this.topologyRevision,
       galleryArtistTopologies: Object.fromEntries(this.galleryArtistTopologies),
       bootstrapPresenceEligible: this.bootstrapPresenceEligible,
+      diagTrace: [...this.diagTrace],
     };
   }
 

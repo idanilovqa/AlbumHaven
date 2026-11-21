@@ -17776,13 +17776,14 @@ async function fetchTrackModalAlbumDetails(albumKey, options = {}) {
   const albumIdQuery = Number.isInteger(albumId) && albumId > 0
     ? `&album_id=${encodeURIComponent(String(albumId))}`
     : '';
+  const lineageQuery = options.resolveLineage === true ? '&resolve_lineage=1' : '';
   const albumKeyUrl = `/album-details?album_key=${encodeURIComponent(normalizedAlbumKey)}`;
   const requestOptions = {
     headers: { Accept: 'application/json' },
     priority: options.speculative === true ? 'low' : 'high',
     ...(options.signal ? { signal: options.signal } : {}),
   };
-  let response = await fetch(`${albumKeyUrl}${albumIdQuery}`, requestOptions);
+  let response = await fetch(`${albumKeyUrl}${albumIdQuery}${lineageQuery}`, requestOptions);
   let payload = null;
   try {
     payload = await response.json();
@@ -17805,23 +17806,64 @@ async function fetchTrackModalAlbumDetails(albumKey, options = {}) {
   }
   if (!response.ok || !payload?.ok || !payload?.album) {
     const error = new Error(payload?.error || `Album detail request failed: ${response.status}`);
-    error.status = response.status;
+    if (
+      payload?.resolution_kind === 'album_split'
+      && Array.isArray(payload.current_releases)
+    ) error.currentReleases = payload.current_releases;
     throw error;
   }
   return payload.album;
 }
 
-// A gallery album that is gone was split or merged meanwhile. The refreshed gallery shows every
-// current release as its own card, so the choice is made there, never in a chooser here.
-function closeTrackModalForChangedAlbum() {
-  closeTrackModal();
-  showToast('This album changed—choose it again in the gallery.', 'info', 4200);
+function renderTrackModalIdentitySplitChoices(releases) {
+  const choices = Array.isArray(releases) ? releases : [];
+  if (choices.length < 2) return false;
+  const els = getTrackModalElements();
+  if (typeof disposeAlbumTrackCreditMotion === 'function') disposeAlbumTrackCreditMotion(els.list);
+  state.ui.trackModalIdentitySplitChoices = choices;
+  els.subtitle.textContent = 'This album was split—choose the current release';
+  els.list.innerHTML = `<li class="cover-lookup-current-release-list" role="group" aria-label="Current releases">
+    ${choices.map((release) => `<button class="cover-lookup-current-release" type="button" data-track-modal-current-release="${escapeHtml(release.album_id || '')}">
+      <span>${escapeHtml(release.name || release.album_key || 'Album')}</span>
+      <span class="cover-lookup-current-release-count">${escapeHtml(String(release.track_count || 0))} tracks</span>
+    </button>`).join('')}
+  </li>`;
+  return true;
+}
+
+function selectTrackModalCurrentRelease(albumId) {
+  const choice = (state.ui.trackModalIdentitySplitChoices || []).find(
+    (candidate) => String(candidate?.album_id || '') === String(albumId || ''),
+  );
+  if (!choice) return false;
+  openTrackModal({
+    ...choice,
+    key: choice.album_key || choice.key,
+    preview_only: true,
+    tracks: [],
+  });
+  return true;
+}
+
+// The card from this session's own edit can outlive its old key, but its name and year still
+// identify the release, so the chooser would only ask about a choice already made.
+function openLocallyEditedSplitRelease(albumKey, album, releases) {
+  if (!locallyEditedAlbumKeys.has(albumKey) || !Array.isArray(releases)) return false;
+  const matches = releases.filter((release) => (
+    String(release?.name || '') === String(album?.name || '')
+    && String(release?.year || '') === String(album?.year || '')
+  ));
+  if (matches.length !== 1) return false;
+  rememberLocallyEditedAlbum({ key: matches[0].album_key || matches[0].key });
+  state.ui.trackModalIdentitySplitChoices = releases;
+  return selectTrackModalCurrentRelease(matches[0].album_id);
 }
 
 function loadTrackModalAlbumDetails(albumKey, options = {}) {
   const normalizedAlbumKey = String(albumKey || '').trim();
   if (!normalizedAlbumKey) return Promise.resolve(null);
-  const requiresIdentityResolution = options.canonicalRefresh === true;
+  const requiresIdentityResolution = options.canonicalRefresh === true
+    || options.resolveLineage === true;
   const cachedAlbum = requiresIdentityResolution
     ? null
     : getCachedHydratedTrackModalAlbum(normalizedAlbumKey);
@@ -17880,8 +17922,8 @@ function loadTrackModalAlbumDetails(albumKey, options = {}) {
   return load;
 }
 
-// Albums this session edited: their rows were rendered optimistically and their cards already
-// carry the current identity, so neither needs reloading by identity.
+// This session knows its own edits, so it never needs asking which release it meant.
+// Other sessions still get the split chooser, and a removed album still returns it.
 const locallyEditedAlbumKeys = new Set();
 
 function rememberLocallyEditedAlbum(album) {
@@ -17905,6 +17947,7 @@ async function refreshOpenTrackModalAfterInventoryMutation() {
     refreshedAlbum = await loadTrackModalAlbumDetails(albumKey, {
       albumId: openAlbum.album_id || openAlbum.id,
       canonicalRefresh: true,
+      resolveLineage: !editedLocally,
     });
   } catch (error) {
     loadError = error;
@@ -17918,12 +17961,10 @@ async function refreshOpenTrackModalAfterInventoryMutation() {
       && getTrackModalAlbumVersionKey(currentAlbum) !== albumVersionKey
     )
   ) return false;
-  if (loadError?.status === 404) {
-    // The view that triggered this refresh already shows the current releases.
-    closeTrackModalForChangedAlbum();
-    return true;
+  if (loadError) {
+    if (renderTrackModalIdentitySplitChoices(loadError.currentReleases)) return true;
+    throw loadError;
   }
-  if (loadError) throw loadError;
   refreshOpenTrackModalVersionState(albumKey, refreshedAlbum);
   return true;
 }
@@ -18079,7 +18120,7 @@ function openTrackModal(album, options = {}) {
     const coverLoadSuspensionToken = suspendGalleryCoverLoadsForTrackModal();
     const detailsPromise = loadTrackModalAlbumDetails(albumKey, {
       albumId: albumWithPlaybackContext.album_id || albumWithPlaybackContext.id,
-      canonicalRefresh: albumWithPlaybackContext.refresh_identity === true,
+      resolveLineage: albumWithPlaybackContext.resolve_lineage === true,
     });
     detailsPromise.then((hydratedAlbum) => {
       if (loadToken !== state.ui.pendingTrackModalLoadToken) return;
@@ -18094,13 +18135,12 @@ function openTrackModal(album, options = {}) {
       openTrackModal(resolvedAlbum, { ...options, foreground: false });
     }).catch((error) => {
       if (loadToken !== state.ui.pendingTrackModalLoadToken) return;
-      if (error.status === 404) {
-        closeTrackModalForChangedAlbum();
-        if (typeof refreshCurrentViewAfterBackgroundCompletion === 'function') {
-          void refreshCurrentViewAfterBackgroundCompletion();
-        }
-        return;
-      }
+      if (openLocallyEditedSplitRelease(
+        albumKey,
+        albumWithPlaybackContext,
+        error.currentReleases,
+      )) return;
+      if (renderTrackModalIdentitySplitChoices(error.currentReleases)) return;
       console.error('[AlbumHaven][AlbumDetails] Failed to load full album details.', error);
       showToast('Unable to load album details.', 'error', 3200);
     }).finally(() => {
@@ -18184,7 +18224,7 @@ function resolveTrackModalActionAlbum(button) {
     && currentIdentityRevision > renderedIdentityRevision
     && !locallyEditedAlbumKeys.has(albumKey)
   ) {
-    return { ...fallbackAlbum, refresh_identity: true };
+    return { ...fallbackAlbum, resolve_lineage: true };
   }
   if (albumVersionKey) {
     const currentAlbumVersionKey = getTrackModalAlbumVersionKey(currentAlbum);
@@ -18229,7 +18269,7 @@ async function resolveHydratedTrackModalActionAlbum(button) {
   try {
     return await loadTrackModalAlbumDetails(albumKey, {
       albumId: album.album_id || album.id,
-      canonicalRefresh: album.refresh_identity === true,
+      resolveLineage: album.resolve_lineage === true,
     });
   } catch (error) {
     console.error('[AlbumHaven][AlbumDetails] Failed to load full album details for action.', error);
@@ -52258,6 +52298,14 @@ async function handleUtilityBootstrapClick(event) {
     selectRemoteCoverFromLookup(candidateId);
     return;
   }
+    const trackModalCurrentRelease = event.target.closest('[data-track-modal-current-release]');
+    if (trackModalCurrentRelease) {
+      event.preventDefault();
+      selectTrackModalCurrentRelease(
+        trackModalCurrentRelease.getAttribute('data-track-modal-current-release') || '',
+      );
+      return;
+    }
 
   const trackProblematicButton = event.target.closest('[data-open-track-problematic="1"]');
   if (trackProblematicButton) {

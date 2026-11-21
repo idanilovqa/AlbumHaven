@@ -93,13 +93,11 @@ test('interactive summary returns one coherent ready snapshot for the expected a
   assert.equal(reads, snapshots.length);
 });
 
-test('TrackModalActions exposes the changed-album journey instead of a split chooser', async () => {
+test('TrackModalActions exposes the current-release split choice journey', async () => {
   const { TrackModalActions } = await import('../e2e/actions/trackModalActions.js');
 
-  assert.equal(typeof TrackModalActions.prototype.watchForChangedAlbumNotice, 'function');
-  assert.equal(typeof TrackModalActions.prototype.waitForChangedAlbumNotice, 'function');
-  assert.equal(TrackModalActions.prototype.waitForIdentitySplitChoices, undefined);
-  assert.equal(TrackModalActions.prototype.chooseCurrentRelease, undefined);
+  assert.equal(typeof TrackModalActions.prototype.waitForIdentitySplitChoices, 'function');
+  assert.equal(typeof TrackModalActions.prototype.chooseCurrentRelease, 'function');
 });
 
 test('TrackModalActions waits for one atomic exact album-details render', async () => {

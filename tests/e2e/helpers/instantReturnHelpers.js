@@ -137,7 +137,7 @@ export function requestedAlbumKeys(page) {
 // The first album inside the window whose details were never asked for, so nothing keeps them.
 export async function albumNeverRequested(galleryActions, requested) {
   for (const name of await visibleAlbumNames(galleryActions.galleryPage)) {
-    if (!requested.has(await galleryActions.readAlbumKeyByName(name))) return name;
+    if (name && !requested.has(await galleryActions.readAlbumKeyByName(name))) return name;
   }
   throw new Error('every album in the window had its details asked for');
 }

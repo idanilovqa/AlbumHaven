@@ -3640,6 +3640,306 @@ def test_sorter_exit_failure_explicitly_closes_completed_search_spool_and_preser
     assert opened and all(owner.closed for owner in opened)
 
 
+def _topology_unit_row(path, identity, *, original_key="topology-owned", album_id=71,
+                       disc=1, number=1, year=1988, title="Topology Album",
+                       artist="Topology Artist", duration=180, split=False):
+    row = _row(year=year, title=f"Track {identity}", path=path, track_number=number)
+    row.update(album_id=album_id, album_key=original_key, album_title=title,
+               album_release_year=1988, album_edition=None,
+               album_metadata={"album_artist": artist}, artist_name=artist,
+               track_id=identity, track_key=f"topology-track-{identity}",
+               disc_number=disc, duration_seconds=duration,
+               file_library_root_id="1", file_library_root_category="main_library_roots",
+               separate_release_keys=[f"{artist.lower()}::{title.lower()}"] if split else [])
+    row["file_entry"].update(album=title, album_artist=artist, artist=artist,
+                             disc_number=disc, duration_seconds=duration)
+    return row
+
+
+def _topology_unit_main_records(rows):
+    from music_app.services.problematic_files_projection import project_problematic_albums
+
+    records = {}
+    for album in project_problematic_albums(rows):
+        summary = _problematic_album_summary_payload(album)
+        detail = _problematic_album_detail_payload(album)
+        assert summary is not None and detail is not None
+        merged = {**summary, **detail}
+        values = [merged.get("name"), merged.get("raw_name"), merged.get("album_artist"),
+                  merged.get("raw_album_artist"), merged.get("year"),
+                  *merged.get("problem_reasons", []), merged.get("search_text"),
+                  *(track.get("title") for track in merged.get("tracks", [])),
+                  *(value for repair in merged.get("repair_preview_rows", [])
+                    for value in (repair.get("track_title"), repair.get("original"), repair.get("repaired")))]
+        records[summary["projection_id"]] = {
+            "summary": summary, "detail": detail,
+            "document": "\n".join("" if value is None else str(value) for value in values).lower(),
+            "transient_root_provenance": album.get("root_provenance"),
+        }
+    return records
+
+
+def _assert_topology_unit_matches_main(rows):
+    from music_app.services.problematic_files_projection import ProblematicGroupAccumulator
+
+    expected = _topology_unit_main_records(rows)
+    assert expected
+    accumulator = ProblematicGroupAccumulator()
+    facts = _persist_semantic_facts(accumulator, enumerate(rows, 1))
+    unchanged = deepcopy(facts)
+    actual = {}
+    for projected in accumulator.finalize(facts):
+        with projected:
+            key = projected["item_key"]
+            assert key in expected
+            summary = expected[key]["summary"]
+            assert projected["summary"]["problem_reasons"] == summary["problem_reasons"]
+            assert projected["summary"]["track_count"] == summary["track_count"]
+            assert projected["reasons"] == summary["problem_reasons"]
+            assert [fact.display_reason for fact in projected.reason_facts] == summary["problem_reasons"]
+            chunks = list(projected.search_facts)
+            assert [fact["normalized_text"] for fact in chunks] == [expected[key]["document"]]
+            assert all(fact["item_key"] == key and fact["fact_kind"] == "main_search" for fact in chunks)
+            assert projected["summary"].get("duplicate_companion_count", 0) == 0
+            actual[key] = deepcopy(projected["summary"])
+    assert set(actual) == set(expected)
+    assert facts == unchanged
+    return expected, actual
+
+
+@pytest.mark.parametrize("first_folder, second_folder, second_disc, duplicate", [
+    ("CD1", "CD2", 2, False),
+    ("1", "2", 2, False),
+    ("1", "2", 1, True),
+])
+def test_complete_topology_keeps_canonical_cd_numeric_and_bad_disc_decisions(
+    first_folder, second_folder, second_disc, duplicate,
+):
+    rows = [_topology_unit_row(f"D:/Music/Topology/P/{first_folder}/one.flac", 1, disc=1),
+            _topology_unit_row(f"D:/Music/Topology/P/{second_folder}/two.flac", 2, disc=second_disc)]
+    expected = _topology_unit_main_records(rows)
+    assert len(expected) == 1
+    assert ("Duplicate files" in next(iter(expected.values()))["summary"]["problem_reasons"]) is duplicate
+    _assert_topology_unit_matches_main(rows)
+
+
+@pytest.mark.parametrize("exclusion", ["exception", "persisted-membership", "none"])
+def test_complete_topology_excludes_bad_disc_before_numeric_sibling_decision(exclusion):
+    rows = [_topology_unit_row("D:/Music/Topology/P/1/one.flac", 1, disc=1),
+            _topology_unit_row("D:/Music/Topology/P/2/two.flac", 2, disc=2),
+            _topology_unit_row("D:/Music/Topology/P/2/bad.flac", 3, disc=1)]
+    if exclusion == "exception":
+        rows[-1]["file_entry"]["exception_type"] = "Non-album rarity"
+    elif exclusion == "persisted-membership":
+        rows[-1]["local_album_membership_problem"] = "Outside album folder"
+        rows[-1]["file_entry"]["local_album_membership_problem"] = "Outside album folder"
+    expected = _topology_unit_main_records(rows)
+    assert len(expected) == 1
+    assert ("Duplicate files" in next(iter(expected.values()))["summary"]["problem_reasons"]) is (exclusion == "none")
+    _assert_topology_unit_matches_main(rows)
+
+
+@pytest.mark.parametrize("same_original_key", [True, False])
+def test_complete_topology_numeric_decision_respects_original_album_domains(same_original_key):
+    rows = [_topology_unit_row("D:/Music/Topology/P/1/one.flac", 1, album_id=71, disc=1),
+            _topology_unit_row("D:/Music/Topology/P/2/two.flac", 2,
+                               original_key="topology-owned" if same_original_key else "topology-peer",
+                               album_id=71 if same_original_key else 72, disc=2)]
+    expected = _topology_unit_main_records(rows)
+    assert len(expected) == (1 if same_original_key else 2)
+    assert all(("Duplicate files" in record["summary"]["problem_reasons"]) is (not same_original_key)
+               for record in expected.values())
+    _assert_topology_unit_matches_main(rows)
+
+
+def test_complete_topology_numeric_context_precedes_split_year_projection():
+    rows = [_topology_unit_row(f"D:/Music/Topology/{copy}/{disc}/track.flac", index,
+                               disc=disc, year=1988 if disc == 1 else 1999, split=True)
+            for index, (copy, disc) in enumerate((("P", 1), ("P", 2), ("Q", 1), ("Q", 2)), 1)]
+    expected = _topology_unit_main_records(rows)
+    assert len(expected) == 2
+    assert {int(record["summary"]["year"]) for record in expected.values()} == {1988, 1999}
+    assert all("Duplicate files" not in record["summary"]["problem_reasons"] for record in expected.values())
+    _assert_topology_unit_matches_main(rows)
+
+
+def test_complete_topology_same_path_replay_does_not_create_another_container():
+    row = _topology_unit_row("D:/Music/Topology/P/one.flac", 1)
+    rows = [row, deepcopy(row), deepcopy(row)]
+    expected = _topology_unit_main_records(rows)
+    assert len(expected) == 1
+    assert next(iter(expected.values()))["summary"]["track_count"] == 1
+    assert "Duplicate files" not in next(iter(expected.values()))["summary"]["problem_reasons"]
+    _assert_topology_unit_matches_main(rows)
+
+
+@pytest.mark.parametrize("signature", ["one-track", "invalid-duration", "unequal-signatures"])
+def test_complete_topology_local_exact_fallback_survives_foreign_global_mixing(signature):
+    rows = [_topology_unit_row("D:/Music/Topology/P/one.flac", 1),
+            _topology_unit_row("D:/Music/Topology/Q/two.flac", 2)]
+    if signature == "invalid-duration":
+        for row in rows:
+            row["duration_seconds"] = 0
+            row["file_entry"]["duration_seconds"] = 0
+    elif signature == "unequal-signatures":
+        rows.extend([_topology_unit_row("D:/Music/Topology/P/three.flac", 3, number=2, duration=100),
+                     _topology_unit_row("D:/Music/Topology/Q/four.flac", 4, number=2, duration=250)])
+    rows.append(_topology_unit_row("D:/Music/Topology/P/foreign.flac", 9,
+                                   original_key="topology-foreign", album_id=72,
+                                   title="Foreign Album", artist="Foreign Artist"))
+    expected = _topology_unit_main_records(rows)
+    owned = [record for record in expected.values() if record["summary"]["key"] == "topology-owned"]
+    assert len(owned) == 1 and "Duplicate files" in owned[0]["summary"]["problem_reasons"]
+    assert owned[0]["transient_root_provenance"] is None
+    _expected, actual = _assert_topology_unit_matches_main(rows)
+    assert actual[owned[0]["summary"]["projection_id"]].get("root_provenance") is None
+
+
+def test_complete_topology_exact_link_suppresses_entire_original_album_fallback_family():
+    rows = [_topology_unit_row("D:/Music/Topology/P/one.flac", 1, split=True),
+            _topology_unit_row("D:/Music/Topology/Q/two.flac", 2, split=True),
+            _topology_unit_row("D:/Music/Topology/R/three.flac", 3, year=1999, split=True),
+            _topology_unit_row("D:/Music/Topology/S/four.flac", 4, year=1999, split=True)]
+    for row in rows[2:]:
+        row["file_entry"]["album"] = "Own fallback album"
+    rows.extend([_topology_unit_row("D:/Music/Topology/R/foreign.flac", 5,
+                                    original_key="topology-foreign-r", album_id=72,
+                                    title="Foreign R", artist="Foreign Artist", year=1999),
+                 _topology_unit_row("D:/Music/Topology/S/foreign.flac", 6,
+                                    original_key="topology-foreign-s", album_id=73,
+                                    title="Foreign S", artist="Foreign Artist", year=1999)])
+    expected = _topology_unit_main_records(rows)
+    owned = {int(record["summary"]["year"]): record for record in expected.values()
+             if record["summary"]["key"].startswith("topology artist::topology album::year::")}
+    assert set(owned) == {1988, 1999}
+    assert "Duplicate files" in owned[1988]["summary"]["problem_reasons"]
+    assert "Duplicate files" not in owned[1999]["summary"]["problem_reasons"]
+    _assert_topology_unit_matches_main(rows)
+
+
+def test_complete_topology_stop_preserves_primary_and_closes_allocated_spools(monkeypatch):
+    from music_app.services.problematic_files_projection import ProblematicGroupAccumulator
+
+    _module, opened = _tracked_projection_spools(monkeypatch)
+    accumulator = ProblematicGroupAccumulator()
+    row = _topology_unit_row("D:/Music/Topology/P/one.flac", 1)
+    facts = _persist_semantic_facts(accumulator, ((1, row),))
+    primary = RuntimeError("topology stop with owned temporary resources")
+    calls = []
+    prior_owner_count = len(opened)
+    prepared_owners = []
+
+    def check_stop():
+        calls.append(True)
+        new_owners = opened[prior_owner_count:]
+        if any(not owner.closed for owner in new_owners):
+            prepared_owners.extend(new_owners)
+            raise primary
+
+    with pytest.raises(RuntimeError) as caught:
+        list(accumulator.finalize(facts, check_stop=check_stop))
+    assert caught.value is primary
+    assert calls and prepared_owners
+    assert opened and all(owner.closed for owner in opened)
+
+
+def test_complete_topology_input_error_preserves_primary_and_closes_spools(monkeypatch):
+    from music_app.services.problematic_files_projection import ProblematicGroupAccumulator
+
+    _module, opened = _tracked_projection_spools(monkeypatch)
+    accumulator = ProblematicGroupAccumulator()
+    row = _topology_unit_row("D:/Music/Topology/P/one.flac", 1)
+    facts = _persist_semantic_facts(accumulator, ((1, row),))
+    primary = RuntimeError("topology supplied fact stream failed")
+
+    def broken_facts():
+        yield facts[0]
+        raise primary
+
+    with pytest.raises(RuntimeError) as caught:
+        list(accumulator.finalize(broken_facts()))
+    assert caught.value is primary
+    assert opened and all(owner.closed for owner in opened)
+
+
+def test_complete_topology_early_outer_close_releases_owned_spools(monkeypatch):
+    from music_app.services.problematic_files_projection import ProblematicGroupAccumulator
+
+    _module, opened = _tracked_projection_spools(monkeypatch)
+    rows = [_topology_unit_row("D:/Music/Topology/P/one.flac", 1),
+            _topology_unit_row("D:/Music/Topology/Q/two.flac", 2,
+                               original_key="topology-other", album_id=72, title="Other Album")]
+    accumulator = ProblematicGroupAccumulator()
+    facts = _persist_semantic_facts(accumulator, enumerate(rows, 1))
+    finalizer = accumulator.finalize(facts)
+    projected = next(finalizer)
+    try:
+        next(iter(projected.reason_facts))
+    finally:
+        projected.close()
+        finalizer.close()
+    assert opened and all(owner.closed for owner in opened)
+
+
+def test_complete_topology_normal_handoff_retains_reason_and_search_stream_ownership(monkeypatch):
+    from music_app.services.problematic_files_projection import ProblematicGroupAccumulator
+
+    _module, opened = _tracked_projection_spools(monkeypatch)
+    row = _topology_unit_row("D:/Music/Topology/P/one.flac", 1)
+    accumulator = ProblematicGroupAccumulator()
+    facts = _persist_semantic_facts(accumulator, ((1, row),))
+    projected, = accumulator.finalize(facts)
+    try:
+        assert not projected.closed
+        assert not projected.reason_facts.closed
+        assert not projected.search_facts.closed
+        assert list(projected.reason_facts)
+        assert not projected.search_facts.closed
+        assert list(projected.search_facts)
+        assert projected.closed
+    finally:
+        projected.close()
+    assert opened and all(owner.closed for owner in opened)
+
+
+def test_complete_topology_losing_same_path_row_does_not_keep_track_key_or_title_facts():
+    from music_app.services.problematic_files_projection import ProblematicGroupAccumulator
+
+    first = _topology_unit_row("D:/Music/Topology/P/one.flac", 1)
+    losing = _topology_unit_row("D:/Music/Topology/P/one.flac", 2)
+    second = _topology_unit_row("D:/Music/Topology/P/two.flac", 3, number=2)
+    for row, key, title in ((first, "track-A", "Retained first title"),
+                            (losing, "track-B", "Losing replay title"),
+                            (second, "track-B", "Retained second title")):
+        row["track_key"] = key
+        row["track_title"] = title
+        row["file_entry"]["title"] = title
+    rows = [first, losing, second]
+    expected_records = _topology_unit_main_records(rows)
+    assert len(expected_records) == 1
+    expected = next(iter(expected_records.values()))
+    assert expected["summary"]["track_count"] == 2
+    assert "Duplicate files" not in expected["summary"]["problem_reasons"]
+    assert "losing replay title" not in expected["document"]
+    assert "retained first title" in expected["document"]
+    assert "retained second title" in expected["document"]
+
+    accumulator = ProblematicGroupAccumulator()
+    facts = _persist_semantic_facts(accumulator, enumerate(rows, 1))
+    projected, = accumulator.finalize(facts)
+    with projected:
+        assert projected["item_key"] == expected["summary"]["projection_id"]
+        assert projected["summary"]["track_count"] == 2
+        assert "Duplicate files" not in projected["summary"]["problem_reasons"]
+        assert projected["summary"]["problem_reasons"] == expected["summary"]["problem_reasons"]
+        assert "Losing replay title" not in json.dumps(projected["summary"], ensure_ascii=False)
+        assert "losing replay title" not in projected["search_text"]
+        assert [fact.display_reason for fact in projected.reason_facts] == expected["summary"]["problem_reasons"]
+        chunks = [fact["normalized_text"] for fact in projected.search_facts]
+        assert chunks == [expected["document"]]
+        assert all("losing replay title" not in chunk for chunk in chunks)
+
+
 @pytest.mark.parametrize("last_item", [False, True], ids=["group-boundary", "last-group"])
 @pytest.mark.parametrize("action", ["close", "throw"])
 def test_finalize_closes_suspended_item_streams(monkeypatch, last_item, action):

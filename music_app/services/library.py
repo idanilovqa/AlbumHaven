@@ -519,23 +519,12 @@ def _contextual_album_containers(
     parent_paths: dict[tuple[str, str, str], str] = {}
 
     for index, (path_value, disc_number, album_name, edition) in enumerate(rows):
-        raw_path = str(path_value or "").strip()
-        if not raw_path:
+        candidate = _numeric_album_container_candidate(path_value, disc_number, album_name, edition)
+        if candidate is None:
             continue
-        normalized_path = os.path.normpath(raw_path)
-        path = path_value if isinstance(path_value, Path) and str(path_value) == normalized_path else Path(normalized_path)
-        folder = path.parent
-        folder_name = folder.name.strip()
-        if not folder_name.isdigit() or folder.parent == folder:
-            continue
-
-        ordinal = int(folder_name)
-        parent_path = str(folder.parent).strip()
-        album_key, edition_key = _album_bucket_metadata(album_name, edition)
-        group_key = (os.path.normcase(parent_path), album_key, edition_key)
-        folder_key = os.path.normcase(str(folder))
+        group_key, folder_key, ordinal, matches, parent_path = candidate
         numeric_groups.setdefault(group_key, {}).setdefault(folder_key, []).append(
-            (index, ordinal, safe_int(disc_number) == ordinal)
+            (index, ordinal, matches)
         )
         parent_paths.setdefault(group_key, parent_path)
 
@@ -558,6 +547,24 @@ def _contextual_album_containers(
                 containers[index] = parent_paths[group_key]
 
     return containers
+
+
+def _numeric_album_container_candidate(path_value, disc_number, album_name, edition):
+    """Return the canonical immediate numeric-folder bucket, without grouping rows."""
+    raw_path = str(path_value or "").strip()
+    if not raw_path:
+        return None
+    normalized_path = os.path.normpath(raw_path)
+    path = path_value if isinstance(path_value, Path) and str(path_value) == normalized_path else Path(normalized_path)
+    folder = path.parent
+    folder_name = folder.name.strip()
+    if not folder_name.isdigit() or folder.parent == folder:
+        return None
+    ordinal = int(folder_name)
+    parent_path = str(folder.parent).strip()
+    album_key, edition_key = _album_bucket_metadata(album_name, edition)
+    return ((os.path.normcase(parent_path), album_key, edition_key),
+            os.path.normcase(str(folder)), ordinal, safe_int(disc_number) == ordinal, parent_path)
 
 
 

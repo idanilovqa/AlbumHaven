@@ -12,11 +12,12 @@ import hashlib
 import heapq
 import itertools
 import json
+import os
 import re
 import tempfile
 import unicodedata
 from collections.abc import Callable, Iterable, Iterator, Mapping
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from os.path import basename
 from pathlib import Path
@@ -2230,7 +2231,8 @@ def _normalized_problematic_search_chunks(value: object) -> tuple[str, ...]:
 class _ProblematicSortedSearchValues:
     """Order complete search facts with bounded runs and merge fan-in."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, work=None) -> None:
+        self._work = work
         self._file = tempfile.SpooledTemporaryFile(
             max_size=_MAX_REDUCER_FACT_BYTES, mode="w+t", encoding="utf-8", newline="\n",
         )
@@ -2238,12 +2240,16 @@ class _ProblematicSortedSearchValues:
 
     def add(self, key: tuple[object, ...], value: object) -> None:
         self._file.seek(0, 2)
-        self._file.write(json.dumps((key, value), ensure_ascii=False, separators=(",", ":")) + "\n")
+        line = json.dumps((key, value), ensure_ascii=False, separators=(",", ":")) + "\n"
+        if self._work is not None:
+            self._work(len(line.encode("utf-8")))
+        self._file.write(line)
         self._sorted = False
 
-    @staticmethod
-    def _records(owner: object) -> Iterator[list[object]]:
+    def _records(self, owner: object) -> Iterator[list[object]]:
         for line in owner:
+            if self._work is not None:
+                self._work(len(line.encode("utf-8")))
             yield json.loads(line)
 
     def _sort(self) -> None:
@@ -2258,16 +2264,22 @@ class _ProblematicSortedSearchValues:
 
             def flush() -> None:
                 nonlocal count, batch_bytes
+                if self._work is not None:
+                    self._work(force=True)
                 batch.sort(key=lambda record: record[0])
                 with (root / f"run-0-{count}.jsonl").open("w", encoding="utf-8", newline="\n") as run:
                     for _key, line in batch:
                         run.write(line)
+                if self._work is not None:
+                    self._work(force=True)
                 count += 1
                 batch.clear()
                 batch_bytes = 0
 
             for line in self._file:
                 line_bytes = len(line.encode("utf-8"))
+                if self._work is not None:
+                    self._work(line_bytes)
                 if batch and batch_bytes + line_bytes > _MAX_REDUCER_FACT_BYTES:
                     flush()
                 batch.append((json.loads(line)[0], line))
@@ -2278,6 +2290,8 @@ class _ProblematicSortedSearchValues:
             while count > 1:
                 next_count = 0
                 for start in range(0, count, _PROBLEMATIC_FACT_MERGE_FAN_IN):
+                    if self._work is not None:
+                        self._work(force=True)
                     inputs = [root / f"run-{generation}-{index}.jsonl"
                               for index in range(start, min(start + _PROBLEMATIC_FACT_MERGE_FAN_IN, count))]
                     with ExitStack() as stack:
@@ -2289,6 +2303,8 @@ class _ProblematicSortedSearchValues:
                                 run.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
                     for path in inputs:
                         path.unlink()
+                    if self._work is not None:
+                        self._work(force=True)
                     next_count += 1
                 count = next_count
                 generation += 1
@@ -2297,6 +2313,8 @@ class _ProblematicSortedSearchValues:
             if count:
                 with (root / f"run-{generation}-0.jsonl").open("r", encoding="utf-8") as run:
                     for line in run:
+                        if self._work is not None:
+                            self._work(len(line.encode("utf-8")))
                         self._file.write(line)
             self._sorted = True
 
@@ -2313,8 +2331,279 @@ class _ProblematicSortedSearchValues:
     def __enter__(self) -> "_ProblematicSortedSearchValues":
         return self
 
-    def __exit__(self, *_exc_info: object) -> None:
-        self.close()
+    def __exit__(self, _exc_type, error, _traceback) -> None:
+        try:
+            self.close()
+        except BaseException as cleanup_error:
+            if error is None:
+                raise
+            error.add_note(f"problematic spool cleanup failed: {cleanup_error!r}")
+
+
+@contextmanager
+def _prepared_problematic_topology(facts, *, check_stop=None):
+    """Derive topology from the immutable supplied universe, using bounded runs."""
+    from music_app.services.library import (
+        _duplicate_album_identity_values,
+        _numeric_album_container_candidate,
+        _track_album_container,
+    )
+
+    records = decoded_bytes = 0
+
+    def work(size=0, *, force=False):
+        nonlocal records, decoded_bytes
+        records += 1
+        decoded_bytes += size
+        if force or records >= 100 or decoded_bytes >= _MAX_REDUCER_FACT_BYTES:
+            if check_stop is not None:
+                check_stop()
+            records = decoded_bytes = 0
+
+    stack = ExitStack()
+
+    def spool():
+        return stack.enter_context(_ProblematicSortedSearchValues(work=work))
+
+    def identity(entry):
+        value = _duplicate_album_identity_values(
+            entry.get("album_artist"), entry.get("album"), entry.get("year")
+        )
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":")) if value else ""
+
+    try:
+        work(force=True)
+        output, prepared, row_facts = spool(), spool(), spool()
+
+        def emit(stage, kind, fact):
+            key = (str(fact["projection_id"]), kind, str(fact["semantic_child_identity"]))
+            if kind == "duplicate_root":
+                key += (fact.get("primary") is not True,)
+            output.add(key, [stage, kind, fact])
+
+        row_derived_kinds = {
+            "track_key", "track_title", "private_path", "private_path_locator",
+            "duplicate_lookup", "album_value", "artist_value", "raw_year",
+            "valid_year", "track_number",
+        }
+        previous = None
+        for stage, kind, fact in facts:
+            projection = str(fact.get("projection_id") or "")
+            semantic = str(fact.get("semantic_child_identity") or "")
+            if not projection:
+                raise ValueError("problematic projection fact lacks projection_id")
+            if not semantic:
+                raise ValueError("problematic projection fact lacks semantic child identity")
+            key = (projection, kind, semantic)
+            if previous is not None and key < previous:
+                raise ValueError("problematic projection fact order regressed")
+            if key == previous:
+                continue
+            previous = key
+            if kind != "row":
+                if kind in row_derived_kinds or (kind == "duplicate_root" and fact.get("primary") is True):
+                    continue
+                emit(stage, kind, fact)
+                if kind == "duplicate_companion":
+                    root_id = fact.get("companion_library_root_id")
+                    category = fact.get("companion_root_category")
+                    emit(stage, "duplicate_root", {
+                        "projection_id": projection,
+                        "semantic_child_identity": _problematic_fact_identity("duplicate_root", root_id, category),
+                        "root_id": root_id, "category": category, "primary": False,
+                    })
+                continue
+            path = str(fact.get("file_private_path") or "").strip()
+            row_facts.add((projection, path, semantic), [stage, kind, fact])
+
+        previous_path = None
+        for stage, kind, fact in row_facts.values():
+            projection = str(fact["projection_id"])
+            path = str(fact.get("file_private_path") or "").strip()
+            path_key = (projection, path)
+            if not path or path_key != previous_path:
+                emit(stage, kind, fact)
+                # Persisted value facts have merged away their row origin; rebuild from winners.
+                for _stage, derived_kind, derived in ProblematicGroupAccumulator().consume(((max(1, stage), fact),)):
+                    if derived_kind != "row":
+                        emit(stage, derived_kind, derived)
+            previous_path = path_key
+            # Topology excludes before its separate original-album path deduplication.
+            entry = _problematic_file_entry_from_row(fact)
+            if fact.get("file_entry_is_object") is not True and not _row_json_mapping(fact.get("file_entry")):
+                entry.update(album=None, album_artist=None, year=None)
+            album = str(fact.get("album_key") or "")
+            path = str(entry.get("path") or "")
+            if (not album or not path or normalize_exception_value(entry.get("exception_type"))
+                    or str(entry.get("local_album_membership_problem") or "").strip()):
+                continue
+            prepared.add((album, path.casefold(), path), {
+                "album": album, "path": path, "entry": entry, "projection": projection,
+                "split": _row_album_identity(fact, str(fact.get("artist_name") or ""))[1] != album,
+            })
+
+        numeric = spool()
+        for album, rows in itertools.groupby(prepared.values(), key=lambda row: row["album"]):
+            previous_path = None
+            rank = None
+            for row in rows:
+                path = row["path"]
+                if path == previous_path:
+                    continue
+                previous_path = path
+                rank = rank or [path.casefold(), path, album]
+                row["rank"] = rank
+                entry = row["entry"]
+                candidate = _numeric_album_container_candidate(
+                    path, entry.get("disc_number"), entry.get("album"), entry.get("edition")
+                )
+                row["container"] = _track_album_container(path)
+                if candidate is None:
+                    bucket = [album, "", path]
+                else:
+                    group, folder, ordinal, matches, parent = candidate
+                    bucket = [album, "numeric", *group]
+                    row.update(folder=folder, ordinal=ordinal, matches=matches, parent=parent)
+                row["bucket"] = bucket
+                numeric.add((*bucket, path.casefold(), path), row)
+
+        by_container, global_paths = spool(), spool()
+        for _bucket, rows in itertools.groupby(numeric.values(), key=lambda row: row["bucket"]):
+            with _ProblematicSortedSearchValues(work=work) as replay:
+                first_folder = first_ordinal = None
+                different_folder = different_ordinal = False
+                matches = True
+                for row in rows:
+                    if "folder" in row:
+                        first_folder = first_folder if first_folder is not None else row["folder"]
+                        first_ordinal = first_ordinal if first_ordinal is not None else row["ordinal"]
+                        different_folder |= row["folder"] != first_folder
+                        different_ordinal |= row["ordinal"] != first_ordinal
+                        matches &= row["matches"]
+                    replay.add((row["path"].casefold(), row["path"]), row)
+                collapse = different_folder and different_ordinal and matches
+                for row in replay.values():
+                    if collapse:
+                        row["container"] = row["parent"]
+                    row["container_key"] = os.path.normcase(row["container"])
+                    row["identity"] = identity(row["entry"])
+                    by_container.add((row["container_key"], row["album"], row["path"]), row)
+                    global_paths.add((row["container_key"], os.path.normcase(row["path"]),
+                                      row["rank"], row["path"].casefold(), row["path"]), row)
+
+        containers = spool()
+        for container, rows in itertools.groupby(global_paths.values(), key=lambda row: row["container_key"]):
+            found = None
+            clean = True
+            for _path, versions in itertools.groupby(rows, key=lambda row: os.path.normcase(row["path"])):
+                winner = None
+                for winner in versions:
+                    work()
+                value = winner["identity"]
+                if found is None:
+                    found = value
+                clean &= bool(value) and value == found
+            if clean and found:
+                containers.add((found, container), {"identity": found, "container": container})
+
+        linked = spool()
+        for _identity, rows in itertools.groupby(containers.values(), key=lambda row: row["identity"]):
+            with _ProblematicSortedSearchValues(work=work) as replay:
+                count = 0
+                for row in rows:
+                    count += 1
+                    replay.add((row["container"],), row)
+                if count > 1:
+                    for row in replay.values():
+                        linked.add((row["container"],), row)
+
+        positives = iter(linked.values())
+        positive = next(positives, None)
+        local = spool()
+        for container, rows in itertools.groupby(by_container.values(), key=lambda row: row["container_key"]):
+            while positive is not None and positive["container"] < container:
+                positive = next(positives, None)
+            exact = positive is not None and positive["container"] == container
+            for row in rows:
+                row["exact"] = exact
+                row["exact_year"] = json.loads(positive["identity"])[2] if exact else None
+                local.add((row["album"], container, row["path"]), row)
+
+        families = spool()
+        for (album, container), rows in itertools.groupby(local.values(), key=lambda row: (row["album"], row["container_key"])):
+            with _ProblematicSortedSearchValues(work=work) as replay:
+                found = year = None
+                clean = uniform_year = True
+                exact = False
+                for row in rows:
+                    value = row["identity"]
+                    found = value if found is None else found
+                    clean &= bool(value) and value == found
+                    row_year = _coerce_int(row["entry"].get("year"))
+                    year = row_year if year is None else year
+                    uniform_year &= row_year == year
+                    exact |= row["exact"]
+                    replay.add((row["projection"], row["path"]), row)
+                for row in replay.values():
+                    families.add((album, found if clean else "", container, row["projection"], row["path"]), {
+                        **row, "local_identity": found if clean else "", "source_year": year if uniform_year else None,
+                        "exact": exact,
+                    })
+
+        decisions = spool()
+        for album, rows in itertools.groupby(families.values(), key=lambda row: row["album"]):
+            with _ProblematicSortedSearchValues(work=work) as replay:
+                any_exact = False
+                for local_identity, members in itertools.groupby(rows, key=lambda row: row["local_identity"]):
+                    with _ProblematicSortedSearchValues(work=work) as family:
+                        first = None
+                        repeated = False
+                        for row in members:
+                            first = first if first is not None else row["container_key"]
+                            repeated |= row["container_key"] != first
+                            any_exact |= row["exact"]
+                            family.add((row["projection"], row["path"]), row)
+                        for row in family.values():
+                            row["fallback"] = bool(local_identity and repeated)
+                            replay.add((row["projection"], row["path"]), row)
+                for row in replay.values():
+                    target = (album, "year", str(_coerce_int(row["entry"].get("year")))) if row["split"] else (album, "all", "")
+                    decisions.add((*target, 1, row["projection"], row["path"]), {"key": target, "row": row})
+                    qualifies = row["exact"] if any_exact else row["fallback"]
+                    if not qualifies:
+                        continue
+                    source_year = row["exact_year"] if any_exact else row["source_year"]
+                    source_keys = [(album, "all", "")]
+                    if source_year is not None:
+                        source_keys.append((album, "year", str(source_year)))
+                    for source_key in source_keys:
+                        decisions.add((*source_key, 0), {"key": source_key, "fallback": not any_exact})
+        for _key, rows in itertools.groupby(decisions.values(), key=lambda row: row["key"]):
+            qualifies = fallback = False
+            for decision in rows:
+                if "row" not in decision:
+                    qualifies = True
+                    fallback = decision["fallback"]
+                    continue
+                if qualifies:
+                    row = decision["row"]
+                    fact = {
+                        "projection_id": row["projection"],
+                        "semantic_child_identity": _problematic_fact_identity("topology", row["album"], row["projection"]),
+                        "fallback_unsplit": fallback and not row["split"],
+                    }
+                    output.add((row["projection"], "duplicate_topology", fact["semantic_child_identity"]),
+                               [0, "duplicate_topology", fact])
+        work(force=True)
+        yield output.values()
+    except BaseException as error:
+        try:
+            stack.close()
+        except BaseException as cleanup_error:
+            error.add_note(f"topology cleanup failed: {cleanup_error!r}")
+        raise
+    else:
+        stack.close()
 
 
 class _ProblematicSearchFactStream(Iterator[Mapping[str, object]]):
@@ -2414,6 +2703,7 @@ class _ProblematicItemReducer:
         self._track_missing_ranges: list[tuple[int, int]] = []
         self._previous_grouped_track_identity: str | None = None
         self.has_duplicate_files = False
+        self._fallback_unsplit_provenance = False
         self._featured_artist_facts = _BoundedFactValues()
         self._ignored_repair_facts = _SpooledIgnoredRepairMembership()
         self._track_title_facts = _BoundedFactValues()
@@ -2529,6 +2819,10 @@ class _ProblematicItemReducer:
                     )
 
     def consume(self, fact_kind: str, fact: Mapping[str, object]) -> None:
+        if fact_kind == "duplicate_topology":
+            self.has_duplicate_files = True
+            self._fallback_unsplit_provenance |= fact.get("fallback_unsplit") is True
+            return
         if fact_kind == "row":
             try:
                 self.path_count += 1
@@ -2782,6 +3076,8 @@ class _ProblematicItemReducer:
         self.summary["track_path_fact_digest"] = self._private_path_facts.digest.hexdigest()
         self.summary["track_path_facts_truncated"] = self._private_path_facts.truncated
         self._duplicate_topology.apply(self.summary)
+        if self._fallback_unsplit_provenance:
+            self.summary["root_provenance"] = None
         for compatibility_field in ("file_types",):
             self.summary.pop(compatibility_field, None)
         def search_reasons() -> Iterator[str]:
@@ -3105,6 +3401,15 @@ class ProblematicGroupAccumulator:
         self._next_batch_index += 1
 
     def finalize(
+        self,
+        facts: Iterable[tuple[int, str, Mapping[str, object]]],
+        *,
+        check_stop: Callable[[], None] | None = None,
+    ) -> Iterable[ProblematicProjectedItem]:
+        with _prepared_problematic_topology(facts, check_stop=check_stop) as prepared:
+            yield from self._finalize_prepared(prepared)
+
+    def _finalize_prepared(
         self,
         facts: Iterable[tuple[int, str, Mapping[str, object]]],
     ) -> Iterable[ProblematicProjectedItem]:

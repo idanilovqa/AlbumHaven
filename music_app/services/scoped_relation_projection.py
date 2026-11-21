@@ -664,14 +664,15 @@ def publish_affected_relation_projection(connection, *, album_ids=(), album_keys
     prior_generations = [row['first_gallery_generation'] for row in dirty if row.get('first_gallery_generation') is not None]
     if expected_gallery_generation is not None:
         prior_generations.append(expected_gallery_generation)
-    rows = connection.execute(relations.load_relation_source_rows_sql(scoped=True), {'album_ids': sorted(ids)}).fetchall()
-    current_keys = {row['id']: row['album_key'] for row in connection.execute(
-        'select id,album_key from library.local_albums where library_id=%s and id=any(%s::bigint[])',
-        (library_id, sorted(ids))).fetchall()}
-    new = _fact_records(rows, current_keys)
-    connection.execute('delete from library.local_relation_album_facts where library_id=%s and album_id=any(%s::bigint[])',
-                       (library_id, sorted(ids)))
-    _upsert_facts(connection, library_id, new)
+    with persistence_stage('relation_publication.album_facts'):
+        rows = connection.execute(relations.load_relation_source_rows_sql(scoped=True), {'album_ids': sorted(ids)}).fetchall()
+        current_keys = {row['id']: row['album_key'] for row in connection.execute(
+            'select id,album_key from library.local_albums where library_id=%s and id=any(%s::bigint[])',
+            (library_id, sorted(ids))).fetchall()}
+        new = _fact_records(rows, current_keys)
+        connection.execute('delete from library.local_relation_album_facts where library_id=%s and album_id=any(%s::bigint[])',
+                           (library_id, sorted(ids)))
+        _upsert_facts(connection, library_id, new)
 
     comparable = ('album_id', 'source_rows', 'connection_keys', 'low_value_keys', 'low_value_artists')
     old_values = {row['album_id']: {key: row[key] for key in comparable} for row in old}
@@ -690,21 +691,25 @@ def publish_affected_relation_projection(connection, *, album_ids=(), album_keys
         return _finish_publication(connection, context, metadata, result, reason=reason, config=config,
                                    copy_legacy_views=False, legacy_views=legacy_views, prepare_compatibility=prepare_compatibility)
 
-    component, affected_names, _, views = _load_affected_component(
-        connection, library_id, old, new, cancel_requested,
-        include_compatibility=compatibility_state is not None)
-    previous_entries, low_display_albums = _patch_entry_contract(
-        connection, library_id, views, affected_names)
+    with persistence_stage('relation_publication.component_load'):
+        component, affected_names, _, views = _load_affected_component(
+            connection, library_id, old, new, cancel_requested,
+            include_compatibility=compatibility_state is not None)
+    with persistence_stage('relation_publication.entry_contract'):
+        previous_entries, low_display_albums = _patch_entry_contract(
+            connection, library_id, views, affected_names)
     if compatibility_state is not None:
-        legacy_component = _restrict_component_views(build_postgres_relation_views(
-            [source for record in component.values() for source in record['source_rows']],
-            alias_policy=LEGACY_ALIAS_POLICY,
-        ), affected_names)
-        _patch_entry_contract(connection, library_id, legacy_component, affected_names, compatibility=True)
-        _patch_family_links(connection, legacy_component, affected_names, stamp, legacy=True)
-        _patch_search_rows(connection, legacy_component, affected_names, metadata, stamp, legacy=True)
-    _patch_family_links(connection, views, affected_names | set(views['folder_related']), stamp)
-    _patch_search_rows(connection, views, affected_names, metadata, stamp)
+        with persistence_stage('relation_publication.compatibility_patch'):
+            legacy_component = _restrict_component_views(build_postgres_relation_views(
+                [source for record in component.values() for source in record['source_rows']],
+                alias_policy=LEGACY_ALIAS_POLICY,
+            ), affected_names)
+            _patch_entry_contract(connection, library_id, legacy_component, affected_names, compatibility=True)
+            _patch_family_links(connection, legacy_component, affected_names, stamp, legacy=True)
+            _patch_search_rows(connection, legacy_component, affected_names, metadata, stamp, legacy=True)
+    with persistence_stage('relation_publication.family_and_search'):
+        _patch_family_links(connection, views, affected_names | set(views['folder_related']), stamp)
+        _patch_search_rows(connection, views, affected_names, metadata, stamp)
     removals = defaultdict(list)
     for entry in previous_entries:
         removals[entry['section']].append(entry['entry_key'])

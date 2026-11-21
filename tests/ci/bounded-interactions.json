@@ -11012,7 +11012,7 @@
         "membership_rows": 0,
         "filesystem_enumerations": 0,
         "stat_calls": 25,
-        "open_calls": 4,
+        "open_calls": 5,
         "media_parses": 1
       },
       "growth": {

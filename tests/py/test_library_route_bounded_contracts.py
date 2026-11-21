@@ -962,6 +962,43 @@ def _cover_lookup_library(app, root: Path, album_count: int) -> tuple[Path, list
     return album_root, track_paths, counts
 
 
+def _stub_cover_lookup_task_store(monkeypatch, current_counts):
+    """The Postgres task store: a reusable-task lookup is one scoped row read (counted), and the
+    guarded notification write is one transaction like the unguarded one."""
+    from music_app.services import cover_lookup_tasks
+
+    def load_reusable(*_args, **_kwargs):
+        if current_counts.get("counts") is not None:
+            current_counts["counts"].sql_statements += 1
+        return None
+
+    monkeypatch.setattr(cover_lookup_tasks, "load_reusable_cover_lookup_notification", load_reusable)
+    # Reading one task back is one row read by id; the live run stays authoritative.
+    monkeypatch.setattr(cover_lookup_tasks, "load_cover_lookup_notification", load_reusable)
+    monkeypatch.setattr(cover_lookup_tasks, "upsert_guarded_cover_lookup_notifications", lambda *_args, **_kwargs: None)
+
+
+def _indexed_cover_inventory(monkeypatch, app, album_root):
+    """The local cover index as the worker publishes it: the selected album's folder listing is read
+    from Postgres by root, never from the folder, so the route does no library-sized work for it."""
+    listing = [{
+        "path": str(album_root / "front.jpg"), "filename": "front.jpg", "is_squareish": True,
+        "width": 1200, "height": 1200, "sha256": "a" * 64,
+    }]
+    worker = SimpleNamespace(
+        repository=SimpleNamespace(
+            root_for_tracks=lambda _paths: album_root,
+            get=lambda _root: {"available": True, "complete": True, "candidates": listing},
+        ),
+        note_foreground_activity=lambda: None,
+        request=lambda _root: None,
+        request_context=lambda _paths: {"root_path": str(album_root)},
+        wait_for_context=lambda _paths, _timeout: None,
+        wait_for_listing=lambda _root, _timeout: None,
+    )
+    monkeypatch.setattr(app.state, "local_cover_inventory", worker, raising=False)
+
+
 def test_cover_lookup_add_remote_route_contract_reads_only_the_selected_album_at_production_library_size(
     library_app, tmp_path, monkeypatch,
 ):
@@ -979,9 +1016,13 @@ def test_cover_lookup_add_remote_route_contract_reads_only_the_selected_album_at
     match = {"id": "pasted-1", "image_url": "https://covers.example/front.jpg", "source": "manual", "width": 1200, "height": 1200}
     # Fetching the pasted pages is provider network work outside this contract.
     monkeypatch.setattr(api_wave_d_asgi_routes, "add_manual_cover_candidates_from_urls", lambda urls, **_kwargs: [dict(match)])
+    current_counts = {"counts": None}
+    _stub_cover_lookup_task_store(monkeypatch, current_counts)
 
     def run(album_count: int) -> OperationCounts:
         album_root, track_paths, counts = _cover_lookup_library(library_app, tmp_path / f"main-{album_count}", album_count)
+        current_counts["counts"] = counts
+        _indexed_cover_inventory(monkeypatch, library_app, album_root)
 
         def request():
             status, _headers, body = run_asgi_request(
@@ -1092,8 +1133,13 @@ def test_cover_lookup_save_remote_route_contract_reads_only_the_selected_album_a
     )
     match = {"id": "remote-1", "url": "https://covers.example/front.jpg", "source": "musicbrainz", "art_kind": "cover", "width": 1200, "height": 1200}
 
+    current_counts = {"counts": None}
+    _stub_cover_lookup_task_store(monkeypatch, current_counts)
+
     def run(album_count: int) -> OperationCounts:
         album_root, track_paths, counts = _cover_lookup_library(library_app, tmp_path / f"main-{album_count}", album_count)
+        current_counts["counts"] = counts
+        _indexed_cover_inventory(monkeypatch, library_app, album_root)
         album = {"id": 7, "name": "Album", "album_artist": "Selected", "tracks": [{"path": path} for path in track_paths]}
         task_id, _cancel = cover_lookup_tasks.create_cover_lookup_task(album, set(track_paths), config=library_app.state.config)
         cover_lookup_tasks.update_cover_lookup_task(

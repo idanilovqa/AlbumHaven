@@ -23,17 +23,17 @@ async function provesRecovery({ page, galleryActions, navigationPanelActions, tr
   let loads = 0;
   page.on('load', () => { loads += 1; });
 
-  // Album Details.
-  await cutOff();
-  // An album never on screen while online: the gallery fetches (and the copy may keep) the details
-  // of the albums it shows, so one shown online could open offline. Three screens down, short of
-  // the end of the loaded albums.
+  // Album Details: an album never on screen while online. The gallery fetches (and the copy may
+  // keep) the details of the albums it shows, so one shown online could open offline. Three
+  // screens down, short of the end of the loaded albums; scrolling there offline may also fail to
+  // load more albums, which the end-of-gallery step below covers.
   const firstScreen = await galleryActions.readGalleryScrollState();
   const { clientHeight } = firstScreen;
   const below = Math.min(3 * clientHeight, firstScreen.maxScrollTop - clientHeight);
   expect(below, 'the loaded albums reach well below the first screen').toBeGreaterThan(clientHeight);
+  await cutOff();
   await galleryActions.scrollGalleryBy(below);
-  await expect.poll(async () => (await galleryActions.readGalleryScrollState()).scrollTop).toBeGreaterThanOrEqual(below - 1);
+  await expect.poll(() => galleryActions.readGalleryScrollTop()).toBeGreaterThanOrEqual(below - 1);
   await galleryActions.clickFirstAlbumDetailsInView();
   await expect(trackModal.unreachableTitle).toHaveText('Offline');
   await expect(trackModal.unreachableDetail).toHaveText("Can't load the details, check your network or try again later");

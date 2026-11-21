@@ -1990,6 +1990,12 @@ export class GalleryActions {
     await this.galleryPage.page.mouse.wheel(0, deltaY);
   }
 
+  // The gallery's scroll position alone, also while a page of more albums failed to load.
+  async readGalleryScrollTop() {
+    // parity-check: allow-read-only-measurement-evaluate -- read the gallery scroll position without changing application state
+    return this.galleryPage.galleryScroll.evaluate(galleryScroll => galleryScroll.scrollTop);
+  }
+
   async readGalleryScrollState() {
 
     // parity-check: allow-read-only-measurement-evaluate -- read gallery geometry and the actual loaded-page boundary without changing application state

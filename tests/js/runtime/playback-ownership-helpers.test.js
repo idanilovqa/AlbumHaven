@@ -1636,12 +1636,18 @@ test('bounded interaction: a playback ownership heartbeat repaints the player on
     const owner = loadCountedOwnership(counter, { fetch: countedOwnershipFetch(counter) });
     assert.equal(await owner.context.claimPlaybackOwnership(localTrack), true);
     let remote = null;
-    const mirror = loadCountedOwnership(counter, { fetch: countedOwnershipFetch(counter, { elsewhere: () => remote }) });
+    // A tab without a claim reads the shared state every 10 s: its clock moves on that much per tick.
+    let mirrorNow = 0;
+    const mirror = loadCountedOwnership(counter, {
+      performance: { now: () => mirrorNow },
+      fetch: countedOwnershipFetch(counter, { elsewhere: () => remote }),
+    });
     mirror.context.startPlaybackOwnershipHeartbeat();
     const work = await counter.measure(async () => {
       for (let tick = 0; tick < ticks; tick += 1) {
         owner.heartbeat();
         if (tick === 1) remote = remoteOwnershipTrack;
+        mirrorNow += 10_000;
         mirror.heartbeat();
         await flushOwnershipTick();
       }

@@ -979,9 +979,14 @@
       ]);
       clearTimeout(timer);
       if (outcome === NO_ANSWER) {
-        const kept = (await serverReachable()) ? null : await keptData(url);
-        if (kept) return kept;
-        // Reachable (or nothing kept): the server's answer, however late, decides as below.
+        if (!(await serverReachable())) {
+          const kept = await keptData(url);
+          if (kept) return kept;
+          // Never kept, and a cut network may hold the request forever: fail now as a lost
+          // network would, so the page says Offline instead of loading on.
+          throw new TypeError('Album Haven cannot be reached');
+        }
+        // Reachable: the server's answer, however late, decides as below.
         outcome = await settled;
       }
       if (outcome.error) {

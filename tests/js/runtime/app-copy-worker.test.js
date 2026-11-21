@@ -1674,6 +1674,10 @@ test('IAR-W25: a slow server is waited for; the kept data answers only when the 
   const kept = await handle(resource(url)).finally(() => release());
   assert.equal(kept.headers.get(COPY_HEADER), 'cache');
   assert.deepEqual(artistsOf(await json(kept)), ['slow']);
+
+  // Owner steps on sandbox5: a Wi-Fi cut holds connections open, and an album never kept loaded
+  // forever. Unreachable with nothing kept fails as a lost network does, so the page says Offline.
+  await assert.rejects(handle(resource('/album-details?album_key=never-kept')).finally(() => release()), TypeError);
 });
 
 test('a data request the page cancels is never answered from the copy', async () => {

@@ -26,8 +26,57 @@ export class UtilityProblematicFilesActions {
     throw new Error(`The Problematic Files index did not finish filling: ${JSON.stringify(last?.problematic_index_in_progress)}`);
   }
 
+  // Diagnostic (FTC-UTIL-PROBLEMS-001): what the page holds and what the server answers.
+  async describeProblematicState(searchTerm = '') {
+    const page = this.utilityProblematicFilesTab.page;
+    // parity-check: allow-read-only-measurement-evaluate -- diagnostic snapshot of client state
+    const client = await page.evaluate((term) => {
+      if (typeof state === 'undefined') return null;
+      const utility = state.utility || {};
+      const matches = (item) => !term || String(item?.name || '').includes(term);
+      const pick = (items) => (items || []).filter(matches).slice(0, 5).map((item) => ({
+        key: item?.key, name: item?.name, reasons: item?.problem_reasons, detailLoaded: item?.detail_loaded,
+      }));
+      return {
+        loading: utility.loading, loaded: utility.loaded, complete: utility.problematicFilesComplete,
+        indexing: utility.problematicIndexing, loadError: utility.problematicLoadError,
+        summaryToken: utility.problematicSummaryRequestToken, hasLoadPromise: Boolean(utility.loadPromise),
+        hasCompleteLoadPromise: Boolean(utility.completeLoadPromise), selected: utility.selectedProblematicKey,
+        itemCount: (utility.problematicFiles || []).length, items: pick(utility.problematicFiles),
+        searchItems: pick(utility.problematicServerSearchItems),
+      };
+    }, searchTerm);
+    const pills = await this.readAlbumProblemReasons();
+    const read = async (url) => {
+      const response = await authenticatedPageGet(page, url);
+      return { status: response.status(), body: response.ok() ? await response.json() : await response.text() };
+    };
+    const first = await read('/utilities/problematic-files?limit=50');
+    const search = searchTerm ? await read(`/utilities/problematic-files?limit=50&q=${encodeURIComponent(searchTerm)}`) : null;
+    const status = await read('/status');
+    const summarize = (result) => (result?.body && typeof result.body === 'object' ? {
+      status: result.status, count: result.body.count, complete: result.body.complete, indexing: result.body.indexing,
+      error: result.body.error, items: (result.body.items || []).filter((item) => !searchTerm
+        || String(item?.name || '').includes(searchTerm)).slice(0, 5)
+        .map((item) => ({ key: item.key, reasons: item.problem_reasons })),
+    } : result);
+    return JSON.stringify({
+      client, pills, firstPage: summarize(first), search: summarize(search),
+      indexInProgress: status.body?.problematic_index_in_progress,
+    });
+  }
+
   async waitForReady(options = {}) {
     const timeout = options.timeout || 60000;
+    // A failure rethrows with a snapshot of the page and server state appended.
+    await this.waitForReadyCondition(options, timeout).then(undefined, async (failure) => {
+      failure.message += `
+Problematic Files state: ${await this.describeProblematicState(options.diagnosticTerm || '')}`;
+      throw failure;
+    });
+  }
+
+  async waitForReadyCondition(options, timeout) {
     await this.utilityProblematicFilesTab.waitForPageCondition((expected) => {
       if (typeof state !== 'undefined' && state.utility?.loading) return false;
       const isVisible = (element) => Boolean(element && (

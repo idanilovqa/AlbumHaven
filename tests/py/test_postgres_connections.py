@@ -2,6 +2,8 @@ from music_app.services import postgres_connections
 
 
 class _FakeConnection:
+    autocommit = False
+
     def rollback(self):
         pass
 
@@ -98,3 +100,18 @@ def test_a_lease_released_on_another_thread_unwinds_the_acquiring_threads_depth(
     with postgres_connections.pooled_connection(url):
         pass
     assert list(postgres_connections._pools) == [(url, "default")]
+
+
+def test_a_leased_connection_applies_settings_to_the_connection_it_wraps(monkeypatch):
+    # scan_cache persistence reads revisions in autocommit before its write transaction; a setting kept
+    # on the wrapper would leave that read inside an open transaction and nest the save in a savepoint.
+    _FakePool.created = []
+    monkeypatch.setattr(postgres_connections, "ConnectionPool", _FakePool)
+    monkeypatch.setattr(postgres_connections, "_pools", {})
+    monkeypatch.setattr(postgres_connections, "_held", {})
+
+    with postgres_connections.leased_connection("postgresql://isolated/test") as connection:
+        connection.autocommit = True
+        assert connection._connection.autocommit is True
+        assert connection.autocommit is True
+        assert "autocommit" not in vars(connection)

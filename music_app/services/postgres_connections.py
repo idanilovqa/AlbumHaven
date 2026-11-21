@@ -173,6 +173,13 @@ class _LeasedConnection:
     def __getattr__(self, name: str):
         return getattr(self._connection, name)
 
+    def __setattr__(self, name: str, value) -> None:
+        # Settings such as `autocommit` belong to the leased connection, not to this wrapper.
+        if name in ("_lease", "_connection"):
+            object.__setattr__(self, name, value)
+        else:
+            setattr(self._connection, name, value)
+
     def __enter__(self):
         return self
 

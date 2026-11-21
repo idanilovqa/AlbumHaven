@@ -338,7 +338,6 @@ function loadCustomCollectionCatalog({ fresh = false, view = state.view || {} } 
     if (!response.ok || payload?.ok === false) {
       throw new Error(payload?.error || `Custom Collections request failed: ${response.status}`);
     }
-    if (typeof rememberSearchHighlights === 'function') rememberSearchHighlights(payload.search_highlights);
     const collections = (Array.isArray(payload.custom_collections) ? payload.custom_collections : [])
       .map(({ name, count }) => ({ name: String(name || '').trim(), count: Number(count) || 0 }))
       .filter(({ name }) => name)
@@ -462,7 +461,6 @@ function renderCustomCollectionNavigation(collections, { failure = '' } = {}) {
         variant: 'panel',
         key: name,
         label: name,
-        labelHtml: typeof searchHighlightedLabelHtml === 'function' ? searchHighlightedLabelHtml(name) : '',
         count,
         selected: name === activeCollectionName,
         attributes: { 'data-open-custom-collection': name },

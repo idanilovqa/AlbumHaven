@@ -2615,8 +2615,8 @@ function groupAlbumTracks(tracks) {
 }
 
 
-// Album Details tracks are not in a search response: during a search, ask the server which of their titles and
-// artists it matched, then mark them in the table on screen. Rows are updated in place, never redrawn, so a play
+// Album Details tracks are not in a search response: during a search, ask the server which of their titles it
+// matched, then mark them in the table on screen. Rows are updated in place, never redrawn, so a play
 // click that lands while the answer arrives still reaches its button.
 function refreshAlbumTrackSearchHighlights(list, tracks, album) {
   const query = activeSearchHighlightQuery();
@@ -2624,7 +2624,7 @@ function refreshAlbumTrackSearchHighlights(list, tracks, album) {
   list.albumTrackSearchHighlightRender = render;
   if (!query) return;
   const rows = Array.isArray(album?.track_rows) ? album.track_rows : [];
-  const texts = [...(tracks || []), ...rows].flatMap((track) => [track?.title, track?.secondary_artist]);
+  const texts = [...(tracks || []), ...rows].map((track) => track?.title);
   void requestSearchHighlights(texts).then((answered) => {
     if (!answered || list.albumTrackSearchHighlightRender !== render || activeSearchHighlightQuery() !== query) return;
     list.querySelectorAll('.album-track-table__row').forEach((row) => {
@@ -2632,13 +2632,10 @@ function refreshAlbumTrackSearchHighlights(list, tracks, album) {
       const titleText = title?.firstChild;
       if (!titleText || titleText.nodeType !== Node.TEXT_NODE) return;
       const ranges = searchHighlightRanges(titleText.textContent);
-      const secondary = title.querySelector('.album-track-table__secondary')?.textContent || '';
-      if (!ranges && !searchHighlightRanges(secondary)) return;
-      if (ranges) {
-        const markup = document.createElement('template');
-        markup.innerHTML = buildHighlightedTextHtml(titleText.textContent, ranges);
-        titleText.replaceWith(markup.content);
-      }
+      if (!ranges) return;
+      const markup = document.createElement('template');
+      markup.innerHTML = buildHighlightedTextHtml(titleText.textContent, ranges);
+      titleText.replaceWith(markup.content);
       row.classList.add('album-track-table__row--search-match');
       row.dataset.trackSearchMatch = 'true';
     });
@@ -2710,10 +2707,10 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
         isCurrent: Boolean(isCurrentTrack),
         isPlaying: Boolean(isActivelyPlaying),
         isProblematic: Boolean(track.is_problematic),
-        // The server's search matcher marks the title's matched characters; a match in the title or the
-        // track's own artist marks the row (owner 2026-11-18).
+        // The server's search matcher marks the title's matched characters and its row; track titles only,
+        // never artists (owner 2026-11-21).
         titleHighlightRanges: highlightRanges(displayTitle),
-        isSearchMatch: Boolean(highlightRanges(displayTitle) || highlightRanges(secondaryArtist)),
+        isSearchMatch: Boolean(highlightRanges(displayTitle)),
       };
     });
     return {

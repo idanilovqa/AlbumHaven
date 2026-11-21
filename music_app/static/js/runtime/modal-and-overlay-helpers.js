@@ -636,9 +636,8 @@ function buildNonAlbumTrackRowsMarkup(items, startingIndex, problematicIndex = b
     const secondaryArtist = metadataArtist && metadataArtist.toLocaleLowerCase() !== 'unknown artist'
       ? metadataArtist
       : '';
-    // Owner 2026-11-18: a title shows its matched characters; a track found by its artist is highlighted whole.
-    const highlightRanges = typeof searchHighlightRanges === 'function' ? searchHighlightRanges : () => null;
-    const titleHighlightRanges = highlightRanges(title);
+    // Search highlights mark the matched characters of track titles only (owner 2026-11-21).
+    const titleHighlightRanges = typeof searchHighlightRanges === 'function' ? searchHighlightRanges(title) : null;
     return {
       path: trackPath,
       mediaRef,
@@ -670,7 +669,6 @@ function buildNonAlbumTrackRowsMarkup(items, startingIndex, problematicIndex = b
       isPlaying: isActivelyPlaying,
       isProblematic: Boolean(problematicAlbum || item.is_problematic),
       titleHighlightRanges,
-      isSearchMatch: Boolean(highlightRanges(metadataArtist)),
     };
   });
 }

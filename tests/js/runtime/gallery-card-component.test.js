@@ -165,19 +165,21 @@ test('hover year omits unknown values and safely renders supplied release years'
   assert.match(cards, /<span data-gallery-metadata-text>2005<\/span><\/div>/);
 });
 
-test('GalleryCard marks the matched characters of its title and artist only', () => {
+test('GalleryCard never highlights album or artist names (owner 2026-11-21: track names only)', () => {
   const context = loadGalleryCard();
   vm.runInContext(fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', 'markup-format-helpers.js'), 'utf8'), context);
-  const html = context.buildGalleryCardHtml({
-    title: 'Pinta Tu Aldea',
-    artist: 'Alas',
-    year: '1983',
-    titleHighlightRanges: [[9, 14]],
-    artistHighlightRanges: [[0, 4]],
-    trackCount: 6,
-    artboxHtml: '',
-  });
-  assert.match(html, /aria-label="Pinta Tu Aldea"/);
-  assert.match(html, /Pinta Tu <mark class="search-match-highlight">Aldea<\/mark>/);
-  assert.match(html, /<mark class="search-match-highlight">Alas<\/mark> · 1983/);
+  for (const displayMode of ['cards', 'covers']) {
+    const html = context.buildGalleryCardHtml({
+      title: 'Pinta Tu Aldea',
+      artist: 'Alas',
+      year: '1983',
+      titleHighlightRanges: [[9, 14]],
+      artistHighlightRanges: [[0, 4]],
+      trackCount: 6,
+      artboxHtml: '',
+      displayMode,
+    });
+    assert.match(html, /Pinta Tu Aldea/);
+    assert.doesNotMatch(html, /<mark/);
+  }
 });

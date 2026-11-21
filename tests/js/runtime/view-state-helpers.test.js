@@ -1532,21 +1532,15 @@ test('search highlights mark the server ranges by code point and escape every pa
   assert.equal(buildHighlightedTextHtml('Spark', null), 'Spark');
 });
 
-test('the artist tree marks the characters the active search matched, never an older search', () => {
+test('the artist tree never highlights artist names, only track names are highlighted', () => {
   const context = loadHelpers();
-  const view = {
-    query: 'sal',
-    search_highlights: { query: 'sal', texts: { 'Alas de Sal': [[8, 11]] } },
-  };
+  const view = { query: 'sal' };
   context.state.view = view;
-  const artists = [{ artist: 'Alas de Sal', artist_display: 'Alas de Sal', count: 1 }, { artist: 'Argovia', count: 1 }];
+  context.rememberSearchHighlights({ query: 'sal', texts: { 'Alas de Sal': [[8, 11]] } });
+  const artists = [{ artist: 'Alas de Sal', artist_display: 'Alas de Sal', count: 1 }];
   const html = context.buildSidebarHtml(view, artists, { showAllArtistsOverride: false });
-  assert.match(html, /title="Alas de Sal"/);
-  assert.match(html, />Alas de <mark class="search-match-highlight">Sal<\/mark></);
-  assert.doesNotMatch(html, /Argovia<\/mark>|<mark[^>]*>Argovia/);
-
-  context.state.view = { ...view, query: 'alas' };
-  assert.doesNotMatch(context.buildSidebarHtml(context.state.view, artists, { showAllArtistsOverride: false }), /<mark/);
+  assert.match(html, />Alas de Sal</);
+  assert.doesNotMatch(html, /<mark/);
 });
 
 test('texts shown outside a search response are asked once, and misses are remembered', async () => {
@@ -1565,14 +1559,14 @@ test('texts shown outside a search response are asked once, and misses are remem
   assert.equal(requests.length, 1);
 });
 
-test('a new search keeps highlights that arrived before its view replaced the previous search', () => {
+test('a new search keeps track-title highlights that arrived before its view replaced the previous search', () => {
   const context = loadHelpers();
-  context.state.view = { query: 'old', search_highlights: { query: 'old', texts: { Oldies: [[0, 3]] } } };
+  context.state.view = { query: 'old' };
+  context.rememberSearchHighlights({ query: 'old', texts: { Oldies: [[0, 3]] } });
   assert.deepEqual(context.searchHighlightRanges('Oldies'), [[0, 3]]);
   context.rememberSearchHighlights({ query: 'sal', texts: { 'Salt and Sal': [[0, 3], [9, 12]] } });
   assert.equal(context.searchHighlightRanges('Salt and Sal'), null);
-  context.state.view = { query: 'sal', search_highlights: { query: 'sal', texts: { 'Alas de Sal': [[8, 11]] } } };
+  context.state.view = { query: 'sal' };
   assert.deepEqual(context.searchHighlightRanges('Salt and Sal'), [[0, 3], [9, 12]]);
-  assert.deepEqual(context.searchHighlightRanges('Alas de Sal'), [[8, 11]]);
   assert.equal(context.searchHighlightRanges('Oldies'), null);
 });

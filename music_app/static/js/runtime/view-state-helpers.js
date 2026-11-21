@@ -225,17 +225,13 @@ function parseUrlState(url) {
   return parseUrlStateFromUrl(url, window.location.origin);
 }
 
-// The highlight ranges the server reported, by search and display text. Search responses (view-data, Loose
-// Tracks, the Custom Collections catalog) carry them; /search/highlights answers for texts shown elsewhere. A
-// text the server was asked about and did not match is known, with no ranges. The latest few searches are kept:
-// a new search's catalog can arrive while the previous search's view is still shown.
-function searchHighlightState() {
-  state.searchHighlights ||= { byQuery: new Map(), viewSource: null };
-  return state.searchHighlights;
-}
-
+// The track-title highlight ranges the server reported, by search and title (owner 2026-11-21: only track names
+// are highlighted). The Loose Tracks response carries them; /search/highlights answers for Album Details titles.
+// A title the server was asked about and did not match is known, with no ranges. The latest few searches are
+// kept: a new search's tracks can arrive while the previous search's page is still shown.
 function searchHighlightTexts(query, create = false) {
-  const { byQuery } = searchHighlightState();
+  state.searchHighlights ||= { byQuery: new Map() };
+  const { byQuery } = state.searchHighlights;
   if (!byQuery.has(query) && create) {
     byQuery.set(query, new Map());
     while (byQuery.size > 3) byQuery.delete(byQuery.keys().next().value);
@@ -261,11 +257,6 @@ function rememberSearchHighlights(highlights, askedTexts = []) {
 function searchHighlightRanges(value) {
   const query = activeSearchHighlightQuery();
   if (!query) return null;
-  const viewHighlights = state.view?.search_highlights;
-  if (viewHighlights && viewHighlights !== searchHighlightState().viewSource) {
-    searchHighlightState().viewSource = viewHighlights;
-    rememberSearchHighlights(viewHighlights);
-  }
   const ranges = searchHighlightTexts(query)?.get(String(value ?? ''));
   return ranges?.length ? ranges : null;
 }
@@ -286,10 +277,4 @@ async function requestSearchHighlights(values) {
   if (!response.ok || !payload?.ok || payload.search_highlights?.query !== query) return false;
   rememberSearchHighlights(payload.search_highlights, texts);
   return true;
-}
-
-// Markup for a label the active search matched, or '' when nothing in it matched.
-function searchHighlightedLabelHtml(value) {
-  const ranges = searchHighlightRanges(value);
-  return ranges ? buildHighlightedTextHtml(value, ranges) : '';
 }

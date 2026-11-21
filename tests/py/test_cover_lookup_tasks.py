@@ -2059,3 +2059,29 @@ def test_cover_lookup_notification_store_contract_opens_one_connection_per_call_
     assert_plateau([small[0].pool_leases, large[0].pool_leases], label="upsert connections")
     # One summary read, one in-place interrupt of every stale task, and one re-read.
     assert_plateau([small[1].pool_leases, large[1].pool_leases], label="stale recovery connections")
+
+
+def test_admission_resolves_paths_without_holding_the_task_lock_request_routes_take(monkeypatch, tmp_path):
+    # Freeze guard (BI-08): async Cover Look Up routes read tasks under this lock, so resolving
+    # paths (filesystem work, slow on a network drive) inside it blocked the event loop.
+    from music_app.services import cover_lookup_tasks as tasks
+
+    album = tmp_path / "Album"
+    album.mkdir()
+    track = album / "01.flac"
+    track.write_bytes(b"")
+    monkeypatch.setattr(tasks, "_COVER_LOOKUP_TASKS", {
+        "running": {"status": "running", "track_paths": [str(track)]},
+        "internal": {"status": "running", "internal": True, "track_paths": [str(track)]},
+    })
+    resolved_under_lock = []
+    real_resolve = tasks.Path.resolve
+
+    def watched_resolve(self, *args, **kwargs):
+        resolved_under_lock.append(tasks._COVER_LOOKUP_TASKS_LOCK.locked())
+        return real_resolve(self, *args, **kwargs)
+
+    monkeypatch.setattr(tasks.Path, "resolve", watched_resolve)
+
+    assert tasks.cover_lookup_admission_state({str(track)}) == ("running", "")
+    assert resolved_under_lock and not any(resolved_under_lock)

@@ -8121,9 +8121,11 @@ const STREAMING_FALLBACK_BYTES_PER_SECOND = 40_000;
 const STREAMING_ENCODED_CREDIT_BYTES = 64 * 1024;
 // Several credits stay in flight, so a start's cushion does not wait one round trip per credit.
 const STREAMING_ENCODED_CREDIT_WINDOW_BYTES = 4 * STREAMING_ENCODED_CREDIT_BYTES;
-// A start opens at the rate already playing (or this one) instead of asking first; the server
-// answers a wrong guess with the track's rate and the start runs again at it.
+// A start opens at the rate already playing, else the last one this browser played, else this
+// one, instead of asking first; the server answers a wrong guess with the track's rate and the
+// start runs again at it.
 const STREAMING_GUESSED_SAMPLE_RATE = 44_100;
+const STREAMING_SAMPLE_RATE_STORAGE_KEY = 'albumhaven.playbackSampleRate.v1';
 // The bytes of a stream kept for seeks inside it; a longer stream seeks through the server.
 const STREAMING_KEPT_INITIAL_BYTES = 256 * 1024;
 const STREAMING_KEPT_MAX_BYTES = 64 * 1024 * 1024;
@@ -9367,6 +9369,9 @@ function handleStreamingControl(message) {
       );
     }
     if (roleState.role === 'current') {
+      if (typeof setLocalStorageItem === 'function') {
+        setLocalStorageItem(STREAMING_SAMPLE_RATE_STORAGE_KEY, String(message.sampleRate));
+      }
       Object.assign(engine.snapshot, {
         sampleRate: message.sampleRate,
         requestedStartFrame: message.requestedStartFrame,
@@ -10620,6 +10625,17 @@ function streamingQualityNeedsTrackSize(track) {
     && !(Number(engine.trackFormats?.get(path)?.sizeBytes) > 0);
 }
 
+function guessedStreamingSampleRate() {
+  const engine = streamingEngineState();
+  if (engine.sampleRate) return engine.sampleRate;
+  const remembered = typeof getLocalStorageItem === 'function'
+    ? Number(getLocalStorageItem(STREAMING_SAMPLE_RATE_STORAGE_KEY))
+    : 0;
+  return Number.isInteger(remembered) && remembered >= 8_000 && remembered <= 192_000
+    ? remembered
+    : STREAMING_GUESSED_SAMPLE_RATE;
+}
+
 function streamingPlaybackRate(track) {
   const engine = streamingEngineState();
   const nativeRate = knownStreamingSampleRate(track);
@@ -10874,6 +10890,20 @@ async function prepareStreamingPlaybackEngine(sampleRate = 0) {
     return await preparation;
   } finally {
     if (engine.preparePromise === preparation) engine.preparePromise = null;
+  }
+}
+
+// The page's idle moment readies what a first press needs: verified decoders (so the first song
+// streams compressed), the socket, and an audio graph at the likely rate (so its open goes out at
+// the press). The graph stays suspended, rendering nothing, until a press resumes it.
+async function prepareIdleStreamingPlayback() {
+  const engine = streamingEngineState();
+  if (typeof ensureStreamingDecoders === 'function') void ensureStreamingDecoders();
+  const startRequestId = engine.startRequestId;
+  await prepareStreamingPlaybackEngine(guessedStreamingSampleRate());
+  if (engine.startRequestId === startRequestId && !engine.roles.current
+      && engine.context?.state === 'running') {
+    await engine.context.suspend();
   }
 }
 
@@ -11292,7 +11322,7 @@ async function openBrowserStreamingTrack(track, {
   try {
     if (typeof ensureStreamingDecoders === 'function') void ensureStreamingDecoders();
     if (guessedSampleRate) {
-      sampleRate = engine.sampleRate || STREAMING_GUESSED_SAMPLE_RATE;
+      sampleRate = guessedStreamingSampleRate();
     } else {
       await prepareStreamingPlaybackEngine();
       await requestStreamingSampleRate(track);
@@ -53225,13 +53255,11 @@ if (typeof initPlaybackOwnershipCoordinator === 'function') {
   if (typeof initAndroidSettings === 'function') initAndroidSettings();
 }
 let idlePlaybackPreparationCancelled = false;
-if (typeof prepareStreamingPlaybackEngine === 'function'
+if (typeof prepareIdleStreamingPlayback === 'function'
     && (!window.AlbumHavenCapabilities || window.AlbumHavenCapabilities.allows('library.media.read'))) {
   const prepareIdlePlayback = () => {
     if (idlePlaybackPreparationCancelled) return;
-    // Verified decoders let the first song stream compressed instead of waiting on server decoding.
-    if (typeof ensureStreamingDecoders === 'function') void ensureStreamingDecoders();
-    void prepareStreamingPlaybackEngine().catch((error) => {
+    void prepareIdleStreamingPlayback().catch((error) => {
       console.error('[AlbumHaven][Playback] Failed to prepare streaming playback.', error);
     });
   };

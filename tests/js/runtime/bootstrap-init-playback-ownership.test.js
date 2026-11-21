@@ -17,6 +17,7 @@ for (const unloadBeforeIdle of [false, true]) test(`bootstrap idle playback prep
   const calls = {
     initPlaybackOwnershipCoordinator: 0,
     prepareStreamingPlaybackEngine: 0,
+    ensureStreamingDecoders: 0,
     visibilitychange: null,
     loopExpiryReconciles: 0,
     persistPlayerStateForUnload: [],
@@ -163,6 +164,10 @@ for (const unloadBeforeIdle of [false, true]) test(`bootstrap idle playback prep
     initPlaybackOwnershipCoordinator() {
       calls.initPlaybackOwnershipCoordinator += 1;
     },
+    ensureStreamingDecoders() {
+      calls.ensureStreamingDecoders += 1;
+      return Promise.resolve(['mp3', 'flac']);
+    },
     prepareStreamingPlaybackEngine() {
       calls.prepareStreamingPlaybackEngine += 1;
       return Promise.reject(preparationFailure);
@@ -199,6 +204,7 @@ for (const unloadBeforeIdle of [false, true]) test(`bootstrap idle playback prep
   if (!unloadBeforeIdle) idleWarmup();
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(calls.prepareStreamingPlaybackEngine, unloadBeforeIdle ? 0 : 1);
+  assert.equal(calls.ensureStreamingDecoders, unloadBeforeIdle ? 0 : 1, 'the first song finds its decoders verified');
   assert.equal(observedErrors.length, unloadBeforeIdle ? 0 : 1);
   if (!unloadBeforeIdle) assert.equal(observedErrors[0].includes(preparationFailure), true);
 

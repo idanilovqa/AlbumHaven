@@ -23,6 +23,7 @@ function element() {
 test('outside dismissal clears the problem-filter owner state so the next toggle opens it', () => {
   const state = { utility: {
     problematicFiles: [{ problem_reasons: ['Missing year'] }],
+    problematicReasonFacets: ['Missing year'],
     selectedProblemFilters: [], problemDropdownOpen: true,
   } };
   const context = vm.createContext({ state, window: {}, escapeHtml: value => value });
@@ -79,6 +80,7 @@ test('an actual modal backdrop closes the filter owner and its state without clo
 test('list refreshes keep the open filter menu options, so its scroll position survives', () => {
   const state = { utility: {
     problematicFiles: [{ problem_reasons: ['Missing year'] }, { problem_reasons: ['MBID: Not found'] }],
+    problematicReasonFacets: ['Missing year', 'MBID: Not found'],
     selectedProblemFilters: [], problemDropdownOpen: true,
   } };
   const context = vm.createContext({ state, window: {}, escapeHtml: value => value });
@@ -100,6 +102,7 @@ test('list refreshes keep the open filter menu options, so its scroll position s
   assert.equal(writes, 1, 'unchanged options are not rewritten');
 
   state.utility.problematicFiles.push({ problem_reasons: ['Poor art quality'] });
+  state.utility.problematicReasonFacets = ['Missing year', 'MBID: Not found', 'Poor art quality'];
   context.renderProblemFilterControls(els);
   assert.equal(writes, 2, 'a new problem type updates the menu');
   assert.match(html, /Poor art quality/);

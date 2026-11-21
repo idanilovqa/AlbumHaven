@@ -41,7 +41,7 @@ function loadUtilitySearch(loopCount, activeTab) {
     },
     clearTimeout: () => {},
   });
-  for (const name of ['utility-renderers-and-actions.js', 'track-modal-and-gallery.js']) {
+  for (const name of ['utility-loaders-and-cover-lookup.js', 'utility-renderers-and-actions.js', 'track-modal-and-gallery.js']) {
     vm.runInContext(fs.readFileSync(path.join(root, name), 'utf8'), context);
   }
   context.filterUtilityLoopViews = () => {

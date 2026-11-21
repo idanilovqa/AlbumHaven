@@ -24,7 +24,7 @@ function setup(key = 'problem-ignores', query = '') {
   context.setTimeout = callback => { timers.set(++timerId, callback); return timerId; };
   context.clearTimeout = id => timers.delete(id);
   context.flushSearchTimers = () => { const pending = [...timers.values()]; timers.clear(); pending.forEach(callback => callback()); };
-  for (const filename of ['utility-list-builders.js', 'utility-renderers-and-actions.js', 'track-modal-and-gallery.js']) vm.runInContext(fs.readFileSync(path.join(runtime, filename), 'utf8'), context);
+  for (const filename of ['utility-list-builders.js', 'utility-loaders-and-cover-lookup.js', 'utility-renderers-and-actions.js', 'track-modal-and-gallery.js']) vm.runInContext(fs.readFileSync(path.join(runtime, filename), 'utf8'), context);
   context.buildUtilityAlbumArtbox = () => '';
   context.buildUtilityRuleListItem = rule => `<nav>${rule.key}</nav>`;
   context.renderUtilityModalContent = () => context.renderUtilityRules();

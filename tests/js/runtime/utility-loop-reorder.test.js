@@ -100,7 +100,7 @@ function setup() {
   context.document.activeElement = panels.children[1];
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(path.join(runtime, '../button-component.js'), 'utf8'), context);
-  for (const name of ['player-and-waveform', 'utility-list-builders', 'utility-loop-playback', 'utility-renderers-and-actions', 'track-modal-and-gallery']) vm.runInContext(read(name), context);
+  for (const name of ['player-and-waveform', 'utility-list-builders', 'utility-loop-playback', 'utility-loaders-and-cover-lookup', 'utility-renderers-and-actions', 'track-modal-and-gallery']) vm.runInContext(read(name), context);
   context.renderUtilityModalContent = () => renders.push('full');
   context.initializeUtilityLoopPlayer = loop => created.push(loop.id);
   context.disposeMountedLoopActions = node => removed.push(node);

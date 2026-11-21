@@ -3,6 +3,9 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const path=require('node:path');
 const vm=require('node:vm');
+const { loadPendingProjectionFetch } = require('../helpers/pending-projection-fetch');
+const { loadProblematicCompanions } = require('../helpers/problematic-runtime-context');
+const { loadCapabilityUi } = require('../support/capability-ui-context.cjs');
 const root=path.resolve(__dirname,'../../../music_app/static/js/runtime');
 test('filtered shared navigation rows override their authored flex/grid display',()=>{
   const css=fs.readFileSync(path.resolve(root,'../../css/navigation-tree.css'),'utf8');
@@ -56,15 +59,33 @@ test('Problematic Files search requests one bounded server-filtered page before 
   const listeners = {};
   const timers = [];
   const calls = [];
+  const requests = [];
+  const renders = [];
+  let resolveResponse;
+  const response = new Promise(resolve => { resolveResponse = resolve; });
   const els = {
     overlay: { dataset: {}, hidden: false, addEventListener() {} },
     search: {
       value: '',
       addEventListener(name, listener) { listeners[name] = listener; },
     },
+    list: { scrollTop: 73 },
+    detail: { scrollTop: 41 },
   };
   const context = vm.createContext({
-    state: { utility: { activeTab: 'problematic-files', searchQuery: '' } },
+    console,
+    window: {},
+    document: { activeElement: els.search, getElementById() { return null; } },
+    state: { utility: {
+      activeTab: 'problematic-files', searchQuery: '', selectedProblemFilters: [],
+      problematicFiles: [{ key: 'previous', name: 'Previous album', detail_loaded: false }],
+      selectedProblematicKey: 'previous',
+      loaded: true, loading: false,
+      problematicFilesPageSignature: '',
+      problematicFilesProjectionRevision: '11111111-1111-4111-8111-111111111111',
+      problematicFilesComplete: true, problematicFilesNextCursor: null,
+      problematicFilesTotal: 1, problematicReasonFacets: ['Missing year'],
+    } },
     getUtilityModalElements: () => els,
     bindOverlayPointerOrigin() {},
     closeUtilityModal() {},
@@ -73,20 +94,53 @@ test('Problematic Files search requests one bounded server-filtered page before 
       timers.push(callback);
       return timers.length;
     },
-    async loadProblematicFiles(force, options) {
-      calls.push({ force, options });
-      return [];
+    fetch(url, options) {
+      requests.push({ url, options });
+      return response;
     },
-    invalidateProblematicFilesPaging() { calls.push('invalidate'); },
-    renderUtilityModalContent() { calls.push('render'); },
+    scheduleBrowserAnimationFrame(callback) { callback(); return 1; },
+    renderUtilityModalContent() {
+      const utility = context.state.utility;
+      renders.push({ loading: utility.loading, keys: Array.from(utility.problematicFiles, item => item.key) });
+      // The loader paints its pending shell separately from the settled results.
+      if (!utility.loading) calls.push('render');
+    },
   });
-  vm.runInContext(fs.readFileSync(path.join(root, 'track-modal-and-gallery.js'), 'utf8'), context);
+  loadCapabilityUi(context);
+  loadPendingProjectionFetch(context);
+  loadProblematicCompanions(context);
+  for (const name of ['utility-loaders-and-cover-lookup.js', 'track-modal-and-gallery.js']) {
+    vm.runInContext(fs.readFileSync(path.join(root, name), 'utf8'), context);
+  }
+  const loadProblematicFiles = context.loadProblematicFiles;
+  context.loadProblematicFiles = (force, options) => {
+    calls.push({ force, options });
+    return loadProblematicFiles(force, options);
+  };
+  const invalidateProblematicFilesPaging = context.invalidateProblematicFilesPaging;
+  context.invalidateProblematicFilesPaging = options => {
+    calls.push('invalidate');
+    return invalidateProblematicFilesPaging(options);
+  };
   context.attachUtilityModalEvents();
 
   els.search.value = 'missing year';
   listeners.input();
   assert.deepEqual(calls, ['invalidate']);
   await timers[0]();
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url,
+    '/utilities/problematic-files?limit=50&filter=%7B%22query%22%3A%22missing%20year%22%2C%22reasons%22%3A%5B%5D%7D');
+  assert.equal(requests[0].options.headers.Accept, 'application/json');
+  assert.equal(renders.length, 1);
+  assert.equal(context.state.utility.loading, true);
+  const loadPromise = context.state.utility.loadPromise;
+  resolveResponse({ ok: true, status: 200, json: async () => ({
+    items: [], total: 0, next_cursor: null,
+    projection_revision: '22222222-2222-4222-8222-222222222222',
+    reason_facets: [{ reason: 'Missing year', count: 0 }],
+  }) });
+  await loadPromise;
 
   assert.equal(context.state.utility.searchQuery, 'missing year');
   assert.deepEqual(JSON.parse(JSON.stringify(calls)), [
@@ -94,4 +148,16 @@ test('Problematic Files search requests one bounded server-filtered page before 
     { force: true, options: { preserveSelectedDetail: true } },
     'render',
   ]);
+  assert.deepEqual(renders, [
+    { loading: true, keys: ['previous'] },
+    { loading: false, keys: [] },
+  ]);
+  assert.equal(requests.length, 1);
+  assert.equal(context.state.utility.selectedProblematicKey, 'previous');
+  assert.equal(context.document.activeElement, els.search);
+  assert.equal(els.list.scrollTop, 73);
+  assert.equal(els.detail.scrollTop, 41);
+  assert.equal(context.state.utility.problematicFilesPageSignature,
+    JSON.stringify({ query: 'missing year', reasons: [] }));
+  assert.deepEqual(Array.from(context.state.utility.problematicReasonFacets), ['Missing year']);
 });

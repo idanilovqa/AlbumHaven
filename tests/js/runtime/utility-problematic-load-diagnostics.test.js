@@ -4,6 +4,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const test = require('node:test');
 const { loadPendingProjectionFetch } = require('../helpers/pending-projection-fetch');
+const { loadProblematicCompanions } = require('../helpers/problematic-runtime-context');
 
 const helperPath = path.join(
   __dirname,
@@ -33,24 +34,6 @@ const listBuilderPath = path.join(
   'utility-list-builders.js',
 );
 const listBuilderSource = fs.readFileSync(listBuilderPath, 'utf8');
-const problematicCompanionSource = [
-  listBuilderSource.slice(
-    listBuilderSource.indexOf('function getSelectedProblematicAlbum('),
-    listBuilderSource.indexOf('function markProblematicSearchFactsChanged('),
-  ),
-  listBuilderSource.slice(
-    listBuilderSource.indexOf('function markProblematicSearchFactsChanged('),
-    listBuilderSource.indexOf('function getAlbumTrackPaths('),
-  ),
-  listBuilderSource.slice(
-    listBuilderSource.indexOf('function normalizeProblemFilterReason('),
-    listBuilderSource.indexOf('const renderedProblemFilterOptions '),
-  ),
-  listBuilderSource.slice(
-    listBuilderSource.indexOf('function getProblematicMainSearchText('),
-    listBuilderSource.indexOf('function getSelectedUtilityRule('),
-  ),
-].join('\n');
 const problematicTrackNavigationSource = listBuilderSource.slice(
   listBuilderSource.indexOf('function getProblematicAlbumForTrackPath('),
   listBuilderSource.indexOf('function getIgnorableProblemRows('),
@@ -266,7 +249,7 @@ function loadHelper(overrides = {}) {
   Object.assign(context, overrides);
   vm.createContext(context);
   loadPendingProjectionFetch(context);
-  vm.runInContext(problematicCompanionSource, context, { filename: listBuilderPath });
+  loadProblematicCompanions(context);
   vm.runInContext(helperSource, context, { filename: helperPath });
   return { context, calls };
 }

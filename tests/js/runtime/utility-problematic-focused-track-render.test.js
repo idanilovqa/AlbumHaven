@@ -4,6 +4,7 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 const { loadPendingProjectionFetch } = require('../helpers/pending-projection-fetch');
+const { loadProblematicCompanions } = require('../helpers/problematic-runtime-context');
 
 const rendererPath = path.join(
   __dirname,
@@ -148,6 +149,13 @@ test('problematic-file render scrolls the focused track row into view determinis
         loading: false,
         problemDropdownOpen: false,
         problematicFiles: [selectedAlbum],
+        loaded: true,
+        problematicFilesPageSignature: '',
+        problematicFilesProjectionRevision: '11111111-1111-4111-8111-111111111111',
+        problematicReasonFacets: [],
+        problematicFilesComplete: true,
+        problematicFilesNextCursor: null,
+        problematicFilesTotal: 1,
         searchQuery: '',
         selectedProblematicKey: 'album-alpha',
         selectedProblemFilters: [],
@@ -177,6 +185,7 @@ test('problematic-file render scrolls the focused track row into view determinis
     async loadProblematicAlbumDetail() {},
   };
   vm.createContext(context);
+  loadProblematicCompanions(context);
   vm.runInContext(rendererSource, context, { filename: rendererPath });
 
   context.renderProblematicFiles();
@@ -231,6 +240,10 @@ test('mobile problematic list keeps horizontal paging active and shows the serve
         loading: false,
         loaded: true,
         problematicFiles: [album],
+        problematicFilesPageSignature: '',
+        problematicFilesProjectionRevision: '11111111-1111-4111-8111-111111111111',
+        problematicReasonFacets: [],
+        problematicFilesComplete: false,
         problematicFilesNextCursor: 'page-2',
         problematicFilesTotal: 1492,
         searchQuery: '',
@@ -246,6 +259,7 @@ test('mobile problematic list keeps horizontal paging active and shows the serve
     loadNextProblematicFilesPage() { pagingCalls.push('next'); },
   };
   vm.createContext(context);
+  loadProblematicCompanions(context);
   vm.runInContext(rendererSource, context, { filename: rendererPath });
 
   context.renderProblematicFiles();
@@ -278,6 +292,13 @@ test('rerender leaves a failed problematic album detail in its terminal state', 
         focusedTrackPath: '',
         loading: false,
         problematicFiles: [selectedAlbum],
+        loaded: true,
+        problematicFilesPageSignature: '',
+        problematicFilesProjectionRevision: '11111111-1111-4111-8111-111111111111',
+        problematicReasonFacets: [],
+        problematicFilesComplete: true,
+        problematicFilesNextCursor: null,
+        problematicFilesTotal: 1,
         searchQuery: '',
         selectedProblematicKey: 'album-alpha',
         selectedProblemFilters: [],
@@ -293,6 +314,7 @@ test('rerender leaves a failed problematic album detail in its terminal state', 
   context.escapeHtml = value => String(value || '');
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(path.join(path.dirname(rendererPath), 'alert-components.js'), 'utf8'), context);
+  loadProblematicCompanions(context);
   vm.runInContext(rendererSource, context, { filename: rendererPath });
 
   context.renderProblematicFiles();
@@ -330,6 +352,13 @@ test('focused-track navigation keeps the matching album selected during a summar
         loading: false,
         problemDropdownOpen: false,
         problematicFiles: [staleAlbum, targetAlbum],
+        loaded: true,
+        problematicFilesPageSignature: '',
+        problematicFilesProjectionRevision: '11111111-1111-4111-8111-111111111111',
+        problematicReasonFacets: [],
+        problematicFilesComplete: true,
+        problematicFilesNextCursor: null,
+        problematicFilesTotal: 2,
         searchQuery: '',
         selectedProblematicKey: 'obsolete-before-save',
         selectedProblemFilters: [],
@@ -349,6 +378,7 @@ test('focused-track navigation keeps the matching album selected during a summar
     async loadProblematicAlbumDetail() {},
   };
   vm.createContext(context);
+  loadProblematicCompanions(context);
   vm.runInContext(rendererSource, context, { filename: rendererPath });
 
   context.renderProblematicFiles();
@@ -376,6 +406,12 @@ test('incomplete problematic summary does not replace a missing existing selecti
         focusedTrackPath: '',
         loading: false,
         problematicFiles: [boundedAlbum],
+        loaded: true,
+        problematicFilesPageSignature: '',
+        problematicFilesProjectionRevision: '11111111-1111-4111-8111-111111111111',
+        problematicReasonFacets: [],
+        problematicFilesNextCursor: 'page-2',
+        problematicFilesTotal: 2,
         problematicFilesComplete: false,
         searchQuery: '',
         selectedProblematicKey: 'edited-source',
@@ -392,6 +428,7 @@ test('incomplete problematic summary does not replace a missing existing selecti
     loadProblematicAlbumDetail(albumKey) { loadCalls.push(albumKey); },
   };
   vm.createContext(context);
+  loadProblematicCompanions(context);
   vm.runInContext(rendererSource, context, { filename: rendererPath });
 
   context.renderProblematicFiles();
@@ -430,6 +467,13 @@ test('optimistic problematic detail shell defers the ordinary loader to its targ
         focusedTrackPath: 'C:/Music/edited.flac',
         loading: false,
         problematicFiles: [selectedAlbum],
+        loaded: false,
+        problematicFilesPageSignature: null,
+        problematicFilesProjectionRevision: '',
+        problematicReasonFacets: [],
+        problematicFilesComplete: false,
+        problematicFilesNextCursor: null,
+        problematicFilesTotal: 1,
         searchQuery: '',
         selectedProblematicKey: 'album-new',
         selectedProblemFilters: [],
@@ -443,6 +487,7 @@ test('optimistic problematic detail shell defers the ordinary loader to its targ
     loadProblematicAlbumDetail(albumKey) { loadCalls.push(albumKey); },
   };
   vm.createContext(context);
+  loadProblematicCompanions(context);
   vm.runInContext(rendererSource, context, { filename: rendererPath });
 
   context.renderProblematicFiles();
@@ -502,6 +547,13 @@ test('pending tag mutation preserves list and scroll while scrimming only the af
         focusedTrackPath: '',
         loading: false,
         problematicFiles: [selectedAlbum],
+        loaded: true,
+        problematicFilesPageSignature: '',
+        problematicFilesProjectionRevision: '11111111-1111-4111-8111-111111111111',
+        problematicReasonFacets: [],
+        problematicFilesComplete: true,
+        problematicFilesNextCursor: null,
+        problematicFilesTotal: 1,
         problematicMutation: {
           taskId: 'task-17',
           albumKey: 'album-alpha',
@@ -522,6 +574,7 @@ test('pending tag mutation preserves list and scroll while scrimming only the af
     buildProblematicAlbumDetail() { return '<div>normal detail</div>'; },
   };
   vm.createContext(context);
+  loadProblematicCompanions(context);
   vm.runInContext(rendererSource, context, { filename: rendererPath });
 
   context.renderUtilityModalContent();
@@ -578,6 +631,13 @@ test('removed mutation owner keeps its scrim until the nearest previous survivor
         focusedTrackPath: '',
         loading: false,
         problematicFiles: [previous, next],
+        loaded: true,
+        problematicFilesPageSignature: '',
+        problematicFilesProjectionRevision: '11111111-1111-4111-8111-111111111111',
+        problematicReasonFacets: [],
+        problematicFilesComplete: true,
+        problematicFilesNextCursor: null,
+        problematicFilesTotal: 2,
         problematicMutation: {
           taskId: 'task-remove',
           albumKey: 'album-removed',
@@ -810,6 +870,13 @@ function renderFocusedAlbumWithGeometry({
         loading: false,
         problemDropdownOpen: false,
         problematicFiles: [selectedAlbum],
+        loaded: true,
+        problematicFilesPageSignature: '',
+        problematicFilesProjectionRevision: '11111111-1111-4111-8111-111111111111',
+        problematicReasonFacets: [],
+        problematicFilesComplete: true,
+        problematicFilesNextCursor: null,
+        problematicFilesTotal: 1,
         searchQuery: '',
         selectedProblematicKey: 'album-alpha',
         selectedProblemFilters: [],
@@ -846,6 +913,7 @@ function renderFocusedAlbumWithGeometry({
     async loadProblematicAlbumDetail() {},
   };
   vm.createContext(context);
+  loadProblematicCompanions(context);
   vm.runInContext(rendererSource, context, { filename: rendererPath });
 
   context.renderProblematicFiles();
@@ -1057,9 +1125,15 @@ test(`problematic-file render preserves owned mutation scroll geometry across a 
       utility: {
         activeTab: 'problematic-files',
         focusedTrackPath: '',
-        loaded: true,
         loading: false,
         problematicFiles: [selectedAlbum],
+        loaded: true,
+        problematicFilesPageSignature: '',
+        problematicFilesProjectionRevision: '11111111-1111-4111-8111-111111111111',
+        problematicReasonFacets: [],
+        problematicFilesComplete: true,
+        problematicFilesNextCursor: null,
+        problematicFilesTotal: 1,
         searchQuery: '',
         selectedProblematicKey: selectedAlbum.key,
         selectedProblemFilters: [],
@@ -1075,6 +1149,7 @@ test(`problematic-file render preserves owned mutation scroll geometry across a 
     async loadProblematicAlbumDetail() {},
   };
   vm.createContext(context);
+  loadProblematicCompanions(context);
   vm.runInContext(rendererSource, context, { filename: rendererPath });
 
   if (withLoadingRefresh) {

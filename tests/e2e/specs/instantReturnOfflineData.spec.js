@@ -10,7 +10,6 @@ import {
 
 test.use({ serviceWorkers: 'allow' });
 
-const OFFLINE_DETAILS = "Offline. Can't load the details, check your network or try again later";
 
 // Opens [album] under [artist], waits for its tracks, and returns their titles.
 async function openDetails(galleryActions, trackModalActions, artist, album) {
@@ -89,7 +88,8 @@ test('FTC-IAR-W20 after browsing online, an offline reload still opens every art
   // Never seen: an album in the window whose details were never asked for still says Offline.
   const unseen = await albumNeverRequested(galleryActions, requested);
   await galleryActions.clickAlbumDetailsByAlbumName(unseen);
-  await expect(trackModalActions.trackModal.unreachableNotice).toHaveText(OFFLINE_DETAILS);
+  await expect(trackModalActions.trackModal.unreachableTitle).toHaveText('Offline');
+  await expect(trackModalActions.trackModal.unreachableDetail).toHaveText("Can't load the details, check your network or try again later");
   await trackModalActions.close();
 
   // Back online the server answers again: data comes from it, not from the device.

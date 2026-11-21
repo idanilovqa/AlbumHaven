@@ -51766,8 +51766,10 @@ function isMountedSelectedGalleryComplete(selectedArtist, reusableRootBrowseView
 }
 
 // A remembered full gallery that no library change has outdated, so showing it needs no request.
+// While another gallery request is loading, the normal refresh supersedes it instead, so that
+// request's late answer can never replace the gallery shown from memory.
 function readCurrentRememberedRootGallery(rootView) {
-  if (!rootView || rootView.initial_view_partial
+  if (!rootView || state.ui.activeViewRequestController || rootView.initial_view_partial
     || String(rootView.payload_tier || '').trim().toLowerCase() === 'sidebar') {
     return null;
   }
@@ -51779,10 +51781,6 @@ function readCurrentRememberedRootGallery(rootView) {
 }
 
 function showRememberedRootGallery(rootView, historyView = rootView) {
-  // This may send no request of its own, so an earlier gallery request (a search still
-  // loading) must not land on top of the gallery shown here.
-  state.ui.activeViewRequestController?.abort();
-  state.ui.viewStateRevision = Number(state.ui.viewStateRevision || 0) + 1;
   state.gallery.sidebarArtistsOverride = null;
   state.gallery.sidebarShowAllArtistsOverride = null;
   applyViewPayload(rootView, { trackSidebarReveal: false });

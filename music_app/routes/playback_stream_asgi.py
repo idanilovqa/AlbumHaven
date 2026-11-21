@@ -752,6 +752,8 @@ class _PlaybackPcmConnection:
         resolution = asyncio.ensure_future(run_playback_io(resolve))
         self._pending_credit_tasks.add(resolution)
         resolution.add_done_callback(self._pending_credit_tasks.discard)
+        # A rejected open never awaits its resolution; its failure must not go unretrieved.
+        resolution.add_done_callback(lambda done: done.cancelled() or done.exception())
         return resolution
 
     async def _open_tracked(self, control: dict[str, Any]) -> bool:

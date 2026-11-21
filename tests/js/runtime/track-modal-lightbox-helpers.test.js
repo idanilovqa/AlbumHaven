@@ -657,6 +657,24 @@ test('inventory refresh follows the release this session split instead of closin
   assert.deepEqual(context.showToastCalls, []);
 });
 
+test('inventory refresh keeps an album this session renamed open until its save rebinds it', async () => {
+  // FTC-TAGS-008: a rename and re-year derives "artist::renamed" while the server adds ::year::2027.
+  const open = { album_id: 17, key: 'artist::renamed', request_key: 'artist::renamed', name: 'Renamed', year: 2027,
+    preview_only: false, tracks: [{ path: 'one', title: 'Track' }] };
+  const notFound = { ok: false, status: 404, json: async () => ({ ok: false, error: 'Album not found' }) };
+  const { context } = loadHelper({ initialAlbums: [open], onFetchAlbumDetails: () => notFound });
+  context.rememberLocallyEditedAlbum(open);
+  context.state.modalReleases = [open];
+  context.state.modalReleaseIndex = 0;
+  context.getTrackModalElements().overlay.hidden = false;
+
+  assert.equal(await context.refreshOpenTrackModalAfterInventoryMutation(), false);
+  await flushMicrotasks();
+
+  assert.equal(context.getTrackModalElements().overlay.hidden, false);
+  assert.deepEqual(context.showToastCalls, []);
+});
+
 test('inventory refresh closes Album Details when the open album is gone', async () => {
   const open = {
     album_id: 17,

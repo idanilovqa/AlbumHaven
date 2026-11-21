@@ -623,9 +623,15 @@ async function refreshOpenTrackModalAfterInventoryMutation() {
   if (loadError?.status === 404) {
     const release = await findLocallyEditedSplitRelease(albumKey, openAlbum);
     if (els.overlay.hidden || state.modalReleases?.[state.modalReleaseIndex] !== currentAlbum) return false;
+    if (release) {
+      openTrackModal(release);
+      return true;
+    }
+    // This session's own save rebinds the modal when it completes; a key derived before the server
+    // added a release discriminator (::year::) is not an album that changed elsewhere.
+    if (editedLocally) return false;
     // Otherwise the view that triggered this refresh already shows the current releases.
-    if (release) openTrackModal(release);
-    else closeTrackModalForChangedAlbum();
+    closeTrackModalForChangedAlbum();
     return true;
   }
   if (loadError) throw loadError;

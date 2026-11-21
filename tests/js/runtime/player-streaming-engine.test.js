@@ -7890,7 +7890,9 @@ test('a liveness check that ran late, on a page too busy to read what arrived, d
 // asked a dead socket for that song's rate and waited forever.
 test('a rate probe asked of a socket that hears nothing goes again on a new socket, so one press starts the song', async () => {
   const harness = encodedHarness({ holdSampleRateProbes: true, trackSampleRates: new Map() });
-  const first = harness.api.start(makeTrack('01.mp3'));
+  // A 320 kbps stream still asks for its rate before it opens.
+  harness.engine.qualityPreference = '320';
+  const first = harness.api.start(makeTrack('01.flac'));
   for (let turn = 0; turn < 20 && !harness.sockets[0]?.probes.length; turn += 1) await harness.settle();
   harness.sockets[0].receive({ type: 'probe-result', requestId: harness.sockets[0].probes[0].requestId, sampleRate: 48_000 });
   await first;
@@ -7899,19 +7901,19 @@ test('a rate probe asked of a socket that hears nothing goes again on a new sock
   await harness.api.pause();
   await harness.settle();
 
-  void harness.api.start(makeTrack('02.mp3'));
+  void harness.api.start(makeTrack('02.flac'));
   await settleTwice(harness);
-  assert.equal(harness.sockets[0].probes.at(-1)?.path, makeTrack('02.mp3').path, 'the new song asks for its rate');
+  assert.equal(harness.sockets[0].probes.at(-1)?.path, makeTrack('02.flac').path, 'the new song asks for its rate');
   checkLivenessUntil(harness, 1_500, 6_500);
   await settleTwice(harness);
 
   assert.equal(harness.sockets[0].closeCalls, 1, 'the silent socket is replaced');
   const again = harness.sockets[1].probes.at(-1);
-  assert.equal(again?.path, makeTrack('02.mp3').path, 'the probe goes again on the new socket');
+  assert.equal(again?.path, makeTrack('02.flac').path, 'the probe goes again on the new socket');
   harness.sockets[1].receive({ type: 'probe-result', requestId: again.requestId, sampleRate: 48_000 });
   await settleTwice(harness);
   await settleTwice(harness);
-  assert.equal(harness.sockets[1].sent.filter(({ type }) => type === 'open').at(-1)?.path, makeTrack('02.mp3').path);
+  assert.equal(harness.sockets[1].sent.filter(({ type }) => type === 'open').at(-1)?.path, makeTrack('02.flac').path);
   assert.notEqual(harness.api.snapshot().mode, 'error');
 });
 

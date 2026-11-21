@@ -90,7 +90,7 @@ test('a start waits for the bridge only inside the APK, then runs on the negotia
   const native = loadContract({ shell: true, route: Promise.resolve(true) });
   await native.context.startStreamingTrack('track', { startSeconds: 3, autoplay: false, extra: 1 });
   // The options object is made inside the contract's context, so it is compared as data.
-  assert.equal(JSON.stringify(native.calls), JSON.stringify([['startAndroidNativePlaybackTrack', 'track', { startSeconds: 3, autoplay: false }]]));
+  assert.equal(JSON.stringify(native.calls), JSON.stringify([['startAndroidNativePlaybackTrack', 'track', { startSeconds: 3, autoplay: false, takeover: false }]]));
   assert.equal(native.context.playbackEngineHandshake(), 'connectAndroidBridge');
 
   const refused = loadContract({ shell: true, route: Promise.resolve(false) });

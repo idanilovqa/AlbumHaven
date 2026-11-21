@@ -441,7 +441,7 @@ html .cover-lookup-drawer {
   backdrop-filter: none;
 }
 :root[data-appearance-player]:not([data-appearance-native-surface]) .global-player:not(.is-floating-compact) { border-color: var(--appearance-player-ink); }
-:root[data-appearance-player]:not([data-appearance-native-surface]) :is(.player-title, .player-album-link, .player-album-link:hover, .player-time, .player-timeline-wrap.is-idle::after) { color: var(--appearance-player-ink); }
+:root[data-appearance-player]:not([data-appearance-native-surface]) :is(.player-title, .player-album-link, .player-album-link:hover, .player-time, .player-timeline-wrap.is-idle::after, .player-elsewhere-label) { color: var(--appearance-player-ink); }
 :root[data-appearance-player]:not([data-appearance-native-controls]) :is(.player-play, .player-loop-button, .player-save-loop) { color: var(--appearance-play-ink); background: var(--appearance-play); border-color: var(--appearance-player-control-border, var(--appearance-waveform-edge)); box-shadow: none; }
 :root[data-appearance-player]:not([data-appearance-native-handles]) .player-loop-handle::after { width: 5px; background: var(--appearance-player-handle); border-color: var(--appearance-player-handle); }
 :root[data-appearance-player]:not([data-appearance-native-handles]) .loop-range-handle::after { width: 5px; background: var(--appearance-player-handle); border-color: var(--appearance-player-handle); }

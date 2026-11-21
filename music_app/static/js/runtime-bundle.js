@@ -18917,6 +18917,10 @@ function isPagedRootGallery(view = state.view) {
     && surface === 'albums');
 }
 
+function isRootGalleryPageRequestLoading() {
+  return Boolean(rootGalleryPageRequest);
+}
+
 function cancelRootGalleryPageRequest() {
   rootGalleryPageRequest?.controller.abort();
   rootGalleryPageRequest = null;
@@ -49756,8 +49760,9 @@ function handleGalleryBootstrapClick(event) {
       ? getReusableRootBrowseView(nextView)
       : null;
     if (reusableRootBrowseView) {
+      const showsCurrentRootGallery = Boolean(readCurrentRememberedRootGallery(reusableRootBrowseView));
       showRememberedRootGallery(reusableRootBrowseView, nextView);
-      if (readCurrentRememberedRootGallery(reusableRootBrowseView)) {
+      if (showsCurrentRootGallery) {
         resumeCoverLoads();
         return;
       }
@@ -51769,7 +51774,9 @@ function isMountedSelectedGalleryComplete(selectedArtist, reusableRootBrowseView
 // While another gallery request is loading, the normal refresh supersedes it instead, so that
 // request's late answer can never replace the gallery shown from memory.
 function readCurrentRememberedRootGallery(rootView) {
-  if (!rootView || state.ui.activeViewRequestController || rootView.initial_view_partial
+  if (!rootView || state.ui.activeViewRequestController
+    || (typeof isRootGalleryPageRequestLoading === 'function' && isRootGalleryPageRequestLoading())
+    || rootView.initial_view_partial
     || String(rootView.payload_tier || '').trim().toLowerCase() === 'sidebar') {
     return null;
   }

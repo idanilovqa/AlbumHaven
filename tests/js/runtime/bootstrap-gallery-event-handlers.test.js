@@ -3623,6 +3623,35 @@ test('Home shows a current remembered gallery with no request', () => {
   assert.equal(calls.resumeSelectedArtistCoverLoadsAfterUserAction.length, 1);
 });
 
+test('Home refreshes while a gallery page is loading, so the refresh supersedes the page it cancels', () => {
+  const cachedRootView = {
+    query: '',
+    selected_artist: '',
+    all_artists_active: false,
+    gallery_scope: 'all',
+    visible_library_categories: ['main_library', 'hoard', 'new_arrivals'],
+    related_filter_artists: [],
+    primary_filter_active: false,
+    artist_groups: [{ artist: 'Broadcast' }],
+    artists_sidebar: [{ artist: 'Broadcast', count: 1 }],
+    inventory_mutation_revision: 3,
+  };
+  const { context, calls } = createContext({ cachedRootView, status: { inventory_mutation_revision: 3 } });
+  // Showing a gallery cancels the loading page request, as the real applyViewPayload does.
+  let pageRequestLoading = true;
+  context.isRootGalleryPageRequestLoading = () => pageRequestLoading;
+  const applyViewPayload = context.applyViewPayload;
+  context.applyViewPayload = (...args) => {
+    pageRequestLoading = false;
+    return applyViewPayload(...args);
+  };
+
+  context.handleGalleryBootstrapClick(createAllArtistsEvent().event);
+
+  assert.equal(calls.applyViewPayload.length, 1);
+  assert.equal(calls.fetchAndRender.length, 1);
+});
+
 test('canonical no-match clear requests a full albums projection for the Home completion', () => {
   const { context, calls } = createContext({ searchInputValue: '' });
   context.state.view = {

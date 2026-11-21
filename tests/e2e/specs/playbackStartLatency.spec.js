@@ -25,7 +25,10 @@ function startStages(playbackEvidence, eventMark, clickedAtEpochMs) {
     .filter((event) => ['probe', 'probe-result', 'open', 'metadata', 'rate-mismatch', 'encoded', 'pcm']
       .includes(event.type))
     .map((event) => ({
-      label: ['encoded', 'pcm'].includes(event.type) ? `first ${event.type} bytes` : event.type,
+      label: ['encoded', 'pcm'].includes(event.type)
+        ? `first ${event.type} bytes ${event.role}`
+        : `${event.type} ${event.role || ''}${event.sampleRate ? ` @${event.sampleRate}` : ''}${
+          event.type === 'open' ? (event.codecs ? ' encoded' : ' server-decoded') : ''}`,
       at: event.sentAtEpochMs || event.receivedAtEpochMs,
     }))
     .filter(({ label }) => (seen.has(label) ? false : seen.add(label)))

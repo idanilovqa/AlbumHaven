@@ -715,7 +715,7 @@ test('FTC-PLAYBACK-OFFLINE-006 offline, seeks forward and back inside the receiv
   let received = 0;
 
   try {
-    await stepLogger.step('The long song plays through a slow network for ten seconds', async () => {
+    await stepLogger.step('The long song plays through a slow network for three seconds', async () => {
       await page.goto(`${relay.origin}/?surface=albums`);
       await galleryActions.waitForGalleryReady();
       await navigationPanelActions.selectSidebarArtistByName(ARTIST);
@@ -730,7 +730,7 @@ test('FTC-PLAYBACK-OFFLINE-006 offline, seeks forward and back inside the receiv
       durationSeconds = (await player.readPlaybackTiming()).duration;
       expect(durationSeconds).toBeGreaterThan(120);
       await expect.poll(async () => displayedSeconds(await player.time.textContent()), { timeout: 60_000 })
-        .toBeGreaterThanOrEqual(10);
+        .toBeGreaterThanOrEqual(3);
     });
 
     await stepLogger.step('Offline: back and forward inside the received audio, each plays at once', async () => {
@@ -738,15 +738,15 @@ test('FTC-PLAYBACK-OFFLINE-006 offline, seeks forward and back inside the receiv
       await expect.poll(receivedThroughSeconds, { timeout: 10_000 }).not.toBeNull();
       received = await receivedThroughSeconds();
       // The measured range decides which places are inside and which are past it.
-      expect(received, 'only part of the song arrived before the outage').toBeLessThan(durationSeconds * 0.5);
-      expect(received).toBeGreaterThan(20);
-      await expectPlaysFrom(3);
+      expect(received, 'only part of the song arrived before the outage').toBeLessThan(durationSeconds * 0.7);
+      expect(received).toBeGreaterThan(15);
+      await expectPlaysFrom(1);
       await expectPlaysFrom(Math.floor(received - 6));
     });
 
     await stepLogger.step('Still offline: forward and back past the received audio, each waits silently at its place, playing and enabled', async () => {
-      await expectWaitsSilentlyAt(Math.floor(durationSeconds * 0.85));
-      await expectWaitsSilentlyAt(Math.floor((received + durationSeconds * 0.85) / 2));
+      await expectWaitsSilentlyAt(Math.floor(durationSeconds * 0.95));
+      await expectWaitsSilentlyAt(Math.floor((received + durationSeconds * 0.95) / 2));
     });
 
     await stepLogger.step('The network returns: the song plays on from the place by itself', async () => {

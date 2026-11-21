@@ -82,6 +82,49 @@ def test_scoped_dual_publication_does_not_dirty_itself_and_next_edit_succeeds(co
         assert connection.execute('select album_id from library.local_relation_dirty_albums').fetchall() == []
 
 
+def test_patching_the_stored_legacy_copy_matches_a_full_rebuild(compatibility_inventory):
+    """Owner (2026-11-21, case 29): a save patches only its changed entries, with the exact full order."""
+    fixture = compatibility_inventory
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        library_id = connection.execute("select id from library.libraries where name='Local Library'").fetchone()['id']
+        stored = contracts(connection)['shared']
+        removed_artist = stored['artists'][0]
+        changed_alias = next(iter(stored['alias_to_canonical']))
+        connection.execute("""delete from library.local_relation_compatibility_entries
+            where library_id=%s and section='artists' and entry_key=%s""", (library_id, removed_artist))
+        connection.execute("""update library.local_relation_compatibility_entries set payload=%s
+            where library_id=%s and section='alias_to_canonical' and entry_key=%s""",
+            (Jsonb('Patched canonical'), library_id, changed_alias))
+        added = [
+            ('artists', 'Zeta Newcomer', Jsonb('Zeta Newcomer'), 'zeta newcomer'),
+            ('artists', 'Aaa Newcomer', Jsonb('Aaa Newcomer'), 'aaa newcomer'),
+            ('artists_sidebar', 'Mid Newcomer', Jsonb({'artist': 'Mid Newcomer', 'count': 1}), 'mid newcomer'),
+            ('alias_to_canonical', 'New Alias', Jsonb('Zeta Newcomer'), 'new alias'),
+        ]
+        for section, key, payload, sort_key in added:
+            connection.execute("""insert into library.local_relation_compatibility_entries
+                (library_id,section,entry_key,payload,sort_key,artist_names,connection_keys,low_value_keys)
+                values (%s,%s,%s,%s,%s,'{}','{}','{}')""", (library_id, section, key, payload, sort_key))
+        touched = [{'section': 'artists', 'entry_key': removed_artist},
+                   {'section': 'alias_to_canonical', 'entry_key': changed_alias},
+                   *({'section': section, 'entry_key': key} for section, key, _, _ in added)]
+        row = connection.execute(
+            """select library.patch_relation_compatibility_views(%s,%s,%s) as patched,
+              library.local_relation_compatibility_views(%s) as rebuilt,
+              current_setting('album_haven.relation_views_publication', true) as proof""",
+            (library_id, Jsonb(stored), Jsonb(touched), library_id)).fetchone()
+        assert row['patched'] == row['rebuilt']
+        assert row['patched']['artists'] != stored['artists']
+        proof = connection.execute('select md5(%s::jsonb::text) as proof', (Jsonb(row['patched']),)).fetchone()['proof']
+        assert row['proof'] == proof
+        # A stored copy that names an entry the table no longer has cannot be patched in order.
+        broken = {**stored, 'artists': ['Missing Artist', *stored['artists'][1:]]}
+        assert connection.execute(
+            'select library.patch_relation_compatibility_views(%s,%s,%s) as patched',
+            (library_id, Jsonb(broken), Jsonb([{'section': 'artists', 'entry_key': 'Aaa Newcomer'}]))).fetchone()['patched'] is None
+        connection.rollback()
+
+
 @pytest.mark.parametrize('fault', [
     None, 'compatibility_xid', 'normalized_xid', 'fingerprint', 'builder',
     'stamp', 'missing_section', 'extra_section', 'aliases', 'pending_receipt',

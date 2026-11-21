@@ -582,6 +582,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0200_create_cover_references.sql",
         "0201_backfill_cover_references.sql",
         "0210_create_schema_migration_attestations.sql",
+        "0267_trust_relation_publication_marker.sql",
     ]
 
 

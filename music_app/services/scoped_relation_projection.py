@@ -696,15 +696,17 @@ def publish_affected_relation_projection(connection, *, album_ids=(), album_keys
             connection, library_id, old, new, cancel_requested,
             include_compatibility=compatibility_state is not None)
     with persistence_stage('relation_publication.entry_contract'):
-        previous_entries, low_display_albums = _patch_entry_contract(
+        previous_entries, low_display_albums, _ = _patch_entry_contract(
             connection, library_id, views, affected_names)
+    legacy_touched_entries = None
     if compatibility_state is not None:
         with persistence_stage('relation_publication.compatibility_patch'):
             legacy_component = _restrict_component_views(build_postgres_relation_views(
                 [source for record in component.values() for source in record['source_rows']],
                 alias_policy=LEGACY_ALIAS_POLICY,
             ), affected_names)
-            _patch_entry_contract(connection, library_id, legacy_component, affected_names, compatibility=True)
+            _, _, legacy_touched_entries = _patch_entry_contract(
+                connection, library_id, legacy_component, affected_names, compatibility=True)
             _patch_family_links(connection, legacy_component, affected_names, stamp, legacy=True)
             _patch_search_rows(connection, legacy_component, affected_names, metadata, stamp, legacy=True)
     with persistence_stage('relation_publication.family_and_search'):
@@ -725,7 +727,8 @@ def publish_affected_relation_projection(connection, *, album_ids=(), album_keys
         'affected_relation_album_keys': sorted(keys | {row['album_key'] for row in component.values()} | {row['album_key'] for row in low_display_albums}),
     }
     return _finish_publication(connection, context, metadata, result, reason=reason, config=config,
-                               legacy_views=legacy_views, prepare_compatibility=prepare_compatibility)
+                               legacy_views=legacy_views, prepare_compatibility=prepare_compatibility,
+                               legacy_touched_entries=legacy_touched_entries)
 
 
 def _patch_entry_contract(connection, library_id, views, affected_names, *, compatibility=False):
@@ -745,13 +748,17 @@ def _patch_entry_contract(connection, library_id, views, affected_names, *, comp
         where library_id=%s and low_value_keys && %s::text[]""", (library_id, changed_low_keys)).fetchall() if changed_low_keys else []
     entries = _view_entries(views)
     affected_names.update(name for entry in entries for name in entry['artist_names'])
-    connection.execute(f"""delete from {_entry_table(compatibility)}
-        where library_id=%s and (artist_names && %s::text[] or connection_keys && %s::text[])""",
-        (library_id, sorted(affected_names), sorted(entry_connections)))
+    deleted = connection.execute(f"""delete from {_entry_table(compatibility)}
+        where library_id=%s and (artist_names && %s::text[] or connection_keys && %s::text[])
+        returning section,entry_key""",
+        (library_id, sorted(affected_names), sorted(entry_connections))).fetchall()
     _upsert_entries(connection, library_id, entries, compatibility=compatibility)
     previous_entries.extend(_refresh_low_value_family_references(connection, library_id, views, canonical_low_names, compatibility=compatibility))
-    _upsert_entries(connection, library_id, _view_entries(views), compatibility=compatibility)
-    return previous_entries, low_display_albums
+    upserted = _view_entries(views)
+    _upsert_entries(connection, library_id, upserted, compatibility=compatibility)
+    # Every entry this patch removed or wrote, so the stored legacy copy can follow only these.
+    touched = {(row['section'], row['entry_key']) for row in [*deleted, *entries, *upserted]}
+    return previous_entries, low_display_albums, touched
 
 
 
@@ -814,7 +821,7 @@ def _prepare_compatibility_in_transaction(connection, context, metadata, capture
     _store_compatibility_state(connection, library_id, metadata, stamp)
 
 
-def _finish_publication(connection, context, metadata, result, *, reason, config, copy_legacy_views=True, legacy_views=None, prepare_compatibility=False):
+def _finish_publication(connection, context, metadata, result, *, reason, config, copy_legacy_views=True, legacy_views=None, prepare_compatibility=False, legacy_touched_entries=None):
     library_id = context['library_id']
     if prepare_compatibility:
         _prepare_compatibility_in_transaction(connection, context, metadata, legacy_views)
@@ -831,10 +838,26 @@ def _finish_publication(connection, context, metadata, result, *, reason, config
     if copy_legacy_views:
         # Older writers need the cached summary, never a rebuild of album/track sources.
         with persistence_stage('relation_publication.legacy_views_copy'):
-            connection.execute("""update library.libraries set metadata=jsonb_set(jsonb_set(metadata,
-                '{scan_cache,relation_projection}',%(metadata)s::jsonb),
-                '{scan_cache,relation_views}',library.local_relation_compatibility_views(id)),updated_at=now() where id=%(library_id)s""",
-                {'library_id': library_id, 'metadata': _jsonb(metadata)})
+            # Owner (2026-11-21): a save patches only the compatibility entries it changed; the whole
+            # copy is rebuilt only when no patch is known or the stored copy cannot be patched.
+            patched = legacy_touched_entries is not None and connection.execute("""update library.libraries set
+                metadata=jsonb_set(jsonb_set(metadata,'{scan_cache,relation_projection}',%(metadata)s::jsonb),
+                  '{scan_cache,relation_views}',patched.views),updated_at=now()
+                from (select library.patch_relation_compatibility_views(%(library_id)s,
+                  metadata #> '{scan_cache,relation_views}',%(touched)s::jsonb) as views
+                  from library.libraries where id=%(library_id)s) patched
+                where id=%(library_id)s and patched.views is not null returning id""",
+                {'library_id': library_id, 'metadata': _jsonb(metadata), 'touched': _jsonb([
+                    {'section': section, 'entry_key': entry_key}
+                    for section, entry_key in sorted(legacy_touched_entries)])}).fetchone() is not None
+            if not patched:
+                if legacy_touched_entries is not None:
+                    logging.getLogger(__name__).warning(
+                        'Stored legacy relation views could not be patched; copying the full views: library=%s', library_id)
+                connection.execute("""update library.libraries set metadata=jsonb_set(jsonb_set(metadata,
+                    '{scan_cache,relation_projection}',%(metadata)s::jsonb),
+                    '{scan_cache,relation_views}',library.local_relation_compatibility_views(id)),updated_at=now() where id=%(library_id)s""",
+                    {'library_id': library_id, 'metadata': _jsonb(metadata)})
     else:
         connection.execute("""update library.libraries set metadata=jsonb_set(metadata,
             '{scan_cache,relation_projection}',%(metadata)s::jsonb),updated_at=now() where id=%(library_id)s""",

@@ -7,8 +7,10 @@ const STREAMING_PROCESSOR_NAME = 'album-haven-gapless-playback';
 const STREAMING_MAX_CREDIT_SECONDS = 1;
 const STREAMING_CREDIT_LOW_WATER_SECONDS = 0.25;
 const STREAMING_INITIAL_PLAYBACK_CUSHION_SECONDS = 2;
-// A lost socket is replaced at once, then after each of these delays, then every last one.
-const STREAMING_RECONNECT_DELAYS_MS = [500, 1000, 2000];
+// A lost socket is replaced at once, then after each of these delays, then every last one. An attempt
+// the network refuses costs next to nothing, and a server back after an outage (a tunnel's minute of
+// 502s) is found within a second (sandbox5 2026-11-21: up to 2 s of this wait stacked with the claim's).
+const STREAMING_RECONNECT_DELAYS_MS = [500, 1000];
 // The server sends a heartbeat this often (`/playback/pcm?heartbeat=`), however long its answers
 // take: a socket is judged by what it hears, never by how fast it is answered, because a busy
 // server answers slowly (owner retest B-D4 round 6, 2026-11-18, with the CPU at 100%).
@@ -721,6 +723,8 @@ function resumeStreamingTransport() {
   if (!detached) return;
   detached.failures = 0;
   detached.connected = true;
+  // The server answers again: a claim waiting out its retry asks now, not on its timer.
+  if (typeof retryUnansweredPlaybackClaimNow === 'function') retryUnansweredPlaybackClaimNow();
   if (detached.kind === 'splice') {
     maybeOpenStreamingSplice();
     return;

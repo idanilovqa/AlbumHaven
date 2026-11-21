@@ -5143,6 +5143,41 @@ test('after a frozen network, the hanging reconnect is replaced as soon as the s
   assert.notEqual(harness.api.snapshot().mode, 'error');
 });
 
+// sandbox5 (2026-11-21): after a minute of 502s, another song pressed in it played 4.8-18 s after the
+// server answered: the reconnect waited out 2 s, then the claim waited out its own 2 s retry. Attempts
+// the network refuses are retried every second, and the reopened socket has the claim ask at once.
+test('a socket that reopens after an outage has a claim waiting out its retry ask at once', async () => {
+  let serverBack = false;
+  let retriedNow = 0;
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => count > 1 && !serverBack,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+  });
+  harness.context.retryUnansweredPlaybackClaimNow = () => { retriedNow += 1; return true; };
+  await startLocallySeekable(harness, 100_000);
+  await harness.api.resume();
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  const delays = [];
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const retry = timers.pending().find(({ delay }) => delay <= 2_000);
+    delays.push(retry.delay);
+    timers.fire(retry);
+    await settleTwice(harness);
+  }
+  assert.deepEqual(delays, [500, 1_000, 1_000, 1_000], 'refused attempts are retried every second');
+  assert.equal(retriedNow, 0);
+
+  serverBack = true;
+  timers.fire(timers.pending().find(({ delay }) => delay <= 2_000));
+  await settleTwice(harness);
+  assert.equal(harness.sockets.at(-1).readyState, 1);
+  assert.equal(retriedNow, 1, 'the claim asks as soon as the socket is back');
+});
+
 test('a refused socket still stops playback with an error', async () => {
   const harness = createEngineHarness();
   await harness.api.start(makeTrack());
@@ -7309,7 +7344,7 @@ test('reconnects keep trying while the received audio plays, and once it runs ou
     timers.fire(timer);
     await settleTwice(harness);
   }
-  assert.deepEqual(delays, [500, 1_000, 2_000, 2_000, 2_000, 2_000]);
+  assert.deepEqual(delays, [500, 1_000, 1_000, 1_000, 1_000, 1_000]);
   assert.equal(harness.sockets.length, 8);
   assert.notEqual(harness.api.snapshot().mode, 'error', 'failures stay silent while audio plays');
 
@@ -7318,7 +7353,7 @@ test('reconnects keep trying while the received audio plays, and once it runs ou
     renderedFrame: 1, missingFrames: 128,
   });
   // The owner's rule (2026-11-17): losing the network never stops playback, however long.
-  assert.deepEqual(timers.pending().map(({ delay }) => delay), [2_000], 'no deadline ends the wait');
+  assert.deepEqual(timers.pending().map(({ delay }) => delay), [1_000], 'no deadline ends the wait');
   for (let attempt = 0; attempt < 20; attempt += 1) {
     timers.fire(timers.pending()[0]);
     await settleTwice(harness);

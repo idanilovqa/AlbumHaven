@@ -117,9 +117,18 @@ function buildRootGalleryPageUrl(view) {
 // the artist whose label the scrolled viewport has passed is the one on screen.
 function rootGalleryViewportArtists(groups = [], scrollAnchor = null, scrollTop = 0) {
   const albumKey = String(scrollAnchor?.albumKey || '');
-  let viewportIndex = albumKey
-    ? groups.findIndex(group => (group.albums || []).some(album => String(album.key || '') === albumKey))
+  const holdsAnchorAlbum = group => (group.albums || []).some(album => String(album.key || '') === albumKey);
+  // A jointly credited album sits under several artists: the captured card's own section says which
+  // one is on screen. The first group holding it can be far above, and a window anchored there would
+  // end before the artist on screen (FTC-TAGS-011/012).
+  const anchorSection = typeof virtualGrid === 'undefined'
+    ? null
+    : virtualGrid?.sectionByKey?.get?.(String(scrollAnchor?.sectionOccurrenceKey || ''));
+  const anchorSectionArtist = String(anchorSection?.group?.artist || '').trim();
+  let viewportIndex = albumKey && anchorSectionArtist
+    ? groups.findIndex(group => String(group.artist || '').trim() === anchorSectionArtist && holdsAnchorAlbum(group))
     : -1;
+  if (viewportIndex < 0 && albumKey) viewportIndex = groups.findIndex(holdsAnchorAlbum);
   if (viewportIndex < 0 && scrollTop > 0) {
     const visibleArtist = findGalleryMainContextSection(scrollTop)?.artist;
     viewportIndex = visibleArtist ? groups.findIndex(group => galleryMainGroupArtist(group) === visibleArtist) : -1;
@@ -133,24 +142,6 @@ function rootGalleryViewportArtists(groups = [], scrollAnchor = null, scrollTop 
     }
   }
   return { artists: artists.slice(0, ROOT_GALLERY_ANCHOR_RECOVERY_REQUEST_LIMIT) };
-}
-
-// A refreshed root window must not end inside an artist the gallery already shows: the page would
-// replace that artist's mounted albums with its first few until the next page arrived, so a just
-// edited album vanished for a moment (FTC-TAGS-011/012). From the anchor, the page covers 50
-// mounted albums and then the rest of the artist the 50th falls in, within the server's limit.
-const ROOT_GALLERY_WINDOW_PAGE_SIZE = 50;
-const ROOT_GALLERY_MAX_PAGE_SIZE = 100;
-
-function rootGalleryWindowPageSize(groups = [], anchorArtist = '') {
-  const start = groups.findIndex(group => String(group?.artist || '').trim() === anchorArtist);
-  if (start < 0) return ROOT_GALLERY_WINDOW_PAGE_SIZE;
-  let albums = 0;
-  for (let index = start; index < groups.length; index += 1) {
-    albums += (groups[index]?.albums || []).length;
-    if (albums >= ROOT_GALLERY_WINDOW_PAGE_SIZE) return Math.min(ROOT_GALLERY_MAX_PAGE_SIZE, albums);
-  }
-  return ROOT_GALLERY_WINDOW_PAGE_SIZE;
 }
 
 function retainRootGalleryAnchorMetadata(currentPage = {}, nextPage = {}) {
@@ -1202,9 +1193,6 @@ async function fetchAndRender(url, push = true, options = {}) {
     const refreshUrl = new URL(apiUrl, 'http://localhost');
     if (!refreshUrl.searchParams.has('gallery_anchor_artist')) {
       refreshUrl.searchParams.set('gallery_anchor_artist', rootWindow.artists[0]);
-      refreshUrl.searchParams.set('gallery_page_size', String(
-        rootGalleryWindowPageSize(state.view.artist_groups, rootWindow.artists[0]),
-      ));
       apiUrl = `${refreshUrl.pathname}${refreshUrl.search}`;
     }
   }

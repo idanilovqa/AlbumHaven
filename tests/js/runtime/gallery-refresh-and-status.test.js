@@ -7630,14 +7630,20 @@ test('BI cover completion refresh retry requests the current view once at produc
   measureCompletionRefreshRetry('Cover')
 ));
 
-test('a refreshed root window ends after the artist its 50th album belongs to, never inside it', () => {
-  // FTC-TAGS-011/012: a post-save refresh anchored above an edited album cut that artist after its
-  // first albums, so the edited album vanished until the next page arrived.
+test('a refreshed root window anchors on the section of the card on screen, not the first group holding its album', () => {
+  // FTC-TAGS-011/012: the card at the top of the screen was a jointly credited album, also listed
+  // under an artist far above; anchoring there ended the window before the artist on screen.
   const { context } = createContext();
-  const artist = (name, count) => ({ artist: name, albums: Array.from({ length: count }, (_, index) => ({ key: `${name}-${index}` })) });
-  const groups = [artist('Above', 3), artist('Compilation Signal Guest', 45), artist('E2E Rarity Artist', 7), artist('Below', 9)];
-  assert.equal(context.rootGalleryWindowPageSize(groups, 'Compilation Signal Guest'), 52);
-  assert.equal(context.rootGalleryWindowPageSize(groups, 'E2E Rarity Artist'), 50, 'too few mounted albums keeps the default');
-  assert.equal(context.rootGalleryWindowPageSize([artist('Huge', 140)], 'Huge'), 100, 'never above the server limit');
-  assert.equal(context.rootGalleryWindowPageSize(groups, 'Unmounted'), 50);
+  const joint = { key: 'joint-album' };
+  const groups = [
+    { artist: 'Compilation Signal Guest', albums: [{ key: 'guest-1' }, joint] },
+    { artist: 'Control Signal Lead', albums: [{ key: 'lead-1' }] },
+    { artist: 'Control Signal Partner', albums: [joint, { key: 'partner-2' }] },
+    { artist: 'E2E Rarity Artist', albums: [{ key: 'rarity-1' }] },
+  ];
+  context.virtualGrid = { sectionByKey: new Map([['all:Control Signal Partner:0', { group: groups[2] }]]) };
+  const anchor = { albumKey: 'joint-album', sectionOccurrenceKey: 'all:Control Signal Partner:0' };
+  assert.equal(context.rootGalleryViewportArtists(groups, anchor, 900).artists[0], 'Control Signal Partner');
+  // Without a known section the first group holding the album still anchors the window.
+  assert.equal(context.rootGalleryViewportArtists(groups, { albumKey: 'joint-album' }, 900).artists[0], 'Compilation Signal Guest');
 });

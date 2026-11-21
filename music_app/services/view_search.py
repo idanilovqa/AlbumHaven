@@ -424,9 +424,8 @@ def search_terms_match_fields(terms: list[str], fields: list[str]) -> bool:
 # Search highlighting: the characters of a displayed text that search matched, found with the same
 # normalization and word rules as search_term_matches_field so a highlight never disagrees with a result.
 # Ranges are [start, end) code-point offsets into the original text.
-_SEARCH_HIGHLIGHT_TEXT_KEYS = frozenset({
-    "name", "title", "filename", "artist", "artist_display", "album_artist", "display_artist", "secondary_artist",
-})
+# Only track names are highlighted (owner 2026-11-21); a Loose Track without a usable title shows its file name.
+_SEARCH_HIGHLIGHT_TEXT_KEYS = frozenset({"title", "filename"})
 _SEARCH_HIGHLIGHT_TEXT_LIMIT = 4000
 
 
@@ -477,7 +476,7 @@ def search_match_ranges(query: str, text: str) -> list[list[int]]:
 
 
 def collect_search_highlight_texts(payload: object) -> list[str]:
-    """The display strings of a search response (names, titles, artists) that may carry highlights."""
+    """The track titles (and Loose Track file names) of a search response that may carry highlights."""
     texts: list[str] = []
     pending = [payload]
     while pending and len(texts) < _SEARCH_HIGHLIGHT_TEXT_LIMIT:

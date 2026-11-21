@@ -75,20 +75,20 @@ def test_build_search_highlights_dedupes_and_omits_unmatched_texts():
     assert build_search_highlights("", ["Alas de Sal"]) == {}
 
 
-def test_collect_search_highlight_texts_reads_only_display_fields():
+def test_collect_search_highlight_texts_reads_only_track_titles():
+    """Owner 2026-11-21: only track names are highlighted, never album, artist or collection names."""
     payload = {
         "artists_sidebar": [{"artist": "Alas", "artist_display": "Alas", "count": 1}],
         "primary_artist_groups": [
             {"albums": [{"name": "Pinta Tu Aldea", "display_artist": "Alas", "cover_ref": "alas-ref"}]},
         ],
         "custom_collections": [{"name": "Road trip", "count": 2}],
-        "path": "D:/Music/alas.mp3",
+        "library_non_album_tracks": [
+            {"title": "Alas de Sal", "artist": "Argovia", "path": "D:/Music/alas.mp3"},
+            {"title": "", "filename": "alas demo.mp3"},
+        ],
     }
-    texts = set(collect_search_highlight_texts(payload))
-    assert {"Alas", "Pinta Tu Aldea", "Road trip"} <= texts
-    assert "alas-ref" not in texts
-    assert "D:/Music/alas.mp3" not in texts
-
+    assert sorted(collect_search_highlight_texts(payload)) == ["Alas de Sal", "alas demo.mp3"]
 
 def test_highlight_work_is_bounded_by_the_response_texts(monkeypatch):
     from music_app.services import view_search
@@ -96,11 +96,11 @@ def test_highlight_work_is_bounded_by_the_response_texts(monkeypatch):
     calls = []
     real = view_search.search_match_ranges
     monkeypatch.setattr(view_search, "search_match_ranges", lambda query, text: calls.append(text) or real(query, text))
-    payload = {"albums": [{"name": f"Album {index % 50}", "display_artist": "Sal"} for index in range(10_000)]}
+    payload = {"tracks": [{"title": f"Track {index % 50}", "filename": "Sal.mp3"} for index in range(10_000)]}
 
     texts = view_search.collect_search_highlight_texts(payload)
     highlights = view_search.build_search_highlights("sal", texts)
 
     assert len(texts) == view_search._SEARCH_HIGHLIGHT_TEXT_LIMIT
     assert len(calls) == 51
-    assert highlights == {"Sal": [[0, 3]]}
+    assert highlights == {"Sal.mp3": [[0, 3]]}

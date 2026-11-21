@@ -769,7 +769,7 @@ def _build_transient_scan_view_payload(
 
 
 def _with_search_highlights(request: Request, payload: object) -> object:
-    """A search response names the characters of its display texts that the search matched."""
+    """A Loose Tracks search response names the characters of its track titles that the search matched."""
     # The first q, as the search itself reads it (_AsgiQueryArgs).
     query = str(_AsgiQueryArgs(request.query_params).get("q") or "").strip()
     if query and isinstance(payload, dict):
@@ -784,7 +784,7 @@ _SEARCH_HIGHLIGHT_REQUEST_BYTES = 256 * 1024
 
 @router.post("/search/highlights")
 async def search_highlights(request: Request) -> JSONResponse:
-    """Highlights for texts a client shows outside a search response (Album Details tracks)."""
+    """Highlights for track titles a client shows outside a search response (Album Details)."""
     try:
         body = await read_bounded_json_object(request, max_bytes=_SEARCH_HIGHLIGHT_REQUEST_BYTES)
     except JSONBodyTooLarge:
@@ -818,9 +818,9 @@ def library_custom_collections(request: Request) -> JSONResponse:
     if not is_library_browse_postgres_available(_app_config(request)):
         return JSONResponse({"ok": False, "error": "Custom Collections need the Postgres library."}, status_code=409)
     return JSONResponse(
-        _with_search_highlights(request, PostgresLibraryBrowseRepository(_app_config(request)).build_custom_collection_catalog_payload(
+        PostgresLibraryBrowseRepository(_app_config(request)).build_custom_collection_catalog_payload(
             query_params=request.query_params,
-        )),
+        ),
         headers={"Cache-Control": "private, no-store"},
     )
 
@@ -834,7 +834,6 @@ async def view_data(request: Request) -> JSONResponse:
     # uses the same worker pool; a sync-to-async bridge can deadlock that pool.
     await require_action("library.browse.read", refresh_actor=True)(request)
     payload = await run_in_threadpool(_project_album_payload_for_request, request, payload)
-    payload = await run_in_threadpool(_with_search_highlights, request, payload)
     return await run_in_threadpool(
         JSONResponse, compact_selected_artist_wire_payload(payload),
         headers={"Cache-Control": "private, no-store"},

@@ -797,3 +797,13 @@ test('the shared track table owns the Album Details type scale on every surface'
   assert.match(rule, /font-size:\s*0\.8rem/);
   assert.match(rule, /line-height:\s*1\.3/);
 });
+
+test('the neutral search highlight lives in the track table stylesheet the page loads', () => {
+  const css = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'album-track-table.css'), 'utf8');
+  const index = fs.readFileSync(path.join(repoRoot, 'music_app', 'templates', 'index.html'), 'utf8');
+  assert.match(index, /css\/runtime\/album-track-table\.css/);
+  const rule = css.match(/\.album-track-table mark\.search-match-highlight \{([^}]*)\}/);
+  assert.ok(rule, 'track tables style their own <mark> instead of the browser default yellow');
+  assert.match(rule[1], /color: inherit/);
+  assert.match(rule[1], /background: color-mix\(in srgb, currentColor 24%, transparent\)/);
+});

@@ -629,8 +629,6 @@ def test_asgi_view_data_uses_generation_owned_preview_during_active_scan(
     assert _decode_json(body) == {
         "view_data_source": "transient_scan_state",
         "album_count": 1,
-        # A search response carries its highlights (none here: the payload has no display text).
-        **({"search_highlights": {"query": query["q"], "texts": {}}} if "q" in query else {}),
     }
     assert len(build_calls) == 1
     assert asgi_app.state.library_state["albums"] == []
@@ -740,7 +738,6 @@ def test_asgi_active_scan_album_search_prefers_postgres_committed_library_over_t
         "album_count": 1,
         "view_data_source": "postgres_library_browse",
         "inventory_mutation_revision": 0,
-        "search_highlights": {"query": "tender", "texts": {}},
     }
     assert len(postgres_calls) == 1
 
@@ -817,7 +814,8 @@ def test_asgi_custom_collection_catalog_returns_names_and_counts_only(asgi_app, 
         b"private, no-store", "private, no-store")
 
 
-def test_asgi_search_catalog_and_loose_tracks_carry_search_highlights(asgi_app, monkeypatch):
+def test_asgi_search_highlights_only_loose_track_titles(asgi_app, monkeypatch):
+    """Owner 2026-11-21: only track names are highlighted, never collection, album or artist names."""
     from music_app.routes import api_read_asgi_routes as asgi_read_routes
 
     class FakePostgresBrowseRepository:
@@ -828,7 +826,10 @@ def test_asgi_search_catalog_and_loose_tracks_carry_search_highlights(asgi_app, 
             return {"custom_collections": [{"name": "Salt and Sal", "count": 2}, {"name": "Road trip", "count": 1}]}
 
         def build_library_loose_tracks_payload(self, *, query_params):
-            return {"library_non_album_tracks": [{"title": "Alas de Sal", "artist": "Argovia", "path": "sal.mp3"}]}
+            return {"library_non_album_tracks": [
+                {"title": "Alas de Sal", "artist": "Salvador", "album_artist": "Sal", "path": "sal.mp3"},
+                {"title": "", "filename": "Sal demo.mp3", "artist": "Argovia", "path": "demo.mp3"},
+            ]}
 
     monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FakePostgresBrowseRepository)
     monkeypatch.setattr(asgi_read_routes, "is_library_browse_postgres_available", lambda _config: True)
@@ -839,8 +840,10 @@ def test_asgi_search_catalog_and_loose_tracks_carry_search_highlights(asgi_app, 
     _status, _headers, loose = _run_asgi_request(asgi_app, "GET", "/library/loose-tracks", query={"q": "sal"})
     _status, _headers, unsearched = _run_asgi_request(asgi_app, "GET", "/library/custom-collections")
 
-    assert _decode_json(catalog)["search_highlights"] == {"query": "sal", "texts": {"Salt and Sal": [[0, 3], [9, 12]]}}
-    assert _decode_json(loose)["search_highlights"] == {"query": "sal", "texts": {"Alas de Sal": [[8, 11]]}}
+    assert "search_highlights" not in _decode_json(catalog)
+    assert _decode_json(loose)["search_highlights"] == {
+        "query": "sal", "texts": {"Alas de Sal": [[8, 11]], "Sal demo.mp3": [[0, 3]]},
+    }
     assert "search_highlights" not in _decode_json(unsearched)
 
 
@@ -944,7 +947,6 @@ def test_asgi_search_preview_uses_postgres_without_file_backed_hydration(
         "payload_tier": "search_preview",
         "view_data_source": "postgres_library_browse",
         "inventory_mutation_revision": 0,
-        "search_highlights": {"query": "Neal Morse", "texts": {}},
     }
     assert len(postgres_calls) == 1
 
@@ -1327,7 +1329,6 @@ def test_asgi_view_and_home_routes_hydrate_and_log_through_explicit_asgi_depende
         "album_count": 3,
         "artist_count": 2,
         "inventory_mutation_revision": 0,
-        "search_highlights": {"query": "mono", "texts": {}},
     }
     assert home_payload == {
         "kind": "home",
@@ -1340,9 +1341,8 @@ def test_asgi_view_and_home_routes_hydrate_and_log_through_explicit_asgi_depende
     assert build_view_kwargs["query_args"].get("q") == "mono"
     assert build_view_kwargs["query_args"].getlist("q") == ["mono", "ignored-last-query-value"]
     assert build_view_kwargs["query_args"].get("artist") == "Mono"
-    # The request log sees the payload before the response adds its search highlights.
     assert logged_calls == [
-        ({key: value for key, value in view_payload.items() if key != "search_highlights"}, 10.0),
+        (view_payload, 10.0),
         (home_payload, 20.0),
     ]
 

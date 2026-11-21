@@ -17,9 +17,10 @@ export class UtilityProblematicFilesActions {
     const deadline = Date.now() + (options.timeout || 600000);
     let last = null;
     while (Date.now() < deadline) {
-      const response = await page.request.get('/status');
-      last = response.ok() ? await response.json() : null;
-      if (last && last.problematic_index_in_progress === false) return;
+      const response = await authenticatedPageGet(page, '/status');
+      assert.ok(response.ok(), `/status answered ${response.status()} while waiting for the Problematic Files index.`);
+      last = await response.json();
+      if (last.problematic_index_in_progress === false) return;
       await page.waitForTimeout(500);
     }
     throw new Error(`The Problematic Files index did not finish filling: ${JSON.stringify(last?.problematic_index_in_progress)}`);

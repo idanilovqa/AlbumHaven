@@ -6078,6 +6078,20 @@ test('the idle preparation verifies decoders and builds a suspended graph at the
   assert.equal(harness.sent('open')[0].sampleRate, 48_000);
 });
 
+test('inside the APK the idle preparation readies only the socket', async () => {
+  let decoderChecks = 0;
+  const harness = createEngineHarness({
+    ensureStreamingDecoders: () => { decoderChecks += 1; return Promise.resolve(['mp3']); },
+  });
+  harness.context.isInsideAndroidShell = () => true;
+
+  await harness.context.prepareIdleStreamingPlayback();
+
+  assert.equal(harness.sockets.length, 1);
+  assert.equal(harness.contexts.length, 0, 'the native engine plays; no web audio graph is built');
+  assert.equal(decoderChecks, 0);
+});
+
 test('the rate a song played at is remembered for the next page', async () => {
   const stored = new Map();
   const harness = createEngineHarness({

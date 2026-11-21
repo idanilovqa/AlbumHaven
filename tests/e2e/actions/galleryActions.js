@@ -396,6 +396,22 @@ export class GalleryActions {
     await this.galleryPage.albumCard.detailsButtonAt(index).click();
   }
 
+  // Opens the details of the first album whose details button is wholly inside the gallery's
+  // visible area; returns that album card's index among the rendered cards.
+  async clickFirstAlbumDetailsInView() {
+    const view = await this.galleryPage.galleryScroll.boundingBox();
+    const buttons = this.galleryPage.albumDetailsButtons;
+    const count = await buttons.count();
+    for (let index = 0; index < count; index += 1) {
+      const box = await buttons.nth(index).boundingBox();
+      if (box && box.y >= view.y && box.y + box.height <= view.y + view.height) {
+        await buttons.nth(index).click();
+        return index;
+      }
+    }
+    throw new Error('no album details button is wholly in view');
+  }
+
   async clickAlbumDetailsByAlbumName(albumName) {
     await this.galleryPage.albumCard.detailsButtonByAlbumName(albumName).first().click();
   }

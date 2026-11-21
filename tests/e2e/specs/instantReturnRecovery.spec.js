@@ -25,8 +25,15 @@ async function provesRecovery({ page, galleryActions, navigationPanelActions, tr
 
   // Album Details.
   await cutOff();
-  // The first album by position: at this short height its title is below the fold.
-  await galleryActions.clickAlbumDetailsAt(0);
+  // An album never on screen while online: the gallery fetches (and the copy may keep) the details
+  // of the albums it shows, so one shown online could open offline. Three screens down, short of
+  // the end of the loaded albums.
+  const { clientHeight, maxScrollTop } = await galleryActions.readGalleryScrollState();
+  const below = Math.min(3 * clientHeight, maxScrollTop - clientHeight);
+  expect(below, 'the loaded albums reach well below the first screen').toBeGreaterThan(clientHeight);
+  await galleryActions.scrollGalleryBy(below);
+  await expect.poll(async () => (await galleryActions.readGalleryScrollState()).scrollTop).toBeGreaterThanOrEqual(below - 1);
+  await galleryActions.clickFirstAlbumDetailsInView();
   await expect(trackModal.unreachableTitle).toHaveText('Offline');
   await expect(trackModal.unreachableDetail).toHaveText("Can't load the details, check your network or try again later");
   let loadsBefore = loads;

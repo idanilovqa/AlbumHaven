@@ -1152,6 +1152,21 @@ def _build_postgres_home_payload(request: Request) -> dict[str, object]:
 
 @router.get("/album-details")
 async def album_details(request: Request) -> JSONResponse:
+    response = await _album_details_impl(request)
+    try:
+        body = json.loads(response.body or b"{}")
+    except Exception:
+        body = {}
+    album = body.get("album") if isinstance(body, dict) else None
+    logging.getLogger(__name__).warning(
+        "DIAG008 album-details params=%s status=%s key=%s name=%s tracks=%s error=%s",
+        dict(request.query_params), response.status_code,
+        (album or {}).get("key"), (album or {}).get("name"), len((album or {}).get("tracks") or []),
+        body.get("error") if isinstance(body, dict) else None)
+    return response
+
+
+async def _album_details_impl(request: Request) -> JSONResponse:
     unsupported_params = sorted(
         str(key)
         for key in request.query_params.keys()

@@ -9,6 +9,23 @@ export class UtilityProblematicFilesActions {
     this.navigationObservation = null;
   }
 
+  // A restored fixture database fills the Problematic Files index once after startup; a
+  // restarted production server already has it. /status reports the fill without warming
+  // Problematic Files, so a timed open afterwards stays cold.
+  async waitForIndexReady(options = {}) {
+    const page = this.utilityProblematicFilesTab.page;
+    const deadline = Date.now() + (options.timeout || 600000);
+    let last = null;
+    while (Date.now() < deadline) {
+      const response = await authenticatedPageGet(page, '/status');
+      assert.ok(response.ok(), `/status answered ${response.status()} while waiting for the Problematic Files index.`);
+      last = await response.json();
+      if (last.problematic_index_in_progress === false) return;
+      await page.waitForTimeout(500);
+    }
+    throw new Error(`The Problematic Files index did not finish filling: ${JSON.stringify(last?.problematic_index_in_progress)}`);
+  }
+
   async waitForReady(options = {}) {
     const timeout = options.timeout || 60000;
     await this.utilityProblematicFilesTab.waitForPageCondition((expected) => {
@@ -91,8 +108,10 @@ export class UtilityProblematicFilesActions {
 
   async waitForBoundedPageEvidence(problemType, albumTitle, options = {}) {
     const timeout = options.timeout || 60000;
+    // The first bounded response proves the page; with the indexed list the complete list can
+    // replace that page before a check of the rendered state runs, so the screen is only
+    // required to show the filter and the row.
     const rendered = this.utilityProblematicFilesTab.waitForPageCondition((expected) => {
-      if (typeof state === 'undefined' || state.utility?.problematicFilesComplete !== false) return false;
       const filter = Array.from(document.querySelectorAll(expected.filterOptionSelector))
         .find((option) => option.getAttribute('data-problem-filter-value') === expected.problemType);
       const item = Array.from(document.querySelectorAll(expected.listItemSelector)).find((candidate) => {
@@ -112,7 +131,11 @@ export class UtilityProblematicFilesActions {
       return candidate.ok()
         && candidate.request().method() === 'GET'
         && url.pathname === '/utilities/problematic-files'
-        && url.searchParams.has('limit');
+        && url.searchParams.has('limit')
+        // The Artist rows page shares the path; only the first album page proves the case.
+        && !url.searchParams.has('artists')
+        && !url.searchParams.has('cursor')
+        && !url.searchParams.has('q');
     }, { timeout });
     const [response] = await Promise.all([responsePromise, rendered]);
     const payload = await response.json();

@@ -50,6 +50,7 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
 
     await stepLogger.step('Open the isolated production app root', async () => {
       await galleryActions.goto('/');
+      await utilityProblematicFilesActions.waitForIndexReady();
     });
 
     const networkEvidence = await stepLogger.step('Open Settings and wait for Problematic Files automatic detail', async () => (
@@ -301,6 +302,7 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
     expect(process.env.PLAYWRIGHT_ISOLATED_LIBRARY_APP).toBe('1');
     expect(process.env.ALBUM_HAVEN_PERSISTENCE_LIBRARY_BROWSE).toBe('postgres');
     await galleryActions.goto('/');
+    await utilityProblematicFilesActions.waitForIndexReady();
     // The earlier test leaves the complete list warm; holding it makes "bounded first" a
     // controlled precondition instead of a race the warm list always wins.
     await setProblematicCompleteListHeld(testInfo, true);

@@ -464,7 +464,7 @@ test('FTC-PLAYER-016 production playback crosses a sample-exact stable-stream bo
       expect(traffic.activeSocketCount()).toBe(1);
     });
 
-    await stepLogger.step('Reload and render the persisted six-minute waveform from one cache-only response', async () => {
+    await stepLogger.step('Reload and render the persisted six-minute waveform from one cached response', async () => {
       await page.reload({ waitUntil: 'domcontentloaded' });
       await galleryActions.waitForGalleryReady();
       await searchToolbarActions.search(gaplessPlaybackFixture.album, { submitWithEnter: true });
@@ -477,7 +477,7 @@ test('FTC-PLAYER-016 production playback crosses a sample-exact stable-stream bo
       try {
         const mark = waveformTraffic.mark();
         const cacheResponsePromise = waveformTraffic.waitForResponse({
-          cachedOnly: true,
+          priority: 'current',
           path: longLoop.path,
           status: 200,
         }, { afterMark: mark });

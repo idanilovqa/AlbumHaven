@@ -588,3 +588,23 @@ for (const choice of ['local', 'pasted', 'remote']) {
     });
   }
 }
+
+test('a delete never does nothing: an unnamed cover says why, and a file already gone leaves the list (owner 2026-11-21)', async () => {
+  const h = harness(), a = album('A');
+  await h.open(a);
+  h.context.openCoverLookupDeleteConfirm('');
+  assert.equal(h.confirm.hidden, true);
+  assert.equal(h.notifications.length, 1);
+  assert.match(h.notifications[0][0], /cannot be deleted yet/);
+  assert.equal(h.notifications[0][1], 'error');
+
+  const pending = h.context.deleteLocalCoverFromLookup('/A/source.jpg');
+  const reads = h.galleries.length;
+  h.server.set('A', { ok: true, active_cover_ref: a.cover_ref, selected_source_cover_ref: a.cover_ref,
+    local_covers: [{ candidate_cover_ref: a.cover_ref, is_active: true, cover_revision: a.cover_revision }] });
+  h.requests[0].resolve({ ok: false, status: 404, json: async () => ({ ok: false, error: 'Selected image was not found' }) });
+  await pending;
+  assert.equal(h.galleries.length, reads + 1, 'the list is read again from the disk');
+  assert.deepEqual(h.context.state.coverLookup.modal.localCovers.map(item => item.candidate_cover_ref), [a.cover_ref]);
+  assert.equal(h.notifications.at(-1)[1], 'info');
+});

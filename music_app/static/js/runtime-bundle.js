@@ -40091,7 +40091,12 @@ function closeCoverLookupModal() {
 
 function openCoverLookupDeleteConfirm(path) {
   const els = getCoverLookupDeleteConfirmElements();
-  if (!els.overlay || !path || isCoverLookupLocalMutationPending()) return;
+  if (!els.overlay || isCoverLookupLocalMutationPending()) return;
+  // A delete never does nothing (owner 2026-11-21, Lisbon): a cover the server could not name says why.
+  if (!path) {
+    showToast('This cover cannot be deleted yet. Close Cover Look Up and open it again.', 'error', 4000);
+    return;
+  }
   state.coverLookup.modal.pendingDeletePath = String(path || '');
   if (els.text) {
     els.text.textContent = path === 'custom-collection'
@@ -40285,6 +40290,12 @@ async function deleteLocalCoverFromLookup(sourceRef) {
       body: JSON.stringify({ album, source_cover_ref: sourceRef }),
     });
     const data = await response.json().catch(() => ({}));
+    // The file is already gone from the disk: the cover leaves the list, as a delete would (owner 2026-11-21).
+    if (response.status === 404) {
+      if (ownsModal()) await refreshCoverLookupGallery(false);
+      showToast('That cover file was already gone; it is removed from the list.', 'info', 2800);
+      return;
+    }
     if (!response.ok || !data.ok) {
       throw new Error(data.error || 'Failed to delete local cover art');
     }

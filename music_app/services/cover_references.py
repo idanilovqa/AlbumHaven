@@ -33,13 +33,18 @@ class CoverReferenceStore:
 
     def __init__(self, config: Mapping[str, object], *, connect=pooled_connection, cache_size: int = _CACHE_SIZE):
         self._database_url = str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "")
-        # Browse-only instances on a shared database never write; they name only stored covers.
-        self._writable = config.get("SHARED_LIBRARY_BROWSE_ONLY") is not True
+        self._config = config
         self._connect = connect
         self._cache_size = cache_size
         self._by_path: OrderedDict[tuple[int, str], tuple[str, str]] = OrderedDict()
         self._by_reference: OrderedDict[str, tuple[int, str, str]] = OrderedDict()
         self._lock = threading.Lock()
+
+    def _writable(self) -> bool:
+        # Browse-only instances on a shared database never write; they name only stored covers. Read per call:
+        # a runtime can leave browse-only after startup, and a store fixed at construction then never named a
+        # new local cover, so it showed blank and could not be deleted (owner 2026-11-21, Lisbon).
+        return self._config.get("SHARED_LIBRARY_BROWSE_ONLY") is not True
 
     def references_for(self, library_id: int, wanted: Mapping[str, str]) -> dict[str, str]:
         """References for `{path: kind}`, minting missing ones; absent only on a browse-only miss."""
@@ -91,7 +96,7 @@ class CoverReferenceStore:
     def _load_or_register(self, library_id: int, wanted: Mapping[str, str]) -> list[tuple[str, str, str]]:
         paths = list(wanted)
         with self._connect(self._database_url, workload=_WORKLOAD) as connection:
-            if self._writable:
+            if self._writable():
                 connection.execute(
                     """insert into library.cover_references (library_id, private_path, kind)
                        select %s, wanted.path, wanted.kind

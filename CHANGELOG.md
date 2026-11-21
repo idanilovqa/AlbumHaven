@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.43 - 2026-11-21
+
+- Test-only: the bounded-interaction freeze guard now performs every request-capture interaction twice and fails when the repeat sends an identical request more often than the first pass, or sends more requests in total. This catches leaked listeners and duplicated fetches that a single pass misses.
+
 ## 0.11.42 - 2026-11-19
 
 - Docs-only: contributor guidance now says that rerunning a failing gate to diagnose it or to verify a fix is expected; only rerunning unchanged code for a lucky pass is ruled out.

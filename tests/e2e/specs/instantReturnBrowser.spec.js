@@ -191,11 +191,12 @@ test(`FTC-IAR-W13 offline, album details show 'Offline. Can't load the details, 
   const requested = requestedAlbumKeys(page);
   await primeCopy(page, galleryActions);
   const { galleryPage } = galleryActions;
-  // Details already asked for (a prewarm included) are kept and open offline (FTC-IAR-W20).
-  const album = await albumNeverRequested(galleryActions, requested);
   // Album Details was never opened online; its close X (a CSS mask image) is kept by the save alone.
   await expect.poll(() => keptStaticPaths(page), { timeout: 15_000 }).toContain('/static/images/icons/tabler-x.svg');
   await context.setOffline(true);
+  // Details already asked for (a prewarm included) are kept and open offline (FTC-IAR-W20); chosen
+  // once offline, so no prewarm can still keep the album's details.
+  const album = await albumNeverRequested(galleryActions, requested);
   const failedAssets = failedStaticRequests(page);
 
   await galleryActions.clickAlbumDetailsByAlbumName(album);

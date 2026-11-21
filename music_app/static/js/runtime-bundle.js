@@ -53900,6 +53900,12 @@ if (shouldStartImmediateHydration) {
 window.AlbumHavenAppCopy?.onServerAnswer(() => {
   void refreshCurrentViewAfterBackgroundCompletion({ preserveScroll: true });
 });
+// A view whose page was never kept may still have its data on the device (an artist opened
+// online, app-copy-worker.js): asked for once, it replaces the Offline message when the worker
+// answers from what it kept, and the message stays when nothing was kept.
+if (window.AlbumHavenAppCopy?.viewMissing) {
+  void fetchAndRender(`${window.location.pathname}${window.location.search}`, false).catch(() => {});
+}
 
 document.addEventListener('contextmenu', (event) => {
   const sidebarArtist = event.target.closest('[data-sidebar-artist]');

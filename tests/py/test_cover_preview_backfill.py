@@ -67,6 +67,57 @@ def test_backfill_loads_distinct_database_cover_paths_and_uses_album_owned_stora
     assert "FROM library.local_albums" in connection.executed[0]
 
 
+def test_backfill_retries_a_failed_preview_until_a_later_pass_publishes_it(tmp_path):
+    from PIL import Image
+
+    from music_app.services.cover_preview_backfill import CoverPreviewBackfill
+
+    source = tmp_path / "Artist" / "Album" / "cover.jpg"
+    source.parent.mkdir(parents=True)
+    Image.new("RGB", (600, 600), "teal").save(source, format="JPEG")
+    preview = tmp_path / "preview.jpg"
+    connection = _Connection([{"cover_path": str(source)}])
+    # The real generator answers with the source when a render fails.
+    outcomes = [source, preview]
+    calls = []
+
+    def generate(source_path, **_kwargs):
+        calls.append(source_path)
+        return outcomes.pop(0)
+
+    worker = CoverPreviewBackfill(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app@example/library"},
+        connect=lambda *_args, **_kwargs: _ConnectionContext(connection),
+        generate=generate,
+        throttle_seconds=0,
+    )
+
+    assert worker.run_once() == 1
+    assert worker.run_once() == 1
+    assert worker.run_once() == 0
+    assert calls == [source, source]
+
+
+def test_backfill_settles_a_source_that_needs_no_preview(tmp_path):
+    from PIL import Image
+
+    from music_app.services.cover_preview_backfill import CoverPreviewBackfill
+
+    source = tmp_path / "Artist" / "Album" / "cover.jpg"
+    source.parent.mkdir(parents=True)
+    Image.new("RGB", (300, 300), "teal").save(source, format="JPEG")
+    connection = _Connection([{"cover_path": str(source)}])
+    worker = CoverPreviewBackfill(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app@example/library"},
+        connect=lambda *_args, **_kwargs: _ConnectionContext(connection),
+        generate=lambda source_path, **_kwargs: source_path,
+        throttle_seconds=0,
+    )
+
+    assert worker.run_once() == 1
+    assert worker.run_once() == 0
+
+
 def test_backfill_uses_a_bounded_background_pool_checkout(tmp_path):
     from music_app.services.cover_preview_backfill import CoverPreviewBackfill
 
@@ -299,16 +350,18 @@ def test_backfill_honors_storage_policy_without_revision(tmp_path, mode):
             "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app@example/library",
             "DATA_DIR": str(data_dir),
             "_GENERATED_PREVIEW_STORAGE_POLICY": policy,
+            "_GENERATED_PREVIEW_INVENTORY_RECORDER": (recorder := object()),
         },
         connect=lambda *_args, **_kwargs: _ConnectionContext(connection),
         generate=lambda source_path, **kwargs: generated.append(
-            (Path(source_path), Path(kwargs["cache_root"]))
+            (Path(source_path), Path(kwargs["cache_root"]), kwargs.get("on_published"))
         ),
         throttle_seconds=0,
     )
 
     assert worker.run_once() == 1
-    assert generated == [(source, policy.write_cache_root(source))]
+    # The preview follows the storage policy, so its destination is the one recorded.
+    assert generated == [(source, policy.write_cache_root(source), recorder)]
 
 
 @pytest.mark.parametrize("mode", ["album_folders", "custom"])
@@ -348,10 +401,9 @@ def test_repeated_unrevisioned_backfill_records_only_policy_destination(tmp_path
         throttle_seconds=0,
     )
 
-    for _ in range(3):
-        assert worker.run_once() == 1
-    assert len(recorded) == 3
-    assert len({row["current_path"] for row in recorded}) == 1
+    # A settled preview is not generated or recorded again on later passes.
+    assert [worker.run_once() for _ in range(3)] == [1, 0, 0]
+    assert len(recorded) == 1
     for row in recorded:
         relocation_target = (
             tmp_path / "ssd" / row["managed_relative_path"]

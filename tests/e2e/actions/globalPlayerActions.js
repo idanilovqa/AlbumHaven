@@ -676,6 +676,22 @@ export class GlobalPlayerActions {
     return this.readLoopActionVisualState();
   }
 
+  async expectScissorsStayFoldedOnPlayHover() {
+    const before = await this.readLoopActionVisualState();
+    const playBounds = await this.globalPlayer.playButton.boundingBox();
+    if (!playBounds) throw new Error('Expected Play to have rendered bounds before hovering it.');
+    await this.globalPlayer.page.mouse.move(
+      playBounds.x + (playBounds.width / 2),
+      playBounds.y + (playBounds.height / 2),
+    );
+    // Three times the 300 ms reveal dwell: an unusable player must never slide the scissors out.
+    await this.globalPlayer.page.waitForTimeout(900);
+    await expect(this.globalPlayer.loopAction).toHaveAttribute('data-loop-action-engaged', 'false');
+    const after = await this.readLoopActionVisualState();
+    await this.globalPlayer.page.mouse.move(0, 0);
+    return { before, after };
+  }
+
   async hoverLoopAction(target = 'enter') {
     const playBounds = await this.globalPlayer.playButton.boundingBox();
     if (!playBounds) throw new Error('Expected Play to have rendered bounds before revealing loop actions.');

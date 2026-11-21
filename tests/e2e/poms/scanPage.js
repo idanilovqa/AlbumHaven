@@ -432,7 +432,7 @@ export class ScanPage extends BasePage {
             if (productionSource) {
               const productionUrl = new URL(productionSource, window.location.href);
               productionCoverReady = productionUrl.origin === window.location.origin
-                && productionUrl.pathname === '/cover';
+                && productionUrl.pathname.startsWith('/cover/');
             }
           }
           const approvedPlaceholder = visible(placeholder)

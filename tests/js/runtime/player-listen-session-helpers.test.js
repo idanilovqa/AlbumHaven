@@ -418,7 +418,7 @@ async function run() {
         displayTitle: 'Track Two',
         artist: 'Artist Alpha feat. Guest Singer',
         album: 'Album Alpha',
-        coverPath: '',
+        coverRef: '',
         trackNumber: '2',
       },
       started_at: '2026-05-14T00:00:00Z',
@@ -467,7 +467,7 @@ async function run() {
       title: 'Song',
       artist: 'Artist',
       album: 'Album',
-      coverPath: 'C:/Music/cover.jpg',
+      coverRef: 'C:/Music/cover.jpg',
       trackNumber: '3',
     });
     context.beginListenSegment(10.1111);
@@ -480,7 +480,7 @@ async function run() {
         title: 'Song',
         artist: 'Artist',
         album: 'Album',
-        coverPath: 'C:/Music/cover.jpg',
+        coverRef: 'C:/Music/cover.jpg',
         trackNumber: '3',
       },
       started_at: '2026-05-14T00:00:00Z',
@@ -508,7 +508,7 @@ async function run() {
       title: 'Song',
       artist: 'Artist',
       album: 'Album',
-      coverPath: 'C:/Music/cover.jpg',
+      coverRef: 'C:/Music/cover.jpg',
       trackNumber: '3',
     }))), {
       path: 'C:/Music/song.flac',
@@ -516,7 +516,7 @@ async function run() {
       artist: 'Artist',
       album: 'Album',
       album_artist: 'Artist',
-      cover_path: 'C:/Music/cover.jpg',
+      cover_ref: 'C:/Music/cover.jpg',
       duration_seconds: 240.111,
       started_at: '2026-05-14T00:00:00Z',
       started_at_unix: 1778716800,
@@ -535,7 +535,7 @@ async function run() {
       title: 'Song',
       artist: 'Artist',
       album: 'Album',
-      coverPath: '',
+      coverRef: '',
       trackNumber: '1',
     },
     started_at: '2026-05-14T00:00:00Z',
@@ -591,7 +591,7 @@ async function run() {
         title: 'Song',
         artist: 'Artist',
         album: 'Album',
-        coverPath: '',
+        coverRef: '',
         trackNumber: '1',
       },
       started_at: '2026-05-14T00:00:00Z',
@@ -649,7 +649,7 @@ async function run() {
         title: 'Song',
         artist: 'Artist',
         album: 'Album',
-        coverPath: '',
+        coverRef: '',
         trackNumber: '1',
       },
       started_at: '2026-05-14T00:00:00Z',
@@ -713,7 +713,7 @@ async function run() {
         title: 'Song',
         artist: 'Artist',
         album: 'Album',
-        coverPath: '',
+        coverRef: '',
         trackNumber: '1',
       },
       started_at: '2026-05-14T00:00:00Z',
@@ -804,7 +804,7 @@ async function run() {
         title: 'Song',
         artist: 'Artist',
         album: 'Album',
-        coverPath: '',
+        coverRef: '',
         trackNumber: '1',
       },
       started_at: '2026-05-14T00:00:00Z',
@@ -850,7 +850,7 @@ async function run() {
         title: 'Song',
         artist: 'Artist',
         album: 'Album',
-        coverPath: '',
+        coverRef: '',
         trackNumber: '1',
       },
       started_at: '2026-05-14T00:00:00Z',
@@ -907,7 +907,7 @@ async function run() {
         title: 'Song',
         artist: 'Artist',
         album: 'Album',
-        coverPath: '',
+        coverRef: '',
         trackNumber: '1',
       },
       started_at: '2026-05-14T00:00:00Z',
@@ -958,7 +958,7 @@ async function run() {
     let currentTime = 30;
     const track = {
       path: 'C:/Music/song.flac', title: 'Song', artist: 'Artist', album: 'Album',
-      coverPath: '', trackNumber: '1',
+      coverRef: '', trackNumber: '1',
     };
     const session = {
       track,
@@ -1026,7 +1026,7 @@ async function run() {
         title: 'Song',
         artist: 'Artist',
         album: 'Album',
-        coverPath: '',
+        coverRef: '',
         trackNumber: '1',
       },
       started_at: '2026-05-14T00:00:00Z',
@@ -1082,7 +1082,7 @@ async function run() {
       title: 'Next Song',
       artist: 'Artist',
       album: 'Album',
-      coverPath: '',
+      coverRef: '',
       trackNumber: '2',
     };
     let releaseFirstRequest;
@@ -1143,4 +1143,37 @@ async function run() {
 run().catch((error) => {
   console.error(error);
   process.exitCode = 1;
+});
+
+// Request-capture contract (tests/ci/bounded-interactions.json): one listen sends now-playing,
+// its scrobble and its completion once each, however many progress events it receives.
+const { assertInteractionRequests, createRequestCapture, measureInteractionContract } = require('../helpers/request-capture');
+
+test('request capture: one listen posts each session write once on listen-session endpoints', async () => {
+  const id = 'js:runtime/player-listen-session-helpers.js#postPlaybackSession';
+  await measureInteractionContract(id, async (progressEvents) => {
+    const capture = createRequestCapture(async () => ({ ok: true, json: async () => ({ ok: true }) }));
+    const track = { path: 'signal.flac', title: 'Signal', artist: 'Artist' };
+    const { context } = loadHelper({
+      fetch: capture.fetch,
+      crypto: require('node:crypto'),
+      getPlayerPlaybackSnapshot: () => ({ currentTime: 120, duration: 120 }),
+      canEmitPlaybackSessionSideEffects: () => true,
+    });
+    context.state.player.current = track;
+    context.startListenSession(track);
+    context.beginListenSegment(0);
+    const session = context.state.player.listenSession;
+    session.duration_seconds = 120;
+    const frames = Math.ceil((70 * 48000) / progressEvents);
+    for (let event = 0; event < progressEvents; event += 1) {
+      await context.maybeSendNowPlaying(track, session);
+      context.recordMeasuredStreamingFrames({ role: 'current', track }, { frames }, 48000);
+      await context.maybeScrobbleListenSession(session);
+    }
+    await context.finalizeListenSession('ended', { session, finishedFully: true, currentTime: 120, duration: 120 });
+    assert.deepEqual(capture.urls(), ['/playback/session/now-playing', '/playback/session/scrobble', '/playback/session/complete']);
+    assertInteractionRequests(id, capture.urls());
+    return capture.counter.snapshot();
+  });
 });

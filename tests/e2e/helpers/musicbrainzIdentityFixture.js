@@ -67,16 +67,15 @@ export async function createMusicBrainzIdentityFixture() {
   }
 
   async function writeMatch(artist, {
-    state, mbid = null, creditName = null, associated = [], decisionSource = 'manual', matcherVersion = PINNED_MATCHER_VERSION,
+    state, mbid = null, creditName = null, decisionSource = 'manual', matcherVersion = PINNED_MATCHER_VERSION,
   }) {
     await sql(`insert into library.local_artist_musicbrainz_matches (library_id, local_artist_id, artist_mbid, state,
-        decision_source, confidence, evidence_summary, selected_at, matcher_version, credit_name, associated_artist_mbids)
+        decision_source, confidence, evidence_summary, selected_at, matcher_version, credit_name)
       values (${artist.library}, ${artist.artist}, ${mbid ? `'${mbid}'` : 'null'}, '${state}', '${decisionSource}', 1,
-        'E2E MusicBrainz identity fixture', now(), ${matcherVersion}, ${literal(creditName)},
-        ${associated.length ? `array[${associated.map((value) => `'${value}'`).join(',')}]::uuid[]` : 'null'})
+        'E2E MusicBrainz identity fixture', now(), ${matcherVersion}, ${literal(creditName)})
       on conflict (library_id, local_artist_id) do update set artist_mbid = excluded.artist_mbid, state = excluded.state,
         decision_source = excluded.decision_source, matcher_version = excluded.matcher_version,
-        credit_name = excluded.credit_name, associated_artist_mbids = excluded.associated_artist_mbids`);
+        credit_name = excluded.credit_name`);
   }
 
   async function writeProblem(artist, reasonCode, candidateCount) {
@@ -129,14 +128,6 @@ export async function createMusicBrainzIdentityFixture() {
       for (const owner of owners) await upsertMusicBrainzArtist(owner);
       await writeMatch(artist, { state: 'per_album' });
       await this.assignAlbums(artist, owners);
-    },
-    /** A person matched together with the same-named band they belong to. */
-    async personWithBand(name, person, band) {
-      const artist = await localArtist(name);
-      await upsertMusicBrainzArtist(person);
-      await upsertMusicBrainzArtist(band);
-      await writeMatch(artist, { state: 'matched', mbid: person.mbid, associated: [band.mbid] });
-      await this.assignAlbums(artist, [person, band]);
     },
     async notFoundArtist(name) {
       const artist = await localArtist(name);
@@ -289,9 +280,11 @@ const CASES = {
       { mbid: '0e2e0001-0000-4000-8000-000000000003', name: 'Compilation Signal Lead', disambiguation: 'UK band', albums: ['Compilation Lead Solo', 'Functional Fixture Album 249'] },
       { mbid: '0e2e0001-0000-4000-8000-000000000004', name: 'Compilation Signal Lead', disambiguation: 'Swedish band', albums: ['Functional Fixture Album 250'] },
     ]);
-    await fixture.personWithBand('Control Signal Lead',
+    // Owner 2026-11-14: a person and their same-named band split like any same-named artists.
+    await fixture.splitArtist('Control Signal Lead', [
       { mbid: '0e2e0001-0000-4000-8000-000000000005', name: 'Control Signal Lead', kind: 'Person', albums: ['Control Lead Solo'] },
-      { mbid: '0e2e0001-0000-4000-8000-000000000006', name: 'Control Signal Lead', disambiguation: 'the band', albums: ['Functional Fixture Album 266'] });
+      { mbid: '0e2e0001-0000-4000-8000-000000000006', name: 'Control Signal Lead', disambiguation: 'the band', albums: ['Functional Fixture Album 266'] },
+    ]);
   },
   'FTC-MBID-003': async (fixture) => {
     await fixture.unconfirmedArtist('Album Rating Contract', {

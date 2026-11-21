@@ -120,3 +120,23 @@ def test_production_python_surface_has_no_emit_to_file_routing_hint():
             offenders.append(str(source_path.relative_to(REPO_ROOT)))
 
     assert offenders == []
+
+
+def test_provider_events_reach_the_application_log_but_never_open_log_history(monkeypatch, caplog):
+    """Cover provider searches log per query, candidate and probe; a pasted
+    album link's expansion runs them once per URL. Each history write opens a
+    database connection, so provider events never write history."""
+    import logging
+
+    from music_app.services import app_logging, cover_manual_links, cover_provider_runtime
+
+    writes = []
+    monkeypatch.setattr(app_logging, "append_log_history", lambda *args, **kwargs: writes.append(args))
+    logger = logging.getLogger("provider-events-test")
+    with caplog.at_level(logging.INFO, logger="provider-events-test"):
+        for index in range(50):
+            cover_provider_runtime.log_provider_event({"DATA_DIR": "unused"}, logger, "Probe rejected candidate", level="info", index=index)
+    assert writes == []
+    assert len([record for record in caplog.records if "Probe rejected candidate" in record.getMessage()]) == 50
+    # The pasted-link expansion hands the provider helpers this logger.
+    assert "cover_provider_runtime.log_provider_event" in __import__("inspect").getsource(cover_manual_links)

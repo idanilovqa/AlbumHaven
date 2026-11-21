@@ -75,7 +75,7 @@ test('visible gallery cover readiness uses the cover visual intersection rather 
     attributes: {
       'aria-hidden': 'true',
       'data-cover-visual-state': 'pending',
-      'data-production-cover-src': '/cover?path=pending',
+      'data-production-cover-src': '/cover/pending',
     },
   });
   const firstReadyCover = new FakeImageElement({
@@ -83,10 +83,10 @@ test('visible gallery cover readiness uses the cover visual intersection rather 
   }, {
     complete: true,
     naturalWidth: 480,
-    currentSrc: 'http://album.test/cover?path=ready-one',
+    currentSrc: 'http://album.test/cover/ready-one',
     attributes: {
       'data-cover-visual-state': 'ready',
-      'data-production-cover-src': '/cover?path=ready-one',
+      'data-production-cover-src': '/cover/ready-one',
     },
   });
   const secondReadyCover = new FakeImageElement({
@@ -94,10 +94,10 @@ test('visible gallery cover readiness uses the cover visual intersection rather 
   }, {
     complete: true,
     naturalWidth: 480,
-    currentSrc: 'http://album.test/cover?path=ready-two',
+    currentSrc: 'http://album.test/cover/ready-two',
     attributes: {
       'data-cover-visual-state': 'ready',
-      'data-production-cover-src': '/cover?path=ready-two',
+      'data-production-cover-src': '/cover/ready-two',
     },
   });
   const cards = [

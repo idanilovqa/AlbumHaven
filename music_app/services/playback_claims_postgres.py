@@ -153,11 +153,13 @@ class PostgresPlaybackClaims:
                     (account_id, library_id, client_id, client_surface, digest, expires,
                      json.dumps(track), now, now)).fetchone()
             else:
+                # The token renews its claim even past the lease, as for a client that played on
+                # without a network: until another client's acquire replaces the row or its release
+                # deletes it, nobody else has played since.
                 row = connection.execute("""update app.playback_claims set expires_at = %s, track = %s::jsonb
-                    where account_id = %s and library_id = %s and client_id = %s
-                      and token_digest = %s and expires_at > %s
+                    where account_id = %s and library_id = %s and client_id = %s and token_digest = %s
                     returning client_id, client_surface, expires_at, track""",
-                    (expires, json.dumps(track), account_id, library_id, client_id, digest, now)).fetchone()
+                    (expires, json.dumps(track), account_id, library_id, client_id, digest)).fetchone()
             if row is None:
                 raise PlaybackContractError(409)
         return {"protocol": 1, "claimToken": token, "expiresAt": expires.isoformat(),

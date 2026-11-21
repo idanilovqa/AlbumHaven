@@ -83,6 +83,9 @@ sealed interface UpdateState {
         }
 }
 
+/** The failure reason when Android had no room left for the download, its staging or its installation. */
+const val INSUFFICIENT_STORAGE = "insufficient_storage"
+
 /** Passive checks run on a cold launch only when the last successful check is six hours old. */
 object UpdateSchedule {
     const val PASSIVE_INTERVAL_MS = 6L * 60 * 60 * 1000
@@ -107,12 +110,18 @@ sealed interface DownloadResult {
     data class Refused(val reason: Rejection) : DownloadResult
     data class Denied(val reason: AccessFailure) : DownloadResult
     data object Failed : DownloadResult
+
+    /** Android had no room left for the download. */
+    data object NoSpace : DownloadResult
 }
 
 sealed interface StageResult {
     data class Staged(val sessionId: Int) : StageResult
     data class Refused(val reason: Rejection) : StageResult
     data object Failed : StageResult
+
+    /** Android had no room left to stage the installation. */
+    data object NoSpace : StageResult
 }
 
 sealed interface InstallStatus {
@@ -121,6 +130,9 @@ sealed interface InstallStatus {
     data object Succeeded : InstallStatus
     data object Cancelled : InstallStatus
     data object Failed : InstallStatus
+
+    /** Android had no room left to install the update. */
+    data object NoSpace : InstallStatus
 }
 
 /** Persisted across process death: the last successful check, and the verified update awaiting install. */
@@ -294,6 +306,7 @@ class Updater(
             is DownloadResult.Refused -> fail(UpdateError.VERIFICATION_FAILED, result.reason.wireName, manifest)
             is DownloadResult.Denied -> fail(UpdateError.DOWNLOAD_FAILED, result.reason.wireName, manifest)
             DownloadResult.Failed -> fail(UpdateError.DOWNLOAD_FAILED, null, manifest)
+            DownloadResult.NoSpace -> fail(UpdateError.DOWNLOAD_FAILED, INSUFFICIENT_STORAGE, manifest)
         }
     }
 
@@ -392,6 +405,7 @@ class Updater(
             }
             is StageResult.Refused -> fail(UpdateError.VERIFICATION_FAILED, result.reason.wireName, manifest)
             StageResult.Failed -> fail(UpdateError.INSTALL_FAILED, null, manifest)
+            StageResult.NoSpace -> fail(UpdateError.INSTALL_FAILED, INSUFFICIENT_STORAGE, manifest)
         }
     }
 
@@ -423,9 +437,9 @@ class Updater(
                 sessionId = null
                 state = UpdateState.Ready(manifest)
             }
-            InstallStatus.Failed -> {
+            InstallStatus.Failed, InstallStatus.NoSpace -> {
                 sessionId = null
-                fail(UpdateError.INSTALL_FAILED, null, manifest)
+                fail(UpdateError.INSTALL_FAILED, if (status == InstallStatus.NoSpace) INSUFFICIENT_STORAGE else null, manifest)
             }
         }
     }
@@ -447,7 +461,7 @@ class Updater(
         }
     }
 
-    /** [reason] is a [Rejection] or [AccessFailure] wire name. */
+    /** [reason] is a [Rejection] or [AccessFailure] wire name, or [INSUFFICIENT_STORAGE]. */
     private fun fail(error: UpdateError, reason: String?, manifest: UpdateManifest) {
         installWhenReady = null
         ports.cancelDownload()

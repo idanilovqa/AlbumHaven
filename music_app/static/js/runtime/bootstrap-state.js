@@ -30,7 +30,6 @@ const appBootstrap = (() => {
     gallery_display_mode: 'cards',
     gallery_scale_percent: 100,
     visible_library_categories: ['main_library', 'hoard', 'new_arrivals'],
-    music_dir: '',
     app_name: 'Album Haven',
     app_version: releaseVersion,
     ignored_version_keys: [],

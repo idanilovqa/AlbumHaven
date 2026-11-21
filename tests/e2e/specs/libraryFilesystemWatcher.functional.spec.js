@@ -5,6 +5,7 @@ import {
   queryPersistedAlbumIdentity,
   queryPersistedAlbumTrackMetadata,
 } from '../helpers/postgresAlbumIdentityHelpers.js';
+import { coverPathForReference } from '../helpers/coverReferences.js';
 
 const ARTIST = 'Watcher Reconciliation Artist';
 const TARGET_ALBUM = 'Watcher Reconciliation Album';
@@ -69,7 +70,7 @@ test('FTC-COVERS-034 watcher prefers front-named local art over a larger booklet
           WATCHER_LOCAL_COVER_TARGET,
           60000,
         );
-        expect(opened.album.cover_path).toMatch(/[\\/]front-scan\.jpg$/i);
+        expect(await coverPathForReference(opened.album.cover_ref)).toMatch(/[\\/]front-scan\.jpg$/i);
       }).toPass({ timeout: 60000, intervals: [250, 500, 1000] });
 
       await trackModalActions.waitForLoadedSummary();
@@ -1201,6 +1202,11 @@ test(`FTC-SEARCH-NAV-032 watcher sorts I${apostrophe}m with Her before IZZ witho
         context,
         managedAppLifecycle,
       });
+      // The tree is read on the next page load, so every album must be indexed
+      // first: wait for each addition before writing the next.
+      let revision = (await libraryFilesystemWatcherActions.waitForRevisionAfter(
+        status.inventory_mutation_revision,
+      )).inventory_mutation_revision;
       for (const target of siblings) {
         await fixture.createSiblingAlbum({
           album: target.album,
@@ -1209,10 +1215,9 @@ test(`FTC-SEARCH-NAV-032 watcher sorts I${apostrophe}m with Her before IZZ witho
           trackArtist: target.artist,
           albumArtist: target.artist,
         });
+        revision = (await libraryFilesystemWatcherActions.waitForRevisionAfter(revision))
+          .inventory_mutation_revision;
       }
-      await libraryFilesystemWatcherActions.waitForRevisionAfter(
-        status.inventory_mutation_revision,
-      );
     });
 
     await stepLogger.step('Ignore leading punctuation for ordering but preserve every display name', async () => {
@@ -1718,7 +1723,7 @@ test('FTC-COVERS-033 watcher indexes a new album and applies one automatic cover
           { timeout: 60000 },
         );
         expect(opened.album.cover_selection_origin).toBe('automatic');
-        expect(opened.album.cover_path).toMatch(/[\\/]cover\.jpg$/i);
+        expect(await coverPathForReference(opened.album.cover_ref)).toMatch(/[\\/]cover\.jpg$/i);
       }).toPass({ timeout: 60000, intervals: [250, 500, 1000] });
 
       await trackModalActions.waitForLoadedSummary();
@@ -1726,7 +1731,7 @@ test('FTC-COVERS-033 watcher indexes a new album and applies one automatic cover
       const coverFiles = fs.readdirSync(fixture.albumDirectory)
         .filter((name) => /^cover\.(?:jpe?g|png|webp)$/i.test(name));
       expect(coverFiles).toEqual(['cover.jpg']);
-      fixture.coverPath = opened.album.cover_path;
+      fixture.coverReference = opened.album.cover_ref;
       fixture.coverRevision = opened.album.cover_revision;
       await trackModalActions.close();
     });
@@ -1742,7 +1747,8 @@ test('FTC-COVERS-033 watcher indexes a new album and applies one automatic cover
         { timeout: 60000 },
       );
       expect(reopened.album.cover_selection_origin).toBe('automatic');
-      expect(reopened.album.cover_path).toBe(fixture.coverPath);
+      // The same file keeps the same opaque reference across a restart.
+      expect(reopened.album.cover_ref).toBe(fixture.coverReference);
       expect(reopened.album.cover_revision).toBe(fixture.coverRevision);
       await trackModalActions.waitForLoadedSummary();
       await expect(trackModalActions.trackModal.detailedCoverImage).toBeVisible();

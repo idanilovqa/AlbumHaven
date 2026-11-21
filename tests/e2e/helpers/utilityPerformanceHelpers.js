@@ -205,7 +205,7 @@ function normalizeFailedCoverUrl(value) {
   const rawUrl = String(value || '');
   if (!URL.canParse(rawUrl)) return '';
   const url = new URL(rawUrl);
-  return url.pathname === '/cover' ? `${url.origin}${url.pathname}` : '';
+  return url.pathname.startsWith('/cover/') ? `${url.origin}/cover` : '';
 }
 
 const AUTHENTICATED_COVER_PREEMPTION_REASONS = new Set([

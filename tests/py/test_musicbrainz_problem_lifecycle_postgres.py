@@ -612,7 +612,6 @@ def test_projection_refresh_replaces_remote_metadata_without_rewriting_the_accep
         credit_name="Old Credit",
         album_evidence=[{"local_album_id": album_id, "local_title": "Kingdom of the Night"}],
         album_identities=[{"local_album_id": album_id, "artist_mbid": GERMAN}],
-        associated_artist_mbids=[TRANCE],
         artist={
             "mbid": GERMAN,
             "canonical_name": "Old Name",
@@ -1031,10 +1030,11 @@ def test_albums_of_several_artists_store_their_identities_and_leave_problematic_
         assert _identities(connection, library_id) == {}
 
 
-def test_a_person_matched_with_their_band_s_albums_stores_the_band_for_those_identities(
+def test_a_person_and_their_same_named_band_split_per_album_and_a_stale_merge_is_cleared(
         monkeypatch: pytest.MonkeyPatch):
-    """Owner 2026-11-09: Alice Cooper is one artist, the singer; the albums credited to the
-    group he is a member of keep the group's MBID, which must exist for the identity."""
+    """Owner 2026-11-14 (reversing 2026-11-09): Alice Cooper the singer and his 1969-73 band
+    are separate artists. A re-check stores the per-album split and clears the person-plus-
+    band value Delivery 1.1 wrote into 0178's column."""
     setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
     library_id, artist_id = _seed_present_artist(setup_url, "alice")
     with isolatedPostgres._connect(setup_url) as connection:
@@ -1045,35 +1045,28 @@ def test_a_person_matched_with_their_band_s_albums_stores_the_band_for_those_ide
         solo_album = connection.execute("select id from library.local_albums where album_key = 'alice-album'").fetchone()["id"]
     repository = MusicBrainzEnrichmentPostgresRepository(
         {"ALBUM_HAVEN_APP_DATABASE_URL": runtime_url}, connect=lambda _url: isolatedPostgres._connect(runtime_url))
-
+    person = {"mbid": GERMAN, "canonical_name": "Alice Cooper", "artist_type": "Person"}
+    band = {"mbid": TRANCE, "canonical_name": "Alice Cooper", "artist_type": "Group", "disambiguation": "the band"}
+    identities = [{"local_album_id": solo_album, "artist_mbid": GERMAN},
+                  {"local_album_id": band_album, "artist_mbid": TRANCE}]
     repository.record_automatic_outcome(
         local_artist_id=artist_id, state="matched", confidence=1, observed_at=NOW,
-        evidence_summary="MusicBrainz album evidence agreed.",
-        artist={"mbid": GERMAN, "canonical_name": "Alice Cooper", "artist_type": "Person"},
-        identity_artists=[{"mbid": GERMAN, "canonical_name": "Alice Cooper", "artist_type": "Person"},
-                          {"mbid": TRANCE, "canonical_name": "Alice Cooper", "artist_type": "Group",
-                           "disambiguation": "the band"}],
-        album_identities=[{"local_album_id": solo_album, "artist_mbid": GERMAN},
-                          {"local_album_id": band_album, "artist_mbid": TRANCE}],
-        associated_artist_mbids=[TRANCE])
+        evidence_summary="MusicBrainz album evidence agreed.", artist=person, identity_artists=[person, band],
+        album_identities=identities)
+    with isolatedPostgres._connect(setup_url) as connection:
+        # The stale Delivery 1.1 value, as core still has it for Alice Cooper and Артур Беркут.
+        connection.execute("update library.local_artist_musicbrainz_matches set associated_artist_mbids = %s"
+                           " where local_artist_id = %s", ([TRANCE], artist_id))
+
+    repository.record_automatic_outcome(
+        local_artist_id=artist_id, state="per_album", confidence=1, observed_at=NOW, artist=None,
+        evidence_summary="Your albums belong to 2 MusicBrainz artists.", identity_artists=[person, band],
+        album_identities=identities)
 
     with isolatedPostgres._connect(setup_url) as connection:
         match = connection.execute(
             "select state, artist_mbid, associated_artist_mbids from library.local_artist_musicbrainz_matches"
             " where local_artist_id = %s", (artist_id,)).fetchone()
-        assert (match["state"], str(match["artist_mbid"])) == ("matched", GERMAN)
-        # One local artist, two MBIDs: the person, and the band the person belongs to.
-        assert [str(mbid) for mbid in match["associated_artist_mbids"]] == [TRANCE]
+        assert (match["state"], match["artist_mbid"], match["associated_artist_mbids"]) == ("per_album", None, None)
         assert _identities(connection, library_id) == {
             "alice-album": (GERMAN, "automatic", False), "alice-killer": (TRANCE, "automatic", False)}
-        assert _active(connection, artist_id) == []
-
-    # A later match without the band clears it.
-    repository.record_automatic_outcome(
-        local_artist_id=artist_id, state="matched", confidence=1, observed_at=NOW,
-        evidence_summary="MusicBrainz album evidence agreed.",
-        artist={"mbid": GERMAN, "canonical_name": "Alice Cooper", "artist_type": "Person"})
-    with isolatedPostgres._connect(setup_url) as connection:
-        assert connection.execute(
-            "select associated_artist_mbids from library.local_artist_musicbrainz_matches where local_artist_id = %s",
-            (artist_id,)).fetchone()["associated_artist_mbids"] is None

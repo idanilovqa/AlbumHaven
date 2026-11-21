@@ -4,7 +4,7 @@ const vm = require('node:vm');
 
 const expectedArtists = ['Neal Morse', 'Transatlantic', 'Neal Morse & The Resonance', 'Morse Portnoy George', 'The Neal Morse Band'];
 
-async function readInventory(names, missingKeyIndex = -1, options = { expectedArtists }) {
+async function readInventory(names, missingKeyIndex = -1, options = { expectedArtists }, calls = []) {
   const { GalleryActions } = await import('../e2e/actions/galleryActions.js');
   const headings = names.map((textContent, index) => ({
     textContent,
@@ -16,10 +16,14 @@ async function readInventory(names, missingKeyIndex = -1, options = { expectedAr
   const actions = new GalleryActions({
     artistHeadingSelector: '.artist-name',
     page: {
-      evaluate: async (callback, selectors) => vm.runInNewContext(`(${callback})(selectors)`, {
-        selectors, document: { querySelectorAll: () => headings },
-      }),
+      evaluate: async (callback, selectors) => {
+        calls.push('read');
+        return vm.runInNewContext(`(${callback})(selectors)`, {
+          selectors, document: { querySelectorAll: () => headings },
+        });
+      },
     },
+    waitForVirtualGalleryOwnership: async ({ timeout }) => calls.push(`owned:${timeout}`),
   });
   actions.readGalleryScrollState = async () => ({ scrollTop: 0, maxScrollTop: 0, clientHeight: 800 });
   return actions.readArtistHeadingOccurrencesAcrossGallery(options);
@@ -29,6 +33,12 @@ test('existing observation-only callers retain repeated section headings without
   const artists = ['Neal Morse', 'Neal Morse', 'Transatlantic'];
   const result = await readInventory(artists, -1, { timeout: 60000 });
   assert.deepEqual(result.map(({ artist }) => artist), artists);
+});
+
+test('heading inventory waits for virtual-grid ownership before its first read', async () => {
+  const calls = [];
+  await readInventory(expectedArtists, -1, { expectedArtists, timeout: 60000 }, calls);
+  assert.deepEqual(calls, ['owned:60000', 'read']);
 });
 
 test('complete native heading inventory preserves all five independently expected identities in order', async () => {

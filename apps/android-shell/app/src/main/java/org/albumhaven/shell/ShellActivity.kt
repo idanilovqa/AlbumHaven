@@ -16,6 +16,7 @@ import android.os.Environment
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
 import android.view.View
@@ -35,6 +36,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import android.widget.ImageView
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.addCallback
@@ -51,6 +53,10 @@ import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import org.albumhaven.shell.playback.PlaybackServiceBinder
 import org.albumhaven.shell.playback.PlaybackServiceHandle
+import org.albumhaven.shell.updates.BuildAction
+import org.albumhaven.shell.updates.BuildChoice
+import org.albumhaven.shell.updates.BuildChoices
+import org.albumhaven.shell.updates.BuildPicker
 import org.albumhaven.shell.updates.UpdateState
 import org.albumhaven.shell.updates.Updater
 import org.albumhaven.shell.updates.Updates
@@ -84,11 +90,27 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         // Settings and Update required show one failure message; the details are only logged.
         if (state is UpdateState.Failed) Log.w(TAG, "Update failed: ${state.error.wireName} (${state.reason ?: "no reason"})")
         bridge.emit(state)
+        installingCode?.let { code -> continueChosenInstall(code, state) }
         updateRequired?.let { flow ->
             flow.onState(state)
             showUpdateRequired()
         }
     }
+
+    /** The sandbox app's choice of every sandbox's build (`updates.choose.v1`); null on stable. */
+    private var picker: BuildPicker? = null
+    private var buildSheet: BuildSheet? = null
+
+    /** A chosen build of this sandbox: its update check must find exactly this version code. */
+    private var installingCode: Long? = null
+    private val pickerEvents: () -> Unit = {
+        if (::bridge.isInitialized) bridge.emitBuilds()
+        buildSheet?.render()
+        scheduleRebuildPoll()
+    }
+
+    /** While a rebuild the owner started runs, the index is read again until its build appears. */
+    private val rebuildPoll = Runnable { picker?.refresh { scheduleRebuildPoll() } }
 
     /** Set while the native Update required screen covers a site this app cannot run. */
     private var updateRequired: UpdateRequiredFlow? = null
@@ -107,9 +129,11 @@ class ShellActivity : ComponentActivity(), BridgeHost {
                     override fun reported(stored: Boolean) = copies.reported(siteOrigin, stored)
                     override val forgetPending get() = copies.forgetPending(siteOrigin)
                 },
+                picker?.let { ShellBuildPort(it) },
             )
             service.setEventListener { event -> bridge.emit(event) }
             updater?.addListener(updateEvents)
+            picker?.addListener(pickerEvents)
             earlyBridgeMessages.forEach { it() }
             earlyBridgeMessages.clear()
         }
@@ -123,6 +147,13 @@ class ShellActivity : ComponentActivity(), BridgeHost {
     private lateinit var lastScreen: LastScreen
     private lateinit var lastScreenView: ImageView
     private lateinit var sandboxWarning: View
+    private lateinit var batteryPrompt: BatteryPrompt
+    private lateinit var batteryCard: View
+
+    /** The battery offer's Settings screen while it is open; on return it may lead on to App info. */
+    private var batterySettingsOpen: BatterySettings? = null
+    private val batteryOffer = Runnable(::offerBattery)
+    private lateinit var pendingBuildStrip: View
     private val handshakes = HandshakeWatch(originPolicy.channel)
     private val foregrounds = ForegroundWatch()
     private var returnedFromBackground = false
@@ -166,9 +197,12 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         copies = AppCopies(preferences)
         val origin = sandboxes.origin
         updater = Updates.get(this)
+        picker = Updates.picker(this)
         // Once per process: a cold launch checks when the last successful check is six hours old.
         // Before a sandbox is chosen there is no origin to check.
         if (origin != null) updater?.passiveCheckIfDue()
+        // The Update row names the sandbox builds waiting; reading the index installs nothing.
+        if (origin != null) picker?.refresh()
         recovery = RecoveryPanel(findViewById(R.id.recovery_root))
         lastScreen = LastScreen(cacheDir, ioExecutor)
         lastScreenView = findViewById(R.id.last_screen)
@@ -176,6 +210,19 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         sandboxWarning = findViewById(R.id.sandbox_warning)
         findViewById<View>(R.id.sandbox_warning_switch).setOnClickListener { showSandboxChoice() }
         findViewById<View>(R.id.sandbox_warning_dismiss).setOnClickListener { sandboxWarning.isVisible = false }
+        batteryPrompt = BatteryPrompt(preferences)
+        batteryCard = findViewById(R.id.battery_prompt)
+        findViewById<TextView>(R.id.battery_prompt_reason).setText(BatteryPrompt.reason(Build.MANUFACTURER))
+        findViewById<View>(R.id.battery_prompt_allow).setOnClickListener {
+            answerBattery()
+            openBatterySettings(BatterySettings.REQUEST)
+        }
+        findViewById<View>(R.id.battery_prompt_decline).setOnClickListener { answerBattery() }
+        pendingBuildStrip = findViewById(R.id.pending_build)
+        findViewById<View>(R.id.pending_build_cancel).setOnClickListener {
+            preferences.pendingBuild = null
+            pendingBuildStrip.isVisible = false
+        }
 
         // The system WebView is too old for the bridge; updating this app cannot fix that.
         if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
@@ -203,6 +250,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         // Only a page Android ended in the background comes back as it was; a full restart opens Home.
         // After an update the last screen's picture shows the old version, so the page loads without it.
         if (startUrl != null) open(startUrl, asLeft = page.url != null && updatePage == null) else showSandboxChoice()
+        if (updatePage != null) toast(getString(R.string.build_updated, BuildConfig.VERSION_CODE))
         playbackBound = bindService(
             PlaybackService.shellBindIntent(this),
             playbackConnection,
@@ -246,14 +294,17 @@ class ShellActivity : ComponentActivity(), BridgeHost {
                 download()
             }
         }
+        batterySettingsOpen?.let(::returnedFromBatterySettings)
         if (returnedFromBackground) probeForegroundDocument()
         returnedFromBackground = false
+        scheduleRebuildPoll()
     }
 
     override fun onPause() {
         super.onPause()
         returnedFromBackground = true
         foregrounds.cancel()
+        mainHandler.removeCallbacks(rebuildPoll)
         CookieManager.getInstance().flush()
         // Only a page the user actually sees is pictured; never a native screen or an older picture.
         val url = page.url
@@ -267,6 +318,8 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         playback?.setEventListener(null)
         if (::bridge.isInitialized) bridge.reset()
         updater?.removeListener(updateEvents)
+        picker?.removeListener(pickerEvents)
+        buildSheet?.dismiss()
         if (playbackBound) unbindService(playbackConnection)
         playback = null
         // A download already asked for is still handed to Android.
@@ -286,6 +339,60 @@ class ShellActivity : ComponentActivity(), BridgeHost {
     override fun onBridgeConnected() {
         handshakes.answered()
         sandboxWarning.isVisible = false
+        // Signed in to the sandbox a chosen build waits on: it installs from this sandbox now.
+        val pending = preferences.pendingBuild
+        if (pending != null && pending.sandbox == preferences.selectedSandboxSlot) {
+            preferences.pendingBuild = null
+            pendingBuildStrip.isVisible = false
+            bridge.webProtocols?.let { installHere(pending.versionCode, it) }
+        }
+        // Signed out at launch, the index could not be read; the Update row needs it now.
+        if (picker?.builds == null) picker?.refresh()
+        mainHandler.postDelayed(batteryOffer, BATTERY_OFFER_DELAY_MS)
+    }
+
+    /** Once the library has drawn, with nothing of the shell's own over it or waiting on the user. */
+    private fun offerBattery() {
+        if (batteryCard.isVisible || recovery.showing || sandboxWarning.isVisible || pendingBuildStrip.isVisible ||
+            downloadAfterAsking != null || !lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) ||
+            webView.url?.toUri()?.path == SIGN_IN_PATH
+        ) return
+        batteryCard.isVisible = batteryPrompt.shouldOffer(batteryState())
+    }
+
+    private fun batteryState() = BatteryState(
+        ignoringOptimizations = getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName),
+        backgroundRestricted = getSystemService(ActivityManager::class.java).isBackgroundRestricted,
+    )
+
+    private fun openBatterySettings(settings: BatterySettings) {
+        val action = when (settings) {
+            BatterySettings.REQUEST -> Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+            BatterySettings.APP_INFO -> Settings.ACTION_APPLICATION_DETAILS_SETTINGS
+        }
+        val opened = try {
+            startActivity(Intent(action, "package:$packageName".toUri()))
+            true
+        } catch (_: ActivityNotFoundException) {
+            false
+        } catch (_: SecurityException) {
+            // Some makers' Settings refuse to open this for another app.
+            false
+        }
+        // Without Android's question, App info; without that either, nothing is left to offer.
+        if (opened) batterySettingsOpen = settings else if (settings == BatterySettings.REQUEST) openBatterySettings(BatterySettings.APP_INFO)
+    }
+
+    private fun answerBattery() {
+        batteryPrompt.answered()
+        batteryCard.isVisible = false
+    }
+
+    private fun returnedFromBatterySettings(opened: BatterySettings) {
+        batterySettingsOpen = null
+        val state = batteryState()
+        Log.i(TAG, "battery_prompt opened=$opened unrestricted=${state.unrestricted}")
+        BatteryPrompt.followUp(opened, state)?.let(::openBatterySettings)
     }
 
     override fun onForegroundReady(token: Long) {
@@ -367,7 +474,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
 
     private inner class ShellUpdatePort(private val updater: Updater) : UpdatePort {
         override val state get() = updater.state
-        override fun check(webProtocols: IntRange) = updater.check(webProtocols)
+        override fun check(webProtocols: IntRange) = updater.check(webProtocols).also { if (it) picker?.refresh() }
         override fun download(): Boolean {
             val download = { updater.download(thenInstall = ::prepareForPackageReplacement) }
             if (updater.state !is UpdateState.Available && updater.state !is UpdateState.Failed) return download()
@@ -384,6 +491,103 @@ class ShellActivity : ComponentActivity(), BridgeHost {
             return download()
         }
         override fun install() = updater.install(::prepareForPackageReplacement)
+    }
+
+    /**
+     * Update in the cogwheel menu: one waiting build installs (switching sandbox when it is
+     * another sandbox's); two or more, or only an older one, open the sheet. The index is read
+     * first, so the choice reflects every sandbox now.
+     */
+    private inner class ShellBuildPort(private val picker: BuildPicker) : BuildChoicePort {
+        override val summary get() = picker.summary
+
+        override fun choose(webProtocols: IntRange): Boolean {
+            val idle = when (updater?.state) {
+                is UpdateState.Idle, is UpdateState.UpToDate, is UpdateState.Available, is UpdateState.Failed -> true
+                else -> false
+            }
+            if (!idle || installingCode != null) return false
+            picker.refresh { read ->
+                if (isDestroyed) return@refresh
+                if (!read) return@refresh toast(R.string.build_list_unavailable)
+                when (val action = BuildChoices.action(picker.choices.orEmpty())) {
+                    BuildAction.None -> toast(R.string.build_none)
+                    is BuildAction.Install -> installChoice(action.choice, webProtocols)
+                    BuildAction.Choose -> showBuildSheet(webProtocols)
+                }
+            }
+            return true
+        }
+    }
+
+    private fun showBuildSheet(webProtocols: IntRange) {
+        val picker = picker ?: return
+        buildSheet?.dismiss()
+        buildSheet = BuildSheet(this, picker, BuildConfig.VERSION_CODE.toLong(), Build.VERSION.SDK_INT, { preferences.selectedSandboxSlot }) {
+            installChoice(it, webProtocols)
+        }.also { it.show() }
+    }
+
+    private fun installChoice(choice: BuildChoice, webProtocols: IntRange) {
+        if (choice.thisSandbox) installHere(choice.build.versionCode, webProtocols) else switchToInstall(choice)
+    }
+
+    /** Installs this sandbox's build [versionCode] through the updater, checking its manifest first. */
+    private fun installHere(versionCode: Long, webProtocols: IntRange) {
+        val updater = updater ?: return
+        val state = updater.state
+        if (state is UpdateState.Available && state.manifest.versionCode == versionCode) {
+            ShellUpdatePort(updater).download()
+            return
+        }
+        installingCode = versionCode
+        if (!updater.check(webProtocols)) {
+            installingCode = null
+            toast(getString(R.string.build_install_failed, versionCode))
+        }
+    }
+
+    /** The check started for a chosen build ended: download it, or say why not. */
+    private fun continueChosenInstall(versionCode: Long, state: UpdateState) {
+        when (state) {
+            is UpdateState.Checking -> return
+            is UpdateState.Available -> {
+                installingCode = null
+                if (state.manifest.versionCode == versionCode) {
+                    updater?.let { ShellUpdatePort(it).download() }
+                } else {
+                    toast(getString(R.string.build_changed, preferences.selectedSandboxSlot ?: 0))
+                }
+            }
+            else -> {
+                installingCode = null
+                toast(getString(R.string.build_install_failed, versionCode))
+            }
+        }
+    }
+
+    /**
+     * Another sandbox's build: switch there exactly as Switch sandbox does, then install it from
+     * that sandbox once its page connects, after the owner signs in if there is no session yet.
+     */
+    private fun switchToInstall(choice: BuildChoice) {
+        val build = choice.build
+        preferences.pendingBuild = PendingBuild(build.sandbox, build.versionCode)
+        recovery.showLoading(originHost(), null, getString(R.string.build_switching, build.sandbox, build.versionCode))
+        selectSandbox(build.sandbox) { connected ->
+            if (connected) return@selectSandbox
+            preferences.pendingBuild = null
+            recovery.hide()
+            toast(getString(R.string.build_unreachable, build.sandbox))
+        }
+    }
+
+    /** Re-reads the index each minute while the app is in front and a rebuild still runs. */
+    private fun scheduleRebuildPoll() {
+        mainHandler.removeCallbacks(rebuildPoll)
+        if (picker?.watchingRebuilds == true && lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+            mainHandler.postDelayed(rebuildPoll, REBUILD_POLL_MS)
+        }
     }
 
     /** Asks once for notifications, when they are off; returns whether Android is asking. */
@@ -424,6 +628,8 @@ class ShellActivity : ComponentActivity(), BridgeHost {
      */
     private fun open(url: String, asLeft: Boolean = false, useCachedCopy: Boolean = true) {
         mainFrameFailed = false
+        // A build chosen on this sandbox waits for its page to connect, after any sign-in.
+        val pending = pendingHere()
         val cached = useCachedCopy && copies.exists(siteOrigin)
         val picture = if (asLeft && !cached) lastScreen.load(siteOrigin, url, resources.configuration.orientation) else null
         hideLastScreen()
@@ -435,11 +641,17 @@ class ShellActivity : ComponentActivity(), BridgeHost {
             lastScreenView.isVisible = true
             mainHandler.postDelayed(lastScreenTimeout, LAST_SCREEN_MAX_MS)
         } else {
-            recovery.showLoading(originHost(), switchSandbox)
+            recovery.showLoading(originHost(), switchSandbox, pending?.let { getString(R.string.build_switching, it.sandbox, it.versionCode) })
+        }
+        pendingBuildStrip.isVisible = pending != null
+        if (pending != null) {
+            findViewById<TextView>(R.id.pending_build_message).text = getString(R.string.build_sign_in, pending.sandbox, pending.versionCode)
         }
         webView.visibility = View.VISIBLE
         webView.loadUrl(url)
     }
+
+    private fun pendingHere(): PendingBuild? = preferences.pendingBuild?.takeIf { it.sandbox == preferences.selectedSandboxSlot }
 
     private val lastScreenTimeout = Runnable {
         hideLastScreen()
@@ -478,6 +690,7 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         if (::bridge.isInitialized) bridge.reset()
         handshakes.pageStarted()
         mainHandler.removeCallbacks(handshakeTimeout)
+        mainHandler.removeCallbacks(batteryOffer)
         sandboxWarning.isVisible = false
     }
 
@@ -590,6 +803,8 @@ class ShellActivity : ComponentActivity(), BridgeHost {
 
     private fun toast(@StringRes message: Int) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
 
+    private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+
     private fun openExternally(url: String) {
         try {
             startActivity(
@@ -628,7 +843,11 @@ class ShellActivity : ComponentActivity(), BridgeHost {
 
         override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
             // The sign-in page means signed out: the page's copy went as it left (app-copy-worker.js).
-            if (url.toUri().path == SIGN_IN_PATH && originPolicy.isSameOrigin(url, siteOrigin)) copies.reported(siteOrigin, stored = false)
+            if (url.toUri().path == SIGN_IN_PATH && originPolicy.isSameOrigin(url, siteOrigin)) {
+                copies.reported(siteOrigin, stored = false)
+                // An offer still unanswered waits for the library after signing in.
+                batteryCard.isVisible = false
+            }
             // The same origin's next document re-attaches to the running queue from its handshake.
             documentGone()
             incompatibleWeb = false
@@ -719,11 +938,15 @@ class ShellActivity : ComponentActivity(), BridgeHost {
         const val BRIDGE_TIMEOUT_MS = 15_000L
         const val FOREGROUND_TIMEOUT_MS = 5_000L
 
+        /** The battery offer never lands on the library's first paint. */
+        const val BATTERY_OFFER_DELAY_MS = 2_000L
+
         /** A page still not drawn after this long shows the Connecting screen, so a picture never looks frozen. */
         const val LAST_SCREEN_MAX_MS = 6_000L
 
         /** How long a sandbox switch waits for the page it leaves to delete its copy. */
         const val COPY_FORGET_TIMEOUT_MS = 1_500L
         const val SIGN_IN_PATH = "/login"
+        const val REBUILD_POLL_MS = 60_000L
     }
 }

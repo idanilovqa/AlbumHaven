@@ -10,4 +10,13 @@
     <color name="success">#2EBA70</color>
     <color name="info">#55C7FF</color>
     <color name="error">#E06F78</color>
+    <!-- The build sheet follows the web app's account menu (approved mockup v003). -->
+    <color name="sheet_surface">#0D1B2B</color>
+    <color name="sheet_line">#2B4157</color>
+    <color name="sheet_selected">#172D43</color>
+    <color name="sheet_focus">#72B8ED</color>
+    <color name="sheet_ink">#E7EDF5</color>
+    <color name="sheet_muted">#9CA3AF</color>
+    <color name="primary">#2FBF71</color>
+    <color name="primary_ink">#06130B</color>
 </resources>

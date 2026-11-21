@@ -36,7 +36,9 @@ test('PR classifier applies changed-path performance ownership before selecting 
 test('sensitive browse, sidebar, modal, status, and mobile changes select their focused targets', () => {
   const cases = [
     ['music_app/services/runtime_asset_versions.py', ['app-open-all-artists', 'artist-tree-scroll-navigation', 'utility-problematic-files', 'problematic-files-focused']],
+    ['music_app/services/compressed_static_files.py', ['app-open-all-artists', 'artist-tree-scroll-navigation', 'utility-problematic-files', 'problematic-files-focused']],
     ['music_app/static/js/app-copy.js', ['app-open-all-artists', 'artist-tree-scroll-navigation']],
+    ['music_app/services/http_compression.py', ['all-artists', 'selected-artist', 'root-album-browse', 'app-open-all-artists', 'artist-tree-scroll-navigation', 'artist-family', 'search-all-artists', 'search-browse', 'gallery-artwork-diversity', 'utility-problematic-files', 'problematic-files-focused']],
     // Every HTML document render reads the account's layout preferences.
     ['music_app/services/client_layout_preferences.py', ['app-open-all-artists', 'artist-tree-scroll-navigation']],
     ['music_app/services/library_browse_postgres.py', ['all-artists', 'selected-artist', 'root-album-browse', 'app-open-all-artists', 'artist-tree-scroll-navigation', 'artist-family', 'search-all-artists', 'search-browse', 'gallery-artwork-diversity', 'utility-problematic-files', 'problematic-files-focused', 'cover-lookup']],
@@ -52,6 +54,12 @@ test('sensitive browse, sidebar, modal, status, and mobile changes select their 
   ];
   for (const [changedPath, expectedTargets] of cases) {
     assert.deepEqual(resolveRequiredPerformanceTargets(contract, [changedPath]), expectedTargets, changedPath);
+  }
+});
+
+test('structural save finalize and album rebuild changes select the Edit Tags post-save target', () => {
+  for (const changedPath of ['music_app/services/save_tasks.py', 'music_app/services/edit_state.py']) {
+    assert.ok(resolveRequiredPerformanceTargets(contract, [changedPath]).includes('edit-tags-post-edit'), changedPath);
   }
 });
 
@@ -205,5 +213,20 @@ test('shared browse changes retain every search gate in focused CI', () => {
       assert.ok(result.focusedPerformanceTargets.includes(target), `${changedPath} must require ${target}`);
     }
     assert.ok(result.focusedPerformanceShards.includes('synthetic-large-library'));
+  }
+});
+
+test('cover reference owners require the search, Problematic Files and HTML reload gates', () => {
+  for (const changedPath of [
+    'music_app/services/cover_reference_boundary.py',
+    'music_app/services/cover_references.py',
+    'migrations/postgres/0201_backfill_cover_references.sql',
+  ]) {
+    assert.ok(contract.requiredPaths.includes(changedPath), `${changedPath} must remain an explicit performance owner`);
+    const targets = resolveRequiredPerformanceTargets(contract, [changedPath]);
+    for (const target of ['artist-family', 'search-all-artists', 'search-browse', 'utility-problematic-files',
+      'problematic-files-focused', 'app-open-all-artists', 'artist-tree-scroll-navigation']) {
+      assert.ok(targets.includes(target), `${changedPath} must require ${target}`);
+    }
   }
 });

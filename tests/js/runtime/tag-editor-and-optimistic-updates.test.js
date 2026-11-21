@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const { loadPendingProjectionFetch } = require('../helpers/pending-projection-fetch');
 const ButtonComponent = require(path.join(
   __dirname,
   '..',
@@ -181,6 +182,7 @@ function loadHelper(albums, overrides = {}) {
   Object.assign(context, overrides);
 
   vm.createContext(context);
+  loadPendingProjectionFetch(context);
   vm.runInContext(helperSource, context, { filename: helperPath });
   return context;
 }
@@ -254,7 +256,7 @@ test('version tabs are the sole edition indicator while standalone editions reta
     year: 1998,
     release_type: 'ALBUM',
     tabLabel: 'Original - 1998',
-    cover_path: 'C:\\Music\\Shared Artist\\Shared Album\\cover.png',
+    cover_ref: 'C:\\Music\\Shared Artist\\Shared Album\\cover.png',
     tracks: [],
   };
   const specialEdition = {
@@ -480,7 +482,7 @@ test('track modal cover transition hides pending image chrome over a blank place
   });
   const markup = context.buildTrackModalCoverVisualHtml({
     albumName: 'Kaipa',
-    localCoverPath: '',
+    localCoverRef: '',
     remoteCoverUrl: 'https://images.example/kaipa.jpg',
   });
 
@@ -3623,7 +3625,7 @@ function createTrackModalCoverContext(options = {}) {
     name: 'Album Alpha',
     album_artist: 'Artist Alpha',
     year: 2001,
-    cover_path: 'C:\\Music\\Artist Alpha\\Album Alpha\\cover.png',
+    cover_ref: 'C:\\Music\\Artist Alpha\\Album Alpha\\cover.png',
     tracks: [],
   }];
   const cover = new TrackModalTestElement('div');
@@ -3697,10 +3699,10 @@ function createTrackModalCoverContext(options = {}) {
       return true;
     },
     buildAlbumDisplayCoverUrl(album) {
-      return `/cover?path=${encodeURIComponent(album.cover_path)}&size=480&v=fixture`;
+      return `/cover/${encodeURIComponent(album.cover_ref)}?size=480&v=fixture`;
     },
     buildAlbumLightboxCoverUrl(album) {
-      return `/cover?path=${encodeURIComponent(album.cover_path)}&v=fixture`;
+      return `/cover/${encodeURIComponent(album.cover_ref)}?v=fixture`;
     },
     async loadGalleryCoverPreviewImage(image, productionUrl, loaderOptions = {}) {
       loaderCalls.push({ image, productionUrl, options: loaderOptions });
@@ -3756,7 +3758,7 @@ test('first track-modal cover render stays source-less until a shared-cache hit 
   assert.ok(image instanceof TrackModalTestImage);
   assert.equal(image.getAttribute('src'), '', 'first render must not assign the production cover URL directly');
   assert.equal(loaderCalls.length, 1, 'the modal must resolve its preview through the shared gallery loader');
-  assert.match(loaderCalls[0].productionUrl, /^\/cover\?.*size=480/);
+  assert.match(loaderCalls[0].productionUrl, /^\/cover\/.*size=480/);
   assert.equal(typeof loaderCalls[0].options.isCurrent, 'function');
   assert.equal(loaderCalls[0].options.isCurrent(), true);
   assert.deepEqual(directFetchCalls, []);
@@ -4227,7 +4229,7 @@ test('track-modal cover gallery icon exposes only unseen automatic improvements'
     key: 'automatic-improvement-album',
     name: 'Automatic Improvement Album',
     album_artist: 'Candidate Artist',
-    cover_path: 'C:\\Music\\Candidate Artist\\Automatic Improvement Album\\cover.jpg',
+    cover_ref: 'C:\\Music\\Candidate Artist\\Automatic Improvement Album\\cover.jpg',
     tracks: [],
     cover_candidate_snapshot: {
       search_kind: 'automatic',
@@ -4334,14 +4336,14 @@ test('a stale track-modal cover completion cannot reveal an earlier album over t
     key: 'alpha',
     name: 'Album Alpha',
     album_artist: 'Artist Alpha',
-    cover_path: 'C:\\Music\\Artist Alpha\\Album Alpha\\cover.png',
+    cover_ref: 'C:\\Music\\Artist Alpha\\Album Alpha\\cover.png',
     tracks: [],
   };
   const beta = {
     key: 'beta',
     name: 'Album Beta',
     album_artist: 'Artist Beta',
-    cover_path: 'C:\\Music\\Artist Beta\\Album Beta\\cover.png',
+    cover_ref: 'C:\\Music\\Artist Beta\\Album Beta\\cover.png',
     tracks: [],
   };
   const pending = new Map([
@@ -4464,6 +4466,42 @@ test('cross-album continuity peek is side-effect free until the exact boundary c
   assert.equal(context.state.player.playbackQueue.currentIndex, 0);
 });
 
+test('only the immediate successor inside the current album queue is a consecutive album boundary', () => {
+  const paths = ['01', '02', '03'].map((number) => `/music/artist/first/${number}.flac`);
+  const nextAlbumPath = '/music/artist/second/01.flac';
+  const first = {
+    key: 'first', name: 'First', album_artist: 'Artist',
+    tracks: paths.map((path, index) => ({ path, title: `Track ${index + 1}` })),
+    playback_context: {
+      kind: 'artist_page', end_behavior: 'continue', ordered_album_refs: ['first', 'second'],
+      albums: [{ album_ref: 'first', can_play: true }, { album_ref: 'second', can_play: true }],
+    },
+  };
+  const second = {
+    key: 'second', name: 'Second', album_artist: 'Artist',
+    tracks: [{ path: nextAlbumPath, title: 'Second' }],
+  };
+  const context = loadHelper([first, second]);
+  context.state.player = { current: { path: paths[0] }, playbackQueue: null };
+  context.setAlbumPlaybackQueue(first, paths[0]);
+  const { tracks } = context.state.player.playbackQueue;
+
+  assert.equal(context.isConsecutiveAlbumSuccessor(context.peekNextQueuedTrack()), true);
+  assert.equal(context.isConsecutiveAlbumSuccessor(tracks[2]), false, 'a skipped queue entry is not adjacent');
+  assert.equal(context.isConsecutiveAlbumSuccessor({ ...tracks[1] }), false, 'only the queued entry itself qualifies');
+
+  context.state.player.current = { path: paths[2] };
+  const continuation = context.peekNextQueuedTrack();
+  assert.equal(continuation.path, nextAlbumPath);
+  assert.equal(context.isConsecutiveAlbumSuccessor(continuation), false, 'continuing into another album never qualifies');
+
+  context.state.player.current = null;
+  assert.equal(context.isConsecutiveAlbumSuccessor(tracks[1]), false, 'an unknown current track never qualifies');
+  context.state.player.current = { path: paths[0] };
+  delete context.state.player.playbackQueue.albumRef;
+  assert.equal(context.isConsecutiveAlbumSuccessor(tracks[1]), false, 'a queue without a concrete album never qualifies');
+});
+
 test('Various Artists modal playback preserves album artist in markup and queue payloads', () => {
   const trackPath = 'C:\\Music\\Various Artists\\Featured Signal Collection\\01 - Credit Signal 1.mp3';
   const album = {
@@ -4553,7 +4591,7 @@ test('Various Artists modal playback preserves album artist in markup and queue 
       artist: 'Artist Alpha',
       albumArtist: 'Artist Alpha',
       album: 'Album Beta',
-      coverPath: '',
+      coverRef: '',
       durationSeconds: 0,
       year: '2002',
     },
@@ -5382,4 +5420,53 @@ test('Album Details matches a numbered second disc rating by its disc tag (All t
     Array.from(renderedConfig.groups, (group) => [group.discLabel, group.discRating]),
     [['CD 1', null], ['CD 2', 8]],
   );
+});
+
+// Request-capture contract (tests/ci/bounded-interactions.json): confirming a missing album's
+// removal posts once, then refreshes the current view once through the real fetchAndRender.
+const { assertRequestOwnership } = require('../helpers/bounded-interaction-counter');
+const { createGalleryRefreshContext, useRealViewUrls } = require('../helpers/gallery-refresh-context');
+const {
+  assertInteractionRequests, createRequestCapture, jsonResponse, measureInteractionContract,
+} = require('../helpers/request-capture');
+
+test('request capture: missing album removal posts once and refreshes its own view once', async () => {
+  const id = 'js:runtime/tag-editor-and-optimistic-updates.js#confirmMissingAlbumRemoval';
+  await measureInteractionContract(id, async (albums) => {
+    const { context } = createGalleryRefreshContext();
+    useRealViewUrls(context);
+    vm.runInContext(fs.readFileSync(helperPath, 'utf8'), context, { filename: helperPath });
+    let removalStatus = 200;
+    let accepted = true;
+    const capture = createRequestCapture(url => (url.startsWith('/api/')
+      ? jsonResponse({ removed_album_key: 'missing' }, { status: removalStatus })
+      : jsonResponse({ artist_groups: [], payload_tier: 'full' })));
+    context.fetch = capture.fetch;
+    context.showAppConfirmDialog = async () => accepted;
+    const album = { key: 'missing', inventory_status: 'missing', allowed_actions: { 'library.inventory.manage': true } };
+    const remove = async (view) => {
+      context.state.busy = false;
+      context.state.view = {
+        ...view,
+        artist_groups: [{ artist: 'Owner', albums: [album, ...Array.from({ length: albums }, (_, index) => ({ key: `kept-${index}` }))] }],
+      };
+      return context.confirmMissingAlbumRemoval(album);
+    };
+    assert.equal(await remove({}), true);
+    assert.equal(await remove({ selected_artist: 'Owner' }), true);
+    removalStatus = 409;
+    assert.equal(await remove({ selected_artist: 'Owner' }), false);
+    accepted = false;
+    assert.equal(await remove({ selected_artist: 'Owner' }), false);
+    const urls = capture.urls();
+    const shape = urls.map(url => [new URL(url, 'http://localhost').pathname, new URL(url, 'http://localhost').searchParams.get('artist')]);
+    assert.deepEqual(shape, [
+      ['/api/library/albums/missing/confirm-removal', null], ['/home-data', null],
+      ['/api/library/albums/missing/confirm-removal', null], ['/view-data', 'Owner'],
+      ['/api/library/albums/missing/confirm-removal', null], ['/view-data', 'Owner'],
+    ]);
+    assertRequestOwnership([urls[1]], { allowed: ['/home-data'], forbidden: ['/view-data'] }, 'Home refresh');
+    assertInteractionRequests(id, urls);
+    return capture.counter.snapshot();
+  });
 });

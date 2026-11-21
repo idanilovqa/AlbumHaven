@@ -9,6 +9,7 @@ from typing import Callable
 
 from music_app.services.app_logging import log_app_event
 from music_app.services.library import build_albums_from_file_cache
+from music_app.services.library_album_index import publish_library_albums
 from music_app.services.library_indexing import (
     ScanCancelled,
     finish_scan_stage,
@@ -361,7 +362,7 @@ def refresh_library_state(
             if int(library_state.get("scan_generation") or 0) == scan_generation:
                 library_state["file_cache"] = file_cache
                 library_state["last_scan"] = disk_last_scan
-                library_state["albums"] = rebuilt_albums
+                publish_library_albums(library_state, rebuilt_albums)
                 if disk_relation_views:
                     library_state["relation_views"] = disk_relation_views
                 if disk_relations_last_built:
@@ -511,11 +512,11 @@ def refresh_library_state(
             "file_cache": new_file_cache,
             "last_scan": new_last_scan,
             "separate_release_keys": new_separate_release_keys,
-            "albums": rebuilt_albums,
             "last_error": None,
             # A root left unchanged as incomplete still needs its repair.
             "scan_metadata_repair_required": bool(publication_state.get("scan_incomplete_root_ids")),
         })
+        publish_library_albums(publication_state, rebuilt_albums)
         publish_current_browse_snapshot()
         with cache_lock:
             if int(library_state.get("scan_generation") or 0) == scan_generation:

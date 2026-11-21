@@ -223,17 +223,166 @@ _UTILITY_PROJECTION_KINDS = (
 )
 
 
+_DUPLICATE_PROJECTION_KINDS = ("duplicate-absence", "duplicate-identities")
+
+
 def refresh_postgres_utility_projections_after_edit(
     config: Mapping[str, object],
     *,
     track_paths: Iterable[str],
+    previous_entries: Iterable[Mapping[str, object]] | None = None,
 ) -> None:
     """After a tag save or watcher edit: invalidate the utility projections and let the
-    Problematic Files index evaluate the albums the database marked."""
+    Problematic Files index evaluate the albums the database marked.
+
+    A tag save passes the edited files' previous entries: its duplicate projections then keep
+    every album the edit cannot affect (FTC-TAGS-015). A watcher edit invalidates them whole.
+    """
     database_url = str(config.get(_APP_DATABASE_URL_KEY) or "").strip()
     if database_url:
         problematic_index.queue_maintenance(PostgresLibraryBrowseRepository(dict(config)))
-    invalidate_postgres_utility_projection_cache(database_url=database_url or None)
+    if previous_entries is None or not database_url:
+        invalidate_postgres_utility_projection_cache(database_url=database_url or None)
+        return
+    invalidate_postgres_utility_projection_cache(
+        database_url=database_url,
+        kinds=[kind for kind in _UTILITY_PROJECTION_KINDS if kind not in _DUPLICATE_PROJECTION_KINDS],
+    )
+    try:
+        retain_duplicate_projections_after_tag_save(
+            config, track_paths=track_paths, previous_entries=previous_entries,
+        )
+    except Exception:
+        invalidate_postgres_utility_projection_cache(
+            database_url=database_url, kinds=_DUPLICATE_PROJECTION_KINDS,
+        )
+        raise
+
+
+def _fingerprint_at_most_one_save_behind(cached: Mapping[str, object], fingerprint: Mapping[str, object]) -> bool:
+    """At most this save changed the inventory since the entry was cached: roots and overrides
+    are unchanged and the inventory revision moved by one, or not at all when the save's
+    finalize refreshes again after its persistence step did."""
+    old, new = tuple(cached.get("fingerprint") or ()), tuple(fingerprint.get("fingerprint") or ())
+    if len(old) != len(new) or len(new) < 2 or old[:1] + old[2:] != new[:1] + new[2:]:
+        return False
+    try:
+        return int(new[1]) - int(old[1]) in (0, 1)
+    except (TypeError, ValueError):
+        return False
+
+
+def _edited_duplicate_scope(
+    connection: Any, paths: list[str],
+) -> tuple[set[int], set[str], set[tuple[str, str, int]]]:
+    """The albums now holding the edited files, and those files' current identities."""
+    from music_app.services.library import _duplicate_album_identity_values
+
+    rows = connection.execute(
+        """
+        select albums.id as album_id, albums.album_key,
+          files.scan_file_album_artist as album_artist, files.scan_file_album as album,
+          files.scan_file_year as year
+        from library.local_track_files files
+        join library.local_tracks tracks on tracks.id = files.track_id
+        join library.local_albums albums on albums.id = tracks.album_id
+        where files.private_path = any(%(paths)s::text[]) and files.scan_cache_stale is false
+        """,
+        {"paths": paths},
+    ).fetchall() if paths else []
+    album_ids: set[int] = set()
+    album_keys: set[str] = set()
+    identities: set[tuple[str, str, int]] = set()
+    for row in rows:
+        payload = _row_mapping(row)
+        album_ids.add(_coerce_int(payload.get("album_id")))
+        album_keys.add(str(payload.get("album_key") or ""))
+        identity = _duplicate_album_identity_values(
+            payload.get("album_artist"), payload.get("album"), payload.get("year"),
+        )
+        if identity:
+            identities.add(identity)
+    return album_ids, album_keys, identities
+
+
+def retain_duplicate_projections_after_tag_save(
+    config: Mapping[str, object],
+    *,
+    track_paths: Iterable[str],
+    previous_entries: Iterable[Mapping[str, object]],
+) -> None:
+    """Move the duplicate projections past one tag save, dropping only what it can change.
+
+    An album gains or loses a duplicate only when an edited file carried or now carries its
+    identity, so the edited albums and every album holding one of those identities (old or
+    new) are dropped and all others stay valid. Anything else changed meanwhile invalidates
+    the projection whole. The work is bounded by the edited albums, not the library.
+    """
+    from music_app.services.library import _duplicate_album_identity_values
+
+    repository = PostgresLibraryBrowseRepository(dict(config))
+    cache_keys = {kind: repository._utility_projection_cache_key(kind) for kind in _DUPLICATE_PROJECTION_KINDS}
+    with _UTILITY_PROJECTION_CACHE_LOCK:
+        cached = {kind: _UTILITY_PROJECTION_CACHE.get(key) for kind, key in cache_keys.items() if key}
+    if not any(cached.values()):
+        return
+    affected_identities = {
+        identity
+        for entry in previous_entries
+        if isinstance(entry, Mapping)
+        and (identity := _duplicate_album_identity_values(
+            entry.get("album_artist"), entry.get("album"), entry.get("year"),
+        ))
+    }
+    paths = sorted({str(path) for path in track_paths if str(path or "").strip()})
+    absence_entry = cached.get("duplicate-absence")
+    index_entry = cached.get("duplicate-identities")
+    refreshed_index_rows = None
+    with repository._connect_to_database() as connection:
+        fingerprint = _duplicate_inventory_fingerprint(connection)
+        edited_album_ids, edited_keys, current_identities = _edited_duplicate_scope(connection, paths)
+        affected_identities |= current_identities
+        stale_album_ids = set(edited_album_ids)
+        if index_entry and fingerprint and _fingerprint_at_most_one_save_behind(index_entry, fingerprint):
+            stale_album_ids |= {
+                album_id for album_id, _key, identity in index_entry["index"]
+                if identity and tuple(identity) in affected_identities
+            }
+            refreshed_index_rows = connection.execute(
+                _duplicate_identity_index_rows_sql(scoped_to_album_ids=True),
+                {"album_ids": sorted(stale_album_ids)},
+            ).fetchall() if stale_album_ids else []
+    replacements: dict[str, dict[str, object] | None] = {}
+    if absence_entry:
+        replacements["duplicate-absence"] = (
+            {**fingerprint, "albums": {
+                key: entry for key, entry in absence_entry["albums"].items()
+                if key not in edited_keys
+                and isinstance(entry.get("_identities"), list)
+                and not any(tuple(identity) in affected_identities for identity in entry["_identities"])
+            }}
+            if fingerprint and _fingerprint_at_most_one_save_behind(absence_entry, fingerprint)
+            else None
+        )
+    if index_entry:
+        replacements["duplicate-identities"] = (
+            {**fingerprint, "index": [
+                *(item for item in index_entry["index"] if item[0] not in stale_album_ids),
+                *_duplicate_candidate_index_from_rows(refreshed_index_rows),
+            ]}
+            if refreshed_index_rows is not None
+            else None
+        )
+    with _UTILITY_PROJECTION_CACHE_LOCK:
+        for kind, replacement in replacements.items():
+            cache_key = cache_keys[kind]
+            if _UTILITY_PROJECTION_CACHE.get(cache_key) is not cached[kind]:
+                continue  # A newer writer replaced it meanwhile; its result stands.
+            _UTILITY_PROJECTION_GENERATIONS[cache_key] = _UTILITY_PROJECTION_GENERATIONS.get(cache_key, 0) + 1
+            if replacement is None:
+                _UTILITY_PROJECTION_CACHE.pop(cache_key, None)
+            else:
+                _UTILITY_PROJECTION_CACHE[cache_key] = replacement
 
 
 def _run_utility_projection_rewarm(cache_key: tuple[str, str], rewarm: Callable[[], None]) -> None:
@@ -380,7 +529,10 @@ class PostgresLibraryBrowseRepository:
             fingerprint = _duplicate_inventory_fingerprint(active_connection)
             cached = self._get_cached_utility_projection(kind, copy_payload=False) if fingerprint else None
             absent = cached["albums"] if cached and cached.get("fingerprint") == fingerprint.get("fingerprint") else {}
-            known = {key: deepcopy(absent[key]) for key in keys if key in absent}
+            known = {
+                key: {field: deepcopy(value) for field, value in absent[key].items() if field != "_identities"}
+                for key in keys if key in absent
+            }
             pending = [key for key in keys if key not in known]
             if not pending:
                 return known
@@ -396,6 +548,7 @@ class PostgresLibraryBrowseRepository:
             if candidate_ids is None:
                 return None
             duplicates = {}
+            duplicate_rows = []
             if candidate_ids:
                 cursor = active_connection.execute(
                     _duplicate_source_rows_for_album_ids_sql(),
@@ -412,13 +565,15 @@ class PostgresLibraryBrowseRepository:
                 )
             if fingerprint:
                 absent = dict(absent)
+                identities_by_key = _duplicate_identities_by_album_key(duplicate_rows)
                 # Only requested albums have every matching identity loaded.
                 # Incidental container companions may have unqueried identities.
                 for key in pending:
                     result = duplicates.get(key, {})
                     if result.get("has_duplicate_files") or result.get("duplicate_sources"):
                         continue
-                    absent[key] = {"duplicate_sources": []}
+                    # The album's own identities let a tag save keep this entry unless it touched them.
+                    absent[key] = {"duplicate_sources": [], "_identities": identities_by_key.get(key)}
                     provenance = result.get("_root_provenance_by_year")
                     if provenance:
                         absent[key]["_root_provenance_by_year"] = deepcopy(provenance)
@@ -5540,7 +5695,17 @@ def _load_duplicate_candidate_album_ids(
     cache_key = repository._utility_projection_cache_key(kind)
     with _UTILITY_PROJECTION_CACHE_LOCK:
         generation = _UTILITY_PROJECTION_GENERATIONS.setdefault(cache_key, 0) if cache_key else 0
-    cursor = connection.execute("""
+    rows = connection.execute(_duplicate_identity_index_rows_sql(), {}).fetchall()
+    index = _duplicate_candidate_index_from_rows(rows)
+    if fingerprint:
+        _cache_compact_inventory_payload(connection, repository, kind, fingerprint, {"index": index}, generation)
+    candidate_ids = _duplicate_candidate_ids_from_index(index, album_keys)
+    return candidate_ids
+
+
+def _duplicate_identity_index_rows_sql(*, scoped_to_album_ids: bool = False) -> str:
+    album_filter = "and albums.id = any(%(album_ids)s::bigint[])" if scoped_to_album_ids else ""
+    return f"""
         select distinct albums.id as album_id, albums.album_key,
           files.scan_file_album as album, files.scan_file_album_artist as album_artist,
           files.scan_file_year as year
@@ -5553,14 +5718,29 @@ def _load_duplicate_candidate_album_ids(
         left join library.local_track_files files on files.track_id = tracks.id
           and files.scan_cache_stale is false
           and files.scan_file_entry_is_object is true
-        where owners.owner_key = 'local-bootstrap-owner'
-    """, {})
-    rows = cursor.fetchall()
-    index = _duplicate_candidate_index_from_rows(rows)
-    if fingerprint:
-        _cache_compact_inventory_payload(connection, repository, kind, fingerprint, {"index": index}, generation)
-    candidate_ids = _duplicate_candidate_ids_from_index(index, album_keys)
-    return candidate_ids
+        where owners.owner_key = 'local-bootstrap-owner' {album_filter}
+    """
+
+
+def _duplicate_identities_by_album_key(rows: Iterable[object]) -> dict[str, list[list[object]]]:
+    """Each album's duplicate identities, from the source rows a duplicate lookup loaded."""
+    from music_app.services.library import _duplicate_album_identity_values
+
+    identities: dict[str, set[tuple[str, str, int]]] = {}
+    for row in rows:
+        payload = _row_mapping(row)
+        key = str(payload.get("album_key") or "")
+        if not key:
+            continue
+        file_entry = _row_json_mapping(payload.get("file_entry"))
+        # The tag fields the duplicate identity index reads (scan_file_album_artist, ...).
+        identity = _duplicate_album_identity_values(
+            file_entry.get("album_artist"), file_entry.get("album"), file_entry.get("year"),
+        )
+        bucket = identities.setdefault(key, set())
+        if identity:
+            bucket.add(identity)
+    return {key: sorted([list(identity) for identity in values]) for key, values in identities.items()}
 
 
 def _duplicate_identity_helpers_available(connection: Any) -> bool:

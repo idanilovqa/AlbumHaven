@@ -781,6 +781,10 @@ def _finalize_save_task(
                 "Utility projection refresh",
                 lambda: refresh_postgres_utility_projections_after_edit(
                     config, track_paths=changed_paths or requested_track_paths,
+                    previous_entries=[
+                        entry for path in (changed_paths or requested_track_paths)
+                        if isinstance(entry := previous_file_cache.get(path), dict)
+                    ],
                 ),
             ),
         ):

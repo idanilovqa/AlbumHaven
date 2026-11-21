@@ -679,6 +679,10 @@ def persist_structural_tag_edit_for_config(
         refresh_postgres_utility_projections_after_edit(
             config,
             track_paths=_edited_track_paths(changed_paths, updated_file_entries),
+            previous_entries=[
+                entry for path in changed_paths
+                if isinstance(entry := previous_file_entries.get(path), Mapping)
+            ],
         )
     return result
 

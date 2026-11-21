@@ -13507,6 +13507,163 @@ def test_duplicate_identity_cache_does_not_publish_after_a_newer_snapshot_or_inv
     browse.invalidate_postgres_utility_projection_cache()
 
 
+class _TagSaveRetentionConnection:
+    """Answers the scoped identity-index reload of a tag save and records each read."""
+
+    def __init__(self, rows=()):
+        self.rows, self.reads = list(rows), []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def execute(self, sql, params):
+        self.reads.append(params)
+        return self
+
+    def fetchall(self):
+        return self.rows
+
+
+def _retain_after_tag_save(monkeypatch, *, revision, scope, previous_entries, rows=()):
+    import music_app.services.library_browse_postgres as browse
+
+    connection = _TagSaveRetentionConnection(rows)
+    monkeypatch.setattr(browse, "_duplicate_inventory_fingerprint",
+                        lambda _connection: {"fingerprint": revision, "observed_at": 2})
+    monkeypatch.setattr(browse, "_edited_duplicate_scope", lambda _connection, paths: scope)
+    monkeypatch.setattr(browse.PostgresLibraryBrowseRepository, "_connect_to_database", lambda self: connection)
+    browse.retain_duplicate_projections_after_tag_save(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "tag-save-retention-test"},
+        track_paths=["/music/edited.flac"], previous_entries=previous_entries,
+    )
+    return connection
+
+
+@pytest.mark.parametrize("revision, kept", [
+    ((1, "8", "roots", 1, None, 0), True),
+    ((1, "7", "roots", 1, None, 0), True),
+    ((1, "9", "roots", 1, None, 0), False),
+    ((1, "8", "moved roots", 1, None, 0), False),
+])
+def test_tag_save_keeps_duplicate_absence_except_albums_the_edit_can_change(monkeypatch, revision, kept):
+    """FTC-TAGS-015: a save keeps every cached duplicate absence the edit cannot change. It
+    drops the edited album and every album holding the edited files' old or new identity, and
+    drops the whole projection when anything besides this one save changed the inventory. An
+    unchanged revision is the save's finalize refreshing again after its persistence step."""
+    import music_app.services.library_browse_postgres as browse
+
+    repository = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": "tag-save-retention-test"})
+    browse.invalidate_postgres_utility_projection_cache()
+    old, new, other = ["twin", "old release", 2001], ["twin", "new release", 2001], ["other", "kept", 2001]
+    repository._set_cached_utility_projection("duplicate-absence", {
+        "fingerprint": (1, "7", "roots", 1, None, 0), "observed_at": 1, "albums": {
+            "edited": {"duplicate_sources": [], "_identities": [old]},
+            "old-twin": {"duplicate_sources": [], "_identities": [old]},
+            "new-twin": {"duplicate_sources": [], "_identities": [new]},
+            "untouched": {"duplicate_sources": [], "_identities": [other]},
+            "untagged": {"duplicate_sources": [], "_identities": []},
+            "unknown-identity": {"duplicate_sources": []},
+        },
+    })
+    _retain_after_tag_save(
+        monkeypatch, revision=revision, scope=({11}, {"edited"}, {tuple(new)}),
+        previous_entries=[{"album_artist": "Twin", "album": "Old Release", "year": 2001}],
+    )
+    cached = repository._get_cached_utility_projection("duplicate-absence")
+    if kept:
+        assert cached["fingerprint"] == revision
+        assert sorted(cached["albums"]) == ["untagged", "untouched"]
+    else:
+        assert cached is None
+    browse.invalidate_postgres_utility_projection_cache()
+
+
+def test_tag_save_reloads_only_the_identity_index_rows_the_edit_can_change(monkeypatch):
+    """The Postgres 17 identity index moves past a save by re-reading only the edited albums
+    and the albums sharing their old or new identity; the rest of the library is not read."""
+    import music_app.services.library_browse_postgres as browse
+
+    repository = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": "tag-save-retention-test"})
+    browse.invalidate_postgres_utility_projection_cache()
+    old, new, other = ("twin", "old release", 2001), ("twin", "new release", 2001), ("other", "kept", 2001)
+    repository._set_cached_utility_projection("duplicate-identities", {
+        "fingerprint": (1, "7", "roots", 1, None, 0), "observed_at": 1, "index": [
+            (11, "edited", old), (12, "old-twin", old), (13, "new-twin", new), (14, "untouched", other),
+        ],
+    })
+    connection = _retain_after_tag_save(
+        monkeypatch, revision=(1, "8", "roots", 1, None, 0), scope=({11}, {"edited"}, {new}),
+        previous_entries=[{"album_artist": "Twin", "album": "Old Release", "year": 2001}],
+        rows=[
+            {"album_id": 11, "album_key": "edited", "album_artist": "Twin", "album": "New Release", "year": "2001"},
+            {"album_id": 12, "album_key": "old-twin", "album_artist": "Twin", "album": "Old Release", "year": "2001"},
+            {"album_id": 13, "album_key": "new-twin", "album_artist": "Twin", "album": "New Release", "year": "2001"},
+        ],
+    )
+    assert connection.reads == [{"album_ids": [11, 12, 13]}]
+    cached = repository._get_cached_utility_projection("duplicate-identities")
+    assert cached["fingerprint"] == (1, "8", "roots", 1, None, 0)
+    assert sorted(cached["index"]) == [
+        (11, "edited", new), (12, "old-twin", old), (13, "new-twin", new), (14, "untouched", other),
+    ]
+    assert browse._duplicate_candidate_ids_from_index(cached["index"], ["edited"]) == [11, 13]
+    browse.invalidate_postgres_utility_projection_cache()
+
+
+def test_tag_save_retention_leaves_a_newer_duplicate_projection_in_place(monkeypatch):
+    import music_app.services.library_browse_postgres as browse
+
+    repository = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": "tag-save-retention-test"})
+    browse.invalidate_postgres_utility_projection_cache()
+    repository._set_cached_utility_projection("duplicate-absence", {
+        "fingerprint": (1, "7", "roots", 1, None, 0), "observed_at": 1,
+        "albums": {"untouched": {"duplicate_sources": [], "_identities": []}},
+    })
+    newer = {"fingerprint": (1, "8", "roots", 1, None, 0), "observed_at": 3, "albums": {}}
+
+    def scope_while_another_reader_publishes(_connection, paths):
+        repository._set_cached_utility_projection("duplicate-absence", newer)
+        return set(), set(), set()
+
+    monkeypatch.setattr(browse, "_edited_duplicate_scope", scope_while_another_reader_publishes)
+    monkeypatch.setattr(browse, "_duplicate_inventory_fingerprint",
+                        lambda _connection: {"fingerprint": (1, "8", "roots", 1, None, 0), "observed_at": 2})
+    monkeypatch.setattr(browse.PostgresLibraryBrowseRepository, "_connect_to_database",
+                        lambda self: _TagSaveRetentionConnection())
+    browse.retain_duplicate_projections_after_tag_save(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "tag-save-retention-test"}, track_paths=["/x.flac"], previous_entries=[],
+    )
+    assert repository._get_cached_utility_projection("duplicate-absence") == newer
+    browse.invalidate_postgres_utility_projection_cache()
+
+
+def test_watcher_edit_still_invalidates_the_duplicate_projections_whole(monkeypatch):
+    import music_app.services.library_browse_postgres as browse
+
+    config = {"ALBUM_HAVEN_APP_DATABASE_URL": "tag-save-retention-test"}
+    repository = browse.PostgresLibraryBrowseRepository(config)
+    monkeypatch.setattr(browse.problematic_index, "queue_maintenance", lambda repository: None)
+    retained = []
+    monkeypatch.setattr(browse, "retain_duplicate_projections_after_tag_save", lambda *a, **k: retained.append(k))
+
+    def cache_both():
+        for kind in browse._DUPLICATE_PROJECTION_KINDS:
+            repository._set_cached_utility_projection(kind, {"fingerprint": (1,), "observed_at": 1})
+
+    cache_both()
+    browse.refresh_postgres_utility_projections_after_edit(config, track_paths=["/x.flac"])
+    assert retained == []
+    assert all(repository._get_cached_utility_projection(kind) is None for kind in browse._DUPLICATE_PROJECTION_KINDS)
+    cache_both()
+    browse.refresh_postgres_utility_projections_after_edit(config, track_paths=["/x.flac"], previous_entries=[])
+    assert len(retained) == 1
+    assert all(repository._get_cached_utility_projection(kind) for kind in browse._DUPLICATE_PROJECTION_KINDS)
+    browse.invalidate_postgres_utility_projection_cache()
+
+
 def test_non_album_candidate_cache_reloads_rows_by_ids_and_invalidates_overrides(monkeypatch):
     import music_app.services.library_browse_postgres as browse
 

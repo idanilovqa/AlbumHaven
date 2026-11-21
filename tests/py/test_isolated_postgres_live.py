@@ -8091,3 +8091,81 @@ def test_live_problematic_files_flags_an_app_rating_that_differs_from_the_file_t
     assert "File rating mismatch" in next(
         item for item in page["items"] if item["name"] == "Differs"
     )["problem_reasons"]
+
+
+@pytest.mark.parametrize("candidate_lookup", ["postgres-18-helpers", "postgres-17-identity-index"])
+def test_live_tag_save_moves_duplicate_badges_at_once_and_keeps_untouched_albums_cached(
+    watcher_repair_inventory, monkeypatch, candidate_lookup,
+):
+    """FTC-TAGS-015: a save keeps the duplicate projections, so the next search and artist
+    view stay fast. An edit that creates a duplicate pair badges both albums at once; the edit
+    that breaks it clears the badge on the album left behind at once."""
+    from music_app.services import library_browse_postgres as browse
+    from music_app.services.cache import persist_structural_tag_edit_for_config
+
+    fixture = watcher_repair_inventory
+    if candidate_lookup == "postgres-17-identity-index":
+        monkeypatch.setattr(browse, "_duplicate_identity_helpers_available", lambda connection: False)
+    monkeypatch.setattr(browse.problematic_index, "queue_maintenance", lambda repository: None)
+    browse.invalidate_postgres_utility_projection_cache()
+
+    def tagged(relative, album):
+        entry = fixture.entry(relative, artist="Twin", album=album)
+        entry.update(album_artist="Twin", year=2001)
+        return entry
+
+    first = tagged("Twin/One/01.flac", "Same Release")
+    second = tagged("Twin/Two/01.flac", "Other Release")
+    bystander = fixture.entry("Bystander/Kept/01.flac", artist="Bystander", album="Kept")
+    bystander["album_artist"] = "Bystander"
+    fixture.seed(first, second, bystander)
+    repository = browse.PostgresLibraryBrowseRepository(fixture.config, connect=isolatedPostgres._connect)
+
+    def album_key(entry):
+        with isolatedPostgres._connect(fixture.runtime_url) as connection:
+            return connection.execute(
+                """
+                select albums.album_key from library.local_track_files files
+                join library.local_tracks tracks on tracks.id = files.track_id
+                join library.local_albums albums on albums.id = tracks.album_id
+                where files.private_path = %(path)s and files.scan_cache_stale is false
+                """,
+                {"path": entry["path"]},
+            ).fetchone()["album_key"]
+
+    def badges():
+        albums = [{"key": album_key(entry)} for entry in (first, second, bystander)]
+        repository._attach_duplicate_sources(albums)
+        return [bool(album.get("has_duplicate_files")) for album in albums]
+
+    def save(entry, **changes):
+        updated = {**entry, **changes}
+        persist_structural_tag_edit_for_config(
+            fixture.config, changed_paths={entry["path"]}, previous_file_entries={entry["path"]: dict(entry)},
+            updated_file_entries={entry["path"]: updated}, changed_field_names=set(changes),
+        )
+        # The save task's finalize refreshes again after the persistence step did.
+        browse.refresh_postgres_utility_projections_after_edit(
+            fixture.config, track_paths={entry["path"]}, previous_entries=[dict(entry)],
+        )
+        entry.update(updated)
+
+    def cached_absence_keys():
+        cached = repository._get_cached_utility_projection("duplicate-absence")
+        return set(cached["albums"]) if cached else set()
+
+    def save_keeps_untouched_albums_cached(entry, **changes):
+        bystander_key = album_key(bystander)
+        save(entry, **changes)
+        assert bystander_key in cached_absence_keys(), "The save kept the untouched album's cached absence."
+        if candidate_lookup == "postgres-17-identity-index":
+            assert repository._get_cached_utility_projection("duplicate-identities"), (
+                "The save moved the identity index forward instead of discarding it."
+            )
+
+    assert badges() == [False, False, False]
+    save_keeps_untouched_albums_cached(second, album="Same Release")
+    assert badges() == [True, True, False], "Creating a duplicate pair badges both albums at once."
+    save_keeps_untouched_albums_cached(second, album="Other Release")
+    assert badges() == [False, False, False], "Breaking the pair clears the remaining album's badge at once."
+    browse.invalidate_postgres_utility_projection_cache()

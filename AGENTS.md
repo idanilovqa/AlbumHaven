@@ -162,6 +162,15 @@ operate, or contribute to the application.
   selection on the hosted runner with `-f gates=focused -f cases=...` and/or
   `-f targets=...` (comma-separated). A focused run never satisfies a gate;
   the full gate must still pass on the handed-off commit.
+- Never poll CI in a tight loop (owner rule, 2026-11-21). Every agent shares
+  one GitHub API budget of 5,000 requests per hour. Start the run, estimate
+  when it will finish (the job's usual duration, its last few runs read once,
+  or a guess: about 10–15 minutes for focused cases, 30–90 minutes for a full
+  gate or pipeline), then check once at that time with a single
+  `gh run view`. If the run isn't finished, wait at least half the estimate
+  again, and never check more often than every 5 minutes. `gh run watch`
+  always takes `--interval 300` or more. Check `gh api rate_limit` (it is
+  free) before starting several runs or watchers.
 - A hosted run satisfies a gate only when that gate's job succeeded on the
   commit being handed off. It uses isolated PostgreSQL 17, released synthetic
   fixtures, and the `local` timing contract. It is not the pull-request

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.43 - 2026-11-21
+
+- When a track moved back into its album while another album split from it still shared the folder, the album's cover could vanish for a few seconds. Every album in a split folder now keeps the folder's cover through the next library pass. Covers you chose yourself are never touched.
+
 ## 0.11.42 - 2026-11-19
 
 - Docs-only: contributor guidance now says that rerunning a failing gate to diagnose it or to verify a fix is expected; only rerunning unchanged code for a lucky pass is ruled out.

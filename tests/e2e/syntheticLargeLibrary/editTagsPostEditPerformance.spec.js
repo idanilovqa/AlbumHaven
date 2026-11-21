@@ -246,7 +246,7 @@ test.describe(`${CASE_ID} synthetic-large repeated Edit Tags recovery`, () => {
 
       await stepLogger.step('Correct the final typo artist and reconcile to its destination', async () => {
         // The fixture restore restarted the app: time the save, not the startup warm-up
-        // or the opened album's automatic Cover Lookup.
+        // or background cover work.
         await appBarActions.waitForScanAndCoverRefreshIdle({ includeStartupAndLookups: true });
         const typoSummary = await trackModalActions.waitForLoadedSummary({ timeout: 60000 });
         expect(typoSummary.trackRows).toBe(TYPO_TRACK_FILENAMES.length);

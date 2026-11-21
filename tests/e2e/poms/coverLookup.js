@@ -454,7 +454,7 @@ export class CoverLookup extends BasePage {
   // The card's select target: the Select label on local cards, the card name on remote cards, which carry a
   // provider badge instead of a Select word (owner 2026-11-19). The badge itself opens its popover, never a selection.
   get localCoverActionWithinCardSelector() {
-    return '.cover-lookup-art-action-label, [data-select-remote-cover] .cover-lookup-art-name';
+    return '.cover-lookup-art-action-label';
   }
 
   get localCoverResolutionWithinCardSelector() {
@@ -486,7 +486,8 @@ export class CoverLookup extends BasePage {
   }
 
   localCoverActionWithin(card) {
-    return card.locator(this.localCoverActionWithinCardSelector).first();
+    const label = card.locator(this.localCoverActionWithinCardSelector);
+    return label.or(card.locator(':scope:not(:has(.cover-lookup-art-action-label)) .cover-lookup-art-name')).first();
   }
 
   localCoverDeleteWithin(card) {

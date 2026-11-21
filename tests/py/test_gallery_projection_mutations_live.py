@@ -749,3 +749,53 @@ def test_first_anchored_request_after_republish_ignores_stale_statistics(gallery
     assert elapsed_ms < 1000, f"first anchored gallery request took {elapsed_ms:.0f} ms"
     assert "Nested Loop" not in json.dumps(explained)
     assert explained["Plan"]["Shared Hit Blocks"] + explained["Plan"]["Shared Read Blocks"] < 1000
+
+
+def _bump_builder(monkeypatch, *, servable_previous):
+    previous = gallery.BUILDER_VERSION
+    monkeypatch.setattr(gallery, "BUILDER_VERSION", f"{previous}-next")
+    monkeypatch.setattr(gallery, "SERVABLE_PREVIOUS_BUILDER_VERSIONS", (previous,) if servable_previous else ())
+    refreshes = []
+    monkeypatch.setattr(gallery, "schedule_gallery_projection_refresh",
+                        lambda *args, **kwargs: refreshes.append(kwargs.get("view_state")))
+    return refreshes
+
+
+def test_builder_bump_keeps_serving_the_previous_gallery_until_the_new_one_is_published(
+    gallery_inventory, monkeypatch,
+):
+    """Owner 2026-11-21, "Keep old gallery until ready": a builder bump never answers 503 while
+    the new builder's first snapshot is prepared; the scope swaps when it is published."""
+    fixture = gallery_inventory
+    repository = browse.PostgresLibraryBrowseRepository(fixture.config, connect=isolatedPostgres._connect)
+    paged = {"gallery_page_size": "8"}
+    before = repository.build_root_startup_preview_payload(query_params=paged, queue_projection_refresh=False)
+    refreshes = _bump_builder(monkeypatch, servable_previous=True)
+
+    during = repository.build_root_startup_preview_payload(query_params=paged)
+    sidebar = repository.build_projected_root_sidebar_payload(query_params={})
+
+    assert during["gallery_page"]["projection_stale"] is True
+    assert during["gallery_page"]["revision"] == before["gallery_page"]["revision"]
+    assert [album["key"] for group in during["artist_groups"] for album in group["albums"]] == [
+        album["key"] for group in before["artist_groups"] for album in group["albums"]]
+    assert sidebar["artists_sidebar"] == before["artists_sidebar"]
+    assert len(refreshes) == 2, "each stale read schedules the new builder's preparation"
+
+    assert gallery.ensure_gallery_projection_ready(fixture.config, connect=isolatedPostgres._connect)["built"] > 0
+    after = repository.build_root_startup_preview_payload(query_params=paged, queue_projection_refresh=False)
+    assert after["gallery_page"].get("projection_stale") is not True
+    with isolatedPostgres._connect(fixture.runtime_url) as connection:
+        assert gallery._ready_header(connection, fixture.context, fixture.view_state) is not None
+
+
+def test_builder_bump_without_a_servable_previous_gallery_is_pending_as_before(gallery_inventory, monkeypatch):
+    fixture = gallery_inventory
+    repository = browse.PostgresLibraryBrowseRepository(fixture.config, connect=isolatedPostgres._connect)
+    refreshes = _bump_builder(monkeypatch, servable_previous=False)
+
+    with pytest.raises(browse.GalleryProjectionPending):
+        repository.build_root_startup_preview_payload(query_params={"gallery_page_size": "8"})
+    with pytest.raises(browse.GalleryProjectionPending):
+        repository.build_projected_root_sidebar_payload(query_params={})
+    assert len(refreshes) == 2

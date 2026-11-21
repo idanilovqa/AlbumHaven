@@ -829,6 +829,7 @@ class PostgresLibraryBrowseRepository:
             projected = load_gallery_projection_sidebar(
                 connection,
                 _root_sidebar_view_state(query_params),
+                allow_stale=True,
             )
         finally:
             try:
@@ -839,10 +840,11 @@ class PostgresLibraryBrowseRepository:
                 close = getattr(connection, "close", None)
                 if callable(close):
                     close()
-        if projected is None:
+        if projected is None or projected[2]:
             schedule_gallery_projection_refresh(self._config, connect=self._connect)
+        if projected is None:
             raise GalleryProjectionPending("Gallery is being prepared.")
-        artists_sidebar, album_count = projected
+        artists_sidebar, album_count, _stale = projected
         return {
             "artists_sidebar": artists_sidebar,
             "artist_count": len(artists_sidebar),

@@ -783,12 +783,13 @@ def test_selected_startup_sidebar_uses_only_current_gallery_projection(monkeypat
     monkeypatch.setattr(
         projection,
         "load_gallery_projection_sidebar",
-        lambda _connection, _state: (
+        lambda _connection, _state, **_options: (
             [
                 {"artist": "Broadcast", "artist_display": "Broadcast", "count": 2},
                 {"artist": "Stereolab", "artist_display": "Stereolab", "count": 1},
             ],
             3,
+            False,
         ),
         raising=False,
     )
@@ -1013,3 +1014,48 @@ def test_persisted_gallery_anchor_resolves_published_artist_alias(monkeypatch, s
     assert metadata["anchor_artist"] == "Artist alias"
     assert metadata["anchor_group_artist"] == displayed_artist
 
+
+
+def test_builder_bump_serves_the_previous_builders_snapshot_from_its_own_scope(monkeypatch):
+    from music_app.services import gallery_projection_postgres as projection
+
+    monkeypatch.setattr(projection, "BUILDER_VERSION", "root-gallery-next")
+    monkeypatch.setattr(projection, "SERVABLE_PREVIOUS_BUILDER_VERSIONS", ("root-gallery-previous",))
+    previous_scope = projection.gallery_projection_scope_key({}, "root-gallery-previous")
+    header = {"source_generation": 9, "revision": "b" * 64, "album_count": 1, "occurrence_count": 1,
+              "sidebar": [{"artist": "Artist", "artist_display": "Artist", "count": 1}]}
+    header_versions, occurrence_scopes = [], []
+
+    class Cursor:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def fetchone(self):
+            return self.rows[0] if self.rows else None
+
+        def fetchall(self):
+            return self.rows
+
+    class Connection:
+        def execute(self, sql, params=None):
+            if "source_generation = %(generation)s" in sql:
+                return Cursor([])
+            if "order by source_generation desc" in sql:
+                header_versions.append(params["builder_version"])
+                assert params["scope_key"] == projection.gallery_projection_scope_key({}, params["builder_version"])
+                return Cursor([header] if params["builder_version"] == "root-gallery-previous" else [])
+            if "gallery_projection_occurrences" in sql:
+                occurrence_scopes.append(params["scope_key"])
+                return Cursor([{"payload": membership("Artist", "album-1")}])
+            raise AssertionError(sql)
+
+    context = {"library_id": 1, "generation": 10}
+    page, sidebar, _count, metadata = projection.load_gallery_projection_page(
+        Connection(), {}, {"gallery_page_size": "8"}, context=context, allow_stale=True)
+
+    assert header_versions == ["root-gallery-next", "root-gallery-previous"]
+    assert occurrence_scopes == [previous_scope]
+    assert page == [membership("Artist", "album-1")] and sidebar == header["sidebar"]
+    assert metadata["projection_stale"] is True
+    assert projection.load_gallery_projection_sidebar(Connection(), {}, context=context, allow_stale=True)[2] is True
+    assert projection.load_gallery_projection_sidebar(Connection(), {}, context=context) is None

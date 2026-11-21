@@ -14,6 +14,11 @@ from music_app.services import browse_query_diagnostics  # TEMPORARY FTC-OPS-016
 from music_app.services.library_roots import library_category_slugs
 
 BUILDER_VERSION = "root-gallery-v5"
+# Earlier builders whose stored occurrences and sidebar this code still reads. While a new
+# builder's first snapshot is prepared, the newest of theirs keeps serving (marked stale), so a
+# builder bump never answers "Gallery is being prepared." when a snapshot exists. A bump that
+# changes what an occurrence or sidebar entry holds leaves its predecessor out.
+SERVABLE_PREVIOUS_BUILDER_VERSIONS = ("root-gallery-v4",)
 _LOGGER = logging.getLogger(__name__)
 _PENDING = {}
 _PENDING_LOCK = Lock()
@@ -25,9 +30,9 @@ _OCCURRENCE_FIELDS = frozenset({
 })
 
 
-def gallery_projection_scope_key(view_state):
+def gallery_projection_scope_key(view_state, builder_version=None):
     scope = {
-        "builder_version": BUILDER_VERSION,
+        "builder_version": builder_version or BUILDER_VERSION,
         **{key: view_state.get(key) for key in ("gallery_scope", "visible_library_categories")},
     }
     selected_categories = set(scope.get("visible_library_categories") or ())
@@ -90,7 +95,8 @@ def _ready_header(connection, context, view_state):
     """, {**context, "scope_key": gallery_projection_scope_key(view_state), "builder_version": BUILDER_VERSION}))
 
 
-def _latest_compatible_header(connection, context, view_state):
+def _latest_compatible_header(connection, context, view_state, builder_version=None):
+    builder_version = builder_version or BUILDER_VERSION
     return _first(connection.execute("""
         select source_generation, revision, sidebar, album_count, occurrence_count
         from library.gallery_projection_snapshots
@@ -98,19 +104,35 @@ def _latest_compatible_header(connection, context, view_state):
           and builder_version = %(builder_version)s
         order by source_generation desc
         limit 1
-    """, {**context, "scope_key": gallery_projection_scope_key(view_state), "builder_version": BUILDER_VERSION}))
+    """, {**context, "scope_key": gallery_projection_scope_key(view_state, builder_version),
+          "builder_version": builder_version}))
 
 
-def load_gallery_projection_sidebar(connection, view_state, *, context=None):
+def _servable_header(connection, context, view_state, *, allow_stale):
+    """The snapshot to serve, its scope key and whether it is stale: the current one, else (when
+    stale is allowed) this builder's newest, else the newest of a servable previous builder."""
+    header = _ready_header(connection, context, view_state)
+    if header or not allow_stale:
+        return header, gallery_projection_scope_key(view_state), False
+    for builder_version in (BUILDER_VERSION, *SERVABLE_PREVIOUS_BUILDER_VERSIONS):
+        header = _latest_compatible_header(connection, context, view_state, builder_version)
+        if header:
+            return header, gallery_projection_scope_key(view_state, builder_version), True
+    return None, gallery_projection_scope_key(view_state), False
+
+
+def load_gallery_projection_sidebar(connection, view_state, *, context=None, allow_stale=False):
+    """The sidebar and album count of the snapshot to serve, and whether it is stale."""
     context = context if context is not None else gallery_projection_context(connection)
     if not context:
         return None
-    header = _ready_header(connection, context, view_state)
+    header, _scope_key, stale = _servable_header(connection, context, view_state, allow_stale=allow_stale)
     if not header:
         return None
     return (
         [dict(item) for item in list(header.get("sidebar") or [])],
         int(header["album_count"]),
+        stale,
     )
 
 
@@ -140,11 +162,7 @@ def load_gallery_projection_page(connection, view_state, params, *, context=None
     context = context if context is not None else gallery_projection_context(connection)
     if not context:
         return None
-    header = _ready_header(connection, context, view_state)
-    stale = False
-    if not header and allow_stale:
-        header = _latest_compatible_header(connection, context, view_state)
-        stale = header is not None
+    header, scope_key, stale = _servable_header(connection, context, view_state, allow_stale=allow_stale)
     if not header:
         return None
     count = int(header["occurrence_count"])
@@ -164,7 +182,7 @@ def load_gallery_projection_page(connection, view_state, params, *, context=None
               and payload->>'artist_name' = %(anchor_artist)s
         """, {
             "library_id": context["library_id"],
-            "scope_key": gallery_projection_scope_key(view_state),
+            "scope_key": scope_key,
             "revision": header["revision"],
             "anchor_artist": anchor_artist,
         }))
@@ -178,7 +196,6 @@ def load_gallery_projection_page(connection, view_state, params, *, context=None
         count,
         anchor_offset=anchor_offset,
     )
-    scope_key = gallery_projection_scope_key(view_state)
 
     def artist_bounds(ordinal):
         if not count:
@@ -209,7 +226,7 @@ def load_gallery_projection_page(connection, view_state, params, *, context=None
           and revision = %(revision)s
           and ordinal >= %(offset)s and ordinal < %(end)s
         order by ordinal
-    """, {"library_id": context["library_id"], "scope_key": gallery_projection_scope_key(view_state),
+    """, {"library_id": context["library_id"], "scope_key": scope_key,
             "revision": header["revision"], "offset": offset, "end": end}).fetchall()
     page = [dict(row["payload"]) for row in rows]
     if len(page) != end - offset:

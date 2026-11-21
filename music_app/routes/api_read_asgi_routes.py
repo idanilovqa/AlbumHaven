@@ -1446,7 +1446,7 @@ def _unsupported_postgres_non_album_modal_response(
 
 
 def _problematic_artist_page(
-    request: Request, *, limit: int | None, cursor: str,
+    loaded_items: list[dict[str, object]], *, limit: int | None, cursor: str,
 ) -> dict[str, object] | JSONResponse:
     """One page of the owner's Artist rows, in name order, behind a fingerprinted cursor."""
     sort_key = lambda item: (
@@ -1455,7 +1455,7 @@ def _problematic_artist_page(
         str(item.get("year") or ""),
         str(item.get("key") or "").lower(),
     )
-    artist_items = sorted(load_problematic_artist_items(request), key=sort_key)
+    artist_items = sorted(loaded_items, key=sort_key)
     fingerprint = hashlib.sha256(json.dumps(
         [(item.get("key"), item.get("problem_reasons")) for item in artist_items],
         sort_keys=True,
@@ -1500,7 +1500,7 @@ def utilities_problematic_files(
 ) -> JSONResponse:
     if _is_postgres_utility_projection_request(request):
         if artists:
-            artist_page = _problematic_artist_page(request, limit=limit, cursor=cursor)
+            artist_page = _problematic_artist_page(load_problematic_artist_items(request), limit=limit, cursor=cursor)
             if isinstance(artist_page, JSONResponse):
                 return artist_page
             return JSONResponse(_attach_library_watch_health(request, artist_page))
@@ -1509,15 +1509,14 @@ def utilities_problematic_files(
             # The first page also carries the first page of Artist rows, so their filters arrive
             # with the album filters; the client keeps one row per key when Artist paging repeats them.
             with ThreadPoolExecutor(max_workers=1) as pool:
-                artist_page = None if cursor else pool.submit(
-                    _problematic_artist_page, request, limit=limit, cursor="",
-                )
+                artist_items = None if cursor else pool.submit(load_problematic_artist_items, request)
                 try:
                     payload = repository.build_problematic_files_page(limit=limit, cursor=cursor)
                 except ValueError as error:
                     return JSONResponse({"error": str(error)}, status_code=422)
                 _project_missing_album_actions_for_request(request, payload)
-                if artist_page is not None and isinstance(first_artists := artist_page.result(), dict):
+                if artist_items is not None:
+                    first_artists = _problematic_artist_page(artist_items.result(), limit=limit, cursor="")
                     project_artist_problems_into_problematic_files(request, payload, first_artists["items"])
             return JSONResponse(_attach_library_watch_health(request, payload))
         # Artist rows have their own bounded client owner. Search combines those

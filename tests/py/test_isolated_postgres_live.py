@@ -6682,3 +6682,31 @@ def test_live_problematic_files_flags_an_app_rating_that_differs_from_the_file_t
     assert "File rating mismatch" in next(
         item for item in page["items"] if item["name"] == "Differs"
     )["problem_reasons"]
+
+
+def test_prepare_rebuilds_schemas_that_a_test_migrated_outside_the_ledger(monkeypatch):
+    """CI order on 2026-11-21: a test dropped the schemas and ran migrations without the ledger,
+    and the next prepare replayed 0070 over them (DuplicateColumn loop_control_style)."""
+    import time
+
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    migrations = sorted((isolatedPostgres.ROOT / "migrations" / "postgres").glob("*.sql"))
+    isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+    sealed_started = time.perf_counter()
+    isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+    sealed_seconds = time.perf_counter() - sealed_started
+
+    _drop_application_schemas(setup_url)
+    with isolatedPostgres._connect(setup_url) as connection:
+        for path in migrations:
+            if path.name >= "0071_":
+                break
+            connection.execute(path.read_text(encoding="utf-8"))
+    rebuild_started = time.perf_counter()
+    isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+    rebuild_seconds = time.perf_counter() - rebuild_started
+    with isolatedPostgres._connect(setup_url) as connection:
+        recorded = {row["migration_name"] for row in connection.execute(
+            "select migration_name from ops.schema_migrations").fetchall()}
+    assert migrations[-1].name in recorded
+    print(f"prepare: sealed {sealed_seconds:.2f}s, rebuild after an unledgered schema {rebuild_seconds:.2f}s")

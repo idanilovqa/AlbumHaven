@@ -11,7 +11,7 @@ from copy import deepcopy
 import re
 from typing import Any
 
-from music_app.services.postgres_connections import leased_connection as _leased_connection
+from music_app.services.postgres_connections import pooled_connection as _connect
 
 PROFILES = ("web_desktop", "mobile", "tv")
 _DEFAULTS = {
@@ -116,10 +116,6 @@ def _owner(value: object) -> int:
     if type(value) is not int or value <= 0:
         raise ValueError("An authenticated account is required.")
     return value
-
-
-def _connect(database_url: str):
-    return _leased_connection(database_url)
 
 
 class PostgresClientLayoutPreferences:

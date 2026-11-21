@@ -11,6 +11,7 @@
   <script src="/static/js/app-copy.js?v={{ runtime_asset_version }}" defer></script>
   <title>{{ app_name }} v{{ app_version }}</title>
   <link rel="preload" href="{{ url_for('static', filename='app.js') }}?v={{ runtime_asset_version }}" as="script" fetchpriority="high">
+<script>(()=>{const t0=performance.now();const f=window.fetch.bind(window);window.fetch=async(i,o)=>{const u=typeof i==='string'?i:(i&&i.url)||String(i);const m=(o&&o.method)||'GET';const s=performance.now();console.info('[diag] fetch-start',m,u,Math.round(s-t0));try{const r=await f(i,o);console.info('[diag] fetch-end',m,u,r.status,Math.round(performance.now()-s)+'ms');return r;}catch(e){console.info('[diag] fetch-error',m,u,String(e));throw e;}};})();</script>
   <link rel="preload" href="{{ url_for('static', filename='js/runtime-bundle.js') }}?v={{ runtime_asset_version }}" as="script" fetchpriority="high">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/base-layout.css') }}?v={{ runtime_asset_version }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/account-menu.css') }}?v={{ runtime_asset_version }}">

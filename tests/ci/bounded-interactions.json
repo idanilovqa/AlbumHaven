@@ -1883,6 +1883,22 @@
       "proof": "static"
     },
     {
+      "id": "js:runtime/bootstrap-init.js#<top-level>#viewMissing",
+      "action": "One request for the view of an address never kept as a page, on a page started from the device copy offline",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/bootstrap-init.js#<top-level>:request:fetchAndRender"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/bootstrap-init.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:runtime/bootstrap-init.js#runHydration",
       "action": "Hydrate the startup view for Home, the root gallery, and a selected artist",
       "entrypoints": [

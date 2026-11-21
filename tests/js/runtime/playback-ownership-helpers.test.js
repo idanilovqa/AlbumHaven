@@ -206,6 +206,8 @@ test('a playing tab renews every 4 s, and a tab without a claim reads the shared
   heartbeat();
   heartbeat();
   assert.equal(renewals, 2, 'holding playback: a renewal on every 4 s tick');
+});
+
 test('a claim retry waiting out its 2 s runs at once when the server is back, and only once', () => {
   const timers = [];
   const cleared = [];

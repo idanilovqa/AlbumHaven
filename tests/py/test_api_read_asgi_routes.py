@@ -5231,6 +5231,57 @@ def test_asgi_bounded_problematic_files_page_does_not_wait_for_artist_attention(
     assert [item["key"] for item in payload["items"]] == ["bounded-album"]
 
 
+def test_asgi_bounded_first_problematic_files_page_carries_the_first_artist_page(
+    app,
+    asgi_app,
+    monkeypatch,
+):
+    """FTC-MBID-003 (MBD1-10, MBD1-21): an Artist problem and its filter arrive with the first
+    page. Only the first Artist page rides along; Artist paging repeats it under the same keys."""
+    from music_app.routes import api_read_asgi_routes as asgi_read_routes
+
+    class FakePostgresRepository:
+        def __init__(self, _config):
+            pass
+
+        def build_problematic_files_page(self, *, limit, cursor=""):
+            assert (limit, cursor) == (2, "")
+            return {"count": 1, "items": [{"key": "bounded-album", "name": "M Album"}],
+                    "complete": False, "has_more": True, "next_cursor": "page-2"}
+
+    artists = [
+        {"key": f"musicbrainz-artist:{index}", "name": name, "entity_kind": "artist",
+         "problem_reasons": ["MBID: Unconfirmed match"]}
+        for index, name in enumerate(["Z Artist", "A Artist", "B Artist"], start=1)
+    ]
+    app.config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://album_haven_app@localhost/app"
+    app.config["PERSISTENCE_BACKENDS"] = {"library_browse": "postgres"}
+    monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FakePostgresRepository)
+    monkeypatch.setattr(asgi_read_routes, "load_problematic_artist_items", lambda _request: list(artists))
+    monkeypatch.setattr(
+        "music_app.routes.musicbrainz_enrichment_asgi.load_problematic_artist_items",
+        lambda _request: list(artists),
+    )
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app, "GET", "/utilities/problematic-files", query={"limit": "2"},
+    )
+    assert status == 200
+    payload = _decode_json(body)
+    assert [item["key"] for item in payload["items"]] == [
+        "musicbrainz-artist:2", "musicbrainz-artist:3", "bounded-album",
+    ]
+    assert payload["next_cursor"] == "page-2"
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app, "GET", "/utilities/problematic-files", query={"limit": "2", "artists": "true", "cursor": ""},
+    )
+    assert status == 200
+    assert [item["key"] for item in _decode_json(body)["items"]] == [
+        "musicbrainz-artist:2", "musicbrainz-artist:3",
+    ]
+
+
 def test_asgi_problematic_files_rejects_malformed_base_and_search_cursors(
     app,
     asgi_app,

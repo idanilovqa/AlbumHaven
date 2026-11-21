@@ -1445,6 +1445,51 @@ def _unsupported_postgres_non_album_modal_response(
     )
 
 
+def _problematic_artist_page(
+    request: Request, *, limit: int | None, cursor: str,
+) -> dict[str, object] | JSONResponse:
+    """One page of the owner's Artist rows, in name order, behind a fingerprinted cursor."""
+    sort_key = lambda item: (
+        str(item.get("name") or "").lower(),
+        str(item.get("album_artist") or "").lower(),
+        str(item.get("year") or ""),
+        str(item.get("key") or "").lower(),
+    )
+    artist_items = sorted(load_problematic_artist_items(request), key=sort_key)
+    fingerprint = hashlib.sha256(json.dumps(
+        [(item.get("key"), item.get("problem_reasons")) for item in artist_items],
+        sort_keys=True,
+        default=str,
+    ).encode("utf-8")).hexdigest()[:16]
+    after = None
+    cursor_restarted = False
+    if cursor:
+        try:
+            cursor_payload = json.loads(cursor)
+            if cursor_payload.get("fingerprint") == fingerprint:
+                after = tuple(str(value) for value in cursor_payload["after"])
+            else:
+                cursor_restarted = True
+        except (TypeError, ValueError, KeyError, json.JSONDecodeError):
+            return JSONResponse({"error": "Invalid Problematic Files Artist cursor."}, status_code=422)
+    remaining = [item for item in artist_items if after is None or sort_key(item) > after]
+    page_limit = limit or 50
+    page_items = remaining[:page_limit]
+    has_more = len(remaining) > page_limit
+    next_cursor = json.dumps({
+        "fingerprint": fingerprint,
+        "after": list(sort_key(page_items[-1])),
+    }, separators=(",", ":")) if has_more and page_items else ""
+    return {
+        "items": page_items,
+        "count": len(page_items),
+        "complete": not has_more,
+        "has_more": has_more,
+        "next_cursor": next_cursor,
+        "cursor_restarted": cursor_restarted,
+    }
+
+
 @router.get("/utilities/problematic-files")
 def utilities_problematic_files(
     request: Request,
@@ -1455,52 +1500,25 @@ def utilities_problematic_files(
 ) -> JSONResponse:
     if _is_postgres_utility_projection_request(request):
         if artists:
-            sort_key = lambda item: (
-                str(item.get("name") or "").lower(),
-                str(item.get("album_artist") or "").lower(),
-                str(item.get("year") or ""),
-                str(item.get("key") or "").lower(),
-            )
-            artist_items = sorted(load_problematic_artist_items(request), key=sort_key)
-            fingerprint = hashlib.sha256(json.dumps(
-                [(item.get("key"), item.get("problem_reasons")) for item in artist_items],
-                sort_keys=True,
-                default=str,
-            ).encode("utf-8")).hexdigest()[:16]
-            after = None
-            cursor_restarted = False
-            if cursor:
-                try:
-                    cursor_payload = json.loads(cursor)
-                    if cursor_payload.get("fingerprint") == fingerprint:
-                        after = tuple(str(value) for value in cursor_payload["after"])
-                    else:
-                        cursor_restarted = True
-                except (TypeError, ValueError, KeyError, json.JSONDecodeError):
-                    return JSONResponse({"error": "Invalid Problematic Files Artist cursor."}, status_code=422)
-            remaining = [item for item in artist_items if after is None or sort_key(item) > after]
-            page_limit = limit or 50
-            page_items = remaining[:page_limit]
-            has_more = len(remaining) > page_limit
-            next_cursor = json.dumps({
-                "fingerprint": fingerprint,
-                "after": list(sort_key(page_items[-1])),
-            }, separators=(",", ":")) if has_more and page_items else ""
-            return JSONResponse(_attach_library_watch_health(request, {
-                "items": page_items,
-                "count": len(page_items),
-                "complete": not has_more,
-                "has_more": has_more,
-                "next_cursor": next_cursor,
-                "cursor_restarted": cursor_restarted,
-            }))
+            artist_page = _problematic_artist_page(request, limit=limit, cursor=cursor)
+            if isinstance(artist_page, JSONResponse):
+                return artist_page
+            return JSONResponse(_attach_library_watch_health(request, artist_page))
         repository = PostgresLibraryBrowseRepository(_app_config(request))
         if limit is not None and not q.strip():
-            try:
-                payload = repository.build_problematic_files_page(limit=limit, cursor=cursor)
-            except ValueError as error:
-                return JSONResponse({"error": str(error)}, status_code=422)
-            _project_missing_album_actions_for_request(request, payload)
+            # The first page also carries the first page of Artist rows, so their filters arrive
+            # with the album filters; the client keeps one row per key when Artist paging repeats them.
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                artist_page = None if cursor else pool.submit(
+                    _problematic_artist_page, request, limit=limit, cursor="",
+                )
+                try:
+                    payload = repository.build_problematic_files_page(limit=limit, cursor=cursor)
+                except ValueError as error:
+                    return JSONResponse({"error": str(error)}, status_code=422)
+                _project_missing_album_actions_for_request(request, payload)
+                if artist_page is not None and isinstance(first_artists := artist_page.result(), dict):
+                    project_artist_problems_into_problematic_files(request, payload, first_artists["items"])
             return JSONResponse(_attach_library_watch_health(request, payload))
         # Artist rows have their own bounded client owner. Search combines those
         # already-loaded rows locally, keeping this request on the SQL search path.

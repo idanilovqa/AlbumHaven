@@ -657,6 +657,36 @@
   {
     "config": "playwright.config.js",
     "project": "functional",
+    "test": "tests/e2e/specs/discPartFolderDuplicates.spec.js",
+    "case": "FTC-ALBUM-DETAILS-031 localized disc-part folders are one release while a real folder copy stays a duplicate",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "setupGroup": "disc-part-folder-duplicates",
+    "databaseScenarios": [
+      "album-identity:disc-part-folder-duplicates"
+    ],
+    "filesystemScenarios": [
+      "media-copy:disc-part-folder-duplicates"
+    ],
+    "expectedContracts": [
+      "localized-disc-part-folders-form-one-release",
+      "disc-part-folders-do-not-create-duplicate-sources",
+      "real-folder-copy-keeps-duplicate-warning",
+      "disc-part-folder-release-persists-after-restart"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:disc-part-folder-duplicates",
+      "filesystemCopy": "media/cases/disc-part-folder-duplicates"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
     "test": "tests/e2e/specs/yearDistinctReleaseProjection.spec.js",
     "case": "FTC-ALBUM-DETAILS-028 year-distinct folders remain separate releases",
     "profile": "functional-core",

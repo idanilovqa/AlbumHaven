@@ -44,6 +44,7 @@ export class TrackModal extends BasePage {
     this.fastCoverFetchButton = page.locator(this.fastCoverFetchButtonSelector);
     this.releaseTabs = page.locator('#track-modal-tabs [data-track-tab-index]');
     this.duplicateSourceTabs = page.locator('#track-modal-duplicate-tabs [data-track-duplicate-source-index]');
+    this.duplicateWarning = page.locator('#track-modal-duplicate-warning');
     this.editTagsButton = page.getByRole('button', { name: 'Edit album tags', exact: true });
     this.coverLightboxButton = page.locator(this.coverLightboxButtonSelector);
     this.lightbox = page.locator(this.lightboxSelector);

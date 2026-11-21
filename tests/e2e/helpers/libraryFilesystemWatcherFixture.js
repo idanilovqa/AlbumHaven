@@ -15,6 +15,7 @@ const WATCHER_FIXTURE_DIRECTORIES = [
   'watcher-grouped-feature-credit',
   'gallery-native-response-overlap',
   'generated-preview-storage',
+  'disc-part-folder-duplicates',
 ];
 
 function resolveWatcherFixtureMediaRoot(environment = process.env) {
@@ -236,6 +237,7 @@ async function buildWatchedAlbumFixture({
   trackTitles = ['Watcher First Signal', 'Watcher Second Signal'],
   trackArtists = null,
   discNumbers = null,
+  discFolderName = (discNumber) => `CD${discNumber}`,
   removeEmbeddedArtwork = false,
   createLocalArt = false,
   ownedDirectoryName = 'watcher-reconciliation',
@@ -257,6 +259,7 @@ async function buildWatchedAlbumFixture({
     trackArtists: albumTrackArtists = null,
     albumArtist: albumOwner = albumArtist,
     discNumbers: albumDiscNumbers = discNumbers,
+    discFolderName: albumDiscFolderName = discFolderName,
   }) => {
     const directory = assertOwnedPath(
       mediaRoot,
@@ -283,7 +286,7 @@ async function buildWatchedAlbumFixture({
             const discNumber = normalizedDiscNumbers[index];
             const filename = `${String(index + 1).padStart(2, '0')} - ${title}.mp3`;
             const relativePath = discTotal > 1
-              ? path.join(`CD${discNumber}`, filename)
+              ? path.join(albumDiscFolderName(discNumber), filename)
               : filename;
             const destination = assertOwnedPath(
               mediaRoot,

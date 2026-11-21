@@ -121,6 +121,92 @@ def test_numeric_disc_folders_matching_disc_tags_are_one_physical_source():
     ) == []
 
 
+_DISC_PART_FOLDER_NAMES = ["Часть {}", "Part {}", "Teil {}", "CD {}", "Disc {}", "Диск {}", "{}"]
+
+
+def _part_folder_album(root, folder_name, track_counts=(9, 11, 9, 8)):
+    return [
+        _track(f"{root}/{folder_name.format(disc_number)}", number, disc_number=disc_number, title=f"Disc {disc_number} track {number}")
+        for disc_number, count in enumerate(track_counts, start=1)
+        for number in range(1, count + 1)
+    ]
+
+
+@pytest.mark.parametrize("folder_name", _DISC_PART_FOLDER_NAMES)
+def test_disc_part_folders_of_one_album_are_never_duplicate_copies(folder_name):
+    tracks = _part_folder_album("main/2009 - Album One", folder_name)
+    album = Album(key="artist one::album one", name="Album One", album_artist="Artist One", tracks=tracks)
+
+    contexts = _link_duplicate_album_sources([album], defer_source_payloads=True)
+
+    assert contexts[0]["has_duplicate_files"] is False
+    assert contexts[0]["materialize_sources"]() == []
+    assert _sources(*tracks) == []
+
+
+def test_containers_holding_different_discs_are_not_copies_even_in_unrecognized_folders():
+    assert _sources(
+        _track("main/release/first half", 1, disc_number=1),
+        _track("main/release/first half", 2, disc_number=1),
+        _track("hoard/release/second half", 1, disc_number=2),
+        _track("hoard/release/second half", 2, disc_number=2),
+    ) == []
+
+
+@pytest.mark.parametrize("folder_name", ["Часть {}", "Part {}", "Teil {}"])
+def test_real_copy_of_a_disc_part_album_is_still_one_duplicate_pair(folder_name):
+    original = _part_folder_album("main/2009 - Album One", folder_name, track_counts=(2, 3))
+    flat_copy = [
+        _track(
+            "hoard/Album One copy",
+            track.track_number,
+            disc_number=track.disc_number,
+            title=track.title,
+            path=Path("hoard/Album One copy") / f"{index:02d}.flac",
+        )
+        for index, track in enumerate(original, start=1)
+    ]
+
+    sources = _sources(*original, *flat_copy)
+
+    assert {source["folder_path"] for source in sources} == {
+        str(Path("main/2009 - Album One")),
+        str(Path("hoard/Album One copy")),
+    }
+    assert sorted(source["track_count"] for source in sources) == [5, 5]
+
+
+def test_disc_part_words_do_not_merge_folders_whose_disc_tags_disagree():
+    sources = _sources(
+        _track("main/release/Part 1", 1, disc_number=1),
+        _track("main/release/Part 2", 1, disc_number=1),
+    )
+
+    assert {source["folder_path"] for source in sources} == {
+        str(Path("main/release/Part 1")),
+        str(Path("main/release/Part 2")),
+    }
+
+
+def test_postgres_projection_keeps_disc_part_folders_out_of_duplicates():
+    from music_app.services.library_browse_postgres import _duplicate_sources_from_rows
+
+    rows = [
+        {
+            "album_key": "album",
+            "file_private_path": str(track.path),
+            "file_entry": asdict(track),
+            "duration_seconds": track.duration_seconds,
+        }
+        for track in _part_folder_album("main/2009 - Album One", "Часть {}")
+    ]
+
+    projection = _duplicate_sources_from_rows(rows)["album"]
+
+    assert projection["has_duplicate_files"] is False
+    assert projection["duplicate_sources"] == []
+
+
 def test_single_numeric_album_folders_do_not_collapse_from_matching_disc_tags():
     sources = _sources(
         _track("main/1", disc_number=1),
@@ -138,7 +224,7 @@ def test_numeric_disc_folders_do_not_collapse_with_mixed_disc_tags():
     sources = _sources(
         _track("main/original/1", 1, disc_number=1),
         _track("main/original/1", 2, disc_number=2),
-        _track("main/original/2", 1, disc_number=2),
+        _track("main/original/2", 2, disc_number=2),
     )
 
     assert {source["folder_path"] for source in sources} == {

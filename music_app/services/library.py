@@ -48,6 +48,12 @@ from music_app.services.metadata import normalize_exception_value
 
 _NON_ALBUM_ALBUM_VALUE_RE = re.compile(r"^[!\-\s\[\(]*non[\s\-_]*album(?:\b.*)?$", re.IGNORECASE)
 _DISC_FOLDER_RE = re.compile(r"(?<![A-Za-z0-9])(?:cd|disc|disk)\s*[-_.]?\s*(\d{1,2})(?![A-Za-z0-9])", re.IGNORECASE)
+# A folder named only by a disc ordinal ("2", "Part 2", "Часть 2", "Teil 2").
+# Such siblings form one album only when every track's disc tag matches.
+_DISC_ORDINAL_FOLDER_RE = re.compile(
+    r"(?:(?:cd|disc|disk|disque|part|pt|parte|partie|teil|часть|диск)\.?\s*[-_.]?\s*)?(\d{1,2})",
+    re.IGNORECASE,
+)
 _VARIOUS_ARTIST_KEYS = {"va", "v.a.", "various artists", "various artist", "various"}
 _FEATURE_ARTIST_SPLIT_RE = re.compile(r"\s+(?:feat\.?|featuring|with|vs|x)\s+", re.IGNORECASE)
 _SPLIT_ARTIST_SPLIT_RE = re.compile(
@@ -525,11 +531,11 @@ def _contextual_album_containers(
         normalized_path = os.path.normpath(raw_path)
         path = path_value if isinstance(path_value, Path) and str(path_value) == normalized_path else Path(normalized_path)
         folder = path.parent
-        folder_name = folder.name.strip()
-        if not folder_name.isdigit() or folder.parent == folder:
+        ordinal_match = _DISC_ORDINAL_FOLDER_RE.fullmatch(folder.name.strip())
+        if ordinal_match is None or folder.parent == folder:
             continue
 
-        ordinal = int(folder_name)
+        ordinal = int(ordinal_match.group(1))
         parent_path = str(folder.parent).strip()
         album_key, edition_key = _album_bucket_metadata(album_name, edition)
         group_key = (os.path.normcase(parent_path), album_key, edition_key)
@@ -1277,12 +1283,17 @@ def _ordered_album_duplicate_track_groups(
     ordered_groups = _ordered_album_track_groups(tracks)
     if len(ordered_groups) <= 1:
         return []
-    identities = [_duplicate_album_identity(group) for _, group in ordered_groups]
-    counts = Counter(identities)
+    indexes_by_identity: dict[tuple[str, str, int], list[int]] = {}
+    for index, (_, group) in enumerate(ordered_groups):
+        identity = _duplicate_album_identity(group)
+        if identity is not None:
+            indexes_by_identity.setdefault(identity, []).append(index)
     qualifying_indexes = {
-        index
-        for index, identity in enumerate(identities)
-        if identity is not None and counts[identity] > 1
+        same_identity_indexes[position]
+        for same_identity_indexes in indexes_by_identity.values()
+        for position in _overlapping_copy_positions(
+            [ordered_groups[group_index][1] for group_index in same_identity_indexes]
+        )
     }
     for index, (_, tracks) in enumerate(ordered_groups):
         if index in qualifying_indexes:
@@ -1356,6 +1367,26 @@ def _duplicate_album_identity(tracks: list[Track]) -> tuple[str, str, int] | Non
             return None
         identities.add(identity)
     return next(iter(identities)) if len(identities) == 1 else None
+
+
+def _overlapping_copy_positions(track_groups: list[list[Track]]) -> set[int]:
+    """Containers of one album identity are copies only when they share a track.
+
+    Disjoint containers hold different discs or parts of the same album.
+    """
+    coverages = [
+        {_duplicate_track_coverage_identity(track) for track in tracks}
+        for tracks in track_groups
+    ]
+    return {
+        position
+        for position, coverage in enumerate(coverages)
+        if any(
+            not coverage.isdisjoint(other)
+            for other_position, other in enumerate(coverages)
+            if other_position != position
+        )
+    }
 
 
 def _duplicate_track_coverage_identity(track: Track) -> tuple[object, ...]:
@@ -1646,14 +1677,18 @@ def _link_duplicate_album_sources(
         folder_identities[folder] = identity
         if identity is not None:
             identities.setdefault(identity, []).append((folder_paths[folder], tracks))
-    duplicate_groups_by_identity = {
-        identity: sorted(
-            groups,
-            key=lambda item: (Path(item[0]).name.casefold(), item[0].casefold()),
-        )
-        for identity, groups in identities.items()
-        if len(groups) > 1
-    }
+    duplicate_groups_by_identity = {}
+    duplicate_folder_keys = set()
+    for identity, groups in identities.items():
+        if len(groups) < 2:
+            continue
+        copies = [groups[position] for position in _overlapping_copy_positions([tracks for _, tracks in groups])]
+        if copies:
+            duplicate_groups_by_identity[identity] = sorted(
+                copies,
+                key=lambda item: (Path(item[0]).name.casefold(), item[0].casefold()),
+            )
+            duplicate_folder_keys.update(os.path.normcase(folder) for folder, _ in copies)
     sources_by_identity: dict[tuple[str, str, int], list[dict[str, object]]] = {}
 
     def materialize_identity_sources(identity: tuple[str, str, int]) -> list[dict[str, object]]:
@@ -1685,12 +1720,13 @@ def _link_duplicate_album_sources(
 
     contexts: list[dict[str, object]] = []
     for album, folder_keys in zip(albums, album_folder_keys):
-        own_identities = {folder_identities[key] for key in folder_keys}
-        duplicate_identities = tuple(sorted(own_identities.intersection(duplicate_groups_by_identity)))
+        duplicate_identities = tuple(sorted({
+            folder_identities[key] for key in folder_keys if key in duplicate_folder_keys
+        }))
         source_track_groups = [
             tracks
             for identity in duplicate_identities
-            for _, tracks in identities[identity]
+            for _, tracks in duplicate_groups_by_identity[identity]
         ]
         linked_tracks: list[Track] = []
         if duplicate_identities:

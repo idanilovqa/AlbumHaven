@@ -1003,6 +1003,9 @@ function pausePlayerPlaybackForHandoff(playback = getPlayerPlaybackSnapshot()) {
     && (ownershipVersion === null || ownershipVersion === (getPlaybackOwnershipState().requestVersion || 0));
   const pauseEffects = Promise.resolve(pauseStreamingPlayback()).then(async () => {
     if (!isCurrentPause()) return false;
+    // The controls follow the sound as soon as it stops, not after the listen-session and
+    // ownership round trips below.
+    updatePlayerUi();
     closeListenSegment();
     markListenSessionPaused(Number(playback.currentTime) || 0);
     if (typeof maybeScrobbleListenSession === 'function') {

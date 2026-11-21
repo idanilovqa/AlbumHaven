@@ -807,17 +807,17 @@ def test_repository_guarded_enqueue_returns_existing_or_created_job(cursor_api):
     assert result == {"job_id": 91, "rebuild_epoch": 8, "created": False}
     sql, params = connections[0].calls[0]
     assert "ops.enqueue_problematic_projection_rebuild" in sql
-    assert params == {"library_id": 17, "requested_by": "projection-reader"}
+    assert params == {"library_id": 17, "requested_by": "projection-reader", "builder_version": 2}
 
 
 @pytest.mark.parametrize(
     ("function_name", "parameter_types"),
     (
-        ("enqueue_problematic_projection_rebuild", ("bigint", "text")),
-        ("prepare_claimed_problematic_projection", ("bigint", "integer", "text", "text", "timestamptz")),
+        ("enqueue_problematic_projection_rebuild", ("bigint", "text", "integer")),
+        ("prepare_claimed_problematic_projection", ("bigint", "integer", "text", "text", "timestamptz", "integer")),
         ("validate_claimed_problematic_projection", ("bigint", "integer", "text", "text", "bigint", "bigint", "bigint", "uuid", "timestamptz")),
-        ("load_claimed_problematic_projection_source", ("bigint", "integer", "text", "text", "bigint", "bigint", "bigint", "uuid", "integer", "integer", "timestamptz")),
-        ("stage_claimed_problematic_projection_source", ("bigint", "integer", "text", "text", "bigint", "bigint", "bigint", "uuid", "text", "text", "text", "text", "text", "text", "jsonb", "boolean", "timestamptz")),
+        ("load_claimed_problematic_projection_source", ("bigint", "integer", "text", "text", "bigint", "bigint", "bigint", "uuid", "integer", "integer", "timestamptz", "integer")),
+        ("stage_claimed_problematic_projection_source", ("bigint", "integer", "text", "text", "bigint", "bigint", "bigint", "uuid", "text", "text", "text", "text", "text", "text", "jsonb", "boolean", "timestamptz", "integer")),
         ("load_claimed_problematic_projection_staged_group", ("bigint", "integer", "text", "text", "bigint", "bigint", "bigint", "uuid", "text", "text", "bigint", "integer", "timestamptz")),
         ("stage_claimed_problematic_projection_items", ("bigint", "integer", "text", "text", "bigint", "bigint", "bigint", "uuid", "text", "text", "jsonb", "integer", "timestamptz")),
         ("stage_claimed_problematic_projection_reason_facts", ("bigint", "integer", "text", "text", "bigint", "bigint", "bigint", "uuid", "text", "text", "jsonb", "timestamptz")),
@@ -825,8 +825,7 @@ def test_repository_guarded_enqueue_returns_existing_or_created_job(cursor_api):
             "stage_claimed_problematic_projection_search_facts",
             (
                 "bigint", "integer", "text", "text", "bigint", "bigint",
-                "bigint", "uuid", "text", "text", "text", "text", "text",
-                "integer", "timestamptz",
+                "bigint", "uuid", "text", "text", "jsonb", "timestamptz",
             ),
         ),
         ("complete_claimed_problematic_projection_group", ("bigint", "integer", "text", "text", "bigint", "bigint", "bigint", "uuid", "text", "text", "text", "text", "text", "text", "timestamptz")),
@@ -863,16 +862,16 @@ def test_projection_function_call_sql_uses_exact_migration_signature(
     claim = ("job_id", "attempt", "worker_id", "lease_token")
     build = ("library_id", "source_generation", "rebuild_epoch", "revision")
     parameter_names = {
-        "enqueue_problematic_projection_rebuild": ("library_id", "requested_by"),
-        "prepare_claimed_problematic_projection": (*claim, "observed_at"),
+        "enqueue_problematic_projection_rebuild": ("library_id", "requested_by", "builder_version"),
+        "prepare_claimed_problematic_projection": (*claim, "observed_at", "builder_version"),
         "validate_claimed_problematic_projection": (*claim, *build, "observed_at"),
         "load_claimed_problematic_projection_source": (
-            *claim, *build, "limit", "child_limit", "observed_at",
+            *claim, *build, "limit", "child_limit", "observed_at", "builder_version",
         ),
         "stage_claimed_problematic_projection_source": (
             *claim, *build, "group_kind", "group_identity", "source_kind",
             "source_identity", "child_kind", "child_identity", "rows", "complete",
-            "observed_at",
+            "observed_at", "builder_version",
         ),
         "load_claimed_problematic_projection_staged_group": (
             *claim, *build, "group_kind", "group_identity", "after_stage_id", "limit",
@@ -887,8 +886,7 @@ def test_projection_function_call_sql_uses_exact_migration_signature(
         ),
         "stage_claimed_problematic_projection_search_facts": (
             *claim, *build, "group_kind", "group_identity",
-            "after_projection_id", "after_fact_kind",
-            "after_semantic_child_identity", "limit", "observed_at",
+            "entries", "observed_at",
         ),
         "complete_claimed_problematic_projection_group": (
             *claim, *build, "group_kind", "group_identity", "source_kind",
@@ -992,10 +990,7 @@ def test_stage_claimed_reason_facts_preserves_closed_sql_contract(cursor_api):
         ("stage_claimed_problematic_projection_reason_facts", (), "accepted"),
         (
             "stage_claimed_problematic_projection_search_facts",
-            (
-                "after_projection_id", "after_fact_kind",
-                "after_semantic_child_identity", "staged_count", "complete",
-            ),
+            ("accepted",),
             None,
         ),
         ("complete_claimed_problematic_projection_group", (), "accepted"),
@@ -1040,7 +1035,7 @@ def test_projection_function_call_sql_preserves_closed_return_shape(
         function_name, parameter_names, success_key=success_key
     )
 
-    prefix = f"select true as {success_key} from" if success_key else "select * from"
+    prefix = f"select true as {success_key} from" if success_key and not return_columns else "select * from"
     assert sql.startswith(f"{prefix} ops.{function_name}(")
 
 
@@ -1057,6 +1052,89 @@ def test_projection_function_call_sql_rejects_unknown_success_alias(cursor_api):
             parameter_names,
             success_key="published",
         )
+
+
+@pytest.mark.parametrize(("function_name", "suffix", "return_columns"), [
+    ("register_claimed_problematic_topology_nodes", (
+        ("group_kind", "text"), ("group_identity", "text"),
+        ("after_seed_stage_id", "bigint"), ("limit", "integer"), ("observed_at", "timestamptz"),
+    ), ("after_seed_stage_id", "complete")),
+    ("load_claimed_problematic_topology_node", (
+        ("node_kind", "text"), ("node_identity", "text"),
+        ("limit", "integer"), ("observed_at", "timestamptz"),
+    ), ("definition", "expected_cursor", "rows", "complete", "sealed")),
+    ("stage_claimed_problematic_topology_node", (
+        ("node_kind", "text"), ("node_identity", "text"), ("expected_cursor", "jsonb"),
+        ("rows", "jsonb"), ("complete", "boolean"), ("observed_at", "timestamptz"),
+    ), ("accepted",)),
+    ("complete_claimed_problematic_topology_node", (
+        ("node_kind", "text"), ("node_identity", "text"), ("observed_at", "timestamptz"),
+    ), ("accepted",)),
+    ("load_claimed_problematic_topology_descriptors", (
+        ("group_kind", "text"), ("group_identity", "text"), ("after_reference_key", "text"),
+        ("limit", "integer"), ("observed_at", "timestamptz"),
+    ), ("reference_key", "fact_kind", "fact_value")),
+])
+def test_topology_functions_preserve_exact_claimed_signature_and_result(
+    cursor_api, function_name, suffix, return_columns,
+):
+    expected = (
+        ("job_id", "bigint"), ("attempt", "integer"), ("worker_id", "text"), ("lease_token", "text"),
+        ("library_id", "bigint"), ("source_generation", "bigint"),
+        ("rebuild_epoch", "bigint"), ("revision", "uuid"), *suffix,
+    )
+    assert cursor_api._PROJECTION_FUNCTION_PARAMETERS[function_name] == expected
+    assert cursor_api._PROJECTION_FUNCTION_RETURN_COLUMNS[function_name] == return_columns
+    sql = cursor_api._projection_function_call_sql(function_name, tuple(name for name, _type in expected))
+    arguments = ", ".join(f"%({name})s::{kind}" for name, kind in expected)
+    assert sql == f"select * from ops.{function_name}({arguments})"
+
+
+@pytest.mark.parametrize("operation", ["stage", "complete"])
+@pytest.mark.parametrize("accepted", [False, True], ids=["rejected", "accepted"])
+def test_topology_node_writes_preserve_actual_accepted_result(cursor_api, operation, accepted):
+    repository, connections = _repository(cursor_api, ({"accepted": accepted},))
+    build = cursor_api.ProblematicProjectionBuild(
+        17, 12, 8, "00000000-0000-0000-0000-000000000012", None,
+    )
+    values = {"claim": _claim(), "build": build,
+              "node_key": ("topology_address", "a" * 64), "now": _now()}
+    method = repository.complete_claimed_topology_node
+    if operation == "stage":
+        method = repository.stage_claimed_topology_node
+        values.update(expected_cursor={"relation": "default"}, rows=(), complete=True)
+    if accepted:
+        method(**values)
+    else:
+        with pytest.raises(cursor_api.ProblematicProjectionIntegrityError, match="claimed projection write rejected"):
+            method(**values)
+    sql, _params = connections[0].calls[0]
+    assert sql.startswith(f"select * from ops.{operation}_claimed_problematic_topology_node(")
+
+
+def test_legacy_search_stage_cursor_overload_preserves_exact_signature_and_result(cursor_api):
+    expected = (
+        ("job_id", "bigint"), ("attempt", "integer"), ("worker_id", "text"), ("lease_token", "text"),
+        ("library_id", "bigint"), ("source_generation", "bigint"),
+        ("rebuild_epoch", "bigint"), ("revision", "uuid"),
+        ("group_kind", "text"), ("group_identity", "text"),
+        ("after_projection_id", "text"), ("after_fact_kind", "text"),
+        ("after_semantic_child_identity", "text"), ("limit", "integer"), ("observed_at", "timestamptz"),
+    )
+    assert cursor_api._LEGACY_SEARCH_STAGE_PARAMETERS == expected
+    repository, connections = _repository(cursor_api, ({
+        "after_projection_id": "item-a", "after_fact_kind": "main_search",
+        "after_semantic_child_identity": "00000000000000000000", "staged_count": 1, "complete": True,
+    },))
+    build = cursor_api.ProblematicProjectionBuild(17, 12, 8, "00000000-0000-0000-0000-000000000012", None)
+    result = repository.stage_claimed_search_facts(
+        claim=_claim(), build=build, group_key=("album", 100), after_projection_id="",
+        after_fact_kind="", after_semantic_child_identity="", limit=100, now=_now(),
+    )
+    assert result == ("item-a", "main_search", "00000000000000000000", 1, True)
+    arguments = ", ".join(f"%({name})s::{kind}" for name, kind in expected)
+    sql, _params = connections[0].calls[0]
+    assert sql == f"select * from ops.stage_claimed_problematic_projection_search_facts({arguments})"
 
 
 def test_live_enqueue_claim_and_authorize_use_one_closed_projection_contract(
@@ -2384,6 +2462,7 @@ def test_repository_loads_bounded_source_page(cursor_api):
     _sql, params = connections[0].calls[0]
     assert params["limit"] == 32
     assert params["child_limit"] == 100
+    assert params["builder_version"] == 2
 
 
 @pytest.mark.parametrize(
@@ -2541,6 +2620,7 @@ def test_repository_stages_chunks_items_and_completes_group(cursor_api):
     completion_sql = connections[2].calls[0][0]
     assert "ops.stage_claimed_problematic_projection_source" in source_sql
     assert "%(rows)s" in source_sql and "%(complete)s" in source_sql
+    assert connections[0].calls[0][1]["builder_version"] == 2
     assert "ops.stage_claimed_problematic_projection_items" in item_sql
     assert "%(items)s" in item_sql and "%(batch_index)s" in item_sql
     assert "ops.complete_claimed_problematic_projection_group" in completion_sql
@@ -6247,6 +6327,232 @@ def _main_search_claimed_v2(db):
     assert claim.parameters["builder_version"] == 2
     build = worker.prepare_claimed_build(claim=claim, now=now)
     return worker, claim, build, now
+
+
+def _topology_unknown_claimed_build(db, *, retry=False):
+    from music_app.services.jobs.models import JobState, JobTransitionResult
+    from music_app.services.problematic_projection_postgres import ProblematicProjectionBuild
+
+    app = PostgresProblematicProjectionRepository(database_url=db.app_url)
+    worker = PostgresProblematicProjectionRepository(database_url=db.worker_url)
+    jobs = PostgresJobRepository(database_url=db.worker_url)
+    queued = app.enqueue_rebuild(library_id=db.library_id, requested_by="topology-unknown-proof")
+    now = datetime.now(timezone.utc)
+    claim = jobs.claim(worker_id="topology-unknown-proof", now=now, lease_seconds=120,
+                       kinds=("problematic_files_projection",))
+    assert claim is not None and claim.job_id == queued["job_id"]
+    revision = uuid4()
+    with isolatedPostgres._connect(db.setup_url) as connection:
+        # Model an older persisted attempt, including the empty-artifact case.
+        # Omitted nullable proof fields are UNKNOWN; no future SQL API is needed.
+        state = connection.execute(
+            "update ops.problematic_projection_state set build_revision=%s, "
+            "requested_job_id=%s, requested_attempt=%s, requested_revision=%s "
+            "where library_id=%s returning source_generation,rebuild_epoch,"
+            "to_jsonb(problematic_projection_state)->'topology_completed_group_count' as topology_count,"
+            "to_jsonb(problematic_projection_state)->'topology_completed_group_fingerprint' as topology_fingerprint",
+            (revision, claim.job_id, claim.attempt, revision, db.library_id),
+        ).fetchone()
+        assert state["topology_count"] is None and state["topology_fingerprint"] is None
+    build = ProblematicProjectionBuild(
+        library_id=db.library_id, source_generation=state["source_generation"],
+        rebuild_epoch=state["rebuild_epoch"], revision=str(revision),
+        source_cursor=None, source_group_key=None, committed=False,
+    )
+    if retry:
+        assert jobs.finish(claim, JobTransitionResult(
+            JobState.RETRY_WAIT, "projection_storage_retry", scheduled_at=now,
+        ), now=now)
+        previous = claim
+        claim = jobs.claim(worker_id="topology-unknown-proof-retry", now=now,
+                           lease_seconds=120, kinds=("problematic_files_projection",))
+        assert claim is not None and claim.job_id == previous.job_id
+        assert claim.attempt == previous.attempt + 1
+    return worker, claim, build, now
+
+
+def _insert_unknown_topology_header(connection, db, revision, *, total=0,
+                                    source_generation=1, rebuild_epoch=1):
+    connection.execute(
+        "insert into ops.problematic_projection_headers("
+        "library_id,revision,source_generation,rebuild_epoch,builder_version,"
+        "total,item_count,reason_facets,reason_fact_count,reason_fingerprint,"
+        "search_fact_count,search_fingerprint,verified,published_at) "
+        "values(%s,%s,%s,%s,2,%s,%s,'{}'::jsonb,0,0::bit(256),0,0::bit(256),true,now())",
+        (db.library_id, revision, source_generation, rebuild_epoch, total, total),
+    )
+    for ordinal in range(total):
+        key = f"topology-unknown-item-{ordinal}"
+        connection.execute(
+            "insert into ops.problematic_projection_items("
+            "library_id,revision,item_key,sort_title,sort_artist,sort_year,"
+            "sort_album_key,search_text,reasons,summary) "
+            "values(%s,%s,%s,%s,'artist','1988',%s,'',array[]::text[],%s::jsonb)",
+            (db.library_id, revision, key, key, key, json.dumps({"key": key})),
+        )
+    row = connection.execute(
+        "select to_jsonb(header)->'topology_completed_group_count' as count,"
+        "to_jsonb(header)->'topology_completed_group_fingerprint' as fingerprint "
+        "from ops.problematic_projection_headers header where library_id=%s and revision=%s",
+        (db.library_id, revision),
+    ).fetchone()
+    assert row == {"count": None, "fingerprint": None}
+
+
+@pytest.mark.parametrize("retry", [False, True], ids=["same-attempt", "retry-attempt"])
+def test_live_topology_unknown_empty_build_cannot_be_adopted(live_projection_database, retry):
+    db = live_projection_database
+    worker, claim, build, now = _topology_unknown_claimed_build(db, retry=retry)
+    with isolatedPostgres._connect(db.setup_url) as connection:
+        before = connection.execute(
+            "select build_revision,requested_attempt,requested_revision from "
+            "ops.problematic_projection_state where library_id=%s", (db.library_id,),
+        ).fetchone()
+    with pytest.raises(ProblematicProjectionIntegrityError, match="problematic_projection_topology_unknown"):
+        worker.prepare_claimed_build(claim=claim, now=now)
+    with isolatedPostgres._connect(db.setup_url) as connection:
+        assert connection.execute(
+            "select build_revision,requested_attempt,requested_revision from "
+            "ops.problematic_projection_state where library_id=%s", (db.library_id,),
+        ).fetchone() == before
+        assert connection.execute(
+            "select count(*) as count from ops.problematic_projection_headers "
+            "where library_id=%s and revision=%s", (db.library_id, build.revision),
+        ).fetchone() == {"count": 0}
+
+
+def test_live_topology_unknown_empty_build_cannot_publish(live_projection_database):
+    db = live_projection_database
+    worker, claim, build, now = _topology_unknown_claimed_build(db)
+    assert not worker.publish_claimed_snapshot(claim=claim, build=build, now=now)
+    with isolatedPostgres._connect(db.setup_url) as connection:
+        assert connection.execute(
+            "select count(*) as count from ops.problematic_projection_headers "
+            "where library_id=%s and revision=%s", (db.library_id, build.revision),
+        ).fetchone() == {"count": 0}
+
+
+def test_live_topology_unknown_prepare_uses_terminal_recovery_and_new_epoch(live_projection_database):
+    from music_app.jobs.problematic_projection_handlers import build_problematic_projection_handler
+    from music_app.services.jobs.authorization import AuthorizationDecision
+    from music_app.services.jobs.models import JobState
+    from music_app.services.problematic_files_projection import project_problematic_files
+
+    db = live_projection_database
+    worker, claim, build, _now = _topology_unknown_claimed_build(db)
+
+    class Context:
+        cancel_requested = False
+        lease_active = True
+
+        @staticmethod
+        def reauthorize():
+            return AuthorizationDecision(True, "problematic_projection_scope_current")
+
+    outcome = build_problematic_projection_handler(
+        repository=worker, project_group=project_problematic_files,
+    )(claim, Context())
+    assert outcome.next_state is JobState.FAILED
+    assert outcome.reason_code == "problematic_projection_topology_unknown"
+    with isolatedPostgres._connect(db.setup_url) as connection:
+        state = connection.execute(
+            "select rebuild_epoch,live_job_id,requested_job_id,requested_attempt,"
+            "build_revision,requested_revision from ops.problematic_projection_state "
+            "where library_id=%s", (db.library_id,),
+        ).fetchone()
+        assert state["rebuild_epoch"] == build.rebuild_epoch + 1
+        assert state["live_job_id"] == state["requested_job_id"]
+        assert state["live_job_id"] != claim.job_id
+        assert state["requested_attempt"] is None
+        assert state["build_revision"] is None and state["requested_revision"] is None
+
+
+@pytest.mark.parametrize("operation", ["prepare", "publish"])
+def test_live_topology_unknown_committed_empty_header_cannot_replay(live_projection_database, operation):
+    db = live_projection_database
+    worker, claim, build, now = _topology_unknown_claimed_build(db)
+    with isolatedPostgres._connect(db.setup_url) as connection:
+        _insert_unknown_topology_header(connection, db, build.revision,
+                                        source_generation=build.source_generation,
+                                        rebuild_epoch=build.rebuild_epoch)
+        connection.execute(
+            "update ops.problematic_projection_state set live_job_id=null,"
+            "committed_job_id=%s,committed_revision=%s,committed_total=0,"
+            "reason_facets='{}'::jsonb,verified=true where library_id=%s",
+            (claim.job_id, build.revision, db.library_id),
+        )
+    if operation == "prepare":
+        with pytest.raises(ProblematicProjectionIntegrityError, match="problematic_projection_topology_unknown"):
+            worker.prepare_claimed_build(claim=claim, now=now)
+    else:
+        assert not worker.publish_claimed_snapshot(claim=claim, build=build, now=now)
+
+
+@pytest.mark.parametrize("total", [0, 2], ids=["empty", "populated"])
+def test_live_topology_unknown_current_v2_header_is_pending(live_projection_database, total):
+    db = live_projection_database
+    revision = uuid4()
+    with isolatedPostgres._connect(db.setup_url) as connection:
+        _insert_unknown_topology_header(connection, db, revision, total=total)
+        connection.execute(
+            "insert into ops.problematic_projection_state("
+            "library_id,source_generation,rebuild_epoch,committed_revision,committed_total,reason_facets,verified) "
+            "values(%s,1,1,%s,%s,'{}'::jsonb,true) on conflict(library_id) do update set "
+            "source_generation=1,rebuild_epoch=1,committed_revision=excluded.committed_revision,"
+            "committed_total=excluded.committed_total,reason_facets='{}'::jsonb,verified=true",
+            (db.library_id, revision, total),
+        )
+    reader = PostgresProblematicProjectionRepository(database_url=db.app_url)
+    with pytest.raises(ProblematicProjectionIntegrityError, match="projection snapshot unavailable"):
+        reader.read_page(library_id=db.library_id, limit=50)
+    browse = PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": db.app_url})
+    with pytest.raises(ProblematicProjectionPending):
+        browse.build_problematic_files_page(limit=50)
+
+
+def test_live_topology_unknown_retained_v2_header_expires_cursor(live_projection_database):
+    from music_app.services.problematic_projection_postgres import (
+        ProblematicProjectionCursorExpired, encode_problematic_projection_page_cursor,
+    )
+
+    db = live_projection_database
+    worker, claim, build, now = _main_search_claimed_v2(db)
+    assert worker.publish_claimed_snapshot(claim=claim, build=build, now=now)
+    retained = uuid4()
+    with isolatedPostgres._connect(db.setup_url) as connection:
+        _insert_unknown_topology_header(connection, db, retained, total=2,
+                                        source_generation=build.source_generation,
+                                        rebuild_epoch=build.rebuild_epoch)
+    token = encode_problematic_projection_page_cursor(
+        library_id=db.library_id, revision=str(retained), query="", reasons=(),
+        sort="album", total=2, anchor_item_key="topology-unknown-item-0",
+    )
+    reader = PostgresProblematicProjectionRepository(database_url=db.app_url)
+    result = reader.read_page(library_id=db.library_id, limit=1, cursor=token)
+    assert isinstance(result, ProblematicProjectionCursorExpired)
+
+
+def test_live_topology_fresh_empty_build_and_header_have_known_zero_proof(live_projection_database):
+    db = live_projection_database
+    worker, claim, build, now = _main_search_claimed_v2(db)
+    page = worker.load_claimed_source_page(claim=claim, build=build, limit=100,
+                                           child_limit=100, now=now)
+    assert page.complete and page.chunks == ()
+    with isolatedPostgres._connect(db.setup_url) as connection:
+        state = connection.execute(
+            "select to_jsonb(state)->'topology_completed_group_count' as count,"
+            "to_jsonb(state)->'topology_completed_group_fingerprint' as fingerprint "
+            "from ops.problematic_projection_state state where library_id=%s", (db.library_id,),
+        ).fetchone()
+    assert state == {"count": 0, "fingerprint": "0" * 256}
+    assert worker.publish_claimed_snapshot(claim=claim, build=build, now=now)
+    with isolatedPostgres._connect(db.setup_url) as connection:
+        assert connection.execute(
+            "select total,item_count,to_jsonb(header)->'topology_completed_group_count' as count,"
+            "to_jsonb(header)->'topology_completed_group_fingerprint' as fingerprint "
+            "from ops.problematic_projection_headers header where library_id=%s and revision=%s",
+            (db.library_id, build.revision),
+        ).fetchone() == {"total": 0, "item_count": 0, "count": 0, "fingerprint": "0" * 256}
 
 
 def _main_search_claimed_group(db, item_key):

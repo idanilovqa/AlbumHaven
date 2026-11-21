@@ -1646,7 +1646,8 @@ def test_incremental_finalized_item_retains_bounded_duplicate_topology():
     summary = list(accumulator.finalize(facts))[0]["summary"]
 
     assert summary["duplicate_companion_count"] == 2
-    assert summary["root_provenance"]["root_ids"] == ["3", "9", "12"]
+    assert "root_provenance" not in summary
+    assert summary["duplicate_topology"]["root_count"] == 3
     assert summary["duplicate_sources"]
     assert len(summary["duplicate_sources"]) <= 3
 
@@ -3269,6 +3270,43 @@ def test_group_accumulator_preserves_normalization_colliding_locators(paths):
                 for _stage_id, kind, payload in facts
                 if kind == "private_path_locator"}
     assert set(locators.values()) == set(paths)
+
+
+def test_missing_reducer_hides_stale_tracks_but_preserves_search_and_locators():
+    rows = []
+    for number in range(1, 5):
+        row = _row(year=1988, title=f"Stale title {number}",
+                   path=f"/music/Missing/Copy{(number - 1) // 2}/{number}.flac")
+        row.update(inventory_status="missing", album_key="missing-album::71",
+                   track_id=number, track_key=f"stale-{number}", source_child_identity=str(number))
+        rows.append(row)
+    accumulator = projection.ProblematicGroupAccumulator()
+    facts = _persist_semantic_facts(accumulator, enumerate(rows, 1))
+    assert {value["normalized_text"] for _stage, kind, value in facts
+            if kind == "private_path_locator"} == {row["file_private_path"] for row in rows}
+    with projection._prepared_problematic_topology(facts) as prepared:
+        reducer = None
+        try:
+            for _stage, kind, value in prepared:
+                if reducer is None:
+                    reducer = projection._ProblematicItemReducer(value["projection_id"])
+                reducer.consume(kind, value)
+            assert reducer is not None
+            projected = reducer.finish()
+            assert projected is not None
+            try:
+                documents = [fact["normalized_text"] for fact in projected.search_facts]
+                assert all(row["track_title"].lower() in "\n".join(documents) for row in rows)
+                assert projected.item["track_path_fact_count"] == len(rows)
+                assert projected.item["summary"]["problem_reasons"] == ["Album not found"]
+                assert projected.item["summary"]["track_count"] == 0
+                assert reducer.summary["track_paths"] == []
+                assert "track_paths" not in projected.item["summary"]
+            finally:
+                projected.close()
+        finally:
+            if reducer is not None:
+                reducer.close()
 
 
 def test_group_accumulator_emits_exact_private_path_locator():

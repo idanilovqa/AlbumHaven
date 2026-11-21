@@ -58,10 +58,35 @@ _PROJECTION_FUNCTION_PARAMETERS: Mapping[str, tuple[tuple[str, str], ...]] = {
         *_CLAIM_FUNCTION_PARAMETERS, *_BUILD_FUNCTION_PARAMETERS,
         ("observed_at", "timestamptz"),
     ),
+    "register_claimed_problematic_topology_nodes": (
+        *_CLAIM_FUNCTION_PARAMETERS, *_BUILD_FUNCTION_PARAMETERS,
+        ("group_kind", "text"), ("group_identity", "text"),
+        ("after_seed_stage_id", "bigint"), ("limit", "integer"), ("observed_at", "timestamptz"),
+    ),
+    "load_claimed_problematic_topology_node": (
+        *_CLAIM_FUNCTION_PARAMETERS, *_BUILD_FUNCTION_PARAMETERS,
+        ("node_kind", "text"), ("node_identity", "text"),
+        ("limit", "integer"), ("observed_at", "timestamptz"),
+    ),
+    "stage_claimed_problematic_topology_node": (
+        *_CLAIM_FUNCTION_PARAMETERS, *_BUILD_FUNCTION_PARAMETERS,
+        ("node_kind", "text"), ("node_identity", "text"), ("expected_cursor", "jsonb"),
+        ("rows", "jsonb"), ("complete", "boolean"), ("observed_at", "timestamptz"),
+    ),
+    "complete_claimed_problematic_topology_node": (
+        *_CLAIM_FUNCTION_PARAMETERS, *_BUILD_FUNCTION_PARAMETERS,
+        ("node_kind", "text"), ("node_identity", "text"), ("observed_at", "timestamptz"),
+    ),
+    "load_claimed_problematic_topology_descriptors": (
+        *_CLAIM_FUNCTION_PARAMETERS, *_BUILD_FUNCTION_PARAMETERS,
+        ("group_kind", "text"), ("group_identity", "text"),
+        ("after_reference_key", "text"), ("limit", "integer"), ("observed_at", "timestamptz"),
+    ),
     "load_claimed_problematic_projection_source": (
         *_CLAIM_FUNCTION_PARAMETERS, *_BUILD_FUNCTION_PARAMETERS,
         ("limit", "integer"), ("child_limit", "integer"),
         ("observed_at", "timestamptz"),
+        ("builder_version", "integer"),
     ),
     "stage_claimed_problematic_projection_source": (
         *_CLAIM_FUNCTION_PARAMETERS, *_BUILD_FUNCTION_PARAMETERS,
@@ -70,6 +95,7 @@ _PROJECTION_FUNCTION_PARAMETERS: Mapping[str, tuple[tuple[str, str], ...]] = {
         ("child_kind", "text"), ("child_identity", "text"),
         ("rows", "jsonb"), ("complete", "boolean"),
         ("observed_at", "timestamptz"),
+        ("builder_version", "integer"),
     ),
     "load_claimed_problematic_projection_staged_group": (
         *_CLAIM_FUNCTION_PARAMETERS, *_BUILD_FUNCTION_PARAMETERS,
@@ -182,6 +208,11 @@ _PROJECTION_FUNCTION_PARAMETERS: Mapping[str, tuple[tuple[str, str], ...]] = {
 }
 
 _PROJECTION_FUNCTION_RETURN_COLUMNS: Mapping[str, tuple[str, ...]] = {
+    "register_claimed_problematic_topology_nodes": ("after_seed_stage_id", "complete"),
+    "load_claimed_problematic_topology_node": ("definition", "expected_cursor", "rows", "complete", "sealed"),
+    "stage_claimed_problematic_topology_node": ("accepted",),
+    "complete_claimed_problematic_topology_node": ("accepted",),
+    "load_claimed_problematic_topology_descriptors": ("reference_key", "fact_kind", "fact_value"),
     "enqueue_problematic_projection_rebuild": ("job_id", "rebuild_epoch", "created"),
     "prepare_claimed_problematic_projection": (
         "library_id",
@@ -256,6 +287,8 @@ _PROJECTION_FUNCTION_RETURN_COLUMNS: Mapping[str, tuple[str, ...]] = {
 }
 
 _PROJECTION_FUNCTION_SUCCESS_KEYS: Mapping[str, str] = {
+    "stage_claimed_problematic_topology_node": "accepted",
+    "complete_claimed_problematic_topology_node": "accepted",
     "stage_claimed_problematic_projection_source": "accepted",
     "advance_claimed_problematic_projection_group_accumulator": "advanced",
     "stage_claimed_problematic_projection_items": "accepted",
@@ -626,7 +659,8 @@ def _projection_function_call_sql(
     arguments = ", ".join(
         f"%({name})s::{parameter_type}" for name, parameter_type in expected
     )
-    select_clause = f"select true as {success_key} from" if success_key else "select * from"
+    select_clause = (f"select true as {success_key} from"
+                     if success_key and success_key not in return_columns else "select * from")
     return f"{select_clause} ops.{function_name}({arguments})"
 
 
@@ -731,6 +765,20 @@ def _validate_group_key(value: object) -> ProblematicProjectionGroupKey:
     return value[0], _normalize_projection_identity(value[0], value[1])
 
 
+def _validate_topology_node_key(value: object) -> tuple[str, str]:
+    kind, identity = _validate_group_key(value)
+    if kind not in ("topology_identity", "topology_numeric_bucket", "topology_address") or not isinstance(identity, str):
+        raise ProblematicProjectionIntegrityError("invalid topology node key")
+    digest = identity
+    if identity.startswith("input:") and kind == "topology_numeric_bucket":
+        digest = identity[6:]
+    elif identity.startswith("rank:") and kind == "topology_address":
+        digest = identity[5:]
+    if len(digest) != 64 or any(value not in "0123456789abcdef" for value in digest):
+        raise ProblematicProjectionIntegrityError("invalid topology node identity")
+    return kind, identity
+
+
 def _validate_source_cursor(value: object) -> ProblematicProjectionSourceCursor:
     if not isinstance(value, tuple) or len(value) != 4:
         raise ProblematicProjectionIntegrityError("invalid projection source cursor")
@@ -823,6 +871,12 @@ class PostgresProblematicProjectionRepository:
         except ProblematicProjectionError:
             raise
         except Exception as exc:
+            if (getattr(exc, "sqlstate", None) == "55000" and
+                    getattr(getattr(exc, "diag", None), "message_primary", None)
+                    == "problematic_projection_topology_unknown"):
+                raise ProblematicProjectionIntegrityError(
+                    "problematic_projection_topology_unknown"
+                ) from exc
             raise ProblematicProjectionStorageError(
                 "problematic projection operation failed"
             ) from exc
@@ -835,6 +889,12 @@ class PostgresProblematicProjectionRepository:
         except ProblematicProjectionError:
             raise
         except Exception as exc:
+            if (getattr(exc, "sqlstate", None) == "55000" and
+                    getattr(getattr(exc, "diag", None), "message_primary", None)
+                    == "problematic_projection_topology_unknown"):
+                raise ProblematicProjectionIntegrityError(
+                    "problematic_projection_topology_unknown"
+                ) from exc
             raise ProblematicProjectionStorageError(
                 "problematic projection operation failed"
             ) from exc
@@ -955,6 +1015,7 @@ class PostgresProblematicProjectionRepository:
         params = {
             **_claim_parameters(claim), **_build_parameters(build),
             "limit": limit, "child_limit": child_limit, "observed_at": now,
+            "builder_version": 2,
         }
         with self._connect() as connection:
             rows = self._all(
@@ -964,7 +1025,7 @@ class PostgresProblematicProjectionRepository:
                     (
                         "job_id", "attempt", "worker_id", "lease_token", "library_id",
                         "source_generation", "rebuild_epoch", "revision", "limit",
-                        "child_limit", "observed_at",
+                        "child_limit", "observed_at", "builder_version",
                     ),
                 ),
                 params,
@@ -1013,6 +1074,7 @@ class PostgresProblematicProjectionRepository:
             **_group_cursor_parameters(group_key, source_cursor),
             "rows": json.dumps([dict(row) for row in rows], ensure_ascii=True),
             "complete": bool(complete), "observed_at": now,
+            "builder_version": 2,
         }
         self._require_accepted(
             "stage_claimed_problematic_projection_source",
@@ -1021,7 +1083,7 @@ class PostgresProblematicProjectionRepository:
                 "job_id", "attempt", "worker_id", "lease_token", "library_id",
                 "source_generation", "rebuild_epoch", "revision", "group_kind",
                 "group_identity", "source_kind", "source_identity", "child_kind",
-                "child_identity", "rows", "complete", "observed_at",
+                "child_identity", "rows", "complete", "observed_at", "builder_version",
             ),
         )
 
@@ -1264,7 +1326,6 @@ class PostgresProblematicProjectionRepository:
                 if not rows:
                     return
                 for row in rows:
-                    stage_id = _positive_integer("fact stage id", row.get("stage_id"))
                     projection_id = _nonempty_text(
                         "fact projection id", row.get("projection_id")
                     )
@@ -1282,9 +1343,110 @@ class PostgresProblematicProjectionRepository:
                     if next_cursor <= cursor or not isinstance(fact_value, Mapping):
                         raise ProblematicProjectionIntegrityError("invalid group fact")
                     cursor = next_cursor
+                    if fact_kind.startswith("topology_"):
+                        continue
+                    stage_id = _positive_integer("fact stage id", row.get("stage_id"))
                     yield stage_id, fact_kind, dict(fact_value)
                 if len(rows) < batch_limit:
                     return
+
+    def register_claimed_topology_nodes(
+        self, *, claim: object, build: ProblematicProjectionBuild,
+        group_key: ProblematicProjectionGroupKey, after_seed_stage_id: int,
+        limit: int, now: object,
+    ) -> tuple[int, bool]:
+        kind, identity = _validate_group_key(group_key)
+        params = {**_claim_parameters(claim), **_build_parameters(build),
+                  "group_kind": kind, "group_identity": str(identity),
+                  "after_seed_stage_id": _nonnegative_integer("topology seed cursor", after_seed_stage_id),
+                  "limit": _validate_limit("topology registration limit", limit, 100), "observed_at": now}
+        name = "register_claimed_problematic_topology_nodes"
+        with self._connect() as connection:
+            row = self._one(connection, _projection_function_call_sql(
+                name, tuple(key for key, _type in _PROJECTION_FUNCTION_PARAMETERS[name])), params)
+        if row is None or type(row.get("complete")) is not bool:
+            raise ProblematicProjectionIntegrityError("invalid topology registration result")
+        cursor = _nonnegative_integer("topology seed cursor", row.get("after_seed_stage_id"))
+        if cursor < after_seed_stage_id:
+            raise ProblematicProjectionIntegrityError("topology seed cursor regressed")
+        return cursor, row["complete"]
+
+    def load_claimed_topology_node(
+        self, *, claim: object, build: ProblematicProjectionBuild,
+        node_key: ProblematicProjectionGroupKey, limit: int, now: object,
+    ) -> Mapping[str, Any]:
+        kind, identity = _validate_topology_node_key(node_key)
+        params = {**_claim_parameters(claim), **_build_parameters(build),
+                  "node_kind": kind, "node_identity": identity,
+                  "limit": _validate_limit("topology node limit", limit, 100), "observed_at": now}
+        name = "load_claimed_problematic_topology_node"
+        with self._connect() as connection:
+            row = self._one(connection, _projection_function_call_sql(
+                name, tuple(key for key, _type in _PROJECTION_FUNCTION_PARAMETERS[name])), params)
+        if (row is None or not isinstance(row.get("definition"), Mapping)
+                or not isinstance(row.get("expected_cursor"), Mapping)
+                or not isinstance(row.get("rows"), list) or len(row["rows"]) > limit
+                or type(row.get("complete")) is not bool or type(row.get("sealed")) is not bool
+                or any(not isinstance(value, Mapping) for value in row["rows"])
+                or (row["sealed"] and (not row["complete"] or row["rows"]))):
+            raise ProblematicProjectionIntegrityError("invalid topology node page")
+        return {**row, "rows": tuple(dict(value) for value in row["rows"])}
+
+    def stage_claimed_topology_node(
+        self, *, claim: object, build: ProblematicProjectionBuild,
+        node_key: ProblematicProjectionGroupKey, expected_cursor: Mapping[str, Any],
+        rows: Iterable[Mapping[str, Any]], complete: bool, now: object,
+    ) -> None:
+        kind, identity = _validate_topology_node_key(node_key)
+        values = []
+        for row in rows:
+            if not isinstance(row, Mapping) or len(values) >= 100:
+                raise ProblematicProjectionIntegrityError("invalid topology stage rows")
+            values.append(dict(row))
+        if not isinstance(expected_cursor, Mapping) or type(complete) is not bool:
+            raise ProblematicProjectionIntegrityError("invalid topology stage cursor")
+        params = {**_claim_parameters(claim), **_build_parameters(build),
+                  "node_kind": kind, "node_identity": identity,
+                  "expected_cursor": json.dumps(dict(expected_cursor), ensure_ascii=True),
+                  "rows": json.dumps(values, ensure_ascii=True), "complete": complete, "observed_at": now}
+        name = "stage_claimed_problematic_topology_node"
+        self._require_accepted(name, params, tuple(key for key, _type in _PROJECTION_FUNCTION_PARAMETERS[name]))
+
+    def complete_claimed_topology_node(
+        self, *, claim: object, build: ProblematicProjectionBuild,
+        node_key: ProblematicProjectionGroupKey, now: object,
+    ) -> None:
+        kind, identity = _validate_topology_node_key(node_key)
+        params = {**_claim_parameters(claim), **_build_parameters(build),
+                  "node_kind": kind, "node_identity": identity, "observed_at": now}
+        name = "complete_claimed_problematic_topology_node"
+        self._require_accepted(name, params, tuple(key for key, _type in _PROJECTION_FUNCTION_PARAMETERS[name]))
+
+    def iter_claimed_topology_descriptors(
+        self, *, claim: object, build: ProblematicProjectionBuild,
+        group_key: ProblematicProjectionGroupKey, batch_limit: int, now: object,
+    ) -> Iterable[Mapping[str, Any]]:
+        kind, identity = _validate_group_key(group_key)
+        limit = _validate_limit("topology descriptor limit", batch_limit, 100)
+        cursor = ""
+        name = "load_claimed_problematic_topology_descriptors"
+        while True:
+            params = {**_claim_parameters(claim), **_build_parameters(build),
+                      "group_kind": kind, "group_identity": str(identity),
+                      "after_reference_key": cursor, "limit": limit, "observed_at": now}
+            with self._connect() as connection:
+                rows = self._all(connection, _projection_function_call_sql(
+                    name, tuple(key for key, _type in _PROJECTION_FUNCTION_PARAMETERS[name])), params)
+            if len(rows) > limit:
+                raise ProblematicProjectionIntegrityError("topology descriptors exceed page limit")
+            for row in rows:
+                key = _nonempty_text("topology reference key", row.get("reference_key"))
+                if key <= cursor or not isinstance(row.get("fact_value"), Mapping):
+                    raise ProblematicProjectionIntegrityError("invalid topology descriptor cursor")
+                cursor = key
+                yield row
+            if len(rows) < limit:
+                return
 
     def stage_claimed_items(
         self, *, claim: object, build: ProblematicProjectionBuild,
@@ -1874,6 +2036,10 @@ def _read_page_sql() -> str:
              and committed_header.revision = state.committed_revision
              and committed_header.verified
              and (committed_header.builder_version = 2 or %(legacy_cursor)s)
+             and (committed_header.builder_version = 1 or (
+                 committed_header.topology_completed_group_count is not null
+                 and committed_header.topology_completed_group_fingerprint is not null
+             ))
              and committed_header.total = state.committed_total
              and committed_header.item_count = committed_header.total
              and committed_header.reason_facets = state.reason_facets
@@ -1884,6 +2050,8 @@ def _read_page_sql() -> str:
                  coalesce(%(revision)s, state.committed_revision)
              and projection_header.verified
              and projection_header.builder_version = 2
+             and projection_header.topology_completed_group_count is not null
+             and projection_header.topology_completed_group_fingerprint is not null
              and not %(legacy_cursor)s
              and projection_header.item_count = projection_header.total
             where state.library_id = %(library_id)s

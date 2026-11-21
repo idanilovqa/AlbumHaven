@@ -10374,7 +10374,13 @@ def _duplicate_source_rows_for_album_ids_sql(*, canonical_library: bool = False)
             files.private_path as file_private_path,
             files.library_root_id as file_library_root_id,
             files.metadata ->> 'library_root_category' as file_library_root_category,
-            files.metadata #> '{{scan_cache,file_entry}}' as file_entry
+            files.metadata #> '{{scan_cache,file_entry}}' as file_entry,
+            coalesce(exception_override.override_payload ? 'exception_type', false)
+              as exception_override_present,
+            case when exception_override.override_payload ? 'exception_type'
+              then exception_override.override_payload ->> 'exception_type'
+              else files.metadata #>> '{{scan_cache,file_entry,exception_type}}'
+            end as exception_type
         from scoped_files files
         join library.local_tracks tracks
           on tracks.id = files.track_id
@@ -10387,6 +10393,15 @@ def _duplicate_source_rows_for_album_ids_sql(*, canonical_library: bool = False)
           on roots.id = files.library_root_id
          and roots.library_id = tracks.library_id
          and roots.is_active is true
+        left join lateral (
+            select override_row.override_payload
+            from library.exception_overrides override_row
+            where override_row.library_id = tracks.library_id
+              and (override_row.track_key = files.private_path or override_row.track_id = tracks.id)
+            order by case when override_row.track_key = files.private_path then 0 else 1 end,
+              override_row.id
+            limit 1
+        ) exception_override on true
         left join library.local_artists artists
           on artists.id = albums.artist_id;
     """

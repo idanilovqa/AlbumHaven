@@ -3,14 +3,22 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from enum import Enum
+import heapq
 import logging
 from typing import Any
 
 from music_app.services.jobs.models import ClaimedJob, JobState, JobTransitionResult
 from music_app.services.problematic_files_projection import (
     ProblematicProjectionFactLimitError,
+    _derive_problematic_topology_address,
+    _derive_problematic_topology_numeric_bucket,
+    _derive_problematic_topology_own_rank,
+    _prepare_problematic_topology_parent_partition,
+    _problematic_topology_seed,
+    _problematic_topology_work,
 )
 from music_app.services.problematic_projection_postgres import (
     ProblematicProjectionBuild,
@@ -32,6 +40,31 @@ class _GroupProjectionResult(Enum):
     COMPLETED = "completed"
     INCOMPLETE = "incomplete"
     STOPPED = "stopped"
+
+
+class _TopologyStopped(Exception):
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+@contextmanager
+def _owned_topology_iterator(owner):
+    def close():
+        operation = getattr(owner, "close", None)
+        if callable(operation):
+            operation()
+
+    try:
+        yield owner
+    except BaseException as error:
+        try:
+            close()
+        except BaseException as cleanup_error:
+            error.add_note(f"topology iterator cleanup failed: {cleanup_error!r}")
+        raise
+    else:
+        close()
 
 
 def _context_stop_reason(context: Any) -> str | None:
@@ -149,7 +182,7 @@ def build_problematic_projection_handler(
         build: ProblematicProjectionBuild | None,
         reason_code: str,
     ) -> JobTransitionResult:
-        if claim.attempt < claim.max_attempts:
+        if claim.attempt < claim.max_attempts and reason_code != "problematic_projection_topology_unknown":
             return JobTransitionResult(
                 JobState.RETRY_WAIT,
                 reason_code,
@@ -195,6 +228,174 @@ def build_problematic_projection_handler(
                 return "problematic_projection_stale"
             return None
 
+        def check_topology_stop() -> None:
+            reason = claimed_build_stop_reason()
+            if reason is not None:
+                raise _TopologyStopped(reason)
+
+        topology_work = _problematic_topology_work(check_topology_stop)
+
+        def topology_descriptors(group_key):
+            return repository.iter_claimed_topology_descriptors(
+                claim=claim, build=build, group_key=group_key,
+                batch_limit=PROBLEMATIC_PROJECTION_SOURCE_CHILD_LIMIT, now=now(),
+            )
+
+        def topology_inputs(group_key, after_stage_id=0):
+            return repository.iter_claimed_source_group_entries(
+                claim=claim, build=build, group_key=group_key, after_stage_id=after_stage_id,
+                batch_limit=PROBLEMATIC_PROJECTION_SOURCE_CHILD_LIMIT, now=now(),
+            )
+
+        def checkpoint_topology(group_key, batches):
+            persisted = repository.load_claimed_group_accumulator(
+                claim=claim, build=build, group_key=group_key, now=now(),
+            )
+            with _owned_topology_iterator(batches):
+                for batch in batches:
+                    check_topology_stop()
+                    row_count = persisted.row_count + len({
+                        stage for stage, _kind, _value in batch if stage > persisted.after_stage_id
+                    })
+                    for _stage, kind, value in batch:
+                        if kind in ("topology_numeric_bucket_result", "topology_own_rank_result", "topology_address_result"):
+                            row_count = int(value["input_count"])
+                    persisted = repository.checkpoint_claimed_group_facts(
+                        claim=claim, build=build, group_key=group_key,
+                        expected_after_stage_id=persisted.after_stage_id, entries=batch,
+                        next_batch_index=persisted.next_batch_index, row_count=row_count, now=now(),
+                    )
+            return persisted
+
+        def resolve_topology_references(group_key):
+            with _owned_topology_iterator(topology_descriptors(group_key)) as descriptors:
+                for descriptor in descriptors:
+                    if descriptor["fact_kind"] in ("topology_reference", "topology_physical_reference", "topology_rank_reference"):
+                        value = descriptor["fact_value"]
+                        ensure_topology_node((value["node_kind"], value["node_identity"]))
+
+        def register_topology(group_key):
+            persisted = repository.load_claimed_group_accumulator(
+                claim=claim, build=build, group_key=group_key, now=now(),
+            )
+            cursor = 0
+            own_dependencies_resolved = False
+            maximum_steps = 2 * ((persisted.row_count + 99) // 100) + 4
+            for _step in range(maximum_steps):
+                check_topology_stop()
+                next_cursor, complete = repository.register_claimed_topology_nodes(
+                    claim=claim, build=build, group_key=group_key, after_seed_stage_id=cursor,
+                    limit=PROBLEMATIC_PROJECTION_SOURCE_CHILD_LIMIT, now=now(),
+                )
+                if complete:
+                    resolve_topology_references(group_key)
+                    return
+                if next_cursor == cursor and not own_dependencies_resolved:
+                    resolve_topology_references(group_key)
+                    own_dependencies_resolved = True
+                cursor = next_cursor
+            raise ProblematicProjectionIntegrityError("topology registration did not close")
+
+        def ensure_topology_node(node_key):
+            check_topology_stop()
+            while True:
+                page = repository.load_claimed_topology_node(
+                    claim=claim, build=build, node_key=node_key,
+                    limit=PROBLEMATIC_PROJECTION_SOURCE_CHILD_LIMIT, now=now(),
+                )
+                if page["sealed"]:
+                    return
+                definition = page["definition"]
+                if page["expected_cursor"].get("relation") == "dependency":
+                    ensure_topology_node(("topology_numeric_bucket", page["expected_cursor"]["input_owner"]))
+                    continue
+                if page["expected_cursor"].get("relation") == "done":
+                    break
+                rows = page["rows"]
+                if page["expected_cursor"].get("relation") in ("numeric_parent", "parent"):
+                    from music_app.services.library import _numeric_album_container_candidate
+
+                    classified = []
+                    for row in rows:
+                        topology_work(len(str(row).encode("utf-8")))
+                        try:
+                            candidate = _numeric_album_container_candidate(row["path"], 0, None, None)
+                        except ValueError:
+                            # Some isdigit glyphs cannot represent a decimal ordinal.
+                            candidate = None
+                        classified.append({**row, "retain": candidate is not None})
+                    rows = classified
+                repository.stage_claimed_topology_node(
+                    claim=claim, build=build, node_key=node_key, expected_cursor=page["expected_cursor"],
+                    rows=rows, complete=page["complete"], now=now(),
+                )
+                check_topology_stop()
+
+            persisted = repository.load_claimed_group_accumulator(
+                claim=claim, build=build, group_key=node_key, now=now(),
+            )
+            if definition.get("subordinate_input"):
+                with _owned_topology_iterator(topology_inputs(node_key, persisted.after_stage_id)) as entries:
+                    with _owned_topology_iterator(_prepare_problematic_topology_parent_partition(
+                        entries, definition["key"][1], work=topology_work,
+                    )) as partitions:
+                        checkpoint_topology(node_key, _bounded_fact_batches(partitions))
+            elif definition.get("subordinate_own_rank") or node_key[0] == "topology_numeric_bucket":
+                result_kind = ("topology_own_rank_result" if definition.get("subordinate_own_rank")
+                               else "topology_numeric_bucket_result")
+                previous = None
+                with _owned_topology_iterator(topology_descriptors(node_key)) as descriptors:
+                    for descriptor in descriptors:
+                        if descriptor["fact_kind"] == result_kind:
+                            previous = descriptor["fact_value"]
+                if not (result_kind == "topology_numeric_bucket_result" and previous and previous.get("complete")):
+                    derive = (_derive_problematic_topology_own_rank if definition.get("subordinate_own_rank")
+                              else _derive_problematic_topology_numeric_bucket)
+                    with _owned_topology_iterator(topology_inputs(node_key, persisted.after_stage_id)) as entries:
+                        with _owned_topology_iterator(derive(entries, definition["key"], previous=previous,
+                                                            work=topology_work)) as results:
+                            checkpoint_topology(node_key, ((result,) for result in results))
+            else:
+                with _owned_topology_iterator(topology_inputs(node_key, persisted.after_stage_id)) as entries:
+                    def seed_facts():
+                        for stage_id, row in entries:
+                            topology_work(len(str(row).encode("utf-8")))
+                            seed = _problematic_topology_seed(row)
+                            if seed is None:
+                                raise ProblematicProjectionIntegrityError("topology input lacks file identity")
+                            yield stage_id, "topology_seed", {
+                                **seed, "projection_id": "topology", "semantic_child_identity": f"{stage_id:020d}",
+                            }
+                    checkpoint_topology(node_key, _bounded_fact_batches(seed_facts()))
+                register_topology(node_key)
+                if node_key[0] == "topology_address":
+                    def values(kind):
+                        with _owned_topology_iterator(topology_descriptors(node_key)) as descriptors:
+                            for descriptor in descriptors:
+                                if descriptor["fact_kind"] == kind:
+                                    yield descriptor["fact_value"]
+                    with _owned_topology_iterator(topology_inputs(node_key)) as entries:
+                        with _owned_topology_iterator(values("topology_numeric_descriptor")) as numeric:
+                            with _owned_topology_iterator(values("topology_rank_descriptor")) as ranks:
+                                with _owned_topology_iterator(_derive_problematic_topology_address(
+                                    entries, definition["key"], numeric, ranks, work=topology_work,
+                                )) as results:
+                                    checkpoint_topology(node_key, _bounded_fact_batches(results))
+            check_topology_stop()
+            repository.complete_claimed_topology_node(claim=claim, build=build, node_key=node_key, now=now())
+
+        def final_topology_facts(group_key):
+            yield 0, "topology_descriptor", {"projection_id": "topology", "semantic_child_identity": "!start",
+                                            "descriptor_kind": "topology_descriptor_start", "descriptor": {}}
+            with _owned_topology_iterator(topology_descriptors(group_key)) as descriptors:
+                for descriptor in descriptors:
+                    if descriptor["fact_kind"] in ("topology_numeric_descriptor", "topology_address_descriptor",
+                                                   "topology_companion_descriptor", "topology_folder_descriptor", "topology_descriptor_end"):
+                        yield 0, "topology_descriptor", {
+                            "projection_id": "topology", "semantic_child_identity": descriptor["reference_key"],
+                            "descriptor_kind": descriptor["fact_kind"], "descriptor": descriptor["fact_value"],
+                        }
+
         def project_active_group(
             group_key: ProblematicProjectionGroupKey,
             source_cursor: tuple[str, int | str, str, int | str],
@@ -211,8 +412,8 @@ def build_problematic_projection_handler(
                 now=now(),
             )
             projection = accumulator_type.from_checkpoint(persisted)
-            facts = projection.consume(
-                repository.iter_claimed_source_group_entries(
+            def source_facts():
+                entries = repository.iter_claimed_source_group_entries(
                     claim=claim,
                     build=build,
                     group_key=group_key,
@@ -220,32 +421,44 @@ def build_problematic_projection_handler(
                     batch_limit=PROBLEMATIC_PROJECTION_SOURCE_CHILD_LIMIT,
                     now=now(),
                 )
-            )
-            for fact_batch in _bounded_fact_batches(facts):
-                reason = claimed_build_stop_reason()
-                if reason is not None:
-                    return _GroupProjectionResult.STOPPED, reason
-                fact_stage_count = 1 + sum(
-                    fact_batch[index - 1][0] != fact_batch[index][0]
-                    for index in range(1, len(fact_batch))
-                )
-                persisted = repository.checkpoint_claimed_group_facts(
-                    claim=claim,
-                    build=build,
-                    group_key=group_key,
-                    expected_after_stage_id=persisted.after_stage_id,
-                    entries=fact_batch,
-                    next_batch_index=persisted.next_batch_index,
-                    row_count=persisted.row_count + fact_stage_count,
-                    now=now(),
-                )
+                with _owned_topology_iterator(entries):
+                    with _owned_topology_iterator(projection.consume(entries)) as facts:
+                        yield from facts
+
+            with _owned_topology_iterator(source_facts()) as facts:
+                with _owned_topology_iterator(_bounded_fact_batches(facts)) as batches:
+                    for fact_batch in batches:
+                        reason = claimed_build_stop_reason()
+                        if reason is not None:
+                            return _GroupProjectionResult.STOPPED, reason
+                        fact_stage_count = 1 + sum(
+                            fact_batch[index - 1][0] != fact_batch[index][0]
+                            for index in range(1, len(fact_batch))
+                        )
+                        persisted = repository.checkpoint_claimed_group_facts(
+                            claim=claim,
+                            build=build,
+                            group_key=group_key,
+                            expected_after_stage_id=persisted.after_stage_id,
+                            entries=fact_batch,
+                            next_batch_index=persisted.next_batch_index,
+                            row_count=persisted.row_count + fact_stage_count,
+                            now=now(),
+                        )
             if source_complete is None:
                 source_complete = persisted.source_complete
             if not source_complete:
                 return _GroupProjectionResult.INCOMPLETE, None
+            try:
+                register_topology(group_key)
+            except _TopologyStopped as stopped:
+                return _GroupProjectionResult.STOPPED, stopped.reason
+            except (ValueError, TypeError) as error:
+                raise ProblematicProjectionIntegrityError(str(error)) from error
             projection = accumulator_type.from_checkpoint(persisted)
-            projected_items = projection.finalize(
-                repository.iter_claimed_group_facts(
+
+            def finalized_topology_items():
+                raw_facts = repository.iter_claimed_group_facts(
                     claim=claim,
                     build=build,
                     group_key=group_key,
@@ -253,7 +466,19 @@ def build_problematic_projection_handler(
                     batch_limit=PROBLEMATIC_PROJECTION_SOURCE_CHILD_LIMIT,
                     now=now(),
                 )
-            )
+                with _owned_topology_iterator(raw_facts):
+                    with _owned_topology_iterator(final_topology_facts(group_key)) as descriptors:
+                        merged = heapq.merge(raw_facts, descriptors, key=lambda fact: (
+                            str(fact[2].get("projection_id") or ""), fact[1],
+                            str(fact[2].get("semantic_child_identity") or ""),
+                        ))
+                        with _owned_topology_iterator(merged):
+                            with _owned_topology_iterator(projection.finalize(
+                                merged, check_stop=check_topology_stop,
+                            )) as items:
+                                yield from items
+
+            projected_items = finalized_topology_items()
             try:
                 for item_index, projected in enumerate(projected_items):
                     try:
@@ -309,6 +534,10 @@ def build_problematic_projection_handler(
                         close_item = getattr(projected, "close", None)
                         if callable(close_item):
                             close_item()
+            except _TopologyStopped as stopped:
+                return _GroupProjectionResult.STOPPED, stopped.reason
+            except (ValueError, TypeError) as error:
+                raise ProblematicProjectionIntegrityError(str(error)) from error
             finally:
                 close_items = getattr(projected_items, "close", None)
                 if callable(close_items):
@@ -471,13 +700,13 @@ def build_problematic_projection_handler(
         except (
             ProblematicProjectionIntegrityError,
             ProblematicProjectionFactLimitError,
-        ):
+        ) as error:
             logging.getLogger(__name__).exception(
                 "Problematic Files projection integrity failure."
             )
-            return failure_outcome(
-                claim, build, "problematic_projection_integrity_failed"
-            )
+            return failure_outcome(claim, build,
+                "problematic_projection_topology_unknown" if str(error) == "problematic_projection_topology_unknown"
+                else "problematic_projection_integrity_failed")
         except ProblematicProjectionStorageError:
             logging.getLogger(__name__).exception(
                 "Problematic Files projection storage failure."

@@ -8664,3 +8664,102 @@ def test_schema_migration_attestations_are_append_only_and_owner_written():
     for statement in ("update ops.schema_migrations", "delete from ops.schema_migrations",
                       "insert into ops.schema_migrations", "truncate ops.schema_migrations"):
         assert statement not in sql
+
+
+_MAIN_SEARCH_V2_WORKER_SIGNATURES = (
+    "ops.register_claimed_problematic_topology_nodes(bigint,integer,text,text,bigint,bigint,bigint,uuid,text,text,bigint,integer,timestamptz)",
+    "ops.load_claimed_problematic_topology_node(bigint,integer,text,text,bigint,bigint,bigint,uuid,text,text,integer,timestamptz)",
+    "ops.stage_claimed_problematic_topology_node(bigint,integer,text,text,bigint,bigint,bigint,uuid,text,text,jsonb,jsonb,boolean,timestamptz)",
+    "ops.complete_claimed_problematic_topology_node(bigint,integer,text,text,bigint,bigint,bigint,uuid,text,text,timestamptz)",
+    "ops.load_claimed_problematic_topology_descriptors(bigint,integer,text,text,bigint,bigint,bigint,uuid,text,text,text,integer,timestamptz)",
+    "ops.load_claimed_problematic_projection_source(bigint,integer,text,text,bigint,bigint,bigint,uuid,integer,integer,timestamptz,integer)",
+    "ops.stage_claimed_problematic_projection_source(bigint,integer,text,text,bigint,bigint,bigint,uuid,text,text,text,text,text,text,jsonb,boolean,timestamptz,integer)",
+)
+
+
+def _main_search_v2_sql():
+    sql = _normalized_sql((MIGRATIONS_DIR / "0266_version_problematic_main_search.sql").read_text(encoding="utf-8"))
+    return re.sub(r"\s*,\s*", ",", sql.replace("timestamp with time zone", "timestamptz"))
+
+
+def _main_search_function_roles(sql, signature):
+    target = re.escape(signature)
+    revoked = re.findall(rf"revoke all on function {target} from ([^;]+);", sql)
+    granted = re.findall(rf"grant execute on function {target} to ([^;]+);", sql)
+    return (
+        {role.strip().split()[0].strip('"') for roles in revoked for role in roles.split(",")},
+        {role.strip().split()[0].strip('"') for roles in granted for role in roles.split(",")},
+    )
+
+
+@pytest.mark.parametrize("signature", _MAIN_SEARCH_V2_WORKER_SIGNATURES,
+                         ids=lambda signature: signature.split("(")[0].removeprefix("ops."))
+def test_main_search_v2_preflight_requires_exact_worker_entrypoint(signature):
+    startup = _main_search_v2_sql().split(
+        "create or replace function ops.validate_durable_worker_startup(", 1,
+    )[1].split(" $$;", 1)[0]
+    assert f"'{signature}'" in startup
+    required_checks = startup.split(
+        "from pg_catalog.unnest(required_functions) as required(signature)", 1,
+    )[1].split("end if;", 1)[0]
+    assert "pg_catalog.to_regprocedure(required.signature) is null" in required_checks
+    assert re.search(
+        r"not\s+pg_catalog\.has_function_privilege\(\s*session_user,(?:\s*pg_catalog\.to_regprocedure\()?"
+        r"\s*required\.signature\)?,'execute'\s*\)", required_checks,
+    )
+    assert "return false;" in required_checks
+
+
+@pytest.mark.parametrize("signature", _MAIN_SEARCH_V2_WORKER_SIGNATURES,
+                         ids=lambda signature: signature.split("(")[0].removeprefix("ops."))
+def test_main_search_v2_claimed_entrypoints_are_worker_execute_only(signature):
+    sql = _main_search_v2_sql()
+    revoked, granted = _main_search_function_roles(sql, signature)
+    assert {"public", "album_haven_app", "album_haven_readonly", "album_haven_worker"} <= revoked
+    assert granted == {"album_haven_worker"}
+    assert not re.search(rf"grant execute on function {re.escape(signature)} to [^;]+ with grant option", sql)
+    name = signature.split("(")[0]
+    header = sql.split(f"create or replace function {name}(", 1)[1].split("as $$", 1)[0]
+    assert "security definer" in header
+    assert "set search_path = pg_catalog" in header
+
+
+@pytest.mark.parametrize("signature", [
+    "ops.problematic_projection_builder_version(jsonb)",
+    "ops.problematic_projection_search_complete(bigint,integer,uuid,text,text)",
+    "ops.problematic_projection_topology_proof_matches(bigint,integer,uuid)",
+    "ops.require_claimed_problematic_topology(bigint,integer,text,text,bigint,bigint,bigint,uuid,timestamptz)",
+    "ops.register_problematic_topology_node(bigint,integer,bigint,bigint,bigint,uuid,text,text,text,jsonb,timestamptz)",
+    "ops.register_problematic_topology_parent_input(bigint,integer,bigint,bigint,bigint,uuid,text,text,timestamptz)",
+    "ops.register_problematic_topology_own_rank(bigint,integer,bigint,bigint,bigint,uuid,bigint,text,timestamptz)",
+    "ops.problematic_projection_topology_owner_cached(bigint,integer,uuid,text,text)",
+    "library.problematic_immediate_folder_parent(text)",
+    "ops.problematic_projection_topology_file_payload(bigint,bigint)",
+    "ops.problematic_projection_topology_complete(bigint,integer,uuid,text,text)",
+    "ops.seal_problematic_projection_topology_owner(bigint,integer,bigint,bigint,bigint,uuid,text,text,timestamptz)",
+    "ops.stage_problematic_projection_source_rows(bigint,integer,text,text,bigint,bigint,bigint,uuid,text,text,text,text,text,text,jsonb,boolean,timestamptz)",
+], ids=lambda signature: signature.split("(")[0])
+def test_main_search_v2_private_helpers_are_not_role_entrypoints(signature):
+    revoked, granted = _main_search_function_roles(_main_search_v2_sql(), signature)
+    roles = {"public", "album_haven_app", "album_haven_readonly", "album_haven_worker"}
+    assert roles <= revoked
+    assert not roles.intersection(granted)
+
+
+def test_main_search_v2_preserves_legacy_source_entrypoints():
+    sql = _main_search_v2_sql()
+    startup = sql.split("create or replace function ops.validate_durable_worker_startup(", 1)[1].split(" $$;", 1)[0]
+    legacy = re.sub(r"\s*,\s*", ",", _normalized_sql(PROBLEMATIC_PROJECTION_MIGRATION.read_text(encoding="utf-8")))
+    for signature in (
+        "ops.load_claimed_problematic_projection_source(bigint,integer,text,text,bigint,bigint,bigint,uuid,integer,integer,timestamptz)",
+        "ops.stage_claimed_problematic_projection_source(bigint,integer,text,text,bigint,bigint,bigint,uuid,text,text,text,text,text,text,jsonb,boolean,timestamptz)",
+    ):
+        assert f"'{signature}'" in startup
+        assert "album_haven_worker" in _main_search_function_roles(legacy, signature)[1]
+        assert not re.search(rf"drop function(?: if exists)? {re.escape(signature)}", sql)
+
+
+def test_main_search_v2_does_not_grant_worker_broad_table_access():
+    for privilege, roles in re.findall(r"\bgrant ([^;]+?) to ([^;]+);", _main_search_v2_sql()):
+        if "album_haven_worker" in {role.strip().split()[0].strip('"') for role in roles.split(",")}:
+            assert privilege.startswith("execute on function ")

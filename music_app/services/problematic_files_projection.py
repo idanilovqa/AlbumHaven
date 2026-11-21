@@ -1921,9 +1921,6 @@ class _BoundedDuplicateTopology:
             }
             for payload in retained_payloads[:_MAX_DUPLICATE_SUMMARY_SOURCES]
         ]
-        summary["root_provenance"] = summarize_root_provenance_payloads(
-            retained_payloads
-        )
         summary["duplicate_topology"] = {
             "companion_count": self.companion_count,
             "root_count": self.root_count,
@@ -2231,8 +2228,9 @@ def _normalized_problematic_search_chunks(value: object) -> tuple[str, ...]:
 class _ProblematicSortedSearchValues:
     """Order complete search facts with bounded runs and merge fan-in."""
 
-    def __init__(self, *, work=None) -> None:
+    def __init__(self, *, work=None, compare_keys=None) -> None:
         self._work = work
+        self._compare_keys = compare_keys
         self._file = tempfile.SpooledTemporaryFile(
             max_size=_MAX_REDUCER_FACT_BYTES, mode="w+t", encoding="utf-8", newline="\n",
         )
@@ -2253,6 +2251,9 @@ class _ProblematicSortedSearchValues:
             yield json.loads(line)
 
     def _sort(self) -> None:
+        from functools import cmp_to_key
+
+        ordered_key = cmp_to_key(self._compare_keys) if self._compare_keys is not None else lambda key: key
         if _PROBLEMATIC_FACT_MERGE_FAN_IN < 2:
             raise ValueError("problematic search merge fan-in is too small")
         with tempfile.TemporaryDirectory(prefix="album-haven-problematic-search-") as directory:
@@ -2266,7 +2267,7 @@ class _ProblematicSortedSearchValues:
                 nonlocal count, batch_bytes
                 if self._work is not None:
                     self._work(force=True)
-                batch.sort(key=lambda record: record[0])
+                batch.sort(key=lambda record: ordered_key(record[0]))
                 with (root / f"run-0-{count}.jsonl").open("w", encoding="utf-8", newline="\n") as run:
                     for _key, line in batch:
                         run.write(line)
@@ -2299,7 +2300,7 @@ class _ProblematicSortedSearchValues:
                                    for path in inputs]
                         target = root / f"run-{generation + 1}-{next_count}.jsonl"
                         with target.open("w", encoding="utf-8", newline="\n") as run:
-                            for record in heapq.merge(*sources, key=lambda record: record[0]):
+                            for record in heapq.merge(*sources, key=lambda record: ordered_key(record[0])):
                                 run.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
                     for path in inputs:
                         path.unlink()
@@ -2340,15 +2341,235 @@ class _ProblematicSortedSearchValues:
             error.add_note(f"problematic spool cleanup failed: {cleanup_error!r}")
 
 
-@contextmanager
-def _prepared_problematic_topology(facts, *, check_stop=None):
-    """Derive topology from the immutable supplied universe, using bounded runs."""
-    from music_app.services.library import (
-        _duplicate_album_identity_values,
-        _numeric_album_container_candidate,
-        _track_album_container,
-    )
+def _problematic_signature_digest():
+    """Candidate bucket only; exact bounded comparison decides equality."""
+    return hashlib.sha256()
 
+
+class _ProblematicSignatureStore:
+    def __init__(self, work):
+        self._file = None
+        self._work = work
+
+    def text(self, title):
+        if self._file is None:
+            self._file = tempfile.TemporaryFile(mode="w+b")
+        self._file.seek(0, 2)
+        offset = self._file.tell()
+        for start in range(0, len(title), max(1, _MAX_REDUCER_FACT_BYTES // 4)):
+            encoded = title[start:start + max(1, _MAX_REDUCER_FACT_BYTES // 4)].encode("utf-8")
+            self._work(len(encoded))
+            self._file.write(encoded)
+        return {"offset": offset, "length": self._file.tell() - offset}
+
+    def token(self, disc, number, title, duration):
+        reference = self.text(title)
+        return (disc, number, reference["offset"], reference["length"], duration)
+
+    def compare_tokens(self, left, right):
+        self._work()
+        if left[:2] != right[:2]:
+            return -1 if left[:2] < right[:2] else 1
+        compared = self.compare({"offset": left[2], "length": left[3]},
+                                {"offset": right[2], "length": right[3]})
+        return compared or (left[4] > right[4]) - (left[4] < right[4])
+
+    def write(self, tokens):
+        with _ProblematicSortedSearchValues(work=self._work, compare_keys=self.compare_tokens) as ordered:
+            for token in tokens:
+                reference = self.token(*token)
+                ordered.add(reference, reference)
+            return self.write_refs(ordered.values())
+
+    def write_refs(self, tokens):
+        if self._file is None:
+            self._file = tempfile.TemporaryFile(mode="w+b")
+        self._file.seek(0, 2)
+        offset = destination = self._file.tell()
+        digest = _problematic_signature_digest()
+        count = 0
+        for token in tokens:
+            header = (json.dumps([token[0], token[1], token[3], token[4]], separators=(",", ":")) + "\n").encode("utf-8")
+            for start in range(0, len(header), max(1, _MAX_REDUCER_FACT_BYTES // 2)):
+                block = header[start:start + max(1, _MAX_REDUCER_FACT_BYTES // 2)]
+                self._file.seek(destination)
+                self._file.write(block)
+                destination += len(block)
+                digest.update(block)
+                self._work(len(block))
+            position, remaining = token[2], token[3]
+            while remaining:
+                self._file.seek(position)
+                block = self._file.read(min(remaining, max(1, _MAX_REDUCER_FACT_BYTES // 2)))
+                if not block:
+                    raise ValueError("signature title reference exceeds its owned stream")
+                self._file.seek(destination)
+                self._file.write(block)
+                destination += len(block)
+                position += len(block)
+                remaining -= len(block)
+                digest.update(block)
+                self._work(2 * len(block))
+            count += 1
+        return {"offset": offset, "length": destination - offset,
+                "count": count, "digest": digest.hexdigest()}
+
+    def compare(self, left, right):
+        self._work()
+        left_offset, right_offset = left["offset"], right["offset"]
+        left_remaining, right_remaining = left["length"], right["length"]
+        while left_remaining and right_remaining:
+            size = min(left_remaining, right_remaining, max(1, _MAX_REDUCER_FACT_BYTES // 2))
+            self._file.seek(left_offset)
+            first = self._file.read(size)
+            self._work(len(first))
+            self._file.seek(right_offset)
+            second = self._file.read(size)
+            self._work(len(second))
+            if len(first) != size or len(second) != size:
+                raise ValueError("signature reference exceeds its owned stream")
+            if first != second:
+                return -1 if first < second else 1
+            left_offset += size
+            right_offset += size
+            left_remaining -= size
+            right_remaining -= size
+        return (left_remaining > right_remaining) - (left_remaining < right_remaining)
+
+    def close(self):
+        if self._file is not None:
+            self._file.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, _kind, error, _traceback):
+        try:
+            self.close()
+        except BaseException as cleanup_error:
+            if error is None:
+                raise
+            error.add_note(f"signature spool cleanup failed: {cleanup_error!r}")
+
+
+def _problematic_equivalent_witnesses(candidates, signatures, *, work):
+    """Find actual compatible witnesses with bounded sorted references and top-two scalars."""
+    from music_app.services.library import _RELEASE_TYPE_EDITIONS
+
+    def compare_keys(left, right):
+        work()
+        if left[:-2] != right[:-2]:
+            return -1 if left[:-2] < right[:-2] else 1
+        return signatures.compare({"offset": left[-2], "length": left[-1]},
+                                  {"offset": right[-2], "length": right[-1]})
+
+    def remember(values, container):
+        if container not in values and len(values) < 2:
+            values.append(container)
+
+    def compare_text_keys(left, right):
+        work()
+        if left[0] != right[0]:
+            return -1 if left[0] < right[0] else 1
+        return signatures.compare({"offset": left[1], "length": left[2]},
+                                  {"offset": right[1], "length": right[2]})
+
+    with ExitStack() as stack:
+        ordered = stack.enter_context(_ProblematicSortedSearchValues(work=work, compare_keys=compare_keys))
+        pairs = stack.enter_context(_ProblematicSortedSearchValues(work=work))
+        originals = stack.enter_context(_ProblematicSortedSearchValues(work=work))
+        texts = stack.enter_context(_ProblematicSortedSearchValues(work=work, compare_keys=compare_text_keys))
+        assigned = stack.enter_context(_ProblematicSortedSearchValues(work=work))
+        for ordinal, candidate in enumerate(candidates):
+            references = candidate.get("card_refs")
+            if references is None:
+                card = candidate["card"]
+                references = [signatures.text(card[index]) for index in (0, 1, 3, 4)]
+                edition_role = card[3] if card[3] in _RELEASE_TYPE_EDITIONS or not card[3] else None
+                date_blank = not card[4]
+                year = card[2]
+            else:
+                edition_role, date_blank = candidate["edition_role"], candidate["date_blank"]
+                year = candidate["year"]
+            originals.add((ordinal,), {"ordinal": ordinal, "album": candidate["album"],
+                                       "container": candidate["container"], "signature": candidate["signature"],
+                                       "year": year, "edition_role": edition_role, "date_blank": date_blank})
+            for field, reference in enumerate(references):
+                texts.add((field, reference["offset"], reference["length"]),
+                          {"ordinal": ordinal, "field": field, "reference": reference})
+        previous_text = None
+        text_id = 0
+        for row in texts.values():
+            if (previous_text is None or row["field"] != previous_text["field"]
+                    or signatures.compare(row["reference"], previous_text["reference"]) != 0):
+                text_id += 1
+            previous_text = row
+            assigned.add((row["ordinal"], row["field"]), {"ordinal": row["ordinal"], "field": row["field"], "id": text_id})
+        assignments = iter(assigned.values())
+        assignment = next(assignments, None)
+        for candidate in originals.values():
+            card = [None] * 4
+            while assignment is not None and assignment["ordinal"] == candidate["ordinal"]:
+                card[assignment["field"]] = assignment["id"]
+                assignment = next(assignments, None)
+            if any(value is None for value in card):
+                raise ValueError("signature candidate lacks canonical metadata references")
+            candidate["card"] = [card[0], card[1], candidate["year"], card[2], card[3]]
+            signature = candidate["signature"]
+            key = (candidate["album"], *candidate["card"][:3], signature["digest"], signature["count"],
+                   signature["offset"], signature["length"])
+            ordered.add(key, candidate)
+        previous = None
+        class_id = 0
+        for candidate in ordered.values():
+            signature = candidate["signature"]
+            if (previous is None or candidate["album"] != previous["album"]
+                    or candidate["card"][:3] != previous["card"][:3]
+                    or signature["digest"] != previous["signature"]["digest"]
+                    or signature["count"] != previous["signature"]["count"]
+                    or signatures.compare(signature, previous["signature"]) != 0):
+                class_id += 1
+            previous = candidate
+            edition, date = candidate["card"][3:]
+            domains = [(("self", edition), 0)]
+            if candidate["edition_role"] == "":
+                domains.extend((("cross", value), 0) for value in sorted(_RELEASE_TYPE_EDITIONS))
+            elif candidate["edition_role"] is not None:
+                domains.append((("cross", candidate["edition_role"]), 1))
+            for domain, role in domains:
+                pairs.add((class_id, domain, role, date, candidate["container"]),
+                          {**candidate, "class": class_id, "domain": domain, "role": role, "date": date})
+        for (class_id, domain), records in itertools.groupby(pairs.values(), key=lambda row: (row["class"], row["domain"])):
+            with _ProblematicSortedSearchValues(work=work) as replay, _ProblematicSortedSearchValues(work=work) as dated:
+                all_dates, blank_dates = [[], []], [[], []]
+                for (role, date), rows in itertools.groupby(records, key=lambda row: (row["role"], row["date"])):
+                    top = []
+                    for row in rows:
+                        remember(all_dates[role], row["container"])
+                        if row["date_blank"]:
+                            remember(blank_dates[role], row["container"])
+                        remember(top, row["container"])
+                        replay.add((date, role, row["container"]), row)
+                    for container in top:
+                        dated.add((date, role, container), {"date": date, "role": role, "container": container})
+                date_stream = iter(dated.values())
+                date_row = next(date_stream, None)
+                for date, rows in itertools.groupby(replay.values(), key=lambda row: row["date"]):
+                    same_date = [[], []]
+                    while date_row is not None and date_row["date"] < date:
+                        date_row = next(date_stream, None)
+                    while date_row is not None and date_row["date"] == date:
+                        remember(same_date[date_row["role"]], date_row["container"])
+                        date_row = next(date_stream, None)
+                    for row in rows:
+                        role = 1 - row["role"] if domain[0] == "cross" else row["role"]
+                        choices = all_dates[role] if row["date_blank"] else same_date[role] + blank_dates[role]
+                        witness = next((value for value in choices if value != row["container"]), None)
+                        if witness is not None:
+                            yield {"album": row["album"], "container": row["container"], "witness": witness}
+
+
+def _problematic_topology_work(check_stop=None):
     records = decoded_bytes = 0
 
     def work(size=0, *, force=False):
@@ -2359,6 +2580,23 @@ def _prepared_problematic_topology(facts, *, check_stop=None):
             if check_stop is not None:
                 check_stop()
             records = decoded_bytes = 0
+
+    return work
+
+
+@contextmanager
+def _prepared_problematic_topology(facts, *, check_stop=None):
+    """Derive topology from the immutable supplied universe, using bounded runs."""
+    from music_app.services.library import (
+        _duplicate_album_identity_values,
+        _numeric_album_container_candidate,
+        _track_album_container,
+        _normalized_duplicate_card_text,
+        _RELEASE_TYPE_EDITIONS,
+        safe_int,
+    )
+
+    work = _problematic_topology_work(check_stop)
 
     stack = ExitStack()
 
@@ -2374,6 +2612,9 @@ def _prepared_problematic_topology(facts, *, check_stop=None):
     try:
         work(force=True)
         output, prepared, row_facts = spool(), spool(), spool()
+        external_numeric, external_addresses, external_companions, targets = spool(), spool(), spool(), spool()
+        external_folders, ordered_rows = spool(), spool()
+        external_topology = external_complete = False
 
         def emit(stage, kind, fact):
             key = (str(fact["projection_id"]), kind, str(fact["semantic_child_identity"]))
@@ -2400,6 +2641,29 @@ def _prepared_problematic_topology(facts, *, check_stop=None):
             if key == previous:
                 continue
             previous = key
+            if kind == "topology_descriptor":
+                external_topology = True
+                descriptor_kind = fact.get("descriptor_kind")
+                descriptor = fact.get("descriptor")
+                if not isinstance(descriptor, Mapping):
+                    raise ValueError("invalid topology descriptor")
+                if descriptor_kind == "topology_descriptor_start":
+                    continue
+                if descriptor_kind == "topology_descriptor_end":
+                    external_complete = descriptor.get("complete") is True
+                elif descriptor_kind == "topology_numeric_descriptor":
+                    external_numeric.add(tuple(descriptor["key"]), descriptor)
+                elif descriptor_kind == "topology_address_descriptor":
+                    external_addresses.add((descriptor["key"][1],), descriptor)
+                elif descriptor_kind == "topology_companion_descriptor":
+                    external_companions.add((descriptor["original_album_key"], descriptor["file_id"]), descriptor)
+                elif descriptor_kind == "topology_folder_descriptor":
+                    external_folders.add((descriptor["root_id"], descriptor["physical_parent"]), descriptor)
+                else:
+                    raise ValueError("unknown topology descriptor")
+                continue
+            if kind.startswith("topology_"):
+                continue
             if kind != "row":
                 if kind in row_derived_kinds or (kind == "duplicate_root" and fact.get("primary") is True):
                     continue
@@ -2414,26 +2678,49 @@ def _prepared_problematic_topology(facts, *, check_stop=None):
                     })
                 continue
             path = str(fact.get("file_private_path") or "").strip()
-            row_facts.add((projection, path, semantic), [stage, kind, fact])
+            row_facts.add((_coerce_int(fact.get("file_library_root_id")),
+                           str(fact.get("file_physical_parent") or ""), projection, path, semantic), [stage, kind, fact])
+
+        def folder_decisions():
+            for folder, versions in itertools.groupby(external_folders.values(), key=lambda value: (value["root_id"], value["physical_parent"])):
+                yield folder, any(value["mixed"] is True for value in versions)
+
+        decisions = iter(folder_decisions())
+        stack.callback(decisions.close)
+        decision = next(decisions, None)
+        for stage, kind, fact in row_facts.values():
+            folder = (_coerce_int(fact.get("file_library_root_id")), str(fact.get("file_physical_parent") or ""))
+            while decision is not None and decision[0] < folder:
+                decision = next(decisions, None)
+            if decision is not None and decision[0] == folder:
+                fact = {**fact, "file_mixed_album_folder": decision[1]}
+            ordered_rows.add((str(fact["projection_id"]), str(fact.get("file_private_path") or "").strip(),
+                              str(fact["semantic_child_identity"])), [stage, kind, fact])
 
         previous_path = None
-        for stage, kind, fact in row_facts.values():
+        for stage, kind, fact in ordered_rows.values():
             projection = str(fact["projection_id"])
             path = str(fact.get("file_private_path") or "").strip()
             path_key = (projection, path)
-            if not path or path_key != previous_path:
+            row_winner = not path or path_key != previous_path
+            if row_winner:
                 emit(stage, kind, fact)
                 # Persisted value facts have merged away their row origin; rebuild from winners.
                 for _stage, derived_kind, derived in ProblematicGroupAccumulator().consume(((max(1, stage), fact),)):
-                    if derived_kind != "row":
+                    if derived_kind != "row" and not derived_kind.startswith("topology_"):
                         emit(stage, derived_kind, derived)
             previous_path = path_key
+            if fact.get("inventory_status") == "missing":
+                continue
             # Topology excludes before its separate original-album path deduplication.
-            entry = _problematic_file_entry_from_row(fact)
-            if fact.get("file_entry_is_object") is not True and not _row_json_mapping(fact.get("file_entry")):
-                entry.update(album=None, album_artist=None, year=None)
+            entry = _problematic_topology_entry(fact)
             album = str(fact.get("album_key") or "")
             path = str(entry.get("path") or "")
+            if row_winner and album and path:
+                split = _row_album_identity(fact, str(fact.get("artist_name") or ""))[1] != album
+                target = [album, "year", str(_coerce_int(entry.get("year")))] if split else [album, "all", ""]
+                targets.add((*target, projection), {"key": target, "album": album,
+                            "projection": projection, "split": split})
             if (not album or not path or normalize_exception_value(entry.get("exception_type"))
                     or str(entry.get("local_album_membership_problem") or "").strip()):
                 continue
@@ -2442,6 +2729,8 @@ def _prepared_problematic_topology(facts, *, check_stop=None):
                 "split": _row_album_identity(fact, str(fact.get("artist_name") or ""))[1] != album,
             })
 
+        if external_topology and not external_complete:
+            raise ValueError("topology descriptor stream is incomplete")
         numeric = spool()
         for album, rows in itertools.groupby(prepared.values(), key=lambda row: row["album"]):
             previous_path = None
@@ -2468,6 +2757,8 @@ def _prepared_problematic_topology(facts, *, check_stop=None):
                 numeric.add((*bucket, path.casefold(), path), row)
 
         by_container, global_paths = spool(), spool()
+        numeric_stream = iter(external_numeric.values())
+        numeric_decision = next(numeric_stream, None)
         for _bucket, rows in itertools.groupby(numeric.values(), key=lambda row: row["bucket"]):
             with _ProblematicSortedSearchValues(work=work) as replay:
                 first_folder = first_ordinal = None
@@ -2482,6 +2773,14 @@ def _prepared_problematic_topology(facts, *, check_stop=None):
                         matches &= row["matches"]
                     replay.add((row["path"].casefold(), row["path"]), row)
                 collapse = different_folder and different_ordinal and matches
+                if external_topology and _bucket[1] == "numeric":
+                    expected_bucket = ["bucket", _bucket[0], *_bucket[2:]]
+                    while numeric_decision is not None and numeric_decision["key"] < expected_bucket:
+                        numeric_decision = next(numeric_stream, None)
+                    if (numeric_decision is None or numeric_decision["key"] != expected_bucket
+                            or type(numeric_decision.get("collapse")) is not bool):
+                        raise ValueError("topology projection lacks certified numeric decision")
+                    collapse = numeric_decision["collapse"]
                 for row in replay.values():
                     if collapse:
                         row["container"] = row["parent"]
@@ -2491,7 +2790,9 @@ def _prepared_problematic_topology(facts, *, check_stop=None):
                     global_paths.add((row["container_key"], os.path.normcase(row["path"]),
                                       row["rank"], row["path"].casefold(), row["path"]), row)
 
-        containers = spool()
+        containers, linked = spool(), spool()
+        address_stream = iter(external_addresses.values())
+        address = next(address_stream, None)
         for container, rows in itertools.groupby(global_paths.values(), key=lambda row: row["container_key"]):
             found = None
             clean = True
@@ -2503,10 +2804,25 @@ def _prepared_problematic_topology(facts, *, check_stop=None):
                 if found is None:
                     found = value
                 clean &= bool(value) and value == found
+            if external_topology:
+                while address is not None and address["key"][1] < container:
+                    address = next(address_stream, None)
+                if address is None or address["key"][1] != container or address.get("status") not in ("CLEAN", "MIXED", "EMPTY"):
+                    raise ValueError("topology projection lacks certified address")
+                if type(address.get("linked")) is not bool:
+                    raise ValueError("invalid topology address link decision")
+                if address["status"] == "CLEAN":
+                    address_identity = address.get("identity")
+                    if (not isinstance(address_identity, list) or len(address_identity) != 3
+                            or _duplicate_album_identity_values(*address_identity) != tuple(address_identity)):
+                        raise ValueError("invalid canonical topology address identity")
+                if address["status"] == "CLEAN" and address["linked"]:
+                    linked.add((container,), {"identity": json.dumps(address["identity"], ensure_ascii=False, separators=(",", ":")),
+                                             "container": container})
+                continue
             if clean and found:
                 containers.add((found, container), {"identity": found, "container": container})
 
-        linked = spool()
         for _identity, rows in itertools.groupby(containers.values(), key=lambda row: row["identity"]):
             with _ProblematicSortedSearchValues(work=work) as replay:
                 count = 0
@@ -2529,13 +2845,17 @@ def _prepared_problematic_topology(facts, *, check_stop=None):
                 row["exact_year"] = json.loads(positive["identity"])[2] if exact else None
                 local.add((row["album"], container, row["path"]), row)
 
-        families = spool()
+        families, signature_candidates = spool(), spool()
+        has_signature_candidates = False
+        signatures = stack.enter_context(_ProblematicSignatureStore(work))
         for (album, container), rows in itertools.groupby(local.values(), key=lambda row: (row["album"], row["container_key"])):
             with _ProblematicSortedSearchValues(work=work) as replay:
                 found = year = None
                 clean = uniform_year = True
                 exact = False
+                track_count = 0
                 for row in rows:
+                    track_count += 1
                     value = row["identity"]
                     found = value if found is None else found
                     clean &= bool(value) and value == found
@@ -2547,13 +2867,14 @@ def _prepared_problematic_topology(facts, *, check_stop=None):
                 for row in replay.values():
                     families.add((album, found if clean else "", container, row["projection"], row["path"]), {
                         **row, "local_identity": found if clean else "", "source_year": year if uniform_year else None,
-                        "exact": exact,
+                        "exact": exact, "container_track_count": track_count,
                     })
 
-        decisions = spool()
+        decisions, eligible_rows, album_modes = spool(), spool(), spool()
         for album, rows in itertools.groupby(families.values(), key=lambda row: row["album"]):
             with _ProblematicSortedSearchValues(work=work) as replay:
                 any_exact = False
+                unqualified = False
                 for local_identity, members in itertools.groupby(rows, key=lambda row: row["local_identity"]):
                     with _ProblematicSortedSearchValues(work=work) as family:
                         first = None
@@ -2565,19 +2886,85 @@ def _prepared_problematic_topology(facts, *, check_stop=None):
                             family.add((row["projection"], row["path"]), row)
                         for row in family.values():
                             row["fallback"] = bool(local_identity and repeated)
-                            replay.add((row["projection"], row["path"]), row)
-                for row in replay.values():
-                    target = (album, "year", str(_coerce_int(row["entry"].get("year")))) if row["split"] else (album, "all", "")
-                    decisions.add((*target, 1, row["projection"], row["path"]), {"key": target, "row": row})
-                    qualifies = row["exact"] if any_exact else row["fallback"]
-                    if not qualifies:
-                        continue
+                            unqualified |= bool(local_identity) and not row["fallback"] and row["container_track_count"] >= 2
+                            replay.add((row["fallback"], row["container_key"], row["projection"], row["path"]), row)
+                needs_equivalent = not any_exact and unqualified
+                has_unqualified_signature = False
+                for (qualified, container), members in itertools.groupby(replay.values(), key=lambda row: (row["fallback"], row["container_key"])):
+                    prepare_signature = needs_equivalent and (not qualified or has_unqualified_signature)
+                    with ExitStack() as signature_stack:
+                        tokens = signature_stack.enter_context(_ProblematicSortedSearchValues(
+                            work=work, compare_keys=signatures.compare_tokens,
+                        )) if prepare_signature else None
+                        card = local_identity = None
+                        valid_signature = prepare_signature
+                        for row in members:
+                            eligible_rows.add((album, container, row["projection"], row["path"]), row)
+                            if not prepare_signature:
+                                continue
+                            local_identity = row["local_identity"]
+                            if not local_identity:
+                                valid_signature = False
+                                continue
+                            entry = row["entry"]
+                            current_card = (_normalized_duplicate_card_text(entry.get("edition")),
+                                            str(entry.get("release_date") or "").strip())
+                            if card is None:
+                                card = current_card
+                            valid_signature &= current_card == card
+                            number = safe_int(entry.get("track_number"))
+                            duration = safe_int(entry.get("duration_seconds"))
+                            title = _normalized_duplicate_card_text(entry.get("title"))
+                            if number is None or duration is None or duration <= 0 or not title:
+                                valid_signature = False
+                            else:
+                                token = signatures.token(safe_int(entry.get("disc_number")) or 1, number, title, duration)
+                                tokens.add(token, token)
+                        if valid_signature and local_identity:
+                            signature = signatures.write_refs(tokens.values())
+                            if signature["count"] >= 2:
+                                has_unqualified_signature |= not qualified
+                                artist, title, identity_year = json.loads(local_identity)
+                                signature_candidates.add((album, container), {
+                                    "album": album, "container": container, "signature": signature,
+                                    "card_refs": [signatures.text(_normalized_duplicate_card_text(artist)),
+                                                  signatures.text(_normalized_duplicate_card_text(title).removeprefix("the ")),
+                                                  signatures.text(card[0]), signatures.text(card[1])],
+                                    "year": identity_year,
+                                    "edition_role": card[0] if not card[0] or card[0] in _RELEASE_TYPE_EDITIONS else None,
+                                    "date_blank": not card[1],
+                                })
+                                has_signature_candidates = True
+                album_modes.add((album,), {"album": album, "exact": any_exact})
+        equivalent = spool()
+        if has_signature_candidates:
+            for witness in _problematic_equivalent_witnesses(signature_candidates.values(), signatures, work=work):
+                equivalent.add((witness["album"], witness["container"]), witness)
+        witnesses = iter(equivalent.values())
+        witness = next(witnesses, None)
+        modes = iter(album_modes.values())
+        mode = next(modes, None)
+        for (album, container), rows in itertools.groupby(eligible_rows.values(), key=lambda row: (row["album"], row["container_key"])):
+            while mode is not None and mode["album"] < album:
+                mode = next(modes, None)
+            while witness is not None and (witness["album"], witness["container"]) < (album, container):
+                witness = next(witnesses, None)
+            has_witness = witness is not None and (witness["album"], witness["container"]) == (album, container)
+            any_exact = mode["exact"]
+            for row in rows:
+                qualifies = row["exact"] if any_exact else row["fallback"] or has_witness
+                if qualifies:
                     source_year = row["exact_year"] if any_exact else row["source_year"]
                     source_keys = [(album, "all", "")]
                     if source_year is not None:
                         source_keys.append((album, "year", str(source_year)))
                     for source_key in source_keys:
                         decisions.add((*source_key, 0), {"key": source_key, "fallback": not any_exact})
+        companion_join = spool()
+        for _target, records in itertools.groupby(targets.values(), key=lambda row: (*row["key"], row["projection"])):
+            row = next(records)
+            decisions.add((*row["key"], 1, row["projection"]), {"key": row["key"], "row": row})
+            companion_join.add((*row["key"], 0, row["projection"]), {"key": row["key"], "projection": row["projection"]})
         for _key, rows in itertools.groupby(decisions.values(), key=lambda row: row["key"]):
             qualifies = fallback = False
             for decision in rows:
@@ -2594,6 +2981,33 @@ def _prepared_problematic_topology(facts, *, check_stop=None):
                     }
                     output.add((row["projection"], "duplicate_topology", fact["semantic_child_identity"]),
                                [0, "duplicate_topology", fact])
+        for companion in external_companions.values():
+            album = companion["original_album_key"]
+            year = str(companion["identity"][2])
+            for companion_key in ([album, "all", ""], [album, "year", year]):
+                companion_join.add((*companion_key, 1, companion["file_id"]),
+                                   {"key": companion_key, "companion": companion})
+        for _target, records in itertools.groupby(companion_join.values(), key=lambda row: row["key"]):
+            with _ProblematicSortedSearchValues(work=work) as projections:
+                for record in records:
+                    if "projection" in record:
+                        projections.add((record["projection"],), record["projection"])
+                        continue
+                    companion = record["companion"]
+                    for projection in projections.values():
+                        root_id, category = companion["root_id"], companion["category"]
+                        emit(0, "duplicate_companion", {
+                            "projection_id": projection,
+                            "semantic_child_identity": _problematic_fact_identity("duplicate_companion",
+                                companion["file_id"], companion["path"].casefold(), root_id, category),
+                            "companion_file_id": companion["file_id"], "companion_private_path": companion["path"],
+                            "companion_library_root_id": root_id, "companion_root_category": category,
+                        })
+                        emit(0, "duplicate_root", {
+                            "projection_id": projection,
+                            "semantic_child_identity": _problematic_fact_identity("duplicate_root", root_id, category),
+                            "root_id": root_id, "category": category, "primary": False,
+                        })
         work(force=True)
         yield output.values()
     except BaseException as error:
@@ -2703,7 +3117,6 @@ class _ProblematicItemReducer:
         self._track_missing_ranges: list[tuple[int, int]] = []
         self._previous_grouped_track_identity: str | None = None
         self.has_duplicate_files = False
-        self._fallback_unsplit_provenance = False
         self._featured_artist_facts = _BoundedFactValues()
         self._ignored_repair_facts = _SpooledIgnoredRepairMembership()
         self._track_title_facts = _BoundedFactValues()
@@ -2821,7 +3234,6 @@ class _ProblematicItemReducer:
     def consume(self, fact_kind: str, fact: Mapping[str, object]) -> None:
         if fact_kind == "duplicate_topology":
             self.has_duplicate_files = True
-            self._fallback_unsplit_provenance |= fact.get("fallback_unsplit") is True
             return
         if fact_kind == "row":
             try:
@@ -3005,6 +3417,7 @@ class _ProblematicItemReducer:
 
     def finish(self) -> ProblematicProjectedItem | None:
         self._flush_track_order_reason()
+        is_missing = (self.seed_row or {}).get("inventory_status") == "missing"
         album_reasons: list[str] = []
         if self.has_duplicate_files:
             album_reasons.append("Duplicate files")
@@ -3018,6 +3431,8 @@ class _ProblematicItemReducer:
             album_reasons.append("Year mismatch")
         elif self.raw_year_count > 1 and self.valid_year_count == 0:
             album_reasons.append("Inconsistent year")
+        if is_missing:
+            album_reasons = []
         track_order_reasons = self.track_order_reasons
 
         all_cross_reasons = [*album_reasons, *track_order_reasons]
@@ -3065,10 +3480,10 @@ class _ProblematicItemReducer:
         self.summary["issue_count"] = (
             len(exact_non_track_reasons) + self._track_order_reason_count
         )
-        self.summary["track_count"] = self.path_count
+        self.summary["track_count"] = 0 if is_missing else self.path_count
         self.summary["projection_id"] = self.projection_id
         self.summary["search_text"] = "\n".join(self._track_title_facts.values())
-        self.summary["track_paths"] = self._private_path_facts.values()
+        self.summary["track_paths"] = [] if is_missing else self._private_path_facts.values()
         self.summary["search_fact_count"] = self._track_title_facts.count
         self.summary["search_fact_digest"] = self._track_title_facts.digest.hexdigest()
         self.summary["search_facts_truncated"] = self._track_title_facts.truncated
@@ -3076,8 +3491,8 @@ class _ProblematicItemReducer:
         self.summary["track_path_fact_digest"] = self._private_path_facts.digest.hexdigest()
         self.summary["track_path_facts_truncated"] = self._private_path_facts.truncated
         self._duplicate_topology.apply(self.summary)
-        if self._fallback_unsplit_provenance:
-            self.summary["root_provenance"] = None
+        # The canonical summary omits provenance; domain/detail own its full value.
+        self.summary.pop("root_provenance", None)
         for compatibility_field in ("file_types",):
             self.summary.pop(compatibility_field, None)
         def search_reasons() -> Iterator[str]:
@@ -3134,6 +3549,275 @@ class _ProblematicItemReducer:
         )
 
 
+def _problematic_topology_entry(row: Mapping[str, object]) -> dict[str, object]:
+    entry = _problematic_file_entry_from_row(row)
+    entry["duration_seconds"] = _coerce_duration_seconds(row.get("duration_seconds"))
+    if row.get("file_entry_is_object") is not True and not _row_json_mapping(row.get("file_entry")):
+        entry.update(album=None, album_artist=None, year=None)
+    return entry
+
+
+def _problematic_topology_node_identity(key) -> str:
+    return hashlib.sha256(json.dumps(key, ensure_ascii=False, separators=(", ", ": ")).encode("utf-8")).hexdigest()
+
+
+def _problematic_topology_seed(row: Mapping[str, object]) -> dict[str, object] | None:
+    from music_app.services.library import (
+        _duplicate_album_identity_values, _numeric_album_container_candidate,
+        _track_album_container,
+    )
+
+    file_id = row.get("file_id")
+    album_key = str(row.get("album_key") or "")
+    if not file_id:
+        return None
+    entry = _problematic_topology_entry(row)
+    path = str(entry.get("path") or "")
+    physical_container = os.path.normcase(_track_album_container(path)) if path else None
+    if (not album_key or not path or normalize_exception_value(entry.get("exception_type"))
+            or str(entry.get("local_album_membership_problem") or "").strip()):
+        return {"file_id": file_id, "original_album_key": album_key,
+                "path": path, "excluded": True, "physical_container": physical_container}
+    numeric = _numeric_album_container_candidate(
+        path, entry.get("disc_number"), entry.get("album"), entry.get("edition")
+    )
+    return {
+        "file_id": file_id, "original_album_key": album_key, "path": path,
+        "excluded": False,
+        "physical_container": physical_container,
+        "identity": _duplicate_album_identity_values(
+            entry.get("album_artist"), entry.get("album"), entry.get("year")
+        ),
+        "default_container": os.path.normcase(_track_album_container(path)),
+        "numeric_bucket": [album_key, *numeric[0]] if numeric is not None else None,
+        "numeric_parent": numeric[4] if numeric is not None else None,
+    }
+
+
+def _prepare_problematic_topology_parent_partition(entries, parent, *, check_stop=None, work=None):
+    """Classify each unique persisted parent input once into an indexed bucket."""
+    from music_app.services.library import _numeric_album_container_candidate
+
+    work = work or _problematic_topology_work(check_stop)
+    work(force=True)
+    for stage_id, row in entries:
+        work(len(json.dumps(row, ensure_ascii=False).encode("utf-8")))
+        entry = _problematic_topology_entry(row)
+        seed = _problematic_topology_seed(row)
+        if seed is None:
+            raise ValueError("topology parent input lacks file identity")
+        candidate = _numeric_album_container_candidate(
+            entry.get("path"), entry.get("disc_number"), entry.get("album"), entry.get("edition")
+        )
+        excluded = seed["excluded"] or candidate is None or candidate[0][0] != parent
+        key = ["bucket", seed["original_album_key"], *candidate[0]] if candidate is not None else None
+        yield stage_id, "topology_parent_partition", {
+            "projection_id": _problematic_topology_node_identity(key) if key is not None else "excluded",
+            "semantic_child_identity": f"{int(seed['file_id']):020d}",
+            "file_id": seed["file_id"], "source_stage_id": stage_id, "excluded": bool(excluded), "key": key,
+            "folder": os.path.basename(candidate[1]) if candidate is not None else None,
+            "ordinal": candidate[2] if candidate is not None else None,
+            "matches": candidate[3] if candidate is not None else False,
+        }
+    work(force=True)
+
+
+def _derive_problematic_topology_numeric_bucket(entries, key, *, previous=None, check_stop=None, work=None):
+    work = work or _problematic_topology_work(check_stop)
+    previous = previous or {}
+    work(force=True)
+    count = _coerce_int(previous.get("input_count"))
+    last_stage = pending = 0
+    first_folder, first_ordinal = previous.get("first_folder"), previous.get("first_ordinal")
+    different_folder, different_ordinal = bool(previous.get("different_folder")), bool(previous.get("different_ordinal"))
+    matches = previous.get("matches", True) is True
+
+    def result(complete):
+        return last_stage, "topology_numeric_bucket_result", {
+            "projection_id": "topology", "semantic_child_identity": "result", "key": key,
+            "input_count": count, "collapse": bool(different_folder and different_ordinal and matches),
+            "first_folder": first_folder, "first_ordinal": first_ordinal,
+            "different_folder": different_folder, "different_ordinal": different_ordinal,
+            "matches": matches, "complete": complete,
+        }
+
+    for stage_id, row in entries:
+        work(len(json.dumps(row, ensure_ascii=False).encode("utf-8")))
+        count += 1
+        pending += 1
+        last_stage = max(last_stage, stage_id)
+        if row.get("key") != key:
+            raise ValueError("topology bucket input key differs")
+        if not row.get("excluded"):
+            folder, ordinal = row["folder"], row["ordinal"]
+            first_folder = folder if first_folder is None else first_folder
+            first_ordinal = ordinal if first_ordinal is None else first_ordinal
+            different_folder |= folder != first_folder
+            different_ordinal |= ordinal != first_ordinal
+            matches &= row["matches"] is True
+        if pending == 100:
+            yield result(False)
+            pending = 0
+    work(force=True)
+    yield result(True)
+
+
+def _derive_problematic_topology_own_rank(entries, key, *, previous=None, check_stop=None, work=None):
+    """Checkpoint the exact Python first-prepared-path scalar without sorting rows."""
+    work = work or _problematic_topology_work(check_stop)
+    previous = previous or {}
+    rank = previous.get("rank")
+    count = _coerce_int(previous.get("input_count"))
+    last_stage = pending = 0
+
+    def result():
+        return last_stage, "topology_own_rank_result", {
+            "projection_id": "topology", "semantic_child_identity": "result",
+            "key": key, "rank": rank, "input_count": count,
+        }
+
+    work(force=True)
+    for stage_id, row in entries:
+        work(len(json.dumps(row, ensure_ascii=False).encode("utf-8")))
+        count += 1
+        pending += 1
+        last_stage = stage_id
+        if str(row.get("album_key") or "") != key[1]:
+            raise ValueError("topology own rank input album differs")
+        seed = _problematic_topology_seed(row)
+        if seed is None:
+            raise ValueError("topology own rank input lacks file identity")
+        if not seed["excluded"]:
+            path = seed["path"]
+            candidate = [path.casefold(), path, key[1]]
+            if rank is None or candidate < rank:
+                rank = candidate
+        if pending == 100:
+            yield result()
+            pending = 0
+    if pending or count == 0:
+        yield result()
+    work(force=True)
+
+
+def _derive_problematic_topology_address(entries, key, numeric_decisions, own_ranks, *, check_stop=None, work=None):
+    """Reduce one complete address using sealed numeric and original-album scalars."""
+    from music_app.services.library import (
+        _duplicate_album_identity_values, _numeric_album_container_candidate, _track_album_container,
+    )
+
+    work = work or _problematic_topology_work(check_stop)
+    with ExitStack() as stack:
+        def spool():
+            return stack.enter_context(_ProblematicSortedSearchValues(work=work))
+
+        prepared, numeric, mapped, decisions, ranks, winners, members, folders = [spool() for _ in range(8)]
+        input_count = last_stage = 0
+        work(force=True)
+        for stage_id, row in entries:
+            work(len(json.dumps(row, ensure_ascii=False).encode("utf-8")))
+            input_count += 1
+            last_stage = max(last_stage, stage_id)
+            folders.add((_coerce_int(row.get("file_library_root_id")), str(row.get("file_physical_parent") or "")),
+                        {"album_id": row.get("album_id"), "root_id": _coerce_int(row.get("file_library_root_id")),
+                         "physical_parent": str(row.get("file_physical_parent") or "")})
+            seed = _problematic_topology_seed(row)
+            if seed is None:
+                raise ValueError("topology address input lacks file identity")
+            if seed["excluded"]:
+                continue
+            path, album = seed["path"], seed["original_album_key"]
+            prepared.add((album, path.casefold(), path, stage_id), {
+                "stage_id": stage_id, "payload": row, "entry": _problematic_topology_entry(row),
+                "path": path, "album": album,
+            })
+        for folder, rows in itertools.groupby(folders.values(), key=lambda value: (value["root_id"], value["physical_parent"])):
+            first_album = None
+            mixed = False
+            count = 0
+            for row in rows:
+                count += 1
+                if row["album_id"] is not None:
+                    if first_album is None:
+                        first_album = row["album_id"]
+                    mixed |= row["album_id"] != first_album
+            yield last_stage, "topology_folder_status", {
+                "projection_id": "topology", "semantic_child_identity": _problematic_topology_node_identity(list(folder)),
+                "root_id": folder[0], "physical_parent": folder[1], "input_count": count, "mixed": mixed,
+            }
+        previous = None
+        for row in prepared.values():
+            path_key = (row["album"], row["path"])
+            if path_key == previous:
+                continue
+            previous = path_key
+            entry = row["entry"]
+            candidate = _numeric_album_container_candidate(
+                row["path"], entry.get("disc_number"), entry.get("album"), entry.get("edition")
+            )
+            row["container"] = _track_album_container(row["path"])
+            if candidate is None:
+                if os.path.normcase(row["container"]) == key[1]:
+                    mapped.add((row["album"], row["path"]), row)
+            else:
+                row["bucket"] = ["bucket", row["album"], *candidate[0]]
+                row["parent"] = candidate[4]
+                numeric.add((*row["bucket"], row["path"]), row)
+        for decision in numeric_decisions:
+            decisions.add(tuple(decision["key"]), decision)
+        decision_stream = iter(decisions.values())
+        decision = next(decision_stream, None)
+        for bucket, rows in itertools.groupby(numeric.values(), key=lambda row: row["bucket"]):
+            while decision is not None and decision["key"] < bucket:
+                decision = next(decision_stream, None)
+            if decision is None or decision["key"] != bucket or type(decision.get("collapse")) is not bool:
+                raise ValueError("topology address lacks sealed numeric decision")
+            for row in rows:
+                if decision["collapse"]:
+                    row["container"] = row["parent"]
+                if os.path.normcase(row["container"]) == key[1]:
+                    mapped.add((row["album"], row["path"]), row)
+        for rank in own_ranks:
+            ranks.add((rank["key"][1],), rank)
+        rank_stream = iter(ranks.values())
+        rank = next(rank_stream, None)
+        for album, rows in itertools.groupby(mapped.values(), key=lambda row: row["album"]):
+            while rank is not None and rank["key"][1] < album:
+                rank = next(rank_stream, None)
+            if rank is None or rank["key"][1] != album or rank.get("rank") is None:
+                raise ValueError("topology address lacks sealed original-album rank")
+            if rank["rank"][2] != album:
+                raise ValueError("topology original-album rank key differs")
+            for row in rows:
+                winners.add((os.path.normcase(row["path"]), rank["rank"], row["path"].casefold(), row["path"]), row)
+        identity = None
+        clean = True
+        member_count = member_fingerprint = 0
+        for _path, versions in itertools.groupby(winners.values(), key=lambda row: os.path.normcase(row["path"])):
+            winner = None
+            for winner in versions:
+                work()
+            entry = winner["entry"]
+            value = _duplicate_album_identity_values(entry.get("album_artist"), entry.get("album"), entry.get("year"))
+            value = list(value) if value is not None else None
+            identity = value if member_count == 0 else identity
+            clean &= value is not None and value == identity
+            payload = winner["payload"]
+            file_id = int(payload["file_id"])
+            member_count += 1
+            member_fingerprint ^= int(_problematic_topology_node_identity([file_id, winner["path"]]), 16)
+            member = {"projection_id": "topology", "semantic_child_identity": f"{file_id:020d}",
+                      "file_id": file_id, "path": winner["path"], "source_stage_id": winner["stage_id"],
+                      "root_id": payload.get("file_library_root_id"), "category": payload.get("file_library_root_category")}
+            members.add((winner["stage_id"], file_id), [winner["stage_id"], "topology_address_member", member])
+        yield from members.values()
+        yield last_stage, "topology_address_result", {
+            "projection_id": "topology", "semantic_child_identity": "result", "key": key,
+            "input_count": input_count, "status": "EMPTY" if member_count == 0 else "CLEAN" if clean else "MIXED",
+            "identity": identity if clean and member_count else None,
+            "member_count": member_count, "member_fingerprint": f"{member_fingerprint:0256b}",
+        }
+        work(force=True)
 class ProblematicGroupAccumulator:
     """Scalar progress whose row-derived facts are persisted separately."""
 
@@ -3286,6 +3970,9 @@ class ProblematicGroupAccumulator:
                     row_semantic_identity,
                     row_fact,
                 )
+                topology_seed = _problematic_topology_seed(payload)
+                if topology_seed is not None:
+                    yield fact("topology_seed", row_semantic_identity, topology_seed)
                 track_key = str(payload.get("track_key") or "").strip()
                 if track_key:
                     yield fact(

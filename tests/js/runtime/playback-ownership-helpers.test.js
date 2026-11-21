@@ -106,6 +106,24 @@ function activeOwnershipState() {
   };
 }
 
+test('a claim retry waiting out its 2 s runs at once when the server is back, and only once', () => {
+  const timers = [];
+  const cleared = [];
+  const { context } = loadHelper({
+    setTimeout: (callback, delay) => { timers.push({ callback, delay }); return timers.length; },
+    clearTimeout: (id) => cleared.push(id),
+  });
+  let runs = 0;
+  context.scheduleUnansweredPlaybackClaimRetry(() => { runs += 1; });
+  assert.equal(timers.at(-1).delay, 2000);
+
+  assert.equal(context.retryUnansweredPlaybackClaimNow(), true);
+  assert.equal(runs, 1);
+  assert.ok(cleared.includes(1), 'its timer no longer fires');
+  assert.equal(context.retryUnansweredPlaybackClaimNow(), false, 'nothing waits any more');
+  assert.equal(runs, 1);
+});
+
 test('rejected handoff beacon removes the unusable session envelope', () => {
   const storage = new Map();
   const removed = [];

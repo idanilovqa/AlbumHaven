@@ -287,13 +287,34 @@ function askAgainUntilAnswered(track, options, error) {
   if (!error?.unanswered) return false;
   const ownership = getPlaybackOwnershipState();
   const version = ownership.requestVersion;
-  if (ownership.retryTimer) clearTimeout(ownership.retryTimer);
-  ownership.retryTimer = setTimeout(() => {
-    ownership.retryTimer = 0;
+  scheduleUnansweredPlaybackClaimRetry(() => {
     if (version === ownership.requestVersion && !ownership.activeClaim && isPlaybackClaimRenewable()) {
       void claimPlaybackOwnership(track, options);
     }
-  }, PLAYBACK_OWNERSHIP_RETRY_MS);
+  });
+  return true;
+}
+
+// One retry of an unanswered claim waits at a time; a newer one replaces it.
+function scheduleUnansweredPlaybackClaimRetry(retry) {
+  const ownership = getPlaybackOwnershipState();
+  if (ownership.retryTimer) clearTimeout(ownership.retryTimer);
+  const run = () => {
+    ownership.retryTimer = 0;
+    ownership.retryNow = null;
+    retry();
+  };
+  ownership.retryNow = run;
+  ownership.retryTimer = setTimeout(run, PLAYBACK_OWNERSHIP_RETRY_MS);
+}
+
+/** The server answers again (the playback socket reopened): a waiting retry asks at once. */
+function retryUnansweredPlaybackClaimNow() {
+  const ownership = getPlaybackOwnershipState();
+  const run = ownership.retryNow;
+  if (!run) return false;
+  clearTimeout(ownership.retryTimer);
+  run();
   return true;
 }
 
@@ -338,11 +359,9 @@ async function expirePlaybackClaim(claim) {
 function keepUnansweredPlaybackClaim(claim, error) {
   if (!error?.unanswered) return false;
   const ownership = getPlaybackOwnershipState();
-  if (ownership.retryTimer) clearTimeout(ownership.retryTimer);
-  ownership.retryTimer = setTimeout(() => {
-    ownership.retryTimer = 0;
+  scheduleUnansweredPlaybackClaimRetry(() => {
     if (ownership.activeClaim === claim && isPlaybackClaimRenewable()) void refreshPlaybackOwnershipClaim();
-  }, PLAYBACK_OWNERSHIP_RETRY_MS);
+  });
   return true;
 }
 

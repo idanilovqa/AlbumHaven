@@ -454,9 +454,12 @@ export class UtilityProblematicFilesActions {
   async openMusicBrainzPopup(trigger, expectedUrl) {
     const page = this.utilityProblematicFilesTab.page;
     const context = page.context();
+    const appOrigin = new URL(page.url()).origin;
     let openedUrl = null;
+    // A popup's first navigation has no frame yet (request.frame() throws), so it is told apart by
+    // leaving the app's origin.
     const recordPopupNavigation = (request) => {
-      if (openedUrl === null && request.isNavigationRequest() && request.frame().page() !== page) {
+      if (openedUrl === null && request.isNavigationRequest() && new URL(request.url()).origin !== appOrigin) {
         openedUrl = request.url();
       }
     };

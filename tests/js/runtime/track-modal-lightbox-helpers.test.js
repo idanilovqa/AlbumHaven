@@ -3598,3 +3598,37 @@ test('the loading shell shows the gallery card cover and title at once', () => {
     'the shell reuses the gallery preview URL that Album Details renders, already in the browser cache');
   assert.doesNotMatch(trackModalCover.innerHTML, /Loading cover art/);
 });
+
+test('a trackless details answer is never kept, so the next open asks again (FTC-ALBUM-DETAILS-021)', async () => {
+  // After some Artist edits the server briefly answers an album with no rows until its relation projection
+  // publishes; a prefetch caught in that window must not keep Album Details empty afterwards.
+  const preview = { key: 'window-album', request_key: 'window-album', name: 'Window Album', preview_only: true, tracks: [] };
+  const empty = { ...preview, preview_only: false, tracks: [] };
+  const full = { ...preview, preview_only: false, tracks: [{ path: 'one', title: 'One' }] };
+  const responses = [];
+  const { context } = loadHelper({
+    initialAlbums: [preview], inventoryMutationRevision: 3,
+    onFetchAlbumDetails: () => new Promise(resolve => responses.push(resolve)),
+  });
+  const prefetch = context.loadTrackModalAlbumDetails(preview.key, { speculative: true });
+  responses[0]({ ok: true, status: 200, json: async () => ({ ok: true, album: empty }) });
+  await prefetch;
+  assert.equal(context.getCachedHydratedTrackModalAlbum(preview.key), null);
+  assert.notEqual(context.state.gallery.albumIndex.get(preview.key), empty);
+  const open = context.loadTrackModalAlbumDetails(preview.key);
+  assert.equal(responses.length, 2, 'opening the album asks the server again');
+  responses[1]({ ok: true, status: 200, json: async () => ({ ok: true, album: full }) });
+  assert.equal(await open, full);
+  assert.equal(context.getCachedHydratedTrackModalAlbum(preview.key), full);
+});
+
+test('a missing album is still kept although it has no tracks', async () => {
+  const preview = { key: 'gone-album', request_key: 'gone-album', name: 'Gone Album', preview_only: true, tracks: [] };
+  const missing = { ...preview, preview_only: false, tracks: [], inventory_status: 'missing' };
+  const { context } = loadHelper({
+    initialAlbums: [preview], inventoryMutationRevision: 3,
+    onFetchAlbumDetails: async () => ({ ok: true, status: 200, json: async () => ({ ok: true, album: missing }) }),
+  });
+  assert.equal(await context.loadTrackModalAlbumDetails(preview.key), missing);
+  assert.equal(context.getCachedHydratedTrackModalAlbum(preview.key), missing);
+});

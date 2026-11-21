@@ -525,6 +525,11 @@ function openLocallyEditedSplitRelease(albumKey, album, releases) {
   return selectTrackModalCurrentRelease(matches[0].album_id);
 }
 
+function albumDetailsAnswerIsComplete(album) {
+  return String(album?.inventory_status || '') === 'missing'
+    || (Array.isArray(album?.tracks) && album.tracks.length > 0);
+}
+
 function loadTrackModalAlbumDetails(albumKey, options = {}) {
   const normalizedAlbumKey = String(albumKey || '').trim();
   if (!normalizedAlbumKey) return Promise.resolve(null);
@@ -569,6 +574,10 @@ function loadTrackModalAlbumDetails(albumKey, options = {}) {
         return loadTrackModalAlbumDetails(normalizedAlbumKey,
           promotedToForeground ? { ...options, speculative: false } : options);
       }
+      // A present album answered with no tracks is the brief window before a post-save relation projection
+      // publishes (FTC-ALBUM-DETAILS-021). Keeping it would leave Album Details empty after the publish, so the
+      // next open asks again; a missing album legitimately has none and is kept.
+      if (!albumDetailsAnswerIsComplete(album)) return album;
       cacheHydratedTrackModalAlbum(normalizedAlbumKey, album);
       getTrackModalAlbumKeyAliases(normalizedAlbumKey, album).forEach((alias) => {
         trackModalAlbumDetailsLoads.set(alias, load);

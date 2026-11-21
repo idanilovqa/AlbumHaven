@@ -26,7 +26,7 @@ from music_app.services.cover_lookup_notifications import (
     load_cover_lookup_notification,
     load_reusable_cover_lookup_notification,
     save_cover_lookup_notifications,
-    upsert_cover_lookup_notification,
+    upsert_guarded_cover_lookup_notifications,
     upsert_cover_lookup_notifications,
 )
 from music_app.services.cover_lookup_jobs import build_cover_lookup_job_contract
@@ -381,14 +381,14 @@ def _save_cover_lookup_notification_tasks(
                 # A task carrying its search generation is written only while that
                 # search still owns its stored notification.
                 unguarded = []
+                guarded = []
                 for task, revision in current:
                     generation = str(task.get("search_generation") or "")
                     if generation:
-                        upsert_cover_lookup_notification(
-                            config, task, persistence_revision=revision, expected_search_generation=generation,
-                        )
+                        guarded.append((task, revision, generation))
                     else:
                         unguarded.append((task, revision))
+                upsert_guarded_cover_lookup_notifications(config, guarded)
             if unguarded:
                 upsert_cover_lookup_notifications(config, unguarded)
         return
@@ -768,26 +768,31 @@ def _reclaim_terminal_internal_cover_lookup_task(
 def cover_lookup_admission_state(
     requested_track_paths: set[str], *, preferred_task_id: str = "",
 ) -> tuple[str, str]:
-    paths = {os.path.normcase(str(Path(path).resolve(strict=False))) for path in requested_track_paths}
+    paths = {_resolved_path_key(path) for path in requested_track_paths}
     if not paths:
         return "", ""
-    finishing_task_id = ""
+    # Resolving a path can ask the filesystem (slow on a network drive), so it runs after the task
+    # lock is released: request routes take that lock to read a task and must never wait on disk.
     with _COVER_LOOKUP_TASKS_LOCK:
-        for task_id, task in _COVER_LOOKUP_TASKS.items():
-            if task.get("internal"):
-                continue
-            task_paths = {
-                os.path.normcase(str(Path(path).resolve(strict=False)))
-                for path in task.get("track_paths", [])
-            }
-            if task_paths == paths:
-                if task.get("status") in {"pending", "running"}:
-                    return task_id, ""
-                if _COVER_LOOKUP_FUTURES.get(task_id):
-                    finishing_task_id = task_id
-            elif task_id == preferred_task_id and _COVER_LOOKUP_FUTURES.get(task_id):
+        candidates = [
+            (task_id, task.get("status"), list(task.get("track_paths", [])))
+            for task_id, task in _COVER_LOOKUP_TASKS.items()
+            if not task.get("internal")
+        ]
+    finishing_task_id = ""
+    for task_id, status, track_paths in candidates:
+        if {_resolved_path_key(path) for path in track_paths} == paths:
+            if status in {"pending", "running"}:
+                return task_id, ""
+            if _COVER_LOOKUP_FUTURES.get(task_id):
                 finishing_task_id = task_id
+        elif task_id == preferred_task_id and _COVER_LOOKUP_FUTURES.get(task_id):
+            finishing_task_id = task_id
     return "", finishing_task_id
+
+
+def _resolved_path_key(path: object) -> str:
+    return os.path.normcase(str(Path(path).resolve(strict=False)))
 
 
 def wait_for_cover_lookup_workers(task_id: str, timeout: float) -> bool:

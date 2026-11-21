@@ -1447,7 +1447,7 @@ function initGalleryMain() {
       const settled = galleryMainSurfaceController?.current?.();
       if (settled?.key?.startsWith?.('artist:') && settled.surface.getAttribute?.('aria-modal') !== 'true') {
         const previousAnchor = settled.anchor;
-        const artist = settled.key.slice('artist:'.length);
+        const artist = String(settled.key).slice('artist:'.length);
         const nextAnchor = resolveVisibleGalleryArtistInfoAnchor(settled, scroll);
         if (nextAnchor !== previousAnchor && String(nextAnchor?.dataset?.artist || '') === artist
             && isGalleryArtistInfoAnchorVisible(nextAnchor, scroll)) {

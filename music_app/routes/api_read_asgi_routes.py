@@ -1047,7 +1047,7 @@ async def home_data(request: Request) -> JSONResponse:
     # loop stalled every other request (search, covers, status) until it ended.
     request_started_at = time.perf_counter()
     try:
-        payload = await run_in_threadpool(_build_home_data_payload, request)
+        payload = await run_in_threadpool(_build_home_data_payload, request, request_started_at)
     except GalleryProjectionPending:
         return JSONResponse(
             {"ok": False, "code": "gallery_projection_pending", "error": "Gallery is being prepared."},
@@ -1055,11 +1055,20 @@ async def home_data(request: Request) -> JSONResponse:
         )
     if isinstance(payload, JSONResponse):
         return payload
-    _log_view_data_request_from_asgi(request, payload, request_started_at)
     return JSONResponse(payload)
 
 
-def _build_home_data_payload(request: Request) -> dict[str, object] | JSONResponse:
+def _build_home_data_payload(
+    request: Request, request_started_at: float | None = None,
+) -> dict[str, object] | JSONResponse:
+    payload = _compose_home_data_payload(request)
+    # The request log is a Postgres write, so it is written here, off the event loop (freeze guard BI-08).
+    if request_started_at is not None and not isinstance(payload, JSONResponse):
+        _log_view_data_request_from_asgi(request, payload, request_started_at)
+    return payload
+
+
+def _compose_home_data_payload(request: Request) -> dict[str, object] | JSONResponse:
     library_state = _library_state(request)
     postgres_browse = (
         select_runtime_persistence_adapter(

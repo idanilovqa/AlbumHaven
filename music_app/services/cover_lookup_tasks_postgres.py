@@ -316,34 +316,27 @@ class CoverLookupTasksPostgresAdapter:
         if not expected_search_generation:
             self.upsert_notifications([(task, persistence_revision)])
             return
-        normalized_task = _normalize_task(task)
-        if normalized_task is None:
+        self.upsert_guarded_notifications([(task, persistence_revision, expected_search_generation)])
+
+    def upsert_guarded_notifications(
+        self,
+        items: list[tuple[dict[str, object], int | None, str]],
+    ) -> None:
+        """Write each task only while its search generation still owns it, in one transaction."""
+        guarded = [
+            (normalized_task, persistence_revision, expected_search_generation)
+            for task, persistence_revision, expected_search_generation in items
+            if (normalized_task := _normalize_task(task)) is not None
+        ]
+        if not guarded:
             return
         with self._connect_to_database() as connection:
             with _transaction(connection):
                 _ensure_bootstrap_context(connection)
-                current_row = connection.execute(
-                    _load_notification_sql().rstrip().rstrip(";") + " for update of cover_lookup_tasks",
-                    (str(normalized_task["id"]),),
-                ).fetchone()
-                current = _task_from_row(current_row) if current_row is not None else {}
-                if (
-                    current.get("search_generation") != expected_search_generation
-                    or ((current.get("job_contract") or {}).get("job_kind") == "save_remote_selection"
-                        and (normalized_task.get("job_contract") or {}).get("job_kind") != "save_remote_selection")
-                    or (current.get("status") in {"completed", "failed", "canceled"}
-                        and normalized_task.get("status") != current.get("status"))
-                ):
-                    return
-                if current.get("notification_action_taken"):
-                    for key in ("notification_action_taken", "selected_candidate_id", "save_generation",
-                                "notification_completed_at", "notification_expires_at"):
-                        if key in current:
-                            normalized_task[key] = current[key]
-                _execute_notification_upsert(
-                    connection,
-                    _task_row(normalized_task, source_index=0, persistence_revision=persistence_revision),
-                )
+                for normalized_task, persistence_revision, expected_search_generation in guarded:
+                    _upsert_guarded_notification(
+                        connection, normalized_task, persistence_revision, expected_search_generation,
+                    )
 
     def upsert_notifications(
         self,
@@ -385,6 +378,36 @@ class CoverLookupTasksPostgresAdapter:
         if self._use_shared_connection_pool:
             return _pooled_connection(self._database_url, workload="default")
         return self._connect(self._database_url)
+
+
+def _upsert_guarded_notification(
+    connection: Any,
+    normalized_task: dict[str, object],
+    persistence_revision: int | None,
+    expected_search_generation: str,
+) -> None:
+    current_row = connection.execute(
+        _load_notification_sql().rstrip().rstrip(";") + " for update of cover_lookup_tasks",
+        (str(normalized_task["id"]),),
+    ).fetchone()
+    current = _task_from_row(current_row) if current_row is not None else {}
+    if (
+        current.get("search_generation") != expected_search_generation
+        or ((current.get("job_contract") or {}).get("job_kind") == "save_remote_selection"
+            and (normalized_task.get("job_contract") or {}).get("job_kind") != "save_remote_selection")
+        or (current.get("status") in {"completed", "failed", "canceled"}
+            and normalized_task.get("status") != current.get("status"))
+    ):
+        return
+    if current.get("notification_action_taken"):
+        for key in ("notification_action_taken", "selected_candidate_id", "save_generation",
+                    "notification_completed_at", "notification_expires_at"):
+            if key in current:
+                normalized_task[key] = current[key]
+    _execute_notification_upsert(
+        connection,
+        _task_row(normalized_task, source_index=0, persistence_revision=persistence_revision),
+    )
 
 
 class _NoopTransaction:

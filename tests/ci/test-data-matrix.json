@@ -10286,7 +10286,7 @@
       "offline-reload-opens-artist-seen-online",
       "browser-copy-offline-reload-names-unreachable-view"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.config.js",

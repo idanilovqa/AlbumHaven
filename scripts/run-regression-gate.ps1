@@ -55,7 +55,8 @@ $gates = @{
         FixtureProfiles = @('functional-core', 'synthetic-large-library')
         Pytest = @(, @('tests/py/test_edit_workflows.py', 'tests/py/test_save_tasks.py', 'tests/py/test_edit_state.py',
                 'tests/py/test_tag_edit_recovery.py', 'tests/py/test_tag_edit_intents_postgres.py',
-                'tests/py/test_postgres_structural_tag_edit.py'))
+                'tests/py/test_postgres_structural_tag_edit.py', 'tests/py/test_relation_compatibility_postgres.py',
+                'tests/py/test_scoped_relation_projection.py', 'tests/py/test_postgres_migrations.py'))
         Node = @('tests/js/runtime/tag-editor-*.test.js', 'tests/js/runtime/utility-tag-edit-optimistic.test.js')
         FunctionalShard = 'metadata-mutations'
         Performance = @{ Profile = 'synthetic-large-library'; Targets = 'edit-tags-post-edit' }

@@ -269,6 +269,7 @@ class PcmDecoderProcess:
             raise SampleRateMismatch(native_sample_rate)
 
         requested_seek_seconds = command.start_frame / command.sample_rate
+        preroll_frames = 0
         input_seek: tuple[str, ...] = ()
         output_seek: tuple[str, ...] = ()
         if command.path.suffix.lower() in {".wav", ".wave", ".flac", ".aif", ".aiff"}:
@@ -283,21 +284,26 @@ class PcmDecoderProcess:
                 "-ss",
                 f"{requested_seek_seconds - input_seek_seconds:.9f}",
             )
+            preroll_frames = round((requested_seek_seconds - input_seek_seconds) * command.sample_rate)
 
         from music_app.services.mp3_gapless import ignored_mp3_gapless_info
 
         gapless = await ignored_mp3_gapless_info(command.path, executable)
-        audio_filter: tuple[str, ...] = ()
+        filters = ""
         if gapless is not None:
             coarse_seconds, filters = gapless.decode_filters(command.start_frame)
             input_seek = ("-ss", str(coarse_seconds)) if coarse_seconds else ()
             output_seek = ()
-            audio_filter = ("-af", filters)
+            preroll_frames = 0
             command = replace(command, provisional_duration_seconds=gapless.duration_seconds)
-        frame_limit = (
-            ("-frames:a", str(command.end_frame - command.start_frame))
-            if command.end_frame is not None else ()
-        )
+        if command.end_frame is not None:
+            # An exclusive end in samples ("-frames:a" counts packets, "-t" includes encoder priming).
+            # The output seek cuts after the filters and by timestamp, so after a preroll the end is a timestamp
+            # too; without one it is a count, since encoder priming shifts timestamps but is never emitted.
+            end = preroll_frames + command.end_frame - command.start_frame
+            unit = "end_pts" if preroll_frames else "end_sample"
+            filters = ",".join(filter(None, (filters, f"atrim={unit}={end}")))
+        audio_filter = ("-af", filters) if filters else ()
         process = await process_factory(
             executable,
             "-hide_banner",
@@ -315,7 +321,6 @@ class PcmDecoderProcess:
             "pcm_f32le",
             "-ac",
             "2",
-            *frame_limit,
             "pipe:1",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,

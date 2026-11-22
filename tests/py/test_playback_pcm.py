@@ -208,22 +208,38 @@ def test_decoder_uses_bounded_preroll_and_residual_seek_for_encoded_input(tmp_pa
     asyncio.run(scenario())
 
 
-def test_decoder_limits_output_to_exclusive_segment_end(tmp_path):
-    async def scenario() -> None:
-        calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
-        process = FakeProcess()
+@pytest.mark.parametrize("suffix, codec", [
+    (".wav", "pcm_s16le"), (".flac", "flac"), (".mp3", "libmp3lame"), (".m4a", "aac"),
+])
+@pytest.mark.parametrize("start, end", [(0, 88_201), (44_100, 132_300), (44_101, 97_338)])
+def test_decoder_stops_at_the_exclusive_segment_end(tmp_path, monkeypatch, suffix, codec, start, end):
+    # Runs ffmpeg: "-frames:a" counts packets, so a CUE track played on to the end of its album image.
+    rate = 44_100
+    monkeypatch.setattr("music_app.services.playback_pcm.read_native_sample_rate", lambda *_args, **_kwargs: rate)
+    executable = resolve_ffmpeg_executable()
+    image = tmp_path / f"image{suffix}"
+    subprocess.run(
+        [executable, "-v", "error", "-f", "lavfi", "-i", f"sine=frequency=440:sample_rate={rate}:duration=6",
+         "-ac", "2", "-c:a", codec, str(image)],
+        check=True, timeout=30,
+    )
+
+    async def scenario() -> int:
         decoder = await PcmDecoderProcess.start(
-            open_command(tmp_path / "image.flac", start_frame=75, end_frame=225),
-            ffmpeg_executable="ffmpeg-test",
-            process_factory=factory_for(process, calls),
+            open_command(image, start_frame=start, end_frame=end, sample_rate=rate),
+            ffmpeg_executable=executable,
         )
-        await decoder.finish()
+        total = 0
+        while True:
+            decoder.grant_credit(4096)
+            chunk = await decoder.read_credited_frames(max_frames=4096)
+            if not chunk.frame_count:
+                break
+            total += chunk.frame_count
+        await decoder.cancel()
+        return total
 
-        args, _kwargs = calls[0]
-        assert args[args.index("-frames:a") + 1] == "150"
-        assert args.index("-frames:a") < args.index("pipe:1")
-
-    asyncio.run(scenario())
+    assert asyncio.run(scenario()) == end - start
 
 
 def test_decoder_never_reads_more_than_reserved_credit():

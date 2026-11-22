@@ -2107,10 +2107,14 @@ class _SharedConnection:
         self._connect = connect
         self._lock = threading.Lock()
         self._connection: Any = None
+        self._closed = False
 
     @contextmanager
     def transaction(self) -> Iterator[Any]:
         with self._lock:
+            if self._closed:
+                # A lease opened now would never be returned to the pool.
+                raise RuntimeError("The cover run's shared connection is closed.")
             if self._connection is None:
                 self._connection = self._connect()
             connection = self._connection
@@ -2138,6 +2142,7 @@ class _SharedConnection:
 
     def close(self) -> None:
         with self._lock:
+            self._closed = True
             if self._connection is not None:
                 self._discard()
 

@@ -7,7 +7,7 @@ trivial kinds apply automatically, the rest wait for the owner. A tag signature 
 recompare only albums that changed; refreshes run when a release decision is recorded and in
 the background after Problematic Files is invalidated (tag edits, rescans, watcher). The
 owner's undo, skip and approval decisions are kept by the exact change, so a refresh never
-reapplies an undone change. "Applied" is display only until PR 53 writes tags; nothing here
+reapplies an undone change. "Applied" is display only until Bulk Correction (needs PR 65) writes tags; nothing here
 writes media tags.
 """
 from __future__ import annotations

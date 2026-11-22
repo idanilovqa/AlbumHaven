@@ -5,7 +5,7 @@ Problematic Files labels an album "Data Correction Needed" when its tags differ 
 release it certainly is. Trivial changes apply automatically and the Edits Queue lists them as
 "Applied automatically", with Undo per album; the rest wait there for approval (per kind, per
 album, or skip; artist changes per album only). "Applied" is display only until Bulk Correction
-(PR 53) writes tags; nothing here writes tags.
+(which depends on PR 65) writes tags; nothing here writes tags.
 """
 from __future__ import annotations
 
@@ -102,9 +102,9 @@ class MusicBrainzCorrectionService:
     def submit_due_bulk_corrections(self) -> int:
         """The hourly "Auto submit bulks" run. A no-op until Bulk Correction exists.
 
-        TODO(PR 53): when the setting is on and next_auto_submit_at has passed, write the
-        applied changes through the Edit Tags pipeline's server-side batch save. Never write
-        tags from here before then."""
+        TODO(PR 65): when the setting is on and a run is due, write the applied changes through
+        that PR's run_edit_tags_payload. next_auto_submit_at is always ahead of now, so being due
+        needs a stored last run. Never write tags from here before then."""
         return 0
 
     def settings(self) -> dict[str, object]:

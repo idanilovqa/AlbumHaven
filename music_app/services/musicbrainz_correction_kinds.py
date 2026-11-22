@@ -20,7 +20,7 @@ KINDS = (
     "track_title", "album_title", "track_artist_renamed", "track_artist_joined", "album_artist_renamed",
     "album_artist_joined",
 )
-# Applied without a click (display only until PR 53 writes tags).
+# Applied without a click (display only until Bulk Correction, which needs PR 65, writes tags).
 AUTO_KINDS = frozenset({"case", "spacing", "case_spacing", "punctuation", "accents", "small_edit"})
 # Wait for the owner; artist kinds only ever per album, never per kind or all at once.
 ARTIST_KINDS = frozenset({"track_artist_renamed", "track_artist_joined", "album_artist_renamed",

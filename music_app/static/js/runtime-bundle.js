@@ -38422,7 +38422,7 @@ function handleMusicBrainzLookupEvent(event) {
 // MusicBrainz data corrections and Settings → Edits Queue (Delivery 2, S4; owner 2026-11-16,
 // "Data Correction flow"). Problematic Files shows an album's "Data Correction Needed" label and
 // its changes. Trivial ones apply to the display automatically ("Applied automatically", Undo per
-// album); the rest wait for approval. Display only: nothing here writes tags (Bulk Correction, PR 53).
+// album); the rest wait for approval. Display only: nothing here writes tags (Bulk Correction needs PR 65).
 const MUSICBRAINZ_DATA_CORRECTION_LABEL = 'Data Correction Needed';
 const EDITS_QUEUE_TABS = { 'data-correction': 'Data Correction', 'musicbrainz-lookup': 'MusicBrainz Look Up' };
 const editsQueue = { tab: 'data-correction', section: 'applied', kinds: null, pages: {}, openKind: null,

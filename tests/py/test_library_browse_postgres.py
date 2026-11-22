@@ -4638,6 +4638,52 @@ def test_exact_artist_fallback_sql_constrains_identity_before_album_expansion():
     assert sql.index(identity_filter) < sql.index(track_expansion)
 
 
+@pytest.mark.parametrize("album_artist, credits, expected", [
+    # gold, album 417777: Bobby Goldsboro's name matches; CSS and Mud only share the compilation.
+    ("Various Artists", [("Bobby Goldsboro", "featured_track_artist", True),
+                         ("CSS", "featured_track_artist", False), ("Mud", "featured_track_artist", False)],
+     {"Bobby Goldsboro"}),
+    # A matching track: its own artist is found, and the album's owner.
+    ("Various Artists", [("Various Artists", "owner", True), ("Contrarian", "featured_track_artist", True),
+                         ("B612", "featured_track_artist", False)],
+     {"Various Artists", "Contrarian"}),
+    # Only the album's title matches and no artist owns it: the album is still found, under its album artist.
+    ("Various Artists", [("Daal", "featured_track_artist", False)], {"Various Artists"}),
+    # A split's composite owner stays folded into its artists, also when only one of them matched.
+    ("Alpha / Bravo", [("Alpha / Bravo", "owner", True), ("Alpha", "featured_track_artist", True),
+                       ("Bravo", "featured_track_artist", False)],
+     {"Alpha"}),
+])
+def test_a_search_finds_an_artist_only_through_what_is_theirs(album_artist, credits, expected):
+    # Owner 2026-11-22: "fix the bug in the search that allows them to be found, when they are not matching on
+    # anything - soi this does not happen on any other queries".
+    from music_app.services.library_browse_postgres import _canonicalize_artist_rows, _search_artist_groups
+
+    row = _browse_album_row(artist=album_artist, album_id=1, album_key="shared", title="Shared Album")
+    row["album_featured_artists"] = [
+        {"artist_id": index, "artist_name": name, "artist_sort_name": name, "featured_kind": kind,
+         "found_by_search": found}
+        for index, (name, kind, found) in enumerate(credits, 1)
+    ]
+
+    groups = _search_artist_groups(_canonicalize_artist_rows([row], {}), query="any query")
+
+    assert {group["artist"] for group in groups} == expected
+
+
+def test_the_search_query_records_which_artist_each_match_belongs_to():
+    from music_app.services.library_browse_postgres import _search_preview_sql
+
+    sql = " ".join(_search_preview_sql().casefold().split())
+    found = sql.split("search_found_artists as materialized (", 1)[1].split("), matched_album_rows as (", 1)[0]
+    # Their name or alias, their own matching track, and their shared album's title.
+    assert "from display_artist_matches" in found
+    assert "select eligible_matched_track_album_ids.album_id, eligible_matched_track_album_ids.artist_id" in found
+    assert "from album_title_matches" in found and "featured_kind = 'featured_member'" in found
+    assert "'found_by_search'" in sql
+    assert "library.local_tracks.artist_id" in sql.split("track_title_matches as materialized (", 1)[1].split(")", 1)[0]
+
+
 def test_exact_artist_sidebar_excludes_artists_found_only_through_a_shared_release():
     from music_app.services.library_browse_postgres import _without_release_coartists
 

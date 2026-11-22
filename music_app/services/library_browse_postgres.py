@@ -7543,6 +7543,7 @@ def _canonicalize_artist_rows(
 ) -> list[object]:
     normalized_alias_to_canonical: dict[str, object] | None = None
     canonical_rows: list[object] = []
+    unfound_credit_ids: set[int] = set()
     for row in rows:
         payload = _row_mapping(row)
         if not payload:
@@ -7559,6 +7560,9 @@ def _canonicalize_artist_rows(
             for credit in featured_artists
             if isinstance(credit, Mapping)
         ] if isinstance(featured_artists, list) else []
+        if credited_payloads and all(credit.get("found_by_search") is False for credit in credited_payloads):
+            # Only the album itself matched and no artist owns it: it is found under its album artist.
+            credited_payloads = []
         expanded_featured_artists = bool(credited_payloads)
         for credited_payload in credited_payloads or [payload]:
             artist_name = str(credited_payload.get("artist_name") or "").strip()
@@ -7588,11 +7592,18 @@ def _canonicalize_artist_rows(
                 next_payload["artist_id"] = None
                 next_payload["artist_sort_name"] = canonical_name.casefold()
                 next_payload["sort_name"] = canonical_name.casefold()
+            if next_payload.pop("found_by_search", None) is False:
+                unfound_credit_ids.add(id(next_payload))
             canonical_rows.append(next_payload)
-    return _suppress_split_release_composite_owner_rows(
-        canonical_rows,
-        alias_to_canonical=alias_to_canonical,
-    )
+    # A split release is recognized by all its credits; only those the search matched are then results.
+    return [
+        row
+        for row in _suppress_split_release_composite_owner_rows(
+            canonical_rows,
+            alias_to_canonical=alias_to_canonical,
+        )
+        if id(row) not in unfound_credit_ids
+    ]
 
 
 def _suppress_split_release_composite_owner_rows(
@@ -11061,7 +11072,8 @@ def _search_preview_sql(
           select
             library.local_tracks.library_id,
             library.local_tracks.album_id,
-            library.local_tracks.id as track_id
+            library.local_tracks.id as track_id,
+            library.local_tracks.artist_id
           from library.local_tracks
           where {track_title_prefilter_sql}lower(btrim(coalesce(library.local_tracks.title, '')))
             like lower(%(query_like)s) escape ''
@@ -11087,13 +11099,15 @@ def _search_preview_sql(
           select
             track_title_matches.library_id,
             track_title_matches.album_id,
-            track_title_matches.track_id
+            track_title_matches.track_id,
+            track_title_matches.artist_id
           from track_title_matches
           union
           select
             library.local_tracks.library_id,
             library.local_tracks.album_id,
-            file_name_matches.track_id
+            file_name_matches.track_id,
+            library.local_tracks.artist_id
           from file_name_matches
           join library.local_tracks
             on library.local_tracks.id = file_name_matches.track_id
@@ -11169,7 +11183,8 @@ def _search_preview_sql(
         eligible_matched_track_album_ids as materialized (
           select distinct
             matched_track_album_ids.library_id,
-            matched_track_album_ids.album_id
+            matched_track_album_ids.album_id,
+            matched_track_album_ids.artist_id
           from matched_track_album_ids
           join eligible_album_tracks
             on eligible_album_tracks.library_id = matched_track_album_ids.library_id
@@ -11209,6 +11224,29 @@ def _search_preview_sql(
           select eligible_matched_track_album_ids.album_id
           from eligible_matched_track_album_ids
         ),
+        -- Who the search found on each album. An album's other artists are not found by sharing it; its owner
+        -- always is, since the album is theirs.
+        search_found_artists as materialized (
+          select found.album_id, array_agg(found.artist_id) as artist_ids
+          from (
+            select library.local_album_featured_artists.album_id, library.local_album_featured_artists.artist_id
+            from display_artist_matches
+            join library.local_album_featured_artists
+              on library.local_album_featured_artists.library_id = display_artist_matches.library_id
+             and library.local_album_featured_artists.artist_id = display_artist_matches.artist_id
+            union
+            select eligible_matched_track_album_ids.album_id, eligible_matched_track_album_ids.artist_id
+            from eligible_matched_track_album_ids
+            union
+            select library.local_album_featured_artists.album_id, library.local_album_featured_artists.artist_id
+            from album_title_matches
+            join library.local_album_featured_artists
+              on library.local_album_featured_artists.library_id = album_title_matches.library_id
+             and library.local_album_featured_artists.album_id = album_title_matches.album_id
+             and library.local_album_featured_artists.featured_kind = 'featured_member'
+          ) as found
+          group by found.album_id
+        ),
         matched_album_rows as (
           select
             coalesce(
@@ -11217,7 +11255,8 @@ def _search_preview_sql(
             ) as artist_id,
             coalesce(
               library.local_artists.name,
-              featured_credits.owner_artist_name
+              featured_credits.owner_artist_name,
+              nullif(btrim(library.local_albums.metadata ->> 'album_artist'), '')
             ) as display_artist,
             coalesce(
               library.local_artists.sort_name,
@@ -11238,6 +11277,8 @@ def _search_preview_sql(
           left join library.local_artists
             on library.local_artists.library_id = library.local_albums.library_id
            and library.local_artists.id = library.local_albums.artist_id
+          left join search_found_artists
+            on search_found_artists.album_id = library.local_albums.id
           left join lateral (
             select
               jsonb_agg(
@@ -11246,6 +11287,10 @@ def _search_preview_sql(
                    'artist_name', credited_artists.name,
                    'artist_sort_name', credited_artists.sort_name,
                    'featured_kind', library.local_album_featured_artists.featured_kind,
+                   'found_by_search', (
+                     library.local_album_featured_artists.featured_kind = 'owner'
+                     or coalesce(credited_artists.id = any(search_found_artists.artist_ids), false)
+                   ),
                    'artist_mbid', artist_match.artist_mbid::text,
                    'artist_canonical_name', musicbrainz_artist.canonical_name,
                    'artist_native_name', musicbrainz_artist.preferred_native_name,

@@ -1,4 +1,5 @@
-"""Case 64: the Loose Tracks store's start-up owner builds without any read and retries a failed build on a timer."""
+"""Case 64: the Loose Tracks store's start-up owner builds without any read, retries a failed build on its own
+timer, and touches no database while the store is ready."""
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -12,41 +13,73 @@ class _Repository:
         self._reads = reads
 
     def _owned_connection_context(self):
-        raise AssertionError("the owner reads its state through _seconds_until_retry, stubbed here")
+        raise AssertionError("only prepare() touches the database, and it is stubbed here")
 
     def build_library_loose_tracks_payload(self, **_kwargs):
         self._reads.append(True)
 
 
-def test_a_fresh_store_is_prepared_at_start_without_any_read(monkeypatch):
-    reads, prepared = [], []
-    monkeypatch.setattr(loose_track_store, "prepare", lambda inventory, connect: prepared.append(inventory))
-    owner = loose_track_store.LooseTrackStoreOwner({}, repository_factory=lambda: _Repository(reads))
-    monkeypatch.setattr(owner, "_seconds_until_retry", lambda _repository: None)
+def _owner(monkeypatch, outcomes, reads, repositories):
+    """An owner whose prepare() returns (or raises) each outcome in turn, and whose stop event records waits."""
+    prepared, waits = [], []
+    outcomes = iter(outcomes)
 
-    assert owner.run_once() is None
+    def prepare(inventory, _connect):
+        prepared.append(inventory)
+        outcome = next(outcomes)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    def repository():
+        repositories.append(True)
+        return _Repository(reads)
+
+    monkeypatch.setattr(loose_track_store, "prepare", prepare)
+    owner = loose_track_store.LooseTrackStoreOwner({}, repository_factory=repository)
+    # wait() returns False: the timer ran out and the owner was not stopped.
+    owner._stop = SimpleNamespace(wait=lambda seconds=None: waits.append(seconds) or False, set=lambda: None)
+    return owner, prepared, waits
+
+
+def test_a_fresh_store_is_prepared_at_start_without_any_read(monkeypatch):
+    reads, repositories = [], []
+    owner, prepared, _waits = _owner(monkeypatch, [None], reads, repositories)
+
+    owner._run()
 
     assert len(prepared) == 1, "start-up preparation runs once, in the background owner"
     assert reads == [], "no read is needed for the store to become ready"
 
 
-def test_a_failed_build_is_retried_after_its_backoff_with_no_read(monkeypatch):
-    reads, prepared, waits = [], [], []
-    monkeypatch.setattr(loose_track_store, "prepare", lambda inventory, connect: prepared.append(inventory))
-    owner = loose_track_store.LooseTrackStoreOwner({}, repository_factory=lambda: _Repository(reads), poll_seconds=60)
-    # The first build failed with 120 s to wait; after that wait the retry is due, and then the store is ready.
-    retry_times = iter([120.0, 0.0, None, None])
-    monkeypatch.setattr(owner, "_seconds_until_retry", lambda _repository: next(retry_times))
+def test_a_ready_store_makes_no_database_call_while_idle(monkeypatch):
+    """With the store ready, the owner keeps no timer that opens a connection: an idle hour makes 0 calls."""
+    reads, repositories = [], []
+    owner, prepared, waits = _owner(monkeypatch, [None], reads, repositories)
 
-    def wait(seconds):
-        waits.append(seconds)
-        if len(waits) == 2:
-            owner._stop.set()
-
-    owner._stop = SimpleNamespace(is_set=lambda: getattr(owner, "_stopped", False),
-                                  wait=wait, set=lambda: setattr(owner, "_stopped", True))
     owner._run()
 
-    assert waits[0] == 120.0, "the owner waits for the failed build's own retry time, on a timer"
+    assert len(prepared) == 1 and len(repositories) == 1, "only the start-up pass touches the database"
+    assert all(wait is None for wait in waits), "with nothing failed the owner only waits on its stop event"
+
+
+def test_a_failed_build_is_retried_after_its_backoff_with_no_read(monkeypatch):
+    reads, repositories = [], []
+    owner, prepared, waits = _owner(monkeypatch, [RuntimeError("build failed"), None], reads, repositories)
+
+    owner._run()
+
+    assert waits[0] == loose_track_store.FAILED_BUILD_RETRY_SECONDS, "the retry time comes from its own prepare()"
     assert len(prepared) == 2, "the build is retried once its backoff has passed"
+    assert reads == []
+
+
+def test_a_failed_build_from_before_a_restart_is_retried_at_its_stored_time(monkeypatch):
+    """prepare() returns how long a failed, not yet due build still waits; the owner waits exactly that."""
+    reads, repositories = [], []
+    owner, prepared, waits = _owner(monkeypatch, [120.0, None], reads, repositories)
+
+    owner._run()
+
+    assert waits[0] == 120.0 and len(prepared) == 2
     assert reads == []

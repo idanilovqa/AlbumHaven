@@ -562,45 +562,62 @@ def test_live_one_changed_loose_track_rewrites_one_stored_row(watcher_repair_inv
     assert _marks(fixture) == 0
 
 
-def test_live_a_read_drains_fifty_waiting_marks_with_flat_rows_at_two_sizes(watcher_repair_inventory, monkeypatch):
-    """Case 64: with INLINE_DRAIN_LIMIT marks waiting, the read request itself drains them, each by key: the
-    candidate rows it reads and the store rows it writes stay at that many at 5 and 60 albums. Not yet a
-    registered guard interaction; its registry entry and budgets wait for 6.5."""
-    from music_app.services import loose_track_store
+def test_live_loose_track_read_drains_fifty_waiting_marks_by_key_at_any_store_size(watcher_repair_inventory, monkeypatch):
+    """Case 64 (selected-set contract, keyed by waiting marks): with INLINE_DRAIN_LIMIT marks waiting, the
+    read request drains them itself in one keyed candidate load. At 20 and 20,000 stored loose rows it reads
+    one candidate row per marked file, writes one store row per marked track (affected rows also count the
+    cleared marks) and runs a constant number of statements."""
+    from music_app.services import library_browse_postgres as browse, loose_track_store
+    from tests.py.bounded_interactions import (
+        CountingConnection, OperationCounts, _checked_in_entries, measure_scale_pair,
+    )
 
     fixture = watcher_repair_inventory
     _apply_case64_draft(fixture)
     waiting = loose_track_store.INLINE_DRAIN_LIMIT
 
-    def counts_at(albums):
-        # A full seed replaces the library; preparing drains the marks the seed itself left.
-        _entries, loose_entries = _loose_library(fixture, albums, loose=waiting)
-        repository = _prepare_store(fixture)
+    def run(stored):
+        # A full seed replaces the library; preparing builds or drains it before anything is counted.
+        _entries, loose_entries = _loose_library(fixture, 5, loose=stored)
+        _prepare_store(fixture)
         before = _store_rows(fixture)
         changed = {
             entry["path"]: {**entry, "title": f"Changed {index}", "mtime": entry["mtime"] + 1}
-            for index, entry in enumerate(loose_entries)
+            for index, entry in enumerate(loose_entries[:waiting])
         }
         fixture.adapter.persist_targeted_inventory_mutation(root_id="repair-main", active_file_entries=changed)
         assert _marks(fixture) == waiting
-        read = []
+        counts = OperationCounts()
+        repository = browse.PostgresLibraryBrowseRepository(
+            fixture.config, connect=lambda *args: CountingConnection(isolatedPostgres._connect(*args), counts),
+        )
+        loads = []
         load = repository._inventory_repository.load_non_album_candidates
 
-        def counted(**kwargs):
+        def counted_load(**kwargs):
             rows = load(**kwargs)
-            read.append(len(rows))
+            loads.append(kwargs.get("track_ids"))
+            counts.count("candidate_rows", len(rows))
             return rows
 
-        monkeypatch.setattr(repository._inventory_repository, "load_non_album_candidates", counted)
+        monkeypatch.setattr(repository._inventory_repository, "load_non_album_candidates", counted_load)
         _loose_payload(repository)  # the read request drains inline
         after = _store_rows(fixture)
-        written = sum(1 for track_id in after if before.get(track_id) != after[track_id])
         assert _marks(fixture) == 0, "the read drained every waiting mark"
-        assert len(read) == 1, "one keyed candidate load for the marked tracks"
-        return read[0], written
+        assert len(loads) == 1 and len(loads[0]) == waiting, "one candidate load, keyed by the marked tracks"
+        assert sum(1 for track_id in after if before.get(track_id) != after[track_id]) == waiting
+        return counts
 
-    assert counts_at(5) == (waiting, waiting)
-    assert counts_at(60) == (waiting, waiting), "rows read and written stay flat as the library grows"
+    interaction = "py:routes/api_read_asgi_routes.py#library_loose_tracks"
+    entry = _checked_in_entries()[interaction]
+    measure_scale_pair(
+        interaction_id=interaction,
+        small=entry["cardinalities"]["small"],
+        large=entry["cardinalities"]["production"],
+        run=run,
+        budgets=entry["budgets"],
+        growth=(entry["growth"]["metric"], entry["growth"]["largeMinusSmallMax"]),
+    )
 
 
 def test_live_loose_track_store_equals_a_full_rebuild_after_each_change(watcher_repair_inventory):

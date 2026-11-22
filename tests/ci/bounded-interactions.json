@@ -9494,14 +9494,32 @@
         "py:music_app/routes/api_read_asgi_routes.py#library_loose_tracks:route:GET /library/loose-tracks"
       ],
       "owners": [
-        "music_app/routes/api_read_asgi_routes.py"
+        "music_app/routes/api_read_asgi_routes.py",
+        "music_app/services/library_browse_postgres.py",
+        "music_app/services/loose_track_store.py"
       ],
       "rules": [
         "BI-04",
         "BI-13"
       ],
-      "workClass": "page",
-      "proof": "static"
+      "workClass": "selected-set",
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 20000
+      },
+      "budgets": {
+        "candidate_rows": 50,
+        "affected_rows": 100,
+        "sql_statements": 12
+      },
+      "growth": {
+        "metric": "candidate_rows",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_isolated_postgres_live.py::test_live_loose_track_read_drains_fifty_waiting_marks_by_key_at_any_store_size",
+      "testIdentity": "test_live_loose_track_read_drains_fifty_waiting_marks_by_key_at_any_store_size",
+      "rollback": "Case 64 (6.5): the read drains at most 50 waiting marks inline, keyed by those marks: one keyed candidate load, 50 rows read (one file per track) and 50 store rows written plus 50 marks cleared, at any store size. Reverting the store returns the route to its static page entry."
     },
     {
       "id": "py:routes/api_read_asgi_routes.py#people_read_reserved",
@@ -10029,6 +10047,23 @@
       "command": "python -m pytest tests/py/test_missing_album_rescan.py::test_rescan_route_contract_looks_up_a_fixed_number_of_places_at_any_library_size",
       "testIdentity": "test_rescan_route_contract_looks_up_a_fixed_number_of_places_at_any_library_size",
       "rollback": "Walking a root or listing a candidate folder in the request makes filesystem_enumerations exceed 0; checking more places as the library grows makes stat_calls grow (freeze guard case 59)."
+    },
+    {
+      "id": "py:services/loose_track_store.py#LooseTrackStoreOwner._run",
+      "action": "Prepare the Loose Tracks store once at start in the background, and retry a failed build after its own backoff",
+      "entrypoints": [
+        "py:music_app/services/loose_track_store.py#LooseTrackStoreOwner._run:background:thread"
+      ],
+      "owners": [
+        "music_app/services/loose_track_store.py",
+        "music_app/__init__.py"
+      ],
+      "rules": [
+        "BI-07",
+        "BI-08"
+      ],
+      "workClass": "background-batch",
+      "proof": "static"
     },
     {
       "id": "py:services/missing_album_rescan.py#MissingAlbumSearches._run",

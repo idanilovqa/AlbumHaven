@@ -4931,7 +4931,7 @@
       "no-drawer-scroll",
       "enter-opens-the-same-task"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.component.config.js",
@@ -4948,7 +4948,7 @@
       "no-drawer-scroll",
       "enter-opens-the-same-task"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.component.config.js",
@@ -4965,7 +4965,7 @@
       "no-drawer-scroll",
       "enter-opens-the-same-task"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.component.config.js",
@@ -4981,7 +4981,7 @@
       "outside-focus-untouched",
       "no-forced-focus-after-removal"
     ],
-    "ownerApproval": "pending"
+    "ownerApproval": "approved"
   },
   {
     "config": "playwright.component.config.js",

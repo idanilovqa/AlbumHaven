@@ -8,41 +8,85 @@ from __future__ import annotations
 import atexit
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
-from threading import Lock, get_ident
+from threading import Condition, Lock, get_ident
 from time import perf_counter
+from weakref import WeakSet
 
 try:  # Keep schema-independent tooling importable.
-    from psycopg import Connection, OperationalError
+    from psycopg import Connection, Cursor, OperationalError, ServerCursor
     from psycopg.rows import dict_row
     from psycopg_pool import ConnectionPool, PoolTimeout
 except ImportError:  # pragma: no cover
     Connection = None
     ConnectionPool = None
+    Cursor = ServerCursor = None
     OperationalError = RuntimeError
     PoolTimeout = TimeoutError
     dict_row = None
 
 _pools = {}
 _lock = Lock()
-# The pool connects in the background and retries a failed attempt until a checkout times out (30 s),
-# so against an unreachable database every request would stall for the whole timeout. Once the
-# pool's own connection attempt has failed, checkouts fail at once with that error, as
-# `psycopg.connect` did; one request per interval still goes through to find out whether the
-# database is back (freeze-guard backlog case 30). That probe, and a pool's first checkout before it
-# has ever connected, wait a short while only: a slower connection still joins the pool when it
-# completes and clears the failure.
-_UNREACHABLE_PROBE_INTERVAL_SECONDS = 5.0
-_PROBE_CHECKOUT_TIMEOUT_SECONDS = 5.0
+# The pool connects in the background and retries a failed attempt, so against an unreachable
+# database a checkout would wait out its whole timeout (freeze-guard backlog case 30). Only a pool
+# with no live connection is unreachable: it fails checkouts at once with its own connection error.
+# A pool that has a connection, idle or leased, serves or queues as usual whatever growth attempts
+# do. The pool gives up a failed attempt after a few seconds rather than backing off for minutes,
+# and every refused checkout asks it to connect again (a no-op while it is already trying). A
+# failure nobody has met for that long says nothing about now: the next checkout waits for a fresh
+# attempt, so the first request after a quiet outage is served.
+_RECONNECT_GIVE_UP_SECONDS = 5.0
 _connect_states: dict[object, "_ConnectState"] = {}
 
 
 class _ConnectState:
-    """Whether the pool has connected, and its last failed attempt, cleared by its next success."""
+    """A pool's live connections and, while it has none, why it could not open one."""
 
     def __init__(self):
-        self.connected = False
-        self.error = None
-        self.failed_at = 0.0
+        self._changed = Condition()
+        self._connections = WeakSet()
+        self._error = None
+        self._error_seen_at = 0.0
+
+    def _has_live_connection(self) -> bool:
+        return any(not connection.closed for connection in self._connections)
+
+    def connected(self, connection) -> None:
+        with self._changed:
+            self._connections.add(connection)
+            self._error = None
+            self._changed.notify_all()
+
+    def failed(self, error: Exception) -> None:
+        with self._changed:
+            if not self._has_live_connection():
+                if self._error is None:  # the pool's own retries do not count as meeting it
+                    self._error_seen_at = perf_counter()
+                self._error = error
+                self._changed.notify_all()
+
+    def require_connection(self, pool, timeout_seconds: float) -> bool:
+        """Return once the pool has a live connection, and whether that meant waiting; raise if it
+        cannot open one."""
+        with self._changed:
+            if self._has_live_connection():
+                return False
+            now = perf_counter()
+            if now - self._error_seen_at > _RECONNECT_GIVE_UP_SECONDS:
+                self._error = None
+            self._error_seen_at = now
+            error = self._error
+        # Not through the pool's queue: timed-out waiters stay in it, and a full queue stops growth.
+        pool.check()
+        with self._changed:
+            if error is None:
+                if not self._changed.wait_for(lambda: self._error or self._has_live_connection(), timeout_seconds):
+                    raise PoolTimeout(f"couldn't get a connection after {timeout_seconds:.2f} sec")
+                error = self._error
+        if error is not None:
+            raise OperationalError(f"Postgres is unreachable: {error}") from error
+        return True
+
+
 # Leases each thread holds right now, by thread id. A lease taken while the thread already holds one
 # comes from a pool one level deeper, so nested repository calls never wait on a connection their own
 # request is holding: waits only ever go deeper, so pool exhaustion cannot deadlock. A lease released
@@ -56,6 +100,26 @@ _MAX_SIZE = 4
 # starts cold and keeps that connection only after one succeeded, so an unreachable database never
 # leaves a reconnect loop behind (shutdown waits on it).
 _WARM_WORKLOADS = frozenset({"browse"})
+# What a borrower can change on the connection object. The pool's own reset only rolls back, so each
+# checkout restores these (none needs a round trip): one caller's autocommit must never turn the next
+# caller's transaction into separate commits.
+_SESSION_DEFAULTS = (
+    ("autocommit", False),
+    ("isolation_level", None),
+    ("read_only", None),
+    ("deferrable", None),
+    ("row_factory", dict_row),
+    ("cursor_factory", Cursor),
+    ("server_cursor_factory", ServerCursor),
+    ("prepare_threshold", 5),
+)
+# State the server keeps for the session (an advisory lock, LISTEN) cannot be restored that way. Its
+# holders lease from this workload, whose connections expire on return: closing one ends whatever its
+# holder left behind, and the pool opens the replacement in the background.
+_SESSION_WORKLOAD = "session"
+# An edit holds its session lease through the media writes, so session leases need the request
+# pool's headroom or a fifth concurrent save would wait for the first.
+_LARGE_WORKLOADS = frozenset({"default", _SESSION_WORKLOAD})
 
 
 def _observe_pool_lease(
@@ -104,20 +168,20 @@ def pooled_connection(
                 conninfo=database_url,
                 connection_class=_state_recording_connection_class(connect_state),
                 min_size=0,
-                max_size=_DEFAULT_WORKLOAD_MAX_SIZE if depth == 0 and normalized_workload == "default" else _MAX_SIZE,
+                max_size=_DEFAULT_WORKLOAD_MAX_SIZE if depth == 0 and normalized_workload in _LARGE_WORKLOADS else _MAX_SIZE,
                 max_waiting=32,
-                timeout=30, max_idle=120, max_lifetime=600,
+                timeout=30, max_idle=120,
+                max_lifetime=0 if normalized_workload == _SESSION_WORKLOAD else 600,
+                check=_restore_session_defaults,
+                reconnect_timeout=_RECONNECT_GIVE_UP_SECONDS,
                 kwargs={"row_factory": dict_row, "connect_timeout": 15},
                 open=True,
             )
             _pools[pool_key] = pool
     checkout_started = perf_counter()
+    timeout_seconds = max(0.001, float(checkout_timeout_seconds)) if checkout_timeout_seconds is not None else None
     try:
-        checkout = _checkout(
-            pool,
-            _connect_states.get(pool_key),
-            max(0.001, float(checkout_timeout_seconds)) if checkout_timeout_seconds is not None else None,
-        )
+        checkout = pool.connection(timeout=timeout_seconds) if timeout_seconds is not None else pool.connection()
     except PoolTimeout:
         _observe_pool_lease(
             lease_observer,
@@ -130,10 +194,19 @@ def pooled_connection(
     return _lease_connection(
         checkout,
         pool=pool,
+        # Only a pool that connects through the recording class can report its connections.
+        connect_state=_connect_states.get(pool_key) if hasattr(pool, "connection_class") else None,
+        timeout_seconds=timeout_seconds,
         workload=normalized_workload,
         lease_observer=lease_observer,
         keep_warm=depth == 0 and normalized_workload in _WARM_WORKLOADS,
     )
+
+
+def _restore_session_defaults(connection) -> None:
+    for name, default in _SESSION_DEFAULTS:
+        if getattr(connection, name) != default:
+            setattr(connection, name, default)
 
 
 def _state_recording_connection_class(connect_state: _ConnectState):
@@ -145,28 +218,13 @@ def _state_recording_connection_class(connect_state: _ConnectState):
         def connect(cls, *args, **kwargs):
             try:
                 connection = super().connect(*args, **kwargs)
-            except OperationalError as error:
-                connect_state.error, connect_state.failed_at = error, perf_counter()
+            except Exception as error:
+                connect_state.failed(error)
                 raise
-            connect_state.connected, connect_state.error = True, None
+            connect_state.connected(connection)
             return connection
 
     return _StateRecordingConnection
-
-
-def _checkout(pool, connect_state: _ConnectState | None, timeout_seconds: float | None):
-    if not hasattr(pool, "connection_class"):  # a pool that does not connect through the recording class
-        connect_state = None
-    probing = False
-    if connect_state is not None and connect_state.error is not None:
-        now = perf_counter()
-        if now - connect_state.failed_at < _UNREACHABLE_PROBE_INTERVAL_SECONDS:
-            raise OperationalError(f"Postgres is unreachable: {connect_state.error}") from connect_state.error
-        connect_state.failed_at = now  # this request probes; the others keep failing at once
-        probing = True
-    if probing or (connect_state is not None and not connect_state.connected):
-        timeout_seconds = min(timeout_seconds or _PROBE_CHECKOUT_TIMEOUT_SECONDS, _PROBE_CHECKOUT_TIMEOUT_SECONDS)
-    return pool.connection(timeout=timeout_seconds) if timeout_seconds is not None else pool.connection()
 
 
 @contextmanager
@@ -174,6 +232,8 @@ def _lease_connection(
     checkout,
     *,
     pool,
+    connect_state: _ConnectState | None,
+    timeout_seconds: float | None,
     workload: str,
     lease_observer: Callable[[Mapping[str, object]], None] | None,
     keep_warm: bool = False,
@@ -182,6 +242,11 @@ def _lease_connection(
     acquired = False
     acquired_at = 0.0
     try:
+        if connect_state is not None:
+            timeout = timeout_seconds or pool.timeout
+            if connect_state.require_connection(pool, timeout):
+                # Connecting and leasing share one timeout: lease with what connecting left of it.
+                checkout = pool.connection(timeout=max(0.001, timeout - (perf_counter() - wait_started)))
         with checkout as connection:
             acquired_at = perf_counter()
             acquired = True
@@ -222,12 +287,28 @@ def _lease_connection(
             )
 
 
+class _ReleasedConnection:
+    """What a released lease holds in place of the connection its next borrower may be using."""
+
+    closed = True
+
+    def __getattr__(self, name: str):
+        raise OperationalError("the connection is closed")
+
+    def __setattr__(self, name: str, value) -> None:
+        raise OperationalError("the connection is closed")
+
+
+_RELEASED = _ReleasedConnection()
+
+
 class _LeasedConnection:
     """A pool lease used like a `psycopg.connect()` connection.
 
     `with` commits on success and rolls back on error, then returns the
     connection to the pool; `close()` rolls back what was not committed and
-    returns it. Everything else is the leased connection itself."""
+    returns it. Everything else is the leased connection itself, until it is
+    returned: from then on the lease is a closed connection."""
 
     def __init__(self, database_url: str, workload: str):
         self._lease = pooled_connection(database_url, workload=workload)
@@ -244,6 +325,8 @@ class _LeasedConnection:
             setattr(self._connection, name, value)
 
     def __enter__(self):
+        if self._lease is None:
+            raise OperationalError("the connection is closed")
         return self
 
     def __exit__(self, exc_type, exc, traceback):
@@ -258,6 +341,8 @@ class _LeasedConnection:
 
     def _release(self, exc_type, exc, traceback) -> None:
         lease, self._lease = self._lease, None
+        # Before the pool can hand the connection on, not after.
+        self._connection = _RELEASED
         if lease is not None:
             lease.__exit__(exc_type, exc, traceback)
 
@@ -265,6 +350,11 @@ class _LeasedConnection:
 def leased_connection(database_url: str, *, workload: str = "default") -> _LeasedConnection:
     """A shared-pool connection for repositories written against `psycopg.connect()`."""
     return _LeasedConnection(database_url, workload)
+
+
+def session_connection(database_url: str) -> _LeasedConnection:
+    """A lease for session state such as a session advisory lock; its connection is never reused."""
+    return _LeasedConnection(database_url, _SESSION_WORKLOAD)
 
 
 def prewarm_connection_pool(database_url: str) -> None:

@@ -166,7 +166,7 @@
     // them at once, so neither it nor a navigation waits behind the covers queued before them.
     const pendingData = new Map();
     // Pages and versioned assets being written to the copy, under PAGES or the asset's URL (covers
-    // are not waited for).
+    // and data are not waited for).
     const writing = new Map();
     const written = (key, work) => {
       const works = writing.get(key) || new Set();
@@ -275,6 +275,7 @@
       const text = await response.text();
       if (PATH_COVER_URL.test(text)) return false;
       let started = false;
+      let initial = null;
       await written(PAGES, exclusive(async () => {
         if (fetchedIn !== generation) return;
         const html = withoutPaths(text.replace(NETWORK_MARKER, COPY_MARKER));
@@ -305,8 +306,11 @@
         }
         await writeMeta(cache, meta);
         await pruneAssets(cache, meta);
-        await keepInitialGallery(cache, key, html, expiresAt);
+        initial = { cache, name: CACHE_PREFIX + account, key, html, expiresAt };
       }));
+      // Outside the page's turn: an offline tab waits for the page being written, never for reading
+      // its gallery (sandbox5 r29: right after a cold sign-in, a new tab offline took 6-12 s).
+      if (initial) await keepInitialGallery(initial, fetchedIn);
       return started;
     }
 
@@ -815,8 +819,8 @@
 
     // The first block of the gallery a kept app page shows, from its bootstrap, kept as gallery data
     // so the artists in it open offline like those scrolled to. Its gallery is not named by data
-    // parameters (base null), so it stands in for any. Runs in keepPage's turn.
-    async function keepInitialGallery(cache, key, html, expiresAt) {
+    // parameters (base null), so it stands in for any. Read outside any turn; only storing takes one.
+    async function keepInitialGallery({ cache, name, key, html, expiresAt }, fetchedIn) {
       const match = html.match(BOOTSTRAP_PAYLOAD);
       if (!match) return;
       let view;
@@ -829,7 +833,10 @@
       const prepared = keepable(view, new Set());
       if (!prepared) return;
       const gallery = galleryPageSpan({ base: null, cursor: null, previous: false, artist: '' }, prepared.kept);
-      await storeData(cache, `${INITIAL_GALLERY_PATH}?page=${encodeURIComponent(key)}`, prepared, { kind: 'view', expiresAt, gallery });
+      await quietly(exclusive(async () => {
+        if (fetchedIn !== generation || (await accountCache())?.name !== name) return;
+        await storeData(cache, `${INITIAL_GALLERY_PATH}?page=${encodeURIComponent(key)}`, prepared, { kind: 'view', expiresAt, gallery });
+      }));
     }
 
     // A kept answer as the page reads it, marked as coming from the copy.

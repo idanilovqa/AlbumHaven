@@ -806,8 +806,11 @@ def test_library_settings_watcher_replacement_keeps_loop_responsive_and_saves_se
 
     def workflow(config, settings, **kwargs):
         return save_library_settings_and_start_refresh(
-            config, settings, save_root_settings=save_roots, **kwargs,
+            config, settings, save_root_settings=save_roots,
+            load_root_identity=lambda _config: ",".join(saved), **kwargs,
         )
+
+    monkeypatch.setattr(routes, "queue_root_change_scan_for_state", lambda *_args: True, raising=False)
 
     def start_refresh(library_state, *_args, **_kwargs):
         library_state["scan_in_progress"] = True
@@ -852,9 +855,11 @@ def test_library_settings_watcher_replacement_keeps_loop_responsive_and_saves_se
         timer.join(timeout=2.0)
         assert not timer.is_alive()
 
-    assert [result[0] for result in results] == ([200, 409] if concurrent_save else [200])
-    assert saved == ["first"]
-    assert replacements == ["first"]
+    # A save during the scan the first one started is saved too, never refused.
+    expected = ["first", "second"] if concurrent_save else ["first"]
+    assert [result[0] for result in results] == [200] * len(expected)
+    assert saved == expected
+    assert replacements == expected
     assert asgi_app.state.library_state["scan_in_progress"] is True
 
 
@@ -913,21 +918,31 @@ def test_asgi_library_settings_post_rejects_overlapping_roots(app, asgi_app, mon
     assert "cannot overlap or nest" in payload["error"]
 
 
-def test_asgi_library_settings_write_returns_scan_blocked_without_bridge_context(
-    app, asgi_app, monkeypatch
+@pytest.mark.parametrize("roots_changed", [True, False])
+def test_asgi_library_settings_write_during_a_scan_saves_and_queues_without_bridge_context(
+    app, asgi_app, monkeypatch, roots_changed,
 ):
     from music_app.routes import api_wave_a_asgi_routes as asgi_routes
+    from music_app.services.library_settings import save_library_settings_and_start_refresh
 
-    class FailingAppContext:
-        def __enter__(self):
-            raise AssertionError("scan-blocked POST /library-settings must not enter Flask app_context")
+    saved = []
+    queued = []
+    identities = iter(["roots-before", "roots-after" if roots_changed else "roots-before"])
 
-        def __exit__(self, exc_type, exc, traceback):
-            return False
+    def workflow(config, settings, **kwargs):
+        return save_library_settings_and_start_refresh(
+            config, settings, **kwargs,
+            save_root_settings=lambda _config, payload, **_scope: saved.append(payload) or payload,
+            load_root_identity=lambda _config: next(identities),
+        )
 
-    def fail_flask_app(_request):
-        raise AssertionError("scan-blocked POST /library-settings must not read through _flask_app")
-
+    monkeypatch.setattr(asgi_routes, "save_library_settings_and_start_refresh", workflow)
+    monkeypatch.setattr(
+        asgi_routes, "queue_root_change_scan_for_state",
+        lambda _state, _config, _logger, identity: queued.append(identity) or True,
+        raising=False,
+    )
+    asgi_app.state.replace_library_watch_roots = lambda _roots: None
     asgi_app.state.library_state["scan_in_progress"] = True
     assert not hasattr(asgi_routes, "_flask_app")
 
@@ -944,11 +959,12 @@ def test_asgi_library_settings_write_returns_scan_blocked_without_bridge_context
         },
     )
 
-    assert status == 409
-    assert _decode_json(body) == {
-        "ok": False,
-        "error": "Wait for the current library scan to finish before saving library settings.",
-    }
+    assert status == 200
+    payload = _decode_json(body)
+    assert payload["ok"] is True
+    assert (payload["refresh_started"], payload["refresh_queued"]) == (False, roots_changed)
+    assert len(saved) == 1
+    assert queued == (["roots-after"] if roots_changed else [])
 
 
 def test_asgi_rules_routes_preserve_payloads_mutations_and_background_cold_start_hydration(app, asgi_app, monkeypatch):

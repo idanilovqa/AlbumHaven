@@ -591,6 +591,7 @@ def _cover_selection_options(
     local_cover_width: int | None = None,
     local_cover_height: int | None = None,
     reject_if_user_controlled: bool = False,
+    reject_if_mixed_album_folder: bool = False,
     clear_selection: bool = False,
     expected_cover_selection_origin: str | None = None,
     expected_cover_revision: str | None = None,
@@ -622,6 +623,8 @@ def _cover_selection_options(
         persistence_options["explicit_selection"] = True
     if reject_if_explicit_selection:
         persistence_options["reject_if_explicit_selection"] = True
+    if reject_if_mixed_album_folder:
+        persistence_options["reject_if_mixed_album_folder"] = True
     if local_cover_width is not None or local_cover_height is not None:
         persistence_options.update(local_cover_width=local_cover_width, local_cover_height=local_cover_height)
     if clear_selection:

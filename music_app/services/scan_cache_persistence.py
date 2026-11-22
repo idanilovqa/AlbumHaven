@@ -17,7 +17,7 @@ from music_app.services.album_local_cover_integrity import (
     inferred_local_cover_belongs_to_track,
     split_folder_covers,
 )
-from music_app.services.album_local_membership import physical_album_folder
+from music_app.services.album_local_membership import physical_album_folder, physical_album_folder_sql
 from music_app.services.album_ratings_postgres import PostgresAlbumRatingsService
 from music_app.services.library_reachability import missing_reasons
 from music_app.services.missing_album_auto_removal import remove_untouched_deleted
@@ -204,6 +204,7 @@ class ScanCacheAdapter(Protocol):
         local_cover_width: int | None = None,
         local_cover_height: int | None = None,
         reject_if_user_controlled: bool = False,
+        reject_if_mixed_album_folder: bool = False,
         clear_selection: bool = False,
         expected_cover_selection_origin: str | None = None,
         expected_cover_revision: str | None = None,
@@ -1025,6 +1026,7 @@ class PostgresScanCacheAdapter:
         local_cover_width: int | None = None,
         local_cover_height: int | None = None,
         reject_if_user_controlled: bool = False,
+        reject_if_mixed_album_folder: bool = False,
         clear_selection: bool = False,
         expected_cover_selection_origin: str | None = None,
         expected_cover_revision: str | None = None,
@@ -1125,6 +1127,16 @@ class PostgresScanCacheAdapter:
                 raise ScanCachePublicationSuperseded(
                     "Inventory changed while cover selection was prepared."
                 )
+            # Read here, under the publication lock: a targeted run's file cache never holds the folder's other album.
+            if reject_if_mixed_album_folder and _row_mapping(_first_row(connection.execute(
+                _mixed_album_folder_sql(), {"track_paths": normalized_track_paths},
+            ))).get("mixed"):
+                connection.commit()
+                return {
+                    "album_rows_updated": 0,
+                    "track_file_rows_updated": 0,
+                    "blocked_by_mixed_album_folder": True,
+                }
             expected_cover_state_guard = expected_cover_state is not None or normalized_expected_origin is not None
             if not reject_if_user_controlled and not expected_cover_state_guard:
                 connection.execute(_increment_cover_mutation_revision_sql())
@@ -7310,6 +7322,33 @@ def _load_scan_snapshot_sql(*, metadata_only: bool = False) -> str:
         from library.libraries
         join bootstrap_context on bootstrap_context.library_id = library.libraries.id
         limit 1;
+    """
+
+
+def _mixed_album_folder_sql() -> str:
+    """Whether a folder of the given files holds more than one album; one lookup per folder in 0088's index.
+
+    The given files need no album of their own: a track without one is refused in such a folder too.
+    """
+    return f"""
+        select exists (
+          select 1
+          from (
+            select distinct seed.library_root_id, tracks.library_id,
+              {physical_album_folder_sql("seed.private_path")} as folder
+            from library.local_track_files seed
+            join library.local_tracks tracks on tracks.id = seed.track_id
+            where seed.private_path = any(%(track_paths)s::text[]) and seed.scan_cache_stale is false
+          ) own
+          join lateral (
+            select count(distinct tracks.album_id) as albums
+            from library.local_track_files files
+            join library.local_tracks tracks on tracks.id = files.track_id and tracks.library_id = own.library_id
+            where files.library_root_id = own.library_root_id
+              and files.scan_cache_stale is false
+              and {physical_album_folder_sql("files.private_path")} = own.folder
+          ) held on held.albums > 1
+        ) as mixed
     """
 
 

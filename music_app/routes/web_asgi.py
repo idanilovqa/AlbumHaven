@@ -52,7 +52,7 @@ from music_app.services.capability_artwork import render_browse_artwork
 from music_app.services.cover_references import CANDIDATE as CANDIDATE_COVER, cover_library_id, legacy_cover_path_is_named
 from music_app.services.runtime_shutdown import create_daemon_executor
 from music_app.services.runtime_asset_versions import runtime_asset_version_cache
-from music_app.services.app_copy import app_copy_account, app_copy_requested, mark_app_copy
+from music_app.services.app_copy import app_copy_account, app_copy_requested, fits_app_copy, mark_app_copy
 from music_app.services.shell_layout_seams import build_shell_layout_payload
 from music_app.services.startup_bootstrap import (
     COVER_CACHE_PROCESS_TOKEN,
@@ -1054,7 +1054,11 @@ async def index(request: Request) -> Response:
         bootstrap_payload["bootstrap"]["scanInProgress"] = True
         bootstrap_payload["bootstrap"]["scanPhase"] = "discovering"
         bootstrap_payload["bootstrap"]["scanMode"] = "background"
-    copy_account = app_copy_account(request.state.current_actor) if app_copy_requested(request) else ""
+    copy_account = ""
+    if app_copy_requested(request) and await run_in_threadpool(
+        fits_app_copy, bootstrap_payload, [value for _name, value in query_args.multi_items()],
+    ):
+        copy_account = app_copy_account(request.state.current_actor)
     appearance_started_at = time.perf_counter()
     appearance_context = await load_appearance_context(request)
     appearance_elapsed_ms = round((time.perf_counter() - appearance_started_at) * 1000, 2)

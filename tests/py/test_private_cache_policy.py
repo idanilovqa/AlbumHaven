@@ -188,7 +188,6 @@ def test_every_storable_policy_in_the_source_is_a_listed_decision():
         ("api_wave_d_asgi_routes.py", "private, max-age=3600"),  # a candidate image, named by its web URL
         ("playback_control_asgi.py", "private, max-age=3600"),  # notification artwork, named by a token
         ("web_asgi.py", "private, max-age={max_age}"),  # covers by reference
-        ("app_copy.py", "private, no-cache"),  # the marked app page
         ("web_asgi.py", "public, max-age=86400"),  # the empty favicon
         ("web_asgi.py", "no-cache"),  # the worker script, public
     }

@@ -4,11 +4,13 @@
 // It keeps, for the one signed-in account, the app page as the server rendered it for a copy
 // request, the versioned assets that page loads, and cover thumbnails already seen. A navigation to
 // a page kept in the last seven days is answered from the copy; the page then brings itself up to
-// date. Only responses the server marked as copies for an account are kept, never anything
-// no-store. Signing in or out deletes every copy, as does a page for another account.
+// date. Only responses the server marked as copies for an account are kept, and no asset or cover
+// that is no-store. A page always is: its mark alone lets it be kept. Signing in or out deletes
+// every copy, as does a page for another account.
 // The copy is only for showing: every write goes to the server.
 //
-// No file path is stored on the device. The server names covers by opaque reference
+// No file path is stored on the device: the server marks no page that carries one (app_copy.py,
+// fits_app_copy), beside what is emptied here. The server names covers by opaque reference
 // (`/cover/<reference>`); pages served before that change named them by path (`/cover?path=…`).
 // A kept page has every cover URL replaced by an opaque key, the SHA-256 of that URL without its
 // version, and any leftover `cover_path` or `music_dir` emptied; cover bytes seen online are kept
@@ -18,7 +20,9 @@
 
   const COPY_HEADER = 'X-Album-Haven-App-Copy';
   const VERSION_HEADER = 'X-Album-Haven-Asset-Version';
-  const CACHE_PREFIX = 'album-haven-app-copy-v1:';
+  const COPY_FAMILY = 'album-haven-app-copy-';
+  // v1.1: only pages that fit a copy are marked. Copies of earlier formats go on activation.
+  const CACHE_PREFIX = `${COPY_FAMILY}v1.1:`;
   const META_PATH = '/__app-copy__/meta';
   const MAX_COPY_AGE_MS = 7 * 24 * 60 * 60 * 1000;
   const MAX_PAGES = 4;
@@ -58,8 +62,15 @@
     async function forget() {
       keptIndex = null;
       unseenCovers.clear();
-      const names = (await caches.keys()).filter(key => key.startsWith(CACHE_PREFIX));
+      const names = (await caches.keys()).filter(key => key.startsWith(COPY_FAMILY));
       await Promise.all(names.map(name => caches.delete(name)));
+    }
+
+    // True when a copy of an earlier format went: the pages open then have none until they save.
+    async function activate() {
+      const names = (await caches.keys()).filter(key => key.startsWith(COPY_FAMILY) && !key.startsWith(CACHE_PREFIX));
+      await Promise.all(names.map(name => caches.delete(name)));
+      return names.length > 0;
     }
 
     // One key per cover and size, whatever version a page asks for; the gallery's own cover cache
@@ -153,7 +164,7 @@
       if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
         await forget();
       } else if (
-        response.status === 200 && response.headers.get(COPY_HEADER) && !noStore(response)
+        response.status === 200 && response.headers.get(COPY_HEADER)
         && (response.headers.get('Content-Type') || '').startsWith('text/html')
       ) {
         await keepPage(url, response.clone(), running);
@@ -344,7 +355,7 @@
             await fetchPage(url);
             // A full restart opens Home, so the shell's "a copy exists" must cover it too.
             const target = await accountCache();
-            if (target && pageKey(url) !== '/' && !isFresh((await readMeta(target.cache)).pages['/'])) {
+            if (pageKey(url) !== '/' && !(target && isFresh((await readMeta(target.cache)).pages['/']))) {
               await fetchPage(new URL('/', origin));
             }
             await fillCovers();
@@ -356,7 +367,7 @@
       return { stored: await hasFreshCopy() };
     }
 
-    return { route, handle, message };
+    return { route, handle, message, activate };
   }
 
   const exported = {
@@ -367,7 +378,17 @@
   if (root.registration && typeof root.addEventListener === 'function') {
     const worker = createAppCopyWorker({ caches: root.caches, fetch: root.fetch.bind(root), origin: root.location.origin });
     root.addEventListener('install', event => event.waitUntil(root.skipWaiting()));
-    root.addEventListener('activate', event => event.waitUntil(root.clients.claim()));
+    // After a new format, the open app pages save as their own saves do. Each is a message to this
+    // worker: activation holds every request, and a save's fills must not.
+    root.addEventListener('activate', event => event.waitUntil(worker.activate().then(async (replaced) => {
+      await root.clients.claim();
+      if (!replaced) return;
+      const open = (await root.clients.matchAll({ type: 'window' })).map(client => client.url)
+        .filter(url => isAppPage(new URL(url)));
+      for (const url of Array.from(new Set(open)).slice(0, MAX_PAGES)) {
+        root.registration.active?.postMessage({ type: 'save', url });
+      }
+    })));
     root.addEventListener('fetch', (event) => {
       const name = worker.route(event.request);
       // Sign-in and sign-out requests go on unchanged; only the copy goes, at once.

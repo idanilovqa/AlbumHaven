@@ -4464,7 +4464,25 @@
         "BI-09"
       ],
       "workClass": "delta",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 14000
+      },
+      "budgets": {
+        "listeners": 8,
+        "observers": 0,
+        "animationFrames": 0,
+        "itemsVisited": 0
+      },
+      "growth": {
+        "metric": "listeners",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/mobile-feedback.test.js",
+      "testIdentity": "bounded interaction: mobile navigation installs its listeners once at any library size",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; starting mobile navigation already installs its listeners once and reads none of the library. The renders its resize and profile-change listeners start are their own surfaces' interactions."
     },
     {
       "id": "js:runtime/mobile-navigation.js#presentMobilePage",

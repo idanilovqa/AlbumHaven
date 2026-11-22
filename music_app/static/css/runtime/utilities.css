@@ -2126,10 +2126,8 @@
 }
 
 .musicbrainz-identity-line {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 6px;
+  display: grid;
+  gap: 2px;
   min-width: 0;
 }
 

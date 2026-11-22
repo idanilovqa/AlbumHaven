@@ -26426,37 +26426,53 @@ function buildMusicBrainzExternalLinkHtml(url, label, { disabled = false, classN
   });
 }
 
-function buildMusicBrainzIdentityTableHtml(detail, ui) {
-  const view = getMusicBrainzArtistProblemView(detail);
-  const rows = getMusicBrainzArtistProblemIdentityRows(detail);
+// The shared identity table (X4: name, details and MBID each on their own line). It draws
+// only the rows and selection it is given. A row: mbid, name, prefix, facts, evidence, url.
+function buildMusicBrainzIdentityTableHtml({ rows, selectedMbid, ariaLabel, targetLabel, emptyHtml = '' }) {
   const tableRows = rows.map((row) => {
-    const selected = ui.selectedMbid === row.artist_mbid;
-    const prefix = row.role === 'current' ? 'Currently assigned: ' : row.role === 'suggested' ? 'Suggested: ' : '';
-    const facts = [row.country, row.artist_kind, row.disambiguation].filter(Boolean).join(' · ');
-    const name = `${prefix}${row.canonical_name || 'Unknown artist'}`;
+    const selected = selectedMbid === row.mbid;
+    const name = `${row.prefix || ''}${row.name}`;
     return {
-      key: row.artist_mbid,
+      key: row.mbid,
       ariaSelected: selected,
       className: selected ? 'is-selected' : '',
       cells: {
-        target: `<label class="musicbrainz-identity-choice"><input class="musicbrainz-identity-radio" type="radio" name="musicbrainz-artist-identity" value="${escapeHtml(row.artist_mbid)}" data-musicbrainz-select-identity="${escapeHtml(row.artist_mbid)}"${selected ? ' checked' : ''} aria-label="Select ${escapeHtml(name)}"><span class="musicbrainz-identity-copy"><span class="musicbrainz-identity-line"><strong>${escapeHtml(name)}</strong>${facts ? `<small>${escapeHtml(facts)}</small>` : ''}</span><span class="musicbrainz-identity-mbid">${escapeHtml(row.artist_mbid)}</span></span></label>`,
-        reason: `<span class="musicbrainz-identity-evidence">${escapeHtml(row.evidence_summary || 'Name only')}</span>`,
-        action: buildMusicBrainzExternalLinkHtml(row.musicbrainz_url, `Open ${row.canonical_name || 'artist'} on MusicBrainz`),
+        target: `<label class="musicbrainz-identity-choice"><input class="musicbrainz-identity-radio" type="radio" name="musicbrainz-artist-identity" value="${escapeHtml(row.mbid)}" data-musicbrainz-select-identity="${escapeHtml(row.mbid)}"${selected ? ' checked' : ''} aria-label="Select ${escapeHtml(name)}"><span class="musicbrainz-identity-copy"><span class="musicbrainz-identity-line"><strong>${escapeHtml(name)}</strong>${row.facts ? `<small>${escapeHtml(row.facts)}</small>` : ''}</span><span class="musicbrainz-identity-mbid">${escapeHtml(row.mbid)}</span></span></label>`,
+        reason: `<span class="musicbrainz-identity-evidence">${escapeHtml(row.evidence || '')}</span>`,
+        action: buildMusicBrainzExternalLinkHtml(row.url, `Open ${row.name} on MusicBrainz`),
       },
     };
   });
   return buildUtilityCompactTable({
     id: 'musicbrainz-artist-identities',
-    ariaLabel: view === 'conflict' ? 'MusicBrainz identity comparison' : 'MusicBrainz artist candidates',
+    ariaLabel,
     columns: 'minmax(220px,1.4fr) minmax(160px,1fr) 44px',
     actionTrackWidth: '44px',
     columnsConfig: [
-      { key: 'target', label: view === 'conflict' ? 'Artist identity / MBID' : 'Candidate artist / MBID' },
+      { key: 'target', label: targetLabel },
       { key: 'reason', label: 'Local evidence' },
       { key: 'action', label: 'Actions', action: true, header: 'screen-reader' },
     ],
     headers: 'visible', density: 'compact', overflow: 'local', mobile: 'preserve', frame: 'outline',
     selection: 'single', rows: tableRows,
+    emptyHtml,
+  });
+}
+
+function buildMusicBrainzArtistProblemTableHtml(detail, ui) {
+  const conflict = getMusicBrainzArtistProblemView(detail) === 'conflict';
+  return buildMusicBrainzIdentityTableHtml({
+    rows: getMusicBrainzArtistProblemIdentityRows(detail).map((row) => ({
+      mbid: row.artist_mbid,
+      name: row.canonical_name || 'Unknown artist',
+      prefix: row.role === 'current' ? 'Currently assigned: ' : row.role === 'suggested' ? 'Suggested: ' : '',
+      facts: [row.country, row.artist_kind, row.disambiguation].filter(Boolean).join(' · '),
+      evidence: row.evidence_summary || 'Name only',
+      url: row.musicbrainz_url,
+    })),
+    selectedMbid: ui.selectedMbid,
+    ariaLabel: conflict ? 'MusicBrainz identity comparison' : 'MusicBrainz artist candidates',
+    targetLabel: conflict ? 'Artist identity / MBID' : 'Candidate artist / MBID',
     emptyHtml: '<p class="utility-detail-meta">No candidate artists are stored yet. Retry to search again.</p>',
   });
 }
@@ -26530,7 +26546,7 @@ function buildMusicBrainzArtistProblemDetail(item) {
     actions = ButtonComponent.renderButton({ label: 'Assign MBID', variant: 'primary', disabled: !actionsAvailable || !ui.validated || ui.busy, attributes: { 'data-musicbrainz-assign': '1' } });
   } else if (view === 'multiple' || view === 'conflict') {
     body = `<h4 class="utility-detail-section-title">${view === 'conflict' ? 'Identity comparison' : 'Candidate artists'}</h4>
-      <div class="utility-detected-table">${buildMusicBrainzIdentityTableHtml(detail, ui)}</div>`;
+      <div class="utility-detected-table">${buildMusicBrainzArtistProblemTableHtml(detail, ui)}</div>`;
     const canAssign = Boolean(ui.selectedMbid) && ui.selectedMbid !== (view === 'conflict' ? detail.artist_mbid : null);
     actions = `${view === 'conflict' && detail.artist_mbid ? ButtonComponent.renderButton({ label: 'Keep current MBID', disabled: !actionsAvailable || ui.busy, attributes: { 'data-musicbrainz-keep-current': '1' } }) : ''}
       ${ButtonComponent.renderButton({ label: 'Assign MBID', variant: 'primary', disabled: !actionsAvailable || !canAssign || ui.busy, attributes: { 'data-musicbrainz-assign': '1' } })}`;

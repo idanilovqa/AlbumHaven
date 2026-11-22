@@ -214,10 +214,14 @@ class Device:
         self.reverse_ports = (device_port, host_port)
         self.run("reverse", f"tcp:{device_port}", f"tcp:{host_port}")
 
-    def remove_reverse(self):
-        if self.reverse_ports:
-            self.run("reverse", "--remove", f"tcp:{self.reverse_ports[0]}", check=False)
-            self.reverse_ports = None
+    def clean_up(self):
+        """Best effort, never waiting for a lost device: the next case recovers it or fails on its own."""
+        self.reverse_ports = None
+        for args in (["reverse", "--remove", f"tcp:{DEV_PORT}"], ["uninstall", PACKAGE]):
+            try:
+                self.attempt(args, 60)
+            except subprocess.TimeoutExpired:
+                pass
 
     def shell(self, command: str, check: bool = True) -> str:
         return self.run("shell", command, check=check)
@@ -398,9 +402,8 @@ def main():
                 flush=True,
             )
         finally:
-            device.remove_reverse()
             origin.shutdown()
-            device.run("uninstall", PACKAGE, check=False)
+            device.clean_up()
     sys.exit(1 if failures else 0)
 
 

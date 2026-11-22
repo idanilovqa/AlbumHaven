@@ -825,3 +825,31 @@ require('node:test')('a save confirmed after Cover Look Up reopened updates the 
   assert.equal(views.closed, 0, 'the reopened dialog is not closed by the earlier save');
   assert.equal(reopened.orderedCoversRevision, 4);
 });
+
+for (const confirmed of [true, false]) {
+  // Owner 2026-11-22: "Saving a cover from the service still freezes on Saving".
+  require('node:test')(`a ${confirmed ? 'confirmed' : 'failed'} save ends when a refresh replaced the album object meanwhile`, async () => {
+    const { context, views, album } = savingRuntime();
+    let answer;
+    context.fetch = () => new Promise((resolve) => { answer = resolve; });
+    const saving = context.saveOrderedCoverSelection();
+    const refreshed = { ...album, selected_covers: album.selected_covers.map((slot) => ({ ...slot })) };
+    context.state.coverLookup.modal.album = refreshed;
+    answer({
+      ok: confirmed,
+      json: async () => (confirmed
+        ? { ok: true, selected_covers_revision: 5, selected_covers: [{ selection_id: 'new-front', kind: 'local' }] }
+        : { ok: false, error: 'The cover was saved, but its display could not refresh.' }),
+    });
+
+    assert.equal(await saving, confirmed);
+    const { modal } = context.state.coverLookup;
+    assert.equal(modal.saving, false, 'the button leaves "Saving"');
+    if (confirmed) {
+      assert.equal(views.closed, 1);
+      assert.equal(refreshed.selected_covers_revision, 5, 'the album now on screen gets the saved cover');
+    } else {
+      assert.equal(modal.statusText, 'The cover was saved, but its display could not refresh.');
+    }
+  });
+}

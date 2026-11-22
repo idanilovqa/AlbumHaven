@@ -93,6 +93,7 @@ def test_apply_cover_path_wrapper_forwards_linked_remote_cover_fields(monkeypatc
         "schedule_cache_update": True,
         "include_problematic_album": True,
         "manual_selection": True,
+        "local_cover_dimensions": None,
     }
 
 
@@ -141,3 +142,19 @@ def test_cover_selection_does_not_build_global_problematic_files_payload(
     assert updated_albums == [{"key": "album-1"}]
     assert updated_problematic_album == {"key": "album-1"}
     assert detail_calls == ["album-1"]
+
+
+@pytest.mark.parametrize("selection, expected", [
+    ([{"kind": "local", "path": "album/cover.jpg"}], str(Path("album/cover.jpg"))),
+    ([], None),
+])
+def test_a_committed_ordered_selection_is_published_to_the_running_library(selection, expected):
+    # Runs the real service: a stub hid an argument it no longer accepts, so every changed save answered 503.
+    from music_app.routes.api_cover_helpers import publish_ordered_cover_selection_for_tracks
+
+    path = "album/01.flac"
+    library_state = {"file_cache": {path: {"cover_path": "album/old.jpg"}}, "albums": []}
+
+    publish_ordered_cover_selection_for_tracks(library_state, {path}, selection)
+
+    assert library_state["file_cache"][path]["cover_path"] == expected

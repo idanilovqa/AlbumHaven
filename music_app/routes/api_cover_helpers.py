@@ -78,7 +78,7 @@ def publish_ordered_cover_selection_for_tracks(
             "url", "thumbnail_url", "source", "source_label", "album_url", "width", "height",
         )},
         cover_revision=None, manual_selection=True, local_cover_dimensions=(None, None),
-        persist_cache_update=False, cache_path=None, schedule_cache_updates_save=None,
+        persist_cache_update=False, schedule_cache_updates_save=None,
         find_updated_albums=lambda paths: [], find_problematic_album=lambda paths: None,
     )
 

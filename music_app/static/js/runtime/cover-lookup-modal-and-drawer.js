@@ -1363,7 +1363,8 @@ async function saveOrderedCoverSelection() {
   const lookupTaskId = String(modal.remoteSelectionOverrideGeneration || modal.taskId || '').trim();
   // Closing or reopening Cover Look Up starts a new session: this save then updates the album only.
   const session = coverLookupModalSession;
-  const ownsModal = () => session === coverLookupModalSession && modal.album === album;
+  // A refresh may replace modal.album with a newer copy of the same album; only the session says whose modal it is.
+  const ownsModal = () => session === coverLookupModalSession;
   modal.orderedCoverMutationId = mutationId;
   modal.saving = true;
   // The album keeps its saved covers until the server confirms this choice: a cover that is still
@@ -1393,10 +1394,13 @@ async function saveOrderedCoverSelection() {
         image_url: selectedCoverImageUrl(libraryId, albumId, item.selection_id),
       } : {}),
     }));
-    applyOrderedCoverSlotsToAlbum(album, saved, data.selected_covers_revision);
-    album.selected_covers_album_id = albumId;
+    const shownAlbum = ownsModal() ? modal.album : album;
+    for (const savedAlbum of new Set([album, shownAlbum])) {
+      applyOrderedCoverSlotsToAlbum(savedAlbum, saved, data.selected_covers_revision);
+      savedAlbum.selected_covers_album_id = albumId;
+    }
     try {
-      showSavedOrderedCoverEverywhere(album, saved);
+      showSavedOrderedCoverEverywhere(shownAlbum, saved);
     } catch (error) {
       // The save is confirmed; a view that could not refresh catches up on its next render.
       console.warn('[AlbumHaven][CoverLookup] Saved cover could not refresh every view.', error);

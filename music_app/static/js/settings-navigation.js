@@ -139,6 +139,8 @@
       const posting = method === 'POST' && url && isAccountPost(url.pathname);
       const returning = library && url && (url.href === libraryUrl || url.pathname === '/');
       if (destroyed || restoringPosition !== null || !url || (!isSettingsPath(url.pathname) && !posting && !returning)) return false;
+      // The Settings page already shown, with nothing else loading: nothing to load (owner, 11-18).
+      if (!posting && !returning && !host.hidden && !navigationPending && url.href === currentUrl) return true;
       const ownSequence = ++sequence;
       pending?.abort();
       navigationPending = false;

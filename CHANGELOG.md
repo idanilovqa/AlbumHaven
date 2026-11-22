@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.11.45 - 2026-11-22
+
+- Every request and background check now borrows a database connection from a shared pool instead of opening a new one, and the freeze guard rejects any new code that opens its own. If the database is unreachable, requests fail at once instead of waiting 30 seconds.
+- Going back, Home, or a Settings or Discovery tab no longer reloads a view that is already on screen; the guard checks this for every such navigation.
+- After a tag save, the gallery no longer briefly drops the artist on screen when that artist shares an album with an artist further up.
+
+## 0.11.44 - 2026-11-21
+
+- Clearing a search is faster. The X only empties the box; clicking the search button, or clicking outside the box on desktop, applies the clear. The full gallery then appears straight from memory, as Home does, when the library hasn't changed, and a late search answer can no longer replace it. An artist the search selected stays selected.
+
+## 0.11.43 - 2026-11-21
+
+- Test-only: the bounded-interaction freeze guard now performs every request-capture interaction twice and fails when the repeat sends an identical request more often than the first pass, or sends more requests in total. This catches leaked listeners and duplicated fetches that a single pass misses.
+
 ## 0.11.42 - 2026-11-19
 
 - Docs-only: contributor guidance now says that rerunning a failing gate to diagnose it or to verify a fix is expected; only rerunning unchanged code for a lucky pass is ruled out.

@@ -7930,7 +7930,15 @@ function newStreamingDecoder(codec, className = streamingDecoderClassNames[codec
 }
 
 function createStreamingDecoder(codec) {
-  return streamingDecoderPool[codec]?.pop() || newStreamingDecoder(codec);
+  const pooled = streamingDecoderPool[codec]?.pop();
+  if (!pooled) return newStreamingDecoder(codec);
+  // The next stream (a switch's, while this one still plays) finds one started too.
+  if (!streamingDecoderPool[codec].length) {
+    setTimeout(() => {
+      if (!streamingDecoderPool[codec].length) releaseStreamingDecoder(codec, newStreamingDecoder(codec));
+    }, 0);
+  }
+  return pooled;
 }
 
 // A stream's decoder goes back to the pool, reset, while the pool has room; otherwise it ends.

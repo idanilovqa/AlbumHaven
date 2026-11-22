@@ -159,9 +159,15 @@ class PlaybackBridge(private val port: NativePlaybackPort) {
 
         /** Queue items may carry the album's `year`, which the media card shows after the album. */
         const val ALBUM_DETAILS_CAPABILITY = "playback.album_details.v1"
+
+        /**
+         * `loadQueue` may carry `takeover`: Play here replaces another device's claim (playback.claim.takeover).
+         * The site offers Play here only to a shell that declares this, since older shells refuse the key.
+         */
+        const val TAKEOVER_CAPABILITY = "playback.takeover.v1"
         val CAPABILITIES = listOf(
             NATIVE_CAPABILITY, QUEUE_CAPABILITY, LOOPS_CAPABILITY, MEDIA_SESSION_CAPABILITY, RESUMPTION_CAPABILITY,
-            ALBUM_DETAILS_CAPABILITY,
+            ALBUM_DETAILS_CAPABILITY, TAKEOVER_CAPABILITY,
         )
 
         private const val LOAD_QUEUE = "playback.loadQueue"

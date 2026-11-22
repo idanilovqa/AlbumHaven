@@ -3055,7 +3055,7 @@ const { createRequestCapture, jsonResponse, measureInteractionContract } = requi
 const viewStateHelpersPath = path.join(path.dirname(helperPath), 'view-state-helpers.js');
 
 test('request capture: loose-track hydration requests each scope once', async () => {
-  const id = 'js:runtime/modal-and-overlay-helpers.js#hydrateDeferredNonAlbumTracks';
+  const id = 'js:runtime/modal-and-overlay-helpers.js#fetchNonAlbumPayload';
   await measureInteractionContract(id, {
     setup(opens) {
       const { context } = loadHelper();

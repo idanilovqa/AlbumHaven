@@ -712,6 +712,13 @@ function handleSidebarArtistSelectionClick(event) {
   }
   closeArtistsDrawer({ restoreFocus: false });
   const artist = sidebarArtistLink.getAttribute('data-sidebar-artist') || '';
+  // What the page showed before the click, put back if the artist cannot be loaded.
+  const previousPage = {
+    view: state.view,
+    mainState: state.gallery.mainState,
+    sidebarArtistsOverride: state.gallery.sidebarArtistsOverride,
+    sidebarShowAllArtistsOverride: state.gallery.sidebarShowAllArtistsOverride,
+  };
   const usingSidebarOverride = Array.isArray(state.gallery.sidebarArtistsOverride)
     && state.gallery.sidebarArtistsOverride.length > 0;
   if (!usingSidebarOverride) {
@@ -818,13 +825,35 @@ function handleSidebarArtistSelectionClick(event) {
     });
   }
   const resumeCoverLoads = beginSidebarArtistCoverLoadSuspension();
+  const shownView = state.view;
   Promise.resolve(fetchAndRender(buildApiUrl(nextView, {
     omitSidebar: true,
-  }), true)).then(resumeCoverLoads, () => resumeCoverLoads(true));
+  }), true)).then(resumeCoverLoads, () => {
+    resumeCoverLoads(true);
+    restoreSidebarArtistSelectionPage(previousPage, shownView);
+  });
   if (!sidebarSelectionUpdated) {
     renderSidebar();
   }
   return true;
+}
+
+// An artist that could not be loaded (owner 2026-11-21: the server restarted under load) leaves nothing half-applied:
+// the tree, heading and gallery go back to the page its URL still describes, and the owner is told.
+function restoreSidebarArtistSelectionPage(previousPage, shownView) {
+  // A newer navigation owns the page now.
+  if (state.view !== shownView) return;
+  state.gallery.mainState = previousPage.mainState;
+  state.gallery.sidebarArtistsOverride = previousPage.sidebarArtistsOverride;
+  state.gallery.sidebarShowAllArtistsOverride = previousPage.sidebarShowAllArtistsOverride;
+  if (previousPage.view !== shownView) applyViewPayload(previousPage.view, { trackSidebarReveal: false });
+  renderView({ preserveScroll: true });
+  renderSidebar();
+  if (typeof showToast === 'function') {
+    showToast('This artist could not be loaded. Try again.', 'error', 4800, {
+      errorKey: 'sidebar-artist-selection-failed',
+    });
+  }
 }
 
 function applyImmediateSidebarArtistSelection(sidebarArtistLink, artist) {
@@ -1847,24 +1876,19 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
         && clearScopeMatches
       );
       if (retainMountedSelectedArtist) {
-        fetchAndRender(buildApiUrl({
-          ...next,
-          selected_artist: '',
-        }, {
-          payloadTier: 'sidebar',
-        }), true, {
-          preserveScroll: true,
-          retainMountedGalleryIfEquivalent: true,
-          retainMountedSelectedViewState: next,
-          skipPendingViewTransition: true,
-        });
+        fetchLibraryArtistTree(next, true);
+      } else if (preSearchSidebar?.length) {
+        // An artist page's request carries no tree: the tree saved when the search started comes back whole, its
+        // count included (it read the artist page's own count, "All artists 1", owner 2026-11-21).
+        state.view.artists_sidebar = buildRestoredSearchSidebar(preSearchSidebar, next.selected_artist);
+        state.view.artist_count = Number.isFinite(state.ui.preSearchView?.artist_count)
+          ? state.ui.preSearchView.artist_count
+          : preSearchSidebar.length;
+        state.view.show_all_artists_sidebar_link = state.ui.preSearchView?.show_all_artists_sidebar_link !== false;
+        renderSidebar();
+        fetchAndRender(buildApiUrl(next), true, { preserveSidebarState: true });
       } else {
-        fetchAndRender(buildApiUrl(next), true);
-        // That gallery request carries no tree, so the search's filtered list would stay.
-        if (preSearchSidebar?.length) {
-          state.view.artists_sidebar = buildRestoredSearchSidebar(preSearchSidebar, next.selected_artist);
-          renderSidebar();
-        }
+        loadLibraryArtistTreeAfter(fetchAndRender(buildApiUrl(next), true), next.selected_artist);
       }
     }
     return;
@@ -2744,11 +2768,42 @@ function syncSearchClear() {
   if (!normalizedQuery.trim()) closeRecentSearchPopover();
 }
 
+// The library's whole Artists tree for a view without a search, keeping the mounted gallery of that view. An artist
+// page's own request carries no tree: the library's tree comes with the library view, a search's with the search.
+function fetchLibraryArtistTree(view, push) {
+  return fetchAndRender(buildApiUrl({ ...view, selected_artist: '' }, { payloadTier: 'sidebar' }), push, {
+    preserveScroll: true,
+    retainMountedGalleryIfEquivalent: true,
+    retainMountedSelectedViewState: view,
+    skipPendingViewTransition: true,
+  });
+}
+
+// After an artist page's request leaves a search, its tree is still the search's: the library's tree follows,
+// unless another navigation took over meanwhile. A view without an artist brings its own tree.
+function loadLibraryArtistTreeAfter(request, artist) {
+  const selectedArtist = String(artist || '').trim();
+  if (!selectedArtist) return;
+  void Promise.resolve(request).then((applied) => {
+    if (!applied || String(state.view?.query || '').trim()
+      || String(state.view?.selected_artist || '').trim() !== selectedArtist) return;
+    fetchLibraryArtistTree({ ...state.view }, false);
+  }, () => {});
+}
+
 function handleGalleryBootstrapPopState(options = {}) {
   const parentViewUrl = options.parentViewUrl || getBrowserLocationHref();
+  // The history entry owns the search field: unsubmitted text, or a typed search still waiting to commit, would
+  // otherwise stay over the entry's page (and an emptied field would clear the restored search when it blurs).
+  const destination = parseBrowserUrlState(parentViewUrl);
+  clearPendingGallerySearchCommit();
+  updateGallerySearchDraftQuery(destination.query);
   if (typeof syncGalleryMainStateFromLocation === 'function') syncGalleryMainStateFromLocation(options.parentViewUrl);
   const requestUrl = options.galleryAnchorArtist
-    ? buildApiUrl(parseBrowserUrlState(parentViewUrl), { galleryAnchorArtist: options.galleryAnchorArtist })
+    ? buildApiUrl(destination, { galleryAnchorArtist: options.galleryAnchorArtist })
     : parentViewUrl;
-  fetchAndRender(requestUrl, false, options);
+  // Leaving a search for an artist page would keep the search's tree (owner 2026-11-21).
+  const leavesSearchTree = Boolean(String(state.view?.query || '').trim()) && !String(destination.query || '').trim();
+  const request = fetchAndRender(requestUrl, false, options);
+  if (leavesSearchTree) loadLibraryArtistTreeAfter(request, destination.selected_artist);
 }

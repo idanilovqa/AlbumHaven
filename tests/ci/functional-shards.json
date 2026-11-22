@@ -577,6 +577,55 @@
               "test": "tests/e2e/specs/albumDetailsLoadingIdentity.functional.spec.js",
               "case": "FTC-ALBUM-DETAILS-025 mobile identifies cold album B before its details settle without restoring album A",
               "area": "album-details"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/browserHistoryNavigation.spec.js",
+              "case": "FTC-GALLERY-NAV-039 browser Back and Forward restore a cleared search and its tree",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/browserHistoryNavigation.spec.js",
+              "case": "FTC-GALLERY-NAV-040 browser Back and Forward move between artists and All artists with their tree selection",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/browserHistoryNavigation.spec.js",
+              "case": "FTC-GALLERY-NAV-041 browser Back and Forward restore a search with no match",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/browserHistoryNavigation.spec.js",
+              "case": "FTC-GALLERY-NAV-043 phone Back and Forward restore a cleared search and its tree",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/browserHistoryNavigation.spec.js",
+              "case": "FTC-GALLERY-NAV-044 a page loaded from a search URL selects its artist and ends the search like a typed one",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/browserHistoryNavigation.spec.js",
+              "case": "FTC-GALLERY-NAV-045 the logo goes home from a page loaded from a search URL",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/browserHistoryNavigation.spec.js",
+              "case": "FTC-GALLERY-NAV-046 an artist that fails to load while the server is down puts back the page it left",
+              "area": "gallery-search"
             }
           ]
         }
@@ -1369,6 +1418,13 @@
               "project": "functional",
               "test": "tests/e2e/specs/nonAlbumRarity.spec.js",
               "case": "FTC-NON-ALBUM-016 keeps named Custom Collections out of Gallery and in library-wide Loose Tracks",
+              "area": "tag-edit"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/browserHistoryNavigation.spec.js",
+              "case": "FTC-GALLERY-NAV-042 browser Back and Forward move between collections, All Loose Tracks and a search gallery",
               "area": "tag-edit"
             },
             {

@@ -584,7 +584,34 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0210_create_schema_migration_attestations.sql",
         "0266_mark_problematic_albums_named_by_rule_keys.sql",
         "0267_trust_relation_publication_marker.sql",
+        "0292_index_local_cover_inventory_roots.sql",
     ]
+
+
+def test_local_cover_inventory_root_index_migration_adds_exactly_two_checked_c_collated_indexes():
+    source = (MIGRATIONS_DIR / "0292_index_local_cover_inventory_roots.sql").read_text(encoding="utf-8")
+    sql = _normalized_sql(source)
+
+    assert source.startswith("-- depends on: 0125_add_local_cover_inventory.sql")
+    assert sql.count("create index") == 4, "two builds and the two definitions they are checked against"
+    assert (
+        "create index if not exists local_cover_inventories_root_path_c_idx "
+        'on library.local_cover_inventories (library_id, (root_path collate "c"));'
+    ) in sql
+    assert (
+        "create index if not exists local_cover_inventory_contexts_root_path_c_idx "
+        'on library.local_cover_inventory_contexts (library_id, (root_path collate "c")) '
+        "where root_path is not null;"
+    ) in sql
+    assert 'root_path collate "C"' in source, 'the "C" collation name is case-sensitive'
+    assert "indisvalid and indisready and indislive" in sql
+    assert "pg_get_indexdef(indexrelid)" in sql
+    assert "raise exception" in sql
+    for forbidden in (
+        "concurrently", "create function", "create or replace", "using gin", "create table", "alter table",
+        "grant ", "insert into", "update library", "delete from", "drop ",
+    ):
+        assert forbidden not in sql
 
 
 def test_gallery_projection_artist_lookup_migration_indexes_anchor_and_boundary_queries():

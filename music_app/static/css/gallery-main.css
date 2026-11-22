@@ -318,29 +318,29 @@
 .gallery-card__hover-year::before { right: calc(50% + var(--gallery-year-gap) - 3px); }
 .gallery-card__hover-year::after { left: calc(50% + var(--gallery-year-gap) - 3px); }
 
-/* Shared library provenance: card and artbox coloring are independent. */
-/* The Appearance > Album page preview shares these colors; its draft palette sets its own mode. */
-.album-card[data-library-sources],
-.appearance-source-preview {
+/* Shared library provenance: card and artbox coloring are independent. The account's choices live on :root;
+   a [data-library-source-scope] element (the Appearance > Album page preview) carries its own draft choices,
+   which win for the cards inside it. [data-component-preview-hover] shows its cards in their hovered state. */
+.album-card[data-library-sources] {
   --library-source-hoard: #d5a757;
   --library-source-arrivals: #74bdb4;
   --library-source-tint: var(--panel);
 }
-:root[data-appearance-mode="light"] .album-card[data-library-sources],
-.appearance-source-preview[data-appearance-mode="light"] {
+:root[data-appearance-mode="light"] .album-card[data-library-sources]:not([data-library-source-scope] *),
+[data-library-source-scope][data-appearance-mode="light"] .album-card[data-library-sources] {
   --library-source-hoard: #865b13;
   --library-source-arrivals: #247870;
 }
 .album-card[data-library-sources="hoard"] { --library-source-tint: color-mix(in srgb, var(--panel) 92%, var(--library-source-hoard)); }
 .album-card[data-library-sources="new_arrivals"] { --library-source-tint: color-mix(in srgb, var(--panel) 92%, var(--library-source-arrivals)); }
-:root[data-library-source-card-colors="true"] .album-card[data-library-sources]:not([data-library-sources=""]):not([data-library-sources="main"]) {
+:is(:root[data-library-source-card-colors="true"] .album-card:not([data-library-source-scope] *), [data-library-source-scope][data-library-source-card-colors="true"] .album-card)[data-library-sources]:not([data-library-sources=""]):not([data-library-sources="main"]) {
   border-color: transparent;
   background: linear-gradient(var(--library-source-tint), var(--library-source-tint)) padding-box, var(--library-source-gradient) border-box;
 }
-:root[data-library-source-card-colors="true"] .album-card[data-library-sources]:not([data-library-sources="main"]) > .album-body {
+:is(:root[data-library-source-card-colors="true"] .album-card:not([data-library-source-scope] *), [data-library-source-scope][data-library-source-card-colors="true"] .album-card)[data-library-sources]:not([data-library-sources="main"]) > .album-body {
   background: var(--library-source-tint);
 }
-:root[data-library-source-hover-outline-colors="true"] .album-card[data-library-sources]:not([data-library-sources=""]):not([data-library-sources="main"]) > .cover::after {
+:is(:root[data-library-source-hover-outline-colors="true"] .album-card:not([data-library-source-scope] *), [data-library-source-scope][data-library-source-hover-outline-colors="true"] .album-card)[data-library-sources]:not([data-library-sources=""]):not([data-library-sources="main"]) > .cover::after {
   display: block;
   box-sizing: border-box;
   border: 5px solid transparent;
@@ -350,11 +350,11 @@
   opacity: 0;
   box-shadow: none;
 }
-:root[data-library-source-hover-outline-colors="true"] .album-card[data-library-sources]:not([data-library-sources=""]):not([data-library-sources="main"]):is(:hover, :has(:focus-visible)) > .cover::after { opacity: 1; }
-:root[data-library-source-hover-outline-colors="true"] .album-card[data-library-sources][data-gallery-release-year] > .cover::after {
+:is(:root[data-library-source-hover-outline-colors="true"] .album-card:not([data-library-source-scope] *), [data-library-source-scope][data-library-source-hover-outline-colors="true"] .album-card)[data-library-sources]:not([data-library-sources=""]):not([data-library-sources="main"]):is(:hover, :has(:focus-visible), [data-component-preview-hover] *) > .cover::after { opacity: 1; }
+:is(:root[data-library-source-hover-outline-colors="true"] .album-card:not([data-library-source-scope] *), [data-library-source-scope][data-library-source-hover-outline-colors="true"] .album-card)[data-library-sources][data-gallery-release-year] > .cover::after {
   clip-path: polygon(0 0, calc(50% - var(--gallery-year-gap)) 0, calc(50% - var(--gallery-year-gap)) 12px, calc(50% + var(--gallery-year-gap)) 12px, calc(50% + var(--gallery-year-gap)) 0, 100% 0, 100% 100%, 0 100%);
 }
-:root[data-library-source-hover-outline-colors="true"] .album-card[data-library-sources]:not([data-library-sources=""]):not([data-library-sources="main"])[data-gallery-display="covers"]::after { display: none; }
+:is(:root[data-library-source-hover-outline-colors="true"] .album-card:not([data-library-source-scope] *), [data-library-source-scope][data-library-source-hover-outline-colors="true"] .album-card)[data-library-sources]:not([data-library-sources=""]):not([data-library-sources="main"])[data-gallery-display="covers"]::after { display: none; }
 .gallery-card__source-overlay {
   position: absolute;
   inset: 0 0 auto;
@@ -396,12 +396,12 @@
 .album-card .gallery-source-action--new_arrivals { color: var(--library-source-arrivals); }
 .album-card .gallery-source-action svg { width: 24px; height: 24px; flex: none; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
 .album-card .gallery-source-action span { max-width: 0; overflow: hidden; opacity: 0; white-space: nowrap; font-size: 12px; transition: max-width 150ms ease, opacity 150ms ease, margin 150ms ease; }
-.album-card:is(:hover, :has(:focus-visible)) .gallery-source-action { opacity: 1; pointer-events: auto; }
+.album-card:is(:hover, :has(:focus-visible), [data-component-preview-hover] *) .gallery-source-action { opacity: 1; pointer-events: auto; }
 .album-card .gallery-source-action:is(:hover, :focus-visible) span { max-width: 150px; margin-left: 6px; opacity: 1; }
 .album-card .gallery-source-action:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 .album-card .gallery-source-action--duplicate { position: absolute; right: 9px; bottom: 9px; max-width: calc(100% - 18px); }
 .album-card:has(.album-artbox--missing) .gallery-source-action--duplicate { bottom: 52px; }
-:root[data-library-source-icons="false"] .gallery-card__source-actions { display: none; }
+:is(:root[data-library-source-icons="false"] .gallery-card__source-actions:not([data-library-source-scope] *), [data-library-source-scope][data-library-source-icons="false"] .gallery-card__source-actions) { display: none; }
 @media (hover: none) {
   .album-card .gallery-source-action { min-height: 44px; min-width: 44px; opacity: 1; pointer-events: auto; }
 }

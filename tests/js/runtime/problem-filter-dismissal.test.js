@@ -22,8 +22,8 @@ function element() {
 
 test('outside dismissal clears the problem-filter owner state so the next toggle opens it', () => {
   const state = { utility: {
-    problematicFiles: [{ problem_reasons: ['Missing year'] }],
-    selectedProblemFilters: [], problemDropdownOpen: true,
+    problematicFiles: [{ key: 'year', problem_reasons: ['Missing year'] }],
+    selectedProblemFilters: [], problemDropdownOpen: true, problematicFilesComplete: true,
   } };
   const context = vm.createContext({ state, window: {}, escapeHtml: value => value });
   const runtime = path.resolve(__dirname, '../../../music_app/static/js/runtime');
@@ -50,8 +50,8 @@ test('an actual modal backdrop closes the filter owner and its state without clo
   let parentCloses = 0;
   const modal = { contains: target => target === els.problemFilterMenu || target === els.problemFilterButton };
   const state = { utility: {
-    problematicFiles: [{ problem_reasons: ['Missing year'] }],
-    selectedProblemFilters: [], problemDropdownOpen: true,
+    problematicFiles: [{ key: 'year', problem_reasons: ['Missing year'] }],
+    selectedProblemFilters: [], problemDropdownOpen: true, problematicFilesComplete: true,
   } };
   const context = vm.createContext({ state, window: {}, escapeHtml: value => value,
     getTopmostOpenModal: () => modal, dismissForegroundModal: () => { parentCloses++; } });
@@ -122,8 +122,8 @@ test('mobile: an always-visible surface such as the view switcher never swallows
 
 test('list refreshes keep the open filter menu options, so its scroll position survives', () => {
   const state = { utility: {
-    problematicFiles: [{ problem_reasons: ['Missing year'] }, { problem_reasons: ['MBID: Not found'] }],
-    selectedProblemFilters: [], problemDropdownOpen: true,
+    problematicFiles: [{ key: 'year', problem_reasons: ['Missing year'] }, { key: 'mbid', problem_reasons: ['MBID: Not found'] }],
+    selectedProblemFilters: [], problemDropdownOpen: true, problematicFilesComplete: true,
   } };
   const context = vm.createContext({ state, window: {}, escapeHtml: value => value });
   const runtime = path.resolve(__dirname, '../../../music_app/static/js/runtime');
@@ -139,11 +139,11 @@ test('list refreshes keep the open filter menu options, so its scroll position s
   context.renderProblemFilterControls(els);
   assert.equal(writes, 1);
   // A progressive list refresh with the same problem types re-renders the controls.
-  state.utility.problematicFiles = [...state.utility.problematicFiles, { problem_reasons: ['Missing year'] }];
+  state.utility.problematicFiles = [...state.utility.problematicFiles, { key: 'year-2', problem_reasons: ['Missing year'] }];
   context.renderProblemFilterControls(els);
   assert.equal(writes, 1, 'unchanged options are not rewritten');
 
-  state.utility.problematicFiles.push({ problem_reasons: ['Poor art quality'] });
+  state.utility.problematicFiles.push({ key: 'art', problem_reasons: ['Poor art quality'] });
   context.renderProblemFilterControls(els);
   assert.equal(writes, 2, 'a new problem type updates the menu');
   assert.match(html, /Poor art quality/);

@@ -38185,11 +38185,13 @@ function renderCoverLookupDrawer({
 }
 
 // Renders only the visible task window and its spacers.
-function renderCoverLookupDrawerTaskWindow(body, tasks, taskIds = []) {
+function renderCoverLookupDrawerTaskWindow(body, tasks, taskIds = [], capturedAnchor) {
   const restoreScrollTop = body.innerHTML
     ? Number(body.scrollTop || 0)
     : Number(state.coverLookup.drawerScrollTop || 0);
-  const scrollAnchor = taskIds.length ? null : captureCoverLookupDrawerScrollAnchor(body);
+  let scrollAnchor = capturedAnchor;
+  if (taskIds.length) scrollAnchor = null;
+  else if (scrollAnchor === undefined) scrollAnchor = captureCoverLookupDrawerScrollAnchor(body);
   const renderWindow = getCoverLookupTaskRenderWindow(tasks, body, scrollAnchor);
   state.coverLookup.taskRenderWindowStart = renderWindow.start;
   const visibleTasks = tasks.slice(renderWindow.start, renderWindow.end);
@@ -38342,14 +38344,14 @@ function renderCoverLookupDrawerTaskWindow(body, tasks, taskIds = []) {
 
 // Scrolling moves only the task window; the counts, timers, and the other
 // tasks' terminal signatures cannot change, so they are not recomputed.
-function renderCoverLookupDrawerScrollWindow() {
+function renderCoverLookupDrawerScrollWindow(capturedAnchor) {
   const body = document.getElementById('cover-lookup-drawer-body');
   const tasks = state.coverLookup.tasks;
   if (!body || !state.coverLookup.drawerOpen || !Array.isArray(tasks) || !tasks.length) {
     renderCoverLookupDrawer({ preserveInteraction: false });
     return;
   }
-  const visibleTasks = renderCoverLookupDrawerTaskWindow(body, tasks);
+  const visibleTasks = renderCoverLookupDrawerTaskWindow(body, tasks, [], capturedAnchor);
   state.coverLookup.drawerRenderedTerminalSignatures = Object.assign(
     state.coverLookup.drawerRenderedTerminalSignatures || {},
     buildCoverLookupDrawerTerminalSignatures(visibleTasks),
@@ -39464,7 +39466,8 @@ function handleCoverLookupDrawerScroll(event) {
   }
   const renderWindowChanged = nextWindow.start !== Number(state.coverLookup.taskRenderWindowStart || 0);
   if (renderWindowChanged && !captureCoverLookupDrawerScrollAnchor(body)?.taskId) {
-    renderCoverLookupDrawerScrollWindow();
+    // No row is on screen to anchor to; the immediate render must not search for one again.
+    renderCoverLookupDrawerScrollWindow(null);
   } else if (renderWindowChanged && typeof window.setTimeout === 'function') {
     coverLookupDrawerScrollRenderTimer = window.setTimeout(() => {
       coverLookupDrawerScrollRenderTimer = 0;
@@ -39496,9 +39499,10 @@ async function loadCoverLookupTasksForPolling(options = {}) {
 
 function hasActiveCoverLookupWork() {
   const active = (status) => ['pending', 'running'].includes(String(status || ''));
-  return (state.coverLookup.tasks || []).some((task) => active(task?.status))
-    || Number(state.coverLookup.notificationCounts?.active_count || 0) > 0
-    || active(state.coverLookup.modal?.candidateSnapshot?.status);
+  // Constant answers first: this runs every 100 ms, and the loaded list can hold 1,000 tasks.
+  return Number(state.coverLookup.notificationCounts?.active_count || 0) > 0
+    || active(state.coverLookup.modal?.candidateSnapshot?.status)
+    || (state.coverLookup.tasks || []).some((task) => active(task?.status));
 }
 
 function ensureCoverLookupPolling() {
@@ -40949,6 +40953,8 @@ function selectLocalCoverFromLookup(sourceRef) {
     return;
   }
   modalState.artboxCleared = false;
+  // A deletion already applied its fallback; any other choice is a new draft that still has to be saved.
+  if (String(sourceRef || '') !== String(modalState.pendingLocalRef || '')) modalState.fallbackLocalSelectionPending = false;
   state.coverLookup.modal.pendingLocalRef = String(sourceRef || '');
   state.coverLookup.modal.pendingPastedImageId = '';
   state.coverLookup.modal.selectedRemoteId = '';
@@ -41080,6 +41086,14 @@ async function deleteLocalCoverFromLookup(sourceRef) {
   coverLookupPendingMutations.set(mutationKey, session);
   invalidateCoverLookupGalleryCache(album);
   coverLookupGalleryRequest += 1;
+  const currentSelection = () => [
+    state.coverLookup.modal.pendingLocalRef,
+    state.coverLookup.modal.pendingPastedImageId,
+    state.coverLookup.modal.selectedRemoteId,
+  ].map((value) => String(value || '')).join('\n');
+  let selectionAfterDelete = currentSelection();
+  // Whatever was selected while the deletion ran is the newer choice and outlives both of its outcomes.
+  const keepsSelection = () => ownsModal() && currentSelection() === selectionAfterDelete;
   try {
     closeCoverLookupDeleteConfirm();
     state.coverLookup.modal.localCovers = remainingLocalCovers;
@@ -41099,6 +41113,7 @@ async function deleteLocalCoverFromLookup(sourceRef) {
     }
     state.coverLookup.modal.pendingPastedImageId = '';
     state.coverLookup.modal.selectedRemoteId = '';
+    selectionAfterDelete = currentSelection();
     if (optimisticAlbum) {
       markAlbumCoverRefsFresh([optimisticAlbum]);
       syncCoverLookupAlbumReferences([optimisticAlbum]);
@@ -41131,7 +41146,7 @@ async function deleteLocalCoverFromLookup(sourceRef) {
     inventoryMutation.deletedPaths.add(String(sourceRef));
     if (deletedActiveLocalSelection) {
       inventoryMutation.selectedPath = selectedFallbackPath;
-      if (ownsModal() && !previousPendingLocalPath) {
+      if (!previousPendingLocalPath && keepsSelection()) {
         state.coverLookup.modal.pendingLocalRef = selectedFallbackPath;
         state.coverLookup.modal.fallbackLocalSelectionPending = Boolean(selectedFallbackPath);
       }
@@ -41153,9 +41168,11 @@ async function deleteLocalCoverFromLookup(sourceRef) {
     if (buildCoverLookupMutationKey(state.coverLookup.modal.album) === mutationKey) coverLookupGalleryRequest += 1;
     if (ownsModal()) {
       state.coverLookup.modal.localCovers = previousLocalCovers;
-      state.coverLookup.modal.pendingLocalRef = previousPendingLocalPath;
-      state.coverLookup.modal.activeLocalSelectionRef = previousActiveLocalSelectionPath;
-      state.coverLookup.modal.fallbackLocalSelectionPending = previousFallbackLocalSelectionPending;
+      if (keepsSelection()) {
+        state.coverLookup.modal.pendingLocalRef = previousPendingLocalPath;
+        state.coverLookup.modal.activeLocalSelectionRef = previousActiveLocalSelectionPath;
+        state.coverLookup.modal.fallbackLocalSelectionPending = previousFallbackLocalSelectionPending;
+      }
     }
     if (previousAlbum) {
       markAlbumCoverRefsFresh([previousAlbum]);

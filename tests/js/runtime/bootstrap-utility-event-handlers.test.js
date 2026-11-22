@@ -1615,7 +1615,10 @@ test('a click inside the shared app-form dialog (split-release chooser) keeps th
 test('returning to Problematic Files from Rules reuses the loaded list without another summary request', async () => {
   // Owner regression: PF -> Rules -> PF must never pay for the summary again.
   const { context } = createContext({ activeTab: 'problematic-files', loaded: false, rulesLoaded: true });
+  require('../helpers/pending-projection-fetch').loadPendingProjectionFetch(context);
   vm.runInContext(utilityLoadersSource, context, { filename: utilityLoadersPath });
+  // Only an open Settings modal reconciles with the complete list (e01d0d613).
+  context.getUtilityModalElements().overlay = { hidden: false };
   const requests = [];
   const summary = (complete) => ({
     ok: true, complete, items: [{ key: 'artist::album', name: 'Album', problem_reasons: ['Missing year'], detail_loaded: false }],

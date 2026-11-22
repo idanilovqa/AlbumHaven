@@ -256,11 +256,16 @@ test('local mutation claim spans image preload and releases after synchronous se
   await new Promise(resolve => setImmediate(resolve));
   h.context.closeCoverLookupModal();
   await h.open(clone(a));
-  const denied = h.context.deleteLocalCoverFromLookup('/A/source.jpg');
-  assert.equal(h.requests.length, 1);
-  await denied;
+  // Owner report 2026-11-15 (8c776ecbf): a delete during a save is queued behind it, not dropped.
+  const queuedDelete = h.context.deleteLocalCoverFromLookup('/A/source.jpg');
+  assert.equal(h.requests.length, 1, 'the delete waits for the claim that spans the preload');
   finishPreload(true);
   await pending;
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.requests.length, 2, 'the queued delete is sent once the save settles');
+  assert.equal(h.requests[1].url, '/utilities/cover-lookup/local-delete');
+  await h.settle(1);
+  await queuedDelete;
   h.context.applyOptimisticLocalCoverSelection = () => { throw new Error('Setup failed'); };
   await h.context.saveLocalCoverFromLookup('/A/newer.jpg');
   assert.equal(h.context.state.coverLookup.modal.saving, false);
@@ -343,34 +348,34 @@ test('a successful deletion cannot restore the deleted cover as unknown other ar
   const h = harness(), a = album('A');
   await h.open(a);
 
-  const pending = h.context.deleteLocalCoverFromLookup(a.cover_path);
+  const pending = h.context.deleteLocalCoverFromLookup(a.cover_ref);
   h.requests[0].resolve({ ok: true, json: async () => ({
     ok: true,
-    updated_albums: [{ ...a, cover_path: '/A/settled.jpg', cover_revision: 'A-settled' }],
+    updated_albums: [{ ...a, cover_ref: '/A/settled.jpg', cover_revision: 'A-settled' }],
     gallery: {
       ok: true,
-      local_covers: [{ path: '/A/settled.jpg', is_active: true }],
-      other_art: [{ path: a.cover_path, resolution: 'Unknown' }],
+      local_covers: [{ candidate_cover_ref: '/A/settled.jpg', is_active: true }],
+      other_art: [{ candidate_cover_ref: a.cover_ref, resolution: 'Unknown' }],
     },
   }) });
   await pending;
 
-  assert.ok(!h.context.state.coverLookup.modal.localCovers.some(card => card.path === a.cover_path));
-  assert.ok(!h.context.state.coverLookup.modal.otherArt.some(card => card.path === a.cover_path));
+  assert.ok(!h.context.state.coverLookup.modal.localCovers.some(card => card.candidate_cover_ref === a.cover_ref));
+  assert.ok(!h.context.state.coverLookup.modal.otherArt.some(card => card.candidate_cover_ref === a.cover_ref));
 });
 
 test('immediate notification reopen does not restore deleted selected art from lagging inventory', async () => {
   const h = harness(), a = album('A');
   await h.open(a);
-  const pending = h.context.deleteLocalCoverFromLookup(a.cover_path);
-  const fallback = { ...a, cover_path: '/A/source.jpg', cover_revision: 'A-fallback' };
+  const pending = h.context.deleteLocalCoverFromLookup(a.cover_ref);
+  const fallback = { ...a, cover_ref: '/A/source.jpg', cover_revision: 'A-fallback' };
   h.server.set('A', {
     ok: true,
-    active_cover_path: a.cover_path,
-    selected_source_path: a.cover_path,
+    active_cover_ref: a.cover_ref,
+    selected_source_cover_ref: a.cover_ref,
     local_covers: [
-      { path: a.cover_path, is_active: true },
-      { path: fallback.cover_path, is_active: false },
+      { candidate_cover_ref: a.cover_ref, is_active: true },
+      { candidate_cover_ref: fallback.cover_ref, is_active: false },
     ],
   });
   h.requests[0].resolve({ ok: true, json: async () => ({
@@ -383,8 +388,8 @@ test('immediate notification reopen does not restore deleted selected art from l
 
   await h.open(fallback);
 
-  assert.ok(!h.context.state.coverLookup.modal.localCovers.some(card => card.path === a.cover_path));
-  assert.equal(h.context.state.coverLookup.modal.activeLocalSelectionPath, fallback.cover_path);
+  assert.ok(!h.context.state.coverLookup.modal.localCovers.some(card => card.candidate_cover_ref === a.cover_ref));
+  assert.equal(h.context.state.coverLookup.modal.activeLocalSelectionRef, fallback.cover_ref);
 });
 
 test('closing without reopening settles the local deletion without a new gallery read', async () => {
@@ -404,7 +409,7 @@ test('Save closes immediately while selected-cover deletion applies its fallback
   const h = harness(), a = album('A');
   await h.open(a);
 
-  const deletion = h.context.deleteLocalCoverFromLookup(a.cover_path);
+  const deletion = h.context.deleteLocalCoverFromLookup(a.cover_ref);
   assert.equal(h.save.disabled, false, 'the optimistic fallback is immediately actionable');
 
   await h.context.saveCoverFromLookup();
@@ -433,6 +438,17 @@ for (const outcome of ['success', 'error']) {
     await again;
   });
 }
+
+test('a failed deletion keeps a cover selected while it ran', async () => {
+  const h = harness(), a = album('A');
+  await h.open(a);
+  const pending = h.context.deleteLocalCoverFromLookup(a.cover_ref);
+  h.context.selectLocalCoverFromLookup('/A/next.jpg');
+  await h.settle(0, 'error');
+  await pending;
+  assert.equal(h.context.state.coverLookup.modal.pendingLocalRef, '/A/next.jpg');
+  assert.equal(h.save.disabled, false, 'the preserved draft is ready to Save');
+});
 
 test('a reopened reconciliation read cannot overwrite a subsequently admitted local save', async () => {
   const h = harness(), a = album('A');

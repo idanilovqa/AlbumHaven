@@ -139,6 +139,7 @@ test('S01 ordinary typing and modified shortcuts do not change the active tab', 
 
 test('S03 ArrowDown opens Filters and focuses its first option', () => {
   const { context, els } = harness();
+  context.state.utility.problematicFilesComplete = true;
   const option = element({ 'data-problem-filter-value': 'Missing year' });
   els.problemFilterButton.closest = (selector) => selector.includes('problem-filter') ? els.problemFilterButton : null;
   els.problemFilterMenu.querySelectorAll = () => [option];
@@ -198,6 +199,7 @@ test('S03 disabled Filters does not activate through keyboard navigation', () =>
 
 test('S03 filter menu uses the shared trigger anchor and clears it when closed', () => {
   const { context, els } = harness();
+  context.state.utility.problematicFilesComplete = true;
   const anchored = [];
   const cleared = [];
   context.getProblemReasonTypes = () => ['Missing year', 'Encoding'];
@@ -216,6 +218,7 @@ test('S03 filter menu uses the shared trigger anchor and clears it when closed',
 
 test('S03 a selected problem filter shows a check instead of the word on', () => {
   const { context, els } = harness();
+  context.state.utility.problematicFilesComplete = true;
   context.getProblemReasonTypes = () => ['Missing year', 'Encoding'];
   context.state.utility.problemDropdownOpen = true;
   context.state.utility.selectedProblemFilters = ['Missing year'];
@@ -226,15 +229,23 @@ test('S03 a selected problem filter shows a check instead of the word on', () =>
   assert.match(unselected, /utility-problem-filter-check" aria-hidden="true"><\/span>/);
 });
 
-test('S03 the filter menu says more problem types are coming until the full list loads', () => {
+test('S03 the filter menu stays closed and disabled until every problem type has loaded', () => {
   const { context, els } = harness();
   context.getProblemReasonTypes = () => ['Missing year'];
   context.state.utility.problemDropdownOpen = true;
   context.state.utility.problematicFilesComplete = false;
   context.renderProblemFilterControls(els);
-  assert.match(els.problemFilterMenu.innerHTML, /Loading more problem types/);
+  // cd08172b3 replaced the partial list and its "Loading more problem types" note.
+  assert.equal(els.problemFilterButton.disabled, true);
+  assert.equal(context.state.utility.problemDropdownOpen, false);
+  assert.equal(els.problemFilterMenu.hidden, true);
+  assert.doesNotMatch(els.problemFilterMenu.innerHTML, /Missing year|Loading more problem types/);
   context.state.utility.problematicFilesComplete = true;
+  context.state.utility.problemDropdownOpen = true;
   context.renderProblemFilterControls(els);
+  assert.equal(els.problemFilterButton.disabled, false);
+  assert.equal(els.problemFilterMenu.hidden, false);
+  assert.match(els.problemFilterMenu.innerHTML, /Missing year/);
   assert.doesNotMatch(els.problemFilterMenu.innerHTML, /Loading more problem types/);
 });
 

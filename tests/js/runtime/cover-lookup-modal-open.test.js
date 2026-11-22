@@ -735,7 +735,7 @@ test('stale task polling cannot regress an active optimistic split or re-merge',
   ];
   const merged = {
     ...original,
-    cover_path: 'N:/Music/DDT/Remixes/folder.jpg',
+    cover_ref: 'N:/Music/DDT/Remixes/folder.jpg',
     tracks: [...tracks],
   };
   const overlay = { hidden: true, classList: { toggle() {} } };
@@ -798,8 +798,8 @@ test('stale task polling cannot regress an active optimistic split or re-merge',
     updated_albums: [merged],
   });
   assert.equal(
-    context.state.coverLookup.tasks[0].album_payload.cover_path,
-    merged.cover_path,
+    context.state.coverLookup.tasks[0].album_payload.cover_ref,
+    merged.cover_ref,
     'the optimistic re-merge updates the task payload before the next poll',
   );
   context.state.coverLookup.tasks = context.mergeCoverLookupTaskSummaries([{
@@ -825,8 +825,8 @@ test('stale task polling cannot regress an active optimistic split or re-merge',
   assert.equal(context.state.coverLookup.tasks[0].status, 'running');
   assert.equal(context.state.coverLookup.tasks[0].progress_label, 'Searching...');
   assert.equal(
-    context.state.coverLookup.tasks[0].album_payload.cover_path,
-    merged.cover_path,
+    context.state.coverLookup.tasks[0].album_payload.cover_ref,
+    merged.cover_ref,
     'the stale pending response must not discard optimistic re-merge metadata',
   );
   assert.equal(
@@ -851,7 +851,7 @@ test('stale task polling cannot regress an active optimistic split or re-merge',
   assert.equal(context.state.coverLookup.tasks[0].candidate_updated_at, '2026-11-12T12:00:01Z');
   assert.equal(context.state.coverLookup.tasks[0].job_kind, 'optimistic-remerge');
   assert.equal(context.state.coverLookup.tasks[0].selected_candidate_id, 'optimistic-candidate');
-  assert.equal(context.state.coverLookup.tasks[0].updated_albums[0].cover_path, merged.cover_path);
+  assert.equal(context.state.coverLookup.tasks[0].updated_albums[0].cover_ref, merged.cover_ref);
 
   context.state.coverLookup.tasks = [{
     id: 'reused-task',
@@ -919,7 +919,7 @@ test('stale task polling cannot regress an active optimistic split or re-merge',
   const appliedAlbums = [];
   context.state.coverLookup.appliedTaskUpdateSignatures = {};
   context.clearOptimisticAlbumCovers = albums => appliedAlbums.push(...albums);
-  context.markAlbumCoverPathsFresh = () => {};
+  context.markAlbumCoverRefsFresh = () => {};
   context.syncCoverLookupAlbumReferences = () => {};
   context.refreshCoverLookupAlbumArtwork = () => {};
   const newGenerationTerminal = {
@@ -1995,34 +1995,34 @@ test('latest optimistic local cover remains selected across stale gallery reconc
   const existingAlbum = { key: 'existing-cover' };
   const existingGallery = {
     local_covers: [
-      { path: '/covers/old.jpg', is_active: true },
-      { path: '/covers/existing.jpg', is_active: false },
+      { candidate_cover_ref: '/covers/old.jpg', is_active: true },
+      { candidate_cover_ref: '/covers/existing.jpg', is_active: false },
     ],
-    active_cover_path: '/covers/old.jpg',
-    selected_source_path: '/covers/old.jpg',
+    active_cover_ref: '/covers/old.jpg',
+    selected_source_cover_ref: '/covers/old.jpg',
   };
   context.cacheCoverLookupGalleryPayload(existingAlbum, existingGallery);
-  context.cacheOptimisticLocalCoverGallery(existingAlbum, { path: '/covers/existing.jpg' });
+  context.cacheOptimisticLocalCoverGallery(existingAlbum, { candidate_cover_ref: '/covers/existing.jpg' });
   const reconciledExisting = context.reconcileCoverLookupLocalInventory(
     existingAlbum,
     existingGallery,
     false,
   );
-  assert.equal(reconciledExisting.selected_source_path, '/covers/existing.jpg');
+  assert.equal(reconciledExisting.selected_source_cover_ref, '/covers/existing.jpg');
 
   const addedAlbum = { key: 'two-added-covers' };
   const staleGallery = {
-    local_covers: [{ path: '/covers/old.jpg', is_active: true }],
-    active_cover_path: '/covers/old.jpg',
-    selected_source_path: '/covers/old.jpg',
+    local_covers: [{ candidate_cover_ref: '/covers/old.jpg', is_active: true }],
+    active_cover_ref: '/covers/old.jpg',
+    selected_source_cover_ref: '/covers/old.jpg',
   };
   context.cacheCoverLookupGalleryPayload(addedAlbum, staleGallery);
-  context.cacheOptimisticLocalCoverGallery(addedAlbum, { path: '/covers/first-new.jpg' });
-  context.cacheOptimisticLocalCoverGallery(addedAlbum, { path: '/covers/second-new.jpg' });
+  context.cacheOptimisticLocalCoverGallery(addedAlbum, { candidate_cover_ref: '/covers/first-new.jpg' });
+  context.cacheOptimisticLocalCoverGallery(addedAlbum, { candidate_cover_ref: '/covers/second-new.jpg' });
   const reconciledAdded = context.reconcileCoverLookupLocalInventory(addedAlbum, staleGallery, false);
-  assert.equal(reconciledAdded.selected_source_path, '/covers/second-new.jpg');
+  assert.equal(reconciledAdded.selected_source_cover_ref, '/covers/second-new.jpg');
   assert.deepEqual(
-    Array.from(reconciledAdded.local_covers, cover => cover.path),
+    Array.from(reconciledAdded.local_covers, cover => cover.candidate_cover_ref),
     ['/covers/first-new.jpg', '/covers/old.jpg', '/covers/second-new.jpg'],
   );
 });
@@ -2038,31 +2038,31 @@ test('authoritative latest cover stays selected while an older addition remains 
 
   const album = { key: 'latest-confirmed-first-pending' };
   const originalGallery = {
-    local_covers: [{ path: '/covers/old.jpg', is_active: true }],
-    active_cover_path: '/covers/old.jpg',
-    selected_source_path: '/covers/old.jpg',
+    local_covers: [{ candidate_cover_ref: '/covers/old.jpg', is_active: true }],
+    active_cover_ref: '/covers/old.jpg',
+    selected_source_cover_ref: '/covers/old.jpg',
   };
   context.cacheCoverLookupGalleryPayload(album, originalGallery);
-  context.cacheOptimisticLocalCoverGallery(album, { path: '/covers/first-new.jpg' });
-  context.cacheOptimisticLocalCoverGallery(album, { path: '/covers/latest-new.jpg' });
+  context.cacheOptimisticLocalCoverGallery(album, { candidate_cover_ref: '/covers/first-new.jpg' });
+  context.cacheOptimisticLocalCoverGallery(album, { candidate_cover_ref: '/covers/latest-new.jpg' });
 
   const reconciled = context.reconcileCoverLookupLocalInventory(album, {
     ...originalGallery,
     local_covers: [
-      { path: '/covers/latest-new.jpg', is_active: true },
-      { path: '/covers/old.jpg', is_active: false },
+      { candidate_cover_ref: '/covers/latest-new.jpg', is_active: true },
+      { candidate_cover_ref: '/covers/old.jpg', is_active: false },
     ],
-    active_cover_path: '/covers/latest-new.jpg',
-    selected_source_path: '/covers/latest-new.jpg',
+    active_cover_ref: '/covers/latest-new.jpg',
+    selected_source_cover_ref: '/covers/latest-new.jpg',
   }, true);
 
-  assert.equal(reconciled.selected_source_path, '/covers/latest-new.jpg');
+  assert.equal(reconciled.selected_source_cover_ref, '/covers/latest-new.jpg');
   assert.equal(
-    reconciled.local_covers.find(cover => cover.is_active)?.path,
+    reconciled.local_covers.find(cover => cover.is_active)?.candidate_cover_ref,
     '/covers/latest-new.jpg',
   );
   assert.ok(
-    reconciled.local_covers.some(cover => cover.path === '/covers/first-new.jpg'),
+    reconciled.local_covers.some(cover => cover.candidate_cover_ref === '/covers/first-new.jpg'),
     'the older pending addition remains visible without owning selection',
   );
 });
@@ -2078,23 +2078,23 @@ test('selected path echo cannot confirm an optimistic cover absent from local in
 
   const album = { key: 'delayed-selected-cover' };
   const originalGallery = {
-    local_covers: [{ path: '/covers/old.jpg', is_active: true }],
-    active_cover_path: '/covers/old.jpg',
-    selected_source_path: '/covers/old.jpg',
+    local_covers: [{ candidate_cover_ref: '/covers/old.jpg', is_active: true }],
+    active_cover_ref: '/covers/old.jpg',
+    selected_source_cover_ref: '/covers/old.jpg',
   };
   context.cacheCoverLookupGalleryPayload(album, originalGallery);
-  context.cacheOptimisticLocalCoverGallery(album, { path: '/covers/first-new.jpg' });
-  context.cacheOptimisticLocalCoverGallery(album, { path: '/covers/latest-new.jpg' });
+  context.cacheOptimisticLocalCoverGallery(album, { candidate_cover_ref: '/covers/first-new.jpg' });
+  context.cacheOptimisticLocalCoverGallery(album, { candidate_cover_ref: '/covers/latest-new.jpg' });
 
   const reconciled = context.reconcileCoverLookupLocalInventory(album, {
     ...originalGallery,
-    active_cover_path: '/covers/latest-new.jpg',
-    selected_source_path: '/covers/latest-new.jpg',
+    active_cover_ref: '/covers/latest-new.jpg',
+    selected_source_cover_ref: '/covers/latest-new.jpg',
   }, true);
 
-  assert.equal(reconciled.selected_source_path, '/covers/latest-new.jpg');
+  assert.equal(reconciled.selected_source_cover_ref, '/covers/latest-new.jpg');
   assert.equal(
-    reconciled.local_covers.find(cover => cover.is_active)?.path,
+    reconciled.local_covers.find(cover => cover.is_active)?.candidate_cover_ref,
     '/covers/latest-new.jpg',
   );
 });

@@ -9464,9 +9464,12 @@ for (const [kind, accepted] of [['local', false], ['remote', false], ['local', t
     await Promise.resolve();
     assert.equal(closed, 1, 'mobile sheet must close before server acknowledgement');
     context.state.coverLookup.modal.saving = false;
-    await (kind === 'local'
-      ? context.saveLocalCoverFromLookup('N:/Mobile/new.jpg') : context.saveRemoteCoverFromLookup());
+    const repeated = kind === 'local'
+      ? context.saveLocalCoverFromLookup('N:/Mobile/new.jpg') : context.saveRemoteCoverFromLookup();
+    // Assert before awaiting: a duplicate submit never resolves here, and hanging cancels the rest of the file.
+    await new Promise(resolve => setImmediate(resolve));
     assert.equal(requests, 1, 'reopening the same album must not submit the pending save twice');
+    await repeated;
     const newer = { album: { key: 'another', tracks: [{ path: 'N:/Other/01.flac' }] } };
     context.state.coverLookup.modal = newer;
     respond({ ok: accepted, json: async () => accepted

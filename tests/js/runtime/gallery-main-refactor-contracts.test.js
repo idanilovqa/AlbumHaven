@@ -597,7 +597,9 @@ test('artist info stays open and follows its header while the gallery scrolls', 
   // Keep unrelated chrome/layout work outside this event-lifecycle test.
   context.ensureGalleryMainState = () => ({});
   context.observeArtistFamilyPanelBounds = () => null;
-  context.updateGalleryMainChrome = () => { if (anchor) anchor.isConnected = false; };
+  context.updateGalleryMainChrome = () => {};
+  // A scroll updates only the bar's context (c343b0786); the virtual header is replaced by then.
+  context.updateGalleryMainScrollContext = () => { if (anchor) anchor.isConnected = false; };
   context.focusGalleryMainSurface = () => {};
   context.initGalleryMain();
   anchor = {
@@ -835,7 +837,7 @@ test('reusable GalleryBar, switch, panel, divider, and artist heading render acc
   assert.match(artistHeading, /Flying Colors[\s\S]*4 albums/);
 });
 
-test('current GalleryBar owner keeps desktop metadata to two lines and lets mobile labels wrap below controls', () => {
+test('current GalleryBar owner keeps desktop and mobile metadata to two lines without running under the controls', () => {
   const context = loadRuntime();
   const projection = {
     country: 'Russia',
@@ -872,7 +874,7 @@ test('current GalleryBar owner keeps desktop metadata to two lines and lets mobi
   assert.match(markup, /data-gallery-context-metadata><span class="gallery-bar__artist-country"><span class="ui-metadata-pill ui-metadata-pill--country">Russia<\/span><\/span><\/span>/,
     'the first line ends with the country pill');
   assert.match(markup, /data-gallery-context-mobile-summary><span class="gallery-bar__summary-count">4 albums<\/span><span class="gallery-bar__artist-country"><span class="ui-metadata-pill ui-metadata-pill--country">Russia<\/span><\/span><span class="gallery-bar__artist-genres"><span class="gallery-bar__artist-genre"><span class="ui-metadata-pill ui-metadata-pill--genre">Heavy Metal<\/span>/,
-    'mobile places country before genre labels in one wrapping metadata row');
+    'mobile places country before genre labels in one metadata row');
   assert.match(markup, /data-gallery-context-summary><span class="gallery-bar__summary-count">4 albums<\/span><span class="gallery-bar__artist-genres"><span class="gallery-bar__artist-genre"><span class="ui-metadata-pill ui-metadata-pill--genre">Heavy Metal<\/span>/,
     'desktop keeps count and ranked genres on its second line');
   assert.doesNotMatch(galleryMainCssSource, /\.gallery-bar__artist-country::before\s*\{[^}]*content:/s);
@@ -881,7 +883,9 @@ test('current GalleryBar owner keeps desktop metadata to two lines and lets mobi
   assert.doesNotMatch(galleryMainCssSource + mobileLayoutCssSource, /\.gallery-bar__artist-metadata\s*\{[^}]*flex-wrap:\s*wrap/s);
   assert.equal((markup.match(/data-gallery-context-mobile-summary/g) || []).length, 1, 'mobile metadata has one owner');
   assert.match(mobileLayoutCssSource, /data-gallery-context-kind="artist"[^}]*grid-template-rows:\s*24px auto/s);
-  assert.match(mobileLayoutCssSource, /gallery-bar__artist-mobile-summary[^}]*grid-column:\s*2 \/ -1;[^}]*flex-wrap:\s*wrap/s);
+  // Owner (MOBILE-SETTINGS-HEADER 2, 6, 7; 2026-11-18): one line that stops before the title-line buttons.
+  assert.match(mobileLayoutCssSource, /gallery-bar__artist-mobile-summary\s*\{[^}]*grid-column:\s*text \/ actions;[^}]*flex-wrap:\s*nowrap;[^}]*overflow:\s*hidden/s);
+  assert.match(mobileLayoutCssSource, /is-controls-below \.gallery-bar__artist-mobile-summary\s*\{[^}]*grid-column:\s*text \/ end;/s);
   assert.match(mobileLayoutCssSource, /data-gallery-context-kind="artist"[^}]*\.gallery-bar__summary\s*\{\s*display:\s*none;/s);
   assert.match(galleryMainCssSource, /\.gallery-bar__artist-genres\s*\{[^}]*overflow:\s*hidden/s);
 });

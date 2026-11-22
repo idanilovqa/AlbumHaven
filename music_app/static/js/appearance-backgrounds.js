@@ -338,7 +338,9 @@
     rootElement.setAttribute?.('data-docked-compact-player-regular-style', String(preference.docked_compact_player_regular_style === true));
     rootElement.setAttribute?.('data-album-details-layout', preference.album_details_layout || 'classic_bar');
     rootElement.setAttribute?.('data-album-playing-row-animation', preference.album_playing_row_animation || 'enabled');
-    rootElement.setAttribute?.('data-album-art-quality-alert', preference.album_art_quality_alert || 'enabled');
+    const artQualityAlert = preference.album_art_quality_alert || 'enabled';
+    // Every color input re-applies the theme; a write restyles the document, so write only a changed choice.
+    if (rootElement.getAttribute?.('data-album-art-quality-alert') !== artQualityAlert) rootElement.setAttribute?.('data-album-art-quality-alert', artQualityAlert);
     for (const [name, enabled] of Object.entries(normalizeSourceIndicators(preference.library_source_indicators))) {
       rootElement.setAttribute?.('data-library-source-' + name.replaceAll('_', '-'), String(enabled));
     }

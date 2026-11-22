@@ -291,3 +291,19 @@ def test_projected_artist_carries_the_discogs_artist_id():
         "relations": [_discogs("https://www.discogs.com/artist/82730")],
     })
     assert artist["discogs_artist_id"] == 82730
+
+
+@pytest.mark.parametrize("method,key", [
+    ("lookup_release", "release"), ("lookup_release_group", "release_group"), ("lookup_release_tracklist", "release"),
+])
+def test_a_merged_mbid_names_the_entity_it_now_points_to(method, key):
+    requested = "00000000-0000-4000-8000-0000000000a1"
+    target = "00000000-0000-4000-8000-0000000000a2"
+    client = _client_api().MusicBrainzClient(
+        base_url="http://127.0.0.1:5050/ws/2", user_agent="AlbumHaven/test",
+        get_json=lambda _url, _agent, **_kwargs: ({"id": target, "title": "Merged"}, {"status": "network"}))
+
+    found = getattr(client, method)(requested)[key]
+
+    # The matcher keys stored groups and releases by the id it asked for.
+    assert (found["id"], found["canonical_id"]) == (requested, target)

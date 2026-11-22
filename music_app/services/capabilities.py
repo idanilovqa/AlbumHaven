@@ -108,7 +108,10 @@ ROLE_PRESETS = MappingProxyType({
 
 # Compatibility for fine-grained grants assigned before the artwork/custom-cover
 # split. These aliases never expand audio authority from a browse-only grant.
+# Album identity is no key of its own: the match-review grant carries it (owner
+# 2026-11-22), and its policy also admits administrators, unlike that key's routes.
 ACTION_GRANT_ALIASES = MappingProxyType({
+    "library.album_identity.edit": frozenset({"library.metadata_matches.review"}),
     "library.artwork.read": frozenset({"library.media.read", "library.browse.read"}),
     "library.covers.upload": frozenset({"library.covers.write"}),
     "library.covers.link": frozenset({"library.covers.write"}),
@@ -174,7 +177,9 @@ def client_allows_action(action: str, surface: str, *, administrator: bool) -> b
         return False
     if surface == "tv" and capabilities & {"practice", "admin"}:
         return False
-    if surface == "tv" and action in {"library.covers.upload", "library.covers.link"}:
+    if surface == "tv" and action in {
+        "library.album_identity.edit", "library.covers.upload", "library.covers.link",
+    }:
         return False
     if surface in {"private_web", "cloud_web"} and "edit" in capabilities and not administrator:
         return False

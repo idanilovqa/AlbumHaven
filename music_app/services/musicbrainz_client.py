@@ -84,6 +84,11 @@ def _integer(value: object, default: int = 0) -> int:
         return default
 
 
+def _canonical_id(payload: Mapping[str, object], requested: str) -> str:
+    """MusicBrainz answers a merged MBID with the entity it was merged into."""
+    return _valid_mbid(payload.get("id")) or requested
+
+
 def artist_url(mbid: object) -> str | None:
     normalized = _valid_mbid(mbid)
     return f"https://musicbrainz.org/artist/{normalized}" if normalized else None
@@ -653,7 +658,8 @@ class MusicBrainzClient:
             return {"classification": _transport_classification(transport), "transport": transport}
         group = payload.get("release-group") if isinstance(payload.get("release-group"), dict) else {}
         return {"classification": "complete", "release": {
-            "id": normalized, "title": _text(payload.get("title")), "date": _text(payload.get("date")) or None,
+            "id": normalized, "canonical_id": _canonical_id(payload, normalized),
+            "title": _text(payload.get("title")), "date": _text(payload.get("date")) or None,
             "track_count": sum(_integer(medium.get("track-count")) for medium in payload.get("media") or []
                                if isinstance(medium, dict)),
             "release_group_id": _valid_mbid(group.get("id")),
@@ -682,7 +688,8 @@ class MusicBrainzClient:
             for genre in payload.get("genres") or [] if isinstance(genre, dict) and _text(genre.get("name"))
         ]
         return {"classification": "complete", "release_group": {
-            "id": normalized, "title": _text(payload.get("title")),
+            "id": normalized, "canonical_id": _canonical_id(payload, normalized),
+            "title": _text(payload.get("title")),
             "primary_type": _text(payload.get("primary-type")) or None,
             "secondary_types": [_text(kind) for kind in payload.get("secondary-types") or [] if _text(kind)],
             "first_release_date": _text(payload.get("first-release-date")) or None,
@@ -770,7 +777,8 @@ class MusicBrainzClient:
                 "format": _text(medium.get("format")) or None, "track_count": len(tracks), "tracks": tracks,
             })
         return {"classification": "complete", "release": {
-            "id": normalized, "title": _text(payload.get("title")), "date": _text(payload.get("date")) or None,
+            "id": normalized, "canonical_id": _canonical_id(payload, normalized),
+            "title": _text(payload.get("title")), "date": _text(payload.get("date")) or None,
             "country": _text(payload.get("country")) or None, "barcode": _text(payload.get("barcode")) or None,
             "status": _text(payload.get("status")) or None, "disambiguation": _text(payload.get("disambiguation")) or None,
             "release_group_id": _valid_mbid(group.get("id")),

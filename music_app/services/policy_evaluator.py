@@ -15,6 +15,7 @@ _PRIMARY_OWNER_ACTIONS = frozenset({
     "catalogue.enrichment.request",
     "library.metadata_matches.review",
 })
+_LIBRARY_OWNER_OR_ADMINISTRATOR_ACTIONS = frozenset({"library.album_identity.edit"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,6 +121,12 @@ class PolicyEvaluator:
             for relationship in actor.library_relationships
         ):
             return False, "library_owner_required"
+        if context.action in _LIBRARY_OWNER_OR_ADMINISTRATOR_ACTIONS and not any(
+            relationship.library_id == context.library_id
+            and (relationship.is_primary_owner or administrator)
+            for relationship in actor.library_relationships
+        ):
+            return False, "library_owner_or_administrator_required"
         if actor.is_bootstrap_owner:
             return True, "bootstrap_owner"
         if context.action == "auth.session.logout" and actor.session_id is not None:

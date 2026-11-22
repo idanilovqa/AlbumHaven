@@ -1956,6 +1956,12 @@ def test_bootstrap_preflight_skips_noop_service_reconfiguration() -> None:
     assert "if ($service.Status -ne 'Running')" in source
 
 
+def test_bootstrap_sql_errors_do_not_quote_the_statement() -> None:
+    source = BOOTSTRAP_PATH.read_text(encoding="utf-8")
+    runner = source.split("function Invoke-PsqlText", 1)[1].split("\nfunction ", 1)[0]
+    assert "-v VERBOSITY=terse" in runner
+
+
 def test_bootstrap_preflight_prefers_ready_loopback_server_and_fails_closed(
     tmp_path: Path,
 ) -> None:
@@ -2014,6 +2020,7 @@ function Set-Service { $script:serviceCalls += 'set' }
 function Start-Service { $script:serviceCalls += 'start'; $env:TEST_POSTGRES_READY = '1' }
 function Start-Sleep {}
 $ServiceName = 'postgresql-x64-18'
+$onGithubActions = $true
 $ExpectedMajorVersion = '18'
 $HostName = 'localhost'
 $Port = 5432
@@ -2039,7 +2046,11 @@ function Invoke-Scenario(
     }
 }
 
+$onGithubActions = $false
+$unavailableLocally = Invoke-Scenario $false '18.0' '180000' $false
+$onGithubActions = $true
 [ordered]@{
+    unavailableLocally = $unavailableLocally
     ready = Invoke-Scenario $true '18.0' '180000' $false
     unavailable = Invoke-Scenario $false '18.0' '180000' $false
     wrongClientMajor = Invoke-Scenario $true '17.0' '180000' $false
@@ -2068,6 +2079,8 @@ function Invoke-Scenario(
     assert outcomes["ready"] == {"ok": True, "calls": [], "error": ""}
     assert outcomes["unavailable"]["ok"] is True
     assert outcomes["unavailable"]["calls"] == ["get", "start"]
+    assert outcomes["unavailableLocally"]["ok"] is False
+    assert outcomes["unavailableLocally"]["calls"] == [], "no service is read or changed outside GitHub Actions"
     assert outcomes["wrongClientMajor"]["ok"] is False
     assert "client version" in outcomes["wrongClientMajor"]["error"].casefold()
     assert outcomes["wrongServerMajor"]["ok"] is False

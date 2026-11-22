@@ -194,7 +194,8 @@ function Invoke-Checked([string]$Executable, [string[]]$Arguments) {
 }
 
 function Invoke-PsqlText([string]$Psql, [string]$Role, [string]$Database, [string]$Sql) {
-    $Sql | & $Psql -X -w -v ON_ERROR_STOP=1 -h $HostName -p $Port -U $Role -d $Database
+    # Terse: a failed statement's error must not quote the statement, which can hold a password.
+    $Sql | & $Psql -X -w -v ON_ERROR_STOP=1 -v VERBOSITY=terse -h $HostName -p $Port -U $Role -d $Database
     if ($LASTEXITCODE -ne 0) { throw 'PostgreSQL command failed.' }
 }
 
@@ -272,6 +273,8 @@ function Assert-ProvisionPreflight([object]$Contract) {
     & $ready -h $HostName -p $Port -q
     $alreadyReady = $LASTEXITCODE -eq 0
     if (-not $alreadyReady) {
+        # Outside GitHub Actions the named service is the installed server, whatever port was asked for.
+        if (-not $onGithubActions) { throw 'The bootstrap never starts or changes a service outside GitHub Actions: start the throwaway cluster first.' }
         $service = Get-Service -Name $ServiceName -ErrorAction Stop
         if ($service.Name -cne $ServiceName) { throw 'Unexpected PostgreSQL service.' }
         if ($service.StartType -ne 'Automatic') { Set-Service -Name $ServiceName -StartupType Automatic }

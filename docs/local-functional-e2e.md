@@ -23,8 +23,9 @@ to the same functional-shard runner used by CI, and removes its state afterward.
 
 - `ALBUM_HAVEN_TEST_POSTGRES_PORT` names the port of a throwaway PostgreSQL
   cluster. Outside GitHub Actions the runner refuses 5432, the installed
-  server's port, which can serve real data. Without a throwaway cluster, run
-  the hosted gates instead.
+  server's port, which can serve real data, and never starts or changes a
+  Windows service. The cluster must already be running and must be the data
+  directory of the configured service; otherwise run the hosted gates.
 
 The runner connects through `localhost`. Do not replace it with `127.0.0.1`:
 pgpass host matching is exact, and the supported local entry is scoped to

@@ -101,15 +101,40 @@ def _differs(current: object, proposed: object) -> bool:
     return bool(str(proposed or "").strip()) and comparable(current) != comparable(proposed)
 
 
+def paired_tracks(album: Mapping[str, object]) -> list[tuple[Mapping[str, object], Mapping[str, object]]]:
+    """Each local track with the release track it is compared against: by the stored edition
+    pairing when reordered; by position when the order is exact; without a stored pairing, by
+    position only where the titles agree. An ambiguous pairing pairs none."""
+    pairing = album.get("pairing")
+    quality = (pairing or {}).get("match_quality")
+    if quality == "ambiguous":
+        return []
+    by_position = {(int(medium.get("position") or 1), int(track.get("position") or 0)): track
+                   for medium in album.get("media") or [] for track in medium.get("tracks") or []}
+    first_medium = int(album.get("disc_position") or 1)
+    stored = (pairing or {}).get("pairing") or {}
+    pairs = []
+    for local in album.get("tracks") or []:
+        disc, number = int(local.get("disc_number") or 1), int(local.get("track_number") or 0)
+        if quality == "reordered":
+            remote = by_position.get(stored.get((disc, number)))
+        else:
+            remote = by_position.get((first_medium + disc - 1, number))
+            if remote is not None and pairing is None and not same_track_title(local.get("title"), remote.get("title")):
+                remote = None
+        if remote is not None:
+            pairs.append((local, remote))
+    return pairs
+
+
 def compare_album(album: Mapping[str, object]) -> dict[str, object]:
     """Every difference between an album's tags and its certain release, classified.
 
     ``album`` carries title, artist_name, release_title, release_credit, media, tracks
     [{disc_number, track_number, title, artist}] and ``pairing`` as album_track_pairing
-    returns it (None until the album is re-checked). Tracks pair by the stored edition pairing
-    when reordered; by position when the order is exact; without a stored pairing, by position
-    only where the titles agree. An ambiguous pairing compares no tracks and sends the album to
-    review whole; so does the guard. Returns {"rows": [...], "review_whole": bool}."""
+    returns it (None until the album is re-checked). Tracks pair as paired_tracks says. An
+    ambiguous pairing compares no tracks and sends the album to review whole; so does the
+    guard. Returns {"rows": [...], "review_whole": bool}."""
     rows: list[dict[str, object]] = []
 
     def add(field, disc, track, current, proposed):
@@ -120,27 +145,13 @@ def compare_album(album: Mapping[str, object]) -> dict[str, object]:
 
     add("album", 0, 0, album.get("title"), album.get("release_title"))
     add("album_artist", 0, 0, album.get("artist_name"), album.get("release_credit"))
-    pairing = album.get("pairing")
-    quality = (pairing or {}).get("match_quality")
-    by_position = {(int(medium.get("position") or 1), int(track.get("position") or 0)): track
-                   for medium in album.get("media") or [] for track in medium.get("tracks") or []}
-    first_medium = int(album.get("disc_position") or 1)
-    compared_titles = 0
-    if quality != "ambiguous":
-        stored = (pairing or {}).get("pairing") or {}
-        for local in album.get("tracks") or []:
-            disc, number = int(local.get("disc_number") or 1), int(local.get("track_number") or 0)
-            if quality == "reordered":
-                remote = by_position.get(stored.get((disc, number)))
-            else:
-                remote = by_position.get((first_medium + disc - 1, number))
-                if remote is not None and pairing is None and not same_track_title(local.get("title"), remote.get("title")):
-                    remote = None
-            if remote is None:
-                continue
-            compared_titles += 1
-            add("title", disc, number, local.get("title"), remote.get("title"))
-            add("artist", disc, number, local.get("artist"), credit_text(remote.get("artist_credit") or []))
+    quality = (album.get("pairing") or {}).get("match_quality")
+    pairs = paired_tracks(album)
+    compared_titles = len(pairs)
+    for local, remote in pairs:
+        disc, number = int(local.get("disc_number") or 1), int(local.get("track_number") or 0)
+        add("title", disc, number, local.get("title"), remote.get("title"))
+        add("artist", disc, number, local.get("artist"), credit_text(remote.get("artist_credit") or []))
     substantial = sum(1 for row in rows if row["field"] == "title" and row["kind"] == "track_title")
     review_whole = quality == "ambiguous" or (compared_titles > 0 and substantial / compared_titles > GUARD_SHARE)
     for row in rows:

@@ -135,3 +135,23 @@ def test_a_composer_first_credit_is_proposed_as_musicbrainz_orders_it_and_waits_
 
 def test_a_classical_album_already_credited_as_musicbrainz_does_has_no_correction():
     assert compare_album(_classical("Antonín Dvořák; Inna Poroshina"))["rows"] == []
+
+
+def test_edit_tags_pairs_tracks_exactly_as_data_correction_does():
+    from music_app.services.musicbrainz_correction_kinds import paired_tracks
+
+    local = [{"id": 1, "disc_number": 1, "track_number": 1, "title": "Second"},
+             {"id": 2, "disc_number": 1, "track_number": 2, "title": "First"}]
+    media = [{"position": 1, "tracks": [{"position": 1, "title": "First"}, {"position": 2, "title": "Second"}]}]
+
+    def pairs(pairing, tracks=local):
+        return [(track["id"], remote["title"])
+                for track, remote in paired_tracks({"tracks": tracks, "media": media, "pairing": pairing})]
+
+    assert pairs({"match_quality": "order_exact"}) == [(1, "First"), (2, "Second")]
+    assert pairs({"match_quality": "reordered", "pairing": {(1, 1): (1, 2), (1, 2): (1, 1)}}) == [
+        (1, "Second"), (2, "First")]
+    # An ambiguous pairing hints at nothing; without a stored one only agreeing titles pair.
+    assert pairs({"match_quality": "ambiguous"}) == []
+    assert pairs(None) == []
+    assert pairs(None, [{**local[0], "title": "First"}]) == [(1, "First")]

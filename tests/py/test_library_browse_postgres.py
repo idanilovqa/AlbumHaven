@@ -13890,7 +13890,8 @@ def test_duplicate_absence_cache_skips_source_projection_when_candidates_are_emp
 
     assert album["has_duplicate_files"] is False
     cached = repository._get_cached_utility_projection("duplicate-absence")
-    assert cached["albums"] == {"one": {"duplicate_sources": []}}
+    # No source rows means unknown identities: the next tag save drops this entry.
+    assert cached["albums"] == {"one": {"duplicate_sources": [], "_identities": None}}
     browse.invalidate_postgres_utility_projection_cache()
 
 

@@ -10,7 +10,7 @@ const ARTIST = 'Playback Start Signals';
 const ALBUM = 'Length And Repetition';
 // The browser runs four times slower than the runner, as on a busy laptop.
 const CPU_SLOWDOWN = 4;
-// The owner's bar: sound well under a second after Play even when the machine is busy.
+// The bar: sound well under a second after Play even when the machine is busy.
 const CLICK_TO_SOUND_BUDGET = defineTimingBudget({
   metricId: 'playback-start.clickToSoundUnderCpuLoadMs',
   targetMaximum: 1000,

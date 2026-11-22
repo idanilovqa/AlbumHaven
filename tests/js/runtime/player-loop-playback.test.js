@@ -357,27 +357,24 @@ test('mirrored playback keeps metadata unobscured while showing its locked statu
   assert.equal(time.textContent, '10 - 20');
 });
 
-// Owner, sandbox5 2026-11-21: "the waveform is still of the old song, and it does not play a new
-// song for a few seconds". While a switch waits for its audio, a redraw of the player keeps the
-// pressed song's title instead of flipping back, and leaves the old song's waveform off.
+// While a switch waits for its audio, a redraw
+// of the player keeps the pressed song's title instead of flipping back; the waveform stays the
+// playing song's until the new one sounds.
 test('while a switch waits for its audio, the player shows the pressed song, not the old one', async () => {
   const oldTrack = { src: '/track?path=old.flac', path: 'C:/Music/old.flac', title: 'Old', artist: 'A' };
   const newTrack = { src: '/track?path=new.flac', path: 'C:/Music/new.flac', title: 'New', artist: 'A' };
   const title = new FakeElement();
-  const waveformDraws = [];
   let finishStart;
   const { context } = loadHelper({
     getPlayerElements: () => ({ title }),
     canStartPlaybackInThisTab: () => true,
     startStreamingTrack: () => new Promise((resolve) => { finishStart = resolve; }),
-    updateWaveformAppearance: () => { waveformDraws.push(context.state.player.selectedTrack?.path || ''); },
   });
   context.state.player.current = oldTrack;
 
   const playing = context.playTrackFromPayload(newTrack);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(title.textContent, 'A - New', 'the press shows the new song at once');
-  assert.equal(waveformDraws.at(-1), newTrack.path, 'the waveform is redrawn for the pressed song');
   context.updatePlayerUi();
   assert.equal(title.textContent, 'A - New', 'a redraw while the switch waits does not show the old song again');
 
@@ -739,7 +736,7 @@ test('pause awaiting an old scrobble cannot checkpoint a newer playing session',
   assert.strictEqual(context.state.player.listenSession, playingSession);
 });
 
-// Owner retest B-D4 (2026-11-17): offline, Pause silenced the music but the button kept showing
+// Offline, Pause silenced the music but the button kept showing
 // Pause while the listen checkpoint and the claim give-back waited on the network.
 test('pause shows Play at once while its listen checkpoint and claim give-back wait on the network', async () => {
   let finish;
@@ -761,7 +758,7 @@ test('pause shows Play at once while its listen checkpoint and claim give-back w
   pending.resolve(true);
 });
 
-// The same retest: offline, the checkpoint's lost request showed "Listening history could not be
+// Offline, the checkpoint's lost request showed "Listening history could not be
 // saved". With no answer the listen stays open and is saved with the next checkpoint instead.
 for (const failure of ['network', 'abort']) {
   test(`pause checkpoint with no answer (${failure}) keeps the listen and shows no alert`, async () => {

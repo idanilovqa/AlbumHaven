@@ -4942,8 +4942,8 @@ test('paused metadata and consumption update accounting without credit until exp
   assert.ok(diagnostics.inFlightFrames.continuity <= 5 * 48_000);
 });
 
-// Owner retest B-D4 round 7 (2026-11-18): "Then playhead is being reset into the beginning of the
-// track. The song does not restart when network is back." The owner's laptop serves the app through
+// The head was reset to the start of the track, and the song did not restart when the network was
+// back. Here the app is served through
 // a tunnel that answers 530 for about a minute after its Wi-Fi returns: every attempt in that
 // minute fails. A lost socket under audio that cannot play on waits at the heard place, still
 // playing, and reopens there on the first socket the server answers, with nothing pressed.
@@ -4983,7 +4983,7 @@ test('a lost socket waits playing at the heard place and reopens there once the 
   assert.equal(harness.api.snapshot().paused, false);
 });
 
-// Owner retest B-D4 round 7 (2026-11-18): "it took 6 clicks for another song to try". Each press
+// Another song needed up to six presses to play. Each press
 // in the minute the tunnel answered 530 failed and needed another; one press now waits for the server.
 test('another song pressed once while the server is still away opens on the first socket it answers', async () => {
   let serverBack = false;
@@ -5040,7 +5040,7 @@ test('a socket lost while another song waits to replace the playing one opens th
   assert.notEqual(harness.api.snapshot().mode, 'error');
 });
 
-// Hosted FTC-PLAYBACK-OFFLINE-002 (round 8): the socket died while a press on another song was still
+// Hosted FTC-PLAYBACK-OFFLINE-002: the socket died while a press on another song was still
 // starting. The old song's splice, or a restart of the old song at its place, then took the press's place.
 test('a socket lost while a press on another song is still starting opens only that song on the next socket', async () => {
   const harness = encodedHarness({ createStreamingDecoder: recordingDecoders().create });
@@ -5063,7 +5063,7 @@ test('a socket lost while a press on another song is still starting opens only t
   void press;
 });
 
-// Hosted FTC-PLAYBACK-OFFLINE-001/003 (round 8): two restarts in one outage left a close queued for
+// Hosted FTC-PLAYBACK-OFFLINE-001/003: two restarts in one outage left a close queued for
 // the first restart's stream, whose open never left the page. The server refused that close (4400)
 // on the next socket and the player stopped with an error.
 test('the next socket never gets a control for a stream that was not opened on it', async () => {
@@ -5093,7 +5093,7 @@ test('the next socket never gets a control for a stream that was not opened on i
   assert.notEqual(harness.api.snapshot().mode, 'error');
 });
 
-// sandbox5 (2026-11-21): a network that froze and came back gave no sign, and playback resumed 19.6 s
+// A network that froze and came back gave no sign, and playback resumed 19.6 s
 // later while an attempt with the doubled 16 s deadline hung. The server is asked every 1.5 s whether it
 // answers; once it does, the hanging attempt is replaced at once with the short deadline.
 test('after a frozen network, the hanging reconnect is replaced as soon as the server answers again', async () => {
@@ -5145,7 +5145,7 @@ test('after a frozen network, the hanging reconnect is replaced as soon as the s
   assert.notEqual(harness.api.snapshot().mode, 'error');
 });
 
-// sandbox5 (2026-11-21): after a minute of 502s, another song pressed in it played 4.8-18 s after the
+// After a minute of 502s, another song pressed in it played 4.8-18 s after the
 // server answered: the reconnect waited out 2 s, then the claim waited out its own 2 s retry. Attempts
 // the network refuses are retried every second, and the reopened socket has the claim ask at once.
 test('a socket that reopens after an outage has a claim waiting out its retry ask at once', async () => {
@@ -5180,7 +5180,7 @@ test('a socket that reopens after an outage has a claim waiting out its retry as
   assert.equal(retriedNow, 1, 'the claim asks as soon as the socket is back');
 });
 
-// sandbox5 r19 (2026-11-21): once the server answered again, every probe replaced the attempt then
+// Once the server answered again, every probe replaced the attempt then
 // connecting, which takes 1.6-2 s through the tunnel, so no socket ever opened. The attempt a probe
 // starts is on the network that answers and is left to connect; another is replaced only once it
 // has hung for 3 s.
@@ -5223,8 +5223,8 @@ test('a reconnect that a probe started is left to connect, however slowly, while
   assert.equal(harness.sockets.at(-1).closeCalls, 0);
 });
 
-// Owner round 9 (2026-11-21): "app does not understand network is back for a substantial amount of
-// time". After Wi-Fi returns the owner's tunnel answers 530 for minutes, then 200. Every 530 is still
+// The app must notice soon that the network is back. After Wi-Fi returns a tunnel can answer 530 for
+// minutes, then 200. Every 530 is still
 // unreachable, the server is asked again on every tick without backing off, and the first 200
 // replaces the hung attempt on that tick.
 test('a hung reconnect is replaced on the first good answer after a run of tunnel 530s, asked every tick', async () => {
@@ -5268,7 +5268,7 @@ test('a hung reconnect is replaced on the first good answer after a run of tunne
   assert.ok(harness.sockets.at(-1).sent.some(({ type }) => type === 'open'), 'and the song goes on on it');
 });
 
-// sandbox5 r20 (2026-11-21): after a 10 s outage another song pressed at once played 8.4 s later, while
+// After a 10 s outage another song pressed at once played 8.4 s later, while
 // an attempt begun during the outage hung out its time. A press is a fresh reason to try: the attempt
 // begun before it is replaced at once.
 test('a press on another song while a reconnect hangs replaces that attempt at once', async () => {
@@ -6974,7 +6974,7 @@ test('a seek inside the received bytes decodes them here, from the seek table, w
   assert.ok(harness.sent('credit').every(credit => credit.streamId === open.streamId));
 });
 
-// Owner, 2026-11-21: "a bug delay before player displays that playhead is in a new place". The rest of
+// A seek must show the head at its new place at once. The rest of
 // the song decoded in one call held the click's task, and the page's paint, for seconds.
 test('a local seek decodes only what its credit asks, a slice at a time, before the click returns', async () => {
   const { decoders, create } = recordingDecoders();
@@ -6999,7 +6999,7 @@ test('a local seek decodes only what its credit asks, a slice at a time, before 
   assert.equal(harness.engine.snapshot.currentTime, 10, 'the playhead is at the new place');
 });
 
-// sandbox5 r25 (2026-11-21): at 4x CPU a press on another song went unanswered for 15 s while every
+// At 4x CPU a press on another song went unanswered for 15 s while every
 // decoded chunk serialised the engine snapshot onto the page root. The snapshot is written once a frame.
 test('the diagnostics snapshot is written at most once per animation frame, however often the engine changes', async () => {
   const writes = [];
@@ -7452,7 +7452,7 @@ test('reconnects keep trying while the received audio plays, and once it runs ou
     type: 'underrun', generation: open.generation, streamId: open.streamId, role: 'current',
     renderedFrame: 1, missingFrames: 128,
   });
-  // The owner's rule (2026-11-17): losing the network never stops playback, however long.
+  // Losing the network never stops playback, however long.
   assert.deepEqual(timers.pending().map(({ delay }) => delay), [1_000], 'no deadline ends the wait');
   for (let attempt = 0; attempt < 20; attempt += 1) {
     timers.fire(timers.pending()[0]);
@@ -7734,8 +7734,8 @@ test('offline, a seek past the received audio jumps at once and plays from there
   assert.equal(harness.api.snapshot().diagnostics.transportState, 'connected');
 });
 
-// Owner retest B-D4 round 6 (2026-11-18, CPU at 100%): "delay before displaying where I clicked +
-// I have to do 2 clicks: first clicks moves playhead slightly, noit relevant ot where I click".
+// At 100% CPU a seek showed its place late, and took two clicks: the first moved the head only
+// slightly, not to where it was clicked.
 test('offline, a seek past the received audio shows its place and silences the old audio before the slow restart, whose last reports do not move the head', async () => {
   const timers = manualTimers();
   const harness = encodedHarness({
@@ -7766,7 +7766,7 @@ test('offline, a seek past the received audio shows its place and silences the o
   assert.ok(harness.portMessages('configure').at(-1).generation > open.generation);
 });
 
-// Owner retest B-D4 round 4 (2026-11-17): with Wi-Fi off, the socket stays open and silent, so the
+// With Wi-Fi off, the socket stays open and silent, so the
 // seek waited on it and the player fell into a paused error at the keepalive.
 test('the browser going offline gives up the open socket at once, so a seek past the received audio waits silently at its target', async () => {
   const timers = manualTimers();
@@ -7806,9 +7806,8 @@ test('the browser going offline gives up the open socket at once, so a seek past
   assert.equal(harness.api.snapshot().diagnostics.transportState, 'connected');
 });
 
-// Owner retest B-D4 round 5 (2026-11-17), laptop: "when I clicked into the zone that wasn't
-// downloaded, music did not stop immediately. it was playing apparently from the last available
-// moment. The time did not ticked. Then play button became paused". A laptop with another network
+// On a laptop, a click past the received audio did not stop the music at once, the time stood still,
+// and then Play showed paused. A laptop with another network
 // interface never reports `offline`: the socket stays open and silent.
 test('a seek the open socket does not begin to answer jumps to its target silently and keeps playing, with no offline event', async () => {
   const timers = manualTimers();
@@ -7863,8 +7862,8 @@ test('a socket that hears nothing, not even a heartbeat, is given up while the r
   assert.equal(harness.sockets[1].sent.find(({ type }) => type === 'open').startFrame, 999 * 1_152, 'the rest joins at the splice');
 });
 
-// Round 5: "After network is back I tried to play completely different track and it took me 4 or
-// 5 tries"; round 6 (2026-11-18): "6 TIMES". A start or a song's rate asked of a socket that died
+// After the network was back, another track needed four to six tries to play. A start or a song's
+// rate asked of a socket that died
 // without closing is never answered: the socket, which hears not even the server's heartbeat, is
 // replaced, and what waited on it goes again on the new one, so one press starts the song.
 test('paused, a start asked of a socket that hears nothing goes again on a new socket, with no second press', async () => {
@@ -7889,8 +7888,8 @@ test('paused, a start asked of a socket that hears nothing goes again on a new s
   assert.notEqual(harness.api.snapshot().mode, 'error');
 });
 
-// Sandbox5 2026-11-21, CPU at 100%: "Playing another track even on the same album sometimes takes
-// up to 10 s to start." A loaded server fell silent for about a second while a switch waited on its
+// With the CPU at 100%, another track, even on the same album, sometimes took up to 10 s to start.
+// A loaded server fell silent for about a second while a switch waited on its
 // open; the socket was given up after 750 ms, and the new socket's connect and open took 4-17 s more.
 // The old song still plays through a switch, so its socket gets the patience of any silent socket.
 test('a switch whose open a busy server leaves unanswered for a moment keeps its socket', async () => {
@@ -7947,7 +7946,7 @@ test('a liveness check that ran late, on a page too busy to read what arrived, d
   assert.equal(harness.sockets[0].closeCalls, 1, 'on time, the silence counts');
 });
 
-// Round 5, hosted FTC-PLAYBACK-OFFLINE-002: paused through the outage, one press on another song
+// Hosted FTC-PLAYBACK-OFFLINE-002: paused through the outage, one press on another song
 // asked a dead socket for that song's rate and waited forever.
 test('a rate probe asked of a socket that hears nothing goes again on a new socket, so one press starts the song', async () => {
   const harness = encodedHarness({ holdSampleRateProbes: true, trackSampleRates: new Map() });
@@ -8069,8 +8068,7 @@ test('a reconnect attempt that hangs is given up after a few seconds and the nex
   assert.notEqual(harness.api.snapshot().mode, 'error');
 });
 
-// Owner retest B-D4 round 6 (2026-11-18), CPU at 100%: "the playback did not continue when network
-// came back". On a loaded machine a connection can take longer than the deadline to open.
+// With the CPU at 100%, playback did not continue when the network came back. On a loaded machine a connection can take longer than the deadline to open.
 test('each reconnect attempt cut off by its deadline allows the next one twice as long, up to 16 s', async () => {
   const timers = manualTimers();
   const harness = encodedHarness({

@@ -1898,7 +1898,7 @@ def _hold_opens_of(decoder_factory, monkeypatch, name: str) -> list[asyncio.Even
     return release
 
 
-# Sandbox5 2026-11-21, CPU at 100%: a switch right after a song started first closed the next
+# With the CPU at 100%, a switch right after a song started first closed the next
 # track's open, still pending on the server, and its own open waited for that stale one
 # (1.8-2.3 s). The control loop no longer awaits an open: a close cancels it.
 def test_pcm_socket_answers_a_switch_without_waiting_for_the_open_it_closes(

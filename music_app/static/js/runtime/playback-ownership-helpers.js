@@ -278,8 +278,8 @@ async function requestOfferedPlaybackClaim(claim, track) {
   }
 }
 
-// A start nobody answered is not refused (owner retest B-D4 round 6, 2026-11-18: "I had to click
-// into another song 6 TIMES before it started to play after Network came back"): the connections a
+// A start nobody answered is not refused (otherwise a press after the network returned needed up to
+// six tries before a song played): the connections a
 // browser kept from before an outage can stay dead for a while after it, so every request on them
 // goes unanswered. The song plays on, and its claim is asked again every couple of seconds until the
 // server answers; only a refusal stops it.
@@ -352,7 +352,7 @@ async function expirePlaybackClaim(claim) {
   if (isPlaybackClaimRenewable()) await refreshPlaybackOwnershipClaim();
 }
 
-// Losing the network never stops playback (owner decision, 2026-11-15): a claim request the server
+// Losing the network never stops playback: a claim request the server
 // did not answer keeps the claim at any age and retries in 2 s. Its token renews the claim even past
 // the lease until another client claims, so only the server's refusal gives it up; dropping it earlier
 // made the next play an anonymous acquire the server refuses while this client's own lease runs.

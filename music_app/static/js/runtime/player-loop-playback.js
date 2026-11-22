@@ -319,7 +319,6 @@ function renderSelectedTrackState(track) {
   if (track && typeof getPlayerElements === 'function') {
     renderGlobalPlayerMetadata(getPlayerElements(), track);
   }
-  if (typeof updateWaveformAppearance === 'function') void updateWaveformAppearance();
   if (typeof refreshTrackModalPlaybackState === 'function') refreshTrackModalPlaybackState();
   if (typeof refreshNonAlbumModalPlaybackState === 'function') refreshNonAlbumModalPlaybackState();
 }

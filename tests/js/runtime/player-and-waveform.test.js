@@ -110,6 +110,27 @@ test('updateWaveformAppearance publishes the effective seekbar presentation', as
   assert.equal(wrapClasses.has('is-waveform'), true);
 });
 
+// The playing song's waveform never disappears for a moment at a switch: it stays until the new song
+// plays.
+test('a pressed song that has not sounded yet leaves the playing song its waveform', async () => {
+  const canvas = { hidden: false };
+  const { context } = loadRuntime();
+  context.getPlayerElements = () => ({ waveformCanvas: canvas });
+  context.setPlayerSeekbarPresentation = () => {};
+  const drawn = [];
+  context.drawWaveformOnCanvas = (_canvas, waveform) => drawn.push(waveform);
+  const peaks = { left: [0.5], right: [0.5] };
+  Object.assign(context.state.player, {
+    current: { path: 'old.flac' }, selectedTrack: { path: 'new.flac' },
+  });
+  context.state.player.appearance.seekbarMode = 'waveform';
+  context.state.player.waveform.compactPeaks = { path: 'old.flac', data: peaks };
+
+  await context.updateWaveformAppearance();
+
+  assert.deepEqual(drawn, [peaks]);
+});
+
 test('saved-loop waveform settings refresh even without a main-player track', async () => {
   const modes = [];
   const { context } = loadRuntime();

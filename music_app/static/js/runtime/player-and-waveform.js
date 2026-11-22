@@ -233,8 +233,7 @@ async function updateWaveformAppearance(forceReload = false) {
   const els = getPlayerElements();
   const wrap = els.timeline?.parentElement;
   const playback = getPlayerPlaybackSnapshot();
-  // While a switch waits for its audio, the player shows the pressed song, never the old waveform.
-  const path = String(state.player.selectedTrack?.path || state.player.current?.path || '');
+  const path = String(state.player.current?.path || '');
   const isWaveform = state.player.loopActive || state.player.appearance.seekbarMode === 'waveform';
   setPlayerSeekbarPresentation(isWaveform);
   wrap?.classList.toggle('is-waveform', isWaveform);
@@ -251,8 +250,8 @@ async function updateWaveformAppearance(forceReload = false) {
     clearWaveformCanvas();
   }
   // The peaks belong to the song, not to one stream of it: a restart of the same song (a seek past
-  // the received audio in an outage) keeps its waveform (owner retest B-D4 round 6, 2026-11-18:
-  // "Waveform disappeared, so I am left with no visual where I move it").
+  // the received audio in an outage) keeps its waveform, so the listener always sees where the head
+  // is moved.
   const active = state.player.waveform.compactPeaks;
   const waveform = active?.path === path ? active.data : null;
   if (state.player.waveform.renderToken !== renderToken) return;

@@ -1135,7 +1135,7 @@ test('the local lease runs for the answer\'s leaseMs from before the request was
   assert.equal(context.state.player.ownership.activeClaim, null, 'an answer without leaseMs is refused');
 });
 
-// Owner decision 2026-11-15: losing the network never stops playback. A claim the server has not
+// Losing the network never stops playback. A claim the server has not
 // refused stays this client's past its lease; its token renews it on reconnect (the server accepts a
 // lapsed token until another client claims), and only a refusal stops playback.
 test('a lease that lapses with renewals unanswered keeps playing and its token', async () => {
@@ -1315,7 +1315,7 @@ test('a paused claim lapses silently with its token, and play renews it', async 
   assert.equal(context.isActivePlaybackOwner(), true);
 });
 
-// Owner retest B-D4 (2026-11-17): offline, Pause and then Play locked the player in "Playback
+// Offline, Pause and then Play locked the player in "Playback
 // unavailable". The pause gave the claim back with no answer, and Play's anonymous acquire, with no
 // answer either, was taken for a refusal. The token whose give-back never arrived is offered again.
 test('Play offline after a pause whose give-back went unanswered plays on with the same token', async () => {
@@ -1461,8 +1461,8 @@ test('a native-playback shell leaves the claim to Android and reads ownership as
   assert.equal(context.isActivePlaybackOwner(), false);
 });
 
-// Owner retest B-D4 round 6 (2026-11-18): "I had to click into another song 6 TIMES before it
-// started to play after Network came back". Connections kept from before an outage stay dead for a
+// After the network came back, a press on another song needed up to six tries before it played.
+// Connections kept from before an outage stay dead for a
 // while after it, so each press's requests went unanswered and the press was given up.
 test('a start whose requests go unanswered plays on and asks again until the server answers', async () => {
   const requests = [];

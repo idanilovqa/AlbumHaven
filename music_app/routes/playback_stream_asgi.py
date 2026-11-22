@@ -493,7 +493,7 @@ class _PlaybackPcmConnection:
         self._send_lock = asyncio.Lock()
         # Opens and probes run beside the control loop, so their authority refresh and file work
         # never hold the controls after them: a switch's close and open, or the playing song's
-        # credits (sandbox5 2026-11-21, CPU at 100%: a switch waited 1.8-2.3 s behind the open it
+        # credits (measured with the CPU at 100%: a switch waited 1.8-2.3 s behind the open it
         # closed). Shutdown still waits for them.
         self._pending_controls: set[asyncio.Task[bool]] = set()
         self._open_tickets: dict[int, _OpenTicket] = {}
@@ -576,7 +576,7 @@ class _PlaybackPcmConnection:
         """Tells the client its connection lives, however long the server takes to answer.
 
         A client cannot tell a connection that died without closing from a busy server by how long
-        its answers take (owner retest B-D4 round 6, 2026-11-18, with the CPU at 100%); it can by
+        its answers take (a server with the CPU at 100% answers slowly); it can by
         hearing nothing at all.
         """
         with suppress(WebSocketDisconnect, OSError, RuntimeError):

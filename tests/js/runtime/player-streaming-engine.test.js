@@ -3882,7 +3882,7 @@ test('prepared replacement preserves its buffered outgoing cushion while retaini
   );
 });
 
-test('a switch from an outgoing song with under a second buffered starts the new song at once', async () => {
+test('a switch from an outgoing song with under a second buffered crosses over without waiting for a cushion', async () => {
   const timers = [];
   const harness = createEngineHarness({
     setTimeout(callback, delay) {
@@ -3913,14 +3913,26 @@ test('a switch from an outgoing song with under a second buffered starts the new
 
   assert.equal(timers.filter(({ delay }) => delay === 1000).length, 0, 'nothing waits for the outgoing cushion');
   const fresh = harness.sent('open').at(-1);
-  assert.equal(fresh.role, 'current', 'the new song opens as the current stream, not a cross-over');
+  assert.equal(fresh.role, 'continuity', 'the outgoing song plays until the new one sounds');
   assert.equal(fresh.path, makeTrack('replacement.flac').path);
-  assert.notEqual(fresh.generation, outgoing.generation);
+  assert.equal(fresh.generation, outgoing.generation);
+  assert.equal(harness.portMessages('configure').length, 1, 'nothing clears the outgoing audio');
   acceptMetadata(harness, fresh);
+  assert.ok(harness.sent('credit').some(({ streamId }) => streamId === fresh.streamId),
+    'the new song is credited however little of the outgoing one is left');
   receivePcmAndAssertEnqueue(harness, {
+    role: 1,
     generation: fresh.generation,
     streamId: fresh.streamId,
     samples: new Array(12_000 * 2).fill(0.5),
+  });
+  harness.nodes[0].port.dispatch({
+    type: 'seek-boundary',
+    generation: fresh.generation,
+    outgoingStreamId: outgoing.streamId,
+    incomingStreamId: fresh.streamId,
+    renderedFrame: 128,
+    timelineFrame: 0,
   });
   assert.equal((await starting).streamId, fresh.streamId);
 });
@@ -8182,3 +8194,207 @@ test('a seek once the next socket is open, before the splice joined, asks the se
   assert.equal(snapshot.diagnostics.transportResumes, undefined);
 });
 
+// The new song starts at once, and the old song sounds until it does.
+// These render the real worklet: each song is a level, so a quantum says which one is heard.
+const OLD_SONG = 0.25;
+const NEXT_SONG = 0.75;
+const PRESSED_SONG = 0.5;
+const ONE_SECOND = 48_000;
+
+function heard(node) {
+  const left = node.render()[0];
+  return left.every((sample) => sample === left[0]) ? left[0] : 'mixed';
+}
+
+function heardFor(node, quanta) {
+  const levels = new Set();
+  for (let index = 0; index < quanta; index += 1) {
+    levels.add(heard(node));
+    node.deliverEvents();
+  }
+  return [...levels];
+}
+
+function receiveSong(harness, open, level, frames, sequence = 0, role = open.role === 'current' ? 0 : 1) {
+  for (let sent = 0; sent < frames; sent += ONE_SECOND) {
+    harness.sockets.at(-1).receive(createPcmMessage({
+      role,
+      generation: open.generation,
+      streamId: open.streamId,
+      sequence: sequence + sent / ONE_SECOND,
+      samples: new Array(Math.min(ONE_SECOND, frames - sent) * 2).fill(level),
+    }));
+  }
+}
+
+async function playingSong(t, options = {}) {
+  const harness = createEngineHarness({ realProcessor: true, ...options });
+  t.after(() => harness.api.stop());
+  await harness.api.start(makeTrack('01.flac'));
+  const open = harness.sent('open')[0];
+  acceptMetadata(harness, open);
+  receiveSong(harness, open, OLD_SONG, 2 * ONE_SECOND);
+  await harness.settle();
+  const node = harness.nodes[0];
+  assert.deepEqual(heardFor(node, 1), [OLD_SONG]);
+  return { harness, node, open };
+}
+
+async function pressTrack(harness, name) {
+  const outcome = {};
+  outcome.done = Promise.resolve(harness.api.start(makeTrack(name))).then(
+    (role) => { outcome.role = role; },
+    (error) => { outcome.error = error; },
+  );
+  await harness.settle();
+  outcome.open = harness.sent('open').filter(({ path }) => path === makeTrack(name).path).at(-1);
+  return outcome;
+}
+
+async function answerOpen(harness, open, level, frames = 2 * ONE_SECOND) {
+  acceptMetadata(harness, open);
+  receiveSong(harness, open, level, frames, 0, 1);
+  await harness.settle();
+}
+
+test('a press with under a second of the playing song left keeps it sounding until the new song starts', async (t) => {
+  const { harness, node } = await playingSong(t);
+  heardFor(node, 384);
+  assert.ok(harness.engine.diagnostics.bufferedFrames.current < ONE_SECOND);
+
+  const pressed = await pressTrack(harness, '05.flac');
+
+  assert.deepEqual(heardFor(node, 20), [OLD_SONG], 'the press does not silence the playing song');
+  assert.equal(pressed.open.role, 'continuity');
+  await answerOpen(harness, pressed.open, PRESSED_SONG);
+  assert.deepEqual(heardFor(node, 4), [PRESSED_SONG], 'the short cushion never defers the new song');
+});
+
+test('a press while a switch waits retargets it, and the playing song sounds until the last pressed one starts', async (t) => {
+  const { harness, node } = await playingSong(t);
+  const first = await pressTrack(harness, '05.flac');
+  acceptMetadata(harness, first.open);
+  receiveSong(harness, first.open, NEXT_SONG, 4_800, 0, 1);
+  await harness.settle();
+
+  const last = await pressTrack(harness, '06.flac');
+
+  assert.deepEqual(heardFor(node, 20), [OLD_SONG], 'a second press does not silence the playing song');
+  await first.done;
+  assert.match(first.error.message, /superseded/);
+  assert.ok(harness.sent('close').some(({ streamId }) => streamId === first.open.streamId));
+  assert.equal(last.open.role, 'continuity');
+  await answerOpen(harness, last.open, PRESSED_SONG);
+  assert.deepEqual(heardFor(node, 4), [PRESSED_SONG]);
+  await last.done;
+  assert.equal(last.role.streamId, last.open.streamId);
+  assert.equal(harness.engine.diagnostics.lastProcessorReject, undefined);
+});
+
+for (const committed of [false, true]) {
+  test(`a press as a switch cuts over keeps audio playing (${committed ? 'already rendered' : 'not yet rendered'})`, async (t) => {
+    const { harness, node } = await playingSong(t);
+    const first = await pressTrack(harness, '05.flac');
+    await answerOpen(harness, first.open, NEXT_SONG);
+    assert.equal(harness.engine.pendingSeek.prepareSent, true);
+    if (committed) assert.equal(heard(node), NEXT_SONG);
+
+    const last = await pressTrack(harness, '06.flac');
+    assert.equal(heard(node), NEXT_SONG, 'the cut-over already handed to the worklet completes');
+    node.deliverEvents();
+    await harness.settle();
+
+    assert.deepEqual(heardFor(node, 20), [NEXT_SONG]);
+    const open = harness.sent('open').at(-1);
+    assert.equal(open.path, makeTrack('06.flac').path);
+    assert.equal(open.role, 'continuity');
+    await answerOpen(harness, open, PRESSED_SONG);
+    assert.deepEqual(heardFor(node, 4), [PRESSED_SONG]);
+    await last.done;
+    assert.equal(last.role.streamId, open.streamId);
+  });
+}
+
+for (const prepared of [false, true]) {
+  test(`a press while a seek ${prepared ? 'cuts over' : 'waits'} keeps audio playing`, async (t) => {
+    const { harness, node } = await playingSong(t);
+    await harness.api.seek(120);
+    const seek = harness.sent('open').at(-1);
+    if (prepared) await answerOpen(harness, seek, NEXT_SONG, 12_000);
+
+    await pressTrack(harness, '06.flac');
+    if (prepared) {
+      node.render();
+      node.deliverEvents();
+      await harness.settle();
+      // A seek keeps its own cushion; once that is in, its audio is what the press must keep.
+      receiveSong(harness, seek, NEXT_SONG, ONE_SECOND, 1, 1);
+      receiveSong(harness, seek, NEXT_SONG, 36_000, 2, 1);
+      await harness.settle();
+    }
+
+    assert.deepEqual(heardFor(node, 20), [prepared ? NEXT_SONG : OLD_SONG]);
+    const open = harness.sent('open').at(-1);
+    assert.equal(open.path, makeTrack('06.flac').path);
+    assert.equal(open.role, 'continuity');
+    await answerOpen(harness, open, PRESSED_SONG);
+    assert.deepEqual(heardFor(node, 4), [PRESSED_SONG]);
+  });
+}
+
+async function playingWithPreparedNext(t, options = {}) {
+  const playing = await playingSong(t, options);
+  const { harness } = playing;
+  await harness.api.continuity(makeTrack('02.flac'), {
+    kind: 'queued-next', startSeconds: 0, consecutiveAlbumBoundary: true,
+  });
+  const next = harness.sent('open').at(-1);
+  await answerOpen(harness, next, NEXT_SONG);
+  return { ...playing, next };
+}
+
+test('a press just after a gapless track change, before the server acknowledged it, keeps that track sounding', async (t) => {
+  const { harness, node, open } = await playingWithPreparedNext(t);
+  harness.sockets[0].receive({
+    type: 'eos', generation: open.generation, streamId: open.streamId, role: 'current',
+    emittedFrames: 2 * ONE_SECOND, authoritativeTotalFrames: 2 * ONE_SECOND,
+  });
+  await harness.settle();
+  while (harness.engine.roles.current.streamId === open.streamId) {
+    node.render();
+    node.deliverEvents();
+  }
+  assert.ok(harness.engine.pendingPromotion);
+
+  const pressed = await pressTrack(harness, '07.flac');
+
+  assert.deepEqual(heardFor(node, 20), [NEXT_SONG]);
+  assert.equal(pressed.open.role, 'continuity');
+});
+
+test('a press with nothing of the playing song left starts the new song as a fresh stream', async (t) => {
+  const { harness, node } = await playingSong(t);
+  heardFor(node, 752);
+  assert.equal(harness.engine.diagnostics.bufferedFrames.current, 0);
+
+  const pressed = await pressTrack(harness, '05.flac');
+
+  assert.equal(pressed.open.role, 'current', 'with no audio to keep, nothing waits for a cross-over');
+});
+
+for (const waiting of ['open', 'retargeted open', 'cut-over']) {
+  test(`a handover pause goes silent at once while a switch waits on its ${waiting}`, async (t) => {
+    const { harness, node } = await playingSong(t);
+    let pending = await pressTrack(harness, '05.flac');
+    if (waiting === 'retargeted open') pending = await pressTrack(harness, '06.flac');
+    if (waiting === 'cut-over') await answerOpen(harness, pending.open, PRESSED_SONG);
+
+    await harness.api.pause();
+    assert.deepEqual(heardFor(node, 20), [0], 'the handover silences the old song on purpose');
+
+    if (waiting !== 'cut-over') await answerOpen(harness, pending.open, PRESSED_SONG);
+    await harness.settle();
+    assert.deepEqual(heardFor(node, 20), [0], 'a late answer never sounds the pressed song');
+    assert.equal(harness.api.snapshot().paused, true);
+  });
+}

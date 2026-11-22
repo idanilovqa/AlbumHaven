@@ -8167,7 +8167,6 @@ const STREAMING_QUEUED_NEXT_PREPARE_SECONDS = 3;
 const STREAMING_REPLACEMENT_PREPARE_SECONDS = 2;
 const STREAMING_ENCODED_REPLACEMENT_PREPARE_SECONDS = 1;
 const STREAMING_SEEK_PREPARE_SECONDS = 0.25;
-const STREAMING_REPLACEMENT_OUTGOING_CUSHION_SECONDS = 1;
 const STREAMING_REPLACEMENT_ACTIVE_OUTGOING_CUSHION_SECONDS = STREAMING_REPLACEMENT_PREPARE_SECONDS;
 const STREAMING_WAVEFORM_READY_SECONDS = 1;
 const STREAMING_RESTORE_AUTOPLAY_SETTLEMENT_MS = 750;
@@ -9152,12 +9151,15 @@ function closeStreamingContinuityRole(reason, { releaseWorklet = true } = {}) {
   if (!closeStreamingRoleStream(continuity, reason)) return false;
   const options = continuity.continuityOptions;
   if (releaseWorklet && engine.node) {
-    if (options?.kind === 'queued-next' || options?.kind === 'splice') {
+    // A cut-over not made yet gives up its frames and its reservation, as a successor does.
+    if (['queued-next', 'splice', 'seek'].includes(options?.kind)) {
       engine.node.port.postMessage({
         type: 'drop-continuity',
         generation: continuity.generation,
         streamId: continuity.streamId,
       });
+    }
+    if (options?.kind === 'queued-next' || options?.kind === 'splice') {
       engine.node.port.postMessage({
         type: 'expect-continuity',
         generation: continuity.generation,
@@ -9327,27 +9329,31 @@ function refillStreamingRoleCredit(roleState, missingFrames) {
 
 function continuityCreditNeedsOutgoingRenderCushion(roleState) {
   const engine = streamingEngineState();
-  const pendingReplacement = engine.pendingSeek;
-  const current = engine.roles.current;
-  const queuedNextNeedsCushion = roleState?.role === 'continuity'
+  return roleState?.role === 'continuity'
     && roleState.continuityOptions?.kind === 'queued-next'
-    && !current?.eosReceived
+    && !engine.roles.current?.eosReceived
     && engine.diagnostics.bufferedFrames.current < streamingFrames(1);
-  const replacementNeedsCushion = roleState?.role === 'continuity'
-    && roleState.continuityOptions?.kind === 'seek'
-    && pendingReplacement?.kind === 'replacement'
-    && pendingReplacement.generation === engine.generation
-    && pendingReplacement.streamId === roleState.streamId
-    && pendingReplacement.currentStreamId === current?.streamId
-    && !current.eosReceived
-    && engine.diagnostics.bufferedFrames.current < streamingFrames(STREAMING_REPLACEMENT_OUTGOING_CUSHION_SECONDS);
-  return queuedNextNeedsCushion || replacementNeedsCushion;
 }
 
-function replacementOutgoingCushionReady(engine, current) {
+// The playing song has audio to keep through a switch; one out of it, waiting to refill, has none.
+function streamingOutgoingAudioPlays(engine, current) {
   return current?.eosReceived === true
-    || engine.diagnostics.bufferedFrames.current
-      >= streamingFrames(STREAMING_REPLACEMENT_OUTGOING_CUSHION_SECONDS);
+    || (engine.diagnostics.bufferedFrames.current > 0 && !engine.diagnostics.buffering);
+}
+
+// A cut-over handed to the worklet cannot be taken back: resolves once it is made or given up.
+function streamingCutoverSettled(pending) {
+  return new Promise((settled) => {
+    const { resolve, reject } = pending;
+    pending.resolve = (roleState) => {
+      resolve?.(roleState);
+      settled();
+    };
+    pending.reject = (error) => {
+      reject?.(error);
+      settled();
+    };
+  });
 }
 
 function grantStreamingInitialCredit(roleState) {
@@ -10339,9 +10345,7 @@ function handleStreamingWorkletMessage(message) {
     if (promoted && !continuity.eosReceived) {
       grantStreamingCredit(continuity, streamingRoleCapacityFrames(continuity));
     }
-    if (pendingSeek.kind === 'replacement') {
-      pendingSeek.resolve?.(continuity);
-    }
+    pendingSeek.resolve?.(continuity);
     publishStreamingDiagnostics();
     return;
   }
@@ -11328,20 +11332,21 @@ async function openBrowserStreamingTrack(track, {
     if (engine.startRequestId !== startRequestId) return null;
   }
   const canPrepareReplacement = () => {
+    const current = engine.roles.current;
     const pendingPromotion = engine.pendingPromotion;
+    // Promoted audio sounds from its boundary, before its first-frame report and the server's answer.
     const promotionAllowsReplacement = !pendingPromotion
-      || (pendingPromotion.kind === 'replacement'
-        && pendingPromotion.generation === engine.generation
-        && pendingPromotion.streamId === engine.roles.current?.streamId
-        && engine.roles.current?.firstFrameNotified === true);
+      || (pendingPromotion.generation === engine.generation
+        && pendingPromotion.streamId === current?.streamId);
     return autoplay
-      && engine.roles.current
-      && engine.diagnostics.firstFrameAtMs > 0
+      && current
+      && (engine.diagnostics.firstFrameAtMs > 0 || current.boundaryNotified === true)
       && engine.node
+      // Detached, a press waits silent at its place for the next socket.
+      && !engine.detached
       && engine.socket?.readyState === WebSocket.OPEN
       && !engine.snapshot.paused
-      && promotionAllowsReplacement
-      && !engine.pendingSeek;
+      && promotionAllowsReplacement;
   };
   // A switch to a track's start can open at this rate; the server refuses a wrong one.
   if (canPrepareReplacement() && !knownStreamingSampleRate(track)
@@ -11350,15 +11355,24 @@ async function openBrowserStreamingTrack(track, {
     if (engine.startRequestId !== startRequestId) return null;
   }
   preparedReplacement: {
-    // A switch crosses over from an outgoing song with a second of audio left; otherwise the
-    // new song starts at once instead of waiting for that cushion.
+    // The playing song sounds until the pressed one does, however little of it is left, and a
+    // press during a switch or seek takes over its cut-over.
     if (!canPrepareReplacement()
-        || !replacementOutgoingCushionReady(engine, engine.roles.current)
         || (knownStreamingSampleRate(track)
           && streamingPlaybackRate(track) !== engine.sampleRate)) break preparedReplacement;
+    while (engine.pendingSeek?.prepareSent) {
+      await streamingCutoverSettled(engine.pendingSeek);
+      if (engine.startRequestId !== startRequestId) return null;
+    }
+    if (!canPrepareReplacement()
+        || !streamingOutgoingAudioPlays(engine, engine.roles.current)) break preparedReplacement;
     cancelStreamingWaveformGeneration(engine.generation);
     if (engine.roles.continuity
         && !closeStreamingContinuityRole('replacement-target')) return null;
+    settlePendingStreamingCutover(new Error('Prepared track replacement was superseded'));
+    engine.pendingSeek = null;
+    // A seek held for the promotion's answer belonged to the song this press leaves.
+    if (engine.pendingPromotion) engine.pendingPromotion.requestedSeekSeconds = null;
     engine.pendingContinuityTrack = null;
     engine.pendingContinuityOptions = null;
     engine.loopContinuity = null;

@@ -11,7 +11,7 @@ import math
 from pathlib import Path
 import subprocess
 import time
-from typing import Any
+from typing import Any, Coroutine
 
 from fastapi import APIRouter, HTTPException, Request, WebSocket
 from fastapi.responses import JSONResponse, Response
@@ -52,6 +52,9 @@ from music_app.services.policy_asgi import require_action
 MAX_PLAYBACK_CONNECTIONS = 6
 MAX_PLAYBACK_DECODERS = 8
 MAX_DECODERS_PER_CONNECTION = 2
+# Opens and probes run beside the control loop, closed ones until they finish; past this many the
+# loop waits for one, so a client pressing faster than the server answers queues no unbounded work.
+MAX_PENDING_CONTROLS_PER_CONNECTION = 4
 MAX_CONTROL_MESSAGE_BYTES = 16_384
 MIN_PCM_SAMPLE_RATE = 8_000
 MAX_PCM_SAMPLE_RATE = 192_000
@@ -325,6 +328,18 @@ def _elapsed_ms(started_at: float, at: float | None) -> str:
 
 
 @dataclass(slots=True, eq=False)
+class _OpenTicket:
+    """An open running beside the control loop; a close of its stream abandons it.
+
+    An abandoned open sends nothing more and cancels the decoder it started; it is not cancelled
+    itself, because a decoder start cut off midway could leave its process behind.
+    """
+
+    generation: int | None
+    abandoned: bool = False
+
+
+@dataclass(slots=True, eq=False)
 class _OpenTiming:
     """Monotonic milestones of one `open`, logged once as one path-free line of fixed keys.
 
@@ -448,6 +463,23 @@ class PlaybackPcmRegistry:
             raise RuntimeError(f"playback registry shutdown failed: {details}")
 
 
+def _decoder_error_event(
+    *, generation: int, stream_id: int, role: str, error: Exception
+) -> dict[str, Any]:
+    truncated = str(error) == "ffmpeg returned truncated partial PCM frame"
+    return {
+        "type": "error",
+        "generation": generation,
+        "streamId": stream_id,
+        "role": role,
+        "code": "truncated_pcm" if truncated else "decoder_failed",
+        "message": (
+            "FFmpeg returned truncated partial PCM frame" if truncated else "Audio decoder failed."
+        ),
+        "recoverable": False,
+    }
+
+
 class _PlaybackPcmConnection:
     def __init__(self, registry: PlaybackPcmRegistry, websocket: WebSocket) -> None:
         self._registry = registry
@@ -457,7 +489,13 @@ class _PlaybackPcmConnection:
         self._completed_streams_by_role: dict[str, tuple[int, int]] = {}
         self._cleanup_lock = asyncio.Lock()
         self._send_lock = asyncio.Lock()
-        self._pending_opens: set[asyncio.Task[object]] = set()
+        # Opens and probes run beside the control loop, so their authority refresh and file work
+        # never hold the controls after them: a switch's close and open, or the playing song's
+        # credits (sandbox5 2026-11-21, CPU at 100%: a switch waited 1.8-2.3 s behind the open it
+        # closed). Shutdown still waits for them.
+        self._pending_controls: set[asyncio.Task[bool]] = set()
+        self._open_tickets: dict[int, _OpenTicket] = {}
+        self._control_failure: BaseException | None = None
         self._pending_credit_tasks: set[asyncio.Task[None]] = set()
         self._retire_tasks: set[asyncio.Task[None]] = set()
         self._transport_failed = asyncio.Event()
@@ -554,6 +592,8 @@ class _PlaybackPcmConnection:
             pass
         finally:
             await self.cleanup()
+        if self._control_failure is not None:
+            raise self._control_failure
 
     async def _receive_or_transport_failure(self) -> dict[str, Any]:
         receive_task = asyncio.create_task(self._websocket.receive())
@@ -573,10 +613,16 @@ class _PlaybackPcmConnection:
 
     async def _handle_control(self, control: dict[str, Any]) -> bool:
         command_type = control.get("type")
-        if command_type == "probe":
-            return await self._probe(control)
-        if command_type == "open":
-            return await self._open(control)
+        if command_type in ("probe", "open"):
+            if len(self._pending_controls) >= MAX_PENDING_CONTROLS_PER_CONNECTION:
+                await asyncio.wait(self._pending_controls, return_when=asyncio.FIRST_COMPLETED)
+            task = (
+                self._start_control(self._probe(control))
+                if command_type == "probe"
+                else self._start_open(control)
+            )
+            task.add_done_callback(self._control_finished)
+            return True
         if command_type == "credit":
             return await self._credit(control)
         if command_type == "promote":
@@ -712,13 +758,52 @@ class _PlaybackPcmConnection:
         )
         return True
 
-    async def _open(self, control: dict[str, Any]) -> bool:
-        task = asyncio.create_task(self._open_tracked(control))
-        self._pending_opens.add(task)
-        try:
-            return await task
-        finally:
-            self._pending_opens.discard(task)
+    def _start_control(self, work: Coroutine[Any, Any, bool]) -> asyncio.Task[bool]:
+        task = asyncio.create_task(work)
+        self._pending_controls.add(task)
+        task.add_done_callback(self._pending_controls.discard)
+        return task
+
+    def _start_open(self, control: dict[str, Any]) -> asyncio.Task[bool]:
+        generation = _bounded_integer(
+            control.get("generation"), minimum=1, maximum=_MAX_PROTOCOL_INTEGER
+        )
+        stream_id = _bounded_integer(
+            control.get("streamId"), minimum=1, maximum=_MAX_PROTOCOL_INTEGER
+        )
+        ticket = _OpenTicket(generation)
+        # A new generation replaces every stream of the old one, those still opening too.
+        for pending in self._open_tickets.values():
+            if pending.generation != generation:
+                pending.abandoned = True
+        if stream_id is not None and stream_id not in self._open_tickets:
+            self._open_tickets[stream_id] = ticket
+        task = self._start_control(self._open_tracked(control, ticket))
+        if self._open_tickets.get(stream_id) is ticket:
+            task.add_done_callback(lambda _task: self._forget_open_ticket(stream_id, ticket))
+        return task
+
+    def _forget_open_ticket(self, stream_id: int, ticket: _OpenTicket) -> None:
+        if self._open_tickets.get(stream_id) is ticket:
+            del self._open_tickets[stream_id]
+
+    def _control_finished(self, task: asyncio.Task[bool]) -> None:
+        """An open or a probe that fails ends the connection, as it did inside the control loop."""
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is None:
+            return
+        if not isinstance(error, WebSocketDisconnect) and self._control_failure is None:
+            self._control_failure = error
+        self._closed = True
+        self._transport_failed.set()
+
+    async def _send_open_event(self, ticket: _OpenTicket, event: dict[str, Any]) -> None:
+        """Sends an open's answer unless a close abandoned the open: nothing follows a close."""
+        async with self._send_lock:
+            if not ticket.abandoned:
+                await self._send_json_unlocked(event)
 
     def _resolve_while_authorizing(
         self, control: dict[str, Any]
@@ -756,7 +841,7 @@ class _PlaybackPcmConnection:
         resolution.add_done_callback(lambda done: done.cancelled() or done.exception())
         return resolution
 
-    async def _open_tracked(self, control: dict[str, Any]) -> bool:
+    async def _open_tracked(self, control: dict[str, Any], ticket: _OpenTicket) -> bool:
         received_at = time.monotonic()
         if self._closed:
             return False
@@ -801,28 +886,30 @@ class _PlaybackPcmConnection:
             or duration < 0
             or duration > MAX_TRACK_DURATION_SECONDS
         ):
-            return await self._reject_open(CLOSE_INVALID_CONTROL)
+            return await self._reject_open(ticket, CLOSE_INVALID_CONTROL)
 
         timing = _OpenTiming(generation, stream_id, role, received_at)
         if "path" in control and "playbackRef" in control:
-            return await self._reject_open(CLOSE_INVALID_CONTROL)
+            return await self._reject_open(ticket, CLOSE_INVALID_CONTROL)
         if "playbackRef" in control:
             try:
                 service = PlaybackReferenceService(playback_config(self._websocket))
                 resolved_path = await run_playback_io(service.resolve,
                     self._websocket.state.current_actor, control["playbackRef"])
             except PlaybackContractError:
-                return await self._reject_open(CLOSE_MEDIA_NOT_FOUND)
+                return await self._reject_open(ticket, CLOSE_MEDIA_NOT_FOUND)
         else:
             raw_path = control.get("path")
             if not isinstance(raw_path, str) or not raw_path:
-                return await self._reject_open(CLOSE_MEDIA_NOT_FOUND)
+                return await self._reject_open(ticket, CLOSE_MEDIA_NOT_FOUND)
             if len(raw_path) > MAX_TRACK_PATH_CHARACTERS:
-                return await self._reject_open(CLOSE_INVALID_CONTROL)
+                return await self._reject_open(ticket, CLOSE_INVALID_CONTROL)
             resolved_path = await resolution
         if resolved_path is None:
-            return await self._reject_open(CLOSE_MEDIA_NOT_FOUND)
+            return await self._reject_open(ticket, CLOSE_MEDIA_NOT_FOUND)
         timing.resolved_at = time.monotonic()
+        if ticket.abandoned:
+            return True
 
         generations = {stream.generation for stream in self._streams_by_id.values()}
         generations.update(
@@ -836,11 +923,11 @@ class _PlaybackPcmConnection:
         existing_by_id = self._streams_by_id.get(stream_id)
         existing_by_role = self._streams_by_role.get(role)
         if existing_by_id is not None or existing_by_role is not None:
-            return await self._reject_open(CLOSE_ROLE_CONFLICT)
+            return await self._reject_open(ticket, CLOSE_ROLE_CONFLICT)
         if len(self._streams_by_id) >= MAX_DECODERS_PER_CONNECTION:
-            return await self._reject_open(CLOSE_ADMISSION_EXHAUSTED)
+            return await self._reject_open(ticket, CLOSE_ADMISSION_EXHAUSTED)
         if not await self._registry.acquire_decoder():
-            return await self._reject_open(CLOSE_ADMISSION_EXHAUSTED)
+            return await self._reject_open(ticket, CLOSE_ADMISSION_EXHAUSTED)
 
         command = PcmOpenCommand(
             generation=generation,
@@ -866,25 +953,30 @@ class _PlaybackPcmConnection:
                 return False
             timing.log("rate_mismatch" if isinstance(error, SampleRateMismatch) else "decoder_error")
             if isinstance(error, SampleRateMismatch):
-                await self._send_json(
+                await self._send_open_event(
+                    ticket,
                     {
                         "type": "rate-mismatch",
                         "generation": generation,
                         "streamId": stream_id,
                         "sampleRate": error.native_rate,
                         "fallbackSampleRate": fallback_sample_rate(error.native_rate),
-                    }
+                    },
                 )
                 return True
-            await self._send_decoder_error(
-                generation=generation,
-                stream_id=stream_id,
-                role=role,
-                error=error,
+            await self._send_open_event(
+                ticket,
+                _decoder_error_event(
+                    generation=generation, stream_id=stream_id, role=role, error=error
+                ),
             )
             return True
 
         timing.decoder_started_at = time.monotonic()
+        if ticket.abandoned:
+            await decoder.cancel()
+            await self._registry.release_decoder()
+            return True
         timing.decoder = _decoder_name(decoder)
         stream = _PlaybackStream(
             decoder=decoder,
@@ -901,9 +993,11 @@ class _PlaybackPcmConnection:
         self._streams_by_role[role] = stream
         if self._closed:
             return False
-        await self._send_json(
-            _metadata_event(decoder.metadata, role=role, encoded=_encoded_fields(decoder))
+        await self._send_open_event(
+            ticket, _metadata_event(decoder.metadata, role=role, encoded=_encoded_fields(decoder))
         )
+        if ticket.abandoned:
+            return True
         if isinstance(decoder, EncodedStream):
             self._grant_credit(stream, INITIAL_ENCODED_CREDIT_BYTES)
             if wants_seek_table:
@@ -924,7 +1018,9 @@ class _PlaybackPcmConnection:
         self._pending_credit_tasks.add(task)
         task.add_done_callback(self._pending_credit_tasks.discard)
 
-    async def _reject_open(self, code: int) -> bool:
+    async def _reject_open(self, ticket: _OpenTicket, code: int) -> bool:
+        if ticket.abandoned:
+            return True
         if self._closed:
             return False
         await self.reject(code)
@@ -1116,6 +1212,13 @@ class _PlaybackPcmConnection:
         ):
             await self.reject(CLOSE_INVALID_CONTROL)
             return False
+        ticket = self._open_tickets.get(stream_id)
+        if ticket is not None and ticket.generation == generation:
+            ticket.abandoned = True
+            stream = self._streams_by_id.get(stream_id)
+            if stream is not None:
+                await self._retire_stream(stream)
+            return True
         stream = self._streams_by_id.get(stream_id)
         if stream is not None:
             if stream.generation != generation:
@@ -1141,23 +1244,8 @@ class _PlaybackPcmConnection:
         role: str,
         error: Exception,
     ) -> None:
-        message = str(error)
-        error_code = (
-            "truncated_pcm"
-            if message == "ffmpeg returned truncated partial PCM frame"
-            else "decoder_failed"
-        )
-        message = "FFmpeg returned truncated partial PCM frame" if error_code == "truncated_pcm" else "Audio decoder failed."
         await self._send_json(
-            {
-                "type": "error",
-                "generation": generation,
-                "streamId": stream_id,
-                "role": role,
-                "code": error_code,
-                "message": message,
-                "recoverable": False,
-            }
+            _decoder_error_event(generation=generation, stream_id=stream_id, role=role, error=error)
         )
 
     async def _remove_stream(self, stream: _PlaybackStream, *, cancel: bool = True) -> None:
@@ -1229,7 +1317,7 @@ class _PlaybackPcmConnection:
             failures: list[BaseException] = []
             try:
                 current = asyncio.current_task()
-                pending = [task for task in self._pending_opens if task is not current]
+                pending = [task for task in self._pending_controls if task is not current]
                 if pending:
                     results = await asyncio.gather(*pending, return_exceptions=True)
                     failures.extend(_gathered_failures(results))

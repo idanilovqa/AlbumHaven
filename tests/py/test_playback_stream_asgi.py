@@ -1880,6 +1880,143 @@ def test_pcm_socket_processes_replacement_while_partial_credit_drain_is_waiting(
     asyncio.run(scenario())
 
 
+def _hold_opens_of(decoder_factory, monkeypatch, name: str) -> list[asyncio.Event]:
+    """Decoder starts for [name] wait until the returned event, created in the test's loop, is set."""
+    release: list[asyncio.Event] = []
+    start = decoder_factory.start
+
+    async def held_start(command):
+        decoder = await start(command)
+        if command.path.name == name:
+            await release[0].wait()
+        return decoder
+
+    monkeypatch.setattr(playback_stream_asgi.PcmDecoderProcess, "start", held_start)
+    return release
+
+
+# Sandbox5 2026-11-21, CPU at 100%: a switch right after a song started first closed the next
+# track's open, still pending on the server, and its own open waited for that stale one
+# (1.8-2.3 s). The control loop no longer awaits an open: a close cancels it.
+def test_pcm_socket_answers_a_switch_without_waiting_for_the_open_it_closes(
+    playback_app,
+    media_path,
+    decoder_factory,
+    monkeypatch,
+):
+    stale_path = media_path.with_name("stale.wav")
+    stale_path.write_bytes(b"decoder-boundary-fixture")
+    release = _hold_opens_of(decoder_factory, monkeypatch, stale_path.name)
+
+    async def scenario() -> None:
+        release.append(asyncio.Event())
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            await open_stream(socket, media_path)
+            await socket.send_json(open_command(stale_path, streamId=2, role="continuity"))
+            await socket.send_json(
+                {"type": "close", "generation": 1, "streamId": 2, "reason": "replaced"}
+            )
+            await socket.send_json(open_command(media_path, streamId=3, role="continuity"))
+            metadata = await asyncio.wait_for(socket.receive_json(), timeout=5)
+            assert (metadata["type"], metadata["streamId"]) == ("metadata", 3)
+            # Nothing of the cancelled open follows: the next message answers a later control.
+            await socket.send_json(
+                {"type": "credit", "generation": 1, "streamId": 3, "frames": 1}
+            )
+            assert_pcm_message(
+                await asyncio.wait_for(socket.receive_bytes(), timeout=5),
+                generation=1, stream_id=3, role="continuity", sequence=0, frame_count=1,
+            )
+            # The stale decoder, once started, is cancelled and its open sends nothing.
+            release[0].set()
+            for _ in range(50):
+                await asyncio.sleep(0.01)
+            await socket.send_json(
+                {"type": "credit", "generation": 1, "streamId": 1, "frames": 1}
+            )
+            assert_pcm_message(
+                await asyncio.wait_for(socket.receive_bytes(), timeout=5),
+                generation=1, stream_id=1, role="current", sequence=0, frame_count=1,
+            )
+
+    asyncio.run(scenario())
+    # Closed before or after its decoder started: a started one is cancelled, never left running.
+    stale = [decoder for decoder in decoder_factory.instances if decoder.command.stream_id == 2]
+    assert all(decoder.cancel_calls == 1 for decoder in stale)
+
+
+def test_pcm_socket_bounds_the_opens_it_runs_beside_its_control_loop(
+    playback_app,
+    media_path,
+    decoder_factory,
+    monkeypatch,
+):
+    import threading
+
+    held_path = media_path.with_name("held.wav")
+    held_path.write_bytes(b"decoder-boundary-fixture")
+    release = threading.Event()
+    resolve = playback_stream_asgi._resolve_socket_media_path
+
+    def held_resolve(config, raw_path):
+        if raw_path.endswith(held_path.name):
+            release.wait(10)
+        return resolve(config, raw_path)
+
+    monkeypatch.setattr(playback_stream_asgi, "_resolve_socket_media_path", held_resolve)
+    limit = playback_stream_asgi.MAX_PENDING_CONTROLS_PER_CONNECTION
+
+    async def scenario() -> None:
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            await open_stream(socket, media_path)
+            for stream_id in range(2, 2 + limit):
+                await socket.send_json(open_command(held_path, streamId=stream_id, role="continuity"))
+                await socket.send_json(
+                    {"type": "close", "generation": 1, "streamId": stream_id, "reason": "replaced"}
+                )
+            await socket.send_json(open_command(held_path, streamId=2 + limit, role="continuity"))
+            await socket.send_json(
+                {"type": "credit", "generation": 1, "streamId": 1, "frames": 1}
+            )
+            answer = asyncio.ensure_future(socket.receive_bytes())
+            done, _pending = await asyncio.wait({answer}, timeout=0.5)
+            assert not done, "past the bound, the credit waits for a pending open to finish"
+            release.set()
+            assert_pcm_message(
+                await asyncio.wait_for(answer, timeout=5),
+                generation=1, stream_id=1, role="current", sequence=0, frame_count=1,
+            )
+
+    asyncio.run(scenario())
+
+
+def test_pcm_socket_feeds_the_playing_song_while_another_open_is_pending(
+    playback_app,
+    media_path,
+    decoder_factory,
+    monkeypatch,
+):
+    pending_path = media_path.with_name("pending.wav")
+    pending_path.write_bytes(b"decoder-boundary-fixture")
+    release = _hold_opens_of(decoder_factory, monkeypatch, pending_path.name)
+
+    async def scenario() -> None:
+        release.append(asyncio.Event())
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            await open_stream(socket, media_path)
+            await socket.send_json(open_command(pending_path, streamId=2, role="continuity"))
+            await socket.send_json(
+                {"type": "credit", "generation": 1, "streamId": 1, "frames": 1}
+            )
+            assert_pcm_message(
+                await asyncio.wait_for(socket.receive_bytes(), timeout=5),
+                generation=1, stream_id=1, role="current", sequence=0, frame_count=1,
+            )
+            release[0].set()
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     "second_open",
     [
@@ -2880,6 +3017,8 @@ def test_disconnect_while_decoder_open_is_pending_does_not_raise_on_metadata_sen
                     "type": "websocket.receive",
                     "text": json.dumps(open_command(media_path)),
                 }
+            # The open runs beside the control loop: the client leaves once it is under way.
+            await self.open_under_way.wait()
             return {"type": "websocket.disconnect", "code": 1000}
 
         async def send_json(self, _event: dict[str, object]) -> None:
@@ -2901,6 +3040,7 @@ def test_disconnect_while_decoder_open_is_pending_does_not_raise_on_metadata_sen
         monkeypatch.setattr(playback_stream_asgi.PcmDecoderProcess, "start", blocked_start)
         registry = playback_stream_asgi.PlaybackPcmRegistry()
         websocket = DisconnectingDuringOpenWebSocketDouble()
+        websocket.open_under_way = start_entered
         connection = await registry.acquire_connection(websocket)
         assert connection is not None
 
@@ -2983,18 +3123,24 @@ def test_disconnect_during_stream_send_does_not_emit_decoder_error_and_releases_
                 {"type": "credit", "generation": 1, "streamId": 1, "frames": 1},
             ]
             self.decoder_error_send_calls = 0
+            self.metadata_sent = asyncio.Event()
             configure_authenticated_request_double(self)
 
         async def accept(self) -> None:
             pass
 
         async def receive(self) -> dict[str, object]:
+            if len(self.controls) == 1:
+                # Clients credit a stream once its metadata arrived; the open runs beside the loop.
+                await self.metadata_sent.wait()
             return {
                 "type": "websocket.receive",
                 "text": json.dumps(self.controls.pop(0)),
             }
 
         async def send_json(self, event: dict[str, object]) -> None:
+            if event.get("type") == "metadata":
+                self.metadata_sent.set()
             if event.get("type") == "error":
                 self.decoder_error_send_calls += 1
                 raise RuntimeError("Cannot call send once a close message has been sent")
@@ -3117,7 +3263,7 @@ def test_decoder_start_that_finishes_after_shutdown_is_cancelled_without_registr
         connection = await registry.acquire_connection(websocket)
         assert connection is not None
 
-        open_task = asyncio.create_task(connection._open(open_command(media_path)))
+        open_task = connection._start_open(open_command(media_path))
         await start_entered.wait()
         shutdown_task = asyncio.create_task(registry.shutdown())
         await registry.shutdown_started.wait()

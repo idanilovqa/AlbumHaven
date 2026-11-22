@@ -729,33 +729,33 @@ class PostgresLibraryBrowseRepository:
         view_state = _root_sidebar_view_state(query_params)
         selected_artist = str(params.get("artist") or "").strip()
         query = str(params.get("q") or "")
-        # Only the background rebuild reads the whole library and stores a snapshot;
-        # it must not hold a shared browse connection. Requests only read the snapshot.
-        with (
-            self._owned_connection_context()
-            if rebuild_missing_snapshot
-            else self._browse_connection_context()
-        ) as connection:
-            tracks = self._load_non_album_track_snapshot(connection)
+        from music_app.services import loose_track_store
+
+        del rebuild_missing_snapshot  # case 64: a read never builds; loose_track_store.prepare does
+        browse_only = bool(self._config.get("SHARED_LIBRARY_BROWSE_ONLY"))
+        # A few waiting marks are drained here, on the writer only; more wait for the background drain.
+        if not browse_only:
+            with self._owned_connection_context() as connection:
+                state = loose_track_store.load_state(connection)
+                waiting = loose_track_store.waiting_marks(
+                    connection, at_most=loose_track_store.INLINE_DRAIN_LIMIT + 1,
+                ) if loose_track_store.is_ready(state) else 0
+                if 0 < waiting <= loose_track_store.INLINE_DRAIN_LIMIT:
+                    loose_track_store.drain(self._inventory_repository, connection)
+                    connection.commit()
+            if waiting > loose_track_store.INLINE_DRAIN_LIMIT:
+                self.queue_utility_projection_prewarm("loose-tracks")  # the drain, never a build
+        with self._browse_connection_context() as connection:
+            state = loose_track_store.load_state(connection)
             relation_alias_maps = None
-            browse_only = bool(self._config.get("SHARED_LIBRARY_BROWSE_ONLY"))
-            # A request never rebuilds the global snapshot; only the background
-            # writer does, and a browse-only server never queues it.
-            if tracks is None and (browse_only or not rebuild_missing_snapshot):
-                if not browse_only:
-                    cache_key = self._utility_projection_cache_key("loose-tracks")
-                    with _UTILITY_PROJECTION_CACHE_LOCK:
-                        snapshot_marked_ready = cache_key in _UTILITY_PROJECTION_CACHE
-                    if snapshot_marked_ready:
-                        invalidate_postgres_utility_projection_cache(
-                            database_url=self._database_url,
-                            kinds=("loose-tracks",),
-                        )
-                    self.queue_utility_projection_prewarm("loose-tracks")
+            if not loose_track_store.is_ready(state):
+                # Preparing, or a failed build with its own retry: never built or queued by a read.
+                failed = bool(state) and state.get("status") == "failed"
                 if _request_flag(params.get("availability")):
                     return {
                         "non_album_track_count": 0,
                         "non_album_tracks_deferred": True,
+                        **({"non_album_tracks_failed": True} if failed else {}),
                     }
                 deferred_key = (
                     "non_album_tracks" if selected_artist else "library_non_album_tracks"
@@ -763,36 +763,33 @@ class PostgresLibraryBrowseRepository:
                 return {
                     deferred_key: [],
                     "non_album_tracks_deferred": True,
+                    **({"non_album_tracks_failed": True} if failed else {}),
                     "non_album_exception_values": sorted(set(NON_ALBUM_EXCEPTION_VALUES.values())),
                 }
-            if tracks is None:
-                relation_alias_maps = self._load_relation_alias_maps(connection=connection)
-                snapshot_fingerprint = _problematic_inventory_fingerprint(connection)
-                snapshot_view_state = dict(view_state)
-                snapshot_view_state["visible_library_categories"] = []
-                loaded = self._load_non_album_entries(
-                    view_state=snapshot_view_state,
-                    alias_to_canonical=relation_alias_maps["alias_to_canonical"],
-                    canonical_to_aliases=relation_alias_maps["canonical_to_aliases"],
-                    connection=connection,
-                    query="",
-                    include_library_wide=True,
-                )
-                entries = loaded[1] if isinstance(loaded, tuple) else loaded
-                configured_root_paths = (
-                    configured_library_root_paths_snapshot(self._config, connection=connection)
-                    if entries else ()
-                )
-                tracks = build_non_album_track_list(
-                    entries,
-                    config=self._config,
-                    configured_root_paths=configured_root_paths,
-                )
-                self._store_non_album_track_snapshot(
-                    connection,
-                    tracks,
-                    snapshot_fingerprint,
-                )
+            # Root activity, the loader's cap and order, and the alias maps apply here, at read.
+            candidates = loose_track_store.read_candidates(
+                connection, limit=MAX_NON_ALBUM_CANDIDATE_LIMIT,
+            )
+            relation_alias_maps = self._load_relation_alias_maps(connection=connection)
+            loaded = _non_album_entries_from_inventory_candidates(
+                candidates,
+                visible_library_categories=[],
+                alias_to_canonical=relation_alias_maps["alias_to_canonical"],
+                canonical_to_aliases=relation_alias_maps["canonical_to_aliases"],
+                visible_artist_names=[],
+                query="",
+                include_library_wide=True,
+            )
+            entries = loaded[1] if isinstance(loaded, tuple) else loaded
+            configured_root_paths = (
+                configured_library_root_paths_snapshot(self._config, connection=connection)
+                if entries else ()
+            )
+            tracks = build_non_album_track_list(
+                entries,
+                config=self._config,
+                configured_root_paths=configured_root_paths,
+            )
             if query and relation_alias_maps is None:
                 relation_alias_maps = self._load_relation_alias_maps(connection=connection)
             if selected_artist:
@@ -4754,12 +4751,12 @@ class PostgresLibraryBrowseRepository:
             if kind == "rules":
                 self.build_utility_rules_payload()
             elif kind == "loose-tracks":
-                self.build_library_loose_tracks_payload(rebuild_missing_snapshot=True)
-                self._set_cached_utility_projection(
-                    kind,
-                    {"ready": True},
-                    expected_generation=queued_generation,
-                )
+                # Case 64: the store's own owner. It builds only for start-up preparation (no store, a builder
+                # change, a failed build whose retry time came) and otherwise drains waiting marks. Nothing is
+                # cached, so a later queue always reaches the drain.
+                from music_app.services import loose_track_store
+
+                loose_track_store.prepare(self._inventory_repository, self._owned_connection_context)
             elif kind == "duplicate-identities":
                 with self._search_connection_context() as connection:
                     _load_duplicate_candidate_album_ids(connection, [], repository=self)

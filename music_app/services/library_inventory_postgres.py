@@ -81,8 +81,13 @@ class PostgresLibraryInventoryRepository:
         unassigned_only: bool = False,
         membership_problems_only: bool = False,
         membership_group_ids: Iterable[object] | None = None,
+        all_roots: bool = False,
+        unlimited: bool = False,
     ) -> list[dict[str, object]]:
-        """Load bounded raw inventory candidates without shaping browse payloads."""
+        """Load bounded raw inventory candidates without shaping browse payloads.
+
+        ``all_roots`` and ``unlimited`` are for the Loose Tracks store only: it keeps every root's candidates,
+        uncapped, and applies root activity and the cap when it is read (case 64)."""
         normalized_track_ids = sorted(
             {
                 int(track_id)
@@ -138,6 +143,8 @@ class PostgresLibraryInventoryRepository:
             membership_groups=bool(normalized_membership_group_ids),
             filter_artists=bool(normalized_artist_names),
             filter_query=bool(normalized_query_terms),
+            all_roots=all_roots,
+            unlimited=unlimited,
         )
         if connection is None:
             with self._connect_to_database() as owned_connection:
@@ -378,16 +385,12 @@ def _non_album_candidates_sql(
     membership_groups: bool = False,
     filter_artists: bool = False,
     filter_query: bool = False,
+    all_roots: bool = False,
+    unlimited: bool = False,
 ) -> str:
     stored_file_album = "coalesce(library.local_track_files.scan_file_album, '')"
     stored_non_album_predicate = _non_album_value_predicate_sql(stored_file_album)
-    effective_album = """coalesce(
-      library.local_track_files.scan_file_album,
-      library.local_tracks.metadata ->> 'album',
-      library.local_albums.title,
-      ''
-    )"""
-    effective_non_album_predicate = _non_album_value_predicate_sql(effective_album)
+    active_root = "" if all_roots else " and {table}.is_active is true"
     scanned_exception_predicate = "lower(btrim(coalesce(library.local_track_files.metadata #>> '{scan_cache,file_entry,exception_type}', ''))) in ('interview', 'non-album rarity', 'non album rarity', 'custom collection')"
     artist_scope = """
         and (
@@ -435,14 +438,14 @@ def _non_album_candidates_sql(
           ))) = ''
         )"""
         if membership_problems_only
-        else f"""(
-          {effective_non_album_predicate}
-          or nullif(library.local_track_files.metadata #>> '{{scan_cache,file_entry,local_album_membership_problem}}', '') is not null
-          or exception_override.exception_type is not null
-          or (
-            not coalesce(exception_override.override_payload ? 'exception_type', false)
-            and {scanned_exception_predicate}
-          )
+        # Case 64: the one predicate the Loose Tracks store's triggers also call (migration NNNN+1).
+        else """library.loose_track_qualifies(
+          library.local_track_files.scan_file_album,
+          library.local_tracks.metadata ->> 'album',
+          library.local_albums.title,
+          library.local_track_files.metadata,
+          exception_override.exception_type,
+          exception_override.override_payload
         )"""
     )
     membership_track_join = """
@@ -459,7 +462,7 @@ def _non_album_candidates_sql(
             and {_membership_problem_group_identity_sql("roots.id", "files.private_path")}
               = any(%(membership_group_ids)s::text[])
     """ if membership_groups else ""
-    limit_clause = "" if membership_groups else "limit %(limit)s"
+    limit_clause = "" if membership_groups or unlimited else "limit %(limit)s"
     other_eligibility_branches = "" if membership_problems_only else f"""
           union
           select library.local_track_files.id as track_file_id
@@ -518,7 +521,7 @@ def _non_album_candidates_sql(
           -- at 162k files) even when a search passed the cached track ids.
           select files.id as track_file_id
           from library.local_track_files files
-          join library.library_roots roots on roots.id = files.library_root_id and roots.is_active is true
+          join library.library_roots roots on roots.id = files.library_root_id{active_root.format(table="roots")}
           join bootstrap_context on bootstrap_context.library_id = roots.library_id
           {membership_track_join}
           where files.scan_cache_stale is false
@@ -666,8 +669,7 @@ def _non_album_candidates_sql(
          and library.local_albums.library_id = library.local_tracks.library_id
         join library.library_roots
           on library.library_roots.id = active_track_files.library_root_id
-         and library.library_roots.library_id = library.local_tracks.library_id
-         and library.library_roots.is_active is true
+         and library.library_roots.library_id = library.local_tracks.library_id{active_root.format(table="library.library_roots")}
         left join (
           select
             ranked_exception_overrides.track_file_id,

@@ -8604,3 +8604,49 @@ for (const failing of ['current', 'continuity']) {
     assert.equal(harness.sent('open').at(-1).path, makeTrack('06.flac').path);
   });
 }
+
+for (const waiting of ['open', 'refresh']) {
+  test(`a seek while a switch waits on its ${waiting} gives the press up and playback goes on`, async (t) => {
+    const { harness, node } = waiting === 'refresh'
+      ? await playingWithPreparedNext(t, { holdSampleRateProbes: true })
+      : await playingSong(t);
+    const pressed = waiting === 'refresh' ? '02.flac' : '05.flac';
+    await pressInPlayer(harness, pressed);
+    assert.equal(harness.context.state.player.selectedTrack.path, makeTrack(pressed).path);
+
+    await harness.api.seek(120);
+    await harness.settle();
+
+    assert.notEqual(harness.engine.mode, 'error');
+    assert.equal(harness.engine.diagnostics.lastError, undefined);
+    assert.equal(harness.engine.node, node, 'the audio graph is not torn down');
+    assert.equal(harness.context.state.player.selectedTrack, null, 'the title is the playing song again');
+    assert.equal(harness.context.state.player.current.path, makeTrack('01.flac').path);
+    assert.deepEqual(heardFor(node, 8), [OLD_SONG]);
+    assert.equal(harness.sent('open').at(-1).startFrame, 120 * ONE_SECOND);
+  });
+}
+
+test('a seek while a press waits on a cut-over leaves that press to start its song', async (t) => {
+  const { harness, node } = await playingSong(t);
+  await pressInPlayer(harness, '05.flac');
+  await answerOpen(harness, harness.sent('open').at(-1), NEXT_SONG);
+  await pressInPlayer(harness, '06.flac');
+
+  await harness.api.seek(120);
+  await harness.settle();
+  await harness.settle();
+
+  assert.notEqual(harness.engine.mode, 'error');
+  assert.equal(harness.engine.node, node);
+  assert.equal(harness.sent('open').at(-1).path, makeTrack('06.flac').path);
+});
+
+test('a failed press still ends in the player error path', async (t) => {
+  const { harness } = await playingSong(t);
+
+  harness.context.observeStreamingFacadeCallback(Promise.reject(new Error('broken')), 'track-selection-start-error');
+  await harness.settle();
+
+  assert.equal(harness.engine.mode, 'error');
+});

@@ -9089,6 +9089,7 @@ function watchStreamingNetwork() {
 function observeStreamingFacadeCallback(result, source) {
   if (!result || typeof result.then !== 'function') return;
   void result.catch((error) => {
+    if (error?.cancelledPress) return;
     failStreamingEngine('facade', error, source);
   });
 }
@@ -11869,6 +11870,10 @@ async function seekBrowserStreaming(seconds) {
   if (!replacement) return offline ? jumpWhileDetached(currentTrack, startSeconds) : null;
   // Audio read from a cut stream ends where the stream from the next socket will join it.
   if (offline && detached.spliceFrame !== null) endStreamingEncodedRoleAt(replacement, detached.spliceFrame);
+  // A seek gives up the switch it interrupts: that press is cancelled, which is no playback failure.
+  settlePendingStreamingCutover(Object.assign(
+    new Error('Prepared track replacement was superseded by a seek'), { cancelledPress: true },
+  ));
   engine.pendingSeek = {
     generation: engine.generation,
     currentStreamId: current.streamId,

@@ -10,7 +10,7 @@ const decodersPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static
 // run a Worker); every other decoder answers the self-check clip exactly.
 function loadDecoders({ failing = [] } = {}) {
   const made = [];
-  const context = { console: { warn() {} }, atob: (text) => Buffer.from(text, 'base64').toString('binary'), Uint8Array, Promise };
+  const context = { console: { warn() {} }, setTimeout, atob: (text) => Buffer.from(text, 'base64').toString('binary'), Uint8Array, Promise };
   const clips = {};
   const decoderClass = (className, codec) => class {
     constructor() {
@@ -61,7 +61,11 @@ test('songs decode in the build\'s Worker class, and the first stream takes a de
 
   const decoder = context.createStreamingDecoder('mp3');
   assert.equal(decoder, warmed[0], 'the warm decoder, not a new Worker');
-  assert.equal(context.createStreamingDecoder('mp3').className, 'MPEGDecoderWebWorker', 'an empty pool starts another');
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  const next = context.createStreamingDecoder('mp3');
+  assert.notEqual(next, decoder);
+  assert.equal(next.resets, 1, 'the stream of a switch also finds a decoder started and reset beforehand');
+  assert.equal(next.className, 'MPEGDecoderWebWorker');
 });
 
 test('a browser that cannot start a decoder Worker decodes on the page instead', async () => {

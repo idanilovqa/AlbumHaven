@@ -341,6 +341,7 @@ function renderSelectedTrackState(track) {
   if (track && typeof getPlayerElements === 'function') {
     renderGlobalPlayerMetadata(getPlayerElements(), track);
   }
+  if (typeof updateWaveformAppearance === 'function') void updateWaveformAppearance();
   if (typeof refreshTrackModalPlaybackState === 'function') refreshTrackModalPlaybackState();
   if (typeof refreshNonAlbumModalPlaybackState === 'function') refreshNonAlbumModalPlaybackState();
 }
@@ -1039,10 +1040,11 @@ function pausePlayerPlaybackForHandoff(playback = getPlayerPlaybackSnapshot()) {
     if (typeof persistPausedListenSession === 'function') {
       try {
         await persistPausedListenSession(session);
-      } catch (_error) {
+      } catch (error) {
         if (!isCurrentPause()) return false;
         saved = false;
-        showToast('Listening history could not be saved.', 'error', 4200);
+        // Offline the listen stays open and the next checkpoint saves it; only an answer is a failure.
+        if (error?.status) showToast('Listening history could not be saved.', 'error', 4200);
       }
     }
     if (!isCurrentPause()) return saved;

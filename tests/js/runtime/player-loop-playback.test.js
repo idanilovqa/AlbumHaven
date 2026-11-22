@@ -400,6 +400,36 @@ test('a refresh while a pressed song starts keeps showing the pressed song, not 
   assert.equal(title.textContent, 'Artist - Pressed Song /', 'the pressed song stays shown while it starts');
 });
 
+// Owner, sandbox5 2026-11-21: "the waveform is still of the old song, and it does not play a new
+// song for a few seconds". While a switch waits for its audio, a redraw of the player keeps the
+// pressed song's title instead of flipping back, and leaves the old song's waveform off.
+test('while a switch waits for its audio, the player shows the pressed song, not the old one', async () => {
+  const oldTrack = { src: '/track?path=old.flac', path: 'C:/Music/old.flac', title: 'Old', artist: 'A' };
+  const newTrack = { src: '/track?path=new.flac', path: 'C:/Music/new.flac', title: 'New', artist: 'A' };
+  const title = new FakeElement();
+  const waveformDraws = [];
+  let finishStart;
+  const { context } = loadHelper({
+    getPlayerElements: () => ({ title }),
+    canStartPlaybackInThisTab: () => true,
+    startStreamingTrack: () => new Promise((resolve) => { finishStart = resolve; }),
+    updateWaveformAppearance: () => { waveformDraws.push(context.state.player.selectedTrack?.path || ''); },
+  });
+  context.state.player.current = oldTrack;
+
+  const playing = context.playTrackFromPayload(newTrack);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(title.textContent, 'A - New', 'the press shows the new song at once');
+  assert.equal(waveformDraws.at(-1), newTrack.path, 'the waveform is redrawn for the pressed song');
+  context.updatePlayerUi();
+  assert.equal(title.textContent, 'A - New', 'a redraw while the switch waits does not show the old song again');
+
+  finishStart({ role: 'current', streamId: 2, generation: 2, track: newTrack });
+  await playing;
+  assert.equal(context.state.player.selectedTrack, null);
+  assert.equal(title.textContent, 'A - New');
+});
+
 test('playback held by another tab or lost to the server disables the scissors for this tab', () => {
   const updates = [];
   const loopActions = { _loopActionController: { update: next => updates.push({ ...next }) } };
@@ -753,6 +783,55 @@ test('pause awaiting an old scrobble cannot checkpoint a newer playing session',
   assert.strictEqual(context.state.player.listenSession, playingSession);
 });
 
+// Owner retest B-D4 (2026-11-17): offline, Pause silenced the music but the button kept showing
+// Pause while the listen checkpoint and the claim give-back waited on the network.
+test('pause shows Play at once while its listen checkpoint and claim give-back wait on the network', async () => {
+  let finish;
+  const pending = { promise: new Promise((resolve) => { finish = resolve; }), resolve: (value) => finish(value) };
+  const snapshot = { currentTime: 40, duration: 300, paused: false, ended: false, src: '/track?path=song.flac' };
+  const { context, playButton } = loadHelper({
+    getPlayerPlaybackSnapshot: () => ({ ...snapshot }),
+    pauseStreamingPlayback: () => { snapshot.paused = true; },
+    persistPausedListenSession: () => pending.promise,
+    releasePlaybackOwnership: async () => true,
+  });
+  context.updatePlayerUi = () => { context.renderGlobalPlayerPlayGlyph(playButton, snapshot.paused); };
+  context.attachPlayerEvents();
+  context.updatePlayerUi();
+  assert.equal(playButton.getAttribute('data-player-glyph'), 'pause');
+  playButton.dispatch('click');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(playButton.getAttribute('data-player-glyph'), 'play');
+  pending.resolve(true);
+});
+
+// The same retest: offline, the checkpoint's lost request showed "Listening history could not be
+// saved". With no answer the listen stays open and is saved with the next checkpoint instead.
+for (const failure of ['network', 'abort']) {
+  test(`pause checkpoint with no answer (${failure}) keeps the listen and shows no alert`, async () => {
+    const warnings = [];
+    const releases = [];
+    const session = { id: 'offline-session' };
+    const ownership = { requestVersion: 1 };
+    const { context } = loadHelper({
+      getPlaybackOwnershipState: () => ownership,
+      getPlayerPlaybackSnapshot: () => ({ currentTime: 40, duration: 300, paused: false }),
+      pauseStreamingPlayback: async () => true,
+      persistPausedListenSession: async () => {
+        throw failure === 'network' ? new TypeError('Failed to fetch')
+          : Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' });
+      },
+      showToast: (...args) => { warnings.push(args); },
+      releasePlaybackOwnership: async (...args) => { releases.push(args); return true; },
+    });
+    context.state.player.listenSession = session;
+    assert.equal(await context.pausePlayerPlaybackForHandoff(), false);
+    assert.deepEqual(warnings, []);
+    assert.equal(releases.length, 1);
+    assert.strictEqual(context.state.player.listenSession, session);
+  });
+}
+
 for (const outcome of ['failure', 'nothing-to-save', 'superseded-failure']) {
   test(`pause checkpoint ${outcome} reports only a current genuine save failure`, async () => {
     const ownership = { requestVersion: 1 };
@@ -767,7 +846,7 @@ for (const outcome of ['failure', 'nothing-to-save', 'superseded-failure']) {
       persistPausedListenSession: async () => {
         if (outcome === 'nothing-to-save') return false;
         if (outcome === 'superseded-failure') ownership.requestVersion += 1;
-        throw new Error('checkpoint rejected');
+        throw Object.assign(new Error('checkpoint rejected'), { status: 400 });
       },
       showToast: (...args) => { warnings.push(args); },
       releasePlaybackOwnership: async (...args) => { releases.push(args); return true; },

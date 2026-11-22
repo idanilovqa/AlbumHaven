@@ -114,7 +114,8 @@ async def playback_waveform(
     loop_scope = await saved_loop_scope(request) if requested_loop_id else None
     segment: dict[str, int] = {}
     if loop_scope is not None:
-        resolved_path = resolve_loop_media_path(
+        resolved_path = await asyncio.to_thread(
+            resolve_loop_media_path,
             request.app.state.config,
             requested_loop_id,
             **loop_scope,
@@ -144,7 +145,8 @@ async def playback_waveform(
         except PlaybackContractError:
             resolved_path = None
     else:
-        resolved_path = resolve_configured_media_path(
+        resolved_path = await asyncio.to_thread(
+            resolve_configured_media_path,
             request.app.state.config,
             requested_path,
         )
@@ -159,7 +161,7 @@ async def playback_waveform(
     loop_cache_identity = None
     if loop_cache is not None:
         try:
-            stat = resolved_path.stat()
+            stat = await asyncio.to_thread(resolved_path.stat)
         except OSError:
             return JSONResponse({"error": "Media file not found"}, status_code=404)
         loop_cache_identity = {
@@ -237,7 +239,7 @@ async def playback_waveform(
 
     if loop_cache is not None and loop_cache_identity is not None:
         try:
-            current_stat = resolved_path.stat()
+            current_stat = await asyncio.to_thread(resolved_path.stat)
         except OSError:
             current_stat = None
         if (

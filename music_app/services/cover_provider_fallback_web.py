@@ -9,7 +9,9 @@ from collections.abc import Callable
 from html import unescape
 from html.parser import HTMLParser
 
-from music_app.services.app_logging import log_app_event
+# Provider calls log per query, candidate and probe: application log only,
+# never a log-history write (one database connection each).
+from music_app.services.app_logging import log_app_message_event as log_provider_event
 from music_app.services.cover_provider_candidates import CoverCandidate, dedupe_cover_candidates, normalize_remote_image_url
 from music_app.services.music_identity_matching import (
     automatic_artist_identity_match_allowed,
@@ -417,7 +419,7 @@ def expand_manual_genius_album_url_candidates(
     probe_match_candidates: ProbeCandidates,
     extract_meta_content: ExtractMetaContent | None = None,
     extract_album_page_metadata: Callable[..., tuple[str, str, int | None, list[str]]] = extract_genius_album_page_metadata,
-    log_event: LogEvent | None = log_app_event,
+    log_event: LogEvent | None = log_provider_event,
     logger=None,
 ) -> list[CoverCandidate]:
     split = urllib.parse.urlsplit(normalized_url)
@@ -893,7 +895,7 @@ def discover_artist_website_urls_via_musicbrainz(
     *,
     http_get_json: HttpGetJson,
     similarity: Similarity = _default_similarity,
-    log_event: LogEvent | None = log_app_event,
+    log_event: LogEvent | None = log_provider_event,
     logger=None,
     deadline: float | None = None,
     deadline_expired: Callable[[float | None], bool] = artist_website_deadline_expired,
@@ -1084,7 +1086,7 @@ def search_artist_website_candidates(
     probe_match_candidates: ProbeCandidates,
     dedupe_candidates: DedupeCandidates = dedupe_cover_candidates,
     similarity: Similarity = _default_similarity,
-    log_event: LogEvent | None = log_app_event,
+    log_event: LogEvent | None = log_provider_event,
     logger=None,
     now: Callable[[], float] = time.perf_counter,
     deadline_expired: Callable[[float | None], bool] | None = None,

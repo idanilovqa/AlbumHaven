@@ -17,6 +17,8 @@ const STREAMING_REPLACEMENT_ACTIVE_OUTGOING_CUSHION_SECONDS = STREAMING_REPLACEM
 const STREAMING_WAVEFORM_READY_SECONDS = 1;
 const STREAMING_RESTORE_AUTOPLAY_SETTLEMENT_MS = 750;
 const STREAMING_REPLACEMENT_CUSHION_WAIT_MS = 1000;
+// A kept track only saves a server stream; a slow or stuck browser cache must not hold the start.
+const STREAMING_CACHED_TRACK_PRIME_DEADLINE_MS = 500;
 const STREAMING_MAX_KNOWN_TRACK_RATES = 512;
 const STREAMING_ENCODED_BUFFER_SECONDS = { current: 120, continuity: 30 };
 const STREAMING_ENCODED_BUFFER_MIN_BYTES = 1024 * 1024;
@@ -2348,22 +2350,33 @@ function keepHeardStreamingWire(roleState) {
 }
 
 // Loads `track` from the cache before a role opens it, so the open itself stays synchronous.
+// No caller waits past the deadline: a browser cache that is slow or never answers leaves the
+// track to stream from the server, and a late answer still primes it for a later open.
 async function primeStreamingCachedTrack(track) {
   const engine = streamingEngineState();
   const key = streamingTrackCacheKey(track, chooseStreamingQuality(track));
   engine.primedTracks ??= new Map();
   if (engine.primedTracks.has(key)) return;
-  const entry = await loadStreamingCachedTrack(key);
-  if (!entry) return;
-  engine.primedTracks.set(key, entry);
-  while (engine.primedTracks.size > STREAMING_PRIMED_TRACKS) {
-    engine.primedTracks.delete(engine.primedTracks.keys().next().value);
-  }
-  // Its rate is known, so its start needs no probe.
-  rememberStreamingTrackFormat(String(track.path || ''), entry.sampleRate, {
-    fallbackSampleRate: 0,
-    sizeBytes: entry.bytes.length,
+  const priming = loadStreamingCachedTrack(key).then((entry) => {
+    if (!entry) return;
+    engine.primedTracks.set(key, entry);
+    while (engine.primedTracks.size > STREAMING_PRIMED_TRACKS) {
+      engine.primedTracks.delete(engine.primedTracks.keys().next().value);
+    }
+    // Its rate is known, so its start needs no probe.
+    rememberStreamingTrackFormat(String(track.path || ''), entry.sampleRate, {
+      fallbackSampleRate: 0,
+      sizeBytes: entry.bytes.length,
+    });
   });
+  let deadline = 0;
+  await Promise.race([
+    priming,
+    new Promise((resolve) => {
+      deadline = setTimeout(resolve, STREAMING_CACHED_TRACK_PRIME_DEADLINE_MS);
+    }),
+  ]);
+  clearTimeout(deadline);
 }
 
 function mayPrimeStreamingCachedTrack() {

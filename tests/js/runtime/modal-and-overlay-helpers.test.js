@@ -3048,3 +3048,46 @@ test('clearing a search keeps its selection and flashes the found track in the f
   context.captureLooseTracksSearchContext(els);
   assert.equal(context.state.ui.looseTracksSearchContext, null);
 });
+
+// Request-capture contract (tests/ci/bounded-interactions.json): loose-track hydration builds its
+// URL with the real view helpers, coalesces repeated opens, and never asks again once hydrated.
+const { createRequestCapture, jsonResponse, measureInteractionContract } = require('../helpers/request-capture');
+const viewStateHelpersPath = path.join(path.dirname(helperPath), 'view-state-helpers.js');
+
+test('request capture: loose-track hydration requests each scope once', async () => {
+  const id = 'js:runtime/modal-and-overlay-helpers.js#hydrateDeferredNonAlbumTracks';
+  await measureInteractionContract(id, {
+    setup(opens) {
+      const { context } = loadHelper();
+      context.URL = URL;
+      context.URLSearchParams = URLSearchParams;
+      context.updateGalleryMainControls = () => {};
+      vm.runInContext(fs.readFileSync(viewStateHelpersPath, 'utf8'), context, { filename: viewStateHelpersPath });
+      const capture = createRequestCapture(() => jsonResponse({ non_album_tracks: [], library_non_album_tracks: [] }));
+      context.fetch = capture.fetch;
+      return { capture, context, opens };
+    },
+    async act({ capture, context, opens }) {
+      const before = capture.requests.length;
+      const openMany = options => Promise.all(Array.from({ length: opens }, () => context.hydrateDeferredNonAlbumTracks(options)));
+      for (const scope of [{ selected_artist: 'Agalloch' }, { surface_request: 'albums' }]) {
+        context.state.view = { ...scope, non_album_tracks: [], non_album_tracks_deferred: true };
+        await openMany();
+        await openMany();
+        await openMany({ libraryWide: true });
+        await openMany({ libraryWide: true });
+      }
+      const requests = capture.urls().slice(before);
+      const urls = requests.map(url => new URL(url, 'http://localhost'));
+      // An artist's own loose tracks and the library-wide list have their own endpoint; only the
+      // all-albums scope reads them from its view.
+      assert.deepEqual(urls.map(url => [url.pathname, url.searchParams.get('artist')]), [
+        ['/library/loose-tracks', 'Agalloch'], ['/library/loose-tracks', null],
+        ['/view-data', null], ['/library/loose-tracks', null],
+      ]);
+      const viewRequests = urls.filter(url => url.pathname === '/view-data');
+      assert.ok(viewRequests.every(url => url.searchParams.get('include_non_album') === '1' && url.searchParams.get('omit_sidebar') === '1'));
+      return { requests };
+    },
+  });
+});

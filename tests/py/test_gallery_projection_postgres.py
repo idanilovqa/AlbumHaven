@@ -814,50 +814,105 @@ def test_selected_startup_sidebar_uses_only_current_gallery_projection(monkeypat
     assert events[-2:] == ["rollback", "close"]
 
 
-@pytest.mark.parametrize("stale", [False, True])
-def test_relation_repair_preflight_runs_only_when_stale_and_before_gallery_snapshot(monkeypatch, stale):
+@pytest.mark.parametrize("relations", ["ready", "cold", "pending"])
+def test_pending_relation_rebuild_publishes_last_families_then_rebuilt_families(monkeypatch, relations):
+    """Keep last families: a pending rebuild publishes the gallery at once with
+    the last published aliases (the watcher-found artist visible, ungrouped),
+    then again once the rebuilt relations change the source generation. A cold
+    start with no published projection still waits for the rebuild."""
     from contextlib import contextmanager
+    from threading import Event
     from music_app.services import gallery_projection_postgres as gallery
-    from music_app.services import library_browse_postgres as browse
-    from music_app.services import relation_projection_postgres as relations
+    from music_app.services import relation_projection_postgres as relation_projection
 
-    events = []
+    family = {"Kipelov": "Кипелов"}
+    rebuilt_family = {**family, "Kipelov Live": "Кипелов"}
+    membership_rows = [
+        dict(membership(artist, key), album_id=album_id)
+        for album_id, (artist, key) in enumerate([
+            ("Кипелов", "kipelov::a"),
+            ("Kipelov", "kipelov::b"),
+            # Found by the watcher after the last relation build.
+            ("Kipelov Live", "kipelov::c"),
+        ], start=1)
+    ]
+    store = SimpleNamespace(
+        generation=1,
+        aliases={
+            "ready": {"alias_to_canonical": rebuilt_family, "projection_stale_reason": ""},
+            "cold": {"alias_to_canonical": {}, "projection_stale_reason": "missing_projection"},
+            "pending": {
+                "alias_to_canonical": family,
+                "projection_stale_reason": "projection_not_ready",
+                "projection_structure_complete": True,
+            },
+        }[relations],
+        published={},
+        events=[],
+    )
 
     class Connection:
-        def execute(self, sql):
-            return None
+        def execute(self, *_args):
+            return SimpleNamespace(fetchall=lambda: list(membership_rows))
 
     class Repository:
         def __init__(self, config, *, connect):
             pass
 
-        def _load_relation_alias_maps(self):
-            events.append("readiness")
-            return {"projection_stale_reason": "projection_not_ready" if stale else ""}
+        def _load_relation_alias_maps(self, connection=None):
+            return dict(store.aliases)
+
+        def _load_missing_album_rows(self, connection=None):
+            return []
 
         @contextmanager
         def _connect_to_database(self):
-            events.append("gallery_snapshot")
             yield Connection()
 
-    config = {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://fixture"}
-    connect = object()
-    from threading import Event
-    cancelled = Event()
+    def rebuild(_config, **_kwargs):
+        store.events.append("rebuild")
+        store.aliases = {"alias_to_canonical": rebuilt_family, "projection_stale_reason": ""}
+        # The relation publication is a gallery source change.
+        store.generation += 1
 
-    def repair(current_config, **kwargs):
-        assert current_config is config
-        assert kwargs == {"connect": connect, "cancel_requested": cancelled}
-        assert events == ["readiness"]
-        events.append("repair")
+    def publish(_config, context, state, snapshot, **_kwargs):
+        store.events.append("publish")
+        store.published[(gallery.gallery_projection_scope_key(state), context["generation"])] = snapshot["sidebar"]
+        return True
 
     monkeypatch.setattr(browse, "PostgresLibraryBrowseRepository", Repository)
-    monkeypatch.setattr(relations, "ensure_relation_projection_ready", repair)
-    monkeypatch.setattr(gallery, "gallery_projection_context", lambda connection: None)
-    assert gallery.ensure_gallery_projection_ready(
-        config, connect=connect, cancel_requested=cancelled,
-    ) == {"built": 0}
-    assert events == (["readiness", "repair", "gallery_snapshot"] if stale else ["readiness", "gallery_snapshot"])
+    monkeypatch.setattr(relation_projection, "ensure_relation_projection_ready", rebuild)
+    monkeypatch.setattr(gallery, "gallery_projection_context", lambda _connection: {
+        "library_id": 1, "generation": store.generation,
+    })
+    monkeypatch.setattr(gallery, "_ready_header", lambda _connection, context, state: (
+        (gallery.gallery_projection_scope_key(state), context["generation"]) in store.published
+    ))
+    monkeypatch.setattr(gallery, "publish_gallery_projection", publish)
+
+    result = gallery.ensure_gallery_projection_ready(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://fixture"}, cancel_requested=Event(),
+    )
+
+    root_scope = gallery.gallery_projection_scope_key(browse._root_sidebar_view_state({}))
+    grouped = [{"artist": "Кипелов", "artist_display": "Кипелов", "count": 3}]
+    if relations == "ready":
+        assert store.events == ["publish", "publish"]
+        assert store.published[(root_scope, 1)] == grouped
+    elif relations == "cold":
+        assert store.events == ["rebuild", "publish", "publish"]
+        assert (root_scope, 1) not in store.published
+        assert store.published[(root_scope, 2)] == grouped
+    else:
+        assert store.events == ["publish", "publish", "rebuild", "publish", "publish"]
+        # Before the rebuild: the family stays grouped and the new artist shows.
+        assert sorted(store.published[(root_scope, 1)], key=lambda entry: entry["artist"]) == [
+            {"artist": "Kipelov Live", "artist_display": "Kipelov Live", "count": 1},
+            {"artist": "Кипелов", "artist_display": "Кипелов", "count": 2},
+        ]
+        # After the background publication the new artist joins its family.
+        assert store.published[(root_scope, 2)] == grouped
+    assert result == {"built": store.events.count("publish")}
 
 
 def test_failed_refresh_discards_prior_trailing_demand_and_next_request_retries(monkeypatch):

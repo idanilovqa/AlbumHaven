@@ -1079,14 +1079,6 @@ async function handleUtilityBootstrapClick(event) {
     );
     return;
   }
-    const trackModalCurrentRelease = event.target.closest('[data-track-modal-current-release]');
-    if (trackModalCurrentRelease) {
-      event.preventDefault();
-      selectTrackModalCurrentRelease(
-        trackModalCurrentRelease.getAttribute('data-track-modal-current-release') || '',
-      );
-      return;
-    }
 
   const trackProblematicButton = event.target.closest('[data-open-track-problematic="1"]');
   if (trackProblematicButton) {
@@ -1453,7 +1445,8 @@ function handleUtilityBootstrapMouseDown(event) {
   event.preventDefault();
   const path = trackButton.getAttribute('data-tag-editor-track') || '';
   const plain = !event.shiftKey && !event.ctrlKey && !event.metaKey;
-  const selectedPaths = getSelectedTagEditorPaths(state.tagEditor.tracks || []);
+  // The stored selection is already validated; re-deriving it would walk every track on each press.
+  const selectedPaths = Array.isArray(state.tagEditor.selectedPaths) ? state.tagEditor.selectedPaths.slice() : [];
   // Owner 2026-11-16, as in the shared track table: a drag that starts on a selected track deselects
   // the tracks it passes; a click without a drag still selects only that track (resolved on mouseup).
   const removing = plain && selectedPaths.length > 1 && selectedPaths.includes(path);
@@ -1461,6 +1454,7 @@ function handleUtilityBootstrapMouseDown(event) {
   state.tagEditor.dragAnchorPath = plain ? path : '';
   state.tagEditor.dragBasePaths = removing ? selectedPaths : null;
   state.tagEditor.dragMoved = false;
+  state.tagEditor.dragHoverPath = plain ? path : '';
   if (removing) return;
   selectTagEditorTrack(path, event);
   renderTagEditor({ preserveTrackList: true });
@@ -1646,13 +1640,23 @@ function handleUtilityBootstrapMouseOver(event) {
   if (!trackButton) return false;
   const path = trackButton.getAttribute('data-tag-editor-track') || '';
   state.tagEditor.dragMoved ||= path !== state.tagEditor.dragAnchorPath;
+  // Moves within the hovered track change nothing; a new track changes only
+  // the rows entering or leaving the dragged range.
+  if (path === state.tagEditor.dragHoverPath) return true;
+  state.tagEditor.dragHoverPath = path;
+  const previousPaths = new Set(state.tagEditor.selectedPaths || []);
   const rangePaths = getTagEditorRangePaths(state.tagEditor.dragAnchorPath, path);
   const basePaths = state.tagEditor.dragBasePaths;
   setTagEditorSelectedPaths(
     basePaths ? basePaths.filter((selectedPath) => !rangePaths.includes(selectedPath)) : rangePaths,
     state.tagEditor.dragAnchorPath,
   );
-  renderTagEditor({ preserveTrackList: true });
+  const selectedPaths = new Set(state.tagEditor.selectedPaths);
+  const changedSelectionPaths = [
+    ...[...previousPaths].filter(item => !selectedPaths.has(item)),
+    ...[...selectedPaths].filter(item => !previousPaths.has(item)),
+  ];
+  renderTagEditor({ preserveTrackList: true, changedSelectionPaths });
   syncTagEditorAutoNumberControls();
   return true;
 }
@@ -1718,6 +1722,7 @@ function handleUtilityBootstrapMouseUp(event) {
     : '';
   state.tagEditor.dragSelecting = false;
   state.tagEditor.dragAnchorPath = '';
+  state.tagEditor.dragHoverPath = '';
   state.tagEditor.dragBasePaths = null;
   state.tagEditor.dragMoved = false;
   if (pressedSelectedPath) {

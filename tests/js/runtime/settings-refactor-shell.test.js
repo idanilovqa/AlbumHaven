@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const { loadPendingProjectionFetch } = require('../helpers/pending-projection-fetch');
 
 const root = path.resolve(__dirname, '../../..');
 const tabs = ['problematic-files', 'rules', 'loops', 'log-history', 'integrations', 'appearance'];
@@ -49,6 +50,7 @@ function harness() {
   };
   context.window = context;
   vm.createContext(context);
+  loadPendingProjectionFetch(context);
   vm.runInContext(read('music_app/static/js/button-component.js'), context);
   vm.runInContext(read('music_app/static/js/runtime/alert-components.js'), context);
   vm.runInContext(read('music_app/static/js/navigation-tree.js'), context, { filename: 'navigation-tree.js' });

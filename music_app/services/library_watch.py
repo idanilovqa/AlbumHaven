@@ -51,12 +51,14 @@ class LibraryEventSource(Protocol):
 def _resolved_roots(
     roots: Iterable[Mapping[str, object]],
 ) -> tuple[tuple[str, Path], ...]:
+    """Configured root definitions hold paths resolved when the settings were
+    saved, so attributing an event to its root never asks the filesystem."""
     resolved = []
     for root in roots:
         root_id = str(root.get("id") or "").strip()
         root_path = str(root.get("path") or "").strip()
         if root_id and root_path:
-            resolved.append((root_id, Path(root_path).resolve(strict=False)))
+            resolved.append((root_id, Path(root_path)))
     return tuple(resolved)
 
 

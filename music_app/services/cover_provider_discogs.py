@@ -8,7 +8,9 @@ from collections.abc import Callable
 
 from config import Config
 from music_app.services import cover_provider_http
-from music_app.services.app_logging import log_app_event
+# Provider calls log per query, candidate and probe: application log only,
+# never a log-history write (one database connection each).
+from music_app.services.app_logging import log_app_message_event as log_provider_event
 from music_app.services.cover_provider_availability import provider_availability
 from music_app.services.cover_provider_candidates import (
     CoverCandidate,
@@ -138,7 +140,7 @@ def discogs_api_get_json(
         context=context,
         extra_headers=discogs_auth_headers(config=config),
         logger=logger or _LOGGER,
-        app_event_logger=app_event_logger or log_app_event,
+        app_event_logger=app_event_logger or log_provider_event,
         mark_discogs_rate_limited=mark_rate_limited or mark_discogs_rate_limited,
     )
 
@@ -373,7 +375,7 @@ def discogs_database_search_matches(
     match_score: MatchScore,
     parse_year: ParseYear,
     api_get_json: JsonGetter,
-    log_event: LogEvent = log_app_event,
+    log_event: LogEvent = log_provider_event,
     logger=None,
     config=Config,
     reset_rate_limit_state: Callable[[], None] = reset_discogs_rate_limit_state,
@@ -715,7 +717,7 @@ def search_discogs_candidates(
     parse_year: ParseYear,
     probe_match_candidates: ProbeCandidates,
     api_get_json: JsonGetter,
-    log_event: LogEvent = log_app_event,
+    log_event: LogEvent = log_provider_event,
     logger=None,
     config=Config,
     should_cancel: CancelPredicate | None = None,
@@ -803,7 +805,7 @@ def search_discogs_cover_candidates(
     parse_year: ParseYear,
     probe_match_candidates: ProbeCandidates,
     api_get_json: JsonGetter,
-    log_event: LogEvent = log_app_event,
+    log_event: LogEvent = log_provider_event,
     logger=None,
     config=Config,
     should_cancel: CancelPredicate | None = None,
@@ -843,7 +845,7 @@ def expand_discogs_url_candidates(
     match_score: MatchScore,
     parse_year: ParseYear,
     probe_match_candidates: ProbeCandidates,
-    log_event: LogEvent = log_app_event,
+    log_event: LogEvent = log_provider_event,
     logger=None,
 ) -> list[CoverCandidate] | None:
     split = urllib.parse.urlsplit(normalized_url)

@@ -253,6 +253,43 @@ def test_claim_heartbeat_exact_expiry_matching_release_and_side_effect_guard(pla
     assert service.get(fixture.actor, client_id)["can_start_here"] is True
 
 
+def test_a_lapsed_claim_renews_by_its_token_until_another_client_claims(playback_inventory):
+    # A client that lost its network keeps playing past its lease; when it reconnects its token renews
+    # the claim unless another client claimed meanwhile, whose claim it must then never take back.
+    fixture = playback_inventory
+    clock = [datetime(2026, 11, 15, tzinfo=timezone.utc)]
+    service = claims_service(fixture, lambda: clock[0])
+    reference = issue(reference_service(fixture, lambda: clock[0]), fixture)["tracks"][0]["playbackRef"]
+    track = {"playbackRef": reference, "title": "Track", "artist": "Owner", "album": "Album", "artworkUrl": None}
+    client_id, other_id = str(uuid4()), str(uuid4())
+    token = service.acquire(fixture.actor, client_id=client_id, client_surface="private_web", track=track)["claimToken"]
+
+    clock[0] += timedelta(minutes=5)
+    with pytest.raises(ValueError):
+        service.require_claim(fixture.actor, client_id=client_id, claim_token=token)
+    renewed = service.acquire(fixture.actor, client_id=client_id, client_surface="private_web", track=track,
+                              claim_token=token)
+    assert renewed["claimToken"] == token
+    assert datetime.fromisoformat(renewed["expiresAt"].replace("Z", "+00:00")) == clock[0] + timedelta(seconds=30)
+    service.require_claim(fixture.actor, client_id=client_id, claim_token=token)
+    with pytest.raises(ValueError) as own_live_lease:
+        service.acquire(fixture.actor, client_id=client_id, client_surface="private_web", track=track)
+    assert getattr(own_live_lease.value, "status_code", None) == 409
+
+    clock[0] += timedelta(minutes=5)
+    other = service.acquire(fixture.actor, client_id=other_id, client_surface="mobile", track=track)
+    with pytest.raises(ValueError) as taken_over:
+        service.acquire(fixture.actor, client_id=client_id, client_surface="private_web", track=track,
+                        claim_token=token)
+    assert getattr(taken_over.value, "status_code", None) == 409
+    service.release(fixture.actor, client_id=other_id, claim_token=other["claimToken"])
+    with pytest.raises(ValueError) as released_after_takeover:
+        service.acquire(fixture.actor, client_id=client_id, client_surface="private_web", track=track,
+                        claim_token=token)
+    assert getattr(released_after_takeover.value, "status_code", None) == 409
+    assert service.get(fixture.actor, client_id)["can_start_here"] is True
+
+
 def test_concurrent_clients_cannot_both_acquire_playback(playback_inventory):
     fixture = playback_inventory
     now = datetime(2026, 10, 23, tzinfo=timezone.utc)

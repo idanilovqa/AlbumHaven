@@ -63,7 +63,7 @@ async function loadProblematicFiles(force = false, options = {}) {
     try {
       const fetchSummary = async (url) => {
         const requestStartedAt = getProblematicUtilityNow();
-        const response = await fetch(url, { headers: { Accept: 'application/json' } });
+        const response = await fetchRetryingPendingProjection(url, { headers: { Accept: 'application/json' } });
         requestMs += roundProblematicUtilityMs(getProblematicUtilityNow() - requestStartedAt);
         responseStatus = Number(response.status || 0);
         const parseStartedAt = getProblematicUtilityNow();
@@ -262,7 +262,7 @@ async function loadProblematicAlbumDetail(albumKey, force = false, options = {})
     let loadError = '';
     try {
       const requestStartedAt = getProblematicUtilityNow();
-      const response = await fetch(`/utilities/problematic-files/detail?album_key=${encodeURIComponent(normalizedKey)}`, {
+      const response = await fetchRetryingPendingProjection(`/utilities/problematic-files/detail?album_key=${encodeURIComponent(normalizedKey)}`, {
         headers: { Accept: 'application/json' },
       });
       requestMs = roundProblematicUtilityMs(getProblematicUtilityNow() - requestStartedAt);
@@ -556,7 +556,8 @@ async function fetchCoverForAlbum(album, options = {}) {
     showToast(
       Number(data.downloaded_count || 0) > 0
         ? 'Cover art updated.'
-        : `Cover was not updated${data.job_result?.reason ? `: ${String(data.job_result.reason).replaceAll('_', ' ')}` : ''}.`,
+        : (data.job_result?.message
+          || `Cover was not updated${data.job_result?.reason ? `: ${String(data.job_result.reason).replaceAll('_', ' ')}` : ''}.`),
       Number(data.downloaded_count || 0) > 0 ? 'success' : 'error',
       3200,
     );
@@ -943,21 +944,34 @@ async function syncUtilityLogHistoryRevision(revision) {
   return { revision: state.utility.logHistoryRevision };
 }
 
+const LASTFM_SUBMIT_ERROR = 'Album Haven could not submit pending Last.fm scrobbles.';
+// While the server sends queued scrobbles, the page rereads the pending count.
+const LASTFM_SUBMISSION_POLL_MS = 2000;
+// A run whose count stops moving for a minute is left to the server; Submit becomes available again.
+const LASTFM_SUBMISSION_MAX_UNCHANGED_POLLS = 30;
+
 function ensureLastfmScrobbleState() {
   state.utility.lastfmScrobbles = state.utility.lastfmScrobbles || {
-    summary: null, loading: false, submitting: false, loadPromise: null, requestGeneration: 0,
+    summary: null, loading: false, submitting: false, loadPromise: null, requestGeneration: 0, followToken: 0,
   };
   state.utility.lastfmScrobbles.requestGeneration = Number(state.utility.lastfmScrobbles.requestGeneration || 0);
+  state.utility.lastfmScrobbles.followToken = Number(state.utility.lastfmScrobbles.followToken || 0);
   return state.utility.lastfmScrobbles;
 }
 
 function invalidateLastfmScrobbleSummary() {
   const owner = ensureLastfmScrobbleState();
   owner.requestGeneration += 1;
+  owner.followToken += 1;
   owner.summary = null;
   owner.loading = false;
   owner.loadPromise = null;
+  owner.submitting = false;
   return owner;
+}
+
+function isLastfmSubmissionActive(payload) {
+  return ['queued', 'running'].includes(String(payload?.submission?.state || ''));
 }
 
 function normalizeLastfmScrobbleSummary(payload, fallback = {}) {
@@ -1002,6 +1016,8 @@ async function loadLastfmScrobbleSummary(lastfm, { replace = false, preserveOnEr
       if (!response.ok || !data.ok) throw new Error(data.error || 'Failed to load Last.fm scrobble status');
       if (state.utility.lastfmScrobbles === owner && owner.requestGeneration === requestGeneration) {
         owner.summary = normalizeLastfmScrobbleSummary(data, lastfm);
+        // A run started earlier, or from another page, keeps reporting its progress here.
+        if (!owner.submitting && isLastfmSubmissionActive(data)) followLastfmScrobbleSubmission(owner, lastfm);
       }
       return owner.summary;
     } catch (error) {
@@ -1560,6 +1576,9 @@ async function submitPendingLastfmScrobbles() {
   const lastfm = (state.utility.integrations || []).find((item) => String(item?.key || '') === 'lastfm');
   if (owner.submitting || !lastfm?.connected || Number(owner.summary?.pending) <= 0 || owner.summary?.can_submit !== true) return false;
   const submitGeneration = ++owner.requestGeneration;
+  // A disconnect while the request is out ends this submission.
+  const submitFollowToken = owner.followToken;
+  const stillSubmitting = () => state.utility.lastfmScrobbles === owner && owner.followToken === submitFollowToken;
   owner.loading = false;
   owner.loadPromise = null;
   owner.submitting = true;
@@ -1572,30 +1591,72 @@ async function submitPendingLastfmScrobbles() {
     const data = await response.json().catch(() => ({}));
     if (state.utility.lastfmScrobbles === owner && owner.requestGeneration === submitGeneration) {
       owner.summary = normalizeLastfmScrobbleSummary(data, owner.summary || lastfm);
-      renderUtilityModalContent();
-      await loadLastfmScrobbleSummary(lastfm, { replace: true, preserveOnError: true });
     }
-    if (!response.ok || !data.ok) {
-      state.utility.logHistoryLoaded = false;
-      showRepairAlert(data.error || 'Album Haven could not submit pending Last.fm scrobbles.', 'error', null);
-      return false;
-    }
-    showToast('Pending Last.fm scrobbles submitted.', 'success', 2600);
+    if (!response.ok || !data.ok) throw new Error(data.error || LASTFM_SUBMIT_ERROR);
+    // The server sends the scrobbles in the background; Submit stays busy while the count falls.
+    if (stillSubmitting()) followLastfmScrobbleSubmission(owner, lastfm);
     return true;
   } catch (error) {
     console.error('[AlbumHaven][Integrations] Failed to submit pending Last.fm scrobbles.', error);
-    state.utility.logHistoryLoaded = false;
-    if (state.utility.lastfmScrobbles === owner && owner.requestGeneration === submitGeneration) {
-      await loadLastfmScrobbleSummary(lastfm, { replace: true, preserveOnError: true });
+    if (stillSubmitting()) {
+      await finishLastfmScrobbleSubmission(owner, lastfm, error.message || LASTFM_SUBMIT_ERROR);
     }
-    showRepairAlert(error.message || 'Album Haven could not submit pending Last.fm scrobbles.', 'error', null);
     return false;
-  } finally {
-    if (state.utility.lastfmScrobbles === owner) {
+  }
+}
+
+function followLastfmScrobbleSubmission(owner, lastfm) {
+  const token = ++owner.followToken;
+  let unchangedPolls = 0;
+  owner.submitting = true;
+  renderUtilityModalContent();
+  const following = () => state.utility.lastfmScrobbles === owner && owner.followToken === token;
+  const pollLastfmScrobbleSubmission = async () => {
+    if (!following()) return;
+    let data;
+    try {
+      // The progress read skips the provider total, so polling never calls Last.fm.
+      const response = await fetch('/utilities/integrations/lastfm/scrobbles?progress=1', { headers: { Accept: 'application/json' } });
+      data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) throw new Error(data.error || LASTFM_SUBMIT_ERROR);
+    } catch (error) {
+      if (following()) await finishLastfmScrobbleSubmission(owner, lastfm, error.message || LASTFM_SUBMIT_ERROR);
+      return;
+    }
+    if (!following()) return;
+    const summary = normalizeLastfmScrobbleSummary(data, owner.summary || lastfm);
+    if (summary.pending !== owner.summary?.pending || summary.scrobbled !== owner.summary?.scrobbled) {
+      owner.summary = summary;
+      unchangedPolls = 0;
+      renderUtilityModalContent();
+    } else {
+      unchangedPolls += 1;
+    }
+    if (String(data.submission?.state || '') === 'failed') {
+      await finishLastfmScrobbleSubmission(owner, lastfm, String(data.submission.error || LASTFM_SUBMIT_ERROR));
+    } else if (!isLastfmSubmissionActive(data)) {
+      await finishLastfmScrobbleSubmission(owner, lastfm, '');
+    } else if (unchangedPolls >= LASTFM_SUBMISSION_MAX_UNCHANGED_POLLS) {
+      owner.followToken += 1;
       owner.submitting = false;
       renderUtilityModalContent();
+    } else {
+      window.setTimeout(pollLastfmScrobbleSubmission, LASTFM_SUBMISSION_POLL_MS);
     }
+  };
+  window.setTimeout(pollLastfmScrobbleSubmission, LASTFM_SUBMISSION_POLL_MS);
+}
+
+async function finishLastfmScrobbleSubmission(owner, lastfm, error) {
+  owner.followToken += 1;
+  owner.submitting = false;
+  await loadLastfmScrobbleSummary(lastfm, { replace: true, preserveOnError: true });
+  if (error) {
+    state.utility.logHistoryLoaded = false;
+    showRepairAlert(error, 'error', null);
+    return;
   }
+  showToast('Pending Last.fm scrobbles submitted.', 'success', 2600);
 }
 
 function closeUtilityModal(skipAppearanceGuard = false) {
@@ -2791,6 +2852,16 @@ function showTagEditorReorderCue(beforePath = null) {
   if (state.tagEditor.reorder) state.tagEditor.reorder.beforePath = beforePath || null;
 }
 
+// Whether an editor's track list holds a CUE track is fixed for that list; asking once spares
+// every redraw (each drag-selection step) a pass over all of its tracks.
+const tagEditorCueTracks = new WeakMap();
+function tagEditorCueTrack(tracks) {
+  if (!tagEditorCueTracks.has(tracks)) {
+    tagEditorCueTracks.set(tracks, tracks.find(track => track?.cue_segment_ref || track?.cueSegmentRef) || null);
+  }
+  return tagEditorCueTracks.get(tracks);
+}
+
 function renderTagEditor(options = {}) {
   const els = getTagEditorElements();
   if (!els.overlay || !els.list || !els.form) return;
@@ -2800,7 +2871,8 @@ function renderTagEditor(options = {}) {
 
   const selectedPaths = getSelectedTagEditorPaths(tracks);
   const selectedPathSet = new Set(selectedPaths);
-  const cueTrack = tracks.find(track => track?.cue_segment_ref || track?.cueSegmentRef);
+  // Only a loaded or failed CUE needs to know which track is the CUE one.
+  const cueTrack = state.tagEditor.cueLoaded || state.tagEditor.cueError ? tagEditorCueTrack(tracks) : null;
   const cueLoaded = Boolean(cueTrack && state.tagEditor.cueLoaded);
   const cueEnabled = cueLoaded && state.tagEditor.canEditCueStructure
     && (typeof matchMedia !== 'function' || matchMedia('(min-width: 769px)').matches);
@@ -2821,10 +2893,13 @@ function renderTagEditor(options = {}) {
   const showCue = activeView === 'cue';
   if (els.cueStructure) els.cueStructure.hidden = !showCue;
   if (els.artwork) els.artwork.hidden = showCue;
-  els.form.querySelectorAll('[data-tag-field]').forEach((input) => {
-    const fieldHost = input.closest('label, .tag-editor-exception-field');
-    if (fieldHost) fieldHost.hidden = showCue;
-  });
+  // A drag-selection step never changes the view, so it leaves the form's fields alone.
+  if (!(options.preserveTrackList && Array.isArray(options.changedSelectionPaths))) {
+    els.form.querySelectorAll('[data-tag-field]').forEach((input) => {
+      const fieldHost = input.closest('label, .tag-editor-exception-field');
+      if (fieldHost) fieldHost.hidden = showCue;
+    });
+  }
   if (els.cueAlert) {
     const focusedTrack = tracks.find(
       track => getTagEditorTrackIdentity(track) === getTagEditorFocusedPath(),
@@ -2922,7 +2997,17 @@ function renderTagEditor(options = {}) {
     els.autoNumberStatus.textContent = String(state.tagEditor.autoNumberStatus || '');
   }
 
-  const existingTrackButtons = options.preserveTrackList
+  const syncTrackRowSelection = (row) => {
+    const isSelected = selectedPathSet.has(String(row.getAttribute('data-tag-editor-track') || ''));
+    row.classList.toggle('is-active', isSelected);
+    row.querySelector?.('.tag-editor-track-select')
+      ?.setAttribute?.('aria-pressed', isSelected ? 'true' : 'false');
+  };
+  // A drag-selection step keeps the mounted list and names the rows it changed.
+  const changedSelectionPaths = options.preserveTrackList && Array.isArray(options.changedSelectionPaths)
+    ? options.changedSelectionPaths
+    : null;
+  const existingTrackButtons = options.preserveTrackList && !changedSelectionPaths
     ? Array.from(els.list.querySelectorAll('[data-tag-editor-track]'))
     : [];
   const canPreserveTrackList = existingTrackButtons.length === tracks.length
@@ -2930,14 +3015,13 @@ function renderTagEditor(options = {}) {
       String(existingTrackButtons[index]?.getAttribute('data-tag-editor-track') || '')
       === getTagEditorTrackIdentity(track)
     ));
-  if (canPreserveTrackList) {
-    existingTrackButtons.forEach((button) => {
-      const path = String(button.getAttribute('data-tag-editor-track') || '');
-      const isSelected = selectedPathSet.has(path);
-      button.classList.toggle('is-active', isSelected);
-      button.querySelector?.('.tag-editor-track-select')
-        ?.setAttribute?.('aria-pressed', isSelected ? 'true' : 'false');
+  if (changedSelectionPaths) {
+    changedSelectionPaths.forEach((path) => {
+      const row = els.list.querySelector(`[data-tag-editor-track="${cssEscape(path)}"]`);
+      if (row) syncTrackRowSelection(row);
     });
+  } else if (canPreserveTrackList) {
+    existingTrackButtons.forEach(syncTrackRowSelection);
   } else {
     const rows = tracks.map((track) => {
       const path = getTagEditorTrackIdentity(track);

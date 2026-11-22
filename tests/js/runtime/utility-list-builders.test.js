@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const { loadPendingProjectionFetch } = require('../helpers/pending-projection-fetch');
 
 const helperPath = path.join(
   __dirname,
@@ -202,6 +203,7 @@ function loadHelpers() {
     lastMergedPayload: null,
   };
   vm.createContext(context);
+  loadPendingProjectionFetch(context);
   context.window = context;
   vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'view-state-helpers.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/button-component.js'), 'utf8'), context);

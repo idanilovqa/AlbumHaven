@@ -225,6 +225,12 @@ export class GlobalPlayerActions {
     return this.globalPlayer.readPlaybackSummary();
   }
 
+  // After a play or pause, the player repaints its control from the playback
+  // snapshot asynchronously; wait for the visible summary to settle on `expected`.
+  async expectSettledPlaybackSummary(expected, options = {}) {
+    await expect.poll(() => this.readCurrentPlaybackSummary(), { timeout: options.timeout || 10000 }).toEqual(expected);
+  }
+
   async expectOwnershipBlocked({ artist, album, title }) {
     const player = this.globalPlayer;
     await expect(player.time).toHaveText('Playing in another tab');
@@ -674,6 +680,22 @@ export class GlobalPlayerActions {
     });
     await expect(this.globalPlayer.loopScissorsButton).toBeEnabled({ timeout });
     return this.readLoopActionVisualState();
+  }
+
+  async expectScissorsStayFoldedOnPlayHover() {
+    const before = await this.readLoopActionVisualState();
+    const playBounds = await this.globalPlayer.playButton.boundingBox();
+    if (!playBounds) throw new Error('Expected Play to have rendered bounds before hovering it.');
+    await this.globalPlayer.page.mouse.move(
+      playBounds.x + (playBounds.width / 2),
+      playBounds.y + (playBounds.height / 2),
+    );
+    // Three times the 300 ms reveal dwell: an unusable player must never slide the scissors out.
+    await this.globalPlayer.page.waitForTimeout(900);
+    await expect(this.globalPlayer.loopAction).toHaveAttribute('data-loop-action-engaged', 'false');
+    const after = await this.readLoopActionVisualState();
+    await this.globalPlayer.page.mouse.move(0, 0);
+    return { before, after };
   }
 
   async hoverLoopAction(target = 'enter') {

@@ -41,6 +41,11 @@
     <string name="sandbox_switch">Switch sandbox</string>
     <string name="sandbox_unsupported_title">This sandbox doesn’t support the Android app yet</string>
     <string name="sandbox_unsupported_dismiss">Dismiss</string>
+    <string name="battery_prompt_title">Keep Album Haven running</string>
+    <string name="battery_prompt_reason_samsung">Samsung battery saving closes it in the background, so the library reloads when you come back.</string>
+    <string name="battery_prompt_reason">Battery saving can close it in the background, so the library reloads when you come back.</string>
+    <string name="battery_prompt_allow">Set to Unrestricted</string>
+    <string name="battery_prompt_decline">No thanks</string>
     <string name="playback_resume_sign_in">Sign in to Album Haven to keep listening</string>
     <string name="playback_resume_unavailable">Open Album Haven to keep listening</string>
     <string name="playback_resume_open_app">Open Album Haven</string>

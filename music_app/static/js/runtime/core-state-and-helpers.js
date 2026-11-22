@@ -246,6 +246,7 @@ const state = {
       submitting: false,
       loadPromise: null,
       requestGeneration: 0,
+      followToken: 0,
     },
     localPlaylistImport: {
       selectedFile: null,
@@ -353,6 +354,7 @@ const state = {
     dragAnchorPath: '',
     dragBasePaths: null,
     dragMoved: false,
+    dragHoverPath: '',
     values: {},
   },
   coverLookup: {

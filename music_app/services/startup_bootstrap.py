@@ -109,6 +109,7 @@ def _build_initial_album_preview(album: dict[str, object], *, public_safe: bool 
     cover_preview_url = build_startup_cover_url(source_album) if cover_path else ""
     root_provenance = source_album.get("root_provenance")
     return {
+        "album_id": source_album.get("album_id"),
         "key": source_album.get("key"),
         **build_album_ref_seam(source_album.get("key")),
         "name": source_album.get("name"),

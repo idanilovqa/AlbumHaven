@@ -358,6 +358,8 @@ function createEngineHarness(options = {}) {
     fetch: options.fetch,
     cancelWaveformPeakLoads: options.cancelWaveformPeakLoads,
     loadPlayingWaveformPeaks: options.loadPlayingWaveformPeaks,
+    ...(options.document ? { document: options.document } : {}),
+    ...(options.requestAnimationFrame ? { requestAnimationFrame: options.requestAnimationFrame } : {}),
   };
   window.window = window;
   vm.createContext(context);
@@ -6999,6 +7001,33 @@ test('a local seek decodes only what its credit asks, a slice at a time, before 
   // 10 s starts at byte 41,000 (eight frames early): the rest of the received song is 259,000 bytes.
   assert.ok(decodedBytes <= 2 * 16 * 1024, `decoded ${decodedBytes} bytes for a quarter second of credit`);
   assert.equal(harness.engine.snapshot.currentTime, 10, 'the playhead is at the new place');
+});
+
+// sandbox5 r25 (2026-11-21): at 4x CPU a press on another song went unanswered for 15 s while every
+// decoded chunk serialised the engine snapshot onto the page root. The snapshot is written once a frame.
+test('the diagnostics snapshot is written at most once per animation frame, however often the engine changes', async () => {
+  const writes = [];
+  const frames = [];
+  const { create } = recordingDecoders();
+  const harness = encodedHarness({
+    createStreamingDecoder: create,
+    document: { documentElement: { setAttribute: (name, value) => writes.push({ name, value }) } },
+    requestAnimationFrame: (callback) => frames.push(callback),
+  });
+  await startLocallySeekable(harness, 300_000);
+  void harness.api.seek(10);
+  await harness.settle();
+  assert.equal(writes.length, 0, 'nothing is written before the frame');
+  assert.equal(frames.length, 1, 'one frame is asked for, however many changes came');
+
+  frames.shift()();
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].name, 'data-streaming-diagnostics');
+  assert.equal(JSON.parse(writes[0].value).currentTime, 10, 'the frame writes the latest snapshot');
+
+  harness.context.publishStreamingDiagnostics();
+  harness.context.publishStreamingDiagnostics();
+  assert.equal(frames.length, 1, 'the next changes ask for the next frame once');
 });
 
 test('a seek past the received bytes still asks the server', async () => {

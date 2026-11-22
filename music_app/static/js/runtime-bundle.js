@@ -8695,11 +8695,24 @@ function streamingFrames(seconds) {
   return Math.round(seconds * streamingEngineState().sampleRate);
 }
 
+// The engine's snapshot, on the page for diagnosis, written at most once per frame. Written on every
+// call (each decoded chunk among them), the JSON and the root attribute change held a loaded page for
+// seconds: at 4x CPU a press on another song went unanswered for 15 s (sandbox5 r25, 2026-11-21).
+let streamingDiagnosticsFrame = 0;
 function publishStreamingDiagnostics() {
-  if (typeof document === 'undefined') return;
-  const root = document.documentElement;
-  if (!root) return;
-  root.setAttribute(
+  if (typeof document === 'undefined' || streamingDiagnosticsFrame) return;
+  if (typeof requestAnimationFrame !== 'function') {
+    writeStreamingDiagnostics();
+    return;
+  }
+  streamingDiagnosticsFrame = requestAnimationFrame(() => {
+    streamingDiagnosticsFrame = 0;
+    writeStreamingDiagnostics();
+  });
+}
+
+function writeStreamingDiagnostics() {
+  document.documentElement?.setAttribute(
     'data-streaming-diagnostics',
     JSON.stringify(getStreamingPlaybackSnapshot()),
   );

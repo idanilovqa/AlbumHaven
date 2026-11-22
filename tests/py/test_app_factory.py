@@ -26,6 +26,18 @@ from tests.py.asgi_testing import runtime_app_from_asgi_app
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+
+
+class _FatalFlaskContextAccess:
+    def __init__(self, runtime) -> None:
+        self._runtime = runtime
+
+    def __getattr__(self, name: str):
+        if name in {"app_context", "test_request_context"}:
+            raise AssertionError("Last.fm retry worker must not access Flask context methods")
+        return getattr(self._runtime, name)
+
+
 @pytest.fixture(autouse=True)
 def _stub_relation_projection_startup(monkeypatch):
     from music_app.services import (

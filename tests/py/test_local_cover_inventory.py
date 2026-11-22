@@ -127,6 +127,75 @@ def test_a_waiting_open_preempts_background_work_without_a_database_poll():
     assert not worker._cancel_requested(True)
 
 
+@pytest.mark.parametrize(("kind", "held_by"), [
+    ("context", "an open during the deferral"), ("context", "a stopped process's claim"),
+    ("listing", "an open during the deferral"), ("listing", "a stopped process's claim"),
+])
+def test_deferred_work_waits_for_when_its_row_is_due_and_is_never_dropped(monkeypatch, kind, held_by):
+    now = [100.0]
+    claims = []
+    monkeypatch.setattr(inventory.time, "monotonic", lambda: now[0])
+    worker = inventory.LocalCoverInventoryWorker({}, repository=SimpleNamespace(work_slot=lambda: nullcontext(True)))
+    queue = worker._contexts if kind == "context" else worker._listings
+    if held_by.startswith("an open"):
+        queue.add(["album"], delay=30)  # deferred by this process
+    queue.add(["album"], foreground=True)
+
+    def claim(key):
+        claims.append((key, now[0]))
+        worker._stop.set()
+        return {"retry_in": 20.0, "context_key": key, "root_path": key, "track_paths": [], "revision": 1,
+                "foreground_requested": True}
+
+    monkeypatch.setattr(worker.repository, "next_context" if kind == "context" else "next_pending", claim, raising=False)
+    worker._wake.set()
+    worker._run()
+
+    assert claims == [("album", 100.0)]
+    assert not queue.waiting(background=True), "it is not asked again before its row is due"
+    now[0] = 120.0
+    assert queue.waiting(background=False), "the album someone opened is checked again when due"
+
+
+def test_a_failed_change_mark_still_marks_the_removed_tracks():
+    calls = []
+    worker = SimpleNamespace(invalidate_or_retry=lambda paths, **kwargs: calls.append((paths, kwargs)) and False)
+    check = inventory.LocalCoverScanCheck(1000.0, {"main": 500.0})
+
+    advanced = check.apply(
+        worker,
+        previous={"edited.mp3": {"mtime": 1, "size": 1}, "gone.mp3": {"library_root_id": "main"}},
+        scanned={"edited.mp3": {"mtime": 2, "size": 1}},
+        readable_root_ids={"main"},
+    )
+
+    assert [(list(paths), kwargs) for paths, kwargs in calls] == [
+        (["edited.mp3"], {}), (["gone.mp3"], {"context_changed": True}),
+    ], "the next scan cannot find a removed track again"
+    assert advanced == {}
+
+
+@pytest.mark.parametrize("album_count", [10, 200])
+@pytest.mark.parametrize("first_attempt_fails", [False, True])
+def test_a_root_change_marks_its_albums_without_queueing_a_background_drain(album_count, first_attempt_fails):
+    attempts = []
+
+    def invalidate_paths(*_args, **_kwargs):
+        attempts.append(True)
+        if first_attempt_fails and len(attempts) == 1:
+            raise RuntimeError("database unavailable")
+        return [f"album-{index}" for index in range(album_count)], [f"context-{index}" for index in range(album_count)]
+
+    worker = inventory.LocalCoverInventoryWorker({}, repository=SimpleNamespace(invalidate_paths=invalidate_paths))
+    worker._logger = SimpleNamespace(exception=lambda *args: None)
+    worker.roots_changed([{"path": "library/main"}], [{"path": "library/main", "layout_mode": "genre/artist"}])
+    worker._retry_scheduled_invalidation()
+
+    assert len(attempts) == (2 if first_attempt_fails else 1)
+    assert not worker._listings.waiting(background=True), "only an owner-started Full Rescan may drain"
+    assert not worker._contexts.waiting(background=True)
+
+
 def test_exact_track_set_context_keys_do_not_alias_sibling_albums(tmp_path):
     first = {str(tmp_path / "Album One" / "track.mp3")}
     second = {str(tmp_path / "Album Two" / "track.mp3")}
@@ -213,7 +282,8 @@ def test_worker_forwards_deleted_subtree_without_filesystem_discovery():
     ))
     worker.invalidate_paths(["library/artist"], subtree_paths=["library/artist"], context_changed=True)
     assert calls == [((["library/artist"],), {
-        "subtree_paths": ["library/artist"], "context_changed": True, "pending_contexts": [],
+        "subtree_paths": ["library/artist"], "context_changed": True,
+        "pending_contexts_below": worker._unresolved.below,
     })]
     assert worker._listings.take(background=True) == "album", "what changed is what the worker re-lists"
     assert worker._contexts.take(background=True) == "context"

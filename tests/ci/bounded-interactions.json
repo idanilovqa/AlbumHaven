@@ -14182,6 +14182,7 @@
       },
       "budgets": {
         "affected_rows": 10,
+        "candidate_rows": 64,
         "filesystem_enumerations": 3
       },
       "growth": {

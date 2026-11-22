@@ -36,7 +36,8 @@ def test_unrelated_context_change_preserves_inflight_local_cover_result(event_ki
         changed = roots[1] / ("CD2" if event_kind == "disc" else "CD1/new.mp3")
         subtrees = [roots[1]] if event_kind == "subtree" else []
         repository.invalidate_paths(
-            subtrees or [changed], subtree_paths=subtrees, context_changed=True, pending_contexts=keys,
+            subtrees or [changed], subtree_paths=subtrees, context_changed=True,
+            pending_contexts_below=lambda _folders: keys,
         )
         with isolatedPostgres._connect(setup_url) as connection:
             after = connection.execute(
@@ -85,7 +86,9 @@ def test_parent_subtree_invalidation_preserves_neighbors_and_rejects_inflight_co
         assert repository.root_for_tracks(path_sets[2]) is None
         assert repository.root_for_tracks(path_sets[1]) == Path(root_key(roots[1]))
 
-        repository.invalidate_paths([parent], subtree_paths=[parent], context_changed=True, pending_contexts=keys)
+        repository.invalidate_paths(
+            [parent], subtree_paths=[parent], context_changed=True, pending_contexts_below=lambda _folders: keys,
+        )
 
         assert repository.get(roots[0])["complete"] is False
         assert repository.get(roots[1])["complete"] is True
@@ -114,13 +117,15 @@ def test_local_inventory_context_revisions_leases_and_confirmed_empty(monkeypatc
         repository.request_context(paths)
         context = repository.next_context(context_key(paths))
         assert context["context_key"] == context_key(paths)
-        assert repository.next_context(context_key(paths)) is None
+        assert context["retry_in"] is None
+        assert 0 < repository.next_context(context_key(paths))["retry_in"] <= 30, "a claim left behind says when it is due"
         repository.publish_context(context["context_key"], context["revision"], root, foreground=True)
         assert repository.root_for_tracks(paths) == Path(root_key(root))
         assert repository.root_for_tracks({str(root / "different-album.mp3")}) is None
 
         pending = repository.next_pending(root_key(root))
-        assert repository.next_pending(root_key(root)) is None
+        assert pending["retry_in"] is None
+        assert 0 < repository.next_pending(root_key(root))["retry_in"] <= 300
         assert repository.publish(root, pending["revision"], [])
         assert repository.get(root) == {"candidates": [], "error": None, "available": True, "complete": True}
 
@@ -157,7 +162,11 @@ def test_an_open_retries_only_an_older_unresolved_folder_deferral(retry_in, clea
 
         repository.request_context(paths)
 
-        assert (repository.next_context(key) is not None) is cleared
+        waits = repository.next_context(key)["retry_in"]
+        if cleared:
+            assert waits is None
+        else:
+            assert retry_in - 10 < waits <= retry_in, "an open during the deferral learns when the row is due"
     finally:
         with isolatedPostgres._connect(setup_url) as connection:
             connection.execute("delete from library.local_cover_inventory_contexts where context_key = %s", (key,))

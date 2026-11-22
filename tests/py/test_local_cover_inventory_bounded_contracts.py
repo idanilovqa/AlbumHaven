@@ -45,6 +45,7 @@ class _InventoryTables:
         self.listed: list[str] = []
         self.written = 0
         self.statements = 0
+        self.values_sent = 0
         self.album_walk_steps = 0
 
     def seed(self, album: Path, tracks: list[Path]) -> None:
@@ -67,6 +68,7 @@ class _InventoryTables:
 
     def execute(self, query, params=None):
         self.statements += 1
+        self.values_sent += sum(len(value) for value in (params or {}).values() if isinstance(value, list))
         rows = self._answer(" ".join(str(query).split()), params or {})
         return SimpleNamespace(fetchone=lambda: rows[0] if rows else None, fetchall=lambda: rows, rowcount=len(rows))
 
@@ -88,6 +90,8 @@ class _InventoryTables:
             return self._claim_context(params)
         if "interval '5 minutes'" in sql:
             return self._claim_listing(params)
+        if "insert into library.local_cover_inventory_contexts" in sql:
+            return [{"root_path": self.contexts[params["key"]]["root"], "error": None}]
         if "insert into library.local_cover_inventories " in sql:
             self._write(self.listings.setdefault(params["root"], {"revision": 1, "indexed": 0, "claimed": False}))
             return []
@@ -297,6 +301,7 @@ def _drain(monkeypatch, library, worker) -> None:
     ("watcher reports an image", 1),
     ("watcher reports a removed track", 1),
     ("watcher reports a moved folder", 1),
+    ("removal while a Full Rescan's queue waits", 1),
     ("restart over a stale backlog", 0),
 ])
 def test_local_cover_inventory_contract_relists_only_changed_folders_at_production_library_size(
@@ -330,6 +335,18 @@ def test_local_cover_inventory_contract_relists_only_changed_folders_at_producti
             worker.invalidate_paths([str(album / "02.mp3")], context_changed=True)
         elif change == "watcher reports a moved folder":
             worker.invalidate_paths([album, moved], subtree_paths=[album, moved], context_changed=True)
+        elif change.startswith("removal while"):
+            worker.rescan()
+            for row in list(tables.contexts.values()):
+                worker.request_context(row["paths"])
+            tables.written = tables.values_sent = 0
+            revisions = {key: row["revision"] for key, row in tables.listings.items()}
+            counts = OperationCounts()
+            with count_filesystem_and_media(monkeypatch, counts):
+                worker.invalidate_paths([str(album / "02.mp3")], context_changed=True)
+            counts.affected_rows, counts.candidate_rows = tables.written, tables.values_sent
+            assert sum(row["revision"] != revisions[key] for key, row in tables.listings.items()) == relisted
+            return counts
         else:
             for row in (*tables.listings.values(), *tables.contexts.values()):
                 row["revision"] += 1
@@ -345,7 +362,9 @@ def test_local_cover_inventory_contract_relists_only_changed_folders_at_producti
             _drain(monkeypatch, library, worker)
         counts.affected_rows = tables.written
         assert len(invalidated) == relisted, invalidated
-        assert sorted(set(tables.listed)) == sorted(invalidated), "only the changed folders are listed again"
+        # A root change only marks: its albums are listed when opened, never as a background drain.
+        expected = [] if change == "root removed" else invalidated
+        assert sorted(set(tables.listed)) == sorted(expected), "only the changed folders are listed again"
         assert tables.album_walk_steps == 0, "nothing walks the library's albums"
         if restarted:
             assert tables.statements == 0, "an idle poll reads nothing, whatever backlog is stored"

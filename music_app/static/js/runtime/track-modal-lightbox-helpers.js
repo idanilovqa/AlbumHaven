@@ -34,7 +34,7 @@ function albumHasLoadedDetails(album) {
 function renderTrackModalLoadingState(album) {
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
-  const headerParts = [album.album_artist || '', album.name || 'Album', album.year || ''].filter(Boolean);
+  const headerParts = [album.display_artist || album.album_artist || '', album.name || 'Album', album.year || ''].filter(Boolean);
   els.title.textContent = headerParts.join(' - ');
   els.subtitle.textContent = 'Loading album details...';
   if (els.folder) {

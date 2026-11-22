@@ -163,7 +163,7 @@ function renderVersionPickerModal() {
   if (!(description instanceof HTMLElement) || !(list instanceof HTMLElement) || !(saveButton instanceof HTMLButtonElement)) return;
   const candidates = getVersionPickerCandidates(album);
   description.textContent = album
-    ? `Choose which ${album.album_artist} album should own "${album.name}" as a version.`
+    ? `Choose which ${album.display_artist || album.album_artist} album should own "${album.name}" as a version.`
     : '';
   list.innerHTML = candidates.length
     ? candidates.map((item) => {

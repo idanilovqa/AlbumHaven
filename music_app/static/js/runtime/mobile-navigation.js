@@ -11,7 +11,7 @@ function isMobileClient() {
 function usesMobilePageLayout() { return Number(window.innerWidth) <= 900; }
 function mobilePageDescriptor(kind, album = null) {
   const albumKey = album ? String(getAlbumRequestKey(album) || '') : '';
-  const subtitle = album ? [kind === 'cover-lookup' ? album.name : '', album.album_artist || album.artist, album.year, album.total_duration_display].filter(Boolean).join(' · ') : '';
+  const subtitle = album ? [kind === 'cover-lookup' ? album.name : '', album.display_artist || album.album_artist || album.artist, album.year, album.total_duration_display].filter(Boolean).join(' · ') : '';
   return { kind, albumKey, title: kind === 'utilities' ? 'Settings' : kind === 'cover-lookup' ? 'Cover Art Look Up' : kind === 'non-album' ? 'Non-album tracks' : String(album?.name || 'Album'),
     subtitle,
     // J3 (owner 2026-11-15): the artist's romanized name on its own line under the album page header.

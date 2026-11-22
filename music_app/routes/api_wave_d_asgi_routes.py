@@ -81,6 +81,7 @@ from music_app.services.cover_workflow import (
 )
 from music_app.services.covers import image_dimensions, score_image
 from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+from music_app.services.musicbrainz_correction_display import project_correction_display
 from music_app.services.repair_previews import build_problematic_album_detail_payload
 from music_app.services.save_tasks import (
     acquire_structural_tag_edit_reservation,
@@ -630,6 +631,7 @@ async def _cover_lookup_album_split_response(
             if isinstance(choice, Mapping)
         ]
         if len(current_releases) > 1:
+            await run_in_threadpool(project_correction_display, config, current_releases)
             return (
                 {
                     "ok": False,
@@ -702,6 +704,7 @@ async def _cover_lookup_album_split_response(
         )
     if len(current_releases) < 2 or covered_paths != task_track_paths:
         return None
+    await run_in_threadpool(project_correction_display, config, current_releases)
     return (
         {
             "ok": False,

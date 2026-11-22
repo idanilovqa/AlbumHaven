@@ -311,9 +311,10 @@ function getCoverLookupDeleteConfirmElements() {
 
 function buildCoverLookupAlbumSubtitleHtml(album) {
   if (!album) return '';
+  const artist = album.display_artist || album.album_artist;
   return [
-    album.album_artist
-      ? `<span class="cover-lookup-modal-subtitle-meta">${escapeHtml(album.album_artist)}</span>` : '',
+    artist
+      ? `<span class="cover-lookup-modal-subtitle-meta">${escapeHtml(artist)}</span>` : '',
     album.name
       ? `<button class="cover-lookup-modal-album-link" type="button" data-open-cover-lookup-album-details="1">${escapeHtml(album.name)}</button>` : '',
     album.year
@@ -342,7 +343,7 @@ function openCoverLookupAlbumDetails() {
 
 function buildCoverLookupCurrentReleaseLabel(release) {
   return [
-    release?.album_artist || '',
+    release?.display_artist || release?.album_artist || '',
     release?.name || '',
     release?.year || '',
     release?.edition || '',

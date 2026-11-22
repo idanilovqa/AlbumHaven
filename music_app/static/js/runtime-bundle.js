@@ -15225,7 +15225,7 @@ function renderVersionPickerModal() {
   if (!(description instanceof HTMLElement) || !(list instanceof HTMLElement) || !(saveButton instanceof HTMLButtonElement)) return;
   const candidates = getVersionPickerCandidates(album);
   description.textContent = album
-    ? `Choose which ${album.album_artist} album should own "${album.name}" as a version.`
+    ? `Choose which ${album.display_artist || album.album_artist} album should own "${album.name}" as a version.`
     : '';
   list.innerHTML = candidates.length
     ? candidates.map((item) => {
@@ -16690,7 +16690,7 @@ function albumHasLoadedDetails(album) {
 function renderTrackModalLoadingState(album) {
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
-  const headerParts = [album.album_artist || '', album.name || 'Album', album.year || ''].filter(Boolean);
+  const headerParts = [album.display_artist || album.album_artist || '', album.name || 'Album', album.year || ''].filter(Boolean);
   els.title.textContent = headerParts.join(' - ');
   els.subtitle.textContent = 'Loading album details...';
   if (els.folder) {
@@ -34259,9 +34259,10 @@ function getCoverLookupDeleteConfirmElements() {
 
 function buildCoverLookupAlbumSubtitleHtml(album) {
   if (!album) return '';
+  const artist = album.display_artist || album.album_artist;
   return [
-    album.album_artist
-      ? `<span class="cover-lookup-modal-subtitle-meta">${escapeHtml(album.album_artist)}</span>` : '',
+    artist
+      ? `<span class="cover-lookup-modal-subtitle-meta">${escapeHtml(artist)}</span>` : '',
     album.name
       ? `<button class="cover-lookup-modal-album-link" type="button" data-open-cover-lookup-album-details="1">${escapeHtml(album.name)}</button>` : '',
     album.year
@@ -34290,7 +34291,7 @@ function openCoverLookupAlbumDetails() {
 
 function buildCoverLookupCurrentReleaseLabel(release) {
   return [
-    release?.album_artist || '',
+    release?.display_artist || release?.album_artist || '',
     release?.name || '',
     release?.year || '',
     release?.edition || '',
@@ -47242,6 +47243,19 @@ function syncGlobalPlayerMetadataMotion(els, mobile) {
   rows.forEach(row => globalPlayerMetadataMotion.update(row));
 }
 
+// The artist the player names, as the card does: the track's applied correction, else the album's
+// display_artist in place of its tag. Display only: the track, scrobbles and identities keep the tag.
+function playerShownArtist(track) {
+  const artist = track?.artist || '';
+  const album = typeof state === 'undefined' ? null : state.player?.playbackQueue?.albumSnapshot;
+  const albumTrack = Array.isArray(album?.tracks)
+    ? album.tracks.find((item) => item?.path === track?.path)
+    : null;
+  if (!albumTrack) return artist;
+  return albumTrack.display_artist
+    || (album.display_artist && artist === album.album_artist ? album.display_artist : artist);
+}
+
 function renderGlobalPlayerMetadata(els, track) {
   const mobile = typeof usesMobilePageLayout === 'function' && usesMobilePageLayout();
   const setText = (row, text) => {
@@ -47252,9 +47266,9 @@ function renderGlobalPlayerMetadata(els, track) {
   };
   if (els.artist) {
     els.artist.hidden = !mobile || !track;
-    setText(els.artist, track?.artist || '');
+    setText(els.artist, playerShownArtist(track));
   }
-  const parts = (mobile ? [track?.title] : [track?.artist, track?.title]).filter(Boolean);
+  const parts = (mobile ? [track?.title] : [playerShownArtist(track), track?.title]).filter(Boolean);
   setText(els.title, parts.length ? `${parts.join(' - ')}${!mobile && track?.album ? ' /' : ''}` : '');
   if (els.albumLink) {
     setText(els.albumLink, track?.album || '');
@@ -53655,7 +53669,7 @@ function isMobileClient() {
 function usesMobilePageLayout() { return Number(window.innerWidth) <= 900; }
 function mobilePageDescriptor(kind, album = null) {
   const albumKey = album ? String(getAlbumRequestKey(album) || '') : '';
-  const subtitle = album ? [kind === 'cover-lookup' ? album.name : '', album.album_artist || album.artist, album.year, album.total_duration_display].filter(Boolean).join(' · ') : '';
+  const subtitle = album ? [kind === 'cover-lookup' ? album.name : '', album.display_artist || album.album_artist || album.artist, album.year, album.total_duration_display].filter(Boolean).join(' · ') : '';
   return { kind, albumKey, title: kind === 'utilities' ? 'Settings' : kind === 'cover-lookup' ? 'Cover Art Look Up' : kind === 'non-album' ? 'Non-album tracks' : String(album?.name || 'Album'),
     subtitle,
     // J3 (owner 2026-11-15): the artist's romanized name on its own line under the album page header.

@@ -299,4 +299,6 @@ test('a disabled row cannot be opened and the empty answer is a compact status (
   const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/navigation-tree.css'), 'utf8');
   assert.match(css, /\.navigation-tree-item:disabled, \.navigation-tree-item\[aria-disabled="true"\] \{[^}]*pointer-events: none/);
   assert.match(css, /\.navigation-tree-empty \{ margin: 0; padding: 8px 13px;/);
+  // Owner 2026-11-22: 'In the tree "no match found" should be center-aligned'.
+  assert.match(css, /\.navigation-tree-empty \{[^}]*text-align: center;/);
 });

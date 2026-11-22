@@ -655,8 +655,7 @@ async function takeOverPlayback() {
   // Inside the APK only the handshake says whether Android plays natively.
   const handshake = playingEngineHandshake();
   if (handshake) await handshake;
-  // An engine with its own claim (Android's) takes over by that claim, at the saved place.
-  return playingEngine()?.holdsOwnClaim ? takeOverAtSavedPlace() : takeOverAtConfirmedPlace();
+  return takeOverAtConfirmedPlace();
 }
 
 /**
@@ -666,10 +665,11 @@ async function takeOverPlayback() {
 async function takeOverAtConfirmedPlace() {
   const ownership = getPlaybackOwnershipState();
   const version = ownership.requestVersion = (ownership.requestVersion || 0) + 1;
+  const native = Boolean(playingEngine()?.holdsOwnClaim);
   let result;
   try {
     result = await requestPlaybackClaim({ protocol: 1, state: 'playing', clientId: getPlaybackOwnershipTabId(),
-      clientSurface: 'private_web', takeover: true, confirm: true });
+      clientSurface: native ? 'mobile' : 'private_web', takeover: true, confirm: true });
   } catch (error) {
     if (version === ownership.requestVersion) {
       if (error?.status !== 422) notifyBlockedPlaybackStart();
@@ -689,16 +689,16 @@ async function takeOverAtConfirmedPlace() {
     return false;
   }
   const payload = takenOverTrack(result);
+  const startSeconds = result.position ? result.position.ms / 1000 : 0;
+  state.player.playbackQueue = null;
+  // An engine with its own claim (Android's) starts there by a takeover of the claim now under its client.
+  if (native) return playTrackFromPayload(payload, { startSeconds, takeover: true });
   // The reference is renewed with the first heartbeat: its expiry was never told here.
   acceptPlaybackClaim(result, { path: result.path, track: result.track,
     referenceExpiresAt: new Date(0).toISOString() });
   // Before this tab sounds, and without the server: for a tab of this browser that could not be asked.
   announcePlaybackOwnership('taken-over');
-  state.player.playbackQueue = null;
-  return playTrackFromPayload(payload, {
-    startSeconds: result.position ? result.position.ms / 1000 : 0,
-    ownershipClaimed: true,
-  });
+  return playTrackFromPayload(payload, { startSeconds, ownershipClaimed: true });
 }
 
 function takenOverTrack({ path, track, position }) {
@@ -715,29 +715,6 @@ function takenOverTrack({ path, track, position }) {
   };
 }
 
-async function takeOverAtSavedPlace() {
-  let snapshot;
-  try {
-    snapshot = await playbackOwnershipRequest('GET',
-      `/playback/state?client_id=${encodeURIComponent(getPlaybackOwnershipTabId())}&include_path=true`);
-  } catch (_error) {
-    notifyBlockedPlaybackStart();
-    return false;
-  }
-  if (!snapshot?.is_playing_elsewhere) {
-    // It stopped meanwhile: the player shows what holds now, and the next Play starts here.
-    syncMirroredPlaybackState(snapshot);
-    return false;
-  }
-  if (!snapshot.path) {
-    if (typeof showToast === 'function') showToast('That song cannot be opened here.', 'error', 2800);
-    return false;
-  }
-  const position = snapshot.position;
-  state.player.playbackQueue = null;
-  return playTrackFromPayload(takenOverTrack(snapshot),
-    { startSeconds: position ? position.ms / 1000 : 0, takeover: true });
-}
 
 /**
  * Where [track] is, so another client can continue it there: `{ position }`, or nothing while the

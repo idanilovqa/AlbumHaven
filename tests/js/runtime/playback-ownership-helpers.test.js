@@ -1395,8 +1395,9 @@ test('Play while another client plays, for an engine with its own claim, opens i
       claimClientId: () => '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70', ownsPlayback: () => false }),
     playTrackFromPayload: async (track, options) => { started.push({ track, options }); return true; },
     fetch: async (url, init = {}) => {
-      requests.push({ url, method: init.method || 'GET' });
-      return jsonResponse({ protocol: 1, is_playing_elsewhere: true, path: 'C:/Music/their.flac',
+      requests.push({ url, method: init.method || 'GET', body: init.body ? JSON.parse(init.body) : null });
+      return jsonResponse({ protocol: 1, claimToken: 'phone-claim', expiresAt: '2099-01-01T00:00:00Z', leaseMs: 30000,
+        confirmed: true, path: 'C:/Music/their.flac',
         track: { playbackRef: 'their-ref', title: 'Their Song', artist: 'Them', album: 'Their Album', artworkUrl: null },
         position: { ms: 61500, durationMs: 300000 } });
     },
@@ -1405,9 +1406,12 @@ test('Play while another client plays, for an engine with its own claim, opens i
   assert.equal(context.isPlaybackPlayingElsewhere(), true);
   assert.equal(await context.takeOverPlaybackHere(), true);
 
-  assert.deepEqual(requests.map(({ url, method }) => [method, url]), [
-    ['GET', '/playback/state?client_id=0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70&include_path=true'],
-  ]);
+  assert.deepEqual(requests.map(({ url, method }) => [method, url]), [['PUT', '/playback/state']]);
+  // Owner's rule for both directions: a phone taking over also continues at the confirmed place.
+  assert.equal(requests[0].body.confirm, true);
+  assert.equal(requests[0].body.clientSurface, 'mobile');
+  assert.equal(requests[0].body.clientId, '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70', 'the native client takes it');
+  assert.equal(context.state.player.ownership.activeClaim, null, 'the native engine holds its own claim');
   assert.equal(started.length, 1);
   const [{ track, options }] = started;
   assert.equal(track.path, 'C:/Music/their.flac');
@@ -1755,7 +1759,7 @@ test('Play here on a song that cannot be opened here says so', async () => {
 
 test('inside the app Play here waits to learn whether Android plays before it chooses how to take over', async () => {
   let engine = null;
-  const methods = [];
+  const surfaces = [];
   const { context } = loadHelper({
     state: playingElsewhereState(),
     playbackEngineHandshake: () => Promise.resolve().then(() => {
@@ -1764,12 +1768,12 @@ test('inside the app Play here waits to learn whether Android plays before it ch
     currentPlaybackEngine: () => engine,
     playTrackFromPayload: async () => true,
     fetch: async (url, init = {}) => {
-      methods.push(init.method || 'GET');
+      if (init.body) surfaces.push(JSON.parse(init.body).clientSurface);
       return jsonResponse({ protocol: 1, is_playing_elsewhere: false });
     },
   });
   await context.takeOverPlaybackHere();
-  assert.equal(methods[0], 'GET', 'Android takes over by its own claim');
+  assert.equal(surfaces[0], 'mobile', 'Android takes over as the phone');
 });
 
 test('a renewal refused because another client took over shows that client as playing elsewhere', async () => {

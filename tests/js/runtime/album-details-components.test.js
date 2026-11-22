@@ -334,18 +334,64 @@ test('an album whose tag names another artist shows its MusicBrainz artist, disp
   };
 
   assert.equal(context.albumDisplayArtist(greyAlbum), 'Danger Mouse');
-  assert.equal(context.albumTaggedArtistNote(greyAlbum), 'Tagged as Jay-Z');
-  // An identity that agrees with the tag, or none, keeps the tag and adds no note.
-  // A split artist's album names its own MusicBrainz artist.
-  assert.equal(context.albumTaggedArtistNote({ album_artist: 'Amarok', musicbrainz_artist: {
-    canonical_name: 'Amarok', disambiguation: 'Spanish fusion band', tag_differs: false, split: true } }),
-  'MusicBrainz: Amarok (Spanish fusion band)');
+  // An identity that agrees with the tag, or none, keeps the tag.
   for (const album of [{ album_artist: 'Amarok', musicbrainz_artist: { canonical_name: 'Amarok', tag_differs: false } },
     { album_artist: 'Amarok' }]) {
     assert.equal(context.albumDisplayArtist(album), 'Amarok');
-    assert.equal(context.albumTaggedArtistNote(album), '');
   }
 });
+
+// Owner 2026-11-21: "why is there an extra label for music brains band ... please remove such
+// lables. I don't want to see them", and "Tagged as <tag>": "Remove it too".
+function renderReleaseHeader(layout, album) {
+  const context = loadComponents();
+  const source = fs.readFileSync(
+    path.join(repoRoot, 'music_app/static/js/runtime/tag-editor-and-optimistic-updates.js'), 'utf8',
+  ).replaceAll('\r\n', '\n');
+  const start = source.indexOf('function renderTrackModalRelease(album) {');
+  const els = { overlay: {}, header: {}, cover: {}, list: {} };
+  Object.assign(context, {
+    document: { documentElement: { getAttribute: () => layout } },
+    syncMobileAlbumComposition: () => {},
+    state: { modalReleases: [], ui: {} },
+    getTrackModalElements: () => els,
+    getTrackModalAlbumRequestKey: () => 'album-key',
+    buildAlbumCoverSourceMarkersHtml: () => '',
+    buildAlbumArtboxHtml: () => '',
+    albumHasDisplayCover: () => false,
+    getAlbumDuplicateSources: () => [],
+    getTrackModalDuplicateSourceIndex: () => 0,
+    groupAlbumTracks: () => ({ groups: [] }),
+    formatAlbumDuration: () => '',
+    buildTrackListHtml: () => '',
+    renderTrackModalTabs: () => {},
+    refreshTrackModalPlaybackState: () => {},
+  });
+  vm.runInContext(source.slice(start, source.indexOf('\n}\n', start) + 3), context);
+  context.renderTrackModalRelease(album);
+  return els.header.innerHTML;
+}
+
+for (const layout of ['classic_bar', 'stacked_bar', 'editorial_canvas']) {
+  for (const [name, identity, tagged, shown] of [
+    ['split', { canonical_name: 'Albion', disambiguation: 'Neo Prog band from Poland', split: true, tag_differs: false }, 'Albion', 'Albion'],
+    ['retagged', { canonical_name: 'Danger Mouse', tag_differs: true }, 'Jay-Z', 'Danger Mouse'],
+  ]) {
+    test(`a ${name} album's details show no artist note in the ${layout} layout`, () => {
+      const html = renderReleaseHeader(layout, {
+        album_artist: tagged, name: 'Wabiac Cienie', edition: 'Deluxe', year: '2005', musicbrainz_artist: identity,
+      });
+
+      assert.ok(html.includes(`data-album-details-layout="${layout}"`), html);
+      assert.ok(html.includes(shown) && html.includes('Wabiac Cienie'), html);
+      assert.deepEqual(
+        [...html.matchAll(/<span class="album-details-header__tag[^"]*">([^<]*)</g)].map((match) => match[1]),
+        ['Deluxe'],
+      );
+      assert.doesNotMatch(html, /MusicBrainz:|Tagged as/);
+    });
+  }
+}
 
 test('an artist matched under another name is titled with its MusicBrainz name, display only', () => {
   const context = loadComponents();

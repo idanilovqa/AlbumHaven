@@ -264,7 +264,6 @@ test('album details show the applied value beside the tag, and the tag editor ke
   const track = { title: 'malawelekaahm', display_title: 'Malawêlekaahm', artist: 'christian vander', display_artist: 'Christian Vander' };
 
   assert.equal(context.albumDisplayArtist(album), 'Christian Vander');
-  assert.equal(context.albumTaggedArtistNote(album), '', 'a case correction is not a different artist');
   const values = context.getTrackTagInitialValues(track, album);
   assert.equal(values.title, 'malawelekaahm');
   assert.equal(values.artist, 'christian vander');

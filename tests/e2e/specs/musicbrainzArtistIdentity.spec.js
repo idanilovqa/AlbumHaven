@@ -197,8 +197,9 @@ test('FTC-MBID-001 a matched artist shows its MusicBrainz name, country, genres 
         }),
       );
       await galleryActions.closeArtistInfoPanel();
-      expect(await albumDetailsTags({ galleryActions, trackModalActions }, 'Korpiklaani', 'Hunka lunka'))
-        .toContain('Tagged as Shamaani Duo');
+      // Owner 2026-11-21: no artist notes in the Album Details header.
+      const tags = await albumDetailsTags({ galleryActions, trackModalActions }, 'Korpiklaani', 'Hunka lunka');
+      expect(tags.filter((tag) => tag.startsWith('Tagged as'))).toEqual([]);
       await trackModalActions.closeIfOpen();
     });
 });
@@ -228,9 +229,9 @@ test('FTC-MBID-002 a split name lists each MusicBrainz artist; a person and thei
       await galleryActions.closeArtistInfoPanel();
     });
 
-    await stepLogger.step('MBD1-37: Album Details names which band an album belongs to', async () => {
+    await stepLogger.step('Album Details of a split name\'s album has no MusicBrainz: label', async () => {
       const tags = await albumDetailsTags({ galleryActions, trackModalActions }, LEAD, 'Functional Fixture Album 250');
-      expect(tags).toContain('MusicBrainz: Compilation Signal Lead (Swedish band)');
+      expect(tags.filter((tag) => tag.startsWith('MusicBrainz:'))).toEqual([]);
       await trackModalActions.closeIfOpen();
     });
 

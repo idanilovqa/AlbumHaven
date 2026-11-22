@@ -13,16 +13,6 @@ function albumDisplayArtist(album) {
   return identity?.tag_differs && identity.canonical_name ? identity.canonical_name : tagged;
 }
 
-function albumTaggedArtistNote(album) {
-  const tagged = album?.album_artist || album?.artist || '';
-  if (albumDisplayArtist(album) !== tagged && tagged) return `Tagged as ${tagged}`;
-  // A name shared by several MusicBrainz artists (Amarok): say which one this album is.
-  const identity = album?.musicbrainz_artist;
-  return identity?.split && identity.canonical_name
-    ? `MusicBrainz: ${[identity.canonical_name, identity.disambiguation ? `(${identity.disambiguation})` : ''].filter(Boolean).join(' ')}`
-    : '';
-}
-
 function buildAlbumDetailsHeaderHtml(config = {}) {
   const layout = normalizeAlbumDetailsLayout(config.layout);
   const variant = config.variant === 'copy' ? 'copy' : 'album';

@@ -1961,7 +1961,7 @@ function renderTrackModalRelease(album) {
       album: album.display_name || album.name || 'Album',
       year: album.display_year || album.year || '',
       releaseType: album.release_type || 'ALBUM',
-      tags: [hasVersionTabs ? '' : album.edition || '', albumTaggedArtistNote(album), albumMissing ? 'Missing' : ''].filter(Boolean),
+      tags: [hasVersionTabs ? '' : album.edition || '', albumMissing ? 'Missing' : ''].filter(Boolean),
       poorArtQuality: album.poor_art_quality === true,
       actionsHtml: buildAlbumDetailsHeaderActionsHtml({ missing: albumMissing }),
     });

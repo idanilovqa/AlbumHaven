@@ -2738,13 +2738,29 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static",
+      "proof": "contract",
       "requestOwnership": {
         "allowed": [
           "/utilities/cover-lookup/gallery"
         ],
         "forbidden": []
-      }
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 1000
+      },
+      "budgets": {
+        "requests": 1,
+        "renderCommits": 1
+      },
+      "growth": {
+        "metric": "requests",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/cover-lookup-local-mutation-ownership.test.js",
+      "testIdentity": "bounded interaction: a Cover Look Up gallery refresh reads its own album once and renders once beside any number of notifications",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; a refresh already asks for its own album's gallery once and renders the modal once. Reverting returns this entry to static proof."
     },
     {
       "id": "js:runtime/cover-lookup-modal-and-drawer.js#release",

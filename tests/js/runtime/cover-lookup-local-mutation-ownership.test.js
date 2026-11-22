@@ -1220,3 +1220,34 @@ for (const choice of ['local', 'pasted', 'remote']) {
     });
   }
 }
+
+test('bounded interaction: a Cover Look Up gallery refresh reads its own album once and renders once beside any number of notifications', async () => {
+  const { measureInteractionContract } = require('../helpers/request-capture');
+  await measureInteractionContract('js:runtime/cover-lookup-modal-and-drawer.js#refreshCoverLookupGallery', {
+    // The library's other work, as the drawer holds it: notification tasks for other albums.
+    setup: async (notifications) => {
+      const h = harness();
+      h.context.state.coverLookup.tasks = Array.from({ length: notifications }, (_value, index) => ({
+        id: `task-${index}`, status: 'completed', album_payload: album(`Other ${index}`),
+      }));
+      const sent = [];
+      const fetch = h.context.fetch;
+      h.context.fetch = (url, options) => {
+        sent.push({ url, method: options?.method || 'GET' });
+        return fetch(url, options);
+      };
+      let renders = 0;
+      const render = h.context.renderCoverLookupModal;
+      h.context.renderCoverLookupModal = () => { renders += 1; render(); };
+      await h.open(album('A'));
+      return { h, sent, renders: () => renders };
+    },
+    act: async ({ h, sent, renders }) => {
+      const before = sent.length;
+      const rendered = renders();
+      await h.context.refreshCoverLookupGallery(false);
+      assert.equal(h.context.state.coverLookup.modal.album.name, 'A');
+      return { requests: sent.slice(before), metrics: { renderCommits: renders() - rendered } };
+    },
+  });
+});

@@ -3187,12 +3187,14 @@ test('bounded interaction: a GalleryBar refit visits only its own genres and kee
       querySelectorAll: () => countedCollection(pills, counter),
     };
     context.syncGalleryBarNameFit(bar, name); // the bar's first fit installs its observer
-    return counter.measure(() => {
+    const measured = await counter.measure(() => {
       bar.clientWidth = 301; // a new width refits once, through the bar's own observer
       observed[0][0].callback();
-      assert.equal(observed.length, 1, 'the bar is observed once');
       assert.equal(pills.slice(3).every(pill => pill.hidden), true, 'genres past the line end are dropped whole');
     });
+    assert.equal(counter.snapshot().observers, 1, 'one size observer exists across the first fit and the refit');
+    assert.equal(observed.length, 1, 'the bar is observed once');
+    return measured;
   };
   // One refit shows, then measures, each of the bar's own genres: 2 x 6 visits, none outside the bar.
   await measureScalePair({

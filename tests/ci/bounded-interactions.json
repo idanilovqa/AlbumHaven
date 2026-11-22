@@ -13591,19 +13591,36 @@
     },
     {
       "id": "py:services/edit_state.py#apply_repairs_worker",
-      "action": "Run background apply_repairs_worker",
+      "action": "Write one file's tag repairs while the watcher ignores that one file",
       "entrypoints": [
         "py:music_app/services/edit_state.py#apply_repairs_worker:background:executor"
       ],
       "owners": [
-        "music_app/services/edit_state.py"
+        "music_app/services/edit_state.py",
+        "music_app/services/library_watch_suppression.py"
       ],
       "rules": [
         "BI-07",
         "BI-08"
       ],
       "workClass": "background-batch",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 10,
+        "production": 1000
+      },
+      "budgets": {
+        "path_resolves": 1,
+        "stat_calls": 0,
+        "filesystem_enumerations": 0
+      },
+      "growth": {
+        "metric": "path_resolves",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_edit_repairs_bounded_contracts.py::test_a_tag_repair_resolves_only_its_own_file_however_many_saves_are_in_flight",
+      "testIdentity": "test_a_tag_repair_resolves_only_its_own_file_however_many_saves_are_in_flight",
+      "rollback": "Resolving more than the written file's own path per write (for example every suppressed path) makes path_resolves grow with the saves in flight and the contract fails."
     },
     {
       "id": "py:services/gallery_projection_postgres.py#_publish_gallery_projection_on_connection",

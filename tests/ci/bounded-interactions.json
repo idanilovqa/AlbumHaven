@@ -3404,14 +3404,15 @@
         "production": 1000
       },
       "budgets": {
-        "observers": 1
+        "itemsVisited": 12,
+        "observers": 0
       },
       "growth": {
-        "metric": "observers",
+        "metric": "itemsVisited",
         "largeMinusSmallMax": 0
       },
       "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-main-refactor-contracts.test.js",
-      "testIdentity": "bounded interaction: a GalleryBar keeps one size observer and visits only its own genres however often it refits",
+      "testIdentity": "bounded interaction: a GalleryBar refit visits only its own genres and keeps one size observer at any page size",
       "performanceTargets": [],
       "rollback": "Test-only contract; the bar already keeps one ResizeObserver and walks only its own genre pills. Reverting returns this entry to static proof."
     },
@@ -5900,13 +5901,30 @@
         "BI-13"
       ],
       "workClass": "constant",
-      "proof": "static",
+      "proof": "contract",
       "requestOwnership": {
         "allowed": [
           "/admin/server/preview-storage"
         ],
         "forbidden": []
-      }
+      },
+      "cardinalities": {
+        "small": 1,
+        "production": 1000
+      },
+      "budgets": {
+        "requests": 1,
+        "timers": 1,
+        "renderCommits": 1
+      },
+      "growth": {
+        "metric": "timers",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/preview-move-attention.test.js",
+      "testIdentity": "bounded interaction: a preview move poll sends one request, renders the notifications once and arms one timer",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; each poll already sends one storage request and re-arms one timer. Reverting returns this entry to static proof."
     },
     {
       "id": "js:runtime/problem-exclusion-mutations.js#queueProblemExclusionCreate",

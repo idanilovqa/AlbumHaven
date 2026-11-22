@@ -3144,13 +3144,16 @@ test('the artist panel ends its text with one disabled Open full page and lists 
   assert.doesNotMatch(disabled, /opacity/, 'dimming the colour keeps the fade behind it opaque');
 });
 
-test('bounded interaction: a GalleryBar keeps one size observer and visits only its own genres however often it refits', async () => {
+test('bounded interaction: a GalleryBar refit visits only its own genres and keeps one size observer at any page size', async () => {
   const { createInteractionCounter, countedCollection, measureScalePair } = require('../helpers/bounded-interaction-counter');
   const GENRES = 6;
-  const refits = async (resizes) => {
+  const refit = async (otherBars) => {
     const counter = createInteractionCounter();
     const observed = [];
+    // The rest of the page: other bars' genres and the gallery's cards. Touching any of them is counted.
+    const page = countedCollection(Array.from({ length: otherBars * (GENRES + 4) }, () => ({ hidden: false })), counter);
     const context = loadRuntime({
+      document: { querySelectorAll: () => page, querySelector: () => null },
       window: { innerWidth: 390 },
       ResizeObserver: class {
         constructor(callback) {
@@ -3183,24 +3186,21 @@ test('bounded interaction: a GalleryBar keeps one size observer and visits only 
       }[selector] || null),
       querySelectorAll: () => countedCollection(pills, counter),
     };
+    context.syncGalleryBarNameFit(bar, name); // the bar's first fit installs its observer
     return counter.measure(() => {
-      context.syncGalleryBarNameFit(bar, name);
-      for (let resize = 1; resize <= resizes; resize += 1) {
-        bar.clientWidth = 300 + resize; // a new width refits once, through the bar's own observer
-        observed[0][0].callback();
-      }
+      bar.clientWidth = 301; // a new width refits once, through the bar's own observer
+      observed[0][0].callback();
       assert.equal(observed.length, 1, 'the bar is observed once');
       assert.equal(pills.slice(3).every(pill => pill.hidden), true, 'genres past the line end are dropped whole');
     });
   };
+  // One refit shows, then measures, each of the bar's own genres: 2 x 6 visits, none outside the bar.
   await measureScalePair({
     id: 'js:runtime/gallery-main-interactions.js#syncGalleryBarNameFit',
     small: 10,
     large: 1000,
-    run: refits,
-    budgets: { observers: 1 },
-    growth: { metric: 'observers', largeMinusSmallMax: 0 },
+    run: refit,
+    budgets: { itemsVisited: 12, observers: 0 },
+    growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
   });
-  // The first fit and one refit each visit the bar's genres twice (show, then measure): nothing outside the bar.
-  assert.ok((await refits(1)).itemsVisited <= 4 * GENRES);
 });

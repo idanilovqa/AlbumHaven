@@ -32,6 +32,7 @@ import argparse
 import ast
 import json
 import logging
+import re
 import sys
 from collections import deque
 from dataclasses import dataclass, field
@@ -107,7 +108,19 @@ POOLED_CONNECTION_MODULE = "music_app.services.postgres_connections"
 # and TLS handshake and authentication every time (hundreds of milliseconds),
 # so they lease from the shared pool. Background workers may hold their own.
 POOLED_ENTRY_KINDS = frozenset({"route", "middleware", "poller", "scheduler", "watcher"})
-POOL_LEASES = frozenset(f"{POOLED_CONNECTION_MODULE}.{name}" for name in ("pooled_connection", "leased_connection"))
+POOL_LEASES = frozenset(
+    f"{POOLED_CONNECTION_MODULE}.{name}" for name in ("pooled_connection", "leased_connection", "session_connection")
+)
+SESSION_LEASE = f"{POOLED_CONNECTION_MODULE}.session_connection"
+# SQL whose effect outlives its transaction and stays with the server session. On a shared lease it
+# would reach the next borrower: the pool restores the connection object's settings, never these.
+SESSION_STATE_SQL = {
+    "advisory-lock": re.compile(r"\bpg_(try_)?advisory_lock(_shared)?\b", re.I),
+    "listen": re.compile(r"(^|;)\s*listen\s+[\w\"]+\s*(;|$)", re.I),
+    "set": re.compile(r"(^|;)\s*set\s+((session|role)\b|(?!local\b|transaction\b|constraints\b)[\w.]+\s*(=|\bto\b))", re.I),
+    "set-config": re.compile(r"\bset_config\s*\([^;]*,\s*false\s*\)", re.I),
+    "temp-table": re.compile(r"\bcreate\s+(local\s+)?temp(orary)?\s+table\b(?![^;]*\bon\s+commit\s+drop\b)", re.I),
+}
 # Methods that open, lease or wrap a connection: `with store._connect(url) as
 # connection`, `with pool.connection() as connection`, `with connection.cursor() as cursor`.
 CONNECTION_FACTORY_METHODS = frozenset({"connection", "_connect", "_connect_to_database", "getconn", "cursor"})
@@ -810,6 +823,91 @@ def _pool_lease(node: ast.Call, module: Module) -> str | None:
     """A connection leased from the shared pool."""
     name = _qualified_name(node.func, module)
     return name if name in POOL_LEASES else None
+
+
+def _session_state(nodes) -> tuple[str, int] | None:
+    """The first SQL text among `nodes` that leaves state on the server session."""
+    for node in nodes:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            for kind, pattern in SESSION_STATE_SQL.items():
+                if pattern.search(node.value):
+                    return kind, node.lineno
+    return None
+
+
+def _default_name(node: ast.AST) -> str:
+    """The name a value binds by default: `connect or session_connection` binds the latter."""
+    if isinstance(node, ast.BoolOp):
+        node = node.values[-1]
+    return node.id if isinstance(node, ast.Name) else node.attr if isinstance(node, ast.Attribute) else ""
+
+
+def _session_sources(module: Module, definitions: list[Definition]) -> set[str]:
+    """Names in `module` that yield a connection nobody borrows afterwards: a session lease, a
+    connection of its own, or a function or attribute whose default is one of those."""
+    sources = {alias for alias, (source, symbol) in module.imports.items() if f"{source}.{symbol}" == SESSION_LEASE}
+    for definition in definitions:
+        if any(_database_connect(call, module) for call, _ in _facts(definition).calls):
+            sources.add(definition.node.name)
+    while True:
+        found = {
+            attribute
+            for attributes in module.attribute_values.values()
+            for attribute, values in attributes.items()
+            if values and all(_default_name(value) in sources for value in values)
+        }
+        for definition in definitions:
+            returned = [node.value for node in _own_nodes(definition) if isinstance(node, ast.Return) and node.value]
+            if returned and all(isinstance(value, ast.Call) and _default_name(value.func) in sources for value in returned):
+                found.add(definition.node.name)
+        if found <= sources:
+            return sources
+        sources |= found
+
+
+def _session_state_hazards(modules: list[Module]) -> list[dict[str, object]]:
+    """BI-15: session state is set up only in a function that takes its connection from a session
+    source, whatever reaches it. A helper or constant used on some caller's connection cannot prove
+    that, so it is rejected."""
+    definitions_by_module: dict[str, list[Definition]] = {}
+    for definition in _all_definitions(modules):
+        if isinstance(definition.node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            definitions_by_module.setdefault(definition.module, []).append(definition)
+    hazards = []
+    for module in modules:
+        definitions = definitions_by_module.get(module.name, [])
+        found = [
+            (name, state, None)
+            for name, values in module.assignments.items()
+            for value in values
+            if (state := _session_state(ast.walk(value)))
+        ]
+        found += [
+            (definition.qualname, state, definition)
+            for definition in definitions
+            if (state := _session_state(_own_nodes(definition)))
+        ]
+        if not found:
+            continue
+        sources = _session_sources(module, definitions)
+        for function, (kind, line), definition in found:
+            if definition is not None and any(
+                _database_connect(call, module) or _default_name(call.func) in sources
+                for call, _ in _facts(definition).calls
+            ):
+                continue
+            hazards.append({
+                "rule": "BI-15",
+                "operation": f"session-state-on-shared-connection:{kind}",
+                "path": module.path,
+                "function": function,
+                "line": line,
+                "entrypoint": f"py:{module.path}#{function}",
+                "depth": "direct",
+                "via": [],
+                "reject": True,
+            })
+    return hazards
 
 
 def _blocking_operation(node: ast.Call, module: Module, owner: Definition) -> tuple[str, str] | None:
@@ -2047,6 +2145,7 @@ def analyze_python_repository(
                 callee_loop = loop or ((current.path, line, current.qualname) if call_in_loop else None)
                 callee_bound = library_state.bound_collections(current, bound, call, callee)
                 queue.append((callee, [*via, callee.qualname], callee_loop, scan_of(call), callee_bound))
+    hazards.extend(_session_state_hazards(modules))
     unique: dict[str, dict[str, object]] = {}
     for hazard in hazards:
         site = f"{hazard['path']}#{hazard['function']}"

@@ -143,7 +143,8 @@ _DECISION_SQL = """
           stored.metadata #>> '{stray_duplicate_of,album_key}' as was_folded_into_key,
           former.paths as was_folded_into,
           scoped_albums.title, scoped_albums.release_year,
-          coalesce(nullif(stored.metadata ->> 'album_artist', ''), artists.name) as album_artist,
+          coalesce(nullif(proposed.album_artist, ''), nullif(stored.metadata ->> 'album_artist', ''),
+            artists.name) as album_artist,
           stored.cover_path, stored.metadata ->> 'cover_revision' as cover_revision
         from desired
         join scoped_albums on scoped_albums.id=desired.id
@@ -151,6 +152,7 @@ _DECISION_SQL = """
         left join members owners on owners.album_id=(desired.ownership ->> 'album_id')::bigint
         left join scoped_albums owner_albums on owner_albums.id=(desired.ownership ->> 'album_id')::bigint
         left join library.local_albums stored on stored.id=desired.id
+        left join proposed_albums proposed on proposed.id=desired.id
         left join library.local_artists artists on artists.id=stored.artist_id
         left join members former
           on former.album_id=(stored.metadata #>> '{stray_duplicate_of,album_id}')::bigint

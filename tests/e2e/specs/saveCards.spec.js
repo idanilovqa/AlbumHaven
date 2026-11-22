@@ -14,7 +14,8 @@ const BUDGET_MS = 150 + 200;
 const SAVE_PATH = '**/utilities/edit-tags';
 const FOLD_UNCHECKED = /fold couldn.t be checked/iu;
 const TWIN = 'Twin Release';
-const OTHER = 'Other Release';
+// After TWIN by name: a scan numbers albums by name, and an equal-size fold keeps the older album's card.
+const OTHER = 'Unrelated Release';
 const NEW = 'Brand New Release';
 // Album keys keep accents while duplicate identities fold them: this name folds into TWIN.
 const COPY = 'Twin Réléase';

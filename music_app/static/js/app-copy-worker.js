@@ -172,6 +172,15 @@
       return response;
     }
 
+    // A kept page is stored with no policy of its own, and would then be restorable from memory by
+    // Back, whoever is signed in by then: it is answered no-store, as the server's page is.
+    function pageAnswer(response) {
+      if (response.status !== 200 || noStore(response)) return response;
+      const headers = new Headers(response.headers);
+      headers.set('Cache-Control', 'private, no-store');
+      return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+    }
+
     async function navigate(request) {
       const url = new URL(request.url);
       const target = await accountCache();
@@ -184,10 +193,10 @@
             meta.served = page.version;
             await writeMeta(target.cache, meta);
           }
-          return copy;
+          return pageAnswer(copy);
         }
       }
-      return fetchPage(url, true);
+      return pageAnswer(await fetchPage(url, true));
     }
 
     // A version names exactly one build of an asset: kept once the server marks it immutable.

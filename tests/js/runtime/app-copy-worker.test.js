@@ -111,6 +111,17 @@ test('a fresh copy answers the navigation without waiting for the network', asyn
   assert.match(await response.text(), /content="cache" data-account="acct-a"/);
 });
 
+test('a page answered from the copy is no-store, as the page the server sends', async () => {
+  const { calls, handle } = setup();
+  await handle(navigation('/'));
+
+  const response = await handle(navigation('/'));
+
+  assert.equal(calls.length, 1, 'still answered at once');
+  assert.equal(response.headers.get('Cache-Control'), 'private, no-store');
+  assert.match(await response.text(), /content="cache"/);
+});
+
 test('a copy of another page is not shown for this one', async () => {
   const { calls, handle } = setup();
   await handle(navigation('/?artist=Broadcast'));

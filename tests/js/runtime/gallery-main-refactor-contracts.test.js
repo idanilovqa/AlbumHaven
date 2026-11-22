@@ -3143,3 +3143,64 @@ test('the artist panel ends its text with one disabled Open full page and lists 
   assert.match(disabled, /color:\s*color-mix\(in srgb, var\(--appearance-accent,[^)]*\)\) 45%, transparent\)/, 'dimmed like Full page was');
   assert.doesNotMatch(disabled, /opacity/, 'dimming the colour keeps the fade behind it opaque');
 });
+
+test('bounded interaction: a GalleryBar keeps one size observer and visits only its own genres however often it refits', async () => {
+  const { createInteractionCounter, countedCollection, measureScalePair } = require('../helpers/bounded-interaction-counter');
+  const GENRES = 6;
+  const refits = async (resizes) => {
+    const counter = createInteractionCounter();
+    const observed = [];
+    const context = loadRuntime({
+      window: { innerWidth: 390 },
+      ResizeObserver: class {
+        constructor(callback) {
+          counter.count('observers');
+          this.callback = callback;
+        }
+
+        observe(target) {
+          observed.push([this, target]);
+        }
+      },
+    });
+    const pills = Array.from({ length: GENRES }, (_value, index) => ({
+      hidden: false,
+      getBoundingClientRect: () => ({ right: 40 * (index + 1) }),
+    }));
+    const genres = {
+      getClientRects: () => [{}],
+      getBoundingClientRect: () => ({ right: 120 }),
+      querySelectorAll: () => countedCollection(pills, counter),
+    };
+    const name = { textContent: 'Kipelov', scrollWidth: 100, clientWidth: 100 };
+    const bar = {
+      clientWidth: 300,
+      dataset: { galleryContextKind: 'artist' },
+      classList: { add: () => {}, remove: () => {} },
+      querySelector: selector => ({
+        '[data-gallery-context-name]': name,
+        '.gallery-bar__summary .gallery-bar__artist-genres': genres,
+      }[selector] || null),
+      querySelectorAll: () => countedCollection(pills, counter),
+    };
+    return counter.measure(() => {
+      context.syncGalleryBarNameFit(bar, name);
+      for (let resize = 1; resize <= resizes; resize += 1) {
+        bar.clientWidth = 300 + resize; // a new width refits once, through the bar's own observer
+        observed[0][0].callback();
+      }
+      assert.equal(observed.length, 1, 'the bar is observed once');
+      assert.equal(pills.slice(3).every(pill => pill.hidden), true, 'genres past the line end are dropped whole');
+    });
+  };
+  await measureScalePair({
+    id: 'js:runtime/gallery-main-interactions.js#syncGalleryBarNameFit',
+    small: 10,
+    large: 1000,
+    run: refits,
+    budgets: { observers: 1 },
+    growth: { metric: 'observers', largeMinusSmallMax: 0 },
+  });
+  // The first fit and one refit each visit the bar's genres twice (show, then measure): nothing outside the bar.
+  assert.ok((await refits(1)).itemsVisited <= 4 * GENRES);
+});

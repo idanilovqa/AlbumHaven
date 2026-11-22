@@ -475,3 +475,52 @@ test('AlbumTrackTable leaves the number empty when a track has none, instead of 
   assert.match(numbered.cells.number.content, /album-track-table__number">7</);
   assert.match(unnumbered.cells.number.content, /album-track-table__number"><\/span>/);
 });
+
+test('bounded interaction: re-rendering a track table keeps two credit observers and one motion listener at any row count', async () => {
+  const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter');
+  const rerenders = async (rowCount) => {
+    const counter = createInteractionCounter();
+    const observerClass = () => class {
+      constructor() { counter.count('observers'); }
+      observe() {}
+      disconnect() { counter.count('observers', -1); }
+    };
+    const context = {
+      window: {
+        matchMedia: () => ({
+          matches: false,
+          addEventListener() { counter.count('listeners'); },
+          removeEventListener() { counter.count('listeners', -1); },
+        }),
+      },
+      document: {},
+      requestAnimationFrame: () => 1,
+      cancelAnimationFrame() {},
+      ResizeObserver: observerClass(),
+      IntersectionObserver: observerClass(),
+    };
+    vm.createContext(context);
+    for (const filename of ['running-line.js', 'album-track-table.js']) {
+      vm.runInContext(fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'js', 'runtime', filename), 'utf8'), context);
+    }
+    const rows = Array.from({ length: rowCount }, () => ({
+      firstElementChild: { scrollWidth: 300 },
+      clientWidth: 100,
+      classList: { toggle() {}, remove() {} },
+      style: { removeProperty() {} },
+    }));
+    const root = { querySelectorAll: () => rows };
+    return counter.measure(() => {
+      // Every re-render of the same table first disposes the observers and listener of the last one.
+      for (let render = 0; render < 3; render += 1) context.syncAlbumTrackCreditMotion(root);
+    });
+  };
+  await measureScalePair({
+    id: 'js:runtime/album-track-table.js#syncAlbumTrackCreditMotion',
+    small: 20,
+    large: 2000,
+    run: rerenders,
+    budgets: { observers: 2, listeners: 1 },
+    growth: { metric: 'observers', largeMinusSmallMax: 0 },
+  });
+});

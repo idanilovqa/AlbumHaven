@@ -1063,7 +1063,23 @@
         "BI-09"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 2000
+      },
+      "budgets": {
+        "observers": 2,
+        "listeners": 1
+      },
+      "growth": {
+        "metric": "observers",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/album-track-table.test.js",
+      "testIdentity": "bounded interaction: re-rendering a track table keeps two credit observers and one motion listener at any row count",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; each re-render already disposes the previous observers and listener. Reverting returns this entry to static proof."
     },
     {
       "id": "js:runtime/album-track-table.js#triggerAlbumTrackPlayActivation",
@@ -3382,7 +3398,22 @@
         "BI-09"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 10,
+        "production": 1000
+      },
+      "budgets": {
+        "observers": 1
+      },
+      "growth": {
+        "metric": "observers",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/gallery-main-refactor-contracts.test.js",
+      "testIdentity": "bounded interaction: a GalleryBar keeps one size observer and visits only its own genres however often it refits",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; the bar already keeps one ResizeObserver and walks only its own genre pills. Reverting returns this entry to static proof."
     },
     {
       "id": "js:runtime/gallery-main-interactions.js#transitionGalleryMain",
@@ -10977,7 +11008,8 @@
       },
       "budgets": {
         "filesystem_enumerations": 1,
-        "stat_calls": 18
+        "stat_calls": 5,
+        "path_resolves": 11
       },
       "growth": {
         "metric": "stat_calls",
@@ -11009,7 +11041,8 @@
       },
       "budgets": {
         "filesystem_enumerations": 1,
-        "stat_calls": 18
+        "stat_calls": 4,
+        "path_resolves": 7
       },
       "growth": {
         "metric": "stat_calls",

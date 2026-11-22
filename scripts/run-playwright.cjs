@@ -1574,7 +1574,7 @@ async function cleanupManagedWatcherFixture(childEnv, options = {}) {
     throw new Error('Watcher cleanup requires a runner-owned directory identity.');
   }
   const mediaRoot = resolveWritableFixtureMediaRoot(childEnv, {
-    allowedProfiles: ['functional-core', 'synthetic-large-library'],
+    allowedProfiles: ['functional-core', 'synthetic-large-library', 'utility-problematic-files'],
   });
   const ownedRoot = path.join(mediaRoot, 'cases', ownedDirectoryName);
   const result = (options.runCommandFn || runCommand)(resolvePlaywrightPython(childEnv), [

@@ -3950,6 +3950,28 @@ test('managed watcher cleanup derives its only path from runner media ownership'
   } finally { fs.rmSync(ownedRoot, { recursive: true, force: true }); }
 });
 
+test('managed watcher cleanup serves the Problematic Files profile whose target owns a missing-album case', async () => {
+  const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-watcher-profile-'));
+  try {
+    fs.mkdirSync(path.join(fixtureRoot, 'media'));
+    const calls = [];
+    await _private.cleanupManagedWatcherFixture({
+      ALBUM_HAVEN_FIXTURE_PROFILE: 'utility-problematic-files',
+      ALBUM_HAVEN_FIXTURE_ROOT: fixtureRoot,
+      ALBUM_HAVEN_MEDIA_ROOT: path.join(fixtureRoot, 'media'),
+    }, {
+      ownedDirectoryName: 'problematic-files-missing-album',
+      runCommandFn(_command, args) {
+        calls.push(args);
+        return { status: 0, signal: null };
+      },
+    });
+    assert.deepEqual(calls[0].slice(2), [
+      '--owned-root', path.join(fs.realpathSync(fixtureRoot), 'media', 'cases', 'problematic-files-missing-album'),
+    ]);
+  } finally { fs.rmSync(fixtureRoot, { recursive: true, force: true }); }
+});
+
 test('managed watcher cleanup rejects a request-supplied path or unknown directory before touching inventory', async () => {
   const ownedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-watcher-request-'));
   let controller;

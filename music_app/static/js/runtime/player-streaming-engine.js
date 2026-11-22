@@ -1615,7 +1615,8 @@ function sweepStreamingEncodedDecoders() {
   for (const encoded of [...(engine.encodedStreams || [])]) {
     if (live.includes(encoded) || encoded.pumping) continue;
     engine.encodedStreams.delete(encoded);
-    void encoded.decoder.ready.then(() => encoded.decoder.free()).catch(() => {});
+    if (typeof releaseStreamingDecoder === 'function') releaseStreamingDecoder(encoded.codec, encoded.decoder);
+    else void encoded.decoder.ready.then(() => encoded.decoder.free()).catch(() => {});
   }
 }
 

@@ -12036,14 +12036,32 @@
         "py:music_app/routes/web_asgi.py#albums_page:route:GET /albums"
       ],
       "owners": [
-        "music_app/routes/web_asgi.py"
+        "music_app/routes/web_asgi.py",
+        "music_app/services/covers.py"
       ],
       "rules": [
         "BI-04",
         "BI-13"
       ],
       "workClass": "page",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "filesystem_enumerations": 0,
+        "stat_calls": 6,
+        "open_calls": 0,
+        "media_parses": 0
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_library_browse_postgres.py::test_page_alias_contract_serves_the_index_and_its_fixed_cover_probe_count",
+      "testIdentity": "test_page_alias_contract_serves_the_index_and_its_fixed_cover_probe_count",
+      "rollback": "The route is the index page; giving it its own work outside index fails the delegation assertion, and probing covers per album fails the index's stat_calls growth."
     },
     {
       "id": "py:routes/web_asgi.py#app_copy_account_route",
@@ -12284,14 +12302,32 @@
         "py:music_app/routes/web_asgi.py#loose_tracks_page:route:GET /loose-tracks"
       ],
       "owners": [
-        "music_app/routes/web_asgi.py"
+        "music_app/routes/web_asgi.py",
+        "music_app/services/covers.py"
       ],
       "rules": [
         "BI-04",
         "BI-13"
       ],
       "workClass": "page",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "filesystem_enumerations": 0,
+        "stat_calls": 6,
+        "open_calls": 0,
+        "media_parses": 0
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_library_browse_postgres.py::test_page_alias_contract_serves_the_index_and_its_fixed_cover_probe_count",
+      "testIdentity": "test_page_alias_contract_serves_the_index_and_its_fixed_cover_probe_count",
+      "rollback": "The route is the index page; giving it its own work outside index fails the delegation assertion, and probing covers per album fails the index's stat_calls growth."
     },
     {
       "id": "py:routes/web_asgi.py#news_center",

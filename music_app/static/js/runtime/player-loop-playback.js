@@ -269,7 +269,10 @@ function setCurrentPlayerTrack(track, options = {}) {
     }
   }
   state.player.waveform.renderToken += 1;
-  clearWaveformCanvas();
+  if (!track) {
+    state.player.waveform.shown = null;
+    clearWaveformCanvas();
+  }
   loopEditSessionExpiryController.stop('global-player');
   state.player.loopActive = false;
   state.player.loopStart = 0;

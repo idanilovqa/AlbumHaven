@@ -110,6 +110,83 @@ test('updateWaveformAppearance publishes the effective seekbar presentation', as
   assert.equal(wrapClasses.has('is-waveform'), true);
 });
 
+function waveformSwitch() {
+  const { context } = loadRuntime();
+  const old = { src: 'old', path: 'old.flac', title: 'Old' };
+  const next = { src: 'new', path: 'new.flac', title: 'New' };
+  const oldPeaks = { left: [0.2], right: [0.2] };
+  const newPeaks = { left: [0.9], right: [0.9] };
+  const canvas = {};
+  const shows = [];
+  const snapshot = { src: 'old', currentTime: 100, duration: 200, generation: 1 };
+  context.getPlayerElements = () => ({ waveformCanvas: canvas });
+  context.getPlayerPlaybackSnapshot = () => ({ ...snapshot });
+  context.setPlayerSeekbarPresentation = () => {};
+  context.renderGlobalPlayerMetadata = () => {};
+  context.clearWaveformCanvas = () => shows.push({ data: null });
+  context.drawWaveformOnCanvas = (_canvas, data, progress) => shows.push({ data: data || null, progress });
+  context.updatePlayerUi = () => { void context.updateWaveformAppearance(); };
+  context.state.player.current = old;
+  context.state.player.streaming = { mode: 'playing' };
+  context.state.player.waveform.compactPeaks = { path: old.path, generation: 1, data: oldPeaks };
+  return { context, old, next, oldPeaks, newPeaks, shows, snapshot };
+}
+
+// Owner, round 10 (2026-11-22): "Waveform of the currently playing song disappears for a split second -
+// keep it until new song is playing".
+test('a switch keeps the old waveform, never blank, until the pressed song sounds, then shows its own', async () => {
+  const { context, next, oldPeaks, newPeaks, shows, snapshot } = waveformSwitch();
+  await context.updateWaveformAppearance();
+  shows.length = 0;
+
+  // The press: title and time switch, the old song still sounds.
+  context.state.player.selectedTrack = next;
+  await context.updateWaveformAppearance();
+  // Its peaks arrive before its sound.
+  context.state.player.waveform.compactPeaks = { path: next.path, generation: 2, data: newPeaks };
+  await context.updateWaveformAppearance();
+  // The stream starts over: a new generation, the clock at the new start, no audio yet.
+  Object.assign(snapshot, { src: 'new', currentTime: 0, duration: 180, generation: 2 });
+  context.state.player.streaming.mode = 'starting';
+  await context.updateWaveformAppearance();
+  // The start returns, still before any sound.
+  context.setCurrentPlayerTrack(next, { persist: false });
+  context.state.player.selectedTrack = null;
+  await context.updateWaveformAppearance();
+  // A repaint (palette, resize) meanwhile.
+  await context.updateWaveformAppearance(true);
+
+  assert.ok(shows.at(-1).data === oldPeaks, 'the old song\u2019s waveform is still up');
+  assert.deepEqual(shows.filter((shown) => shown.data && shown.data !== oldPeaks), [], 'not the new one before it sounds');
+  assert.deepEqual([...new Set(shows.filter((shown) => shown.data).map((shown) => shown.progress))], [0.5],
+    'where it was, never jumped to the new start');
+  const blanks = shows.map((shown, index) => ({ shown, index }))
+    .filter(({ shown, index }) => !shown.data && !shows[index + 1]?.data);
+  assert.deepEqual(blanks, [], 'no blank is left on screen');
+
+  shows.length = 0;
+  context.state.player.streaming.mode = 'playing';
+  await context.updateWaveformAppearance();
+  assert.ok(shows.at(-1).data === newPeaks, 'the new one once it sounds');
+});
+
+test('with nothing to play the kept waveform goes', async () => {
+  const { context, shows } = waveformSwitch();
+  await context.updateWaveformAppearance();
+  context.setCurrentPlayerTrack(null, { persist: false });
+  await context.updateWaveformAppearance();
+  assert.equal(shows.at(-1).data, null);
+});
+
+test('a song that sounds with no peaks yet never keeps the previous song\u2019s waveform', async () => {
+  const { context, next, shows, snapshot } = waveformSwitch();
+  await context.updateWaveformAppearance();
+  Object.assign(snapshot, { src: 'new', currentTime: 1, duration: 180, generation: 2 });
+  context.setCurrentPlayerTrack(next, { persist: false });
+  await context.updateWaveformAppearance();
+  assert.equal(shows.at(-1).data, null);
+});
+
 test('saved-loop waveform settings refresh even without a main-player track', async () => {
   const modes = [];
   const { context } = loadRuntime();

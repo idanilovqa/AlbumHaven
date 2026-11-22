@@ -10500,7 +10500,7 @@
       "musicbrainz:matched-and-credited-artist",
       "musicbrainz:native-ddt-and-aria",
       "musicbrainz:held-header-hydration",
-      "musicbrainz:shamaani-duo-korpiklaani"
+      "musicbrainz:credited-duo-renamed-main"
     ],
     "filesystemScenarios": [],
     "expectedContracts": [
@@ -10510,7 +10510,7 @@
       "mbid-native-name-surfaces",
       "mbid-native-latin-storage",
       "mbd1-04-header-info-hydration-race",
-      "mbd1-40-shamaani-duo-korpiklaani"
+      "mbd1-40-credited-duo-renamed-main"
     ],
     "mutationOwnership": {
       "databaseIdentity": "case:musicbrainz-matched-artist"

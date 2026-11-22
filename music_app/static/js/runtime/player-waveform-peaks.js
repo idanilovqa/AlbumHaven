@@ -19,6 +19,16 @@ let playerWaveformStartRequest = null;
 // failing or starting to play.
 let playerWaveformRestingTrack = null;
 
+// Which player asks, so a press stops only this player's previous build. Kept for the page's life:
+// a claim that changes the tab's identity later does not change whose builds these are.
+let playerWaveformClientId = '';
+function getPlayerWaveformClientId() {
+  if (!playerWaveformClientId && typeof getPlaybackOwnershipTabId === 'function') {
+    playerWaveformClientId = String(getPlaybackOwnershipTabId() || '');
+  }
+  return playerWaveformClientId;
+}
+
 // The generation of the engine that plays: in the Android app the browser engine's never moves.
 function playerWaveformGeneration() {
   const playback = typeof getPlayerPlaybackSnapshot === 'function' ? getPlayerPlaybackSnapshot() : null;
@@ -183,6 +193,8 @@ async function fetchWaveformPeaks(rawPath, sampleCount, { current, signal, onPar
   if (current) {
     query.set('priority', 'current');
     query.set('progressive', '1');
+    const clientId = getPlayerWaveformClientId();
+    if (clientId) query.set('client_id', clientId);
   }
   for (let attempt = 0; ; attempt += 1) {
     const response = await fetch(`/playback/waveform?${query}`, { signal });

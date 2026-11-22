@@ -31,8 +31,11 @@ CURRENT_SONG_MAX_SEGMENTS = 4
 # Distinct playing songs (one per listening device) that may build at the same time.
 CURRENT_SONG_MAX_BUILDS = 2
 # A seek or reload drops the playing song's request and asks again once playback has
-# buffered, so its build keeps going this long for that request to rejoin.
+# buffered, so its build keeps going this long for that request to rejoin, unless that
+# client asked for another song since: then it was replaced, and stops at once.
 CURRENT_SONG_REJOIN_SECONDS = 5.0
+# Playback clients whose newest song is remembered; past this the longest silent is forgotten.
+REMEMBERED_PLAYBACK_CLIENTS = 256
 SEGMENT_SEEK_PREROLL_SECONDS = 0.25
 # Started decoders kept waiting for playing songs, and the 50 ms chunks they measure.
 WARM_DECODERS = 2
@@ -47,6 +50,10 @@ _PEAK_LEVEL_PATTERN = re.compile(
     rb"^lavfi\.astats\.(?P<channel>[12])\.Peak_level=(?P<decibels>[^\r\n]+)$"
 )
 _LOGGER = logging.getLogger(__name__)
+
+
+# The account and the playback client id of whoever asks for a playing song.
+PlaybackClient = tuple[object, str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -801,6 +808,8 @@ class _BuildJob:
     cancel_event: asyncio.Event
     task: asyncio.Task[WaveformPeaks] | None = None
     waiters: int = 0
+    # The playback clients that asked for this build as their playing song.
+    clients: set[PlaybackClient | None] = field(default_factory=set)
     stopping: bool = False
     # Set while a playing-song build with no callers waits for its song to ask again.
     linger_timer: asyncio.TimerHandle | None = None
@@ -846,6 +855,7 @@ class WaveformPeaksRegistry:
         self._analyzer_version = analyzer_version
         self._decoder_pool = decoder_pool
         self._jobs: set[_BuildJob] = set()
+        self._newest_songs: dict[PlaybackClient | None, tuple[str, int]] = {}
         self._shutting_down = False
 
     @property
@@ -974,12 +984,17 @@ class WaveformPeaksRegistry:
                 job.cancel_linger()
                 return job
         if current:
-            # Another song plays now, so builds nobody waits for give way at once.
+            # Another song plays now, so prefetch gives way at once. A build waiting to be
+            # rejoined is someone else's seek: it gives way only when its slot is needed.
             for job in active:
-                if not job.current or job.linger_timer is not None:
+                if not job.current:
                     job.stop()
-            if sum(job.current and not job.stopping for job in active) >= CURRENT_SONG_MAX_BUILDS:
-                raise WaveformPeaksBusyError("waveform peak job already active")
+            building = [job for job in active if job.current and not job.stopping]
+            if len(building) >= CURRENT_SONG_MAX_BUILDS:
+                left = next((job for job in building if job.linger_timer is not None), None)
+                if left is None:
+                    raise WaveformPeaksBusyError("waveform peak job already active")
+                left.stop()
         elif active:
             raise WaveformPeaksBusyError("waveform peak job already active")
         job = _BuildJob(key=key, current=current, cancel_event=asyncio.Event())
@@ -1006,13 +1021,17 @@ class WaveformPeaksRegistry:
         bins: int,
         current: bool = False,
         on_progress: Callable[[WaveformPeaks], None] | None = None,
+        client: PlaybackClient | None = None,
     ) -> WaveformPeaks:
         """Return the song's peaks; `on_progress` sees the waveform built so far.
 
+        `client` is who asks for a playing song: its newest song replaces only its own.
         The playing song's build starts without waiting for the cache read, which can take
         seconds on a busy database; a cache hit that arrives first answers and stops it.
         """
         self._ensure_open()
+        if current:
+            self._song_asked_for(client, (str(path), bins))
         cache_identity: dict[str, object] | None = None
         if self._cache_repository is not None:
             try:
@@ -1044,6 +1063,8 @@ class WaveformPeaksRegistry:
         task = job.task
         assert task is not None
         job.waiters += 1
+        if current:
+            job.clients.add(client)
         if on_progress is not None:
             job.listeners.add(on_progress)
             if job.partial is not None:
@@ -1063,7 +1084,7 @@ class WaveformPeaksRegistry:
             return await asyncio.shield(task)
         except asyncio.CancelledError:
             if job.waiters == 1 and not task.done():
-                if job.current:
+                if job.current and self._may_be_rejoined(job):
                     # The last caller left: wait briefly for the playing song to ask again.
                     job.linger_timer = asyncio.get_running_loop().call_later(
                         CURRENT_SONG_REJOIN_SECONDS,
@@ -1079,6 +1100,20 @@ class WaveformPeaksRegistry:
                 cache_read.cancel()
             job.waiters -= 1
             job.listeners.discard(on_progress)
+
+    def _song_asked_for(self, client: PlaybackClient | None, key: tuple[str, int]) -> None:
+        # Before anything is awaited: on a busy host looking at the pressed file takes long
+        # enough for the previous song's decoders to hold up the pressed song's audio.
+        self._newest_songs.pop(client, None)
+        self._newest_songs[client] = key
+        if len(self._newest_songs) > REMEMBERED_PLAYBACK_CLIENTS:
+            del self._newest_songs[next(iter(self._newest_songs))]
+        for job in self._jobs:
+            if job.linger_timer is not None and client in job.clients and not self._may_be_rejoined(job):
+                job.stop()
+
+    def _may_be_rejoined(self, job: _BuildJob) -> bool:
+        return any(self._newest_songs.get(client) == job.key for client in job.clients)
 
     async def _shutdown_and_release(self) -> None:
         self._shutting_down = True

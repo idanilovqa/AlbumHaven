@@ -2239,3 +2239,316 @@ def test_decoders_are_readied_when_a_song_is_selected_and_after_each_build(tmp_p
         await registry.shutdown()
 
     asyncio.run(scenario())
+
+
+class _SwitchBuilds:
+    """Builds that run until stopped or released, by file name."""
+
+    def __init__(self) -> None:
+        self.stops: dict[str, asyncio.Event] = {}
+        self.starts: list[str] = []
+        self.release = asyncio.Event()
+
+    async def __call__(self, path: Path, *, bins: int, cancel_event: asyncio.Event, current: bool = False):
+        self.stops[path.name] = cancel_event
+        self.starts.append(path.name)
+        released = asyncio.create_task(self.release.wait())
+        stopped = asyncio.create_task(cancel_event.wait())
+        await asyncio.wait({released, stopped}, return_when=asyncio.FIRST_COMPLETED)
+        released.cancel()
+        stopped.cancel()
+        if cancel_event.is_set():
+            raise asyncio.CancelledError
+        return "peaks"
+
+    def ask(self, registry: WaveformPeaksRegistry, name: str, client=None) -> asyncio.Task:
+        options = {"client": client} if client else {}
+        return asyncio.create_task(registry.run(Path(name), bins=BIN_COUNT, current=True, **options))
+
+
+async def _leave(caller: asyncio.Task) -> None:
+    caller.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(caller, timeout=1)
+
+
+def test_a_press_on_another_song_stops_the_previous_build_when_its_disconnect_arrives_late():
+    async def scenario() -> None:
+        builds = _SwitchBuilds()
+        registry = WaveformPeaksRegistry(builder=builds)
+        previous = builds.ask(registry, "previous.mp3")
+        await _until(lambda: "previous.mp3" in builds.stops)
+        pressed = builds.ask(registry, "pressed.mp3")
+        await _until(lambda: "pressed.mp3" in builds.stops)
+
+        await _leave(previous)
+        try:
+            # At once, not after the rejoin window.
+            assert builds.stops["previous.mp3"].is_set() is True
+            assert builds.stops["pressed.mp3"].is_set() is False
+        finally:
+            pressed.cancel()
+            await asyncio.gather(pressed, return_exceptions=True)
+            await registry.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_a_press_that_joins_a_running_build_still_stops_the_previous_one():
+    async def scenario() -> None:
+        builds = _SwitchBuilds()
+        registry = WaveformPeaksRegistry(builder=builds)
+        elsewhere = builds.ask(registry, "pressed.mp3")
+        await _until(lambda: "pressed.mp3" in builds.stops)
+        previous = builds.ask(registry, "previous.mp3")
+        await _until(lambda: "previous.mp3" in builds.stops)
+        await _leave(previous)
+        assert builds.stops["previous.mp3"].is_set() is False  # it may still be rejoined
+
+        pressed = builds.ask(registry, "pressed.mp3")
+        await asyncio.sleep(0)
+        try:
+            assert builds.stops["previous.mp3"].is_set() is True
+            assert builds.stops["pressed.mp3"].is_set() is False
+            assert builds.starts == ["pressed.mp3", "previous.mp3"]
+        finally:
+            for caller in (elsewhere, pressed):
+                caller.cancel()
+            await asyncio.gather(elsewhere, pressed, return_exceptions=True)
+            await registry.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_a_press_stops_the_previous_build_before_its_own_file_is_looked_at(monkeypatch):
+    async def scenario() -> None:
+        builds = _SwitchBuilds()
+        registry = WaveformPeaksRegistry(builder=builds, cache_repository=object())
+        looked_at = threading.Event()
+
+        def identity(path: Path, *, bins: int):
+            if path.name == "pressed.mp3":
+                looked_at.wait(5)
+            raise OSError("no cache identity in this test")
+
+        monkeypatch.setattr(registry, "_cache_identity", identity)
+        previous = builds.ask(registry, "previous.mp3")
+        await _until(lambda: "previous.mp3" in builds.stops)
+        await _leave(previous)
+
+        pressed = builds.ask(registry, "pressed.mp3")
+        try:
+            # A busy host takes hundreds of milliseconds for that look.
+            await _until(builds.stops["previous.mp3"].is_set)
+            assert "pressed.mp3" not in builds.stops
+        finally:
+            looked_at.set()
+            pressed.cancel()
+            await asyncio.gather(pressed, return_exceptions=True)
+            await registry.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_a_previous_song_admitted_after_the_press_stops_when_left(monkeypatch):
+    async def scenario() -> None:
+        builds = _SwitchBuilds()
+        registry = WaveformPeaksRegistry(builder=builds, cache_repository=object())
+        looked_at = threading.Event()
+
+        def identity(path: Path, *, bins: int):
+            if path.name == "previous.mp3":
+                looked_at.wait(5)
+            raise OSError("no cache identity in this test")
+
+        monkeypatch.setattr(registry, "_cache_identity", identity)
+        previous = builds.ask(registry, "previous.mp3")
+        await asyncio.sleep(0)
+        pressed = builds.ask(registry, "pressed.mp3")
+        await _until(lambda: "pressed.mp3" in builds.stops)
+        looked_at.set()
+        await _until(lambda: "previous.mp3" in builds.stops)
+
+        await _leave(previous)
+        try:
+            assert builds.stops["previous.mp3"].is_set() is True
+        finally:
+            pressed.cancel()
+            await asyncio.gather(pressed, return_exceptions=True)
+            await registry.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_a_song_asked_for_again_after_another_keeps_its_rejoin_window():
+    async def scenario() -> None:
+        builds = _SwitchBuilds()
+        registry = WaveformPeaksRegistry(builder=builds)
+        first = builds.ask(registry, "back.mp3")
+        await _until(lambda: "back.mp3" in builds.stops)
+        other = builds.ask(registry, "other.mp3")
+        await _until(lambda: "other.mp3" in builds.stops)
+        again = builds.ask(registry, "back.mp3")
+        await asyncio.sleep(0)
+
+        await _leave(first)
+        await _leave(again)  # a seek: it will be asked for again
+        assert builds.stops["back.mp3"].is_set() is False
+
+        rejoined = builds.ask(registry, "back.mp3")
+        await asyncio.sleep(0)
+        builds.release.set()
+        assert await asyncio.wait_for(rejoined, timeout=1) == "peaks"
+        assert builds.starts.count("back.mp3") == 1
+        await asyncio.gather(other, return_exceptions=True)
+        await registry.shutdown()
+
+    asyncio.run(scenario())
+
+
+TAB = (1, "tab")
+SAME_ACCOUNT_OTHER_TAB = (1, "other-tab")
+OTHER_ACCOUNT_SAME_CLIENT_ID = (2, "tab")
+
+
+@pytest.mark.parametrize("someone_else", [SAME_ACCOUNT_OTHER_TAB, OTHER_ACCOUNT_SAME_CLIENT_ID])
+def test_someone_elses_song_does_not_end_a_seeks_rejoin_window(someone_else):
+    async def scenario() -> None:
+        builds = _SwitchBuilds()
+        registry = WaveformPeaksRegistry(builder=builds)
+        seeking = builds.ask(registry, "seeking.mp3", TAB)
+        await _until(lambda: "seeking.mp3" in builds.stops)
+        await _leave(seeking)
+
+        # A press there, or a page there that only opens with a paused track.
+        other = builds.ask(registry, "theirs.mp3", someone_else)
+        await _until(lambda: "theirs.mp3" in builds.stops)
+        assert builds.stops["seeking.mp3"].is_set() is False
+
+        rejoined = builds.ask(registry, "seeking.mp3", TAB)
+        await asyncio.sleep(0)
+        builds.release.set()
+        assert await asyncio.wait_for(rejoined, timeout=1) == "peaks"
+        assert builds.starts.count("seeking.mp3") == 1
+        await asyncio.gather(other, return_exceptions=True)
+        await registry.shutdown()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("someone_else", [SAME_ACCOUNT_OTHER_TAB, OTHER_ACCOUNT_SAME_CLIENT_ID])
+def test_someone_elses_song_asked_before_a_seek_leaves_its_build_to_rejoin(someone_else):
+    async def scenario() -> None:
+        builds = _SwitchBuilds()
+        registry = WaveformPeaksRegistry(builder=builds)
+        seeking = builds.ask(registry, "seeking.mp3", TAB)
+        await _until(lambda: "seeking.mp3" in builds.stops)
+        other = builds.ask(registry, "theirs.mp3", someone_else)
+        await _until(lambda: "theirs.mp3" in builds.stops)
+
+        await _leave(seeking)
+        try:
+            assert builds.stops["seeking.mp3"].is_set() is False
+        finally:
+            other.cancel()
+            await asyncio.gather(other, return_exceptions=True)
+            await registry.shutdown()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("left_before_the_press", [True, False])
+def test_a_press_stops_that_clients_previous_build_while_someone_else_also_plays(left_before_the_press):
+    async def scenario() -> None:
+        builds = _SwitchBuilds()
+        registry = WaveformPeaksRegistry(builder=builds)
+        previous = builds.ask(registry, "previous.mp3", TAB)
+        await _until(lambda: "previous.mp3" in builds.stops)
+        if left_before_the_press:
+            await _leave(previous)
+        pressed = builds.ask(registry, "pressed.mp3", TAB)
+        await asyncio.sleep(0)
+        if not left_before_the_press:
+            await _leave(previous)
+        try:
+            assert builds.stops["previous.mp3"].is_set() is True
+            other = builds.ask(registry, "theirs.mp3", SAME_ACCOUNT_OTHER_TAB)
+            await _until(lambda: "theirs.mp3" in builds.stops)
+            assert builds.stops["pressed.mp3"].is_set() is False
+            other.cancel()
+            await asyncio.gather(other, return_exceptions=True)
+        finally:
+            pressed.cancel()
+            await asyncio.gather(pressed, return_exceptions=True)
+            await registry.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_a_build_two_clients_asked_for_lingers_until_both_moved_on():
+    async def scenario() -> None:
+        builds = _SwitchBuilds()
+        registry = WaveformPeaksRegistry(builder=builds)
+        mine = builds.ask(registry, "shared.mp3", TAB)
+        await _until(lambda: "shared.mp3" in builds.stops)
+        theirs = builds.ask(registry, "shared.mp3", OTHER_ACCOUNT_SAME_CLIENT_ID)
+        await asyncio.sleep(0)
+        await _leave(theirs)
+        await _leave(mine)
+
+        my_next = builds.ask(registry, "my-next.mp3", TAB)
+        await _until(lambda: "my-next.mp3" in builds.stops)
+        try:
+            assert builds.stops["shared.mp3"].is_set() is False  # theirs may still rejoin
+            await _leave(my_next)
+            their_next = builds.ask(registry, "their-next.mp3", OTHER_ACCOUNT_SAME_CLIENT_ID)
+            await asyncio.sleep(0)
+            assert builds.stops["shared.mp3"].is_set() is True
+            their_next.cancel()
+            await asyncio.gather(their_next, return_exceptions=True)
+        finally:
+            await registry.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_a_pressed_song_takes_a_lingering_builds_slot_only_when_no_slot_is_free():
+    async def scenario() -> None:
+        builds = _SwitchBuilds()
+        registry = WaveformPeaksRegistry(builder=builds)
+        seeking = builds.ask(registry, "seeking.mp3", TAB)
+        await _until(lambda: "seeking.mp3" in builds.stops)
+        await _leave(seeking)
+        playing = builds.ask(registry, "theirs.mp3", SAME_ACCOUNT_OTHER_TAB)
+        await _until(lambda: "theirs.mp3" in builds.stops)
+        assert builds.stops["seeking.mp3"].is_set() is False
+
+        pressed = builds.ask(registry, "pressed.mp3", OTHER_ACCOUNT_SAME_CLIENT_ID)
+        try:
+            # A song somebody waits for never waits behind a build nobody waits for.
+            await _until(lambda: "pressed.mp3" in builds.stops)
+            assert builds.stops["seeking.mp3"].is_set() is True
+            assert builds.stops["theirs.mp3"].is_set() is False
+        finally:
+            for caller in (playing, pressed):
+                caller.cancel()
+            await asyncio.gather(playing, pressed, return_exceptions=True)
+            await registry.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_the_newest_song_of_each_client_stays_bounded():
+    async def scenario() -> None:
+        async def builder(path: Path, *, bins: int, cancel_event: asyncio.Event, current: bool = False):
+            return "peaks"
+
+        registry = WaveformPeaksRegistry(builder=builder)
+        limit = waveform_peaks.REMEMBERED_PLAYBACK_CLIENTS
+        for number in range(limit + 20):
+            await registry.run(Path("song.mp3"), bins=BIN_COUNT, current=True, client=(1, str(number)))
+        assert len(registry._newest_songs) == limit
+        await registry.shutdown()
+
+    asyncio.run(scenario())
+

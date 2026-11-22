@@ -621,3 +621,34 @@ test('going back to the restored track before the other sounds loads it at once'
   assert.deepEqual(building.map(({ url }) => url.searchParams.get('path')), [TRACK.path]);
   assertPlayingPriority(building[0]);
 });
+
+test('pressing the current song during a switch cancels the pressed song\'s build', async () => {
+  const page = openPage();
+  await page.open();
+  // The engine's half of a cancel, whose file this page does not load.
+  page.context.cancelStreamingWaveformGeneration = (generation) => page.context.cancelWaveformPeakLoads(generation);
+
+  await page.press(OTHER);
+  // Its stream opened and took over the press's request.
+  void page.context.loadPlayingWaveformPeaks(OTHER.path);
+  await settle();
+  const replaced = page.requestFor(OTHER)[0];
+
+  await page.press(TRACK);
+
+  assert.equal(replaced.signal.aborted, true);
+});
+
+test('every playing-priority request names this page\'s playback client, and keeps that name', async () => {
+  const page = openPage();
+  let clientId = '4f7c0b62-2b55-4e0e-9a43-3f0c6f1d2a10';
+  page.context.getPlaybackOwnershipTabId = () => clientId;
+  await page.open();
+  const named = clientId;
+  // A refused renewal gives the tab a new claim identity mid-page; its builds are still this page's.
+  clientId = 'ffffffff-2b55-4e0e-9a43-3f0c6f1d2a10';
+
+  await page.press(OTHER);
+
+  assert.deepEqual(page.waveformRequests().map(({ url }) => url.searchParams.get('client_id')), [named, named]);
+});

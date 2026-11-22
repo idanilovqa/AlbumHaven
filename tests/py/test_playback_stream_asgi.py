@@ -3400,7 +3400,7 @@ def test_waveform_route_streams_the_playing_song_waveform_as_it_builds(
         def __init__(self) -> None:
             self.calls: list[tuple[Path, int, bool]] = []
 
-        async def run(self, path, *, bins, current=False, on_progress=None):
+        async def run(self, path, *, bins, current=False, on_progress=None, client=None):
             self.calls.append((path, bins, current))
             await asyncio.sleep(0)
             on_progress(WaveformPeaks(left=(0.25,) * bins, right=(0.0,) * bins, sample_count=bins))
@@ -3462,6 +3462,99 @@ def test_waveform_route_streams_the_playing_song_waveform_as_it_builds(
     assert registry.calls == [(media_path, 720, True)]
 
 
+def test_waveform_route_knows_the_asking_account_and_playback_client(playback_app, media_path):
+    from music_app.services.waveform_peaks import WaveformPeaks
+
+    asked = []
+
+    class RegistryDouble:
+        async def run(self, path, *, bins, current=False, on_progress=None, client=None):
+            asked.append(client)
+            return WaveformPeaks(left=(0.5,) * bins, right=(0.5,) * bins, sample_count=bins)
+
+    playback_app.state.waveform_peaks_registry = RegistryDouble()
+    client_id = "4f7c0b62-2b55-4e0e-9a43-3f0c6f1d2a10"
+    for extra in ({"client_id": client_id}, {"client_id": "x" * 500}):
+        status, _headers, _body = run_asgi_request(
+            playback_app,
+            "GET",
+            "/playback/waveform",
+            query={"path": str(media_path), "bins": "720", "priority": "current", "progressive": "1", **extra},
+        )
+        assert status == 200
+
+    (account_id, named), (_same_account, oversized) = asked
+    assert account_id is not None
+    assert named == client_id
+    assert len(oversized) <= 64
+
+
+def test_waveform_progressive_request_left_before_any_progress_frees_its_build(
+    playback_app,
+    media_path,
+):
+    """A press cancels the previous song's request, often before its build has shown anything."""
+    from music_app.services.waveform_peaks import WaveformPeaksRegistry
+
+    async def scenario() -> None:
+        started = asyncio.Event()
+        stopped = asyncio.Event()
+
+        async def builder(path: Path, *, bins: int, cancel_event: asyncio.Event, current: bool = False):
+            if path.name == "pressed.mp3":
+                return "peaks"
+            started.set()
+            await cancel_event.wait()
+            stopped.set()
+            raise asyncio.CancelledError()
+
+        registry = WaveformPeaksRegistry(builder=builder)
+        playback_app.state.waveform_peaks_registry = registry
+        incoming: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+        await incoming.put({"type": "http.request", "body": b"", "more_body": False})
+        messages: list[dict[str, object]] = []
+
+        async def send(message: dict[str, object]) -> None:
+            messages.append(message)
+
+        query = urlencode({"path": str(media_path), "bins": "720", "priority": "current", "progressive": "1"})
+        left = asyncio.create_task(
+            playback_app(
+                {
+                    "type": "http",
+                    "asgi": {"version": "3.0"},
+                    "http_version": "1.1",
+                    "method": "GET",
+                    "scheme": "http",
+                    "path": "/playback/waveform",
+                    "raw_path": b"/playback/waveform",
+                    "query_string": query.encode("ascii"),
+                    "headers": [(b"host", b"testserver")],
+                    "client": ("testclient", 50000),
+                    "server": ("testserver", 80),
+                },
+                incoming.get,
+                send,
+            )
+        )
+        await asyncio.wait_for(started.wait(), timeout=2)
+        try:
+            await incoming.put({"type": "http.disconnect"})
+            await asyncio.wait_for(left, timeout=1)
+            assert stopped.is_set() is False  # a seek may still rejoin it
+
+            # The same account and player press another song.
+            pressed = registry.run(Path("pressed.mp3"), bins=720, current=True, client=(1, ""))
+            assert await pressed == "peaks"
+            await asyncio.wait_for(stopped.wait(), timeout=1)
+        finally:
+            left.cancel()
+            await asyncio.gather(left, return_exceptions=True)
+            await registry.shutdown()
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     ("outcome", "expected_status"),
     [("cached", 200), ("busy", 429)],
@@ -3475,7 +3568,7 @@ def test_waveform_route_answers_a_finished_playing_song_build_without_streaming(
     from music_app.services.waveform_peaks import WaveformPeaks, WaveformPeaksBusyError
 
     class RegistryDouble:
-        async def run(self, path, *, bins, current=False, on_progress=None):
+        async def run(self, path, *, bins, current=False, on_progress=None, client=None):
             if outcome == "busy":
                 raise WaveformPeaksBusyError("waveform peak job already active")
             return WaveformPeaks(left=(0.75,) * bins, right=(0.5,) * bins, sample_count=bins)

@@ -57,6 +57,7 @@ MAX_PCM_SAMPLE_RATE = 192_000
 MAX_CREDIT_FRAMES_PER_MESSAGE = MAX_PCM_SAMPLE_RATE
 MAX_TRACK_DURATION_SECONDS = 86_400
 MAX_TRACK_PATH_CHARACTERS = 32_768
+MAX_CLIENT_ID_CHARACTERS = 64
 PCM_STREAM_SEND_COOPERATIVE_PAUSE_SECONDS = 0
 PCM_SLOW_STEP_LOG_SECONDS = 1.0
 
@@ -109,6 +110,7 @@ async def playback_waveform(
     bins: int = 280,
     priority: str = "",
     progressive: str = "",
+    client_id: str = "",
 ) -> Response:
     if bins not in {280, 720}:
         return JSONResponse({"error": "Unsupported waveform sample count"}, status_code=400)
@@ -178,7 +180,10 @@ async def playback_waveform(
         return JSONResponse(_peaks_payload(peaks))
 
     if priority == "current" and progressive == "1" and loop_scope is None:
-        return await _progressive_waveform_response(request, resolved_path, bins)
+        # The account is the session's; the client id only tells that account's players apart.
+        actor = getattr(request.state, "current_actor", None)
+        client = (getattr(actor, "account_id", None), client_id[:MAX_CLIENT_ID_CHARACTERS])
+        return await _progressive_waveform_response(request, resolved_path, bins, client)
 
     peaks_task = asyncio.create_task(
         request.app.state.waveform_peaks_registry.run(
@@ -240,7 +245,9 @@ def _peaks_payload(peaks: Any, **extra: object) -> dict[str, object]:
     }
 
 
-async def _progressive_waveform_response(request: Request, path: Path, bins: int) -> Response:
+async def _progressive_waveform_response(
+    request: Request, path: Path, bins: int, client: tuple[object, str]
+) -> Response:
     """Answer the playing song's peaks, streaming the waveform built so far while it builds.
 
     A cached or already finished build answers as plain JSON, and a busy one as 429, so
@@ -259,6 +266,7 @@ async def _progressive_waveform_response(request: Request, path: Path, bins: int
             bins=bins,
             current=True,
             on_progress=on_progress,
+            client=client,
         )
     )
 
@@ -272,12 +280,25 @@ async def _progressive_waveform_response(request: Request, path: Path, bins: int
         changed.clear()
         return peaks_task.done()
 
+    first_update = asyncio.create_task(next_update())
+    # Until the response streams nothing else notices that the caller left for another song.
+    disconnect_task = asyncio.create_task(_wait_for_http_disconnect(request))
     try:
-        finished = await next_update()
+        await asyncio.wait({first_update, disconnect_task}, return_when=asyncio.FIRST_COMPLETED)
+        if not first_update.done():
+            peaks_task.cancel()
+            first_update.cancel()
+            await asyncio.gather(peaks_task, first_update, return_exceptions=True)
+            return Response(status_code=204)
+        finished = first_update.result()
     except BaseException:
         peaks_task.cancel()
-        await asyncio.gather(peaks_task, return_exceptions=True)
+        first_update.cancel()
+        await asyncio.gather(peaks_task, first_update, return_exceptions=True)
         raise
+    finally:
+        disconnect_task.cancel()
+        disconnect_task.add_done_callback(_observe_cancelled_task)
     if finished:
         try:
             return JSONResponse(_peaks_payload(peaks_task.result()))

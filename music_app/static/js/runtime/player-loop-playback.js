@@ -356,8 +356,10 @@ async function playTrackFromPayload(track, options = {}) {
   const shouldAutoplay = options.autoplay !== false;
   const requestedTrackPath = String(track?.path || '');
   const currentTrackPath = String(state.player.current?.path || '');
-  if (shouldAutoplay && requestedTrackPath && currentTrackPath
-      && requestedTrackPath !== currentTrackPath
+  // Replaced by this press: the current song, and one pressed before it that has yet to sound.
+  const replacesSong = [currentTrackPath, String(state.player.selectedTrack?.path || '')]
+    .some((replaced) => replaced && replaced !== requestedTrackPath);
+  if (shouldAutoplay && requestedTrackPath && replacesSong
       && typeof cancelStreamingWaveformGeneration === 'function') {
     cancelStreamingWaveformGeneration(
       Number(getPlayerPlaybackSnapshot().generation ?? state.player.streaming?.generation) || 0,

@@ -768,6 +768,10 @@ class _PlaybackPcmConnection:
         if resolved_path is None:
             await self.reject(CLOSE_MEDIA_NOT_FOUND)
             return False
+        if control.get("authorityOnly") is True:
+            # A press on an already decoded track: refreshed and resolved as an open, nothing read.
+            await self._send_json({"type": "probe-result", "requestId": request_id})
+            return True
         size_bytes = 0
         try:
             sample_rate = await run_playback_io(read_native_sample_rate, resolved_path)

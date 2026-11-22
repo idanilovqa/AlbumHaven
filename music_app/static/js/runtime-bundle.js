@@ -10747,6 +10747,12 @@ function rememberStreamingTrackFormat(path, sampleRate, format) {
 
 function settleStreamingSampleRateProbe(requestId, sampleRate, format = null) {
   const engine = streamingEngineState();
+  if (engine.authorityCheck?.requestId === requestId) {
+    const { prepared } = engine.authorityCheck;
+    engine.authorityCheck = null;
+    cutOverToAuthorizedStreamingTrack(prepared);
+    return;
+  }
   const probe = engine.sampleRateProbes?.get(requestId);
   if (!probe) return;
   engine.sampleRateProbes.delete(requestId);
@@ -11276,6 +11282,58 @@ function probeStreamingTrackWaveform(track) {
   }
 }
 
+// The pressed track already decoded to follow the playing one. A kept track opens as ever.
+function preparedStreamingSuccessor(track, startSeconds) {
+  const engine = streamingEngineState();
+  const prepared = engine.roles.continuity;
+  return !engine.pendingSeek
+    && !(startSeconds > 0)
+    && prepared?.continuityOptions?.kind === 'queued-next'
+    && prepared.metadataAccepted
+    && !prepared.local
+    && prepared.startFrame === 0
+    && prepared.track?.path === track.path
+    && prepared.quality === chooseStreamingQuality(track)
+    ? prepared
+    : null;
+}
+
+// A press refreshes the listener's authority, as the open it saves would have. Until the server
+// answers, the track stays the queued successor, which nothing cuts over to, behind a reservation
+// that also keeps it from following the old song's end. A refusal closes the socket, as an open's.
+function requestPreparedStreamingAuthority(prepared) {
+  const engine = streamingEngineState();
+  engine.nextSampleRateProbeId = (Number(engine.nextSampleRateProbeId) || 0) + 1;
+  const requestId = engine.nextSampleRateProbeId;
+  engine.authorityCheck = { requestId, prepared };
+  return sendStreamingControl({
+    type: 'probe', requestId, path: String(prepared.track.path), authorityOnly: true,
+  });
+}
+
+function cutOverToAuthorizedStreamingTrack(prepared) {
+  const engine = streamingEngineState();
+  const pending = engine.pendingSeek;
+  // A later press, a pause or a seek took the switch over.
+  if (pending?.kind !== 'replacement' || pending.streamId !== prepared.streamId) return;
+  if (engine.roles.continuity !== prepared) {
+    engine.pendingSeek = null;
+    // Already playing: the old song reached its end before the press reached the worklet.
+    if (engine.roles.current === prepared) pending.resolve?.(prepared);
+    // Its stream went while the server answered.
+    else void startStreamingTrack(prepared.track).then(pending.resolve, pending.reject);
+    return;
+  }
+  prepared.continuityOptions = { kind: 'seek', startSeconds: 0, endSeconds: 0 };
+  prepared.continuityIdentity = streamingContinuityIdentity(prepared.track, prepared.continuityOptions);
+  const prepareSeconds = prepared.encoded
+    ? STREAMING_ENCODED_REPLACEMENT_PREPARE_SECONDS
+    : STREAMING_REPLACEMENT_PREPARE_SECONDS;
+  prepared.targetBufferFrames = Math.min(prepared.targetBufferFrames, streamingFrames(prepareSeconds));
+  maybeGrantDeferredReplacementCredit();
+  maybePrepareStreamingSeek(prepared);
+}
+
 // A start until its song's role opens: a socket lost meanwhile leaves the start to open it there.
 function startBrowserStreamingTrack(track, options = {}) {
   const engine = streamingEngineState();
@@ -11367,7 +11425,12 @@ async function openBrowserStreamingTrack(track, {
     if (!canPrepareReplacement()
         || !streamingOutgoingAudioPlays(engine, engine.roles.current)) break preparedReplacement;
     cancelStreamingWaveformGeneration(engine.generation);
-    if (engine.roles.continuity
+    const prepared = preparedStreamingSuccessor(track, startSeconds);
+    if (prepared) {
+      if (!requestPreparedStreamingAuthority(prepared)) return null;
+      // Until then it follows nothing: not the old song's end, not as an album's next track.
+      engine.node.port.postMessage({ type: 'expect-continuity', generation: engine.generation, active: false });
+    } else if (engine.roles.continuity
         && !closeStreamingContinuityRole('replacement-target')) return null;
     settlePendingStreamingCutover(new Error('Prepared track replacement was superseded'));
     engine.pendingSeek = null;
@@ -11378,15 +11441,17 @@ async function openBrowserStreamingTrack(track, {
     engine.loopContinuity = null;
     engine.waveformReadyIdentity = null;
     const startFrame = streamingFrames(Math.max(0, startSeconds));
-    const replacement = openStreamingRole('continuity', track, startFrame, {
+    const replacement = prepared || openStreamingRole('continuity', track, startFrame, {
       kind: 'seek', startSeconds: Math.max(0, startSeconds), endSeconds: Math.max(0, startSeconds),
     });
     if (!replacement) return null;
     probeStreamingTrackWaveform(track);
-    replacement.targetBufferFrames = Math.min(
-      streamingRoleCapacityFrames(replacement),
-      streamingFrames(STREAMING_REPLACEMENT_PREPARE_SECONDS),
-    );
+    if (!prepared) {
+      replacement.targetBufferFrames = Math.min(
+        streamingRoleCapacityFrames(replacement),
+        streamingFrames(STREAMING_REPLACEMENT_PREPARE_SECONDS),
+      );
+    }
     const completion = new Promise((resolve, reject) => {
       engine.pendingSeek = {
         generation: engine.generation,

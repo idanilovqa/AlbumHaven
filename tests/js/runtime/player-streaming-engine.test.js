@@ -8382,17 +8382,172 @@ test('a press with nothing of the playing song left starts the new song as a fre
   assert.equal(pressed.open.role, 'current', 'with no audio to keep, nothing waits for a cross-over');
 });
 
-for (const waiting of ['open', 'retargeted open', 'cut-over']) {
+function answerAuthority(harness, probe) {
+  harness.sockets.at(-1).receive({ type: 'probe-result', requestId: probe.requestId });
+}
+
+async function pressPreparedNext(t) {
+  const playing = await playingWithPreparedNext(t, { holdSampleRateProbes: true });
+  const { harness } = playing;
+  const opens = harness.sent('open').length;
+  const pressed = await pressTrack(harness, '02.flac');
+  return { ...playing, pressed, opens, probe: harness.sockets[0].probes.at(-1) };
+}
+
+test('a press on the prepared next track cuts over to its decoded frames once the press refresh answers', async (t) => {
+  const { harness, node, next, pressed, opens, probe } = await pressPreparedNext(t);
+
+  assert.equal(harness.sent('open').length, opens, 'the decoded track is not opened again');
+  assert.equal(harness.sent('close').some(({ streamId }) => streamId === next.streamId), false);
+  assert.deepEqual(
+    { path: probe?.path, authorityOnly: probe?.authorityOnly },
+    { path: makeTrack('02.flac').path, authorityOnly: true },
+  );
+  // 600 ms of a slow refresh is 225 render quanta.
+  assert.deepEqual(heardFor(node, 225), [OLD_SONG], 'nothing of the new song sounds before the refresh');
+
+  answerAuthority(harness, probe);
+  await harness.settle();
+
+  assert.equal(heard(node), NEXT_SONG, 'the first quantum after the answer is the new song');
+  node.deliverEvents();
+  await pressed.done;
+  assert.equal(pressed.role.streamId, next.streamId);
+  assert.ok(harness.sent('promote').some(({ streamId }) => streamId === next.streamId));
+  assert.equal(harness.api.snapshot().src, makeTrack('02.flac').src);
+  assert.equal(harness.api.snapshot().paused, false);
+  assert.equal(harness.portMessages('configure').length, 1);
+});
+
+test('a pressed next track still filling cuts over when refreshed and filled, not before', async (t) => {
+  const { harness, node } = await playingSong(t, { holdSampleRateProbes: true });
+  await harness.api.continuity(makeTrack('02.flac'), { kind: 'queued-next', startSeconds: 0 });
+  const next = harness.sent('open').at(-1);
+  acceptMetadata(harness, next);
+  receiveSong(harness, next, NEXT_SONG, 4_800, 0, 1);
+  await pressTrack(harness, '02.flac');
+  answerAuthority(harness, harness.sockets[0].probes.at(-1));
+  await harness.settle();
+  assert.deepEqual(heardFor(node, 4), [OLD_SONG]);
+
+  receiveSong(harness, next, NEXT_SONG, 43_200, 1, 1);
+  receiveSong(harness, next, NEXT_SONG, ONE_SECOND, 2, 1);
+  await harness.settle();
+
+  assert.deepEqual(heardFor(node, 4), [NEXT_SONG]);
+});
+
+test('the prepared next track never follows the old song to its end before the press refresh answers', async (t) => {
+  const { harness, node, open, probe } = await pressPreparedNext(t);
+  harness.sockets[0].receive({
+    type: 'eos', generation: open.generation, streamId: open.streamId, role: 'current',
+    emittedFrames: 2 * ONE_SECOND, authoritativeTotalFrames: 2 * ONE_SECOND,
+  });
+  await harness.settle();
+
+  const levels = heardFor(node, 800);
+
+  assert.equal(levels.includes(NEXT_SONG), false);
+  answerAuthority(harness, probe);
+  await harness.settle();
+  assert.deepEqual(heardFor(node, 4), [NEXT_SONG]);
+});
+
+for (const code of [4401, 4403, 1006]) {
+  test(`the prepared next track never sounds when the press refresh ends in ${code}`, async (t) => {
+    const { harness, node } = await pressPreparedNext(t);
+
+    harness.sockets[0].unexpectedClose({ code });
+    await harness.settle();
+
+    assert.equal(heardFor(node, 800).includes(NEXT_SONG), false);
+    if (code === 1006) {
+      assert.equal(harness.sent('open').at(-1).path, makeTrack('02.flac').path,
+        'on the next socket the press is an ordinary open, with its own refresh');
+    }
+  });
+}
+
+test('a press elsewhere while the refresh waits leaves the prepared track silent, late answer or not', async (t) => {
+  const { harness, node, probe } = await pressPreparedNext(t);
+  const last = await pressTrack(harness, '06.flac');
+
+  answerAuthority(harness, probe);
+  await harness.settle();
+
+  assert.deepEqual(heardFor(node, 20), [OLD_SONG]);
+  await answerOpen(harness, last.open, PRESSED_SONG);
+  assert.deepEqual(heardFor(node, 4), [PRESSED_SONG]);
+});
+
+test('a prepared track dropped while the refresh waits opens again instead of hanging the press', async (t) => {
+  const { harness, node, probe } = await pressPreparedNext(t);
+  harness.context.closeStreamingContinuityRole('decoder-fallback');
+
+  answerAuthority(harness, probe);
+  await harness.settle();
+
+  const reopened = harness.sent('open').at(-1);
+  assert.equal(reopened.path, makeTrack('02.flac').path);
+  assert.equal(reopened.role, 'continuity');
+  assert.deepEqual(heardFor(node, 4), [OLD_SONG]);
+});
+
+test('a press into the prepared track at another place opens it there', async (t) => {
+  const { harness } = await playingWithPreparedNext(t);
+
+  void harness.api.start(makeTrack('02.flac'), { startSeconds: 30 }).catch(() => {});
+  await harness.settle();
+
+  assert.equal(harness.sent('open').at(-1).startFrame, 30 * ONE_SECOND);
+});
+
+test('a prepared compressed track needs its usual one second of head, after the refresh', async (t) => {
+  const harness = encodedHarness({ holdSampleRateProbes: true });
+  t.after(() => harness.api.stop());
+  await harness.api.start(makeTrack('01.flac'));
+  const current = harness.sent('open')[0];
+  acceptMetadata(harness, current);
+  receivePcmAndAssertEnqueue(harness, {
+    generation: current.generation, streamId: current.streamId, samples: new Array(ONE_SECOND * 2).fill(OLD_SONG),
+  });
+  harness.nodes[0].port.dispatch({
+    type: 'first-frame', generation: current.generation, streamId: current.streamId, renderedFrame: 0,
+  });
+  await harness.api.continuity(makeTrack('02.mp3'), { kind: 'queued-next', startSeconds: 0 });
+  const next = harness.sent('open').at(-1);
+  acceptMetadata(harness, next, { codec: 'mp3', skipFrames: 0, totalFrames: 2_000_000 });
+  await harness.settle();
+  // 42 packets of 1152 frames are just over a second.
+  for (let sequence = 0; sequence < 42; sequence += 1) {
+    harness.sockets[0].receive(encodedFrame(next, sequence, new Uint8Array(100)));
+    await harness.settle();
+  }
+  void harness.api.start(makeTrack('02.mp3')).catch(() => {});
+  await harness.settle();
+  assert.equal(harness.portMessages('prepare-seek').length, 0);
+
+  answerAuthority(harness, harness.sockets[0].probes.at(-1));
+  await harness.settle();
+
+  assert.equal(harness.portMessages('prepare-seek').at(-1)?.streamId, next.streamId);
+});
+
+for (const waiting of ['open', 'retargeted open', 'refresh', 'cut-over']) {
   test(`a handover pause goes silent at once while a switch waits on its ${waiting}`, async (t) => {
-    const { harness, node } = await playingSong(t);
-    let pending = await pressTrack(harness, '05.flac');
+    const { harness, node, probe } = waiting === 'refresh'
+      ? await pressPreparedNext(t)
+      : await playingSong(t);
+    let pending = null;
+    if (waiting !== 'refresh') pending = await pressTrack(harness, '05.flac');
     if (waiting === 'retargeted open') pending = await pressTrack(harness, '06.flac');
     if (waiting === 'cut-over') await answerOpen(harness, pending.open, PRESSED_SONG);
 
     await harness.api.pause();
     assert.deepEqual(heardFor(node, 20), [0], 'the handover silences the old song on purpose');
 
-    if (waiting !== 'cut-over') await answerOpen(harness, pending.open, PRESSED_SONG);
+    if (waiting === 'refresh') answerAuthority(harness, probe);
+    else if (waiting !== 'cut-over') await answerOpen(harness, pending.open, PRESSED_SONG);
     await harness.settle();
     assert.deepEqual(heardFor(node, 20), [0], 'a late answer never sounds the pressed song');
     assert.equal(harness.api.snapshot().paused, true);

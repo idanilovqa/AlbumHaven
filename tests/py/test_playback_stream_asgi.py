@@ -271,10 +271,12 @@ def test_pcm_socket_uses_managed_account_playback_permission(
         ("missing-capability", 4403),
     ],
 )
+@pytest.mark.parametrize("control", ["open", "refresh-only probe"])
 def test_pcm_socket_revalidates_durable_authority_before_each_open(
     playback_app,
     media_path,
     decoder_factory,
+    control,
     revoked_actor,
     expected_close_code,
 ):
@@ -312,7 +314,11 @@ def test_pcm_socket_revalidates_durable_authority_before_each_open(
         async with websocket_session(playback_app, "/playback/pcm") as socket:
             assert socket.accepted is True
             resolver.revoked = True
-            await socket.send_json(open_command(media_path))
+            await socket.send_json(
+                open_command(media_path)
+                if control == "open"
+                else {"type": "probe", "requestId": 1, "path": str(media_path), "authorityOnly": True}
+            )
             assert await socket.receive_close() == expected_close_code
 
     asyncio.run(scenario())
@@ -2023,6 +2029,58 @@ def test_pcm_socket_feeds_the_playing_song_while_another_open_is_pending(
                 generation=1, stream_id=1, role="current", sequence=0, frame_count=1,
             )
             release[0].set()
+
+    asyncio.run(scenario())
+
+
+def test_pcm_socket_refreshes_authority_for_a_prepared_track_without_reading_its_rate(
+    playback_app,
+    media_path,
+    monkeypatch,
+):
+    rate_reads = []
+    monkeypatch.setattr(
+        playback_stream_asgi,
+        "read_native_sample_rate",
+        lambda path: rate_reads.append(path) or 44_100,
+    )
+    refreshes = []
+    authorize = playback_stream_asgi._PlaybackPcmConnection._authorize_media_read
+
+    async def counted_authorize(connection):
+        refreshes.append(1)
+        return await authorize(connection)
+
+    monkeypatch.setattr(
+        playback_stream_asgi._PlaybackPcmConnection, "_authorize_media_read", counted_authorize
+    )
+
+    async def scenario() -> None:
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            await socket.send_json(
+                {"type": "probe", "requestId": 9, "path": str(media_path), "authorityOnly": True}
+            )
+            assert await socket.receive_json() == {"type": "probe-result", "requestId": 9}
+
+    asyncio.run(scenario())
+    assert refreshes == [1]
+    # A press on a decoded track must not wait for an ffmpeg rate read.
+    assert rate_reads == []
+
+
+def test_pcm_socket_refresh_only_probe_still_refuses_media_outside_the_library(
+    playback_app,
+    tmp_path,
+):
+    outside = tmp_path / "outside.wav"
+    outside.write_bytes(b"decoder-boundary-fixture")
+
+    async def scenario() -> None:
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            await socket.send_json(
+                {"type": "probe", "requestId": 9, "path": str(outside), "authorityOnly": True}
+            )
+            assert await socket.receive_close() == 4404
 
     asyncio.run(scenario())
 

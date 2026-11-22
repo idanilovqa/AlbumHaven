@@ -170,6 +170,28 @@ test('a switch keeps the old waveform, never blank, until the pressed song sound
   assert.ok(shows.at(-1).data === newPeaks, 'the new one once it sounds');
 });
 
+test('in the Android app, where only the engine snapshot says starting, the old waveform stays until sound', async () => {
+  const { context, next, oldPeaks, newPeaks, shows, snapshot } = waveformSwitch();
+  // The native engine never moves the web engine's mode.
+  context.state.player.streaming.mode = 'stopped';
+  snapshot.mode = 'playing';
+  await context.updateWaveformAppearance();
+  shows.length = 0;
+
+  context.state.player.selectedTrack = next;
+  await context.updateWaveformAppearance();
+  context.state.player.waveform.compactPeaks = { path: next.path, generation: 2, data: newPeaks };
+  Object.assign(snapshot, { src: 'new', currentTime: 0, duration: 180, generation: 2, mode: 'starting' });
+  context.setCurrentPlayerTrack(next, { persist: false });
+  context.state.player.selectedTrack = null;
+  await context.updateWaveformAppearance();
+  assert.ok(shows.at(-1).data === oldPeaks, 'the old song\u2019s, until it sounds');
+
+  snapshot.mode = 'playing';
+  await context.updateWaveformAppearance();
+  assert.ok(shows.at(-1).data === newPeaks, 'the new one once it sounds');
+});
+
 test('with nothing to play the kept waveform goes', async () => {
   const { context, shows } = waveformSwitch();
   await context.updateWaveformAppearance();

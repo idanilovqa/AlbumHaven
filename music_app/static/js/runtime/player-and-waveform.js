@@ -231,8 +231,9 @@ function setPlayerSeekbarPresentation(isWaveform) {
 
 function keepsHeldWaveform(held, path, waveform, playback) {
   const { selectedTrack, current, streaming } = state.player;
-  // Started, but no frame of it has sounded.
-  if (held.path !== path) return streaming?.mode === 'starting';
+  // Started, but no frame of it has sounded. The snapshot is the playing engine's: in the Android app
+  // the web engine's mode never moves.
+  if (held.path !== path) return (playback.mode ?? streaming?.mode) === 'starting';
   if (!selectedTrack || selectedTrack.path === path) return false;
   // Pressed: the old song plays on with its own progress until its peaks or its clock are replaced.
   return !waveform || Boolean(playback.src && current?.src && playback.src !== current.src);

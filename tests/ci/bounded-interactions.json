@@ -656,7 +656,7 @@
         "requests": 0,
         "listeners": 0,
         "domQueries": 220,
-        "domMutations": 1700,
+        "domMutations": 1690,
         "renderCommits": 30,
         "markupBytes": 2040
       },
@@ -777,7 +777,7 @@
         "requests": 0,
         "listeners": 0,
         "domQueries": 220,
-        "domMutations": 1350,
+        "domMutations": 1340,
         "renderCommits": 10,
         "markupBytes": 0
       },

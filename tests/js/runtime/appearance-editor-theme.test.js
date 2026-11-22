@@ -524,7 +524,7 @@ test('bounded interaction: Main elements color input stays bounded after 500 edi
     id: 'js:appearance-backgrounds.js#mount',
     small: 1,
     large: 500,
-    budgets: { requests: 0, listeners: 0, domQueries: 220, domMutations: 1700, renderCommits: 30, markupBytes: 2040 },
+    budgets: { requests: 0, listeners: 0, domQueries: 220, domMutations: 1690, renderCommits: 30, markupBytes: 2040 },
     growth: { metric: 'domQueries', largeMinusSmallMax: 0 },
     async run(mounts) {
       const { work, state, lastColor } = await measureEditorColorInput('mount', mounts, { 'data-player-hex': 'fill' });
@@ -542,7 +542,7 @@ test('bounded interaction: Selection & Hover accent input stays bounded after 50
     id: 'js:appearance-backgrounds.js#mountSelectionAccent',
     small: 1,
     large: 500,
-    budgets: { requests: 0, listeners: 0, domQueries: 220, domMutations: 1350, renderCommits: 10, markupBytes: 0 },
+    budgets: { requests: 0, listeners: 0, domQueries: 220, domMutations: 1340, renderCommits: 10, markupBytes: 0 },
     growth: { metric: 'domQueries', largeMinusSmallMax: 0 },
     async run(mounts) {
       const { work, state, lastColor } = await measureEditorColorInput('mountSelectionAccent', mounts, { 'data-aggregate-accent-custom': '' });

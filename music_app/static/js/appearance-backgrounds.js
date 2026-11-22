@@ -359,8 +359,6 @@
     editor.style.setProperty('--appearance-main-surface', effective.main);
     editor.style.setProperty('--appearance-panel-background', effective.panel);
     for (const [token, color] of Object.entries(effective.tokens)) editor.style.setProperty('--appearance-' + token, color);
-    editor.style.setProperty('--appearance-primary-button', effective.tokens['primary-button']);
-    editor.style.setProperty('--appearance-primary-button-ink', effective.tokens['primary-button-ink']);
     const interactions = value.interaction_overrides || {};
     editor.style.setProperty('--appearance-selected-accent', interactions.panel_outline || '#55C7FF');
     editor.style.setProperty('--selection-body-background', interactions.item_selected

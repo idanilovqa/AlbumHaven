@@ -109,6 +109,7 @@ const expectedRuntimeOrder = [
   'preview-move-attention.js',
   'pending-tag-edits.js',
   'save-fold-decisions.js',
+  'optimistic-artist-tree.js',
   'tag-editor-and-optimistic-updates.js',
   'player-state-persistence-helpers.js',
   'player-listen-session-helpers.js',

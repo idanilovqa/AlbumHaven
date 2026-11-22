@@ -867,6 +867,9 @@ async function confirmManualTagEdit() {
       tagEdits: updates,
     },
   );
+  if (typeof applyTagEditToArtistTree === 'function') {
+    applyTagEditToArtistTree(album, optimisticUpdatedAlbums);
+  }
   // Before the first render, so no frame shows both cards of a fold that is already decided.
   const saveFolds = typeof saveFoldDecisions !== 'undefined'
     ? saveFoldDecisions.start({

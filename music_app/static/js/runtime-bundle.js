@@ -8664,6 +8664,10 @@ const STREAMING_ENCODED_CREDIT_WINDOW_BYTES = 4 * STREAMING_ENCODED_CREDIT_BYTES
 // start runs again at it.
 const STREAMING_GUESSED_SAMPLE_RATE = 44_100;
 const STREAMING_SAMPLE_RATE_STORAGE_KEY = 'albumhaven.playbackSampleRate.v1';
+// The most encoded bytes one decode call takes. A local seek or a kept track queues the rest of the
+// song as one chunk; decoded whole, it held the page for seconds before the playhead could move
+// (owner, 2026-11-21: "a bug delay before player displays that playhead is in a new place").
+const STREAMING_ENCODED_DECODE_SLICE_BYTES = 16 * 1024;
 // The bytes of a stream kept for seeks inside it; a longer stream seeks through the server.
 const STREAMING_KEPT_INITIAL_BYTES = 256 * 1024;
 const STREAMING_KEPT_MAX_BYTES = 64 * 1024 * 1024;
@@ -10396,6 +10400,14 @@ function streamingRoleIsLive(roleState) {
     && streamingRoleForId(roleState.streamId) === roleState;
 }
 
+// The next bytes to decode, at most one slice, so the decoder only runs as far as the credit asks.
+function takeStreamingEncodedSlice(queue) {
+  const head = queue[0];
+  if (head.length <= STREAMING_ENCODED_DECODE_SLICE_BYTES) return queue.shift();
+  queue[0] = head.subarray(STREAMING_ENCODED_DECODE_SLICE_BYTES);
+  return head.subarray(0, STREAMING_ENCODED_DECODE_SLICE_BYTES);
+}
+
 async function pumpStreamingEncodedRole(roleState) {
   const encoded = roleState.encoded;
   if (!encoded?.ready || encoded.pumping || !streamingRoleIsLive(roleState)) return;
@@ -10409,7 +10421,7 @@ async function pumpStreamingEncodedRole(roleState) {
         acceptStreamingPcm(roleState, frameCount, takeStreamingDecodedPcm(encoded, frameCount));
       } else if ((encoded.localCreditFrames > 0 || !encoded.remainingFrames)
           && encoded.queue.length) {
-        const bytes = encoded.queue.shift();
+        const bytes = takeStreamingEncodedSlice(encoded.queue);
         encoded.queuedBytes -= bytes.length;
         appendStreamingDecodedAudio(encoded, await encoded.decoder.decode(bytes));
       } else if (encoded.eos && !encoded.flushed && !encoded.queue.length) {

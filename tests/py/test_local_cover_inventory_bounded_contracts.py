@@ -350,6 +350,62 @@ def _drain(monkeypatch, library, worker) -> None:
     worker._run()
 
 
+@pytest.mark.parametrize("root_ids", [("main", "extra"), (7, 8)], ids=["text ids", "numeric ids"])
+@pytest.mark.parametrize("unreadable", ["away", "incomplete"])
+def test_a_full_rescan_hands_the_inventory_exactly_the_roots_it_read(tmp_path, monkeypatch, root_ids, unreadable):
+    """The scan names its roots as text, whatever type the settings stored: an id compared by type
+    would keep a readable root's stale folders, or rebuild an unreadable one's."""
+    roots = [
+        {"id": root_id, "path": str(tmp_path / name), "layout_mode": "artist", "category": "main_library_roots"}
+        for root_id, name in zip(root_ids, ("main", "extra"))
+    ]
+    rescanned = []
+
+    class Adapter:
+        def load_snapshot(self, _cache_path, _identity):
+            return {}, 0.0, {}, 0.0, None
+
+        def load_cover_inventory_checked_at(self):
+            return {}
+
+    monkeypatch.setattr(scan_state, "_scan_cache_adapter", lambda _config: Adapter())
+    monkeypatch.setattr(scan_state, "load_separate_release_keys", lambda _config: set())
+    monkeypatch.setattr(scan_state, "pin_library_scan_roots", lambda _config: (list(roots), "roots"))
+    monkeypatch.setattr(scan_state, "resolve_media_host_history_scope", lambda _config: None)
+    monkeypatch.setattr(scan_state, "log_app_event", lambda *_args, **_kwargs: None)
+    state = {
+        "file_cache": {}, "albums": [], "last_scan": time.time() - 3600,
+        "relation_views": {"artists": ["Artist"]}, "scan_generation": 0, "rescan_ignore_existing_cache": True,
+    }
+
+    def scan(*, publication_state, **_options):
+        walked = roots[:1] if unreadable == "away" else roots
+        publication_state["observed_library_root_ids"] = {str(root["id"]).strip() for root in walked}
+        if unreadable == "incomplete":
+            publication_state["scan_incomplete_root_ids"] = {str(roots[1]["id"]).strip()}
+        return {}, time.time()
+
+    scan_state.refresh_library_state(
+        state,
+        config={
+            "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://inventory.invalid/contract", "IMAGE_EXTENSIONS": {".jpg"},
+            "CACHE_PATH": tmp_path / "cache", "CACHE_MAX_AGE_SECONDS": 0,
+            "_library_root_paths_snapshot": tuple(Path(root["path"]) for root in roots),
+            "_LOCAL_COVER_INVENTORY": SimpleNamespace(rescan=rescanned.append),
+        },
+        logger=SimpleNamespace(exception=lambda *_args: None, warning=lambda *_args: None),
+        force=True,
+        cache_lock=threading.Lock(),
+        scan_music_incremental=scan,
+        refresh_relation_views=lambda **_options: None,
+        start_manual_cover_refresh=lambda **_options: {},
+        start_background_cover_refresh=lambda: None,
+    )
+
+    assert state["scan_outcome"] == "completed"
+    assert rescanned == [[roots[0]["path"]]], "exactly the readable root's folders are rebuilt"
+
+
 @pytest.mark.parametrize("unreadable", ["away", "incomplete"])
 @pytest.mark.parametrize("first_attempt_fails", [False, True])
 def test_a_full_rescan_keeps_an_unreadable_roots_stored_folders_and_survives_a_failure(

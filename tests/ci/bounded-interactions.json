@@ -5101,7 +5101,23 @@
         "BI-03"
       ],
       "workClass": "constant",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 1,
+        "production": 200
+      },
+      "budgets": {
+        "timers": 1,
+        "renderCommits": 1
+      },
+      "growth": {
+        "metric": "renderCommits",
+        "largeMinusSmallMax": 0
+      },
+      "command": "node --test --test-concurrency=1 tests/js/runtime/pending-tag-edits.test.js",
+      "testIdentity": "bounded interaction: a retry pass keeps one retry timer and refreshes the view once however many saves it settles",
+      "performanceTargets": [],
+      "rollback": "Test-only contract; a retry pass already asks about each waiting save (the user's own queue), keeps at most one retry timer and refreshes the view once."
     },
     {
       "id": "js:runtime/pending-tag-edits.js#settle",

@@ -115,3 +115,48 @@ test('a page load resumes saves that were waiting and keeps failed ones for the 
   api.discard('0b1f6a52-3c4d-4e5f-9a0b-1c2d3e4f5a6b');
   assert.deepEqual(api.list().map((entry) => entry.id), [SAVE_ID]);
 });
+
+test('bounded interaction: a retry pass keeps one retry timer and refreshes the view once however many saves it settles', async () => {
+  const { createInteractionCounter, measureScalePair } = require('../helpers/bounded-interaction-counter');
+  const retryPass = async (pendingSaves) => {
+    const counter = createInteractionCounter();
+    const live = new Set();
+    let nextTimer = 0;
+    const context = {
+      console, JSON, Promise, Date,
+      CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init.detail; } },
+      window: { dispatchEvent() {} },
+      getLocalStorageItem: (_key, fallback) => fallback,
+      setLocalStorageItem() {},
+      setTimeout: (fn) => { nextTimer += 1; live.add(nextTimer); live[nextTimer] = fn; return nextTimer; },
+      clearTimeout: (id) => { live.delete(id); },
+      showToast() {},
+      refreshCurrentViewAfterBackgroundCompletion: async () => { counter.count('renderCommits'); },
+      // Every waiting save is confirmed by the server: each is settled in this one pass.
+      fetch: async () => { counter.count('requests'); return { ok: true, status: 200, json: async () => ({ ok: true, found: true, status: 'completed' }) }; },
+    };
+    vm.createContext(context);
+    vm.runInContext(moduleSource, context, { filename: modulePath });
+    const api = context.window.AlbumHavenPendingTagEdits;
+    for (let index = 0; index < pendingSaves; index += 1) {
+      api.add({ id: `save-${index}`, payload: { confirmed: true }, album: { name: `Album ${index}` }, trackCount: 1 });
+    }
+    assert.equal(live.size, 1, 'adding saves re-arms the one retry timer');
+    const [armed] = live;
+    const measured = await counter.measure(async () => {
+      live.delete(armed);
+      await live[armed]();
+      counter.count('timers', live.size);
+    });
+    assert.deepEqual(api.list(), [], 'every confirmed save left the queue');
+    return measured;
+  };
+  await measureScalePair({
+    id: 'js:runtime/pending-tag-edits.js#schedule',
+    small: 1,
+    large: 200,
+    run: retryPass,
+    budgets: { timers: 1, renderCommits: 1 },
+    growth: { metric: 'renderCommits', largeMinusSmallMax: 0 },
+  });
+});

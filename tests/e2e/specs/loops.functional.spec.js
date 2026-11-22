@@ -1311,8 +1311,64 @@ test('FTC-PLAYER-017 paused reload restores the current waveform', { tag: '@area
   expect(waveform.rightBins).toBe(720);
 });
 
+// Diagnostic ref only, never for a pull request: what the playing song's waveform and first audio
+// frame did, once per animation frame, as times and booleans. It reads page state and changes none.
+function recordFirstSongTimeline(page) {
+  // parity-check: allow-read-only-measurement-evaluate -- waveform and first-frame times, no mutation
+  return page.evaluate(() => new Promise((resolve) => {
+    const startedAtMs = performance.now();
+    const changes = [];
+    let previous = '';
+    let peaksSinceMs = null;
+    let bothSinceMs = null;
+    const sample = () => {
+      const now = performance.now();
+      const player = typeof state === 'undefined' ? null : state.player;
+      const engine = player?.streaming;
+      const peaks = player?.waveform?.compactPeaks;
+      const firstFrameAtMs = Number(engine?.diagnostics?.firstFrameAtMs) || 0;
+      const seen = {
+        generation: Number(engine?.generation) || 0,
+        pressed: Boolean(player?.selectedTrack),
+        current: Boolean(player?.current),
+        peaks: Boolean(peaks?.data),
+        partial: Boolean(peaks?.data && peaks.partial),
+        firstFrameMs: firstFrameAtMs ? Math.round(firstFrameAtMs - startedAtMs) : null,
+        timeMoves: Number(engine?.snapshot?.currentTime) >= 0.02,
+      };
+      const key = JSON.stringify(seen);
+      if (key !== previous && changes.length < 100) changes.push({ atMs: Math.round(now - startedAtMs), ...seen });
+      previous = key;
+      if (seen.peaks && peaksSinceMs === null) peaksSinceMs = now;
+      if (seen.peaks && firstFrameAtMs && bothSinceMs === null) bothSinceMs = now;
+      const observed = now - startedAtMs >= 50000
+        || (peaksSinceMs !== null && now - peaksSinceMs >= 15000)
+        || (bothSinceMs !== null && now - bothSinceMs >= 5000);
+      if (observed) resolve({ startedAtMs, changes, observedMs: Math.round(now - startedAtMs) });
+      else requestAnimationFrame(sample);
+    };
+    sample();
+  })).then((timeline) => timeline, (error) => ({ recorderError: String(error?.name || 'Error') }));
+}
+
 test.describe('a browser that has just signed in', () => {
   test.use({ authenticateFreshBrowserSession: false });
+
+  let timelineRecording = null;
+  let checkpointTimes = null;
+  // Runs whether the case passed or failed, before its page closes.
+  test.afterEach(async () => {
+    if (!timelineRecording) return;
+    const { startedAtMs, ...timeline } = await timelineRecording;
+    const sinceStart = (value) => (value && startedAtMs !== undefined ? Math.round(value - startedAtMs) : null);
+    console.log(`PLAYER-025-TIMING ${JSON.stringify({
+      ...timeline,
+      checkpoint: checkpointTimes && {
+        atMs: sinceStart(checkpointTimes.renderedAtMs),
+        firstFrameMs: sinceStart(checkpointTimes.firstFrameAtMs),
+      },
+    })}`);
+  });
 
   test('FTC-PLAYER-025 the first song played right after sign-in draws its own waveform about a second after it starts', { tag: '@area:loops' }, async ({
     freshBrowserSession,
@@ -1337,6 +1393,7 @@ test.describe('a browser that has just signed in', () => {
     await settingsActions.closeSettings();
     await galleryActions.selectAlbumDetailsByIdentity(LOOP_ALBUM_TARGET);
 
+    timelineRecording = recordFirstSongTimeline(signedInPage);
     const selectedTrack = await trackModalActions.playTrackByTitle(LOOP_TRACK_TITLE);
     await globalPlayerActions.waitForCurrentTrack({
       path: selectedTrack.path,
@@ -1348,6 +1405,7 @@ test.describe('a browser that has just signed in', () => {
       path: selectedTrack.path,
       timeout: 30000,
     });
+    checkpointTimes = { renderedAtMs: waveform.renderedAtMs, firstFrameAtMs: waveform.firstFrameAtMs };
 
     // The canvas shows this song's own peaks, not an empty or earlier waveform.
     expect(waveform.path).toBe(selectedTrack.path);

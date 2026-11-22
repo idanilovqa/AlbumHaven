@@ -64,7 +64,7 @@ module.exports = defineConfig({
     baseURL: `http://127.0.0.1:${port}`,
     headless: isHeadless,
     viewport: { width: 1440, height: 960 },
-    trace: 'retain-on-failure',
+    trace: 'off', // diagnostic ref only: no trace exists to upload
     screenshot: 'off',
   },
   projects: [

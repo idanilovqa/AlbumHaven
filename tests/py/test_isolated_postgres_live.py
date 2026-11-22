@@ -465,6 +465,33 @@ def test_live_gallery_refresh_builds_no_scope_for_a_search_or_browse_read_while_
     )
 
 
+@pytest.mark.parametrize("albums", [5, 60])
+def test_live_loose_track_reads_without_a_store_never_queue_a_build(watcher_repair_inventory, monkeypatch, albums):
+    """Case 64 (freeze guard, red): a Loose Tracks read without a ready store answers "preparing" and never
+    queues the whole-library loose-track build, however often it is asked and at any library size."""
+    from music_app.services import library_browse_postgres as browse
+
+    fixture = watcher_repair_inventory
+    fixture.seed(*[
+        fixture.entry(f"Artist {index:03d}/Album {index:03d}/01.flac", artist=f"Artist {index:03d}", album=f"Album {index:03d}")
+        for index in range(albums)
+    ], fixture.entry("Loose/Single/01.flac", album="", exception="Non-album rarity"))
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute("delete from library.non_album_track_snapshots")
+    queued = []
+    monkeypatch.setattr(browse.PostgresLibraryBrowseRepository, "queue_utility_projection_prewarm",
+                        lambda self, kind: queued.append(kind))
+    repository = browse.PostgresLibraryBrowseRepository(fixture.config, connect=isolatedPostgres._connect)
+
+    answers = [
+        repository.build_library_loose_tracks_payload(query_params={})
+        for _read in range(50)
+    ]
+
+    assert all(answer.get("non_album_tracks_deferred") for answer in answers), "without a store a read answers preparing"
+    assert queued == [], "a read never queues the loose-track build"
+
+
 def test_live_featured_artist_rebuild_preserves_guests_and_suppresses_owner_variants(
     watcher_repair_inventory,
     monkeypatch,

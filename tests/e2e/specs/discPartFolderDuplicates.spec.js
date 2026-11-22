@@ -58,10 +58,13 @@ async function saveComposerCover({ coverLookupActions, page }) {
 }
 
 async function expectAlbumDetailsCover({ coverLookupActions, trackModalActions }, coverPath) {
-  const shown = await coverLookupActions.readDisplayedImageEvidence(
-    trackModalActions.trackModal.detailedCoverImage, 'saved album cover', { expectedCoverPath: coverPath },
-  );
-  expect(shown.coverPath).toBe(coverPath);
+  // Right after a save the details artwork swaps from the optimistic image to the saved file.
+  await expect(async () => {
+    const shown = await coverLookupActions.readDisplayedImageEvidence(
+      trackModalActions.trackModal.detailedCoverImage, 'saved album cover', { expectedCoverPath: coverPath },
+    );
+    expect(shown.coverPath).toBe(coverPath);
+  }).toPass({ timeout: 30000, intervals: [250, 500, 1000] });
 }
 
 async function expectPartAlbumCoversAfterSave(actions, albumDirectory, savedCoverPath) {

@@ -657,7 +657,7 @@ test('copies kept by the earlier cover-path version are deleted, never shown', a
   assert.deepEqual(await caches.keys(), []);
 });
 
-test('in Chrome, requests the copy never answers skip the worker', async () => {
+test('in Chrome, only busy paths the copy never keeps skip the worker, so a later version can keep new paths in open tabs', async () => {
   const added = [];
   const { worker } = setup();
 
@@ -667,8 +667,9 @@ test('in Chrome, requests the copy never answers skip the worker', async () => {
 
   assert.equal(added.length, 1);
   assert.equal(added[0].source, 'network');
-  const own = added[0].condition.not.or.map(rule => rule.urlPattern.pathname);
-  for (const pathname of ['/', '/static/*', '/cover/*', '/login*', '/logout']) assert.ok(own.includes(pathname), pathname);
+  assert.equal(added[0].condition.not, undefined, 'never "everything but what this version keeps"');
+  const network = added[0].condition.or.map(rule => rule.urlPattern.pathname);
+  assert.deepEqual(network, ['/track', '/playback/*', '/health', '/status', '/downloads/*']);
 });
 
 // ---- Browsers: the server first, the copy when it does not answer (IAR-W01, IAR-W05) ----

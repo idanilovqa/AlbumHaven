@@ -45,11 +45,11 @@
   const COPY_MARKER = '<meta name="album-haven-app-copy" content="cache"';
   const SIGN_IN_PAGES = /^\/(?:login|accept-invitation|password-reset|password-recovery)(?:\/|$)/;
   const SIGN_IN_POSTS = new Set(['/login', '/logout']);
-  // Every path the worker answers or watches; Chrome sends all others straight to the network.
-  const OWN_PATHS = [
-    '/', '/static/*', '/cover/*', '/login*', '/logout',
-    '/accept-invitation*', '/password-reset*', '/password-recovery*',
-  ];
+  // Busy paths the copy will never keep (audio, playback, server checks, downloads): Chrome sends
+  // them straight to the network. Never route "everything but what this version keeps" there:
+  // a tab keeps the routes of the version it started under, so a later version could not keep a
+  // new path in tabs already open until they reload.
+  const NETWORK_PATHS = ['/track', '/playback/*', '/health', '/status', '/downloads/*'];
 
   const noStore = response => /(?:^|,)\s*no-store\b/i.test(response.headers.get('Cache-Control') || '');
   const immutable = response => /\bimmutable\b/i.test(response.headers.get('Cache-Control') || '');
@@ -589,12 +589,12 @@
       return { stored: await hasFreshCopy() };
     }
 
-    // Chrome's static routing: requests the copy never answers go to the network without waking
+    // Chrome's static routing: busy requests the copy never keeps go to the network without waking
     // the worker. Browsers without it dispatch them here, where they pass through untouched.
     async function install(event) {
       if (typeof event.addRoutes !== 'function') return;
       await quietly(event.addRoutes({
-        condition: { not: { or: OWN_PATHS.map(pathname => ({ urlPattern: { pathname } })) } },
+        condition: { or: NETWORK_PATHS.map(pathname => ({ urlPattern: { pathname } })) },
         source: 'network',
       }));
     }

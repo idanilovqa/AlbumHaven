@@ -7,6 +7,11 @@
 - The device copy (Android app and browsers) keeps covers by the server's cover reference, is never shown past the end of the signing-in session, cannot be brought back by a save that finishes after signing out, answers pages before writing the copy, and never breaks a page when storage is full. Copies kept by the previous version are deleted once.
 - `ALBUM_HAVEN_APP_COPY=off` switches the device copy off: pages stop loading it and installed copies delete themselves.
 
+## 0.11.46 - 2026-11-22
+
+- Fixed a 0.11.45 regression: one failed attempt to open another database connection could make requests fail even though working connections were free. Requests now fail fast only when no working connection exists, a slow first connection is waited for, and the app reconnects within seconds after Postgres returns.
+- Fixed a second 0.11.45 regression: a database setting made by one task could carry over to the next one, so a later change could be saved only partly if it failed. Every borrowed connection now starts with standard settings, Edit Tags locks use connections nothing else reuses, and the freeze guard rejects session state on shared connections.
+
 ## 0.11.45 - 2026-11-22
 
 - Every request and background check now borrows a database connection from a shared pool instead of opening a new one, and the freeze guard rejects any new code that opens its own. If the database is unreachable, requests fail at once instead of waiting 30 seconds.

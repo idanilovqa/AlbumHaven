@@ -18,6 +18,7 @@ function tree(sidebar, visible = []) {
   return {
     apply: (original, updated, kept = false) => context.applyTagEditToArtistTree(original, updated, kept),
     keeps: (album, updates) => context.artistTreeKeepsEditedAlbum(album, updates),
+    list: () => context.state.view.artists_sidebar,
     read: () => JSON.parse(JSON.stringify(context.state.view.artists_sidebar.map(({ artist, count }) => [artist, count]))),
   };
 }
@@ -74,4 +75,14 @@ test('an edit of every file of the card does not keep it', () => {
   const view = tree([entry('Alpha', 1)], [album]);
 
   assert.equal(view.keeps(album, { 1: { album: 'Y' }, 2: { album: 'Y' } }), false);
+});
+
+test('FTC-TAGS-036 an edit that moves no album between artists keeps the same tree list', () => {
+  const sidebar = [entry('Alpha', 2)];
+  const view = tree(sidebar);
+  const before = view.list();
+
+  view.apply({ key: 'a::x', album_artist: 'Alpha' }, [{ key: 'a::y', album_artist: 'Alpha' }], false);
+
+  assert.equal(view.list(), before);
 });

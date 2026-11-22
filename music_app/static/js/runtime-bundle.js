@@ -42163,9 +42163,11 @@ function moveSidebarArtistCounts(sidebar, original, updatedAlbums, kept) {
   // Each new album the save leaves counts once; the album it edited, only if it lost its card.
   destinations.forEach((artist) => change(artist, 1));
   if (!kept) change(from, -1);
+  const changes = Array.from(deltas.entries()).filter(([, { delta }]) => delta);
+  // No artist gains or loses an album: the tree keeps its list, so nothing redraws.
+  if (!changes.length) return sidebar;
   const next = sidebar.map((entry) => ({ ...entry }));
-  deltas.forEach(({ artist, delta }, key) => {
-    if (!delta) return;
+  changes.forEach(([key, { artist, delta }]) => {
     const index = next.findIndex((entry) => optimisticTreeKey(String(entry?.artist || '').trim()) === key);
     if (index >= 0) {
       next[index].count = Math.max(0, Number(next[index].count || 0) + delta);

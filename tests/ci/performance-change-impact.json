@@ -164,6 +164,7 @@
     },
     {
       "paths": [
+        "music_app/services/child_process.py",
         "music_app/static/js/audio-worklets/gapless-playback-processor.js",
         "music_app/static/js/runtime/player-streaming-engine.js"
       ],

@@ -189,3 +189,33 @@ def test_decide_album_contract_touches_one_album_at_production_album_count():
 def test_approve_kind_contract_touches_only_the_kinds_albums_at_production_album_count():
     measure_scale_pair(run=_route("POST", "/api/musicbrainz/corrections/kinds/edition_suffix/approve", {}),
                        **_registered("py:routes/musicbrainz_corrections_asgi.py#approve_kind"))
+
+
+def test_correction_albums_contract_reads_one_page_and_the_stored_total_at_production_album_count():
+    measure_scale_pair(run=_route("GET", "/api/musicbrainz/corrections/albums?limit=50"),
+                       **_registered("py:routes/musicbrainz_corrections_asgi.py#list_correction_albums"))
+
+
+def test_problematic_files_correction_labels_read_only_the_listed_albums_at_production_album_count():
+    # The projection behind GET /utilities/problematic-files: the route's own contract counts its
+    # list builds; this one counts what labelling a list reaches in the stored corrections.
+    from types import SimpleNamespace
+
+    from music_app.routes.musicbrainz_corrections_asgi import project_correction_problems_into_problematic_files
+
+    def reached(album_count: int) -> int:
+        counts = OperationCounts()
+        repository = corrections.MusicBrainzCorrectionsPostgresRepository(
+            {"ALBUM_HAVEN_APP_DATABASE_URL": URL}, connect=_Library(album_count, counts).connect)
+        actor = SimpleNamespace(account_id=7, current_library_id=1,
+                                library_relationships=(SimpleNamespace(library_id=1, is_primary_owner=True),))
+        service = MusicBrainzCorrectionService(repository)
+        page = SimpleNamespace(state=SimpleNamespace(current_actor=actor),
+                               app=SimpleNamespace(state=SimpleNamespace(musicbrainz_correction_service=service, config={})))
+        payload = {"items": [{"key": f"album-{number}"} for number in range(28)]}
+        project_correction_problems_into_problematic_files(page, payload)
+        assert "musicbrainz_correction_album_count" in payload
+        return counts.candidate_rows
+
+    small, production = reached(10), reached(15000)
+    assert small == production <= 28, (small, production)

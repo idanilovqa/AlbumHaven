@@ -74,8 +74,8 @@ async function clickSave({ page, galleryActions, tagEditorActions }, album, edit
     await tagEditorActions.waitForOpen({ expectedTrackCount: 2 });
     await tagEditorActions.selectAllTracks();
   } else {
-    // A folded card lists both copies; the edit is one copy's files.
-    await tagEditorActions.waitForOpen({ expectedTrackCount: 4 });
+    // With the pair's marker, the folded card lists one copy; naming its files proves which.
+    await tagEditorActions.waitForOpen({ expectedTrackCount: 2 });
     await tagEditorActions.selectTracksByFilenames(albumFilenames(copyIndex));
   }
   await edit(tagEditorActions);

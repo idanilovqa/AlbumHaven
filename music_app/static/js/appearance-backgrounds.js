@@ -38,6 +38,11 @@
       ? Object.fromEntries(Object.entries(candidate).sort(([left], [right]) => left.localeCompare(right)))
       : candidate
   ));
+  // Settings with the same effect are no change to discard: badges absent means on, and a device section that
+  // follows desktop does not use the values it keeps (owner 2026-11-22).
+  const effectiveJson = value => stableJson(JSON.parse(JSON.stringify(value, (key, item) => (
+    key === 'local_cover_badges' && item === true ? undefined : item?.mode === 'follow' ? { mode: 'follow' } : item
+  ))));
   const isAggregate = value => Boolean(value && ['revision', 'interaction_overrides', 'selection_accent', 'player_style_override', 'player_recent_sets'].some(key => Object.hasOwn(value, key)));
   function normalizeColor(value) {
     if (value === null) return null;
@@ -517,8 +522,8 @@
     const getState = () => {
       const comparable = comparableDraftState();
       const dirty = [...seekbarModes.values()].some(mode => mode.draft !== mode.saved)
-        || stableJson(comparable.baseDraft) !== stableJson(saved)
-        || stableJson(persistedDeviceProfiles(comparable.profiles)) !== stableJson(persistedDeviceProfiles(savedDeviceProfiles))
+        || effectiveJson(comparable.baseDraft) !== effectiveJson(saved)
+        || effectiveJson(persistedDeviceProfiles(comparable.profiles)) !== effectiveJson(persistedDeviceProfiles(savedDeviceProfiles))
         || Object.keys(errors).length > 0;
       // Recent waveform colours alone can still be saved, but they are no unsaved change to warn about
       // (owner 2026-11-18: a setting changed and changed back asks nothing on leaving).

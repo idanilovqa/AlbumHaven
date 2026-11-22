@@ -64,6 +64,24 @@ const editableSnapshot = value => {
   return { action_button_outlines: true, device_profiles: {}, compact_player_motion: 'normal', floating_player_edge: { source: 'player', color: null }, ...draft };
 };
 
+// Owner 2026-11-22: "if my changes insettings amount to the same state don't show discard or keep changes"
+// ("Badges on local covers").
+test('settings changed back to the same state are nothing to discard', async () => {
+  const { controller } = setup();
+  assert.equal(await controller.load(), true);
+
+  controller.setLibrarySourceIndicator('local_cover_badges', false);
+  assert.equal(controller.getState().dirty, true, 'switched off is a change');
+  controller.setLibrarySourceIndicator('local_cover_badges', true);
+  assert.equal(controller.getState().dirty, false, 'on again is the saved state: absent means on');
+
+  controller.setDeviceProfile('mobile');
+  controller.setDeviceSectionMode('custom');
+  assert.equal(controller.getState().dirty, true, 'its own settings on mobile is a change');
+  controller.setDeviceSectionMode('follow');
+  assert.equal(controller.getState().dirty, false, 'following desktop again is the saved state');
+});
+
 test('a handle-only edit from native appearance preserves other components after save and reload', async () => {
   const nativeInitial = { ...initialAppearance(), palette_id: null, player_override: null, player_style_override: null, player_recent_sets: [] };
   const { controller } = setup({ initial: nativeInitial });

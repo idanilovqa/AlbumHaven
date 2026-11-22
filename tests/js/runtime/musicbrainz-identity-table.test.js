@@ -61,7 +61,7 @@ test('name, details and MBID each take their own line in every row (X4)', () => 
   assert.doesNotMatch(rule, /flex-wrap/);
 });
 
-test('a bare action button hovers with a background, never an outline (approved P1, X3)', () => {
+test("the table's link hovers with a background, never an outline (approved P1, X3)", () => {
   const css = read('music_app/static/css/button-component.css');
   const rule = css.match(/\.action-button--bare[^{]*:hover[^{]*\{([^}]*)\}/)[1];
   assert.match(rule, /border-color:\s*transparent\s*;/, 'never !important: focus and error edges keep their colours');
@@ -69,5 +69,6 @@ test('a bare action button hovers with a background, never an outline (approved 
   const page = read('music_app/static/css/appearance-backgrounds.css');
   const hover = page.match(/:root :is\(button, \.button[^{]*:hover[^{]*\{\s*border-color: var\(--appearance-item-action-hover-border/)[0];
   // :where() adds no specificity, so every other button's hover border resolves as before.
-  assert.match(hover, /:where\(:not\(\.action-button--bare\)\)/, "the page's hover border leaves bare buttons alone");
+  assert.match(hover, /:where\(:not\(#musicbrainz-artist-identities \.action-button--bare\)\)/, "the page's hover border leaves the table's link alone");
+  assert.doesNotMatch(hover, /:not\(\.action-button--bare\)/, 'every other bare button keeps its hover border');
 });

@@ -156,7 +156,7 @@ box-shadow: none;
 }
 .action-button--bare:not(.trigger-anchor-open):not(.global-player *):hover:not(:disabled):not([aria-disabled='true']),
 :root[data-action-button-outlines='off'] .action-button:not(.trigger-anchor-open):not(.global-player *):not(.action-button--destructive):hover:not(:disabled):not([aria-disabled='true']) {
-border-color: transparent !important;
+border-color: transparent;
 background: var(--appearance-item-action-hover-background, var(--appearance-hover, #293a50)) !important;
 }
 .action-button--destructive {

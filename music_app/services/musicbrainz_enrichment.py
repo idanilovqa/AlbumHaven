@@ -272,7 +272,8 @@ class MusicBrainzArtistEnrichmentProcessor:
                 evidence_summary=evidence_summary,
                 observed_at=observed_at,
                 album_identities=outcome.get("album_identities"),
-                identity_artists=outcome.get("artists"),
+                # A suggested band outside the split needs its artist row, never an identity.
+                identity_artists=[*(outcome.get("artists") or []), *(outcome.get("suggested_artists") or [])],
                 album_suggestions=outcome.get("album_suggestions"),
                 album_suggestions_unchecked=outcome.get("album_suggestions_unchecked"),
             )
@@ -653,10 +654,15 @@ def _resolve_artist(context: dict[str, object], mirror: _Mirror) -> dict[str, ob
         # Owner 2026-11-14 (reversing 2026-11-09): a person and the same-named band they are a
         # member of are separate artists with their own MBIDs (Alice Cooper and his 1969-73
         # band), split per album like any other same-named artists.
-        decided, suggestions, unchecked = _resolve_undecided_albums(decision, albums, mirror)
+        namesakes = _namesakes_outside(decision["candidates"], pool.values())
+        decided, suggestions, unchecked = _resolve_undecided_albums(decision, albums, mirror, namesakes)
+        suggested = {item["artist_mbid"] for suggestion in suggestions for item in suggestion["artists"]}
         return {"classification": "per_album", "artists": artists, "confidence": 1,
                 "album_identities": _album_identities(decision["certain"], albums) + decided,
                 "album_suggestions": suggestions, "album_suggestions_unchecked": unchecked,
+                "suggested_artists": [
+                    {key: band.get(key) for key in _NAMESAKE_FIELDS}
+                    for band in namesakes if band["mbid"] in suggested],
                 "evidence_summary": f"Your albums belong to {len(artists)} MusicBrainz artists."}
     if classification == "not_found":
         return {"classification": "not_found",
@@ -708,15 +714,29 @@ def _album_identities(certain: dict[int, dict[str, object]], albums: list[dict[s
 
 # A split name's undecided albums looked up by recordings, at most this many per artist and run.
 _UNDECIDED_ALBUM_LIMIT = 20
+# What the name search already gave about a band outside the split, for its suggestion row.
+_NAMESAKE_FIELDS = ("mbid", "canonical_name", "sort_name", "disambiguation", "artist_type", "country_code",
+                    "area_mbid", "area_name")
+
+
+def _namesakes_outside(split: list[dict[str, object]], pool) -> list[dict[str, object]]:
+    """Owner 2026-11-22: bands the name search found that no local album has, the best few.
+    They cost no search of their own."""
+    owners = {str(owner["mbid"]) for owner in split}
+    others = [band for band in pool if band.get("named") and band["mbid"] not in owners]
+    return sorted(others, key=lambda band: (-int(band.get("score") or 0), band["mbid"]))[:_MAX_NAME_ONLY_CANDIDATES]
 
 
 def _resolve_undecided_albums(
     decision: dict[str, object], albums: list[dict[str, object]], mirror: _Mirror,
+    namesakes: list[dict[str, object]],
 ) -> tuple[list[dict[str, object]], list[dict[str, object]], list[object]]:
     """Owner 2026-11-18: an album no candidate certainly holds goes to the candidate a sample
     of its recordings leads to; only an album with no recordings evidence falls back to the
     folder it shares with one candidate's decided albums. Recordings and folder that disagree,
     or several candidates holding the sample, leave it undecided. An owner's choice is kept.
+    An album the recordings leave undecided is also searched among ``namesakes``: such a band
+    can only be suggested, and its recordings keep the folder from deciding (owner 2026-11-22).
 
     Returns the decided albums' identities; what Problematic Files proposes for those left
     undecided with some evidence ("MusicBrainz: artist undecided"), which never decides; and
@@ -745,7 +765,8 @@ def _resolve_undecided_albums(
     left = [index for index in range(len(albums)) if index not in kept]
     undecided = left[:_UNDECIDED_ALBUM_LIMIT]
     unchecked = set(left[_UNDECIDED_ALBUM_LIMIT:])
-    mirror.remaining = max(mirror.remaining, 3 * len(undecided))
+    # One search per sampled title, and one more where namesakes are searched too.
+    mirror.remaining = max(mirror.remaining, (6 if namesakes else 3) * len(undecided))
 
     def identity_for(index: int, mbid: str, evidence: dict[str, object]) -> dict[str, object]:
         return {"local_album_id": albums[index].get("id"), "local_title": albums[index].get("title"),
@@ -754,18 +775,8 @@ def _resolve_undecided_albums(
     identities, fallback, evidence = [], [], {}
     for index in undecided:
         sample = recording_sample(albums[index].get("tracks") or [])
-        results: dict[str, list[dict[str, object]]] = {}
-        for title in sample:
-            try:
-                found = mirror.call("search_recordings", title, candidates,
-                                    accept=("complete", "not_found", "invalid_request"))
-            except _ProviderFailure:
-                found = None
-            if found is None:  # budget spent or the mirror failed: this album stays unchecked
-                results = {}
-                break
-            results[title] = found.get("recordings") or []
-        if sample and len(results) < len(sample):
+        results = _sampled_recordings(sample, candidates, mirror)
+        if results is None:  # budget spent or the mirror failed: this album stays unchecked
             unchecked.add(index)
             continue
         outcome = decide_by_recordings(sample, results, candidates) if sample else {"outcome": "none", "found": {}}
@@ -776,10 +787,19 @@ def _resolve_undecided_albums(
                 "release_mbid": outcome.get("release_mbid")}))
             note_decided(index, mbid)
             continue
-        if any(outcome["found"].values()):
-            evidence[index] = (len(sample), outcome["found"])
+        found = dict(outcome["found"])
+        others = [band["mbid"] for band in namesakes]
+        if sample and others:
+            theirs = _sampled_recordings(sample, others, mirror)
+            if theirs is None:
+                unchecked.add(index)
+            else:
+                counts = decide_by_recordings(sample, theirs, others)["found"]
+                found.update((mbid, count) for mbid, count in counts.items() if count)
+        if index not in unchecked and any(found.values()):
+            evidence[index] = (len(sample), found)
         if outcome["outcome"] not in {"tie", "mixed"}:
-            fallback.append((index, {mbid for mbid, count in outcome["found"].items() if count}))
+            fallback.append((index, {mbid for mbid, count in found.items() if count}))
     for index, weak_artists in fallback:
         folders = album_folders(albums[index].get("folders") or [])
         owner = decide_by_folder(folders[1].casefold(), decided_folders) if folders else None
@@ -788,6 +808,7 @@ def _resolve_undecided_albums(
         # The artist folder relative to its library root; never an absolute path.
         identities.append(identity_for(index, owner, {"method": "folder", "folder": folders[1].partition(":")[2]}))
         evidence.pop(index, None)
+        unchecked.discard(index)
 
     suggestions = []
     for index, (sampled, found) in evidence.items():
@@ -796,9 +817,25 @@ def _resolve_undecided_albums(
         suggestions.append({
             "local_album_id": albums[index].get("id"), "favoured_mbid": favoured_artist(found),
             "artists": [{"artist_mbid": mbid, "found": found[mbid], "sampled": sampled,
-                         "folder_album": folder_albums.get((mbid, folder))} for mbid in candidates],
+                         "folder_album": folder_albums.get((mbid, folder))} for mbid in found],
         })
     return identities, suggestions, [albums[index].get("id") for index in sorted(unchecked)]
+
+
+def _sampled_recordings(sample: list[str], artists: list[str],
+                        mirror: _Mirror) -> dict[str, list[dict[str, object]]] | None:
+    """Each sampled title's recordings among ``artists``, or None when one could not be asked."""
+    results = {}
+    for title in sample:
+        try:
+            found = mirror.call("search_recordings", title, artists,
+                                accept=("complete", "not_found", "invalid_request"))
+        except _ProviderFailure:
+            return None
+        if found is None:
+            return None
+        results[title] = found.get("recordings") or []
+    return results
 
 
 def _add_release_credits(add, index: int, release: dict[str, object]) -> None:

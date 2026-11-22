@@ -48,7 +48,9 @@ def test_ideographs_are_romaji_only_for_a_japanese_release_and_pinyin_otherwise(
 
 
 def test_only_the_japanese_runs_are_read_and_a_run_cutlet_cannot_read_gives_none(fallbacks):
-    assert album_title_transliteration("Tenmon Best (天門)", stored={"language": "jpn"}) == "Tenmon Best (tenmon)"
+    assert album_title_transliteration("Best of 天門", stored={"language": "jpn"}) == "Best of tenmon"
+    # Owner 2026-11-21, "Hide if title has Latin": this title already gives its reading.
+    assert album_title_transliteration("Tenmon Best (天門)", stored={"language": "jpn"}) is None
     assert album_title_transliteration("Gianizm (ジャイアニズム叱)", stored={"language": "jpn"}) is None
 
 

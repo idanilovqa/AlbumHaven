@@ -2,7 +2,8 @@
 
 Owner 2026-11-17 (1A): in the album details tracklist a title written in a script other than
 Latin always shows its Latin form after it, "桜花抄 • Oukashou"; a Latin title shows nothing.
-1E: "Cyrillic stays as it is", so a Cyrillic title never does either.
+1E: "Cyrillic stays as it is", so a Cyrillic title never does either. Nor does a title that
+already reads in Latin (owner 2026-11-21, "Hide if title has Latin"): "Gianizm Ten (ジャイアニズム天)".
 
 The Latin form comes from MusicBrainz first: the Latin pseudo-release its "transl-tracklisting"
 relationship links to the album's matched release, fetched once per release by the album
@@ -54,6 +55,39 @@ def needs_transliteration(title: object) -> bool:
 
 def _has(text: object, ranges: tuple[tuple[int, int], ...]) -> bool:
     return any(_within(letter, ranges) for letter in _letters(text))
+
+
+def _bracketed(text: object) -> tuple[str, list[str]]:
+    """The text outside brackets, and each outermost bracket's content."""
+    outside, groups, depth = "", [], 0
+    for character in str(text or ""):
+        if character in "([（［【":
+            depth += 1
+            if depth == 1:
+                groups.append("")
+                continue
+        elif character in ")]）］】" and depth:
+            depth -= 1
+            if not depth:
+                continue
+        if depth:
+            groups[-1] += character
+        else:
+            outside += character
+    return outside, groups
+
+
+def _reads_in_latin(title: object, latin: object) -> bool:
+    """The title already gives its reading: Latin words with the original in brackets after
+    them ("Jinsei Game (人生ゲイム)"), or the original with that same Latin form in brackets
+    ("桜花抄 (Oukashou)"). Other Latin words are none: "Hello 世界", "桜花抄 (Live)", and a
+    bracket opening with Latin ("(feat. 初音ミク)", "(Live at 武道館)")."""
+    outside, groups = _bracketed(title)
+    if not needs_transliteration(outside):
+        openings = ("".join(_letters(group))[:1] for group in groups)
+        return _has(outside, _LATIN) and any(needs_transliteration(opening) for opening in openings)
+    reading = latin_search_key(_bracketed(latin)[0])
+    return bool(reading) and reading in (latin_search_key(group) for group in groups)
 
 
 @lru_cache(maxsize=1)
@@ -183,7 +217,7 @@ def track_transliterations(tracks: Iterable[Mapping[str, object]], *, stored: Ma
         latin = musicbrainz.get(local)
         if not latin or needs_transliteration(latin):
             latin = fallback_transliteration(track.get("title"), japanese=japanese)
-        if latin:
+        if latin and not _reads_in_latin(track.get("title"), latin):
             shown[local] = latin.strip()
     return shown
 
@@ -192,7 +226,8 @@ def album_title_transliteration(title: object, *, stored: Mapping[str, object] |
     """The Latin form to show under an album title that needs one: the installed fallback,
     reading ideographs as Japanese only when the release's MusicBrainz language is Japanese.
     MusicBrainz stores no Latin release title, so there is no MusicBrainz form to prefer."""
-    return fallback_transliteration(title, japanese=(stored or {}).get("language") == "jpn")
+    latin = fallback_transliteration(title, japanese=(stored or {}).get("language") == "jpn")
+    return None if not latin or _reads_in_latin(title, latin) else latin
 
 
 def stored_transliteration(connection: Any, album_id: object) -> dict[str, object] | None:

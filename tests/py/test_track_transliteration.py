@@ -89,6 +89,47 @@ def test_latin_cyrillic_digits_and_punctuation_need_none(title):
     assert not needs_transliteration(title)
 
 
+# A title that already reads in Latin (owner 2026-11-21, GIANIZM: "Hide if title has Latin") ---
+
+@pytest.mark.parametrize("title", [
+    "Gianizm San (ジャイアニズム惨, Disaster)",
+    "Gianizm Tsū/Two (ジャイアニズム痛, Massacre)",
+    "Jishō (Shōnen Terrorist) ~Gianizm~ (自傷 (少年テロリスト) 〜ジャイアニズム〜, Self-mutilation (terrorist boy) ~Gianizm~)",
+    "Deko (凸 ～デコ～)",
+    "Jinsei Game （人生ゲイム）",
+])
+def test_a_title_that_already_reads_in_latin_shows_no_romanized_form(title, monkeypatch):
+    from music_app.services import track_transliteration as module
+
+    monkeypatch.setattr(module, "fallback_transliteration", lambda *_args, **_kwargs: "Romanized")
+    assert module.track_transliterations(_tracks([title])) == {}
+    assert module.album_title_transliteration(title) is None
+
+
+def test_a_latin_reading_after_the_original_shows_no_romanized_form(monkeypatch):
+    from music_app.services import track_transliteration as module
+
+    monkeypatch.setattr(module, "fallback_transliteration", lambda *_args, **_kwargs: "Oukashou (Ōkashō)")
+    assert module.album_title_transliteration("桜花抄 (Oukashou)") is None
+    assert module.track_transliterations(_tracks(["桜花抄 (Oukashou)"])) == {}
+
+
+@pytest.mark.parametrize("title", [
+    "Hello 世界",  # Latin words, no reading of the rest
+    "桜花抄 (Live)",  # a Latin note
+    "桜花抄 [2011 Remaster]",
+    "Kiss (feat. 初音ミク)",  # a credit, not the title's original
+    "Concert (Live at 武道館)",
+    "桜花抄",
+])
+def test_latin_words_that_are_no_reading_keep_the_romanized_form(title, monkeypatch):
+    from music_app.services import track_transliteration as module
+
+    monkeypatch.setattr(module, "fallback_transliteration", lambda *_args, **_kwargs: "Romanized (Live)")
+    assert module.track_transliterations(_tracks([title])) == {(1, 1): "Romanized (Live)"}
+    assert module.album_title_transliteration(title) == "Romanized (Live)"
+
+
 # MusicBrainz: the transl-tracklisting pseudo-release -------------------------------------
 
 def test_the_linked_transliteration_is_chosen_and_the_translation_beside_it_is_not():

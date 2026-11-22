@@ -233,7 +233,8 @@ async function updateWaveformAppearance(forceReload = false) {
   const els = getPlayerElements();
   const wrap = els.timeline?.parentElement;
   const playback = getPlayerPlaybackSnapshot();
-  const path = String(state.player.current?.path || '');
+  // While a switch waits for its audio, the player shows the pressed song, never the old waveform.
+  const path = String(state.player.selectedTrack?.path || state.player.current?.path || '');
   const isWaveform = state.player.loopActive || state.player.appearance.seekbarMode === 'waveform';
   setPlayerSeekbarPresentation(isWaveform);
   wrap?.classList.toggle('is-waveform', isWaveform);

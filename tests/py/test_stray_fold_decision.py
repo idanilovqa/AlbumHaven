@@ -255,12 +255,19 @@ def _decide(fixture, edited, changes):
 
 def test_live_040_an_unfolded_card_carries_the_proposed_album_artist(watcher_repair_inventory):
     fixture = watcher_repair_inventory
-    _first, second = _stored_pair(fixture)
-    _refresh_every_album(fixture)
+    pair = _stored_pair(fixture)
+    _owner, folded = _refresh_every_album(fixture)  # The seed decides which copy gets the lower id.
+    with isolatedPostgres._connect(fixture.runtime_url) as connection:
+        folded_paths = {row["private_path"] for row in connection.execute(
+            """select files.private_path from library.local_track_files files
+               join library.local_tracks tracks on tracks.id = files.track_id
+               where tracks.album_id = %s""", (folded["id"],),
+        ).fetchall()}
+    copy = next(entries for entries in pair if {entry["path"] for entry in entries} == folded_paths)
 
-    _previous, _updated, albums = _decide(fixture, second, {"album_artist": "Someone Else"})
+    _previous, _updated, albums = _decide(fixture, copy, {"album_artist": "Someone Else"})
 
-    card = next(album["card"] for album in albums if album["card"])
+    card = next(album["card"] for album in albums if set(album["track_paths"]) == folded_paths)
     assert card["album_artist"] == "Someone Else"
 
 

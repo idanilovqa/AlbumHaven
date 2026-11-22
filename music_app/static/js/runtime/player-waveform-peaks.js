@@ -14,6 +14,16 @@ let playerWaveformPeakCurrentIdentity = null;
 let playerWaveformForegroundSuspensionDepth = 0;
 // The waveform request sent when Play was pressed, until the playing generation takes it.
 let playerWaveformStartRequest = null;
+// The track the page opened with, until another takes the player. Like a playing song's, its
+// waveform is never low priority (owner rule); its one request outlives its stream opening,
+// failing or starting to play.
+let playerWaveformRestingTrack = null;
+
+// The generation of the engine that plays: in the Android app the browser engine's never moves.
+function playerWaveformGeneration() {
+  const playback = typeof getPlayerPlaybackSnapshot === 'function' ? getPlayerPlaybackSnapshot() : null;
+  return Number(playback?.generation ?? state.player?.streaming?.generation) || 0;
+}
 
 function trimWaveformPeakCache() {
   while (playerWaveformPeakCache.size > 2) {
@@ -50,9 +60,10 @@ function validateWaveformPeakPayload(payload, sampleCount) {
 
 function suspendPlayerWaveformPeakLoadsForForegroundView() {
   playerWaveformForegroundSuspensionDepth += 1;
-  const generation = Number(state.player?.streaming?.generation) || 0;
+  const generation = playerWaveformGeneration();
   if (String(state.player?.current?.path || '')) {
     cancelWaveformPeakLoads(generation);
+    stopRestingTrackWaveformRequest();
   }
   return { generation };
 }
@@ -61,24 +72,9 @@ async function resumePlayerWaveformPeakLoadsAfterForegroundView(suspension) {
   if (!suspension || playerWaveformForegroundSuspensionDepth < 1) return null;
   playerWaveformForegroundSuspensionDepth -= 1;
   if (playerWaveformForegroundSuspensionDepth > 0) return null;
-
-  const generation = Number(state.player?.streaming?.generation) || 0;
-  const path = String(state.player?.current?.path || '');
-  if (!path || generation !== Number(suspension.generation || 0)) return null;
-
-  const peaks = await loadWaveformPeaks(path, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, generation, {
-    current: true,
-  });
-  if (!peaks || playerWaveformForegroundSuspensionDepth > 0
-      || Number(state.player?.streaming?.generation) !== generation
-      || String(state.player?.current?.path || '') !== path) return null;
-  state.player.waveform.compactPeaks = { path, generation, data: peaks };
-  try {
-    await updateWaveformAppearance();
-  } catch (_error) {
-    // Optional waveform rendering must not interrupt foreground navigation.
-  }
-  return peaks;
+  // A stream that opened during the view load found loading suspended, so whichever track the
+  // player shows by now is asked for.
+  return loadPlayingWaveformPeaks(state.player?.current?.path);
 }
 
 function retainSavedLoopWaveformPeaks(loopIds) {
@@ -165,7 +161,7 @@ async function readWaveformPeakResponse(response, sampleCount, onPartial) {
       if (!peaks || payload.complete) return { peaks };
       onPartial?.(peaks);
     }
-    if (done) return { peaks: null };
+    if (done) return { broken: true };
   }
 }
 
@@ -173,7 +169,7 @@ async function readWaveformPeakResponse(response, sampleCount, onPartial) {
 function showPartialWaveformPeaks(path, generation, peaks) {
   const shown = state.player.waveform.compactPeaks;
   if (String(state.player.current?.path || '') !== path
-      || state.player.streaming.generation !== generation
+      || playerWaveformGeneration() !== generation
       || (shown?.path === path && !shown.partial)) return;
   state.player.waveform.compactPeaks = { path, generation, data: peaks, partial: true };
   if (typeof updateWaveformAppearance === 'function') {
@@ -190,10 +186,18 @@ async function fetchWaveformPeaks(rawPath, sampleCount, { current, signal, onPar
   }
   for (let attempt = 0; ; attempt += 1) {
     const response = await fetch(`/playback/waveform?${query}`, { signal });
-    const outcome = response.status === 429
+    // 503 is a server that is not ready yet, so it is asked again as a busy one is.
+    const outcome = response.status === 429 || response.status === 503
       ? { busy: true }
-      : response.ok ? await readWaveformPeakResponse(response, sampleCount, onPartial) : null;
-    if (outcome?.busy) {
+      : response.ok
+        ? await readWaveformPeakResponse(response, sampleCount, onPartial).catch((error) => {
+          if (error?.name === 'TypeError') return { broken: true };
+          throw error;
+        })
+        : null;
+    // A build cut off mid-answer is asked again a few times, so a file that cannot be decoded
+    // stops being asked for.
+    if (outcome?.busy || (outcome?.broken && attempt < PLAYER_WAVEFORM_BUSY_RETRY_DELAYS_MS.length)) {
       await new Promise((resolve) => {
         setTimeout(resolve, PLAYER_WAVEFORM_BUSY_RETRY_DELAYS_MS[attempt]
           ?? PLAYER_WAVEFORM_BUSY_RETRY_MAX_DELAY_MS);
@@ -205,10 +209,47 @@ async function fetchWaveformPeaks(rawPath, sampleCount, { current, signal, onPar
   }
 }
 
+// The page opened with this track in the player.
+function restTrackWaveform(path) {
+  stopRestingTrackWaveformRequest();
+  playerWaveformRestingTrack = { path: String(path || ''), controller: null, promise: null };
+}
+
+function stopRestingTrackWaveformRequest() {
+  const resting = playerWaveformRestingTrack;
+  if (!resting) return;
+  resting.controller?.abort();
+  resting.controller = null;
+  resting.promise = null;
+}
+
+function endTrackWaveformRest() {
+  stopRestingTrackWaveformRequest();
+  playerWaveformRestingTrack = null;
+}
+
+function loadRestingTrackWaveform(resting) {
+  if (resting.promise || playerWaveformForegroundSuspensionDepth > 0) return resting.promise;
+  const controller = new AbortController();
+  resting.controller = controller;
+  resting.promise = fetchWaveformPeaks(resting.path, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, {
+    current: true,
+    signal: controller.signal,
+    onPartial: (partial) => showPartialWaveformPeaks(resting.path, playerWaveformGeneration(), partial),
+    stillWanted: () => playerWaveformRestingTrack === resting,
+  }).catch(() => null).then((peaks) => {
+    if (resting.controller !== controller) return null;
+    if (!peaks) resting.promise = null;
+    return peaks;
+  });
+  return resting.promise;
+}
+
 // Play was pressed: the song's waveform starts building while its stream opens, and the
 // playing generation takes over this request instead of asking again.
 function startSelectedTrackWaveformPeaks(path) {
   const rawPath = String(path || '');
+  endTrackWaveformRest();
   if (playerWaveformStartRequest?.path === rawPath) return;
   playerWaveformStartRequest?.controller.abort();
   playerWaveformStartRequest = null;
@@ -219,7 +260,7 @@ function startSelectedTrackWaveformPeaks(path) {
   const promise = fetchWaveformPeaks(rawPath, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, {
     current: true,
     signal: controller.signal,
-    onPartial: (partial) => showPartialWaveformPeaks(rawPath, state.player.streaming.generation, partial),
+    onPartial: (partial) => showPartialWaveformPeaks(rawPath, playerWaveformGeneration(), partial),
     stillWanted: () => true,
   }).catch(() => null);
   playerWaveformStartRequest = { path: rawPath, controller, promise };
@@ -265,7 +306,7 @@ async function loadWaveformPeaks(
   const controller = started?.controller || new AbortController();
   const abortWithGeneration = () => controller.abort();
   generationSignal.addEventListener('abort', abortWithGeneration, { once: true });
-  const stillWanted = () => state.player.streaming.generation === generation;
+  const stillWanted = () => playerWaveformGeneration() === generation;
   let request;
   request = (async () => {
     let retained = false;
@@ -300,19 +341,26 @@ async function loadWaveformPeaks(
 }
 
 // Starting a song asks for its waveform with the stream: the server answers a cached one at
-// once and otherwise builds it while playback starts, drawing it as it builds.
-async function loadPlayingWaveformPeaks(path, generation = 0) {
+// once and otherwise builds it while playback starts, drawing it as it builds. A resting track
+// shares its one request instead, whichever generation asks.
+async function loadPlayingWaveformPeaks(path, generation = playerWaveformGeneration()) {
   const rawPath = String(path || '');
+  if (playerWaveformRestingTrack && playerWaveformRestingTrack.path !== rawPath) endTrackWaveformRest();
   if (!rawPath) return null;
+  const resting = playerWaveformRestingTrack;
   const shown = state.player.waveform.compactPeaks;
   // A seek or replay of the same song keeps its finished peaks.
   const peaks = shown?.path === rawPath && shown.data && !shown.partial
     ? shown.data
-    : await loadWaveformPeaks(rawPath, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, generation, {
-      current: true,
-    });
-  if (!peaks || state.player.streaming.generation !== generation
-      || String(state.player.current?.path || '') !== rawPath) return null;
+    : resting
+      ? await loadRestingTrackWaveform(resting)
+      : await loadWaveformPeaks(rawPath, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, generation, {
+        current: true,
+      });
+  if (!peaks || String(state.player.current?.path || '') !== rawPath) return null;
+  // A resting track's peaks belong to the track, not to the stream that was opening meanwhile.
+  if (resting) generation = playerWaveformGeneration();
+  else if (playerWaveformGeneration() !== generation) return null;
   const active = state.player.waveform.compactPeaks;
   if (active?.path === rawPath && active.generation === generation && active.data === peaks) return peaks;
   playerWaveformPeakCurrentIdentity = `${generation}\u0000${PLAYER_WAVEFORM_DETAIL_PEAK_COUNT}\u0000${rawPath}`;
@@ -329,7 +377,7 @@ async function loadPlayingWaveformPeaks(path, generation = 0) {
 async function promoteWaveformPeaks(completedPath, currentPath, generation) {
   const completedIdentity = `${generation}\u0000${PLAYER_WAVEFORM_DETAIL_PEAK_COUNT}\u0000${String(completedPath || '')}`;
   const currentIdentity = `${generation}\u0000${PLAYER_WAVEFORM_DETAIL_PEAK_COUNT}\u0000${String(currentPath || '')}`;
-  if (state.player.streaming.generation === generation) {
+  if (playerWaveformGeneration() === generation) {
     // The promoted song plays now, so a prefetch still building for it is upgraded.
     await loadWaveformPeaks(currentPath, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, generation, {
       current: true,

@@ -264,10 +264,7 @@ function setCurrentPlayerTrack(track, options = {}) {
   state.player.timelineDragging = false;
   state.player.timelineDragPreviewSeconds = null;
   if (typeof loadPlayingWaveformPeaks === 'function') {
-    const playingWaveform = loadPlayingWaveformPeaks(
-      String(track?.path || ''),
-      Number(state.player.streaming?.generation) || 0,
-    );
+    const playingWaveform = loadPlayingWaveformPeaks(String(track?.path || ''));
     if (playingWaveform && typeof playingWaveform.catch === 'function') {
       void playingWaveform.catch(() => {});
     }
@@ -358,7 +355,9 @@ async function playTrackFromPayload(track, options = {}) {
   if (shouldAutoplay && requestedTrackPath && currentTrackPath
       && requestedTrackPath !== currentTrackPath
       && typeof cancelStreamingWaveformGeneration === 'function') {
-    cancelStreamingWaveformGeneration(Number(state.player.streaming?.generation) || 0);
+    cancelStreamingWaveformGeneration(
+      Number(getPlayerPlaybackSnapshot().generation ?? state.player.streaming?.generation) || 0,
+    );
   }
   const ownershipAlreadyClaimed = options.ownershipClaimed === true
     && typeof isActivePlaybackOwner === 'function' && isActivePlaybackOwner();

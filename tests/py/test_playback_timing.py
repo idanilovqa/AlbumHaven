@@ -238,3 +238,105 @@ def test_a_waveform_build_says_when_it_ran_and_how_many_ran_with_it(timing_on, c
     assert ended["outcome"] == outcome
     assert ended["elapsed_ms"].isdigit()
     assert "secret" not in caplog.text.lower()
+
+
+UNHEARD_REPORT = {
+    "type": "unheard-report",
+    "outcome": "paused",
+    "prepared": True,
+    "pressedStreamId": 7,
+    "presses": 2,
+    "pressedAtEpochMs": 1_795_000_000_000,
+    "firstPressMs": 6100,
+    "openMs": 140,
+    "metadataMs": 6000,
+    "firstBytesMs": None,
+    "decodedMs": None,
+    "prepareMs": None,
+    "endedMs": 6000,
+}
+
+
+def test_a_press_that_never_sounded_becomes_one_line(playback_app, timing_on):
+    async def scenario():
+        async with websocket_session(playback_app, "/playback/pcm?heartbeat=100") as socket:
+            await socket.send_json(UNHEARD_REPORT)
+            await socket.receive_json()
+
+    asyncio.run(scenario())
+    [line] = timing_on("client-unheard")
+    assert (line["kind"], line["outcome"], line["stream"]) == ("prepared", "paused", "7")
+    assert (line["metadata_ms"], line["prepare_ms"], line["ended_ms"]) == ("6000", "-", "6000")
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"outcome": "Secret Album"},
+        {"outcome": ["paused"]},
+        {"pressedStreamId": "secret.flac"},
+        {"endedMs": "Secret"},
+        {"path": "C:/Music/Secret Album/secret.flac"},
+    ],
+    ids=["text-outcome", "list-outcome", "text-stream", "text-duration", "extra-field"],
+)
+def test_an_unheard_report_can_carry_no_text(playback_app, timing_on, caplog, change):
+    async def scenario():
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            await socket.send_json({**UNHEARD_REPORT, **change})
+            assert await socket.receive_close() == 4400
+
+    asyncio.run(scenario())
+    assert timing_on("client-unheard") == []
+    assert "secret" not in caplog.text.lower()
+
+
+def test_a_control_line_says_when_the_page_sent_it(playback_app, media_path, decoder_factory, timing_on):
+    async def scenario():
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            await socket.send_json({**open_command(media_path), "clientSentAtEpochMs": 1_795_000_000_123})
+            metadata = await socket.receive_json()
+            assert metadata["timingUnheard"] is True
+
+    asyncio.run(scenario())
+    [line] = timing_on("control")
+    assert line["client_sent_at"] == "1795000000123"
+
+
+def test_a_refresh_splits_into_checkout_session_and_actor(monkeypatch, timing_on):
+    from contextlib import nullcontext
+    from datetime import datetime, timezone
+
+    from music_app.services.auth_sessions_postgres import ResolvedBrowserSession
+    from music_app.services.current_actor import CurrentActor
+    from music_app.services.current_actor_postgres import PostgresCurrentActorResolver
+
+    at = datetime(2026, 11, 22, tzinfo=timezone.utc)
+    session = ResolvedBrowserSession(
+        session_id=3, account_id=2, created_at=at, authenticated_at=at, last_seen_at=at,
+        idle_expires_at=at, absolute_expires_at=at, user_agent=None,
+    )
+
+    class Connection:
+        def transaction(self):
+            return nullcontext()
+
+    class Sessions:
+        def resolve_session(self, _token, *, connection=None):
+            return session
+
+    resolver = PostgresCurrentActorResolver(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "never-connected"},
+        session_service=Sessions(),
+        connect=lambda _url: nullcontext(Connection()),
+    )
+    monkeypatch.setattr(resolver, "_actor", lambda *_args: CurrentActor.anonymous())
+    timing = playback_timing.ControlTiming(1, "refresh-probe", None, 9)
+
+    timing.timed("refresh", resolver.resolve)("token")
+    timing.log()
+
+    [line] = timing_on("control")
+    for step in ("refresh_checkout_ms", "refresh_session_ms", "refresh_actor_ms"):
+        assert line[step].isdigit(), (step, line)
+    assert playback_timing.CONTROL.get() is None, "a pooled thread keeps no control"

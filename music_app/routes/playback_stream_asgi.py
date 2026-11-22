@@ -90,6 +90,20 @@ _START_REPORT_DURATIONS = {
     "decodedMs": "decoded_ms",
     "audibleMs": "audible_ms",
 }
+_UNHEARD_OUTCOMES = {"replaced", "paused", "seek", "stopped", "waiting"}
+_UNHEARD_REPORT_DURATIONS = {
+    "firstPressMs": "first_press_ms",
+    "openMs": "open_ms",
+    "metadataMs": "metadata_ms",
+    "firstBytesMs": "first_bytes_ms",
+    "decodedMs": "decoded_ms",
+    "prepareMs": "prepare_ms",
+    "endedMs": "ended_ms",
+}
+_UNHEARD_REPORT_KEYS = {
+    "type", "outcome", "prepared", "pressedStreamId", "presses", "pressedAtEpochMs",
+    *_UNHEARD_REPORT_DURATIONS,
+}
 _START_REPORT_KEYS = {
     "type", "generation", "audibleStreamId", "prepared", "presses", "pressedAtEpochMs",
     *_START_REPORT_DURATIONS,
@@ -712,6 +726,8 @@ class _PlaybackPcmConnection:
             return await self._log_audio_output(control)
         if command_type == "start-report":
             return await self._log_client_start(control)
+        if command_type == "unheard-report":
+            return await self._log_client_unheard(control)
         # A paused client's socket carries nothing; proxies close an idle WebSocket after about
         # 100 seconds, so clients that cannot send WebSocket pings send this instead.
         if command_type == "keepalive" and set(control) == {"type"}:
@@ -776,6 +792,45 @@ class _PlaybackPcmConnection:
                 socket=self.timing_socket,
                 kind="prepared" if control["prepared"] else "opened",
                 generation=generation,
+                stream=stream_id,
+                pressed_at=pressed_at,
+                presses=presses,
+                **durations,
+            )
+        return True
+
+    async def _log_client_unheard(self, control: dict[str, Any]) -> bool:
+        """A page's press that did not sound: numbers and one word from a fixed list."""
+        outcome, stream_id = control.get("outcome"), control.get("pressedStreamId")
+        presses = _bounded_integer(control.get("presses"), minimum=1, maximum=_MAX_PROTOCOL_INTEGER)
+        pressed_at = _bounded_integer(control.get("pressedAtEpochMs"), minimum=0, maximum=_MAX_EPOCH_MS)
+        durations = {
+            key: _bounded_integer(control.get(name), minimum=0, maximum=_MAX_PROTOCOL_INTEGER)
+            for name, key in _UNHEARD_REPORT_DURATIONS.items()
+        }
+        if (
+            set(control) != _UNHEARD_REPORT_KEYS
+            or not isinstance(outcome, str)
+            or outcome not in _UNHEARD_OUTCOMES
+            or not isinstance(control.get("prepared"), bool)
+            or None in (presses, pressed_at)
+            or (
+                stream_id is not None
+                and _bounded_integer(stream_id, minimum=1, maximum=_MAX_PROTOCOL_INTEGER) is None
+            )
+            or any(
+                durations[key] is None and control.get(name) is not None
+                for name, key in _UNHEARD_REPORT_DURATIONS.items()
+            )
+        ):
+            await self.reject(CLOSE_INVALID_CONTROL)
+            return False
+        if playback_timing.ENABLED:
+            playback_timing.log(
+                "client-unheard",
+                socket=self.timing_socket,
+                kind="prepared" if control["prepared"] else "opened",
+                outcome=outcome,
                 stream=stream_id,
                 pressed_at=pressed_at,
                 presses=presses,
@@ -889,6 +944,7 @@ class _PlaybackPcmConnection:
             _bounded_integer(
                 control.get("streamId" if is_open else "requestId"), minimum=1, maximum=_MAX_PROTOCOL_INTEGER
             ),
+            _bounded_integer(control.get("clientSentAtEpochMs"), minimum=0, maximum=_MAX_EPOCH_MS),
         )
         return playback_timing.timed_control(timing, answer)
 
@@ -1135,6 +1191,8 @@ class _PlaybackPcmConnection:
         if playback_timing.ENABLED:
             # Asks the page to report where its presses waited (`start-report`).
             metadata["timing"] = True
+            # Apart from `timing`, which a server older than the unheard-press line also sends.
+            metadata["timingUnheard"] = True
         await self._send_open_event(ticket, metadata)
         if ticket.abandoned:
             return True

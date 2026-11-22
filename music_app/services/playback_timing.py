@@ -39,8 +39,16 @@ def elapsed_ms(started_at: float) -> int:
 class ControlTiming:
     """Where one open or probe waited."""
 
-    def __init__(self, socket: int, kind: str, generation: int | None, control_id: int | None) -> None:
+    def __init__(
+        self,
+        socket: int,
+        kind: str,
+        generation: int | None,
+        control_id: int | None,
+        client_sent_at: int | None = None,
+    ) -> None:
         self.socket, self.kind, self.generation, self.control_id = socket, kind, generation, control_id
+        self.client_sent_at = client_sent_at
         self.received_at = epoch_ms()
         self.steps: dict[str, int] = {}
 
@@ -54,9 +62,12 @@ class ControlTiming:
         def run(*args: object) -> _T:
             started_at = time.perf_counter()
             self.mark(f"{step}_wait_ms", round((started_at - submitted_at) * 1000))
+            # The work marks its own steps (`mark_step`) from whichever thread runs it.
+            in_work = CONTROL.set(self)
             try:
                 return work(*args)
             finally:
+                CONTROL.reset(in_work)
                 self.mark(f"{step}_ms", elapsed_ms(started_at))
 
         return run
@@ -68,11 +79,13 @@ class ControlTiming:
             kind=self.kind,
             generation=self.generation,
             id=self.control_id,
+            client_sent_at=self.client_sent_at,
             received_at=self.received_at,
             **{
                 step: self.steps.get(step)
                 for step in (
-                    "refresh_wait_ms", "refresh_ms", "resolve_wait_ms", "resolve_ms", "mp3_scan_ms",
+                    "refresh_wait_ms", "refresh_ms", "refresh_checkout_ms", "refresh_session_ms",
+                    "refresh_actor_ms", "resolve_wait_ms", "resolve_ms", "mp3_scan_ms",
                     "send_lock_wait_ms", "sent_at",
                 )
             },
@@ -86,6 +99,14 @@ CONTROL: ContextVar[ControlTiming | None] = ContextVar("playback_control_timing"
 def timed_work(step: str, work: Callable[..., _T]) -> Callable[..., _T]:
     timing = CONTROL.get()
     return work if timing is None else timing.timed(step, work)
+
+
+def mark_step(step: str, started_at: float) -> float:
+    """Ends one step inside timed work, for the control it answers, and starts the next."""
+    timing = CONTROL.get()
+    if timing is not None:
+        timing.mark(step, elapsed_ms(started_at))
+    return time.perf_counter()
 
 
 async def timed_control(timing: ControlTiming, answer: Awaitable[_T]) -> _T:

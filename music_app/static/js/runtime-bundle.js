@@ -8520,6 +8520,8 @@ const STREAMING_LIVENESS_CHECK_MS = 500;
 // A page running more than a heartbeat behind may hold one unread: before a seek's silence counts
 // there, the page gets this long to read its socket. A page that keeps up waits for nothing.
 const STREAMING_LATE_PAGE_READ_MS = 100;
+// A press still silent after this says so in the timing lines, once.
+const STREAMING_PRESS_WAIT_REPORT_MS = 15000;
 // A reconnect attempt begun on a network that is gone can hang for tens of seconds; it is given up.
 // Each attempt given up so allows the next one twice as long, up to 16 s: on a loaded machine a
 // connection that is only slow to open must open at last (as with the CPU at 100%).
@@ -9465,6 +9467,7 @@ function watchStreamingSocketLiveness(socket) {
       clearInterval(timer);
       return;
     }
+    reportLongWaitingStreamingPress();
     // A check that ran late found a page too busy to have read what arrived: it decides nothing.
     const now = performance.now();
     const sinceLastMs = now - checkedAtMs;
@@ -9854,7 +9857,10 @@ function handleStreamingControl(message) {
     }
     roleState.metadataAccepted = true;
     // A kept track's metadata is the page's own and says nothing for the server.
-    if (!roleState.local) engine.timingRequested = message.timing === true;
+    if (!roleState.local) {
+      engine.timingRequested = message.timing === true;
+      engine.unheardRequested = message.timingUnheard === true;
+    }
     markStreamingPress('metadataMs', roleState);
     if (message.codec) {
       createStreamingEncodedRole(roleState, message);
@@ -10039,6 +10045,7 @@ function noteStreamingPress(track) {
   // A start of the song whose start still waits (timed out, or not from its row) is one more press of it.
   const waiting = last?.path === path
     && [state.player.selectedTrack?.path, state.player.current?.path].includes(path);
+  if (last && !waiting) reportUnheardStreamingPress('replaced');
   const pressedAtMs = performance.now();
   engine.startTiming = {
     path,
@@ -10056,6 +10063,45 @@ function noteStreamingPress(track) {
 function countIgnoredStreamingPress(path) {
   const timing = streamingEngineState().startTiming;
   if (timing?.path === path) timing.presses += 1;
+}
+
+// When the page sent a control, for a server that times them.
+function streamingClientSendTime() {
+  return streamingEngineState().timingRequested ? { clientSentAtEpochMs: Math.round(Date.now()) } : {};
+}
+
+// How a press that has not sounded ended, or that it still waits: numbers and one word from this list
+// (replaced, paused, seek, stopped, waiting), to a server that asks (`timingUnheard`).
+function reportUnheardStreamingPress(outcome) {
+  const engine = streamingEngineState();
+  const timing = engine.startTiming;
+  if (!timing) return;
+  if (outcome !== 'waiting') engine.startTiming = null;
+  if (!engine.unheardRequested || engine.socket?.readyState !== WebSocket.OPEN) return;
+  const now = performance.now();
+  sendStreamingControl({
+    type: 'unheard-report',
+    outcome,
+    prepared: timing.prepared,
+    pressedStreamId: timing.streamId,
+    presses: timing.presses,
+    pressedAtEpochMs: timing.pressedAtEpochMs,
+    firstPressMs: Math.max(0, Math.round(now - timing.firstPressedAtMs)),
+    openMs: timing.marks.openMs ?? null,
+    metadataMs: timing.marks.metadataMs ?? null,
+    firstBytesMs: timing.marks.firstBytesMs ?? null,
+    decodedMs: timing.marks.decodedMs ?? null,
+    prepareMs: timing.marks.prepareMs ?? null,
+    endedMs: Math.max(0, Math.round(now - timing.pressedAtMs)),
+  });
+}
+
+function reportLongWaitingStreamingPress() {
+  const timing = streamingEngineState().startTiming;
+  if (!timing || timing.waitReported
+      || performance.now() - timing.firstPressedAtMs < STREAMING_PRESS_WAIT_REPORT_MS) return;
+  timing.waitReported = true;
+  reportUnheardStreamingPress('waiting');
 }
 
 function followStreamingPress(roleState, prepared = false) {
@@ -10132,6 +10178,8 @@ function maybePrepareStreamingSeek(roleState) {
       || (!roleState.eosReceived
         && engine.diagnostics.bufferedFrames.continuity < roleState.targetBufferFrames)) return;
   pendingSeek.prepareSent = true;
+  // With the answer's time, this tells a late answer from a cut-over that was not made.
+  markStreamingPress('prepareMs', roleState);
   engine.node.port.postMessage({
     type: 'prepare-seek',
     generation: roleState.generation,
@@ -11565,6 +11613,7 @@ function openStreamingRole(role, track, startFrame = 0, continuityOptions = null
     durationSeconds: Number(track.durationSeconds) || 0,
     ...(engine.encodedCodecs?.length ? { codecs: engine.encodedCodecs, seekTable: true } : {}),
     ...(roleState.quality === '320' ? { quality: '320' } : {}),
+    ...streamingClientSendTime(),
   });
   if (!accepted) {
     if (engine.roles[role] === roleState) engine.roles[role] = null;
@@ -11820,7 +11869,7 @@ function requestPreparedStreamingAuthority(prepared) {
   engine.authorityCheck = { requestId, prepared };
   followStreamingPress(prepared, true);
   return sendStreamingControl({
-    type: 'probe', requestId, path: String(prepared.track.path), authorityOnly: true,
+    type: 'probe', requestId, path: String(prepared.track.path), authorityOnly: true, ...streamingClientSendTime(),
   });
 }
 
@@ -12155,6 +12204,7 @@ async function openBrowserStreamingTrack(track, {
 
 async function pauseBrowserStreaming() {
   const engine = streamingEngineState();
+  reportUnheardStreamingPress('paused');
   const startRequestId = engine.startRequestId = (Number(engine.startRequestId) || 0) + 1;
   if (!engine.context || !engine.node) return;
   settlePendingBufferedSeek('superseded', { retainForAcknowledgement: true });
@@ -12248,6 +12298,7 @@ async function seekBrowserStreaming(seconds) {
   if (!currentTrack || !engine.node) return;
   const current = engine.roles.current;
   if (!current) return null;
+  reportUnheardStreamingPress('seek');
   settlePendingBufferedSeek('superseded', { retainForAcknowledgement: true });
   if (engine.pendingPromotion) {
     const pendingPromotion = engine.pendingPromotion;
@@ -12518,6 +12569,7 @@ async function cleanupStreamingResources(reason, {
   const node = engine.node;
   const socket = engine.socket;
   const context = engine.context;
+  reportUnheardStreamingPress('stopped');
   if (roles.length || engine.waveformReadyIdentity) {
     cancelStreamingWaveformGeneration(engine.generation);
   }

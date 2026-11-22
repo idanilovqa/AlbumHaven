@@ -9185,6 +9185,80 @@ test('a seek while another already cuts over still asks the server', async () =>
   assert.equal(harness.sent('open').length, opens + 1);
 });
 
+// A lost press left no line, and no control said when the page sent it.
+test('with timing asked, an open and a refresh probe say when the page sent them', async (t) => {
+  const { harness } = await playingWithPreparedNext(t, { holdSampleRateProbes: true });
+  assert.equal(harness.sent('open')[0].clientSentAtEpochMs, undefined, 'nothing is added before the server asks');
+  harness.engine.timingRequested = true;
+
+  await pressTrack(harness, '02.flac');
+  assert.equal(harness.sockets[0].probes.at(-1).clientSentAtEpochMs, harness.dateNow());
+  await pressTrack(harness, '05.flac');
+  assert.equal(harness.sent('open').at(-1).clientSentAtEpochMs, harness.dateNow());
+});
+
+for (const ended of ['replaced', 'paused', 'seek', 'stopped']) {
+  test(`a press that never sounded reports that it was ${ended}, in numbers only`, async (t) => {
+    const { harness } = await playingSong(t);
+    Object.assign(harness.engine, { timingRequested: true, unheardRequested: true });
+    harness.setNow(5_000);
+    const pressed = await timedPress(harness, '05.flac');
+    harness.setNow(5_900);
+    if (ended === 'replaced') harness.context.noteStreamingPress(makeTrack('06.flac'));
+    else if (ended === 'paused') await harness.api.pause();
+    else if (ended === 'seek') await harness.api.seek(120);
+    else await harness.api.stop();
+    await harness.settle();
+
+    const [report, ...more] = harness.sent('unheard-report');
+    assert.equal(more.length, 0, 'one line');
+    assert.deepEqual(report, {
+      type: 'unheard-report',
+      outcome: ended,
+      prepared: false,
+      pressedStreamId: pressed.open.streamId,
+      presses: 1,
+      pressedAtEpochMs: report.pressedAtEpochMs,
+      firstPressMs: 900,
+      openMs: 0,
+      metadataMs: null,
+      firstBytesMs: null,
+      decodedMs: null,
+      prepareMs: null,
+      endedMs: 900,
+    });
+    assert.doesNotMatch(JSON.stringify(report), /05\.flac|Track|src|path|title/);
+  });
+}
+
+test('a press still silent after fifteen seconds says so once, and goes on waiting', async (t) => {
+  const { harness, node } = await playingSong(t);
+  Object.assign(harness.engine, { timingRequested: true, unheardRequested: true });
+  harness.setNow(5_000);
+  const pressed = await timedPress(harness, '05.flac');
+  for (const now of [19_500, 20_000, 20_500]) {
+    harness.setNow(now);
+    harness.sockets[0].receive({ type: 'heartbeat' });
+    liveness(harness).callback();
+  }
+  assert.deepEqual(harness.sent('unheard-report').map(({ outcome }) => outcome), ['waiting']);
+
+  acceptMetadata(harness, pressed.open, { timing: true, timingUnheard: true });
+  receiveSong(harness, pressed.open, PRESSED_SONG, 2 * ONE_SECOND, 0, 1);
+  await harness.settle();
+  heardFor(node, 2);
+  assert.equal(harness.sent('start-report').length, 1, 'and still reports when it sounds');
+});
+
+test('a server that did not ask for unheard presses gets none', async (t) => {
+  const { harness } = await playingSong(t);
+  harness.engine.timingRequested = true;
+  await timedPress(harness, '05.flac');
+  await harness.api.pause();
+
+  assert.equal(harness.sent('unheard-report').length, 0);
+});
+
 test('a press on a different song still switches, and back', async (t) => {
   const { harness, node } = await playingSong(t);
   const rows = installRowPresses(harness);

@@ -43,14 +43,6 @@ _PENDING_ALBUMS_SQL = """
     order by library.local_albums.album_key, library.local_track_files.private_path;
 """
 
-_RECORD_WRITE_SQL = """
-    insert into library.local_track_file_text_correction_writes (track_file_id, text_corrections)
-    values (%s, %s)
-    on conflict (track_file_id) do update
-      set text_corrections = excluded.text_corrections, written_at = now();
-"""
-_FORGET_WRITE_SQL = "delete from library.local_track_file_text_correction_writes where track_file_id = any(%s::bigint[]);"
-
 
 def library_writes_tags(config: dict[str, object]) -> bool:
     from music_app.services.library_roots import METADATA_CORRECTIONS_WRITE_TAGS, load_library_root_settings
@@ -73,19 +65,6 @@ def pending_correction_albums(config: dict[str, object]) -> dict[str, list[dict[
         for row in connection.execute(_PENDING_ALBUMS_SQL).fetchall():
             albums.setdefault(str(row["album_key"]), []).append(dict(row))
     return albums
-
-
-def record_writes(config: dict[str, object], files: list[dict[str, object]]) -> None:
-    from psycopg.types.json import Jsonb
-
-    with _connect(config) as connection, connection.transaction():
-        for row in files:
-            connection.execute(_RECORD_WRITE_SQL, (row["track_file_id"], Jsonb(row["text_corrections"])))
-
-
-def forget_writes(config: dict[str, object], files: list[dict[str, object]]) -> None:
-    with _connect(config) as connection:
-        connection.execute(_FORGET_WRITE_SQL, ([row["track_file_id"] for row in files],))
 
 
 def correction_payload(detail: dict[str, object] | None, paths: set[str]) -> dict[str, object] | None:
@@ -152,16 +131,19 @@ class LibraryDataCorrectionsWriter:
             payload = correction_payload(detail, {str(row["private_path"]) for row in files})
             if payload is None:
                 continue
-            written_files = [row for row in files if str(row["private_path"]) in payload["updates"]]
-            # Recorded first: a completed write clears the file's corrections.
-            await run_in_threadpool(record_writes, config, written_files)
+            # The save records these as written when it completes, which is also when the corrections clear.
+            written_records = {
+                str(row["private_path"]): {"track_file_id": row["track_file_id"], "text_corrections": row["text_corrections"]}
+                for row in files if str(row["private_path"]) in payload["updates"]
+            }
             # History belongs to the library whose files were corrected.
             history_scope = HistoryScope(library_id=files[0]["library_id"], origin_kind="background")
-            result = await run_edit_tags_payload(request, payload, history_scope=history_scope)
+            result = await run_edit_tags_payload(
+                request, payload, history_scope=history_scope, text_correction_writes=written_records,
+            )
             response = result[0] if isinstance(result, tuple) else result
             if response.get("ok"):
                 written += 1
             else:
-                await run_in_threadpool(forget_writes, config, written_files)
                 _LOGGER.warning("Library data corrections for one album were not written: %s", response.get("error"))
         return written

@@ -363,13 +363,14 @@ def _validate_changes(changes: list[dict[str, object]]) -> list[dict[str, object
             raise ValueError(
                 "Tag edit intent requires matching old and requested values."
             )
-        normalized.append(
-            {
-                "path": path,
-                "old_values": dict(old_values),
-                "requested_values": dict(requested_values),
-            }
-        )
+        change = {
+            "path": path,
+            "old_values": dict(old_values),
+            "requested_values": dict(requested_values),
+        }
+        if isinstance(raw_change.get("text_correction_write"), Mapping):
+            change["text_correction_write"] = dict(raw_change["text_correction_write"])
+        normalized.append(change)
     return normalized
 
 
@@ -408,15 +409,29 @@ def _mark_files_verified_sql() -> str:
 
 
 def _mark_terminal_sql() -> str:
+    # A "Write in tags" correction is recorded as written only by the commit that completes its save.
     return """
-        update library.tag_edit_intents
-        set status = %(status)s,
-            updated_at = now(),
-            completed_at = now(),
-            last_error = %(last_error)s
-        where id = %(intent_id)s::uuid
-          and status in ('prepared', 'files_verified', 'recovery_failed')
-        returning id::text as id
+        with terminal as (
+          update library.tag_edit_intents
+          set status = %(status)s,
+              updated_at = now(),
+              completed_at = now(),
+              last_error = %(last_error)s
+          where id = %(intent_id)s::uuid
+            and status in ('prepared', 'files_verified', 'recovery_failed')
+          returning id, status, changes
+        ), written as (
+          insert into library.local_track_file_text_correction_writes (track_file_id, text_corrections)
+          select files.id, change -> 'text_correction_write' -> 'text_corrections'
+          from terminal
+          cross join lateral jsonb_array_elements(terminal.changes) change
+          join library.local_track_files files
+            on files.id = (change -> 'text_correction_write' ->> 'track_file_id')::bigint
+          where terminal.status = 'completed'
+          on conflict (track_file_id) do update
+            set text_corrections = excluded.text_corrections, written_at = now()
+        )
+        select id::text as id from terminal
     """
 
 

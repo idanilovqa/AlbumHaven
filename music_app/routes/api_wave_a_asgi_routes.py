@@ -1847,10 +1847,15 @@ async def utilities_edit_tags(request: Request) -> JSONResponse:
     return _json_response(await run_edit_tags_payload(request, payload, history_scope=history_scope, started=request_started))
 
 
-async def run_edit_tags_payload(request: Request, payload, *, history_scope, started: float | None = None) -> ResponseValue:
+async def run_edit_tags_payload(
+    request: Request, payload, *, history_scope, started: float | None = None,
+    text_correction_writes: Mapping[str, Mapping[str, object]] | None = None,
+) -> ResponseValue:
     """The whole Edit Tags pipeline for one payload: reservation, intent,
     media write, save task, History. The route and Library Data Corrections
-    (with a request bound only to the app) both run it."""
+    (with a request bound only to the app) both run it. ``text_correction_writes``
+    is never taken from the payload: the intent carries it to the commit that
+    completes the save, recovery included."""
     request_started = perf_counter() if started is None else started
     if history_scope is not None:
         # Save-task finalizers record History from the request's scope.
@@ -1952,7 +1957,12 @@ async def run_edit_tags_payload(request: Request, payload, *, history_scope, sta
         "prepare_tag_edit_intent": (
             lambda *, changes: intent_lease.prepare_intent(
                 library_root_identity=library_root_cache_identity(config),
-                changes=changes,
+                changes=[
+                    {**change, "text_correction_write": text_correction_writes[change["path"]]}
+                    if text_correction_writes and change["path"] in text_correction_writes
+                    else change
+                    for change in changes
+                ],
             )
         ),
         "mark_tag_edit_files_verified": (

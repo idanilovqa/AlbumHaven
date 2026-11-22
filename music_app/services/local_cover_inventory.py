@@ -33,6 +33,7 @@ WALK_LIMIT = 4
 # Opens waiting for a walk; past this an open answers with what is stored. A write's walk is never refused.
 WAITING_LIMIT = 32
 WALK_WAIT_SECONDS = 8.0
+CLOSE_WAIT_SECONDS = 3.0
 
 
 def root_key(root: Path | str) -> str:
@@ -142,10 +143,13 @@ class LocalCoverInventory:
         self.repository = repository or LocalCoverInventoryRepository(config)
         self._logger = logger or logging.getLogger("music_app")
         self._lock = threading.Lock()
+        self._closed = False
         self._walking: dict[str, Future] = {}
         self._waiting: OrderedDict[str, tuple[Path, Future]] = OrderedDict()
 
     def stored(self, roots) -> dict[str, dict[str, object]]:
+        if self._closed:
+            return {}
         try:
             return self.repository.get(roots)
         except Exception:
@@ -199,32 +203,44 @@ class LocalCoverInventory:
     def refresh(self, root, *, after_write: bool = False) -> dict[str, object]:
         return self.read_folders([root], after_write=after_write)[0][1]
 
-    def after_write(self, roots, *, removed=None) -> None:
-        """Follow a committed write without waiting on the drive or failing it.
+    def after_write(self, album_root, track_paths, *, removed=None) -> None:
+        """Follow a committed write without asking the drive, waiting on it or failing the write.
 
-        A removed cover leaves its row now. Each folder gets a walk that begins after the write, which the next
-        read of the album waits for.
+        The album's stored folders are found by key from its paths as written. A removed cover leaves them now,
+        and each gets a walk that begins after the write, which the album's next read waits for.
         """
         try:
-            if removed is not None:
-                for root in roots:
-                    self._drop(root, removed)
+            folders: dict[str, Path] = {}
+            for track_path in track_paths:
+                folder = Path(track_path).parent
+                for candidate in (folder, folder.parent):
+                    folders.setdefault(root_key(candidate), candidate)
+            if album_root is not None:
+                folders[root_key(album_root)] = Path(album_root)
+            rows = self.stored(folders.values())
+            with self._lock:
+                listed = [key for key in folders if key in rows or key in self._walking or key in self._waiting]
+            for key in listed:
+                if removed is not None:
+                    self._drop(folders[key], removed)
+                self._ask(folders[key], after_write=True)
         except Exception:
-            self._logger.exception("Could not drop a deleted cover from its stored listing.")
-        for root in roots:
-            self._ask(root, after_write=True)
+            self._logger.exception("Could not update the local cover listing after a cover write.")
 
-    def written_listings(self, roots, *, removed=None) -> list[tuple[Path, dict[str, object]]]:
-        """What a write answers with: the stored covers, less a removed one. The follow-up read replaces them."""
-        rows = self.stored(roots)
-        gone = root_key(removed) if removed is not None else None
-        return [
-            (root, {"error": None, "candidates": [
-                item for item in (rows.get(root_key(root)) or {}).get("candidates") or []
-                if root_key(item["path"]) != gone
-            ]})
-            for root in roots
-        ]
+    def close(self) -> None:
+        """Refuse new walks, answer waiting ones and give running ones a bounded time. The pool is then left alone."""
+        with self._lock:
+            self._closed = True
+            waiting, self._waiting = list(self._waiting.values()), OrderedDict()
+            running = list(self._walking.values())
+        for _root, walk in waiting:
+            walk.set_result(None)
+        deadline = monotonic() + CLOSE_WAIT_SECONDS
+        for walk in running:
+            try:
+                walk.result(timeout=max(0.0, deadline - monotonic()))
+            except FutureTimeoutError:
+                self._logger.warning("A local cover folder was still being read at shutdown.")
 
     def _kept(self, root, error: str) -> dict[str, object]:
         row = self.stored([root]).get(root_key(root)) or {}
@@ -241,6 +257,8 @@ class LocalCoverInventory:
     def _ask(self, root, *, after_write: bool) -> Future | None:
         key = root_key(root)
         with self._lock:
+            if self._closed:
+                return None
             waiting = self._waiting.get(key)
             if waiting:
                 return waiting[1]  # Not started: it sees everything written so far.
@@ -289,11 +307,12 @@ class LocalCoverInventory:
                 found = discover_local_cover_inventory(root, self.config, previous=stored)
             except OSError:
                 try:
-                    self.repository.mark_unreadable(root)
+                    if not self._closed:
+                        self.repository.mark_unreadable(root)
                 except Exception:
                     self._logger.exception("Could not record an unreadable local cover folder.")
                 return {"candidates": stored, "error": STORAGE_UNAVAILABLE}
-            if row and row.get("complete") and not row.get("error") and found == stored:
+            if self._closed or (row and row.get("complete") and not row.get("error") and found == stored):
                 break
             try:
                 if self.repository.publish(root, found, expected_revision=row["revision"] if row else None):

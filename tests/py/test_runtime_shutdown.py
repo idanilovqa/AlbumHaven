@@ -409,6 +409,11 @@ def test_asgi_lifespan_attempts_every_cleanup_stage_before_raising(monkeypatch, 
         lambda _runtime: record_or_raise("runtime-shutdown"),
     )
 
+    from music_app.services.local_cover_inventory import LocalCoverInventory
+
+    monkeypatch.setattr(
+        LocalCoverInventory, "close", lambda _self: calls.append("cover-walks-close"), raising=False,
+    )
     app = create_asgi_app()
     app.state.playback_pcm_registry = RegistryDouble()
     app.state.waveform_peaks_registry = WaveformRegistryDouble()
@@ -421,6 +426,7 @@ def test_asgi_lifespan_attempts_every_cleanup_stage_before_raising(monkeypatch, 
     asyncio.run(scenario())
 
     assert calls == [
+        "cover-walks-close",
         "lastfm-stop",
         "waveform-shutdown",
         "pcm-shutdown",

@@ -618,6 +618,7 @@ def create_asgi_app():
             runtime.config.pop("_LIBRARY_WATCH_MANUAL_RECOVERY_CALLBACK", None)
             shutdown_errors: list[tuple[str, BaseException]] = []
             shutdown_stages = (
+                ("local cover walks", lambda: asyncio.to_thread(_app.state.local_cover_inventory.close)),
                 (
                     "generated preview relocation",
                     _app.state.generated_preview_relocation.stop

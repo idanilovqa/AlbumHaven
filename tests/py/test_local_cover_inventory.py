@@ -8,6 +8,7 @@ import threading
 import time
 from types import SimpleNamespace
 
+from fastapi import FastAPI
 from PIL import Image
 import pytest
 
@@ -76,13 +77,13 @@ class Album:
         monkeypatch.setattr(routes, "_library_state", lambda request: {"file_cache": entries})
         monkeypatch.setattr(routes, "cover_lookup_result", lambda task_id: {})
 
-    def gallery(self, *, stored_first=False, **written):
+    def gallery(self, *, stored_first=False):
         return asyncio.run(routes._serialize_cover_gallery_from_asgi(
-            self.request, self.album_root, self.tracks, stored_first=stored_first, **written,
+            self.request, self.album_root, self.tracks, stored_first=stored_first,
         ))
 
-    def roots(self):
-        return self.inventory.listed_roots(self.album_root, [self.copy] if self.copy else [], self.tracks)
+    def written(self, removed=None):
+        self.inventory.after_write(self.album_root, self.tracks, removed=removed)
 
     def shown(self, payload):
         return {Path(item["candidate_cover_path"]).name for item in payload["local_covers"] + payload["other_art"]}
@@ -191,10 +192,9 @@ def test_a_deleted_active_cover_gets_no_card(album):
 
 
 def test_a_save_stores_the_new_cover_under_the_folder_the_gallery_lists(album):
-    roots = album.roots()  # Resolved before the commit.
     Image.new("RGB", (60, 60), "white").save(album.main / "cover-2.jpg")
 
-    album.inventory.after_write(roots)
+    album.written()
 
     assert "cover-2.jpg" in album.shown(album.gallery()), "the read that follows sees the write"
     assert "cover-2.jpg" in album.stored(album.main)
@@ -203,7 +203,7 @@ def test_a_save_stores_the_new_cover_under_the_folder_the_gallery_lists(album):
 
 def test_a_failed_listing_update_never_fails_the_save(album, monkeypatch):
     monkeypatch.setattr(album.store, "get", lambda roots: (_ for _ in ()).throw(RuntimeError("database away")))
-    album.inventory.after_write(album.roots(), removed=album.main / "cover.jpg")
+    album.written(removed=album.main / "cover.jpg")
 
 
 class HeldWalk:
@@ -227,7 +227,6 @@ class HeldWalk:
 
 @pytest.mark.parametrize("write", ["delete", "paste"])
 def test_a_write_during_a_running_walk_never_answers_with_what_was_before_it(album, monkeypatch, write):
-    roots = album.roots()
     changed = album.main / "Covers" / "inside.jpg" if write == "delete" else album.main / "pasted.jpg"
     held = HeldWalk(monkeypatch, album.main)
     earlier = threading.Thread(target=album.gallery)
@@ -236,13 +235,11 @@ def test_a_write_during_a_running_walk_never_answers_with_what_was_before_it(alb
     try:
         if write == "delete":
             changed.unlink()
-            # The delete route's answer: no walk is waited for, and the deleted cover is gone from it.
-            answer = album.gallery(written_roots=roots, removed=changed)
-            assert changed.name not in album.shown(answer) and answer["local_inventory_pending"] is True
-            assert changed.name not in album.stored(album.main)
+            album.written(removed=changed)
+            assert changed.name not in album.stored(album.main), "gone at once, without waiting for a walk"
         else:
             Image.new("RGB", (70, 70), "black").save(changed)
-            album.inventory.after_write(roots)  # The paste route; the dialog then reads the gallery.
+            album.written()
     finally:
         threading.Timer(0.2, held.release.set).start()
 
@@ -257,7 +254,7 @@ def test_a_hung_drive_blocks_neither_another_album_nor_a_save(tmp_path, monkeypa
     monkeypatch.setattr(inventory, "WALK_WAIT_SECONDS", 0.3)
     hung = Album(tmp_path / "a", monkeypatch, "plain")
     listed = hung.gallery()
-    roots, entered, release = hung.roots(), threading.Event(), threading.Event()
+    entered, release = threading.Event(), threading.Event()
     scandir = cover_state.os.scandir
 
     def hang(path="."):
@@ -276,10 +273,8 @@ def test_a_hung_drive_blocks_neither_another_album_nor_a_save(tmp_path, monkeypa
         assert answered["local_inventory_pending"] is False
 
         started = time.monotonic()
-        hung.inventory.after_write(roots)
-        written = hung.gallery(written_roots=roots)
+        hung.written()
         assert time.monotonic() - started < 0.2, "a committed write never waits on the drive"
-        assert written["local_inventory_pending"] is True
 
         other = tmp_path / "b"
         other.mkdir()
@@ -385,6 +380,124 @@ def test_walks_of_different_albums_are_bounded(tmp_path, monkeypatch):
     for thread in threads:
         thread.join(5)
     assert len(peak) == 12 and max(peak) <= inventory.WALK_LIMIT
+
+
+def post(album, path, payload):
+    from tests.py.test_ordered_cover_save_asgi import request_async
+
+    app = FastAPI()
+    app.include_router(routes.router)
+    app.state.local_cover_inventory = album.inventory
+    app.state.config = dict(CONFIG)
+    return asyncio.run(request_async(app, payload, path=path, method="POST"))
+
+
+@pytest.fixture
+def writing(album, monkeypatch):
+    """The album behind the two write routes, with only their database and file transaction replaced."""
+    committed = []
+
+    async def context(config, payload, **_kwargs):
+        return dict(payload), SimpleNamespace(album_root=album.album_root, track_paths=album.tracks)
+
+    async def allowed(*_args, **_kwargs):
+        return None
+
+    async def state(*_args, **_kwargs):
+        return {"file_cache": {}}
+
+    monkeypatch.setattr(routes, "_app_logger", lambda request: SimpleNamespace(exception=lambda *a, **k: None))
+    monkeypatch.setattr(routes, "_library_state", lambda request: {"file_cache": {}})
+    monkeypatch.setattr(routes, "_resolve_album_payload_context", context)
+    monkeypatch.setattr(routes, "_legacy_cover_mutation_preflight", allowed)
+    monkeypatch.setattr(routes, "_selected_cover_inventory_state", state)
+    monkeypatch.setattr(routes, "validate_local_cover_source", lambda config, root, source, **kwargs: Path(source))
+    monkeypatch.setattr(routes, "ranked_local_cover_candidates", lambda *args, **kwargs: [])
+    monkeypatch.setattr(routes, "mark_cover_lookup_notifications_action_taken_for_track_paths", lambda *a, **k: [])
+    return committed
+
+
+@pytest.mark.parametrize("drive", ["answers", "raises", "hangs"])
+@pytest.mark.parametrize("write", ["delete", "paste"])
+def test_the_write_routes_update_the_listing_and_never_depend_on_it(album, writing, monkeypatch, write, drive):
+    release = threading.Event()
+    changed = album.main / ("cover.jpg" if write == "paste" else "Covers/inside.jpg")
+    before = album.store.rows[inventory.root_key(album.main)]["revision"]
+
+    def ask_the_drive(*_args, **_kwargs):
+        if drive == "raises":
+            raise OSError("share away")
+        release.wait(10)
+        return album.album_root
+
+    if drive != "answers":
+        monkeypatch.setattr(cover_workflow, "restrict_album_root_to_represented_disc", ask_the_drive)
+        monkeypatch.setattr(routes, "resolve_album_copy_roots", ask_the_drive)
+        monkeypatch.setattr(inventory, "discover_local_cover_inventory", ask_the_drive)
+
+    def commit(config, **_kwargs):
+        if write == "delete":
+            changed.unlink()
+        else:
+            Image.new("RGB", (80, 80), "purple").save(changed)
+        writing.append(write)
+        return {}
+
+    monkeypatch.setattr(routes, "run_cover_mutation_for_config", commit)
+    try:
+        started = time.monotonic()
+        if write == "delete":
+            status, body = post(album, "/utilities/cover-lookup/local-delete",
+                                {"album": {"name": "Album"}, "source_path": str(changed)})
+        else:
+            import base64
+            import io
+
+            png = io.BytesIO()
+            Image.new("RGB", (80, 80), "purple").save(png, "PNG")
+            status, body = post(album, "/utilities/cover-lookup/pasted-image-save", {
+                "album": {"name": "Album"},
+                "data_url": "data:image/png;base64," + base64.b64encode(png.getvalue()).decode(),
+            })
+        elapsed = time.monotonic() - started
+
+        assert status == 200 and body["ok"] is True and writing == [write]
+        assert elapsed < 2, "the write never waits on the drive"
+        assert "gallery" not in body, "the dialog's own read follows, so no cover is blanked"
+        if write == "delete":
+            assert changed.name not in album.stored(album.main)
+        if drive == "answers":
+            followed = album.gallery()
+            assert (changed.name in album.shown(followed)) is (write == "paste")
+            assert album.store.rows[inventory.root_key(album.main)]["revision"] > before
+            if album.copy:
+                assert "copy.jpg" in album.shown(followed)
+    finally:
+        release.set()
+
+
+def test_closing_refuses_walks_answers_waiters_and_leaves_the_pool_alone(tmp_path, monkeypatch):
+    listings = inventory.LocalCoverInventory(CONFIG, repository=Store())
+    release, entered = threading.Event(), threading.Event()
+    monkeypatch.setattr(inventory, "discover_local_cover_inventory",
+                        lambda root, *a, **k: entered.set() or (release.wait(5) and [{"path": "late"}]))
+    monkeypatch.setattr(inventory, "WALK_WAIT_SECONDS", 5.0)
+    monkeypatch.setattr(inventory, "CLOSE_WAIT_SECONDS", 0.2)
+    running = listings._ask(tmp_path, after_write=False)
+    assert entered.wait(2)
+    waiting = listings._ask(tmp_path, after_write=True)
+
+    started = time.monotonic()
+    listings.close()
+
+    assert time.monotonic() - started < 1, "a hung walk never holds shutdown"
+    assert waiting.result(timeout=0) is None
+    assert listings._ask(tmp_path / "new", after_write=True) is None
+    monkeypatch.setattr(listings.repository, "get", lambda roots: pytest.fail("used the pool after close"))
+    monkeypatch.setattr(listings.repository, "publish", lambda *a, **k: pytest.fail("published after close"))
+    release.set()
+    running.result(timeout=2)
+    assert listings.refresh(tmp_path)["candidates"] == []
 
 
 def test_there_is_no_background_worker_to_start_poll_or_stop():

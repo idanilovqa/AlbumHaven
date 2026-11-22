@@ -330,8 +330,6 @@ def _build_automatic_cover_write_guard(
                     publish_selection(selection)
                 return result
 
-        inventory = config.get("_LOCAL_COVER_INVENTORY")
-        written_roots = inventory.listed_roots(folder, [], set(track_paths)) if inventory is not None else None
         result = run_cover_mutation_for_config(
             config, track_paths=track_paths, album_root=folder,
             source_paths=(target,), affected_paths=(target,),
@@ -350,8 +348,9 @@ def _build_automatic_cover_write_guard(
         )
         if any(value for key, value in result.items() if key.startswith("blocked_by_")):
             return False
-        if written_roots is not None:
-            inventory.after_write(written_roots)
+        inventory = config.get("_LOCAL_COVER_INVENTORY")
+        if inventory is not None:
+            inventory.after_write(folder, track_paths)
         return result["value"]
 
     return automatic_write_guard

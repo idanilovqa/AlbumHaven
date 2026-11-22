@@ -679,8 +679,6 @@ async def _serialize_cover_gallery_from_asgi(
     *,
     refresh_persisted_cover_state: bool = False,
     stored_first: bool = False,
-    written_roots: list[Path] | None = None,
-    removed: Path | None = None,
 ) -> dict[str, object]:
     config = _app_config(request)
     library_file_cache = _library_state(request).get("file_cache", {}) or {}
@@ -695,20 +693,13 @@ async def _serialize_cover_gallery_from_asgi(
             paths_to_load,
         ))
     inventory = getattr(request.app.state, "local_cover_inventory", None)
-    copy_roots: list[Path] = []
+    copy_roots = await run_in_threadpool(resolve_album_copy_roots, config, album_root, track_paths)
     stored_listings, listings_pending = None, False
-    if inventory is not None and written_roots is not None:
-        # A committed write's answer: its folders were resolved before the commit and the drive is not asked again.
-        await run_in_threadpool(inventory.after_write, written_roots, removed=removed)
-        stored_listings = await run_in_threadpool(inventory.written_listings, written_roots, removed=removed)
-        listings_pending = True
-    else:
-        copy_roots = await run_in_threadpool(resolve_album_copy_roots, config, album_root, track_paths)
-        if inventory is not None:
-            roots = await run_in_threadpool(inventory.listed_roots, album_root, copy_roots, track_paths)
-            stored_listings, listings_pending = await run_in_threadpool(
-                inventory.album_listings, roots, track_paths, stored_first=stored_first,
-            )
+    if inventory is not None:
+        roots = await run_in_threadpool(inventory.listed_roots, album_root, copy_roots, track_paths)
+        stored_listings, listings_pending = await run_in_threadpool(
+            inventory.album_listings, roots, track_paths, stored_first=stored_first,
+        )
     serialized_task_payload = serialize_cover_lookup_task_payload(
         dict(task_payload) if isinstance(task_payload, Mapping)
         else cover_lookup_result(task_id) if task_id
@@ -728,6 +719,12 @@ async def _serialize_cover_gallery_from_asgi(
         stored_listings=stored_listings,
         listings_pending=listings_pending,
     )
+
+
+async def _update_cover_listing_after_write(request: Request, album_root, track_paths, *, removed=None) -> None:
+    inventory = getattr(request.app.state, "local_cover_inventory", None)
+    if inventory is not None:
+        await run_in_threadpool(inventory.after_write, album_root, track_paths, removed=removed)
 
 
 def _album_id(album: Mapping[str, object]) -> int | None:
@@ -1596,11 +1593,6 @@ async def albums_selected_covers_save(request: Request, album_ref: str) -> JSONR
                     lock_timeout_seconds=state_service.COVER_COMMIT_RUNTIME_LOCK_WAIT_SECONDS,
                 )
 
-        inventory = getattr(request.app.state, "local_cover_inventory", None)
-        written_roots = (
-            await run_in_threadpool(inventory.listed_roots, album_root, [], track_paths)
-            if inventory is not None and album_root is not None else None
-        )
         downloads = await run_in_threadpool(
             _download_online_cover_choices, config, album_id=album_id, album_root=album_root, payload=payload,
         )
@@ -1619,8 +1611,7 @@ async def albums_selected_covers_save(request: Request, album_ref: str) -> JSONR
             raise
         # A replay saved nothing new, so this request's downloads are not referenced.
         await run_in_threadpool(downloads.undo if result["replayed"] else downloads.finish)
-        if written_roots is not None:
-            await run_in_threadpool(inventory.after_write, written_roots)
+        await _update_cover_listing_after_write(request, album_root, track_paths)
     except OnlineCoverDownloadFailed:
         return JSONResponse({"ok": False, "error": "This online cover could not be downloaded. Your current cover is unchanged."}, status_code=502)
     except HTTPException:
@@ -1942,15 +1933,6 @@ async def utilities_cover_lookup_local_delete(request: Request) -> JSONResponse:
                 )
         return state_service.run_authoritative_cover_commit_for_state(library_state, publish)
 
-    inventory = getattr(request.app.state, "local_cover_inventory", None)
-    written_roots = None
-    if inventory is not None:
-        copy_roots = await run_in_threadpool(
-            resolve_album_copy_roots, config, album_context.album_root, album_context.track_paths,
-        )
-        written_roots = await run_in_threadpool(
-            inventory.listed_roots, album_context.album_root, copy_roots, album_context.track_paths,
-        )
     try:
         run_cover_mutation_for_config(
             config, track_paths=album_context.track_paths, album_root=album_context.album_root,
@@ -1967,7 +1949,13 @@ async def utilities_cover_lookup_local_delete(request: Request) -> JSONResponse:
     except CoverMutationCommitUncertainError as exc:
         return _json_response(({"ok": False, "persisted": None, "error": str(exc)}, 503))
     except CoverMutationFinalizationError as exc:
+        await _update_cover_listing_after_write(
+            request, album_context.album_root, album_context.track_paths, removed=resolved,
+        )
         return _json_response(({"ok": False, "persisted": True, "error": str(exc)}, 500))
+    await _update_cover_listing_after_write(
+        request, album_context.album_root, album_context.track_paths, removed=resolved,
+    )
     if updated_albums:
         try:
             updated_problematic_album = build_problematic_album_detail_payload(
@@ -1983,13 +1971,6 @@ async def utilities_cover_lookup_local_delete(request: Request) -> JSONResponse:
             "updated_albums": updated_albums,
             "updated_album": updated_albums[0] if updated_albums else None,
             "updated_problematic_album": updated_problematic_album,
-            "gallery": await _serialize_cover_gallery_from_asgi(
-                request,
-                album_context.album_root,
-                album_context.track_paths,
-                written_roots=written_roots,
-                removed=resolved,
-            ),
         }
     )
 
@@ -2086,11 +2067,6 @@ async def utilities_cover_lookup_pasted_image_save(request: Request) -> JSONResp
             )
         return state_service.run_authoritative_cover_commit_for_state(library_state, publish)
 
-    inventory = getattr(request.app.state, "local_cover_inventory", None)
-    written_roots = (
-        await run_in_threadpool(inventory.listed_roots, album_context.album_root, [], album_context.track_paths)
-        if inventory is not None else None
-    )
     try:
         run_cover_mutation_for_config(
             config, track_paths=album_context.track_paths, album_root=album_context.album_root,
@@ -2105,11 +2081,11 @@ async def utilities_cover_lookup_pasted_image_save(request: Request) -> JSONResp
     except CoverMutationCommitUncertainError as exc:
         return _json_response(({"ok": False, "persisted": None, "error": str(exc)}, 503))
     except CoverMutationFinalizationError as exc:
+        await _update_cover_listing_after_write(request, album_context.album_root, album_context.track_paths)
         return _json_response(({"ok": False, "persisted": True, "error": str(exc)}, 500))
     except Exception:
         return _json_response(({"ok": False, "error": "Pasted cover art could not be saved. Try again."}, 500))
-    if written_roots is not None:
-        await run_in_threadpool(inventory.after_write, written_roots)
+    await _update_cover_listing_after_write(request, album_context.album_root, album_context.track_paths)
     if updated_albums:
         try:
             updated_problematic_album = build_problematic_album_detail_payload(

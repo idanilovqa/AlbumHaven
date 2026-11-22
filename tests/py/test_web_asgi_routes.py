@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 import threading
 from types import SimpleNamespace
-from urllib.parse import parse_qs, quote, urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from music_app.services import startup_bootstrap
@@ -1758,7 +1758,7 @@ def test_asgi_cover_uses_dedicated_capacity_instead_of_the_shared_request_worker
         "Нил Морс - Джозеф, часть первая.png",
     ],
 )
-def test_asgi_cover_preserves_rfc_safe_content_disposition_for_punctuation_and_unicode(
+def test_asgi_cover_names_no_library_file_in_content_disposition(
     app,
     filename,
     monkeypatch,
@@ -1775,7 +1775,8 @@ def test_asgi_cover_preserves_rfc_safe_content_disposition_for_punctuation_and_u
         cover_reference_url(asgi_app, cover_path),
         query={},
     )
-    expected_disposition = f"inline; filename*=utf-8''{quote(filename)}"
+    # A cover may be stored, and a cache keeps the headers with the image.
+    expected_disposition = 'inline; filename="cover.png"'
 
     assert status == 200
     assert body == b"cover-bytes"

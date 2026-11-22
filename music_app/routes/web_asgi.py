@@ -968,7 +968,8 @@ def _conditional_file_response(
     file_response = FileResponse(
         path,
         stat_result=resolved_stat,
-        filename=path.name,
+        # A cover may be stored, its headers with it: those never carry the library's file name.
+        filename=path.name if max_age is None else f"cover{path.suffix.lower()}",
         content_disposition_type="inline",
     )
     if max_age is not None:

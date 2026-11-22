@@ -7,6 +7,7 @@ storable policy is a deliberate exception and is listed here, so a new route can
 
 from __future__ import annotations
 
+import ast
 import asyncio
 from pathlib import Path
 import re
@@ -173,14 +174,58 @@ def test_an_address_without_a_path_keeps_a_deliberate_policy(monkeypatch, query)
     assert headers["cache-control"] == "private, max-age=300"
 
 
+_DIRECTIVE = (
+    r"(?:public|private|no-cache|must-revalidate|proxy-revalidate|immutable"
+    r"|(?:max-age|s-maxage|stale-while-revalidate|stale-if-error)=(?:\d+|\{[^}]*\}))"
+)
+_STORABLE_POLICY = re.compile(rf",?\s*{_DIRECTIVE}(?:\s*,\s*{_DIRECTIVE})*", re.IGNORECASE)
+
+
+def _storable_policies(source: str) -> set[str]:
+    """Strings made only of storable directives, wherever they are written. A bare "public" or
+    "private" is a policy only on a line that names Cache-Control."""
+    lines = source.splitlines()
+    nodes = list(ast.walk(ast.parse(source)))
+    parts = {id(part) for node in nodes if isinstance(node, ast.JoinedStr) for part in node.values}
+    found = set()
+    for node in nodes:
+        if isinstance(node, ast.JoinedStr):
+            text = "".join(
+                str(part.value) if isinstance(part, ast.Constant) else f"{{{ast.unparse(part.value)}}}"
+                for part in node.values
+            )
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in parts:
+            text = node.value
+        else:
+            continue
+        if not _STORABLE_POLICY.fullmatch(text):
+            continue
+        line = lines[node.lineno - 1].lower()
+        if '"pragma"' in line or (text.lower() in {"public", "private"} and not re.search("cache[-_]control", line)):
+            continue
+        found.add(text)
+    return found
+
+
+@pytest.mark.parametrize("source", [
+    'headers = {"Cache-Control": "max-age=3600"}',
+    "headers = {'Cache-Control': 'private, max-age=60'}",
+    'response.headers["cache-control"] = "private, max-age=60"',
+    'headers = {"Cache-Control": "private"}',
+    'headers = {"Cache-Control": "private, no-cache, must-revalidate"}',
+    'headers = {"Cache-Control": "no-cache, must-revalidate"}',
+    'POLICY = "private, max-age=60"',
+    'policy = f"private, max-age={seconds}"',
+])
+def test_a_storable_policy_is_found_however_it_is_written(source):
+    assert _storable_policies(source)
+
+
 def test_every_storable_policy_in_the_source_is_a_listed_decision():
     root = Path(private_route_boundary.__file__).resolve().parents[1]
     found = set()
     for source in root.rglob("*.py"):
-        for line in source.read_text(encoding="utf-8").splitlines():
-            policy = re.search(r"f?\"((?:public|private), max-age=[^\"]*|no-cache|private, no-cache|public, max-age=[^\"]*)\"", line)
-            if policy and ("Cache-Control" in line or "CACHE_CONTROL" in line):
-                found.add((source.name, policy.group(1)))
+        found |= {(source.name, policy) for policy in _storable_policies(source.read_text(encoding="utf-8-sig"))}
 
     assert found == {
         ("__init__.py", "public, max-age=31536000, immutable"),  # versioned static assets
@@ -188,6 +233,7 @@ def test_every_storable_policy_in_the_source_is_a_listed_decision():
         ("api_wave_d_asgi_routes.py", "private, max-age=3600"),  # a candidate image, named by its web URL
         ("playback_control_asgi.py", "private, max-age=3600"),  # notification artwork, named by a token
         ("web_asgi.py", "private, max-age={max_age}"),  # covers by reference
+        ("web_asgi.py", ", immutable"),  # added to it for a versioned cover
         ("web_asgi.py", "public, max-age=86400"),  # the empty favicon
         ("web_asgi.py", "no-cache"),  # the worker script, public
     }

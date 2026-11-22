@@ -33,7 +33,18 @@ _STARTER = ThreadPoolExecutor(max_workers=4, thread_name_prefix="child-process-s
 def _stdout_pipe() -> tuple[BinaryIO, BinaryIO]:
     if sys.platform == "win32":
         read, write = _winapi.CreatePipe(None, _WINDOWS_STDOUT_PIPE_BYTES)
-        descriptors = msvcrt.open_osfhandle(read, os.O_RDONLY), msvcrt.open_osfhandle(write, 0)
+        try:
+            read_end = msvcrt.open_osfhandle(read, os.O_RDONLY)
+        except OSError:
+            _winapi.CloseHandle(read)
+            _winapi.CloseHandle(write)
+            raise
+        try:
+            descriptors = read_end, msvcrt.open_osfhandle(write, 0)
+        except OSError:
+            os.close(read_end)
+            _winapi.CloseHandle(write)
+            raise
     else:
         descriptors = os.pipe()
     return open(descriptors[0], "rb", buffering=0), open(descriptors[1], "wb", buffering=0)
@@ -114,8 +125,8 @@ class ChildProcess:
         pipes = [(self._stdout, output)]
         if self._stderr:
             pipes.append((self._stderr, self._popen.stderr))
+        pumps = []
         try:
-            pumps = []
             for reader, pipe in pipes:
                 pump = threading.Thread(
                     target=reader.pump, args=(pipe,), name="child-process-pipe", daemon=True,
@@ -130,6 +141,8 @@ class ChildProcess:
             self._popen.kill()
             for reader, _pipe in pipes:
                 reader.release()
+            for _reader, pipe in pipes[len(pumps):]:
+                pipe.close()
             raise
 
     def _supervise(self, pumps: list[tuple[_PipeReader, threading.Thread]]) -> None:

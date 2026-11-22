@@ -172,11 +172,45 @@ def test_a_thread_that_cannot_start_fails_the_caller_and_stops_the_child(
         start(thread)
 
     monkeypatch.setattr(threading.Thread, "start", exhausted)
+    make_pipe = child_process._stdout_pipe
+    pipes = []
+    monkeypatch.setattr(child_process, "_stdout_pipe", lambda: pipes.append(make_pipe()) or pipes[-1])
 
     with pytest.raises(RuntimeError, match="can't start new thread"):
         on_selector_loop(start_child_process(*python_child("time.sleep(60)")))
 
     assert children[0].wait(10) != 0
+    deadline = time.monotonic() + 10
+    while not pipes[0][0].closed and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert pipes[0][0].closed
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows pipe handles")
+@pytest.mark.parametrize("failing_end", [0, 1], ids=["read-end", "write-end"])
+def test_a_pipe_that_cannot_be_wrapped_leaks_no_handle(monkeypatch, failing_end):
+    create_pipe = child_process._winapi.CreatePipe
+    wrap = child_process.msvcrt.open_osfhandle
+    handles = []
+
+    def recorded_pipe(*args):
+        handles.extend(create_pipe(*args))
+        return tuple(handles)
+
+    def no_descriptor_left(handle, flags):
+        if handle == handles[failing_end]:
+            raise OSError(errno.EMFILE, "Too many open files")
+        return wrap(handle, flags)
+
+    monkeypatch.setattr(child_process._winapi, "CreatePipe", recorded_pipe)
+    monkeypatch.setattr(child_process.msvcrt, "open_osfhandle", no_descriptor_left)
+
+    with pytest.raises(OSError, match="Too many open files"):
+        child_process._stdout_pipe()
+
+    for handle in handles:
+        with pytest.raises(OSError):
+            child_process._winapi.GetFileType(handle)
 
 
 @pytest.mark.parametrize("stop", ["kill", "terminate"])

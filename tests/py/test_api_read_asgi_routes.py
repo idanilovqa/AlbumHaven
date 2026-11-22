@@ -78,6 +78,8 @@ def test_asgi_status_route_preserves_current_payload_shape(app):
     assert payload["album_total"] == 0
     assert payload["last_scan_display"] == "Never"
     assert payload["log_history_revision"] == ""
+    # Without the library database there is no Problematic Files index to fill.
+    assert payload["problematic_index_in_progress"] is False
 
 
 def test_asgi_status_route_keeps_scan_and_cover_failures_separate(asgi_app):

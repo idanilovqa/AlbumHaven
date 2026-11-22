@@ -468,9 +468,10 @@ async def status(request: Request) -> JSONResponse:
             payload["scan_mode"] = "background"
     # Test harnesses wait for this with scans and relations: Problematic Files answers from
     # its index only once the one-time backfill and queued album evaluations are done.
+    # Status stays observational without the library database: no index, nothing in progress.
     payload["problematic_index_in_progress"] = problematic_index.in_progress(
         PostgresLibraryBrowseRepository(_app_config(request))
-    ) if _is_postgres_utility_projection_request(request) else False
+    ) if is_library_browse_postgres_available(_app_config(request)) else False
     payload["watcher_health"] = await run_in_threadpool(
         _project_library_watch_health_for_request,
         request,
@@ -1070,18 +1071,16 @@ def _build_home_data_payload(
 
 def _compose_home_data_payload(request: Request) -> dict[str, object] | JSONResponse:
     library_state = _library_state(request)
-    postgres_browse = (
-        select_runtime_persistence_adapter(
-            "library_browse", _app_config(request)
-        ).effective_backend
-        == PERSISTENCE_BACKEND_POSTGRES
-    )
+    # An active scan keeps its transient sidebar; only source totals read Postgres then.
     if (
-        postgres_browse
-        and (
+        (
             _request_flag_value(request.query_params.get("source_totals"))
             or not library_state.get("scan_in_progress")
         )
+        and select_runtime_persistence_adapter(
+            "library_browse", _app_config(request)
+        ).effective_backend
+        == PERSISTENCE_BACKEND_POSTGRES
     ):
         return _build_postgres_home_payload(request)
     # The legacy builder needs the in-memory library; answer pending while the

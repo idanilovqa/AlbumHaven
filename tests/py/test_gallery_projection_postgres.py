@@ -1081,8 +1081,11 @@ def test_builder_bump_serves_the_previous_builders_snapshot_from_its_own_scope(m
     assert occurrence_scopes == [previous_scope]
     assert page == [membership("Artist", "album-1")] and sidebar == header["sidebar"]
     assert metadata["projection_stale"] is True
-    assert projection.load_gallery_projection_sidebar(Connection(), {}, context=context, allow_stale=True)[2] is True
-    assert projection.load_gallery_projection_sidebar(Connection(), {}, context=context) is None
+    # The tree serves the previous builder's sidebar only for the current library generation.
+    assert projection.load_gallery_projection_sidebar(Connection(), {}, context=context, allow_stale=True) is None
+    current = {**context, "generation": header["source_generation"]}
+    assert projection.load_gallery_projection_sidebar(Connection(), {}, context=current, allow_stale=True)[2] is True
+    assert projection.load_gallery_projection_sidebar(Connection(), {}, context=current) is None
 
 
 @pytest.mark.parametrize("first_run_fails", [False, True])

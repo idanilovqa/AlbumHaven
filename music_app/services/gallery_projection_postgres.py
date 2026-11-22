@@ -125,12 +125,15 @@ def _servable_header(connection, context, view_state, *, allow_stale):
 
 
 def load_gallery_projection_sidebar(connection, view_state, *, context=None, allow_stale=False):
-    """The sidebar and album count of the snapshot to serve, and whether it is stale."""
+    """The sidebar and album count of the snapshot to serve, and whether it is stale. A stale
+    sidebar is served only from the current library generation (a previous builder's snapshot
+    while the new builder's is prepared): the tree never lists another generation's artists
+    (FTC-GALLERY-STARTUP-005Q)."""
     context = context if context is not None else gallery_projection_context(connection)
     if not context:
         return None
     header, _scope_key, stale = _servable_header(connection, context, view_state, allow_stale=allow_stale)
-    if not header:
+    if not header or (stale and header.get("source_generation") != context.get("generation")):
         return None
     return (
         [dict(item) for item in list(header.get("sidebar") or [])],

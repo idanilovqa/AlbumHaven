@@ -1,3 +1,5 @@
+import pytest
+
 from music_app.services import postgres_connections
 
 
@@ -145,3 +147,33 @@ def test_a_browse_pool_whose_connection_fails_stays_cold(monkeypatch):
 
     # A warm minimum on an unreachable database would leave a reconnect loop that shutdown waits on.
     assert [pool.min_size for pool in _FakePool.created] == [0]
+
+
+def test_after_a_failed_connection_checkouts_fail_at_once_until_the_next_probe(monkeypatch):
+    # A real pool against a closed port. Its background attempts keep failing, but a checkout used to
+    # wait out the whole pool timeout (30 s) every time (freeze-guard case 30).
+    import time
+
+    import psycopg
+
+    def refuse(cls, *_args, **_kwargs):
+        raise psycopg.OperationalError("connection refused")
+
+    # The driver refuses at once, as a missing database or failed authentication does; the pool,
+    # its background attempts and its recording connection class are the real ones.
+    monkeypatch.setattr(psycopg.Connection, "connect", classmethod(refuse))
+    monkeypatch.setattr(postgres_connections, "_pools", {})
+    monkeypatch.setattr(postgres_connections, "_connect_states", {})
+    url = "postgresql://album_haven_app@127.0.0.1/unreachable"
+    try:
+        with pytest.raises(Exception):
+            with postgres_connections.pooled_connection(url, checkout_timeout_seconds=1):
+                pass
+        started = time.perf_counter()
+        for _ in range(20):
+            with pytest.raises(psycopg.OperationalError, match="Postgres is unreachable"):
+                with postgres_connections.pooled_connection(url):
+                    pass
+        assert time.perf_counter() - started < 0.5
+    finally:
+        postgres_connections.close_pools()

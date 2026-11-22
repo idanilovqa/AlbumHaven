@@ -12,15 +12,37 @@ from threading import Lock, get_ident
 from time import perf_counter
 
 try:  # Keep schema-independent tooling importable.
+    from psycopg import Connection, OperationalError
     from psycopg.rows import dict_row
     from psycopg_pool import ConnectionPool, PoolTimeout
 except ImportError:  # pragma: no cover
+    Connection = None
     ConnectionPool = None
+    OperationalError = RuntimeError
     PoolTimeout = TimeoutError
     dict_row = None
 
 _pools = {}
 _lock = Lock()
+# The pool connects in the background and retries a failed attempt until a checkout times out (30 s),
+# so against an unreachable database every request would stall for the whole timeout. Once the
+# pool's own connection attempt has failed, checkouts fail at once with that error, as
+# `psycopg.connect` did; one request per interval still goes through to find out whether the
+# database is back (freeze-guard backlog case 30). That probe, and a pool's first checkout before it
+# has ever connected, wait a short while only: a slower connection still joins the pool when it
+# completes and clears the failure.
+_UNREACHABLE_PROBE_INTERVAL_SECONDS = 5.0
+_PROBE_CHECKOUT_TIMEOUT_SECONDS = 5.0
+_connect_states: dict[object, "_ConnectState"] = {}
+
+
+class _ConnectState:
+    """Whether the pool has connected, and its last failed attempt, cleared by its next success."""
+
+    def __init__(self):
+        self.connected = False
+        self.error = None
+        self.failed_at = 0.0
 # Leases each thread holds right now, by thread id. A lease taken while the thread already holds one
 # comes from a pool one level deeper, so nested repository calls never wait on a connection their own
 # request is holding: waits only ever go deeper, so pool exhaustion cannot deadlock. A lease released
@@ -77,8 +99,10 @@ def pooled_connection(
     with _lock:
         pool = _pools.get(pool_key)
         if pool is None:
+            connect_state = _connect_states[pool_key] = _ConnectState()
             pool = ConnectionPool(
                 conninfo=database_url,
+                connection_class=_state_recording_connection_class(connect_state),
                 min_size=0,
                 max_size=_DEFAULT_WORKLOAD_MAX_SIZE if depth == 0 and normalized_workload == "default" else _MAX_SIZE,
                 max_waiting=32,
@@ -89,10 +113,10 @@ def pooled_connection(
             _pools[pool_key] = pool
     checkout_started = perf_counter()
     try:
-        checkout = (
-            pool.connection(timeout=max(0.001, float(checkout_timeout_seconds)))
-            if checkout_timeout_seconds is not None
-            else pool.connection()
+        checkout = _checkout(
+            pool,
+            _connect_states.get(pool_key),
+            max(0.001, float(checkout_timeout_seconds)) if checkout_timeout_seconds is not None else None,
         )
     except PoolTimeout:
         _observe_pool_lease(
@@ -110,6 +134,39 @@ def pooled_connection(
         lease_observer=lease_observer,
         keep_warm=depth == 0 and normalized_workload in _WARM_WORKLOADS,
     )
+
+
+def _state_recording_connection_class(connect_state: _ConnectState):
+    if Connection is None:  # pragma: no cover
+        return None
+
+    class _StateRecordingConnection(Connection):
+        @classmethod
+        def connect(cls, *args, **kwargs):
+            try:
+                connection = super().connect(*args, **kwargs)
+            except OperationalError as error:
+                connect_state.error, connect_state.failed_at = error, perf_counter()
+                raise
+            connect_state.connected, connect_state.error = True, None
+            return connection
+
+    return _StateRecordingConnection
+
+
+def _checkout(pool, connect_state: _ConnectState | None, timeout_seconds: float | None):
+    if not hasattr(pool, "connection_class"):  # a pool that does not connect through the recording class
+        connect_state = None
+    probing = False
+    if connect_state is not None and connect_state.error is not None:
+        now = perf_counter()
+        if now - connect_state.failed_at < _UNREACHABLE_PROBE_INTERVAL_SECONDS:
+            raise OperationalError(f"Postgres is unreachable: {connect_state.error}") from connect_state.error
+        connect_state.failed_at = now  # this request probes; the others keep failing at once
+        probing = True
+    if probing or (connect_state is not None and not connect_state.connected):
+        timeout_seconds = min(timeout_seconds or _PROBE_CHECKOUT_TIMEOUT_SECONDS, _PROBE_CHECKOUT_TIMEOUT_SECONDS)
+    return pool.connection(timeout=timeout_seconds) if timeout_seconds is not None else pool.connection()
 
 
 @contextmanager

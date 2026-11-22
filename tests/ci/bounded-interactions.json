@@ -6787,28 +6787,6 @@
       "proof": "static"
     },
     {
-      "id": "js:runtime/utility-list-builders.js#assignMusicBrainzAlbumArtist",
-      "action": "fetch requests installed by assignMusicBrainzAlbumArtist",
-      "entrypoints": [
-        "js:music_app/static/js/runtime/utility-list-builders.js#assignMusicBrainzAlbumArtist:request:fetch"
-      ],
-      "owners": [
-        "music_app/static/js/runtime/utility-list-builders.js"
-      ],
-      "rules": [
-        "BI-03",
-        "BI-13"
-      ],
-      "workClass": "constant",
-      "proof": "static",
-      "requestOwnership": {
-        "allowed": [
-          "/api/musicbrainz/albums/artist"
-        ],
-        "forbidden": []
-      }
-    },
-    {
       "id": "js:runtime/utility-list-builders.js#loadMusicBrainzArtistProblemDetail",
       "action": "fetch requests installed by loadMusicBrainzArtistProblemDetail",
       "entrypoints": [
@@ -11430,22 +11408,6 @@
       ],
       "owners": [
         "music_app/routes/download_links_asgi.py"
-      ],
-      "rules": [
-        "BI-04",
-        "BI-14"
-      ],
-      "workClass": "affected-set",
-      "proof": "static"
-    },
-    {
-      "id": "py:routes/musicbrainz_album_identity_asgi.py#assign_album_artist",
-      "action": "Serve PUT /artist",
-      "entrypoints": [
-        "py:music_app/routes/musicbrainz_album_identity_asgi.py#assign_album_artist:route:PUT /artist"
-      ],
-      "owners": [
-        "music_app/routes/musicbrainz_album_identity_asgi.py"
       ],
       "rules": [
         "BI-04",

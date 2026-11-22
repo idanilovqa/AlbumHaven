@@ -768,20 +768,11 @@ class MusicBrainzEnrichmentPostgresRepository:
         return [_attention_row(row) for row in rows]
 
     def list_album_attention(self, *, album_key: str | None = None) -> list[dict[str, object]]:
-        """The owner's MusicBrainz album rows in Problematic Files, all or one: present albums
-        MusicBrainz has no info on (an automatic contribution flag, S5), and a split name's
-        albums left undecided with some evidence ("MusicBrainz: artist undecided", 0259)."""
-        params = {"album_key": album_key}
+        """Present albums MusicBrainz has no info on (an automatic contribution flag, S5),
+        all or one: the owner's Problematic Files "MusicBrainz has no info" album rows."""
         with self._connect(self._database_url) as connection:
-            no_info = connection.execute(_ALBUM_ATTENTION_SQL, params).fetchall()
-            undecided = connection.execute(_ARTIST_UNDECIDED_SQL, params).fetchall()
-        albums = {row["album_key"]: {**row, "musicbrainz_has_no_info": True}
-                  for row in map(_row_mapping, no_info)}
-        for row in map(_row_mapping, undecided):
-            evidence = {field: row.pop(field, None) for field in ("track_count", "candidates")}
-            album = albums.setdefault(row["album_key"], {**row, "musicbrainz_has_no_info": False})
-            album["artist_undecided"] = evidence
-        return list(albums.values())
+            rows = connection.execute(_ALBUM_ATTENTION_SQL, {"album_key": album_key}).fetchall()
+        return [_row_mapping(row) for row in rows]
 
     def get_artist_problem(self, *, local_artist_id: int) -> dict[str, object] | None:
         params = {"local_artist_id": _positive_id(local_artist_id)}
@@ -976,7 +967,6 @@ PROBLEM_LABELS = {
 APP_PROBLEM_LABELS = {**PROBLEM_LABELS, **{reason: "Metadata pending" for reason in _PENDING_REASONS}}
 # Owner decision 2026-11-15 (C2): an artist MusicBrainz lacks (an automatic contribution flag).
 MUSICBRAINZ_HAS_NO_INFO_LABEL = "MusicBrainz has no info"
-MUSICBRAINZ_ARTIST_UNDECIDED_LABEL = "MusicBrainz: artist undecided"
 
 
 def _problem_label_sql() -> str:
@@ -1193,54 +1183,6 @@ _ALBUM_ATTENTION_SQL = _active_library_cte() + """
     join library.local_artists artists on artists.library_id = albums.library_id and artists.id = albums.artist_id
     where exists (select 1 from library.local_tracks tracks
                   where tracks.library_id = albums.library_id and tracks.album_id = albums.id)
-    order by albums.title, albums.album_key;
-"""
-
-
-# Starts from the stored suggestions (a handful of albums), never from the library. An album
-# decided since, the owner's choice included, or whose name is no longer split, is not listed.
-_ARTIST_UNDECIDED_SQL = _active_library_cte() + """
-    select albums.album_key, albums.title as album_title, albums.release_year as year, albums.cover_path,
-           albums.artist_id as local_artist_id, artists.name as artist_name,
-           album_tracks.track_count, proposed.candidates
-    from (
-      select suggestions.library_id, suggestions.album_key,
-             jsonb_agg(jsonb_build_object(
-               'artist_mbid', suggestions.artist_mbid, 'canonical_name', remote.canonical_name,
-               'disambiguation', remote.disambiguation, 'artist_kind', remote.artist_kind,
-               'country', country.country_code,
-               'found', suggestions.found_count, 'sampled', suggestions.sampled_count,
-               'folder_album', suggestions.folder_album, 'favoured', suggestions.favoured)
-               order by suggestions.favoured desc, suggestions.found_count desc, suggestions.artist_mbid) as candidates
-      from active_library
-      join library.local_album_artist_suggestions suggestions
-        on suggestions.library_id = active_library.library_id
-       and (%(album_key)s::text is null or suggestions.album_key = %(album_key)s::text)
-      join integration.musicbrainz_artists remote on remote.mbid = suggestions.artist_mbid
-      left join lateral (
-        select countries.country_code
-        from integration.musicbrainz_artist_countries countries
-        where countries.artist_mbid = suggestions.artist_mbid
-        order by countries.country_code
-        limit 1
-      ) country on true
-      group by suggestions.library_id, suggestions.album_key
-    ) proposed
-    join library.local_albums albums
-      on albums.library_id = proposed.library_id and albums.album_key = proposed.album_key
-    left join library.local_artists artists
-      on artists.library_id = albums.library_id and artists.id = albums.artist_id
-    join library.local_artist_musicbrainz_matches matches
-      on matches.library_id = albums.library_id and matches.local_artist_id = albums.artist_id
-     and matches.state = 'per_album'
-    join lateral (
-      select count(*)::integer as track_count
-      from library.local_tracks tracks
-      where tracks.library_id = albums.library_id and tracks.album_id = albums.id
-    ) album_tracks on album_tracks.track_count > 0
-    where not exists (
-      select 1 from library.local_album_artist_identities identities
-      where identities.library_id = albums.library_id and identities.album_key = albums.album_key)
     order by albums.title, albums.album_key;
 """
 

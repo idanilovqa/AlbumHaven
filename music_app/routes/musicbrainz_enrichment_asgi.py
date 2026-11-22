@@ -12,10 +12,8 @@ from fastapi.responses import JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
 from music_app.services.current_actor_asgi import current_actor_from_request
-from music_app.services.musicbrainz_client import artist_url
 from music_app.services.musicbrainz_enrichment_postgres import (
     APP_PROBLEM_LABELS,
-    MUSICBRAINZ_ARTIST_UNDECIDED_LABEL,
     MUSICBRAINZ_HAS_NO_INFO_LABEL,
     MusicBrainzEnrichmentPostgresRepository,
 )
@@ -322,8 +320,8 @@ def project_artist_problems_into_problematic_files(
 
 
 def load_problematic_album_items(request: Request, *, album_key: str | None = None) -> list[dict[str, object]]:
-    """The primary owner's albums MusicBrainz has no info on (S5) or whose artist is
-    undecided, as Problematic Files rows, owner-only like the artist rows. A failure yields no rows."""
+    """The primary owner's albums MusicBrainz has no info on, as Problematic Files rows
+    (S5), owner-only like the artist rows. A failure yields no rows."""
     if not _is_current_library_owner(getattr(request.state, "current_actor", None)):
         return []
     service = getattr(request.app.state, "musicbrainz_enrichment_api_service", None)
@@ -343,23 +341,17 @@ def project_album_problems_into_problematic_files(
     payload: object,
     album_items: list[dict[str, object]] | None = None,
 ) -> object:
-    """An album already listed gains its MusicBrainz labels, with their lookups or artists;
+    """An album already listed gains the "MusicBrainz has no info" label and its lookups;
     any other flagged album is added as a row of its own, by name."""
     if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
         return payload
     if album_items is None:
         album_items = load_problematic_album_items(request)
     by_key = {item["musicbrainz_album_key"]: item for item in album_items}
-    initial_detail = payload.get("initial_detail")
-    if isinstance(initial_detail, dict):
-        # The client spreads it over its summary row, so it carries the same labels.
-        flagged = by_key.get(_problematic_album_key(initial_detail.get("key")))
-        if flagged is not None:
-            _label_flagged_album(initial_detail, flagged)
     for item in payload["items"]:
         flagged = by_key.pop(_problematic_album_key(item.get("key")), None)
         if flagged is not None:
-            _label_flagged_album(item, flagged)
+            _label_flagged_album(item, flagged["musicbrainz_album_key"])
     if by_key:
         payload["items"] = sorted([*payload["items"], *by_key.values()],
                                   key=lambda item: str(item.get("name") or "").lower())
@@ -371,8 +363,8 @@ def project_album_problem_into_problematic_detail(request: Request, payload: obj
     """A loaded album detail keeps the label its summary row carried."""
     if isinstance(payload, dict) and payload.get("key"):
         album_key = _problematic_album_key(payload["key"])
-        for flagged in load_problematic_album_items(request, album_key=album_key):
-            _label_flagged_album(payload, flagged)
+        if load_problematic_album_items(request, album_key=album_key):
+            _label_flagged_album(payload, album_key)
     return payload
 
 
@@ -381,21 +373,16 @@ def _problematic_album_key(key: object) -> str:
     return re.sub(r"::year::\d{4}$", "", str(key or ""))
 
 
-def _label_flagged_album(item: dict[str, object], flagged: Mapping[str, object]) -> None:
+def _label_flagged_album(item: dict[str, object], album_key: str) -> None:
     reasons = list(item.get("problem_reasons") or [])
-    item["problem_reasons"] = reasons + [label for label in flagged["problem_reasons"] if label not in reasons]
-    if MUSICBRAINZ_HAS_NO_INFO_LABEL in flagged["problem_reasons"]:
-        # This key draws the no-info lookups.
-        item["musicbrainz_album_key"] = flagged["musicbrainz_album_key"]
-    if flagged.get("musicbrainz_artist_undecided"):
-        item["musicbrainz_artist_undecided"] = flagged["musicbrainz_artist_undecided"]
+    if MUSICBRAINZ_HAS_NO_INFO_LABEL not in reasons:
+        item["problem_reasons"] = [*reasons, MUSICBRAINZ_HAS_NO_INFO_LABEL]
+    item["musicbrainz_album_key"] = album_key
 
 
 def _problematic_album_item(row: Mapping[str, object]) -> dict[str, object]:
     album_key = str(row["album_key"])
-    undecided = row.get("artist_undecided")
-    reasons = [MUSICBRAINZ_HAS_NO_INFO_LABEL] if row.get("musicbrainz_has_no_info", True) else []
-    item = {
+    return {
         "key": f"musicbrainz-album:{album_key}",
         "entity_kind": "musicbrainz_album",
         "musicbrainz_album_key": album_key,
@@ -404,22 +391,10 @@ def _problematic_album_item(row: Mapping[str, object]) -> dict[str, object]:
         "album_artist": str(row.get("artist_name") or "").strip() or "Unknown Artist",
         "year": row.get("year"),
         "cover_path": row.get("cover_path") or None,
-        "problem_reasons": reasons,
+        "problem_reasons": [MUSICBRAINZ_HAS_NO_INFO_LABEL],
         # A summary row like every other; its detail is the row itself.
         "detail_loaded": False,
     }
-    if undecided:
-        reasons.append(MUSICBRAINZ_ARTIST_UNDECIDED_LABEL)
-        item["musicbrainz_artist_undecided"] = {
-            "album_key": album_key,
-            "artist_name": item["album_artist"],
-            "track_count": undecided.get("track_count"),
-            "candidates": [
-                {**candidate, "musicbrainz_url": artist_url(candidate.get("artist_mbid"))}
-                for candidate in undecided.get("candidates") or []
-            ],
-        }
-    return item
 
 
 def _problematic_artist_item(row: Mapping[str, object]) -> dict[str, object]:

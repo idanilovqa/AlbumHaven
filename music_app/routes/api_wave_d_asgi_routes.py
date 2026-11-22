@@ -24,6 +24,7 @@ from music_app.routes.api_cover_helpers import (
     persist_cover_selection_for_tracks,
 )
 from music_app.services import state as state_service
+from music_app.services import user_cover_choice
 from music_app.services.app_logging import log_app_event
 from music_app.services.album_cover_candidate_snapshots_postgres import (
     AlbumCoverCandidateSnapshotRepository,
@@ -76,7 +77,9 @@ from music_app.services.cover_refresh_runtime import (
 )
 from music_app.services.cover_workflow import (
     CoverAlbumContext,
+    _atomic_replace_file_bytes,
     begin_local_image_promotion,
+    decode_image_bytes,
     complete_local_image_promotion,
     cover_revision_for_path,
     delete_local_cover_and_choose_next,
@@ -1373,12 +1376,17 @@ def _utilities_cover_lookup_local_select_response(
         return _json_response(({"ok": False, "error": str(exc)}, 400))
     except FileNotFoundError:
         return _json_response(({"ok": False, "error": "Selected image was not found"}, 404))
-    resolution_finished_at = perf_counter()
-    promotion = begin_local_image_promotion(
-        resolved,
-        album_context.album_root,
-        serialize_selection=True,
-    )
+    try:
+        chosen = _read_chosen_image(config, resolved)  # before any lock: what the user clicked
+        resolution_finished_at = perf_counter()
+        promotion = begin_local_image_promotion(
+            resolved,
+            album_context.album_root,
+            serialize_selection=True,
+            chosen_bytes=chosen.raw_bytes,
+        )
+    except FileNotFoundError:
+        return _chosen_image_changed_response()
     authoritative_cover = promotion.cover_path
     promotion_finished_at = perf_counter()
     updated_albums: list[dict[str, object]] = []
@@ -1390,6 +1398,11 @@ def _utilities_cover_lookup_local_select_response(
     lock_wait_ms = 0.0
     database_ms = 0.0
     runtime_refresh_ms = 0.0
+    write_back = None
+
+    def settle_selection(connection) -> None:
+        nonlocal write_back
+        write_back = user_cover_choice.settle_chosen_image(connection, chosen)
 
     def refresh_runtime_state() -> None:
         nonlocal updated_albums, updated_problematic_album
@@ -1433,9 +1446,14 @@ def _utilities_cover_lookup_local_select_response(
             nonlocal lock_wait_ms, database_ms
             lock_wait_ms += (perf_counter() - lock_requested_at) * 1000
             database_started_at = perf_counter()
-            commit_result = commit_action()
+            commit_result = user_cover_choice.commit_with_write_back(
+                write_back, commit_action, replace_bytes=_atomic_replace_file_bytes,
+            )
             database_ms += (perf_counter() - database_started_at) * 1000
             database_commit_completed = True
+            if write_back is not None:
+                # First: the replaced write can be this album's own, and the user's selection then has the last word.
+                user_cover_choice.apply_write_back(library_state, write_back)
             refresh_runtime_state()
             return commit_result
 
@@ -1447,6 +1465,13 @@ def _utilities_cover_lookup_local_select_response(
     try:
         hash_started_at = perf_counter()
         cover_revision = cover_revision_for_path(authoritative_cover)
+        chosen = user_cover_choice.measure_if_replaced(chosen, _chosen_image_dimensions)
+        chosen_dimensions = None
+        if resolved == authoritative_cover.resolve(strict=False):
+            # Nothing was promoted, so the file may hold an automatic write this save is about to replace.
+            cover_revision = chosen.revision
+            if chosen.width and chosen.height:
+                chosen_dimensions = (chosen.width, chosen.height)
         hash_ms = (perf_counter() - hash_started_at) * 1000
         persistence_started_at = perf_counter()
         persistence_result = persist_cover_selection_for_tracks(
@@ -1459,8 +1484,12 @@ def _utilities_cover_lookup_local_select_response(
             cover_selection_origin="user",
             explicit_selection=True,
             commit_guard=commit_cover_selection,
+            prepare_selection=settle_selection,
+            local_cover_dimensions=chosen_dimensions,
         )
         persistence_ms = (perf_counter() - persistence_started_at) * 1000
+        if write_back is not None:
+            _invalidate_local_cover_inventory(config, write_back.track_paths)
     except Exception as exc:
         if database_commit_completed:
             complete_local_image_promotion(promotion)
@@ -1501,6 +1530,8 @@ def _utilities_cover_lookup_local_select_response(
                 target_filename=authoritative_cover.name,
                 error_kind=type(rollback_exc).__name__,
              history_scope=history_scope)
+        if isinstance(exc, user_cover_choice.ChosenImageChanged):
+            return _chosen_image_changed_response()
         _log_local_cover_persistence_event(
             config,
             logger,
@@ -1643,6 +1674,71 @@ async def _additional_artwork_album_context(request: Request, payload: Mapping[s
     return album, album_context, album_id, None
 
 
+def _read_chosen_image(config: dict[str, object], path: Path) -> user_cover_choice.ChosenImage:
+    from music_app.services.postgres_connections import leased_connection
+
+    return user_cover_choice.read_chosen_image(
+        lambda: leased_connection(str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "")), path,
+    )
+
+
+def _chosen_image_dimensions(raw_bytes: bytes) -> tuple[int | None, int | None]:
+    decoded = decode_image_bytes(raw_bytes)
+    if decoded is None:
+        return None, None
+    image, width, height = decoded
+    image.close()
+    return width, height
+
+
+def _chosen_image_changed_response() -> JSONResponse:
+    return _json_response(({"ok": False, "error": user_cover_choice.IMAGE_CHANGED_MESSAGE}, 409))
+
+
+def _invalidate_local_cover_inventory(config: dict[str, object], track_paths) -> None:
+    inventory = config.get("_LOCAL_COVER_INVENTORY")
+    if inventory is None:
+        return
+    try:
+        inventory.invalidate_paths(set(track_paths))
+    except Exception:
+        LOGGER.exception("Could not refresh local artwork inventory after the committed write-back.")
+
+
+def _save_local_second_artbox(config, get_library_state, repository, chosen, selection) -> list[dict[str, object]]:
+    """The artbox save under the clicked image's folder lock, then the publication lock."""
+    from music_app.services.relation_projection_postgres import inventory_publication_advisory_lock_sql
+    from music_app.services.scan_cache_persistence import _increment_cover_mutation_revision_sql
+
+    write_back = None
+
+    def prepare(connection) -> None:
+        nonlocal write_back
+        connection.execute(inventory_publication_advisory_lock_sql())
+        write_back = user_cover_choice.settle_chosen_image(connection, chosen)
+        if write_back is not None:
+            connection.execute(_increment_cover_mutation_revision_sql())  # a prepared scan holds the replaced revision
+
+    def commit(commit_action) -> object:
+        return user_cover_choice.commit_with_write_back(
+            write_back, commit_action, replace_bytes=_atomic_replace_file_bytes,
+        )
+
+    def save() -> list[dict[str, object]]:
+        nonlocal chosen
+        chosen = user_cover_choice.measure_if_replaced(chosen, _chosen_image_dimensions)
+        artworks = repository.save(**selection, prepare=prepare, commit_guard=commit)
+        if write_back is not None:
+            library_state = get_library_state()
+            state_service.run_authoritative_cover_commit_for_state(
+                library_state, lambda: user_cover_choice.apply_write_back(library_state, write_back),
+            )
+            _invalidate_local_cover_inventory(config, write_back.track_paths)
+        return artworks
+
+    return run_serialized_cover_selection(chosen.path.parent, save)
+
+
 @router.post("/utilities/cover-lookup/additional-artwork")
 async def utilities_cover_lookup_additional_artwork(request: Request) -> JSONResponse:
     """Choose the art for an album's second artbox (slot 1). Slot 0 stays the album cover."""
@@ -1671,6 +1767,7 @@ async def utilities_cover_lookup_additional_artwork(request: Request) -> JSONRes
     ) or {}
     cover_path = None
     remote_url = None
+    chosen = None
     if source_kind == "local":
         try:
             # Validation resolves and checks the file on disk: off the event loop (freeze guard BI-08).
@@ -1685,6 +1782,11 @@ async def utilities_cover_lookup_additional_artwork(request: Request) -> JSONRes
             return _json_response(({"ok": False, "error": "Selected image was not found"}, 404))
         cover_path = str(resolved)
         same_art = str(current.get("cover_path") or "").strip() == cover_path
+        if not same_art:
+            try:
+                chosen = await run_in_threadpool(_read_chosen_image, config, resolved)
+            except FileNotFoundError:
+                return _chosen_image_changed_response()
     elif source_kind == "remote":
         remote_url = str(payload.get("remote_url") or "").strip()
         snapshot = await run_in_threadpool(
@@ -1707,12 +1809,24 @@ async def utilities_cover_lookup_additional_artwork(request: Request) -> JSONRes
     if same_art:
         return _json_response(({"ok": False, "error": "This art is already in the first artbox"}, 409))
     actor = getattr(request.state, "current_actor", None)
-    artworks = await run_in_threadpool(
-        AlbumAdditionalArtworkRepository(config).save,
-        album_id=album_id, slot=slot, source_kind=source_kind,
-        cover_path=cover_path, remote_url=remote_url,
-        account_id=getattr(actor, "account_id", None),
-    )
+    repository = AlbumAdditionalArtworkRepository(config)
+    selection = {
+        "album_id": album_id, "slot": slot, "source_kind": source_kind,
+        "cover_path": cover_path, "remote_url": remote_url,
+        "account_id": getattr(actor, "account_id", None),
+    }
+    if chosen is None:
+        artworks = await run_in_threadpool(repository.save, **selection)
+    else:
+        try:
+            artworks = await run_in_threadpool(
+                _save_local_second_artbox, config, lambda: _library_state(request), repository, chosen, selection,
+            )
+        except user_cover_choice.ChosenImageChanged:
+            return _chosen_image_changed_response()
+        except OSError:
+            _app_logger(request).exception("Second artbox write-back failed")
+            return _json_response(({"ok": False, "error": "Selected art could not be saved."}, 500))
     return JSONResponse({"ok": True, "album_id": album_id, "additional_artworks": artworks})
 
 

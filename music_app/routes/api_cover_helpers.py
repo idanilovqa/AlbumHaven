@@ -81,10 +81,12 @@ def persist_cover_selection_for_tracks(
     reject_if_user_controlled: bool = False,
     clear_selection: bool = False,
     commit_guard=None,
+    prepare_selection=None,
+    local_cover_dimensions: tuple[int | None, int | None] | None = None,
 ) -> dict[str, int]:
     if config is None:
         raise ValueError("persist_cover_selection_for_tracks requires explicit config")
-    width, height = image_dimensions(cover_path) if cover_path else (None, None)
+    width, height = local_cover_dimensions or (image_dimensions(cover_path) if cover_path else (None, None))
     dimensions = {"local_cover_width": width, "local_cover_height": height} if width and height else {}
     return persist_cover_selection_for_tracks_for_config(
         dict(config),
@@ -105,6 +107,7 @@ def persist_cover_selection_for_tracks(
         reject_if_user_controlled=reject_if_user_controlled,
         clear_selection=clear_selection,
         commit_guard=commit_guard,
+        **({"prepare_selection": prepare_selection} if prepare_selection is not None else {}),
         logger=logger,
     )
 

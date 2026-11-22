@@ -592,12 +592,15 @@ def _cover_selection_options(
     local_cover_height: int | None = None,
     reject_if_user_controlled: bool = False,
     reject_if_mixed_album_folder: bool = False,
+    replaced_cover_paths: tuple[str, ...] = (),
+    replacement_is_same_art: bool = False,
     clear_selection: bool = False,
     expected_cover_selection_origin: str | None = None,
     expected_cover_revision: str | None = None,
     expected_cover_state: tuple[str | None, str | None] | None = None,
     expected_inventory_mutation_revision: int | None = None,
     commit_guard: Callable[[Callable[[], object]], object] | None = None,
+    prepare_selection: Callable[[object], object] | None = None,
     logger=None,
 ) -> dict[str, object]:
     del logger
@@ -625,6 +628,9 @@ def _cover_selection_options(
         persistence_options["reject_if_explicit_selection"] = True
     if reject_if_mixed_album_folder:
         persistence_options["reject_if_mixed_album_folder"] = True
+    if replaced_cover_paths:
+        persistence_options["replaced_cover_paths"] = replaced_cover_paths
+        persistence_options["replacement_is_same_art"] = replacement_is_same_art
     if local_cover_width is not None or local_cover_height is not None:
         persistence_options.update(local_cover_width=local_cover_width, local_cover_height=local_cover_height)
     if clear_selection:
@@ -640,6 +646,8 @@ def _cover_selection_options(
         )
     if commit_guard is not None:
         persistence_options["commit_guard"] = commit_guard
+    if prepare_selection is not None:
+        persistence_options["prepare_selection"] = prepare_selection
     return persistence_options
 
 

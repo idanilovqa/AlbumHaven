@@ -38,6 +38,7 @@ from music_app.services.library import build_albums_from_file_cache
 from music_app.services.library_album_index import publish_library_albums
 from music_app.services.library_roots import configured_library_root_paths_snapshot, library_category_label
 from music_app.services.scan_cache_persistence import shared_scan_cache_connection
+from music_app.services.user_cover_choice import write_back_sequence, written_back_since
 
 StateGetter = Callable[[], dict[str, object]]
 
@@ -278,12 +279,15 @@ def _build_automatic_cover_write_guard(
             ):
                 return False
             current_cover = folder / "cover.jpg"
+            # Decoded here, under the folder lock only: nothing decodes under the publication lock.
+            same_art = isinstance(prepared_cover_bytes, bytes) and images_are_visually_similar(
+                current_cover, prepared_cover_bytes
+            )
             if preserve_user_ownership and (
-                not current_cover.is_file()
-                or cover_revision_for_path(current_cover) != expected_cover_revision
-                or not images_are_visually_similar(current_cover, prepared_cover_bytes)
+                not same_art or cover_revision_for_path(current_cover) != expected_cover_revision
             ):
                 return False
+            replaced_cover_paths = tuple({str(current_cover), str(current_cover.resolve())})
             written_holder: dict[str, Path] = {}
 
             def commit_after_write(commit_action: Callable[[], object]) -> object:
@@ -327,6 +331,8 @@ def _build_automatic_cover_write_guard(
                 local_cover_height=getattr(write_action, "local_cover_height", None),
                 reject_if_user_controlled=not (preserve_user_ownership or replace_legacy_user),
                 reject_if_mixed_album_folder=True,
+                replaced_cover_paths=replaced_cover_paths,
+                replacement_is_same_art=same_art,
                 reject_if_explicit_selection=replace_legacy_user,
                 expected_cover_state=("user", legacy_revision) if replace_legacy_user else None,
                 expected_cover_selection_origin=(
@@ -546,6 +552,7 @@ def _run_cover_jobs(
     library_state = get_state()
     changed = False
     runtime_cover_updates: dict[str, tuple[tuple[object, ...], dict[str, object]]] = {}
+    write_backs_before_run = write_back_sequence(library_state)
     failed = 0
     skipped = 0
     downloaded_count = 0
@@ -767,7 +774,7 @@ def _run_cover_jobs(
         job_results.append(detail)
         if reason in {"remote_provider_group_disabled", "library_root_unavailable"} or (
             # Also when the album's missing-file flag took the reason's place: a refusal is not a failure.
-            "mixed_album_folder" in (reason, detail.get("search_reason"))
+            {"mixed_album_folder", "automatic_write_blocked_by_user_selection"} & {reason, detail.get("search_reason")}
         ):
             terminal_category = "skipped"
             skipped += 1
@@ -1228,6 +1235,9 @@ def _run_cover_jobs(
                 current_entries = library_state.get("file_cache") or {}
                 for path, (baseline, selection) in runtime_cover_updates.items():
                     entry = current_entries.get(path)
+                    # A user's write-back can leave the entry equal to this run's baseline, so that alone proves nothing.
+                    if written_back_since(library_state, path, write_backs_before_run):
+                        continue
                     # An entry another writer changed meanwhile keeps that change.
                     if isinstance(entry, dict) and _cover_selection_values(entry) == baseline and selection.get("cover_path") is not None:
                         entry.update(selection)

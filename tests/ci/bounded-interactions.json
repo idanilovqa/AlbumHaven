@@ -10895,14 +10895,43 @@
         "py:music_app/routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_additional_artwork:route:POST /utilities/cover-lookup/additional-artwork"
       ],
       "owners": [
-        "music_app/routes/api_wave_d_asgi_routes.py"
+        "music_app/routes/api_wave_d_asgi_routes.py",
+        "music_app/services/album_additional_artworks_postgres.py",
+        "music_app/services/cover_workflow.py",
+        "music_app/services/library_roots.py",
+        "music_app/services/library_watch_suppression.py",
+        "music_app/services/user_cover_choice.py"
       ],
       "rules": [
         "BI-04",
+        "BI-06",
         "BI-14"
       ],
       "workClass": "affected-set",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 20,
+        "production": 1000
+      },
+      "budgets": {
+        "candidate_rows": 0,
+        "membership_rows": 0,
+        "filesystem_enumerations": 0,
+        "stat_calls": 15,
+        "path_resolves": 27,
+        "open_calls": 5,
+        "media_parses": 1,
+        "sql_statements": 16,
+        "returned_rows": 5,
+        "pool_leases": 4
+      },
+      "growth": {
+        "metric": "stat_calls",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_library_route_bounded_contracts.py::test_cover_lookup_additional_artwork_route_contract_reads_only_the_selected_album_at_production_library_size",
+      "testIdentity": "test_cover_lookup_additional_artwork_route_contract_reads_only_the_selected_album_at_production_library_size",
+      "rollback": "Revert fix(covers) shared-folder user choice, with its contract."
     },
     {
       "id": "py:routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_additional_artwork_remove",

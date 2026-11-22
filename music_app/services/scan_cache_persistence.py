@@ -205,6 +205,8 @@ class ScanCacheAdapter(Protocol):
         local_cover_height: int | None = None,
         reject_if_user_controlled: bool = False,
         reject_if_mixed_album_folder: bool = False,
+        replaced_cover_paths: tuple[str, ...] = (),
+        replacement_is_same_art: bool = False,
         clear_selection: bool = False,
         expected_cover_selection_origin: str | None = None,
         expected_cover_revision: str | None = None,
@@ -1027,12 +1029,15 @@ class PostgresScanCacheAdapter:
         local_cover_height: int | None = None,
         reject_if_user_controlled: bool = False,
         reject_if_mixed_album_folder: bool = False,
+        replaced_cover_paths: tuple[str, ...] = (),
+        replacement_is_same_art: bool = False,
         clear_selection: bool = False,
         expected_cover_selection_origin: str | None = None,
         expected_cover_revision: str | None = None,
         expected_cover_state: tuple[str | None, str | None] | None = None,
         expected_inventory_mutation_revision: int | None = None,
         commit_guard: Callable[[Callable[[], object]], object] | None = None,
+        prepare_selection: Callable[[Any], object] | None = None,
     ) -> dict[str, object]:
         normalized_track_paths = sorted(
             {str(path or "").strip() for path in track_paths if str(path or "").strip()}
@@ -1127,6 +1132,8 @@ class PostgresScanCacheAdapter:
                 raise ScanCachePublicationSuperseded(
                     "Inventory changed while cover selection was prepared."
                 )
+            if prepare_selection is not None:
+                prepare_selection(connection)  # a user save settles the image it read before it waited
             # Read here, under the publication lock: a targeted run's file cache never holds the folder's other album.
             if reject_if_mixed_album_folder and _row_mapping(_first_row(connection.execute(
                 _mixed_album_folder_sql(), {"track_paths": normalized_track_paths},
@@ -1137,6 +1144,20 @@ class PostgresScanCacheAdapter:
                     "track_file_rows_updated": 0,
                     "blocked_by_mixed_album_folder": True,
                 }
+            # Owner rule: different art never replaces a user's choice, and no art replaces another album's.
+            if replaced_cover_paths:
+                choices = _row_mapping(_first_row(connection.execute(_user_cover_choices_sql(), {
+                    "track_paths": normalized_track_paths, "cover_paths": list(replaced_cover_paths),
+                })))
+                if choices.get("another_albums_choice") or (
+                    choices.get("own_second_artbox") and not replacement_is_same_art
+                ):
+                    connection.commit()
+                    return {
+                        "album_rows_updated": 0,
+                        "track_file_rows_updated": 0,
+                        "blocked_by_user_selection": True,
+                    }
             expected_cover_state_guard = expected_cover_state is not None or normalized_expected_origin is not None
             if not reject_if_user_controlled and not expected_cover_state_guard:
                 connection.execute(_increment_cover_mutation_revision_sql())
@@ -7354,6 +7375,60 @@ def _mixed_album_folder_sql() -> str:
               and {physical_album_folder_sql("files.private_path")} = own.folder
           ) held on held.albums > 1
         ) as mixed
+    """
+
+
+def _user_cover_choices_sql() -> str:
+    """Who chose the files an automatic write would replace; 0290's indexes, no album scan.
+
+    Files of several albums, or of none, have no album of their own: every choice is then another album's.
+    """
+    return """
+        with bootstrap_context as materialized (
+          select library.libraries.id as library_id
+          from app.bootstrap_owners
+          join library.libraries
+            on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+           and library.libraries.name = 'Local Library'
+           and library.libraries.library_kind = 'local'
+          where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+          limit 1
+        ),
+        target as materialized (
+          select array_agg(distinct library.local_path_key(path)) as keys
+          from unnest(%(cover_paths)s::text[]) as path
+        ),
+        own as materialized (
+          select case when count(distinct tracks.album_id) = 1 then min(tracks.album_id) end as album_id
+          from library.local_track_files files
+          join library.local_tracks tracks on tracks.id = files.track_id
+          where files.private_path = any(%(track_paths)s::text[])
+        ),
+        choices as (
+          select albums.id as album_id, false as second_artbox
+          from library.local_albums albums
+          where albums.library_id = (select library_id from bootstrap_context)
+            and albums.metadata ->> 'cover_selection_origin' = 'user'
+            and library.local_path_key(albums.cover_path) = any((select keys from target)::text[])
+          union all
+          select albums.id, false
+          from library.local_albums albums
+          where albums.library_id = (select library_id from bootstrap_context)
+            and albums.metadata ->> 'cover_selection_origin' = 'user'
+            and library.local_path_key(albums.metadata ->> 'selected_local_cover_source_path')
+              = any((select keys from target)::text[])
+          union all
+          select albums.id, true
+          from library.local_album_additional_artworks artworks
+          join library.local_albums albums on albums.id = artworks.album_id
+          where artworks.source_kind = 'local'
+            and library.local_path_key(artworks.cover_path) = any((select keys from target)::text[])
+            and albums.library_id = (select library_id from bootstrap_context)
+        )
+        select
+          coalesce(bool_or(choices.album_id is distinct from own.album_id), false) as another_albums_choice,
+          coalesce(bool_or(choices.second_artbox and choices.album_id = own.album_id), false) as own_second_artbox
+        from choices cross join own
     """
 
 

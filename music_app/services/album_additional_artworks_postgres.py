@@ -45,22 +45,29 @@ class AlbumAdditionalArtworkRepository:
         cover_path: str | None,
         remote_url: str | None,
         account_id: int | None,
+        prepare: Callable[[Any], object] | None = None,
+        commit_guard: Callable[[Callable[[], object]], object] | None = None,
     ) -> list[dict[str, object]]:
         if slot not in ADDITIONAL_ARTWORK_SLOTS:
             raise ValueError("Only one additional artbox is allowed")
         if source_kind not in _SOURCE_KINDS:
             raise ValueError("Unsupported artwork source")
         with self._connect_to_database() as connection:
-            with connection.transaction():
-                connection.execute(_UPSERT_SQL, {
-                    "album_id": album_id,
-                    "slot": slot,
-                    "source_kind": source_kind,
-                    "cover_path": cover_path if source_kind == "local" else None,
-                    "remote_url": remote_url if source_kind == "remote" else None,
-                    "account_id": account_id,
-                })
-                rows = connection.execute(_LIST_SQL, {"album_id": album_id}).fetchall()
+            if prepare is not None:
+                prepare(connection)
+            connection.execute(_UPSERT_SQL, {
+                "album_id": album_id,
+                "slot": slot,
+                "source_kind": source_kind,
+                "cover_path": cover_path if source_kind == "local" else None,
+                "remote_url": remote_url if source_kind == "remote" else None,
+                "account_id": account_id,
+            })
+            rows = connection.execute(_LIST_SQL, {"album_id": album_id}).fetchall()
+            if commit_guard is not None:
+                commit_guard(connection.commit)
+            else:
+                connection.commit()
         return [artwork_payload(row) for row in rows]
 
     def remove(self, *, album_id: int, slot: int) -> list[dict[str, object]]:

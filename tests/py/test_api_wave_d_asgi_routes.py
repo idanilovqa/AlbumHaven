@@ -178,6 +178,21 @@ def seeded_state_is_the_stored_selection(monkeypatch):
     monkeypatch.setattr(asgi_routes, "_load_selected_album_state", stored_selection)
 
 
+@pytest.fixture(autouse=True)
+def no_automatic_write_is_recorded(monkeypatch):
+    """A save reads which automatic writes exist before it waits; these tests have no database, so none does."""
+    from contextlib import nullcontext
+
+    from music_app.services import user_cover_choice
+
+    read = user_cover_choice.read_chosen_image
+    monkeypatch.setattr(user_cover_choice, "_automatic_writes", lambda _connection, _path: [])
+    monkeypatch.setattr(
+        user_cover_choice, "read_chosen_image",
+        lambda _connect, path: read(nullcontext, path),
+    )
+
+
 class _FilesystemCoverInventory:
     """Route tests have no isolated database for the Postgres-backed local cover
     inventory, so resolve an album's folder from its track paths instead."""

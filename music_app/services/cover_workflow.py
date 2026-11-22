@@ -55,6 +55,7 @@ class LocalCoverPromotion:
     promoted_cover_revision: str = ""
     selection_lock_key: str = ""
     selection_lock: Lock | None = None
+    other_selection_locks: tuple[tuple[str, Lock], ...] = ()
     prior_cover_atime_ns: int | None = None
     prior_cover_mtime_ns: int | None = None
     prior_reserve_artifacts: frozenset[Path] = frozenset()
@@ -523,12 +524,25 @@ def begin_local_image_promotion(
     album_root: Path,
     *,
     serialize_selection: bool = False,
+    chosen_bytes: bytes | None = None,
 ) -> LocalCoverPromotion:
-    lock_key, selection_lock = (
-        _acquire_local_cover_selection_lock(album_root)
-        if serialize_selection
-        else ("", None)
-    )
+    """Promote `source_path`; `chosen_bytes` are what the user clicked, read before this waited for a lock.
+
+    Those also lock the source's folder, whose automatic writer could replace them, in key order with the root's.
+    """
+    lock_key, selection_lock = "", None
+    other_locks: list[tuple[str, Lock]] = []
+    if serialize_selection:
+        root_key = _local_cover_selection_lock_key(album_root)
+        folders = {root_key: album_root}
+        if chosen_bytes is not None:
+            folders.setdefault(_local_cover_selection_lock_key(source_path.parent), source_path.parent)
+        for key in sorted(folders):
+            held = _acquire_local_cover_selection_lock(folders[key])
+            if key == root_key:
+                lock_key, selection_lock = held
+            else:
+                other_locks.append(held)
     try:
         resolved_source = source_path.resolve(strict=True)
         target = album_root / "cover.jpg"
@@ -536,8 +550,9 @@ def begin_local_image_promotion(
         prior_cover_stat = target.stat() if prior_cover_existed else None
         prior_cover_bytes = target.read_bytes() if prior_cover_existed else None
         if resolved_source == target.resolve(strict=False):
-            raw_bytes = target.read_bytes()
+            raw_bytes = target.read_bytes() if chosen_bytes is None else chosen_bytes
             return LocalCoverPromotion(
+                other_selection_locks=tuple(other_locks),
                 cover_path=target,
                 prior_cover_existed=prior_cover_existed,
                 prior_cover_bytes=prior_cover_bytes,
@@ -556,8 +571,9 @@ def begin_local_image_promotion(
                     else None
                 ),
             )
-        raw_bytes = resolved_source.read_bytes()
+        raw_bytes = resolved_source.read_bytes() if chosen_bytes is None else chosen_bytes
         promotion = LocalCoverPromotion(
+            other_selection_locks=tuple(other_locks),
             cover_path=target,
             prior_cover_existed=prior_cover_existed,
             prior_cover_bytes=prior_cover_bytes,
@@ -601,6 +617,8 @@ def begin_local_image_promotion(
         else:
             if selection_lock is not None:
                 _release_local_cover_selection_lock(lock_key, selection_lock)
+            for held in reversed(other_locks):
+                _release_local_cover_selection_lock(*held)
         raise
     return promotion
 
@@ -779,6 +797,9 @@ def complete_local_image_promotion(promotion: LocalCoverPromotion) -> None:
         promotion.selection_lock_key,
         selection_lock,
     )
+    other_locks, promotion.other_selection_locks = promotion.other_selection_locks, ()
+    for held in reversed(other_locks):
+        _release_local_cover_selection_lock(*held)
 
 
 def _local_cover_selection_lock_key(album_root: Path) -> str:

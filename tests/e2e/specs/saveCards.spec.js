@@ -231,6 +231,8 @@ test.describe('Cards change at Save', () => {
     await makeFixtureFilesReadOnly(ownedFixture);
     await holdSave();
     const frames = await clickSave({ page, galleryActions, tagEditorActions }, TWIN, async (actions) => {
+      // Both credits: an album still credited to the selected artist keeps a card in its view.
+      await actions.setArtist(movedArtist);
       await actions.setAlbumArtist(movedArtist);
     }, { copyIndex: 0 });
     await expectFromTheClick(frames, [COPY]);

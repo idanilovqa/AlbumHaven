@@ -19548,21 +19548,28 @@ def test_live_targeted_watcher_reuses_unchanged_families_through_publication(
         if search_state == 'ready':
             monkeypatch.setattr(module, 'replace_artist_search_projection_in_transaction', unexpected)
 
-    # Exercise the actual caller: it marks the projection stale while advancing
-    # the inventory revision, even when the observed track has not changed, and
-    # leaves relations to the queued background refresh.
+    # Exercise the actual caller: it advances the inventory revision even when the
+    # observed track has not changed, and patches only that album's relations in
+    # its own transaction (owner 2026-11-21), so no relation rebuild is left pending.
     result = fixture.adapter.persist_targeted_inventory_mutation(
         root_id=fixture.roots[0]['id'], active_file_entries={entry['path']: entry},
     )
     assert result['inventory_mutation_revision'] > revision_before
     assert fixture.adapter.load_inventory_mutation_revision() == result['inventory_mutation_revision']
     with isolatedPostgres._connect(fixture.setup_url) as connection:
-        marked = projections._relation_projection_scan_cache_from_row(
+        patched = projections._relation_projection_scan_cache_from_row(
             connection.execute(projections._load_relation_projection_sql()).fetchone()
         )
-    assert projections.relation_projection_stale_reason(marked) == 'projection_not_ready'
-    refreshed = projections.ensure_relation_projection_ready(fixture.config, connect=isolatedPostgres._connect)
-    assert refreshed['rebuild_reason'] == 'source_unchanged'
+    assert not projections.relation_projection_stale_reason(patched)
+    assert patched['relation_projection']['targeted_patch_reason'] == 'targeted_reconciliation'
+    # A later readiness check finds nothing to rebuild; a damaged search projection
+    # still needs explicit startup reconciliation instead of a background rebuild.
+    if search_state == 'ready':
+        refreshed = projections.ensure_relation_projection_ready(fixture.config, connect=isolatedPostgres._connect)
+        assert refreshed['rebuild_reason'] == 'healthy'
+    else:
+        with pytest.raises(RuntimeError, match='requires explicit startup reconciliation'):
+            projections.ensure_relation_projection_ready(fixture.config, connect=isolatedPostgres._connect)
     with isolatedPostgres._connect(fixture.setup_url) as connection:
         after = projections._relation_projection_scan_cache_from_row(
             connection.execute(projections._load_relation_projection_sql()).fetchone()
@@ -19697,12 +19704,12 @@ def _sidebar_counts(payload):
     return {entry['artist']: entry['count'] for entry in payload['artists_sidebar']}
 
 
-def test_live_watcher_event_keeps_last_families_until_background_rebuild_publishes(
+def test_live_watcher_event_keeps_families_and_groups_the_found_artist_at_once(
     watcher_repair_inventory, monkeypatch, default_empty_relation_alias_projection,
 ):
-    """Keep last families: after a watcher event, browse keeps the published
-    family grouped and shows the watcher-found artist at once, ungrouped; the
-    background refresh then groups it with its family."""
+    """Keep last families: after a watcher event, browse keeps the family
+    grouped, and the watcher-found artist joins it at once, without waiting
+    for a background relation rebuild."""
     from music_app.services import gallery_projection_postgres as gallery
     from music_app.services import relation_projection_postgres as projections
     from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
@@ -19726,46 +19733,39 @@ def test_live_watcher_event_keeps_last_families_until_background_rebuild_publish
     ))
     assert result.revision > 0
 
-    pending = repository._load_relation_alias_maps()
-    assert pending['projection_stale_reason'] == 'projection_not_ready'
-    pending_sidebar = _sidebar_counts(repository.build_root_startup_preview_payload(
-        query_params={}, sidebar_only=True, queue_projection_refresh=False,
-    ))
-    assert pending_sidebar['Rhapsody of Fire'] == 3
-    assert pending_sidebar['Rhapsody of Fira'] == 1
-    assert 'Rhapsody of Fyre' not in pending_sidebar
+    # The watcher pass patched the album's relations in its own transaction
+    # (owner 2026-11-21): no rebuild is pending, the family keeps its members,
+    # and the found artist joins it at once without a reload.
+    patched = repository._load_relation_alias_maps()
+    assert not patched['projection_stale_reason']
+    assert patched['alias_to_canonical'].get('Rhapsody of Fyre') == 'Rhapsody of Fire'
+    assert patched['alias_to_canonical'].get('Rhapsody of Fira') == 'Rhapsody of Fire'
     assert repository.canonical_gallery_artist_names(['Rhapsody of Fyre', 'Rhapsody of Fira']) == {
-        'Rhapsody of Fyre': 'Rhapsody of Fire', 'Rhapsody of Fira': 'Rhapsody of Fira',
+        'Rhapsody of Fyre': 'Rhapsody of Fire', 'Rhapsody of Fira': 'Rhapsody of Fire',
     }
+    assert _sidebar_counts(repository.build_root_startup_preview_payload(
+        query_params={}, sidebar_only=True, queue_projection_refresh=False,
+    )) == {'Rhapsody of Fire': 4}
 
-    # The queued background refresh publishes the gallery with the last
-    # families before it rebuilds relations.
-    gallery_during_rebuild = []
-    rebuild = projections.ensure_relation_projection_ready
+    # The queued background gallery refresh publishes the same families
+    # without rebuilding relations.
+    def unexpected_rebuild(*args, **kwargs):
+        pytest.fail('patched relations must not be rebuilt by the background gallery refresh')
 
-    def observed_rebuild(*args, **kwargs):
-        gallery_during_rebuild.append(_sidebar_counts(repository.build_projected_root_sidebar_payload()))
-        return rebuild(*args, **kwargs)
-
-    monkeypatch.setattr(projections, 'ensure_relation_projection_ready', observed_rebuild)
+    monkeypatch.setattr(projections, 'ensure_relation_projection_ready', unexpected_rebuild)
     gallery.ensure_gallery_projection_ready(fixture.config, connect=isolatedPostgres._connect)
 
-    assert len(gallery_during_rebuild) == 1
-    assert gallery_during_rebuild[0]['Rhapsody of Fire'] == 3
-    assert gallery_during_rebuild[0]['Rhapsody of Fira'] == 1
-    rebuilt = repository._load_relation_alias_maps()
-    assert not rebuilt['projection_stale_reason']
-    assert rebuilt['alias_to_canonical'].get('Rhapsody of Fira') == 'Rhapsody of Fire'
-    published_sidebar = _sidebar_counts(repository.build_projected_root_sidebar_payload())
-    assert published_sidebar['Rhapsody of Fire'] == 4
-    assert 'Rhapsody of Fira' not in published_sidebar
+    refreshed = repository._load_relation_alias_maps()
+    assert not refreshed['projection_stale_reason']
+    assert refreshed['alias_to_canonical'].get('Rhapsody of Fira') == 'Rhapsody of Fire'
+    assert _sidebar_counts(repository.build_projected_root_sidebar_payload()) == {'Rhapsody of Fire': 4}
 
 
-def test_live_album_move_keeps_last_families_until_background_rebuild_publishes(
+def test_live_album_move_keeps_families_without_a_pending_rebuild(
     watcher_repair_inventory, monkeypatch, default_empty_relation_alias_projection,
 ):
-    """An in-app album move marks relations stale like a watcher event; browse
-    keeps the family grouped and the moved album visible until the rebuild."""
+    """An in-app album move patches relations like a watcher event; browse
+    keeps the family grouped and the moved album counted."""
     import shutil
 
     fixture = watcher_repair_inventory
@@ -19795,12 +19795,14 @@ def test_live_album_move_keeps_last_families_until_background_rebuild_publishes(
     )
     assert persisted['inventory_mutation_revision'] > 0
 
-    assert repository._load_relation_alias_maps()['projection_stale_reason'] == 'projection_not_ready'
-    pending_sidebar = _sidebar_counts(repository.build_root_startup_preview_payload(
+    # The move patches the moved album's relations in its own transaction
+    # (owner 2026-11-21), so the family stays grouped with no rebuild pending.
+    patched = repository._load_relation_alias_maps()
+    assert not patched['projection_stale_reason']
+    assert patched['alias_to_canonical'].get('Rhapsody of Fyre') == 'Rhapsody of Fire'
+    assert _sidebar_counts(repository.build_root_startup_preview_payload(
         query_params={}, sidebar_only=True, queue_projection_refresh=False,
-    ))
-    assert pending_sidebar['Rhapsody of Fire'] == 3
-    assert 'Rhapsody of Fyre' not in pending_sidebar
+    )) == {'Rhapsody of Fire': 3}
 
 
 def test_postgres_cover_state_batch_uses_narrow_indexed_path_query():
@@ -19918,13 +19920,15 @@ def test_search_artist_tree_is_alphabetical_while_ranked_groups_choose_the_match
     assert [item["artist"] for item in browse._artists_sidebar_from_groups(ranked)][:2] == ["Lost Frequencies", "Lostprophets"]
 
 
-@pytest.mark.parametrize(("category", "kept"), [("main_library", True), ("hoard", True), ("new_arrivals", False)])
-def test_deleted_main_and_hoard_albums_stay_as_missing_cards_until_confirmed(category, kept):
+@pytest.mark.parametrize("category", ["main_library", "hoard", "new_arrivals"])
+def test_deleted_albums_stay_as_missing_cards_until_confirmed(category):
+    """Owner 2026-11-18: every source keeps a deleted album's missing card. An
+    untouched New Arrivals album is auto-removed before it reaches this list."""
     from music_app.services import library_browse_postgres as library_browse
 
     rows = [_missing_browse_row(album_id=7, title="F♯ A♯ ∞", category=category)]
     payloads = library_browse._missing_album_projection_payloads(rows)
-    assert bool(payloads) is kept
+    assert [(payload["key"], payload["inventory_status"]) for payload in payloads] == [("missing-7", "missing")]
 
 
 def test_gallery_cover_prewarm_leaves_previews_a_running_move_has_not_reached(monkeypatch, tmp_path):

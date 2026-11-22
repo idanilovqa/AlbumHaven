@@ -530,8 +530,8 @@ class PostgresScanCacheAdapter:
     ) -> dict[str, object]:
         """Publish one targeted inventory mutation without rebuilding relations.
 
-        The revision increment marks the relation projection stale; the caller
-        queues the gallery refresh, which rebuilds it in the background.
+        The same transaction patches only the affected albums' relations
+        (owner 2026-11-21), so no library-wide relation rebuild is left pending.
         Expected revisions reject a mutation prepared before a newer cover or
         inventory commit; `before_commit` runs inside its transaction.
         """

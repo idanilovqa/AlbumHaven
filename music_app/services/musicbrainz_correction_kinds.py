@@ -111,9 +111,13 @@ def compare_album(album: Mapping[str, object]) -> dict[str, object]:
     only where the titles agree. An ambiguous pairing compares no tracks and sends the album to
     review whole; so does the guard. Returns {"rows": [...], "review_whole": bool}."""
     rows: list[dict[str, object]] = []
+    seen_changes: set[tuple[object, ...]] = set()
 
     def add(field, disc, track, current, proposed):
-        if _differs(current, proposed):
+        change = (field, disc, track, str(current or ""), str(proposed or "").strip())
+        # Copies with different titles can still share an artist change.
+        if _differs(current, proposed) and change not in seen_changes:
+            seen_changes.add(change)
             rows.append({"field": field, "disc_number": disc, "track_number": track,
                          "current_value": str(current or ""), "proposed_value": str(proposed).strip(),
                          "kind": classify(field, current, proposed)})
@@ -128,8 +132,15 @@ def compare_album(album: Mapping[str, object]) -> dict[str, object]:
     compared_titles = 0
     if quality != "ambiguous":
         stored = (pairing or {}).get("pairing") or {}
+        compared: set[tuple[object, ...]] = set()
         for local in album.get("tracks") or []:
             disc, number = int(local.get("disc_number") or 1), int(local.get("track_number") or 0)
+            # Copies of one song at one position are one track: the same change twice can't be
+            # decided (one decision per exact change) and would weigh twice in the guard.
+            copy = (disc, number, local.get("title"), local.get("artist"))
+            if copy in compared:
+                continue
+            compared.add(copy)
             if quality == "reordered":
                 remote = by_position.get(stored.get((disc, number)))
             else:

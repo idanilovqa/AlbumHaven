@@ -275,3 +275,22 @@ def test_search_finds_an_applied_correction_and_after_undo_only_the_tag(monkeypa
     assert "rel-cry" not in _search(setup_url, "Hostilities")
     assert "rel-cry" in _search(setup_url, "Hostlities")
     assert "rel-cry" in changed[-1]
+
+
+def test_copies_of_a_song_at_one_position_never_fail_the_refresh_or_a_decision(monkeypatch):
+    # sandbox6 (2026-11-22): the refresh failed at every start and stored nothing.
+    setup_url, repository, _ids = _corrections(monkeypatch)
+    with isolatedPostgres._connect(setup_url) as connection:
+        for key, title in (("same", "don't despair"), ("other-case", "DON'T DESPAIR")):
+            connection.execute(
+                "insert into library.local_tracks (library_id, album_id, artist_id, track_key, title, disc_number,"
+                " track_number, metadata) select library_id, album_id, artist_id, %s, %s, 1, 1, '{}'::jsonb"
+                " from library.local_tracks where track_key = 'rel-cry-1'", (f"rel-cry-1-{key}", title))
+    service = MusicBrainzCorrectionService(repository, now=lambda: NOW)
+
+    assert repository.refresh(observed_at=NOW) == 2
+    with isolatedPostgres._connect(setup_url) as connection:
+        shown = connection.execute("select corrected_title from library.local_tracks"
+                                   " where track_key like 'rel-cry-1%%'", ()).fetchall()
+    assert [row["corrected_title"] for row in shown] == ["Don’t Despair"] * 3
+    assert service.undo_album(album_key="rel-cry", actor_account_id=None) == 2, "one row per distinct tag value"

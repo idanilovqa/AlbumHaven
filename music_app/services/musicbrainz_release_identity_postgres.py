@@ -243,8 +243,10 @@ class MusicBrainzReleaseIdentityPostgresRepository(EnrichmentJobQueue):
                 {"ALBUM_HAVEN_APP_DATABASE_URL": self._database_url}, connect=self._connect,
             ).refresh(album_ids=[album["local_album_id"] for album in albums if album.get("local_album_id")],
                       observed_at=observed)
-        except Exception:
-            logging.getLogger(__name__).warning("MusicBrainz data corrections could not be refreshed.")
+        except Exception as exc:
+            # The type only: a database message can quote tags.
+            logging.getLogger(__name__).warning(
+                "MusicBrainz data corrections could not be refreshed: %s.", type(exc).__name__)
         return int(_row_mapping(row).get("stored") or 0)
 
 

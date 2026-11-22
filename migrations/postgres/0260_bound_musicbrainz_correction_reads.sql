@@ -147,6 +147,17 @@ create trigger musicbrainz_correction_release_update
     is distinct from (new.title, new.artist_credit, new.media, new.refreshed_at))
   execute function library.mark_musicbrainz_correction_album();
 
+-- Copies of a song at one track position stored one change twice, which no decision could record.
+-- Derived rows: one of each is kept, before the groups are counted.
+delete from library.local_album_musicbrainz_correction_rows correction
+using (
+  select id, row_number() over (
+    partition by library_id, album_key, field, disc_number, track_number, current_value, proposed_value
+    order by id) as copy
+  from library.local_album_musicbrainz_correction_rows
+) numbered
+where numbered.id = correction.id and numbered.copy > 1;
+
 -- The stored groups of what is stored today, once: the same rule as
 -- musicbrainz_corrections_postgres._LISTED_SQL.
 insert into library.local_album_musicbrainz_correction_groups
@@ -179,12 +190,18 @@ select library_id, section, grouping, count(*), sum(row_count)
 from library.local_album_musicbrainz_correction_groups
 group by library_id, section, grouping;
 
--- An album 0198 left to recompute is still recomputed once.
+-- Every album with a release decision or a stored result is checked once, in the background
+-- refresh's batches. A refresh before this migration stored nothing when one album failed it
+-- (sandbox6, 2026-11-22), so what is stored can be stale; an album whose signature holds is not
+-- compared again.
 insert into library.musicbrainz_correction_refresh_marks (album_id)
 select albums.id
-from library.local_album_musicbrainz_corrections stored
-join library.local_albums albums on albums.library_id = stored.library_id and albums.album_key = stored.album_key
-where stored.signature = 'recompute';
+from library.local_albums albums
+where exists (select 1 from library.local_album_musicbrainz_releases decision
+              where decision.library_id = albums.library_id and decision.album_key = albums.album_key
+                and decision.state = 'release')
+   or exists (select 1 from library.local_album_musicbrainz_corrections stored
+              where stored.library_id = albums.library_id and stored.album_key = albums.album_key);
 
 create or replace function library.count_musicbrainz_correction_group()
 returns trigger language plpgsql security definer set search_path = pg_catalog as $$

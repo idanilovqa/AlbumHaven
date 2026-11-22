@@ -107,7 +107,8 @@ _LOCK_SQL = """
     select pg_advisory_xact_lock(hashtextextended('album-haven:musicbrainz-corrections', 0));
 """
 _MARKS_SQL = """
-    select id, album_id from library.musicbrainz_correction_refresh_marks order by id limit %(limit)s;
+    select id, album_id from library.musicbrainz_correction_refresh_marks
+    where id > %(after)s order by id limit %(limit)s;
 """
 # Only the marks read: one added meanwhile waits for the next batch.
 _CLEAR_MARKS_SQL = """
@@ -537,26 +538,52 @@ class MusicBrainzCorrectionsPostgresRepository:
                     compared, synced = self._refresh_albums(connection, ids, now)
             self._changed(synced)
             return compared
-        total = 0
-        while True:
-            compared, synced, marks_read = self._refresh_marked(now)
-            self._changed(synced)
-            total += compared
-            if marks_read < REFRESH_BATCH_MARKS:
-                return total
+        total = after = 0
+        synced: list[str] = []
+        try:
+            with self._connect(self._database_url) as connection:
+                while True:
+                    # Read in a transaction of its own, so each batch below commits by itself.
+                    with _transaction(connection):
+                        marks = [_row_mapping(row) for row in connection.execute(
+                            _MARKS_SQL, {"after": after, "limit": REFRESH_BATCH_MARKS}).fetchall()]
+                    if marks:
+                        compared, changed = self._refresh_marked(connection, marks, now)
+                        total += compared
+                        synced.extend(changed)
+                    if len(marks) < REFRESH_BATCH_MARKS:
+                        return total
+                    # Past this batch even where an album failed: it never holds back the albums after it.
+                    after = marks[-1]["id"]
+        finally:
+            # Batches committed before a failure changed values too.
+            self._changed(tuple(synced))
 
-    def _refresh_marked(self, now: datetime) -> tuple[int, tuple[str, ...], int]:
-        with self._connect(self._database_url) as connection:
+    def _refresh_marked(self, connection: Any, marks: list[dict[str, object]],
+                        now: datetime) -> tuple[int, tuple[str, ...]]:
+        """Refresh and clear one batch. When an album's data fails it, the batch runs album by
+        album; the failing album keeps its marks for the next refresh."""
+        album_ids = sorted({int(mark["album_id"]) for mark in marks})
+        try:
             with _transaction(connection):
                 connection.execute(_LOCK_SQL)
-                marks = [_row_mapping(row) for row in connection.execute(
-                    _MARKS_SQL, {"limit": REFRESH_BATCH_MARKS}).fetchall()]
-                if not marks:
-                    return 0, (), 0
-                compared, synced = self._refresh_albums(
-                    connection, sorted({int(mark["album_id"]) for mark in marks}), now)
+                compared, synced = self._refresh_albums(connection, album_ids, now)
                 connection.execute(_CLEAR_MARKS_SQL, {"mark_ids": [mark["id"] for mark in marks]})
-        return compared, synced, len(marks)
+            return compared, synced
+        except Exception as exc:
+            if not _album_data_error(exc):
+                raise
+            if len(album_ids) == 1:
+                _logger.warning("MusicBrainz data corrections of album %s could not be refreshed: %s.",
+                                album_ids[0], _cause(exc))
+                return 0, ()
+        compared, synced = 0, ()
+        for album_id in album_ids:
+            own_compared, own_synced = self._refresh_marked(
+                connection, [mark for mark in marks if int(mark["album_id"]) == album_id], now)
+            compared += own_compared
+            synced += own_synced
+        return compared, synced
 
     def _refresh_albums(self, connection: Any, album_ids: list[int], now: datetime) -> tuple[int, tuple[str, ...]]:
         scope = {"album_ids": album_ids}
@@ -612,6 +639,19 @@ _REFRESH_RUNNING: dict[str, bool] = {}
 _ON_CHANGE: dict[str, Callable[[tuple[str, ...]], None]] = {}
 
 
+def _album_data_error(exc: BaseException) -> bool:
+    """One album's data, not the database: a cardinality, value or constraint error (SQLSTATE
+    classes 21, 22, 23), or a comparison that could not read its values."""
+    state = str(getattr(exc, "sqlstate", None) or "")
+    return state[:2] in {"21", "22", "23"} or isinstance(exc, (ValueError, TypeError))
+
+
+def _cause(exc: BaseException) -> str:
+    """The error's type and SQLSTATE; never its message, which can quote tags."""
+    state = getattr(exc, "sqlstate", None)
+    return f"{type(exc).__name__} ({state})" if state else type(exc).__name__
+
+
 def notify_searchable_values_changed(database_url: object, album_keys: Iterable[str], *,
                                      on_change: Callable[[tuple[str, ...]], None] | None = None) -> None:
     """Drop the search, gallery and Problematic Files caches of albums whose searchable values
@@ -659,8 +699,8 @@ def _refresh_until_settled(url: str) -> None:
     while True:
         try:
             MusicBrainzCorrectionsPostgresRepository({"ALBUM_HAVEN_APP_DATABASE_URL": url}).refresh()
-        except Exception:
-            _logger.warning("MusicBrainz data corrections could not be refreshed.")
+        except Exception as exc:
+            _logger.warning("MusicBrainz data corrections could not be refreshed: %s.", _cause(exc))
         with _REFRESH_LOCK:
             if not _REFRESH_RUNNING.get(url):
                 _REFRESH_RUNNING.pop(url, None)

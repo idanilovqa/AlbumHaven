@@ -194,3 +194,89 @@ def test_search_matches_the_corrected_values_through_their_own_prefiltered_index
     for column in ("corrected_title", "corrected_album_artist"):
         assert f"(library.local_albums.{column} is not null and lower(btrim(coalesce(library.local_albums.{column}" in sql
         assert f"( (lower(btrim(coalesce({column}, '')))) %i.gin_trgm_ops ) where {column} is not null" in album_migration
+
+
+class _DataError(Exception):
+    sqlstate = "21000"
+
+
+def _marked_store(monkeypatch, fails):
+    from music_app.services import musicbrainz_corrections_postgres as store
+
+    marks = {number: number for number in range(1, 6)}
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def execute(self, sql, params=None):
+            rows = []
+            if sql is store._MARKS_SQL:
+                after = (params or {}).get("after", 0)
+                rows = [{"id": key, "album_id": value} for key, value in sorted(marks.items())
+                        if key > after][:params["limit"]]
+            elif sql is store._CLEAR_MARKS_SQL:
+                for key in params["mark_ids"]:
+                    marks.pop(key, None)
+            return type("Result", (), {"fetchall": lambda _self: rows})()
+
+    repository = store.MusicBrainzCorrectionsPostgresRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://s4"}, connect=lambda _url: Connection())
+
+    def refresh_albums(_connection, album_ids, _now):
+        for album_id in album_ids:
+            fails(album_id)
+        return len(album_ids), ()
+
+    monkeypatch.setattr(repository, "_refresh_albums", refresh_albums)
+    return repository, marks
+
+
+def test_one_album_that_cannot_be_stored_never_stops_the_others_refresh(monkeypatch, caplog):
+    def fails(album_id):
+        if album_id == 3:
+            raise _DataError("more than one row returned by a subquery used as an expression")
+
+    repository, marks = _marked_store(monkeypatch, fails)
+
+    with caplog.at_level("WARNING"):
+        assert repository.refresh() == 4
+
+    assert marks == {3: 3}, "only the failed album waits for the next refresh"
+    assert "album 3" in caplog.text and "_DataError" in caplog.text and "21000" in caplog.text
+
+
+def test_a_database_outage_is_not_retried_album_by_album(monkeypatch):
+    attempts = []
+
+    def fails(album_id):
+        attempts.append(album_id)
+        raise ConnectionError("down")
+
+    repository, marks = _marked_store(monkeypatch, fails)
+
+    with pytest.raises(ConnectionError):
+        repository.refresh()
+    assert attempts == [1] and len(marks) == 5
+
+
+def test_a_failed_background_refresh_logs_its_cause(monkeypatch, caplog):
+    from music_app.services import musicbrainz_corrections_postgres as store
+
+    class Repository:
+        def __init__(self, _config):
+            pass
+
+        def refresh(self):
+            raise _DataError("more than one row returned by a subquery used as an expression")
+
+    monkeypatch.setattr(store, "MusicBrainzCorrectionsPostgresRepository", Repository)
+    monkeypatch.setattr(store, "_REFRESH_RUNNING", {"postgresql://s4": False})
+
+    with caplog.at_level("WARNING"):
+        store._refresh_until_settled("postgresql://s4")
+
+    assert "_DataError" in caplog.text and "21000" in caplog.text

@@ -135,3 +135,20 @@ def test_a_composer_first_credit_is_proposed_as_musicbrainz_orders_it_and_waits_
 
 def test_a_classical_album_already_credited_as_musicbrainz_does_has_no_correction():
     assert compare_album(_classical("Antonín Dvořák; Inna Poroshina"))["rows"] == []
+
+
+def test_two_copies_of_one_song_at_one_position_are_one_change():
+    album = _album(["carry on", "Nova Era"], ["Carry On", "Nova Era"], pairing=ORDER_EXACT)
+    album["tracks"].append(dict(album["tracks"][0]))
+
+    rows = compare_album(album)["rows"]
+
+    assert [(row["field"], row["track_number"], row["proposed_value"]) for row in rows] == [("title", 1, "Carry On")]
+
+
+def test_copies_of_a_song_do_not_weigh_twice_in_the_guard():
+    album = _album(["The Mirror", "Song 2", "Song 3", "Song 4"],
+                   ["Only for the Night", "Song 2", "Song 3", "Song 4"], pairing=ORDER_EXACT)
+    album["tracks"].append(dict(album["tracks"][0]))
+
+    assert compare_album(album)["review_whole"] is False, "one of four titles changes, not two of five"

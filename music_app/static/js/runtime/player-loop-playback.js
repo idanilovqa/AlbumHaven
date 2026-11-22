@@ -176,14 +176,14 @@ function resolvePlayerUiStatus(playback) {
 
 // The seek position and its time label: all that a timeline drag preview changes.
 function renderPlayerTimelinePosition(els, playback, { hasTrack, lockedByAnotherTab, playingElsewhere, blockedLabel }) {
-  // A pressed song waiting for its audio shows its own start and length, as its title and waveform
+  // A pressed song waiting for its audio shows its own start place and length, as its title and waveform
   // do: never the old song's running time under the new title (owner round 9, 2026-11-21: "the
   // majority of player UI does not [...] All these should be syncronoized").
   const pendingTrack = !lockedByAnotherTab && state.player.selectedTrack
     && state.player.selectedTrack.path !== state.player.current?.path ? state.player.selectedTrack : null;
   const duration = pendingTrack ? Math.max(0, Number(pendingTrack.durationSeconds) || 0) : getPlayerDuration();
   const dragPreview = Number(state.player.timelineDragPreviewSeconds);
-  const current = pendingTrack ? 0 : state.player.timelineDragging && Number.isFinite(dragPreview)
+  const current = pendingTrack ? Number(state.player.selectedStartSeconds) || 0 : state.player.timelineDragging && Number.isFinite(dragPreview)
     ? dragPreview
     : Number(playback.currentTime) || 0;
   if (els.timeline) {
@@ -354,8 +354,9 @@ function renderSelectedTrackState() {
   if (typeof refreshNonAlbumModalPlaybackState === 'function') refreshNonAlbumModalPlaybackState();
 }
 
-function showSelectedTrackImmediately(track, shouldAutoplay) {
+function showSelectedTrackImmediately(track, shouldAutoplay, startSeconds) {
   if (!shouldAutoplay) return;
+  state.player.selectedStartSeconds = startSeconds;
   state.player.selectedTrack = track;
   renderSelectedTrackState();
 }
@@ -420,7 +421,7 @@ async function playTrackFromPayload(track, options = {}) {
   if (typeof startStreamingTrack !== 'function') {
     throw new Error('Streaming playback engine is unavailable');
   }
-  showSelectedTrackImmediately(track, shouldAutoplay);
+  showSelectedTrackImmediately(track, shouldAutoplay, startSeconds);
   // The pressed song paints before its stream starts: the start's own work never holds the frame
   // that shows the press (owner: instant even at 100% CPU). Audio that is not yet running (the first
   // press after load) starts in the press itself, where every browser lets the press start sound.
@@ -522,6 +523,7 @@ async function handleStreamingPlaybackFirstFrame(event = {}) {
   if (identity === pendingStreamingFirstFrameIdentity) {
     return pendingStreamingFirstFrameSchedule;
   }
+  if (typeof publishPlaybackPositionSoon === 'function') publishPlaybackPositionSoon();
   const selectionToken = playerTrackSelectionToken;
   const nextTrack = typeof peekNextQueuedTrack === 'function'
     ? peekNextQueuedTrack()
@@ -671,6 +673,7 @@ async function handleStreamingPlaybackBoundary(event = {}) {
     }
   }
   setCurrentPlayerTrack(promotedTrack, { previousPlaybackSnapshot });
+  if (typeof publishPlaybackPositionSoon === 'function') publishPlaybackPositionSoon();
   if (event.incomingListenSession) state.player.listenSession = event.incomingListenSession;
   if (typeof resumeListenSessionPlayback === 'function') {
     const incomingSessionStart = Promise.resolve(resumeListenSessionPlayback(promotedTrack, 0)).then((incomingSession) => (
@@ -899,6 +902,7 @@ function setLoopPlaybackHead(value) {
   } else if (seek && typeof seek.catch === 'function') {
     void seek.catch(() => {});
   }
+  if (typeof publishPlaybackPositionSoon === 'function') publishPlaybackPositionSoon();
   updatePlayerUi();
 }
 
@@ -920,6 +924,7 @@ function setPlayerPlaybackHead(value, options = {}) {
     void seek.catch(() => {});
   }
   if (shouldResumeSegment) void resumeListenSessionPlayback(state.player.current, next);
+  if (typeof publishPlaybackPositionSoon === 'function') publishPlaybackPositionSoon();
   updatePlayerUi();
 }
 

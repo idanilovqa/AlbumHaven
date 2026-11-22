@@ -5,12 +5,13 @@ const ARTIST = 'Playback Start Signals';
 const ALBUM = 'Length And Repetition';
 const TITLE = 'Long Cold Signal';
 
-// Every painted frame for two seconds, with whether [titleLocator] names [title], and the browser's own
+// Every painted frame for four seconds (through the switch and the new song's first second): the player's
+// title and time, whether the title names [title], and the browser's own
 // timing of the press inside it (Event Timing: when the pointer went down, when the click's handlers
 // ended). Start it, press, then await it.
-function samplePressPaint(titleLocator, title) {
+function samplePressPaint(titleAndTimeLocator, title) {
   // parity-check: allow-read-only-measurement-evaluate -- frame-by-frame timing of the visible title after a press
-  return titleLocator.evaluate((element, expected) => new Promise((resolve) => {
+  return titleAndTimeLocator.evaluateAll(([titleElement, timeElement], expected) => new Promise((resolve) => {
     const frames = [];
     const events = [];
     const started = performance.now();
@@ -23,8 +24,9 @@ function samplePressPaint(titleLocator, title) {
     });
     observer.observe({ type: 'event', durationThreshold: 16 });
     const sample = () => {
-      frames.push({ at: performance.now(), shows: String(element.textContent || '').includes(expected) });
-      if (performance.now() - started < 2000) {
+      const text = String(titleElement.textContent || '');
+      frames.push({ at: performance.now(), title: text, time: String(timeElement.textContent || ''), shows: text.includes(expected) });
+      if (performance.now() - started < 4000) {
         requestAnimationFrame(sample);
         return;
       }
@@ -291,27 +293,18 @@ test('FTC-PLAYBACK-TITLE-001 pressing another song while one plays never shows t
   // Owner round 9 (2026-11-21): "title is changing qucil;ly, but the majority of player UI does not [...]
   // All these should be syncronoized." The time is read right after each title: one redraw sets both.
   await stepLogger.step('Read continuously from the press until the other song has played a second, the title never goes back and the time switches with it', async () => {
-    // The visible title is read back to back, a few milliseconds apart: a flicker a listener sees
-    // lasts several frames, so it cannot fall between two reads.
-    const samples = [];
-    let sampling = true;
-    const sampler = (async () => {
-      while (sampling) {
-        const title = String(await player.title.textContent() || '');
-        samples.push({ title, seconds: displayedSeconds(await player.time.textContent()) });
-      }
-    })();
+    // Title and time are read together in every painted frame: a flicker a listener sees cannot fall
+    // between two reads, and neither can be read a frame later than the other.
     const mark = await playbackEvidence.playbackMark();
-    const pressPaint = samplePressPaint(player.title, OTHER_TITLE);
+    const pressPaint = samplePressPaint(player.titleAndTime, OTHER_TITLE);
     await trackModalActions.playTrackByTitle(OTHER_TITLE);
     const evidence = await playbackEvidence.waitForTrackPlaybackEvidence({ after: mark, path: paths[OTHER_TITLE] });
     expect(evidence.nonZeroSamples).toBeGreaterThan(0);
     await page.waitForTimeout(1000);
-    sampling = false;
-    await sampler;
+    const { started, frames, events } = await pressPaint;
+    const samples = frames.map(({ title, time }) => ({ title, seconds: displayedSeconds(time) }));
     // The press shows its song at once: within 150 ms, in the first frame after its click (orchestrator,
     // 2026-11-21, for the owner's "instant").
-    const { started, frames, events } = await pressPaint;
     const pressedAt = events.find(({ name }) => name !== 'click')?.startTime ?? started;
     const clickEnded = events.find(({ name }) => name === 'click')?.processingEnd;
     const shown = frames.find(({ shows }) => shows);

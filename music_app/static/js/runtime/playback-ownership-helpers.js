@@ -3,6 +3,8 @@ const PLAYBACK_OWNERSHIP_HEARTBEAT_MS = 10000;
 // A playing tab renews this often, so the server tells a live holder from a browser that closed
 // without a word (a holder silent for 10 s gives way to a press elsewhere).
 const PLAYBACK_OWNERSHIP_RENEW_MS = 4000;
+// A burst of seeks (a held arrow key) tells the claim its last place once.
+const PLAYBACK_POSITION_PUBLISH_MS = 200;
 const PLAYBACK_HANDOFF_STORAGE_KEY = 'albumhaven.playbackHandoff.v1';
 const PLAYBACK_HANDOFF_WINDOW_MS = 15000;
 const PLAYBACK_HANDOFF_RETRY_MS = 100;
@@ -278,6 +280,18 @@ function stagePlaybackOwnershipHandoff(completion = null, playbackSnapshot = nul
 function isPlaybackClaimRenewable() {
   const playback = typeof getPlayerPlaybackSnapshot === 'function' ? getPlayerPlaybackSnapshot() : null;
   return !playback?.paused && !playback?.ended;
+}
+
+// Play here starts where the claim says the song is, so a seek and a song's first frame say so now,
+// not at the next renewal. A claim request on its way carries the older place: this follows it.
+function publishPlaybackPositionSoon() {
+  const ownership = getPlaybackOwnershipState();
+  clearTimeout(ownership.positionTimer);
+  ownership.positionTimer = setTimeout(async () => {
+    ownership.positionTimer = 0;
+    await ownership.pendingOperation;
+    if (ownership.activeClaim && isPlaybackClaimRenewable()) await refreshPlaybackOwnershipClaim();
+  }, PLAYBACK_POSITION_PUBLISH_MS);
 }
 
 function startPlaybackOwnershipHeartbeat() {

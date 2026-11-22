@@ -1830,6 +1830,46 @@ test('a takeover claim asks to replace the other claim once and every claim requ
   assert.equal('position' in bodies[3], false, 'the previous song\'s place is never reported for this one');
 });
 
+// Hosted TAKEOVER-001 (run 44977805392, 2026-11-22): Play here 0.5 s after a seek started at 1 s
+// instead of 1:27, as only the 4 s renewal told the claim where the song was.
+test('a burst of seeks tells the claim the last place once, after the request already on its way', async () => {
+  const bodies = [];
+  const timers = new Map();
+  let nextTimer = 0;
+  let currentTime = 2;
+  const inFlight = deferred();
+  const { context } = loadHelper({
+    state: activeOwnershipState(),
+    getPlayerPlaybackSnapshot: () => ({ paused: false, ended: false, currentTime, duration: 300 }),
+    setTimeout: (callback, delay) => { timers.set(++nextTimer, { callback, delay }); return nextTimer; },
+    clearTimeout: (id) => timers.delete(id),
+    fetch: async (url, init = {}) => {
+      if (url === '/playback/refs') {
+        return jsonResponse({ protocol: 1, expiresAt: '2099-01-01T00:00:00Z', tracks: [{ playbackRef: 'ref-1' }] });
+      }
+      bodies.push(JSON.parse(init.body));
+      if (bodies.length === 1) await inFlight.promise;
+      return jsonResponse({ protocol: 1, claimToken: 'departing-claim', expiresAt: '2099-01-01T00:00:00Z', leaseMs: 30000 });
+    },
+  });
+
+  const renewal = context.refreshPlaybackOwnershipClaim(localTrack);
+  await new Promise((resolve) => setImmediate(resolve));
+  for (const seconds of [30, 60, 90]) {
+    currentTime = seconds;
+    context.publishPlaybackPositionSoon();
+  }
+  const waiting = [...timers.values()].filter(({ delay }) => delay <= 250);
+  assert.equal(waiting.length, 1, 'one request waits, however many seeks came');
+  const published = waiting[0].callback();
+  inFlight.resolve();
+  await renewal;
+  await published;
+
+  assert.equal(bodies.length, 2, 'the renewal on its way does not swallow the seek');
+  assert.deepEqual(bodies[1].position, { ms: 90000, durationMs: 300000 });
+});
+
 test('a renewal refused because another client took over shows that client as playing elsewhere', async () => {
   const requests = [];
   const { context } = loadHelper({

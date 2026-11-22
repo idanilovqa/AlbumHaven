@@ -8683,7 +8683,9 @@ test('a timed press reports where it waited, in numbers only', async (t) => {
     generation: pressed.open.generation,
     audibleStreamId: pressed.open.streamId,
     prepared: false,
+    presses: 1,
     pressedAtEpochMs: report.pressedAtEpochMs,
+    firstPressMs: 140,
     openMs: 0,
     metadataMs: 80,
     firstBytesMs: 120,
@@ -8752,3 +8754,54 @@ test('a server that stopped asking gets no report', async (t) => {
 
   assert.equal(harness.sent('start-report').length, 0);
 });
+
+for (const waiting of ['open', 'refresh', 'cut-over']) {
+  test(`presses on a row whose start waits on its ${waiting} are counted as one start`, async (t) => {
+    const { harness, node } = waiting === 'refresh'
+      ? await playingWithPreparedNext(t, { holdSampleRateProbes: true })
+      : await playingSong(t);
+    harness.engine.timingRequested = true;
+    const row = waiting === 'refresh' ? '02.flac' : '05.flac';
+    harness.setNow(5_000);
+    await pressInPlayer(harness, row);
+    if (waiting === 'cut-over') await answerOpen(harness, harness.sent('open').at(-1), NEXT_SONG);
+    harness.setNow(6_000);
+    await pressInPlayer(harness, row);
+    if (waiting === 'cut-over') {
+      node.render();
+      node.deliverEvents();
+      await harness.settle();
+    }
+    const open = harness.sent('open').at(-1);
+    acceptMetadata(harness, open, { timing: true });
+    receiveSong(harness, open, PRESSED_SONG, 2 * ONE_SECOND, 0, 1);
+    await harness.settle();
+    harness.setNow(6_400);
+    heardFor(node, 4);
+
+    const [report] = harness.sent('start-report');
+    assert.equal(report.presses, 2);
+    assert.equal(report.audibleMs, 400, 'from the last press');
+    assert.equal(report.firstPressMs, 1_400, 'from the first, which is what the listener waited');
+    assert.equal(harness.sent('start-report').length, 1);
+  });
+}
+
+for (const between of ['another row', 'a seek that gave it up']) {
+  test(`a press after ${between} is a start of its own`, async (t) => {
+    const { harness, node } = await playingSong(t);
+    await pressInPlayer(harness, '05.flac');
+    if (between === 'another row') await pressInPlayer(harness, '06.flac');
+    else await harness.api.seek(120);
+    await harness.settle();
+    await pressInPlayer(harness, '05.flac');
+    const open = harness.sent('open').at(-1);
+    acceptMetadata(harness, open, { timing: true });
+    receiveSong(harness, open, PRESSED_SONG, 2 * ONE_SECOND, 0, 1);
+    await harness.settle();
+    heardFor(node, 4);
+
+    const [report] = harness.sent('start-report');
+    assert.equal(report.presses, 1);
+  });
+}

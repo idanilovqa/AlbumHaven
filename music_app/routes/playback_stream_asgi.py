@@ -83,6 +83,7 @@ _WEBSOCKET_POST_CLOSE_SEND_ERROR = (
 _MAX_PROTOCOL_INTEGER = 2_147_483_647
 _MAX_EPOCH_MS = 2**53 - 1
 _START_REPORT_DURATIONS = {
+    "firstPressMs": "first_press_ms",
     "openMs": "open_ms",
     "metadataMs": "metadata_ms",
     "firstBytesMs": "first_bytes_ms",
@@ -90,7 +91,8 @@ _START_REPORT_DURATIONS = {
     "audibleMs": "audible_ms",
 }
 _START_REPORT_KEYS = {
-    "type", "generation", "audibleStreamId", "prepared", "pressedAtEpochMs", *_START_REPORT_DURATIONS,
+    "type", "generation", "audibleStreamId", "prepared", "presses", "pressedAtEpochMs",
+    *_START_REPORT_DURATIONS,
 }
 _NORMAL_SHUTDOWN_CODE = 1001
 
@@ -747,9 +749,9 @@ class _PlaybackPcmConnection:
 
     async def _log_client_start(self, control: dict[str, Any]) -> bool:
         """A page's timed press. Numbers only, so a page cannot put text in the log."""
-        generation, stream_id = (
+        generation, stream_id, presses = (
             _bounded_integer(control.get(name), minimum=1, maximum=_MAX_PROTOCOL_INTEGER)
-            for name in ("generation", "audibleStreamId")
+            for name in ("generation", "audibleStreamId", "presses")
         )
         pressed_at = _bounded_integer(control.get("pressedAtEpochMs"), minimum=0, maximum=_MAX_EPOCH_MS)
         durations = {
@@ -758,7 +760,7 @@ class _PlaybackPcmConnection:
         }
         if (
             set(control) != _START_REPORT_KEYS
-            or None in (generation, stream_id, pressed_at)
+            or None in (generation, stream_id, presses, pressed_at)
             or not isinstance(control.get("prepared"), bool)
             or any(
                 durations[key] is None and control.get(name) is not None
@@ -775,6 +777,7 @@ class _PlaybackPcmConnection:
                 generation=generation,
                 stream=stream_id,
                 pressed_at=pressed_at,
+                presses=presses,
                 **durations,
             )
         return True

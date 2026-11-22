@@ -1502,11 +1502,20 @@ function handleStreamingRateMismatch(roleState, message) {
 }
 
 // Where a press waited, reported once it sounds to a server that asks (`timing` in its metadata).
-// A press keeps its track and a few times until then; only the times are ever sent.
+// A press keeps its track and a few numbers until then; only the numbers are ever sent.
 function noteStreamingPress(track) {
-  streamingEngineState().startTiming = {
-    path: String(track?.path || ''),
-    pressedAtMs: performance.now(),
+  const engine = streamingEngineState();
+  const path = String(track?.path || '');
+  const last = engine.startTiming;
+  // A press on the song whose start still waits starts it again: one more press of that start.
+  const waiting = last?.path === path
+    && [state.player.selectedTrack?.path, state.player.current?.path].includes(path);
+  const pressedAtMs = performance.now();
+  engine.startTiming = {
+    path,
+    presses: waiting ? last.presses + 1 : 1,
+    firstPressedAtMs: waiting ? last.firstPressedAtMs : pressedAtMs,
+    pressedAtMs,
     pressedAtEpochMs: Math.round(Date.now()),
     streamId: null,
     prepared: false,
@@ -1539,7 +1548,9 @@ function markStreamingPress(mark, roleState) {
     generation: roleState.generation,
     audibleStreamId: roleState.streamId,
     prepared: timing.prepared,
+    presses: timing.presses,
     pressedAtEpochMs: timing.pressedAtEpochMs,
+    firstPressMs: Math.max(0, Math.round(performance.now() - timing.firstPressedAtMs)),
     openMs: timing.marks.openMs ?? null,
     metadataMs: timing.marks.metadataMs ?? null,
     firstBytesMs: timing.marks.firstBytesMs ?? null,

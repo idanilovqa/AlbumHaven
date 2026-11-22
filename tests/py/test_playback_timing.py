@@ -28,7 +28,9 @@ START_REPORT = {
     "generation": 1,
     "audibleStreamId": 1,
     "prepared": False,
+    "presses": 1,
     "pressedAtEpochMs": 1_795_000_000_000,
+    "firstPressMs": 1140,
     "openMs": 12,
     "metadataMs": 80,
     "firstBytesMs": 95,
@@ -156,6 +158,7 @@ def test_a_client_start_report_becomes_one_line(playback_app, timing_on):
     assert line["kind"] == "prepared"
     assert (line["open_ms"], line["metadata_ms"], line["audible_ms"]) == ("12", "80", "140")
     assert (line["first_bytes_ms"], line["decoded_ms"]) == ("-", "-")
+    assert (line["presses"], line["first_press_ms"]) == ("1", "1140")
 
 
 @pytest.mark.parametrize(
@@ -165,8 +168,10 @@ def test_a_client_start_report_becomes_one_line(playback_app, timing_on):
         {"openMs": "Secret Album"},
         {"pressedAtEpochMs": "token"},
         {"prepared": "Secret"},
+        {"presses": "Secret"},
+        {"presses": 0},
     ],
-    ids=["extra-field", "text-duration", "text-time", "text-flag"],
+    ids=["extra-field", "text-duration", "text-time", "text-flag", "text-count", "no-press"],
 )
 def test_a_client_start_report_can_carry_no_text(playback_app, timing_on, caplog, change):
     async def scenario():

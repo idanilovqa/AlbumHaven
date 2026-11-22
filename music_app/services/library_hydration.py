@@ -9,6 +9,7 @@ from music_app.services.cache import (
     schedule_cache_updates_save_for_config,
 )
 from music_app.services.covers import find_cover_image, image_dimensions
+from music_app.services.utils import DISC_PART_FOLDER_NAME_RE
 from music_app.services.album_local_cover_integrity import clear_ambiguous_folder_covers
 from music_app.services.exception_overrides import apply_exception_override
 from music_app.services.library import build_albums_from_file_cache
@@ -25,7 +26,6 @@ from music_app.services.scan_cache_persistence import select_scan_cache_adapter
 from music_app.services.separate_releases import load_separate_release_keys
 
 
-_DISC_FOLDER_NAMES = {"cd1", "cd 1", "cd2", "cd 2", "disc1", "disc 1", "disc2", "disc 2"}
 _HYDRATION_FILE_ERROR_PATH_LIMIT = 1024
 _HYDRATION_FILE_ERROR_MESSAGE_LIMIT = 1000
 
@@ -183,8 +183,7 @@ def find_cover_for_track_folder(folder: Path, image_extensions: set[str]) -> Pat
     cover = find_cover_image(folder, image_extensions)
     if cover:
         return cover
-    folder_name = folder.name.strip().casefold()
-    if folder_name in _DISC_FOLDER_NAMES:
+    if DISC_PART_FOLDER_NAME_RE.fullmatch(folder.name.strip()):
         return find_cover_image(folder.parent, image_extensions)
     return None
 

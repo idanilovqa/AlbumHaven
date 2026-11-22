@@ -66,6 +66,26 @@ def test_find_cover_for_track_folder_checks_parent_for_disc_subfolders(tmp_path:
     assert find_cover_for_track_folder(disc_root, {".jpg"}) == cover_path
 
 
+@pytest.mark.parametrize("folder_name", ["CD3", "Disc 12", "Часть 1", "Part 2", "Teil 4", "Диск 3"])
+def test_find_cover_for_track_folder_uses_album_folder_cover_above_any_disc_part_folder(tmp_path: Path, folder_name):
+    album_root = tmp_path / "Artist" / "2009 - Album"
+    disc_root = album_root / folder_name
+    disc_root.mkdir(parents=True)
+    cover_path = album_root / "cover.jpg"
+    cover_path.write_bytes(b"cover")
+
+    assert find_cover_for_track_folder(disc_root, {".jpg"}) == cover_path
+
+
+@pytest.mark.parametrize("folder_name", ["CD 2 - Festival", "Bonus Album", "Concept 2", "4"])
+def test_find_cover_for_track_folder_keeps_named_release_folders_on_their_own_covers(tmp_path: Path, folder_name):
+    release_root = tmp_path / "Artist" / "Box" / folder_name
+    release_root.mkdir(parents=True)
+    (release_root.parent / "cover.jpg").write_bytes(b"cover")
+
+    assert find_cover_for_track_folder(release_root, {".jpg"}) is None
+
+
 def test_repair_cover_paths_in_cache_updates_missing_cover_paths(tmp_path: Path):
     album_root = tmp_path / "Artist" / "Album"
     album_root.mkdir(parents=True)

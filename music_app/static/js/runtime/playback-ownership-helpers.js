@@ -199,6 +199,11 @@ function syncMirroredPlaybackState(snapshot) {
     ownership.mirroredTrack = normalizePlaybackOwnershipTrack(snapshot.track);
   } else if (!ownership.activeClaim && !isShellPlaybackUnavailable()) {
     clearBlockedPlaybackState();
+    // A handover that did not go through: the claim is still this tab's to play on with.
+    if (snapshot?.is_playing_here && ownership.handedOverClaim) {
+      ownership.activeClaim = ownership.handedOverClaim;
+      ownership.handedOverClaim = null;
+    }
   }
   if (typeof updatePlayerUi === 'function') updatePlayerUi();
 }
@@ -349,6 +354,12 @@ function acceptPlaybackClaim(result, prepared) {
   const scrobblingAvailable = typeof result.scrobbling?.available === 'boolean' ? result.scrobbling.available : null;
   const leaseDeadline = result.sentAt + result.leaseMs;
   const claim = { ...prepared, claimToken: result.claimToken, leaseDeadline, scrobblingAvailable };
+  // A switch claims the pressed song while the one before still sounds: a handover names that one.
+  if (ownership.activeClaim?.path && ownership.activeClaim.path !== claim.path) {
+    ownership.previousClaim = ownership.activeClaim;
+  }
+  ownership.releasedClaim = null;
+  ownership.handedOverClaim = null;
   ownership.activeClaim = claim;
   clearBlockedPlaybackState();
   if (ownership.expiryTimer) clearTimeout(ownership.expiryTimer);
@@ -490,6 +501,8 @@ async function releasePlaybackOwnership() {
     await previousOperation;
     if (version !== ownership.requestVersion) return false;
     ownership.activeClaim = null;
+    // Play here elsewhere can still ask the tab that just paused.
+    ownership.releasedClaim = claim;
     if (ownership.expiryTimer) clearTimeout(ownership.expiryTimer);
     clearBlockedPlaybackState();
     await deletePlaybackClaim(claim).catch(() => {});
@@ -549,10 +562,112 @@ function canStartPlaybackInThisTab(track, options = {}) {
 }
 
 /**
+ * Play here elsewhere asked this tab (owner, 2026-11-22): it stops, then answers the song that sounded
+ * and where, with its claim's token. No path crosses the socket.
+ */
+async function answerPlaybackHandover(requestId) {
+  const ownership = getPlaybackOwnershipState();
+  // A start's first claim may still be on its way.
+  if (!ownership.activeClaim && !ownership.releasedClaim) await ownership.pendingOperation;
+  const claim = ownership.activeClaim || ownership.releasedClaim;
+  if (!claim?.claimToken) return;
+  const snapshot = getPlayerPlaybackSnapshot();
+  const sounding = (typeof getSoundingStreamingPlayback === 'function' && getSoundingStreamingPlayback())
+    || { track: state.player.current, seconds: snapshot.currentTime, durationSeconds: snapshot.duration };
+  const { track } = sounding;
+  if (!track?.path) return;
+  const known = [claim, ownership.previousClaim].find((held) => held?.path === track.path) || null;
+  if (typeof cancelPendingPlayerSelection === 'function') cancelPendingPlayerSelection();
+  // The stop of a claim taken over: no save and no release follows it with the token it hands on.
+  losePlaybackOwnership('ownership-takeover', false);
+  ownership.handedOverClaim = claim;
+  ownership.blockedReason = 'playing_in_another_tab';
+  ownership.mirroredTrack = normalizePlaybackOwnershipTrack(track);
+  if (typeof updatePlayerUi === 'function') updatePlayerUi();
+  const prepared = await playbackOwnershipTrack(track, known);
+  const durationMs = Math.round((Number(sounding.durationSeconds) || 0) * 1000);
+  const ms = Math.max(0, Math.round((Number(sounding.seconds) || 0) * 1000));
+  sendStreamingHandoverAnswer({
+    type: 'handover-answer',
+    requestId,
+    claimToken: claim.claimToken,
+    track: prepared.track,
+    position: durationMs > 0 ? { ms: Math.min(ms, durationMs), durationMs } : null,
+  });
+}
+
+/** The press that asked this tab is over: it shows who plays now, or plays on if nobody took over. */
+function settlePlaybackHandover() {
+  return handlePlaybackOwnershipEvent();
+}
+
+/**
  * Play while another client plays (owner, 2026-11-17, playback.claim.takeover): that client's
  * song continues here from where it last said it was, and this claim replaces its claim.
  */
-async function takeOverPlaybackHere() {
+function takeOverPlaybackHere() {
+  const ownership = getPlaybackOwnershipState();
+  if (ownership.takingOver) return ownership.takingOver;
+  // An engine with its own claim (Android's) takes over by that claim, at the saved place.
+  const take = playingEngine()?.holdsOwnClaim ? takeOverAtSavedPlace() : takeOverAtConfirmedPlace();
+  ownership.takingOver = take.finally(() => { ownership.takingOver = null; });
+  return ownership.takingOver;
+}
+
+/**
+ * One request (owner, 2026-11-22): the server asks the playing client, which stops and says what
+ * sounds and where, and moves the claim here with that answer, or at the saved place without one.
+ */
+async function takeOverAtConfirmedPlace() {
+  const ownership = getPlaybackOwnershipState();
+  const version = ownership.requestVersion = (ownership.requestVersion || 0) + 1;
+  let result;
+  try {
+    result = await requestPlaybackClaim({ protocol: 1, state: 'playing', clientId: getPlaybackOwnershipTabId(),
+      clientSurface: 'private_web', takeover: true, confirm: true });
+  } catch (_error) {
+    if (version === ownership.requestVersion) {
+      notifyBlockedPlaybackStart();
+      void handlePlaybackOwnershipEvent();
+    }
+    return false;
+  }
+  if (version !== ownership.requestVersion) {
+    // A later press here decides what plays.
+    if (result.claimToken) await deletePlaybackClaim(result).catch(() => {});
+    return false;
+  }
+  if (!result.claimToken) {
+    // It stopped meanwhile: the player shows what holds now, and the next Play starts here.
+    syncMirroredPlaybackState(result);
+    return false;
+  }
+  const payload = takenOverTrack(result);
+  // The reference is renewed with the first heartbeat: its expiry was never told here.
+  acceptPlaybackClaim(result, { path: result.path, track: result.track,
+    referenceExpiresAt: new Date(0).toISOString() });
+  state.player.playbackQueue = null;
+  return playTrackFromPayload(payload, {
+    startSeconds: result.position ? result.position.ms / 1000 : 0,
+    ownershipClaimed: true,
+  });
+}
+
+function takenOverTrack({ path, track, position }) {
+  const song = normalizePlaybackOwnershipTrack(track);
+  return {
+    src: `/track?path=${encodeURIComponent(path)}`,
+    path,
+    title: song.title || 'Track',
+    artist: song.artist,
+    albumArtist: '',
+    album: song.album,
+    coverRef: '',
+    durationSeconds: position ? position.durationMs / 1000 : 0,
+  };
+}
+
+async function takeOverAtSavedPlace() {
   let snapshot;
   try {
     snapshot = await playbackOwnershipRequest('GET',
@@ -570,19 +685,10 @@ async function takeOverPlaybackHere() {
     if (typeof showToast === 'function') showToast('That song cannot be opened here.', 'error', 2800);
     return false;
   }
-  const song = normalizePlaybackOwnershipTrack(snapshot.track);
   const position = snapshot.position;
   state.player.playbackQueue = null;
-  return playTrackFromPayload({
-    src: `/track?path=${encodeURIComponent(snapshot.path)}`,
-    path: snapshot.path,
-    title: song.title || 'Track',
-    artist: song.artist,
-    albumArtist: '',
-    album: song.album,
-    coverRef: '',
-    durationSeconds: position ? position.durationMs / 1000 : 0,
-  }, { startSeconds: position ? position.ms / 1000 : 0, takeover: true });
+  return playTrackFromPayload(takenOverTrack(snapshot),
+    { startSeconds: position ? position.ms / 1000 : 0, takeover: true });
 }
 
 /**

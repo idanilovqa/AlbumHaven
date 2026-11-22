@@ -364,6 +364,12 @@ function afterNextPlayerPaint() {
   });
 }
 
+// A handover stops this tab: a press still waiting for its stream never starts it afterwards.
+function cancelPendingPlayerSelection() {
+  playerTrackSelectionToken += 1;
+  clearSelectedTrack();
+}
+
 async function playTrackFromPayload(track, options = {}) {
   const selectionToken = ++playerTrackSelectionToken;
   const shouldAutoplay = options.autoplay !== false;

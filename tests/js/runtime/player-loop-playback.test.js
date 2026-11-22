@@ -4192,6 +4192,29 @@ test('a Resume during a switch from a paused song ends the pending selection', a
   assert.equal(context.state.player.selectedTrack, null);
 });
 
+test('cancelling a pending selection keeps its stream from starting after a handover stopped the tab', async () => {
+  const frames = [];
+  const starts = [];
+  const { context } = loadHelper({
+    document: { hidden: false, querySelectorAll: () => [], addEventListener: () => {} },
+    requestAnimationFrame: (callback) => frames.push(callback),
+    setTimeout: (callback, delay) => (delay ? 0 : setImmediate(callback)),
+    clearTimeout: () => {},
+    getPlayerElements: () => ({ title: new FakeElement() }),
+    canStartPlaybackInThisTab: () => true,
+    startStreamingTrack: async (track) => { starts.push(track.path); return { generation: 2, streamId: 2, track }; },
+  });
+  context.state.player.current = { src: 'old', path: 'old.flac', title: 'Old', artist: 'A' };
+  context.state.player.streaming = { context: { state: 'running' } };
+  const switching = context.playTrackFromPayload({ src: 'new', path: 'new.flac', title: 'New', artist: 'A' });
+  await new Promise((resolve) => setImmediate(resolve));
+  context.cancelPendingPlayerSelection();
+  frames.shift()();
+  assert.equal(await switching, false);
+  assert.deepEqual(starts, []);
+  assert.equal(context.state.player.selectedTrack, null);
+});
+
 test('a pending start in the middle of a song shows that place, not 0:00', async () => {
   const time = new FakeElement();
   const { context } = loadHelper({

@@ -1386,11 +1386,13 @@ function playingElsewhereState() {
   };
 }
 
-test('Play while another client plays opens its song here at its place and claims with a takeover', async () => {
+test('Play while another client plays, for an engine with its own claim, opens its song here at its place and claims with a takeover', async () => {
   const requests = [];
   const started = [];
   const { context } = loadHelper({
     state: playingElsewhereState(),
+    currentPlaybackEngine: () => ({ holdsOwnClaim: true,
+      claimClientId: () => '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70', ownsPlayback: () => false }),
     playTrackFromPayload: async (track, options) => { started.push({ track, options }); return true; },
     fetch: async (url, init = {}) => {
       requests.push({ url, method: init.method || 'GET' });
@@ -1557,6 +1559,125 @@ test('a renewal while a switch is pending never gives the claim back to the prev
 
   assert.equal(puts.at(-1).track.title, 'Next Track', 'the claim still names the pressed song');
   assert.equal('position' in puts.at(-1), false, "and never carries the previous song's place");
+});
+
+function handoverHolder({ sounding, paused = false, claim } = {}) {
+  const order = [];
+  const answers = [];
+  const refs = [];
+  const state = activeOwnershipState();
+  state.player.ownership.activeClaim = claim === undefined ? {
+    claimToken: 'departing-claim', leaseDeadline: Infinity, path: localTrack.path,
+    referenceExpiresAt: '2099-01-01T00:00:00Z', track: { playbackRef: 'departing-ref' },
+  } : claim;
+  const { context } = loadHelper({
+    state,
+    getPlayerPlaybackSnapshot: () => ({ paused, ended: false, currentTime: 117.6, duration: 195, src: localTrack.src }),
+    getSoundingStreamingPlayback: () => sounding || { track: localTrack, seconds: 117.6, durationSeconds: 195 },
+    cancelPendingPlayerSelection: () => order.push('cancel'),
+    stopStreamingPlayback: () => { order.push('stop'); },
+    sendStreamingHandoverAnswer: (message) => { order.push('answer'); answers.push(message); return true; },
+    fetch: async (url, init = {}) => {
+      if (url !== '/playback/refs') throw new Error(`unexpected request ${url}`);
+      refs.push(JSON.parse(init.body).tracks[0].path);
+      return jsonResponse({ protocol: 1, expiresAt: '2099-01-01T00:00:00Z', tracks: [{ playbackRef: 'fetched-ref' }] });
+    },
+  });
+  return { context, state, order, answers, refs };
+}
+
+// Owner, 2026-11-22 (confirmed handover): Play here asks the playing tab, which stops and says what sounds.
+test('asked by Play here elsewhere, the playing tab cancels a pending switch, stops, then answers its place', async () => {
+  const { context, state, order, answers, refs } = handoverHolder();
+  await context.answerPlaybackHandover('request-1');
+  assert.deepEqual(order, ['cancel', 'stop', 'answer']);
+  assert.equal(answers[0].type, 'handover-answer');
+  assert.equal(answers[0].requestId, 'request-1');
+  assert.equal(answers[0].claimToken, 'departing-claim');
+  assert.equal(answers[0].track.playbackRef, 'departing-ref');
+  assert.equal(JSON.stringify(answers[0].position), JSON.stringify({ ms: 117600, durationMs: 195000 }));
+  assert.equal('path' in answers[0].track, false, 'no path crosses the socket');
+  assert.deepEqual(refs, [], 'the claimed song needs no reference request');
+  assert.equal(state.player.ownership.blockedReason, 'playing_in_another_tab', 'it shows Play here at once');
+});
+
+test('during a switch it answers the song still sounding, not the one it claimed for the switch', async () => {
+  const old = { src: '/track?path=old.flac', path: 'C:/Music/old.flac', title: 'Still Sounding', artist: 'A', album: 'B' };
+  const { context, answers, state } = handoverHolder({ sounding: { track: old, seconds: 88.2, durationSeconds: 240 } });
+  state.player.selectedTrack = { ...localTrack, title: 'Pressed' };
+  await context.answerPlaybackHandover('request-2');
+  assert.equal(answers[0].track.title, 'Still Sounding');
+  assert.equal(answers[0].track.playbackRef, 'fetched-ref');
+  assert.equal(answers[0].position.ms, 88200);
+});
+
+test('a tab that just paused answers its paused place with the claim it gave back', async () => {
+  const { context, state, answers, order } = handoverHolder({ paused: true, claim: null });
+  state.player.ownership.releasedClaim = {
+    claimToken: 'released-claim', path: localTrack.path,
+    referenceExpiresAt: '2099-01-01T00:00:00Z', track: { playbackRef: 'departing-ref' },
+  };
+  await context.answerPlaybackHandover('request-3');
+  assert.equal(answers[0].claimToken, 'released-claim');
+  assert.equal(answers[0].position.ms, 117600);
+  assert.equal(order.includes('answer'), true);
+});
+
+test('a tab that holds and gave back no claim answers nothing', async () => {
+  const { context, answers } = handoverHolder({ claim: null });
+  await context.answerPlaybackHandover('request-4');
+  assert.deepEqual(answers, []);
+});
+
+test('a handover that did not go through leaves the stopped tab its claim to play on with', async () => {
+  const { context, state } = handoverHolder();
+  await context.answerPlaybackHandover('request-5');
+  context.syncMirroredPlaybackState({ is_playing_here: true, is_playing_elsewhere: false });
+  assert.equal(state.player.ownership.activeClaim?.claimToken, 'departing-claim');
+  assert.equal(state.player.ownership.lockStatus, 'unlocked');
+});
+
+test('Play here is one confirmed request and starts exactly at the place the playing tab answered', async () => {
+  const requests = [];
+  const started = [];
+  const { context } = loadHelper({
+    state: playingElsewhereState(),
+    playTrackFromPayload: async (track, options) => { started.push({ track, options }); return true; },
+    fetch: async (url, init = {}) => {
+      requests.push({ url, body: init.body ? JSON.parse(init.body) : null });
+      return jsonResponse({ protocol: 1, claimToken: 'taker-claim', expiresAt: '2099-01-01T00:00:00Z', leaseMs: 30000,
+        confirmed: true, path: 'C:/Music/their.flac',
+        track: { playbackRef: 'their-ref', title: 'Their Song', artist: 'Them', album: 'Their Album', artworkUrl: null },
+        position: { ms: 117600, durationMs: 195000 } });
+    },
+  });
+
+  assert.equal(await context.takeOverPlaybackHere(), true);
+
+  assert.equal(requests.length, 1, 'no read before it and no claim after it');
+  assert.equal(requests[0].url, '/playback/state');
+  assert.equal(requests[0].body.confirm, true);
+  assert.equal(requests[0].body.takeover, true);
+  assert.equal('track' in requests[0].body, false);
+  assert.equal(started[0].track.path, 'C:/Music/their.flac');
+  assert.equal(started[0].options.startSeconds, 117.6);
+  assert.equal(started[0].options.ownershipClaimed, true);
+});
+
+test('two Play here presses at once send one request', async () => {
+  let requests = 0;
+  const { context } = loadHelper({
+    state: playingElsewhereState(),
+    playTrackFromPayload: async () => true,
+    fetch: async () => {
+      requests += 1;
+      return jsonResponse({ protocol: 1, claimToken: 'taker-claim', expiresAt: '2099-01-01T00:00:00Z', leaseMs: 30000,
+        confirmed: true, path: 'C:/Music/their.flac', position: { ms: 1000, durationMs: 195000 },
+        track: { playbackRef: 'their-ref', title: 'Their Song', artist: 'Them', album: 'B', artworkUrl: null } });
+    },
+  });
+  await Promise.all([context.takeOverPlaybackHere(), context.takeOverPlaybackHere()]);
+  assert.equal(requests, 1);
 });
 
 test('a renewal refused because another client took over shows that client as playing elsewhere', async () => {

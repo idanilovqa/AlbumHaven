@@ -339,6 +339,9 @@ function createEngineHarness(options = {}) {
     handleStreamingPlaybackWaveformReady: options.handleStreamingPlaybackWaveformReady,
     ensureStreamingDecoders: options.ensureStreamingDecoders,
     updatePlayerUi: options.updatePlayerUi,
+    getPlaybackOwnershipTabId: options.getPlaybackOwnershipTabId,
+    answerPlaybackHandover: options.answerPlaybackHandover,
+    settlePlaybackHandover: options.settlePlaybackHandover,
     cancelWaveformPeakLoads: options.cancelWaveformPeakLoads,
     probeCachedWaveformPeaks: options.probeCachedWaveformPeaks,
   };
@@ -6368,6 +6371,36 @@ test('padding after the last mapped sample never delays end of stream', async ()
   await harness.settle();
 
   assert.equal(harness.portMessages('eos').at(-1).emittedFrames, 1_152);
+});
+
+// Owner, 2026-11-22 (confirmed handover): Play here elsewhere asks the playing tab over this socket.
+test('the socket names its client, hands a handover to the player and answers only while it is open', async () => {
+  const asked = [];
+  const settled = [];
+  const harness = createEngineHarness({
+    getPlaybackOwnershipTabId: () => '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70',
+    answerPlaybackHandover: async (requestId) => { asked.push(requestId); },
+    settlePlaybackHandover: async () => { settled.push(true); },
+  });
+  const track = makeTrack();
+  await harness.api.start(track, { startSeconds: 87 });
+  const socket = harness.sockets[0];
+  assert.equal(new URL(socket.url).searchParams.get('client_id'), '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70');
+
+  socket.receive({ type: 'handover', requestId: 'request-1' });
+  socket.receive({ type: 'handover-done', requestId: 'request-1' });
+  await harness.settle();
+  assert.deepEqual(asked, ['request-1']);
+  assert.deepEqual(settled, [true]);
+
+  const sounding = harness.context.getSoundingStreamingPlayback();
+  assert.equal(sounding.track.path, track.path);
+  assert.equal(sounding.seconds, 87, 'a start with no audio yet is at its start place');
+
+  assert.equal(harness.context.sendStreamingHandoverAnswer({ type: 'handover-answer', requestId: 'request-1' }), true);
+  socket.readyState = 3;
+  assert.equal(harness.context.sendStreamingHandoverAnswer({ type: 'handover-answer', requestId: 'request-2' }), false);
+  assert.notEqual(harness.engine.mode, 'error', 'an answer that cannot be sent never fails playback');
 });
 
 test('music playback asks for large output buffers', async () => {

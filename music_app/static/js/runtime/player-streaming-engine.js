@@ -568,6 +568,37 @@ function closeStreamingContinuityRole(reason, { releaseWorklet = true } = {}) {
   return true;
 }
 
+// Which client this socket plays for, so Play here elsewhere can ask it.
+function streamingSocketClientQuery() {
+  const clientId = typeof getPlaybackOwnershipTabId === 'function' ? getPlaybackOwnershipTabId() : '';
+  return clientId ? `?client_id=${encodeURIComponent(clientId)}` : '';
+}
+
+// What sounds: the current role, which stays the old song until a switch cuts over. Its place is the
+// seek's target once seeked, and the start's place before any audio.
+function getSoundingStreamingPlayback() {
+  const engine = streamingEngineState();
+  const track = engine.roles.current?.track;
+  if (!track) return null;
+  return {
+    track,
+    seconds: Math.max(0, Number(engine.snapshot.currentTime) || 0),
+    durationSeconds: Number(engine.snapshot.duration) || Number(track.durationSeconds) || 0,
+  };
+}
+
+// An answer that cannot be sent leaves the asker its saved place; it never fails playback.
+function sendStreamingHandoverAnswer(message) {
+  const { socket } = streamingEngineState();
+  if (socket?.readyState !== WebSocket.OPEN) return false;
+  try {
+    socket.send(JSON.stringify(message));
+    return true;
+  } catch (_error) {
+    return false;
+  }
+}
+
 function sendStreamingControl(message) {
   const engine = streamingEngineState();
   const socket = engine.socket;
@@ -804,6 +835,18 @@ function handleStreamingControl(message) {
       fallbackSampleRate: Number(message.fallbackSampleRate) || 0,
       sizeBytes: Number(message.sizeBytes) || 0,
     });
+    return;
+  }
+  if (message.type === 'handover') {
+    if (typeof answerPlaybackHandover === 'function') {
+      void Promise.resolve(answerPlaybackHandover(message.requestId)).catch((error) => {
+        console.warn('[AlbumHaven][Playback] Play here elsewhere was not answered.', error);
+      });
+    }
+    return;
+  }
+  if (message.type === 'handover-done') {
+    if (typeof settlePlaybackHandover === 'function') void settlePlaybackHandover();
     return;
   }
   const roleState = streamingRoleForId(message.streamId);
@@ -2163,7 +2206,7 @@ async function prepareStreamingPlaybackEngine(sampleRate = 0) {
       }
       if (engine.socket) return;
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      socket = new WebSocket(`${protocol}//${window.location.host}/playback/pcm`);
+      socket = new WebSocket(`${protocol}//${window.location.host}/playback/pcm${streamingSocketClientQuery()}`);
       socket.binaryType = 'arraybuffer';
       socket.onopen = () => {
         flushStreamingControls();

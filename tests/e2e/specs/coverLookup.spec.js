@@ -171,6 +171,9 @@ test('FTC-COVERS-024 manual composer preserves staged images and exclusive choic
     expect([original.naturalWidth, original.naturalHeight]).toEqual([fixtureCover.width, fixtureCover.height]);
     expect(original.sha256).toBe(fixtureCover.sha256.toUpperCase());
     await trackModalActions.closeCoverLightbox();
+    // Viewing the original selects nothing: the staged choice is still the only one.
+    await expect(lookup.stagedCoverCardByName(pickerName)).toHaveClass(/\bis-active\b/);
+    await expect(lookup.selectedCoverCards).toHaveCount(1);
   });
 
   await stepLogger.step('Keep exactly one local, remote, or staged cover selected and remove the staged image', async () => {

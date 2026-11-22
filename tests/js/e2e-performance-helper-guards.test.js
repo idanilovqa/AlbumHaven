@@ -2016,6 +2016,120 @@ test('replacement evidence follows the promoted open when an earlier same-track 
 });
 
 
+test('FTC-PLAYER-013 takes a prepared stream only after its refresh-only probe answered, with every other assertion', async () => {
+  const helperUrl = pathToFileURL(
+    path.join(repoRoot, 'tests/e2e/helpers/gaplessPlaybackHelpers.js'),
+  ).href;
+  const { assertActiveReplacementContract } = await import(helperUrl);
+  const expect = (actual, message) => ({
+    toBe: (wanted) => assert.equal(actual, wanted, message),
+    toBeNull: () => assert.equal(actual, null, message),
+    toBeTruthy: () => assert.ok(actual, message),
+    toBeGreaterThan: (least) => assert.ok(actual > least, message),
+    toBeGreaterThanOrEqual: (least) => assert.ok(actual >= least, message),
+  });
+  const track = 'C:/Music/prepared.flac';
+  const stream = { generation: 1, streamId: 2 };
+  const open = {
+    direction: 'sent', type: 'open', role: 'continuity', path: track, sampleRate: 48_000, ...stream,
+  };
+  const decoded = {
+    direction: 'received', type: 'pcm', frameCount: 48_000, finiteSamples: 96_000, nonZeroSamples: 9, peakSample: 0.5,
+    ...stream,
+  };
+  const probe = { direction: 'sent', type: 'probe', requestId: 9, path: track, authorityOnly: true };
+  const answer = { direction: 'received', type: 'probe-result', requestId: 9 };
+  const promote = { direction: 'sent', type: 'promote', ...stream };
+  const run = ({ prior = [open, decoded], events = [probe, answer, promote], after = {} } = {}) => (
+    assertActiveReplacementContract(expect, {
+      activeSocketCount: 1,
+      socketCount: 1,
+      beforeDiagnostics: { underruns: 0, generation: 1 },
+      afterDiagnostics: {
+        underruns: 0, generation: 1, paused: false, mode: 'playing', lastError: null,
+        renderedPcmEvidence: { streamId: 2, nonZeroSamples: 9, peakSample: 0.5 },
+        ...after,
+      },
+      events,
+      priorEvents: prior,
+      lifecycle: { sameContext: true, sameNode: true, sameSocket: true, contextState: 'running' },
+      path: track,
+    })
+  );
+
+  run();
+  run({ prior: [], events: [open, decoded, promote] });
+  const refused = {
+    'no probe after the click': { events: [promote] },
+    'a probe before the click': { prior: [open, decoded, probe, answer], events: [promote] },
+    'a probe that reads the rate': { events: [{ ...probe, authorityOnly: false }, answer, promote] },
+    'no answer': { events: [probe, promote] },
+    'another probe answered': { events: [probe, { ...answer, requestId: 8 }, promote] },
+    'promoted before the answer': { events: [probe, promote, answer] },
+    'not prepared for that track': { prior: [{ ...open, path: 'C:/Music/other.flac' }, decoded] },
+    'a prepared stream already closed': { prior: [open, decoded, { ...promote, type: 'close' }] },
+    'under a second decoded': { prior: [open, { ...decoded, frameCount: 47_999 }] },
+    'another stream sounding': { after: { renderedPcmEvidence: { streamId: 3, nonZeroSamples: 9, peakSample: 0.5 } } },
+    'an underrun': { after: { underruns: 1 } },
+    'a new generation': { after: { generation: 2 } },
+  };
+  for (const [name, change] of Object.entries(refused)) {
+    assert.throws(() => run(change), assert.AssertionError, name);
+  }
+});
+
+test('FTC-PLAYER-028/029 switch evidence rejects silence, a restart, a wrong song and a title that does not stay', async () => {
+  const helperUrl = pathToFileURL(
+    path.join(repoRoot, 'tests/e2e/helpers/gaplessPlaybackHelpers.js'),
+  ).href;
+  const { assertSwitchKeepsSongSounding } = await import(helperUrl);
+  const expect = (actual, message) => ({
+    toBe: (wanted) => assert.equal(actual, wanted, message),
+    toBeNull: () => assert.equal(actual, null, message),
+    toBeGreaterThan: (least) => assert.ok(actual > least, message),
+    toBeGreaterThanOrEqual: (least) => assert.ok(actual >= least, message),
+  });
+  const pressed = { path: 'new.mp3', title: 'New Song' };
+  const run = ({ waiting = {}, playsOn = true, last = {}, after = {} } = {}) => {
+    const samples = Array.from({ length: 60 }, (_, index) => ({
+      currentPath: 'old.mp3', currentStreamId: 1, currentTime: playsOn ? index / 100 : 0, generation: 1,
+      mode: 'playing', paused: false, title: index ? 'Artist - New Song /' : 'Artist - Old Song /', ...waiting,
+    }));
+    samples.push({
+      currentPath: pressed.path, currentStreamId: 2, currentTime: 0, generation: 1, mode: 'playing', paused: false,
+      title: 'Artist - New Song /', ...last,
+    });
+    assertSwitchKeepsSongSounding(expect, {
+      before: { currentStreamId: 1, generation: 1, underruns: 0 },
+      after: {
+        currentStreamId: 2, generation: 1, underruns: 0, lastError: null, seekSilentFrames: 0,
+        seekCapture: { outgoing: { frames: 1, left: [0.2], right: [0.2] } },
+        renderedPcmEvidence: { streamId: 2, nonZeroSamples: 4, peakSample: 0.5 },
+        ...after,
+      },
+      pressed,
+      samples,
+    });
+  };
+
+  run();
+  const refused = {
+    'a pause': { waiting: { paused: true } },
+    'a restart': { waiting: { generation: 2 } },
+    'a wait for audio': { waiting: { mode: 'buffering' } },
+    'a place that stands still': { playsOn: false },
+    'another song': { last: { currentPath: 'other.mp3' } },
+    'the old title back': { last: { title: 'Artist - Old Song /' } },
+    'a title that only contains it': { last: { title: 'Artist - Brand New Song /' } },
+    'an underrun': { after: { underruns: 1 } },
+    'silence before the switch': { after: { seekCapture: { outgoing: { frames: 1, left: [0], right: [0] } } } },
+    'a silent new song': { after: { renderedPcmEvidence: { streamId: 2, nonZeroSamples: 0, peakSample: 0 } } },
+  };
+  for (const [name, change] of Object.entries(refused)) {
+    assert.throws(() => run(change), assert.AssertionError, name);
+  }
+});
+
 test('new gallery and cold saved-loop playback cases own their exact sample evidence', () => {
   const gallery = readRepoFile('tests/e2e/specs/galleryInteractionRegressions.spec.js');
   const loops = readRepoFile('tests/e2e/specs/loops.functional.spec.js');

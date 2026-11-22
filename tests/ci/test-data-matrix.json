@@ -136,6 +136,60 @@
   {
     "config": "playwright.config.js",
     "project": "functional",
+    "test": "tests/e2e/specs/playbackSwitchContinuity.spec.js",
+    "case": "FTC-PLAYER-028 A press on the next track of the playing album starts it as soon as the server confirms the press",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 3,
+    "databaseScenarios": [
+      "playback:prepared-next-press"
+    ],
+    "filesystemScenarios": [
+      "audio-copy:playback-length-signals"
+    ],
+    "expectedContracts": [
+      "prepared-press-click-to-sound-budget",
+      "confirmed-before-sound",
+      "no-second-download",
+      "previous-song-audible-until-cut",
+      "pressed-title-stays"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:playback-prepared-next-press",
+      "filesystemCopy": "media/Playback Start Signals/Length And Repetition"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/playbackSwitchContinuity.spec.js",
+    "case": "FTC-PLAYER-029 The playing song keeps sounding through a press until the pressed song starts",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "playback:switch-keeps-song-sounding"
+    ],
+    "filesystemScenarios": [
+      "audio-copy:playback-length-signals"
+    ],
+    "expectedContracts": [
+      "previous-song-audible-until-cut",
+      "last-pressed-song-follows",
+      "pressed-title-stays"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:playback-switch-continuity",
+      "filesystemCopy": "media/Playback Start Signals/Length And Repetition"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
     "test": "tests/e2e/specs/playbackNetworkOutage.spec.js",
     "case": "FTC-PLAYBACK-OFFLINE-001 a seek past the received audio offline stays playing silently, resumes by itself when the network returns, and one Play press continues a paused one",
     "profile": "functional-core",

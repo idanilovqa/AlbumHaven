@@ -1115,6 +1115,13 @@
               "test": "tests/e2e/specs/playbackNetworkOutage.spec.js",
               "case": "FTC-PLAYBACK-SEEK-001 under full CPU load ten rapid seeks forward and back each show their place, never reset to the start, never stop or disable Play, and the last one plays",
               "area": "playback"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playbackSwitchContinuity.spec.js",
+              "case": "FTC-PLAYER-028 A press on the next track of the playing album starts it as soon as the server confirms the press",
+              "area": "playback"
             }
           ]
         },
@@ -1432,6 +1439,13 @@
               "project": "functional",
               "test": "tests/e2e/specs/playbackNetworkOutage.spec.js",
               "case": "FTC-PLAYBACK-OFFLINE-004 owner round 7 with Wi-Fi off and on: a click in the received audio plays at once, the head never jumps to the start, the song plays on by itself when the server is back, one Play continues it, and one press plays another song",
+              "area": "playback"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playbackSwitchContinuity.spec.js",
+              "case": "FTC-PLAYER-029 The playing song keeps sounding through a press until the pressed song starts",
               "area": "playback"
             }
           ]

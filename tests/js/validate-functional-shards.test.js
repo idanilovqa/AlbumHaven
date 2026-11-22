@@ -23,9 +23,9 @@ const EXPECTED_SHARD_COUNTS = new Map([
   ['cover-providers-1', 22],
   ['cover-providers-2', 16],
   ['metadata-mutations', 16],
-  ['playback-utilities-1', 15],
+  ['playback-utilities-1', 16],
   ['playback-utilities-2', 21],
-  ['playback-utilities-3', 16],
+  ['playback-utilities-3', 17],
 ]);
 const EXPECTED_SHARD_DISPLAY_NAMES = new Map([
   ['gallery-search-visual-1', 'Gallery, Search & Visual 1'],
@@ -124,7 +124,7 @@ function functionalJobSource() {
   return { workflow, job: workflow.slice(start, end) };
 }
 
-test('functional shard contract pins the approved eight-way 173-case assignment', () => {
+test('functional shard contract pins the approved eight-way 175-case assignment', () => {
   const contract = readJson(shardContractPath);
   assert.equal(contract.browser, 'chrome');
   assert.equal(contract.workersPerInvocation, 1);
@@ -138,7 +138,7 @@ test('functional shard contract pins the approved eight-way 173-case assignment'
     assert.ok(shard.invocations.length > 0, `${shard.name} must not be empty`);
     assert.ok(shard.suitePrerequisites.length > 0, `${shard.name} must declare prerequisites`);
   }
-  assert.equal(total, 173);
+  assert.equal(total, 175);
   for (const ownedCase of ownedCases(contract)) {
     assert.match(ownedCase.area, /^[a-z]+(?:-[a-z]+)*$/, ownedCase.case);
   }
@@ -913,6 +913,7 @@ validatorTest('playback restores three wave baselines and isolates conflicting e
       'FTC-UTIL-PROBLEMS-001 scopes exclusions with optimistic persistence and reload',
       'FTC-TAGS-024 completes a verified Album and Exception intent during app restart',
       'FTC-PLAYBACK-OFFLINE-001 a seek past the received audio offline stays playing silently, resumes by itself when the network returns, and one Play press continues a paused one',
+      'FTC-PLAYER-029 The playing song keeps sounding through a press until the pressed song starts',
     ].sort(),
   );
   assert.deepEqual(
@@ -922,6 +923,7 @@ validatorTest('playback restores three wave baselines and isolates conflicting e
       'FTC-UTIL-PROBLEMS-001 rolls back failed exclusion creation and reversion',
       'FTC-PLAYBACK-OFFLINE-004 owner round 7 with Wi-Fi off and on: a click in the received audio plays at once, the head never jumps to the start, the song plays on by itself when the server is back, one Play continues it, and one press plays another song',
       'FTC-PLAYBACK-OFFLINE-005 owner round 7 with the server answering 530 for a minute after Wi-Fi returns: a click in the received audio plays at once, the head never jumps to the start, the song plays on by itself when the server is back, one Play continues it, and one press plays another song',
+      'FTC-PLAYER-028 A press on the next track of the playing album starts it as soon as the server confirms the press',
     ].sort(),
   );
   assert.deepEqual(waveInvocations(4).flatMap((invocation) => invocation.cases.map(({ case: name }) => name)), [
@@ -986,9 +988,9 @@ validatorTest('all eight shards use explicit effect-compatible wave budgets', ()
     ['cover-providers-1', { cases: 22, waves: [1, 2, 4] }],
     ['cover-providers-2', { cases: 16, waves: [1, 2] }],
     ['metadata-mutations', { cases: 16, waves: [1, 2, 3] }],
-    ['playback-utilities-1', { cases: 15, waves: [1, 2, 3, 4] }],
+    ['playback-utilities-1', { cases: 16, waves: [1, 2, 3, 4] }],
     ['playback-utilities-2', { cases: 21, waves: [1, 2, 3, 5] }],
-    ['playback-utilities-3', { cases: 16, waves: [1, 2, 3] }],
+    ['playback-utilities-3', { cases: 17, waves: [1, 2, 3] }],
   ]);
   const matrixByCase = new Map(matrix.map((row) => [row.case, row]));
 

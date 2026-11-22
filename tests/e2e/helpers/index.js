@@ -95,6 +95,9 @@ export {
 } from './playbackStartPerformanceHelpers.js';
 export {
   assertActiveReplacementContract,
+  assertSwitchKeepsSongSounding,
+  findPromotedPreparedReplacement,
+  observeSwitchPresentation,
   assertAudibleBoundaryCapture,
   assertNearEndSeekContract,
   assertGaplessBoundaryCapture,

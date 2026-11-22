@@ -155,7 +155,8 @@ def test_an_open_retries_only_an_older_unresolved_folder_deferral(retry_in, clea
     setup_url, runtime_url = isolatedPostgres.resolve_isolated_database_urls()
     isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
     repository = LocalCoverInventoryRepository(
-        {"ALBUM_HAVEN_APP_DATABASE_URL": runtime_url}, connect=isolatedPostgres._connect,
+        {"ALBUM_HAVEN_APP_DATABASE_URL": runtime_url, "_library_root_paths_snapshot": (Path("/"),)},
+        connect=isolatedPostgres._connect,
     )
     paths = {f"/int028-retry-{uuid4()}/track.mp3"}
     key = context_key(paths)

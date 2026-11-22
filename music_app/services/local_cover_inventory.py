@@ -32,6 +32,19 @@ def root_key(root: Path | str) -> str:
     return os.path.normcase(os.path.normpath(str(root)))
 
 
+def _below(folder):
+    return folder.rstrip(os.sep) + os.sep
+
+
+def _at_or_above_a_root(folder, roots):
+    return any(folder == root or root.startswith(_below(folder)) for root in roots)
+
+
+def _strictly_below_a_root(folder, roots):
+    """As strings, without the filesystem: below a configured root and not at or above any of them."""
+    return any(folder.startswith(_below(root)) for root in roots) and not _at_or_above_a_root(folder, roots)
+
+
 def local_inventory_root_for_tracks(config, track_paths):
     """Read-only discovery folder for an album the strict cover-write resolver declines.
 
@@ -43,13 +56,13 @@ def local_inventory_root_for_tracks(config, track_paths):
 
     from music_app.services.library_roots import configured_library_root_paths_snapshot
 
-    roots = [Path(root_key(root)) for root in configured_library_root_paths_snapshot(dict(config))]
+    roots = [root_key(root) for root in configured_library_root_paths_snapshot(dict(config))]
     folders = Counter(Path(root_key(path)).parent for path in track_paths if Path(path).is_file())
     if not folders:
         return None
 
     def below_a_root(folder):
-        return any(folder != root and folder.is_relative_to(root) for root in roots)
+        return _strictly_below_a_root(str(folder), roots)
 
     parents = {folder.parent for folder in folders}
     if len(folders) > 1 and len(parents) == 1 and below_a_root(next(iter(parents))):
@@ -77,17 +90,9 @@ def context_key(paths):
     return hashlib.sha256(json.dumps(sorted({root_key(path) for path in paths})).encode()).hexdigest()
 
 
-def changed_library_root_paths(previous, current):
-    """The roots whose albums can get another art folder: added, removed, re-pathed or with another layout."""
-    def rules(roots):
-        return {(root_key(root["path"]), str(root.get("layout_mode") or "artist")) for root in roots if root.get("path")}
-
-    return sorted({path for path, _layout in rules(previous) ^ rules(current)})
-
-
 def _prefix_range(folders):
     """The "C"-order range of every path below each folder: what migration 0292 indexes."""
-    prefixes = sorted(folder.rstrip(os.sep) + os.sep for folder in folders)
+    prefixes = sorted(_below(folder) for folder in folders)
     return prefixes, [prefix[:-1] + chr(ord(prefix[-1]) + 1) for prefix in prefixes]
 
 
@@ -223,8 +228,29 @@ class _UnresolvedContexts:
 
 class LocalCoverInventoryRepository:
     def __init__(self, config, *, connect=None):
+        self._config = config
         self._database_url = str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()
         self._connect = connect
+
+    def _roots(self):
+        """The configured roots as keys, from the snapshot; read before a lease is taken."""
+        from music_app.services.library_roots import configured_library_root_paths_snapshot
+
+        return [root_key(root) for root in configured_library_root_paths_snapshot(self._config)]
+
+    def _usable_root(self, connection, key, row, roots):
+        """A stored folder the configured roots still allow; any other makes that one context unresolved."""
+        stored = row["root_path"] if row else None
+        if not stored or _strictly_below_a_root(stored, roots):
+            return stored
+        connection.execute(
+            f"""update library.local_cover_inventory_contexts
+                set root_path = null, retry_after = null, revision = revision + 1
+                where library_id = ({_LIBRARY}) and context_key = %(key)s and revision = %(revision)s""",
+            {"key": key, "revision": row["revision"]},
+        )
+        connection.commit()
+        return None
 
     def _connection(self):
         if not self._database_url:
@@ -253,6 +279,8 @@ class LocalCoverInventoryRepository:
                         raise
 
     def get(self, root):
+        if not _strictly_below_a_root(root_key(root), self._roots()):
+            return None  # nothing at, above or outside the configured roots is shown or served
         with self._connection() as connection:
             row = connection.execute(
                 f"""select candidates, error, indexed_revision > 0 as available,
@@ -265,15 +293,27 @@ class LocalCoverInventoryRepository:
     def root_for_tracks(self, paths):
         if not paths:
             return None
+        roots, key = self._roots(), context_key(paths)
         with self._connection() as connection:
             row = connection.execute(
-                f"""select root_path from library.local_cover_inventory_contexts
+                f"""select root_path, revision from library.local_cover_inventory_contexts
                     where library_id = ({_LIBRARY}) and context_key = %(key)s and track_paths = %(paths)s""",
-                {"key": context_key(paths), "paths": Jsonb(sorted({root_key(path) for path in paths}))},
+                {"key": key, "paths": Jsonb(sorted({root_key(path) for path in paths}))},
             ).fetchone()
-        return Path(row["root_path"]) if row and row["root_path"] else None
+            stored = self._usable_root(connection, key, row, roots)
+        return Path(stored) if stored else None
+
+    def stored_context(self, key):
+        with self._connection() as connection:
+            row = connection.execute(
+                f"""select track_paths, root_path, revision from library.local_cover_inventory_contexts
+                    where library_id = ({_LIBRARY}) and context_key = %(key)s""",
+                {"key": key},
+            ).fetchone()
+        return dict(row) if row else None
 
     def request_context(self, paths, *, foreground=True):
+        roots = self._roots()
         with self._connection() as connection:
             row = connection.execute(
                 f"""insert into library.local_cover_inventory_contexts
@@ -289,11 +329,14 @@ class LocalCoverInventoryRepository:
                           and library.local_cover_inventory_contexts.retry_after
                             <= now() + interval '{_UNRESOLVED_FOLDER_RETRY_SECONDS - _RETRY_SECONDS} seconds'
                         then null else library.local_cover_inventory_contexts.retry_after end
-                    returning root_path, error""",
+                    returning root_path, revision, error""",
                 {"key": context_key(paths), "paths": Jsonb(sorted({root_key(path) for path in paths})), "foreground": foreground},
             ).fetchone()
             connection.commit()
-        return dict(row) if row else {}
+            if not row:
+                return {}
+            stored = self._usable_root(connection, context_key(paths), row, roots)
+        return {"root_path": stored, "error": row.get("error")}
 
     def defer_context(self, key, revision, *, delay_seconds=_RETRY_SECONDS, error=_STORAGE_UNAVAILABLE):
         with self._connection() as connection:
@@ -360,12 +403,24 @@ class LocalCoverInventoryRepository:
 
         Every lookup is by key or by a migration 0292 range, hence the explicit "C" collation and the
         arrays: an OR over a join would read the whole table. An unresolved context has no indexed
-        folder, so only the caller's own work below the changed folders is matched by track path."""
-        paths = list(paths)
-        subtrees = {root_key(path) for path in subtree_paths}
+        folder, so only the caller's own work below the changed folders is matched by track path.
+
+        Nothing at or above a configured root is marked: a deleted or moved root, or a drive that is
+        gone, is unavailable storage and keeps its stored listings."""
+        paths, subtree_paths = list(paths), list(subtree_paths)
+        if not paths and not subtree_paths:
+            return [], []
+        library_roots = self._roots()
+
+        def inside(folders):
+            return {folder for folder in folders if not _at_or_above_a_root(folder, library_roots)}
+
+        paths = [path for path in paths if not _at_or_above_a_root(root_key(path), library_roots)]
+        subtrees = inside({root_key(path) for path in subtree_paths})
         ancestors = {root_key(parent) for value in paths for parent in Path(value).parents}
         ancestors.update(root_key(path) for path in paths)
         ancestors.update(subtrees)
+        ancestors = inside(ancestors)
         if not ancestors:
             return [], []
         prefixes, prefix_ends = _prefix_range(subtrees)
@@ -381,6 +436,8 @@ class LocalCoverInventoryRepository:
             disc_parents = {root_key(Path(path).parent) for path in [*paths, *subtrees] if is_disc_like_folder(Path(path))}
             pending_roots = {root_key(Path(path).parent) for path in paths if root_key(path) not in subtrees}
             pending_roots.update(subtrees | disc_parents)
+            # A range below a root never becomes that whole root through a path's parent.
+            pending_roots, disc_parents = inside(pending_roots), inside(disc_parents)
             parameters["context_prefixes"] = _prefix_range(pending_roots)[0]
             parameters["pending_contexts"] = list(pending_contexts_below(pending_roots))
             parameters["disc_prefixes"], parameters["disc_prefix_ends"] = _prefix_range(disc_parents)
@@ -540,6 +597,7 @@ class LocalCoverInventoryWorker:
         self._invalidation_retries = {}
         self._contexts = _WorkQueue()
         self._listings = _WorkQueue()
+        self._rechecks = _WorkQueue()
         self._unresolved = _UnresolvedContexts()
         self._foreground_at = time.monotonic()
         # What the worker has finished since start, so a request waiting for one folder is woken by
@@ -598,6 +656,11 @@ class LocalCoverInventoryWorker:
         self._wake.set()
         return result
 
+    def recheck_context(self, paths):
+        """An open shows the stored folder at once; this only queues resolving that album again."""
+        self._rechecks.add([context_key(paths)], foreground=True)
+        self._wake.set()
+
     def _queue_changed(self, changed):
         listings, contexts = changed
         self._listings.add(listings)
@@ -621,11 +684,6 @@ class LocalCoverInventoryWorker:
             self.schedule_invalidation_retry(paths, context_changed=context_changed, subtree_paths=subtree_paths)
             return False
         return True
-
-    def roots_changed(self, previous, current):
-        changed = changed_library_root_paths(previous, current)
-        if changed:
-            self.invalidate_or_retry(changed, context_changed=True, subtree_paths=changed)
 
     def schedule_invalidation_retry(self, paths, *, context_changed=False, subtree_paths=()):
         key = (
@@ -693,7 +751,26 @@ class LocalCoverInventoryWorker:
             time.monotonic() - self._foreground_at <= 5
             or self._contexts.waiting(background=False)
             or self._listings.waiting(background=False)
+            or self._rechecks.waiting(background=False)
         )
+
+    def _recheck_context(self, key):
+        """Resolve an opened album's stored folder again and publish it only if it differs."""
+        from music_app.services.cover_workflow import resolve_album_root_from_track_paths
+
+        stored = self.repository.stored_context(key)
+        if not stored or not stored["root_path"]:
+            return  # unresolved: its own request resolves it
+        tracks = set(stored["track_paths"])
+        try:
+            current = resolve_album_root_from_track_paths(self.config, tracks, cancel_requested=self._stop.is_set)
+            current = current or local_inventory_root_for_tracks(self.config, tracks)
+        except (OSError, ValueError):
+            return  # unavailable storage, or shutdown, keeps the stored answer
+        if current and root_key(current) != stored["root_path"] and not self._stop.is_set():
+            self.repository.publish_context(key, stored["revision"], current, foreground=True)
+            self._listings.add([root_key(current)], foreground=True)
+            self._mark_finished(("context", key))
 
     def _run(self):
         while not self._stop.is_set():
@@ -706,6 +783,7 @@ class LocalCoverInventoryWorker:
                 self._invalidation_retries
                 or self._contexts.waiting(background=background)
                 or self._listings.waiting(background=background)
+                or self._rechecks.waiting(background=background)
             ):
                 continue  # an idle poll reads nothing and takes no work slot
             key = root = None
@@ -714,6 +792,8 @@ class LocalCoverInventoryWorker:
                     if not admitted:
                         continue
                     self._retry_scheduled_invalidation()
+                    if opened := self._rechecks.take(background=background):
+                        self._recheck_context(opened)
                     key = self._contexts.take(background=background)
                     context = self.repository.next_context(key) if key else None
                     if context:

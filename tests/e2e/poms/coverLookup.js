@@ -761,9 +761,10 @@ export class CoverLookup extends BasePage {
     return this.taskCardById(taskId).evaluate((element) => {
       const opener = element.querySelector('[data-open-cover-lookup-task]');
       const image = element.querySelector('img.cover-lookup-task-cover');
+      // The preview cache shows a blob, so the image's identity is the production address it was resolved from.
       // currentSrc stays empty until a lazy image starts loading; resolve the attribute to the same absolute form.
       const imageSrc = image instanceof HTMLImageElement
-        ? String(image.currentSrc || image.getAttribute('src') || '').trim()
+        ? String(image.getAttribute('data-production-cover-src') || image.currentSrc || image.getAttribute('src') || '').trim()
         : '';
       return {
         taskId: String(opener?.getAttribute('data-open-cover-lookup-task') || ''),

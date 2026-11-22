@@ -3,7 +3,7 @@ const PLAYBACK_OWNERSHIP_HEARTBEAT_MS = 10000;
 // A playing tab renews this often, so the server tells a live holder from a browser that closed
 // without a word (a holder silent for 10 s gives way to a press elsewhere).
 const PLAYBACK_OWNERSHIP_RENEW_MS = 4000;
-// A burst of seeks (a held arrow key) tells the claim its last place once.
+// A burst of seeks (a held arrow key) tells the claim its first place at once and its last when it settles.
 const PLAYBACK_POSITION_PUBLISH_MS = 200;
 const PLAYBACK_HANDOFF_STORAGE_KEY = 'albumhaven.playbackHandoff.v1';
 const PLAYBACK_HANDOFF_WINDOW_MS = 15000;
@@ -262,12 +262,21 @@ function isPlaybackClaimRenewable() {
 // not at the next renewal. A claim request on its way carries the older place: this follows it.
 function publishPlaybackPositionSoon() {
   const ownership = getPlaybackOwnershipState();
+  const inBurst = Boolean(ownership.positionTimer);
   clearTimeout(ownership.positionTimer);
-  ownership.positionTimer = setTimeout(async () => {
+  ownership.positionTimer = setTimeout(() => {
     ownership.positionTimer = 0;
-    await ownership.pendingOperation;
-    if (ownership.activeClaim && isPlaybackClaimRenewable()) await refreshPlaybackOwnershipClaim();
+    return inBurst ? publishPlaybackPositionNow() : undefined;
   }, PLAYBACK_POSITION_PUBLISH_MS);
+  if (!inBurst) void publishPlaybackPositionNow();
+}
+
+async function publishPlaybackPositionNow() {
+  const ownership = getPlaybackOwnershipState();
+  await ownership.pendingOperation;
+  // A renewal that took this turn read the place before this one did: it is waited for, not joined.
+  while (ownership.renewing) await ownership.pendingOperation;
+  if (ownership.activeClaim && isPlaybackClaimRenewable()) await refreshPlaybackOwnershipClaim();
 }
 
 function startPlaybackOwnershipHeartbeat() {
@@ -375,11 +384,13 @@ async function refreshPlaybackOwnershipClaim(track = null) {
     const claim = ownership.activeClaim;
     if (!claim) return false;
     try {
-      const prepared = await playbackOwnershipTrack(track || state.player.current, claim);
+      // While a switch is pending the claim is the pressed song's: the current one is the song it replaces.
+      const claimed = track || state.player.selectedTrack || state.player.current;
+      const prepared = await playbackOwnershipTrack(claimed, claim);
       if (version !== (ownership.requestVersion || 0)) return false;
       const result = await requestPlaybackClaim({ protocol: 1,
         clientId: getPlaybackOwnershipTabId(), clientSurface: 'private_web', claimToken: claim.claimToken,
-        state: 'playing', track: prepared.track, ...positionField(track || state.player.current) });
+        state: 'playing', track: prepared.track, ...positionField(claimed) });
       if (ownership.activeClaim !== claim || version !== (ownership.requestVersion || 0)) return false;
       acceptPlaybackClaim(result, prepared);
       return true;

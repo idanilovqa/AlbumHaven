@@ -1452,7 +1452,7 @@ test('a takeover claim asks to replace the other claim once and every claim requ
 
 // Hosted TAKEOVER-001 (run 44977805392, 2026-11-22): Play here 0.5 s after a seek started at 1 s
 // instead of 1:27, as only the 4 s renewal told the claim where the song was.
-test('a burst of seeks tells the claim the last place once, after the request already on its way', async () => {
+test('a seek publishes at once, and a burst ends on its last place behind a slow request', async () => {
   const bodies = [];
   const timers = new Map();
   let nextTimer = 0;
@@ -1472,22 +1472,91 @@ test('a burst of seeks tells the claim the last place once, after the request al
       return jsonResponse({ protocol: 1, claimToken: 'departing-claim', expiresAt: '2099-01-01T00:00:00Z', leaseMs: 30000 });
     },
   });
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
 
-  const renewal = context.refreshPlaybackOwnershipClaim(localTrack);
-  await new Promise((resolve) => setImmediate(resolve));
-  for (const seconds of [30, 60, 90]) {
+  currentTime = 30;
+  context.publishPlaybackPositionSoon();
+  await settle();
+  assert.equal(bodies.length, 1, 'the first seek waits for no timer');
+  assert.deepEqual(bodies[0].position, { ms: 30000, durationMs: 300000 });
+
+  for (let seconds = 31; seconds <= 90; seconds += 1) {
     currentTime = seconds;
     context.publishPlaybackPositionSoon();
   }
   const waiting = [...timers.values()].filter(({ delay }) => delay <= 250);
-  assert.equal(waiting.length, 1, 'one request waits, however many seeks came');
+  assert.equal(waiting.length, 1, 'one timer, however many seeks');
   const published = waiting[0].callback();
   inFlight.resolve();
-  await renewal;
   await published;
-
-  assert.equal(bodies.length, 2, 'the renewal on its way does not swallow the seek');
+  await settle();
+  assert.equal(bodies.length, 2, 'sixty-one seeks, two requests');
   assert.deepEqual(bodies[1].position, { ms: 90000, durationMs: 300000 });
+});
+
+test('a publish is not lost when another renewal takes its turn first', async () => {
+  const bodies = [];
+  const gates = [deferred(), deferred()];
+  let currentTime = 10;
+  const { context } = loadHelper({
+    state: activeOwnershipState(),
+    getPlayerPlaybackSnapshot: () => ({ paused: false, ended: false, currentTime, duration: 300 }),
+    fetch: async (url, init = {}) => {
+      if (url === '/playback/refs') {
+        return jsonResponse({ protocol: 1, expiresAt: '2099-01-01T00:00:00Z', tracks: [{ playbackRef: 'ref-1' }] });
+      }
+      bodies.push(JSON.parse(init.body));
+      if (gates[bodies.length - 1]) await gates[bodies.length - 1].promise;
+      return jsonResponse({ protocol: 1, claimToken: 'departing-claim', expiresAt: '2099-01-01T00:00:00Z', leaseMs: 30000 });
+    },
+  });
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+
+  void context.refreshPlaybackOwnershipClaim();
+  await settle();
+  // The heartbeat is waiting on the same request, and gets the turn.
+  void context.state.player.ownership.pendingOperation.then(() => context.refreshPlaybackOwnershipClaim());
+  context.publishPlaybackPositionSoon();
+  gates[0].resolve();
+  await settle();
+  currentTime = 90;
+  gates[1].resolve();
+  for (let turn = 0; turn < 4; turn += 1) await settle();
+
+  assert.equal(bodies.length, 3);
+  assert.deepEqual(bodies[2].position, { ms: 90000, durationMs: 300000 });
+});
+
+// A renewal during a switch: the pressed song is claimed, but the player's current song is still the old
+// one until the new stream starts. Renewing that one handed the previous song to Play here.
+test('a renewal while a switch is pending never gives the claim back to the previous song', async () => {
+  const refs = deferred();
+  const puts = [];
+  const state = activeOwnershipState();
+  const next = { ...localTrack, src: '/track?path=next.flac', path: 'C:/Music/next.flac', title: 'Next Track' };
+  state.player.selectedTrack = next;
+  const { context } = loadHelper({
+    state,
+    getPlayerPlaybackSnapshot: () => ({ paused: false, ended: false, currentTime: 127, duration: 195, src: localTrack.src }),
+    fetch: async (url, init = {}) => {
+      const body = JSON.parse(init.body);
+      if (url === '/playback/refs') {
+        if (body.tracks[0].path === next.path) await refs.promise;
+        return jsonResponse({ protocol: 1, expiresAt: '2099-01-01T00:00:00Z', tracks: [{ playbackRef: `ref:${body.tracks[0].path}` }] });
+      }
+      puts.push(body);
+      return jsonResponse({ protocol: 1, claimToken: 'departing-claim', expiresAt: '2099-01-01T00:00:00Z', leaseMs: 30000 });
+    },
+  });
+
+  const switching = context.claimPlaybackOwnership(next);
+  const heartbeat = context.refreshPlaybackOwnershipClaim();
+  refs.resolve();
+  await switching;
+  await heartbeat;
+
+  assert.equal(puts.at(-1).track.title, 'Next Track', 'the claim still names the pressed song');
+  assert.equal('position' in puts.at(-1), false, "and never carries the previous song's place");
 });
 
 test('a renewal refused because another client took over shows that client as playing elsewhere', async () => {

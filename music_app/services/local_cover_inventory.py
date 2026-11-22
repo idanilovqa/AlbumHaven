@@ -24,6 +24,7 @@ and libraries.library_kind = 'local' limit 1"""
 _STORAGE_UNAVAILABLE = "Local artwork storage is unavailable. Checking again shortly."
 _RETRY_SECONDS = 30
 _UNRESOLVED_FOLDER_RETRY_SECONDS = 3600
+_FULL_RESCAN = "full rescan"  # an invalidation retry's kind; any other retry's key starts with its paths
 # File times are coarse (2 s on FAT), so a scan's check reaches this far behind the last one's start.
 _SCAN_CHECK_OVERLAP_SECONDS = 2.0
 
@@ -191,9 +192,19 @@ class _WorkQueue:
             self._taken_was_opened = pending is self._opened
             return key
 
+    @property
+    def taken_was_opened(self):
+        """Whether the key just taken was asked for by an open, which a stored row's flag never says."""
+        return self._taken_was_opened
+
     def put_back(self, key, *, delay=0.0):
         """The key just taken is not done: it waits its delay where it was."""
         self.add([key], foreground=self._taken_was_opened, delay=delay)
+
+    def retry(self, key, *, delay):
+        """An unavailable answer: an open asks again after its delay; a change waits for the next change or open."""
+        if self._taken_was_opened:
+            self.add([key], foreground=True, delay=delay)
 
 
 class _UnresolvedContexts:
@@ -478,15 +489,48 @@ class LocalCoverInventoryRepository:
             connection.commit()
         return [row["root_path"] for row in listings], [row["context_key"] for row in contexts]
 
-    def invalidate_all(self):
+    def invalidate_all(self, readable_roots):
+        """A Full Rescan: mark everything below the roots it read, by migration 0292 ranges.
+
+        A root it could not read, even one inside a readable root, is unavailable storage and keeps
+        its stored listings and folders. An unresolved context has no folder, so its tracks decide."""
+        readable = {root_key(root) for root in readable_roots}
+        if not readable:
+            return [], []
+        prefixes, prefix_ends = _prefix_range(readable)
+        parameters = {
+            "rebuild_prefixes": prefixes, "rebuild_prefix_ends": prefix_ends,
+            "kept_prefixes": [_below(root) for root in self._roots() if root not in readable],
+        }
+        kept = """not exists(select 1 from unnest(%(kept_prefixes)s::text[]) as kept(prefix)
+            where starts_with({path}, kept.prefix))"""
         with self._connection() as connection:
             listings = connection.execute(
-                f"""update library.local_cover_inventories set revision = revision + 1,
-                    retry_after = null where library_id = ({_LIBRARY}) returning root_path"""
+                f"""update library.local_cover_inventories set revision = revision + 1, retry_after = null
+                    from unnest(%(rebuild_prefixes)s::text[], %(rebuild_prefix_ends)s::text[]) as readable(prefix, prefix_end)
+                    where library_id = ({_LIBRARY}) and root_path collate "C" >= readable.prefix
+                      and root_path collate "C" < readable.prefix_end and {kept.format(path="root_path")}
+                    returning root_path""",
+                parameters,
             ).fetchall()
             contexts = connection.execute(
                 f"""update library.local_cover_inventory_contexts set root_path = null, retry_after = null,
-                    revision = revision + 1 where library_id = ({_LIBRARY}) returning context_key"""
+                    revision = revision + 1
+                    where library_id = ({_LIBRARY}) and context_key = any(
+                      array(select resolved.context_key
+                        from unnest(%(rebuild_prefixes)s::text[], %(rebuild_prefix_ends)s::text[]) as readable(prefix, prefix_end)
+                        join library.local_cover_inventory_contexts as resolved
+                          on resolved.library_id = ({_LIBRARY}) and resolved.root_path is not null
+                          and resolved.root_path collate "C" >= readable.prefix
+                          and resolved.root_path collate "C" < readable.prefix_end
+                        where {kept.format(path="resolved.root_path")})
+                      || array(select unresolved.context_key from library.local_cover_inventory_contexts as unresolved
+                        where unresolved.library_id = ({_LIBRARY}) and unresolved.root_path is null and exists(
+                          select 1 from jsonb_array_elements_text(unresolved.track_paths) as track(path)
+                          cross join unnest(%(rebuild_prefixes)s::text[]) as readable(prefix)
+                          where starts_with(track.path, readable.prefix) and {kept.format(path="track.path")})))
+                    returning context_key""",
+                parameters,
             ).fetchall()
             connection.commit()
         return [row["root_path"] for row in listings], [row["context_key"] for row in contexts]
@@ -711,9 +755,12 @@ class LocalCoverInventoryWorker:
         if due is None:
             return
         key, state = due
-        paths, context_changed, subtree_paths = key
         try:
-            self._invalidate(paths, context_changed=context_changed, subtree_paths=subtree_paths)
+            if key[0] == _FULL_RESCAN:
+                self._queue_changed(self.repository.invalidate_all(key[1]))
+            else:
+                paths, context_changed, subtree_paths = key
+                self._invalidate(paths, context_changed=context_changed, subtree_paths=subtree_paths)
         except Exception:
             attempts = state[1] + 1
             delay = min(
@@ -733,9 +780,19 @@ class LocalCoverInventoryWorker:
             if self._invalidation_retries.get(key) == state:
                 self._invalidation_retries.pop(key, None)
 
-    def rescan(self):
-        """An owner-started Full Rescan: the one whole-library invalidation."""
-        self._queue_changed(self.repository.invalidate_all())
+    def rescan(self, readable_roots):
+        """An owner-started Full Rescan: the one whole-library invalidation, of the roots it could read.
+
+        It runs after the scan published, so a failure is retried like any invalidation, never lost."""
+        roots = tuple(sorted({root_key(root) for root in readable_roots}))
+        if not roots:
+            return
+        try:
+            self._queue_changed(self.repository.invalidate_all(roots))
+        except Exception:
+            self._logger.exception("Could not mark the Full Rescan's local cover listings; retrying.")
+            with self._invalidation_retry_lock:
+                self._invalidation_retries.setdefault((_FULL_RESCAN, roots), (time.monotonic(), 0))
         self._wake.set()
 
     def remove_path(self, path):
@@ -805,7 +862,9 @@ class LocalCoverInventoryWorker:
                         context = None
                     if context:
                         from music_app.services.cover_workflow import resolve_album_root_from_track_paths
-                        cancelled = lambda: self._cancel_requested(context["foreground_requested"])
+                        # A stored row's flag may be an older open's; only this process's queue says who asked.
+                        foreground = self._contexts.taken_was_opened
+                        cancelled = lambda: self._cancel_requested(foreground)
                         try:
                             album_root = resolve_album_root_from_track_paths(self.config, set(context["track_paths"]), cancel_requested=cancelled)
                             if cancelled():
@@ -814,22 +873,22 @@ class LocalCoverInventoryWorker:
                             # "unavailable"; an album spread over several folders still gets its art.
                             album_root = album_root or local_inventory_root_for_tracks(self.config, context["track_paths"])
                             if album_root:
-                                self.repository.publish_context(context["context_key"], context["revision"], album_root, foreground=context["foreground_requested"])
-                                self._listings.add([root_key(album_root)], foreground=context["foreground_requested"])
+                                self.repository.publish_context(context["context_key"], context["revision"], album_root, foreground=foreground)
+                                self._listings.add([root_key(album_root)], foreground=foreground)
                                 self._unresolved.forget(key)
                             elif local_inventory_tracks_exist(context["track_paths"]):
                                 self.repository.defer_context(context["context_key"], context["revision"], delay_seconds=_UNRESOLVED_FOLDER_RETRY_SECONDS, error=None)
-                                self._contexts.put_back(key, delay=_UNRESOLVED_FOLDER_RETRY_SECONDS)
+                                self._contexts.retry(key, delay=_UNRESOLVED_FOLDER_RETRY_SECONDS)
                             else:
                                 self.repository.defer_context(context["context_key"], context["revision"])
-                                self._contexts.put_back(key, delay=_RETRY_SECONDS)
+                                self._contexts.retry(key, delay=_RETRY_SECONDS)
                             self._mark_finished(("context", context["context_key"]))
                         except InterruptedError:
                             self.repository.defer_context(context["context_key"], context["revision"], delay_seconds=0)
                             self._contexts.put_back(key)
                         except (OSError, ValueError):
                             self.repository.defer_context(context["context_key"], context["revision"])
-                            self._contexts.put_back(key, delay=_RETRY_SECONDS)
+                            self._contexts.retry(key, delay=_RETRY_SECONDS)
                     key = None
                     if self._stop.is_set():
                         return
@@ -839,7 +898,7 @@ class LocalCoverInventoryWorker:
                         self._listings.put_back(root, delay=pending["retry_in"])
                         pending = None
                     if pending:
-                        cancelled = lambda: self._cancel_requested(pending["foreground_requested"])
+                        cancelled = lambda: self._cancel_requested(self._listings.taken_was_opened)
                         try:
                             candidates = discover_local_cover_inventory(pending["root_path"], self.config, cancel_requested=cancelled)
                             if cancelled():
@@ -851,7 +910,7 @@ class LocalCoverInventoryWorker:
                             self._listings.put_back(root)
                         except OSError:
                             self.repository.defer(pending["root_path"], pending["revision"])
-                            self._listings.put_back(root, delay=_RETRY_SECONDS)
+                            self._listings.retry(root, delay=_RETRY_SECONDS)
                             self._mark_finished(("root", root_key(pending["root_path"])))
             except Exception:
                 # A database failure loses no work this process was given.

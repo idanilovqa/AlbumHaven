@@ -551,6 +551,10 @@ def refresh_library_state(
             if int(library_state.get("scan_generation") or 0) == scan_generation:
                 library_state["scan_phase"] = "finalizing"
                 start_scan_stage(library_state, "relations")
+        readable_root_ids = (
+            set(publication_state.get("observed_library_root_ids") or ())
+            - set(publication_state.get("scan_incomplete_root_ids") or ())
+        )
         if cover_check is not None:
             del publication_state["cover_inventory_check"]
             # Before publishing: a failed invalidation must not advance its roots' check times.
@@ -558,10 +562,7 @@ def refresh_library_state(
                 local_cover_inventory,
                 previous=existing_cache,
                 scanned=new_file_cache,
-                readable_root_ids=(
-                    set(publication_state.get("observed_library_root_ids") or ())
-                    - set(publication_state.get("scan_incomplete_root_ids") or ())
-                ),
+                readable_root_ids=readable_root_ids,
             )
         relation_refresh_options: dict[str, object] = {
             "final_scan_publication": True,
@@ -604,7 +605,8 @@ def refresh_library_state(
         with cache_lock:
             library_state["published_root_identity"] = root_identity
         if ignore_existing_cache and local_cover_inventory is not None:
-            local_cover_inventory.rescan()
+            # An unreadable root is unavailable storage: its stored folders stay.
+            local_cover_inventory.rescan([root["path"] for root in scan_roots if root["id"] in readable_root_ids])
         finish_scan_stage(library_state, "relations")
         library_state["scan_elapsed_seconds"] = max(0.0, time.time() - scan_started_at)
         with cache_lock:

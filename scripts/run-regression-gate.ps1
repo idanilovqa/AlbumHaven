@@ -48,7 +48,9 @@ $gates = @{
     'html-reload' = @{
         FixtureProfiles = @('synthetic-large-library')
         Pytest = @(, @('tests/py/test_web_bootstrap.py', 'tests/py/test_runtime_asset_versions.py',
-                'tests/py/test_runtime_shutdown.py'))
+                'tests/py/test_runtime_shutdown.py',
+                # A lifecycle-owned worker: counted on real Postgres to do no library-wide work at start or idle.
+                'tests/py/test_local_cover_inventory.py', 'tests/py/test_local_cover_inventory_postgres.py'))
         Performance = @{ Profile = 'synthetic-large-library'; Targets = 'artist-tree-scroll-navigation' }
     }
     'edit-tags' = @{

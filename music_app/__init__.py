@@ -549,6 +549,9 @@ def create_asgi_app():
         runtime.config["_GENERATED_PREVIEW_STORAGE_POLICY"] = (
             _app.state.generated_preview_storage_policy
         )
+        from music_app.services.local_cover_inventory import LocalCoverInventoryWorker
+
+        _app.state.local_cover_inventory = LocalCoverInventoryWorker(runtime.config, logger=runtime.logger)
         _app.state.cover_preview_backfill = CoverPreviewBackfill(
             runtime.config,
             logger=runtime.logger,
@@ -590,6 +593,7 @@ def create_asgi_app():
             _app.state.generated_preview_relocation.start()
         else:
             _app.state.cover_preview_backfill.start()
+        _app.state.local_cover_inventory.start()
         _app.state.library_warmup_thread = _start_library_warmup(
             runtime,
             hydrate_runtime_library_state_on_startup,
@@ -614,6 +618,7 @@ def create_asgi_app():
             runtime.config.pop("_LIBRARY_WATCH_MANUAL_RECOVERY_CALLBACK", None)
             shutdown_errors: list[tuple[str, BaseException]] = []
             shutdown_stages = (
+                ("local cover inventory", _app.state.local_cover_inventory.stop),
                 (
                     "generated preview relocation",
                     _app.state.generated_preview_relocation.stop

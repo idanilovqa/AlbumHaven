@@ -481,7 +481,7 @@ test('split album conflict stays in Cover Lookup and choosing a release refreshe
   assert.equal(context.state.coverLookup.modal.taskId, 'stale-task');
   assert.deepEqual(
     requests.find((request) => request.album?.album_id === secondRelease.album_id),
-    { album: secondRelease, task_id: 'stale-task' },
+    { album: secondRelease, task_id: 'stale-task', stored_first: true },
   );
 });
 
@@ -1427,6 +1427,45 @@ for (const actions of [{ 'library.covers.lookup': true }, undefined]) {
     assert.equal(new URL(f.location.href).searchParams.get('mobile_page'), 'cover-lookup');
   });
 }
+
+test('owner 2026-11-22: an open shows the stored local covers, then the folder read replaces them without a loading state', async () => {
+  const album = { album_id: 7, key: 'a::b', name: 'B', album_artist: 'A', tracks: [{ path: 'N:/A/B/01.flac' }] };
+  const bodies = [];
+  const answers = [
+    { ok: true, local_inventory_pending: true, local_covers: [{ filename: 'front.jpg', candidate_cover_ref: 'ref:front' }, { filename: 'back.jpg', candidate_cover_ref: 'ref:back' }], other_art: [] },
+    { ok: true, local_inventory_pending: false, local_covers: [{ filename: 'front.jpg', candidate_cover_ref: 'ref:front' }], other_art: [] },
+  ];
+  const context = {
+    window: {}, URLSearchParams, console: { ...console, log() {} }, HTMLButtonElement: class {},
+    ButtonComponent: { renderButton: () => '' },
+    setTimeout: () => 0, clearTimeout() {},
+    state: { coverLookup: { tasks: [], modal: { album, taskId: '', loading: false, pastedImages: [], localCovers: [], otherArt: [], possibleMatches: [] } } },
+    getAlbumTrackPaths: value => new Set((value?.tracks || []).map(item => item.path)),
+    markAlbumCoverRefsFresh() {},
+    showToast() {},
+    fetch: async (_url, options) => { bodies.push(JSON.parse(options.body)); return { ok: true, json: async () => answers[bodies.length - 1] }; },
+    document: { body: { classList: { add() {} } }, getElementById: () => null },
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  const renders = [];
+  context.renderCoverLookupModal = () => renders.push({
+    loading: context.state.coverLookup.modal.loading,
+    count: context.state.coverLookup.modal.localCovers.length,
+  });
+  context.markCoverLookupAutomaticImprovementSeen = async () => {};
+
+  await context.refreshCoverLookupGallery(false, { storedFirst: true });
+  assert.ok(renders.some(entry => entry.count === 2), 'every stored cover shows at once');
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(bodies.map(body => Boolean(body.stored_first)), [true, false]);
+  assert.equal(renders.at(-1).count, 1, 'the folder is what stays');
+  context.applyCoverLookupGalleryPayload({ ok: true, local_covers: [], other_art: [], local_inventory_error: 'Local artwork could not be read. Showing the last known covers.' });
+  assert.equal(context.state.coverLookup.modal.statusText, 'Local artwork could not be read. Showing the last known covers.');
+  assert.equal(context.state.coverLookup.modal.statusTone, 'error');
+  assert.ok(renders.every(entry => !entry.loading));
+});
 
 test('owner 2026-11-18: local covers show while the remote search keeps polling, and no poll discards the open read', async () => {
   const resolvers = [];

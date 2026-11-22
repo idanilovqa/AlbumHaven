@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from hashlib import sha256
 import logging
+import os
 from pathlib import Path
 from threading import Event
 from time import perf_counter
@@ -94,7 +95,9 @@ from music_app.services.custom_collection_artwork_postgres import (
     CustomCollectionArtworkRepository,
 )
 from music_app.services.covers import image_dimensions, score_image
+from music_app.services.cover_workflow import restrict_album_root_to_represented_disc
 from music_app.services.ordered_cover_references import OrderedCoverSelectionConflict
+from music_app.services.local_cover_inventory import STORAGE_UNAVAILABLE, root_key
 from music_app.services.ordered_cover_selection import InvalidOrderedCoverSelection, current_cover_token, validate_save_request
 from music_app.services.policy import ResourceScope
 from music_app.services.policy_asgi import require_action
@@ -678,6 +681,7 @@ async def _serialize_cover_gallery_from_asgi(
     task_payload: Mapping[str, object] | None = None,
     *,
     refresh_persisted_cover_state: bool = False,
+    stored_first: bool = False,
 ) -> dict[str, object]:
     config = _app_config(request)
     library_file_cache = _library_state(request).get("file_cache", {}) or {}
@@ -692,6 +696,9 @@ async def _serialize_cover_gallery_from_asgi(
             paths_to_load,
         ))
     copy_roots = await run_in_threadpool(resolve_album_copy_roots, config, album_root, track_paths)
+    stored_listings = await _album_local_listings(
+        request, album_root, copy_roots, track_paths, stored_first=stored_first,
+    )
     serialized_task_payload = serialize_cover_lookup_task_payload(
         dict(task_payload) if isinstance(task_payload, Mapping)
         else cover_lookup_result(task_id) if task_id
@@ -708,7 +715,40 @@ async def _serialize_cover_gallery_from_asgi(
         task_payload=serialized_task_payload,
         candidate_snapshot=candidate_snapshot,
         additional_album_roots=copy_roots,
+        stored_listings=stored_listings,
     )
+
+
+async def _album_local_listings(
+    request: Request, album_root, copy_roots: list, track_paths: set[str], *, stored_first: bool,
+):
+    """The album's stored listings, when every copy has one and an open asks or a folder is away.
+
+    Its folders are queued for a refresh either way.
+    """
+    inventory = getattr(request.app.state, "local_cover_inventory", None)
+    if inventory is None:
+        return None
+    roots = [await run_in_threadpool(restrict_album_root_to_represented_disc, album_root, track_paths), *copy_roots]
+    away: set = set()
+    if not stored_first:
+        away = await run_in_threadpool(lambda: {root for root in roots if not os.path.isdir(root)})
+    rows = {}
+    if stored_first or away:
+        try:
+            rows = await run_in_threadpool(inventory.repository.get, roots)
+        except Exception:
+            logging.getLogger(__name__).exception("Could not read stored local cover listings.")
+    for root in roots:
+        inventory.request(root)
+    listings = [(root, rows.get(root_key(root))) for root in roots]
+    if not all(row and row.get("available") for _root, row in listings):
+        return None
+    # A folder that is away keeps its last known covers and says so: an empty read never replaces them.
+    return [
+        (root, {**row, "error": STORAGE_UNAVAILABLE, "unreadable": True} if root in away else row)
+        for root, row in listings
+    ]
 
 
 def _album_id(album: Mapping[str, object]) -> int | None:
@@ -1163,6 +1203,7 @@ async def utilities_cover_lookup_gallery(request: Request) -> JSONResponse:
             candidate_snapshot,
             task_payload,
             refresh_persisted_cover_state=True,
+            stored_first=payload.get("stored_first") is True,
         )
     )
 
@@ -1594,6 +1635,9 @@ async def albums_selected_covers_save(request: Request, album_ref: str) -> JSONR
             raise
         # A replay saved nothing new, so this request's downloads are not referenced.
         await run_in_threadpool(downloads.undo if result["replayed"] else downloads.finish)
+        inventory = getattr(request.app.state, "local_cover_inventory", None)
+        if inventory is not None and album_root is not None:
+            inventory.request(album_root)
     except OnlineCoverDownloadFailed:
         return JSONResponse({"ok": False, "error": "This online cover could not be downloaded. Your current cover is unchanged."}, status_code=502)
     except HTTPException:
@@ -1932,6 +1976,13 @@ async def utilities_cover_lookup_local_delete(request: Request) -> JSONResponse:
         return _json_response(({"ok": False, "persisted": None, "error": str(exc)}, 503))
     except CoverMutationFinalizationError as exc:
         return _json_response(({"ok": False, "persisted": True, "error": str(exc)}, 500))
+    inventory = getattr(request.app.state, "local_cover_inventory", None)
+    if inventory is not None:
+        try:
+            await run_in_threadpool(inventory.remove_path, album_context.album_root, resolved)
+        except Exception:
+            # The cover is deleted either way; the refresh queued with the returned gallery drops it.
+            logging.getLogger(__name__).exception("Could not drop a deleted cover from its stored listing.")
     if updated_albums:
         try:
             updated_problematic_album = build_problematic_album_detail_payload(

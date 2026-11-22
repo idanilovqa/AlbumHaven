@@ -37124,6 +37124,11 @@ function applyCoverLookupGalleryPayload(gallery) {
   // Owner 2026-11-16: every real file is a choice, byte-identical copies included.
   state.coverLookup.modal.localCovers = incomingLocalCovers;
   state.coverLookup.modal.otherArt = Array.isArray(gallery.other_art) ? gallery.other_art : [];
+  const localArtError = String(gallery.local_inventory_error || '').trim();
+  if (localArtError) {
+    state.coverLookup.modal.statusText = localArtError;
+    state.coverLookup.modal.statusTone = 'error';
+  }
   const task = gallery.task && typeof gallery.task === 'object' ? gallery.task : null;
   const candidateSnapshot = normalizeCoverLookupCandidateSnapshot(gallery.candidate_snapshot);
   state.coverLookup.modal.candidateSnapshot = candidateSnapshot;
@@ -40353,7 +40358,7 @@ async function finishCoverLookupLocalMutation(mutationKey, session) {
 // the dialog stays in its loading state with no local covers.
 let coverLookupGalleryFlight = null;
 
-async function refreshCoverLookupGallery(showLoading = true, { coalesce = false } = {}) {
+async function refreshCoverLookupGallery(showLoading = true, { coalesce = false, storedFirst = false } = {}) {
   const album = state.coverLookup.modal.album;
   if (!album) return;
   if (coalesce && coverLookupGalleryFlight?.album === album) {
@@ -40370,7 +40375,11 @@ async function refreshCoverLookupGallery(showLoading = true, { coalesce = false 
     const response = await fetch('/utilities/cover-lookup/gallery', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ album, task_id: state.coverLookup.modal.taskId || '' }),
+      body: JSON.stringify({
+        album,
+        task_id: state.coverLookup.modal.taskId || '',
+        ...(storedFirst ? { stored_first: true } : {}),
+      }),
     });
     const data = await response.json().catch(() => ({}));
     if (!isCurrent()) return;
@@ -40390,6 +40399,8 @@ async function refreshCoverLookupGallery(showLoading = true, { coalesce = false 
     console.log('[AlbumHaven][CoverLookup] Gallery response.', data);
     state.coverLookup.modal.currentReleases = [];
     applyCoverLookupGalleryPayload(data);
+    // Stored covers show at once (owner 2026-11-22); the folders' own answer follows and replaces them.
+    if (data.local_inventory_pending) flight.queued = true;
     state.coverLookup.modal.loading = false;
     renderCoverLookupModal();
     void markCoverLookupAutomaticImprovementSeen(state.coverLookup.modal.candidateSnapshot);
@@ -40522,7 +40533,7 @@ async function openCoverLookupModal(album, options = {}) {
   renderCoverLookupModal();
   restoreCoverLookupDrawerScroll();
   await Promise.all([
-    refreshCoverLookupGallery(false),
+    refreshCoverLookupGallery(false, { storedFirst: true }),
     loadOrderedCoverSelectionForAlbum(album),
   ]);
   if (!els.overlay.hidden) {

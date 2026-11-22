@@ -227,8 +227,18 @@ async function handlePlaybackOwnershipEvent() {
   }
 }
 
-function announcePlaybackOwnership() {
-  getPlaybackOwnershipState().channel?.postMessage({ type: 'changed' });
+function announcePlaybackOwnership(type = 'changed') {
+  getPlaybackOwnershipState().channel?.postMessage({ type });
+}
+
+/** Another tab of this browser says ownership changed, or that it took over: then this one stops at once. */
+function receivePlaybackOwnershipMessage(event) {
+  const ownership = getPlaybackOwnershipState();
+  if (event?.data?.type === 'taken-over' && ownership.activeClaim) {
+    losePlaybackOwnership('ownership-takeover', false);
+    ownership.blockedReason = 'playing_in_another_tab';
+  }
+  return handlePlaybackOwnershipEvent();
 }
 
 function stagePlaybackOwnershipHandoff(completion = null, playbackSnapshot = null) {
@@ -673,6 +683,8 @@ async function takeOverAtConfirmedPlace() {
   // The reference is renewed with the first heartbeat: its expiry was never told here.
   acceptPlaybackClaim(result, { path: result.path, track: result.track,
     referenceExpiresAt: new Date(0).toISOString() });
+  // Before this tab sounds, and without the server: for a tab of this browser that could not be asked.
+  announcePlaybackOwnership('taken-over');
   state.player.playbackQueue = null;
   return playTrackFromPayload(payload, {
     startSeconds: result.position ? result.position.ms / 1000 : 0,
@@ -769,7 +781,7 @@ function initPlaybackOwnershipCoordinator() {
   getPlaybackOwnershipTabId();
   if (typeof BroadcastChannel === 'function') {
     ownership.channel = new BroadcastChannel(PLAYBACK_OWNERSHIP_CHANNEL_NAME);
-    ownership.channel.addEventListener('message', handlePlaybackOwnershipEvent);
+    ownership.channel.addEventListener('message', receivePlaybackOwnershipMessage);
   }
   startPlaybackOwnershipHeartbeat();
   void handlePlaybackOwnershipEvent();

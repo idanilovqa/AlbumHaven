@@ -1624,6 +1624,18 @@ test('a tab that just paused answers its paused place with the claim it gave bac
   assert.equal(order.includes('answer'), true);
 });
 
+// Owner, round 10: the two tabs never sound at once. In one browser they tell each other directly.
+test('a tab told by another tab of this browser that it took over stops without asking the server', async () => {
+  const { context, stopStreamingPlaybackCalls } = loadHelper({
+    state: activeOwnershipState(),
+    fetch: () => new Promise(() => {}),
+  });
+  context.state.player.ownership.activeClaim = { claimToken: 'mine', path: localTrack.path, leaseDeadline: Infinity };
+  context.receivePlaybackOwnershipMessage({ data: { type: 'taken-over' } });
+  assert.deepEqual(stopStreamingPlaybackCalls, ['ownership-takeover']);
+  assert.equal(context.state.player.ownership.blockedReason, 'playing_in_another_tab');
+});
+
 test('a tab that cannot prove its output silent pauses and does not answer', async () => {
   const { context, order, answers } = handoverHolder();
   context.silenceStreamingPlaybackForHandover = async () => null;

@@ -30,7 +30,12 @@ const STREAMING_CONNECT_DEADLINE_DOUBLINGS = 2;
 // While a reconnect attempt hangs, the server is asked this often whether it answers again. Once it
 // does, the hanging attempt (begun on the network that went) is replaced at once with the short
 // deadline: a network that froze and came back gives no other sign (owner retest, sandbox5
-// 2026-11-21: playback resumed 19.6 s after the network was back while a 16 s attempt hung).
+// 2026-11-21: playback resumed 19.6 s after the network was back while a 16 s attempt hung). It is
+// asked again as soon as an answer settles, at most every 0.4 s, so the first good answer after a
+// run of tunnel 530s replaces the attempt within about half a second (owner round 9: "app
+// does not understand network is back for a substantial amount of time").
+const STREAMING_REACHABILITY_TICK_MS = 400;
+// How long one question waits for its answer.
 const STREAMING_REACHABILITY_PROBE_MS = 1500;
 // Only an attempt hung this long is replaced: through a tunnel, on a loaded machine, a healthy connect
 // takes up to about 3 s, and replacing it would start over again and again (sandbox5 r19).
@@ -2653,8 +2658,9 @@ async function retireStreamingAudioGraph() {
   await context?.close();
 }
 
-// Asks the server, every STREAMING_REACHABILITY_PROBE_MS while [socket] still tries to connect,
-// whether it answers. An answer replaces the attempt with a fresh one on the short deadline.
+// Asks the server, every STREAMING_REACHABILITY_TICK_MS while [socket] still tries to connect,
+// whether it answers. An answer (not a tunnel's 5xx) replaces the attempt with a fresh one on the
+// short deadline.
 function probeStreamingReachability(socket) {
   if (typeof fetch !== 'function') return 0;
   let asking = false;
@@ -2684,7 +2690,7 @@ function probeStreamingReachability(socket) {
       window.clearTimeout(deadline);
       asking = false;
     }
-  }, STREAMING_REACHABILITY_PROBE_MS);
+  }, STREAMING_REACHABILITY_TICK_MS);
   return timer;
 }
 

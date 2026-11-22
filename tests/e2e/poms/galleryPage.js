@@ -265,8 +265,9 @@ export class GalleryPage extends BasePage {
     this.galleryContextName = this.galleryContext.locator('[data-gallery-context-name]');
     this.galleryContextMetadata = this.galleryContext.locator('[data-gallery-context-metadata]');
     this.galleryContextInlineTotal = this.galleryContext.locator('[data-gallery-context-inline-total]');
-    this.galleryContextCountryPills = this.galleryContext.locator('.ui-metadata-pill--country');
-    this.galleryContextGenrePills = this.galleryContext.locator('.ui-metadata-pill--genre');
+    // The header holds a desktop and a phone summary; CSS shows one per layout.
+    this.galleryContextCountryPills = this.galleryContext.locator('.ui-metadata-pill--country:visible');
+    this.galleryContextGenrePills = this.galleryContext.locator('.ui-metadata-pill--genre:visible');
     this.galleryContextSummary = page.locator('[data-gallery-context-summary]');
     this.artistInfoTrigger = this.galleryContext.locator('[data-artist-info-trigger]');
     this.artistInfoPanel = page.locator('[data-artist-info-overlay]');

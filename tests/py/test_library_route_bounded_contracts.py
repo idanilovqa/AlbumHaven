@@ -994,6 +994,7 @@ def _indexed_cover_inventory(monkeypatch, app, album_root):
         note_foreground_activity=lambda: None,
         request=lambda _root: None,
         request_context=lambda _paths: {"root_path": str(album_root)},
+        recheck_context=lambda _paths: None,
         wait_for_context=lambda _paths, _timeout: None,
         wait_for_listing=lambda _root, _timeout: None,
     )

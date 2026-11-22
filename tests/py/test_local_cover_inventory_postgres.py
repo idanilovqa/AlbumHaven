@@ -17,7 +17,8 @@ def test_unrelated_context_change_preserves_inflight_local_cover_result(event_ki
     setup_url, runtime_url = isolatedPostgres.resolve_isolated_database_urls()
     isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
     repository = LocalCoverInventoryRepository(
-        {"ALBUM_HAVEN_APP_DATABASE_URL": runtime_url}, connect=isolatedPostgres._connect,
+        {"ALBUM_HAVEN_APP_DATABASE_URL": runtime_url, "_library_root_paths_snapshot": (Path("/"),)},
+        connect=isolatedPostgres._connect,
     )
     parent = Path(f"/int028-unrelated-{uuid4()}")
     roots = [parent / "album-a", parent / "album-b"]
@@ -65,7 +66,8 @@ def test_parent_subtree_invalidation_preserves_neighbors_and_rejects_inflight_co
     setup_url, runtime_url = isolatedPostgres.resolve_isolated_database_urls()
     isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
     repository = LocalCoverInventoryRepository(
-        {"ALBUM_HAVEN_APP_DATABASE_URL": runtime_url}, connect=isolatedPostgres._connect,
+        {"ALBUM_HAVEN_APP_DATABASE_URL": runtime_url, "_library_root_paths_snapshot": (Path("/"),)},
+        connect=isolatedPostgres._connect,
     )
     parent = Path(f"/int028-subtree-{uuid4()}")
     roots = [parent / "album", Path(str(parent) + "-neighbor") / "album", parent / "CD1"]
@@ -108,7 +110,8 @@ def test_local_inventory_context_revisions_leases_and_confirmed_empty(monkeypatc
     setup_url, runtime_url = isolatedPostgres.resolve_isolated_database_urls()
     isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
     repository = LocalCoverInventoryRepository(
-        {"ALBUM_HAVEN_APP_DATABASE_URL": runtime_url}, connect=isolatedPostgres._connect,
+        {"ALBUM_HAVEN_APP_DATABASE_URL": runtime_url, "_library_root_paths_snapshot": (Path("/"),)},
+        connect=isolatedPostgres._connect,
     )
     root = Path(f"/int028-{uuid4()}")
     paths = {str(root / "first.mp3"), str(root / "second.mp3")}
@@ -184,14 +187,17 @@ def test_unicode_candidate_removal_preserves_filesystem_identity(monkeypatch, tm
     setup_url, runtime_url = isolatedPostgres.resolve_isolated_database_urls()
     isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
     repository = LocalCoverInventoryRepository(
-        {"ALBUM_HAVEN_APP_DATABASE_URL": runtime_url}, connect=isolatedPostgres._connect,
+        {"ALBUM_HAVEN_APP_DATABASE_URL": runtime_url, "_library_root_paths_snapshot": (tmp_path,)},
+        connect=isolatedPostgres._connect,
     )
     root = tmp_path / f"unicode-inventory-{uuid4()}"
     original = str(root / "ОБЛОЖКА.jpg")
     variant = str(root / "обложка.jpg")
     sharp_s = str(root / "Straße.jpg")
     double_s = str(root / "Strasse.jpg")
-    monkeypatch.setattr(module, "os", SimpleNamespace(name="nt" if windows_paths else "posix", path=ntpath if windows_paths else posixpath))
+    monkeypatch.setattr(module, "os", SimpleNamespace(
+        name="nt" if windows_paths else "posix", sep=os.sep, path=ntpath if windows_paths else posixpath,
+    ))
     try:
         repository.request(root)
         assert repository.publish(root, 1, [{"path": original}, {"path": sharp_s}, {"path": double_s}])

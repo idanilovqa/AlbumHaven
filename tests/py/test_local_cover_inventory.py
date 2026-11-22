@@ -175,25 +175,24 @@ def test_a_failed_change_mark_still_marks_the_removed_tracks():
     assert advanced == {}
 
 
-@pytest.mark.parametrize("album_count", [10, 200])
-@pytest.mark.parametrize("first_attempt_fails", [False, True])
-def test_a_root_change_marks_its_albums_without_queueing_a_background_drain(album_count, first_attempt_fails):
-    attempts = []
+def test_candidates_outside_the_configured_roots_are_never_read_back(tmp_path):
+    root = tmp_path / "main"
+    reached = []
 
-    def invalidate_paths(*_args, **_kwargs):
-        attempts.append(True)
-        if first_attempt_fails and len(attempts) == 1:
-            raise RuntimeError("database unavailable")
-        return [f"album-{index}" for index in range(album_count)], [f"context-{index}" for index in range(album_count)]
+    def connect(_url):
+        reached.append(True)
+        raise RuntimeError("only a folder below a configured root is read")
 
-    worker = inventory.LocalCoverInventoryWorker({}, repository=SimpleNamespace(invalidate_paths=invalidate_paths))
-    worker._logger = SimpleNamespace(exception=lambda *args: None)
-    worker.roots_changed([{"path": "library/main"}], [{"path": "library/main", "layout_mode": "genre/artist"}])
-    worker._retry_scheduled_invalidation()
-
-    assert len(attempts) == (2 if first_attempt_fails else 1)
-    assert not worker._listings.waiting(background=True), "only an owner-started Full Rescan may drain"
-    assert not worker._contexts.waiting(background=True)
+    repository = inventory.LocalCoverInventoryRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://inventory.invalid/unit",
+         "_library_root_paths_snapshot": (root, root / "Artist" / "nested")},
+        connect=connect,
+    )
+    for folder in (tmp_path / "removed" / "Album", root, tmp_path, root / "Artist"):
+        assert repository.get(folder) is None, "removed, at a root, or above any root"
+    assert reached == []
+    with pytest.raises(RuntimeError, match="below a configured root"):
+        repository.get(root / "Artist" / "Album")
 
 
 def test_exact_track_set_context_keys_do_not_alias_sibling_albums(tmp_path):
@@ -443,16 +442,6 @@ def test_generated_previews_are_not_a_changed_album_folder(tmp_path):
     check.note(preview, tmp_path, 1.0, lambda: SimpleNamespace(st_mtime=2.0))
     check.apply(worker, previous={}, scanned={}, readable_root_ids={"main"})
     assert calls == []
-
-
-def test_only_added_removed_or_relaid_roots_are_changed_roots():
-    main = {"id": "main", "path": "library/main", "layout_mode": "artist", "category": "main_library_roots"}
-    extra = {"id": "extra", "path": "library/extra"}
-    assert inventory.changed_library_root_paths([main, extra], [dict(main, category="hoarding"), extra]) == []
-    assert inventory.changed_library_root_paths([main, extra], [main]) == [inventory.root_key("library/extra")]
-    assert inventory.changed_library_root_paths([main], [dict(main, layout_mode="genre/artist")]) == [
-        inventory.root_key("library/main"),
-    ]
 
 
 def _touch(*paths):

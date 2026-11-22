@@ -1034,7 +1034,6 @@ def test_app_wires_coordinator_and_reconciliation_problems_to_persistent_watcher
     app.state.local_cover_inventory = SimpleNamespace(
         start=lambda: None,
         stop=stop_inventory,
-        roots_changed=lambda _previous, _current: None,
         invalidate_paths=lambda _paths, **_options: None,
         note_foreground_activity=lambda: None,
     )

@@ -1,7 +1,8 @@
 """Bounded-interaction contract for the local cover inventory.
 
-A scan, a live root change and a watcher event each re-list only the folders they
-changed, and a restart re-lists none, whatever backlog is stored. The real scan,
+A scan and a watcher event re-list only the folders they changed; a root change or
+an event at or above a root writes nothing; an open repairs its own album; and a
+restart re-lists none, whatever backlog is stored. The real scan,
 root-change wiring, repository and worker run over real folders; only the two
 inventory tables are an in-memory stand-in that counts the rows each statement
 writes and the folders it hands out.
@@ -34,6 +35,8 @@ _WORKER = "py:services/local_cover_inventory.py#LocalCoverInventoryWorker._run"
 _DAY = 86400.0
 # A pass that finds its queued key already done writes nothing, so one quiet pass is not the end.
 _QUIET_PASSES = 3
+_ROOT_CHANGES = {"root added", "root changed", "root removed", "nested root removed", "roots saved unchanged"}
+_ROOT_LEVEL_EVENTS = {"root deleted", "root moved", "drive gone"}
 
 
 class _InventoryTables:
@@ -91,7 +94,16 @@ class _InventoryTables:
         if "interval '5 minutes'" in sql:
             return self._claim_listing(params)
         if "insert into library.local_cover_inventory_contexts" in sql:
-            return [{"root_path": self.contexts[params["key"]]["root"], "error": None}]
+            row = self.contexts[params["key"]]
+            return [{"root_path": row["root"], "revision": row["revision"], "error": None}]
+        if sql.startswith("select") and "local_cover_inventory_contexts" in sql:
+            row = self.contexts.get(params["key"])
+            return [{"root_path": row["root"], "revision": row["revision"], "track_paths": row["paths"]}] if row else []
+        if "set root_path = null" in sql and "key" in params:
+            row = self.contexts[params["key"]]
+            if row["revision"] == params["revision"]:
+                self._write(row, root=None, revision=row["revision"] + 1, claimed=False)
+            return []
         if "insert into library.local_cover_inventories " in sql:
             self._write(self.listings.setdefault(params["root"], {"revision": 1, "indexed": 0, "claimed": False}))
             return []
@@ -184,14 +196,13 @@ def _seed_library(base: Path, album_count: int):
     for folder in [path for path in base.rglob("*") if path.is_dir()]:
         os.utime(folder, (long_ago, long_ago))
     config = {
+        "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://inventory.invalid/contract",
         "IMAGE_EXTENSIONS": {".jpg"}, "CACHE_PATH": base / "cache", "CACHE_MAX_AGE_SECONDS": 0,
         "_library_root_paths_snapshot": tuple(Path(root["path"]) for root in roots),
     }
     worker = LocalCoverInventoryWorker(
         config,
-        repository=LocalCoverInventoryRepository(
-            {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://inventory.invalid/contract"}, connect=lambda _url: tables,
-        ),
+        repository=LocalCoverInventoryRepository(config, connect=lambda _url: tables),
         # The worker logs and retries what fails; here that is a failed contract.
         logger=SimpleNamespace(exception=lambda message, *_args: pytest.fail(message)),
     )
@@ -268,6 +279,38 @@ def _change_roots(monkeypatch, library, roots: list[dict[str, object]]) -> None:
     asyncio.run(change())
 
 
+def _changed_roots(library, change: str) -> list[dict[str, object]]:
+    main, extra = library.roots
+    if change == "root added":
+        return [main, extra, {**extra, "id": "added", "path": str(Path(extra["path"]).with_name("added"))}]
+    if change == "root changed":
+        return [{**main, "layout_mode": "genre/artist"}, extra]
+    if change == "root removed":
+        return [main]
+    if change == "nested root removed":
+        library.roots = [main, extra, {**main, "id": "nested", "path": str(library.album.parent)}]
+    return [main, extra]
+
+
+def _open_album(library, change: str) -> tuple[str, str | None]:
+    """An open as the gallery route makes it; returns the context and the folder it must end with."""
+    album = library.album if "removed root" not in change else Path(library.roots[1]["path"]) / "Artist" / "Album"
+    paths = [str(album / "01.mp3"), str(album / "02.mp3")]
+    key, shown = context_key(paths), root_key(album)
+    if "removed root" in change:
+        library.roots = library.roots[:1]
+        library.config["_library_root_paths_snapshot"] = (Path(library.roots[0]["path"]),)
+        shown = None
+    elif "boundary moved" in change:
+        library.tables.contexts[key]["root"] = root_key(album.parent)
+    stored = library.worker.repository.root_for_tracks(paths)
+    if stored is None:
+        library.worker.request_context(paths)
+    else:
+        library.worker.recheck_context(paths)
+    return key, shown
+
+
 def _drain(monkeypatch, library, worker) -> None:
     """Run the real worker, idle long enough for background work, until it writes nothing more."""
     worker._stop.clear()  # the application's shutdown stopped it
@@ -296,8 +339,17 @@ def _drain(monkeypatch, library, worker) -> None:
     ("scan finds an image the watcher missed", 1),
     ("scan finds an overwritten image", 1),
     ("scan finds a removed track", 1),
-    ("root removed", 1),
+    ("root added", 0),
+    ("root changed", 0),
+    ("root removed", 0),
+    ("nested root removed", 0),
     ("roots saved unchanged", 0),
+    ("root deleted", 0),
+    ("root moved", 0),
+    ("drive gone", 0),
+    ("open of an album under a removed root", 0),
+    ("open of an album whose folder boundary moved", 0),
+    ("open of an album whose folder is unchanged", 0),
     ("watcher reports an image", 1),
     ("watcher reports a removed track", 1),
     ("watcher reports a moved folder", 1),
@@ -325,10 +377,14 @@ def test_local_cover_inventory_contract_relists_only_changed_folders_at_producti
 
         if change.startswith("scan"):
             _scan(monkeypatch, library, checked_at)
-        elif change == "root removed":
-            _change_roots(monkeypatch, library, library.roots[:1])
-        elif change == "roots saved unchanged":
-            _change_roots(monkeypatch, library, library.roots)
+        elif change in _ROOT_CHANGES:
+            _change_roots(monkeypatch, library, _changed_roots(library, change))
+        elif change in _ROOT_LEVEL_EVENTS:
+            main = Path(library.roots[0]["path"])
+            gone = {"root deleted": [main], "root moved": [main, main.parent], "drive gone": [main.parent]}[change]
+            worker.invalidate_paths(gone, subtree_paths=gone, context_changed=True)
+        elif change.startswith("open"):
+            opened, shown = _open_album(library, change)
         elif change == "watcher reports an image":
             worker.invalidate_paths([str(album / "cover.jpg")])
         elif change == "watcher reports a removed track":
@@ -362,9 +418,13 @@ def test_local_cover_inventory_contract_relists_only_changed_folders_at_producti
             _drain(monkeypatch, library, worker)
         counts.affected_rows = tables.written
         assert len(invalidated) == relisted, invalidated
-        # A root change only marks: its albums are listed when opened, never as a background drain.
-        expected = [] if change == "root removed" else invalidated
-        assert sorted(set(tables.listed)) == sorted(expected), "only the changed folders are listed again"
+        assert sorted(set(tables.listed)) == sorted(invalidated), "only the changed folders are listed again"
+        if change in _ROOT_CHANGES | _ROOT_LEVEL_EVENTS or change.endswith("folder is unchanged"):
+            assert tables.written == 0, "a root change, a root-level event or an unchanged open writes nothing"
+        if change.startswith("open"):
+            assert tables.contexts[opened]["root"] == shown, "the open ends with the right folder, or none"
+            others = [row for key, row in tables.contexts.items() if key != opened]
+            assert all(row["revision"] == 1 and row["root"] for row in others), "an open writes only its own rows"
         assert tables.album_walk_steps == 0, "nothing walks the library's albums"
         if restarted:
             assert tables.statements == 0, "an idle poll reads nothing, whatever backlog is stored"

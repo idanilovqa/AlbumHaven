@@ -465,6 +465,59 @@ def test_live_gallery_refresh_builds_no_scope_for_a_search_or_browse_read_while_
     )
 
 
+_CASE64_DRAFT_ENV = "ALBUM_HAVEN_CASE64_DRAFT_SQL"
+
+
+def _apply_case64_draft(fixture):
+    """Case 64's migration is a draft until the owner approves it: the phase 2 run names its SQL file here
+    (after case 55's NNNN). Without it these cases cannot run, and the run must not count them."""
+    draft = os.environ.get(_CASE64_DRAFT_ENV)
+    if not draft:
+        _skip_or_fail_ci(f"{_CASE64_DRAFT_ENV} names case 64's draft migration for the phase 2 run.")
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        if connection.execute("select to_regclass('library.non_album_track_rows') as present").fetchone()["present"] is None:
+            connection.execute(Path(draft).read_text(encoding="utf-8"))
+
+
+def _loose_library(fixture, albums, loose=3):
+    entries = [
+        fixture.entry(f"Artist {index:03d}/Album {index:03d}/01.flac", artist=f"Artist {index:03d}", album=f"Album {index:03d}")
+        for index in range(albums)
+    ]
+    loose_entries = [
+        fixture.entry(f"Loose/Single {index}/01.flac", artist=f"Loose Artist {index}", album="", exception="Non-album rarity")
+        for index in range(loose)
+    ]
+    fixture.seed(*entries, *loose_entries)
+    return entries, loose_entries
+
+
+def _store_rows(fixture):
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        return {
+            row["track_id"]: (row["track"], row["updated_at"])
+            for row in connection.execute("select track_id, track, updated_at from library.non_album_track_rows").fetchall()
+        }
+
+
+def _marks(fixture):
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        return connection.execute("select count(*) as marks from library.non_album_track_marks").fetchone()["marks"]
+
+
+def _prepare_store(fixture):
+    from music_app.services import library_browse_postgres as browse, loose_track_store
+
+    repository = browse.PostgresLibraryBrowseRepository(fixture.config, connect=isolatedPostgres._connect)
+    loose_track_store.prepare(repository._inventory_repository, repository._owned_connection_context)
+    return repository
+
+
+def _loose_payload(repository):
+    payload = repository.build_library_loose_tracks_payload(query_params={})
+    return sorted(json.dumps(track, sort_keys=True, default=str) for track in payload["library_non_album_tracks"])
+
+
 @pytest.mark.parametrize("albums", [5, 60])
 def test_live_loose_track_reads_without_a_store_never_queue_a_build(watcher_repair_inventory, monkeypatch, albums):
     """Case 64 (freeze guard, red): a Loose Tracks read without a ready store answers "preparing" and never
@@ -472,12 +525,8 @@ def test_live_loose_track_reads_without_a_store_never_queue_a_build(watcher_repa
     from music_app.services import library_browse_postgres as browse
 
     fixture = watcher_repair_inventory
-    fixture.seed(*[
-        fixture.entry(f"Artist {index:03d}/Album {index:03d}/01.flac", artist=f"Artist {index:03d}", album=f"Album {index:03d}")
-        for index in range(albums)
-    ], fixture.entry("Loose/Single/01.flac", album="", exception="Non-album rarity"))
-    with isolatedPostgres._connect(fixture.setup_url) as connection:
-        connection.execute("delete from library.non_album_track_snapshots")
+    _apply_case64_draft(fixture)
+    _loose_library(fixture, albums)
     queued = []
     monkeypatch.setattr(browse.PostgresLibraryBrowseRepository, "queue_utility_projection_prewarm",
                         lambda self, kind: queued.append(kind))
@@ -490,6 +539,86 @@ def test_live_loose_track_reads_without_a_store_never_queue_a_build(watcher_repa
 
     assert all(answer.get("non_album_tracks_deferred") for answer in answers), "without a store a read answers preparing"
     assert queued == [], "a read never queues the loose-track build"
+
+
+@pytest.mark.parametrize("albums", [5, 60])
+def test_live_one_changed_loose_track_rewrites_one_stored_row(watcher_repair_inventory, albums):
+    """Case 64: once the store is ready, one changed loose file marks its track and the drain rewrites one row."""
+    fixture = watcher_repair_inventory
+    _apply_case64_draft(fixture)
+    _entries, loose_entries = _loose_library(fixture, albums)
+    repository = _prepare_store(fixture)
+    before = _store_rows(fixture)
+    assert before and _marks(fixture) == 0
+
+    retitled = {**loose_entries[0], "title": "Retitled loose track", "mtime": loose_entries[0]["mtime"] + 1}
+    fixture.adapter.persist_targeted_inventory_mutation(root_id="repair-main", active_file_entries={retitled["path"]: retitled})
+    assert _marks(fixture) == 1, "one changed loose file marks one track"
+    _loose_payload(repository)  # a read drains the few waiting marks inline
+    after = _store_rows(fixture)
+
+    changed = [track_id for track_id in after if before.get(track_id) != after[track_id]]
+    assert len(changed) == 1 and set(after) == set(before), "exactly that track's row was rewritten"
+    assert _marks(fixture) == 0
+
+
+def test_live_loose_track_store_equals_a_full_rebuild_after_each_change(watcher_repair_inventory):
+    """Case 64's deciding test: after each change the drained store reads the same as a full rebuild."""
+    from music_app.services import loose_track_store
+
+    fixture = watcher_repair_inventory
+    _apply_case64_draft(fixture)
+    entries, loose_entries = _loose_library(fixture, 8)
+    repository = _prepare_store(fixture)
+
+    def setup_sql(sql, params=None):
+        with isolatedPostgres._connect(fixture.setup_url) as connection:
+            connection.execute(sql, params or {})
+
+    def rebuilt_equals_drained(step):
+        drained = _loose_payload(repository)
+        loose_track_store.build(repository._inventory_repository, repository._owned_connection_context)
+        rebuilt = _loose_payload(repository)
+        assert drained == rebuilt, f"after {step}, the drained store differs from a full rebuild"
+
+    no_problem = {**loose_entries[1], "title": "No problem, new title", "mtime": loose_entries[1]["mtime"] + 1}
+    fixture.adapter.persist_targeted_inventory_mutation(root_id="repair-main", active_file_entries={no_problem["path"]: no_problem})
+    rebuilt_equals_drained("a tag edit of a loose file without a membership problem")
+
+    gaining = {**entries[0], "exception_type": "Non-album rarity", "mtime": entries[0]["mtime"] + 1}
+    fixture.adapter.persist_targeted_inventory_mutation(root_id="repair-main", active_file_entries={gaining["path"]: gaining})
+    rebuilt_equals_drained("an album track becoming a rarity")
+
+    setup_sql("update library.local_artists set name = name || ' (renamed)' where name = %(name)s", {"name": "Loose Artist 2"})
+    rebuilt_equals_drained("an artist rename")
+
+    setup_sql("""update library.local_albums set title = 'Unknown Album'
+                 where id = (select album_id from library.local_tracks where album_id is not null limit 1)""")
+    rebuilt_equals_drained("an album retitled to a loose value")
+
+    marks_before = _marks(fixture)
+    setup_sql("update library.library_roots set is_active = false where metadata ->> 'root_id' = 'repair-hoard'")
+    assert _marks(fixture) == marks_before, "a root on or off writes no mark"
+    rebuilt_equals_drained("a root turned off")
+
+    setup_sql("""insert into library.exception_overrides (library_id, track_key, override_payload)
+                 select tracks.library_id, files.private_path, '{"exception_type": "Interview"}'::jsonb
+                 from library.local_track_files files join library.local_tracks tracks on tracks.id = files.track_id
+                 where files.private_path = %(path)s""", {"path": entries[1]["path"]})
+    rebuilt_equals_drained("an override added")
+    setup_sql("delete from library.exception_overrides where track_key = %(path)s", {"path": entries[1]["path"]})
+    rebuilt_equals_drained("an override removed")
+
+    unchanged = {entry["path"]: entry for entry in entries[2:4]}
+    marks_before = _marks(fixture)
+    fixture.adapter.persist_targeted_inventory_mutation(root_id="repair-main", active_file_entries=unchanged)
+    assert _marks(fixture) == marks_before, "a no-change pass writes no mark"
+
+    removed = loose_entries[0]
+    fixture.adapter.persist_targeted_inventory_mutation(
+        root_id="repair-main", active_file_entries={}, deleted_paths=(removed["path"],),
+    )
+    rebuilt_equals_drained("a loose file deleted")
 
 
 def test_live_featured_artist_rebuild_preserves_guests_and_suppresses_owner_variants(

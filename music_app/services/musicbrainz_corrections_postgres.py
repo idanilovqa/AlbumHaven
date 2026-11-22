@@ -30,13 +30,17 @@ from music_app.services.musicbrainz_enrichment_postgres import (
     _row_mapping,
     _transaction,
 )
-from music_app.services.musicbrainz_release_identity import credit_text
+from music_app.services.musicbrainz_release_identity import album_artist_text
 from music_app.services.musicbrainz_release_identity_postgres import parse_track_pairing
 
 # The review group of albums the guard (or an ambiguous pairing) sends to review whole.
 WHOLE_ALBUM_GROUP = "whole_album"
 REFRESH_BATCH_MARKS = 200
 DECISIONS = frozenset({"undone", "skipped", "approved"})
+# Part of every signature, so rows stored under older comparison rules are compared again when their
+# album is refreshed. A change here needs a migration that marks every matched album once, as 0260
+# does for 2 (owner 2026-11-22, credited album artists).
+COMPARE_RULES_VERSION = 2
 
 _DECISION_MATCH = """
     decision.library_id = correction.library_id and decision.album_key = correction.album_key
@@ -59,9 +63,10 @@ _STATE_SQL = f"""
 """
 
 # The given albums' signatures: everything a comparison reads. A new input needs a mark in 0260's triggers.
-_SIGNATURES_SQL = _active_library_cte() + """
+_SIGNATURES_SQL = _active_library_cte() + f"""
     select albums.id as album_id, albums.library_id, albums.album_key, decision.release_mbid::text,
-           md5(concat_ws(E'\\x1f', decision.release_mbid, releases.refreshed_at, decision.disc_position,
+           md5(concat_ws(E'\\x1f', 'rules-{COMPARE_RULES_VERSION}', decision.release_mbid,
+             releases.refreshed_at, decision.disc_position,
              decision.match_quality, decision.track_pairing::text, albums.title, artists.name,
              (select string_agg(concat_ws(E'\\x1e', tracks.disc_number, tracks.track_number, tracks.title,
                                           track_artists.name), E'\\x1d'
@@ -424,7 +429,7 @@ def compare_stored_album(row: Mapping[str, object]) -> dict[str, object]:
     return compare_album({
         "title": row.get("title"), "artist_name": row.get("artist_name"),
         "release_title": row.get("release_title"),
-        "release_credit": credit_text(_json(row.get("artist_credit")) or []) or None,
+        "release_credit": album_artist_text(_json(row.get("artist_credit")) or []),
         "media": _json(row.get("media")) or [], "tracks": _json(row.get("tracks")) or [],
         "disc_position": row.get("disc_position"), "pairing": parse_track_pairing(row),
     })

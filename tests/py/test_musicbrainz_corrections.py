@@ -280,3 +280,76 @@ def test_a_failed_background_refresh_logs_its_cause(monkeypatch, caplog):
         store._refresh_until_settled("postgresql://s4")
 
     assert "_DataError" in caplog.text and "21000" in caplog.text
+
+
+# Owner, 2026-11-22: "An album keeps the name MusicBrainz credits it to". The correct album artist
+# is the release's credited name, not the artist's main name, except for spelling-only differences.
+def _album_artist_rows(tag, *credit):
+    from music_app.services.musicbrainz_corrections_postgres import compare_stored_album
+
+    rows = compare_stored_album({
+        "title": "Album", "release_title": "Album", "artist_name": tag, "media": [], "tracks": [],
+        "artist_credit": [{"name": name, "artist_name": main, "join_phrase": join} for name, main, join in credit],
+    })["rows"]
+    return [(row["current_value"], row["proposed_value"]) for row in rows if row["field"] == "album_artist"]
+
+
+@pytest.mark.parametrize("credited,main", [
+    ("Shamaani Duo", "Korpiklaani"), ("Shaman", "Korpiklaani"), ("Rhapsody", "Rhapsody of Fire"),
+    ("天門", "Tenmon"),
+])
+def test_a_correctly_credited_album_is_never_offered_the_artists_main_name(credited, main):
+    assert _album_artist_rows(credited, (credited, main, "")) == []
+
+
+def test_an_album_tagged_with_the_main_name_is_offered_the_credited_one():
+    assert _album_artist_rows("Korpiklaani", ("Shamaani Duo", "Korpiklaani", "")) == [("Korpiklaani", "Shamaani Duo")]
+
+
+@pytest.mark.parametrize("credited,main", [("AC-DC", "AC/DC"), ("Blue Oyster Cult", "Blue Öyster Cult"),
+                                           ("Guns N Roses", "Guns N' Roses")])
+def test_a_spelling_only_credit_takes_the_artists_main_name(credited, main):
+    assert _album_artist_rows(main, (credited, main, "")) == [], "the main name is never respelled as the credit"
+    assert _album_artist_rows(credited, (credited, main, "")) == [(credited, main)]
+
+
+def test_each_name_of_a_joined_credit_follows_the_rule_by_itself():
+    credit = (("Shamaani Duo", "Korpiklaani", " & "), ("AC-DC", "AC/DC", ""))
+
+    assert _album_artist_rows("Shamaani Duo & AC/DC", *credit) == []
+
+
+def test_a_credit_without_a_credited_name_proposes_no_album_artist():
+    assert _album_artist_rows("Shamaani Duo", ("", "Korpiklaani", "")) == [], "the main name never stands in for it"
+
+
+def test_a_correction_row_stored_before_the_rule_is_compared_again_and_dropped():
+    from music_app.services import musicbrainz_corrections_postgres as store
+
+    stored_rows = [{"field": "album_artist", "current_value": "Shamaani Duo", "proposed_value": "Korpiklaani"}]
+    # The signature covers the tags and release, which did not change, and the rules that compared them.
+    rules = f"'rules-{store.COMPARE_RULES_VERSION}'"
+    assert rules in store._SIGNATURES_SQL
+
+    class Connection:
+        def execute(self, sql, params=None):
+            rows = []
+            if sql is store._ALBUM_KEYS_SQL:
+                rows = [{"album_key": "hunka-lunka"}]
+            elif sql is store._SIGNATURES_SQL:
+                rows = [{"album_id": 1, "library_id": 1, "album_key": "hunka-lunka", "release_mbid": "r",
+                         "signature": "current rules", "stored_signature": "older rules"}]
+            elif sql is store._COMPARE_SQL:
+                rows = [{"album_id": 1, "title": "Hunka lunka", "release_title": "Hunka lunka",
+                         "artist_name": "Shamaani Duo", "media": [], "tracks": [],
+                         "artist_credit": [{"name": "Shamaani Duo", "artist_name": "Korpiklaani", "join_phrase": ""}]}]
+            elif sql is store._STORE_SQL:
+                stored_rows.clear()  # the statement deletes the album's rows before storing its summary
+            elif sql is store._STORE_ROWS_SQL:
+                stored_rows.extend(params["rows"])
+            return type("Result", (), {"fetchall": lambda _self: rows})()
+
+    repository = store.MusicBrainzCorrectionsPostgresRepository({"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://s4"})
+
+    assert repository._refresh_albums(Connection(), [1], NOW)[0] == 1
+    assert stored_rows == []

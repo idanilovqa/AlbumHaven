@@ -200,8 +200,9 @@ group by library_id, section, grouping;
 
 -- Every album with a release decision or a stored result is checked once, in the background
 -- refresh's batches. A refresh before this migration stored nothing when one album failed it
--- (sandbox6, 2026-11-22), so what is stored can be stale; an album whose signature holds is not
--- compared again.
+-- (sandbox6, 2026-11-22), and rows from before the credited album artist rule (owner 2026-11-22)
+-- can propose an artist's main name: the signature now names the comparison rules, so each of
+-- these albums is compared again.
 insert into library.musicbrainz_correction_refresh_marks (album_id)
 select albums.id
 from library.local_albums albums

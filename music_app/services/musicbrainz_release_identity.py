@@ -22,6 +22,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timedelta, timezone
 
+from music_app.services.music_identity_matching import same_artist_credit_spelling
 from music_app.services.musicbrainz_evidence import (
     TITLE_RANK,
     album_level,
@@ -364,6 +365,19 @@ def credit_text(credit: list[dict[str, object]]) -> str:
     """An artist credit as MusicBrainz writes it: each name followed by its join phrase."""
     return "".join(f"{part.get('name') or part.get('artist_name') or ''}{part.get('join_phrase') or ''}"
                    for part in credit or []).strip()
+
+
+def album_artist_text(credit: list[dict[str, object]]) -> str | None:
+    """The album artist a release calls for (owner 2026-11-22, "An album keeps the name MusicBrainz
+    credits it to"): each credited name, or its artist's main name where the two differ only in
+    spelling (case, spacing, punctuation, Latin accents). None without every credited name: the
+    main name never stands in for one."""
+    if not credit or not all(part.get("name") for part in credit):
+        return None
+    return credit_text([
+        {**part, "name": part["artist_name"]}
+        if part.get("artist_name") and same_artist_credit_spelling(part["name"], part["artist_name"]) else part
+        for part in credit]) or None
 
 
 def release_type_label(primary_type: object, secondary_types: object) -> str | None:

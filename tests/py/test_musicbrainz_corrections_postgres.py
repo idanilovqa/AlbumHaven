@@ -294,3 +294,32 @@ def test_copies_of_a_song_at_one_position_never_fail_the_refresh_or_a_decision(m
                                    " where track_key like 'rel-cry-1%%'", ()).fetchall()
     assert [row["corrected_title"] for row in shown] == ["Don’t Despair"] * 3
     assert service.undo_album(album_key="rel-cry", actor_account_id=None) == 2, "one row per distinct tag value"
+
+
+def test_a_main_name_row_stored_before_the_credited_name_rule_is_dropped_on_the_next_refresh(monkeypatch):
+    # Owner 2026-11-22: "Hunka lunka" keeps "Shamaani Duo", although its artist is Korpiklaani.
+    from music_app.services import musicbrainz_corrections_postgres as store
+
+    setup_url, repository, _ids = _corrections(monkeypatch)
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute("update library.local_artists set name = 'Shamaani Duo' where artist_key = 'rel-angra'")
+        connection.execute("update integration.musicbrainz_releases set artist_credit = %s", (json.dumps(
+            [{"name": "Shamaani Duo", "artist_name": "Korpiklaani", "join_phrase": ""}]),))
+    repository.refresh(observed_at=NOW)
+    with isolatedPostgres._connect(setup_url) as connection:
+        album_id = connection.execute("select id from library.local_albums where album_key = 'rel-cry'").fetchone()["id"]
+        # As code from before the rule stored it: the same tags and release, so the same signature without the rules.
+        before_rule = connection.execute(
+            store._SIGNATURES_SQL.replace(f"'rules-{store.COMPARE_RULES_VERSION}', ", ""),
+            {"album_ids": [album_id]}).fetchone()["signature"]
+        connection.execute(
+            "insert into library.local_album_musicbrainz_correction_rows (library_id, album_key, field, current_value,"
+            " proposed_value, kind, mode) select library_id, album_key, 'album_artist', 'Shamaani Duo', 'Korpiklaani',"
+            " 'album_artist_renamed', 'review' from library.local_albums where id = %s", (album_id,))
+        connection.execute("update library.local_album_musicbrainz_corrections set signature = %s"
+                           " where album_key = 'rel-cry'", (before_rule,))
+        connection.execute("insert into library.musicbrainz_correction_refresh_marks (album_id) values (%s)", (album_id,))
+
+    repository.refresh(observed_at=NOW)
+
+    assert "album_artist" not in {row[0] for row in _rows(repository, "rel-cry")}

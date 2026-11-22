@@ -150,8 +150,11 @@
       event?.waitUntil?.(work);
       return work;
     };
-    // Pages and versioned assets being written to the copy (covers are not waited for).
+    // Pages and versioned assets being written to the copy (covers and data are not waited for).
     const writing = new Set();
+    // Data answers waiting for their turn to be written, by key: an offline request answers from
+    // them at once, so neither it nor a navigation waits behind the covers queued before them.
+    const pendingData = new Map();
     const written = (work) => {
       writing.add(work);
       void quietly(work).then(() => writing.delete(work));
@@ -188,6 +191,7 @@
 
     function forget() {
       generation += 1;
+      pendingData.clear();
       return exclusive(deleteCopies);
     }
 
@@ -758,7 +762,7 @@
     }
 
     // Keeps a data answer the server marked as a copy for an account, without its file paths.
-    async function keepData(url, response, fetchedIn) {
+    async function keepData(url, response, fetchedIn, event) {
       const account = response.headers.get(COPY_HEADER);
       const redacted = new Set((response.headers.get(REDACT_HEADER) || '').split(',').map(name => name.trim()).filter(Boolean));
       const text = await response.text();
@@ -766,7 +770,10 @@
       const prepared = keepable(JSON.parse(text), redacted);
       if (!prepared) return;
       const place = galleryPlace(url);
-      await written(exclusive(async () => {
+      const key = dataKey(url);
+      const pending = { account, kept: prepared.kept };
+      if (fetchedIn === generation) pendingData.set(key, pending);
+      const write = quietly(exclusive(async () => {
         if (fetchedIn !== generation) return;
         let target = await accountCache();
         if (target && target.name !== CACHE_PREFIX + account) {
@@ -774,12 +781,15 @@
           target = null;
         }
         const cache = target ? target.cache : await caches.open(CACHE_PREFIX + account);
-        await storeData(cache, dataKey(url), prepared, {
+        await storeData(cache, key, prepared, {
           kind: url.pathname === '/album-details' ? 'album' : 'view',
           expiresAt: Number(response.headers.get(EXPIRES_HEADER)) || undefined,
           gallery: place ? galleryPageSpan(place, prepared.kept) : null,
         });
-      }));
+      })).then(() => {
+        if (pendingData.get(key) === pending) pendingData.delete(key);
+      });
+      event?.waitUntil?.(write);
     }
 
     // The first block of the gallery a kept app page shows, from its bootstrap, kept as gallery data
@@ -908,9 +918,11 @@
     // The kept answer for [url], or one made from kept gallery pages; null when nothing was kept.
     async function keptData(url) {
       const target = await accountCache();
+      const key = dataKey(url);
+      const pending = pendingData.get(key);
+      if (pending && (!target || target.name === CACHE_PREFIX + pending.account)) return dataAnswer(pending.kept);
       if (!target) return null;
       const index = await readDataIndex(target.cache);
-      const key = dataKey(url);
       let answer = null;
       if (isFresh(index.entries[key])) {
         const kept = await target.cache.match(new URL(key, origin).href);
@@ -963,7 +975,7 @@
       const arrived = fetch(new Request(request, { headers })).then((response) => {
         if (response.status === 200 && response.headers.get(COPY_HEADER) && !noStore(response)) {
           const copy = response.clone();
-          later(event, () => keepData(url, copy, fetchedIn));
+          later(event, () => keepData(url, copy, fetchedIn, event));
         }
         return response;
       });

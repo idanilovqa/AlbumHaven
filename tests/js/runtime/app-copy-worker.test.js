@@ -1058,6 +1058,57 @@ test('IAR-W12: an offline navigation waits for the page being written, not for c
   assert.ok(Date.now() - started < 1000, `answered after ${Date.now() - started} ms, not after the covers' 3 s of writes`);
 });
 
+// Owner round on sandbox5 r24 (530s): after scrolling, a new tab waited 11-21 s, because data
+// writes queued behind the covers were waited for like pages.
+test('IAR-W12: data queued behind covers holds no offline navigation and answers offline at once', async () => {
+  const caches = fakeCaches();
+  const open = caches.open.bind(caches);
+  caches.open = async (name) => {
+    const cache = await open(name);
+    if (!cache.slowCovers) {
+      const put = cache.put.bind(cache);
+      cache.put = async (request, response) => {
+        const key = typeof request === 'string' ? request : request.url;
+        if (key.includes('/__album-haven-cover/')) await new Promise(resolve => setTimeout(resolve, 300));
+        return put(request, response);
+      };
+      cache.slowCovers = true;
+    }
+    return cache;
+  };
+  let online = true;
+  const { worker, event, settled } = setup({
+    mode: 'web', caches,
+    respond: (request) => {
+      if (!online) return new Response('Origin unreachable', { status: 530 });
+      const { pathname } = new URL(request.url);
+      if (pathname === '/') return page('acct-a');
+      if (pathname === '/view-data') return dataAnswer({ ok: true, artist_groups: [{ artist: 'Broadcast', albums: [] }] });
+      return coverResponse(10);
+    },
+  });
+  await worker.handle('page', navigation('/'), event);
+  await settled();
+  for (let index = 0; index < 10; index += 1) {
+    void worker.handle('cover', resource(`/cover/${String(index).padStart(22, 'C')}?size=480`), event);
+  }
+  for (let turn = 0; turn < 50; turn += 1) await new Promise(resolve => setImmediate(resolve));
+  const url = '/view-data?surface=albums&artist=Broadcast';
+  await worker.handle('data', resource(url), event);
+  for (let turn = 0; turn < 50; turn += 1) await new Promise(resolve => setImmediate(resolve));
+  online = false;
+
+  const started = Date.now();
+  const navigated = await worker.handle('page', navigation('/'), event);
+  const data = await worker.handle('data', resource(url), event);
+
+  assert.match(await navigated.text(), /content="cache"/);
+  assert.equal(data.headers.get(COPY_HEADER), 'cache');
+  assert.deepEqual(artistsOf(await json(data)), ['Broadcast']);
+  assert.ok(Date.now() - started < 1000, `answered after ${Date.now() - started} ms, not after the covers' 3 s of writes`);
+  await settled();
+});
+
 // Owner round 10 ("B: wait 10 s"): a tunnel held the first request after its server stopped for
 // 20-60 s, and the tab stayed blank all that time.
 function heldServer() {

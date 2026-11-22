@@ -20,7 +20,8 @@ import json
 import logging
 import os
 import time
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from threading import Lock
 from typing import Any
 
@@ -326,18 +327,31 @@ def _state(connection: Any, library_id: int) -> str | None:
     return str(_value(row, "status"))
 
 
+@contextmanager
+def _evaluator_connection(repository: Any) -> Iterator[Any]:
+    """An evaluator's connection, in autocommit while it holds the session lock. It is a
+    pool lease, so it goes back as it came: the pool resets no session state on release."""
+    with repository._connect_to_database() as connection:
+        autocommit = connection.autocommit
+        connection.autocommit = True
+        try:
+            yield connection
+        finally:
+            connection.autocommit = autocommit
+
+
 def _locked(connection: Any, library_id: int, *, wait: bool = False) -> bool:
     if wait:
         try:
-            connection.execute(f"set lock_timeout = '{WAIT_SECONDS}s'")
-            connection.execute("select pg_advisory_lock(%s, %s::integer)", (_LOCK_NAMESPACE, library_id))
+            # The timeout ends with this transaction; the session lock outlives it.
+            with connection.transaction():
+                connection.execute(f"set local lock_timeout = '{WAIT_SECONDS}s'")
+                connection.execute("select pg_advisory_lock(%s, %s::integer)", (_LOCK_NAMESPACE, library_id))
             return True
         except Exception as error:
             if getattr(error, "sqlstate", None) == "55P03":  # lock_not_available
                 return False
             raise
-        finally:
-            connection.execute("set lock_timeout = 0")
     row = connection.execute(
         "select pg_try_advisory_lock(%s, %s::integer) as locked", (_LOCK_NAMESPACE, library_id),
     ).fetchone()
@@ -390,8 +404,7 @@ def refresh(repository: Any, *, inline_limit: int = INLINE_ALBUM_LIMIT, wait: bo
         if len(marks) > inline_limit:
             queue_maintenance(repository)
             return True
-        with repository._connect_to_database() as connection:
-            connection.autocommit = True
+        with _evaluator_connection(repository) as connection:
             if not _locked(connection, library_id, wait=wait):
                 return True  # another evaluator holds the marks; the index stays readable
             try:
@@ -553,8 +566,7 @@ def _maintain(repository: Any) -> None:
         _QUEUED.discard(repository._database_url)
         _RUNNING.add(repository._database_url)
     try:
-        with repository._connect_to_database() as connection:
-            connection.autocommit = True
+        with _evaluator_connection(repository) as connection:
             library_id = _library_id(connection)
             if library_id is None or not _locked(connection, library_id):
                 return

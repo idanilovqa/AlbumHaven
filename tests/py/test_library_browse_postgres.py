@@ -13988,6 +13988,59 @@ def test_card_reads_never_wait_for_the_duplicate_results_backfill(monkeypatch, s
     assert waited == [], "A card read must not wait for the lock the backfill holds."
 
 
+@pytest.mark.parametrize("entry", ["card read", "maintenance"])
+def test_index_evaluators_hand_their_pool_lease_back_without_session_state(monkeypatch, entry):
+    """`_connect_to_database` leases the shared pool, which resets neither autocommit nor
+    settings on release: a lease returned in autocommit loses the next writer's transaction."""
+    from contextlib import nullcontext
+
+    from music_app.services import problematic_index
+
+    statements = []
+
+    class Connection:
+        autocommit = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def transaction(self):
+            return nullcontext()
+
+        def execute(self, sql, _params=None):
+            statement = " ".join(str(sql).split())
+            statements.append(statement)
+            marks = [{"album_id": 1, "marked_xid": "9"}] if "dirty_albums" in statement and entry == "card read" else []
+            row = {"locked": True}
+            return SimpleNamespace(fetchall=lambda: marks, fetchone=lambda: None if "item_key" in statement else row)
+
+    lease = Connection()
+    repository = SimpleNamespace(
+        _database_url=f"evaluator-session-state-{entry}",
+        _config={},
+        _browse_connection_context=lambda: nullcontext(Connection()),
+        _connect_to_database=lambda: lease,
+    )
+    monkeypatch.setattr(problematic_index, "_available", lambda _repository: True)
+    monkeypatch.setattr(problematic_index, "_library_id", lambda _connection: 1)
+    monkeypatch.setattr(problematic_index, "_state", lambda *_args: "ready")
+    monkeypatch.setattr(problematic_index, "_duplicate_results_state", lambda *_args: "ready")
+    monkeypatch.setattr(problematic_index, "_drain", lambda *_args: None)
+
+    if entry == "card read":
+        assert problematic_index.refresh(repository, wait=True)
+    else:
+        problematic_index._maintain(repository)
+
+    assert lease.autocommit is False, "The lease went back to the pool in autocommit."
+    assert any("pg_advisory_unlock" in statement for statement in statements), "The session lock was released."
+    settings = [statement for statement in statements if statement.lower().startswith(("set ", "reset "))]
+    assert all(statement.lower().startswith("set local ") for statement in settings), settings
+
+
 def test_duplicate_source_attachment_uses_bounded_pg18_lookup_without_global_prewarm(monkeypatch):
     from time import perf_counter
 

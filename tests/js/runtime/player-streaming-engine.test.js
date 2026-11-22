@@ -8659,3 +8659,96 @@ test('a failed press still ends in the player error path', async (t) => {
 
   assert.equal(harness.engine.mode, 'error');
 });
+
+function timedPress(harness, name) {
+  harness.context.noteStreamingPress(makeTrack(name));
+  return pressTrack(harness, name);
+}
+
+test('a timed press reports where it waited, in numbers only', async (t) => {
+  const { harness, node } = await playingSong(t);
+  harness.setNow(5_000);
+  const pressed = await timedPress(harness, '05.flac');
+  harness.setNow(5_080);
+  acceptMetadata(harness, pressed.open, { timing: true });
+  harness.setNow(5_120);
+  receiveSong(harness, pressed.open, PRESSED_SONG, 2 * ONE_SECOND, 0, 1);
+  await harness.settle();
+  harness.setNow(5_140);
+  heardFor(node, 2);
+
+  const [report] = harness.sent('start-report');
+  assert.deepEqual(report, {
+    type: 'start-report',
+    generation: pressed.open.generation,
+    audibleStreamId: pressed.open.streamId,
+    prepared: false,
+    pressedAtEpochMs: report.pressedAtEpochMs,
+    openMs: 0,
+    metadataMs: 80,
+    firstBytesMs: 120,
+    decodedMs: 120,
+    audibleMs: 140,
+  });
+  assert.ok(Number.isInteger(report.pressedAtEpochMs));
+  assert.doesNotMatch(JSON.stringify(report), /05\.flac|Track|src|path|title/);
+  heardFor(node, 4);
+  assert.equal(harness.sent('start-report').length, 1, 'one line per press');
+});
+
+test('a timed press on the prepared next track times its refresh and no bytes', async (t) => {
+  const { harness, node, next } = await playingWithPreparedNext(t, { holdSampleRateProbes: true });
+  // The server asked with the metadata of a stream before this press.
+  harness.engine.timingRequested = true;
+  harness.setNow(5_000);
+  await timedPress(harness, '02.flac');
+  harness.setNow(5_600);
+  answerAuthority(harness, harness.sockets[0].probes.at(-1));
+  await harness.settle();
+  harness.setNow(5_603);
+  heardFor(node, 2);
+
+  const [report] = harness.sent('start-report');
+  assert.equal(report.audibleStreamId, next.streamId);
+  assert.deepEqual(
+    [report.prepared, report.openMs, report.metadataMs, report.firstBytesMs, report.decodedMs, report.audibleMs],
+    [true, 0, 600, null, null, 603],
+  );
+});
+
+test('a press reports nothing to a server that did not ask', async (t) => {
+  const { harness, node } = await playingSong(t);
+  const pressed = await timedPress(harness, '05.flac');
+  await answerOpen(harness, pressed.open, PRESSED_SONG);
+  heardFor(node, 4);
+
+  assert.equal(harness.engine.startTiming, null, 'and keeps nothing once the song sounds');
+  assert.equal(harness.sent('start-report').length, 0);
+});
+
+test('a report has no say over playback when its socket is closing', async (t) => {
+  const { harness, node } = await playingSong(t);
+  const { context, engine } = harness;
+  engine.timingRequested = true;
+  context.noteStreamingPress(makeTrack('01.flac'));
+  context.followStreamingPress(engine.roles.current);
+  harness.sockets[0].readyState = 2;
+
+  // A kept track starts to sound with nothing else to send, so the report is the only control.
+  context.markStreamingPress('audibleMs', engine.roles.current);
+
+  assert.notEqual(engine.mode, 'error');
+  assert.equal(engine.diagnostics.lastError, undefined);
+  assert.equal(engine.node, node);
+  assert.equal(harness.sent('start-report').length, 0);
+});
+
+test('a server that stopped asking gets no report', async (t) => {
+  const { harness, node } = await playingSong(t);
+  harness.engine.timingRequested = true;
+  const pressed = await timedPress(harness, '05.flac');
+  await answerOpen(harness, pressed.open, PRESSED_SONG);
+  heardFor(node, 4);
+
+  assert.equal(harness.sent('start-report').length, 0);
+});

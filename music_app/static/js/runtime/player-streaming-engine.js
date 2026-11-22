@@ -1324,6 +1324,9 @@ function handleStreamingControl(message) {
       return;
     }
     roleState.metadataAccepted = true;
+    // A kept track's metadata is the page's own and says nothing for the server.
+    if (!roleState.local) engine.timingRequested = message.timing === true;
+    markStreamingPress('metadataMs', roleState);
     if (message.codec) {
       createStreamingEncodedRole(roleState, message);
       refillStreamingEncodedBytes(roleState);
@@ -1498,6 +1501,53 @@ function handleStreamingRateMismatch(roleState, message) {
   leaveStreamingTrackForRateChange(roleState.track);
 }
 
+// Where a press waited, reported once it sounds to a server that asks (`timing` in its metadata).
+// A press keeps its track and a few times until then; only the times are ever sent.
+function noteStreamingPress(track) {
+  streamingEngineState().startTiming = {
+    path: String(track?.path || ''),
+    pressedAtMs: performance.now(),
+    pressedAtEpochMs: Math.round(Date.now()),
+    streamId: null,
+    prepared: false,
+    marks: {},
+  };
+}
+
+function followStreamingPress(roleState, prepared = false) {
+  const timing = streamingEngineState().startTiming;
+  if (!timing || timing.path !== String(roleState.track?.path || '')) return;
+  if (!prepared && roleState.continuityOptions?.kind === 'queued-next') return;
+  timing.streamId = roleState.streamId;
+  timing.prepared = prepared;
+  markStreamingPress('openMs', roleState);
+}
+
+function markStreamingPress(mark, roleState) {
+  const timing = streamingEngineState().startTiming;
+  if (!timing || timing.streamId !== roleState?.streamId) return;
+  // A prepared track's bytes and frames were there before the press.
+  if (timing.prepared && (mark === 'firstBytesMs' || mark === 'decodedMs')) return;
+  timing.marks[mark] ??= Math.max(0, Math.round(performance.now() - timing.pressedAtMs));
+  if (mark !== 'audibleMs') return;
+  const engine = streamingEngineState();
+  engine.startTiming = null;
+  // Only over an open socket: a control that cannot be sent fails the engine, and this one only logs.
+  if (!engine.timingRequested || engine.socket?.readyState !== WebSocket.OPEN) return;
+  sendStreamingControl({
+    type: 'start-report',
+    generation: roleState.generation,
+    audibleStreamId: roleState.streamId,
+    prepared: timing.prepared,
+    pressedAtEpochMs: timing.pressedAtEpochMs,
+    openMs: timing.marks.openMs ?? null,
+    metadataMs: timing.marks.metadataMs ?? null,
+    firstBytesMs: timing.marks.firstBytesMs ?? null,
+    decodedMs: timing.marks.decodedMs ?? null,
+    audibleMs: timing.marks.audibleMs,
+  });
+}
+
 function reportStreamingAudioOutput() {
   const engine = streamingEngineState();
   const context = engine.context;
@@ -1595,6 +1645,9 @@ function discardSupersededBufferedSeek() {
 
 function acceptStreamingPcm(roleState, frameCount, pcm) {
   const engine = streamingEngineState();
+  // Uncompressed audio has no arrival of its own before this.
+  if (!roleState.encoded) markStreamingPress('firstBytesMs', roleState);
+  markStreamingPress('decodedMs', roleState);
   const role = roleState.role;
   const capacityFrames = streamingRoleCapacityFrames(roleState);
   const sequence = roleState.nextSequence;
@@ -1956,6 +2009,7 @@ function handleStreamingEncodedBytes(view, buffer, failProtocol) {
       engine.transferMs /= 2;
     }
   }
+  markStreamingPress('firstBytesMs', roleState);
   wire.nextSequence += 1;
   wire.receivedBytes += byteCount;
   wire.creditedBytes -= byteCount;
@@ -2450,6 +2504,7 @@ function handleStreamingWorkletMessage(message) {
       return;
     }
     roleState.firstFrameNotified = true;
+    markStreamingPress('audibleMs', roleState);
     if (roleState.role === 'current') engine.pendingTransportRecovery = null;
     if (!engine.diagnostics.firstFrameAtMs) {
       engine.diagnostics.firstFrameAtMs = performance.now();
@@ -2644,6 +2699,7 @@ function settleStreamingSampleRateProbe(requestId, sampleRate, format = null) {
   if (engine.authorityCheck?.requestId === requestId) {
     const { prepared } = engine.authorityCheck;
     engine.authorityCheck = null;
+    markStreamingPress('metadataMs', prepared);
     cutOverToAuthorizedStreamingTrack(prepared);
     return;
   }
@@ -2942,6 +2998,7 @@ function openStreamingRole(role, track, startFrame = 0, continuityOptions = null
   engine.diagnostics.inFlightFrames[role] = 0;
   refreshStreamingActiveRoles();
   roleState.openedAtMs = performance.now();
+  followStreamingPress(roleState);
   const cached = takePrimedStreamingTrack(roleState);
   if (cached) {
     // A kept track plays with no server stream; its metadata follows as the server's would.
@@ -3200,6 +3257,7 @@ function requestPreparedStreamingAuthority(prepared) {
   engine.nextSampleRateProbeId = (Number(engine.nextSampleRateProbeId) || 0) + 1;
   const requestId = engine.nextSampleRateProbeId;
   engine.authorityCheck = { requestId, prepared };
+  followStreamingPress(prepared, true);
   return sendStreamingControl({
     type: 'probe', requestId, path: String(prepared.track.path), authorityOnly: true,
   });

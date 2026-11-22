@@ -338,6 +338,7 @@ function clearSelectedTrack() {
 async function playTrackFromPayload(track, options = {}) {
   const selectionToken = ++playerTrackSelectionToken;
   const shouldAutoplay = options.autoplay !== false;
+  if (shouldAutoplay && typeof noteStreamingPress === 'function') noteStreamingPress(track);
   const requestedTrackPath = String(track?.path || '');
   const currentTrackPath = String(state.player.current?.path || '');
   if (shouldAutoplay && requestedTrackPath && currentTrackPath

@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse, Response
 from starlette.websockets import WebSocketDisconnect
 
 from music_app.routes.playback_control_asgi import playback_config
+from music_app.services import playback_timing
 from music_app.services.library_roots import (
     configured_library_root_paths_snapshot,
     resolve_configured_media_path,
@@ -80,6 +81,17 @@ _WEBSOCKET_POST_CLOSE_SEND_ERROR = (
 )
 
 _MAX_PROTOCOL_INTEGER = 2_147_483_647
+_MAX_EPOCH_MS = 2**53 - 1
+_START_REPORT_DURATIONS = {
+    "openMs": "open_ms",
+    "metadataMs": "metadata_ms",
+    "firstBytesMs": "first_bytes_ms",
+    "decodedMs": "decoded_ms",
+    "audibleMs": "audible_ms",
+}
+_START_REPORT_KEYS = {
+    "type", "generation", "audibleStreamId", "prepared", "pressedAtEpochMs", *_START_REPORT_DURATIONS,
+}
 _NORMAL_SHUTDOWN_CODE = 1001
 
 router = APIRouter()
@@ -418,6 +430,9 @@ class PlaybackPcmRegistry:
         self._active_decoder_count = 0
         self._lock = asyncio.Lock()
         self._shutting_down = False
+        # Timing only: sockets are numbered, and the loop is watched while any is open.
+        self._socket_count = 0
+        self._loop_watch: asyncio.Task[None] | None = None
 
     @property
     def active_connection_count(self) -> int:
@@ -433,11 +448,19 @@ class PlaybackPcmRegistry:
                 return None
             connection = _PlaybackPcmConnection(self, websocket)
             self._connections.add(connection)
+            if playback_timing.ENABLED:
+                self._socket_count += 1
+                connection.timing_socket = self._socket_count
+                if self._loop_watch is None:
+                    self._loop_watch = asyncio.create_task(playback_timing.watch_event_loop())
             return connection
 
     async def release_connection(self, connection: _PlaybackPcmConnection) -> None:
         async with self._lock:
             self._connections.discard(connection)
+            if self._loop_watch is not None and not self._connections:
+                self._loop_watch.cancel()
+                self._loop_watch = None
 
     async def acquire_decoder(self) -> bool:
         async with self._lock:
@@ -502,12 +525,23 @@ class _PlaybackPcmConnection:
         self._retire_tasks: set[asyncio.Task[None]] = set()
         self._transport_failed = asyncio.Event()
         self._heartbeat_task: asyncio.Task[None] | None = None
+        self.timing_socket = 0
+        self._client_close_code: int | None = None
         self._closed = False
         self._finalized = False
 
     async def _send_json(self, event: dict[str, Any]) -> None:
+        waiting_since = time.perf_counter()
         async with self._send_lock:
-            await self._send_json_unlocked(event)
+            await self._send_answer_unlocked(event, waiting_since)
+
+    async def _send_answer_unlocked(self, event: dict[str, Any], waiting_since: float) -> None:
+        timing = playback_timing.CONTROL.get()
+        if timing is not None:
+            timing.mark("send_lock_wait_ms", playback_timing.elapsed_ms(waiting_since))
+        await self._send_json_unlocked(event)
+        if timing is not None:
+            timing.mark("sent_at", playback_timing.epoch_ms())
 
     async def _send_json_unlocked(self, event: dict[str, Any]) -> None:
         try:
@@ -581,13 +615,22 @@ class _PlaybackPcmConnection:
         """
         with suppress(WebSocketDisconnect, OSError, RuntimeError):
             while not self._closed:
+                due_at = time.perf_counter() + interval_seconds
                 await asyncio.sleep(interval_seconds)
                 if not self._closed:
                     await self._send_json({"type": "heartbeat"})
+                    if playback_timing.ENABLED:
+                        late = time.perf_counter() - due_at
+                        if late > playback_timing.HEARTBEAT_LATE_SECONDS:
+                            playback_timing.log(
+                                "heartbeat-late", socket=self.timing_socket, late_ms=round(late * 1000)
+                            )
 
     async def run(self) -> None:
         try:
             await self._websocket.accept()
+            if playback_timing.ENABLED:
+                playback_timing.log("socket-accepted", socket=self.timing_socket, at=playback_timing.epoch_ms())
             heartbeat_seconds = self._requested_heartbeat_seconds()
             if heartbeat_seconds is not None:
                 self._heartbeat_task = asyncio.create_task(self._beat(heartbeat_seconds))
@@ -595,6 +638,7 @@ class _PlaybackPcmConnection:
                 message = await self._receive_or_transport_failure()
                 message_type = message.get("type")
                 if message_type == "websocket.disconnect":
+                    self._client_close_code = _bounded_integer(message.get("code"), minimum=0, maximum=4999)
                     break
                 if message_type != "websocket.receive":
                     await self.reject(CLOSE_INVALID_CONTROL)
@@ -645,7 +689,7 @@ class _PlaybackPcmConnection:
             if len(self._pending_controls) >= MAX_PENDING_CONTROLS_PER_CONNECTION:
                 await asyncio.wait(self._pending_controls, return_when=asyncio.FIRST_COMPLETED)
             task = (
-                self._start_control(self._probe(control))
+                self._start_control(self._timed(control, self._probe(control)))
                 if command_type == "probe"
                 else self._start_open(control)
             )
@@ -663,6 +707,8 @@ class _PlaybackPcmConnection:
             return await self._log_decoder_fallback(control)
         if command_type == "output-report":
             return await self._log_audio_output(control)
+        if command_type == "start-report":
+            return await self._log_client_start(control)
         # A paused client's socket carries nothing; proxies close an idle WebSocket after about
         # 100 seconds, so clients that cannot send WebSocket pings send this instead.
         if command_type == "keepalive" and set(control) == {"type"}:
@@ -697,6 +743,40 @@ class _PlaybackPcmConnection:
             fields["underrunMs"],
             stats_available,
         )
+        return True
+
+    async def _log_client_start(self, control: dict[str, Any]) -> bool:
+        """A page's timed press. Numbers only, so a page cannot put text in the log."""
+        generation, stream_id = (
+            _bounded_integer(control.get(name), minimum=1, maximum=_MAX_PROTOCOL_INTEGER)
+            for name in ("generation", "audibleStreamId")
+        )
+        pressed_at = _bounded_integer(control.get("pressedAtEpochMs"), minimum=0, maximum=_MAX_EPOCH_MS)
+        durations = {
+            key: _bounded_integer(control.get(name), minimum=0, maximum=_MAX_PROTOCOL_INTEGER)
+            for name, key in _START_REPORT_DURATIONS.items()
+        }
+        if (
+            set(control) != _START_REPORT_KEYS
+            or None in (generation, stream_id, pressed_at)
+            or not isinstance(control.get("prepared"), bool)
+            or any(
+                durations[key] is None and control.get(name) is not None
+                for name, key in _START_REPORT_DURATIONS.items()
+            )
+        ):
+            await self.reject(CLOSE_INVALID_CONTROL)
+            return False
+        if playback_timing.ENABLED:
+            playback_timing.log(
+                "client-start",
+                socket=self.timing_socket,
+                kind="prepared" if control["prepared"] else "opened",
+                generation=generation,
+                stream=stream_id,
+                pressed_at=pressed_at,
+                **durations,
+            )
         return True
 
     async def _log_decoder_fallback(self, control: dict[str, Any]) -> bool:
@@ -760,7 +840,9 @@ class _PlaybackPcmConnection:
             return False
         resolved_path = (
             await run_playback_io(
-                _resolve_socket_media_path, self._websocket.app.state.config, raw_path
+                playback_timing.timed_work("resolve", _resolve_socket_media_path),
+                self._websocket.app.state.config,
+                raw_path,
             )
             if raw_path
             else None
@@ -790,6 +872,22 @@ class _PlaybackPcmConnection:
         )
         return True
 
+    def _timed(
+        self, control: dict[str, Any], answer: Coroutine[Any, Any, bool]
+    ) -> Coroutine[Any, Any, bool]:
+        if not playback_timing.ENABLED:
+            return answer
+        is_open = control.get("type") == "open"
+        timing = playback_timing.ControlTiming(
+            self.timing_socket,
+            "open" if is_open else "refresh-probe" if control.get("authorityOnly") is True else "probe",
+            _bounded_integer(control.get("generation"), minimum=1, maximum=_MAX_PROTOCOL_INTEGER),
+            _bounded_integer(
+                control.get("streamId" if is_open else "requestId"), minimum=1, maximum=_MAX_PROTOCOL_INTEGER
+            ),
+        )
+        return playback_timing.timed_control(timing, answer)
+
     def _start_control(self, work: Coroutine[Any, Any, bool]) -> asyncio.Task[bool]:
         task = asyncio.create_task(work)
         self._pending_controls.add(task)
@@ -810,7 +908,7 @@ class _PlaybackPcmConnection:
                 pending.abandoned = True
         if stream_id is not None and stream_id not in self._open_tickets:
             self._open_tickets[stream_id] = ticket
-        task = self._start_control(self._open_tracked(control, ticket))
+        task = self._start_control(self._timed(control, self._open_tracked(control, ticket)))
         if self._open_tickets.get(stream_id) is ticket:
             task.add_done_callback(lambda _task: self._forget_open_ticket(stream_id, ticket))
         return task
@@ -833,9 +931,10 @@ class _PlaybackPcmConnection:
 
     async def _send_open_event(self, ticket: _OpenTicket, event: dict[str, Any]) -> None:
         """Sends an open's answer unless a close abandoned the open: nothing follows a close."""
+        waiting_since = time.perf_counter()
         async with self._send_lock:
             if not ticket.abandoned:
-                await self._send_json_unlocked(event)
+                await self._send_answer_unlocked(event, waiting_since)
 
     def _resolve_while_authorizing(
         self, control: dict[str, Any]
@@ -859,14 +958,17 @@ class _PlaybackPcmConnection:
             raw_path.lower().endswith(".mp3") and isinstance(codecs, list) and "mp3" in codecs
         )
 
+        timing = playback_timing.CONTROL.get()
+
         def resolve() -> Path | None:
             resolved = _resolve_socket_media_path(config, raw_path)
             if resolved is not None and scan_mp3:
+                scan = mp3_stream_map if timing is None else timing.timed("mp3_scan", mp3_stream_map)
                 with suppress(Exception):  # The open scans again and reports its own failure.
-                    mp3_stream_map(resolved)
+                    scan(resolved)
             return resolved
 
-        resolution = asyncio.ensure_future(run_playback_io(resolve))
+        resolution = asyncio.ensure_future(run_playback_io(playback_timing.timed_work("resolve", resolve)))
         self._pending_credit_tasks.add(resolution)
         resolution.add_done_callback(self._pending_credit_tasks.discard)
         # A rejected open never awaits its resolution; its failure must not go unretrieved.
@@ -1025,9 +1127,11 @@ class _PlaybackPcmConnection:
         self._streams_by_role[role] = stream
         if self._closed:
             return False
-        await self._send_open_event(
-            ticket, _metadata_event(decoder.metadata, role=role, encoded=_encoded_fields(decoder))
-        )
+        metadata = _metadata_event(decoder.metadata, role=role, encoded=_encoded_fields(decoder))
+        if playback_timing.ENABLED:
+            # Asks the page to report where its presses waited (`start-report`).
+            metadata["timing"] = True
+        await self._send_open_event(ticket, metadata)
         if ticket.abandoned:
             return True
         if isinstance(decoder, EncodedStream):
@@ -1346,6 +1450,13 @@ class _PlaybackPcmConnection:
             if self._finalized:
                 return
             self._closed = True
+            if playback_timing.ENABLED:
+                playback_timing.log(
+                    "socket-closed",
+                    socket=self.timing_socket,
+                    code=close_code if close_code is not None else self._client_close_code,
+                    at=playback_timing.epoch_ms(),
+                )
             failures: list[BaseException] = []
             if self._heartbeat_task is not None:
                 self._heartbeat_task.cancel()

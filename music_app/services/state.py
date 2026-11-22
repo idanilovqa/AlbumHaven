@@ -99,7 +99,7 @@ def invalidate_targeted_library_projections(
     affected_album_keys: tuple[str, ...],
 ) -> None:
     """Invalidate only live projections affected by a committed watcher event."""
-    _publish_targeted_albums(library_state, revision=revision, affected_album_keys=affected_album_keys)
+    _mark_targeted_albums(library_state, revision=revision, affected_album_keys=affected_album_keys)
     if str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip():
         schedule_gallery_projection_refresh(config)
     invalidate_problematic_albums_payload_cache(library_state)
@@ -123,11 +123,11 @@ def invalidate_targeted_cover_projections(
     """Invalidate what a cover-only commit changed. Gallery membership, aliases
     and duplicates don't read covers, and the commit itself noted the albums in
     the Postgres projections that do."""
-    _publish_targeted_albums(library_state, revision=revision, affected_album_keys=affected_album_keys)
+    _mark_targeted_albums(library_state, revision=revision, affected_album_keys=affected_album_keys)
     drop_in_memory_cover_payloads(library_state)
 
 
-def _publish_targeted_albums(
+def _mark_targeted_albums(
     library_state: dict[str, object],
     *,
     revision: int,

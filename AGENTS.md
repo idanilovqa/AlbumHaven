@@ -117,7 +117,10 @@ operate, or contribute to the application.
 - Rejected outright: direct broad work in a high-frequency JavaScript handler;
   a route reaching registered library-scale work or enumerating a directory
   directly; event-loop blocking (BI-08) in an `async def` route, websocket, or
-  middleware; a database connection opened or leased per loop item (BI-05) in a
+  middleware; work an entry lists in its own `forbiddenWork` (a scoped save
+  forbids the library-wide invalidators, rebuild schedulers and
+  `library-state-scan`; add to the list, never shorten it to pass); a database
+  connection opened or leased per loop item (BI-05) in a
   route or middleware; a new database connection (`psycopg.connect`) anywhere
   a route, middleware, poller, scheduler, or watcher reaches, instead of a
   lease from the shared pool (BI-15); and filesystem, media or database work per item of a

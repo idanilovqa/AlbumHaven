@@ -746,13 +746,13 @@ const DEFECTS = [
     // A save finalizer's cache merge that runs one statement per cached file.
     id: 'BI-04 a save finalizer running one statement per cached file',
     language: 'py',
-    file: 'music_app/services/save_tasks.py',
+    file: 'music_app/services/library_album_index.py',
     anchor: '    file_cache = library_state.get("file_cache")\n    if not isinstance(file_cache, dict):\n',
     replacement: '    with library_state["pool"].connection() as connection:\n'
       + '        for path in library_state["file_cache"]:\n'
       + '            connection.execute("select %s", (path,))\n'
       + '    file_cache = library_state.get("file_cache")\n    if not isinstance(file_cache, dict):\n',
-    expected: /^rejected BI-04 library-state-scan-io:file_cache \(db\.execute@music_app\/services\/save_tasks\.py:\d+\) at music_app\/services\/save_tasks\.py:\d+ from py:music_app\/services\/save_tasks\.py#finalize_structural_tag_edit_save_task:background:executor via .* \(work class affected-set cannot do per-item I\/O over the whole library state\)$/,
+    expected: /^rejected BI-04 library-state-scan-io:file_cache \(db\.execute@music_app\/services\/library_album_index\.py:\d+\) at music_app\/services\/library_album_index\.py:\d+ from py:music_app\/services\/save_tasks\.py#finalize_structural_tag_edit_save_task:background:executor via .* \(work class affected-set cannot do per-item I\/O over the whole library state\)$/,
   },
   {
     // A blocking callable handed through an intermediate helper before it runs.
@@ -785,6 +785,43 @@ const DEFECTS = [
       + '    _seeded_futures.wait([_seeded_futures.ThreadPoolExecutor().submit(len, note_ref)])\n',
     prelude: 'import concurrent.futures as _seeded_futures\n',
     expected: /^rejected BI-08 event-loop-blocking:wait:concurrent\.futures\.wait@music_app\/routes\/api_read_asgi_routes\.py:\d+ at music_app\/routes\/api_read_asgi_routes\.py:\d+ from py:music_app\/routes\/api_read_asgi_routes\.py#album_notes_mutate_reserved:route:(PATCH|DELETE) \/album-notes\/\{note_ref\}$/,
+  },
+  {
+    // Owner, 2026-11-21: "After album cover save Cover Look Up loads tremendously slow" (backlog
+    // case 31). Each save copied the whole file cache and walked every album for the saved tracks.
+    id: 'BI-04 a cover save copying the library file cache',
+    language: 'py',
+    file: 'music_app/services/cover_state.py',
+    anchor: '    merge_file_cache_entries(library_state, updated_entries)\n'
+      + '    for album in library_album_index(library_state).albums_with_any_track(updated_entries):\n',
+    replacement: '    library_state["file_cache"] = {**dict(library_state.get("file_cache", {}) or {}), **updated_entries}\n'
+      + '    for album in library_album_index(library_state).albums_with_any_track(updated_entries):\n',
+    expected: /^rejected BI-04 library-state-scan:file_cache at music_app\/services\/cover_state\.py:\d+ from py:music_app\/routes\/api_wave_d_asgi_routes\.py#utilities_cover_lookup_pasted_image_save:route:/,
+  },
+  {
+    id: 'BI-04 a cover save walking every album to find the saved one',
+    language: 'py',
+    file: 'music_app/services/cover_state.py',
+    anchor: '    for album in library_album_index(library_state).albums_with_any_track(normalized_paths):\n',
+    replacement: '    for album in list(library_state.get("albums", []) or []):\n',
+    expected: /^rejected BI-04 library-state-scan:albums at music_app\/services\/cover_state\.py:\d+ from py:music_app\/routes\/api_wave_d_asgi_routes\.py#utilities_cover_lookup_local_select:route:/,
+  },
+  {
+    id: 'BI-04 a cover save dropping every utility projection',
+    language: 'py',
+    file: 'music_app/services/cover_state.py',
+    anchor: '    from music_app.services.problematic_albums import drop_problematic_albums_payload_cache\n',
+    replacement: '    from music_app.services.problematic_albums import drop_problematic_albums_payload_cache, invalidate_problematic_albums_payload_cache\n'
+      + '    invalidate_problematic_albums_payload_cache(library_state)\n',
+    expected: /^rejected BI-04 forbidden-work:py:music_app\/services\/library_browse_postgres\.py#invalidate_postgres_utility_projection_cache at .* from py:music_app\/routes\/api_wave_d_asgi_routes\.py#utilities_cover_lookup_pasted_image_save:route:/,
+  },
+  {
+    id: 'BI-04 a cover-only watcher commit refreshing every library projection',
+    language: 'py',
+    file: 'music_app/services/state.py',
+    anchor: '                invalidate_targeted_cover_projections(\n                    library_state,\n',
+    replacement: '                invalidate_targeted_library_projections(\n                    library_state,\n                    config,\n',
+    expected: /^rejected BI-04 forbidden-work:py:music_app\/services\/state\.py#invalidate_targeted_library_projections at .* from py:music_app\/services\/state\.py#_drain_watcher_cover_refresh_queue:background:while/,
   },
 ];
 

@@ -29,7 +29,7 @@ const TOP_LEVEL_KEYS = new Set(['schemaVersion', 'allowedWorkClasses', 'libraryS
 const INTERACTION_KEYS = new Set([
   'id', 'action', 'entrypoints', 'owners', 'rules', 'workClass', 'proof', 'requestOwnership',
   'cardinalities', 'budgets', 'growth', 'command', 'testIdentity', 'measures', 'performanceTargets', 'rollback',
-  'alreadyShown',
+  'alreadyShown', 'forbiddenWork',
 ]);
 const REQUIRED_KEYS = ['id', 'action', 'entrypoints', 'owners', 'rules', 'workClass', 'proof'];
 const CONTRACT_KEYS = ['cardinalities', 'budgets', 'growth', 'command', 'testIdentity', 'rollback'];
@@ -167,6 +167,18 @@ function validateSchema(registry, { fileExists, readFile }) {
     for (const key of entry?.entrypoints || []) {
       const ownerPath = /^(?:js|py):([^#]+)#/.exec(key)?.[1];
       if (ownerPath && !(entry.owners || []).includes(ownerPath)) errors.push(`${label}: entrypoint ${key} is outside its owners`);
+    }
+    const forbidden = entry?.forbiddenWork;
+    if (forbidden !== undefined) {
+      if (!Array.isArray(forbidden) || !forbidden.length) errors.push(`${label}: forbiddenWork must be a nonempty list`);
+      for (const work of Array.isArray(forbidden) ? forbidden : []) {
+        if (work === 'library-state-scan') continue;
+        // A renamed function would silently forbid nothing.
+        const [, file, name] = /^py:([^#]+)#(?:\w+\.)*(\w+)$/.exec(String(work)) || [];
+        if (!file || !fileExists(file) || !new RegExp(`def ${name}\\(`).test(readFile(file))) {
+          errors.push(`${label}: forbiddenWork ${work} must be library-state-scan or an existing py:<path>#<function>`);
+        }
+      }
     }
     const ownership = entry?.requestOwnership;
     if (ownership !== undefined) {

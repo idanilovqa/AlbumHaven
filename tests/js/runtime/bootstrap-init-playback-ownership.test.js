@@ -1642,29 +1642,38 @@ test('request capture: a page started offline for an address never kept asks for
   const id = 'js:runtime/bootstrap-init.js#<top-level>#viewMissing';
   const runtimeDir = path.dirname(helperPath);
   const helpers = ['view-state-helpers.js', 'browser-navigation-helpers.js'].map(name => path.join(runtimeDir, name));
-  await measureInteractionContract(id, async (albums) => {
-    const capture = createRequestCapture(() => Promise.resolve());
-    const addresses = [{ viewMissing: true, href: 'http://localhost:5000/?artist=Broadcast' }, { viewMissing: true, href: 'http://localhost:5000/' }, { viewMissing: false, href: 'http://localhost:5000/?artist=Broadcast' }];
-    for (const { viewMissing, href } of addresses) {
-      createDelayedStartupHydrationHarness({
-        prepare(context) {
-          context.URLSearchParams = URLSearchParams;
-          for (const file of helpers) vm.runInContext(fs.readFileSync(file, 'utf8'), context, { filename: file });
-          const { pathname, search, origin } = new URL(href);
-          Object.assign(context.window.location, { href, pathname, search, origin });
-          context.window.AlbumHavenAppCopy = { viewMissing, onServerAnswer() {} };
-          context.applyUnreachableView = () => {};
-          context.state.view.artist_groups = Array.from({ length: albums }, (_, index) => ({ artist: `Artist ${index}`, albums: [{ key: `album-${index}` }] }));
-          // fetchAndRender resolves a page address to its API URL this way, then fetches it once.
-          context.fetchAndRender = address => capture.fetch(context.buildApiUrl(context.parseBrowserUrlState(address)));
-        },
-      });
-    }
-    const urls = capture.urls();
-    assert.equal(urls.length, 2);
-    assert.ok(urls.every(url => url.startsWith('/view-data') || url.startsWith('/home-data')), urls.join(' '));
-    assert.match(urls[0], /artist=Broadcast/);
-    assertInteractionRequests(id, urls);
-    return capture.counter.snapshot();
+  const addresses = [
+    { viewMissing: true, href: 'http://localhost:5000/?artist=Broadcast' },
+    { viewMissing: true, href: 'http://localhost:5000/' },
+    { viewMissing: false, href: 'http://localhost:5000/?artist=Broadcast' },
+  ];
+  await measureInteractionContract(id, {
+    setup: albums => ({ albums, capture: createRequestCapture(() => Promise.resolve()) }),
+    // Each pass starts the three pages again.
+    act({ albums, capture }, pass) {
+      const before = capture.requests.length;
+      for (const { viewMissing, href } of addresses) {
+        createDelayedStartupHydrationHarness({
+          prepare(context) {
+            context.URLSearchParams = URLSearchParams;
+            for (const file of helpers) vm.runInContext(fs.readFileSync(file, 'utf8'), context, { filename: file });
+            const { pathname, search, origin } = new URL(href);
+            Object.assign(context.window.location, { href, pathname, search, origin });
+            context.window.AlbumHavenAppCopy = { viewMissing, onServerAnswer() {} };
+            context.applyUnreachableView = () => {};
+            context.state.view.artist_groups = Array.from({ length: albums }, (_, index) => ({ artist: `Artist ${index}`, albums: [{ key: `album-${index}` }] }));
+            // fetchAndRender resolves a page address to its API URL this way, then fetches it once.
+            context.fetchAndRender = address => capture.fetch(context.buildApiUrl(context.parseBrowserUrlState(address)));
+          },
+        });
+      }
+      const urls = capture.urls().slice(before);
+      if (pass === 1) {
+        assert.equal(urls.length, 2);
+        assert.ok(urls.every(url => url.startsWith('/view-data') || url.startsWith('/home-data')), urls.join(' '));
+        assert.match(urls[0], /artist=Broadcast/);
+      }
+      return { requests: urls };
+    },
   });
 });

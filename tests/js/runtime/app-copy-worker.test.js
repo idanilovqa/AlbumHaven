@@ -1170,6 +1170,70 @@ function heldServer() {
   };
 }
 
+// Owner round on sandbox5 r24 (530s): after scrolling, a new tab waited 11-21 s, because data
+// writes queued behind the covers were waited for like pages.
+test('IAR-W12: data queued behind covers holds no offline navigation and answers offline at once', async () => {
+  const caches = fakeCaches();
+  const open = caches.open.bind(caches);
+  caches.open = async (name) => {
+    const cache = await open(name);
+    if (!cache.slowCovers) {
+      const put = cache.put.bind(cache);
+      cache.put = async (request, response) => {
+        const key = typeof request === 'string' ? request : request.url;
+        if (key.includes('/__album-haven-cover/')) await new Promise(resolve => setTimeout(resolve, 300));
+        return put(request, response);
+      };
+      cache.slowCovers = true;
+    }
+    return cache;
+  };
+  let online = true;
+  const { worker, event, settled } = setup({
+    mode: 'web', caches,
+    respond: (request) => {
+      if (!online) return new Response('Origin unreachable', { status: 530 });
+      const { pathname } = new URL(request.url);
+      if (pathname === '/') return page('acct-a');
+      if (pathname === '/view-data') return dataAnswer({ ok: true, artist_groups: [{ artist: 'Broadcast', albums: [] }] });
+      return coverResponse(10);
+    },
+  });
+  await worker.handle('page', navigation('/'), event);
+  await settled();
+  for (let index = 0; index < 10; index += 1) {
+    void worker.handle('cover', resource(`/cover/${String(index).padStart(22, 'C')}?size=480`), event);
+  }
+  for (let turn = 0; turn < 50; turn += 1) await new Promise(resolve => setImmediate(resolve));
+  const url = '/view-data?surface=albums&artist=Broadcast';
+  await worker.handle('data', resource(url), event);
+  for (let turn = 0; turn < 50; turn += 1) await new Promise(resolve => setImmediate(resolve));
+  online = false;
+
+  const started = Date.now();
+  const navigated = await worker.handle('page', navigation('/'), event);
+  const data = await worker.handle('data', resource(url), event);
+
+  assert.match(await navigated.text(), /content="cache"/);
+  assert.equal(data.headers.get(COPY_HEADER), 'cache');
+  assert.deepEqual(artistsOf(await json(data)), ['Broadcast']);
+  assert.ok(Date.now() - started < 1000, `answered after ${Date.now() - started} ms, not after the covers' 3 s of writes`);
+  await settled();
+});
+
+// Owner round 10 ("B: wait 10 s"): a tunnel held the first request after its server stopped for
+// 20-60 s, and the tab stayed blank all that time.
+function heldServer() {
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  let holding = false;
+  return {
+    hold() { holding = true; },
+    release: answer => release(answer),
+    respond: () => (holding ? held : page('acct-a')),
+  };
+}
+
 test('IAR-W14: a navigation with no answer within the wait shows the copy, marked unanswered, and still keeps the answer', async () => {
   const server = heldServer();
   const { worker, event, settled, caches } = setup({ mode: 'web', respond: server.respond, noAnswerMs: 30 });
@@ -1936,45 +2000,49 @@ test('IAR-006: kept data belongs to one account and goes with the copy on sign-o
 });
 
 test('request capture: a data request reaches only its own address, whatever the kept data; a hung one adds one check', async () => {
-  await measureInteractionContract('js:app-copy-worker.js#data', async (keptEntries) => {
-    let network = 'online';
-    const capture = createRequestCapture(async (url) => {
-      const { pathname } = new URL(url);
-      if (network === 'offline') throw new TypeError('Failed to fetch');
-      if (pathname === '/app-copy/account') return new Response('{}', { status: 530 });
-      if (network === 'hung') return new Promise(() => {});
-      return dataAnswer({ ok: true, artist_groups: [] });
-    });
-    const worker = createAppCopyWorker({
-      caches: fakeCaches(), fetch: capture.fetch, origin: ORIGIN, now: () => 1_000_000, mode: 'web', dataCheckMs: 1,
-      dataLimits: { views: 2000 },
-    });
-    const pending = [];
-    const event = { waitUntil: promise => pending.push(promise) };
-    const handle = async (request) => {
-      const response = await worker.handle(worker.route(request), request, event);
-      while (pending.length) await pending.shift();
-      return response;
-    };
-    for (let index = 0; index < keptEntries; index += 1) await handle(resource(`/view-data?surface=albums&artist=Kept${index}`));
-    const before = capture.requests.length;
-    const metrics = await capture.counter.measure(async () => {
-      await handle(resource('/view-data?surface=albums&artist=Kept0'));
-      network = 'offline';
-      await handle(resource('/view-data?surface=albums&artist=Kept0'));
-      network = 'hung';
-      await handle(resource('/view-data?surface=albums&artist=Kept0'));
-    });
-    const paths = capture.urls().slice(before).map((url) => {
-      const parsed = new URL(url);
-      return `${parsed.pathname}${parsed.search}`;
-    });
-    assert.deepEqual(paths, [
-      '/view-data?surface=albums&artist=Kept0', '/view-data?surface=albums&artist=Kept0',
-      '/view-data?surface=albums&artist=Kept0', '/app-copy/account',
-    ]);
-    assertInteractionRequests('js:app-copy-worker.js#data', paths);
-    return metrics;
+  const path = '/view-data?surface=albums&artist=Kept0';
+  await measureInteractionContract('js:app-copy-worker.js#data', {
+    async setup(keptEntries) {
+      const state = { network: 'online' };
+      const capture = createRequestCapture(async (url) => {
+        const { pathname } = new URL(url);
+        if (state.network === 'offline') throw new TypeError('Failed to fetch');
+        if (pathname === '/app-copy/account') return new Response('{}', { status: 530 });
+        if (state.network === 'hung') return new Promise(() => {});
+        return dataAnswer({ ok: true, artist_groups: [] });
+      });
+      const worker = createAppCopyWorker({
+        caches: fakeCaches(), fetch: capture.fetch, origin: ORIGIN, now: () => 1_000_000, mode: 'web', dataCheckMs: 1,
+        dataLimits: { views: 2000 },
+      });
+      const pending = [];
+      const event = { waitUntil: promise => pending.push(promise) };
+      const handle = async (request) => {
+        const response = await worker.handle(worker.route(request), request, event);
+        while (pending.length) await pending.shift();
+        return response;
+      };
+      for (let index = 0; index < keptEntries; index += 1) await handle(resource(`/view-data?surface=albums&artist=Kept${index}`));
+      return { state, capture, handle };
+    },
+    // Online, offline and hung, in turn; the repeat starts online again.
+    async act({ state, capture, handle }, pass) {
+      const before = capture.requests.length;
+      const metrics = await capture.counter.measure(async () => {
+        state.network = 'online';
+        await handle(resource(path));
+        state.network = 'offline';
+        await handle(resource(path));
+        state.network = 'hung';
+        await handle(resource(path));
+      });
+      const paths = capture.urls().slice(before).map((url) => {
+        const parsed = new URL(url);
+        return `${parsed.pathname}${parsed.search}`;
+      });
+      if (pass === 1) assert.deepEqual(paths, [path, path, path, '/app-copy/account']);
+      return { requests: paths, metrics };
+    },
   });
 });
 

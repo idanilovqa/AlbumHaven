@@ -169,7 +169,8 @@ test.describe('Cards change at Save', () => {
     await expect(galleryActions.galleryPage.albumCard.cards).toHaveCount(1);
     await holdSave();
     const frames = await clickSave({ page, galleryActions, tagEditorActions }, TWIN, renameTo(NEW), { copyIndex: 0 });
-    await expectKeptThroughCompletion(frames, page, [NEW, COPY]);
+    // The seed stores the pair as one album, so the copy left behind keeps that album and its stored title.
+    await expectKeptThroughCompletion(frames, page, [NEW, TWIN]);
   });
 
   test('FTC-TAGS-038 Clicking Save before the fold is decided still updates every other card at once; only the fold follows, when its decision arrives', { tag: '@area:tag-edit' }, async ({
@@ -240,7 +241,8 @@ test.describe('Cards change at Save', () => {
       await actions.setArtist(movedArtist);
       await actions.setAlbumArtist(movedArtist);
     }, { copyIndex: 0 });
-    await expectFromTheClick(frames, [COPY]);
+    // The copy left behind keeps the stored album and its title.
+    await expectFromTheClick(frames, [TWIN]);
     await expect(treeEntry).toBeVisible();
 
     const failed = page.waitForResponse(SAVE_PATH);

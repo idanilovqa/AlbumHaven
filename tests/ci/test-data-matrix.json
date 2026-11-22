@@ -2493,6 +2493,28 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/loops.functional.spec.js",
+    "case": "FTC-PLAYER-027 a track shown in the player at 0:00 loads its waveform when the page opens, without Play, and after an outage loads it by itself once the server answers",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 2,
+    "databaseScenarios": [
+      "waveform:restored-track-on-load"
+    ],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "restored-track-waveform-without-play",
+      "waveform-recovers-after-outage"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:restored-track-waveform"
+    },
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/loops.functional.spec.js",
     "case": "FTC-PLAYER-024 the playing song draws its waveform while a prefetch build runs and keeps it through a seek",
     "profile": "functional-core",
     "setupScope": "isolated",

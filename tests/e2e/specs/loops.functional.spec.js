@@ -6,6 +6,7 @@ import { GlobalPlayerActions, SettingsModalAppBarActions, UtilityAppearanceActio
 import { GlobalPlayer, SettingsModalAppBar, UtilityAppearanceTab, UtilityTabBar } from '../poms/index.js';
 import { LoginPage } from '../phase7/poms/authPages.js';
 import { expectTimingBudget } from '../helpers/timingBudget.js';
+import { LIBRARY_PATH, primeCopy, setAppPageHold } from '../helpers/instantReturnHelpers.js';
 import { PERFORMANCE_AUTH_PASSWORD, PERFORMANCE_AUTH_USERNAME } from '../support/performanceAuthentication.js';
 import {
   createLongPrefetchTrack,
@@ -1309,6 +1310,94 @@ test('FTC-PLAYER-017 paused reload restores the current waveform', { tag: '@area
   expect(waveform.nonPlayheadPixels).toBeGreaterThan(0);
   expect(waveform.leftBins).toBe(720);
   expect(waveform.rightBins).toBe(720);
+});
+
+test.describe('a page that opens with a track in the player', () => {
+  // The page can only open during an outage from the copy its worker keeps.
+  test.use({ serviceWorkers: 'allow' });
+
+  test('FTC-PLAYER-027 a track shown in the player at 0:00 loads its waveform when the page opens, without Play, and after an outage loads it by itself once the server answers', { tag: '@area:loops' }, async ({
+    page,
+    galleryActions,
+    globalPlayerActions,
+    settingsModalAppBarActions,
+    trackModalActions,
+    utilityAppearanceActions,
+    utilityTabBarActions,
+  }, testInfo) => {
+    test.setTimeout(180000);
+    const player = globalPlayerActions.globalPlayer;
+    await primeCopy(page, galleryActions);
+    await settingsModalAppBarActions.openSettings();
+    await utilityTabBarActions.openTab('appearance');
+    await utilityAppearanceActions.waitForReady();
+    await utilityAppearanceActions.saveSeekbarMode('waveform');
+    await settingsModalAppBarActions.closeSettings();
+
+    await galleryActions.selectAlbumDetailsByIdentity(LOOP_ALBUM_TARGET);
+    const track = await trackModalActions.playTrackByTitle(LOOP_TRACK_TITLE);
+    const identity = { path: track.path, trackTitle: LOOP_TRACK_TITLE, visibleTitle: LOOP_PLAYER_TITLE };
+    await globalPlayerActions.waitForCurrentTrack(identity);
+    await trackModalActions.close();
+    // Drawn first, so no request of the playing song is still on its way when the page opens again.
+    await globalPlayerActions.waitForRenderedWaveform({ path: track.path });
+    await globalPlayerActions.pauseIfPlaying();
+    await player.timeline.press('Home');
+    await expect(player.time).toContainText(/^0:00/u);
+
+    const claims = [];
+    const waveformRequests = [];
+    const waveformStatuses = [];
+    page.on('request', (request) => {
+      const url = new URL(request.url());
+      if (url.pathname === '/playback/state' && request.method() === 'PUT') claims.push(url.pathname);
+      if (url.pathname === '/playback/waveform' && url.searchParams.get('path') === track.path) {
+        waveformRequests.push(url.searchParams.get('priority'));
+      }
+    });
+    page.on('response', (response) => {
+      if (new URL(response.url()).pathname === '/playback/waveform') waveformStatuses.push(response.status());
+    });
+
+    const expectShownPausedAtStart = async () => {
+      await globalPlayerActions.waitForCurrentTrack(identity);
+      await expect(player.time).toContainText(/^0:00/u);
+      await expect(player.playButton).toHaveAttribute('aria-label', 'Play');
+    };
+    const expectWaveformWithoutPlay = async (timeout) => {
+      const waveform = await globalPlayerActions.waitForRenderedWaveform({ path: track.path, timeout });
+      expect(waveform.path).toBe(track.path);
+      expect(waveform.leftBins).toBe(720);
+      expect(waveform.rightBins).toBe(720);
+      expect(waveform.nonPlayheadPixels).toBeGreaterThan(0);
+      await expectShownPausedAtStart();
+      await globalPlayerActions.waitForPlaybackState({ paused: true });
+      expect(claims, 'showing the waveform takes no playback claim').toEqual([]);
+      expect(waveformRequests.length).toBeGreaterThan(0);
+      expect(waveformRequests, 'a paused track never asks at a playing song\'s priority').not.toContain('current');
+    };
+
+    await page.goto(LIBRARY_PATH);
+    await expectShownPausedAtStart();
+    await expectWaveformWithoutPlay(30000);
+
+    waveformStatuses.length = 0;
+    try {
+      await setAppPageHold(testInfo, 'down');
+      await page.goto(LIBRARY_PATH);
+      await expectShownPausedAtStart();
+      await expect.poll(() => waveformStatuses, { timeout: 15000 }).toContain(502);
+
+      let loads = 0;
+      await page.waitForLoadState('load');
+      page.on('load', () => { loads += 1; });
+      await setAppPageHold(testInfo, 'up');
+      await expectWaveformWithoutPlay(15000);
+      expect(loads, 'the waveform returns without a reload').toBe(0);
+    } finally {
+      await setAppPageHold(testInfo, 'up');
+    }
+  });
 });
 
 test.describe('a browser that has just signed in', () => {

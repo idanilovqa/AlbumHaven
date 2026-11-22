@@ -1148,6 +1148,13 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/loops.functional.spec.js",
+              "case": "FTC-PLAYER-027 a track shown in the player at 0:00 loads its waveform when the page opens, without Play, and after an outage loads it by itself once the server answers",
+              "area": "loops"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/loops.functional.spec.js",
               "case": "FTC-PLAYER-024 the playing song draws its waveform while a prefetch build runs and keeps it through a seek",
               "area": "loops"
             },

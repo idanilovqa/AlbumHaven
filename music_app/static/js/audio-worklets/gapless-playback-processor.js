@@ -1120,6 +1120,7 @@
           generation: this.generation,
           streamId: this.current.streamId,
           timelineFrame: this.timelineFrame,
+          contextTime: currentTime,
         });
       }
       this.renderedFrames += left.length;

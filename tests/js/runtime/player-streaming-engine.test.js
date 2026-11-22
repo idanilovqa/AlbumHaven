@@ -9073,6 +9073,70 @@ test('a press on another song during a pending switch names that song at once, a
   assert.deepEqual(drawn, [makeTrack('05.flac').path, makeTrack('06.flac').path]);
 });
 
+// A seek's socket was replaced while its heartbeats waited to be read by a busy page.
+async function seekWaitingOnTheServer() {
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => count > 1,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+  });
+  const open = await startLocallySeekable(harness, 100_000);
+  harness.setNow(1_000);
+  await harness.api.seek(60);
+  await settleTwice(harness);
+  const position = (contextTime) => harness.nodes[0].port.dispatch({
+    type: 'position', generation: open.generation, streamId: open.streamId, timelineFrame: 100, contextTime,
+  });
+  const rechecks = () => timers.pending().filter(({ delay }) => delay === 100);
+  return { harness, timers, position, rechecks };
+}
+
+for (const heard of [true, false]) {
+  test(`a late page reads its socket before a seek's silence counts (${heard ? 'a heartbeat was waiting' : 'nothing was'})`, async () => {
+    const { harness, timers, position, rechecks } = await seekWaitingOnTheServer();
+    harness.setNow(1_900);
+    // Rendered at 11.6 s, read at 12.5 s: the page is 900 ms behind, and so may its socket be.
+    position(11.6);
+    position(12.5);
+    await settleTwice(harness);
+    assert.equal(harness.sockets[0].closeCalls, 0, 'neither the late message nor the backlog after it decides');
+    assert.equal(rechecks().length, 1, 'one recheck, however long the backlog');
+
+    if (heard) harness.sockets[0].receive({ type: 'heartbeat' });
+    harness.setNow(2_000);
+    timers.fire(rechecks()[0]);
+    await settleTwice(harness);
+
+    assert.equal(harness.sockets[0].closeCalls, heard ? 0 : 1);
+    if (heard) assert.equal(harness.engine.pendingSeek.prepareSent, false, 'the seek still waits on its own open');
+  });
+}
+
+test('an interval check that ran late also reads the socket before a seek is given up', async () => {
+  const { harness, timers, rechecks } = await seekWaitingOnTheServer();
+  harness.setNow(1_800);
+  liveness(harness).callback();
+  await settleTwice(harness);
+  assert.equal(harness.sockets[0].closeCalls, 0);
+
+  harness.sockets[0].receive({ type: 'heartbeat' });
+  timers.fire(rechecks()[0]);
+  await settleTwice(harness);
+  assert.equal(harness.sockets[0].closeCalls, 0);
+});
+
+test('on a page that keeps up, 750 ms of silence still gives a seek up at once', async () => {
+  const { harness, position, rechecks } = await seekWaitingOnTheServer();
+  harness.setNow(1_760);
+  position(12.45);
+  await settleTwice(harness);
+
+  assert.equal(harness.sockets[0].closeCalls, 1);
+  assert.equal(rechecks().length, 0, 'with no recheck to wait for');
+});
+
 test('a press on a different song still switches, and back', async (t) => {
   const { harness, node } = await playingSong(t);
   const rows = installRowPresses(harness);

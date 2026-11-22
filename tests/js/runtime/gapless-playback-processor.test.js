@@ -1841,6 +1841,15 @@ test('whole-track repeat promotes a frame-zero head without duplicating the boun
   assert.equal(fixture.events('underrun').length, 0);
 });
 
+test('a position says when it was rendered, so a late page can tell', () => {
+  const fixture = createProcessor();
+  enqueue(fixture, { streamId: 41, role: 'current', sequence: 0, left: Array(256).fill(0.25) });
+  play(fixture);
+  assertRenderedNonSilentStereo(fixture);
+
+  assert.equal(fixture.events('position').at(-1).contextTime, fixture.events('first-frame').at(-1).contextTime);
+});
+
 test('stop clears playback and reports the exact rendered position', () => {
   const fixture = createProcessor();
   enqueue(fixture, {

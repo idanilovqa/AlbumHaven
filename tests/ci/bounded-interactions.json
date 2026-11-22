@@ -5381,6 +5381,21 @@
       "proof": "static"
     },
     {
+      "id": "js:runtime/player-streaming-engine.js#recheckStreamingSocketOnceRead",
+      "action": "setTimeout timers installed by recheckStreamingSocketOnceRead",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/player-streaming-engine.js#recheckStreamingSocketOnceRead:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/player-streaming-engine.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:runtime/player-streaming-engine.js#startBrowserStreamingTrack",
       "action": "setTimeout timers installed by startBrowserStreamingTrack",
       "entrypoints": [

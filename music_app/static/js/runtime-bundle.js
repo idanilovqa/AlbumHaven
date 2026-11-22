@@ -8517,6 +8517,9 @@ const STREAMING_SILENT_SOCKET_MS = 5000;
 const STREAMING_SEEK_ANSWER_MS = 750;
 // How often a socket's silence is checked, whether or not audio plays.
 const STREAMING_LIVENESS_CHECK_MS = 500;
+// A page running more than a heartbeat behind may hold one unread: before a seek's silence counts
+// there, the page gets this long to read its socket. A page that keeps up waits for nothing.
+const STREAMING_LATE_PAGE_READ_MS = 100;
 // A reconnect attempt begun on a network that is gone can hang for tens of seconds; it is given up.
 // Each attempt given up so allows the next one twice as long, up to 16 s: on a loaded machine a
 // connection that is only slow to open must open at last (as with the CPU at 100%).
@@ -9410,7 +9413,7 @@ function handleStreamingNetworkChange() {
 // once instead of waited on until the keepalive, so the received audio plays on, a seek past it
 // waits silently at its target, and the next socket is tried at once. A seek past the received
 // audio finds it sooner. Checked as audio renders and every half second.
-function checkStreamingSocketLiveness() {
+function checkStreamingSocketLiveness({ readLate = false } = {}) {
   const engine = streamingEngineState();
   const socket = engine.socket;
   if (engine.detached || socket?.readyState !== WebSocket.OPEN) return;
@@ -9420,7 +9423,25 @@ function checkStreamingSocketLiveness() {
   // A switch is no seek past the received audio: the old song plays on while its open is answered.
   const seekWaits = Boolean(seekRole && seek.kind !== 'replacement'
     && !seekRole.local && !seekRole.metadataAccepted);
-  if (silentMs > (seekWaits ? STREAMING_SEEK_ANSWER_MS : STREAMING_SILENT_SOCKET_MS)) replaceSilentStreamingSocket(socket);
+  if (silentMs <= (seekWaits ? STREAMING_SEEK_ANSWER_MS : STREAMING_SILENT_SOCKET_MS)) return;
+  // While that read is awaited, the backlog of audio messages after a late one decides nothing either.
+  if (seekWaits && (readLate || engine.socketReadTimer)) return recheckStreamingSocketOnceRead(socket);
+  replaceSilentStreamingSocket(socket);
+}
+
+function recheckStreamingSocketOnceRead(socket) {
+  const engine = streamingEngineState();
+  if (engine.socketReadTimer) return;
+  engine.socketReadTimer = window.setTimeout(() => {
+    engine.socketReadTimer = 0;
+    if (engine.socket === socket) checkStreamingSocketLiveness();
+  }, STREAMING_LATE_PAGE_READ_MS);
+}
+
+// How far the page is behind the audio thread whose message it reads.
+function streamingPageReadsLate(message) {
+  const behindSeconds = Number(streamingEngineState().context?.currentTime) - Number(message.contextTime);
+  return behindSeconds * 1000 > STREAMING_HEARTBEAT_MS;
 }
 
 // Audio from a silent socket detaches as from any lost socket; with none, or with a song's rate
@@ -9446,9 +9467,12 @@ function watchStreamingSocketLiveness(socket) {
     }
     // A check that ran late found a page too busy to have read what arrived: it decides nothing.
     const now = performance.now();
-    const late = now - checkedAtMs > 2 * STREAMING_LIVENESS_CHECK_MS;
+    const sinceLastMs = now - checkedAtMs;
+    const late = sinceLastMs > 2 * STREAMING_LIVENESS_CHECK_MS;
     checkedAtMs = now;
-    if (!late) checkStreamingSocketLiveness();
+    if (!late) {
+      checkStreamingSocketLiveness({ readLate: sinceLastMs > STREAMING_LIVENESS_CHECK_MS + STREAMING_HEARTBEAT_MS });
+    }
   }, STREAMING_LIVENESS_CHECK_MS);
 }
 
@@ -10937,7 +10961,7 @@ function handleStreamingWorkletMessage(message) {
       engine.diagnostics.staleMessages += 1;
       return;
     }
-    checkStreamingSocketLiveness();
+    checkStreamingSocketLiveness({ readLate: streamingPageReadsLate(message) });
     if (engine.roles.current !== current) return;
     if (engine.pendingSeek?.currentStreamId === current.streamId || streamingHeadHeld()) return;
     const timelineFrame = streamingAbsoluteTimelineFrame(current, message.timelineFrame);

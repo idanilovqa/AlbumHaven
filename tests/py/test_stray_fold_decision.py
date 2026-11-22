@@ -287,3 +287,38 @@ def test_live_037_the_album_a_partial_move_leaves_keeps_a_card(watcher_repair_in
             (second[0]["path"],),
         ).fetchone()
     assert (card["key"], card["name"]) == (stored["album_key"], stored["title"])
+
+
+@pytest.mark.parametrize("edited_copies", ["both", "one"])
+@pytest.mark.parametrize("artist_row", [True, False], ids=["with_artist_row", "without_artist_row"])
+@pytest.mark.parametrize("album_artist", ["", "   ", "?!-.", "Сборник"])
+def test_live_the_decision_stores_the_proposed_identity_as_the_save_does(
+    watcher_repair_inventory, album_artist, artist_row, edited_copies,
+):
+    # A save always gives the album it writes an artist row, so it folds by that. An album it
+    # leaves stored folds by its own row or named album artist.
+    fixture = watcher_repair_inventory
+    first, second = _stored_pair(fixture)
+    if not artist_row:
+        with isolatedPostgres._connect(fixture.setup_url) as connection:
+            connection.execute(
+                """update library.local_albums set artist_id = null,
+                     metadata = metadata || jsonb_build_object('album_artist', %s::text)""",
+                (album_artist,),
+            )
+            connection.commit()
+    _refresh_every_album(fixture)
+    edited = first + second if edited_copies == "both" else second
+
+    previous, updated, albums = _decide(fixture, edited, {"album_artist": album_artist})
+
+    fixture.adapter.persist_structural_tag_edit(
+        changed_paths=set(updated), previous_file_entries=previous, updated_file_entries=updated,
+        changed_field_names={"album_artist"}, rebuild_relation_projection=True,
+    )
+    published = _links(fixture)
+    decided = {
+        frozenset(album["track_paths"]): frozenset(album["folds_into"]) if album["folds_into"] else None
+        for album in albums
+    }
+    assert decided == {album: published.get(album, "no such album") for album in decided}

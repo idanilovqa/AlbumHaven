@@ -3753,11 +3753,14 @@ def test_recovered_cover_persistence_failure_leaves_memory_unchanged(recovered_c
         cover_refresh_execution, "log_job_event",
         lambda _config, _logger, action, **fields: events.append((action, fields)),
     )
-    with pytest.raises(RuntimeError, match="isolated recovery commit failed") as raised:
-        cover_refresh_execution.run_cover_jobs(**case.kwargs)
+    # A recovery failure is one failed job and the refresh goes on to the next (eea310882).
+    result = cover_refresh_execution.run_cover_jobs(**case.kwargs)
 
-    assert raised.value is failure
-    assert attempts == ["private-frame-local"]
+    assert [(item["reason"], item["error_type"]) for item in result["job_results"]] == [
+        ("cover_selection_recovery_failed", "RuntimeError"),
+    ] * 2
+    assert (result["failed"], result["changed"]) == (2, False)
+    assert attempts == ["private-frame-local"] * 2
     assert case.entries == baseline
     assert case.state["file_cache"] == baseline
     assert case.cover.read_bytes() == b"recovered-cover-bytes"
@@ -3769,7 +3772,7 @@ def test_recovered_cover_persistence_failure_leaves_memory_unchanged(recovered_c
     assert diagnostics == [{
         "level": "error",
         "stage": "recover_existing_cover_selection",
-        "queue_index": 1,
+        "queue_index": queue_index,
         "queue_total": 2,
         "error_type": "RuntimeError",
         "origin_frame": {
@@ -3777,12 +3780,16 @@ def test_recovered_cover_persistence_failure_leaves_memory_unchanged(recovered_c
             "function": "fail_persistence",
             "line": origin.tb_lineno,
         },
-    }]
+    } for queue_index in (1, 2)]
     assert origin.tb_lineno > 0
-    assert not any(action == "Cover fetch outcome" for action, _fields in events)
+    outcomes = [fields for action, fields in events if action == "Cover fetch outcome"]
+    assert [fields["terminal_category"] for fields in outcomes] == ["failed", "failed"]
     for private_value in (*private_values, private_source, "private-source-directory",
                           "private-frame-local", "raise failure"):
         assert private_value not in repr(diagnostics)
+    for private_value in (*private_values[-3:], private_source, "private-frame-local", "raise failure"):
+        assert private_value not in repr(outcomes)
+        assert private_value not in repr([item.get("error_type") for item in result["job_results"]])
 
 
 @pytest.mark.parametrize("blocked_flag", ["blocked_by_user_selection", "blocked_by_expected_cover_state"])
@@ -4342,12 +4349,17 @@ def test_recovered_cover_rechecks_state_at_persistence_commit(recovered_cover_ca
         def commit():
             committed.append(selected)
             return {"updated": True}
-        return options["commit_guard"](commit)
+        with pytest.raises(RuntimeError, match="Recovered cover selection changed before commit") as refused:
+            options["commit_guard"](commit)
+        raise refused.value
 
     monkeypatch.setattr(cover_refresh_execution, "persist_cover_selection_in_shared_transaction", persist)
-    with pytest.raises(RuntimeError, match="Recovered cover selection changed before commit"):
-        cover_refresh_execution.run_cover_jobs(**case.kwargs)
+    result = cover_refresh_execution.run_cover_jobs(**case.kwargs)
 
+    assert [(item["reason"], item["error_type"]) for item in result["job_results"]] == [
+        ("cover_selection_recovery_failed", "RuntimeError"),
+    ]
+    assert (result["failed"], result["changed"]) == (1, False)
     assert len(attempts) == 1
     assert committed == []
     if mutation == "runtime_selection":
@@ -4458,13 +4470,17 @@ def test_recovered_cover_rechecks_resolved_containment_before_commit(recovered_c
 
     def persist(_config, _paths, selected, **options):
         redirected.append(True)
-        options["commit_guard"](lambda: commits.append(selected))
-        return {"album_rows_updated": 1, "track_file_rows_updated": len(case.tracks)}
+        with pytest.raises(RuntimeError, match="Recovered cover selection changed before commit") as refused:
+            options["commit_guard"](lambda: commits.append(selected))
+        raise refused.value
 
     monkeypatch.setattr(Path, "resolve", resolve_alias)
     monkeypatch.setattr(cover_refresh_execution, "persist_cover_selection_in_shared_transaction", persist)
-    with pytest.raises(RuntimeError, match="Recovered cover selection changed before commit"):
-        cover_refresh_execution.run_cover_jobs(**case.kwargs)
+    result = cover_refresh_execution.run_cover_jobs(**case.kwargs)
+    assert redirected == [True]
+    assert [(item["reason"], item["error_type"]) for item in result["job_results"]] == [
+        ("cover_selection_recovery_failed", "RuntimeError"),
+    ]
     assert commits == []
     assert case.entries == baseline
 

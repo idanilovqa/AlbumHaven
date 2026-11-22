@@ -1,8 +1,13 @@
 # Changelog
 
+## 0.11.47 - 2026-11-22
+
+- Fixed waveforms and server-side audio conversion on Windows deployments: starting FFmpeg failed on the event loop those servers use. FFmpeg now starts and streams through a shared process helper that works on that loop and stops the process when playback or a waveform is cancelled.
+
 ## 0.11.46 - 2026-11-22
 
-- One cache policy for private answers: they are not stored by browser or proxy caches unless a route deliberately allows it, stored covers carry no library file names, and the on-device app copy keeps only pages that fit it. Copies saved in the earlier format are replaced.
+- Fixed a 0.11.45 regression: one failed attempt to open another database connection could make requests fail even though working connections were free. Requests now fail fast only when no working connection exists, a slow first connection is waited for, and the app reconnects within seconds after Postgres returns.
+- Fixed a second 0.11.45 regression: a database setting made by one task could carry over to the next one, so a later change could be saved only partly if it failed. Every borrowed connection now starts with standard settings, Edit Tags locks use connections nothing else reuses, and the freeze guard rejects session state on shared connections.
 
 ## 0.11.45 - 2026-11-22
 

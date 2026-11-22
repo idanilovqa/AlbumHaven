@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import replace
 from pathlib import Path
 from typing import BinaryIO, Literal
 
+from music_app.services.child_process import ChildProcess, start_child_process
 from music_app.services.ffmpeg_runtime import (
     hidden_subprocess_creation_flags,
     resolve_ffmpeg_executable,
@@ -156,7 +156,7 @@ class _ProcessByteStream(EncodedStream):
     def __init__(
         self,
         command: PcmOpenCommand,
-        process: asyncio.subprocess.Process,
+        process: ChildProcess,
         **stream: object,
     ) -> None:
         super().__init__(command, **stream)
@@ -213,17 +213,14 @@ def read_flac_layout(path: Path) -> tuple[bytes, int, int, int, int] | None:
     return header, first_audio_byte, end_byte, sample_rate, total_samples
 
 
-async def _start_process(executable: str, *arguments: str) -> asyncio.subprocess.Process:
-    return await asyncio.create_subprocess_exec(
+async def _start_process(executable: str, *arguments: str) -> ChildProcess:
+    return await start_child_process(
         executable,
         "-hide_banner",
         "-loglevel",
         "error",
         *arguments,
         "pipe:1",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.DEVNULL,
-        stdin=asyncio.subprocess.DEVNULL,
         creationflags=hidden_subprocess_creation_flags(),
     )
 

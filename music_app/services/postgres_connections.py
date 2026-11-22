@@ -108,6 +108,7 @@ def pooled_connection(
                 max_waiting=32,
                 timeout=30, max_idle=120, max_lifetime=600,
                 kwargs={"row_factory": dict_row, "connect_timeout": 15},
+                reset=_reset_leased_session,
                 open=True,
             )
             _pools[pool_key] = pool
@@ -134,6 +135,12 @@ def pooled_connection(
         lease_observer=lease_observer,
         keep_warm=depth == 0 and normalized_workload in _WARM_WORKLOADS,
     )
+
+
+def _reset_leased_session(connection) -> None:
+    # MEASUREMENT ONLY: a borrower's autocommit must not reach the next one.
+    if connection.autocommit:
+        connection.autocommit = False
 
 
 def _state_recording_connection_class(connect_state: _ConnectState):

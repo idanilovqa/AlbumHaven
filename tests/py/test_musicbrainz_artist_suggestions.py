@@ -7,22 +7,24 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 
 from music_app.services.musicbrainz_enrichment import resolve_artist
-from tests.py.musicbrainz_test_mirror import OK
+from tests.py.musicbrainz_test_mirror import OK, albums
 from tests.py.test_musicbrainz_resolve_artist import GERMAN, TRANCE, _client
-from tests.py.test_musicbrainz_split_undecided_albums import LIVE_TRACKS, _recording, _split_context
+from tests.py.test_musicbrainz_split_undecided_albums import LIVE_TRACKS, _recording
 
 THIRD = "00000000-0000-4000-8000-0000000003bd"
 DAWN, HOME, ASHES = "Dawn Over the Northern Sea", "The Long Way Home Tonight", "Ashes in the Harbour"
 IN_GENERAL_FOLDER = ["3:Music/Bootleg Live"]
-IN_TRANCE_FOLDER = ["3:Axxis Trance/Bootleg Live"]
+IN_TRANCE_FOLDER = ["3:Fixture Trance/Bootleg Live"]
+NAME, FIRST_ALBUM, SECOND_ALBUM = "Fixture Band", "Quillfeather Lantern", "Zebrine Cartography"
 
 
 def _resolve(recordings, folders=IN_GENERAL_FOLDER, *, manual=None, search_fails=False,
              namesakes=(), namesake_search_fails=False, searches=None):
-    search = [{"id": GERMAN, "name": "Axxis", "score": 100, "type": "Group", "country": "DE"},
-              {"id": TRANCE, "name": "Axxis", "score": 100, "type": "Group", "disambiguation": "trance duo"},
-              *({"id": mbid, "name": "Axxis", "score": 90, "disambiguation": "Polish band"} for mbid in namesakes)]
-    client, _calls = _client({GERMAN: ["Kingdom of the Night"], TRANCE: ["Dancefloor Mix"]}, search=search)
+    search = [{"id": GERMAN, "name": NAME, "score": 100, "type": "Group", "country": "DE"},
+              {"id": TRANCE, "name": NAME, "score": 100, "type": "Group", "disambiguation": "trance duo"},
+              *({"id": mbid, "name": NAME, "score": 90, "disambiguation": "Polish band"} for mbid in namesakes)]
+    artists = {item["id"]: item for item in search}
+    client, _calls = _client({GERMAN: [FIRST_ALBUM], TRANCE: [SECOND_ALBUM]}, search=search, artists=artists)
     answer = client.get_json
 
     def get_json(url, user_agent, **kwargs):
@@ -42,7 +44,17 @@ def _resolve(recordings, folders=IN_GENERAL_FOLDER, *, manual=None, search_fails
         return answer(url, user_agent, **kwargs)
 
     client.get_json = get_json
-    return resolve_artist(_split_context(LIVE_TRACKS, folders, manual=manual), client=client)
+    return resolve_artist(_context(folders, manual), client=client)
+
+
+def _context(folders, manual):
+    """One certain album per band, each in its own folder, plus one undecided album."""
+    certain = albums(FIRST_ALBUM, SECOND_ALBUM)
+    own_folders = [[f"3:Fixture First/{FIRST_ALBUM}"], [f"3:Fixture Trance/{SECOND_ALBUM}"]]
+    rows = [{**album, "id": index + 1, "folders": own_folders[index]} for index, album in enumerate(certain)]
+    rows.append({"id": 3, "title": "Bootleg Live", "year": 2026, "tracks": LIVE_TRACKS,
+                 "folders": folders, **({"identity": manual} if manual else {})})
+    return {"local_artist_id": 7, "local_name": NAME, "albums": rows}
 
 
 def _suggestion(outcome):
@@ -92,7 +104,7 @@ def test_recordings_that_disagree_with_the_folder_lead_and_the_folder_is_named_b
 
     suggestion, artists = _suggestion(outcome)
     assert suggestion["favoured_mbid"] == GERMAN
-    assert artists[TRANCE]["folder_album"] == "Dancefloor Mix", "an album title, never a path"
+    assert artists[TRANCE]["folder_album"] == SECOND_ALBUM, "an album title, never a path"
     assert artists[GERMAN]["folder_album"] is None
     assert _undecided(outcome)
 
@@ -131,7 +143,7 @@ def test_a_third_band_of_the_name_is_suggested_and_assigned_nothing():
     assert THIRD not in {item["artist_mbid"] for item in outcome["album_identities"]}
     assert THIRD not in {artist["mbid"] for artist in outcome["artists"]}, "the band joins no split"
     (band,) = outcome["suggested_artists"]
-    assert (band["mbid"], band["canonical_name"], band["disambiguation"]) == (THIRD, "Axxis", "Polish band")
+    assert (band["mbid"], band["canonical_name"], band["disambiguation"]) == (THIRD, NAME, "Polish band")
 
 
 def test_a_third_band_without_the_albums_songs_is_not_a_row():

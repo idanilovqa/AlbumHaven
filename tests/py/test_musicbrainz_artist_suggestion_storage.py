@@ -17,7 +17,7 @@ TABLE = "library.local_album_artist_suggestions"
 MIGRATION = Path(__file__).resolve().parents[2] / "migrations" / "postgres" / "0259_create_album_artist_suggestions.sql"
 SUGGESTION = {"local_album_id": 3, "favoured_mbid": GERMAN, "artists": [
     {"artist_mbid": GERMAN, "found": 2, "sampled": 3, "folder_album": None},
-    {"artist_mbid": TRANCE, "found": 0, "sampled": 3, "folder_album": "Dancefloor Mix"},
+    {"artist_mbid": TRANCE, "found": 0, "sampled": 3, "folder_album": "Zebrine Cartography"},
 ]}
 
 
@@ -81,7 +81,7 @@ def test_a_recheck_replaces_the_artist_s_suggestions_and_keeps_those_of_unchecke
         {"local_album_id": 3, "artist_mbid": GERMAN, "found_count": 2, "sampled_count": 3,
          "folder_album": None, "favoured": True},
         {"local_album_id": 3, "artist_mbid": TRANCE, "found_count": 0, "sampled_count": 3,
-         "folder_album": "Dancefloor Mix", "favoured": False},
+         "folder_album": "Zebrine Cartography", "favoured": False},
     ]
 
 
@@ -113,7 +113,7 @@ def test_a_candidate_outcome_clears_the_artist_s_suggestions():
 def test_the_worker_hands_the_suggestions_to_the_repository():
     repository = Repository()
     repository.claims.append({"id": 19, "local_artist_id": 42, "attempt_count": 0})
-    repository.contexts[19] = {"local_artist_id": 42, "local_name": "Axxis", "manual_decision": False, "albums": []}
+    repository.contexts[19] = {"local_artist_id": 42, "local_name": "Fixture Band", "manual_decision": False, "albums": []}
     processor = MusicBrainzArtistEnrichmentProcessor(
         repository=repository, client=object(), now=lambda: NOW,
         resolve_artist=Resolver({"classification": "per_album", "confidence": 1, "album_identities": [], "artists": [],

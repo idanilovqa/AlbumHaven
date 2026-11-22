@@ -1049,6 +1049,74 @@ def test_cover_lookup_add_remote_route_contract_reads_only_the_selected_album_at
     measure_scale_pair(run=run, **_registered("py:routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_add_remote"))
 
 
+@pytest.mark.parametrize("route", ["additional-artwork", "additional-artwork/remove"])
+def test_cover_lookup_additional_artwork_route_contract_reads_only_the_selected_album_at_production_library_size(
+    library_app, tmp_path, monkeypatch, route,
+):
+    """The second artbox's choose and remove routes read and check only the selected album."""
+    from music_app.routes import api_wave_d_asgi_routes
+    from music_app.services import album_additional_artworks_postgres, covers, library_browse_postgres
+
+    saved: list[tuple[str, dict[str, object]]] = []
+
+    class AlbumIdentity:
+        def __init__(self, _config):
+            pass
+
+        def resolve_album_id_for_track_paths(self, *, track_paths):
+            return 7
+
+    class SelectedAlbumDetail:
+        def __init__(self, _config, **_kwargs):
+            pass
+
+        def build_album_detail_payload_by_id(self, album_id):
+            return {"id": album_id, "cover_path": None}
+
+    class Artworks:
+        """The Postgres artwork rows: one write of the chosen slot."""
+
+        def __init__(self, _config):
+            pass
+
+        def save(self, **values):
+            saved.append(("save", values))
+            return [{"slot": values["slot"]}]
+
+        def remove(self, **values):
+            saved.append(("remove", values))
+            return []
+
+    monkeypatch.setattr(api_wave_d_asgi_routes, "AlbumCoverCandidateSnapshotRepository", AlbumIdentity)
+    monkeypatch.setattr(library_browse_postgres, "PostgresLibraryBrowseRepository", SelectedAlbumDetail)
+    monkeypatch.setattr(album_additional_artworks_postgres, "AlbumAdditionalArtworkRepository", Artworks)
+    interaction = (
+        "py:routes/api_wave_d_asgi_routes.py#utilities_cover_lookup_additional_artwork"
+        + ("_remove" if route.endswith("remove") else "")
+    )
+
+    def run(album_count: int) -> OperationCounts:
+        album_root, track_paths, counts = _cover_lookup_library(library_app, tmp_path / f"{route[-6:]}-{album_count}", album_count)
+        _indexed_cover_inventory(monkeypatch, library_app, album_root)
+        payload = {"album": {"name": "Album", "album_artist": "Selected", "tracks": [{"path": path} for path in track_paths]},
+                   "slot": 1, "source_kind": "local", "source_path": str(album_root / "front.jpg")}
+
+        def request():
+            saved.clear()
+            status, _headers, body = run_asgi_request(library_app, "POST", f"/utilities/cover-lookup/{route}", json_body=payload)
+            assert status == 200, body
+            assert decode_json(body)["album_id"] == 7
+            assert [kind for kind, _values in saved] == ["remove" if route.endswith("remove") else "save"]
+
+        request()
+        counts.__init__()
+        with count_filesystem_and_media(monkeypatch, counts, media_modules=(covers,)):
+            request()
+        return counts
+
+    measure_scale_pair(run=run, **_registered(interaction))
+
+
 def test_cover_lookup_local_select_route_contract_reads_only_the_selected_album_at_production_library_size(
     library_app, tmp_path, monkeypatch,
 ):

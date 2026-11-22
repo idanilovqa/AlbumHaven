@@ -450,7 +450,7 @@ test('gallery cards show the corrected title and artist; keys and the tag fields
 // Request-capture contracts (tests/ci/bounded-interactions.json): the Edits Queue's two
 // request helpers take their target at runtime; every target stays on the queue's own
 // endpoints, and the request count does not grow with how many albums wait.
-const { assertInteractionRequests, measureInteractionContract } = require('../helpers/request-capture');
+const { measureInteractionContract } = require('../helpers/request-capture');
 
 function queueOf(albumCount) {
   const albums = Array.from({ length: albumCount }, (_, index) => ({ ...ALBUM, album_key: `album-${index}`, rows: [CASE_ROW] }));
@@ -466,32 +466,42 @@ function queueOf(albumCount) {
 
 test('request capture: the Edits Queue reads only its queue endpoints, one page per open', async () => {
   const id = 'js:runtime/musicbrainz-corrections.js#readEditsQueueJson';
-  await measureInteractionContract(id, async (albumCount) => {
-    const { context, requests } = queueOf(albumCount);
-    await context.loadUtilityEditsQueue(true);
-    await context.loadEditsQueueKindPage('case');
-    const urls = requests.map(([, url]) => url);
-    assert.deepEqual(urls, ['/api/musicbrainz/corrections/edits?section=applied', '/api/musicbrainz/lookups',
-      '/api/musicbrainz/corrections/edits/case?section=applied&offset=0&limit=50']);
-    assertInteractionRequests(id, urls);
-    return { requests: urls.length };
+  await measureInteractionContract(id, {
+    setup: queueOf,
+    act: async ({ context, requests }, pass) => {
+      const before = requests.length;
+      await context.loadUtilityEditsQueue(true);
+      await context.loadEditsQueueKindPage('case');
+      const sent = requests.slice(before).map(([method, url]) => ({ method, url }));
+      if (pass === 1) {
+        assert.deepEqual(sent.map(({ url }) => url), ['/api/musicbrainz/corrections/edits?section=applied', '/api/musicbrainz/lookups',
+          '/api/musicbrainz/corrections/edits/case?section=applied&offset=0&limit=50']);
+      }
+      return { requests: sent };
+    },
   });
 });
 
 test('request capture: Edits Queue changes reach only their own endpoints, once per action', async () => {
   const id = 'js:runtime/musicbrainz-corrections.js#sendEditsQueueChange';
-  await measureInteractionContract(id, async (albumCount) => {
-    const { context, requests } = queueOf(albumCount);
-    await context.loadUtilityEditsQueue(true);
-    const before = requests.length;
-    await context.setEditsQueueAutoSubmit(true);
-    await context.decideEditsQueueAlbum('undo', 'album-0');
-    await context.approveEditsQueueKind('edition_suffix');
-    await context.removeEditsQueueLookup('9');
-    const changes = requests.slice(before).filter(([method]) => method !== 'GET').map(([, url]) => url);
-    assert.deepEqual(changes, ['/api/musicbrainz/corrections/settings', '/api/musicbrainz/corrections/albums/undo',
-      '/api/musicbrainz/corrections/kinds/edition_suffix/approve', '/api/musicbrainz/lookups/9']);
-    assertInteractionRequests(id, changes);
-    return { requests: changes.length };
+  await measureInteractionContract(id, {
+    setup: async (albumCount) => {
+      const queue = queueOf(albumCount);
+      await queue.context.loadUtilityEditsQueue(true);
+      return queue;
+    },
+    act: async ({ context, requests }, pass) => {
+      const before = requests.length;
+      await context.setEditsQueueAutoSubmit(true);
+      await context.decideEditsQueueAlbum('undo', 'album-0');
+      await context.approveEditsQueueKind('edition_suffix');
+      await context.removeEditsQueueLookup('9');
+      const sent = requests.slice(before).filter(([method]) => method !== 'GET').map(([method, url]) => ({ method, url }));
+      if (pass === 1) {
+        assert.deepEqual(sent.map(({ url }) => url), ['/api/musicbrainz/corrections/settings', '/api/musicbrainz/corrections/albums/undo',
+          '/api/musicbrainz/corrections/kinds/edition_suffix/approve', '/api/musicbrainz/lookups/9']);
+      }
+      return { requests: sent };
+    },
   });
 });

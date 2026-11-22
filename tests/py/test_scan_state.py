@@ -1645,6 +1645,7 @@ def test_active_scan_preview_resolver_never_observes_half_staged_publication(
     runtime_logger,
     library_state,
     monkeypatch,
+    unreachable_postgres_pool,
 ):
     old_album = SimpleNamespace(key="artist::old album")
     partial_albums = [SimpleNamespace(key="artist::partial album")]

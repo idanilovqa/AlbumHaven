@@ -286,6 +286,7 @@ function createContext(options = {}) {
       }
       return '/view-data?artist=&gallery_scope=all&omit_sidebar=1';
     },
+    resolveViewSurface: (view) => productionUrlContext.resolveViewSurface(view),
     buildSelectedArtistRuntimeArtistGroups(view, primaryGroups, familyGroups) {
       return [...(Array.isArray(primaryGroups) ? primaryGroups : []), ...(Array.isArray(familyGroups) ? familyGroups : [])];
     },
@@ -1642,6 +1643,48 @@ test('library-home navigation already at the root responds by scrolling to the t
   assert.equal(calls.fetchAndRender.length, 0);
   assert.equal(calls.suspendSelectedArtistCoverLoadsForUserAction, 0);
   assert.equal(calls.pushBrowserViewState.length, 1);
+});
+
+test('Back to the gallery from a freshly loaded root gallery keeps the shown gallery instead of reloading it', () => {
+  // Owner, 11-18: Back from Admin rebuilt the whole root gallery (three view-data reads) after every page load,
+  // because the loaded root view reports all_artists_active: false although it is exactly Home's gallery.
+  const { context, calls } = createContext({ currentUrl: 'http://localhost/albums' });
+  context.state.view = {
+    ...context.state.view,
+    surface: { active: 'albums' },
+    query: '',
+    selected_artist: '',
+    all_artists_active: false,
+    related_filter_artists: [],
+    primary_filter_active: false,
+    gallery_page: { has_previous: false },
+  };
+
+  const { event, wasPrevented } = createAllArtistsEvent({ libraryHome: true });
+  context.handleGalleryBootstrapClick(event);
+
+  assert.equal(wasPrevented(), true);
+  assert.equal(calls.fetchAndRender.length, 0);
+  assert.equal(calls.pushBrowserViewState.length, 1);
+  assert.equal(calls.pushBrowserViewState[0].all_artists_active, true);
+});
+
+test('library-home navigation still loads the gallery when the shown view is the Home surface', () => {
+  const { context, calls } = createContext({ currentUrl: 'http://localhost/' });
+  context.state.view = {
+    ...context.state.view,
+    surface: { active: 'home' },
+    query: '',
+    selected_artist: '',
+    all_artists_active: false,
+    related_filter_artists: [],
+    primary_filter_active: false,
+    gallery_page: { has_previous: false },
+  };
+
+  context.handleGalleryBootstrapClick(createAllArtistsEvent({ libraryHome: true }).event);
+
+  assert.equal(calls.fetchAndRender.length, 1);
 });
 
 test('library-home navigation does not use the no-fetch shortcut while a view request is active', () => {
@@ -3534,6 +3577,124 @@ test('interactive-origin no-match clear restores Home with a bounded albums requ
   );
 });
 
+function noMatchSearchContext(rootRevision, statusRevision) {
+  const cachedRootView = {
+    surface: { active: 'albums' },
+    query: '',
+    selected_artist: '',
+    all_artists_active: true,
+    gallery_scope: 'all',
+    visible_library_categories: ['main_library', 'hoard', 'new_arrivals'],
+    related_filter_artists: [],
+    primary_filter_active: false,
+    artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'broadcast-tender' }] }],
+    artists_sidebar: [{ artist: 'Broadcast', count: 1 }],
+    inventory_mutation_revision: rootRevision,
+  };
+  const { context, calls } = createContext({
+    searchInputValue: '',
+    cachedRootView,
+    status: { inventory_mutation_revision: statusRevision },
+  });
+  context.state.view = {
+    surface: { active: 'albums' },
+    query: 'Album Haven deterministic no-match 7f4c29',
+    selected_artist: '',
+    all_artists_active: false,
+    gallery_scope: 'all',
+    visible_library_categories: ['main_library', 'hoard', 'new_arrivals'],
+    related_filter_artists: [],
+    primary_filter_active: false,
+    primary_artist_groups: [],
+    family_artist_groups: [],
+    artist_groups: [],
+    artists_sidebar: [],
+  };
+  context.state.ui.preSearchViewOrigin = 'canonical_root';
+  return { context, calls, cachedRootView };
+}
+
+test('clearing back to the full gallery shows the remembered gallery with no request when the library is unchanged', () => {
+  const { context, calls, cachedRootView } = noMatchSearchContext(7, 7);
+
+  context.handleGalleryBootstrapSearchSubmit(createSubmitEvent());
+
+  assert.deepEqual(calls.fetchAndRender, []);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.applyViewPayload)), [{
+    payload: cachedRootView,
+    runtimeOptions: { trackSidebarReveal: false },
+  }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.renderArtistGroups)), [{ preserveScroll: true }]);
+});
+
+test('clearing while a search is still loading refreshes, so the refresh supersedes that search', () => {
+  const { context, calls } = noMatchSearchContext(7, 7);
+  context.state.ui.activeViewRequestController = { abort() {} };
+
+  context.handleGalleryBootstrapSearchSubmit(createSubmitEvent());
+
+  assert.equal(calls.fetchAndRender.length, 1);
+});
+
+test('clearing back to the full gallery still refreshes when the library changed since it was remembered', () => {
+  const { calls, context } = noMatchSearchContext(7, 8);
+
+  context.handleGalleryBootstrapSearchSubmit(createSubmitEvent());
+
+  assert.equal(calls.fetchAndRender.length, 1);
+});
+
+test('Home shows a current remembered gallery with no request', () => {
+  const cachedRootView = {
+    query: '',
+    selected_artist: '',
+    all_artists_active: false,
+    gallery_scope: 'all',
+    visible_library_categories: ['main_library', 'hoard', 'new_arrivals'],
+    related_filter_artists: [],
+    primary_filter_active: false,
+    artist_groups: [{ artist: 'Broadcast' }],
+    artists_sidebar: [{ artist: 'Broadcast', count: 1 }],
+    inventory_mutation_revision: 3,
+  };
+  const { context, calls } = createContext({ cachedRootView, status: { inventory_mutation_revision: 3 } });
+
+  context.handleGalleryBootstrapClick(createAllArtistsEvent().event);
+
+  assert.equal(calls.applyViewPayload.length, 1);
+  assert.deepEqual(calls.fetchAndRender, []);
+  assert.equal(calls.resumeSelectedArtistCoverLoadsAfterUserAction.length, 1);
+});
+
+test('Home refreshes while a gallery page is loading, so the refresh supersedes the page it cancels', () => {
+  const cachedRootView = {
+    query: '',
+    selected_artist: '',
+    all_artists_active: false,
+    gallery_scope: 'all',
+    visible_library_categories: ['main_library', 'hoard', 'new_arrivals'],
+    related_filter_artists: [],
+    primary_filter_active: false,
+    artist_groups: [{ artist: 'Broadcast' }],
+    artists_sidebar: [{ artist: 'Broadcast', count: 1 }],
+    inventory_mutation_revision: 3,
+  };
+  const { context, calls } = createContext({ cachedRootView, status: { inventory_mutation_revision: 3 } });
+  // Showing a gallery cancels the loading page request, as the real applyViewPayload does.
+  let pageRequestLoading = true;
+  context.isRootGalleryPageRequestLoading = () => pageRequestLoading;
+  const applyViewPayload = context.applyViewPayload;
+  context.applyViewPayload = (...args) => {
+    pageRequestLoading = false;
+    return applyViewPayload(...args);
+  };
+
+  context.handleGalleryBootstrapClick(createAllArtistsEvent().event);
+
+  assert.equal(calls.applyViewPayload.length, 1);
+  assert.equal(calls.fetchAndRender.length, 1);
+});
+
 test('canonical no-match clear requests a full albums projection for the Home completion', () => {
   const { context, calls } = createContext({ searchInputValue: '' });
   context.state.view = {
@@ -4106,7 +4267,7 @@ test('abandoning an unsubmitted search draft on blur releases every search suspe
   const { context, calls } = createContext();
 
   context.handleGalleryBootstrapSearchInput('Devin');
-  context.handleGalleryBootstrapSearchBlur();
+  context.handleGalleryBootstrapSearchBlur(FOCUS_TO_SEARCH_BUTTON);
   await Promise.resolve();
 
   assert.equal(context.state.ui.albumDetailPrewarmSearchSuspended, false);
@@ -4505,12 +4666,52 @@ test('recordRecentSearchQuery keeps the new query in memory when session storage
   assert.deepEqual(JSON.parse(JSON.stringify(context.readRecentSearchQueries())), ['Joseph']);
 });
 
+// Clicking the search button blurs the input first; that click then submits on its own.
+const FOCUS_TO_SEARCH_BUTTON = Object.freeze({ relatedTarget: Object.freeze({ id: 'search-submit' }) });
+
+test('clicking empty space outside an emptied search box applies the clear', () => {
+  const { context, calls } = createContext({ searchInputValue: '' });
+  context.state.view.query = 'Neal Morse';
+
+  context.syncSearchClear();
+  context.handleGalleryBootstrapSearchBlur({ relatedTarget: null });
+
+  assert.equal(calls.buildApiUrl.length, 1);
+  assert.equal(calls.buildApiUrl[0].query, '');
+  assert.equal(calls.fetchAndRender.length, 1);
+});
+
+test('on the phone layout a blur never applies the clear', () => {
+  const { context, calls } = createContext({ searchInputValue: '' });
+  context.usesMobilePageLayout = () => true;
+  context.state.view.query = 'Neal Morse';
+
+  context.syncSearchClear();
+  context.handleGalleryBootstrapSearchBlur({ relatedTarget: null });
+
+  assert.deepEqual(calls.buildApiUrl, []);
+  assert.deepEqual(calls.fetchAndRender, []);
+});
+
+test('a blur that keeps a typed query or an unchanged search does nothing', () => {
+  const typed = createContext({ searchInputValue: 'Neal' });
+  typed.context.state.view.query = 'Neal Morse';
+  typed.context.handleGalleryBootstrapSearchInput('Neal');
+  typed.context.handleGalleryBootstrapSearchBlur({ relatedTarget: null });
+  assert.deepEqual(typed.calls.fetchAndRender, []);
+  assert.deepEqual(typed.calls.buildApiUrl, []);
+
+  const unsearched = createContext({ searchInputValue: '' });
+  unsearched.context.handleGalleryBootstrapSearchBlur({ relatedTarget: null });
+  assert.deepEqual(unsearched.calls.fetchAndRender, []);
+});
+
 test('native clear changes only the input draft until empty search submission', () => {
   const { context, calls } = createContext({ searchInputValue: '' });
   context.state.view.query = 'Neal Morse';
 
   context.syncSearchClear();
-  context.handleGalleryBootstrapSearchBlur();
+  context.handleGalleryBootstrapSearchBlur(FOCUS_TO_SEARCH_BUTTON);
 
   assert.equal(context.state.ui.searchDraftQuery, '');
   assert.equal(context.state.ui.pendingSearchClearOnBlur, false);
@@ -4660,7 +4861,7 @@ test('empty explicit submission commits the same cleared-search view as Apply', 
   };
   context.state.ui.pendingSearchClearOnBlur = true;
 
-  context.handleGalleryBootstrapSearchBlur();
+  context.handleGalleryBootstrapSearchBlur(FOCUS_TO_SEARCH_BUTTON);
   assert.deepEqual(calls.buildApiUrl, []);
   submitSearch(context, '');
 
@@ -4735,7 +4936,7 @@ test('native clear reloads the full selected-artist gallery when the search has 
   };
   context.state.ui.preSearchViewOrigin = 'canonical_root';
   context.state.ui.pendingSearchClearOnBlur = true;
-  context.handleGalleryBootstrapSearchBlur();
+  context.handleGalleryBootstrapSearchBlur(FOCUS_TO_SEARCH_BUTTON);
   submitSearch(context, '');
 
   assert.deepEqual(calls.applyViewPayload, []);
@@ -4795,7 +4996,7 @@ test('canonical search clear keeps browse scope for a retained artist request bu
   blankClear.context.state.ui.preSearchViewOrigin = 'canonical_root';
   blankClear.context.state.ui.pendingSearchClearOnBlur = true;
 
-  blankClear.context.handleGalleryBootstrapSearchBlur();
+  blankClear.context.handleGalleryBootstrapSearchBlur(FOCUS_TO_SEARCH_BUTTON);
   submitSearch(blankClear.context, '');
 
   assert.deepEqual(blankClear.calls.getReusableRootBrowseView, [{
@@ -4850,7 +5051,7 @@ test('canonical search clear keeps browse scope for a retained artist request bu
   retainedArtistClear.context.state.ui.preSearchViewOrigin = 'canonical_root';
   retainedArtistClear.context.state.ui.pendingSearchClearOnBlur = true;
 
-  retainedArtistClear.context.handleGalleryBootstrapSearchBlur();
+  retainedArtistClear.context.handleGalleryBootstrapSearchBlur(FOCUS_TO_SEARCH_BUTTON);
   submitSearch(retainedArtistClear.context, '');
 
   assert.deepEqual(retainedArtistClear.calls.getReusableRootBrowseView, [{
@@ -4932,7 +5133,7 @@ test('native exact-artist 10/10 clear restores the cached root around the comple
   };
   context.state.ui.preSearchViewOrigin = 'canonical_root';
   context.state.ui.pendingSearchClearOnBlur = true;
-  context.handleGalleryBootstrapSearchBlur();
+  context.handleGalleryBootstrapSearchBlur(FOCUS_TO_SEARCH_BUTTON);
   submitSearch(context, '');
 
   assert.equal(calls.applyViewPayload.length, 1);
@@ -5013,7 +5214,7 @@ test('native exact-artist clear uses the selected-gallery completion denominator
   context.state.ui.preSearchViewOrigin = 'canonical_root';
   context.state.ui.pendingSearchClearOnBlur = true;
 
-  context.handleGalleryBootstrapSearchBlur();
+  context.handleGalleryBootstrapSearchBlur(FOCUS_TO_SEARCH_BUTTON);
   submitSearch(context, '');
 
   assert.equal(calls.applyViewPayload.length, 1);
@@ -5093,7 +5294,7 @@ test('native exact-artist clear restores the captured sidebar preview instead of
   context.state.ui.preSearchViewOrigin = 'canonical_root';
   context.state.ui.pendingSearchClearOnBlur = true;
 
-  context.handleGalleryBootstrapSearchBlur();
+  context.handleGalleryBootstrapSearchBlur(FOCUS_TO_SEARCH_BUTTON);
   submitSearch(context, '');
 
   assert.equal(calls.applyViewPayload.length, 1);
@@ -5169,7 +5370,7 @@ test('native exact-artist clear fetches when a query-scoped denominator understa
   context.state.ui.preSearchViewOrigin = 'canonical_root';
   context.state.ui.pendingSearchClearOnBlur = true;
 
-  context.handleGalleryBootstrapSearchBlur();
+  context.handleGalleryBootstrapSearchBlur(FOCUS_TO_SEARCH_BUTTON);
   submitSearch(context, '');
 
   assert.deepEqual(calls.applyViewPayload, []);
@@ -5252,7 +5453,7 @@ test('native clear does not retain a query-filtered selected-artist group over t
   context.state.ui.preSearchViewOrigin = 'canonical_root';
   context.state.ui.pendingSearchClearOnBlur = true;
 
-  context.handleGalleryBootstrapSearchBlur();
+  context.handleGalleryBootstrapSearchBlur(FOCUS_TO_SEARCH_BUTTON);
   submitSearch(context, '');
 
   assert.equal(context.state.view.query, 'Joseph');
@@ -5341,7 +5542,7 @@ test(`cold direct-loaded Signal 1/1 clear preserves a complete cached root and m
 
   assert.equal(context.state.ui.pendingSearchClearOnBlur, false);
 
-  context.handleGalleryBootstrapSearchBlur();
+  context.handleGalleryBootstrapSearchBlur(FOCUS_TO_SEARCH_BUTTON);
   submitSearch(context, '');
 
   assert.equal(calls.applyViewPayload.length, 1);
@@ -5445,7 +5646,7 @@ test('native clear preserves an intentionally family-filtered mounted gallery an
   context.state.ui.preSearchViewOrigin = 'canonical_root';
 
   context.syncSearchClear();
-  context.handleGalleryBootstrapSearchBlur();
+  context.handleGalleryBootstrapSearchBlur(FOCUS_TO_SEARCH_BUTTON);
   submitSearch(context, '');
 
   assert.equal(calls.applyViewPayload.length, 1);
@@ -5518,7 +5719,7 @@ test('native clear restores the captured pre-search artist tree when no reusable
   calls.fetchAndRender.length = 0;
 
   context.syncSearchClear();
-  context.handleGalleryBootstrapSearchBlur();
+  context.handleGalleryBootstrapSearchBlur(FOCUS_TO_SEARCH_BUTTON);
   submitSearch(context, '');
 
   assert.equal(context.state.view.query, '');
@@ -5580,7 +5781,7 @@ test('syncSearchClear injects the selected artist into a cached preview sidebar 
 
   assert.equal(context.state.ui.pendingSearchClearOnBlur, false);
 
-  context.handleGalleryBootstrapSearchBlur();
+  context.handleGalleryBootstrapSearchBlur(FOCUS_TO_SEARCH_BUTTON);
   submitSearch(context, '');
 
   assert.deepEqual(JSON.parse(JSON.stringify(calls.applyViewPayload)), [{
@@ -5836,10 +6037,10 @@ for (const query of ['Devin', '']) {
 const { assertRequestOwnership } = require('../helpers/bounded-interaction-counter');
 const { createGalleryRefreshContext, useRealViewUrls } = require('../helpers/gallery-refresh-context');
 const {
-  assertInteractionRequests, createRequestCapture, jsonResponse, measureInteractionContract,
+  createRequestCapture, jsonResponse, measureInteractionContract,
 } = require('../helpers/request-capture');
 
-function capturedGalleryHandlers() {
+function capturedGalleryHandlers(respond = () => ({ artist_groups: [], payload_tier: 'full' })) {
   const { context } = createGalleryRefreshContext();
   useRealViewUrls(context);
   context.state.gallery = {};
@@ -5849,7 +6050,7 @@ function capturedGalleryHandlers() {
     overlayClickStartedOnOverlay: () => false,
     applyLocalRelatedArtistFilter: () => false,
   });
-  const capture = createRequestCapture(() => jsonResponse({ artist_groups: [], payload_tier: 'full' }));
+  const capture = createRequestCapture(url => jsonResponse(respond(url)));
   context.fetch = capture.fetch;
   return { context, capture };
 }
@@ -5864,51 +6065,179 @@ const clickEvent = matches => ({
   preventDefault() {},
 });
 
+const NAVIGATION_UI_STUBS = ['closeArtistsDrawer'];
+
+// A freshly loaded page already showing `view` at `href`: navigating to that same view must send nothing.
+function freshlyLoadedGallery(href, view, respond) {
+  const handlers = capturedGalleryHandlers(respond);
+  for (const name of NAVIGATION_UI_STUBS) handlers.context[name] ??= () => {};
+  handlers.context.deepCloneJson ??= value => JSON.parse(JSON.stringify(value));
+  handlers.context.withActiveGallerySources ??= view => view;
+  handlers.context.window.location.href = href;
+  handlers.context.state.view = {
+    ...handlers.context.state.view,
+    surface: { active: 'albums' },
+    query: '',
+    selected_artist: '',
+    all_artists_active: false,
+    related_filter_artists: [],
+    primary_filter_active: false,
+    gallery_page: { has_previous: false },
+    ...view,
+  };
+  return handlers;
+}
+
 test('request capture: gallery links and similar-artist chips request their own view once per click', async () => {
   const id = 'js:runtime/bootstrap-gallery-event-handlers.js#handleGalleryBootstrapClick';
-  await measureInteractionContract(id, async (repeatedClicks) => {
-    const { context, capture } = capturedGalleryHandlers();
-    const clickRepeatedly = async (event) => {
-      for (let click = 0; click < repeatedClicks; click += 1) context.handleGalleryBootstrapClick(event);
-      await settleGallery();
-    };
-    await clickRepeatedly(clickEvent({ 'a[data-nav="1"]': { href: 'http://localhost/' } }));
-    await clickRepeatedly(clickEvent({ 'a[data-nav="1"]': { href: 'http://localhost/?artist=Broadcast' } }));
-    context.state.view = { ...context.state.view, selected_artist: 'Broadcast', related_filter_artists: [] };
-    await clickRepeatedly(clickEvent({ '[data-related-artist]': { getAttribute: () => 'Stereolab' } }));
-    const urls = capture.urls();
-    assert.deepEqual(urls.map(galleryRequestShape), [
-      ['/home-data', null, null, null, null],
-      ['/view-data', 'Broadcast', null, null, null],
-      ['/view-data', 'Broadcast', null, 'Stereolab', null],
-    ]);
-    assertRequestOwnership(urls.slice(0, 1), { allowed: ['/home-data'], forbidden: ['/view-data'] }, 'Home');
-    assertInteractionRequests(id, urls);
-    return capture.counter.snapshot();
+  await measureInteractionContract(id, {
+    async alreadyShown(repeatedClicks) {
+      const requests = [];
+      const perform = async ({ context, capture }, navigate) => {
+        for (let click = 0; click < repeatedClicks; click += 1) navigate(context);
+        await settleGallery();
+        requests.push(...capture.urls());
+      };
+      // Owner, 11-18 (PR #107): Back to the gallery from a freshly loaded root gallery reloaded it, because the
+      // loaded view reports all_artists_active: false although it is exactly the library Home gallery.
+      await perform(freshlyLoadedGallery('http://localhost/albums', {}), context => (
+        context.handleGalleryBootstrapClick(createAllArtistsEvent({ libraryHome: true }).event)));
+      const shownArtist = {
+        selected_artist: 'Broadcast',
+        artists_sidebar: [{ artist: 'Broadcast', count: 1 }],
+        primary_artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'broadcast-tender-buttons', name: 'Tender Buttons' }] }],
+        payload_tier: 'full',
+      };
+      await perform(freshlyLoadedGallery('http://localhost/?artist=Broadcast', shownArtist), context => (
+        context.handleSidebarArtistSelectionClick(clickEvent({
+          '[data-sidebar-artist]': { getAttribute: () => 'Broadcast' },
+        }))));
+      return { requests };
+    },
+    setup: repeatedClicks => ({ ...capturedGalleryHandlers(), repeatedClicks }),
+    async act({ context, capture, repeatedClicks }) {
+      const before = capture.requests.length;
+      const clickRepeatedly = async (event) => {
+        for (let click = 0; click < repeatedClicks; click += 1) context.handleGalleryBootstrapClick(event);
+        await settleGallery();
+      };
+      await clickRepeatedly(clickEvent({ 'a[data-nav="1"]': { href: 'http://localhost/' } }));
+      await clickRepeatedly(clickEvent({ 'a[data-nav="1"]': { href: 'http://localhost/?artist=Broadcast' } }));
+      context.state.view = { ...context.state.view, selected_artist: 'Broadcast', related_filter_artists: [] };
+      await clickRepeatedly(clickEvent({ '[data-related-artist]': { getAttribute: () => 'Stereolab' } }));
+      const urls = capture.urls().slice(before);
+      assert.deepEqual(urls.map(galleryRequestShape), [
+        ['/home-data', null, null, null, null],
+        ['/view-data', 'Broadcast', null, null, null],
+        ['/view-data', 'Broadcast', null, 'Stereolab', null],
+      ]);
+      assertRequestOwnership(urls.slice(0, 1), { allowed: ['/home-data'], forbidden: ['/view-data'] }, 'Home');
+      return { requests: urls };
+    },
+  });
+});
+
+// The root gallery as the server sends it, kept by the browse cache.
+const ROOT_GALLERY = Object.freeze({
+  surface: { active: 'albums' },
+  query: '',
+  selected_artist: '',
+  all_artists_active: true,
+  artists_sidebar: [{ artist: 'Broadcast', count: 1 }],
+  artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'broadcast-tender-buttons', name: 'Tender Buttons' }] }],
+  payload_tier: 'full',
+});
+
+// The server answers a search with its results and an unsearched request with the root gallery.
+const searchResponse = (url) => {
+  const query = new URL(url, 'http://localhost').searchParams.get('q') || '';
+  return { ...JSON.parse(JSON.stringify(ROOT_GALLERY)), query };
+};
+
+function searchableRootGallery() {
+  const handlers = freshlyLoadedGallery('http://localhost/', { ...ROOT_GALLERY }, searchResponse);
+  handlers.context.getReusableRootBrowseView = () => JSON.parse(JSON.stringify(ROOT_GALLERY));
+  return handlers;
+}
+
+test('request capture: a committed search requests its results once, and clearing it refreshes the restored gallery once', async () => {
+  const id = 'js:runtime/bootstrap-gallery-event-handlers.js#commitGallerySearchQuery';
+  // Search input and Enter commit through the scheduler, which owns the already-committed check.
+  const commitRepeatedly = async ({ context }, query, repeatedCommits) => {
+    for (let commit = 0; commit < repeatedCommits; commit += 1) context.scheduleGallerySearchCommit(query, { immediate: true });
+    await settleGallery();
+  };
+  await measureInteractionContract(id, {
+    async alreadyShown(repeatedCommits) {
+      const requests = [];
+      // The unsearched gallery committing an empty search, and search results committing their own query.
+      const unsearched = searchableRootGallery();
+      await commitRepeatedly(unsearched, '', repeatedCommits);
+      requests.push(...unsearched.capture.urls());
+      const searched = freshlyLoadedGallery('http://localhost/?q=broadcast', { ...ROOT_GALLERY, query: 'broadcast' }, searchResponse);
+      await commitRepeatedly(searched, 'broadcast', repeatedCommits);
+      requests.push(...searched.capture.urls());
+      return { requests };
+    },
+    setup: repeatedCommits => ({ ...searchableRootGallery(), repeatedCommits }),
+    async act(handlers) {
+      const before = handlers.capture.requests.length;
+      await commitRepeatedly(handlers, 'broadcast', handlers.repeatedCommits);
+      await commitRepeatedly(handlers, '', handlers.repeatedCommits);
+      const urls = handlers.capture.urls().slice(before);
+      assert.deepEqual(urls.map(galleryRequestShape), [
+        ['/view-data', null, 'broadcast', null, null],
+        ['/view-data', null, null, null, null],
+      ]);
+      return { requests: urls };
+    },
   });
 });
 
 test('request capture: history steps request the restored view once, Home through /home-data', async () => {
   const id = 'js:runtime/bootstrap-gallery-event-handlers.js#handleGalleryBootstrapPopState';
-  await measureInteractionContract(id, async (repeatedSteps) => {
-    const { context, capture } = capturedGalleryHandlers();
-    const step = async (href, options) => {
-      context.window.location.href = href;
-      for (let repeat = 0; repeat < repeatedSteps; repeat += 1) context.handleGalleryBootstrapPopState(options);
-      await settleGallery();
-    };
-    await step('http://localhost/');
-    await step('http://localhost/?q=broadcast');
-    await step('http://localhost/', { parentViewUrl: 'http://localhost/?surface=albums', galleryAnchorArtist: 'Broadcast' });
-    const urls = capture.urls();
-    assert.deepEqual(urls.map(galleryRequestShape), [
-      ['/home-data', null, null, null, null],
-      ['/view-data', null, 'broadcast', null, null],
-      ['/view-data', null, null, null, 'Broadcast'],
-    ]);
-    assertRequestOwnership(urls.slice(0, 1), { allowed: ['/home-data'], forbidden: ['/view-data'] }, 'Home');
-    assertInteractionRequests(id, urls);
-    return capture.counter.snapshot();
+  await measureInteractionContract(id, {
+    // A history step that lands on the address the freshly loaded page already shows.
+    async alreadyShown(repeatedSteps) {
+      const requests = [];
+      const stepInPlace = async (href, view) => {
+        const { context, capture } = freshlyLoadedGallery(href, { gallery_scope: 'all', ...view });
+        // The duplicate entry holds the address the app recorded for the shown view.
+        context.window.location.href = new URL(context.buildUrl(context.state.view), 'http://localhost').href;
+        for (let repeat = 0; repeat < repeatedSteps; repeat += 1) context.handleGalleryBootstrapPopState();
+        await settleGallery();
+        requests.push(...capture.urls());
+      };
+      await stepInPlace('http://localhost/?artist=Broadcast', {
+        selected_artist: 'Broadcast',
+        artists_sidebar: [{ artist: 'Broadcast', count: 1 }],
+        primary_artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'broadcast-tender-buttons', name: 'Tender Buttons' }] }],
+        payload_tier: 'full',
+      });
+      await stepInPlace('http://localhost/?q=broadcast', { ...ROOT_GALLERY, query: 'broadcast' });
+      return { requests };
+    },
+    // Steps start from an artist page, so each lands on a view other than the one shown.
+    setup: repeatedSteps => ({ ...freshlyLoadedGallery('http://localhost/?artist=Stereolab', { selected_artist: 'Stereolab' }), repeatedSteps }),
+    async act({ context, capture, repeatedSteps }) {
+      const before = capture.requests.length;
+      const step = async (href, options) => {
+        context.window.location.href = href;
+        for (let repeat = 0; repeat < repeatedSteps; repeat += 1) context.handleGalleryBootstrapPopState(options);
+        await settleGallery();
+      };
+      await step('http://localhost/');
+      await step('http://localhost/?q=broadcast');
+      await step('http://localhost/', { parentViewUrl: 'http://localhost/?surface=albums', galleryAnchorArtist: 'Broadcast' });
+      const urls = capture.urls().slice(before);
+      assert.deepEqual(urls.map(galleryRequestShape), [
+        ['/home-data', null, null, null, null],
+        ['/view-data', null, 'broadcast', null, null],
+        ['/view-data', null, null, null, 'Broadcast'],
+      ]);
+      assertRequestOwnership(urls.slice(0, 1), { allowed: ['/home-data'], forbidden: ['/view-data'] }, 'Home');
+      return { requests: urls };
+    },
   });
 });
 
@@ -5951,18 +6280,30 @@ async function measureConstantGalleryTick(id, tick) {
 }
 
 test('BI cached selected-artist reconcile waits for the track modal with constant work', async () => {
-  await measureConstantGalleryTick('js:runtime/bootstrap-gallery-event-handlers.js#reconcile', async (artistCount) => {
-    const { calls, context, counter, fireNext, timers } = countedGalleryHandlers(artistCount, { trackModalHidden: false });
-    context.scheduleCachedSelectedArtistReconcile({ ...context.state.view });
-    await fireNext();
-    assert.equal(timers.length, 1, 'an open track modal defers the reconcile');
-    const counts = await counter.measure(fireNext);
-    assert.equal(timers.length, 1);
+  const galleries = [];
+  const { small, large } = await measureInteractionContract('js:runtime/bootstrap-gallery-event-handlers.js#reconcile', {
+    async setup(artistCount) {
+      const gallery = countedGalleryHandlers(artistCount, { trackModalHidden: false });
+      gallery.context.scheduleCachedSelectedArtistReconcile({ ...gallery.context.state.view });
+      await gallery.fireNext();
+      assert.equal(gallery.timers.length, 1, 'an open track modal defers the reconcile');
+      galleries.push(gallery);
+      return gallery;
+    },
+    // One deferred tick while the track modal stays open.
+    async act({ calls, counter, fireNext, timers }) {
+      const before = calls.fetchAndRender.length;
+      const metrics = await counter.measure(fireNext);
+      assert.equal(timers.length, 1);
+      return { requests: calls.fetchAndRender.slice(before).map(([url]) => url), metrics };
+    },
+  });
+  assert.deepEqual(large, small);
+  for (const { calls, context, fireNext } of galleries) {
     context.document.getElementById('track-modal').hidden = true;
     await fireNext();
     assert.equal(calls.fetchAndRender.length, 1, 'the closed modal lets the reconcile request once');
-    return counts;
-  });
+  }
 });
 
 test('BI sidebar artist cover resume waits for the pending view request with constant work', async () => {

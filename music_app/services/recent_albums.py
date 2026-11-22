@@ -4,10 +4,11 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from music_app.services.album_display_cover import album_display_cover_sql
 from music_app.services.client_layout_preferences import _owner
 from music_app.services.postgres_connections import pooled_connection as _connect
 
-_RECENT_ALBUMS_SQL = """
+_RECENT_ALBUMS_SQL = f"""
 with recent as (
     select t.album_id, max(h.played_at) as last_played_at
     from integration.listen_history h
@@ -18,7 +19,7 @@ with recent as (
     order by last_played_at desc, t.album_id
     limit %s
 )
-select a.album_key, a.title, a.release_year, a.cover_path, a.metadata,
+select a.album_key, a.title, a.release_year, {album_display_cover_sql("a")} as cover_path, a.metadata,
        ar.name as artist_name, r.last_played_at,
        totals.track_count, totals.total_duration_seconds
 from recent r

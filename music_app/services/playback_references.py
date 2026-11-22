@@ -6,6 +6,7 @@ import hmac
 import json
 from pathlib import Path
 
+from music_app.services.album_display_cover import album_display_cover_sql
 from music_app.services.auth_tokens import keyed_bucket_digest
 from music_app.services.library_roots import resolve_configured_media_path
 from music_app.services.postgres_connections import pooled_connection
@@ -162,8 +163,9 @@ class PlaybackReferenceService:
         with self._connect(self._database_url) as connection:
             _, library_id = require_playback_membership(connection, actor)
             row = connection.execute(
-                """select coalesce(nullif(btrim(a.cover_path), ''),
-                          nullif(btrim(f.metadata #>> '{scan_cache,file_entry,cover_path}'), '')) as cover_path
+                f"""select case when a.id is null
+                          then nullif(btrim(f.metadata #>> '{{scan_cache,file_entry,cover_path}}'), '')
+                          else {album_display_cover_sql("a")} end as cover_path
                    from library.local_track_files f
                    join library.local_tracks t on t.id = f.track_id
                    join library.library_roots r on r.id = f.library_root_id

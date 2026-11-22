@@ -14,6 +14,7 @@ from typing import Any
 from psycopg.types.json import Jsonb
 
 from music_app.services import scan_cache_persistence as saves
+from music_app.services.album_display_cover import album_display_cover_sql
 from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 from music_app.services.library import build_albums_from_file_cache
 from music_app.services.postgres_connections import leased_connection
@@ -144,7 +145,7 @@ _DECISION_SQL = """
           former.paths as was_folded_into,
           scoped_albums.title, scoped_albums.release_year,
           coalesce(nullif(stored.metadata ->> 'album_artist', ''), artists.name) as album_artist,
-          stored.cover_path, stored.metadata ->> 'cover_revision' as cover_revision
+          """ + album_display_cover_sql("stored") + """ as cover_path, stored.metadata ->> 'cover_revision' as cover_revision
         from desired
         join scoped_albums on scoped_albums.id=desired.id
         join members on members.album_id=desired.id

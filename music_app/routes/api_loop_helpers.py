@@ -98,9 +98,11 @@ def resolve_loop_creation_source(
             return None, (error.payload,error.status_code)
     entry = file_cache.get(str(source_path)) if isinstance(file_cache, dict) else None
     entry = entry if isinstance(entry, dict) else {}
-    cover_path = str((entry.get('cover_path') if scope else payload.get('cover_path') or entry.get('cover_path')) or '')
-    if scope and not cover_path:
+    if scope:
+        # Tracks have no artwork: the album's is the loop's, never the track's folder cache.
         cover_path = SavedLoopsPostgresAdapter(config).get_scoped_track_cover(**scope,track_id=track_id)
+    else:
+        cover_path = str(payload.get('cover_path') or entry.get('cover_path') or '')
     return {
         "source_path": source_path,
         "artist": str(payload.get("artist") or entry.get("artist") or entry.get("album_artist") or ""),

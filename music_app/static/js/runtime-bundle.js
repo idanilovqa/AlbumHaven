@@ -35689,15 +35689,15 @@ function buildOptimisticUpdatedAlbumsFromEdits(album, updates) {
         root_provenance: deepCloneJson(album?.root_provenance || visibleSourceAlbum?.root_provenance || null),
         library_root_category: album?.library_root_category || visibleSourceAlbum?.library_root_category,
         source: album?.source || visibleSourceAlbum?.source,
-        cover_ref: track?.cover_ref || album?.cover_ref || coverSourceAlbum?.cover_ref || null,
-        cover_preview_url: track?.cover_preview_url || album?.cover_preview_url || coverSourceAlbum?.cover_preview_url || null,
-        remote_cover_url: track?.remote_cover_url || album?.remote_cover_url || coverSourceAlbum?.remote_cover_url || null,
-        remote_cover_thumbnail_url: track?.remote_cover_thumbnail_url || album?.remote_cover_thumbnail_url || coverSourceAlbum?.remote_cover_thumbnail_url || null,
-        remote_cover_source: track?.remote_cover_source || album?.remote_cover_source || coverSourceAlbum?.remote_cover_source || null,
-        remote_cover_source_label: track?.remote_cover_source_label || album?.remote_cover_source_label || coverSourceAlbum?.remote_cover_source_label || null,
-        remote_cover_album_url: track?.remote_cover_album_url || album?.remote_cover_album_url || coverSourceAlbum?.remote_cover_album_url || null,
-        remote_cover_width: track?.remote_cover_width || album?.remote_cover_width || coverSourceAlbum?.remote_cover_width || null,
-        remote_cover_height: track?.remote_cover_height || album?.remote_cover_height || coverSourceAlbum?.remote_cover_height || null,
+        cover_ref: album?.cover_ref || coverSourceAlbum?.cover_ref || track?.cover_ref || null,
+        cover_preview_url: album?.cover_preview_url || coverSourceAlbum?.cover_preview_url || track?.cover_preview_url || null,
+        remote_cover_url: album?.remote_cover_url || coverSourceAlbum?.remote_cover_url || track?.remote_cover_url || null,
+        remote_cover_thumbnail_url: album?.remote_cover_thumbnail_url || coverSourceAlbum?.remote_cover_thumbnail_url || track?.remote_cover_thumbnail_url || null,
+        remote_cover_source: album?.remote_cover_source || coverSourceAlbum?.remote_cover_source || track?.remote_cover_source || null,
+        remote_cover_source_label: album?.remote_cover_source_label || coverSourceAlbum?.remote_cover_source_label || track?.remote_cover_source_label || null,
+        remote_cover_album_url: album?.remote_cover_album_url || coverSourceAlbum?.remote_cover_album_url || track?.remote_cover_album_url || null,
+        remote_cover_width: album?.remote_cover_width || coverSourceAlbum?.remote_cover_width || track?.remote_cover_width || null,
+        remote_cover_height: album?.remote_cover_height || coverSourceAlbum?.remote_cover_height || track?.remote_cover_height || null,
         year,
         release_date: String(album?.release_date || '').trim(),
         release_type: String(track?.album_type || album?.release_type || 'ALBUM').trim() || 'ALBUM',
@@ -35898,7 +35898,7 @@ function renderTagEditorArtwork(selectedPaths) {
     ? String(state.tagEditor.anchorPath || '')
     : (selectedPaths[0] || '');
   const track = (state.tagEditor.tracks || []).find((item) => String(item.path || '') === focusedPath);
-  const coverRef = track?.cover_ref || state.tagEditor.album?.cover_ref || '';
+  const coverRef = (state.tagEditor.album ? state.tagEditor.album.cover_ref : track?.cover_ref) || '';
   const label = getFilenameFromPath(focusedPath) || track?.title || 'selected track';
   const separatorIndex = Math.max(focusedPath.lastIndexOf('/'), focusedPath.lastIndexOf('\\'));
   const folderPath = separatorIndex > 0 ? focusedPath.slice(0, separatorIndex) : '';
@@ -44639,7 +44639,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
         artist: track.artist || track.album_artist || '',
         albumArtist: track.album_artist || album?.album_artist || '',
         album: track.album || album?.name || '',
-        coverRef: track.cover_ref || album?.cover_ref || '',
+        coverRef: (album ? album.cover_ref : track.cover_ref) || '',
         durationSeconds: Number(track.duration_seconds) || 0,
         duration: currentTimeDisplay || duration,
         originalDuration: duration,
@@ -44702,7 +44702,8 @@ function buildPlayerTrackPayload(track, album = null) {
     artist: track.artist || track.album_artist || '',
     albumArtist: track.album_artist || album?.album_artist || '',
     album: track.album || '',
-    coverRef: track.cover_ref || '',
+    // Tracks have no artwork: the album being played supplies it.
+    coverRef: (album ? album.cover_ref : track.cover_ref) || '',
     durationSeconds: Number(track.duration_seconds) || 0,
     year: String(album?.display_year || album?.year || track.year || '').trim(),
   };
@@ -50842,9 +50843,16 @@ function setCurrentPlayerTrack(track, options = {}) {
       duration: Number(previousPlaybackSnapshot?.duration) || undefined,
     });
   }
-  if (track && !String(track.coverRef || '').trim() && typeof resolveAlbumForPlayerTrack === 'function') {
-    const resolvedCoverRef = String(resolveAlbumForPlayerTrack(track)?.cover_ref || '').trim();
-    if (resolvedCoverRef) track = { ...track, coverRef: resolvedCoverRef };
+  if (track && typeof resolveAlbumForPlayerTrack === 'function') {
+    const album = resolveAlbumForPlayerTrack(track);
+    const albumCoverRef = String(album?.cover_ref || '').trim();
+    const currentCoverRef = String(track.coverRef || '').trim();
+    // A match by name alone may be another album, so it only fills a gap; the track's own album always wins.
+    const holdsTrack = () => Array.isArray(album?.tracks)
+      && album.tracks.some((item) => String(item?.path || '') === String(track.path || ''));
+    if (albumCoverRef && albumCoverRef !== currentCoverRef && (!currentCoverRef || holdsTrack())) {
+      track = { ...track, coverRef: albumCoverRef };
+    }
   }
   state.player.current = track;
   state.player.timelineDragging = false;

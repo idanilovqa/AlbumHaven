@@ -7206,6 +7206,54 @@ def test_postgres_selected_artist_payload_preserves_query_context():
     assert payload["search_context"]["selected_artist_source"] == "requested_artist"
 
 
+# Typing ranks equal matches by shorter name first, so Zulu, not Alpha, is the artist it selects.
+@pytest.mark.parametrize("selected, family_albums", [("Zulu", ["Evening"]), ("Alpha", [])])
+def test_a_search_opened_by_url_shows_what_typing_it_shows(monkeypatch, selected, family_albums):
+    # Owner 2026-11-22: "opened by url search results should be the same as if I did the search myself". Typing
+    # selects the first artist found and shows their related artists; the URL names that artist and dropped them.
+    from music_app.services import library_browse_postgres as browse_module
+
+    found = [
+        _browse_album_row(artist="Alpha", album_id=1, album_key="alpha-remixes", title="Remixes"),
+        _browse_album_row(artist="Zulu", album_id=2, album_key="zulu-remixes", title="More Remixes"),
+    ]
+    for row_id, row in enumerate(found, 1):
+        row["artist_id"] = row_id
+    related = _browse_album_row(artist="Bravo", album_id=3, album_key="bravo-evening", title="Evening")
+    related["artist_id"] = 3
+    maps = {"alias_to_canonical": {}, "canonical_to_aliases": {}}
+    monkeypatch.setattr(browse_module, "_selected_artist_family_context_from_state",
+                        lambda *_args, **_kwargs: {"family_artists": ["Bravo"], **maps})
+    repository = browse_module.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: _NoopSearchSnapshotConnection(),
+        album_ratings_service=_EmptyAlbumRatingsService(),
+    )
+    monkeypatch.setattr(repository._inventory_repository, "load_support_state",
+                        lambda **_kwargs: {"ignored_version_keys": [], "manual_version_links": {}})
+    monkeypatch.setattr(repository, "_load_relation_alias_maps", lambda **_kwargs: maps)
+    monkeypatch.setattr(repository, "_load_search_rows", lambda *_args, **_kwargs: found)
+    monkeypatch.setattr(repository, "_load_artist_preview_rows", lambda *_args, **_kwargs: [related])
+    monkeypatch.setattr(repository, "_load_non_album_entries", lambda **_kwargs: [])
+    monkeypatch.setattr(repository, "_attach_duplicate_sources", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(repository, "queue_settings_projection_prewarm", lambda: None)
+    params = {"surface": "albums", "q": "remixes"}
+
+    def shown(payload, field):
+        return [album["name"] for group in payload[field] for album in group["albums"]]
+
+    by_url = repository.build_selected_artist_payload(query_params={**params, "artist": selected}, library_state={})
+
+    assert shown(by_url, "family_artist_groups") == family_albums
+    if selected == "Zulu":
+        typed = repository.build_search_payload(query_params=params, library_state={})
+        assert typed["selected_artist"] == selected
+        for field in ("primary_artist_groups", "family_artist_groups"):
+            assert shown(by_url, field) == shown(typed, field)
+        assert by_url["album_count"] == typed["album_count"]
+        assert by_url["artists_sidebar"] == typed["artists_sidebar"]
+
+
 def test_postgres_selected_artist_query_context_rebuilds_filtered_family_sidebar(monkeypatch):
     from music_app.services import library_browse_postgres as browse_module
 

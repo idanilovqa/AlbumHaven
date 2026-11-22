@@ -1694,7 +1694,20 @@ class PostgresLibraryBrowseRepository:
             if family_artists
             else []
         )
-        if query_search_rows is not None:
+        selected_is_search_top = bool(
+            query_search_rows is not None
+            and not _query_param_list(query_params, "related_artist")
+            and not _request_flag((query_params or {}).get("primary_filter"))
+            and local_inventory_identity_key(_typed_search_selected_artist(
+                loaded_search_rows,
+                _search_missing_album_rows,
+                query=query,
+                view_state=view_state,
+                alias_to_canonical=alias_to_canonical,
+                canonical_to_aliases=canonical_to_aliases,
+            )) in selected_scope_keys
+        )
+        if query_search_rows is not None and not selected_is_search_top:
             query_album_pairs = {
                 (
                     _row_mapping(row).get("source_artist_id") or _row_mapping(row).get("artist_id"),
@@ -1797,7 +1810,7 @@ class PostgresLibraryBrowseRepository:
             )
             in visible_family_artist_keys
         ]
-        if (query and artist_display and not selected_artist_name_matches_query
+        if (query and artist_display and not selected_artist_name_matches_query and not selected_is_search_top
                 and not related_artist_name_query and not related_filter_artists):
             family_artist_groups = []
         artist_groups = (
@@ -9011,6 +9024,32 @@ def _top_search_selected_artist(artist_groups: list[dict[str, object]], *, query
         if artist:
             return artist
     return ""
+
+
+def _typed_search_selected_artist(
+    search_rows: list[object] | None,
+    missing_album_rows: list[object] | None,
+    *,
+    query: str,
+    view_state: Mapping[str, object],
+    alias_to_canonical: Mapping[str, object],
+    canonical_to_aliases: Mapping[str, object],
+) -> str:
+    """The artist typing this search selects, from names alone; a URL naming it shows what typing shows."""
+    found = [artist for artist, _ in _group_rows_by_artist_identity(
+        _canonicalize_artist_rows(list(search_rows or []), alias_to_canonical),
+    )]
+    found.extend(
+        _canonical_artist_name(album.get("album_artist") or "Unknown Artist", alias_to_canonical)
+        for album in _missing_album_projection_payloads(
+            list(missing_album_rows or []),
+            view_state=view_state,
+            query=query,
+            alias_to_canonical=alias_to_canonical,
+            canonical_to_aliases=canonical_to_aliases,
+        )
+    )
+    return min(found, key=lambda artist: _search_artist_group_sort_key(artist, query=query), default="")
 
 
 def _artists_sidebar_from_groups(artist_groups: list[dict[str, object]]) -> list[dict[str, object]]:

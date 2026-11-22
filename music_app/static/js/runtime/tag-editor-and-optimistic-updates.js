@@ -926,6 +926,7 @@ async function confirmManualTagEdit() {
     const response = await responsePromise;
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.ok) {
+      saveFolds?.fail();
       saveOutcomeUnknown = typeof data.ok !== 'boolean';
       if (
         data.save_task_id
@@ -950,6 +951,8 @@ async function confirmManualTagEdit() {
     const saveTaskCompleted = Boolean(data.save_task_id)
       && String(data.save_task_status || '').trim().toLowerCase() === 'completed';
     const responseIsTerminal = !data.save_task_id || saveTaskCompleted;
+    // Before anything is awaited: a page left during the refresh must not leave the save as pending.
+    if (responseIsTerminal) saveFolds?.finish();
     const terminalResponseNeedsCanonicalRefresh = responseIsTerminal
       && Boolean(data.requires_view_refresh);
     const committedValues = data.committed_values
@@ -979,7 +982,6 @@ async function confirmManualTagEdit() {
         },
       );
       updateOpenTrackModalAfterTagEdit(album, reconciledUpdatedAlbums);
-      saveFolds?.finish();
       saveFolds?.keep();
       renderView(renderOptions);
     }

@@ -113,14 +113,20 @@ const saveFoldDecisions = (() => {
     return changed || appearing.length > 0;
   }
 
-  // A view read while the save is being written still holds the album as it was.
+  // A view read while the save is being written still holds the album as it was. After a partial move
+  // the source keeps its name, so only an edited track still in it means the view holds it as it was.
   function showEdit(save) {
     if (!Object.values(save.updates).some((values) => 'album' in values || 'album_artist' in values)) return false;
-    const unedited = collectVisibleAlbumsUnique().some((card) => (
-      String(card.key || '') === String(save.album.key || '')
-      && String(card.name || '') === String(save.album.name || '')
-      && String(card.album_artist || '') === String(save.album.album_artist || '')
-    ));
+    const edited = new Set(Object.keys(save.updates));
+    const unedited = collectVisibleAlbumsUnique().some((card) => {
+      if (String(card.key || '') !== String(save.album.key || '')
+        || String(card.name || '') !== String(save.album.name || '')
+        || String(card.album_artist || '') !== String(save.album.album_artist || '')) return false;
+      const paths = Array.from(getAlbumTrackPaths(card));
+      if (paths.length) return paths.some((path) => edited.has(path));
+      // A card without paths can only tell when the whole album was edited.
+      return Array.from(getAlbumTrackPaths(save.album)).every((path) => edited.has(path));
+    });
     if (!unedited) return false;
     applyUpdatedAlbumsToCurrentView(buildOptimisticUpdatedAlbumsFromEdits(save.album, save.updates), {
       skipRender: true, originalAlbum: save.album, tagEdits: save.updates,
@@ -129,6 +135,8 @@ const saveFoldDecisions = (() => {
   }
 
   function show() {
+    // Another page's save is over once the library moves past it; that page may have closed before saying so.
+    saves = saves.filter((save) => save.own || !save.revision || knownRevision() <= save.revision);
     if (showing || !saves.length) return false;
     showing = true;
     try {
@@ -151,7 +159,7 @@ const saveFoldDecisions = (() => {
       const question = questionFor(updates);
       const save = {
         id: `${Date.now()}:${Math.random()}`, own: true, at: Date.now(),
-        album, updates, decision: question?.decision || null,
+        album, updates, revision: knownRevision(), decision: question?.decision || null,
       };
       saves.push(save);
       storeSaves();

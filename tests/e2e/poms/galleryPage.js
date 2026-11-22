@@ -1299,16 +1299,40 @@ export class GalleryPage extends BasePage {
     while (true) {
       const remaining = deadline - Date.now();
       if (remaining <= 0) throw new Error('Gallery scroll movement exceeded its original deadline.');
-      await this.waitForPageCondition(hasSettledVirtualGalleryRender, {
-        timeout: remaining,
-      }, {
-        expectedDirection: Number(direction || 1),
-        galleryScrollSelector: this.galleryScrollSelector,
-        priorPosition: Number(previousScrollTop || 0),
-        targetScrollTop: options.targetScrollTop,
-        previousMaxScrollTop,
-        allowExtentExpansion,
-      });
+      try {
+        await this.waitForPageCondition(hasSettledVirtualGalleryRender, {
+          timeout: remaining,
+        }, {
+          expectedDirection: Number(direction || 1),
+          galleryScrollSelector: this.galleryScrollSelector,
+          priorPosition: Number(previousScrollTop || 0),
+          targetScrollTop: options.targetScrollTop,
+          previousMaxScrollTop,
+          allowExtentExpansion,
+        });
+      } catch (error) {
+        // parity-check: allow-read-only-measurement-evaluate -- report the grid state of a failed wait.
+        const observed = await this.galleryScroll.evaluate(element => {
+          const grid = globalThis.__ALBUM_HAVEN_VIRTUAL_GRID__ || {};
+          const recent = Object.values(grid).filter(Array.isArray).sort((a, b) => b.length - a.length)[0] || [];
+          return {
+            scrollTop: element.scrollTop,
+            maxScrollTop: element.scrollHeight - element.clientHeight,
+            now: performance.now(),
+            latestScroll: grid.latestScroll,
+            latestRender: grid.latestRender && { ...grid.latestRender, sections: undefined, visibleRanges: undefined, rangeKey: undefined },
+            recent: recent.slice(-30).map(event => ({
+              type: event.type,
+              at: event.timestamp ?? event.at,
+              scrollTop: event.scrollTop,
+              generation: event.renderGeneration,
+              owner: event.renderRafOwner,
+            })),
+          };
+        });
+        console.log('[DIAG-028]', JSON.stringify({ previousScrollTop, previousMaxScrollTop, direction, remaining, observed }));
+        throw error;
+      }
       if (!allowExtentExpansion) return;
       // parity-check: allow-read-only-measurement-evaluate -- inspect committed extent; native input is the only scroll mutation.
       const geometry = await this.galleryScroll.evaluate(element => ({

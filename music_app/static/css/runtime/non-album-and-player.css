@@ -948,8 +948,9 @@ background: radial-gradient(ellipse 70% 150% at 50% 50%, rgba(3, 9, 12, 0.95) 0%
 .global-player.is-compact .player-elsewhere-overlay {
 display: none;
 }
-/* Owner, round 7 (2026-11-18): golden like "Nothing is playing" (the idle label's ink, which the
-   appearance ink overrides for both), and larger. */
+/* Owner, round 7 (2026-11-18): golden like "Nothing is playing", and larger. The idle label keeps this
+   ink under every player palette (the appearance rule's `:is()` cannot match its ::after), so this
+   label takes no palette ink either (owner, round 9: "still has no yellow tint"). */
 .player-elsewhere-label {
 color: #d9f99d;
 font-size: 0.95rem;

@@ -229,7 +229,9 @@ test.describe('Cards change at Save', () => {
       await galleryActions.galleryPage.readProductionVisibleAlbumObservation(ownedFixture.artist, [TWIN, COPY, NEW])
     ).albumCount;
     const movedArtist = `${ownedFixture.artist} moved`;
-    const treeEntry = page.getByRole('navigation').getByText(movedArtist, { exact: true });
+    const treeEntry = page.locator(
+      `${galleryActions.galleryPage.sidebarArtistSelector}[data-sidebar-artist=${JSON.stringify(movedArtist)}]`,
+    );
     await waitForSeededPair(galleryActions);
     await expect(albumCard.cards).toHaveCount(1);
     await expect(albumCard.duplicateMarkerByAlbumName(TWIN)).toBeVisible();

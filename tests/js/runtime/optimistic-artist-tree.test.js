@@ -58,7 +58,8 @@ test('an edit that keeps the album artist leaves the tree as it was', () => {
 });
 
 test('FTC-TAGS-040 moving one copy of a twin out keeps the selected artist in the tree', () => {
-  const twin = { key: 'a::twin', album_artist: 'Alpha', track_paths: ['1', '2', '3', '4'] };
+  // The twin's card lists one copy and carries the marker.
+  const twin = { key: 'a::twin', album_artist: 'Alpha', track_paths: ['1', '2'], has_duplicate_files: true };
   const copy = { key: 'a::twin', album_artist: 'Alpha', track_paths: ['1', '2'] };
   const updates = { 1: { album_artist: 'Beta' }, 2: { album_artist: 'Beta' } };
   const view = tree([entry('Alpha', 1)], [twin]);

@@ -42182,11 +42182,14 @@ function moveSidebarArtistCounts(sidebar, original, updatedAlbums, kept) {
 }
 
 // Before the optimistic apply: the edited album keeps its card when its visible card holds a file the
-// save doesn't edit (an edit of one copy, or of some of its tracks).
+// save doesn't edit (some of its tracks), or has duplicate copies (a card lists one copy, and the save
+// edits only the files it lists).
 function artistTreeKeepsEditedAlbum(album, updates) {
   const paths = getAlbumTrackPaths(album);
-  const card = typeof findVisibleAlbumByTrackPaths === 'function' ? findVisibleAlbumByTrackPaths(paths) : null;
-  return Array.from(getAlbumTrackPaths(card || album)).some((path) => !updates?.[path]);
+  const card = (typeof findVisibleAlbumByTrackPaths === 'function' ? findVisibleAlbumByTrackPaths(paths) : null)
+    || album;
+  return Boolean(card?.has_duplicate_files)
+    || Array.from(getAlbumTrackPaths(card)).some((path) => !updates?.[path]);
 }
 
 function applyTagEditToArtistTree(original, updatedAlbums, kept) {

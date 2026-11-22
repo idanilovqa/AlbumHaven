@@ -7683,8 +7683,6 @@ def _synchronize_album_cover_file_entries_sql(
     )
     album_filter = (
         """album.id in (
-          select unnest(%(album_ids)s::bigint[])
-          union
           select selected_tracks.album_id
           from library.local_track_files as selected_files
           join library.local_tracks as selected_tracks
@@ -7695,6 +7693,18 @@ def _synchronize_album_cover_file_entries_sql(
         if by_album_ids
         else "album.album_key = any(%(album_keys)s::text[])"
     )
+    # A save writes only the files it moves, after reconciliation settles their album: untouched
+    # tracks keep their folder cache, and a destination without a cover erases no folder image.
+    moved_only = "and files.private_path = any(%(active_paths)s::text[])" if by_album_ids else ""
+    cover_fields = f"""jsonb_build_object(
+            'album_id', album.id, 'cover_path', album.cover_path,
+            {selection_fields}
+          )"""
+    inherited = ""
+    if by_album_ids:
+        cover_fields = f"""case when nullif(btrim(album.cover_path), '') is null
+            then jsonb_build_object('album_id', album.id) else {cover_fields} end"""
+        inherited = f" || jsonb_build_object({structural_cover_field.lstrip(', ')})"
     # Materialized album and file sets keep the update on the album/track
     # indexes; the planner otherwise scans every track file's metadata.
     return f"""
@@ -7715,13 +7725,11 @@ def _synchronize_album_cover_file_entries_sql(
             on roots.id = files.library_root_id and roots.library_id = tracks.library_id
            and roots.is_active is true
           where files.scan_cache_stale is false and files.scan_file_entry_is_object is true
+            {moved_only}
         )
         update library.local_track_files files
         set metadata = jsonb_set(files.metadata, '{{scan_cache,file_entry}}',
-          (files.metadata #> '{{scan_cache,file_entry}}') || jsonb_build_object(
-            'album_id', album.id, 'cover_path', album.cover_path,
-            {selection_fields}{structural_cover_field}
-          ), true)
+          (files.metadata #> '{{scan_cache,file_entry}}') || {cover_fields}{inherited}, true)
         from repaired_files album
         where files.id = album.file_id
           and coalesce(files.metadata #>> '{{scan_cache,file_entry,local_album_membership_problem}}', '') = ''

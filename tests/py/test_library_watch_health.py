@@ -931,6 +931,7 @@ def test_app_wires_coordinator_and_reconciliation_problems_to_persistent_watcher
                         "C:/Destination/01.flac",
                     ),
                     new_track_paths=("C:/Destination/01.flac",),
+                    paths_complete=True,  # a watcher pass names every path it changed (93f3dd072)
                     health="healthy",
                 )
                 self.after_commit(result)

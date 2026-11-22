@@ -126,3 +126,13 @@ def test_only_a_still_split_still_undecided_present_album_is_listed():
     assert "not exists ( select 1 from library.local_album_artist_identities" in sql, "decided or the owner's choice"
     assert "left join library.local_artists" in sql, "never an inner join on the album's artist"
     assert "from library.local_tracks" in sql
+
+
+def test_the_first_album_s_preloaded_detail_keeps_the_label_the_filter_reads():
+    # The client spreads initial_detail over the summary row, problem_reasons included.
+    payload = {"items": [{"key": "ark", "name": "Ark", "problem_reasons": ["Missing year"]}], "count": 1,
+               "initial_detail": {"key": "ark", "problem_reasons": ["Missing year"]}}
+
+    project_album_problems_into_problematic_files(_request([ARK]), payload)
+
+    assert payload["initial_detail"]["problem_reasons"] == ["Missing year", LABEL]

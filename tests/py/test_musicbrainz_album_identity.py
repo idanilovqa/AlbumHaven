@@ -38,7 +38,7 @@ class _Connection:
         flat = " ".join(sql.lower().split())
         self.calls.append((flat, params))
         row = None
-        if "as album_artist" in flat:
+        if "select albums.artist_id as local_artist_id from active_library" in flat:
             row = self.target and {"local_artist_id": self.target["local_artist_id"]}
         elif "as decided" in flat:
             row = self.target

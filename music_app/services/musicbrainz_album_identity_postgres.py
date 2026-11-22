@@ -91,7 +91,7 @@ class MusicBrainzAlbumIdentityPostgresRepository:
 
 # The album's artist, to lock before anything is decided.
 _ALBUM_ARTIST_SQL = _active_library_cte() + """
-    select albums.artist_id as local_artist_id, albums.album_key as album_artist
+    select albums.artist_id as local_artist_id
     from active_library
     join library.local_albums albums
       on albums.library_id = active_library.library_id and albums.album_key = %(album_key)s;

@@ -350,6 +350,12 @@ def project_album_problems_into_problematic_files(
     if album_items is None:
         album_items = load_problematic_album_items(request)
     by_key = {item["musicbrainz_album_key"]: item for item in album_items}
+    initial_detail = payload.get("initial_detail")
+    if isinstance(initial_detail, dict):
+        # The client spreads it over its summary row, so it carries the same labels.
+        flagged = by_key.get(_problematic_album_key(initial_detail.get("key")))
+        if flagged is not None:
+            _label_flagged_album(initial_detail, flagged)
     for item in payload["items"]:
         flagged = by_key.pop(_problematic_album_key(item.get("key")), None)
         if flagged is not None:

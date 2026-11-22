@@ -3712,15 +3712,18 @@ async function assignMusicBrainzAlbumArtist(item) {
 }
 
 function handleMusicBrainzArtistUndecidedEvent(event) {
+  const choosing = event.type === 'change' && event.target?.matches?.('[data-musicbrainz-select-identity]');
+  const assigning = event.type === 'click' && event.target?.closest?.('[data-musicbrainz-assign-album-artist]');
+  // Utility clicks and keystrokes all pass here: only this entry's own look up the selection.
+  if (!choosing && !assigning) return false;
   const item = getSelectedProblematicAlbum();
   if (!item?.musicbrainz_artist_undecided) return false;
-  if (event.type === 'change' && event.target?.matches?.('[data-musicbrainz-select-identity]')) {
+  if (choosing) {
     const ui = item.musicbrainz_undecided_ui || (item.musicbrainz_undecided_ui = {});
     ui.selectedMbid = event.target.value;
     renderProblematicFiles({ preserveProblematicTree: true });
     return true;
   }
-  if (event.type !== 'click' || !event.target?.closest?.('[data-musicbrainz-assign-album-artist]')) return false;
   event.preventDefault();
   void assignMusicBrainzAlbumArtist(item);
   return true;

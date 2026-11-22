@@ -166,3 +166,14 @@ test('names, titles and evidence are escaped', () => {
   item.musicbrainz_artist_undecided.artist_name = '<b>Ark</b>';
   assert.doesNotMatch(loadContext(item).context.buildMusicBrainzAlbumProblemDetail(item), /<img src=x>|<b>Ark<\/b>/);
 });
+
+test('typing and unrelated clicks never search the problem list for this entry', () => {
+  const item = arkItem();
+  const { context } = loadContext(item);
+  let reads = 0;
+  context.getSelectedProblematicAlbum = () => { reads += 1; return item; };
+  for (const type of ['input', 'click', 'change']) {
+    context.handleMusicBrainzArtistUndecidedEvent({ type, target: { matches: () => false, closest: () => null } });
+  }
+  assert.equal(reads, 0);
+});

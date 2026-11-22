@@ -11,14 +11,32 @@ from __future__ import annotations
 import asyncio
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import suppress
+import os
 import subprocess
+import sys
 import threading
 from typing import BinaryIO
 
+if sys.platform == "win32":
+    import _winapi
+    import msvcrt
+
 
 _PIPE_READ_BYTES = 64 * 1024
+# Windows' default pipe holds about 4 KiB. Each read waits for the loop, and for the GIL while
+# another thread is busy, so reads that small streamed audio slower than it plays.
+_WINDOWS_STDOUT_PIPE_BYTES = 256 * 1024
 # CreateProcess blocks, for seconds on a loaded host, so it never runs on the event loop.
 _STARTER = ThreadPoolExecutor(max_workers=4, thread_name_prefix="child-process-start")
+
+
+def _stdout_pipe() -> tuple[BinaryIO, BinaryIO]:
+    if sys.platform == "win32":
+        read, write = _winapi.CreatePipe(None, _WINDOWS_STDOUT_PIPE_BYTES)
+        descriptors = msvcrt.open_osfhandle(read, os.O_RDONLY), msvcrt.open_osfhandle(write, 0)
+    else:
+        descriptors = os.pipe()
+    return open(descriptors[0], "rb", buffering=0), open(descriptors[1], "wb", buffering=0)
 
 
 class _PipeReader:
@@ -50,7 +68,8 @@ class _PipeReader:
             self._room.set()
 
     def pump(self, pipe: BinaryIO) -> None:
-        # A closed loop refuses callbacks; closing the pipe then stops the child's writes.
+        # A closed loop refuses callbacks, and closing the pipe then stops the child's writes.
+        # A pump already waiting for room ends with the child or with the server process.
         with suppress(RuntimeError):
             try:
                 with pipe:
@@ -58,49 +77,66 @@ class _PipeReader:
                         self._room.clear()
                         self._loop.call_soon_threadsafe(self._deliver, data)
                         self._room.wait()
-            finally:
-                # A failed read must end the caller's read too, never leave it waiting.
+            except Exception as error:
+                # As in asyncio, a failed read is the caller's error, never a short success.
+                self._loop.call_soon_threadsafe(self.stream.set_exception, error)
+            else:
                 self._loop.call_soon_threadsafe(self.stream.feed_eof)
 
 
 class ChildProcess:
     """The part of asyncio.subprocess.Process the app uses."""
 
-    def __init__(self, *, stderr: int) -> None:
+    def __init__(self, *, piped_stderr: bool) -> None:
         self._loop = asyncio.get_running_loop()
         self._stdout = _PipeReader(self._loop)
-        self._stderr = _PipeReader(self._loop) if stderr == subprocess.PIPE else None
+        self._stderr = _PipeReader(self._loop) if piped_stderr else None
         self.stdout = self._stdout.stream
         self.stderr = self._stderr.stream if self._stderr else None
-        self._stderr_target = stderr
         self._exited = self._loop.create_future()
         self._popen: subprocess.Popen[bytes]
 
-    def launch(self, command: tuple[str, ...], creationflags: int) -> None:
-        self._popen = subprocess.Popen(
-            command,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=self._stderr_target,
-            creationflags=creationflags,
-            bufsize=0,
-        )
-        threading.Thread(target=self._supervise, name="child-process-wait", daemon=True).start()
-
-    def _supervise(self) -> None:
-        readers = [(self._stdout, self._popen.stdout)]
+    def launch(self, command: tuple[str, ...], stderr: int, creationflags: int) -> None:
+        output, child_output = _stdout_pipe()
+        try:
+            with child_output:
+                self._popen = subprocess.Popen(
+                    command,
+                    stdin=subprocess.DEVNULL,
+                    stdout=child_output,
+                    stderr=stderr,
+                    creationflags=creationflags,
+                    bufsize=0,
+                )
+        except BaseException:
+            output.close()
+            raise
+        pipes = [(self._stdout, output)]
         if self._stderr:
-            readers.append((self._stderr, self._popen.stderr))
-        pumps = [
-            threading.Thread(target=reader.pump, args=(pipe,), name="child-process-pipe", daemon=True)
-            for reader, pipe in readers
-        ]
-        for pump in pumps:
-            pump.start()
+            pipes.append((self._stderr, self._popen.stderr))
+        try:
+            pumps = []
+            for reader, pipe in pipes:
+                pump = threading.Thread(
+                    target=reader.pump, args=(pipe,), name="child-process-pipe", daemon=True,
+                )
+                pump.start()
+                pumps.append((reader, pump))
+            threading.Thread(
+                target=self._supervise, args=(pumps,), name="child-process-wait", daemon=True,
+            ).start()
+        except BaseException:
+            # Out of threads: nobody would read or reap this child.
+            self._popen.kill()
+            for reader, _pipe in pipes:
+                reader.release()
+            raise
+
+    def _supervise(self, pumps: list[tuple[_PipeReader, threading.Thread]]) -> None:
         self._popen.wait()
-        for reader, _pipe in readers:
+        for reader, _pump in pumps:
             reader.release()
-        for pump in pumps:
+        for _reader, pump in pumps:
             pump.join()
         with suppress(RuntimeError):  # The loop closed first; nobody is waiting.
             self._loop.call_soon_threadsafe(self._exited.set_result, None)
@@ -127,8 +163,8 @@ async def start_child_process(
     creationflags: int = 0,
 ) -> ChildProcess:
     """Start a child with no stdin and a piped stdout."""
-    process = ChildProcess(stderr=stderr)
-    starting = _STARTER.submit(process.launch, command, creationflags)
+    process = ChildProcess(piped_stderr=stderr == subprocess.PIPE)
+    starting = _STARTER.submit(process.launch, command, stderr, creationflags)
     try:
         await asyncio.wrap_future(starting)
     except asyncio.CancelledError:

@@ -194,11 +194,12 @@ def test_mp3_decoded_here_keeps_its_gapless_trim(playback_app, library_track, ch
 
 
 def test_the_gapless_probe_reports_the_trim_ffmpeg_ignores(media, ffmpeg, children):
+    mp3_gapless._probe_cache.clear()
     info = on_selector_loop(mp3_gapless.ignored_mp3_gapless_info(media["trimmed.mp3"], ffmpeg))
 
     assert info is not None
     assert info.end_sample - info.first_sample == FRAMES
-    assert all(child.poll() is not None for child in children)
+    assert children and all(child.poll() is not None for child in children)
 
 
 @pytest.mark.parametrize("name", ["wav", "flac", "m4a", "mp3", "trimmed.mp3"])
@@ -257,6 +258,7 @@ def test_a_disconnect_mid_stream_reaps_the_decoder(playback_app, library_track, 
             assert metadata["type"] == "metadata", f"playback refused the track: {metadata}"
             await socket.send_json({"type": "credit", "generation": 1, "streamId": 1, "frames": 1024})
             assert (await next_message(socket))["bytes"]
+            await socket.disconnect(timeout=30)  # Stopping a real decoder may outlast the helper's 2 s.
 
     on_selector_loop(scenario())
 

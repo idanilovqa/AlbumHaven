@@ -20,13 +20,18 @@ def on_selector_loop(scenario):
 
 
 @pytest.fixture
-def children(monkeypatch) -> list[subprocess.Popen]:
+def children(monkeypatch):
     started: list[subprocess.Popen] = []
 
     class RecordedPopen(subprocess.Popen):
         def __init__(self, *args, **kwargs) -> None:
             super().__init__(*args, **kwargs)
+            self.requested_flags = kwargs.get("creationflags", 0)
             started.append(self)
 
     monkeypatch.setattr(subprocess, "Popen", RecordedPopen)
-    return started
+    yield started
+    # A failed scenario must not leave its children, and their threads, to the tests after it.
+    for child in started:
+        if child.poll() is None:
+            child.kill()

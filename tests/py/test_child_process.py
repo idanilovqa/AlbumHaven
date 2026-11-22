@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import hashlib
 from pathlib import Path
 import subprocess
@@ -12,6 +13,7 @@ import time
 
 import pytest
 
+from music_app.services import child_process
 from music_app.services.child_process import start_child_process
 from music_app.services.ffmpeg_runtime import hidden_subprocess_creation_flags
 from tests.py.selector_loop_testing import children, on_selector_loop  # noqa: F401
@@ -25,7 +27,7 @@ def python_child(code: str) -> tuple[str, ...]:
 
 
 @pytest.fixture(autouse=True)
-def no_pipe_thread_outlives_its_child():
+def no_pipe_thread_outlives_its_child(children):
     yield
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
@@ -73,24 +75,17 @@ def test_an_unread_stream_holds_the_child_back_and_loses_nothing_when_read():
         process = await start_child_process(
             *python_child(
                 "block = bytes(range(256)) * 256\n"
-                "for count in range(1, 129):\n"
+                "for _ in range(128):\n"
                 "    sys.stdout.buffer.write(block)\n"
-                "    sys.stdout.flush()\n"
-                "    print(count, file=sys.stderr, flush=True)\n"
-            ),
-            stderr=subprocess.PIPE,
+            )
         )
-        written = 0
-        while True:
-            try:
-                line = await asyncio.wait_for(process.stderr.readline(), 2)
-            except asyncio.TimeoutError:
-                if written:
-                    break
-                continue
-            assert line, "the child finished although nobody read its output"
-            written = int(line)
-        assert written * 64 * 1024 < MEBIBYTE
+        # The reader's own buffer, because a silent child looks the same as one held back.
+        buffered = process.stdout._buffer
+        high_water = 2 * process.stdout._limit
+        while len(buffered) <= high_water:
+            await asyncio.sleep(0.02)
+        await asyncio.sleep(1)
+        assert high_water < len(buffered) <= high_water + 64 * 1024
         assert process.returncode is None
 
         digest = hashlib.sha256()
@@ -99,12 +94,89 @@ def test_an_unread_stream_holds_the_child_back_and_loses_nothing_when_read():
             assert len(data) <= 16 * 1024
             digest.update(data)
             received += len(data)
-        await process.stderr.read()
         assert received == 8 * MEBIBYTE
         assert digest.digest() == hashlib.sha256(bytes(range(256)) * (256 * 128)).digest()
         assert await process.wait() == 0
 
     on_selector_loop(scenario())
+
+
+def test_a_slow_handoff_to_the_loop_still_moves_small_writes_in_large_reads():
+    """A busy Python thread makes each handoff wait some 5 ms: 4 KiB handoffs fell below realtime."""
+    handoffs = []
+
+    async def scenario():
+        loop = asyncio.get_running_loop()
+        schedule = loop.call_soon_threadsafe
+
+        def slow_handoff(callback, *args, **kwargs):
+            if threading.current_thread().name == "child-process-pipe":
+                handoffs.append(callback)
+                time.sleep(0.05)
+            return schedule(callback, *args, **kwargs)
+
+        loop.call_soon_threadsafe = slow_handoff
+        process = await start_child_process(
+            *python_child("for _ in range(256): os.write(1, bytes(4096))")
+        )
+        assert len(await process.stdout.read()) == MEBIBYTE
+        assert await process.wait() == 0
+
+    on_selector_loop(scenario())
+
+    assert len(handoffs) <= 64
+
+
+def test_a_failed_pipe_read_is_an_error_never_a_short_success(monkeypatch):
+    pump = child_process._PipeReader.pump
+
+    class FailsOnSecondRead:
+        def __init__(self, pipe) -> None:
+            self._pipe = pipe
+            self._reads = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_error) -> None:
+            self._pipe.close()
+
+        def read(self, size):
+            self._reads += 1
+            if self._reads > 1:
+                raise OSError(errno.ENOMEM, "pipe read failed")
+            return self._pipe.read(size)
+
+    monkeypatch.setattr(
+        child_process._PipeReader, "pump", lambda reader, pipe: pump(reader, FailsOnSecondRead(pipe)),
+    )
+
+    async def scenario():
+        process = await start_child_process(*python_child("os.write(1, bytes(3000))"))
+        with pytest.raises(OSError, match="pipe read failed"):
+            await process.stdout.read()
+        await process.wait()
+
+    on_selector_loop(scenario())
+
+
+@pytest.mark.parametrize("thread_name", ["child-process-wait", "child-process-pipe"])
+def test_a_thread_that_cannot_start_fails_the_caller_and_stops_the_child(
+    monkeypatch, children, thread_name,
+):
+    start = threading.Thread.start
+
+    def exhausted(thread):
+        if thread.name == thread_name:
+            raise RuntimeError("can't start new thread")
+        start(thread)
+
+    monkeypatch.setattr(threading.Thread, "start", exhausted)
+
+    with pytest.raises(RuntimeError, match="can't start new thread"):
+        on_selector_loop(start_child_process(*python_child("time.sleep(60)")))
+
+    assert children[0].wait(10) != 0
 
 
 @pytest.mark.parametrize("stop", ["kill", "terminate"])
@@ -203,7 +275,7 @@ def test_a_missing_executable_fails_the_caller(tmp_path):
         on_selector_loop(start_child_process(str(tmp_path / "no-such-decoder")))
 
 
-def test_an_exiting_server_neither_waits_for_nor_orphans_its_child(tmp_path):
+def test_an_exiting_server_neither_waits_for_nor_orphans_a_child_that_writes(tmp_path):
     marker = tmp_path / "child-stopped"
     child = (
         "import sys\n"
@@ -225,7 +297,7 @@ def test_an_exiting_server_neither_waits_for_nor_orphans_its_child(tmp_path):
         [sys.executable, "-c", server, child, str(marker)],
         cwd=Path(__file__).resolve().parents[2],
         check=True,
-        timeout=30,
+        timeout=60,
     )
 
     deadline = time.monotonic() + 10
@@ -235,12 +307,10 @@ def test_an_exiting_server_neither_waits_for_nor_orphans_its_child(tmp_path):
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows process creation flags")
-@pytest.mark.parametrize(
-    ("priority", "expected"),
-    [(0, None), (0x00004000, 0x00004000)],
-    ids=["inherited", "below-normal"],
-)
-def test_hidden_window_and_priority_flags_reach_the_child(priority, expected):
+def test_hidden_window_and_priority_flags_reach_the_child(children):
+    # Children inherit a below-normal priority, so only a raised one proves the flag arrived.
+    flags = hidden_subprocess_creation_flags() | subprocess.ABOVE_NORMAL_PRIORITY_CLASS
+
     async def scenario():
         process = await start_child_process(
             *python_child(
@@ -250,12 +320,15 @@ def test_hidden_window_and_priority_flags_reach_the_child(priority, expected):
                 "kernel.GetPriorityClass.argtypes = [ctypes.c_void_p]\n"
                 "print(kernel.GetConsoleWindow(), kernel.GetPriorityClass(kernel.GetCurrentProcess()))"
             ),
-            creationflags=hidden_subprocess_creation_flags() | priority,
+            creationflags=flags,
         )
         window, priority_class = (await process.stdout.read()).split()
         assert int(window) == 0
-        if expected:
-            assert int(priority_class) == expected
+        assert int(priority_class) == subprocess.ABOVE_NORMAL_PRIORITY_CLASS
         assert await process.wait() == 0
 
     on_selector_loop(scenario())
+
+    # A parent without a console hides the window anyway, so the flag itself is asserted too.
+    assert children[0].requested_flags == flags
+    assert flags & subprocess.CREATE_NO_WINDOW

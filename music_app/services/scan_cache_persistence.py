@@ -1518,6 +1518,17 @@ class PostgresScanCacheAdapter:
                                  if isinstance(previous_file_entries.get(path), dict)}
         updated_file_entries = {path: dict(updated_file_entries[path]) for path in changed_paths
                                 if isinstance(updated_file_entries.get(path), dict)}
+        # Every save path below runs this once on this connection, as its last work before
+        # the commit: after any relation patch, so after any stray ownership it moved.
+        caller_before_commit = before_commit
+
+        def before_commit(connection):
+            from music_app.services.saved_duplicate_results import write_saved_duplicate_results
+
+            write_saved_duplicate_results(connection, self._config)
+            if caller_before_commit is not None:
+                caller_before_commit(connection)
+
         with self._connect_to_database() as connection:
             with persistence_stage("inventory_lock_wait"):
                 connection.execute(_inventory_publication_advisory_lock_sql())

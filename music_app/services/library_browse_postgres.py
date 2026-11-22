@@ -658,7 +658,8 @@ class PostgresLibraryBrowseRepository:
                 f"""select results.album_key, results.result
                     from library.album_duplicate_results results
                     where results.library_id = ({_LOCAL_LIBRARY_ID_SQL})
-                      and results.album_key = any(%(album_keys)s::text[])""",
+                      and results.album_key = any(%(album_keys)s::text[])
+                      and results.result <> '{{}}'::jsonb""",
                 {"album_keys": sorted(album_keys)},
             ).fetchall()
         return {
@@ -670,17 +671,29 @@ class PostgresLibraryBrowseRepository:
         self,
         connection: Any,
         album_keys: Iterable[str],
+        *,
+        candidate_album_ids: list[int] | None = None,
     ) -> dict[str, dict[str, object]]:
         """The duplicate results the Problematic Files index stores for ``album_keys``: the
         same rule the card overlay applied live, kept only where it changes a card. Each
-        names the other albums it was computed from, whose changes must refresh it."""
+        names the other albums it was computed from, whose changes must refresh it.
+
+        A tag save passes its affected scope as ``candidate_album_ids``, so it never loads
+        the whole identity index, which Postgres 17 needs to find candidates itself."""
+        from music_app.services.edit_tag_timings import persistence_stage
+
         keys = sorted({str(key) for key in album_keys} - {""})
-        candidate_ids = _load_duplicate_candidate_album_ids(connection, keys, repository=self) if keys else []
-        rows = connection.execute(
-            _duplicate_source_rows_for_album_ids_sql(), {"album_ids": candidate_ids},
-        ).fetchall() if candidate_ids else []
-        duplicates = _duplicate_sources_from_rows(rows)
-        linked = _linked_duplicate_album_ids(rows, duplicates)
+        if candidate_album_ids is not None:
+            candidate_ids = candidate_album_ids
+        else:
+            candidate_ids = _load_duplicate_candidate_album_ids(connection, keys, repository=self) if keys else []
+        with persistence_stage("duplicate_results.source_rows"):
+            rows = connection.execute(
+                _duplicate_source_rows_for_album_ids_sql(), {"album_ids": candidate_ids},
+            ).fetchall() if candidate_ids else []
+        with persistence_stage("duplicate_results.build"):
+            duplicates = _duplicate_sources_from_rows(rows)
+            linked = _linked_duplicate_album_ids(rows, duplicates)
         return {
             key: {**duplicates[key], "_linked_album_ids": linked.get(key, [])}
             for key in keys

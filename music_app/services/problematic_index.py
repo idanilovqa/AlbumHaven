@@ -48,6 +48,8 @@ _CONNECT_TIMEOUT_SECONDS = 15  # as the shared pool's
 INLINE_ALBUM_LIMIT = 50
 # Albums evaluated per transaction by the backfill.
 BACKFILL_BATCH = 500
+# How often one pass evaluates again because tag saves committed during it.
+OUTRUN_RETRIES = 20
 _LOCK_NAMESPACE = 188  # pg advisory lock (namespace, library id)
 _STEP_LOCK_NAMESPACE = 268  # held for the deploy step's whole run; the startup gate only looks
 # On unless set to 0; the Python test suite turns it off so a background backfill
@@ -134,6 +136,8 @@ _SCOPE_SQL = """
 _DUPLICATE_RESULT_SQL = """
     insert into library.album_duplicate_results (library_id, album_id, album_key, result, linked_album_ids)
     values (%(library_id)s, %(album_id)s, %(album_key)s, %(result)s::jsonb, %(linked_album_ids)s::bigint[])
+    on conflict (library_id, album_id) do update set album_key = excluded.album_key,
+      result = excluded.result, linked_album_ids = excluded.linked_album_ids
 """
 
 # The albums whose stored duplicate result can change with the marked ones without sharing
@@ -317,15 +321,26 @@ def _write(connection: Any, library_id: int, index_rows: list[dict[str, object]]
              and (album_id = any(%(album_ids)s::bigint[]) or (%(loose)s and album_id is null))""",
         {"library_id": library_id, "album_ids": replaced_album_ids, "loose": replace_loose},
     )
+    if index_rows:
+        connection.cursor().executemany(_UPSERT_SQL, index_rows)
+    # Last, and in album order, as a tag save writes them: the two cannot deadlock, and a
+    # save waits at most for this pass's commit. Where a save committed first, this
+    # repeatable-read pass fails here (40001) and evaluates again.
+    connection.execute(
+        """select album_id from library.album_duplicate_results
+           where library_id = %(library_id)s and album_id = any(%(album_ids)s::bigint[])
+           order by album_id for update""",
+        {"library_id": library_id, "album_ids": replaced_album_ids},
+    ).fetchall()
     connection.execute(
         """delete from library.album_duplicate_results
            where library_id = %(library_id)s and album_id = any(%(album_ids)s::bigint[])""",
         {"library_id": library_id, "album_ids": replaced_album_ids},
     )
-    if index_rows:
-        connection.cursor().executemany(_UPSERT_SQL, index_rows)
     if duplicate_rows:
-        connection.cursor().executemany(_DUPLICATE_RESULT_SQL, duplicate_rows)
+        connection.cursor().executemany(
+            _DUPLICATE_RESULT_SQL, sorted(duplicate_rows, key=lambda row: int(row["album_id"])),
+        )
 
 
 def _library_id(connection: Any) -> int | None:
@@ -585,13 +600,20 @@ def _bring_up_to_date(repository: Any, connection: Any, library_id: int, *, rebu
     if _duplicate_results_state(connection, library_id) != "ready":
         _backfill_duplicate_results(repository, connection, library_id, report)
     _DUPLICATES_READY.add(repository._database_url)
-    evaluated = 0
+    evaluated = outrun = 0
     while marks := connection.execute(
         """select album_id, marked_xid::text as marked_xid from library.problematic_index_dirty_albums
            where library_id = %s order by album_id limit %s""",
         (library_id, BACKFILL_BATCH),
     ).fetchall():
-        _drain(repository, connection, library_id, marks)
+        try:
+            _drain(repository, connection, library_id, marks)
+        except Exception as error:
+            # serialization_failure: a save wrote these rows after this pass's snapshot.
+            if getattr(error, "sqlstate", None) != "40001" or outrun >= OUTRUN_RETRIES:
+                raise
+            outrun += 1
+            continue
         evaluated += len(marks)
         if report:
             report("Changed albums", evaluated, evaluated)

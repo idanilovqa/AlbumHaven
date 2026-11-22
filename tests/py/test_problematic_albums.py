@@ -869,7 +869,7 @@ def test_live_problematic_index_equals_a_full_rebuild_through_tag_saves(watcher_
 
 
 
-def test_live_indexed_duplicate_cards_equal_the_live_overlay_and_follow_each_save(watcher_repair_inventory):
+def test_live_indexed_duplicate_cards_equal_the_live_overlay_and_follow_each_save(watcher_repair_inventory, monkeypatch):
     """FTC-TAGS-015: gallery and search cards read each album's stored duplicate result. It
     equals the overlay computed live, key for key: main and hoard copies, an exception track,
     an album spanning two years, a pair whose duplicate problem is excluded from Problematic
@@ -883,6 +883,9 @@ def test_live_indexed_duplicate_cards_equal_the_live_overlay_and_follow_each_sav
     from music_app.services.rule_state_postgres import RuleStatePostgresAdapter
     from tests.e2e.support import isolatedPostgres
 
+    from tests.py.runtime_testing import publish_relations_with_each_save
+
+    publish_relations_with_each_save(monkeypatch)
     fixture = watcher_repair_inventory
     database_url = fixture.config["ALBUM_HAVEN_APP_DATABASE_URL"]
 

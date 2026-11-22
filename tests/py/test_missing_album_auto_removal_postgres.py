@@ -262,7 +262,9 @@ def _shown_missing(fixture, album_key):
     problems = repository._build_problematic_files_payload_uncached()["items"]
     return (
         [album.get("key") for album in gallery],
-        [item.get("problem_reasons") for item in problems if item.get("key") == album_key],
+        [item.get("problem_reasons") for item in problems
+         # A coverless album in the Main Library is still listed, for its cover, which is not "Album not found".
+         if item.get("key") == album_key and "Album not found" in (item.get("problem_reasons") or [])],
     )
 
 
@@ -282,7 +284,7 @@ def test_live_a_new_arrivals_album_moved_into_the_library_is_never_missing(inven
     album = _album(inventory, "Moved Arrival")
     main = Path(next(root for root in inventory.roots if root["id"] == MAIN)["path"])
     destination = main / "Owner" / "Moved Arrival"
-    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.rmdir()  # left empty by _entry; Windows cannot rename a folder onto an existing one
     album.folder.rename(destination)
     moved = destination / "01.flac"
     entry = {**inventory.entry("Owner/Moved Arrival/01.flac", album="Moved Arrival"), "path": str(moved)}

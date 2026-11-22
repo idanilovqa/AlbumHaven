@@ -848,6 +848,39 @@ test('Cover Lookup loading markup holds only the saved remote cover, never searc
   assert.doesNotMatch(savedRemote, /data-cover-lookup-loading-section="local"/);
 });
 
+// Owner 2026-11-22: "Local section is now empty when Cover Look Up loads, and only then all sections appear at once".
+for (const downloadedFromService of [false, true]) {
+  test(`Local shows the album's own cover while the listing loads${downloadedFromService ? ', also one downloaded from a service' : ''}`, () => {
+    const context = {
+      URLSearchParams,
+      window: {},
+      escapeHtml: (value) => String(value || ''),
+      state: { coverLookup: { modal: {} } },
+      document: { getElementById: () => null },
+    };
+    vm.createContext(context);
+    vm.runInContext(helperSource, context, { filename: helperPath });
+    const cards = [];
+    context.buildCoverLookupCard = (item, kind) => {
+      cards.push([kind, item.candidate_cover_ref, item.cover_revision]);
+      return '<known-cover></known-cover>';
+    };
+
+    const markup = context.buildCoverLookupGalleryLoadingMarkup({
+      album: {
+        cover_ref: 'front-ref',
+        cover_revision: 'rev',
+        ...(downloadedFromService ? { remote_cover_url: 'https://images.example/saved.jpg' } : {}),
+      },
+    });
+
+    assert.deepEqual(cards, [['local', 'front-ref', 'rev']]);
+    assert.match(markup, /<div class="cover-lookup-gallery" inert><known-cover>/, 'shown, not selectable before the listing');
+    assert.match(markup, />LOCAL</, 'no count until every file is listed');
+    assert.doesNotMatch(markup, /data-cover-lookup-loading-section="local"/);
+  });
+}
+
 test('Cover Lookup loading markup leaves cached search matches to POSSIBLE MATCHES', () => {
   const context = {
     URLSearchParams,

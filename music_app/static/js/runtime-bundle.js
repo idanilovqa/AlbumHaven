@@ -39380,8 +39380,7 @@ function buildCoverLookupGalleryLoadingCards(section, count) {
 
 function buildCoverLookupGalleryLoadingMarkup(modalState) {
   const album = modalState?.album || {};
-  const localCount = String(album.cover_ref || '').trim()
-    && !String(album.remote_cover_url || album.remote_cover_thumbnail_url || '').trim() ? 1 : 0;
+  const knownLocalRef = String(album.cover_ref || '').trim();
   // REMOTE holds only the album's saved remote cover, as it does once loaded. Search matches
   // keep their own POSSIBLE MATCHES section: drawn here they flooded the dialog under LOCAL and
   // then vanished when the listing answered (owner 2026-11-21, Art Zoyd notification).
@@ -39396,9 +39395,15 @@ function buildCoverLookupGalleryLoadingMarkup(modalState) {
   ` : '';
   // Owner (2026-11-18): nothing blinks at the top while the listing loads; an album without a known cover
   // shows the static heading its empty state keeps once the listing answers.
-  const localMarkup = section('LOCAL', 'local', localCount) || `
+  // Owner (2026-11-22): Local comes first. cover_ref always names a local file, also one downloaded from a
+  // service, so its picture shows at once; it takes no clicks and no count until every file is listed.
+  const knownLocalCard = knownLocalRef
+    ? `<div class="cover-lookup-gallery" inert>${buildCoverLookupCard({ candidate_cover_ref: knownLocalRef, cover_revision: album.cover_revision }, 'local')}</div>`
+    : '';
+  const localMarkup = `
     <section class="cover-lookup-section cover-lookup-gallery-resolving">
       <h4 class="cover-lookup-section-title">LOCAL</h4>
+      ${knownLocalCard}
     </section>
   `;
   return `<div role="status" aria-label="Loading cover art">

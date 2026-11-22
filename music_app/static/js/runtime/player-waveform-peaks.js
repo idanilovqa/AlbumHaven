@@ -14,7 +14,7 @@ let playerWaveformPeakCurrentIdentity = null;
 let playerWaveformForegroundSuspensionDepth = 0;
 // The waveform request sent when Play was pressed, until the playing generation takes it.
 let playerWaveformStartRequest = null;
-// The track the page opened with, until another takes the player. Like a playing song's, its
+// The track the page opened with, until another song sounds. Like a playing song's, its
 // waveform is never low priority (owner rule); its one request outlives its stream opening,
 // failing or starting to play.
 let playerWaveformRestingTrack = null;
@@ -212,7 +212,7 @@ async function fetchWaveformPeaks(rawPath, sampleCount, { current, signal, onPar
 // The page opened with this track in the player.
 function restTrackWaveform(path) {
   stopRestingTrackWaveformRequest();
-  playerWaveformRestingTrack = { path: String(path || ''), controller: null, promise: null };
+  playerWaveformRestingTrack = { path: String(path || ''), controller: null, promise: null, waitingFor: null };
 }
 
 function stopRestingTrackWaveformRequest() {
@@ -228,8 +228,22 @@ function endTrackWaveformRest() {
   playerWaveformRestingTrack = null;
 }
 
+// Until the pressed song sounds, the resting track's waveform is the old one the player keeps
+// (owner, round 10), but it never slows the pressed song's: that builds alone, and the resting one
+// loads again once it is built or the switch ends without it.
+function endTrackWaveformRestOnSound(path) {
+  if (playerWaveformRestingTrack && playerWaveformRestingTrack.path !== String(path || '')) endTrackWaveformRest();
+}
+
+function resumeRestingTrackWaveform() {
+  const resting = playerWaveformRestingTrack;
+  if (!resting?.waitingFor) return;
+  resting.waitingFor = null;
+  if (String(state.player.current?.path || '') === resting.path) void loadPlayingWaveformPeaks(resting.path);
+}
+
 function loadRestingTrackWaveform(resting) {
-  if (resting.promise || playerWaveformForegroundSuspensionDepth > 0) return resting.promise;
+  if (resting.promise || resting.waitingFor || playerWaveformForegroundSuspensionDepth > 0) return resting.promise;
   const controller = new AbortController();
   resting.controller = controller;
   resting.promise = fetchWaveformPeaks(resting.path, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, {
@@ -249,13 +263,19 @@ function loadRestingTrackWaveform(resting) {
 // playing generation takes over this request instead of asking again.
 function startSelectedTrackWaveformPeaks(path) {
   const rawPath = String(path || '');
-  endTrackWaveformRest();
   if (playerWaveformStartRequest?.path === rawPath) return;
   playerWaveformStartRequest?.controller.abort();
   playerWaveformStartRequest = null;
   const shown = state.player.waveform.compactPeaks;
   if (!rawPath || playerWaveformForegroundSuspensionDepth > 0
       || (shown?.path === rawPath && shown.data && !shown.partial)) return;
+  const resting = playerWaveformRestingTrack;
+  if (resting?.path === rawPath) {
+    resting.waitingFor = null;
+    void loadRestingTrackWaveform(resting);
+    return;
+  }
+  stopRestingTrackWaveformRequest();
   const controller = new AbortController();
   const promise = fetchWaveformPeaks(rawPath, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, {
     current: true,
@@ -264,6 +284,11 @@ function startSelectedTrackWaveformPeaks(path) {
     stillWanted: () => true,
   }).catch(() => null);
   playerWaveformStartRequest = { path: rawPath, controller, promise };
+  if (!resting) return;
+  resting.waitingFor = promise;
+  void promise.then((peaks) => {
+    if (peaks && resting.waitingFor === promise) resumeRestingTrackWaveform();
+  });
 }
 
 // The playing song's peaks are asked for with `current`, so the server builds them first at
@@ -345,9 +370,13 @@ async function loadWaveformPeaks(
 // shares its one request instead, whichever generation asks.
 async function loadPlayingWaveformPeaks(path, generation = playerWaveformGeneration()) {
   const rawPath = String(path || '');
-  if (playerWaveformRestingTrack && playerWaveformRestingTrack.path !== rawPath) endTrackWaveformRest();
-  if (!rawPath) return null;
-  const resting = playerWaveformRestingTrack;
+  if (!rawPath) {
+    endTrackWaveformRest();
+    return null;
+  }
+  const resting = playerWaveformRestingTrack?.path === rawPath ? playerWaveformRestingTrack : null;
+  // With another song current, the resting one's answer could not be shown; it only takes a slot.
+  if (!resting && String(state.player.current?.path || '') === rawPath) stopRestingTrackWaveformRequest();
   const shown = state.player.waveform.compactPeaks;
   // A seek or replay of the same song keeps its finished peaks.
   const peaks = shown?.path === rawPath && shown.data && !shown.partial

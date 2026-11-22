@@ -344,6 +344,10 @@ function showSelectedTrackImmediately(track, shouldAutoplay) {
 function clearSelectedTrack() {
   if (!state.player.selectedTrack) return;
   state.player.selectedTrack = null;
+  if (typeof resumeRestingTrackWaveform === 'function') {
+    // Once the switch has settled: a song that started is the current one by then.
+    void Promise.resolve().then(resumeRestingTrackWaveform);
+  }
   renderSelectedTrackState(state.player.current);
 }
 
@@ -468,6 +472,7 @@ async function handleStreamingPlaybackFirstFrame(event = {}) {
   const selectedTrackPath = String(state.player.current?.path || '');
   const renderedTrackPath = String(event.trackPath || '');
   if (renderedTrackPath && renderedTrackPath !== selectedTrackPath) return;
+  if (typeof endTrackWaveformRestOnSound === 'function') endTrackWaveformRestOnSound(selectedTrackPath);
   const identity = [
     Number(event.generation) || 0,
     Number(event.streamId) || 0,
@@ -626,6 +631,8 @@ async function handleStreamingPlaybackBoundary(event = {}) {
     }
   }
   setCurrentPlayerTrack(promotedTrack, { previousPlaybackSnapshot });
+  // A gapless move sounds at the boundary itself.
+  if (typeof endTrackWaveformRestOnSound === 'function') endTrackWaveformRestOnSound(promotedTrack.path);
   if (event.incomingListenSession) state.player.listenSession = event.incomingListenSession;
   if (typeof resumeListenSessionPlayback === 'function') {
     const incomingSessionStart = Promise.resolve(resumeListenSessionPlayback(promotedTrack, 0)).then((incomingSession) => (

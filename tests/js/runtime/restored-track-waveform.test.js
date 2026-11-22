@@ -32,6 +32,10 @@ async function settle() {
   for (let turn = 0; turn < 4; turn += 1) await new Promise((resolve) => setImmediate(resolve));
 }
 
+const OTHER = {
+  ...TRACK, path: 'C:/Music/Album/02.flac', src: '/track?path=02.flac', title: 'Second song',
+};
+
 function openPage({ paused = true, android = false, adopted = '', streamFails = false, claimed = true } = {}) {
   const requests = [];
   const timers = [];
@@ -203,6 +207,37 @@ function openPage({ paused = true, android = false, adopted = '', streamFails = 
     starts: () => starts,
     waveformRequests: () => requests.filter(({ url }) => url.pathname === '/playback/waveform'),
     pending: () => page.waveformRequests().filter(({ signal }) => !signal.aborted),
+    // Another song is pressed; its start answers when the test says so.
+    async press(track) {
+      const start = {};
+      start.answered = new Promise((resolve, reject) => Object.assign(start, { resolve, reject }));
+      context.startStreamingTrack = () => start.answered;
+      const played = context.playTrackFromPayload(track).catch(() => false);
+      await settle();
+      return {
+        async starts({ sounded = false } = {}) {
+          start.resolve({
+            track, generation: streaming.generation, streamId: 2, firstFrameNotified: sounded,
+          });
+          await played;
+          await settle();
+        },
+        async fails() {
+          start.reject(new Error('start failed'));
+          await played;
+          await settle();
+        },
+      };
+    },
+    async sounds(track, streamId = 2) {
+      await context.handleStreamingPlaybackFirstFrame({
+        generation: streaming.generation, streamId, trackPath: track.path,
+      });
+      await settle();
+    },
+    isResting: () => vm.runInContext('Boolean(playerWaveformRestingTrack)', context),
+    requestFor: (track) => page.waveformRequests()
+      .filter(({ url }) => url.searchParams.get('path') === track.path),
     autoplayStarts() {
       engine.paused = false;
       engine.mode = 'playing';
@@ -373,18 +408,15 @@ test('Play after the waveform loaded asks for nothing again', async () => {
   page.assertShown();
 });
 
-test('selecting another track stops waiting for the restored one', async () => {
+test('emptying the player stops waiting for the restored track', async () => {
   const page = openPage();
   await page.open();
   const waiting = page.pending()[0];
-  const other = { ...TRACK, path: 'C:/Music/Album/02.flac', src: '/track?path=02.flac' };
 
-  page.context.setCurrentPlayerTrack(other, { persist: false });
+  page.context.setCurrentPlayerTrack(null, { persist: false });
   await settle();
 
   assert.equal(waiting.signal.aborted, true);
-  assert.equal(page.pending().at(-1).url.searchParams.get('path'), other.path);
-  assertPlayingPriority(page.pending().at(-1));
 });
 
 test('a saved playing track keeps its one request when its autoplay starts', async () => {
@@ -451,4 +483,141 @@ test('the Android page keeps the waveform of a playing queue it adopts', async (
   await page.answer();
 
   page.assertShown();
+});
+
+// A song switch: the restored track's waveform is the old one until the pressed song sounds.
+test('the pressed song builds alone, then the restored waveform loads while the switch waits', async () => {
+  const page = openPage();
+  await page.open();
+  const restored = page.requestFor(TRACK)[0];
+
+  await page.press(OTHER);
+
+  // Two builds share the CPU and take both of the server's slots for playing songs.
+  assert.equal(restored.signal.aborted, true, 'the pressed song never shares its build');
+  assertPlayingPriority(page.requestFor(OTHER)[0]);
+  await page.answer(page.requestFor(OTHER)[0]);
+  assert.equal(page.requestFor(TRACK).length, 2, 'the old waveform loads again once the pressed one is built');
+  await page.answer(page.requestFor(TRACK)[1]);
+  page.assertShown();
+});
+
+for (const [name, meanwhile] of [
+  ['the stream opens', (page) => page.context.loadPlayingWaveformPeaks(OTHER.path)],
+  ['a view load ends', (page) => {
+    const suspension = page.context.suspendPlayerWaveformPeakLoadsForForegroundView();
+    void page.context.resumePlayerWaveformPeakLoadsAfterForegroundView(suspension);
+  }],
+]) {
+  test(`the restored waveform does not compete with the pressed one when ${name}`, async () => {
+    const page = openPage();
+    await page.open();
+
+    await page.press(OTHER);
+    void meanwhile(page);
+    await settle();
+
+    const building = page.requestFor(TRACK).filter(({ signal }) => !signal.aborted);
+    assert.equal(building.length, 0);
+  });
+}
+
+test('a switch that fails to start still gets the restored waveform', async () => {
+  const page = openPage();
+  await page.open();
+
+  const switched = await page.press(OTHER);
+  await switched.fails();
+
+  assert.equal(page.requestFor(TRACK).length, 2);
+  await page.answer(page.requestFor(TRACK)[1]);
+  page.assertShown();
+});
+
+test('a switch that starts while the pressed waveform builds never asks for the old one again', async () => {
+  const page = openPage();
+  await page.open();
+
+  const switched = await page.press(OTHER);
+  await switched.starts();
+
+  assert.equal(page.requestFor(TRACK).length, 1, 'only the request the page opened with');
+});
+
+test('once the pressed song is the current one only its waveform builds, and the rest ends when it sounds', async () => {
+  const page = openPage();
+  await page.open();
+
+  const switched = await page.press(OTHER);
+  await page.answer(page.requestFor(OTHER)[0]);
+  await switched.starts();
+  assert.equal(page.requestFor(TRACK).filter(({ signal }) => !signal.aborted).length, 0);
+  assert.equal(page.isResting(), true, 'started, but nothing of it has sounded');
+
+  await page.sounds(OTHER);
+  assert.equal(page.isResting(), false);
+});
+
+test('a pressed song that sounded before its start returned ends the rest then', async () => {
+  const page = openPage();
+  await page.open();
+
+  const switched = await page.press(OTHER);
+  await page.sounds(OTHER);
+  await switched.starts({ sounded: true });
+
+  assert.equal(page.isResting(), false);
+});
+
+test('the restored track sounding itself keeps its request', async () => {
+  const page = openPage();
+  await page.open();
+
+  await page.sounds(TRACK, 1);
+
+  assert.equal(page.requestFor(TRACK).length, 1);
+  assert.equal(page.requestFor(TRACK)[0].signal.aborted, false);
+});
+
+test('a gapless move to the next song ends the restored load', async () => {
+  const page = openPage();
+  await page.open();
+  const restored = page.requestFor(TRACK)[0];
+  page.context.getNextQueuedTrack = () => OTHER;
+  page.context.peekNextQueuedTrack = () => null;
+
+  await page.context.handleStreamingPlaybackBoundary({
+    generation: 1,
+    outgoingStreamId: 1,
+    incomingStreamId: 2,
+    outgoingTrackPath: TRACK.path,
+    incomingTrackPath: OTHER.path,
+  });
+  await settle();
+
+  assert.equal(restored.signal.aborted, true);
+});
+
+test('pressing the restored track again keeps its one request', async () => {
+  const page = openPage();
+  await page.open();
+
+  const again = await page.press(TRACK);
+  await again.starts();
+
+  assert.equal(page.requestFor(TRACK).length, 1);
+  assert.equal(page.requestFor(TRACK)[0].signal.aborted, false);
+});
+
+test('going back to the restored track before the other sounds loads it at once', async () => {
+  const page = openPage();
+  await page.open();
+
+  await page.press(OTHER);
+  const back = await page.press(TRACK);
+  await back.starts();
+
+  const building = page.pending();
+  assert.deepEqual(building.map(({ url }) => url.searchParams.get('path')), [TRACK.path]);
+  assertPlayingPriority(building[0]);
 });

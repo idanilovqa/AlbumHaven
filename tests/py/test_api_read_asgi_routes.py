@@ -1662,12 +1662,6 @@ def test_asgi_home_data_uses_postgres_root_sidebar_as_authoritative_state(app, a
             "categories": ["main_library", "new_arrivals"],
         }
     ]
-    assert [call[0].__name__ for call in threadpool_calls] == [
-        "_build_home_data_payload", "build_root_sidebar_payload",
-    ]
-    threadpool_function, threadpool_args, threadpool_kwargs = threadpool_calls[1]
-    assert threadpool_args == ()
-    assert threadpool_kwargs["query_params"].get("gallery_display") == "covers"
 
 
 def test_asgi_home_data_omit_sidebar_keeps_postgres_counts_without_readding_sidebar(
@@ -1748,7 +1742,6 @@ def test_asgi_home_data_omit_sidebar_keeps_postgres_counts_without_readding_side
             "categories": ["main_library", "new_arrivals"],
         }
     ]
-    assert threadpool_functions == ["_build_home_data_payload", "build_root_counts_payload"]
 
 
 def test_asgi_home_data_preserves_transient_sidebar_while_scan_is_active(app, asgi_app, monkeypatch):

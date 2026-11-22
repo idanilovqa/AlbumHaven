@@ -1261,7 +1261,7 @@ async def home_data(request: Request) -> JSONResponse:
                 if omit_sidebar
                 else repository.build_root_sidebar_payload
             )
-            root_sidebar_payload = payload_builder(query_params=request.query_params)
+            root_sidebar_payload = await run_in_threadpool(payload_builder, query_params=request.query_params)
             authoritative_fields = [
                 "artist_count",
                 "album_count",

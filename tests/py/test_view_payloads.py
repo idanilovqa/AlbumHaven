@@ -7606,8 +7606,8 @@ def test_non_album_candidates_load_library_roots_once_for_all_loose_tracks(tmp_p
         }
     root_loads = []
     monkeypatch.setattr(
-        view_payloads_module, "get_library_roots",
-        lambda config: root_loads.append(config) or [{"path": str(root), "category": "main_library"}],
+        view_payloads_module, "configured_library_root_paths_snapshot",
+        lambda config: root_loads.append(config) or (root,),
     )
     monkeypatch.setattr(library_roots, "get_library_roots", lambda _config: (_ for _ in ()).throw(
         AssertionError("loose tracks must reuse the roots loaded for the build")))

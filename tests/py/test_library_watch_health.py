@@ -903,13 +903,20 @@ def test_app_wires_coordinator_and_reconciliation_problems_to_persistent_watcher
         def __init__(self, *_args, **kwargs):
             self.after_commit = kwargs["after_commit"]
 
-        def reconcile(self, request, *, root_healthy, publication_guard=None, reuse_unchanged_entries=False):
+        def reconcile(
+            self, request, *, root_healthy, publication_guard=None, reuse_unchanged_entries=False, interrupted=None,
+        ):
             if publication_guard is not None:
                 assert root_healthy
                 assert reuse_unchanged_entries, "catch-ups skip unchanged files like a full scan"
+                assert interrupted() is False, "catch-ups yield to a running full scan (fe89d9a7f)"
                 assert request.paths == request.deleted_subtrees == frozenset({tmp_path})
                 recovery_calls.append(("recover", request.root_id))
                 return SimpleNamespace(health="healthy")
+            if request.root_id == "offline-root":
+                # An unreadable root's albums are marked missing as unreachable (015ee71f0).
+                assert request.paths == frozenset()
+                assert request.deleted_subtrees == frozenset({tmp_path / "disconnected"})
             if request.root_id == "failed-root":
                 raise RuntimeError("database temporarily unavailable")
             reconciled.append((request.root_id, root_healthy))
@@ -1019,6 +1026,19 @@ def test_app_wires_coordinator_and_reconciliation_problems_to_persistent_watcher
     )
 
     app = create_asgi_app()
+
+    async def stop_inventory():
+        return None
+
+    # The cover inventory is Postgres-backed and is not the health wiring under test.
+    app.state.local_cover_inventory = SimpleNamespace(
+        start=lambda: None,
+        stop=stop_inventory,
+        rescan=lambda: None,
+        roots_changed=lambda _previous, _current: None,
+        invalidate_paths=lambda _paths, **_options: None,
+        note_foreground_activity=lambda: None,
+    )
     problem = library_event_coordinator.CoordinatorProblem(
         "stable_write_unavailable",
         "main-root",
@@ -1127,6 +1147,7 @@ def test_app_wires_coordinator_and_reconciliation_problems_to_persistent_watcher
         )
     ]
     assert reconciled == [
+        ("offline-root", True),
         ("main-root", False),
         ("healthy-source", False),
         ("sampling-source", True),

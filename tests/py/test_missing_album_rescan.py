@@ -45,7 +45,7 @@ class _Database:
 def _library(tmp_path, other_albums=0):
     roots = {"main": tmp_path / "main", "hoard": tmp_path / "hoard"}
     for root in roots.values():
-        root.mkdir()
+        root.mkdir(parents=True)
     for index in range(other_albums):
         folder = roots["main"] / f"Artist {index:04d}" / "Record"
         folder.mkdir(parents=True)

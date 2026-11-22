@@ -5170,7 +5170,7 @@ test('after a frozen network, the hanging reconnect is replaced as soon as the s
   assert.ok(timers.pending().some(({ delay }) => delay === 16_000), 'the hanging attempt has the long deadline');
   const hanging = harness.sockets.length;
 
-  const probe = () => harness.intervals.filter(({ delay }) => delay === 1_500).at(-1).callback();
+  const probe = () => harness.intervals.filter(({ delay }) => delay === 400).at(-1).callback();
   // The attempt has hung for a while: well past a healthy connect.
   harness.setNow(5_000);
   await probe();
@@ -5244,7 +5244,7 @@ test('a reconnect that a probe started is left to connect, however slowly, while
   await harness.api.resume();
   harness.sockets[0].unexpectedClose();
   await settleTwice(harness);
-  const probe = () => harness.intervals.filter(({ delay }) => delay === 1_500).at(-1)?.callback();
+  const probe = () => harness.intervals.filter(({ delay }) => delay === 400).at(-1)?.callback();
 
   harness.setNow(1_000);
   reachable = true;
@@ -5264,6 +5264,51 @@ test('a reconnect that a probe started is left to connect, however slowly, while
   }
   assert.equal(harness.sockets.length, 3, 'the attempt the probe started is left to connect');
   assert.equal(harness.sockets.at(-1).closeCalls, 0);
+});
+
+// Owner round 9 (2026-11-21): "app does not understand network is back for a substantial amount of
+// time". After Wi-Fi returns the owner's tunnel answers 530 for minutes, then 200. Every 530 is still
+// unreachable, the server is asked again on every tick without backing off, and the first 200
+// replaces the hung attempt on that tick.
+test('a hung reconnect is replaced on the first good answer after a run of tunnel 530s, asked every tick', async () => {
+  let status = 530;
+  const asked = [];
+  const timers = manualTimers();
+  const harness = encodedHarness({
+    createStreamingDecoder: recordingDecoders().create,
+    refuseConnection: (count) => (count === 2 ? 'hang' : false),
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout,
+    fetch: async (url) => {
+      asked.push(harness.context.performance.now());
+      return { ok: status < 400, status, json: async () => ({}) };
+    },
+  });
+  await startLocallySeekable(harness, 100_000);
+  await harness.api.resume();
+  harness.sockets[0].unexpectedClose();
+  await settleTwice(harness);
+  assert.equal(harness.sockets.length, 2);
+  const probe = () => harness.intervals.filter(({ delay }) => delay === 400).at(-1).callback();
+
+  for (let now = 400; now <= 20_000; now += 400) {
+    harness.setNow(now);
+    await probe();
+    await settleTwice(harness);
+  }
+  assert.equal(harness.sockets.length, 2, 'a 530 is not an answer: the attempt is not replaced');
+  const afterHang = asked.filter((at) => at >= 3_000);
+  assert.ok(afterHang.length >= 40, `asked on every tick once the attempt hung: ${afterHang.length}`);
+  assert.ok(afterHang.every((at, index) => index === 0 || at - afterHang[index - 1] === 400), 'never backing off');
+
+  status = 200;
+  harness.setNow(20_400);
+  await probe();
+  await settleTwice(harness);
+  await settleTwice(harness);
+  assert.equal(harness.sockets.length, 3, 'the first 200 replaces the hung attempt on that tick');
+  assert.equal(harness.sockets.at(-1).readyState, 1);
+  assert.ok(harness.sockets.at(-1).sent.some(({ type }) => type === 'open'), 'and the song goes on on it');
 });
 
 // sandbox5 r20 (2026-11-21): after a 10 s outage another song pressed at once played 8.4 s later, while

@@ -139,10 +139,17 @@ class _InventoryTables:
                 return [{"root_path": key, "revision": row["revision"], "foreground_requested": False}]
         return []
 
+    @staticmethod
+    def _rebuilt(path: str, params) -> bool:
+        return path.startswith(tuple(params["rebuild_prefixes"])) and not path.startswith(tuple(params["kept_prefixes"]))
+
     def _invalidate_listings(self, params) -> list[dict[str, object]]:
         changed = []
         for key, row in self.listings.items():
-            if params and key not in params["roots"] and not key.startswith(tuple(params["prefixes"])):
+            if "rebuild_prefixes" in params:
+                if not self._rebuilt(key, params):
+                    continue
+            elif params and key not in params["roots"] and not key.startswith(tuple(params["prefixes"])):
                 continue
             self._write(row, revision=row["revision"] + 1, claimed=False)
             changed.append({"root_path": key})
@@ -152,7 +159,10 @@ class _InventoryTables:
         changed = []
         for key, row in self.contexts.items():
             root = row["root"]
-            if params:
+            if "rebuild_prefixes" in params:
+                if not any(self._rebuilt(path, params) for path in ([root] if root else row["paths"])):
+                    continue
+            elif params:
                 if root:
                     prefixes = (*params["prefixes"], *params.get("disc_prefixes", ()))
                     affected = root in params["roots"] or root.startswith(prefixes)
@@ -211,7 +221,7 @@ def _seed_library(base: Path, album_count: int):
     )
 
 
-def _scan(monkeypatch, library, checked_at: dict[str, float]) -> None:
+def _scan(monkeypatch, library, checked_at: dict[str, float], *, full_rescan=False, away="", incomplete="") -> None:
     class Adapter:
         def load_snapshot(self, _cache_path, _identity):
             return {}, 0.0, {}, 0.0, None
@@ -227,12 +237,19 @@ def _scan(monkeypatch, library, checked_at: dict[str, float]) -> None:
     state = {
         "file_cache": dict(library.file_cache), "albums": [], "last_scan": time.time() - 3600,
         "relation_views": {"artists": ["Artist"]}, "scan_generation": 0,
+        "rescan_ignore_existing_cache": full_rescan,
     }
+    reachable = [root for root in library.roots if root["id"] != away]
+    if full_rescan:
+        # A Full Rescan reads every file again; these seeded files answer with what was seeded.
+        monkeypatch.setattr(library_indexing, "read_metadata_for_file", lambda path: dict(library.file_cache[str(path)]))
 
     def scan(*, publication_state, **options):
-        publication_state["observed_library_root_ids"] = {root["id"] for root in library.roots}
+        publication_state["observed_library_root_ids"] = {root["id"] for root in reachable}
+        if incomplete:
+            publication_state["scan_incomplete_root_ids"] = {incomplete}
         return library_indexing.scan_library_file_cache(
-            state, roots=[Path(root["path"]) for root in library.roots], root_definitions=library.roots,
+            state, roots=[Path(root["path"]) for root in reachable], root_definitions=library.roots,
             supported_extensions={".mp3"}, image_extensions={".jpg"}, exception_overrides={},
             publication_state=publication_state, **options,
         )
@@ -333,6 +350,38 @@ def _drain(monkeypatch, library, worker) -> None:
     worker._run()
 
 
+@pytest.mark.parametrize("unreadable", ["away", "incomplete"])
+@pytest.mark.parametrize("first_attempt_fails", [False, True])
+def test_a_full_rescan_keeps_an_unreadable_roots_stored_folders_and_survives_a_failure(
+    tmp_path, monkeypatch, unreadable, first_attempt_fails,
+):
+    library = _seed_library(tmp_path, 3)
+    worker, tables = library.worker, library.tables
+    invalidate_all, attempts = worker.repository.invalidate_all, []
+
+    def attempt(*args, **kwargs):
+        attempts.append(True)
+        if first_attempt_fails and len(attempts) == 1:
+            raise RuntimeError("database unavailable")
+        return invalidate_all(*args, **kwargs)
+
+    monkeypatch.setattr(worker.repository, "invalidate_all", attempt)
+    worker._logger = SimpleNamespace(exception=lambda *_args: None)
+
+    _scan(monkeypatch, library, {}, full_rescan=True, **{unreadable: "extra"})
+    worker._retry_scheduled_invalidation()
+
+    kept = root_key(library.roots[1]["path"]) + os.sep
+    assert len(attempts) == (2 if first_attempt_fails else 1), "a failed Full Rescan is not lost"
+    for key, row in tables.listings.items():
+        assert (row["revision"] == 1) is key.startswith(kept), key
+    for row in tables.contexts.values():
+        if row["paths"][0].startswith(kept):
+            assert row["root"] and row["revision"] == 1, "unavailable storage keeps its stored cover folder"
+        else:
+            assert row["root"] is None and row["revision"] == 2
+
+
 @pytest.mark.parametrize(("change", "relisted"), [
     ("scan finds nothing changed", 0),
     ("scan without a recorded check time", 0),
@@ -392,7 +441,7 @@ def test_local_cover_inventory_contract_relists_only_changed_folders_at_producti
         elif change == "watcher reports a moved folder":
             worker.invalidate_paths([album, moved], subtree_paths=[album, moved], context_changed=True)
         elif change.startswith("removal while"):
-            worker.rescan()
+            worker.rescan([root["path"] for root in library.roots])
             for row in list(tables.contexts.values()):
                 worker.request_context(row["paths"])
             tables.written = tables.values_sent = 0

@@ -157,6 +157,62 @@ def test_deferred_work_waits_for_when_its_row_is_due_and_is_never_dropped(monkey
     assert queue.waiting(background=False), "the album someone opened is checked again when due"
 
 
+def test_changed_work_stops_after_its_first_unavailable_answer(monkeypatch):
+    from music_app.services import cover_workflow
+
+    now = [100.0]
+    calls = []
+    albums = [f"album-{index}" for index in range(200)]
+
+    class Repository:
+        def work_slot(self):
+            calls.append("slot")
+            return nullcontext(True)
+
+        def next_context(self, key):
+            calls.append("claim context")
+            return {"context_key": key, "track_paths": [f"{key}/01.mp3"], "revision": 1, "foreground_requested": True}
+
+        def next_pending(self, root):
+            calls.append("claim listing")
+            return {"root_path": root, "revision": 1, "foreground_requested": True}
+
+        def defer_context(self, *_args, **_kwargs):
+            calls.append("defer context")
+
+        def defer(self, *_args, **_kwargs):
+            calls.append("defer listing")
+
+    def deleted(*_args, **_kwargs):
+        raise FileNotFoundError("the album folder was deleted")
+
+    monkeypatch.setattr(inventory.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(cover_workflow, "resolve_album_root_from_track_paths", lambda *args, **kwargs: None)
+    monkeypatch.setattr(inventory, "local_inventory_root_for_tracks", lambda config, paths: None)
+    monkeypatch.setattr(inventory, "local_inventory_tracks_exist", lambda paths: False)
+    monkeypatch.setattr(inventory, "discover_local_cover_inventory", deleted)
+    worker = inventory.LocalCoverInventoryWorker({}, repository=Repository())
+    # A change found them. Their rows still carry an older open's flag, which is not an open now.
+    worker._contexts.add(albums)
+    worker._listings.add(albums)
+    worker._foreground_at = now[0] - 3600
+    passes = []
+
+    def wait(_timeout):
+        passes.append(True)
+        if len(passes) == len(albums) + 2:
+            assert calls.count("defer context") == calls.count("defer listing") == len(albums)
+            now[0] += 7200  # every deferral has passed
+            calls.clear()
+        if len(passes) == len(albums) + 6:
+            worker._stop.set()
+
+    monkeypatch.setattr(worker._wake, "wait", wait)
+    worker._run()
+
+    assert calls == [], "it waits for the next change or open, without a slot, a read or a write"
+
+
 def test_a_failed_change_mark_still_marks_the_removed_tracks():
     calls = []
     worker = SimpleNamespace(invalidate_or_retry=lambda paths, **kwargs: calls.append((paths, kwargs)) and False)

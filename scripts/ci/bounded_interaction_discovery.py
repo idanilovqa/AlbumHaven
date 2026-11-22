@@ -566,6 +566,8 @@ _FACTS: dict[int, BodyFacts] = {}
 _MODULES: dict[str, "Module"] = {}
 # Parameters each definition calls, directly or through the helpers it passes them to.
 _CALLED_PARAMETERS: dict[int, set[str]] = {}
+# Keys of each definition's mapping parameters (`**options` included) whose values get called.
+_CALLED_OPTIONS: dict[int, dict[str, set[str]]] = {}
 # Thread locks some code holds across blocking work, with that work as witness.
 _LOCKS_HELD_ACROSS_IO: dict[tuple[str, ...], str] = {}
 
@@ -1522,10 +1524,13 @@ def _invoked_arguments(node: ast.Call, targets: list[Definition], definition: De
     calls its own parameter (`guard = run_guard or (lambda action: action())`)."""
     arguments = []
     for target in targets:
-        for parameter in _called_parameters(target):
+        called = _called_parameters(target)
+        for parameter in called:
             argument = _argument_for(node, target, parameter)
             if argument is not None:
                 arguments.append(argument)
+        options = _CALLED_OPTIONS.get(id(target.node), {})
+        arguments.extend(_option_arguments(node, target, definition, called, options)[0])
     if not targets and isinstance(node.func, ast.Name):
         for assignment in _own_nodes(definition):
             if not (isinstance(assignment, ast.Assign) and len(assignment.targets) == 1
@@ -1621,10 +1626,91 @@ def _called_parameters(definition: Definition) -> set[str]:
     return found if found is not None else _directly_called_parameters(definition)
 
 
+def _option_sources(
+    mapping: ast.AST, definition: Definition, key: str, seen: set[tuple[int, str]]
+) -> tuple[list[ast.AST], list[tuple[Definition, str]]]:
+    """What a mapping can hold under `key`: the values written for it, and the parameters, each with
+    its definition, that the mapping is built from. A closure reads the local of the function around it."""
+    values: list[ast.AST] = []
+    parameters: list[tuple[Definition, str]] = []
+    parts: list[tuple[ast.AST, Definition]] = []
+    if isinstance(mapping, ast.Dict):
+        for name, value in zip(mapping.keys, mapping.values):
+            if name is None:
+                parts.append((value, definition))
+            elif isinstance(name, ast.Constant) and name.value == key:
+                values.extend([value.body, value.orelse] if isinstance(value, ast.IfExp) else [value])
+    elif isinstance(mapping, ast.IfExp):
+        parts.extend([(mapping.body, definition), (mapping.orelse, definition)])
+    elif isinstance(mapping, ast.BinOp) and isinstance(mapping.op, ast.BitOr):
+        parts.extend([(mapping.left, definition), (mapping.right, definition)])
+    elif isinstance(mapping, ast.Name):
+        owner: Definition | None = definition
+        while owner is not None and (id(owner.node), mapping.id) not in seen:
+            seen.add((id(owner.node), mapping.id))
+            kwarg = owner.node.args.kwarg
+            bound = mapping.id in _parameter_names(owner) or (kwarg is not None and kwarg.arg == mapping.id)
+            if bound:
+                parameters.append((owner, mapping.id))
+            for node in _own_nodes(owner):
+                if not isinstance(node, (ast.Assign, ast.AnnAssign)) or node.value is None:
+                    continue
+                for target in node.targets if isinstance(node, ast.Assign) else [node.target]:
+                    if isinstance(target, ast.Name) and target.id == mapping.id:
+                        bound = True
+                        parts.append((node.value, owner))
+                    elif (
+                        isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name)
+                        and target.value.id == mapping.id
+                        and isinstance(target.slice, ast.Constant) and target.slice.value == key
+                    ):
+                        values.append(node.value)
+            if bound:
+                break
+            owner = _PARENTS.get(id(owner.node))
+    for part, owner in parts:
+        more_values, more_parameters = _option_sources(part, owner, key, seen)
+        values.extend(more_values)
+        parameters.extend(more_parameters)
+    return values, parameters
+
+
+def _option_arguments(
+    node: ast.Call, target: Definition, definition: Definition, called: set[str], options: dict[str, set[str]]
+) -> tuple[list[ast.AST], list[tuple[Definition, str, str]]]:
+    """The callables a call hands over inside mappings for the target to call (`run(**options)`,
+    `run(options)` where run unpacks it), and the caller's (parameter, key) pairs they can come from."""
+    unpacked = [keyword.value for keyword in node.keywords if keyword.arg is None]
+    sought = [
+        (mapping, parameter)
+        for parameter in called
+        if parameter in _parameter_names(target) and _argument_for(node, target, parameter) is None
+        for mapping in unpacked
+    ]
+    values: list[ast.AST] = []
+    kwarg = target.node.args.kwarg
+    for parameter, keys in options.items():
+        if kwarg is not None and parameter == kwarg.arg:
+            for key in keys:
+                named = [keyword.value for keyword in node.keywords if keyword.arg == key]
+                values.extend(named)
+                if not named:
+                    sought.extend((mapping, key) for mapping in unpacked)
+        elif (argument := _argument_for(node, target, parameter)) is not None:
+            sought.extend((argument, key) for key in keys)
+    parameters: list[tuple[Definition, str, str]] = []
+    for mapping, key in sought:
+        found, sources = _option_sources(mapping, definition, key, set())
+        values.extend(found)
+        parameters.extend((owner, name, key) for owner, name in sources)
+    return values, parameters
+
+
 def _compute_called_parameters(modules: list[Module], index: Index) -> None:
-    """`_called_parameters` for every definition, to a fixpoint."""
+    """`_called_parameters` and `_CALLED_OPTIONS` for every definition, to a fixpoint."""
     definitions = list(_all_definitions(modules))
     called = {id(definition.node): _directly_called_parameters(definition) for definition in definitions}
+    options: dict[int, dict[str, set[str]]] = {}
     changed = True
     while changed:
         changed = False
@@ -1639,7 +1725,21 @@ def _compute_called_parameters(modules: list[Module], index: Index) -> None:
                         if isinstance(argument, ast.Name) and argument.id in parameters and argument.id not in own:
                             own.add(argument.id)
                             changed = True
+                    values, sources = _option_arguments(
+                        node, target, definition,
+                        set(called.get(id(target.node), ())), dict(options.get(id(target.node), {})),
+                    )
+                    for value in values:
+                        if isinstance(value, ast.Name) and value.id in parameters and value.id not in own:
+                            own.add(value.id)
+                            changed = True
+                    for owner, name, key in sources:
+                        keys = options.setdefault(id(owner.node), {}).setdefault(name, set())
+                        if key not in keys:
+                            keys.add(key)
+                            changed = True
     _CALLED_PARAMETERS.update(called)
+    _CALLED_OPTIONS.update(options)
 
 
 def _awaited_call_ids(definition: Definition) -> set[int]:
@@ -2024,6 +2124,7 @@ def analyze_python_repository(
     _PARENTS.clear()
     _MODULES.clear()
     _CALLED_PARAMETERS.clear()
+    _CALLED_OPTIONS.clear()
     _LOCKS_HELD_ACROSS_IO.clear()
     modules = load_modules(root, overrides)
     index = Index(modules)

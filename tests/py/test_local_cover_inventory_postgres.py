@@ -22,6 +22,7 @@ class Counting:
 
     def __init__(self, connection, counts):
         self.connection, self.counts = connection, counts
+        self.read = 0  # pg_stat_xact counts per connection and keeps growing until it is flushed.
 
     def execute(self, sql, params=None):
         cursor = self.connection.execute(sql, params)
@@ -30,7 +31,9 @@ class Counting:
         return cursor
 
     def note_reads(self):
-        self.counts["read"] = max(self.counts["read"], self.connection.execute(_ROWS_READ).fetchone()["rows_read"])
+        read = self.connection.execute(_ROWS_READ).fetchone()["rows_read"]
+        self.counts["read"] += max(0, read - self.read)
+        self.read = max(self.read, read)
 
     def commit(self):
         self.note_reads()
@@ -65,7 +68,7 @@ def test_open_refresh_and_delete_touch_one_row_at_any_library_size(library_size,
     repository = inventory.LocalCoverInventoryRepository(
         {"ALBUM_HAVEN_APP_DATABASE_URL": runtime_url}, connect=connect,
     )
-    worker = inventory.LocalCoverInventoryWorker({"IMAGE_EXTENSIONS": {".jpg"}}, repository=repository)
+    listings = inventory.LocalCoverInventory({"IMAGE_EXTENSIONS": {".jpg"}}, repository=repository)
     try:
         with isolatedPostgres._connect(setup_url) as connection:
             # A library of stored listings, every one left pending as on a restored copy.
@@ -79,27 +82,24 @@ def test_open_refresh_and_delete_touch_one_row_at_any_library_size(library_size,
             connection.execute("analyze library.local_cover_inventories")
             connection.commit()
 
-        worker.refresh(album)
-        _, refreshed = measured(lambda: worker.refresh(album))
+        listings.refresh(album)
+        _, refreshed = measured(lambda: listings.refresh(album))
         assert refreshed["read"] <= 2 and refreshed["written"] == 0, "an unchanged open"
 
-        row, opened = measured(lambda: repository.get([album]))
+        row, opened = measured(lambda: listings.stored([album]))
         assert opened["read"] <= 2 and opened["written"] == 0
         assert row[keys[0]]["complete"]
 
         Image.new("RGB", (30, 30), "blue").save(album / "back.jpg")
-        _, changed = measured(lambda: worker.refresh(album))
+        _, changed = measured(lambda: listings.refresh(album))
         assert changed["read"] <= 4 and changed["written"] == 1, "a change the watcher missed"
 
-        _, deleted = measured(lambda: worker.remove_path(album, album / "back.jpg"))
+        (album / "back.jpg").unlink()
+        _, deleted = measured(lambda: listings.refresh(album, after_write=True))
         assert deleted["read"] <= 4 and deleted["written"] == 1
 
-        def idle():
-            worker.start()
-            worker.close()
-
-        _, idled = measured(idle)
-        assert idled == {"read": 0, "written": 0}, "a restart over a stale backlog, left idle"
+        _, restarted = measured(lambda: inventory.LocalCoverInventory({"IMAGE_EXTENSIONS": {".jpg"}}, repository=repository))
+        assert restarted == {"read": 0, "written": 0}, "a restart over a stale backlog"
     finally:
         with isolatedPostgres._connect(setup_url) as connection:
             connection.execute(

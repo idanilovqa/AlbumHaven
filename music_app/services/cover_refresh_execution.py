@@ -348,6 +348,9 @@ def _build_automatic_cover_write_guard(
         )
         if any(value for key, value in result.items() if key.startswith("blocked_by_")):
             return False
+        inventory = config.get("_LOCAL_COVER_INVENTORY")
+        if inventory is not None:
+            inventory.refresh_after_write(folder, set(track_paths))
         return result["value"]
 
     return automatic_write_guard

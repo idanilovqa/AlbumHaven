@@ -2,12 +2,16 @@
 
 Ported from #65's local cover inventory, without its library-wide paths (owner's large-data rule, backlog case 50).
 """
+import asyncio
 from pathlib import Path
+import threading
+from types import SimpleNamespace
 
 from PIL import Image
 import pytest
 
-from music_app.services import cover_state, covers
+from music_app.routes import api_wave_d_asgi_routes as routes
+from music_app.services import cover_state, cover_workflow, covers
 from music_app.services import local_cover_inventory as inventory
 
 
@@ -16,11 +20,10 @@ CONFIG = {"IMAGE_EXTENSIONS": {".jpg", ".png"}}
 
 class Store:
     def __init__(self):
-        self.rows, self.writes, self.reads = {}, [], []
+        self.rows, self.writes = {}, []
 
     def get(self, roots):
         keys = [inventory.root_key(root) for root in roots]
-        self.reads.append(keys)
         return {key: dict(self.rows[key]) for key in keys if key in self.rows}
 
     def publish(self, root, candidates, *, expected_revision):
@@ -38,120 +41,215 @@ class Store:
         self.rows[key]["error"] = inventory.STORAGE_UNAVAILABLE
 
 
-@pytest.fixture
-def album(tmp_path):
-    root = tmp_path / "Album"
-    (root / "Covers").mkdir(parents=True)
-    Image.new("RGB", (20, 20), "red").save(root / "cover.jpg")
-    Image.new("RGB", (30, 20), "blue").save(root / "Covers" / "booklet.png")
-    store = Store()
-    worker = inventory.LocalCoverInventoryWorker(CONFIG, repository=store)
-    worker.refresh(root)
-    return root, store, worker
+class Album:
+    """A real album on disk, in a shape the cover routes resolve, behind the real gallery path."""
+
+    def __init__(self, tmp_path, monkeypatch, shape):
+        library, copies = tmp_path / "Main", tmp_path / "Hoard"
+        base = library / "Artist" / "Album"
+        self.main = base / "CD1" if shape == "disc" else base
+        self.copy = copies / "Artist" / "Album" if shape == "copy" else None
+        (self.main / "Covers").mkdir(parents=True)
+        (self.main / "01.mp3").touch()
+        Image.new("RGB", (20, 20), "red").save(self.main / "cover.jpg")
+        Image.new("RGB", (30, 30), "blue").save(self.main / "Covers" / "inside.jpg")
+        self.tracks = {str(self.main / "01.mp3")}
+        if shape == "disc":
+            (base / "CD2").mkdir()  # Another album's disc: the gallery lists this album's own disc only.
+        if self.copy:
+            self.copy.mkdir(parents=True)
+            (self.copy / "01.mp3").touch()
+            Image.new("RGB", (40, 40), "green").save(self.copy / "copy.jpg")
+            self.tracks.add(str(self.copy / "01.mp3"))
+        roots = [{"path": str(library), "category": "main_library_roots", "layout": "artist_album"},
+                 {"path": str(copies), "category": "hoard_roots", "layout": "artist_album"}]
+        monkeypatch.setattr(cover_workflow, "get_library_roots", lambda config: roots)
+        self.album_root = base
+        self.store = Store()
+        self.inventory = inventory.LocalCoverInventory(CONFIG, repository=self.store)
+        entries = {track: {"cover_path": str(self.main / "cover.jpg")} for track in self.tracks}
+        self.request = SimpleNamespace(
+            app=SimpleNamespace(state=SimpleNamespace(local_cover_inventory=self.inventory)),
+        )
+        monkeypatch.setattr(routes, "_app_config", lambda request: dict(CONFIG))
+        monkeypatch.setattr(routes, "_library_state", lambda request: {"file_cache": entries})
+        monkeypatch.setattr(routes, "cover_lookup_result", lambda task_id: {})
+
+    def gallery(self, *, stored_first=False):
+        return asyncio.run(routes._serialize_cover_gallery_from_asgi(
+            self.request, self.album_root, self.tracks, stored_first=stored_first,
+        ))
+
+    def shown(self, payload):
+        return {Path(item["candidate_cover_path"]).name for item in payload["local_covers"] + payload["other_art"]}
+
+    def stored(self, root):
+        return {Path(item["path"]).name for item in self.store.rows[inventory.root_key(root)]["candidates"]}
 
 
-def listed(store, root):
-    return {Path(item["path"]).name for item in store.rows[inventory.root_key(root)]["candidates"]}
+@pytest.fixture(params=["plain", "disc", "copy"])
+def album(request, tmp_path, monkeypatch):
+    album = Album(tmp_path, monkeypatch, request.param)
+    album.first = album.gallery(stored_first=True)
+    return album
 
 
-def test_a_first_listing_records_every_image_with_dimensions_and_hash(album):
-    root, store, _worker = album
-    assert listed(store, root) == {"cover.jpg", "booklet.png"}
-    assert all(item["sha256"] and item["width"] and item["size"]
-               for item in store.rows[inventory.root_key(root)]["candidates"])
+def refuse(monkeypatch, folder):
+    scandir = cover_state.os.scandir
+
+    def scan(path="."):
+        if Path(path) == folder:
+            raise PermissionError("denied")
+        return scandir(path)
+
+    monkeypatch.setattr(cover_state.os, "scandir", scan)
 
 
-def test_an_unchanged_open_reads_no_image_bytes_and_writes_nothing(album, monkeypatch):
-    root, store, worker = album
+def test_a_first_open_lists_and_stores_every_folder_of_the_album(album):
+    expected = {"cover.jpg", "inside.jpg", *(["copy.jpg"] if album.copy else [])}
+    assert album.shown(album.first) == expected
+    assert album.first["local_inventory_pending"] is False, "nothing stored yet: the folders were read"
+    assert album.stored(album.main) == {"cover.jpg", "inside.jpg"}
+    if album.copy:
+        assert album.stored(album.copy) == {"copy.jpg"}
+
+
+def test_a_whole_unchanged_open_is_one_walk_no_decode_no_hash_no_write(album, monkeypatch):
     monkeypatch.setattr(cover_state, "_file_sha256", lambda *a, **k: pytest.fail("hashed an unchanged image"))
     monkeypatch.setattr(covers, "image_dimensions", lambda *a, **k: pytest.fail("decoded an unchanged image"))
-    store.writes.clear()
+    monkeypatch.setattr(routes, "image_dimensions", lambda *a, **k: pytest.fail("decoded an unchanged image"))
+    walks = []
+    walk = cover_state._iter_local_image_paths
+    monkeypatch.setattr(cover_state, "_iter_local_image_paths",
+                        lambda root, *a, **k: walks.append(inventory.root_key(root)) or walk(root, *a, **k))
+    album.store.writes.clear()
 
-    worker.refresh(root)
+    opened = album.gallery(stored_first=True)
+    assert opened["local_inventory_pending"] is True and walks == [], "the first answer reads no folder"
+    followed = album.gallery()
 
-    assert store.writes == []
+    assert followed["local_inventory_pending"] is False
+    assert album.shown(followed) == album.shown(opened) == album.shown(album.first)
+    assert len(walks) == len(set(walks)) == (2 if album.copy else 1)
+    assert album.store.writes == []
 
 
-def test_a_change_the_watcher_missed_heals_on_the_next_open_hashing_only_that_file(album, monkeypatch):
-    root, store, worker = album
-    Image.new("RGB", (40, 40), "green").save(root / "back.jpg")
+def test_a_change_the_watcher_missed_shows_on_the_next_open_hashing_only_that_file(album, monkeypatch):
+    Image.new("RGB", (50, 50), "yellow").save(album.main / "back.jpg")
     hashed = []
     real_hash = cover_state._file_sha256
     monkeypatch.setattr(cover_state, "_file_sha256",
                         lambda path, **kwargs: hashed.append(path.name) or real_hash(path, **kwargs))
 
-    worker.refresh(root)
-
-    assert listed(store, root) == {"cover.jpg", "booklet.png", "back.jpg"}
+    assert "back.jpg" in album.shown(album.gallery())
     assert hashed == ["back.jpg"]
 
 
-def test_an_offline_folder_keeps_its_listing_and_says_so(album):
-    root, store, worker = album
-    root.rename(root.with_name("Album offline"))
+@pytest.mark.parametrize("unreadable", ["album folder", "subfolder"])
+def test_an_unreadable_folder_keeps_the_covers_on_screen_and_says_so(album, monkeypatch, unreadable):
+    refuse(monkeypatch, album.main if unreadable == "album folder" else album.main / "Covers")
 
-    worker.refresh(root)
+    followed = album.gallery()
 
-    assert listed(store, root) == {"cover.jpg", "booklet.png"}
-    assert store.rows[inventory.root_key(root)]["error"] == inventory.STORAGE_UNAVAILABLE
-
-
-def test_an_unreadable_subfolder_never_publishes_a_shorter_listing(album, monkeypatch):
-    root, store, worker = album
-    scandir = cover_state.os.scandir
-
-    def refuse_covers(path):
-        if Path(path).name == "Covers":
-            raise PermissionError("denied")
-        return scandir(path)
-
-    monkeypatch.setattr(cover_state.os, "scandir", refuse_covers)
-
-    worker.refresh(root)
-
-    assert listed(store, root) == {"cover.jpg", "booklet.png"}
+    assert album.shown(followed) == album.shown(album.first)
+    assert followed["local_inventory_error"] == inventory.STORAGE_UNAVAILABLE
+    assert followed["local_inventory_pending"] is False
+    assert album.stored(album.main) == {"cover.jpg", "inside.jpg"}
 
 
-def test_a_deleted_cover_leaves_the_listing_at_once(album):
-    root, store, worker = album
+@pytest.mark.parametrize("main_is_listed", [True, False])
+def test_a_copy_that_is_away_keeps_its_covers_whatever_the_other_folders_have(tmp_path, monkeypatch, main_is_listed):
+    album = Album(tmp_path, monkeypatch, "copy")
+    first = album.gallery()
+    if not main_is_listed:
+        del album.store.rows[inventory.root_key(album.main)]
+    album.copy.rename(album.copy.with_name("Album away"))
 
-    worker.remove_path(root, root / "cover.jpg")
-
-    assert listed(store, root) == {"booklet.png"}
-
-
-def test_a_listing_changed_during_a_refresh_is_read_again_not_overwritten(album, monkeypatch):
-    root, store, worker = album
-    Image.new("RGB", (40, 40), "green").save(root / "back.jpg")
-    discover = inventory.discover_local_cover_inventory
-
-    def delete_meanwhile(*args, **kwargs):
-        found = discover(*args, **kwargs)
-        store.rows[inventory.root_key(root)]["revision"] += 1
-        return found
-
-    monkeypatch.setattr(inventory, "discover_local_cover_inventory", delete_meanwhile)
-
-    worker.refresh(root)
-
-    assert listed(store, root) == {"cover.jpg", "booklet.png"}
-    assert worker.take_next() == root
+    for stored_first in (True, False):
+        payload = album.gallery(stored_first=stored_first)
+        assert album.shown(payload) == album.shown(first)
+    assert payload["local_inventory_error"] == inventory.STORAGE_UNAVAILABLE
 
 
-def test_repeated_opens_queue_one_walk_and_the_queue_is_bounded(tmp_path):
-    worker = inventory.LocalCoverInventoryWorker(CONFIG, repository=Store())
-    for _ in range(5):
-        worker.request(tmp_path / "same")
-    assert worker.take_next() == tmp_path / "same"
-    assert worker.take_next() is None
+def test_a_deleted_cover_leaves_the_listing_of_the_folder_that_held_it(album):
+    deleted = album.copy / "copy.jpg" if album.copy else album.main / "Covers" / "inside.jpg"
+    deleted.unlink()
 
-    for index in range(inventory.QUEUE_LIMIT + 10):
-        worker.request(tmp_path / f"album-{index}")
-    taken = []
-    while (root := worker.take_next()) is not None:
-        taken.append(root)
-    assert len(taken) == inventory.QUEUE_LIMIT
-    assert taken[0] == tmp_path / f"album-{inventory.QUEUE_LIMIT + 9}", "the album just opened comes first"
+    payload = album.gallery()  # The delete route answers with this read.
+
+    assert deleted.name not in album.shown(payload)
+    assert deleted.name not in album.stored(album.copy or album.main)
+
+
+def test_a_deleted_active_cover_gets_no_card(album):
+    (album.main / "cover.jpg").unlink()
+    assert "cover.jpg" not in album.shown(album.gallery())
+
+
+def test_a_save_stores_the_new_cover_under_the_folder_the_gallery_lists(album):
+    Image.new("RGB", (60, 60), "white").save(album.main / "cover-2.jpg")
+
+    album.inventory.refresh_after_write(album.album_root, album.tracks)
+
+    assert "cover-2.jpg" in album.stored(album.main)
+    assert "cover-2.jpg" in album.shown(album.gallery(stored_first=True)), "the next open shows it at once"
+
+
+def test_a_failed_listing_update_never_fails_the_save(album, monkeypatch):
+    monkeypatch.setattr(album.store, "get", lambda roots: (_ for _ in ()).throw(RuntimeError("database away")))
+    album.inventory.refresh_after_write(album.album_root, album.tracks)
+
+
+def test_repeated_opens_share_one_walk_and_a_save_waits_for_a_walk_of_its_own(tmp_path, monkeypatch):
+    listings = inventory.LocalCoverInventory(CONFIG, repository=Store())
+    walks, entered, release = [], threading.Event(), threading.Event()
+
+    def walk(root, *args, **kwargs):
+        walks.append(root)
+        entered.set()
+        assert release.wait(5)
+        return []
+
+    monkeypatch.setattr(inventory, "discover_local_cover_inventory", walk)
+    opens = [threading.Thread(target=listings.refresh, args=(tmp_path,)) for _ in range(5)]
+    for thread in opens:
+        thread.start()
+    assert entered.wait(5)
+    save = threading.Thread(target=listings.refresh, args=(tmp_path,), kwargs={"after_write": True})
+    save.start()
+    save.join(0.2)
+    assert len(walks) == 1 and save.is_alive()
+    release.set()
+    for thread in [*opens, save]:
+        thread.join(5)
+    assert len(walks) == 2, "one shared walk, then one that sees what the save wrote"
+
+
+def test_walks_of_different_albums_are_bounded(tmp_path, monkeypatch):
+    listings = inventory.LocalCoverInventory(CONFIG, repository=Store())
+    running, peak, lock, release = [], [], threading.Lock(), threading.Event()
+
+    def walk(root, *args, **kwargs):
+        with lock:
+            running.append(root)
+            peak.append(len(running))
+        release.wait(0.05)
+        with lock:
+            running.remove(root)
+        return []
+
+    monkeypatch.setattr(inventory, "discover_local_cover_inventory", walk)
+    threads = [threading.Thread(target=listings.refresh, args=(tmp_path / str(index),)) for index in range(12)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(5)
+    assert len(peak) == 12 and max(peak) <= inventory.WALK_LIMIT
+
+
+def test_there_is_no_background_worker_to_start_poll_or_stop():
+    for name in ("start", "stop", "request", "rescan", "invalidate_paths", "request_context"):
+        assert not hasattr(inventory.LocalCoverInventory, name)
 
 
 def test_an_open_shows_the_stored_listing_of_every_copy_without_touching_the_disk(monkeypatch, tmp_path):
@@ -176,7 +274,7 @@ def test_an_open_shows_the_stored_listing_of_every_copy_without_touching_the_dis
         album_root=main, track_paths={track},
         file_cache={track: {"cover_path": str(main / "cover.jpg"), "cover_revision": "a" * 64}},
         image_extensions={".jpg"}, image_dimensions=lambda path: pytest.fail("decoded an image"),
-        is_squareish_cover=lambda width, height: True, stored_listings=listings,
+        is_squareish_cover=lambda width, height: True, stored_listings=listings, listings_pending=True,
     )
 
     covers_shown = payload["local_covers"]
@@ -190,80 +288,6 @@ def test_an_open_shows_the_stored_listing_of_every_copy_without_touching_the_dis
     assert payload["local_inventory_pending"] is True
     assert payload["local_inventory_error"] == inventory.STORAGE_UNAVAILABLE
 
-
-@pytest.mark.parametrize("stored_first, stored", [(True, True), (True, False), (False, True)])
-def test_the_gallery_uses_the_stored_listing_only_for_an_open_and_always_refreshes_it(
-    monkeypatch, tmp_path, stored_first, stored,
-):
-    import asyncio
-    from types import SimpleNamespace
-
-    from music_app.routes import api_wave_d_asgi_routes as routes
-
-    main, copy = tmp_path / "Album", tmp_path / "Album copy"
-    main.mkdir()
-    copy.mkdir()
-    rows = {inventory.root_key(root): {"candidates": [], "error": None, "available": True} for root in (main, copy)}
-    if not stored:
-        del rows[inventory.root_key(copy)]  # One copy without a listing: the folders are read, nothing is half shown.
-    queued, served = [], []
-    worker = SimpleNamespace(repository=SimpleNamespace(get=lambda roots: rows), request=queued.append)
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(local_cover_inventory=worker)))
-    monkeypatch.setattr(routes, "_app_config", lambda request: dict(CONFIG))
-    monkeypatch.setattr(routes, "_library_state", lambda request: {"file_cache": {}})
-    monkeypatch.setattr(routes, "resolve_album_copy_roots", lambda *args: [copy])
-    monkeypatch.setattr(routes, "cover_lookup_result", lambda task_id: {})
-    monkeypatch.setattr(routes, "serialize_cover_gallery_payload",
-                        lambda **kwargs: served.append(kwargs["stored_listings"]) or {"ok": True})
-
-    asyncio.run(routes._serialize_cover_gallery_from_asgi(
-        request, main, {str(main / "01.mp3")}, stored_first=stored_first,
-    ))
-
-    if stored_first and stored:
-        assert [root for root, _row in served[0]] == [main, copy]
-    else:
-        assert served == [None]
-    assert queued == [main, copy]
-
-
-def test_an_offline_album_keeps_its_stored_covers_on_the_follow_up_read_too(monkeypatch, tmp_path):
-    import asyncio
-    from types import SimpleNamespace
-
-    from music_app.routes import api_wave_d_asgi_routes as routes
-
-    parent, disc = tmp_path / "Album", tmp_path / "Album" / "CD1"  # Offline: neither folder is there.
-    row = {"candidates": [], "error": None, "available": True}
-    asked = []
-    worker = SimpleNamespace(
-        repository=SimpleNamespace(get=lambda roots: asked.extend(roots) or {inventory.root_key(disc): row}),
-        request=lambda root: None,
-    )
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(local_cover_inventory=worker)))
-    monkeypatch.setattr(routes, "restrict_album_root_to_represented_disc", lambda root, paths: disc, raising=False)
-
-    listings = asyncio.run(routes._album_local_listings(request, parent, [], {"track"}, stored_first=False))
-
-    assert asked == [disc], "the folder of the album's own disc, as the gallery lists it"
-    [(root, shown)] = listings
-    assert root == disc and shown["error"] == inventory.STORAGE_UNAVAILABLE and shown["unreadable"] is True
-    payload = cover_state.serialize_cover_gallery_payload(
-        album_root=disc, track_paths={str(disc / "01.mp3")}, file_cache={}, image_extensions={".jpg"},
-        image_dimensions=lambda path: (0, 0), is_squareish_cover=lambda width, height: True, stored_listings=listings,
-    )
-    assert payload["local_inventory_pending"] is False, "nothing better follows while the folder is away"
-    assert payload["local_inventory_error"] == inventory.STORAGE_UNAVAILABLE
-
-
-def test_an_idle_worker_never_asks_postgres_for_work():
-    store = Store()
-    worker = inventory.LocalCoverInventoryWorker(CONFIG, repository=store)
-    worker.start()
-    worker.close()
-    assert store.reads == [] and store.writes == []
-    for name in ("rescan", "invalidate_paths", "request_context"):
-        assert not hasattr(worker, name)
 
 
 @pytest.mark.parametrize("neighbours", [4, 400])

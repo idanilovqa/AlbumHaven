@@ -118,12 +118,10 @@ def resolve_authoritative_album_track_paths(
     return authoritative_track_paths
 
 
-def _iter_local_image_paths(album_root: Path, image_extensions: set[str], *, cancel_requested=None, require_readable: bool = False) -> list[Path]:
+def _iter_local_image_paths(album_root: Path, image_extensions: set[str], *, require_readable: bool = False) -> list[Path]:
     paths: list[Path] = []
     pending_directories = [album_root]
     while pending_directories:
-        if cancel_requested is not None and cancel_requested():
-            raise InterruptedError("Local cover inventory refresh cancelled")
         directory = pending_directories.pop()
         try:
             entries = list(os.scandir(directory))
@@ -132,8 +130,6 @@ def _iter_local_image_paths(album_root: Path, image_extensions: set[str], *, can
                 raise  # For the stored listing an unreadable folder is unknown, never empty.
             continue
         for entry in entries:
-            if cancel_requested is not None and cancel_requested():
-                raise InterruptedError("Local cover inventory refresh cancelled")
             try:
                 if entry.is_dir(follow_symlinks=False):
                     directory_path = Path(entry.path)
@@ -160,7 +156,6 @@ def iter_local_cover_candidates(
     is_squareish_cover,
     active_cover_path: Path | None,
     additional_album_roots: Sequence[Path] = (),
-    cancel_requested=None,
     require_readable: bool = False,
 ) -> list[dict[str, object]]:
     candidates: list[dict[str, object]] = []
@@ -168,7 +163,7 @@ def iter_local_cover_candidates(
     listed_paths = [
         (path, path.relative_to(album_root))
         for path in _iter_local_image_paths(
-            album_root, image_extensions, cancel_requested=cancel_requested, require_readable=require_readable,
+            album_root, image_extensions, require_readable=require_readable,
         )
     ] + [
         (path, Path(copy_root.name) / path.relative_to(copy_root))
@@ -176,8 +171,6 @@ def iter_local_cover_candidates(
         for path in _iter_local_image_paths(copy_root, image_extensions)
     ]
     for path, relative_path in listed_paths:
-        if cancel_requested is not None and cancel_requested():
-            raise InterruptedError("Local cover inventory refresh cancelled")
         width, height = image_dimensions(path)
         candidates.append(
             {
@@ -235,8 +228,15 @@ def stored_local_cover_candidates(
     listings: Sequence[tuple[Path, Mapping[str, object]]],
     active_cover_path: Path | None,
     active_cover_revision: str | None,
+    *,
+    pending: bool,
+    image_dimensions,
+    is_squareish_cover,
 ) -> tuple[list[dict[str, object]], str | None]:
-    """The cards of stored listings, and the file the saved cover came from, without reading a folder or an image."""
+    """The cards of listings, and the file the saved cover came from.
+
+    A pending answer reads no folder or image. Otherwise only a saved cover outside the listed folders is measured.
+    """
     candidates: list[dict[str, object]] = []
     active_key = os.path.normcase(str(active_cover_path)) if active_cover_path else None
     selected_source = str(active_cover_path) if active_cover_path else None
@@ -255,22 +255,34 @@ def stored_local_cover_candidates(
             candidates.append(card)
     if (active_cover_path and not is_managed_preview_path(active_cover_path)
             and not any(item["is_active"] for item in candidates)):
-        # Saved after the listing was stored: it is shown now and measured by the refresh.
-        candidates.append({
-            "path": str(active_cover_path), "filename": active_cover_path.name,
-            "relative_path": active_cover_path.name, "width": 0, "height": 0, "resolution": "Unknown",
-            "is_squareish": True, "is_active": True, "area": 0, "depth": 0,
-        })
+        # Pending or unreadable, the saved cover shows unmeasured; after a good read it shows only if it exists.
+        known = pending or any(listing.get("error") for _root, listing in listings)
+        width = height = 0
+        shown = known
+        if not known:
+            try:
+                shown = active_cover_path.is_file()
+                if shown:
+                    width, height = image_dimensions(active_cover_path)
+            except OSError:
+                shown = False
+        if shown:
+            measured = width > 0 and height > 0
+            candidates.append({
+                "path": str(active_cover_path), "filename": active_cover_path.name,
+                "relative_path": active_cover_path.name, "width": width, "height": height,
+                "resolution": f"{width}x{height}" if measured else "Unknown",
+                "is_squareish": is_squareish_cover(width, height) if measured else True,
+                "is_active": True, "area": width * height, "depth": 0,
+            })
     candidates.sort(key=_local_candidate_order)
     return candidates, selected_source
 
 
-def _file_sha256(path: Path, *, cancel_requested=None) -> str:
+def _file_sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as image:
         for chunk in iter(lambda: image.read(1024 * 1024), b""):
-            if cancel_requested is not None and cancel_requested():
-                raise InterruptedError("Local cover inventory refresh cancelled")
             digest.update(chunk)
     return digest.hexdigest()
 
@@ -330,6 +342,7 @@ def serialize_cover_gallery_payload(
     candidate_snapshot: Mapping[str, object] | None = None,
     additional_album_roots: Sequence[Path] = (),
     stored_listings: Sequence[tuple[Path, Mapping[str, object]]] | None = None,
+    listings_pending: bool = False,
 ) -> dict[str, object]:
     album_root = restrict_album_root_to_represented_disc(album_root, track_paths)
     active_cover_path, active_cover_revision = _active_cover_state_for_track_paths(
@@ -341,6 +354,7 @@ def serialize_cover_gallery_payload(
     if stored_listings is not None:
         local_candidates, selected_source_path = stored_local_cover_candidates(
             stored_listings, shown_cover_path, active_cover_revision,
+            pending=listings_pending, image_dimensions=image_dimensions, is_squareish_cover=is_squareish_cover,
         )
     else:
         local_candidates = iter_local_cover_candidates(
@@ -368,9 +382,7 @@ def serialize_cover_gallery_payload(
         "task": task_payload if task_payload else None,
         "candidate_snapshot": serialize_cover_candidate_snapshot(candidate_snapshot),
         # A stored listing is shown at once, then replaced by the folders' own.
-        "local_inventory_pending": stored_listings is not None and not any(
-            listing.get("unreadable") for _root, listing in stored_listings
-        ),
+        "local_inventory_pending": listings_pending,
         "local_inventory_error": next(
             (str(listing["error"]) for _root, listing in stored_listings or () if listing.get("error")), "",
         ),

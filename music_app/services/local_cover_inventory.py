@@ -1,15 +1,14 @@
 """One album's stored local-art listing, for Cover Look Up to show at once.
 
 Ported from #65's local cover inventory (0125, same table) without its library-wide paths. An open reads that
-album's folders by primary key, shows them, and queues those folders alone for a refresh, so a change nobody
-reported heals on the next open. Nothing here polls Postgres, walks the library, or runs at start (owner's
-large-data rule; freeze guard backlog case 50).
+album's folders by primary key and shows them; its follow-up read, and each of the app's cover writes, refreshes
+those folders alone, so a change nobody reported heals on the next open. There is no worker: nothing polls
+Postgres, walks the library or runs at start (owner's large-data rule; freeze guard backlog case 50).
 """
 from __future__ import annotations
 
-import asyncio
-from collections import OrderedDict
 from collections.abc import Iterable
+from concurrent.futures import Future
 import logging
 import os
 from pathlib import Path
@@ -25,8 +24,8 @@ where owners.owner_key = 'local-bootstrap-owner' and libraries.name = 'Local Lib
 and libraries.library_kind = 'local' limit 1"""
 
 STORAGE_UNAVAILABLE = "Local artwork could not be read. Showing the last known covers."
-# An open queues one folder per copy of its album; past this, the oldest waiting folder waits for its next open.
-QUEUE_LIMIT = 32
+# Folders read at the same time, whatever number of albums are opened.
+WALK_LIMIT = 4
 
 
 def root_key(root: Path | str) -> str:
@@ -91,7 +90,7 @@ class LocalCoverInventoryRepository:
             connection.commit()
 
 
-def discover_local_cover_inventory(root, config, *, previous=(), cancel_requested=None):
+def discover_local_cover_inventory(root, config, *, previous=()):
     """A folder's images. Only new or changed files are decoded and hashed."""
     from music_app.services import cover_state, covers
 
@@ -116,7 +115,6 @@ def discover_local_cover_inventory(root, config, *, previous=(), cancel_requeste
         image_dimensions=dimensions,
         is_squareish_cover=lambda width, height: width > 0 and height > 0 and abs(width - height) / max(width, height) <= 0.18,
         active_cover_path=None,
-        cancel_requested=cancel_requested,
         require_readable=True,
     )
     for candidate in candidates:
@@ -124,89 +122,106 @@ def discover_local_cover_inventory(root, config, *, previous=(), cancel_requeste
         candidate.update(size=stats[path].st_size, mtime_ns=stats[path].st_mtime_ns)
         candidate["sha256"] = (
             unchanged[path]["sha256"] if path in unchanged
-            else cover_state._file_sha256(Path(path), cancel_requested=cancel_requested)
+            else cover_state._file_sha256(Path(path))
         )
     return candidates
 
 
-class LocalCoverInventoryWorker:
-    """One background folder reader, fed only by opens and the app's own cover saves and deletes."""
+class LocalCoverInventory:
+    """An album's listings for the gallery and the cover writers. Every walk is asked for by one of them."""
 
     def __init__(self, config, *, repository=None, logger=None):
         self.config = config
         self.repository = repository or LocalCoverInventoryRepository(config)
         self._logger = logger or logging.getLogger("music_app")
-        self._stop = threading.Event()
-        self._wake = threading.Event()
-        self._queue_lock = threading.Lock()
-        self._queue: OrderedDict[str, Path] = OrderedDict()
-        self._thread = None
+        self._walks = threading.BoundedSemaphore(WALK_LIMIT)
+        self._running_lock = threading.Lock()
+        self._running: dict[str, Future] = {}
 
-    def request(self, root) -> None:
-        key = root_key(root)
-        with self._queue_lock:
-            self._queue.pop(key, None)
-            self._queue[key] = Path(root)
-            if len(self._queue) > QUEUE_LIMIT:
-                self._queue.popitem(last=False)
-        self._wake.set()
-
-    def take_next(self) -> Path | None:
-        """The folder opened last: it is the one on screen."""
-        with self._queue_lock:
-            return self._queue.popitem()[1] if self._queue else None
-
-    def refresh(self, root) -> None:
-        key = root_key(root)
-        row = self.repository.get([root]).get(key)
-        stored = list((row or {}).get("candidates") or [])
+    def stored(self, roots) -> dict[str, dict[str, object]]:
         try:
-            found = discover_local_cover_inventory(
-                root, self.config, previous=stored, cancel_requested=self._stop.is_set,
-            )
-        except InterruptedError:
-            return
-        except OSError:
-            self.repository.mark_unreadable(root)
-            return
-        if row and row.get("complete") and not row.get("error") and found == stored:
-            return
-        if not self.repository.publish(root, found, expected_revision=row["revision"] if row else None):
-            self.request(root)
+            return self.repository.get(roots)
+        except Exception:
+            self._logger.exception("Could not read stored local cover listings.")
+            return {}
 
-    def remove_path(self, root, path) -> None:
-        """Drop a cover the app deleted from its album's listing at once."""
-        row = self.repository.get([root]).get(root_key(root))
-        if row and row.get("available"):
-            kept = [item for item in row["candidates"] if root_key(item["path"]) != root_key(path)]
-            if self.repository.publish(root, kept, expected_revision=row["revision"]):
-                return
-        self.request(root)
+    def album_listings(
+        self, album_root: Path, copy_roots: Iterable[Path], track_paths: set[str], *, stored_first: bool,
+    ) -> tuple[list[tuple[Path, dict[str, object]]], bool]:
+        """The album's listings, and whether they are the stored ones that a follow-up read replaces."""
+        from music_app.services.cover_workflow import is_disc_like_folder, restrict_album_root_to_represented_disc
 
-    def start(self) -> None:
-        if self._thread is not None and self._thread.is_alive():
-            return
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._run, name="albumhaven-local-cover-inventory", daemon=True)
-        self._thread.start()
+        copy_roots = list(copy_roots)
+        roots = [restrict_album_root_to_represented_disc(album_root, track_paths), *copy_roots]
+        covered = [root_key(root) for root in (album_root, *copy_roots)]
+        # A copy whose files are away resolves to no folder, so it is looked up by its tracks' folders.
+        unresolved: dict[str, Path] = {}
+        for track_path in track_paths:
+            folder = Path(track_path).resolve(strict=False).parent
+            key = root_key(folder)
+            if any(key == root or key.startswith(root.rstrip(os.sep) + os.sep) for root in covered):
+                continue
+            for candidate in (folder, folder.parent) if is_disc_like_folder(folder) else (folder,):
+                unresolved[root_key(candidate)] = candidate
+        rows = self.stored([*roots, *unresolved.values()]) if stored_first or unresolved else {}
+        roots.extend(folder for key, folder in unresolved.items() if (rows.get(key) or {}).get("available"))
+        if stored_first and all((rows.get(root_key(root)) or {}).get("available") for root in roots):
+            return [(root, rows[root_key(root)]) for root in roots], True
+        return [(root, self.refresh(root)) for root in roots], False
 
-    def close(self) -> None:
-        self._stop.set()
-        self._wake.set()
-        if self._thread:
-            self._thread.join(30)
-            if self._thread.is_alive():
-                raise TimeoutError("Local cover inventory worker did not stop in time.")
+    def refresh_after_write(self, album_root: Path, track_paths: set[str]) -> None:
+        """Update the listing the gallery shows for a cover write; a failure never fails the write."""
+        from music_app.services.cover_workflow import restrict_album_root_to_represented_disc
 
-    async def stop(self) -> None:
-        await asyncio.to_thread(self.close)
+        try:
+            self.refresh(restrict_album_root_to_represented_disc(album_root, track_paths), after_write=True)
+        except Exception:
+            self._logger.exception("Could not update the local cover listing after a cover write.")
 
-    def _run(self) -> None:
-        while not self._stop.is_set():
-            self._wake.wait()
-            self._wake.clear()
-            while not self._stop.is_set() and (root := self.take_next()) is not None:
+    def refresh(self, root, *, after_write: bool = False) -> dict[str, object]:
+        """Read one folder. Simultaneous opens share a walk; a write waits for one that began after it."""
+        key = root_key(root)
+        while True:
+            with self._running_lock:
+                running = self._running.get(key)
+                if running is None:
+                    mine = self._running[key] = Future()
+                    break
+            if not after_write:
+                return running.result()
+            running.exception()  # Waits for the walk that may have started before the write.
+            after_write = False  # Any walk from here on began after it.
+        try:
+            with self._walks:
+                listing = self._refresh(root, key)
+            mine.set_result(listing)
+            return listing
+        except BaseException as error:
+            mine.set_exception(error)
+            raise
+        finally:
+            with self._running_lock:
+                del self._running[key]
+
+    def _refresh(self, root, key: str) -> dict[str, object]:
+        found: list[dict[str, object]] = []
+        for _attempt in range(3):
+            row = self.stored([root]).get(key)
+            stored = list((row or {}).get("candidates") or [])
+            try:
+                found = discover_local_cover_inventory(root, self.config, previous=stored)
+            except OSError:
                 try:
-                    self.refresh(root)
+                    self.repository.mark_unreadable(root)
                 except Exception:
-                    self._logger.exception("Local cover inventory refresh failed.")
+                    self._logger.exception("Could not record an unreadable local cover folder.")
+                return {"candidates": stored, "error": STORAGE_UNAVAILABLE}
+            if row and row.get("complete") and not row.get("error") and found == stored:
+                break
+            try:
+                if self.repository.publish(root, found, expected_revision=row["revision"] if row else None):
+                    break
+            except Exception:
+                self._logger.exception("Could not store a local cover listing.")
+                break
+        return {"candidates": found, "error": None}

@@ -119,6 +119,25 @@ def test_a_group_with_no_editions_has_nothing_to_warn_about():
     assert found["status"] == "ok" and found["tracklist"] is None
 
 
+def test_a_pinned_editions_credit_names_the_album():
+    edition = _release(EDITIONS[0])
+    edition["release"]["artist_credit"] = [{**CREDIT[0], "name": "Shamaani Duo", "artist_name": "Korpiklaani"}]
+    client = _Client(group=_group(), editions=_editions(3), releases={EDITIONS[0]: edition})
+
+    found = verify_musicbrainz_reference(client, GROUP, _local())
+
+    assert found["artist_credit"] == edition["release"]["artist_credit"]
+
+
+@pytest.mark.parametrize("titles", [TITLES, ("One", "Two", "Three")])
+def test_the_groups_credit_is_kept_without_a_pinned_editions_one(titles):
+    edition = _release(EDITIONS[0], titles)
+    edition["release"]["artist_credit"] = [] if titles == TITLES else [{**CREDIT[0], "name": "Shamaani Duo"}]
+    client = _Client(group=_group(), editions=_editions(3), releases={EDITIONS[0]: edition})
+
+    assert verify_musicbrainz_reference(client, GROUP, _local())["artist_credit"] == CREDIT
+
+
 def test_at_most_three_tracklists_are_read():
     other = ("One", "Two", "Three")
     client = _Client(group=_group(), editions=_editions(*[3] * 6),

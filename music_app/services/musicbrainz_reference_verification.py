@@ -92,8 +92,10 @@ def _release_group(client, group: dict[str, object], tracks: list[dict[str, obje
     if editions:
         tracklist = {"matches": bool(best and best["matches"]), "local": len(tracks),
                      "release": best["count"] if best else editions[0]["track_count"]}
+    # The album keeps the name its own edition credits (owner 2026-11-22).
+    credit = (best["release"]["artist_credit"] if best else None) or group["artist_credit"]
     return {"status": "ok", "entity": "release-group", "title": group["title"],
-            "year": _year(group.get("first_release_date")), "artist_credit": group["artist_credit"],
+            "year": _year(group.get("first_release_date")), "artist_credit": credit,
             "release_group_mbid": group["canonical_id"], "tracklist": tracklist, **_pinned(best)}
 
 

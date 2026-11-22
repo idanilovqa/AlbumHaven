@@ -26,7 +26,7 @@ def _run_bootstrap(tmp_path: Path, *, mode: str, port: int, actions: bool) -> su
         env["GITHUB_ACTIONS"] = "true"
     return subprocess.run(
         [
-            shutil.which("powershell") or "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+            shutil.which("pwsh") or shutil.which("powershell") or "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
             "-File", str(BOOTSTRAP),
             "-Mode", mode,
             # No executables here: provisioning stops before it could connect.
@@ -39,6 +39,13 @@ def _run_bootstrap(tmp_path: Path, *, mode: str, port: int, actions: bool) -> su
         ],
         env=env, capture_output=True, text=True, timeout=120,
     )
+
+
+def _assert_reached_preflight(result: subprocess.CompletedProcess) -> None:
+    """The mask comes just before the preflight, so a check of it counts only once that was reached."""
+    output = (result.stdout + result.stderr).replace(SENTINEL, "<admin secret>")
+    reached = "PGBIN executable is missing" in " ".join(output.split())
+    assert reached, f"the bootstrap stopped before its preflight: {output[-1500:]}"
 
 
 @windows_only
@@ -57,12 +64,14 @@ def test_the_bootstrap_prints_no_secret_outside_github_actions(tmp_path):
     # Never echo the captured output: on failure it would hold the secret.
     leaked = SENTINEL in result.stdout or SENTINEL in result.stderr
     assert not leaked, "the bootstrap printed the admin secret"
+    _assert_reached_preflight(result)
 
 
 @windows_only
 def test_the_bootstrap_still_masks_the_secret_on_github_actions(tmp_path):
     result = _run_bootstrap(tmp_path, mode="Provision", port=54329, actions=True)
 
+    _assert_reached_preflight(result)
     masked = f"::add-mask::{SENTINEL}" in result.stdout
     assert masked, "GitHub Actions needs the masking command"
 

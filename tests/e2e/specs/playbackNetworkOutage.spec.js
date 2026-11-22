@@ -5,6 +5,7 @@ import { startNetworkRelay } from '../helpers/networkRelay.js';
 const ARTIST = 'Playback Start Signals';
 const ALBUM = 'Length And Repetition';
 const TITLE = 'Long Cold Signal';
+const OTHER_TITLE = 'Medium Cold Signal 07';
 // Just above the fixture song's own rate (1.2 MB over about five minutes, 4 KB/s): it plays without
 // stalling, but only its first part has arrived when the network goes, as on a weak mobile network.
 const PLAYBACK_BYTES_PER_SECOND = 6 * 1024;
@@ -14,25 +15,44 @@ const displayedSeconds = (text) => {
   return match ? Number(match[1]) * 60 + Number(match[2]) : Number.NaN;
 };
 
-// Every painted frame for a second after each press on the page: the seek bar's progress, in seconds.
-async function watchSeekPaint(page, durationSeconds) {
-  await page.evaluate((duration) => {
-    const bar = document.querySelector('#player-timeline');
-    document.addEventListener('pointerdown', () => {
-      const clickAt = performance.now();
-      const frames = [];
-      window.__seekPaint = frames;
-      const sample = () => {
-        const progress = parseFloat(bar.style.getPropertyValue('--player-seek-progress')) || 0;
-        frames.push({ afterMs: performance.now() - clickAt, seconds: progress / 100 * duration });
-        if (performance.now() - clickAt < 1000) requestAnimationFrame(sample);
-      };
-      requestAnimationFrame(sample);
-    }, { capture: true });
-  }, durationSeconds);
+// Every painted frame for [ms] from now: [locator]'s text and its painted seek progress (%), with the
+// browser's own timing of a press in that time (Event Timing: when the pointer went down, when the
+// click's handlers ended). Start it, press, then await it.
+function samplePressPaint(locator, ms = 1500) {
+  // parity-check: allow-read-only-measurement-evaluate -- frame-by-frame reading of the player after a press
+  return locator.evaluate((element, duration) => new Promise((resolve) => {
+    const frames = [];
+    const events = [];
+    const started = performance.now();
+    const observer = new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        if (['pointerdown', 'mousedown', 'click'].includes(entry.name)) {
+          events.push({ name: entry.name, startTime: entry.startTime, processingEnd: entry.processingEnd });
+        }
+      }
+    });
+    observer.observe({ type: 'event', durationThreshold: 16 });
+    const sample = () => {
+      frames.push({ at: performance.now(), text: String(element.textContent || ''),
+        progress: parseFloat(element.style.getPropertyValue('--player-seek-progress')) || 0 });
+      if (performance.now() - started < duration) {
+        requestAnimationFrame(sample);
+        return;
+      }
+      observer.disconnect();
+      resolve({ started, frames, events });
+    };
+    requestAnimationFrame(sample);
+  }), ms);
 }
 
-const readSeekPaint = (page) => page.evaluate(() => window.__seekPaint || []);
+// The frames painted after the press, timed from it.
+function framesAfterPress({ started, frames, events }) {
+  const pressedAt = events.find(({ name }) => name !== 'click')?.startTime ?? started;
+  const clickEnded = events.find(({ name }) => name === 'click')?.processingEnd ?? pressedAt;
+  return frames.filter(({ at }) => at > pressedAt).map((frame) => ({ ...frame, afterMs: frame.at - pressedAt,
+    afterClick: frame.at > clickEnded }));
+}
 
 // Owner retest B-D4 round 4 (2026-11-17), verbatim: "As i seeked into the zone that was not cached,
 // the player went into paused mode. I believe it should behave as on mobile - still be on play, just
@@ -641,12 +661,12 @@ test('FTC-PLAYBACK-SEEK-001 under full CPU load ten rapid seeks forward and back
     await stepLogger.step('Ten rapid seeks: each paints its place within two frames, never the start, and Play stays playing and enabled', async () => {
       const fractions = [0.8, 0.3, 0.65, 0.15, 0.9, 0.5, 0.7, 0.2, 0.85, 0.4];
       const bounds = await player.timeline.boundingBox();
-      await watchSeekPaint(page, durationSeconds);
       for (const fraction of fractions) {
         const target = Math.floor(durationSeconds * fraction);
+        const paint = samplePressPaint(player.timeline);
         await player.timeline.click({ position: { x: bounds.width * fraction, y: bounds.height / 2 } });
-        await expect.poll(async () => (await readSeekPaint(page)).length, { timeout: 5000 }).toBeGreaterThanOrEqual(2);
-        const frames = await readSeekPaint(page);
+        const frames = framesAfterPress(await paint)
+          .map((frame) => ({ ...frame, seconds: frame.progress / 100 * durationSeconds }));
         const painted = frames.findIndex(({ seconds }) => Math.abs(seconds - target) <= 2);
         expect(painted, `the seek to ${target}s is on the bar in the first or second frame: ${JSON.stringify(frames.slice(0, 3))}`)
           .toBeGreaterThanOrEqual(0);
@@ -673,6 +693,19 @@ test('FTC-PLAYBACK-SEEK-001 under full CPU load ten rapid seeks forward and back
       await expect.poll(async () => displayedSeconds(await player.time.textContent()), { timeout: 8000 })
         .toBeGreaterThan(target + 1);
       await expect(player.playButton).toHaveAttribute('aria-label', 'Pause');
+    });
+
+    // Owner rule, "instant even at 100% CPU" (orchestrator, 2026-11-21): while a song plays and decodes
+    // under full load, a press on another song shows its title in the first frame after its click.
+    await stepLogger.step('Under the same load, a press on another song shows its title in the first frame after the click', async () => {
+      await galleryActions.clickAlbumDetailsByArtistAndAlbum(ARTIST, ALBUM);
+      await trackModalActions.waitForInteractiveSummary();
+      const paint = samplePressPaint(player.title, 2000);
+      await trackModalActions.playTrackByTitle(OTHER_TITLE);
+      const frames = framesAfterPress(await paint);
+      const firstAfterClick = frames.find(({ afterClick }) => afterClick);
+      expect(firstAfterClick?.text, `the first frame after the click: ${JSON.stringify(frames.slice(0, 3))}`).toContain(OTHER_TITLE);
+      await trackModalActions.close();
     });
   } finally {
     await load?.stop();

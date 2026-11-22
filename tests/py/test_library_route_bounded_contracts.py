@@ -1130,7 +1130,7 @@ class _ArtboxConnection:
         if query == user_cover_choice._AUTOMATIC_WRITES_SQL:
             rows = list(self._stored["automatic_writes"])
         elif query == user_cover_choice._RECORD_WRITE_BACK_SQL:
-            rows = [{"private_path": path} for path in self._stored["track_paths"]]
+            rows = [{"private_path": path, "origin": "automatic"} for path in self._stored["track_paths"]]
         elif query == album_additional_artworks_postgres._LIST_SQL:
             rows = [{"slot": 1, "source_kind": "local", "cover_path": self._stored["source"], "remote_url": None}]
         return SimpleNamespace(fetchall=lambda: rows, description=True, rowcount=-1)
@@ -1221,7 +1221,8 @@ def test_cover_lookup_additional_artwork_route_contract_reads_only_the_selected_
         prepared = album_root.parent / "job-write.tmp"
         prepared.write_bytes(clicked + b"\0")
         job_write = (prepared, [{
-            "album_id": 7, "revision": hashlib.sha256(clicked + b"\0").hexdigest(), "track_paths": track_paths,
+            "album_id": 7, "revision": hashlib.sha256(clicked + b"\0").hexdigest(), "write_id": "job-write",
+            "is_current": True,
         }])
 
         def request():

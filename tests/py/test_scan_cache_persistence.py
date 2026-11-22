@@ -53,6 +53,43 @@ def test_explicit_cover_provenance_is_written_only_by_selection_and_preserved_by
     assert "'cover_selection_repair_previous'" in cleared
 
 
+def test_automatic_write_stamp_is_set_only_by_the_file_writer_and_removed_by_every_other_selection():
+    from music_app.services.scan_cache_persistence import _persist_local_cover_selection_sql
+
+    stamped = _persist_local_cover_selection_sql(include_origin=True, include_automatic_write=True)
+    assert "'cover_automatic_write', jsonb_build_object(" in stamped
+    assert "'album_id', library.local_albums.id" in stamped
+    for options in ({}, {"include_origin": True}, {"include_linked_remote": True}, {"include_clear_selection": True}):
+        sql = _persist_local_cover_selection_sql(**options)
+        assert "'cover_automatic_write', jsonb_build_object(" not in sql, options
+        album_update = sql.split("updated_albums as", 1)[1].split("updated_track_files as", 1)[0]
+        assert "'cover_automatic_write'" in album_update, f"{options} keeps an earlier write's stamp"
+
+
+@pytest.mark.parametrize("updates_release_year", [False, True])
+def test_a_split_album_never_inherits_the_automatic_write_stamp(updates_release_year):
+    from music_app.services.scan_cache_persistence import _persist_structural_album_tag_edit_sql
+
+    sql = _persist_structural_album_tag_edit_sql(updates_release_year=updates_release_year)
+    inserted = sql.split("inserted_destination_album as (", 1)[1].split("destination_album as materialized", 1)[0]
+    assert "- 'cover_automatic_write'" in inserted
+
+
+def test_a_semantic_album_merge_never_copies_the_automatic_write_stamp():
+    from music_app.services.scan_cache_persistence import _reconcile_semantic_local_albums_sql
+
+    sql = " ".join(_reconcile_semantic_local_albums_sql())
+    candidates = sql.split("metadata_candidates as (", 1)[1].split("metadata_values as (", 1)[0]
+    assert "metadata_entry.key <> 'cover_automatic_write'" in candidates
+
+
+def test_the_automatic_write_lookup_reads_no_track_paths():
+    from music_app.services.user_cover_choice import _AUTOMATIC_WRITES_SQL
+
+    assert "array_agg" not in _AUTOMATIC_WRITES_SQL, "both callers discard them"
+    assert "track_paths" not in _AUTOMATIC_WRITES_SQL
+
+
 def test_load_separate_release_keys_accepts_dict_rows():
     from music_app.services.scan_cache_persistence import _load_separate_release_keys
 

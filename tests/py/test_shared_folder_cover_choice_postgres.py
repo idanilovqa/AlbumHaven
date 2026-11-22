@@ -631,3 +631,269 @@ def test_live_both_writers_finish_when_they_queue_on_the_publication_lock(shared
     assert failures == []
     assert [status for status, _body in saved] == [200]
     _assert_choice_kept(shared, choice)
+
+
+def _ownership(shared, album):
+    with isolatedPostgres._connect(shared.setup_url) as connection:
+        return dict(connection.execute(
+            """select metadata ->> 'cover_selection_origin' as origin,
+                      metadata ->> 'cover_selection_provenance' as provenance
+               from library.local_albums where id = %s""",
+            (album["id"],),
+        ).fetchone())
+
+
+@pytest.mark.parametrize("job_album", ["user_owned", "legacy_user_owned"])
+@pytest.mark.parametrize(("shared", "choice", "who"), [
+    ("one_album_folder", "main", "a"),
+    ("one_album_folder", "main", "b"),
+    ("one_album_folder", "second_artbox", "a"),  # B's own is refused before any lock: the next test
+], indirect=["shared"])
+def test_live_a_click_wins_over_a_same_art_upgrade_of_a_user_owned_album(shared, choice, job_album, who, monkeypatch):
+    assert _select_main(shared, monkeypatch, who="b")[0] == 200
+    if job_album == "legacy_user_owned":
+        _forget_provenance(shared)
+    owned = _ownership(shared, shared.b)
+    saved = []
+    user = threading.Thread(
+        target=lambda: saved.append(CHOICES[choice](shared, monkeypatch, who=who)), daemon=True,
+    )
+
+    def select_while_the_job_holds_the_lock():
+        user.start()
+        user.join(2)
+
+    result = _run_job(shared, monkeypatch, art="same", under_lock=select_while_the_job_holds_the_lock,
+                            before_publish=lambda: user.join(JOIN_SECONDS))
+    user.join(JOIN_SECONDS)
+
+    assert not user.is_alive(), "the user's save and the job deadlocked"
+    assert result["downloaded"] == 1, "no upgrade was written, so this proves nothing"
+    assert [status for status, _body in saved] == [200], "the click lost to the automatic upgrade"
+    kept = shared.target.read_bytes() == shared.chosen_bytes
+    assert kept, "the file holds the job's bytes"
+    if who == "a":
+        _assert_choice_kept(shared, choice)
+    assert _album_row(shared, shared.b)["revision"] == _sha(shared.chosen_bytes)
+    if (who, choice) == ("b", "main"):  # the click is itself B's explicit choice
+        owned["provenance"] = "explicit"
+    assert _ownership(shared, shared.b) == owned, "the write-back changed who owns B's cover"
+    for path in shared.paths_b:
+        assert shared.state["file_cache"][path].get("cover_selection_origin") == "user", "the runtime lost the owner"
+
+
+@pytest.mark.parametrize("job_album", ["user_owned", "legacy_user_owned"])
+@pytest.mark.parametrize("shared", ["one_album_folder"], indirect=True)
+def test_live_an_albums_main_cover_is_refused_as_its_own_second_artbox_during_an_upgrade(shared, job_album, monkeypatch):
+    assert _select_main(shared, monkeypatch, who="b")[0] == 200  # the clicked file is B's main cover
+    if job_album == "legacy_user_owned":
+        _forget_provenance(shared)
+    owned = _ownership(shared, shared.b)
+    saved = []
+    user = threading.Thread(target=lambda: saved.append(_select_artbox(shared, monkeypatch, who="b")), daemon=True)
+
+    def click_while_the_job_holds_the_lock():
+        user.start()
+        user.join(2)
+
+    result = _run_job(shared, monkeypatch, art="same", under_lock=click_while_the_job_holds_the_lock)
+    user.join(JOIN_SECONDS)
+
+    assert not user.is_alive(), "the refused click waited for a lock"
+    assert result["downloaded"] == 1, "no upgrade was written, so this proves nothing"
+    assert saved == [(409, {"ok": False, "error": "This art is already in the first artbox"})]
+    assert _artbox_row(shared, who="b") is None, "the refused click saved an artbox"
+    upgraded = shared.target.read_bytes() != shared.chosen_bytes
+    assert upgraded, "the refused click wrote over the job's file"
+    assert _album_row(shared, shared.b)["revision"] == _sha(shared.target.read_bytes())
+    assert _ownership(shared, shared.b) == owned, "the refused click changed who owns B's cover"
+    assert owned["origin"] == "user"
+
+
+@pytest.mark.parametrize("shared", ["one_album_folder"], indirect=True)
+def test_live_an_albums_own_artbox_click_wins_over_its_first_automatic_cover(shared, monkeypatch):
+    assert _album_row(shared, shared.b)["cover_path"] is None, "B already has a cover, so this proves nothing"
+    saved = []
+    user = threading.Thread(target=lambda: saved.append(_select_artbox(shared, monkeypatch, who="b")), daemon=True)
+
+    def click_while_the_job_holds_the_lock():
+        user.start()
+        user.join(2)
+
+    result = _run_job(shared, monkeypatch, under_lock=click_while_the_job_holds_the_lock,
+                      before_publish=lambda: user.join(JOIN_SECONDS))
+    user.join(JOIN_SECONDS)
+
+    assert not user.is_alive(), "the user's save and the job deadlocked"
+    assert result["downloaded"] == 1, "no automatic cover was written, so this proves nothing"
+    assert [status for status, _body in saved] == [200], "the click lost to the automatic write"
+    kept = shared.target.read_bytes() == shared.chosen_bytes
+    assert kept, "the file holds the job's bytes"
+    assert dict(_artbox_row(shared, who="b")) == {"source_kind": "local", "cover_path": str(shared.target.resolve())}
+    row = _album_row(shared, shared.b)
+    assert (row["origin"], row["revision"]) == ("automatic", _sha(shared.chosen_bytes))
+    for path in shared.paths_b:
+        assert shared.state["file_cache"][path].get("cover_selection_origin") == "automatic"
+
+
+@pytest.mark.parametrize(("shared", "choice"), COMMIT_WINDOW, indirect=["shared"])
+def test_live_an_outside_edit_recorded_as_automatic_still_fails_the_save_readably(shared, choice, monkeypatch):
+    from music_app.services import cover_refresh_execution as execution
+    from music_app.services import state, user_cover_choice
+    from music_app.services.scan_cache_persistence import shared_scan_cache_connection
+
+    album, artbox = _album_row(shared, shared.a), _artbox_row(shared)
+    root_cover, edited = shared.target.parent.parent / "cover.jpg", _jpeg("newer", 600)
+    read, recorded = user_cover_choice.read_chosen_image, []
+
+    def read_then_edited_outside(connect, path):
+        chosen = read(connect, path)
+        shared.target.write_bytes(edited)
+        # The real recovery: it writes no file, it records the file it finds with origin 'automatic'.
+        with shared_scan_cache_connection(shared.config):  # as a cover run holds it
+            recorded.append(execution._recover_existing_cover_selection(
+                config=shared.config,
+                job={"folder": shared.target.parent, "track_paths": sorted(shared.paths_b)},
+                cover_path=shared.target,
+                file_cache={path: dict(shared.state["file_cache"][path]) for path in shared.paths_b},
+                get_state=lambda: shared.state, library_state=shared.state, cache_lock=state._CACHE_LOCK,
+                scan_generation=0, cover_generation=0,
+            ))
+        return chosen
+
+    monkeypatch.setattr(user_cover_choice, "read_chosen_image", read_then_edited_outside)
+    saved = [CHOICES[choice](shared, monkeypatch)]
+
+    assert recorded == [(True, False)], "the edit was not recorded, so this proves nothing"
+    assert _album_row(shared, shared.b)["origin"] == "automatic"
+    untouched = shared.target.read_bytes() == edited
+    assert untouched, "the save overwrote an edit made outside the app"
+    _assert_failed_readably_and_wrote_nothing(shared, saved, album, artbox, edited, root_cover)
+
+
+def _record_stamped_write(shared, data, stamped_album):
+    """As the automatic guard will commit it; `stamped_album` is whose write the stamp says it was."""
+    with isolatedPostgres._connect(shared.setup_url) as connection:
+        connection.execute(
+            """update library.local_albums
+               set cover_path = %(path)s,
+                   metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
+                     'cover_selection_origin', 'automatic', 'cover_revision', %(revision)s::text,
+                     'cover_automatic_write', jsonb_build_object(
+                       'album_id', %(stamped)s::bigint, 'revision', %(revision)s::text, 'id', gen_random_uuid()::text))
+               where id = %(album)s""",
+            {"path": str(shared.target), "revision": _sha(data), "stamped": stamped_album["id"],
+             "album": shared.b["id"]},
+        )
+        connection.commit()
+
+
+@pytest.mark.parametrize("window", ["copied_by_a_merge", "users_save_of_the_same_bytes"])
+@pytest.mark.parametrize(("shared", "choice"), COMMIT_WINDOW, indirect=["shared"])
+def test_live_a_stamp_that_is_not_this_albums_last_write_still_fails_the_save_readably(
+    shared, choice, window, monkeypatch,
+):
+    from music_app.services import user_cover_choice
+
+    album, artbox = _album_row(shared, shared.a), _artbox_row(shared)
+    root_cover, newer = shared.target.parent.parent / "cover.jpg", _jpeg("newer", 600)
+    read, others = user_cover_choice.read_chosen_image, []
+
+    def read_then_the_other_write(connect, path):
+        chosen = read(connect, path)
+        monkeypatch.setattr(user_cover_choice, "read_chosen_image", read)  # only the waiting save's own read
+        shared.target.write_bytes(newer)
+        if window == "copied_by_a_merge":
+            # As library.reconcile_removed_separate_release (0035) leaves the survivor: another album's stamp.
+            _record_stamped_write(shared, newer, shared.a)
+        else:
+            _record_stamped_write(shared, newer, shared.b)
+            others.append(_select_main(shared, monkeypatch, who="b")[0])  # B's user picks those bytes
+        return chosen
+
+    monkeypatch.setattr(user_cover_choice, "read_chosen_image", read_then_the_other_write)
+    saved = [CHOICES[choice](shared, monkeypatch)]
+
+    assert others == ([] if window == "copied_by_a_merge" else [200]), "the other save failed, so this proves nothing"
+    untouched = shared.target.read_bytes() == newer
+    assert untouched, "a stamp that is no proof let the save overwrite the file"
+    _assert_failed_readably_and_wrote_nothing(shared, saved, album, artbox, newer, root_cover)
+    if others:
+        with isolatedPostgres._connect(shared.setup_url) as connection:
+            left = connection.execute(
+                "select metadata -> 'cover_automatic_write' as stamp from library.local_albums where id = %s",
+                (shared.b["id"],),
+            ).fetchone()["stamp"]
+        assert left is None, "a user's save left a stamp that proves an automatic write"
+
+
+@pytest.mark.parametrize("shared", ["one_album_folder"], indirect=True)
+def test_live_the_automatic_write_stamp_reaches_no_client_payload(shared, monkeypatch):
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    assert _run_job(shared, monkeypatch)["downloaded"] == 1
+    with isolatedPostgres._connect(shared.setup_url) as connection:
+        stamp = connection.execute(
+            "select metadata -> 'cover_automatic_write' as stamp from library.local_albums where id = %s",
+            (shared.b["id"],),
+        ).fetchone()["stamp"]
+    assert stamp, "the job's write was not stamped, so this proves nothing"
+    repository = PostgresLibraryBrowseRepository(shared.config)
+    payloads = {
+        "album details": repository.build_album_detail_payload_by_id(shared.b["id"]),
+        "album cards": repository.build_album_payloads_by_track_paths(shared.paths_b),
+        "gallery": repository.build_root_album_browse_payload(query_params={}),
+        "artist": repository.build_selected_artist_payload(query_params={"artist": "Owner"}),
+        "search": repository.build_search_payload(query_params={"q": "Other Album", "surface": "albums"}),
+        "sidebar": repository.build_root_sidebar_payload(query_params={}),
+        "problematic files": repository.build_problematic_files_payload(),
+        "problematic album": repository.build_problematic_album_payload_by_track_paths(shared.paths_b),
+        "runtime entries": repository.build_track_file_entries_by_paths(shared.paths_b),
+        "cover state": repository.build_cover_state_entries_by_paths(shared.paths_b),
+        "save response": _select_main(shared, monkeypatch)[1],
+    }
+    sent = {name: json.dumps(payload, default=str) for name, payload in payloads.items()}
+    for name in ("album details", "album cards", "gallery", "artist", "search", "runtime entries"):
+        assert "Other Album" in sent[name], f"{name} does not show the album, so this proves nothing"
+    leaks = [name for name, payload in sent.items() if "cover_automatic_write" in payload or stamp["id"] in payload]
+    assert leaks == [], "the stamp reached a client"
+
+
+class _LaterPickReplaced(Exception):
+    pass
+
+
+@pytest.mark.xfail(
+    strict=True, raises=_LaterPickReplaced,
+    reason="Known limit of C: slice 3 of the cover-save build makes the later accepted pick win",
+)
+@pytest.mark.parametrize("shared", ["one_album_folder"], indirect=True)
+def test_live_a_third_albums_later_pick_of_the_automatic_write_is_never_replaced(shared, monkeypatch):
+    from music_app.services import user_cover_choice
+
+    with isolatedPostgres._connect(shared.setup_url) as connection:
+        third = dict(connection.execute(
+            """insert into library.local_albums (library_id, album_key, title)
+               select library_id, 'generated-third-album', 'Third Album' from library.local_albums where id = %s
+               returning id, album_key""",
+            (shared.b["id"],),
+        ).fetchone())
+        connection.commit()
+    picker = _Shared(**{**vars(shared), "a": third, "paths_a": shared.paths_b})
+    read, newer, picks = user_cover_choice.read_chosen_image, _jpeg("newer", 600), []
+
+    def read_then_a_later_pick(connect, path):
+        chosen = read(connect, path)
+        monkeypatch.setattr(user_cover_choice, "read_chosen_image", read)
+        shared.target.write_bytes(newer)
+        _record_stamped_write(shared, newer, shared.b)
+        picks.append(_select_artbox(picker, monkeypatch)[0])  # the third album's user picks what the file shows now
+        return chosen
+
+    monkeypatch.setattr(user_cover_choice, "read_chosen_image", read_then_a_later_pick)
+    _select_main(shared, monkeypatch)
+
+    if picks != [200]:
+        pytest.fail("the later pick was not saved, so this proves nothing")  # not the expected failure
+    if shared.target.read_bytes() != newer:
+        raise _LaterPickReplaced("the waiting save replaced a later accepted pick")

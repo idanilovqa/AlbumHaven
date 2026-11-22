@@ -1376,8 +1376,29 @@ def _utilities_cover_lookup_local_select_response(
         return _json_response(({"ok": False, "error": str(exc)}, 400))
     except FileNotFoundError:
         return _json_response(({"ok": False, "error": "Selected image was not found"}, 404))
+
+    def persistence_failed(exc: Exception, target_filename: str) -> JSONResponse:
+        _log_local_cover_persistence_event(
+            config,
+            logger,
+            "Local cover selection persistence failed",
+            level="error",
+            artist=str((album or {}).get("album_artist") or "").strip(),
+            album=str((album or {}).get("name") or "").strip(),
+            year=(album or {}).get("year"),
+            target_filename=target_filename,
+            error_kind=type(exc).__name__,
+            history_scope=history_scope,
+        )
+        return _json_response(({"ok": False, "error": "Selected cover art could not be persisted."}, 500))
+
     try:
         chosen = _read_chosen_image(config, resolved)  # before any lock: what the user clicked
+    except FileNotFoundError:
+        return _chosen_image_changed_response()
+    except Exception as exc:
+        return persistence_failed(exc, resolved.name)
+    try:
         resolution_finished_at = perf_counter()
         promotion = begin_local_image_promotion(
             resolved,
@@ -1532,20 +1553,7 @@ def _utilities_cover_lookup_local_select_response(
              history_scope=history_scope)
         if isinstance(exc, user_cover_choice.ChosenImageChanged):
             return _chosen_image_changed_response()
-        _log_local_cover_persistence_event(
-            config,
-            logger,
-            "Local cover selection persistence failed",
-            level="error",
-            artist=str((album or {}).get("album_artist") or "").strip(),
-            album=str((album or {}).get("name") or "").strip(),
-            year=(album or {}).get("year"),
-            target_filename=authoritative_cover.name,
-            error_kind=type(exc).__name__,
-         history_scope=history_scope)
-        return _json_response(
-            ({"ok": False, "error": "Selected cover art could not be persisted."}, 500)
-        )
+        return persistence_failed(exc, authoritative_cover.name)
     try:
         if not commit_guard_called:
             state_service.run_authoritative_cover_commit_for_state(
@@ -1768,6 +1776,11 @@ async def utilities_cover_lookup_additional_artwork(request: Request) -> JSONRes
     cover_path = None
     remote_url = None
     chosen = None
+
+    def save_failed() -> JSONResponse:
+        _app_logger(request).exception("Second artbox save failed")
+        return _json_response(({"ok": False, "error": "Selected art could not be saved."}, 500))
+
     if source_kind == "local":
         try:
             # Validation resolves and checks the file on disk: off the event loop (freeze guard BI-08).
@@ -1787,6 +1800,8 @@ async def utilities_cover_lookup_additional_artwork(request: Request) -> JSONRes
                 chosen = await run_in_threadpool(_read_chosen_image, config, resolved)
             except FileNotFoundError:
                 return _chosen_image_changed_response()
+            except Exception:
+                return save_failed()
     elif source_kind == "remote":
         remote_url = str(payload.get("remote_url") or "").strip()
         snapshot = await run_in_threadpool(
@@ -1815,18 +1830,17 @@ async def utilities_cover_lookup_additional_artwork(request: Request) -> JSONRes
         "cover_path": cover_path, "remote_url": remote_url,
         "account_id": getattr(actor, "account_id", None),
     }
-    if chosen is None:
-        artworks = await run_in_threadpool(repository.save, **selection)
-    else:
-        try:
+    try:
+        if chosen is None:
+            artworks = await run_in_threadpool(repository.save, **selection)
+        else:
             artworks = await run_in_threadpool(
                 _save_local_second_artbox, config, lambda: _library_state(request), repository, chosen, selection,
             )
-        except user_cover_choice.ChosenImageChanged:
-            return _chosen_image_changed_response()
-        except OSError:
-            _app_logger(request).exception("Second artbox write-back failed")
-            return _json_response(({"ok": False, "error": "Selected art could not be saved."}, 500))
+    except user_cover_choice.ChosenImageChanged:
+        return _chosen_image_changed_response()
+    except Exception:
+        return save_failed()
     return JSONResponse({"ok": True, "album_id": album_id, "additional_artworks": artworks})
 
 

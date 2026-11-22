@@ -343,6 +343,7 @@ def _build_automatic_cover_write_guard(
                 ),
                 expected_inventory_mutation_revision=expected_inventory_mutation_revision,
                 commit_guard=commit_after_write,
+                automatic_file_write=True,
             )
             if persistence_result.get("blocked_by_mixed_album_folder"):
                 write_action.blocked_reason = "mixed_album_folder"
@@ -364,6 +365,7 @@ def _build_automatic_cover_write_guard(
                     written_path,
                     cover_revision=exact_revision,
                     cover_selection_origin=persistence_origin,
+                    automatic_file_write=True,
                     reject_if_user_controlled=not (preserve_user_ownership or replace_legacy_user),
                     reject_if_explicit_selection=replace_legacy_user,
                     expected_cover_state=("automatic", provisional_revision) if replace_legacy_user else None,

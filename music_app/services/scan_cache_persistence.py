@@ -213,6 +213,7 @@ class ScanCacheAdapter(Protocol):
         expected_cover_state: tuple[str | None, str | None] | None = None,
         expected_inventory_mutation_revision: int | None = None,
         commit_guard: Callable[[Callable[[], object]], object] | None = None,
+        automatic_file_write: bool = False,
     ) -> dict[str, object]:
         ...
 
@@ -1038,6 +1039,7 @@ class PostgresScanCacheAdapter:
         expected_inventory_mutation_revision: int | None = None,
         commit_guard: Callable[[Callable[[], object]], object] | None = None,
         prepare_selection: Callable[[Any], object] | None = None,
+        automatic_file_write: bool = False,
     ) -> dict[str, object]:
         normalized_track_paths = sorted(
             {str(path or "").strip() for path in track_paths if str(path or "").strip()}
@@ -1172,6 +1174,7 @@ class PostgresScanCacheAdapter:
                         include_reject_explicit_selection=reject_if_explicit_selection,
                         include_local_dimensions=has_local_dimensions,
                         include_selected_local_source=resolved_source_path is not None,
+                        include_automatic_write=automatic_file_write,
                     ),
                     {
                         "track_paths": normalized_track_paths,
@@ -5454,6 +5457,7 @@ def _reconcile_semantic_local_albums_sql(
           cross join lateral jsonb_each(
             coalesce(library.local_albums.metadata, '{}'::jsonb)
           ) as metadata_entry
+          where metadata_entry.key <> 'cover_automatic_write'
         ),
         metadata_values as (
           select
@@ -6933,7 +6937,8 @@ def _persist_structural_album_tag_edit_sql(
             end,
             validated_source_album.cover_path,
         """
-        + "(" + inserted_album_metadata_sql + ") || %(destination_artist_metadata)s::jsonb"
+        # The new album wrote no file, so it inherits no proof of an automatic write.
+        + "((" + inserted_album_metadata_sql + ") - 'cover_automatic_write') || %(destination_artist_metadata)s::jsonb"
         + """
           from validated_source_album
           where (select input_path_count from selection_scope) < (
@@ -7442,6 +7447,7 @@ def _persist_local_cover_selection_sql(
     include_reject_explicit_selection: bool = False,
     include_local_dimensions: bool = False,
     include_selected_local_source: bool = False,
+    include_automatic_write: bool = False,
 ) -> str:
     album_origin_json = (
         ", 'cover_selection_origin', %(cover_selection_origin)s::text"
@@ -7450,6 +7456,10 @@ def _persist_local_cover_selection_sql(
     )
     if include_explicit_selection:
         album_origin_json += ", 'cover_selection_provenance', 'explicit'"
+    if include_automatic_write:
+        # Proof of a file write by the automatic writer, bound to its album so that a copy proves nothing.
+        album_origin_json += """, 'cover_automatic_write', jsonb_build_object(
+                  'album_id', library.local_albums.id, 'revision', %(cover_revision)s::text, 'id', gen_random_uuid())"""
     local_dimensions_json = (
         ", 'local_cover_width', %(local_cover_width)s::integer, 'local_cover_height', %(local_cover_height)s::integer"
         if include_local_dimensions else ""
@@ -7532,6 +7542,7 @@ def _persist_local_cover_selection_sql(
                 'cover_selection_origin',
                 'cover_selection_provenance',
                 'cover_selection_repair_previous',
+                'cover_automatic_write',
                 'remote_cover_url',
                 'remote_cover_thumbnail_url',
                 'remote_cover_source',
@@ -7547,6 +7558,7 @@ def _persist_local_cover_selection_sql(
                 coalesce(library.local_albums.metadata, '{}'::jsonb)
                 - array[
                     'selected_local_cover_source_path',
+                  'cover_automatic_write',
                   'remote_cover_url',
                   'remote_cover_thumbnail_url',
                   'remote_cover_source',

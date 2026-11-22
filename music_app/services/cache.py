@@ -601,6 +601,7 @@ def _cover_selection_options(
     expected_inventory_mutation_revision: int | None = None,
     commit_guard: Callable[[Callable[[], object]], object] | None = None,
     prepare_selection: Callable[[object], object] | None = None,
+    automatic_file_write: bool = False,
     logger=None,
 ) -> dict[str, object]:
     del logger
@@ -648,6 +649,8 @@ def _cover_selection_options(
         persistence_options["commit_guard"] = commit_guard
     if prepare_selection is not None:
         persistence_options["prepare_selection"] = prepare_selection
+    if automatic_file_write:
+        persistence_options["automatic_file_write"] = True
     return persistence_options
 
 

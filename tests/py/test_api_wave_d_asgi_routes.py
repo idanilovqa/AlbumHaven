@@ -2772,6 +2772,42 @@ def test_asgi_local_cover_selection_persistence_failure_restores_prior_cover_and
     assert list(track_path.parent.glob("cover-existing-*.jpg")) == []
 
 
+def test_asgi_local_cover_selection_answers_readably_when_the_clicked_images_read_has_no_database(
+    app,
+    monkeypatch,
+):
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+    from music_app.services import postgres_connections, user_cover_choice
+
+    track_path = (app.config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    selected_image = track_path.parent / "Front.jpg"
+    selected_image.write_bytes(_jpeg_bytes((30, 30, 220)))
+    _seed_album_state(app.library_state, track_path)
+    asgi_app = _make_wave_d_app(app)
+
+    def no_connection(*_args, **_kwargs):
+        raise RuntimeError("database unavailable")
+
+    logged = []
+    monkeypatch.setattr(user_cover_choice, "read_chosen_image", lambda connect, _path: connect())
+    monkeypatch.setattr(postgres_connections, "leased_connection", no_connection)
+    monkeypatch.setattr(asgi_routes, "log_app_event", lambda _config, _logger, message, **_extra: logged.append(message))
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app,
+        "POST",
+        "/utilities/cover-lookup/local-select",
+        json_body={"album": _album_payload(track_path), "source_path": str(selected_image)},
+    )
+
+    assert status == 500
+    assert _decode_json(body) == {"ok": False, "error": "Selected cover art could not be persisted."}
+    assert "Local cover selection persistence failed" in logged
+    assert not (track_path.parent / "cover.jpg").exists()
+
+
 def test_asgi_local_cover_revision_failure_after_promotion_restores_prior_cover_before_persistence(
     app,
     monkeypatch,
@@ -6088,6 +6124,52 @@ def test_asgi_second_artbox_accepts_only_new_album_art(app, monkeypatch):
         (41, 1, "local", str(back.resolve()), None),
         (41, 1, "remote", None, "https://img.example/back-thumb.jpg"),
     ]
+
+
+@pytest.mark.parametrize("failing", ["clicked_image_read", "local_save", "remote_save"])
+def test_asgi_second_artbox_answers_readably_when_the_database_fails(app, monkeypatch, failing):
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+    from music_app.services import album_additional_artworks_postgres as artworks_module
+    from music_app.services import library_browse_postgres as browse_module
+
+    track_path = (app.config["MUSIC_DIR"] / "Artist" / "Testimony" / "song.mp3").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    back = track_path.parent / "back.jpg"
+    back.write_bytes(_jpeg_bytes((200, 10, 10)))
+    _seed_album_state(app.library_state, track_path)
+    asgi_app = _make_wave_d_app(app)
+    remote_url = "https://img.example/back.jpg"
+
+    def no_database(*_args, **_kwargs):
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(asgi_routes, "_resolved_snapshot_album_context", lambda *_args: (None, 41, None))
+    monkeypatch.setattr(
+        browse_module, "PostgresLibraryBrowseRepository",
+        lambda _config: SimpleNamespace(build_album_detail_payload_by_id=lambda _album_id: {"cover_path": ""}),
+    )
+    monkeypatch.setattr(
+        asgi_routes, "AlbumCoverCandidateSnapshotRepository",
+        lambda _config: SimpleNamespace(get_for_album_context=lambda album_id: {"candidates": [{"url": remote_url}]}),
+    )
+    monkeypatch.setattr(artworks_module, "AlbumAdditionalArtworkRepository", lambda _config: SimpleNamespace(save=no_database))
+    if failing == "clicked_image_read":
+        monkeypatch.setattr(asgi_routes, "_read_chosen_image", no_database)
+    elif failing == "local_save":
+        monkeypatch.setattr(asgi_routes, "_save_local_second_artbox", no_database)
+    selection = (
+        {"source_kind": "remote", "remote_url": remote_url} if failing == "remote_save"
+        else {"source_kind": "local", "source_path": str(back)}
+    )
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app, "POST", "/utilities/cover-lookup/additional-artwork",
+        json_body={"album": _album_payload(track_path), "slot": 1, **selection},
+    )
+
+    assert status == 500
+    assert _decode_json(body) == {"ok": False, "error": "Selected art could not be saved."}
 
 
 @pytest.mark.parametrize(("size", "poor"), [(400, True), (1400, False)])

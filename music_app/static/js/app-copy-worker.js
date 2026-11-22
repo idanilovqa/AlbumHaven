@@ -74,11 +74,20 @@
     const unseenAssets = new Set();
     // Kept stylesheets already read for the images they draw (icons as CSS masks), once per worker.
     const readStyles = new Set();
-    // Every change to the copy runs alone, in order, so tabs saving at once cannot lose a page.
+    // Every change to the copy but a cover runs alone, in order, so tabs saving at once cannot lose a page.
     let queue = Promise.resolve();
     const exclusive = (task) => {
       const run = queue.then(task);
       queue = quietly(run);
+      return run;
+    };
+    // Covers are written in a turn of their own: a page, asset or data answer being kept never
+    // queues behind the many covers a page just loaded, so an offline tab waiting for those writes
+    // is not held by covers (sandbox5 r25: a new tab offline right after sign-in took 11-13 s).
+    let coverQueue = Promise.resolve();
+    const coverTurn = (task) => {
+      const run = coverQueue.then(task);
+      coverQueue = quietly(run);
       return run;
     };
     // Raised by every forget: a page or cover fetched before it is never stored after it.
@@ -130,7 +139,10 @@
 
     function forget() {
       generation += 1;
-      return exclusive(deleteCopies);
+      return exclusive(async () => {
+        await coverQueue;
+        await deleteCopies();
+      });
     }
 
     // Where a referenced cover's bytes are kept: its reference and size, whatever the version.
@@ -439,7 +451,7 @@
 
     async function keepCover(key, response, fetchedIn) {
       const body = await response.arrayBuffer();
-      await exclusive(async () => {
+      await coverTurn(async () => {
         const target = await accountCache();
         if (!target || fetchedIn !== generation) return;
         const { cache } = target;

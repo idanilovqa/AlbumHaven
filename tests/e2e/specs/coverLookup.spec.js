@@ -156,8 +156,21 @@ test('FTC-COVERS-024 manual composer preserves staged images and exclusive choic
     await expect(lookup.stagedCoverCardByName(pickerName)).toHaveClass(/\bis-active\b/);
     await expect(lookup.selectedCoverCards).toHaveCount(1);
     await expect(lookup.remoteCoverCards).toHaveCount(1);
-    const image = await coverLookupActions.readDisplayedImageEvidence(lookup.firstRemoteMatchImage, 'extensionless direct image');
-    expect(image.sha256).toBe(fixtureCover.sha256);
+    // The card shows the proxy's 480 px preview of this fixture (cbfabb331); the original keeps its bytes.
+    const preview = await coverLookupActions.readDisplayedImageEvidence(lookup.firstRemoteMatchImage, 'extensionless direct image');
+    const previewUrl = new URL(preview.src);
+    expect(previewUrl.searchParams.get('url')).toBe(imageUrl);
+    expect(previewUrl.searchParams.get('size')).toBe('480');
+    expect([preview.naturalWidth, preview.naturalHeight]).toEqual([480, 480]);
+    const original = await coverLookupActions.readRemoteCardOriginalEvidence(
+      lookup.firstRemoteCoverCard, 'extensionless direct image',
+    );
+    const originalUrl = new URL(original.src);
+    expect(originalUrl.searchParams.get('url')).toBe(imageUrl);
+    expect(originalUrl.searchParams.has('size')).toBe(false);
+    expect([original.naturalWidth, original.naturalHeight]).toEqual([fixtureCover.width, fixtureCover.height]);
+    expect(original.sha256).toBe(fixtureCover.sha256.toUpperCase());
+    await trackModalActions.closeCoverLightbox();
   });
 
   await stepLogger.step('Keep exactly one local, remote, or staged cover selected and remove the staged image', async () => {

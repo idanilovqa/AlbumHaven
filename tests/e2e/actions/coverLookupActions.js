@@ -701,6 +701,12 @@ export class CoverLookupActions {
     return image.evaluate(waitForDisplayedImageDecode);
   }
 
+  async readRemoteCardOriginalEvidence(card, label) {
+    // The card shows a 480 px preview; its full-size button opens the original in the lightbox.
+    await this.coverLookup.openLightboxButtonWithin(card).click();
+    return this.readDisplayedImageEvidence(this.coverLookup.lightboxImage, `full-size ${label}`);
+  }
+
   async readRemoteCandidateEvidence(candidateId, options = {}) {
     const expectedCandidateId = String(candidateId || '').trim();
     if (!expectedCandidateId) {

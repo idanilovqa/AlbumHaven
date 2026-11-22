@@ -3222,8 +3222,12 @@ function deliverCachedStreamingRole(roleState) {
 function openLocalStreamingSeekRole(current, startFrame, continuityOptions) {
   const engine = streamingEngineState();
   const wire = current.encoded?.wire;
+  // A seek still waiting gives way to this one. A cut-over already handed to the audio thread can't,
+  // and a seek that gives a switch up asks the server as before.
+  const pending = engine.pendingSeek;
+  if (pending && (pending.prepareSent || pending.kind === 'replacement')) return null;
   // A lost stream's bytes end at its splice: only a detached player, which splices there, reads them.
-  if (!wire?.bytes || !wire.table || engine.pendingSeek
+  if (!wire?.bytes || !wire.table
       || (wire.lost && !wire.eos && !engine.detached)) return null;
   const window = lookupStreamingSeekTable(wire.table, {
     initialSkip: wire.initialSkip,

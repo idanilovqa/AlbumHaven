@@ -9137,6 +9137,54 @@ test('on a page that keeps up, 750 ms of silence still gives a seek up at once',
   assert.equal(rechecks().length, 0, 'with no recheck to wait for');
 });
 
+// A seek made while another waited always asked the server, also for bytes already here.
+for (const waitingOn of ['the server', 'received bytes']) {
+  test(`a seek while another waits on ${waitingOn} reads the received bytes, with no round trip`, async () => {
+    const harness = encodedHarness({ createStreamingDecoder: recordingDecoders().create });
+    const open = await startLocallySeekable(harness, 100_000);
+    const opensBefore = harness.sent('open').length;
+    // Both seeks land in one task, before the first could decode its quarter second.
+    void harness.api.seek(waitingOn === 'the server' ? 30 : 10);
+    const waiting = harness.engine.roles.continuity;
+    assert.equal(harness.engine.pendingSeek.prepareSent, false, 'the first seek still waits');
+    const opens = harness.sent('open').length;
+    assert.equal(opens, opensBefore + (waitingOn === 'the server' ? 1 : 0));
+
+    const second = harness.api.seek(12);
+
+    const local = harness.engine.roles.continuity;
+    assert.notEqual(local, waiting);
+    assert.equal(local.local, true);
+    assert.equal(harness.sent('open').length, opens, 'the server is not asked again');
+    assert.equal(harness.engine.pendingSeek.streamId, local.streamId);
+    assert.equal(harness.engine.pendingSeek.startFrame, 576_000);
+    assert.equal(harness.portMessages('reserve-seek').at(-1).streamId, local.streamId);
+    assert.deepEqual(harness.sent('close').map(({ streamId }) => streamId),
+      waitingOn === 'the server' ? [waiting.streamId] : [], 'only the waiting seek stream closes on the server');
+
+    await second;
+    await harness.settle();
+    harness.nodes[0].port.dispatch({
+      type: 'seek-boundary', generation: open.generation, outgoingStreamId: open.streamId,
+      incomingStreamId: local.streamId, renderedFrame: 128, timelineFrame: 576_000, silentFrames: 0,
+    });
+    assert.equal(harness.engine.roles.current, local);
+    assert.equal(harness.api.snapshot().currentTime, 12);
+  });
+}
+
+test('a seek while another already cuts over still asks the server', async () => {
+  const harness = encodedHarness({ createStreamingDecoder: recordingDecoders().create });
+  await startLocallySeekable(harness, 100_000);
+  await harness.api.seek(30);
+  harness.engine.pendingSeek.prepareSent = true;
+  const opens = harness.sent('open').length;
+
+  await harness.api.seek(12);
+
+  assert.equal(harness.sent('open').length, opens + 1);
+});
+
 test('a press on a different song still switches, and back', async (t) => {
   const { harness, node } = await playingSong(t);
   const rows = installRowPresses(harness);

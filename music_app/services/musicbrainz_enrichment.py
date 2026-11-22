@@ -12,6 +12,7 @@ from music_app.services.musicbrainz_evidence import (
     album_folders,
     decide_by_folder,
     decide_by_recordings,
+    favoured_artist,
     recording_sample,
     album_level,
     album_rank,
@@ -650,9 +651,10 @@ def _resolve_artist(context: dict[str, object], mirror: _Mirror) -> dict[str, ob
         # Owner 2026-11-14 (reversing 2026-11-09): a person and the same-named band they are a
         # member of are separate artists with their own MBIDs (Alice Cooper and his 1969-73
         # band), split per album like any other same-named artists.
+        decided, suggestions, unchecked = _resolve_undecided_albums(decision, albums, mirror)
         return {"classification": "per_album", "artists": artists, "confidence": 1,
-                "album_identities": _album_identities(decision["certain"], albums)
-                + _undecided_album_identities(decision, albums, mirror),
+                "album_identities": _album_identities(decision["certain"], albums) + decided,
+                "album_suggestions": suggestions, "album_suggestions_unchecked": unchecked,
                 "evidence_summary": f"Your albums belong to {len(artists)} MusicBrainz artists."}
     if classification == "not_found":
         return {"classification": "not_found",
@@ -706,21 +708,29 @@ def _album_identities(certain: dict[int, dict[str, object]], albums: list[dict[s
 _UNDECIDED_ALBUM_LIMIT = 20
 
 
-def _undecided_album_identities(decision: dict[str, object], albums: list[dict[str, object]],
-                                mirror: _Mirror) -> list[dict[str, object]]:
+def _resolve_undecided_albums(
+    decision: dict[str, object], albums: list[dict[str, object]], mirror: _Mirror,
+) -> tuple[list[dict[str, object]], list[dict[str, object]], list[object]]:
     """Owner 2026-11-18: an album no candidate certainly holds goes to the candidate a sample
     of its recordings leads to; only an album with no recordings evidence falls back to the
     folder it shares with one candidate's decided albums. Recordings and folder that disagree,
-    or several candidates holding the sample, leave it undecided. An owner's choice is kept."""
+    or several candidates holding the sample, leave it undecided. An owner's choice is kept.
+
+    Returns the decided albums' identities; what Problematic Files proposes for those left
+    undecided with some evidence ("MusicBrainz: artist undecided"), which never decides; and
+    the albums not checked this run, whose stored proposal still holds."""
     owners = {str(owner["mbid"]): owner for owner in decision.get("candidates") or []}
     candidates = list(owners)
     certain = decision.get("certain") or {}
     decided_folders: dict[str, set[str]] = {mbid: set() for mbid in candidates}
+    # A decided album's title names the folder it shares; a path never leaves the matcher.
+    folder_albums: dict[tuple[str, str], object] = {}
 
     def note_decided(index: int, mbid: str) -> None:
         folders = album_folders(albums[index].get("folders") or [])
         if folders and mbid in decided_folders:
             decided_folders[mbid].add(folders[1].casefold())
+            folder_albums.setdefault((mbid, folders[1].casefold()), albums[index].get("title"))
 
     kept = set(certain)
     for index, owner in certain.items():
@@ -730,14 +740,16 @@ def _undecided_album_identities(decision: dict[str, object], albums: list[dict[s
         if identity.get("source") == "manual":
             kept.add(index)
             note_decided(index, str(identity.get("mbid") or ""))
-    undecided = [index for index in range(len(albums)) if index not in kept][:_UNDECIDED_ALBUM_LIMIT]
+    left = [index for index in range(len(albums)) if index not in kept]
+    undecided = left[:_UNDECIDED_ALBUM_LIMIT]
+    unchecked = set(left[_UNDECIDED_ALBUM_LIMIT:])
     mirror.remaining = max(mirror.remaining, 3 * len(undecided))
 
     def identity_for(index: int, mbid: str, evidence: dict[str, object]) -> dict[str, object]:
         return {"local_album_id": albums[index].get("id"), "local_title": albums[index].get("title"),
                 "artist_mbid": mbid, "tag_differs": not owners[mbid].get("name_agrees"), **evidence}
 
-    identities, fallback = [], []
+    identities, fallback, evidence = [], [], {}
     for index in undecided:
         sample = recording_sample(albums[index].get("tracks") or [])
         results: dict[str, list[dict[str, object]]] = {}
@@ -752,6 +764,7 @@ def _undecided_album_identities(decision: dict[str, object], albums: list[dict[s
                 break
             results[title] = found.get("recordings") or []
         if sample and len(results) < len(sample):
+            unchecked.add(index)
             continue
         outcome = decide_by_recordings(sample, results, candidates) if sample else {"outcome": "none", "found": {}}
         if outcome["outcome"] == "decided":
@@ -760,7 +773,10 @@ def _undecided_album_identities(decision: dict[str, object], albums: list[dict[s
                 "method": outcome["method"], "sampled_titles": sample, "found": outcome["found"],
                 "release_mbid": outcome.get("release_mbid")}))
             note_decided(index, mbid)
-        elif outcome["outcome"] not in {"tie", "mixed"}:
+            continue
+        if any(outcome["found"].values()):
+            evidence[index] = (len(sample), outcome["found"])
+        if outcome["outcome"] not in {"tie", "mixed"}:
             fallback.append((index, {mbid for mbid, count in outcome["found"].items() if count}))
     for index, weak_artists in fallback:
         folders = album_folders(albums[index].get("folders") or [])
@@ -769,7 +785,18 @@ def _undecided_album_identities(decision: dict[str, object], albums: list[dict[s
             continue
         # The artist folder relative to its library root; never an absolute path.
         identities.append(identity_for(index, owner, {"method": "folder", "folder": folders[1].partition(":")[2]}))
-    return identities
+        evidence.pop(index, None)
+
+    suggestions = []
+    for index, (sampled, found) in evidence.items():
+        folders = album_folders(albums[index].get("folders") or [])
+        folder = folders[1].casefold() if folders else None
+        suggestions.append({
+            "local_album_id": albums[index].get("id"), "favoured_mbid": favoured_artist(found),
+            "artists": [{"artist_mbid": mbid, "found": found[mbid], "sampled": sampled,
+                         "folder_album": folder_albums.get((mbid, folder))} for mbid in candidates],
+        })
+    return identities, suggestions, [albums[index].get("id") for index in sorted(unchecked)]
 
 
 def _add_release_credits(add, index: int, release: dict[str, object]) -> None:

@@ -681,6 +681,14 @@ def decide_by_recordings(sample: list[str], results: dict[str, list[dict[str, ob
     return {"outcome": "weak" if any(counts.values()) else "none", "found": counts}
 
 
+def favoured_artist(found: dict[str, int]) -> str | None:
+    """The one candidate more sampled recordings lead to than to any other: a suggestion for
+    the owner, never a decision. None on equal evidence."""
+    most = max(found.values(), default=0)
+    leaders = [mbid for mbid, count in found.items() if count == most]
+    return leaders[0] if most and len(leaders) == 1 else None
+
+
 def album_folders(folders: list[str]) -> tuple[str, str] | None:
     """An album's (album folder, artist folder) from its files' "<root id>:<path under root>"
     folders: the deepest folder holding all of them, one up from a disc folder ("CD1"), and that

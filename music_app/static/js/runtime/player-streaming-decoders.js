@@ -1,9 +1,15 @@
 // Every client decodes with these pinned builds, never a browser or system decoder.
 const STREAMING_DECODER_BASE_URL = '/static/vendor/wasm-audio-decoders/';
+// Each build decodes in a Worker of its own (its `workerClassName`), so a song decoding never holds
+// the page: on the page's thread a press waited behind about 0.7 s of decoding a second at 4x CPU
+// (sandbox5 r26, 2026-11-21; the owner: instant even at 100% CPU). A browser that cannot start one
+// decodes on the page's thread instead.
 const STREAMING_DECODER_BUILDS = {
-  mp3: { file: 'mpg123-decoder.min.js', global: 'mpg123-decoder', className: 'MPEGDecoder' },
-  flac: { file: 'flac-decoder.min.js', global: 'flac-decoder', className: 'FLACDecoder' },
+  mp3: { file: 'mpg123-decoder.min.js', global: 'mpg123-decoder', className: 'MPEGDecoder', workerClassName: 'MPEGDecoderWebWorker' },
+  flac: { file: 'flac-decoder.min.js', global: 'flac-decoder', className: 'FLACDecoder', workerClassName: 'FLACDecoderWebWorker' },
 };
+// Decoders kept ready, reset, per codec: a stream takes one instead of starting a Worker.
+const STREAMING_DECODER_POOL_SIZE = 2;
 const STREAMING_DECODER_SELF_CHECK_TOLERANCE = 0.01;
 const STREAMING_DECODER_SELF_CHECK_CLIPS = {
   "mp3": {
@@ -30,15 +36,37 @@ function loadStreamingDecoderScript(file) {
   });
 }
 
-function createStreamingDecoder(codec) {
-  const { global, className } = STREAMING_DECODER_BUILDS[codec];
-  return new window[global][className]();
+// The class each codec decodes with, once its self-check passed: the Worker one where it works.
+const streamingDecoderClassNames = {};
+const streamingDecoderPool = {};
+
+function newStreamingDecoder(codec, className = streamingDecoderClassNames[codec]) {
+  const { global } = STREAMING_DECODER_BUILDS[codec];
+  return new window[global][className || STREAMING_DECODER_BUILDS[codec].className]();
 }
 
-async function streamingDecoderPassesSelfCheck(codec) {
+function createStreamingDecoder(codec) {
+  return streamingDecoderPool[codec]?.pop() || newStreamingDecoder(codec);
+}
+
+// A stream's decoder goes back to the pool, reset, while the pool has room; otherwise it ends.
+function releaseStreamingDecoder(codec, decoder) {
+  const pool = (streamingDecoderPool[codec] ??= []);
+  if (pool.length >= STREAMING_DECODER_POOL_SIZE || typeof decoder.reset !== 'function') {
+    void Promise.resolve(decoder.ready).then(() => decoder.free()).catch(() => {});
+    return;
+  }
+  pool.push(decoder);
+  void Promise.resolve(decoder.ready).then(() => decoder.reset()).catch(() => {
+    pool.splice(pool.indexOf(decoder) >>> 0, 1);
+    try { decoder.free(); } catch (_error) { /* already gone */ }
+  });
+}
+
+async function streamingDecoderPassesSelfCheck(codec, className) {
   const clip = STREAMING_DECODER_SELF_CHECK_CLIPS[codec];
   const bytes = Uint8Array.from(atob(clip.bytes), (char) => char.charCodeAt(0));
-  const decoder = createStreamingDecoder(codec);
+  const decoder = newStreamingDecoder(codec, className);
   await decoder.ready;
   try {
     const decoded = await decoder.decode(bytes);
@@ -55,13 +83,33 @@ async function streamingDecoderPassesSelfCheck(codec) {
   }
 }
 
+async function verifiedStreamingDecoderClass(codec) {
+  const build = STREAMING_DECODER_BUILDS[codec];
+  for (const className of [build.workerClassName, build.className]) {
+    if (!className || typeof window[build.global]?.[className] !== 'function') continue;
+    try {
+      if (await streamingDecoderPassesSelfCheck(codec, className)) return className;
+    } catch (_error) {
+      // A Worker that cannot start leaves the page's thread to decode.
+    }
+  }
+  return null;
+}
+
 async function detectVerifiedStreamingCodecs() {
   const codecs = [];
   for (const [codec, build] of Object.entries(STREAMING_DECODER_BUILDS)) {
     try {
       await loadStreamingDecoderScript(build.file);
-      if (await streamingDecoderPassesSelfCheck(codec)) codecs.push(codec);
-      else console.warn(`[AlbumHaven][Playback] The ${codec} decoder failed its self-check.`);
+      const className = await verifiedStreamingDecoderClass(codec);
+      if (!className) {
+        console.warn(`[AlbumHaven][Playback] The ${codec} decoder failed its self-check.`);
+        continue;
+      }
+      streamingDecoderClassNames[codec] = className;
+      codecs.push(codec);
+      // A first song finds its decoder started.
+      releaseStreamingDecoder(codec, newStreamingDecoder(codec));
     } catch (error) {
       console.warn(`[AlbumHaven][Playback] The ${codec} decoder is unavailable.`, error);
     }

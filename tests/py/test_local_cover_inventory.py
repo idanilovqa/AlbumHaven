@@ -358,7 +358,10 @@ def test_invalidation_retry_coalesces_backs_off_and_eventually_drains(monkeypatc
     monkeypatch.setattr(inventory.time, "monotonic", lambda: now[0])
     worker = inventory.LocalCoverInventoryWorker(
         {},
-        repository=SimpleNamespace(invalidate_paths=invalidate_paths),
+        repository=SimpleNamespace(
+            last_roots=("library",),
+            invalidate_paths_under=lambda _roots, paths, **kwargs: invalidate_paths(paths, **kwargs),
+        ),
     )
     worker.schedule_invalidation_retry(["library/artist/cover.jpg"])
     worker.schedule_invalidation_retry(["library/artist/cover.jpg"])
@@ -388,6 +391,39 @@ def test_invalidation_retry_coalesces_backs_off_and_eventually_drains(monkeypatc
     assert worker._invalidation_retries == {}
 
 
+@pytest.mark.parametrize("roots_were_read", [True, False])
+def test_a_scheduled_invalidation_retry_uses_the_roots_it_was_scheduled_under(roots_were_read):
+    """A retry runs from the worker's scheduler: it never loads the root settings (freeze guard BI-15)."""
+    retried = []
+
+    class Repository:
+        last_roots = None
+
+        def _roots(self):
+            raise AssertionError("a retry never loads the root settings")
+
+        def invalidate_paths(self, paths, **_kwargs):
+            if roots_were_read:
+                self.last_roots = ("/music",)  # read before the database failed
+            raise RuntimeError("database unavailable")
+
+        def invalidate_paths_under(self, roots, paths, **_kwargs):
+            retried.append((roots, tuple(paths)))
+            return [], []
+
+    worker = inventory.LocalCoverInventoryWorker({}, repository=Repository(), logger=SimpleNamespace(exception=lambda *_a: None))
+
+    assert worker.invalidate_or_retry(["/music/a/cover.jpg"]) is False
+    worker._retry_scheduled_invalidation()
+
+    if roots_were_read:
+        assert retried == [(("/music",), (inventory.root_key("/music/a/cover.jpg"),))]
+        assert worker._invalidation_retries == {}
+    else:
+        assert retried == [], "with no roots known it waits, without loading them"
+        assert len(worker._invalidation_retries) == 1
+
+
 def test_failed_invalidation_retry_does_not_starve_normal_inventory_work():
     normal_work_reached = Event()
     invalidation_attempts = []
@@ -400,7 +436,8 @@ def test_failed_invalidation_retry_does_not_starve_normal_inventory_work():
         {},
         repository=SimpleNamespace(
             work_slot=lambda: nullcontext(True),
-            invalidate_paths=invalidate_paths,
+            last_roots=("library",),
+            invalidate_paths_under=lambda _roots, paths, **kwargs: invalidate_paths(paths, **kwargs),
             next_pending=lambda _key: normal_work_reached.set() or None,
         ),
     )

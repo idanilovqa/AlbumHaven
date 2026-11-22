@@ -57,7 +57,8 @@ def local_inventory_root_for_tracks(config, track_paths):
 
     from music_app.services.library_roots import configured_library_root_paths_snapshot
 
-    roots = [root_key(root) for root in configured_library_root_paths_snapshot(dict(config))]
+    # The live config, as the repository reads it: a copy would reload the roots on every call.
+    roots = [root_key(root) for root in configured_library_root_paths_snapshot(config)]
     folders = Counter(Path(root_key(path)).parent for path in track_paths if Path(path).is_file())
     if not folders:
         return None

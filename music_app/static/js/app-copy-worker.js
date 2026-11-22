@@ -67,8 +67,9 @@
   // copy answers only if it cannot (a slow server is never replaced by what was kept).
   const DATA_CHECK_MS = 3000;
   const CHECK_TIMEOUT_MS = 800;
-  // After a failed check, data requests this soon after ask at once instead of waiting first: the
-  // copy still answers only after a check fails, so a slow but reachable server is waited for.
+  // After a check found the server down (an error or a gateway failure, never a slow answer), data
+  // requests this soon after ask at once instead of waiting first: the copy still answers only after
+  // a check fails, so a slow but reachable server is waited for.
   const UNREACHABLE_KNOWN_MS = 60000;
   // What places one page of the paged gallery, or names one artist in it, rather than naming a
   // different gallery (other categories, scope or display).
@@ -965,6 +966,8 @@
     }
 
     // Whether the server answers at all, asked of the account check with a short limit.
+    // 'reachable'; 'down' for a network error or a gateway failure; 'slow' for no answer in time,
+    // which a busy server gives as well as a cut network, so it never counts as offline by itself.
     async function serverReachable() {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), CHECK_TIMEOUT_MS);
@@ -974,10 +977,11 @@
         }));
         const reachable = !gatewayFailure(response.status);
         unreachableAt = reachable ? 0 : now();
-        return reachable;
+        return reachable ? 'reachable' : 'down';
       } catch (_error) {
+        if (controller.signal.aborted) return 'slow';
         unreachableAt = now();
-        return false;
+        return 'down';
       } finally {
         clearTimeout(timer);
       }
@@ -1010,15 +1014,23 @@
       ]);
       clearTimeout(timer);
       if (outcome === NO_ANSWER) {
-        if (!(await serverReachable())) {
+        const server = await serverReachable();
+        if (server !== 'reachable') {
           const kept = await keptData(url);
           if (kept) return kept;
-          // Never kept, and a cut network may hold the request forever: fail now as a lost
-          // network would, so the page says Offline instead of loading on.
-          throw new TypeError('Album Haven cannot be reached');
         }
-        // Reachable: the server's answer, however late, decides as below.
-        outcome = await settled;
+        // Never kept and certainly unreachable: fail now as a lost network does, so the page says
+        // Offline. A slow check may be a busy server: its answer is waited for up to noAnswerMs in
+        // all (a cut network may hold the request forever), then the page says Offline.
+        if (server === 'down') throw new TypeError('Album Haven cannot be reached');
+        if (server === 'slow') {
+          outcome = await Promise.race([
+            settled,
+            new Promise((resolve) => { timer = setTimeout(() => resolve(NO_ANSWER), Math.max(0, noAnswerMs - dataCheckMs)); }),
+          ]);
+          clearTimeout(timer);
+          if (outcome === NO_ANSWER) throw new TypeError('Album Haven cannot be reached');
+        } else outcome = await settled;
       }
       if (outcome.error) {
         if (outcome.error?.name === 'AbortError' || request.signal?.aborted) throw outcome.error;

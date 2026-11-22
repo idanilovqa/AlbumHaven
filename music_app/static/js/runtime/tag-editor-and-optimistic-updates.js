@@ -859,6 +859,8 @@ async function confirmManualTagEdit() {
     ...(absoluteScrollPosition ? { absoluteScrollPosition } : {}),
   };
   closeTagEditor();
+  const artistTreeKeepsAlbum = typeof artistTreeKeepsEditedAlbum === 'function'
+    && artistTreeKeepsEditedAlbum(album, updates);
   const reconciledOptimisticAlbums = applyUpdatedAlbumsToCurrentView(
     optimisticUpdatedAlbums,
     {
@@ -868,7 +870,7 @@ async function confirmManualTagEdit() {
     },
   );
   if (typeof applyTagEditToArtistTree === 'function') {
-    applyTagEditToArtistTree(album, optimisticUpdatedAlbums);
+    applyTagEditToArtistTree(album, optimisticUpdatedAlbums, artistTreeKeepsAlbum);
   }
   // Before the first render, so no frame shows both cards of a fold that is already decided.
   const saveFolds = typeof saveFoldDecisions !== 'undefined'

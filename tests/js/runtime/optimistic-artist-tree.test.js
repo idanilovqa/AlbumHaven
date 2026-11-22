@@ -7,12 +7,17 @@ const vm = require('node:vm');
 const modulePath = path.join(__dirname, '../../../music_app/static/js/runtime/optimistic-artist-tree.js');
 const source = fs.readFileSync(modulePath, 'utf8');
 
-function tree(sidebar) {
-  const context = { state: { view: { artists_sidebar: sidebar }, gallery: { sidebarArtistsOverride: null } } };
+function tree(sidebar, visible = []) {
+  const context = {
+    state: { view: { artists_sidebar: sidebar }, gallery: { sidebarArtistsOverride: null } },
+    getAlbumTrackPaths: (album) => new Set(album?.track_paths || []),
+    findVisibleAlbumByTrackPaths: (paths) => visible.find((card) => card.track_paths.some((path) => paths.has(path))),
+  };
   vm.createContext(context);
   vm.runInContext(source, context, { filename: modulePath });
   return {
-    apply: (original, updated) => context.applyTagEditToArtistTree(original, updated),
+    apply: (original, updated, kept = false) => context.applyTagEditToArtistTree(original, updated, kept),
+    keeps: (album, updates) => context.artistTreeKeepsEditedAlbum(album, updates),
     read: () => JSON.parse(JSON.stringify(context.state.view.artists_sidebar.map(({ artist, count }) => [artist, count]))),
   };
 }
@@ -38,7 +43,7 @@ test('an artist whose only album moves leaves the tree, and an existing artist g
 test('a partial move keeps the source count and adds the destination', () => {
   const view = tree([entry('Alpha', 1)]);
 
-  view.apply({ album_artist: 'Alpha' }, [{ album_artist: 'Alpha' }, { album_artist: 'Beta' }]);
+  view.apply({ key: 'a::x', album_artist: 'Alpha' }, [{ key: 'a::x', album_artist: 'Alpha' }, { album_artist: 'Beta' }], true);
 
   assert.deepEqual(view.read(), [['Alpha', 1], ['Beta', 1]]);
 });
@@ -49,4 +54,24 @@ test('an edit that keeps the album artist leaves the tree as it was', () => {
   view.apply({ album_artist: 'Alpha' }, [{ album_artist: 'Alpha', name: 'Renamed' }]);
 
   assert.deepEqual(view.read(), [['Alpha', 3]]);
+});
+
+test('FTC-TAGS-040 moving one copy of a twin out keeps the selected artist in the tree', () => {
+  const twin = { key: 'a::twin', album_artist: 'Alpha', track_paths: ['1', '2', '3', '4'] };
+  const copy = { key: 'a::twin', album_artist: 'Alpha', track_paths: ['1', '2'] };
+  const updates = { 1: { album_artist: 'Beta' }, 2: { album_artist: 'Beta' } };
+  const view = tree([entry('Alpha', 1)], [twin]);
+
+  const kept = view.keeps(copy, updates);
+  view.apply(copy, [{ key: 'b::twin', album_artist: 'Beta' }], kept);
+
+  assert.equal(kept, true);
+  assert.deepEqual(view.read(), [['Alpha', 1], ['Beta', 1]]);
+});
+
+test('an edit of every file of the card does not keep it', () => {
+  const album = { key: 'a::x', album_artist: 'Alpha', track_paths: ['1', '2'] };
+  const view = tree([entry('Alpha', 1)], [album]);
+
+  assert.equal(view.keeps(album, { 1: { album: 'Y' }, 2: { album: 'Y' } }), false);
 });

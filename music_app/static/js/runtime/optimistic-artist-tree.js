@@ -9,9 +9,18 @@ function optimisticTreeKey(artist) {
   return artist.toLocaleLowerCase();
 }
 
-function moveSidebarArtistCounts(sidebar, original, updatedAlbums) {
+function optimisticAlbumKey(album) {
+  return String(album?.key || '').trim().toLocaleLowerCase();
+}
+
+// ``kept``: the edited album keeps its card, so its artist keeps its count.
+function moveSidebarArtistCounts(sidebar, original, updatedAlbums, kept) {
   const from = optimisticTreeArtist(original);
-  const destinations = (updatedAlbums || []).map(optimisticTreeArtist).filter(Boolean);
+  const originalKey = optimisticAlbumKey(original);
+  const destinations = (updatedAlbums || [])
+    .filter((album) => !originalKey || optimisticAlbumKey(album) !== originalKey)
+    .map(optimisticTreeArtist)
+    .filter(Boolean);
   if (!from || !destinations.length) return sidebar;
   const deltas = new Map();
   const change = (artist, delta) => {
@@ -20,9 +29,9 @@ function moveSidebarArtistCounts(sidebar, original, updatedAlbums) {
     entry.delta += delta;
     deltas.set(key, entry);
   };
-  // Each album the save leaves counts once; the album it edited no longer does.
+  // Each new album the save leaves counts once; the album it edited, only if it lost its card.
   destinations.forEach((artist) => change(artist, 1));
-  change(from, -1);
+  if (!kept) change(from, -1);
   const next = sidebar.map((entry) => ({ ...entry }));
   deltas.forEach(({ artist, delta }, key) => {
     if (!delta) return;
@@ -39,14 +48,22 @@ function moveSidebarArtistCounts(sidebar, original, updatedAlbums) {
   return next;
 }
 
-function applyTagEditToArtistTree(original, updatedAlbums) {
+// Before the optimistic apply: the edited album keeps its card when its visible card holds a file the
+// save doesn't edit (an edit of one copy, or of some of its tracks).
+function artistTreeKeepsEditedAlbum(album, updates) {
+  const paths = getAlbumTrackPaths(album);
+  const card = typeof findVisibleAlbumByTrackPaths === 'function' ? findVisibleAlbumByTrackPaths(paths) : null;
+  return Array.from(getAlbumTrackPaths(card || album)).some((path) => !updates?.[path]);
+}
+
+function applyTagEditToArtistTree(original, updatedAlbums, kept) {
   const view = state.view || {};
   if (Array.isArray(view.artists_sidebar)) {
-    view.artists_sidebar = moveSidebarArtistCounts(view.artists_sidebar, original, updatedAlbums);
+    view.artists_sidebar = moveSidebarArtistCounts(view.artists_sidebar, original, updatedAlbums, kept);
   }
   if (Array.isArray(state.gallery?.sidebarArtistsOverride) && state.gallery.sidebarArtistsOverride.length) {
     state.gallery.sidebarArtistsOverride = moveSidebarArtistCounts(
-      state.gallery.sidebarArtistsOverride, original, updatedAlbums,
+      state.gallery.sidebarArtistsOverride, original, updatedAlbums, kept,
     );
   }
 }

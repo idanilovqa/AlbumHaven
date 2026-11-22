@@ -67,10 +67,7 @@ from music_app.services.library_roots import (
     library_root_cache_identity,
     load_library_root_settings,
 )
-from music_app.services.library_settings import (
-    LibrarySettingsWorkflowError,
-    save_library_settings_and_start_refresh,
-)
+from music_app.services.library_settings import save_library_settings_and_start_refresh
 from music_app.services.log_history import append_log_history
 from music_app.services.manual_versions import load_manual_version_links, save_manual_version_links
 from music_app.services.metadata import build_text_repairs_for_entry, normalize_exception_value
@@ -97,6 +94,7 @@ from music_app.services.tag_edit_intents_postgres import (
 )
 from music_app.services.state import (
     invalidate_targeted_library_projections,
+    queue_root_change_scan_for_state,
     run_runtime_state_mutation_for_state,
     schedule_relation_projection_rebuild,
     start_background_refresh_for_state,
@@ -281,8 +279,8 @@ def _asgi_logger(request: Request):
 def _start_background_refresh_for_asgi_request(request: Request):
     library_state = _library_state(request)
 
-    def start_asgi_background_refresh(force: bool = False, *, scan_mode: str = "background") -> None:
-        start_background_refresh_for_state(
+    def start_asgi_background_refresh(force: bool = False, *, scan_mode: str = "background") -> bool | None:
+        return start_background_refresh_for_state(
             library_state,
             _app_config(request),
             _asgi_logger(request),
@@ -646,6 +644,9 @@ async def library_settings_write(request: Request) -> JSONResponse:
                 **scope,
                 library_state=_library_state(request),
                 start_background_refresh=_start_background_refresh_for_asgi_request(request),
+                queue_root_change_scan=lambda identity: queue_root_change_scan_for_state(
+                    _library_state(request), _app_config(request), _asgi_logger(request), identity,
+                ),
                 build_status_payload=lambda: _build_status_payload_from_state(_library_state(request)),
                 replace_watch_roots=(
                     replace_live_watch_roots
@@ -655,8 +656,6 @@ async def library_settings_write(request: Request) -> JSONResponse:
             )
     except ValueError as exc:
         return _json_response(({"ok": False, "error": str(exc)}, 400))
-    except LibrarySettingsWorkflowError as exc:
-        return _json_response(({"ok": False, "error": str(exc)}, exc.status_code))
 
     return JSONResponse({"ok": True, **result})
 

@@ -16,7 +16,7 @@ from music_app.services.library_indexing import (
     reset_scan_stage_timings,
     start_scan_stage,
 )
-from music_app.services.library_roots import library_root_cache_identity
+from music_app.services.library_roots import pin_library_scan_roots
 from music_app.services.library_watch_health import FORCED_FULL_SCAN_MODE
 from music_app.services.local_cover_inventory import LocalCoverScanCheck
 from music_app.services.progressive_scan_publication import ProgressiveScanPublisher, contiguous_revision
@@ -42,6 +42,8 @@ def _scan_cache_adapter(config: dict[str, object]):
 
 
 _ACTIVE_SCAN_PREVIEW_KEY = "active_scan_preview_state"
+# The identity of roots saved while a scan ran; one scan of them starts when that scan ends.
+QUEUED_ROOT_CHANGE_KEY = "queued_root_change"
 _SCAN_PREVIEW_BROWSE_FIELDS = (
     "file_cache",
     "albums",
@@ -260,7 +262,11 @@ def refresh_library_state(
         return cache_age < cache_max_age
 
     scan_separate_release_keys = load_separate_release_keys(cfg)
+    # One settings read: every walk, load and publication of this run uses these roots and this identity.
+    scan_roots, root_identity = pin_library_scan_roots(cfg)
     with cache_lock:
+        library_state["scan_root_identity"] = root_identity
+        library_state.pop("published_root_identity", None)
         requested_scan_mode = str(
             library_state.get("scan_mode") or "background"
         )
@@ -340,7 +346,7 @@ def refresh_library_state(
     relations_refreshed_from_disk = False
     file_cache, disk_last_scan, disk_relation_views, disk_relations_last_built, disk_error = scan_cache_adapter.load_snapshot(
         cache_path,
-        library_root_cache_identity(cfg),
+        root_identity,
     )
     if disk_error:
         with cache_lock:
@@ -438,6 +444,8 @@ def refresh_library_state(
                 else current_authoritative_albums
             ),
             "last_error": library_state.get("last_error"),
+            "scan_library_roots": scan_roots,
+            "scan_root_identity": root_identity,
         }
         library_state[_ACTIVE_SCAN_PREVIEW_KEY] = {
             "scan_generation": scan_generation,
@@ -480,9 +488,16 @@ def refresh_library_state(
     # Albums publish as their folders finish reading; the final publication
     # below then writes only what the batches did not, plus stale-marking.
     publish_folders = getattr(scan_cache_adapter, "persist_targeted_inventory_mutation", None)
+
+    def publish_batch(root_id, entries):
+        if library_state.get(QUEUED_ROOT_CHANGE_KEY):
+            # A batch carries no identity: once the roots changed, the queued scan publishes instead.
+            return {}
+        return publish_folders(root_id=root_id, active_file_entries=entries)
+
     progressive_publisher = (
         ProgressiveScanPublisher(
-            lambda root_id, entries: publish_folders(root_id=root_id, active_file_entries=entries),
+            publish_batch,
             logger=logger,
         ).start()
         if callable(publish_folders) else None
@@ -585,6 +600,9 @@ def refresh_library_state(
                     level="info", attempt=republish_attempt + 1,
                 )
         publication_state.pop("cover_inventory_checked_at", None)
+        publication_state.pop("scan_library_roots", None)
+        with cache_lock:
+            library_state["published_root_identity"] = root_identity
         if ignore_existing_cache and local_cover_inventory is not None:
             local_cover_inventory.rescan()
         finish_scan_stage(library_state, "relations")

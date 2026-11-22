@@ -315,6 +315,7 @@ def save_cache_to_disk_for_config(
     observed_library_root_ids: set[str] | None = None,
     unreachable_scope: dict[str, object] | None = None,
     cover_inventory_checked_at: dict[str, float] | None = None,
+    completes_root_change: bool = False,
 ) -> dict[str, object] | None:
     snapshot_options: dict[str, object] = {
         "relation_views": relation_views,
@@ -348,6 +349,8 @@ def save_cache_to_disk_for_config(
         snapshot_options["unreachable_scope"] = unreachable_scope
     if cover_inventory_checked_at:
         snapshot_options["cover_inventory_checked_at"] = cover_inventory_checked_at
+    if completes_root_change:
+        snapshot_options["completes_root_change"] = True
     adapter = _select_runtime_scan_cache_adapter(config)
     result = adapter.save_snapshot(
         cache_path,

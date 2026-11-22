@@ -449,7 +449,10 @@ async function saveUtilityLibrarySettings() {
       }
       scheduleStatusPoll(250);
     }
-    if (ownsPresentation()) showToast('Library settings saved. Scan started.', 'success', 3200);
+    if (ownsPresentation()) {
+      const saved = data.refresh_started ? 'Library settings saved. Scan started.' : 'Library settings saved.';
+      showToast(saved, 'success', 3200);
+    }
     return true;
   } catch (error) {
     settleLibraryStatusAction(statusAction);

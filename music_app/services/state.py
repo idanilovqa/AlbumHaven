@@ -60,7 +60,7 @@ from music_app.services.relation_state import (
 )
 from music_app.services.cover_provider_cache import _BULK_NEGATIVE_CACHE_TTL_SECONDS
 from music_app.services.runtime_shutdown import create_daemon_executor
-from music_app.services.scan_state import refresh_library_state
+from music_app.services.scan_state import QUEUED_ROOT_CHANGE_KEY, refresh_library_state
 from music_app.services.scan_cache_persistence import select_scan_cache_adapter
 from music_app.services.relation_projection_postgres import (
     RELATION_PROJECTION_BUILDER_VERSION,
@@ -622,6 +622,13 @@ def background_cover_negative_cache_ttl_seconds(
     return float(config.get("BULK_COVER_NEGATIVE_CACHE_TTL_SECONDS", _BULK_NEGATIVE_CACHE_TTL_SECONDS))
 
 
+def _root_change_waits_for_its_scan(config: dict[str, object]) -> bool:
+    """A root change saved during a scan, not yet published. A bare identity mismatch never starts a scan."""
+    load = getattr(select_scan_cache_adapter(config), "load_pending_root_change", None)
+    pending = load() if callable(load) else None
+    return bool(pending) and pending == library_root_cache_identity(config)
+
+
 def file_metadata_repair_required_on_startup(app) -> bool:
     """Postgres keeps file entries read by older metadata readers until rescanned.
 
@@ -631,6 +638,8 @@ def file_metadata_repair_required_on_startup(app) -> bool:
     """
     if app.config.get("SHARED_LIBRARY_BROWSE_ONLY") is True:
         return False
+    if _root_change_waits_for_its_scan(app.config):
+        return True
     # A full re-read is an operator decision for a real library, so it is
     # opt-in; test fixtures and CI never start it implicitly.
     enabled = app.config.get(_STARTUP_METADATA_REPAIR_ENV, os.environ.get(_STARTUP_METADATA_REPAIR_ENV, ""))
@@ -971,6 +980,8 @@ def refresh_relation_views_for_state(
             raise ValueError(
                 "expected_scan_generation is required for the final scan publication"
             )
+        if target_state.get("scan_root_identity"):
+            snapshot_options["completes_root_change"] = True
         if target_state.get("cover_inventory_checked_at"):
             snapshot_options["cover_inventory_checked_at"] = dict(target_state["cover_inventory_checked_at"])
         snapshot_options["publication_commit_guard"] = (
@@ -990,6 +1001,8 @@ def refresh_relation_views_for_state(
         )
     publication_generation = int(library_state.get("scan_generation") or 0)
     repaired_cover_published = False
+    # Inside a scan: the roots it walked, so old-root results never look current under newly saved roots.
+    pinned_identity = target_state.get("scan_root_identity") if expected_scan_generation is not None else None
 
     def save_relation_snapshot() -> None:
         nonlocal repaired_cover_published
@@ -997,7 +1010,7 @@ def refresh_relation_views_for_state(
             config,
             config["CACHE_PATH"],
             dict(target_state.get("file_cache") or {}),
-            library_root_cache_identity(config),
+            pinned_identity or library_root_cache_identity(config),
             float(target_state.get("last_scan") or 0.0),
             **snapshot_options,
         )
@@ -1116,14 +1129,17 @@ def scan_music_incremental(
 ) -> tuple[dict[str, dict[str, object]], float]:
     history_scope = resolve_media_host_history_scope(config)
     cfg = config
-    configured_roots = iter_library_root_paths(cfg)
+    pinned_roots = publication_state.get("scan_library_roots") if publication_state is not None else None
+    configured_roots = (
+        [Path(str(root["path"])) for root in pinned_roots] if pinned_roots else iter_library_root_paths(cfg)
+    )
     scan_roots = [root for root in configured_roots if root.exists()]
     if not scan_roots:
         raise FileNotFoundError(
             "No configured library roots are currently available: "
             + ", ".join([str(root) for root in configured_roots] or [str(cfg["MUSIC_DIR"])])
         )
-    root_definitions = get_library_roots(cfg)
+    root_definitions = pinned_roots or get_library_roots(cfg)
     available_paths = {
         normcase(str(Path(root).resolve(strict=False)))
         for root in scan_roots
@@ -1478,6 +1494,10 @@ def start_background_refresh_for_state(
     with _CACHE_LOCK:
         if library_state.get("scan_in_progress"):
             return False
+        if force and library_state.pop(QUEUED_ROOT_CHANGE_KEY, None):
+            # This scan is the queued one: it pins the new roots and owes the saved change its cover refresh.
+            library_state["pending_cover_refresh_after_scan"] = True
+            library_state["pending_cover_refresh_force_search"] = False
         if accepted_state_updates:
             library_state.update(accepted_state_updates)
         library_state["scan_in_progress"] = True
@@ -1546,13 +1566,56 @@ def cancel_background_refresh_for_state(library_state: dict[str, object]) -> boo
         library_state["scan_phase"] = "idle"
         return True
 
+
+def queue_root_change_scan_for_state(
+    library_state: dict[str, object],
+    config: dict[str, object],
+    logger,
+    root_identity: str,
+) -> bool:
+    """Queue one scan of roots saved while a scan runs; False when that scan has already ended."""
+    try:
+        mark_pending = getattr(select_scan_cache_adapter(config), "mark_root_change_pending", None)
+        if callable(mark_pending):
+            # Before queueing, so the publication that covers it can only ever clear it afterwards.
+            mark_pending(root_identity)
+    except Exception:
+        logger.exception("Could not persist the saved root change; its scan stays queued in this process only.")
+    with _CACHE_LOCK:
+        if not library_state.get("scan_in_progress"):
+            return False
+        library_state[QUEUED_ROOT_CHANGE_KEY] = root_identity
+        return True
+
+
+def _start_queued_root_change_scan(library_state: dict[str, object], config: dict[str, object], logger) -> None:
+    with _CACHE_LOCK:
+        queued = library_state.get(QUEUED_ROOT_CHANGE_KEY)
+        if not queued or library_state.get("scan_in_progress"):
+            return
+        if library_state.get("published_root_identity") == queued:
+            del library_state[QUEUED_ROOT_CHANGE_KEY]
+            return
+    try:
+        start_background_refresh_for_state(
+            library_state, config, logger, force=True, scan_mode="library_settings_update",
+        )
+    except Exception:
+        # Shutdown closed the executor; the persisted flag starts this scan at the next start.
+        logger.exception("Could not start the scan of the saved root change.")
+
+
 def _refresh_library_worker(
     library_state: dict[str, object],
     config: dict[str, object],
     logger,
     force: bool,
 ):
-    refresh_library_for_state(library_state, config, logger, force=force)
+    try:
+        refresh_library_for_state(library_state, config, logger, force=force)
+    finally:
+        # Completed, failed or cancelled: roots saved during that scan still get theirs.
+        _start_queued_root_change_scan(library_state, config, logger)
 
 
 def _library_inventory_ready(library_state: dict[str, object]) -> bool:

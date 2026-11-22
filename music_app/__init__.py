@@ -139,7 +139,7 @@ def _start_library_warmup(
                         return
                 try:
                     runtime.logger.info(
-                        "Stored file metadata predates the current reader; starting a background repair scan."
+                        "A saved root change or older file metadata still needs a scan; starting it in the background."
                     )
                     started = start_refresh(
                         runtime.library_state,

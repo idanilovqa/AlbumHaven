@@ -221,7 +221,7 @@ def _scan(monkeypatch, library, checked_at: dict[str, float]) -> None:
 
     monkeypatch.setattr(scan_state, "_scan_cache_adapter", lambda _config: Adapter())
     monkeypatch.setattr(scan_state, "load_separate_release_keys", lambda _config: set())
-    monkeypatch.setattr(scan_state, "library_root_cache_identity", lambda _config: "roots")
+    monkeypatch.setattr(scan_state, "pin_library_scan_roots", lambda _config: (list(library.roots), "roots"))
     monkeypatch.setattr(scan_state, "resolve_media_host_history_scope", lambda _config: None)
     monkeypatch.setattr(scan_state, "log_app_event", lambda *_args, **_kwargs: None)
     state = {

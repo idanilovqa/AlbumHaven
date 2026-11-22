@@ -1981,7 +1981,14 @@ def test_pcm_socket_bounds_the_opens_it_runs_beside_its_control_loop(
             await socket.send_json(
                 {"type": "credit", "generation": 1, "streamId": 1, "frames": 1}
             )
-            answer = asyncio.ensure_future(socket.receive_bytes())
+            async def first_audio() -> bytes:
+                # Released, the pending open may answer its metadata before the credited audio.
+                while True:
+                    message = await socket.receive_message()
+                    if message.get("bytes") is not None:
+                        return message["bytes"]
+
+            answer = asyncio.ensure_future(first_audio())
             done, _pending = await asyncio.wait({answer}, timeout=0.5)
             assert not done, "past the bound, the credit waits for a pending open to finish"
             release.set()

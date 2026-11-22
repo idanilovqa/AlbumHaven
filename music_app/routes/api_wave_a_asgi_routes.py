@@ -218,14 +218,30 @@ async def rescan_missing_album(request: Request, album_key: str) -> JSONResponse
         )
     config = _app_config(request)
 
+    searches = getattr(request.app.state, "missing_album_searches", None)
+
     def rescan() -> dict[str, object]:
         # Reading the roots takes a lock the watcher holds during disk work, so it stays off the event loop.
-        return MissingAlbumRescan(config, reconcile=reconcile, roots=get_library_roots(config)).rescan(normalized_key)
+        # Only lookups run here; a library walk, if needed, runs in the background (freeze guard case 59).
+        return MissingAlbumRescan(
+            config, reconcile=reconcile, roots=get_library_roots(config), searches=searches,
+        ).rescan(normalized_key)
 
     try:
         result = await run_in_threadpool(rescan)
     except MissingAlbumNotFound:
         return JSONResponse({"ok": False, "error": "Album not found", "code": "album_not_found"}, status_code=404)
+    return JSONResponse({"ok": True, **result})
+
+
+@router.get("/api/library/albums/{album_key:path}/rescan")
+async def missing_album_rescan_result(request: Request, album_key: str) -> JSONResponse:
+    """The background search a Re-scan started: still searching, or its result."""
+    await require_action("library.inventory.manage")(request)
+    searches = getattr(request.app.state, "missing_album_searches", None)
+    result = searches.result(str(album_key or "").strip()) if searches is not None else None
+    if result is None:
+        return JSONResponse({"ok": False, "error": "No search for this album", "code": "rescan_not_running"}, status_code=404)
     return JSONResponse({"ok": True, **result})
 
 _EDIT_WRITE_WORKERS = 2

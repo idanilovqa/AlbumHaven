@@ -1,6 +1,7 @@
 """Case 59 (freeze guard): a missing album's Re-scan looks things up in the request and walks only in the background."""
 from __future__ import annotations
 
+import os as _os
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -46,12 +47,22 @@ def _library(tmp_path, other_albums=0):
     for root in roots.values():
         root.mkdir()
     for index in range(other_albums):
-        folder = roots["main"] / f"Artist {index:04d}" / "Album"
+        folder = roots["main"] / f"Artist {index:04d}" / "Record"
         folder.mkdir(parents=True)
         (folder / "01.flac").write_bytes(b"audio")
     album = roots["main"] / "Artist" / "Album"
     files = [(str(album / "01.flac"), "main"), (str(album / "02.flac"), "main")]
     return roots, album, files
+
+
+class _OsWithWalk:
+    """The module's ``os`` with its own ``walk``: only the search's own calls, not os.walk's recursion."""
+
+    def __init__(self, walk):
+        self.walk = walk
+
+    def __getattr__(self, name):
+        return getattr(_os, name)
 
 
 def _rescan(roots, database, *, searches=None, reconciled=None, search_seconds=15.0):
@@ -117,13 +128,13 @@ def test_the_search_walks_each_readable_root_once_and_restores_the_album(tmp_pat
     renamed.mkdir(parents=True)
     for name in ("01.flac", "02.flac"):
         (renamed / name).write_bytes(b"audio")
-    walks, walk = [], rescan_module.os.walk
+    walks = []
 
     def counted_walk(top, *args, **kwargs):
         walks.append(Path(top))
-        return walk(top, *args, **kwargs)
+        return _os.walk(top, *args, **kwargs)
 
-    monkeypatch.setattr(rescan_module.os, "walk", counted_walk)
+    monkeypatch.setattr(rescan_module, "os", _OsWithWalk(counted_walk))
     searches, reconciled = MissingAlbumSearches(), []
 
     assert _rescan(roots, _Database(files), searches=searches, reconciled=reconciled).rescan(_ALBUM) == {"status": "searching"}
@@ -149,14 +160,13 @@ def test_the_search_honours_its_time_cap_and_says_why_the_album_is_missing(tmp_p
 def test_a_search_stops_at_shutdown_and_publishes_nothing(tmp_path, monkeypatch):
     roots, album, files = _library(tmp_path, 30)
     entered, release = threading.Event(), threading.Event()
-    walk = rescan_module.os.walk
 
     def slow_walk(top, *args, **kwargs):
         entered.set()
         release.wait(5)
-        return walk(top, *args, **kwargs)
+        return _os.walk(top, *args, **kwargs)
 
-    monkeypatch.setattr(rescan_module.os, "walk", slow_walk)
+    monkeypatch.setattr(rescan_module, "os", _OsWithWalk(slow_walk))
     searches, reconciled = MissingAlbumSearches(), []
     _rescan(roots, _Database(files), searches=searches, reconciled=reconciled).rescan(_ALBUM)
     assert entered.wait(5)

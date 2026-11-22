@@ -354,6 +354,9 @@ def _configure_asgi_app(app, runtime) -> None:
     from music_app.services.local_cover_inventory import LocalCoverInventoryWorker
     app.state.local_cover_inventory = LocalCoverInventoryWorker(runtime.config, logger=runtime.logger)
     runtime.config["_LOCAL_COVER_INVENTORY"] = app.state.local_cover_inventory
+    from music_app.services.missing_album_rescan import MissingAlbumSearches
+
+    app.state.missing_album_searches = MissingAlbumSearches()
     app.state.logger = runtime.logger
     app.state.cold_scan_handoff_lock = runtime.cold_scan_handoff_lock
     runtime.library_watch_health_service = LibraryWatchHealthService(
@@ -654,6 +657,8 @@ def create_asgi_app():
             shutdown_errors: list[tuple[str, BaseException]] = []
             shutdown_stages = (
                 ("local cover inventory", _app.state.local_cover_inventory.stop),
+                # Joining the search threads stays off the event loop.
+                ("missing album searches", lambda: asyncio.to_thread(_app.state.missing_album_searches.stop)),
                 (
                     "generated preview relocation",
                     _app.state.generated_preview_relocation.stop

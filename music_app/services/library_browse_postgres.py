@@ -732,20 +732,20 @@ class PostgresLibraryBrowseRepository:
         with self._connect_to_database() as connection:
             tracks = self._load_non_album_track_snapshot(connection)
             relation_alias_maps = None
-            if (
-                tracks is None
-                and not self._config.get("SHARED_LIBRARY_BROWSE_ONLY")
-                and not rebuild_missing_snapshot
-            ):
-                cache_key = self._utility_projection_cache_key("loose-tracks")
-                with _UTILITY_PROJECTION_CACHE_LOCK:
-                    snapshot_marked_ready = cache_key in _UTILITY_PROJECTION_CACHE
-                if snapshot_marked_ready:
-                    invalidate_postgres_utility_projection_cache(
-                        database_url=self._database_url,
-                        kinds=("loose-tracks",),
-                    )
-                self.queue_utility_projection_prewarm("loose-tracks")
+            browse_only = bool(self._config.get("SHARED_LIBRARY_BROWSE_ONLY"))
+            # A request never rebuilds the global snapshot; only the background
+            # writer does, and a browse-only server never queues it.
+            if tracks is None and (browse_only or not rebuild_missing_snapshot):
+                if not browse_only:
+                    cache_key = self._utility_projection_cache_key("loose-tracks")
+                    with _UTILITY_PROJECTION_CACHE_LOCK:
+                        snapshot_marked_ready = cache_key in _UTILITY_PROJECTION_CACHE
+                    if snapshot_marked_ready:
+                        invalidate_postgres_utility_projection_cache(
+                            database_url=self._database_url,
+                            kinds=("loose-tracks",),
+                        )
+                    self.queue_utility_projection_prewarm("loose-tracks")
                 if _request_flag(params.get("availability")):
                     return {
                         "non_album_track_count": 0,
@@ -756,12 +756,6 @@ class PostgresLibraryBrowseRepository:
                 )
                 return {
                     deferred_key: [],
-                    "non_album_tracks_deferred": True,
-                    "non_album_exception_values": sorted(set(NON_ALBUM_EXCEPTION_VALUES.values())),
-                }
-            if tracks is None and self._config.get("SHARED_LIBRARY_BROWSE_ONLY"):
-                return {
-                    "library_non_album_tracks": [],
                     "non_album_tracks_deferred": True,
                     "non_album_exception_values": sorted(set(NON_ALBUM_EXCEPTION_VALUES.values())),
                 }

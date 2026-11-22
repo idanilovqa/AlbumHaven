@@ -216,7 +216,10 @@ def test_missing_album_page_selects_compact_candidates_in_python_display_order(
         limit=2,
         connection=Connection(),
     ) == []
-    assert calls[0][1] == {"limit": 2}
+    # The first page has a blank keyset cursor (eea310882 added keyset pages).
+    assert calls[0][1] == {
+        "limit": 2, "after_name": "", "after_artist": "", "after_year": "", "after_key": "",
+    }
     assert calls[1][1]["album_keys"] == ["a", "a-umlaut"]
 
 
@@ -1775,8 +1778,11 @@ def test_inventory_backed_loose_track_reopen_honors_explicit_empty_exception_ove
         {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
         connect=lambda _database_url: _NoopSearchSnapshotConnection(inventory),
     )
-    # Loose Tracks come from their own request since REC-007 deferred them from the tree.
-    [track] = repository.build_library_loose_tracks_payload()["library_non_album_tracks"]
+    # Loose Tracks come from their own request since REC-007 deferred them from the tree;
+    # only the background writer builds the missing snapshot (bf1b9441b).
+    [track] = repository.build_library_loose_tracks_payload(
+        rebuild_missing_snapshot=True,
+    )["library_non_album_tracks"]
 
     assert track["exception_type"] == ""
     assert track.get("custom_collection_name", "") == ""
@@ -2119,6 +2125,8 @@ def test_inventory_backed_root_full_and_non_album_detail_preserve_raw_rows_and_e
                 "track_id_count": 0,
                 "private_paths": [],
                 "private_path_count": 0,
+                # Problematic Files loose-track groups select by folder group (eea310882).
+                "membership_group_ids": [],
                 "limit": 5000,
             }
 
@@ -3007,14 +3015,26 @@ def test_postgres_root_sidebar_reads_one_repeatable_read_snapshot_and_rolls_it_b
     assert connection.commands[:1] == [
         ("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY", {}),
     ]
-    assert len(connection.commands) == 5
+    assert len(connection.commands) == 6
     missing_reads = [(command, params) for command, params in connection.commands if _is_missing_album_query(command)]
     assert len(missing_reads) == 1
     assert missing_reads[0][1] == {"album_key": None}
     fingerprint_reads = [(command, params) for command, params in connection.commands if "transaction_timestamp() as observed_at" in command]
-    # Loose Tracks are deferred (REC-007), so their candidate read is gone.
-    assert len(fingerprint_reads) == 2
+    # Loose Tracks are deferred (REC-007), so their candidate read is gone. On
+    # PostgreSQL 18 duplicates come from a lookup scoped to the visible albums
+    # (eea310882), so the duplicate-index fingerprint read is gone too.
+    assert len(fingerprint_reads) == 1
     assert all(params == {} for _command, params in fingerprint_reads)
+    scoped_duplicate_reads = [
+        params
+        for command, params in connection.commands
+        if command == browse_module._duplicate_candidate_album_ids_for_keys_sql()
+    ]
+    assert scoped_duplicate_reads == [{"album_keys": ["canonical-album"]}]
+    assert all(
+        command != browse_module._duplicate_identity_index_rows_sql()
+        for command, _params in connection.commands
+    )
     identity_reads = [(command, params) for command, params in connection.commands if "files.scan_file_album as album" in command]
     assert identity_reads == []
     duplicate_source_reads = [
@@ -16690,6 +16710,8 @@ def test_postgres_library_browse_ignores_e2e_seed_env_and_queries_product_tables
         connect=lambda _database_url: FakeConnection(),
     )
 
+    # Loose-track groups have their own query; this product row is an album row.
+    repository._load_problematic_loose_file_rows = lambda **_options: []
     payload = repository.build_problematic_files_payload()
     detail_payload = repository.build_problematic_file_detail_payload("product-album")
 
@@ -16699,7 +16721,7 @@ def test_postgres_library_browse_ignores_e2e_seed_env_and_queries_product_tables
     assert detail_payload is not None
     assert detail_payload["key"] == "product-album"
     assert detail_payload["detail_loaded"] is True
-    assert len(executed) == 6
+    assert len(executed) == 7
     assert all(
         "library.local_track_files" in sql
         for sql, _params in executed
@@ -16710,6 +16732,8 @@ def test_postgres_library_browse_ignores_e2e_seed_env_and_queries_product_tables
     assert executed[1][0] == "SET LOCAL work_mem = '16MB'"
     assert executed[2][0] == "SET LOCAL jit = off"
     assert executed[3][1]["mojibake_candidate_pattern"]
+    # The album-scoped detail reads keep the planner on their indexes (754510f36).
+    assert executed[4][0] == "SET LOCAL enable_seqscan = off"
     assert any(
         "requested_albums as materialized" in sql
         and "candidate_album_ids" in sql
@@ -17232,6 +17256,8 @@ def test_postgres_library_browse_settings_prewarm_omits_obsolete_duplicate_ident
             submissions.append(args)
 
     monkeypatch.setattr(module, "_UTILITY_PROJECTION_PREWARM_EXECUTOR", RecordingExecutor())
+    maintained = []
+    monkeypatch.setattr(module.problematic_index, "queue_maintenance", maintained.append)
     with module._UTILITY_PROJECTION_CACHE_LOCK:
         module._UTILITY_PROJECTION_CACHE.clear()
         module._UTILITY_PROJECTION_PREWARM_INFLIGHT.clear()
@@ -17242,11 +17268,13 @@ def test_postgres_library_browse_settings_prewarm_omits_obsolete_duplicate_ident
 
     repository.queue_settings_projection_prewarm()
 
+    # Problematic Files has no cached list since its persisted index (owner 2026-11-19):
+    # settings hand it to the index maintenance instead of a list prewarm.
     assert [submission[1] for submission in submissions] == [
         "loose-tracks",
-        "problematic-files",
         "rules",
     ]
+    assert maintained == [repository]
 
 
 def test_postgres_library_browse_duplicate_identity_prewarm_builds_compact_index(monkeypatch):
@@ -17364,7 +17392,8 @@ def test_browse_only_settings_prewarm_never_queues_loose_track_writer(monkeypatc
 
     repository.queue_settings_projection_prewarm()
 
-    assert [submission[1] for submission in submissions] == ["problematic-files", "rules"]
+    # Problematic Files has no list prewarm since its persisted index (owner 2026-11-19).
+    assert [submission[1] for submission in submissions] == ["rules"]
 
 
 def test_postgres_library_browse_disables_background_utility_projection_prewarm_by_default(monkeypatch):
@@ -17377,14 +17406,20 @@ def test_postgres_library_browse_disables_background_utility_projection_prewarm_
             submissions.append(args)
 
     monkeypatch.setattr(module, "_UTILITY_PROJECTION_PREWARM_EXECUTOR", RecordingExecutor())
+    with module._UTILITY_PROJECTION_CACHE_LOCK:
+        module._UTILITY_PROJECTION_CACHE.clear()
+        module._UTILITY_PROJECTION_PREWARM_INFLIGHT.clear()
     repository = module.PostgresLibraryBrowseRepository({
         "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app",
     })
 
     repository.queue_settings_projection_prewarm()
     repository.queue_utility_projection_prewarm("problematic-files")
+    repository.queue_utility_projection_prewarm("rules")
 
-    assert submissions == []
+    # Only the required Loose Tracks snapshot writer runs by default (c4bcaaab1): a
+    # request never builds that snapshot, so without it Loose Tracks would stay empty.
+    assert [submission[1] for submission in submissions] == ["loose-tracks"]
 
 
 def test_postgres_library_browse_caches_utility_rules_payload_per_database_url():
@@ -17494,28 +17529,31 @@ def test_postgres_utility_projection_cache_reuses_payload_until_explicit_invalid
         {"ALBUM_HAVEN_APP_DATABASE_URL": database_url},
         connect=lambda _database_url: None,
     )
+    # Problematic Files has no cached list since its persisted index (owner
+    # 2026-11-19); the Rules list is the cached utility projection.
     module.invalidate_postgres_utility_projection_cache(
         database_url=database_url,
-        kinds=("problematic-files",),
+        kinds=("rules",),
     )
     assert not hasattr(module, "_UTILITY_PROJECTION_CACHE_TTL_SECONDS")
 
-    def build_payload():
+    def load_rows():
         nonlocal build_count
         build_count += 1
-        return {"items": [{"key": f"payload-{build_count}"}], "count": 1}
+        return [{"rule": f"payload-{build_count}"}]
 
-    monkeypatch.setattr(repository, "_build_problematic_files_payload_uncached", build_payload)
+    monkeypatch.setattr(repository, "_load_utility_rules_rows", load_rows)
+    monkeypatch.setattr(module, "_utility_rules_projection_payload", lambda rows: {"rule": rows[0]["rule"]})
 
-    assert repository.build_problematic_files_payload()["items"][0]["key"] == "payload-1"
-    assert repository.build_problematic_files_payload()["items"][0]["key"] == "payload-1"
+    assert repository.build_utility_rules_payload()["rule"] == "payload-1"
+    assert repository.build_utility_rules_payload()["rule"] == "payload-1"
     assert build_count == 1
 
     module.invalidate_postgres_utility_projection_cache(
         database_url=database_url,
-        kinds=("problematic-files",),
+        kinds=("rules",),
     )
-    assert repository.build_problematic_files_payload()["items"][0]["key"] == "payload-2"
+    assert repository.build_utility_rules_payload()["rule"] == "payload-2"
     assert build_count == 2
 
 def test_postgres_utility_projection_invalidation_is_scoped_by_database_url_and_kind():
@@ -17692,7 +17730,8 @@ def test_postgres_library_browse_empty_product_rows_ignore_empty_e2e_fixture(mon
         "persistence_backend": "postgres",
         "persistence_seam": "library_browse",
         "view_data_source": "postgres_library_browse",
-        "projection_cache_status": "rebuilt",
+        # Without the persisted index the list is evaluated, uncached (owner 2026-11-19).
+        "projection_cache_status": "evaluated",
     }
 
 

@@ -294,8 +294,19 @@ test('non-album tracks follow the displayed artist family instead of a retained 
   assert.equal(context.getVisibleNonAlbumTracks().length, 0);
 });
 
+// The Loose Tracks page header is the shared Gallery Bar (album-details-components.js
+// builds it with gallery-main-components.js), loaded here as the page loads it.
+function loadLooseTracksHeaderOwners(context) {
+  vm.runInContext(galleryMainComponentsSource, context, { filename: galleryMainComponentsPath });
+  const albumDetailsComponentsPath = path.join(path.dirname(helperPath), 'album-details-components.js');
+  vm.runInContext(fs.readFileSync(albumDetailsComponentsPath, 'utf8'), context, {
+    filename: albumDetailsComponentsPath,
+  });
+}
+
 test('populated Loose Tracks paints before deferred table enhancements run', () => {
   const { context, flushAnimationFrame } = loadHelper();
+  loadLooseTracksHeaderOwners(context);
   const overlay = new FakeElement('non-album-modal');
   const header = new FakeElement('non-album-modal-header');
   const table = new FakeElement('non-album-modal-table');
@@ -320,7 +331,6 @@ test('populated Loose Tracks paints before deferred table enhancements run', () 
   context.document.body.appendChild(overlay);
   context.document.body.appendChild(header);
   context.document.body.appendChild(table);
-  context.buildAlbumDetailsHeaderHtml = () => '<h2>Loose Tracks</h2>';
   context.buildLooseTracksHeaderActionsHtml = () => '';
   context.syncAlbumTrackCreditMotion = () => calls.push('credit-motion');
   context.attachSharedPlayer = () => calls.push('shared-player');
@@ -356,6 +366,7 @@ test('populated Loose Tracks paints before deferred table enhancements run', () 
 
 test('empty Loose Tracks does not offer Edit Tags', () => {
   const { context } = loadHelper();
+  loadLooseTracksHeaderOwners(context);
   const overlay = new FakeElement('non-album-modal');
   const header = new FakeElement('non-album-modal-header');
   const table = new FakeElement('non-album-modal-table');
@@ -373,10 +384,10 @@ test('empty Loose Tracks does not offer Edit Tags', () => {
   context.hasHydratedLibraryNonAlbumTracks = () => true;
   context.getVisibleNonAlbumTracks = () => [];
   context.buildLooseTracksHeaderActionsHtml = () => '<button data-open-non-album-tag-editor="1">Edit</button>';
-  context.buildAlbumDetailsHeaderHtml = config => config.actionsHtml || '';
 
   context.openNonAlbumModal({ libraryWide: true });
 
+  assert.match(header.innerHTML, /Loose Tracks/);
   assert.doesNotMatch(header.innerHTML, /data-open-non-album-tag-editor/);
 });
 
@@ -397,17 +408,15 @@ test('artist-scoped Loose Tracks places Back before the header title', () => {
   context.state.view = { selected_artist: 'Agalloch', non_album_tracks_deferred: false };
   context.state.ui = {};
   context.getVisibleNonAlbumTracks = () => [{ path: '/music/agalloch/loose.flac', title: 'Loose' }];
+  loadLooseTracksHeaderOwners(context);
   context.buildLooseTracksHeaderActionsHtml = () => '';
-  vm.runInContext(
-    fs.readFileSync(path.join(path.dirname(helperPath), 'album-details-components.js'), 'utf8'),
-    context,
-  );
 
   context.openNonAlbumModal({ libraryWide: false });
 
   assert.match(
     header.innerHTML,
-    /data-close-non-album-modal="1"[^>]*aria-label="Back to Agalloch"[\s\S]*?<h3[^>]*>Loose Tracks<\/h3>/,
+    // The page header is the shared Gallery Bar with its page heading (eea310882).
+    /data-close-non-album-modal="1"[^>]*aria-label="Back to Agalloch"[\s\S]*?<h1 class="gallery-bar__title"[^>]*>Loose Tracks<\/h1>/,
   );
 });
 
@@ -2862,8 +2871,8 @@ test('INT-007: an album already marked as a version is selected in Mark As A Ver
 const { assertInteractionRequests, createRequestCapture, jsonResponse, measureInteractionContract } = require('../helpers/request-capture');
 const viewStateHelpersPath = path.join(path.dirname(helperPath), 'view-state-helpers.js');
 
-test('request capture: loose-track hydration requests /view-data once per scope', async () => {
-  const id = 'js:runtime/modal-and-overlay-helpers.js#hydrateDeferredNonAlbumTracks';
+test('request capture: loose-track hydration requests each scope once', async () => {
+  const id = 'js:runtime/modal-and-overlay-helpers.js#fetchNonAlbumPayload';
   await measureInteractionContract(id, async (opens) => {
     const { context } = loadHelper();
     context.URL = URL;
@@ -2881,10 +2890,14 @@ test('request capture: loose-track hydration requests /view-data once per scope'
       await openMany({ libraryWide: true });
     }
     const urls = capture.urls().map(url => new URL(url, 'http://localhost'));
-    assert.deepEqual(urls.map(url => [url.pathname, url.searchParams.get('artist'), url.searchParams.has('include_library_wide_non_album')]), [
-      ['/view-data', 'Agalloch', false], ['/view-data', 'Agalloch', true], ['/view-data', null, false], ['/view-data', null, true],
+    // Artist and library-wide Loose Tracks have their own endpoint (owner PERF-1);
+    // only the root gallery's own loose tracks still ride on /view-data.
+    assert.deepEqual(urls.map(url => [url.pathname, url.searchParams.get('artist')]), [
+      ['/library/loose-tracks', 'Agalloch'], ['/library/loose-tracks', null],
+      ['/view-data', null], ['/library/loose-tracks', null],
     ]);
-    assert.ok(urls.every(url => url.searchParams.get('include_non_album') === '1' && url.searchParams.get('omit_sidebar') === '1'));
+    const viewData = urls.filter(url => url.pathname === '/view-data');
+    assert.ok(viewData.every(url => url.searchParams.get('include_non_album') === '1' && url.searchParams.get('omit_sidebar') === '1'));
     assertInteractionRequests(id, capture.urls());
     return capture.counter.snapshot();
   });

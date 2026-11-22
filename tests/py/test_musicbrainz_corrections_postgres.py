@@ -278,7 +278,7 @@ def test_search_finds_an_applied_correction_and_after_undo_only_the_tag(monkeypa
 
 
 def test_copies_of_a_song_at_one_position_never_fail_the_refresh_or_a_decision(monkeypatch):
-    # sandbox6 (2026-11-22): the refresh failed at every start and stored nothing.
+    # One such album used to fail the whole refresh, which then stored nothing.
     setup_url, repository, _ids = _corrections(monkeypatch)
     with isolatedPostgres._connect(setup_url) as connection:
         for key, title in (("same", "don't despair"), ("other-case", "DON'T DESPAIR")):
@@ -297,14 +297,14 @@ def test_copies_of_a_song_at_one_position_never_fail_the_refresh_or_a_decision(m
 
 
 def test_a_main_name_row_stored_before_the_credited_name_rule_is_dropped_on_the_next_refresh(monkeypatch):
-    # Owner 2026-11-22: "Hunka lunka" keeps "Shamaani Duo", although its artist is Korpiklaani.
+    # An album keeps its credited name, although its artist's main name is another. Invented names.
     from music_app.services import musicbrainz_corrections_postgres as store
 
     setup_url, repository, _ids = _corrections(monkeypatch)
     with isolatedPostgres._connect(setup_url) as connection:
-        connection.execute("update library.local_artists set name = 'Shamaani Duo' where artist_key = 'rel-angra'")
+        connection.execute("update library.local_artists set name = 'Fixture Duo' where artist_key = 'rel-angra'")
         connection.execute("update integration.musicbrainz_releases set artist_credit = %s", (json.dumps(
-            [{"name": "Shamaani Duo", "artist_name": "Korpiklaani", "join_phrase": ""}]),))
+            [{"name": "Fixture Duo", "artist_name": "Fixture Folk Band", "join_phrase": ""}]),))
     repository.refresh(observed_at=NOW)
     with isolatedPostgres._connect(setup_url) as connection:
         album_id = connection.execute("select id from library.local_albums where album_key = 'rel-cry'").fetchone()["id"]
@@ -314,7 +314,7 @@ def test_a_main_name_row_stored_before_the_credited_name_rule_is_dropped_on_the_
             {"album_ids": [album_id]}).fetchone()["signature"]
         connection.execute(
             "insert into library.local_album_musicbrainz_correction_rows (library_id, album_key, field, current_value,"
-            " proposed_value, kind, mode) select library_id, album_key, 'album_artist', 'Shamaani Duo', 'Korpiklaani',"
+            " proposed_value, kind, mode) select library_id, album_key, 'album_artist', 'Fixture Duo', 'Fixture Folk Band',"
             " 'album_artist_renamed', 'review' from library.local_albums where id = %s", (album_id,))
         connection.execute("update library.local_album_musicbrainz_corrections set signature = %s"
                            " where album_key = 'rel-cry'", (before_rule,))

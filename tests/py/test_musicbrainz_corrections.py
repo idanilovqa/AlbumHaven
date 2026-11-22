@@ -282,8 +282,8 @@ def test_a_failed_background_refresh_logs_its_cause(monkeypatch, caplog):
     assert "_DataError" in caplog.text and "21000" in caplog.text
 
 
-# Owner, 2026-11-22: "An album keeps the name MusicBrainz credits it to". The correct album artist
-# is the release's credited name, not the artist's main name, except for spelling-only differences.
+# The correct album artist is the release's credited name, not the artist's main name, except for
+# spelling-only differences. Every name below is invented.
 def _album_artist_rows(tag, *credit):
     from music_app.services.musicbrainz_corrections_postgres import compare_stored_album
 
@@ -295,38 +295,39 @@ def _album_artist_rows(tag, *credit):
 
 
 @pytest.mark.parametrize("credited,main", [
-    ("Shamaani Duo", "Korpiklaani"), ("Shaman", "Korpiklaani"), ("Rhapsody", "Rhapsody of Fire"),
-    ("天門", "Tenmon"),
+    ("Fixture Duo", "Fixture Folk Band"), ("Fixture", "Fixture Folk Band"), ("Example", "Example of Testing"),
+    ("試験楽団", "Shiken Gakudan"),
 ])
 def test_a_correctly_credited_album_is_never_offered_the_artists_main_name(credited, main):
     assert _album_artist_rows(credited, (credited, main, "")) == []
 
 
 def test_an_album_tagged_with_the_main_name_is_offered_the_credited_one():
-    assert _album_artist_rows("Korpiklaani", ("Shamaani Duo", "Korpiklaani", "")) == [("Korpiklaani", "Shamaani Duo")]
+    assert _album_artist_rows("Fixture Folk Band", ("Fixture Duo", "Fixture Folk Band", "")) == [
+        ("Fixture Folk Band", "Fixture Duo")]
 
 
-@pytest.mark.parametrize("credited,main", [("AC-DC", "AC/DC"), ("Blue Oyster Cult", "Blue Öyster Cult"),
-                                           ("Guns N Roses", "Guns N' Roses")])
+@pytest.mark.parametrize("credited,main", [("EX-AM", "EX/AM"), ("Example Oster Choir", "Example Öster Choir"),
+                                           ("Tests N Samples", "Tests N' Samples")])
 def test_a_spelling_only_credit_takes_the_artists_main_name(credited, main):
     assert _album_artist_rows(main, (credited, main, "")) == [], "the main name is never respelled as the credit"
     assert _album_artist_rows(credited, (credited, main, "")) == [(credited, main)]
 
 
 def test_a_joint_credit_keeps_its_names_as_written():
-    credit = (("Shamaani Duo", "Korpiklaani", " & "), ("AC-DC", "AC/DC", ""))
+    credit = (("Fixture Duo", "Fixture Folk Band", " & "), ("EX-AM", "EX/AM", ""))
 
-    assert _album_artist_rows("Shamaani Duo & AC-DC", *credit) == []
+    assert _album_artist_rows("Fixture Duo & EX-AM", *credit) == []
 
 
 def test_a_credit_without_a_credited_name_proposes_no_album_artist():
-    assert _album_artist_rows("Shamaani Duo", ("", "Korpiklaani", "")) == [], "the main name never stands in for it"
+    assert _album_artist_rows("Fixture Duo", ("", "Fixture Folk Band", "")) == [], "the main name never stands in for it"
 
 
 def test_a_correction_row_stored_before_the_rule_is_compared_again_and_dropped():
     from music_app.services import musicbrainz_corrections_postgres as store
 
-    stored_rows = [{"field": "album_artist", "current_value": "Shamaani Duo", "proposed_value": "Korpiklaani"}]
+    stored_rows = [{"field": "album_artist", "current_value": "Fixture Duo", "proposed_value": "Fixture Folk Band"}]
     # The signature covers the tags and release, which did not change, and the rules that compared them.
     rules = f"'rules-{store.COMPARE_RULES_VERSION}'"
     assert rules in store._SIGNATURES_SQL
@@ -335,14 +336,15 @@ def test_a_correction_row_stored_before_the_rule_is_compared_again_and_dropped()
         def execute(self, sql, params=None):
             rows = []
             if sql is store._ALBUM_KEYS_SQL:
-                rows = [{"album_key": "hunka-lunka"}]
+                rows = [{"album_key": "fixture-album"}]
             elif sql is store._SIGNATURES_SQL:
-                rows = [{"album_id": 1, "library_id": 1, "album_key": "hunka-lunka", "release_mbid": "r",
+                rows = [{"album_id": 1, "library_id": 1, "album_key": "fixture-album", "release_mbid": "r",
                          "signature": "current rules", "stored_signature": "older rules"}]
             elif sql is store._COMPARE_SQL:
-                rows = [{"album_id": 1, "title": "Hunka lunka", "release_title": "Hunka lunka",
-                         "artist_name": "Shamaani Duo", "media": [], "tracks": [],
-                         "artist_credit": [{"name": "Shamaani Duo", "artist_name": "Korpiklaani", "join_phrase": ""}]}]
+                rows = [{"album_id": 1, "title": "Fixture Album", "release_title": "Fixture Album",
+                         "artist_name": "Fixture Duo", "media": [], "tracks": [],
+                         "artist_credit": [{"name": "Fixture Duo", "artist_name": "Fixture Folk Band",
+                                            "join_phrase": ""}]}]
             elif sql is store._STORE_SQL:
                 stored_rows.clear()  # the statement deletes the album's rows before storing its summary
             elif sql is store._STORE_ROWS_SQL:

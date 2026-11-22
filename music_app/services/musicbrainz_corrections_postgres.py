@@ -45,7 +45,7 @@ REFRESH_BATCH_MARKS = 200
 DECISIONS = frozenset({"undone", "skipped", "approved"})
 # Part of every signature, so rows stored under older comparison rules are compared again when their
 # album is refreshed. A change here needs a migration that marks every matched album once, as 0260
-# does for 2 (owner 2026-11-22, credited album artists).
+# does for 2 (credited album artists).
 COMPARE_RULES_VERSION = 2
 
 _DECISION_MATCH = """

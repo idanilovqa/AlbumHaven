@@ -102,9 +102,9 @@ def classify(field: str, current: object, proposed: object) -> str:
 
 
 def credited_album_artist(credit: list[dict[str, object]]) -> str:
-    """The album artist of a release's credit (owner 2026-11-22): as credited ("Shamaani Duo" on
-    Korpiklaani), but the artist's main name where only punctuation or typography differs. Empty
-    without every credited name: the main name never stands in for one (credit_text would use it)."""
+    """The album artist of a release's credit: as credited, even where the artist's main name is
+    another, but that main name where only punctuation or typography differs. Empty without every
+    credited name: the main name never stands in for one (credit_text would use it)."""
     if not all(part.get("name") for part in credit):
         return ""
     credited = credit_text(credit)

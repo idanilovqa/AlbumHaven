@@ -11430,7 +11430,23 @@
         "BI-14"
       ],
       "workClass": "affected-set",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 10,
+        "production": 15000
+      },
+      "budgets": {
+        "pool_leases": 1,
+        "sql_statements": 10,
+        "candidate_rows": 12
+      },
+      "growth": {
+        "metric": "candidate_rows",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_musicbrainz_corrections_scale_contracts.py::test_approve_kind_contract_touches_only_the_kinds_albums_at_production_album_count",
+      "testIdentity": "test_approve_kind_contract_touches_only_the_kinds_albums_at_production_album_count",
+      "rollback": "Revert the bounded data-correction commits together with migration 0260's readers."
     },
     {
       "id": "py:routes/musicbrainz_corrections_asgi.py#decide_album",
@@ -11446,7 +11462,23 @@
         "BI-14"
       ],
       "workClass": "affected-set",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 10,
+        "production": 15000
+      },
+      "budgets": {
+        "pool_leases": 1,
+        "sql_statements": 10,
+        "candidate_rows": 12
+      },
+      "growth": {
+        "metric": "candidate_rows",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_musicbrainz_corrections_scale_contracts.py::test_decide_album_contract_touches_one_album_at_production_album_count",
+      "testIdentity": "test_decide_album_contract_touches_one_album_at_production_album_count",
+      "rollback": "Revert the bounded data-correction commits together with migration 0260's readers."
     },
     {
       "id": "py:routes/musicbrainz_corrections_asgi.py#get_album_correction",
@@ -11478,7 +11510,23 @@
         "BI-13"
       ],
       "workClass": "page",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 10,
+        "production": 15000
+      },
+      "budgets": {
+        "pool_leases": 2,
+        "sql_statements": 4,
+        "candidate_rows": 0
+      },
+      "growth": {
+        "metric": "candidate_rows",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_musicbrainz_corrections_scale_contracts.py::test_edits_queue_contract_reads_stored_totals_at_production_album_count",
+      "testIdentity": "test_edits_queue_contract_reads_stored_totals_at_production_album_count",
+      "rollback": "Revert the bounded data-correction commits together with migration 0260's readers."
     },
     {
       "id": "py:routes/musicbrainz_corrections_asgi.py#get_edits_queue_page",
@@ -11494,7 +11542,23 @@
         "BI-13"
       ],
       "workClass": "page",
-      "proof": "static"
+      "proof": "contract",
+      "cardinalities": {
+        "small": 10,
+        "production": 15000
+      },
+      "budgets": {
+        "pool_leases": 1,
+        "sql_statements": 2,
+        "candidate_rows": 60
+      },
+      "growth": {
+        "metric": "candidate_rows",
+        "largeMinusSmallMax": 0
+      },
+      "command": "python -m pytest tests/py/test_musicbrainz_corrections_scale_contracts.py::test_edits_queue_page_contract_reads_one_page_at_production_album_count",
+      "testIdentity": "test_edits_queue_page_contract_reads_one_page_at_production_album_count",
+      "rollback": "Revert the bounded data-correction commits together with migration 0260's readers."
     },
     {
       "id": "py:routes/musicbrainz_corrections_asgi.py#list_correction_albums",
@@ -14164,20 +14228,22 @@
       "workClass": "background-batch",
       "proof": "contract",
       "cardinalities": {
-        "small": 20,
-        "production": 1000
+        "small": 10,
+        "production": 15000
       },
       "budgets": {
         "builder_calls": 2,
-        "pool_leases": 2
+        "pool_leases": 4,
+        "sql_statements": 30,
+        "candidate_rows": 20
       },
       "growth": {
-        "metric": "builder_calls",
+        "metric": "candidate_rows",
         "largeMinusSmallMax": 0
       },
-      "command": "python -m pytest tests/py/test_musicbrainz_corrections_bounded_contracts.py::test_correction_refresh_contract_folds_any_trigger_burst_into_two_passes_at_production_trigger_count",
-      "testIdentity": "test_correction_refresh_contract_folds_any_trigger_burst_into_two_passes_at_production_trigger_count",
-      "rollback": "Revert the contract test commit; no product code changed for this interaction."
+      "command": "python -m pytest tests/py/test_musicbrainz_corrections_scale_contracts.py::test_correction_refresh_contract_reads_only_changed_albums_at_production_album_count",
+      "testIdentity": "test_correction_refresh_contract_reads_only_changed_albums_at_production_album_count",
+      "rollback": "Revert the bounded data-correction commits together with migration 0260's readers."
     },
     {
       "id": "py:services/musicbrainz_corrections_postgres.py#enable_background_correction_refresh",

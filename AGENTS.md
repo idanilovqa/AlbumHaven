@@ -68,6 +68,10 @@ operate, or contribute to the application.
   request already uses; renumber before merging when two branches collide. Only
   code merged to main may apply migrations to a shared or production database;
   branch work uses an isolated database or a disposable copy.
+  One written exception (owner, 2026-11-22), for this file only:
+  `0117b_define_fold_search_accents.sql` shares 0117. It must sort before the
+  applied 0118, which needs its function, and no lower number is free. No
+  other file may take a suffix or share a number.
 - Production-copy development (owner rule, 2026-11-14): production stays up and
   is never a development database. Each branch or sandbox develops against its
   own restored copy of the production database, with media writes disabled or a

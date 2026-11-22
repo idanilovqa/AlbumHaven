@@ -7641,8 +7641,17 @@ test('a refreshed root window anchors on the section of the card on screen, not 
     { artist: 'Control Signal Partner', albums: [joint, { key: 'partner-2' }] },
     { artist: 'E2E Rarity Artist', albums: [{ key: 'rarity-1' }] },
   ];
-  context.virtualGrid = { sectionByKey: new Map([['all:Control Signal Partner:0', { group: groups[2] }]]) };
-  const anchor = { albumKey: 'joint-album', sectionOccurrenceKey: 'all:Control Signal Partner:0' };
+  // The captured key is the grid's own rendered section key; derive it from the real grid.
+  const gridContext = vm.createContext({});
+  const gridSource = fs.readFileSync(path.join(path.dirname(helperPath), 'virtual-artist-grid.js'), 'utf8');
+  // The class only; the file's last statement mounts the live grid on the page.
+  vm.runInContext(gridSource.slice(0, gridSource.indexOf('const virtualGrid = new VirtualArtistGrid();')), gridContext);
+  const renderedKey = vm.runInContext(
+    "VirtualArtistGrid.prototype.getRenderedSectionKey({ kind: 'artist', sectionKey: 'all:Control Signal Partner:0' })",
+    gridContext,
+  );
+  context.virtualGrid = { sectionByRenderedKey: new Map([[renderedKey, { group: groups[2] }]]) };
+  const anchor = { albumKey: 'joint-album', sectionOccurrenceKey: renderedKey };
   assert.equal(context.rootGalleryViewportArtists(groups, anchor, 900).artists[0], 'Control Signal Partner');
   // Without a known section the first group holding the album still anchors the window.
   assert.equal(context.rootGalleryViewportArtists(groups, { albumKey: 'joint-album' }, 900).artists[0], 'Compilation Signal Guest');

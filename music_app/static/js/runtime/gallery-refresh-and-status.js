@@ -123,7 +123,7 @@ function rootGalleryViewportArtists(groups = [], scrollAnchor = null, scrollTop 
   // end before the artist on screen (FTC-TAGS-011/012).
   const anchorSection = typeof virtualGrid === 'undefined'
     ? null
-    : virtualGrid?.sectionByKey?.get?.(String(scrollAnchor?.sectionOccurrenceKey || ''));
+    : virtualGrid?.sectionByRenderedKey?.get?.(String(scrollAnchor?.sectionOccurrenceKey || ''));
   const anchorSectionArtist = String(anchorSection?.group?.artist || '').trim();
   let viewportIndex = albumKey && anchorSectionArtist
     ? groups.findIndex(group => String(group.artist || '').trim() === anchorSectionArtist && holdsAnchorAlbum(group))

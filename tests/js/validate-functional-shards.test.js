@@ -23,7 +23,7 @@ const EXPECTED_SHARD_COUNTS = new Map([
   ['cover-providers-1', 22],
   ['cover-providers-2', 15],
   ['metadata-mutations', 16],
-  ['playback-utilities-1', 14],
+  ['playback-utilities-1', 16],
   ['playback-utilities-2', 17],
   ['playback-utilities-3', 14],
 ]);
@@ -124,7 +124,7 @@ function functionalJobSource() {
   return { workflow, job: workflow.slice(start, end) };
 }
 
-test('functional shard contract pins the approved eight-way 177-case assignment', () => {
+test('functional shard contract pins the approved eight-way 179-case assignment', () => {
   const contract = readJson(shardContractPath);
   assert.equal(contract.browser, 'chrome');
   assert.equal(contract.workersPerInvocation, 1);
@@ -138,7 +138,7 @@ test('functional shard contract pins the approved eight-way 177-case assignment'
     assert.ok(shard.invocations.length > 0, `${shard.name} must not be empty`);
     assert.ok(shard.suitePrerequisites.length > 0, `${shard.name} must declare prerequisites`);
   }
-  assert.equal(total, 177);
+  assert.equal(total, 179);
   for (const ownedCase of ownedCases(contract)) {
     assert.match(ownedCase.area, /^[a-z]+(?:-[a-z]+)*$/, ownedCase.case);
   }
@@ -904,14 +904,14 @@ validatorTest('playback restores three wave baselines and isolates conflicting e
   assert.deepEqual(
     waveInvocations(1).flatMap((invocation) => invocation.cases.map(({ case: name }) => name)).sort(),
     [
-      'FTC-SETTINGS-I02 Scrobbling statistics and readable Foobar help retain disabled playlist import',
-      'FTC-SETTINGS-H04 Period includes complete local dates across skipped midnight',
-      'FTC-SETTINGS-S06 searches preserve independent tab queries and unsaved editors',
       'FTC-ALBUM-DETAILS-022 touch artwork controls open full cover and Cover Lookup without hover',
+      'FTC-SETTINGS-H04 Period includes complete local dates across skipped midnight',
+      'FTC-SETTINGS-I02 Scrobbling statistics and readable Foobar help retain disabled playlist import',
+      'FTC-SETTINGS-S06 searches preserve independent tab queries and unsaved editors',
+      'FTC-TAGS-024 completes a verified Album and Exception intent during app restart',
+      'FTC-UTIL-PROBLEMS-001 scopes exclusions with optimistic persistence and reload',
       'FTC-UTIL-PROBLEMS-011 hides dead problem actions for a generated excluded album',
       'FTC-UTIL-PROBLEMS-011 opens the exact problematic track from album details',
-      'FTC-UTIL-PROBLEMS-001 scopes exclusions with optimistic persistence and reload',
-      'FTC-TAGS-024 completes a verified Album and Exception intent during app restart',
     ].sort(),
   );
   assert.deepEqual(
@@ -982,7 +982,7 @@ validatorTest('all eight shards use explicit effect-compatible wave budgets', ()
     ['cover-providers-1', { cases: 22, waves: [1, 2, 4] }],
     ['cover-providers-2', { cases: 15, waves: [1, 2] }],
     ['metadata-mutations', { cases: 16, waves: [1, 2, 3] }],
-    ['playback-utilities-1', { cases: 14, waves: [1, 2, 3, 4] }],
+    ['playback-utilities-1', { cases: 16, waves: [1, 2, 3, 4] }],
     ['playback-utilities-2', { cases: 17, waves: [1, 2, 5] }],
     ['playback-utilities-3', { cases: 14, waves: [1, 2] }],
   ]);

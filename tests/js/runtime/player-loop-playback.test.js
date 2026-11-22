@@ -568,7 +568,8 @@ test('streaming pause and resume drive listen, now-playing, ownership, and UI ef
   assert.deepEqual(pausedOffsets, [12]);
   assert.deepEqual(scrobbles, [pausedSession]);
   assert.deepEqual(ownershipReleases, [{ status: 'paused', track }]);
-  assert.equal(uiUpdates, 1);
+  // Once when the sound stops, once after ownership is released.
+  assert.equal(uiUpdates, 2);
 
   assert.equal(context.togglePlayerPlayback({ focusTimelineOnResume: false }), true);
   await new Promise((resolve) => setImmediate(resolve));
@@ -576,7 +577,7 @@ test('streaming pause and resume drive listen, now-playing, ownership, and UI ef
   assert.deepEqual(ownershipClaims, [track]);
   assert.deepEqual(listenResumes, [{ track, startSeconds: 12 }]);
   assert.deepEqual(nowPlaying, [{ track, session: resumedSession }]);
-  assert.equal(uiUpdates, 2);
+  assert.equal(uiUpdates, 3);
 });
 
 test('global-player handoff shares its pending pause until streaming ownership is released', async () => {
@@ -4176,4 +4177,29 @@ test('bounded interaction: mobile player metadata motion measures its three rows
     budgets: { itemsVisited: 60, domMutations: 180, animationFrames: 20, observers: 0, listeners: 0 },
     growth: { metric: 'itemsVisited', largeMinusSmallMax: 0 },
   });
+});
+
+test('pausing shows Play as soon as the sound stops, before the session and ownership round trips', async () => {
+  const snapshot = {
+    currentTime: 12, duration: 60, paused: false, ended: false, src: '/track?path=song.flac',
+  };
+  let finishSave;
+  const pendingSave = new Promise((resolve) => { finishSave = resolve; });
+  const { context, playButton } = loadHelper({
+    getPlayerPlaybackSnapshot: () => ({ ...snapshot }),
+    pauseStreamingPlayback: async () => { snapshot.paused = true; },
+    maybeScrobbleListenSession: async () => false,
+    persistPausedListenSession: () => pendingSave,
+    releasePlaybackOwnership: async () => true,
+  });
+  context.state.player.listenSession = { id: 'session' };
+
+  const pause = context.pausePlayerPlaybackForHandoff();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(playButton.getAttribute('aria-label'), 'Play',
+    'the control must not keep saying Pause while the listen session is still saving');
+  finishSave(true);
+  assert.equal(await pause, true);
+  assert.equal(playButton.getAttribute('aria-label'), 'Play');
 });

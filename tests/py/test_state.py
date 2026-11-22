@@ -1707,6 +1707,12 @@ def test_state_utility_prewarm_routes_to_authoritative_postgres_projections_when
         RepositoryStub,
         raising=False,
     )
+    # Problematic Files is kept by its index's maintenance, not a projection prewarm (251810c0e).
+    monkeypatch.setattr(
+        state_module.problematic_index,
+        "queue_maintenance",
+        lambda repository: queued_kinds.append("problematic-files") if isinstance(repository, RepositoryStub) else None,
+    )
     monkeypatch.setattr(
         problematic_albums,
         "queue_problematic_albums_prewarm",

@@ -6605,6 +6605,16 @@ test('the audio thread gets a port from a Worker that only this tab\u2019s takeo
   assert.deepEqual(relayed, ['silence']);
 });
 
+// The WebView prepares a socket when idle. Named as the phone, Play here elsewhere would ask it instead of
+// the native player: today's APK would never answer, a new one would be passed over for the newer socket.
+test('in the app the idle web socket does not speak for the native player', async () => {
+  const harness = createEngineHarness({ getPlaybackOwnershipTabId: () => '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70' });
+  harness.context.isAndroidNativePlayback = () => true;
+  await harness.api.prepare();
+  assert.equal(harness.sockets.length, 1);
+  assert.equal(harness.sockets[0].url.includes('client_id='), false);
+});
+
 test('music playback asks for large output buffers', async () => {
   const harness = createEngineHarness();
 

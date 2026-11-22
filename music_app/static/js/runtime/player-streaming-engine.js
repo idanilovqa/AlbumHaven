@@ -588,8 +588,10 @@ function closeStreamingContinuityRole(reason, { releaseWorklet = true } = {}) {
   return true;
 }
 
-// Which client this socket plays for, so Play here elsewhere can ask it.
+// Which client this socket plays for, so Play here elsewhere can ask it. Never an engine's with its own
+// claim: in the app that client's socket is the native player's, and only it can answer.
 function streamingSocketClientQuery() {
+  if (typeof currentPlaybackEngine === 'function' && currentPlaybackEngine().holdsOwnClaim) return '';
   const clientId = typeof getPlaybackOwnershipTabId === 'function' ? getPlaybackOwnershipTabId() : '';
   return clientId ? `?client_id=${encodeURIComponent(clientId)}` : '';
 }

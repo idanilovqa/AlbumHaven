@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from music_app.services import scan_state
+from music_app.services.metadata import FILE_METADATA_SCHEMA_VERSION
 from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
 from tests.py.bounded_interactions import OperationCounts, measure_scale_pair
 
@@ -42,7 +43,16 @@ class _Library:
 
 def _republish(tmp_path, monkeypatch, file_count: int, *, per_path_check: bool = False) -> OperationCounts:
     """One republish attempt over a scan of ``file_count`` files, ``_VANISHED`` of them removed since."""
-    scanned = {str(tmp_path / str(file_count) / f"{index:05d}.mp3"): {"mtime": 1.0} for index in range(file_count)}
+    folder = tmp_path / str(file_count)
+    scanned = {
+        str(folder / f"{index:05d}.mp3"): {
+            "path": str(folder / f"{index:05d}.mp3"), "mtime": 1.0, "size": 1, "title": f"Track {index}",
+            "album": f"Album {index // 10}", "album_artist": "Artist", "artist": "Artist",
+            "track_number": index % 10 + 1, "metadata_schema_version": FILE_METADATA_SCHEMA_VERSION,
+            "release_date": None,
+        }
+        for index in range(file_count)
+    }
     vanished = set(list(scanned)[:_VANISHED])
     counts = OperationCounts()
     adapter = PostgresScanCacheAdapter.__new__(PostgresScanCacheAdapter)
@@ -58,21 +68,25 @@ def _republish(tmp_path, monkeypatch, file_count: int, *, per_path_check: bool =
         counts.count("stat_calls")
         return exists(path)
 
-    monkeypatch.setattr(os.path, "exists", counted_exists)
-    try:
-        publication_state = {"file_cache": dict(scanned)}
-        scan_state._merge_newer_published_inventory(
-            SimpleNamespace(
-                load_inventory_mutation_revision=lambda: 7,
-                load_inventory_published_since=lambda _since: ({}, set()),
-                load_removed_unpublished_paths=load_removed,
-            ),
-            publication_state,
-            since=0.0,
-            separate_release_keys=set(),
-        )
-    finally:
-        monkeypatch.setattr(os.path, "exists", exists)
+    def counted_load_removed(paths):
+        # Only this lookup's disk checks are counted; rebuilding the albums afterwards is the scan's own work.
+        monkeypatch.setattr(os.path, "exists", counted_exists)
+        try:
+            return load_removed(paths)
+        finally:
+            monkeypatch.setattr(os.path, "exists", exists)
+
+    publication_state = {"file_cache": dict(scanned)}
+    scan_state._merge_newer_published_inventory(
+        SimpleNamespace(
+            load_inventory_mutation_revision=lambda: 7,
+            load_inventory_published_since=lambda _since: ({}, set()),
+            load_removed_unpublished_paths=counted_load_removed,
+        ),
+        publication_state,
+        since=0.0,
+        separate_release_keys=set(),
+    )
     if not per_path_check:  # the mutation also drops files that were never written to this test's disk
         assert set(publication_state["file_cache"]) == set(scanned) - vanished, "the removed files stay removed"
     return counts

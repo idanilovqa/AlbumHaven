@@ -263,31 +263,37 @@ def _inventory_versions(setup_url, base):
     with isolatedPostgres._connect(setup_url) as connection:
         rows = connection.execute(
             """select 'listing ' || root_path as row, xmin::text as version from library.local_cover_inventories
-                 where root_path = %(base)s or root_path like %(below)s
+                 where root_path = %(base)s or starts_with(root_path, %(below)s)
                union all select 'context ' || context_key, xmin::text from library.local_cover_inventory_contexts
-                 where track_paths ->> 0 like %(below)s""",
-            {"base": base, "below": base + "/%"},
+                 where starts_with(track_paths ->> 0, %(below)s)""",
+            {"base": base, "below": base + os.sep},
         ).fetchall()
     return {row["row"]: row["version"] for row in rows}
 
 
 def _seed_counted_library(setup_url, base, albums):
-    """``albums`` albums under 50 artists, five more in one box set, and one open whose stored folder is the root."""
+    """``albums`` albums under 50 artists, five more in one box set, and one open whose stored folder is the root.
+
+    Paths are stored as the app keys them (``root_key``), with this platform's separator."""
     with isolatedPostgres._connect(setup_url) as connection:
         connection.execute(
             f"""insert into library.local_cover_inventories (library_id, root_path, revision, indexed_revision)
                 select ({_LIBRARY_ID}), folder, 1, 1 from (
-                  select %(base)s || '/artist-' || (album %% 50) || '/album-' || album from generate_series(1, %(albums)s) as album
-                  union all select %(base)s || '/box/album-' || album from generate_series(1, 5) as album
+                  select %(base)s || %(sep)s || 'artist-' || (album %% 50) || %(sep)s || 'album-' || album
+                    from generate_series(1, %(albums)s) as album
+                  union all select %(base)s || %(sep)s || 'box' || %(sep)s || 'album-' || album from generate_series(1, 5) as album
                   union all select %(base)s) as folders(folder)""",
-            {"base": base, "albums": albums},
+            {"base": base, "albums": albums, "sep": os.sep},
         )
+        # context_key is the SHA-256 of json.dumps([track]), which doubles each backslash.
         connection.execute(
             f"""insert into library.local_cover_inventory_contexts (library_id, context_key, track_paths, root_path)
-                select library_id, encode(sha256(convert_to('["' || root_path || '/01.mp3"]', 'UTF8')), 'hex'),
-                  jsonb_build_array(root_path || '/01.mp3'), root_path
-                from library.local_cover_inventories where library_id = ({_LIBRARY_ID}) and root_path like %(below)s""",
-            {"below": base + "/%"},
+                select library_id,
+                  encode(sha256(convert_to('["' || replace(root_path || %(sep)s || '01.mp3', %(backslash)s, %(json_backslash)s)
+                    || '"]', 'UTF8')), 'hex'),
+                  jsonb_build_array(root_path || %(sep)s || '01.mp3'), root_path
+                from library.local_cover_inventories where library_id = ({_LIBRARY_ID}) and starts_with(root_path, %(below)s)""",
+            {"below": base + os.sep, "sep": os.sep, "backslash": "\\", "json_backslash": "\\\\"},
         )
         connection.execute(
             f"""insert into library.local_cover_inventory_contexts (library_id, context_key, track_paths, root_path)
@@ -299,7 +305,7 @@ def _seed_counted_library(setup_url, base, albums):
 
 
 def _repaired_tracks(base):
-    return {f"{base}/repair/01.mp3", f"{base}/repair/02.mp3"}
+    return {os.path.join(base, "repair", "01.mp3"), os.path.join(base, "repair", "02.mp3")}
 
 
 def test_inventory_changes_read_and_write_only_what_they_change_at_two_library_sizes(monkeypatch):
@@ -313,7 +319,8 @@ def test_inventory_changes_read_and_write_only_what_they_change_at_two_library_s
     isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
     costs = {}
     for albums in (2_000, 20_000):
-        base = f"/int050-count-{uuid4().hex}"
+        # The hosted runners are Windows: paths are keyed as the app keys them there.
+        base = root_key(f"/int050-count-{uuid4().hex}")
         counts = {"statements": 0, "read": 0}
         config = {"ALBUM_HAVEN_APP_DATABASE_URL": runtime_url, "_library_root_paths_snapshot": (Path(base),)}
         repository = LocalCoverInventoryRepository(
@@ -326,7 +333,9 @@ def test_inventory_changes_read_and_write_only_what_they_change_at_two_library_s
             assert repository.root_for_tracks(repaired) is None, "a stored root is never an album's folder"
             worker.request_context(repaired)
             claimed = repository.next_context(context_key(repaired))
-            repository.publish_context(claimed["context_key"], claimed["revision"], f"{base}/repair", foreground=True)
+            repository.publish_context(
+                claimed["context_key"], claimed["revision"], os.path.join(base, "repair"), foreground=True,
+            )
 
         def idle_poll():
             idle, passes = module.LocalCoverInventoryWorker(config, repository=repository), []
@@ -341,9 +350,11 @@ def test_inventory_changes_read_and_write_only_what_they_change_at_two_library_s
             idle._run()
 
         scenarios = {
-            "file change": lambda: worker.invalidate_paths([f"{base}/artist-7/album-7/01.mp3"], context_changed=True),
+            "file change": lambda: worker.invalidate_paths(
+                [os.path.join(base, "artist-7", "album-7", "01.mp3")], context_changed=True,
+            ),
             "folder subtree": lambda: worker.invalidate_paths(
-                [f"{base}/box"], subtree_paths=[f"{base}/box"], context_changed=True,
+                [os.path.join(base, "box")], subtree_paths=[os.path.join(base, "box")], context_changed=True,
             ),
             "root-level event": lambda: worker.invalidate_paths([base], subtree_paths=[base], context_changed=True),
             "open repair": open_repair,
@@ -361,11 +372,12 @@ def test_inventory_changes_read_and_write_only_what_they_change_at_two_library_s
         finally:
             with isolatedPostgres._connect(setup_url) as connection:
                 connection.execute(
-                    "delete from library.local_cover_inventory_contexts where track_paths ->> 0 like %s", (base + "/%",),
+                    "delete from library.local_cover_inventory_contexts where starts_with(track_paths ->> 0, %s)",
+                    (base + os.sep,),
                 )
                 connection.execute(
-                    "delete from library.local_cover_inventories where root_path = %s or root_path like %s",
-                    (base, base + "/%"),
+                    "delete from library.local_cover_inventories where root_path = %s or starts_with(root_path, %s)",
+                    (base, base + os.sep),
                 )
 
     written = {"file change": 2, "folder subtree": 10, "root-level event": 0, "open repair": 2, "idle poll": 0}

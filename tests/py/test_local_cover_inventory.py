@@ -290,10 +290,11 @@ def test_context_resolution_honors_cancellation_between_tracks(monkeypatch, tmp_
     second.touch()
     calls = []
     monkeypatch.setattr(cover_workflow, "get_library_roots", lambda config: [{"path": str(tmp_path)}])
-    def resolve(config, value, **kwargs):
+    # Each track resolves under one snapshot of the roots since 8128ee152.
+    def resolve(value, _root_paths, **kwargs):
         calls.append(value)
         return Path(value)
-    monkeypatch.setattr(cover_workflow, "resolve_configured_media_path", resolve)
+    monkeypatch.setattr(cover_workflow, "resolve_media_path_within_roots", resolve)
 
     with pytest.raises(InterruptedError, match="context resolution cancelled"):
         cover_workflow.resolve_album_root_from_track_paths({}, {str(first), str(second)}, cancel_requested=lambda: bool(calls))

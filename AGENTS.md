@@ -129,8 +129,11 @@ operate, or contribute to the application.
   process-wide cache without an invalidation owner. Fix BI-15 by leasing from
   `music_app/services/postgres_connections.py`: `pooled_connection` for new
   code, `leased_connection` where a repository is written against a
-  `psycopg.connect()` connection. Only a background worker that keeps session
-  state (a session advisory lock, `LISTEN`) holds a connection of its own.
+  `psycopg.connect()` connection. Session state (a session advisory lock,
+  `LISTEN`, `SET` without `LOCAL`, a temporary table not dropped on commit) is
+  rejected on a shared lease (BI-15): take the connection, in the function
+  that sets up that state, from `session_connection`, whose connections are
+  never reused, or in a background worker from a connection of its own.
 - The ASGI test client (`tests/py/asgi_testing.py`) fails any request that
   blocks the event loop for more than 250 ms outside a module's first import,
   and has no opt-out.

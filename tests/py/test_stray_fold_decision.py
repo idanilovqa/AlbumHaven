@@ -72,6 +72,13 @@ def _retitle_a_track_of_a_copy(fixture):
     return first + second, second[:1], {"title": "Another Song"}
 
 
+def _retitle_a_single_track_into_a_stray_of_a_compilation(fixture):
+    # A compilation's album has no artist row; its album artist still names it.
+    whole = _album(fixture, "One", PLAIN, artist="Various Artists")
+    single = _album(fixture, "Single", "Loose", artist="Guest", titles=TITLES[:1])
+    return whole + single, single, {"album": ACCENTED}
+
+
 def _merge_by_exact_tags(fixture):
     first = _album(fixture, "One", PLAIN)
     second = _album(fixture, "Two", "Loud Winter", titles=(("Fourth Song", 190),))
@@ -87,6 +94,7 @@ EDITS = [
     _retitle_into_a_twin, _retitle_out_of_a_pair, _rename_the_owner, _change_the_artist_of_a_copy,
     _change_the_year_of_a_copy, _move_one_track_out_of_a_copy, _retitle_a_single_track_into_a_stray,
     _retitle_a_track_of_a_copy, _merge_by_exact_tags, _edit_nothing_the_rule_reads,
+    _retitle_a_single_track_into_a_stray_of_a_compilation,
 ]
 
 
@@ -176,3 +184,106 @@ def test_live_the_decision_names_the_inventory_it_was_made_from(watcher_repair_i
                where owners.owner_key = 'local-bootstrap-owner' and libraries.name = 'Local Library'"""
         ).fetchone()["revision"]
     assert made_from < current, "A decision from before the save must read as stale after it."
+
+
+def _stored_pair(fixture):
+    """Two stored albums sharing a folded title. A seed stores one album for title variants, so retitle one."""
+    first, second = _album(fixture, "One", PLAIN), _album(fixture, "Two", "Loud Winter")
+    fixture.seed(*first, *second)
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute("update library.local_albums set title = %s where title = 'Loud Winter'", (ACCENTED,))
+        connection.commit()
+    return first, [{**entry, "album": ACCENTED} for entry in second]
+
+
+def _refresh_every_album(fixture):
+    from music_app.services.scoped_relation_projection import _refresh_stray_duplicate_ownership
+
+    with isolatedPostgres._connect(fixture.runtime_url) as connection:
+        rows = connection.execute("select id, library_id from library.local_albums").fetchall()
+        _refresh_stray_duplicate_ownership(connection, rows[0]["library_id"], {row["id"] for row in rows})
+        connection.commit()
+        return connection.execute(
+            """select id, (metadata #>> '{stray_duplicate_of,album_id}')::bigint as owner_id
+               from library.local_albums order by id"""
+        ).fetchall()
+
+
+def test_live_an_equal_size_tie_keeps_the_lower_album_id(watcher_repair_inventory):
+    _stored_pair(watcher_repair_inventory)
+
+    lower, higher = _refresh_every_album(watcher_repair_inventory)
+
+    assert lower["owner_id"] is None
+    assert higher["owner_id"] == lower["id"]
+
+
+@pytest.mark.parametrize("album_artist, named", [
+    ("Various Artists", True), ("Сборник", True), (None, False), ("", False), ("   ", False), ("?!-.", False),
+])
+def test_live_an_album_without_an_artist_row_folds_only_by_a_named_album_artist(
+    watcher_repair_inventory, album_artist, named,
+):
+    fixture = watcher_repair_inventory
+    _stored_pair(fixture)
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute(
+            """update library.local_albums set artist_id = null,
+                 metadata = (metadata - 'stray_duplicate_of' - 'album_artist')
+                   || jsonb_strip_nulls(jsonb_build_object('album_artist', %s::text))""",
+            (album_artist,),
+        )
+        connection.commit()
+
+    lower, higher = _refresh_every_album(fixture)
+
+    assert lower["owner_id"] is None
+    assert higher["owner_id"] == (lower["id"] if named else None)
+
+
+def _decide(fixture, edited, changes):
+    from music_app.services.stray_fold_decision import decide_stray_folds
+
+    previous = {entry["path"]: dict(entry) for entry in edited}
+    updated = {path: {**entry, **changes} for path, entry in previous.items()}
+    with isolatedPostgres._connect(fixture.runtime_url) as connection:
+        decision = decide_stray_folds(
+            connection, previous_entries=previous, updated_entries=updated, changed_fields=set(changes),
+        )
+    return previous, updated, decision["albums"]
+
+
+def test_live_040_an_unfolded_card_carries_the_proposed_album_artist(watcher_repair_inventory):
+    fixture = watcher_repair_inventory
+    _first, second = _stored_pair(fixture)
+    _refresh_every_album(fixture)
+
+    _previous, _updated, albums = _decide(fixture, second, {"album_artist": "Someone Else"})
+
+    card = next(album["card"] for album in albums if album["card"])
+    assert card["album_artist"] == "Someone Else"
+
+
+def test_live_037_the_album_a_partial_move_leaves_keeps_a_card(watcher_repair_inventory):
+    fixture = watcher_repair_inventory
+    first, second = _pair(fixture)  # A seed stores the pair as one album: one copy's move leaves the other.
+    fixture.seed(*first, *second)
+
+    previous, updated, albums = _decide(fixture, first, {"album": "Loud Winter"})
+
+    remainder = {entry["path"] for entry in second}
+    card = next((album["card"] for album in albums if set(album["track_paths"]) == remainder), None)
+    assert card, "The album the move leaves has no card to show at the click."
+    fixture.adapter.persist_structural_tag_edit(
+        changed_paths=set(updated), previous_file_entries=previous, updated_file_entries=updated,
+        changed_field_names={"album"}, rebuild_relation_projection=True,
+    )
+    with isolatedPostgres._connect(fixture.runtime_url) as connection:
+        stored = connection.execute(
+            """select albums.album_key, albums.title from library.local_albums albums
+               join library.local_tracks tracks on tracks.album_id = albums.id
+               join library.local_track_files files on files.track_id = tracks.id
+               where files.private_path = %s""",
+            (second[0]["path"],),
+        ).fetchone()
+    assert (card["key"], card["name"]) == (stored["album_key"], stored["title"])

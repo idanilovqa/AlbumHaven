@@ -388,14 +388,17 @@ def test_pcm_socket_opens_never_reread_the_library_root_settings(
     decoder_factory,
     monkeypatch,
 ):
+    import threading
+
     from music_app.services import library_roots
 
     store_type = library_roots.PostgresLibraryRootSettingsStore
-    loads = []
+    # Each read names its thread, so a failure says which work read the roots.
+    loads: list[str] = []
     original_load = store_type.load_settings
 
     def counted_load(self, *args, **kwargs):
-        loads.append(1)
+        loads.append(f"store on {threading.current_thread().name}")
         return original_load(self, *args, **kwargs)
 
     monkeypatch.setattr(store_type, "load_settings", counted_load)
@@ -403,7 +406,7 @@ def test_pcm_socket_opens_never_reread_the_library_root_settings(
     stubbed_roots = library_roots.get_library_roots
 
     def counted_roots(config):
-        loads.append(1)
+        loads.append(f"roots on {threading.current_thread().name}")
         return stubbed_roots(config)
 
     monkeypatch.setattr(library_roots, "get_library_roots", counted_roots)
@@ -420,8 +423,8 @@ def test_pcm_socket_opens_never_reread_the_library_root_settings(
             return loads_after_first_open
 
     loads_after_first_open = asyncio.run(scenario())
-    assert loads_after_first_open <= 1
-    assert len(loads) == loads_after_first_open, "a later start reads the roots snapshot"
+    assert loads_after_first_open <= 1, loads
+    assert len(loads) == loads_after_first_open, loads
     assert len(decoder_factory.instances) == 2
 
 

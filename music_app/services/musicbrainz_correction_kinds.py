@@ -97,6 +97,14 @@ def classify(field: str, current: object, proposed: object) -> str:
     return f"{prefix}_joined" if (_JOINED.search(a) or _JOINED.search(b)) else f"{prefix}_renamed"
 
 
+def credited_album_artist(credit: list[dict[str, object]]) -> str:
+    """The album artist of a release's credit (owner 2026-11-22): as credited ("Shamaani Duo" on
+    Korpiklaani), but the artist's main name where only punctuation or typography differs."""
+    credited = credit_text(credit)
+    main = str(credit[0].get("artist_name") or "").strip() if len(credit) == 1 else ""
+    return main if main and classify("album_artist", credited, main) in AUTO_KINDS else credited
+
+
 def _differs(current: object, proposed: object) -> bool:
     return bool(str(proposed or "").strip()) and comparable(current) != comparable(proposed)
 

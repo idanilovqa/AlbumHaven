@@ -5584,14 +5584,16 @@ function normalizeAlbumDetailsLayout(value) {
 }
 
 // The MusicBrainz artist an album certainly belongs to replaces a tag that names someone
-// else. Display only: the tag itself changes only through an approved tag edit.
+// else, unless the album's release credits another name (display_artist wins, below).
+// Display only: the tag itself changes only through an approved tag edit.
 function albumIdentityArtist(album) {
   const tagged = album?.album_artist || album?.artist || '';
   const identity = album?.musicbrainz_artist;
   return identity?.tag_differs && identity.canonical_name ? identity.canonical_name : tagged;
 }
 
-// An applied MusicBrainz data correction (S4) shows in place of the album artist tag; a split
+// An applied MusicBrainz data correction (S4), else the name the album's release credits
+// ("Shamaani Duo", owner 2026-11-22), shows in place of the album artist tag; a split
 // same-name artist's album shows its group, "Amarok (Poland)" (D2 S2).
 function albumDisplayArtist(album) {
   return album?.display_artist || album?.musicbrainz_artist?.group_label || albumIdentityArtist(album);

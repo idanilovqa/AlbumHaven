@@ -14,6 +14,8 @@
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; }
+/* Back and Forward: the gallery is not painted at its top on the way to its place (return-place.js). */
+html[data-returning-to-place] #albums-scroll { opacity: 0; }
 body {
   margin: 0;
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;

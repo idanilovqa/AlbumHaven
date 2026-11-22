@@ -87,6 +87,7 @@ const RUNTIME_SCRIPT_PATHS = [
   'js/runtime/bootstrap-utility-event-handlers.js',
   'js/runtime/bootstrap-gallery-event-handlers.js',
   'js/runtime/mobile-navigation.js',
+  'js/runtime/gallery-return-place.js',
   'js/runtime/in-page-tabs.js',
   'js/runtime/mobile-home.js',
   'js/runtime/bootstrap-event-handlers.js',

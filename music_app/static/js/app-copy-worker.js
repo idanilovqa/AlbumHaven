@@ -5,6 +5,7 @@
 // request, the versioned assets that page loads, and cover thumbnails already seen. Two modes:
 // - `app` (the Android app): a navigation to a page kept recently is answered from the copy at once;
 //   the page then brings itself up to date.
+//   Back and Forward wait for the server as `web` does: nothing of the library paints before it answers.
 // - `web` (a browser, `?mode=web`): the server answers first, however slowly; the copy answers only
 //   when the server cannot be reached or fails at its gateway.
 // A copy is shown for at most seven days, and never past the end of the session the server named.
@@ -373,7 +374,8 @@
 
     async function navigate(request, event) {
       const url = new URL(request.url);
-      if (mode === 'web') return pageAnswer(await serverFirst(url, event));
+      const throughHistory = request.isHistoryNavigation === true || request.cache === 'force-cache';
+      if (mode === 'web' || throughHistory) return pageAnswer(await serverFirst(url, event));
       return pageAnswer((await freshCopy(url)) || (await fetchPage(url, { running: true }, event)));
     }
 

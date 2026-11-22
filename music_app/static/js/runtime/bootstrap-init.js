@@ -507,6 +507,7 @@ window.addEventListener('scroll', () => {
 if (typeof syncArtistsDrawerVisibility === 'function') {
   syncArtistsDrawerVisibility();
 }
+if (typeof initReturnPlace === 'function') void initReturnPlace();
 
 const tagEditorFooter = document.getElementById('tag-editor-footer');
 if (tagEditorFooter) {

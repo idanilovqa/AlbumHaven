@@ -1,6 +1,13 @@
 (() => {
   "use strict";
 
+  // Signed out: the places Back would return to go too (return-place.js).
+  try {
+    window.localStorage?.removeItem("album-haven-return-places");
+  } catch (_error) {
+    // Storage is switched off, so none were kept.
+  }
+
   const form = document.querySelector(".login-form");
   const password = document.querySelector("#login-password");
   const toggle = document.querySelector(".login-password-toggle");

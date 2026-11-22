@@ -1063,11 +1063,13 @@ async def index(request: Request) -> Response:
         bootstrap_payload["bootstrap"]["scanInProgress"] = True
         bootstrap_payload["bootstrap"]["scanPhase"] = "discovering"
         bootstrap_payload["bootstrap"]["scanMode"] = "background"
+    actor = request.state.current_actor
+    account_key = app_copy_account(actor) if getattr(actor, "account_id", None) is not None else ""
     copy_account = ""
     if app_copy_requested(request) and await run_in_threadpool(
         fits_app_copy, bootstrap_payload, [value for _name, value in query_args.multi_items()],
     ):
-        copy_account = app_copy_account(request.state.current_actor)
+        copy_account = account_key
     appearance_started_at = time.perf_counter()
     appearance_context = await load_appearance_context(request)
     appearance_elapsed_ms = round((time.perf_counter() - appearance_started_at) * 1000, 2)
@@ -1088,6 +1090,7 @@ async def index(request: Request) -> Response:
             "app_version": config.get("APP_VERSION", RELEASE_VERSION),
             "bootstrap_payload": bootstrap_payload,
             "startup_preview": startup_preview,
+            "account_key": account_key,
             "app_copy_account": copy_account,
             "app_copy_enabled": app_copy_enabled(),
         },

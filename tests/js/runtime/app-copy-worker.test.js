@@ -1694,3 +1694,22 @@ test('bounded interaction: a save message reads no kept cover or asset when 5,00
     },
   });
 });
+
+for (const [name, history] of [
+  ['named a history navigation', { isHistoryNavigation: true }],
+  ['asked from the cache first, as history is', { cache: 'force-cache' }],
+]) {
+  test(`IAR-W27: in the app, Back and Forward (${name}) wait for the server, and offline get the kept page`, async () => {
+    let online = true;
+    const { calls, handle } = setup({ respond: () => (online ? page('acct-a') : new TypeError('Failed to fetch')) });
+    await handle(navigation('/'));
+
+    const returned = await handle({ ...navigation('/'), ...history });
+    assert.equal(calls.length, 2, 'the server is asked before anything paints');
+    assert.match(await returned.text(), /content="network"/);
+
+    online = false;
+    const offline = await handle({ ...navigation('/'), ...history });
+    assert.match(await offline.text(), /content="cache"/);
+  });
+}

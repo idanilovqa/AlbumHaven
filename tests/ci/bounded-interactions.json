@@ -994,6 +994,38 @@
       "proof": "static"
     },
     {
+      "id": "js:return-place.js#createReturnPlace",
+      "action": "Hide and load again a page Back took from memory (one storage write); take every kept place on a sign-out submit",
+      "entrypoints": [
+        "js:music_app/static/js/return-place.js#createReturnPlace:event:pagehide",
+        "js:music_app/static/js/return-place.js#createReturnPlace:event:pageshow",
+        "js:music_app/static/js/return-place.js#createReturnPlace:event:submit"
+      ],
+      "owners": [
+        "music_app/static/js/return-place.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:return-place.js#hide",
+      "action": "One timer that shows the gallery after 10 s at the latest while it returns to its place",
+      "entrypoints": [
+        "js:music_app/static/js/return-place.js#hide:timer:setTimeout"
+      ],
+      "owners": [
+        "music_app/static/js/return-place.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
       "id": "js:runtime/account-menu.js#on",
       "action": "click/focusout/keydown/pointerdown/resize listeners installed by on",
       "entrypoints": [
@@ -3888,6 +3920,83 @@
         ],
         "forbidden": []
       }
+    },
+    {
+      "id": "js:runtime/gallery-return-place.js#<top-level>",
+      "action": "Take the gallery place (the mounted cards) before a navigation, and keep it (at most 50 places) when the entry or the page is left",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/gallery-return-place.js#<top-level>:event:click",
+        "js:music_app/static/js/runtime/gallery-return-place.js#<top-level>:event:currententrychange",
+        "js:music_app/static/js/runtime/gallery-return-place.js#<top-level>:event:focusin",
+        "js:music_app/static/js/runtime/gallery-return-place.js#<top-level>:event:pagehide",
+        "js:music_app/static/js/runtime/gallery-return-place.js#<top-level>:event:submit",
+        "js:music_app/static/js/runtime/gallery-return-place.js#<top-level>:event:visibilitychange"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/gallery-return-place.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/gallery-return-place.js#returnToGalleryPlace",
+      "action": "Back or Forward deep in All artists: ask for one gallery window around the artist left at",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/gallery-return-place.js#returnToGalleryPlace:request:fetchAndRender"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/gallery-return-place.js"
+      ],
+      "rules": [
+        "BI-03",
+        "BI-13"
+      ],
+      "workClass": "constant",
+      "proof": "static",
+      "requestOwnership": {
+        "allowed": [
+          "/home-data",
+          "/view-data"
+        ],
+        "forbidden": []
+      }
+    },
+    {
+      "id": "js:runtime/gallery-return-place.js#returnToPlace",
+      "action": "While returning to a place only: the first scroll, touch, key or press hands over to the user",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/gallery-return-place.js#returnToPlace:event:keydown",
+        "js:music_app/static/js/runtime/gallery-return-place.js#returnToPlace:event:pointerdown",
+        "js:music_app/static/js/runtime/gallery-return-place.js#returnToPlace:event:touchstart",
+        "js:music_app/static/js/runtime/gallery-return-place.js#returnToPlace:event:wheel"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/gallery-return-place.js"
+      ],
+      "rules": [
+        "BI-01",
+        "BI-03"
+      ],
+      "workClass": "delta",
+      "proof": "static"
+    },
+    {
+      "id": "js:runtime/gallery-return-place.js#waitForReturnFrame",
+      "action": "One frame at a time while returning: at most 10 s of waiting and 90 alignment frames",
+      "entrypoints": [
+        "js:music_app/static/js/runtime/gallery-return-place.js#waitForReturnFrame:timer:scheduleBrowserAnimationFrame"
+      ],
+      "owners": [
+        "music_app/static/js/runtime/gallery-return-place.js"
+      ],
+      "rules": [
+        "BI-03"
+      ],
+      "workClass": "constant",
+      "proof": "static"
     },
     {
       "id": "js:runtime/in-page-tabs.js#mountInPageTabs",

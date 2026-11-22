@@ -292,3 +292,17 @@ def test_app_copy_switched_off_retires_the_worker_and_leaves_the_page_without_it
     assert b"unregister()" in body and b"album-haven-app-copy-" in body
     assert b"addEventListener('fetch'" not in body
     assert b"/static/js/app-copy.js" not in page
+    assert "x-album-haven-app-copy" not in headers
+
+
+@pytest.mark.parametrize("request_headers", [{}, COPY_REQUEST])
+def test_every_app_page_names_its_account_for_the_place_back_returns_to(asgi_app, request_headers):
+    _status, _headers, body = run_asgi_request(asgi_app, "GET", "/", headers=request_headers)
+    _account_status, _account_headers, account_body = run_asgi_request(asgi_app, "GET", "/app-copy/account")
+    account = decode_json(account_body)["account"]
+
+    assert f'<meta name="album-haven-account" content="{account}">'.encode() in body
+    place_script = body.index(b"/static/js/return-place.js?v=")
+    tag = body[body.rindex(b"<script", 0, place_script):body.index(b">", place_script)]
+    assert b"defer" not in tag, "it runs before the first paint"
+    assert place_script < body.index(b"<body"), "it runs before the first paint"

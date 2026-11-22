@@ -8,6 +8,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="album-haven-version" content="{{ app_version }}">
   {% if app_copy_account %}<meta name="album-haven-app-copy" content="network" data-account="{{ app_copy_account }}">{% endif %}
+  {% if account_key %}<meta name="album-haven-account" content="{{ account_key }}">{% endif %}
+  {# Not deferred: it runs before the first paint, and before any other script can resume a page from memory. #}
+  <script src="/static/js/return-place.js?v={{ runtime_asset_version }}"></script>
   {% if app_copy_enabled %}<script src="/static/js/app-copy.js?v={{ runtime_asset_version }}" defer></script>{% endif %}
   <title>{{ app_name }} v{{ app_version }}</title>
   <link rel="preload" href="{{ url_for('static', filename='app.js') }}?v={{ runtime_asset_version }}" as="script" fetchpriority="high">

@@ -334,3 +334,17 @@ for (const [name, options] of [
     assert.deepEqual(ui.navigations, ['/']);
   });
 }
+
+test('IAR-W27: the sign-in page takes the places Back would return to', () => {
+  const removed = [];
+  const source = require('node:fs').readFileSync(
+    require('node:path').join(__dirname, '../../../music_app/static/js/login.js'), 'utf8',
+  );
+  require('node:vm').runInNewContext(source, {
+    window: { localStorage: { removeItem: key => removed.push(key) }, addEventListener() {}, navigator: {} },
+    document: { querySelector: () => null },
+  });
+  const { STORAGE_KEY } = require('../../../music_app/static/js/return-place.js');
+
+  require('node:assert/strict').deepEqual(removed, [STORAGE_KEY]);
+});

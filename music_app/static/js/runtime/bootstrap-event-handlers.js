@@ -147,6 +147,6 @@ searchInput?.addEventListener('input', () => {
 
 window.addEventListener('popstate', () => {
   if (typeof handleImageLightboxPopState === 'function' && handleImageLightboxPopState()) return;
-  if (typeof handleMobilePagePopState === 'function' && handleMobilePagePopState()) return;
-  handleGalleryBootstrapPopState();
+  if (!(typeof handleMobilePagePopState === 'function' && handleMobilePagePopState())) handleGalleryBootstrapPopState();
+  if (typeof restoreTraversedPlace === 'function') restoreTraversedPlace();
 });

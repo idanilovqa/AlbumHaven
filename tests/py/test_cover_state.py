@@ -503,3 +503,36 @@ def test_image_dimensions_reuses_cached_result_for_unchanged_file(tmp_path: Path
     assert image_dimensions(cover_path) == (32, 32)
     assert image_dimensions(cover_path) == (32, 32)
     assert open_calls == 1
+
+
+def test_cover_gallery_lists_every_copy_folder_of_the_album(tmp_path: Path):
+    """Owner 2026-11-21 (Art Zoyd, Phase IV): every local file of the album, byte-identical copies included."""
+    first_root = (tmp_path / "Library A" / "Album").resolve()
+    second_root = (tmp_path / "Library B" / "Album (copy)").resolve()
+    first_track = first_root / "01.mp3"
+    second_track = second_root / "01.mp3"
+    for track in (first_track, second_track):
+        track.parent.mkdir(parents=True, exist_ok=True)
+        track.write_bytes(b"track")
+    _write_jpeg(first_root / "cover.jpg", (220, 40, 40))
+    _write_jpeg(second_root / "cover.jpg", (220, 40, 40))
+    _write_jpeg(second_root / "cover.jpeg", (40, 220, 40), size=(10, 10))
+
+    payload = serialize_cover_gallery_payload(
+        album_root=first_root,
+        additional_album_roots=[second_root],
+        track_paths={str(first_track), str(second_track)},
+        file_cache={str(first_track): {"cover_path": str(first_root / "cover.jpg")}},
+        image_extensions={".jpg", ".jpeg"},
+        image_dimensions=image_dimensions,
+        is_squareish_cover=lambda width, height: width == height,
+    )
+
+    assert sorted(item["candidate_cover_path"] for item in payload["local_covers"]) == sorted([
+        str(first_root / "cover.jpg"), str(second_root / "cover.jpg"), str(second_root / "cover.jpeg"),
+    ])
+    # The copy's files say which folder they are in, so two cover.jpg cards can be told apart.
+    assert sorted(item["relative_path"] for item in payload["local_covers"]) == sorted([
+        "cover.jpg", str(Path("Album (copy)") / "cover.jpg"), str(Path("Album (copy)") / "cover.jpeg"),
+    ])
+    assert [item["is_active"] for item in payload["local_covers"]].count(True) == 1

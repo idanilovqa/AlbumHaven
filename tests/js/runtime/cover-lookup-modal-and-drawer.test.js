@@ -6613,13 +6613,59 @@ require('node:test')('loading Cover Lookup renders only known gallery card place
   assert.doesNotMatch(bodyElement.innerHTML, /LOCAL ·/);
   assert.doesNotMatch(bodyElement.innerHTML, /data-cover-lookup-loading-section="local"/);
   assert.doesNotMatch(bodyElement.innerHTML, />OTHER ART</);
-  assert.match(bodyElement.innerHTML, />REMOTE · 4 images</);
+  // Owner 2026-11-21 (COVER-LOOKUP-INSTANT-01): expected matches wait in POSSIBLE MATCHES, never as a
+  // REMOTE flood under LOCAL that shrinks away once the listing answers.
+  assert.doesNotMatch(bodyElement.innerHTML, />REMOTE ·/);
+  assert.match(bodyElement.innerHTML, /POSSIBLE MATCHES · 4 images/);
   assert.match(bodyElement.innerHTML, />MANUAL SEARCH</);
   assert.equal(
     (bodyElement.innerHTML.match(/data-cover-lookup-loading-section="remote"/g) || []).length,
     4,
   );
+  assert.ok(
+    bodyElement.innerHTML.indexOf('data-cover-lookup-loading-section="remote"')
+      > bodyElement.innerHTML.indexOf('POSSIBLE MATCHES'),
+  );
   assert.doesNotMatch(bodyElement.innerHTML, /No images in album folder/);
+});
+
+require('node:test')('loading Cover Lookup shows each cached match once and keeps the match count when it loads', () => {
+  const bodyElement = { innerHTML: '', scrollTop: 0 };
+  const context = loadHelper({ escapeHtml: (value) => String(value ?? '') });
+  context.getCoverLookupModalElements = () => ({
+    overlay: {},
+    body: bodyElement,
+    subtitle: { textContent: '' },
+    status: null,
+    saveRemote: null,
+  });
+  const cached = {
+    id: 'cached-candidate',
+    source: 'youtube_music',
+    url: 'https://images.example/cached.jpg',
+    thumbnail_url: 'https://images.example/cached-thumb.jpg',
+  };
+  context.state.coverLookup.modal = {
+    album: { album_artist: 'Artist', name: 'Album' },
+    loading: true,
+    expectedRemoteCount: 2,
+    localCovers: [],
+    pastedImages: [],
+    otherArt: [],
+    possibleMatches: [cached],
+  };
+
+  context.renderCoverLookupModal();
+  const loading = bodyElement.innerHTML;
+  context.state.coverLookup.modal.loading = false;
+  context.state.coverLookup.modal.possibleMatches = [cached, { ...cached, id: 'second', thumbnail_url: 'https://images.example/second.jpg' }];
+  context.renderCoverLookupModal();
+
+  assert.equal((loading.match(/data-select-remote-cover="cached-candidate"/g) || []).length, 1);
+  assert.match(loading, /POSSIBLE MATCHES · 2 images/);
+  assert.equal((loading.match(/data-cover-lookup-loading-section="remote"/g) || []).length, 1);
+  assert.match(bodyElement.innerHTML, /POSSIBLE MATCHES · 2 images/);
+  assert.doesNotMatch(bodyElement.innerHTML, /data-cover-lookup-loading-section/);
 });
 
 require('node:test')('notification polling rerenders when the selected user cover preview changes', async () => {

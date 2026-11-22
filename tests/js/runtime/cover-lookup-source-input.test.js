@@ -160,7 +160,7 @@ test('manual link extraction renders request-owned loading and feedback beside i
 test('gallery sections expose live image counts and omit empty remote and match sections', () => {
   assert.match(source, /formatCoverLookupImageCount/);
   assert.match(source, /remoteCover\s*\?\s*`<section/);
-  assert.match(source, /possibleMatches\.length\s*\|\|\s*taskRunning/);
+  assert.match(source, /possibleMatches\.length\s*\|\|\s*pendingMatchCount\s*\|\|\s*taskRunning/);
   assert.doesNotMatch(source, /No remote cover is currently selected/);
   assert.doesNotMatch(source, /No remote matches yet/);
 });

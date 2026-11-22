@@ -121,8 +121,10 @@ def _is_explicit_release_part_layout(album_root: Path, paths: list[Path]) -> boo
 def resolve_album_root_from_track_paths(
     config: dict[str, object],
     track_paths: set[str],
+    *,
+    configured_roots: list[dict[str, object]] | None = None,
 ) -> Path | None:
-    configured_roots = get_library_roots(config)
+    configured_roots = get_library_roots(config) if configured_roots is None else configured_roots
     configured_root_paths = [
         Path(str(root.get("path") or "")).resolve(strict=False)
         for root in configured_roots
@@ -195,6 +197,53 @@ def resolve_album_root_from_track_paths(
     ):
         return None
     return album_root
+
+
+def resolve_album_copy_roots(
+    config: dict[str, object],
+    album_root: Path,
+    track_paths: set[str],
+) -> list[Path]:
+    """The folders of an album's other copies: track folders that `album_root` does not contain.
+
+    A logical album can hold a copy of its tracks in several library roots; its local art is every
+    image in all of them (owner 2026-11-21, Art Zoyd Phase IV). One root-settings load serves all folders.
+    """
+    primary_root = album_root.resolve(strict=False)
+    paths_by_folder: dict[str, set[str]] = {}
+    for raw_path in track_paths:
+        folder = Path(str(raw_path)).resolve(strict=False).parent
+        if not _is_path_within(folder, primary_root):
+            paths_by_folder.setdefault(os.path.normcase(str(folder)), set()).add(str(raw_path))
+    if not paths_by_folder:
+        return []
+    configured_roots = get_library_roots(config)
+    copy_roots: dict[str, Path] = {}
+    for folder_paths in paths_by_folder.values():
+        copy_root = resolve_album_root_from_track_paths(
+            config, folder_paths, configured_roots=configured_roots,
+        )
+        if copy_root is not None and not _is_path_within(copy_root, primary_root):
+            copy_roots.setdefault(os.path.normcase(str(copy_root)), copy_root)
+    return sorted(copy_roots.values(), key=lambda path: os.path.normcase(str(path)))
+
+
+def album_source_root_for(
+    config: dict[str, object],
+    album_root: Path,
+    path: Path,
+    *,
+    track_paths: set[str] | None,
+) -> Path | None:
+    """The album folder holding `path`: its own folder, else one of its copies' folders."""
+    primary_root = restrict_album_root_to_represented_disc(album_root, track_paths or set())
+    if _is_path_within(path, primary_root):
+        return primary_root
+    return next(
+        (root for root in resolve_album_copy_roots(config, album_root, track_paths or set())
+         if _is_path_within(path, root)),
+        None,
+    )
 
 
 def resolve_album_context(
@@ -305,10 +354,8 @@ def validate_local_cover_source(
         raise ValueError("Selected image is outside the configured library roots")
     candidate = Path(str(source_path or "").strip())
     resolved = candidate.resolve(strict=True)
-    try:
-        resolved.relative_to(resolved_album_root)
-    except Exception as exc:
-        raise ValueError("Selected image is outside the album folder") from exc
+    if album_source_root_for(config, album_root, resolved, track_paths=track_paths) is None:
+        raise ValueError("Selected image is outside the album folder")
     if not resolved.is_file():
         raise FileNotFoundError("Selected image was not found")
     if is_managed_preview_path(resolved):

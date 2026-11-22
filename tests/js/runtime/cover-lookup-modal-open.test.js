@@ -817,7 +817,7 @@ test('Cover Lookup loading markup does not invent empty artwork cards and keeps 
   assert.match(body.innerHTML, /https:\/\/images\.example\/manual-cover\.jpg/);
 });
 
-test('Cover Lookup loading markup renders the exact persisted remote candidate count', () => {
+test('Cover Lookup loading markup holds only the saved remote cover, never search-match placeholders', () => {
   const context = {
     URLSearchParams,
     window: {},
@@ -828,20 +828,27 @@ test('Cover Lookup loading markup renders the exact persisted remote candidate c
   vm.createContext(context);
   vm.runInContext(helperSource, context, { filename: helperPath });
 
-  const markup = context.buildCoverLookupGalleryLoadingMarkup({
+  const searchOnly = context.buildCoverLookupGalleryLoadingMarkup({
     album: { album_artist: 'Artist', name: 'Album' },
     expectedRemoteCount: 4,
     possibleMatches: [{ id: 'unresolved-candidate' }],
     manualImageAttachments: [],
     manualUrlText: '',
   });
+  const savedRemote = context.buildCoverLookupGalleryLoadingMarkup({
+    album: { album_artist: 'Artist', name: 'Album', remote_cover_url: 'https://images.example/saved.jpg' },
+    expectedRemoteCount: 4,
+    possibleMatches: [],
+  });
 
-  assert.equal((markup.match(/data-cover-lookup-loading-section="remote"/g) || []).length, 4);
-  assert.doesNotMatch(markup, /data-cover-lookup-loading-section="local"/);
-  assert.doesNotMatch(markup, /data-cover-lookup-loading-section="other-art"/);
+  assert.doesNotMatch(searchOnly, /data-cover-lookup-loading-section/);
+  assert.doesNotMatch(searchOnly, /REMOTE/);
+  assert.equal((savedRemote.match(/data-cover-lookup-loading-section="remote"/g) || []).length, 1);
+  assert.match(savedRemote, /REMOTE · 1 image</);
+  assert.doesNotMatch(savedRemote, /data-cover-lookup-loading-section="local"/);
 });
 
-test('Cover Lookup loading markup keeps cached remote candidates usable while local art resolves', () => {
+test('Cover Lookup loading markup leaves cached search matches to POSSIBLE MATCHES', () => {
   const context = {
     URLSearchParams,
     window: {},
@@ -863,13 +870,11 @@ test('Cover Lookup loading markup keeps cached remote candidates usable while lo
     }],
   });
 
-  assert.match(markup, /cached-thumb\.jpg/);
-  // Only the REMOTE placeholders shimmer; the LOCAL heading above them is static.
-  const localPart = markup.slice(0, markup.indexOf('REMOTE'));
-  assert.match(localPart, />LOCAL</);
-  assert.doesNotMatch(localPart, /cover-lookup-task-loading-line/);
-  assert.doesNotMatch(markup, /data-cover-lookup-loading-section="local"/);
-  assert.equal((markup.match(/data-cover-lookup-loading-section="remote"/g) || []).length, 1);
+  // The cached match renders once, in its own section; the loading shell is a still LOCAL heading.
+  assert.doesNotMatch(markup, /cached-thumb\.jpg/);
+  assert.match(markup, />LOCAL</);
+  assert.doesNotMatch(markup, /cover-lookup-task-loading-line/);
+  assert.doesNotMatch(markup, /data-cover-lookup-loading-section/);
 });
 
 test('starting lookup publishes visible feedback before the start request settles', async () => {

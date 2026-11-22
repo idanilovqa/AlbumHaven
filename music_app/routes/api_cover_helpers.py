@@ -27,7 +27,7 @@ def serialize_ordered_cover_selection_for_read(
 ) -> list[dict[str, object]]:
     """Use existing gallery source authority without dropping unavailable slots."""
     from music_app.services.cover_workflow import (
-        resolve_album_write_root_from_track_paths, restrict_album_root_to_represented_disc,
+        album_source_root_for, resolve_album_write_root_from_track_paths, restrict_album_root_to_represented_disc,
     )
     from music_app.services.library_roots import iter_library_root_paths, resolve_configured_media_path
     from music_app.services.ordered_cover_references import project_selected_cover_metadata
@@ -51,8 +51,8 @@ def serialize_ordered_cover_selection_for_read(
                 config, reference["path"], require_file=False, require_exists=False,
                 configured_root_paths=roots,
             )
-            if (path is not None and album_root is not None and path.is_relative_to(album_root)
-                    and path == Path(reference["path"])):
+            if (path is not None and album_root is not None and path == Path(reference["path"])
+                    and album_source_root_for(config, album_root, path, track_paths=track_paths) is not None):
                 public = dict(reference)
             else:
                 public["unavailable"] = True

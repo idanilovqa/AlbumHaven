@@ -82,6 +82,7 @@ from music_app.services.cover_workflow import (
     complete_local_image_promotion,
     ranked_local_cover_candidates,
     resolve_album_context,
+    resolve_album_copy_roots,
     resolve_album_write_root_from_track_paths,
     rollback_local_image_promotion,
     validate_local_cover_source,
@@ -687,6 +688,7 @@ async def _serialize_cover_gallery_from_asgi(
             paths_to_load,
         )
         file_cache = {**file_cache, **selected_entries}
+    copy_roots = await run_in_threadpool(resolve_album_copy_roots, config, album_root, track_paths)
     serialized_task_payload = serialize_cover_lookup_task_payload(
         dict(task_payload) if isinstance(task_payload, Mapping)
         else cover_lookup_result(task_id) if task_id
@@ -702,6 +704,7 @@ async def _serialize_cover_gallery_from_asgi(
         is_squareish_cover=_is_squareish_cover,
         task_payload=serialized_task_payload,
         candidate_snapshot=candidate_snapshot,
+        additional_album_roots=copy_roots,
     )
 
 
@@ -1079,7 +1082,8 @@ async def utilities_cover_lookup_gallery(request: Request) -> JSONResponse:
         if split_response is not None:
             return _json_response(split_response)
         return _json_response(({"ok": False, "error": "Album root could not be resolved"}, 400))
-    repository, album_id, identity_error = _resolved_snapshot_album_context(
+    repository, album_id, identity_error = await run_in_threadpool(
+        _resolved_snapshot_album_context,
         config,
         album,
         album_context.track_paths,
@@ -1116,7 +1120,9 @@ async def utilities_cover_lookup_gallery(request: Request) -> JSONResponse:
     candidate_snapshot = None
     if not album.get("_cover_lookup_task_scoped_context"):
         try:
-            candidate_snapshot = repository.get_for_album_context(album_id=int(album_id))
+            candidate_snapshot = await run_in_threadpool(
+                repository.get_for_album_context, album_id=int(album_id),
+            )
         except Exception:
             candidate_snapshot = _candidate_snapshot_read_failure(
                 "candidate_snapshot_read_failed"
@@ -1158,7 +1164,8 @@ async def utilities_cover_lookup_gallery_mark_seen(request: Request) -> JSONResp
             ({"ok": False, "error": "Album root could not be resolved"}, 400)
         )
     album_id = _album_id(album or {})
-    repository, album_id, identity_error = _resolved_snapshot_album_context(
+    repository, album_id, identity_error = await run_in_threadpool(
+        _resolved_snapshot_album_context,
         config,
         album or {},
         album_context.track_paths,
@@ -1166,10 +1173,12 @@ async def utilities_cover_lookup_gallery_mark_seen(request: Request) -> JSONResp
     if identity_error is not None:
         return _json_response(identity_error)
     try:
-        candidate_snapshot = repository.mark_seen(album_id=album_id)
+        candidate_snapshot = await run_in_threadpool(repository.mark_seen, album_id=album_id)
     except Exception:
         try:
-            candidate_snapshot = repository.get_for_album_context(album_id=album_id)
+            candidate_snapshot = await run_in_threadpool(
+                repository.get_for_album_context, album_id=album_id,
+            )
         except Exception:
             candidate_snapshot = None
         failed_snapshot = dict(

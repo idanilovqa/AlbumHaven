@@ -562,6 +562,47 @@ def test_live_one_changed_loose_track_rewrites_one_stored_row(watcher_repair_inv
     assert _marks(fixture) == 0
 
 
+def test_live_a_read_drains_fifty_waiting_marks_with_flat_rows_at_two_sizes(watcher_repair_inventory, monkeypatch):
+    """Case 64: with INLINE_DRAIN_LIMIT marks waiting, the read request itself drains them, each by key: the
+    candidate rows it reads and the store rows it writes stay at that many at 5 and 60 albums. Not yet a
+    registered guard interaction; its registry entry and budgets wait for 6.5."""
+    from music_app.services import loose_track_store
+
+    fixture = watcher_repair_inventory
+    _apply_case64_draft(fixture)
+    waiting = loose_track_store.INLINE_DRAIN_LIMIT
+
+    def counts_at(albums):
+        # A full seed replaces the library; preparing drains the marks the seed itself left.
+        _entries, loose_entries = _loose_library(fixture, albums, loose=waiting)
+        repository = _prepare_store(fixture)
+        before = _store_rows(fixture)
+        changed = {
+            entry["path"]: {**entry, "title": f"Changed {index}", "mtime": entry["mtime"] + 1}
+            for index, entry in enumerate(loose_entries)
+        }
+        fixture.adapter.persist_targeted_inventory_mutation(root_id="repair-main", active_file_entries=changed)
+        assert _marks(fixture) == waiting
+        read = []
+        load = repository._inventory_repository.load_non_album_candidates
+
+        def counted(**kwargs):
+            rows = load(**kwargs)
+            read.append(len(rows))
+            return rows
+
+        monkeypatch.setattr(repository._inventory_repository, "load_non_album_candidates", counted)
+        _loose_payload(repository)  # the read request drains inline
+        after = _store_rows(fixture)
+        written = sum(1 for track_id in after if before.get(track_id) != after[track_id])
+        assert _marks(fixture) == 0, "the read drained every waiting mark"
+        assert len(read) == 1, "one keyed candidate load for the marked tracks"
+        return read[0], written
+
+    assert counts_at(5) == (waiting, waiting)
+    assert counts_at(60) == (waiting, waiting), "rows read and written stay flat as the library grows"
+
+
 def test_live_loose_track_store_equals_a_full_rebuild_after_each_change(watcher_repair_inventory):
     """Case 64's deciding test: after each change the drained store reads the same as a full rebuild."""
     from music_app.services import loose_track_store

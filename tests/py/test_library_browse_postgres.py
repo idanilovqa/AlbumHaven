@@ -3017,39 +3017,23 @@ def test_postgres_root_sidebar_reads_one_repeatable_read_snapshot_and_rolls_it_b
     assert connection.commands[:1] == [
         ("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY", {}),
     ]
-    assert len(connection.commands) == 6
     missing_reads = [(command, params) for command, params in connection.commands if _is_missing_album_query(command)]
     assert len(missing_reads) == 1
     assert missing_reads[0][1] == {"album_key": None}
-    fingerprint_reads = [(command, params) for command, params in connection.commands if "transaction_timestamp() as observed_at" in command]
-    # Loose Tracks are deferred (REC-007), so their candidate read is gone. On
-    # PostgreSQL 18 duplicates come from a lookup scoped to the visible albums
-    # (eea310882), so the duplicate-index fingerprint read is gone too.
-    assert len(fingerprint_reads) == 1
-    assert all(params == {} for _command, params in fingerprint_reads)
-    scoped_duplicate_reads = [
-        params
-        for command, params in connection.commands
-        if command == browse_module._duplicate_candidate_album_ids_for_keys_sql()
+    # Cards read stored duplicate results (FTC-TAGS-015): the snapshot never runs a
+    # duplicate fingerprint, candidate, identity or source read.
+    duplicate_reads = [
+        command for command, _params in connection.commands
+        if "transaction_timestamp() as observed_at" in command
+        or command in {
+            browse_module._duplicate_candidate_album_ids_for_keys_sql(),
+            browse_module._duplicate_identity_index_rows_sql(),
+            browse_module._duplicate_source_rows_for_album_ids_sql(),
+        }
+        or "files.scan_file_album as album" in command
     ]
-    assert scoped_duplicate_reads == [{"album_keys": ["canonical-album"]}]
-    assert all(
-        command != browse_module._duplicate_identity_index_rows_sql()
-        for command, _params in connection.commands
-    )
-    identity_reads = [(command, params) for command, params in connection.commands if "files.scan_file_album as album" in command]
-    assert identity_reads == []
-    duplicate_source_reads = [
-        command
-        for command in connection.commands
-        if command[0]
-        == browse_module._problematic_files_sql(
-            duplicate_candidates=True,
-            duplicate_sources_only=True,
-        )
-    ]
-    # Sidebar reads must not run full duplicate-file discovery.
-    assert duplicate_source_reads == []
+    assert duplicate_reads == []
+    assert len(connection.commands) == 3
     assert connection.rollback_count == 1
     assert connection.close_count == 1
     assert payload["artists_sidebar"] == [
@@ -13231,97 +13215,6 @@ def test_duplicate_compact_candidates_keep_conflicting_album_rows_for_container_
     assert _duplicate_candidate_ids_from_index(_duplicate_candidate_index_from_rows(rows), ["1"]) == [1, 2]
 
 
-def test_duplicate_candidate_cache_only_prefers_bounded_postgres_18_lookup(
-    monkeypatch,
-):
-    import music_app.services.library_browse_postgres as browse
-
-    repository = browse.PostgresLibraryBrowseRepository({
-        "ALBUM_HAVEN_APP_DATABASE_URL": "duplicate-targeted-test",
-    })
-    monkeypatch.setattr(
-        browse,
-        "_duplicate_inventory_fingerprint",
-        lambda _connection: {"fingerprint": (1,), "observed_at": 1},
-    )
-    targeted = []
-    monkeypatch.setattr(
-        browse,
-        "_load_duplicate_candidate_album_ids_for_keys",
-        lambda _connection, keys: targeted.append(list(keys)) or [9],
-    )
-    monkeypatch.setattr(browse, "_duplicate_identity_helpers_available", lambda _connection: True)
-    monkeypatch.setattr(
-        repository,
-        "queue_utility_projection_prewarm",
-        lambda _kind: (_ for _ in ()).throw(
-            AssertionError("interactive lookup must not launch global prewarm")
-        ),
-    )
-    repository._set_cached_utility_projection(
-        "duplicate-identities",
-        {
-            "fingerprint": (1,),
-            "observed_at": 1,
-            "index": [(1, "one", ("artist", "album", 2001))],
-        },
-    )
-
-    connection = type(
-        "Connection",
-        (),
-        {"info": type("Info", (), {"server_version": 180000})()},
-    )()
-    assert browse._load_duplicate_candidate_album_ids(
-        connection,
-        ["one"],
-        repository=repository,
-        cache_only=True,
-    ) == [9]
-    assert targeted == [["one"]]
-
-
-@pytest.mark.parametrize("server_version", [170000, 180000])
-def test_duplicate_candidate_cache_only_defers_without_targeted_helpers(
-    monkeypatch,
-    server_version,
-):
-    import music_app.services.library_browse_postgres as browse
-
-    repository = browse.PostgresLibraryBrowseRepository({
-        "ALBUM_HAVEN_APP_DATABASE_URL": f"duplicate-deferred-{server_version}",
-    })
-    queued = []
-    monkeypatch.setattr(
-        browse,
-        "_duplicate_inventory_fingerprint",
-        lambda _connection: {"fingerprint": (1,), "observed_at": 1},
-    )
-    monkeypatch.setattr(
-        browse,
-        "_duplicate_identity_helpers_available",
-        lambda _connection: False,
-    )
-    monkeypatch.setattr(
-        repository,
-        "queue_utility_projection_prewarm",
-        queued.append,
-    )
-    connection = type(
-        "Connection",
-        (),
-        {"info": type("Info", (), {"server_version": server_version})()},
-    )()
-
-    assert browse._load_duplicate_candidate_album_ids(
-        connection,
-        ["one"],
-        repository=repository,
-        cache_only=True,
-    ) is None
-    assert queued == ["duplicate-identities"]
-
-
 def test_duplicate_candidate_lookup_uses_python_identity_before_postgres_18(monkeypatch):
     import music_app.services.library_browse_postgres as browse
 
@@ -14010,6 +13903,91 @@ def test_duplicate_absence_miss_does_not_mutate_borrowed_snapshot(monkeypatch):
     assert published["albums"]["new"]["_root_provenance_by_year"][2001]["root_ids"] == ["main"]
 
 
+@pytest.mark.parametrize("index_readable", [False, True])
+def test_duplicate_source_attachment_defers_global_index_cache_miss(monkeypatch, index_readable):
+    """Search and gallery cards read persisted duplicate results (FTC-TAGS-015) and never
+    compute them: no candidate lookup, source rows or inventory rebuild on the request.
+    While no index is readable a card spanning two folders is preview-only, never a
+    concatenated queue."""
+    from time import perf_counter
+
+    import music_app.services.library_browse_postgres as browse
+
+    repository = browse.PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": "indexed-duplicate-test"})
+    stored = browse.encode_duplicate_result({
+        "has_duplicate_files": True,
+        "duplicate_sources": [{"tracks": [{"path": "/music/Artist/Original/01.flac", "year": 2001}],
+                               "track_count": 1, "total_duration_seconds": 60, "total_duration_display": "1:00"}],
+        "_root_provenance_by_year": {2001: {"root_ids": ["main"]}},
+        "root_provenance": {"root_ids": ["main", "hoard"]},
+    })
+    reads = []
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def execute(self, sql, params=None):
+            reads.append(" ".join(str(sql).split()))
+            return type("Rows", (), {"fetchall": lambda _self: [{"album_key": "one", "result": stored}]})()
+
+    monkeypatch.setattr(browse.problematic_index, "duplicate_results_readable", lambda _repository: index_readable)
+    monkeypatch.setattr(repository, "_browse_connection_context", lambda: Connection())
+    for computes in ("_load_duplicate_candidate_album_ids", "_duplicate_sources_from_rows", "_duplicate_inventory_fingerprint"):
+        monkeypatch.setattr(browse, computes, lambda *a, **k: (_ for _ in ()).throw(AssertionError("cards never compute duplicates")))
+    album = {"key": "one", "year": 2001, "tracks": [
+        {"path": "/music/Artist/Original/01.flac"}, {"path": "/music/Artist/Copy/01.flac"}]}
+
+    started_at = perf_counter()
+    repository._attach_duplicate_sources([album], indexed=True)
+    elapsed_ms = (perf_counter() - started_at) * 1000
+
+    assert elapsed_ms < 250, f"an indexed duplicate overlay must return within 250 ms; measured {elapsed_ms:.1f} ms"
+    if index_readable:
+        assert len(reads) == 1 and "from library.album_duplicate_results" in reads[0]
+        assert album["has_duplicate_files"] is True
+        assert [track["path"] for track in album["tracks"]] == ["/music/Artist/Original/01.flac"]
+        assert album["root_provenance"] == {"root_ids": ["main", "hoard"]}
+    else:
+        assert reads == []
+        assert album.get("has_duplicate_files") is None
+        assert album["preview_only"] is True
+
+
+@pytest.mark.parametrize("state", ["building", None, "no table"])
+def test_card_reads_never_wait_for_the_duplicate_results_backfill(monkeypatch, state):
+    """The backfill holds the index lock for its whole pass (26-53 s at 5,346 albums): a card
+    read checks readiness before it may wait for that lock, and never fails without 0268."""
+    from contextlib import nullcontext
+
+    from music_app.services import problematic_index
+
+    class UndefinedTable(Exception):
+        sqlstate = "42P01"
+
+    def stored_state(_connection, _library_id):
+        if state == "no table":
+            raise UndefinedTable()
+        return state
+
+    repository = SimpleNamespace(
+        _database_url="duplicate-results-not-ready-test",
+        _browse_connection_context=lambda: nullcontext(object()),
+    )
+    waited = []
+    monkeypatch.setattr(problematic_index, "_available", lambda _repository: True)
+    monkeypatch.setattr(problematic_index, "_library_id", lambda _connection: 1)
+    monkeypatch.setattr(problematic_index, "_duplicate_results_state", stored_state)
+    monkeypatch.setattr(problematic_index, "queue_maintenance", lambda _repository: None)
+    monkeypatch.setattr(problematic_index, "refresh", lambda *_args, **kwargs: waited.append(kwargs) or True)
+
+    assert problematic_index.duplicate_results_readable(repository) is False
+    assert waited == [], "A card read must not wait for the lock the backfill holds."
+
+
 def test_duplicate_source_attachment_uses_bounded_pg18_lookup_without_global_prewarm(monkeypatch):
     from time import perf_counter
 
@@ -14057,11 +14035,7 @@ def test_duplicate_source_attachment_uses_bounded_pg18_lookup_without_global_pre
     }
     connection = Connection()
     started_at = perf_counter()
-    repository._attach_duplicate_sources(
-        [album],
-        connection=connection,
-        defer_on_cache_miss=True,
-    )
+    repository._attach_duplicate_sources([album], connection=connection)
 
     elapsed_ms = (perf_counter() - started_at) * 1000
 

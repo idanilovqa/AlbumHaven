@@ -13852,7 +13852,7 @@
     },
     {
       "id": "py:services/library_browse_postgres.py#refresh_postgres_utility_projections_after_edit",
-      "action": "After a tag save, keep the duplicate projections except the albums the edit can change, so the next search or artist view reads only those albums",
+      "action": "After a tag save, keep the duplicate projections except the albums the edit can change, so the next live duplicate read (album details, the Problematic Files evaluation) reads only those albums",
       "entrypoints": [
         "py:music_app/services/library_browse_postgres.py#refresh_postgres_utility_projections_after_edit:refresh:name"
       ],
@@ -13879,7 +13879,7 @@
       },
       "command": "python -m pytest tests/py/test_duplicate_projection_bounded_contracts.py::test_tag_save_contract_keeps_duplicate_projections_for_the_next_view_at_production_album_count",
       "testIdentity": "test_tag_save_contract_keeps_duplicate_projections_for_the_next_view_at_production_album_count",
-      "rollback": "Revert the scoped duplicate-projection retention; every save then wipes both duplicate caches and the next view rereads the whole identity index."
+      "rollback": "Revert the scoped duplicate-projection retention; every save then wipes both duplicate caches and the next live duplicate read rereads the whole identity index."
     },
     {
       "id": "py:services/library_event_coordinator.py#LibraryEventCoordinator._run_scheduled_flush",

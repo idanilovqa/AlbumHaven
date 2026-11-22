@@ -1249,6 +1249,34 @@
   {
     "config": "playwright.config.js",
     "project": "functional",
+    "test": "tests/e2e/specs/duplicateTwinMarker.spec.js",
+    "case": "FTC-TAGS-033 Editing an album's tags so its album artist, album and year match another album's shows the two copies as one album card with the Duplicate files marker at once; editing it back shows the two separate album cards again without the marker at once",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 3,
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "setupGroup": "duplicate-twin",
+    "databaseScenarios": [
+      "tag-edit:owned-duplicate-twin-albums"
+    ],
+    "filesystemScenarios": [
+      "media-copy:owned-duplicate-twin-albums"
+    ],
+    "expectedContracts": [
+      "indexed-duplicate-marker",
+      "duplicate-marker-follows-tag-saves"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:ftc-tags-033",
+      "filesystemCopy": "media/cases/ftc-tags-033"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
     "test": "tests/e2e/specs/albumTrackCredits.spec.js",
     "case": "FTC-ALBUM-TRACK-CREDITS-001 shows clean titles and per-track credits on a Various Artists release",
     "profile": "functional-core",

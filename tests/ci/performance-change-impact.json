@@ -1,6 +1,8 @@
 {
   "schemaVersion": 1,
   "requiredPaths": [
+    "music_app/services/problematic_index.py",
+    "migrations/postgres/0268_create_album_duplicate_results.sql",
     "music_app/routes/api_wave_a_asgi_routes.py",
     "music_app/services/edit_state.py",
     "music_app/services/edit_tag_timings.py",
@@ -106,6 +108,23 @@
     "music_app/static/js/runtime/modal-and-overlay-helpers.js"
   ],
   "rules": [
+    {
+      "paths": [
+        "music_app/services/problematic_index.py",
+        "migrations/postgres/0268_create_album_duplicate_results.sql"
+      ],
+      "targets": [
+        "selected-artist",
+        "all-artists",
+        "root-album-browse",
+        "artist-family",
+        "search-all-artists",
+        "search-browse",
+        "edit-tags-post-edit",
+        "utility-problematic-files",
+        "problematic-files-focused"
+      ]
+    },
     {
       "paths": [
         "migrations/postgres/0108_add_scoped_relation_projection.sql",

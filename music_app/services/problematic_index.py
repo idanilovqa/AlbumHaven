@@ -20,8 +20,7 @@ import json
 import logging
 import os
 import time
-from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
+from collections.abc import Mapping
 from threading import Lock
 from typing import Any
 
@@ -37,8 +36,6 @@ BUILDER_VERSION = "1"
 DUPLICATE_RESULTS_VERSION = "1"
 # More marked albums than this are evaluated in the background, not by a read.
 INLINE_ALBUM_LIMIT = 50
-# How long a read that must show the last save's result waits for a running pass.
-WAIT_SECONDS = 5
 # Albums evaluated per transaction by the backfill.
 BACKFILL_BATCH = 500
 _LOCK_NAMESPACE = 188  # pg advisory lock (namespace, library id)
@@ -327,33 +324,25 @@ def _state(connection: Any, library_id: int) -> str | None:
     return str(_value(row, "status"))
 
 
-@contextmanager
-def _evaluator_connection(repository: Any) -> Iterator[Any]:
-    """An evaluator's connection, in autocommit while it holds the session lock. It is a
-    pool lease, so it goes back as it came: the pool resets no session state on release."""
-    with repository._connect_to_database() as connection:
-        autocommit = connection.autocommit
-        connection.autocommit = True
-        try:
-            yield connection
-        finally:
-            connection.autocommit = autocommit
+def _worker_connection(repository: Any) -> Any:
+    """The maintenance worker's own connection: it keeps a session lock for a whole pass,
+    which a pool lease must not (AGENTS.md)."""
+    import psycopg
+    from psycopg.rows import dict_row
+
+    return psycopg.connect(repository._database_url, row_factory=dict_row, autocommit=True)
 
 
-def _locked(connection: Any, library_id: int, *, wait: bool = False) -> bool:
-    if wait:
-        try:
-            # The timeout ends with this transaction; the session lock outlives it.
-            with connection.transaction():
-                connection.execute(f"set local lock_timeout = '{WAIT_SECONDS}s'")
-                connection.execute("select pg_advisory_lock(%s, %s::integer)", (_LOCK_NAMESPACE, library_id))
-            return True
-        except Exception as error:
-            if getattr(error, "sqlstate", None) == "55P03":  # lock_not_available
-                return False
-            raise
+def _locked(connection: Any, library_id: int) -> bool:
     row = connection.execute(
         "select pg_try_advisory_lock(%s, %s::integer) as locked", (_LOCK_NAMESPACE, library_id),
+    ).fetchone()
+    return bool(_value(row, "locked"))
+
+
+def _locked_for_transaction(connection: Any, library_id: int) -> bool:
+    row = connection.execute(
+        "select pg_try_advisory_xact_lock(%s, %s::integer) as locked", (_LOCK_NAMESPACE, library_id),
     ).fetchone()
     return bool(_value(row, "locked"))
 
@@ -371,14 +360,12 @@ def _available(repository: Any) -> bool:
     )
 
 
-def refresh(repository: Any, *, inline_limit: int = INLINE_ALBUM_LIMIT, wait: bool = False) -> bool:
+def refresh(repository: Any, *, inline_limit: int = INLINE_ALBUM_LIMIT) -> bool:
     """Bring the index up to date when that is cheap; whether it may be read now.
 
     A missing or outdated index queues the backfill, and many marked albums
     queue a background pass; either way the caller keeps its previous path
-    only while no ready index exists. With ``wait``, a pass already holding the
-    marks is waited for (at most ``WAIT_SECONDS``), so the caller reads what the
-    last save published: duplicate badges show a pair formed or broken at once.
+    only while no ready index exists. A request never waits for a running pass.
     """
     if not _available(repository):
         return False
@@ -404,38 +391,32 @@ def refresh(repository: Any, *, inline_limit: int = INLINE_ALBUM_LIMIT, wait: bo
         if len(marks) > inline_limit:
             queue_maintenance(repository)
             return True
-        with _evaluator_connection(repository) as connection:
-            if not _locked(connection, library_id, wait=wait):
-                return True  # another evaluator holds the marks; the index stays readable
-            try:
-                if wait:
-                    # The pass waited for may have evaluated them; read what is left.
-                    marks = connection.execute(
-                        """select album_id, marked_xid::text as marked_xid from library.problematic_index_dirty_albums
-                           where library_id = %s limit %s""",
-                        (library_id, inline_limit + 1),
-                    ).fetchall()
-                if len(marks) > inline_limit:
-                    queue_maintenance(repository)
-                elif marks:
-                    _drain(repository, connection, library_id, marks)
-            finally:
-                _unlock(connection, library_id)
-            return True
+        with repository._connect_to_database() as connection:
+            _drain(repository, connection, library_id, marks, try_lock=True)
+        return True
     except Exception as error:
         if _is_undefined_table(error):
             _UNAVAILABLE_DATABASES.add(repository._database_url)
             return False
+        if getattr(error, "sqlstate", None) == "40001":  # serialization_failure
+            return True  # another evaluator wrote these albums while this one took the lock
         _LOGGER.warning("Problematic Files index refresh failed.", exc_info=True)
         return False
 
 
-def _drain(repository: Any, connection: Any, library_id: int, marks: list[object]) -> None:
-    """Evaluate ``marks`` and clear exactly those marks (a later mark survives)."""
+def _drain(repository: Any, connection: Any, library_id: int, marks: list[object], *,
+           try_lock: bool = False) -> None:
+    """Evaluate ``marks`` and clear exactly those marks (a later mark survives).
+
+    With ``try_lock`` (a request on a pool lease) only if no other evaluator holds them:
+    that lock ends with the transaction and is never waited for.
+    """
     album_ids = sorted({int(_value(row, "album_id")) for row in marks} - {0})
     include_loose = any(int(_value(row, "album_id")) == 0 for row in marks)
     with connection.transaction():
         connection.execute("set transaction isolation level repeatable read")
+        if try_lock and not _locked_for_transaction(connection, library_id):
+            return
         connection.execute("set local work_mem = '16MB'")
         connection.execute("set local jit = off")
         index_rows, duplicate_rows, replaced = _index_rows(repository, connection, library_id, album_ids, include_loose)
@@ -566,7 +547,7 @@ def _maintain(repository: Any) -> None:
         _QUEUED.discard(repository._database_url)
         _RUNNING.add(repository._database_url)
     try:
-        with _evaluator_connection(repository) as connection:
+        with _worker_connection(repository) as connection:
             library_id = _library_id(connection)
             if library_id is None or not _locked(connection, library_id):
                 return
@@ -609,10 +590,9 @@ def _maintain(repository: Any) -> None:
 
 
 def duplicate_results_readable(repository: Any) -> bool:
-    """Whether cards may read stored duplicate results now, after the last save's marks
-    were evaluated. Readiness comes first: the backfill holds the lock ``refresh`` waits
-    for, and a read never waits for a backfill. False until both backfills are done;
-    /status shows that work as pending."""
+    """Whether cards may read stored duplicate results now, after evaluating the last save's
+    marks unless a running pass holds them. Readiness comes first, and a read never waits.
+    False until both backfills are done; /status shows that work as pending."""
     if not _available(repository):
         return False
     database_url = repository._database_url
@@ -629,7 +609,7 @@ def duplicate_results_readable(repository: Any) -> bool:
             queue_maintenance(repository)
             return False
         _DUPLICATES_READY.add(database_url)
-    return refresh(repository, wait=True)
+    return refresh(repository)
 
 
 def indexing_progress(repository: Any) -> dict[str, int] | None:

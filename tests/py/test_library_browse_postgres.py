@@ -13989,17 +13989,17 @@ def test_card_reads_never_wait_for_the_duplicate_results_backfill(monkeypatch, s
 
 
 @pytest.mark.parametrize("entry", ["card read", "maintenance"])
-def test_index_evaluators_hand_their_pool_lease_back_without_session_state(monkeypatch, entry):
-    """`_connect_to_database` leases the shared pool, which resets neither autocommit nor
-    settings on release: a lease returned in autocommit loses the next writer's transaction."""
+def test_index_evaluators_keep_no_session_state_on_a_pool_lease(monkeypatch, entry):
+    """A request evaluates on its lease under a transaction lock it never waits for. The
+    maintenance worker keeps its session lock on a connection of its own, never on a lease."""
     from contextlib import nullcontext
 
     from music_app.services import problematic_index
 
-    statements = []
-
     class Connection:
-        autocommit = False
+        def __init__(self, autocommit):
+            self.autocommit = autocommit
+            self.statements = []
 
         def __enter__(self):
             return self
@@ -14011,34 +14011,43 @@ def test_index_evaluators_hand_their_pool_lease_back_without_session_state(monke
             return nullcontext()
 
         def execute(self, sql, _params=None):
-            statement = " ".join(str(sql).split())
-            statements.append(statement)
-            marks = [{"album_id": 1, "marked_xid": "9"}] if "dirty_albums" in statement and entry == "card read" else []
-            row = {"locked": True}
-            return SimpleNamespace(fetchall=lambda: marks, fetchone=lambda: None if "item_key" in statement else row)
+            statement = " ".join(str(sql).lower().split())
+            self.statements.append(statement)
+            # Another evaluator holds the marks: the request must return without waiting.
+            row = None if "item_key" in statement else {"locked": "xact_lock" not in statement}
+            return SimpleNamespace(fetchall=lambda: [], fetchone=lambda: row)
 
-    lease = Connection()
+    class Checks(Connection):
+        def execute(self, sql, _params=None):
+            return SimpleNamespace(fetchall=lambda: [{"album_id": 1, "marked_xid": "9"}])
+
+    lease, own = Connection(False), Connection(True)
     repository = SimpleNamespace(
-        _database_url=f"evaluator-session-state-{entry}",
+        _database_url=f"evaluator-lock-owner-{entry}",
         _config={},
-        _browse_connection_context=lambda: nullcontext(Connection()),
+        _browse_connection_context=lambda: nullcontext(Checks(False)),
         _connect_to_database=lambda: lease,
     )
     monkeypatch.setattr(problematic_index, "_available", lambda _repository: True)
     monkeypatch.setattr(problematic_index, "_library_id", lambda _connection: 1)
     monkeypatch.setattr(problematic_index, "_state", lambda *_args: "ready")
     monkeypatch.setattr(problematic_index, "_duplicate_results_state", lambda *_args: "ready")
-    monkeypatch.setattr(problematic_index, "_drain", lambda *_args: None)
+    monkeypatch.setattr(problematic_index, "_worker_connection", lambda _repository: own, raising=False)
+    monkeypatch.setattr(problematic_index, "_index_rows", lambda *_a, **_k: pytest.fail("evaluated without the lock"))
 
     if entry == "card read":
-        assert problematic_index.refresh(repository, wait=True)
+        assert problematic_index.refresh(repository)
+        assert any("pg_try_advisory_xact_lock" in statement for statement in lease.statements)
+        assert not any("pg_advisory_lock" in statement or "pg_try_advisory_lock" in statement
+                       for statement in lease.statements), "A request never takes or waits for a session lock."
+        assert all(statement.startswith(("set local ", "set transaction "))
+                   for statement in lease.statements if statement.startswith(("set ", "reset ")))
     else:
         problematic_index._maintain(repository)
-
-    assert lease.autocommit is False, "The lease went back to the pool in autocommit."
-    assert any("pg_advisory_unlock" in statement for statement in statements), "The session lock was released."
-    settings = [statement for statement in statements if statement.lower().startswith(("set ", "reset "))]
-    assert all(statement.lower().startswith("set local ") for statement in settings), settings
+        assert lease.statements == [], "Maintenance must not occupy a pool lease."
+        assert any("pg_try_advisory_lock" in statement for statement in own.statements)
+        assert any("pg_advisory_unlock" in statement for statement in own.statements)
+    assert lease.autocommit is False
 
 
 def test_duplicate_source_attachment_uses_bounded_pg18_lookup_without_global_prewarm(monkeypatch):

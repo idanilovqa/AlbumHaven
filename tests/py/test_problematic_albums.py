@@ -1079,6 +1079,42 @@ def test_live_duplicate_results_backfill_runs_once_across_restarts(watcher_repai
     assert reruns == []
 
 
+def test_live_index_evaluators_leave_the_real_pool_transactional_and_unlocked(watcher_repair_inventory):
+    """After a request's evaluation and after a maintenance pass the next pool lease is
+    transactional and no advisory lock of the index is left on any backend."""
+    from psycopg.pq import TransactionStatus
+
+    from music_app.services import library_browse_postgres as browse
+    from music_app.services import problematic_index
+    from music_app.services.postgres_connections import leased_connection
+
+    fixture = watcher_repair_inventory
+    fixture.seed(fixture.entry("Pool/Album/01.flac", artist="Pool", album="Pool Album"))
+    database_url = fixture.config["ALBUM_HAVEN_APP_DATABASE_URL"]
+    _ready_problematic_index(database_url)
+    problematic_index.wait_for_background_work()
+    repository = browse.PostgresLibraryBrowseRepository({
+        "ALBUM_HAVEN_APP_DATABASE_URL": database_url, "ALBUM_HAVEN_PROBLEMATIC_INDEX_ENABLED": "1",
+    })
+    for evaluate in (problematic_index.refresh, problematic_index.maintain_now):
+        with leased_connection(database_url) as connection:
+            connection.execute(
+                "select library.mark_problematic_album_dirty(library_id, id) from library.local_albums",
+            ).fetchall()
+        assert evaluate(repository)
+        with leased_connection(database_url) as connection:
+            assert connection.autocommit is False
+            left = connection.execute(
+                """select (select count(*) from library.problematic_index_dirty_albums) as marks,
+                          (select count(*) from pg_locks
+                           where locktype = 'advisory' and classid::bigint = %s
+                             and database = (select oid from pg_database where datname = current_database())) as locks""",
+                (problematic_index._LOCK_NAMESPACE,),
+            ).fetchone()
+            assert connection.info.transaction_status == TransactionStatus.INTRANS
+            assert dict(left) == {"marks": 0, "locks": 0}
+
+
 def test_live_problematic_index_reads_pages_and_search_without_the_whole_library_pass(monkeypatch):
     """An album that becomes problematic, one that is fixed and one that is removed reach the
     first page and search through the marked albums alone."""

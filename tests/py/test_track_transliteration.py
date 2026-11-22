@@ -237,7 +237,7 @@ def test_without_musicbrainz_or_the_fallbacks_nothing_is_shown(no_fallbacks):
 
 
 def test_japanese_wins_chinese_needs_evidence_and_ideographs_alone_show_nothing(fallbacks):
-    """Owner 2026-11-22, "Album, artist, then MB": replaces the 11-17 fall back to pinyin."""
+    """Ideographs are read by the album's evidence, never by a fall back to pinyin."""
     for evidence in ("jpn", "kana", "JP", "kana jpn JP", "zho JP", "kana CN"):
         assert track_transliterations(_tracks(["天門"]), stored={"evidence": evidence}) == {(1, 1): "Tenmon"}
     for evidence in ("zho", "cmn", "yue", "CN", "TW", "HK", "MO"):
@@ -251,8 +251,8 @@ def test_japanese_wins_chinese_needs_evidence_and_ideographs_alone_show_nothing(
     assert fallback_transliteration("你好，世界", reading="chinese") == "Nǐ hǎo， shì jiè"
 
 
-# The owner's three cases, as stored on sandbox6's copy (albums 5297, 5300, 5302, 5315): the
-# artist, ナイトメア, is from Japan; all but the last album also have titles with kana.
+# Japanese titles that were read as Chinese, on albums with Japanese evidence: the
+# artist is from Japan, and most of the albums also have titles with kana.
 @pytest.mark.parametrize(("title", "evidence", "latin"), [
     ("Kadan (華談)", "kana JP", None),  # It already reads in Latin: "Hide if title has Latin".
     ("Tokyo Shounen (東京傷年)", "kana JP", None),
@@ -274,7 +274,7 @@ def test_a_chinese_album_keeps_its_pinyin(fallbacks):
 
 
 def test_ideographs_on_an_album_with_neither_evidence_show_no_romanized_form(fallbacks):
-    """Album 406739 on sandbox6's copy: a French artist's English release, shown in pinyin before."""
+    """An English release by a French artist, with a title of ideographs."""
     assert track_transliterations(_tracks(["直線移動"]), stored={"evidence": ""}) == {}
 
 
@@ -287,7 +287,7 @@ def test_the_installed_libraries_give_the_approved_mockups_forms():
                                   stored=JAPANESE) == {
         (1, 1): "Ouka shou", (1, 2): "Omoide wa tooku no hibi", (1, 4): "Kanae no kimochi"}
     assert fallback_transliteration("天门", reading="chinese") == "Tiān mén"
-    # A sandbox6 title (2026-11-17): Latin letters cutlet does not know stay as written.
+    # Latin letters cutlet does not know stay as written.
     assert fallback_transliteration("Gianizm Tsū/Two (ジャイアニズム痛, Massacre)", reading="japanese") == (
         "Gianizm Tsū/Two (jaianizumutsuu, Massacre)")
     assert fallback_transliteration("Gianizm Shichi (ジャイアニズム叱, Scold)", reading="japanese") is None

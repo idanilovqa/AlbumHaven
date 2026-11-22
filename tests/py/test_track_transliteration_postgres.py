@@ -379,7 +379,7 @@ def test_the_release_language_answer_redoes_the_album_title_in_romaji(monkeypatc
     assert repository.refresh_latin_titles() == 0
 
 
-# Owner 2026-11-22, "Album, artist, then MB": the evidence, and a row redone when it arrives -----
+# The album's reading evidence, and a row redone when it arrives -----------------------------
 
 def test_the_artists_country_redoes_the_stored_readings_when_it_arrives_or_changes(monkeypatch):
     setup_url, repository, _albums = _seed(monkeypatch)

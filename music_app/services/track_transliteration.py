@@ -8,7 +8,7 @@ already reads in Latin (owner 2026-11-21, "Hide if title has Latin"): "Gianizm T
 The Latin form comes from MusicBrainz first: the Latin pseudo-release its "transl-tracklisting"
 relationship links to the album's matched release, fetched once per release by the album
 release lane and stored (0252). Without one, a title with kana falls back to cutlet, and one
-of ideographs only by the album's evidence (owner 2026-11-22, "Album, artist, then MB", 0270):
+of ideographs only by the album's evidence (0270):
 to cutlet when MusicBrainz says Japanese, another of the album's titles has kana or the artist
 is from Japan; else to pypinyin with tone marks ("exact pronunciation") when MusicBrainz says
 Chinese or the artist is from China, Taiwan, Hong Kong or Macao; with neither, to nothing.

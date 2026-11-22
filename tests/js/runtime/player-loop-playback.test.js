@@ -359,6 +359,36 @@ test('mirrored playback keeps metadata unobscured while showing its locked statu
   assert.equal(time.textContent, '10 - 20');
 });
 
+// Owner, sandbox5 2026-11-21: "the waveform is still of the old song, and it does not play a new
+// song for a few seconds". While a switch waits for its audio, a redraw of the player keeps the
+// pressed song's title instead of flipping back, and leaves the old song's waveform off.
+test('while a switch waits for its audio, the player shows the pressed song, not the old one', async () => {
+  const oldTrack = { src: '/track?path=old.flac', path: 'C:/Music/old.flac', title: 'Old', artist: 'A' };
+  const newTrack = { src: '/track?path=new.flac', path: 'C:/Music/new.flac', title: 'New', artist: 'A' };
+  const title = new FakeElement();
+  const waveformDraws = [];
+  let finishStart;
+  const { context } = loadHelper({
+    getPlayerElements: () => ({ title }),
+    canStartPlaybackInThisTab: () => true,
+    startStreamingTrack: () => new Promise((resolve) => { finishStart = resolve; }),
+    updateWaveformAppearance: () => { waveformDraws.push(context.state.player.selectedTrack?.path || ''); },
+  });
+  context.state.player.current = oldTrack;
+
+  const playing = context.playTrackFromPayload(newTrack);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(title.textContent, 'A - New', 'the press shows the new song at once');
+  assert.equal(waveformDraws.at(-1), newTrack.path, 'the waveform is redrawn for the pressed song');
+  context.updatePlayerUi();
+  assert.equal(title.textContent, 'A - New', 'a redraw while the switch waits does not show the old song again');
+
+  finishStart({ role: 'current', streamId: 2, generation: 2, track: newTrack });
+  await playing;
+  assert.equal(context.state.player.selectedTrack, null);
+  assert.equal(title.textContent, 'A - New');
+});
+
 test('playback held by another tab or lost to the server disables the scissors for this tab', () => {
   const updates = [];
   const loopActions = { _loopActionController: { update: next => updates.push({ ...next }) } };

@@ -160,7 +160,8 @@ function resolvePlayerUiStatus(playback) {
   const mirroredTrack = lockedByAnotherTab && typeof getMirroredPlaybackTrack === 'function'
     ? getMirroredPlaybackTrack()
     : null;
-  const displayTrack = mirroredTrack || state.player.current;
+  // A pressed song is shown from the press, through every redraw until its audio starts.
+  const displayTrack = mirroredTrack || state.player.selectedTrack || state.player.current;
   return {
     lockedByAnotherTab,
     playbackUnavailable,
@@ -334,6 +335,7 @@ function renderSelectedTrackState(track) {
   if (track && typeof getPlayerElements === 'function') {
     renderGlobalPlayerMetadata(getPlayerElements(), track);
   }
+  if (typeof updateWaveformAppearance === 'function') void updateWaveformAppearance();
   if (typeof refreshTrackModalPlaybackState === 'function') refreshTrackModalPlaybackState();
   if (typeof refreshNonAlbumModalPlaybackState === 'function') refreshNonAlbumModalPlaybackState();
 }

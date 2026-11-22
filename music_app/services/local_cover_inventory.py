@@ -489,18 +489,19 @@ class LocalCoverInventoryRepository:
             connection.commit()
         return [row["root_path"] for row in listings], [row["context_key"] for row in contexts]
 
-    def invalidate_all(self, readable_roots):
+    def invalidate_all(self, readable_roots, configured_roots):
         """A Full Rescan: mark everything below the roots it read, by migration 0292 ranges.
 
         A root it could not read, even one inside a readable root, is unavailable storage and keeps
-        its stored listings and folders. An unresolved context has no folder, so its tracks decide."""
+        its stored listings and folders. An unresolved context has no folder, so its tracks decide.
+        Both root lists come from the scan that pinned them, so no root settings are loaded here."""
         readable = {root_key(root) for root in readable_roots}
         if not readable:
             return [], []
         prefixes, prefix_ends = _prefix_range(readable)
         parameters = {
             "rebuild_prefixes": prefixes, "rebuild_prefix_ends": prefix_ends,
-            "kept_prefixes": [_below(root) for root in self._roots() if root not in readable],
+            "kept_prefixes": sorted({_below(root_key(root)) for root in configured_roots} - {_below(root) for root in readable}),
         }
         kept = """not exists(select 1 from unnest(%(kept_prefixes)s::text[]) as kept(prefix)
             where starts_with({path}, kept.prefix))"""
@@ -757,7 +758,7 @@ class LocalCoverInventoryWorker:
         key, state = due
         try:
             if key[0] == _FULL_RESCAN:
-                self._queue_changed(self.repository.invalidate_all(key[1]))
+                self._queue_changed(self.repository.invalidate_all(key[1], key[2]))
             else:
                 paths, context_changed, subtree_paths = key
                 self._invalidate(paths, context_changed=context_changed, subtree_paths=subtree_paths)
@@ -780,19 +781,21 @@ class LocalCoverInventoryWorker:
             if self._invalidation_retries.get(key) == state:
                 self._invalidation_retries.pop(key, None)
 
-    def rescan(self, readable_roots):
+    def rescan(self, readable_roots, *, configured):
         """An owner-started Full Rescan: the one whole-library invalidation, of the roots it could read.
 
-        It runs after the scan published, so a failure is retried like any invalidation, never lost."""
+        ``configured`` is every root the scan pinned. It runs after the scan published, so a failure
+        is retried like any invalidation, never lost."""
         roots = tuple(sorted({root_key(root) for root in readable_roots}))
         if not roots:
             return
+        pinned = tuple(sorted({root_key(root) for root in configured}))
         try:
-            self._queue_changed(self.repository.invalidate_all(roots))
+            self._queue_changed(self.repository.invalidate_all(roots, pinned))
         except Exception:
             self._logger.exception("Could not mark the Full Rescan's local cover listings; retrying.")
             with self._invalidation_retry_lock:
-                self._invalidation_retries.setdefault((_FULL_RESCAN, roots), (time.monotonic(), 0))
+                self._invalidation_retries.setdefault((_FULL_RESCAN, roots, pinned), (time.monotonic(), 0))
         self._wake.set()
 
     def remove_path(self, path):

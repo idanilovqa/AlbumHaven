@@ -607,9 +607,10 @@ def refresh_library_state(
         if ignore_existing_cache and local_cover_inventory is not None:
             # An unreadable root is unavailable storage: its stored folders stay.
             # The walk names its roots as text, whatever type the settings stored.
-            local_cover_inventory.rescan([
-                root["path"] for root in scan_roots if str(root.get("id") or "").strip() in readable_root_ids
-            ])
+            local_cover_inventory.rescan(
+                [root["path"] for root in scan_roots if str(root.get("id") or "").strip() in readable_root_ids],
+                configured=[root["path"] for root in scan_roots],
+            )
         finish_scan_stage(library_state, "relations")
         library_state["scan_elapsed_seconds"] = max(0.0, time.time() - scan_started_at)
         with cache_lock:

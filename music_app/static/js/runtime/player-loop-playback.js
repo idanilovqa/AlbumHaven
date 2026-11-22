@@ -176,9 +176,14 @@ function resolvePlayerUiStatus(playback) {
 
 // The seek position and its time label: all that a timeline drag preview changes.
 function renderPlayerTimelinePosition(els, playback, { hasTrack, lockedByAnotherTab, playingElsewhere, blockedLabel }) {
-  const duration = getPlayerDuration();
+  // A pressed song waiting for its audio shows its own start and length, as its title and waveform
+  // do: never the old song's running time under the new title (owner round 9, 2026-11-21: "the
+  // majority of player UI does not [...] All these should be syncronoized").
+  const pendingTrack = !lockedByAnotherTab && state.player.selectedTrack
+    && state.player.selectedTrack.path !== state.player.current?.path ? state.player.selectedTrack : null;
+  const duration = pendingTrack ? Math.max(0, Number(pendingTrack.durationSeconds) || 0) : getPlayerDuration();
   const dragPreview = Number(state.player.timelineDragPreviewSeconds);
-  const current = state.player.timelineDragging && Number.isFinite(dragPreview)
+  const current = pendingTrack ? 0 : state.player.timelineDragging && Number.isFinite(dragPreview)
     ? dragPreview
     : Number(playback.currentTime) || 0;
   if (els.timeline) {
@@ -337,9 +342,12 @@ function beginStreamingPlayerListenSession(track, startSeconds = 0) {
 let playerTrackSelectionToken = 0;
 
 // A switch takes a moment to reach the listener; the click should not.
-function renderSelectedTrackState(track) {
-  if (track && typeof getPlayerElements === 'function') {
-    renderGlobalPlayerMetadata(getPlayerElements(), track);
+function renderSelectedTrackState() {
+  // The player draws the pressed song (or, once it clears, the playing one) whole: title, time,
+  // seek bar, waveform and rows switch together, in one frame.
+  if (typeof getPlayerElements === 'function') {
+    updatePlayerUi();
+    return;
   }
   if (typeof updateWaveformAppearance === 'function') void updateWaveformAppearance();
   if (typeof refreshTrackModalPlaybackState === 'function') refreshTrackModalPlaybackState();
@@ -349,13 +357,13 @@ function renderSelectedTrackState(track) {
 function showSelectedTrackImmediately(track, shouldAutoplay) {
   if (!shouldAutoplay) return;
   state.player.selectedTrack = track;
-  renderSelectedTrackState(track);
+  renderSelectedTrackState();
 }
 
 function clearSelectedTrack() {
   if (!state.player.selectedTrack) return;
   state.player.selectedTrack = null;
-  renderSelectedTrackState(state.player.current);
+  renderSelectedTrackState();
 }
 
 async function playTrackFromPayload(track, options = {}) {

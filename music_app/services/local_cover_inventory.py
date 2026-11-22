@@ -153,7 +153,6 @@ class _WorkQueue:
         self._lock = threading.Lock()
         self._opened = {}
         self._changed = {}
-        self._taken = None
         self._taken_was_opened = False
 
     def add(self, keys, *, foreground=False, delay=0.0):
@@ -184,7 +183,6 @@ class _WorkQueue:
             pending, key = self._due(background)
             if key is not None:
                 del pending[key]
-            self._taken = key
             self._taken_was_opened = pending is self._opened
             return key
 
@@ -192,10 +190,35 @@ class _WorkQueue:
         """The key just taken is not done: it waits its delay where it was."""
         self.add([key], foreground=self._taken_was_opened, delay=delay)
 
-    def known(self):
-        """Every key queued or being worked."""
+
+class _UnresolvedContexts:
+    """The unresolved contexts this process is working or waiting on, by every folder above their tracks.
+
+    An invalidation looks up only the folders it changed, however much work is queued."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._keys_below = {}
+        self._folders = {}
+
+    def track(self, key, paths):
+        folders = {root_key(parent) for path in paths for parent in Path(path).parents}
         with self._lock:
-            return sorted({*self._opened, *self._changed, *([self._taken] if self._taken else [])})
+            self._folders[key] = folders
+            for folder in folders:
+                self._keys_below.setdefault(folder, set()).add(key)
+
+    def forget(self, key):
+        with self._lock:
+            for folder in self._folders.pop(key, ()):
+                keys = self._keys_below[folder]
+                keys.discard(key)
+                if not keys:
+                    del self._keys_below[folder]
+
+    def below(self, folders):
+        with self._lock:
+            return sorted({key for folder in folders for key in self._keys_below.get(folder, ())})
 
 
 class LocalCoverInventoryRepository:
@@ -330,12 +353,14 @@ class LocalCoverInventoryRepository:
             )
             connection.commit()
 
-    def invalidate_paths(self, paths, *, context_changed=False, subtree_paths=(), pending_contexts=()):
+    def invalidate_paths(
+        self, paths, *, context_changed=False, subtree_paths=(), pending_contexts_below=lambda folders: (),
+    ):
         """Mark what is at, above or (for subtrees) below these paths; return the listings and contexts marked.
 
         Every lookup is by key or by a migration 0292 range, hence the explicit "C" collation and the
         arrays: an OR over a join would read the whole table. An unresolved context has no indexed
-        folder, so only those in ``pending_contexts``, the caller's own work, are matched by track path."""
+        folder, so only the caller's own work below the changed folders is matched by track path."""
         paths = list(paths)
         subtrees = {root_key(path) for path in subtree_paths}
         ancestors = {root_key(parent) for value in paths for parent in Path(value).parents}
@@ -357,7 +382,7 @@ class LocalCoverInventoryRepository:
             pending_roots = {root_key(Path(path).parent) for path in paths if root_key(path) not in subtrees}
             pending_roots.update(subtrees | disc_parents)
             parameters["context_prefixes"] = _prefix_range(pending_roots)[0]
-            parameters["pending_contexts"] = list(pending_contexts)
+            parameters["pending_contexts"] = list(pending_contexts_below(pending_roots))
             parameters["disc_prefixes"], parameters["disc_prefix_ends"] = _prefix_range(disc_parents)
         with self._connection() as connection:
             listings = connection.execute(
@@ -515,6 +540,7 @@ class LocalCoverInventoryWorker:
         self._invalidation_retries = {}
         self._contexts = _WorkQueue()
         self._listings = _WorkQueue()
+        self._unresolved = _UnresolvedContexts()
         self._foreground_at = time.monotonic()
         # What the worker has finished since start, so a request waiting for one folder is woken by
         # the worker instead of polling Postgres (freeze guard BI-05).
@@ -565,7 +591,10 @@ class LocalCoverInventoryWorker:
 
     def request_context(self, paths):
         result = self.repository.request_context(paths)
-        self._contexts.add([context_key(paths)], foreground=True)
+        key = context_key(paths)
+        if not (result or {}).get("root_path"):
+            self._unresolved.track(key, paths)
+        self._contexts.add([key], foreground=True)
         self._wake.set()
         return result
 
@@ -577,7 +606,7 @@ class LocalCoverInventoryWorker:
     def _invalidate(self, paths, *, context_changed, subtree_paths):
         self._queue_changed(self.repository.invalidate_paths(
             paths, context_changed=context_changed, subtree_paths=subtree_paths,
-            pending_contexts=self._contexts.known() if context_changed else [],
+            pending_contexts_below=self._unresolved.below,
         ))
 
     def invalidate_paths(self, paths, *, context_changed=False, subtree_paths=()):
@@ -687,6 +716,10 @@ class LocalCoverInventoryWorker:
                     self._retry_scheduled_invalidation()
                     key = self._contexts.take(background=background)
                     context = self.repository.next_context(key) if key else None
+                    if context:
+                        self._unresolved.track(key, context["track_paths"])
+                    elif key:
+                        self._unresolved.forget(key)  # resolved, or gone
                     if context and context.get("retry_in") is not None:
                         self._contexts.put_back(key, delay=context["retry_in"])
                         context = None
@@ -703,6 +736,7 @@ class LocalCoverInventoryWorker:
                             if album_root:
                                 self.repository.publish_context(context["context_key"], context["revision"], album_root, foreground=context["foreground_requested"])
                                 self._listings.add([root_key(album_root)], foreground=context["foreground_requested"])
+                                self._unresolved.forget(key)
                             elif local_inventory_tracks_exist(context["track_paths"]):
                                 self.repository.defer_context(context["context_key"], context["revision"], delay_seconds=_UNRESOLVED_FOLDER_RETRY_SECONDS, error=None)
                                 self._contexts.put_back(key, delay=_UNRESOLVED_FOLDER_RETRY_SECONDS)

@@ -10773,5 +10773,119 @@
       "databaseIdentity": "case:musicbrainz-manual-resolution-workflows"
     },
     "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/browserHistoryNavigation.spec.js",
+    "case": "FTC-GALLERY-NAV-039 browser Back and Forward restore a cleared search and its tree",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [
+      "search:flower-kings-family-best-match"
+    ],
+    "filesystemScenarios": [
+      "media:functional-core"
+    ],
+    "expectedContracts": [
+      "history-restores-search-query",
+      "history-restores-search-tree-selection",
+      "history-restores-cleared-search",
+      "reload-keeps-search"
+    ],
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/browserHistoryNavigation.spec.js",
+    "case": "FTC-GALLERY-NAV-040 browser Back and Forward move between artists and All artists with their tree selection",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [
+      "search:flower-kings-family-best-match"
+    ],
+    "filesystemScenarios": [
+      "media:functional-core"
+    ],
+    "expectedContracts": [
+      "history-restores-selected-artist",
+      "history-restores-all-artists",
+      "reload-keeps-selected-artist"
+    ],
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/browserHistoryNavigation.spec.js",
+    "case": "FTC-GALLERY-NAV-041 browser Back and Forward restore a search with no match",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [
+      "search:no-match"
+    ],
+    "filesystemScenarios": [
+      "media:functional-core"
+    ],
+    "expectedContracts": [
+      "history-restores-no-match-search",
+      "reload-keeps-no-match-search"
+    ],
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/browserHistoryNavigation.spec.js",
+    "case": "FTC-GALLERY-NAV-042 browser Back and Forward move between collections, All Loose Tracks and a search gallery",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "setupGroup": "late-non-album-mutations",
+    "appProcessScope": "isolated",
+    "appProcessOrder": "after-shared",
+    "executionWave": 2,
+    "databaseScenarios": [
+      "non-album:custom-collections"
+    ],
+    "filesystemScenarios": [
+      "media-copy:non-album-custom-collections"
+    ],
+    "expectedContracts": [
+      "history-restores-custom-collection",
+      "history-restores-all-loose-tracks",
+      "history-restores-search-gallery-from-collection",
+      "reload-keeps-custom-collection"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:browser-history-custom-collections",
+      "filesystemCopy": "media/cases/browser-history-custom-collections"
+    },
+    "ownerApproval": "pending"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/browserHistoryNavigation.spec.js",
+    "case": "FTC-GALLERY-NAV-043 phone Back and Forward restore a cleared search and its tree",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [
+      "search:flower-kings-family-best-match"
+    ],
+    "filesystemScenarios": [
+      "media:functional-core"
+    ],
+    "expectedContracts": [
+      "phone-history-restores-search",
+      "phone-history-restores-cleared-search-tree",
+      "reload-keeps-search"
+    ],
+    "ownerApproval": "pending"
   }
 ]

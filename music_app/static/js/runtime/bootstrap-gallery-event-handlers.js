@@ -2706,9 +2706,31 @@ function syncSearchClear() {
 
 function handleGalleryBootstrapPopState(options = {}) {
   const parentViewUrl = options.parentViewUrl || getBrowserLocationHref();
+  // The history entry, not what was last typed, owns the search field (owner 2026-11-21: Back after clearing a search
+  // brought its URL back with an empty field). A typed search still waiting to commit would override the entry.
+  const destination = parseBrowserUrlState(parentViewUrl);
+  clearPendingGallerySearchCommit();
+  updateGallerySearchDraftQuery(destination.query);
   if (typeof syncGalleryMainStateFromLocation === 'function') syncGalleryMainStateFromLocation(options.parentViewUrl);
   const requestUrl = options.galleryAnchorArtist
-    ? buildApiUrl(parseBrowserUrlState(parentViewUrl), { galleryAnchorArtist: options.galleryAnchorArtist })
+    ? buildApiUrl(destination, { galleryAnchorArtist: options.galleryAnchorArtist })
     : parentViewUrl;
-  fetchAndRender(requestUrl, false, options);
+  // An artist page's view carries no Artists tree: the library's tree comes with the library view, a search's with
+  // the search. Leaving a search for an artist page would keep the search's tree, so the library's tree is loaded
+  // after the page, as clearing a search does.
+  const destinationArtist = String(destination.selected_artist || '').trim();
+  const leavesSearchTree = Boolean(String(state.view?.query || '').trim())
+    && !String(destination.query || '').trim() && Boolean(destinationArtist);
+  const request = fetchAndRender(requestUrl, false, options);
+  if (!leavesSearchTree) return;
+  void Promise.resolve(request).then((applied) => {
+    if (!applied || String(state.view?.query || '').trim()
+      || String(state.view?.selected_artist || '').trim() !== destinationArtist) return;
+    fetchAndRender(buildApiUrl({ ...state.view, selected_artist: '' }, { payloadTier: 'sidebar' }), false, {
+      preserveScroll: true,
+      retainMountedGalleryIfEquivalent: true,
+      retainMountedSelectedViewState: { ...state.view },
+      skipPendingViewTransition: true,
+    });
+  }, () => {});
 }

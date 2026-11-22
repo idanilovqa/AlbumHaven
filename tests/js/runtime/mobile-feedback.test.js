@@ -87,6 +87,9 @@ function load(name, globals = {}) {
     window: { innerWidth: 390 },
     console,
     state: { coverLookup: {} },
+    URL,
+    clearBrowserTimeout() {},
+    parseBrowserUrlState: url => ({ query: new URL(url, 'https://example.test').searchParams.get('q') || '' }),
     ...globals,
   });
   vm.runInContext(fs.readFileSync(path.join(runtime, name), 'utf8'), context);
@@ -546,6 +549,63 @@ test('shared gallery popstate forwards retained-scroll options to the existing r
   assert.equal(calls[1][0], 'https://example.test/?q=After+the+Rain');
   assert.equal(calls[1][1], false);
   assert.equal(calls[1][2], options);
+});
+
+// Owner 2026-11-21: search, clear it, Back: the URL came back but the field kept the cleared text.
+test('gallery popstate shows the history entry query in the search field, not the last draft', () => {
+  const state = { ui: { searchDraftQuery: '', pendingSearchCommitTimer: 7 }, view: { query: '' } };
+  const cleared = [];
+  const context = load('bootstrap-gallery-event-handlers.js', {
+    state,
+    syncGalleryMainStateFromLocation() {},
+    getBrowserLocationHref: () => 'https://example.test/?surface=albums&q=flower+kings&artist=The+Flower+Kings',
+    clearBrowserTimeout: timer => cleared.push(timer),
+    fetchAndRender() {},
+  });
+  context.handleGalleryBootstrapPopState();
+  assert.equal(state.ui.searchDraftQuery, 'flower kings');
+  assert.deepEqual(cleared, [7], 'a typed search waiting to commit never overrides the history entry');
+
+  context.handleGalleryBootstrapPopState({ parentViewUrl: 'https://example.test/?surface=albums&artist=Yes' });
+  assert.equal(state.ui.searchDraftQuery, '');
+});
+
+// An artist page's view carries no Artists tree: Forward from a search to a cleared search kept the search's 3 artists.
+test('gallery popstate from a search to an artist page loads the library tree after the page', async () => {
+  const requests = [];
+  const state = { ui: {}, view: { query: 'flower kings', selected_artist: 'The Flower Kings' } };
+  const context = load('bootstrap-gallery-event-handlers.js', {
+    state,
+    syncGalleryMainStateFromLocation() {},
+    getBrowserLocationHref: () => 'https://example.test/?surface=albums&artist=The+Flower+Kings',
+    parseBrowserUrlState: url => ({
+      query: new URL(url).searchParams.get('q') || '',
+      selected_artist: new URL(url).searchParams.get('artist') || '',
+    }),
+    buildApiUrl: (view, options) => `/view-data?artist=${view.selected_artist}&payload_tier=${options.payloadTier}`,
+    fetchAndRender: async (url, push, options) => {
+      requests.push([url, push, options]);
+      if (requests.length === 1) state.view = { query: '', selected_artist: 'The Flower Kings', artist_groups: [] };
+      return true;
+    },
+  });
+  context.handleGalleryBootstrapPopState();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0][0], 'https://example.test/?surface=albums&artist=The+Flower+Kings');
+  assert.equal(requests[1][0], '/view-data?artist=&payload_tier=sidebar');
+  assert.equal(requests[1][1], false, 'a history move writes no history');
+  assert.equal(requests[1][2].retainMountedSelectedViewState.selected_artist, 'The Flower Kings');
+
+  // Between two library pages the tree is already the library's; a page the owner left again loads no tree.
+  for (const [view, applied] of [[{ query: '', selected_artist: 'Yes' }, true], [state.view, false]]) {
+    requests.length = 0;
+    state.view = { ...view, query: view === state.view ? 'flower kings' : view.query };
+    context.fetchAndRender = async (url) => { requests.push([url]); return applied; };
+    context.handleGalleryBootstrapPopState();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(requests.length, 1);
+  }
 });
 
 test('direct or reloaded mobile Back restores the gallery when there is no traversable parent entry', () => {

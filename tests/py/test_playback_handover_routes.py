@@ -34,7 +34,7 @@ class Claims:
     def holds(self, holder, token):
         return token == "holder-token" and holder["digest"] == b"held"
 
-    def hand_over(self, actor, *, client_id, client_surface, observed, answer):
+    def hand_over(self, actor, *, client_id, client_surface, observed, answer, silences_itself=False):
         Claims.replaced.append({"client_id": client_id, "observed": observed, "answer": answer})
         chosen = answer if answer and answer["track"] else SAVED
         return {"protocol": 1, "claimToken": "taker-token", "confirmed": chosen is not SAVED,
@@ -215,6 +215,110 @@ def test_a_malformed_press_is_refused_before_the_playing_tab_is_asked_to_stop(ha
             status, _, _ = await run_asgi_request_async(handover_app, "PUT", "/playback/state", json_body={
                 "protocol": 1, "state": "playing", "clientId": "not-a-uuid", "clientSurface": "private_web",
                 "takeover": True, "confirm": True,
+            })
+            assert status == 400
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(holder.receive_json(), 0.2)
+
+    asyncio.run(scenario())
+
+
+# Owner, 2026-11-22 ("Yes to all", a): the shortened wait. One request, and Last.fm is looked up afterwards.
+@pytest.fixture
+def claim_app(handover_app, monkeypatch):
+    from types import SimpleNamespace
+
+    from music_app.routes import playback_control_asgi as routes
+
+    seen = SimpleNamespace(acquired=[], issued=[], prepared=[], looked_up=[], app=handover_app)
+
+    class References:
+        def issue_batch(self, _actor, tracks, *, on_media):
+            seen.issued.append(tracks)
+            on_media("media")
+            return {"protocol": 1, "expiresAt": "2099-01-01T00:00:00+00:00",
+                    "tracks": [{"clientKey": tracks[0]["clientKey"], "playbackRef": "issued"}]}
+
+    async def reference_call(_request, call):
+        return call(References())
+
+    async def scrobbling(_request):
+        seen.looked_up.append(True)
+        return {"scrobbling": {"available": True}}
+
+    def acquire(self, _actor, **kwargs):
+        seen.acquired.append(kwargs)
+        return {"protocol": 1, "claimToken": "taker-token"}
+
+    monkeypatch.setattr(Claims, "acquire", acquire, raising=False)
+    monkeypatch.setattr(routes, "reference_call", reference_call)
+    monkeypatch.setattr(routes, "_scrobbling_status", scrobbling)
+    monkeypatch.setattr(routes, "_prepare_streams", seen.prepared.extend)
+    return seen
+
+
+def claim(seen, track, **fields):
+    async def scenario():
+        status, _, body = await run_asgi_request_async(seen.app, "PUT", "/playback/state", json_body={
+            "protocol": 1, "state": "playing", "clientId": TAKER, "clientSurface": "private_web", "track": track,
+            **fields})
+        return status, decode_json(body) if status == 200 else None
+
+    return asyncio.run(scenario())
+
+
+NAMED_BY_PATH = {"path": "as-the-browse-names-it", "title": "Old", "artist": "A", "album": "B", "artworkUrl": None}
+
+
+def test_a_start_claims_in_one_request_and_is_answered_before_lastfm_is_looked_up(claim_app):
+    status, answer = claim(claim_app, NAMED_BY_PATH, silencesItself=True)
+
+    assert status == 200
+    claimed = claim_app.acquired[0]
+    assert claimed["track"] == {**SOUNDING, "playbackRef": "issued"}, "no path is stored"
+    assert claimed["silences_itself"] is True
+    assert (answer["playbackRef"], answer["referenceExpiresAt"]) == ("issued", "2099-01-01T00:00:00+00:00")
+    assert claim_app.prepared == ["media"], "its stream is prepared as by the reference request"
+    assert claim_app.looked_up == []
+    assert "scrobbling" not in answer, "not said, so writes use their own answer until the renewal says"
+
+
+def test_a_renewal_looks_lastfm_up_and_issues_nothing_for_a_reference_it_has(claim_app):
+    status, answer = claim(claim_app, SOUNDING, claimToken="held")
+
+    assert status == 200
+    assert answer["scrobbling"] == {"available": True}
+    assert claim_app.issued == []
+    assert claim_app.acquired[0]["silences_itself"] is False, "an old page makes no promise"
+
+
+def test_only_a_browser_names_its_song_by_a_path(claim_app):
+    status, _ = claim(claim_app, NAMED_BY_PATH, clientSurface="mobile")
+
+    assert status == 400
+    assert claim_app.issued == [] and claim_app.acquired == []
+
+
+def test_a_confirmed_play_here_is_answered_before_lastfm_is_looked_up(claim_app):
+    async def scenario():
+        async with websocket_session(claim_app.app, f"/playback/pcm?client_id={HOLDER}") as holder:
+            pressing = asyncio.create_task(press(claim_app.app))
+            asked = await holder.receive_json()
+            await holder.send_json({"type": "handover-answer", "requestId": asked["requestId"],
+                                    "claimToken": "holder-token", "track": SOUNDING, "position": PLACE})
+            status, _, _ = await pressing
+            assert status == 200
+            assert claim_app.looked_up == []
+
+    asyncio.run(scenario())
+
+
+def test_a_malformed_promise_is_refused_before_the_playing_tab_is_asked_to_stop(handover_app):
+    async def scenario():
+        async with websocket_session(handover_app, f"/playback/pcm?client_id={HOLDER}") as holder:
+            status, _, _ = await run_asgi_request_async(handover_app, "PUT", "/playback/state", json_body={
+                "protocol": 1, "state": "playing", "clientId": TAKER, "clientSurface": "private_web",
+                "takeover": True, "confirm": True, "silencesItself": "yes",
             })
             assert status == 400
             with pytest.raises(asyncio.TimeoutError):

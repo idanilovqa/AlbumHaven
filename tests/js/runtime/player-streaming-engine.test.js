@@ -135,7 +135,8 @@ function createEngineHarness(options = {}) {
             }
           },
           Float32Array, Math, Number, Object, currentTime: 12.5, sampleRate: 48_000,
-          registerProcessor: (_name, Processor) => { port.processor = new Processor(); },
+          Date: FakeDate,
+          registerProcessor: (_name, Processor) => { port.processor = new Processor(nodeOptions); },
         };
         port.events = [];
         vm.createContext(processorContext);
@@ -6497,6 +6498,7 @@ test('a tab asked by Play here answers only when its output is silent, at the la
     tabId: '0c8f5a54-2d1e-4b7a-9a43-6f2d8b1c3e70', lockStatus: 'unlocked', blockedReason: '', mirroredTrack: null,
     heartbeatTimer: 1, initialized: true,
     activeClaim: { claimToken: 'holder-claim', leaseDeadline: Infinity, path: track.path,
+      soundDeadline: Number.MAX_SAFE_INTEGER, soundUntilWallMs: Number.MAX_SAFE_INTEGER,
       referenceExpiresAt: '2099-01-01T00:00:00Z', track: { playbackRef: 'holder-ref' } },
   };
   harness.context.state.player.current = track;
@@ -7044,4 +7046,34 @@ test('a successor prepared ahead is kept at the local audible boundary', async (
     type: 'promoted', generation: current.generation, streamId: continuity.streamId, role: 'current',
   });
   assert.equal(kept.length, 1, 'it is kept once');
+});
+
+// Owner, 2026-11-22: nothing is heard before the grant, though the stream loads meanwhile.
+test('a start with no grant loads its audio silently and sounds once the grant arrives', async (t) => {
+  let permission = { untilMs: 0, forMs: 0 };
+  const harness = createEngineHarness({
+    realProcessor: true,
+    playbackSoundPermission: () => permission,
+  });
+  t.after(() => harness.api.stop());
+  harness.context.playbackSoundPermission = () => permission;
+  await harness.api.start(makeTrack());
+  const open = harness.sent('open')[0];
+  acceptMetadata(harness, open);
+  for (const sequence of [0, 1]) {
+    receivePcmAndAssertEnqueue(harness, {
+      generation: open.generation, streamId: open.streamId, sequence,
+      samples: new Array(48_000 * 2).fill(0.25),
+    });
+  }
+  const node = harness.nodes[0];
+
+  assert.equal(node.options.processorOptions.awaitsPermission, true, 'the audio thread fails closed');
+  assert.ok(harness.sent('credit').length > 0, 'it loads while it waits');
+  for (let quantum = 0; quantum < 10; quantum += 1) assert.ok(node.render()[0].every((sample) => sample === 0));
+
+  permission = { untilMs: Date.now() + 300_000, forMs: 300_000 };
+  harness.context.syncStreamingSoundPermission();
+
+  assert.ok(node.render()[0].some((sample) => sample !== 0));
 });

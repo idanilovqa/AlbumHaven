@@ -483,10 +483,13 @@ class NativePlaybackController(
             maybeAnswerHandover()
             maybeReconnect()
             maybeRecoverStalledStart()
-            // A stream may buffer while the claim is requested; only an owner is heard, and a pause
-            // the owner made finishes its fade even once the claim is given back.
+            // A stream may buffer while the claim is requested; only an owner is heard, and only within its
+            // five minutes without the server. A fade that can no longer be heard ends at once: the claim
+            // is given back only after it.
             val wasPausing = pausing()
-            written = if (loaded && (mayBeHeard() || pausing())) engine?.render(RENDER_CHUNK_FRAMES) ?: 0 else 0
+            val audible = mayBeHeard()
+            if (loaded && wasPausing && !audible) engine?.pause(immediate = true)
+            written = if (loaded && audible) engine?.render(RENDER_CHUNK_FRAMES) ?: 0 else 0
             if (wasPausing && !pausing()) pauseSettled()
             if (timing.awaitingAudible) sink?.let { timing.heard(clock(), it.heardFrames()) }
             maybeFinishDrainedQueue()
@@ -627,7 +630,8 @@ class NativePlaybackController(
             return
         }
         val now = clock()
-        if (!claims.owned) {
+        // Silent by rule (waiting for the server, or five minutes without it) is not stalled.
+        if (!mayBeHeard()) {
             startWaitSinceMs = now
             return
         }
@@ -697,10 +701,11 @@ class NativePlaybackController(
     }
 
     /**
-     * Playback is heard only while it owns the claim (owner, 2026-11-22: "You cannot just start without
-     * an answer"). This replaces the instant start of 2026-11-08: a play fills its buffer while it asks.
+     * Playback is heard only while it owns the claim, and for five minutes without the server (owner,
+     * 2026-11-22: "You cannot just start without an answer"). This replaces the instant start of
+     * 2026-11-08: a play fills its buffer while it asks.
      */
-    private fun mayBeHeard(): Boolean = claims.owned
+    private fun mayBeHeard(): Boolean = claims.maySound()
 
     /**
      * Starts or resumes once the socket is ready, or the stream plays on without one, and the claim
@@ -946,7 +951,7 @@ class NativePlaybackController(
     private fun pauseNow(silenceAtOnce: Boolean = false) {
         if (state == NativePlaybackState.IDLE || state == NativePlaybackState.ENDED) return
         measureListening()
-        engine?.takeIf { loaded }?.pause(immediate = silenceAtOnce)
+        engine?.takeIf { loaded }?.pause(immediate = silenceAtOnce || !mayBeHeard())
         if (loaded) heldPositionMs = positionMs()
         if (wantPlay) listens.pause(heldPositionMs / 1000.0)
         wantPlay = false

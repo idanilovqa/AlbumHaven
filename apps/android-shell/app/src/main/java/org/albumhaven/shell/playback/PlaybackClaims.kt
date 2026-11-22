@@ -81,6 +81,9 @@ class PlaybackClaimOwner(
     private var renewing = false
     private var nextRenewMs = 0L
 
+    /** Until when the held claim may sound: five minutes from before its last answered request was sent. */
+    private var soundUntilMs = 0L
+
     /** When an acquire nobody answered is sent again; null while none waits. */
     private var acquireRetryAtMs: Long? = null
 
@@ -98,6 +101,12 @@ class PlaybackClaimOwner(
     private val unreadGrant = AtomicReference<String?>(null)
 
     val owned: Boolean get() = token != null
+
+    /**
+     * Sound needs the claim and the server within five minutes (owner, 2026-11-22), so that a phone that
+     * died blocks nobody for longer. [clock] counts deep sleep too. A renewal's answer lets it sound again.
+     */
+    fun maySound(): Boolean = token != null && clock() < soundUntilMs
 
     /** Whether the held claim's latest answer says listens can reach Last.fm; null when unknown. */
     var scrobblingAvailable: Boolean? = null
@@ -190,9 +199,9 @@ class PlaybackClaimOwner(
 
     /**
      * Heartbeats a held claim every ten seconds, and two seconds after a renewal the server did not
-     * answer. Losing the network never stops playback (owner decision, 2026-11-15): the claim
-     * outlives its lease, whose token the server renews until another device claims, so only a
-     * refusal gives it up.
+     * answer. Losing the network gives nothing up (owner decision, 2026-11-15): the claim outlives its
+     * lease, whose token the server renews until another device claims, so only a refusal gives it up.
+     * It only falls silent after five minutes of it ([maySound], owner 2026-11-22).
      */
     fun tick() {
         val now = clock()
@@ -291,6 +300,7 @@ class PlaybackClaimOwner(
                 token = response.claimToken
                 scrobblingAvailable = response.scrobblingAvailable
                 nextRenewMs = sentMs + HEARTBEAT_MS
+                soundUntilMs = sentMs + SILENT_WITHOUT_SERVER_MS
                 events(ClaimEvent.Owned)
                 settle(ClaimOutcome.GRANTED)
             }
@@ -300,8 +310,8 @@ class PlaybackClaimOwner(
             }
             is ClaimResponse.Rejected -> settle(ClaimOutcome.UNAVAILABLE)
             ClaimResponse.Unreachable -> {
-                // No answer is not a refusal (owner decision, 2026-11-15): playback goes on from what
-                // is here while the acquire is sent again, the offered token still its best credential.
+                // No answer is neither a refusal (owner decision, 2026-11-15) nor a grant (2026-11-22): the
+                // play waits silently and starts by itself once answered, the offered token its best credential.
                 if (offered != null) unansweredRelease = offered
                 acquiring = true
                 acquireRetryAtMs = sentMs + RETRY_MS
@@ -316,6 +326,7 @@ class PlaybackClaimOwner(
             is ClaimResponse.Granted -> {
                 token = response.claimToken
                 scrobblingAvailable = response.scrobblingAvailable
+                soundUntilMs = sentMs + SILENT_WITHOUT_SERVER_MS
             }
             // The server no longer recognizes this claim: another client owns playback now.
             ClaimResponse.Conflict, is ClaimResponse.Rejected -> {
@@ -340,5 +351,8 @@ class PlaybackClaimOwner(
         /** The server's thirty-second lease, counted from when the request left this device. */
         const val LEASE_MS = 30_000L
         const val RETRY_MS = 2_000L
+
+        /** The server lets another device start 5 s after this, and only a device that promised it. */
+        const val SILENT_WITHOUT_SERVER_MS = 300_000L
     }
 }

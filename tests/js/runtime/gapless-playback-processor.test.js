@@ -45,6 +45,8 @@ function loadProcessorModule() {
       registrations.push({ name, Processor });
     },
     sampleRate: 48_000,
+    Date: { now: () => context.wallMs },
+    wallMs: 1_000_000,
   };
   vm.createContext(context);
   const source = fs.readFileSync(processorPath, 'utf8');
@@ -53,6 +55,7 @@ function loadProcessorModule() {
 }
 
 function createProcessor({
+  processorOptions = undefined,
   generation = 7,
   sampleRate = 48_000,
   currentCapacityFrames = 512,
@@ -63,7 +66,7 @@ function createProcessor({
   loaded.context.sampleRate = sampleRate;
   const registration = loaded.registrations.find(({ name }) => name === PROCESSOR_NAME);
   assert.ok(registration, `${PROCESSOR_NAME} must be registered`);
-  const processor = new registration.Processor();
+  const processor = new registration.Processor(processorOptions && { processorOptions });
   const fixture = {
     ...loaded,
     generation,
@@ -1920,4 +1923,79 @@ test('a hard cut without quiet edges is left untouched', () => {
 
   assert.equal(rendered.indexOf(0.5), 1_000);
   assert.ok(fixture.events('boundary-padding').every(({ removableFrames }) => removableFrames === 0));
+});
+
+// Owner, 2026-11-22 ("Yes to all"): the shortened wait loads silently, and music stops 5 minutes after the
+// server was last heard, enforced here so that a frozen page or a sleeping computer cannot outlast it.
+function gatedPlayer() {
+  const fixture = createProcessor({ processorOptions: { awaitsPermission: true }, currentCapacityFrames: 48_000 });
+  fixture.send({ type: 'enqueue', generation: fixture.generation, streamId: 1, role: 'current', sequence: 0,
+    frameCount: 48_000, pcm: new Float32Array(96_000).fill(0.5) });
+  fixture.send({ type: 'play', generation: fixture.generation });
+  return {
+    ...fixture,
+    sound() {
+      const output = [new Float32Array(QUANTUM_FRAMES), new Float32Array(QUANTUM_FRAMES)];
+      fixture.processor.process([], [output]);
+      return output[0].some((sample) => sample !== 0);
+    },
+    permit: (forMs, untilMs = fixture.context.wallMs + forMs) => fixture.send({ type: 'may-sound', forMs, untilMs }),
+  };
+}
+
+test('a playing stream renders and consumes nothing until it may sound', () => {
+  const player = gatedPlayer();
+
+  for (let quantum = 0; quantum < 20; quantum += 1) assert.equal(player.sound(), false);
+  assert.equal(player.events('first-frame').length, 0);
+  assert.equal(player.processor.current.bufferedFrames, 48_000, 'loaded, waiting');
+
+  player.permit(300_000);
+
+  assert.equal(player.sound(), true, 'the grant is all it waited for');
+});
+
+test('it falls silent after the allowed time of rendered audio, whatever the wall clock says', () => {
+  const player = gatedPlayer();
+  player.permit(8, player.context.wallMs + 3_600_000);
+
+  assert.equal(player.sound(), true);
+  assert.equal(player.sound(), true);
+  assert.equal(player.sound(), true);
+  assert.equal(player.sound(), false, '8 ms are three quanta');
+});
+
+test('it falls silent at the wall clock deadline, as after the computer slept', () => {
+  const player = gatedPlayer();
+  player.permit(300_000);
+  assert.equal(player.sound(), true);
+
+  player.context.wallMs += 300_001;
+
+  assert.equal(player.sound(), false);
+});
+
+test('a permission that waited in the queue never counts from when it arrived', () => {
+  const player = gatedPlayer();
+  const until = player.context.wallMs + 300_000;
+  player.context.wallMs += 300_001;
+
+  player.permit(300_000, until);
+
+  assert.equal(player.sound(), false);
+});
+
+test('a permission taken back silences the next quantum, and a new one plays on from that frame', () => {
+  const player = gatedPlayer();
+  player.permit(300_000);
+  assert.equal(player.sound(), true);
+
+  player.permit(0, 0);
+  assert.equal(player.sound(), false);
+  const held = player.processor.current.bufferedFrames;
+  assert.equal(player.sound(), false);
+  assert.equal(player.processor.current.bufferedFrames, held);
+
+  player.permit(300_000);
+  assert.equal(player.sound(), true);
 });

@@ -46,6 +46,8 @@ class HttpPlaybackClaimApi(private val client: OkHttpClient, private val session
                     .put("album", track.album)
                     .put("artworkUrl", track.artworkUrl ?: JSONObject.NULL),
             )
+        // The render loop keeps this promise: see PlaybackClaimOwner.maySound.
+        body.put("silencesItself", true)
         if (takeover) body.put("takeover", true)
         position?.let { body.put("position", JSONObject().put("ms", it.ms).put("durationMs", it.durationMs)) }
         return try {

@@ -6,6 +6,8 @@ The claims run their own SQL on an in-memory SQLite table: these tests need and 
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import json
+from pathlib import Path
+import re
 import sqlite3
 from types import SimpleNamespace
 from uuid import UUID, uuid4
@@ -261,3 +263,102 @@ def test_a_leaving_page_that_came_back_meanwhile_is_not_replaced(handing):
     handing.start(holder, claim_token=token)
 
     assert refused(lambda: handing.hand_over(taker, observed, None)) == 409
+
+
+# Owner, 2026-11-22 ("Yes to all", b): music stops after 5 minutes without the server, and only then can
+# another start, 5 s later. The one timeout, and only for a player that silences itself.
+@pytest.mark.parametrize("surface", ["private_web", "mobile"])
+@pytest.mark.parametrize("takeover", [False, True])
+def test_a_player_that_silences_itself_gives_way_only_after_its_five_minutes_and_the_margin(player, surface, takeover):
+    holder, taker = str(uuid4()), str(uuid4())
+    player.start(holder, surface, silences_itself=True)
+
+    player.pass_time(304)
+    assert refused(lambda: player.start(taker, takeover=takeover)) == 409
+    assert player.service.get(None, taker)["is_playing_elsewhere"] is True
+    assert player.service.holder(None)["silent"] is False
+
+    player.pass_time(1)
+    assert player.service.get(None, taker)["can_start_here"] is True
+    assert player.service.holder(None)["silent"] is True
+    assert player.start(taker, takeover=takeover)["playbackState"]["is_playing_here"] is True
+
+
+def test_every_renewal_starts_the_five_minutes_again(player):
+    holder = str(uuid4())
+    token = player.start(holder, silences_itself=True)["claimToken"]
+    player.pass_time(250)
+
+    player.start(holder, claim_token=token, silences_itself=True)
+    player.pass_time(250)
+
+    assert refused(lambda: player.start(str(uuid4()))) == 409
+
+
+def test_a_player_that_makes_no_promise_never_times_out(player):
+    holder = str(uuid4())
+    token = player.start(holder, silences_itself=True)["claimToken"]
+    player.start(holder, claim_token=token)  # an old page or app renews without it
+
+    player.pass_time(86_400)
+
+    assert refused(lambda: player.start(str(uuid4()))) == 409
+    assert player.service.holder(None)["silent"] is False
+
+
+def test_a_handover_at_the_timeout_loses_to_a_renewal_that_came_first(handing):
+    holder, taker = str(uuid4()), str(uuid4())
+    token = handing.start(holder, silences_itself=True)["claimToken"]
+    handing.pass_time(305)
+    observed = handing.service.holder(None)
+
+    handing.start(holder, claim_token=token, silences_itself=True)
+
+    assert refused(lambda: handing.hand_over(taker, observed, None)) == 409
+
+
+def test_a_handover_at_the_timeout_needs_no_answer_and_the_taker_keeps_its_own_promise(handing):
+    holder, taker, third = str(uuid4()), str(uuid4()), str(uuid4())
+    handing.start(holder, silences_itself=True, position={"ms": 5_000, "durationMs": 195_000})
+    handing.pass_time(305)
+
+    taken = handing.service.hand_over(None, client_id=taker, client_surface="private_web",
+                                      observed=handing.service.holder(None), answer=None, silences_itself=True)
+
+    assert (taken["confirmed"], taken["position"]["ms"]) == (False, 195_000)
+    handing.pass_time(305)
+    assert handing.start(third)["claimToken"]
+
+
+def test_a_handoff_keeps_the_promise_of_the_page_that_takes_it(player):
+    holder, next_page = str(uuid4()), str(uuid4())
+    handoff = player.stage(holder, player.start(holder, silences_itself=True)["claimToken"])
+    player.start(next_page, claim_token=issue_opaque_token().raw, handoff=handoff, silences_itself=True)
+
+    player.pass_time(305)
+
+    assert player.start(str(uuid4()))["claimToken"]
+
+
+def test_the_promise_is_never_shown_as_part_of_the_track(player):
+    holder = str(uuid4())
+    claim = player.start(holder, silences_itself=True, position={"ms": 1, "durationMs": 2})
+
+    assert claim["playbackState"]["track"] == TRACK
+    assert player.service.get(None, str(uuid4()))["track"] == TRACK
+
+
+@pytest.mark.parametrize("promise", ["yes", 1, None])
+def test_the_promise_is_a_boolean(player, promise):
+    assert refused(lambda: player.start(str(uuid4()), silences_itself=promise)) == 400
+
+
+def test_the_browser_and_the_app_silence_themselves_before_the_server_lets_another_start():
+    root = Path(__file__).resolve().parents[2]
+    web = (root / "music_app/static/js/runtime/playback-ownership-helpers.js").read_text(encoding="utf-8")
+    app = (root / "apps/android-shell/app/src/main/java/org/albumhaven/shell/playback/PlaybackClaims.kt").read_text(
+        encoding="utf-8")
+    web_ms = int(re.search(r"PLAYBACK_SILENT_WITHOUT_SERVER_MS = (\d+);", web).group(1))
+    app_ms = int(re.search(r"SILENT_WITHOUT_SERVER_MS = ([\d_]+)L", app).group(1).replace("_", ""))
+
+    assert web_ms == app_ms == claims.SILENT_WITHOUT_SERVER_SECONDS * 1000 == 300_000

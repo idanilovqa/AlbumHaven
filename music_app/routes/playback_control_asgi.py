@@ -172,19 +172,44 @@ async def acquire_playback(request: Request):
             raise HTTPException(400, "Invalid playback state.")
         if payload.get("confirm") is not None:
             if (payload["confirm"] is not True or payload.get("takeover") is not True
-                    or payload.keys() - {"protocol", "state", "clientId", "clientSurface", "takeover", "confirm"}):
+                    or type(payload.get("silencesItself", False)) is not bool
+                    or payload.keys() - {"protocol", "state", "clientId", "clientSurface", "takeover", "confirm",
+                                         "silencesItself"}):
                 raise HTTPException(400, "Invalid playback handover.")
             return await _confirmed_takeover(request, payload)
-        timing["renew"] = timing["quiet"] = payload.get("claimToken") is not None
+        renews = payload.get("claimToken") is not None
+        timing["renew"] = timing["quiet"] = renews
+        track, reference = await _claimed_track(request, payload)
         result = await playback_call(PostgresPlaybackClaims(playback_config(request)).acquire,
             request.state.current_actor, client_id=payload.get("clientId"),
-            client_surface=payload.get("clientSurface"), track=payload.get("track"),
+            client_surface=payload.get("clientSurface"), track=track,
             claim_token=payload.get("claimToken"), handoff=payload.get("handoff"),
-            takeover=payload.get("takeover", False), position=payload.get("position"))
-        claimed_at = time.perf_counter()
-        scrobbling = await _scrobbling_status(request)
-        timing["scrobbling_ms"] = round((time.perf_counter() - claimed_at) * 1000)
-    return JSONResponse({**result, **scrobbling}, headers={"Cache-Control": "no-store"})
+            takeover=payload.get("takeover", False), position=payload.get("position"),
+            silences_itself=payload.get("silencesItself", False))
+        scrobbling = {}
+        if renews:
+            claimed_at = time.perf_counter()
+            scrobbling = await _scrobbling_status(request)
+            timing["scrobbling_ms"] = round((time.perf_counter() - claimed_at) * 1000)
+    return JSONResponse({**result, **reference, **scrobbling}, headers={"Cache-Control": "no-store"})
+
+
+async def _claimed_track(request, payload):
+    """The claim's track and what the answer adds to it. A start is one request (owner, 2026-11-22: the
+    shortened wait): a browser without a reference names its song by path and is issued one in the same call.
+    """
+    track = payload.get("track")
+    if not isinstance(track, dict) or "path" not in track:
+        return track, {}
+    if payload.get("clientSurface") != "private_web" or "playbackRef" in track:
+        raise HTTPException(400, "Invalid playback request.")
+    media: list[Path] = []
+    issued = await reference_call(request, lambda service: service.issue_batch(
+        request.state.current_actor, [{"clientKey": "claim", "path": track["path"]}], on_media=media.append))
+    _prepare_streams(media)
+    reference = issued["tracks"][0]["playbackRef"]
+    named = {key: value for key, value in track.items() if key != "path"}
+    return {**named, "playbackRef": reference}, {"playbackRef": reference, "referenceExpiresAt": issued["expiresAt"]}
 
 
 async def _confirmed_takeover(request, payload):
@@ -219,19 +244,22 @@ async def _confirmed_takeover(request, payload):
             if answer is None and not observed.get("silent"):
                 raise HTTPException(409, "Playback is active on another client.")
             result = await playback_call(claims.hand_over, actor, client_id=client_id,
-                client_surface=payload.get("clientSurface"), observed=observed, answer=answer)
+                client_surface=payload.get("clientSurface"), observed=observed, answer=answer,
+                silences_itself=payload.get("silencesItself", False))
             taken = True
         finally:
             await hub.settled(*holder, taken=taken)
         timing["confirmed"] = result["confirmed"]
         # A client of this same account and library: the one tab the taker may silence in its own browser.
         result = {**result, "previousClientId": observed["client_id"]}
-        scrobbling = await _scrobbling_status(request)
-    return JSONResponse({**result, **scrobbling}, headers={"Cache-Control": "no-store"})
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
 async def _scrobbling_status(request):
     """`scrobbling.available`: whether this claim's now-playing and scrobble writes can reach Last.fm.
+
+    Only a renewal says it: a start is answered without waiting for the lookup, which took over half of a
+    claim's time (owner, 2026-11-22: the shortened wait).
 
     True only when the actor may send both, the Last.fm API is configured and the account holds a
     session; it reveals nothing else. Omitted when it cannot be read, so clients fall back to the

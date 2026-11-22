@@ -2053,6 +2053,9 @@ def test_claim_reports_whether_its_listens_reach_lastfm_and_nothing_else(playbac
     secrets = ("claim-fixture-listener", "claim-fixture-session-key")
 
     def claim(actor, *, api_enabled=True, token=None, client_id=None):
+        if token is None:
+            # A start is answered without the lookup (owner, 2026-11-22: the shortened wait): its renewal says it.
+            client_id, token = started(actor)
         configure_native_app(playback_app, fixture, actor)
         playback_app.state.config["LASTFM_API_ENABLED"] = api_enabled
         client_id = client_id or str(uuid4())
@@ -2064,6 +2067,18 @@ def test_claim_reports_whether_its_listens_reach_lastfm_and_nothing_else(playbac
         assert all(secret not in body.decode() for secret in secrets)
         result = decode_json(body)
         return result["scrobbling"], client_id, result["claimToken"]
+
+    def started(actor):
+        configure_native_app(playback_app, fixture, actor)
+        client_id = str(uuid4())
+        status, _, body = run_asgi_request(playback_app, "PUT", "/playback/state", json_body={
+            "protocol": 1, "clientId": client_id, "clientSurface": "mobile", "claimToken": None,
+            "state": "playing", "track": {"playbackRef": reference, "title": "Track", "artist": "Owner",
+                                          "album": "Album", "artworkUrl": None}})
+        result = decode_json(body)
+        assert status == 200, result
+        assert "scrobbling" not in result
+        return client_id, result["claimToken"]
 
     def connect(actor):
         save_lastfm_settings(fixture.config, {"username": secrets[0], "session_key": secrets[1],

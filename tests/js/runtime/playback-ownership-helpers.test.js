@@ -644,34 +644,25 @@ test('server claim acquisition uses protocol v1 and keeps paths out of ownership
       return jsonResponse({
         ...protocolFixture.valid.claimResponse,
         expiresAt: '2099-10-23T23:00:30Z',
+        playbackRef: protocolFixture.valid.claimRequest.track.playbackRef,
+        referenceExpiresAt: '2099-10-24T00:00:00Z',
       });
     },
   });
 
   assert.equal(await context.claimPlaybackOwnership(localTrack), true);
-  assert.equal(requests.length, 2);
-  assert.deepEqual(requests[0], {
-    url: '/playback/refs',
-    method: 'POST',
-    body: {
-      protocol: protocolFixture.protocol,
-      tracks: [{ clientKey: requests[0].body.tracks[0].clientKey, path: localTrack.path }],
-    },
-  });
-  assert.equal(requests[1].url, '/playback/state');
-  assert.equal(requests[1].method, 'PUT');
-  assert.equal(requests[1].body.protocol, protocolFixture.protocol);
-  assert.equal(requests[1].body.clientSurface, protocolFixture.valid.claimRequest.clientSurface);
-  assert.equal(requests[1].body.state, protocolFixture.valid.claimRequest.state);
-  assert.equal(
-    requests[1].body.track.playbackRef,
-    protocolFixture.valid.claimRequest.track.playbackRef,
-  );
+  // Owner, 2026-11-22 (the shortened wait): one request, which names the song once, for the server alone.
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, '/playback/state');
+  assert.equal(requests[0].method, 'PUT');
+  assert.equal(requests[0].body.protocol, protocolFixture.protocol);
+  assert.equal(requests[0].body.clientSurface, protocolFixture.valid.claimRequest.clientSurface);
+  assert.equal(requests[0].body.state, protocolFixture.valid.claimRequest.state);
   const forbiddenClaimTrackKeys = Object.keys(
     protocolFixture.invalid.pathLeakingClaimRequest.track,
-  ).filter((key) => !(key in protocolFixture.valid.claimRequest.track));
-  assert.equal(forbiddenClaimTrackKeys.some((key) => key in requests[1].body.track), false);
-  assert.equal(JSON.stringify(requests[1].body).includes(localTrack.path), false);
+  ).filter((key) => key !== 'path' && !(key in protocolFixture.valid.claimRequest.track));
+  assert.equal(forbiddenClaimTrackKeys.some((key) => key in requests[0].body.track), false);
+  assert.equal(requests[0].body.track.path, localTrack.path);
   assert.equal(
     context.state.player.ownership.activeClaim.claimToken,
     protocolFixture.valid.claimResponse.claimToken,
@@ -723,7 +714,7 @@ test('protocol fixture rejects unsupported responses and strips untrusted path m
   });
 
   assert.equal(await context.claimPlaybackOwnership(localTrack), false);
-  assert.equal(statePuts, 0);
+  assert.equal(statePuts, 1, 'one request, whose unsupported answer grants nothing');
   context.syncMirroredPlaybackState(protocolFixture.invalid.pathLeakingPlaybackState);
   assert.equal(
     Object.prototype.hasOwnProperty.call(context.state.player.ownership.mirroredTrack, 'path'),
@@ -859,7 +850,7 @@ test('overlapping selections sharing a claim token never delete the newer select
   await new Promise((resolve) => setImmediate(resolve));
   const newer = context.claimPlaybackOwnership({ ...localTrack, path: 'newer.flac' });
   await new Promise((resolve) => setImmediate(resolve));
-  const response = () => jsonResponse({ protocol: 1, claimToken: 'shared-token',
+  const response = () => jsonResponse({ protocol: 1, claimToken: 'shared-token', playbackRef: 'ref:newer.flac',
     expiresAt: '2099-10-23T23:00:30Z', leaseMs: 30_000, playbackState: { is_playing_here: true } });
   if (acquisitions.length === 1) {
     acquisitions[0].pending.resolve(response());
@@ -1000,7 +991,7 @@ test('new selection renews while old listen drain is pending and obsolete releas
         return jsonResponse({ protocol: 1 });
       }
       writes.push(body);
-      return jsonResponse({ protocol: 1, claimToken: 'shared-token',
+      return jsonResponse({ protocol: 1, claimToken: 'shared-token', playbackRef: `ref:${body.track.path}`,
         expiresAt: '2099-10-23T23:00:30Z', leaseMs: 30_000, playbackState: { is_playing_here: true } });
     },
   });
@@ -1014,7 +1005,7 @@ test('new selection renews while old listen drain is pending and obsolete releas
   assert.equal(acquired, true, 'old listen drain must not block a new selection');
   assert.equal(writes.length, 2);
   assert.equal(writes[1].claimToken, 'shared-token');
-  assert.equal(writes[1].track.playbackRef, 'ref:new-selection.flac');
+  assert.equal(writes[1].track.path, 'new-selection.flac');
   pendingDrain.resolve();
   assert.equal(await release, false);
   assert.equal(await resume, true);
@@ -1226,36 +1217,25 @@ test('the local lease runs for the answer\'s leaseMs from before the request was
   assert.equal(context.state.player.ownership.activeClaim, null, 'an answer without leaseMs is refused');
 });
 
-test('lease expiry still drops ownership when renewals stop answering', async () => {
+// Owner, 2026-11-22 ("Yes to all"): playing on without the server for five minutes replaces dropping at the lease.
+test('a lapsed lease with no answer keeps the claim, no listen writes and no more time to sound', async () => {
   const harness = leaseHarness({ renew: (_answer, signal) => new Promise((_resolve, reject) => {
     signal.addEventListener('abort', () => reject(new Error('aborted')));
   }) });
   const { context, clock, stopStreamingPlaybackCalls } = harness;
   assert.equal(await context.claimPlaybackOwnership(localTrack), true);
+  const until = context.playbackSoundPermission().untilMs;
   clock.monotonic = 30_000;
   const unanswered = harness.leaseTimers()[0].callback();
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(harness.renewals(), 1, 'no renewal in flight: the lapsed lease asks the server once');
-  assert.notEqual(context.state.player.ownership.activeClaim, null);
   harness.timers.filter(({ delay }) => delay === 10_000).at(-1).callback();
   await unanswered;
-  assert.equal(context.state.player.ownership.activeClaim, null, 'an unanswered renewal ends the lease');
-  assert.deepEqual(stopStreamingPlaybackCalls, ['ownership-lost']);
 
-  assert.equal(await context.claimPlaybackOwnership(localTrack), true);
-  harness.heartbeat();
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(harness.renewals(), 2);
-  clock.monotonic = 60_000;
-  const expiry = harness.leaseTimers()[1].callback();
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.notEqual(context.state.player.ownership.activeClaim, null);
-  const renewalDeadline = harness.timers.filter(({ delay }) => delay === 10_000).at(-1);
-  renewalDeadline.callback();
-  await expiry;
-  assert.equal(context.state.player.ownership.activeClaim, null);
-  assert.equal(context.state.player.ownership.blockedReason, 'playback_unavailable');
-  assert.deepEqual(stopStreamingPlaybackCalls, ['ownership-lost', 'ownership-lost']);
+  assert.equal(context.state.player.ownership.activeClaim?.claimToken, 'claim-1');
+  assert.deepEqual(stopStreamingPlaybackCalls, []);
+  assert.equal(context.isActivePlaybackOwner(), false, 'listen writes wait for a renewed lease');
+  assert.equal(context.playbackSoundPermission().untilMs, until);
 });
 
 test('a client clock jump past the lease keeps a playing claim the server still honours', async () => {
@@ -1996,7 +1976,6 @@ test('a paused tab that closes says it is silent', async () => {
 for (const [name, answer, allowed] of [
   ['nobody plays', { protocol: 1, is_playing_elsewhere: false }, true],
   ['another client may sound', { protocol: 1, is_playing_elsewhere: true, track: { title: 'Theirs' } }, false],
-  ['the server does not answer', null, false],
 ]) {
   test(`an app with its own claim is let start only on the server's word: ${name}`, async () => {
     const toasts = [];
@@ -2076,5 +2055,203 @@ for (const first of [true, false]) {
 
     assert.deepEqual(played, [['Pressed', 87]]);
     assert.equal(state.player.ownership.unreleasedClaim?.claimToken, 'departing-claim', 'given back if it cannot');
+  });
+}
+
+// Owner, 2026-11-22 ("Yes to all"): the shortened wait, 5 minutes without the server, and an outage start waits.
+function claimingTab(answer, overrides = {}) {
+  const clock = { monotonic: 1_000 };
+  const requests = [];
+  const permissions = [];
+  const timers = [];
+  let heartbeat = null;
+  const loaded = loadHelper({
+    performance: { now: () => clock.monotonic },
+    Date: class extends Date { static now() { return 50_000_000 + clock.monotonic; } },
+    setTimeout: (callback, delay) => { timers.push({ callback, delay }); return timers.length; },
+    setInterval: (callback) => { heartbeat = callback; return 1; },
+    getPlayerPlaybackSnapshot: () => ({ paused: false, ended: false, currentTime: 0, duration: 0 }),
+    syncStreamingSoundPermission: () => permissions.push(loaded.context.playbackSoundPermission()),
+    fetch: async (url, init = {}) => {
+      const body = init.body ? JSON.parse(init.body) : null;
+      requests.push({ method: init.method || 'GET', url, body });
+      if (init.method === 'GET') return jsonResponse({ protocol: 1, is_playing_elsewhere: false });
+      if (init.method === 'DELETE') return jsonResponse({ protocol: 1 });
+      return answer({ clock, body }) || jsonResponse({ protocol: 1, claimToken: 'granted', leaseMs: 30_000,
+        expiresAt: '2099-01-01T00:00:00Z', playbackRef: 'issued', referenceExpiresAt: '2099-01-01T00:00:00Z' });
+    },
+    ...overrides,
+  });
+  loaded.context.state.player.current = localTrack;
+  const askAgain = () => timers.filter(({ delay }) => delay === 2_000).at(-1).callback();
+  return { ...loaded, clock, requests, permissions, timers, askAgain, heartbeat: () => heartbeat() };
+}
+
+test('a start is one request: it names its song and is issued the reference', async () => {
+  const tab = claimingTab(() => null);
+
+  assert.equal(await tab.context.claimPlaybackOwnership(localTrack), true);
+
+  assert.equal(tab.requests.length, 1);
+  assert.equal(tab.requests[0].url, '/playback/state');
+  assert.equal(tab.requests[0].body.track.path, localTrack.path);
+  assert.equal('playbackRef' in tab.requests[0].body.track, false);
+  assert.equal(tab.requests[0].body.silencesItself, true);
+  const claim = tab.context.state.player.ownership.activeClaim;
+  assert.equal(claim.track.playbackRef, 'issued');
+  assert.equal('path' in claim.track, false);
+});
+
+test('a resume after Pause claims with the reference it had', async () => {
+  const tab = claimingTab(() => null);
+  await tab.context.claimPlaybackOwnership(localTrack);
+  await tab.context.releasePlaybackOwnership();
+  tab.requests.length = 0;
+
+  assert.equal(await tab.context.claimPlaybackOwnership(localTrack), true);
+
+  assert.equal(tab.requests.length, 1);
+  assert.equal(tab.requests[0].body.track.playbackRef, 'issued');
+});
+
+test('it may sound only for five minutes from before the answered request was sent', async () => {
+  const tab = claimingTab(({ clock }) => { clock.monotonic += 700; return null; });
+  assert.equal(tab.context.playbackSoundPermission().forMs, 0, 'no grant, no sound');
+
+  await tab.context.claimPlaybackOwnership(localTrack);
+
+  const granted = tab.permissions.at(-1);
+  assert.equal(granted.forMs, 300_000 - 700);
+  assert.equal(granted.untilMs, 50_000_000 + 1_000 + 300_000);
+});
+
+for (const [how, loses] of [
+  ['gives its claim back', (context) => context.releasePlaybackOwnership()],
+  ['loses its claim', (context) => context.losePlaybackOwnership()],
+  ['closes while paused', (context) => {
+    context.getPlayerPlaybackSnapshot = () => ({ paused: true, ended: false });
+    return context.keepPlaybackClaimForThisTab();
+  }],
+  ['comes back from the page cache', (context) => {
+    context.restorePlaybackOwnershipFromPageCache({ paused: true, ended: false });
+  }],
+]) {
+  test(`a tab that ${how} may no longer sound, at once`, async () => {
+    const tab = claimingTab(() => null);
+    await tab.context.claimPlaybackOwnership(localTrack);
+    assert.ok(tab.permissions.at(-1).forMs > 0);
+
+    await loses(tab.context);
+
+    assert.equal(tab.permissions.at(-1).forMs, 0);
+  });
+}
+
+test('an unanswered renewal keeps the claim and its first deadline, and an answer extends it', async () => {
+  let offline = false;
+  const tab = claimingTab(() => { if (offline) throw new TypeError('Failed to fetch'); return null; });
+  await tab.context.claimPlaybackOwnership(localTrack);
+  const until = tab.context.playbackSoundPermission().untilMs;
+  offline = true;
+  tab.clock.monotonic += 60_000;
+
+  assert.equal(await tab.context.refreshPlaybackOwnershipClaim(localTrack), false);
+
+  assert.equal(tab.context.state.player.ownership.activeClaim?.claimToken, 'granted', 'no answer is not a refusal');
+  assert.deepEqual(tab.stopStreamingPlaybackCalls, []);
+  assert.equal(tab.context.playbackSoundPermission().untilMs, until, 'no answer, no more time');
+
+  offline = false;
+  assert.equal(await tab.context.refreshPlaybackOwnershipClaim(localTrack), true);
+  assert.equal(tab.context.playbackSoundPermission().untilMs, until + 60_000);
+});
+
+test('Play during an outage waits silently and starts by itself once the server answers', async () => {
+  let offline = true;
+  const tab = claimingTab(() => { if (offline) throw new TypeError('Failed to fetch'); return null; });
+  let answered = null;
+  const pressed = tab.context.claimPlaybackOwnership(localTrack).then((value) => { answered = value; });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(answered, null);
+  assert.equal(tab.context.playbackSoundPermission().forMs, 0);
+  assert.deepEqual(tab.stopStreamingPlaybackCalls, [], 'the stream it loads is left to load');
+
+  offline = false;
+  tab.askAgain();
+  await pressed;
+
+  assert.equal(answered, true);
+  assert.ok(tab.permissions.at(-1).forMs > 0);
+});
+
+test('a Pause during that wait ends it', async () => {
+  const tab = claimingTab(() => { throw new TypeError('Failed to fetch'); });
+  const waiting = tab.context.claimPlaybackOwnership(localTrack);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  await tab.context.releasePlaybackOwnership();
+
+  assert.equal(await waiting, false);
+});
+
+test('a held claim switches songs during an outage, inside its five minutes', async () => {
+  let offline = false;
+  const tab = claimingTab(() => { if (offline) throw new TypeError('Failed to fetch'); return null; });
+  await tab.context.claimPlaybackOwnership(localTrack);
+  offline = true;
+
+  assert.equal(await tab.context.claimPlaybackOwnership({ ...localTrack, path: 'C:/Music/next.flac' }), true);
+  assert.ok(tab.context.playbackSoundPermission().forMs > 0);
+});
+
+test('an app start during an outage waits and starts once the server says nobody plays', async () => {
+  let offline = true;
+  const timers = [];
+  const { context } = loadHelper({
+    setTimeout: (callback, delay) => { timers.push({ callback, delay }); return timers.length; },
+    currentPlaybackEngine: () => ({ holdsOwnClaim: true, claimClientId: () => 'app-client', ownsPlayback: () => false }),
+    fetch: async () => {
+      if (offline) throw new TypeError('Failed to fetch');
+      return jsonResponse({ protocol: 1, is_playing_elsewhere: false });
+    },
+  });
+  let answered = null;
+  const pressed = context.claimPlaybackOwnership(localTrack).then((value) => { answered = value; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(answered, null);
+
+  offline = false;
+  timers.filter(({ delay }) => delay === 2_000).at(-1).callback();
+  await pressed;
+
+  assert.equal(answered, true);
+});
+
+test('Play here promises that this tab silences itself', async () => {
+  const tab = claimingTab(({ body }) => (body.confirm ? jsonResponse({ protocol: 1 }) : null),
+    { state: playingElsewhereState() });
+
+  await tab.context.takeOverPlaybackHere();
+
+  assert.equal(tab.requests.find(({ method }) => method === 'PUT').body.silencesItself, true);
+});
+
+for (const [name, envelope, resumes] of [
+  ['this tab was just playing', { expiresAt: () => new Date(Date.now() + 10_000).toISOString() }, true],
+  ['this tab handed on too long ago, as after a browser restart', { expiresAt: () => new Date(Date.now() - 1).toISOString() }, false],
+  ['another tab was playing', null, false],
+]) {
+  test(`a loaded page resumes by itself only if this tab was playing: ${name}`, () => {
+    const stored = envelope && JSON.stringify({
+      id: '12345678-1234-4123-8123-123456789abc', token: 'H'.repeat(43), expiresAt: envelope.expiresAt(),
+    });
+    const { context } = loadHelper({
+      crypto: require('node:crypto').webcrypto,
+      getSessionStorageItem: (key) => (key === 'albumhaven.playbackHandoff.v1' ? stored || '' : ''),
+      removeSessionStorageItem: () => {},
+    });
+
+    assert.equal(context.canThisTabResumePlayback(), resumes);
   });
 }

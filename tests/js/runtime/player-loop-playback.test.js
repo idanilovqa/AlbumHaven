@@ -1266,7 +1266,7 @@ test('BFCache resume uses consumed ownership once and opens one listen at the sa
   assert.equal(listenStarts.length, 1);
 });
 
-test('without a claim a press shows its song at once and opens no audio until the server grants it', async () => {
+test('without a claim a press loads its stream silently while the server is asked', async () => {
   let resolveClaim;
   const claim = new Promise((resolve) => { resolveClaim = resolve; });
   const streamingStarts = [];
@@ -1276,12 +1276,12 @@ test('without a claim a press shows its song at once and opens no audio until th
     startStreamingTrack: async (track) => { streamingStarts.push(track); },
     pauseStreamingPlayback: () => { pauses += 1; },
   });
-  const track = { path: 'C:/Music/awaited.flac', src: '/track?path=awaited.flac', title: 'Awaited' };
 
-  const pendingStart = context.playTrackFromPayload(track, { autoplay: true });
+  const pendingStart = context.playTrackFromPayload({
+    path: 'C:/Music/awaited.flac', src: '/track?path=awaited.flac', title: 'Awaited',
+  }, { autoplay: true });
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(streamingStarts.length, 0, 'nothing can sound before the answer');
-  assert.equal(context.state.player.selectedTrack?.path, track.path, 'the press still paints at once');
+  assert.equal(streamingStarts.length, 1, 'loading; the audio thread holds it until the grant');
 
   resolveClaim(true);
   assert.equal(await pendingStart, true);
@@ -1289,17 +1289,40 @@ test('without a claim a press shows its song at once and opens no audio until th
   assert.equal(pauses, 0);
 });
 
-test('a refused claim never sounds and no longer shows its song', async () => {
+test('an app with its own claim starts nothing before the server answers, as its sound cannot be held', async () => {
+  let resolveClaim;
+  const claim = new Promise((resolve) => { resolveClaim = resolve; });
   const streamingStarts = [];
+  const { context } = loadHelper({
+    loadsSilentlyWhileAsking: () => false,
+    canStartPlaybackInThisTab: () => claim,
+    startStreamingTrack: async (track) => { streamingStarts.push(track); },
+  });
+
+  const pendingStart = context.playTrackFromPayload({
+    path: 'C:/Music/native.flac', src: '/track?path=native.flac', title: 'Native',
+  }, { autoplay: true });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(streamingStarts.length, 0);
+
+  resolveClaim(false);
+  assert.equal(await pendingStart, false);
+  assert.equal(streamingStarts.length, 0);
+});
+
+test('a refused claim stops the stream it loaded silently and no longer shows it as pressed', async () => {
+  const streamingStarts = [];
+  let pauses = 0;
   const { context } = loadHelper({
     canStartPlaybackInThisTab: async () => false,
     startStreamingTrack: async (track) => { streamingStarts.push(track); },
+    pauseStreamingPlayback: () => { pauses += 1; },
   });
 
   assert.equal(await context.playTrackFromPayload({
     path: 'C:/Music/refused.flac', src: '/track?path=refused.flac', title: 'Refused',
   }, { autoplay: true }), false);
-  assert.equal(streamingStarts.length, 0);
+  assert.deepEqual([streamingStarts.length, pauses], [1, 1]);
   assert.equal(context.state.player.selectedTrack ?? null, null);
 });
 
@@ -1355,7 +1378,7 @@ test('different-track selection cancels optional waveform work before awaiting o
   assert.deepEqual(events.slice(0, 2), ['cancel:7', 'claim']);
   resolveClaim(false);
   assert.equal(await pendingStart, false);
-  assert.deepEqual(events, ['cancel:7', 'claim'], 'refused, no stream ever opens');
+  assert.deepEqual(events, ['cancel:7', 'claim', 'stream', 'pause'], 'loaded silently, refused, paused');
 });
 
 test('same-track and malformed selections do not cancel current waveform work', async () => {
@@ -1388,33 +1411,31 @@ test('same-track and malformed selections do not cancel current waveform work', 
   assert.deepEqual(starts, [current]);
 });
 
-for (const holds of [false, true]) {
-  test(`resume ${holds ? 'with a held claim sounds at once' : 'without a claim waits for the grant'}, and resumes only once`, async () => {
-    let resolveClaim;
-    const claim = new Promise((resolve) => { resolveClaim = resolve; });
-    let resumeCalls = 0;
-    const { context } = loadHelper({
-      holdsPlaybackClaim: () => holds,
-      getPlayerPlaybackSnapshot: () => ({
-        currentTime: 12, duration: 60, paused: true, ended: false, src: '/track?path=song.flac',
-      }),
-      canStartPlaybackInThisTab: () => claim,
-      resumeStreamingPlayback: async () => { resumeCalls += 1; return true; },
-    });
-
-    assert.equal(context.togglePlayerPlayback({ focusTimelineOnResume: false }), true);
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(resumeCalls, holds ? 1 : 0);
-
-    resolveClaim(true);
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(resumeCalls, 1);
-  });
-}
-
-test('a refused resume never sounds', async () => {
+test('resume prepares its sound inside the press while the server is asked, and resumes only once', async () => {
+  let resolveClaim;
+  const claim = new Promise((resolve) => { resolveClaim = resolve; });
   let resumeCalls = 0;
   const { context } = loadHelper({
+    getPlayerPlaybackSnapshot: () => ({
+      currentTime: 12, duration: 60, paused: true, ended: false, src: '/track?path=song.flac',
+    }),
+    canStartPlaybackInThisTab: () => claim,
+    resumeStreamingPlayback: async () => { resumeCalls += 1; return true; },
+  });
+
+  assert.equal(context.togglePlayerPlayback({ focusTimelineOnResume: false }), true);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(resumeCalls, 1, 'the audio thread holds it until the grant');
+
+  resolveClaim(true);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(resumeCalls, 1);
+});
+
+test('an app with its own claim resumes only once the server answers', async () => {
+  let resumeCalls = 0;
+  const { context } = loadHelper({
+    loadsSilentlyWhileAsking: () => false,
     getPlayerPlaybackSnapshot: () => ({
       currentTime: 12, duration: 60, paused: true, ended: false, src: '/track?path=song.flac',
     }),
@@ -1425,6 +1446,23 @@ test('a refused resume never sounds', async () => {
   context.togglePlayerPlayback({ focusTimelineOnResume: false });
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(resumeCalls, 0);
+});
+
+test('a refused resume is paused again', async () => {
+  let resumeCalls = 0;
+  let pauses = 0;
+  const { context } = loadHelper({
+    getPlayerPlaybackSnapshot: () => ({
+      currentTime: 12, duration: 60, paused: true, ended: false, src: '/track?path=song.flac',
+    }),
+    canStartPlaybackInThisTab: async () => false,
+    resumeStreamingPlayback: async () => { resumeCalls += 1; return true; },
+    pauseStreamingPlayback: () => { pauses += 1; },
+  });
+
+  context.togglePlayerPlayback({ focusTimelineOnResume: false });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual([resumeCalls, pauses], [1, 1]);
 });
 
 test('pause waits for authorized listen effects before releasing ownership', async () => {
@@ -2219,7 +2257,7 @@ test('streaming boundary identity mismatch fails without consuming or changing c
   assert.equal(audio.currentTime, 12);
 }
 
-test('server ownership denial plays nothing and reports the block', async () => {
+test('server ownership denial pauses the held resume and reports the block', async () => {
   const calls = { showToast: [] };
   const audio = new FakeAudioElement({ paused: true, src: '/track?path=song.flac', duration: 60 });
   const playButton = new FakeElement({ tagName: 'BUTTON' });
@@ -2236,7 +2274,7 @@ test('server ownership denial plays nothing and reports the block', async () => 
   playButton.dispatch('click');
   await new Promise((resolve) => setImmediate(resolve));
 
-  assert.equal(audio.playCalls, 0);
+  assert.equal(audio.pauseCalls, 1);
   assert.equal(audio.paused, true);
   assert.deepEqual(calls.showToast, [['Playback is active in another tab.', 'error', 2800]]);
 });
@@ -4313,6 +4351,7 @@ test('Play during a press that still waits shows the song it resumes, not the wa
       currentTime: 12, duration: 60, paused: true, ended: false, src: '/track?path=song.flac',
     }),
     canStartPlaybackInThisTab: () => new Promise(() => {}),
+    startStreamingTrack: () => new Promise(() => {}),
   });
   void context.playTrackFromPayload({ path: 'C:/Music/waiting.flac', src: '/track?path=waiting.flac', title: 'Waiting' });
   await new Promise((resolve) => setImmediate(resolve));
@@ -4321,4 +4360,69 @@ test('Play during a press that still waits shows the song it resumes, not the wa
   context.togglePlayerPlayback({ focusTimelineOnResume: false });
 
   assert.equal(context.state.player.selectedTrack ?? null, null);
+});
+
+for (const how of ['could not open', 'lost its socket']) {
+  test(`an outage start whose silent stream ${how} starts by itself once the server answers`, async () => {
+    let resolveClaim;
+    const claim = new Promise((resolve) => { resolveClaim = resolve; });
+    let mode = 'paused';
+    const starts = [];
+    const { context } = loadHelper({
+      getPlayerPlaybackSnapshot: () => ({ mode, currentTime: 0, duration: 60, paused: true, ended: false, src: '' }),
+      canStartPlaybackInThisTab: () => claim,
+      startStreamingTrack: async (track, options) => {
+        starts.push(options.startSeconds);
+        if (starts.length > 1) { mode = 'playing'; return { track }; }
+        mode = 'error';
+        if (how === 'could not open') throw new Error('no network');
+        return { track };
+      },
+    });
+
+    const pressed = context.playTrackFromPayload({ path: 'C:/Music/outage.flac', src: '/track?path=outage.flac',
+      title: 'Outage' }, { autoplay: true, startSeconds: 42 });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(starts, [42]);
+
+    resolveClaim(true);
+
+    assert.equal(await pressed, true);
+    assert.deepEqual(starts, [42, 42]);
+  });
+}
+
+test('an outage resume whose stream died starts at its place once the server answers', async () => {
+  let resolveClaim;
+  const claim = new Promise((resolve) => { resolveClaim = resolve; });
+  let mode = 'paused';
+  const starts = [];
+  const { context } = loadHelper({
+    getPlayerPlaybackSnapshot: () => ({ mode, currentTime: 12, duration: 60, paused: true, ended: false,
+      src: '/track?path=song.flac' }),
+    canStartPlaybackInThisTab: () => claim,
+    resumeStreamingPlayback: async () => { mode = 'error'; return false; },
+    startStreamingTrack: async (track, options) => { starts.push(options.startSeconds); return { track }; },
+  });
+
+  context.togglePlayerPlayback({ focusTimelineOnResume: false });
+  await new Promise((resolve) => setImmediate(resolve));
+  resolveClaim(true);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(starts, [12]);
+});
+
+test('an app start that failed after its answer is not started a second time', async () => {
+  let starts = 0;
+  const { context } = loadHelper({
+    loadsSilentlyWhileAsking: () => false,
+    getPlayerPlaybackSnapshot: () => ({ mode: 'error', currentTime: 0, duration: 60, paused: true, ended: false, src: '' }),
+    canStartPlaybackInThisTab: async () => true,
+    startStreamingTrack: async (track) => { starts += 1; return { track }; },
+  });
+
+  await context.playTrackFromPayload({ path: 'C:/Music/app.flac', src: '/track?path=app.flac', title: 'App' });
+
+  assert.equal(starts, 1);
 });

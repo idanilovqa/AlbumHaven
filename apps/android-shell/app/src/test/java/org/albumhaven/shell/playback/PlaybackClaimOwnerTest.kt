@@ -350,4 +350,37 @@ class PlaybackClaimOwnerTest {
         assertTrue(api.calls.isEmpty())
         assertTrue(events.isEmpty())
     }
+
+    // Owner, 2026-11-22: music stops after five minutes without the server, so a dead phone blocks no longer.
+    @Test
+    fun aClaimMaySoundForFiveMinutesFromWhenItsAnsweredRequestWasSent() {
+        assertFalse("nothing before the grant", owner.maySound())
+        owner.acquire(track) {}
+        now = 700 // the answer was on its way this long
+        drain()
+        api.renewResponse = { ClaimResponse.Unreachable }
+
+        now = PlaybackClaimOwner.SILENT_WITHOUT_SERVER_MS - 1
+        assertTrue(owner.maySound())
+        owner.tick()
+        drain()
+        now = PlaybackClaimOwner.SILENT_WITHOUT_SERVER_MS
+        assertFalse(owner.maySound())
+        assertTrue("silent, not given up", owner.owned)
+
+        api.renewResponse = { ClaimResponse.Granted(it) }
+        now += PlaybackClaimOwner.RETRY_MS
+        owner.tick()
+        drain()
+        assertTrue("an answer lets it sound again", owner.maySound())
+    }
+
+    @Test
+    fun aClaimGivenBackMayNotSound() {
+        owner.acquire(track) {}
+        drain()
+        owner.release()
+        assertFalse(owner.maySound())
+    }
+}
 }

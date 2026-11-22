@@ -791,8 +791,8 @@ class NativePlaybackControllerTest {
     }
 
     @Test
-    fun anUnreachableServerNeverStopsPlaybackAndOnlyAnotherDeviceTakingOverDoes() {
-        // Owner decision 2026-11-15: losing the network never stops playback, past the lease too.
+    fun anUnreachableServerKeepsPlaybackForFiveMinutesAndAnotherDeviceTakingOverEndsIt() {
+        // Owner decisions 2026-11-15 and 2026-11-22: past the lease, for at most five minutes.
         val long = SyntheticTrack(tag = 3, frames = 120L * RATE)
         val harness = ControllerHarness(long, realTime = true)
         harness.claims.renewResponse = { ClaimResponse.Unreachable }
@@ -1266,11 +1266,11 @@ class NativePlaybackControllerTest {
     /**
      * Owner retest B-P3 (2026-11-17): paused with the network gone, Play did not go on. Paused, a
      * failed reconnect gave the received audio up, and an unanswered claim request ended in an error.
-     * Now Play goes on from the received audio with nothing answering, and once the network is back
-     * the kept token renews and the rest of the song joins in place.
+     * Owner, 2026-11-22: Play during an outage waits for the server, then starts by itself from the received
+     * audio, and the rest of the song joins in place.
      */
     @Test
-    fun pausedWithTheNetworkGonePlayGoesOnFromTheReceivedAudio() {
+    fun pausedWithTheNetworkGonePlayWaitsForTheServerThenGoesOnFromTheReceivedAudio() {
         val long = SyntheticTrack(tag = 3, frames = 60L * RATE)
         val harness = ControllerHarness(long, realTime = true, encoded = true)
         harness.load(1, long)
@@ -1296,8 +1296,7 @@ class NativePlaybackControllerTest {
         val playedAt = harness.now
         harness.runUntil { harness.now >= playedAt + 3_000 || harness.events.any { it is NativePlaybackEvent.Error } }
         assertFalse(harness.events.any { it is NativePlaybackEvent.Error })
-        assertTrue("plays on from the received audio", sink.writtenFrames > written)
-        assertEquals(NativePlaybackState.PLAYING, harness.state())
+        assertEquals("nothing is heard before the server answers", written, sink.writtenFrames)
 
         harness.refuseConnect = false
         harness.claims.renewResponse = { ClaimResponse.Granted(it) }

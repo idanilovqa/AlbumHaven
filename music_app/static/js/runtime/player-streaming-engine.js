@@ -638,6 +638,13 @@ async function silenceStreamingPlaybackForHandover() {
   };
 }
 
+// Tells the audio thread how long it may sound: not at all without a grant (a stream still loads), and
+// never past the time allowed without the server.
+function syncStreamingSoundPermission(node = streamingEngineState().node) {
+  if (!node || typeof playbackSoundPermission !== 'function') return;
+  node.port.postMessage({ type: 'may-sound', ...playbackSoundPermission() });
+}
+
 // What was rendered is heard only after the output's latency: "I am silent" waits that long.
 function waitOutStreamingOutputLatency(context) {
   const latencySeconds = (Number(context.baseLatency) || 0)
@@ -2019,6 +2026,7 @@ function handleStreamingWorkletMessage(message) {
         && pendingReplacement.currentStreamId === current.streamId
         && pendingReplacement.streamId === engine.roles.continuity?.streamId) {
       if (!engine.snapshot.paused) {
+        syncStreamingSoundPermission();
         engine.node.port.postMessage({ type: 'play', generation: engine.generation });
       }
       return;
@@ -2296,10 +2304,13 @@ async function prepareStreamingPlaybackEngine(sampleRate = 0) {
           numberOfInputs: 0,
           numberOfOutputs: 1,
           outputChannelCount: [2],
+          ...(typeof playbackSoundPermission === 'function'
+            ? { processorOptions: { awaitsPermission: true } } : {}),
         });
         node.connect(context.destination);
         node.port.onmessage = ({ data }) => handleStreamingWorkletMessage(data);
         connectStreamingSilenceRelay(node);
+        syncStreamingSoundPermission(node);
         node.onprocessorerror = (event) => {
           if (engine.node !== node) return;
           failStreamingEngine('processor', event, 'processor-error');
@@ -2984,6 +2995,7 @@ async function resumeBrowserStreaming(
   if (expectedStartRequestId === null) {
     engine.startRequestId = (Number(engine.startRequestId) || 0) + 1;
   }
+  syncStreamingSoundPermission(node);
   node.port.postMessage({ type: 'play', generation });
   engine.snapshot.paused = false;
   maybeGrantDeferredReplacementCredit();

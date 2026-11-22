@@ -375,6 +375,11 @@ function cancelPendingPlayerSelection() {
   clearSelectedTrack();
 }
 
+function mayStartBeforeTheAnswer() {
+  return typeof loadsSilentlyWhileAsking !== 'function' || loadsSilentlyWhileAsking()
+    || (typeof holdsPlaybackClaim === 'function' && holdsPlaybackClaim());
+}
+
 async function playTrackFromPayload(track, options = {}) {
   const selectionToken = ++playerTrackSelectionToken;
   const shouldAutoplay = options.autoplay !== false;
@@ -387,10 +392,11 @@ async function playTrackFromPayload(track, options = {}) {
   }
   const ownershipAlreadyClaimed = options.ownershipClaimed === true
     && typeof isActivePlaybackOwner === 'function' && isActivePlaybackOwner();
-  // Instant start only with a claim already held: nobody else can have started, so queue steps keep
-  // their starts. Without one the press paints at once and sounds when the server grants it (owner,
-  // 2026-11-22: "You cannot just start without an answer"). With another client known to play it paints
-  // nothing either: the overlay offers Play here (sandbox5, 2026-11-21).
+  // A press paints and loads at once, also where the first press lets the browser start audio, and is
+  // heard only once granted: the audio thread holds it (owner, 2026-11-22: "You cannot just start without
+  // an answer", the shortened wait). It waits before loading where nothing can hold the sound (the app's
+  // own player, unless it already owns playback), and where another client is known to play: then it
+  // paints nothing either and the overlay offers Play here (sandbox5, 2026-11-21).
   const knownElsewhere = shouldAutoplay && !ownershipAlreadyClaimed && options.takeover !== true
     && typeof isPlaybackLockedByAnotherTab === 'function' && isPlaybackLockedByAnotherTab();
   const pendingClaim = shouldAutoplay && !ownershipAlreadyClaimed && typeof canStartPlaybackInThisTab === 'function'
@@ -402,7 +408,8 @@ async function playTrackFromPayload(track, options = {}) {
     return false;
   };
   if (pendingClaim === false) return refused();
-  if (pendingClaim !== true && !(typeof holdsPlaybackClaim === 'function' && holdsPlaybackClaim())) {
+  const asksBeforeLoading = pendingClaim !== true && (knownElsewhere || !mayStartBeforeTheAnswer());
+  if (asksBeforeLoading) {
     if (!knownElsewhere && options.takeover !== true && track?.path) {
       showSelectedTrackImmediately(track, shouldAutoplay, Math.max(0, Number(options.startSeconds) || 0));
     }
@@ -428,22 +435,30 @@ async function playTrackFromPayload(track, options = {}) {
   // press after load) starts in the press itself, where every browser lets the press start sound.
   if (shouldAutoplay && state.player.streaming?.context?.state === 'running') await afterNextPlayerPaint();
   if (selectionToken !== playerTrackSelectionToken) return false;
+  // Loading while it waits for the server, a stream may die with the network that keeps the answer away.
+  const waitsForGrant = pendingClaim !== true && !asksBeforeLoading
+    && !(typeof holdsPlaybackClaim === 'function' && holdsPlaybackClaim());
+  const start = () => startStreamingTrack(track, {
+    startSeconds,
+    autoplay: shouldAutoplay,
+    allowSuspendedAutoplayFallback: options.allowSuspendedAutoplayFallback === true,
+    takeover: options.takeover === true,
+  });
   let startedRole;
+  let diedWaiting = false;
   try {
-    startedRole = await startStreamingTrack(track, {
-      startSeconds,
-      autoplay: shouldAutoplay,
-      allowSuspendedAutoplayFallback: options.allowSuspendedAutoplayFallback === true,
-      takeover: options.takeover === true,
-    });
+    startedRole = await start();
   } catch (error) {
     if (selectionToken !== playerTrackSelectionToken) return false;
-    clearSelectedTrack();
-    throw error;
+    if (!waitsForGrant) {
+      clearSelectedTrack();
+      throw error;
+    }
+    diedWaiting = true;
   }
   if (selectionToken !== playerTrackSelectionToken) return false;
   const startedTrackPath = String(startedRole?.track?.path || '');
-  if (startedRole === null || (startedTrackPath && startedTrackPath !== String(track.path))) {
+  if (!diedWaiting && (startedRole === null || (startedTrackPath && startedTrackPath !== String(track.path)))) {
     clearSelectedTrack();
     throw new Error(startedRole === null
       ? 'Streaming playback did not start'
@@ -461,6 +476,11 @@ async function playTrackFromPayload(track, options = {}) {
     return false;
   }
   if (selectionToken !== playerTrackSelectionToken) return false;
+  if (waitsForGrant && (diedWaiting || getPlayerPlaybackSnapshot().mode === 'error')) {
+    // Answered, it starts by itself (owner, 2026-11-22), with no second press.
+    startedRole = await start();
+    if (selectionToken !== playerTrackSelectionToken) return false;
+  }
   if (startedRole?.firstFrameNotified) {
     const reconciliation = handleStreamingPlaybackFirstFrame({
       generation: startedRole.generation,
@@ -1000,8 +1020,8 @@ function togglePlayerPlayback(options = {}) {
     Promise.resolve().then(async () => {
       if (selectionToken !== playerTrackSelectionToken) return false;
       const claim = typeof canStartPlaybackInThisTab === 'function' ? canStartPlaybackInThisTab(track) : true;
-      // Instant resume only on a claim still held; given back, it sounds when the server grants a new one.
-      const early = claim !== true && typeof holdsPlaybackClaim === 'function' && holdsPlaybackClaim()
+      // The audio starts inside the press and is held until the grant; a refusal pauses it again.
+      const early = claim !== true && mayStartBeforeTheAnswer()
         && playback.mode !== 'stopped' && !playback.ended
         ? resumeStreamingPlayback()
         : null;
@@ -1018,7 +1038,12 @@ function togglePlayerPlayback(options = {}) {
       }
       if (track !== state.player.current || selectionToken !== playerTrackSelectionToken) return false;
       pendingPlayerPlaybackHandoff = null;
-      if (early) return early;
+      if (early) {
+        const held = getPlayerPlaybackSnapshot();
+        if (held.mode !== 'error') return early;
+        // The stream died while it waited for the server: answered, it starts by itself at its place.
+        return Boolean(await startStreamingTrack(track, { startSeconds: Number(held.currentTime) || 0 }));
+      }
       if (playback.mode === 'stopped') {
         return Boolean(await startStreamingTrack(track, {
           startSeconds: playback.ended ? 0 : (Number(playback.currentTime) || 0),

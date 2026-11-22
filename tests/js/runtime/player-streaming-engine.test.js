@@ -8553,3 +8553,54 @@ for (const waiting of ['open', 'retargeted open', 'refresh', 'cut-over']) {
     assert.equal(harness.api.snapshot().paused, true);
   });
 }
+
+// A press as the player makes it: its failure reaches failStreamingEngine, which ends playback.
+function pressInPlayer(harness, name) {
+  const { context } = harness;
+  if (typeof context.playTrackFromPayload !== 'function') {
+    loadLeaseRecoveryRuntime(harness);
+    Object.assign(context, {
+      canStartPlaybackInThisTab: () => true,
+      setCurrentPlayerTrack: (track) => { context.state.player.current = track; },
+      renderSelectedTrackState: () => {},
+      beginStreamingPlayerListenSession: () => {},
+    });
+    context.state.player.current = makeTrack('01.flac');
+  }
+  context.observeStreamingFacadeCallback(context.playTrackFromPayload(makeTrack(name)), 'track-selection-start-error');
+  return harness.settle();
+}
+
+test('a socket lost while a press waits on a cut-over opens the pressed song on the next socket', async (t) => {
+  const { harness, node } = await playingSong(t);
+  await pressInPlayer(harness, '05.flac');
+  await answerOpen(harness, harness.sent('open').at(-1), NEXT_SONG);
+  assert.equal(harness.engine.pendingSeek.prepareSent, true);
+  await pressInPlayer(harness, '06.flac');
+
+  harness.sockets[0].unexpectedClose({ code: 1006 });
+  await harness.settle();
+  await harness.settle();
+
+  assert.notEqual(harness.engine.mode, 'error');
+  assert.equal(harness.engine.diagnostics.lastError, undefined);
+  assert.equal(harness.engine.node, node);
+  assert.equal(harness.sent('open').at(-1).path, makeTrack('06.flac').path);
+});
+
+for (const failing of ['current', 'continuity']) {
+  test(`a decoder failing in the ${failing} stream while a press waits on a cut-over starts the pressed song`, async (t) => {
+    const { harness, node } = await playingSong(t);
+    await pressInPlayer(harness, '05.flac');
+    await answerOpen(harness, harness.sent('open').at(-1), NEXT_SONG);
+    await pressInPlayer(harness, '06.flac');
+
+    harness.context.failStreamingEncodedRole(harness.engine.roles[failing], 'decode-error');
+    await harness.settle();
+    await harness.settle();
+
+    assert.notEqual(harness.engine.mode, 'error');
+    assert.equal(harness.engine.node, node);
+    assert.equal(harness.sent('open').at(-1).path, makeTrack('06.flac').path);
+  });
+}

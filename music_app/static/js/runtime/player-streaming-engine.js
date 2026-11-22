@@ -647,12 +647,15 @@ function detachAtStreamingPlace(code) {
   // A start on its way to playing is playing, though its snapshot says paused until it plays.
   const starting = engine.mode === 'starting' && engine.roles.current?.autoplay === true;
   // Another song's prepared start is restarted on the next socket; its press settles with that.
-  const press = seek?.kind === 'replacement' ? { resolve: seek.resolve, reject: seek.reject } : null;
+  const press = seek?.kind === 'replacement' && !seek.supersededByPress
+    ? { resolve: seek.resolve, reject: seek.reject }
+    : null;
   if (press) Object.assign(seek, { resolve: null, reject: null });
   // A start still on its way opens its song on the next socket itself: restarting the old song here
   // would supersede it (hosted FTC-PLAYBACK-OFFLINE-002).
   const inFlight = !press && engine.pendingStart;
   forgetLostStreamingSocket();
+  giveUpStreamingCutoverToPress();
   engine.pendingPromotion = null;
   engine.detached = {
     kind: 'reopen',
@@ -1219,19 +1222,30 @@ function streamingOutgoingAudioPlays(engine, current) {
     || (engine.diagnostics.bufferedFrames.current > 0 && !engine.diagnostics.buffering);
 }
 
-// A cut-over handed to the worklet cannot be taken back: resolves once it is made or given up.
+// A cut-over handed to the worklet cannot be taken back: resolves whether it was made. The press
+// waiting on it is from then on the start on its way, whatever ends the cut-over.
 function streamingCutoverSettled(pending) {
+  pending.supersededByPress = true;
   return new Promise((settled) => {
     const { resolve, reject } = pending;
     pending.resolve = (roleState) => {
       resolve?.(roleState);
-      settled();
+      settled(Boolean(roleState));
     };
     pending.reject = (error) => {
       reject?.(error);
-      settled();
+      settled(false);
     };
   });
+}
+
+// What ends a cut-over a newer press waits on leaves that press to start its song afresh.
+function giveUpStreamingCutoverToPress() {
+  const engine = streamingEngineState();
+  if (!engine.pendingSeek?.supersededByPress) return false;
+  settlePendingStreamingCutover();
+  engine.pendingSeek = null;
+  return true;
 }
 
 function grantStreamingInitialCredit(roleState) {
@@ -1901,6 +1915,7 @@ function failStreamingEncodedRole(roleState, reason) {
     maybeSchedulePendingStreamingContinuity();
     return;
   }
+  if (giveUpStreamingCutoverToPress()) return;
   const replay = startStreamingTrack(track, {
     startSeconds: roleState.role === 'continuity'
       ? continuityOptions.startSeconds
@@ -3297,8 +3312,10 @@ async function openBrowserStreamingTrack(track, {
         || (knownStreamingSampleRate(track)
           && streamingPlaybackRate(track) !== engine.sampleRate)) break preparedReplacement;
     while (engine.pendingSeek?.prepareSent) {
-      await streamingCutoverSettled(engine.pendingSeek);
+      const made = await streamingCutoverSettled(engine.pendingSeek);
       if (engine.startRequestId !== startRequestId) return null;
+      // Given up, it may still have reached the worklet: only a fresh start is sure of what sounds.
+      if (!made) break preparedReplacement;
     }
     if (!canPrepareReplacement()
         || !streamingOutgoingAudioPlays(engine, engine.roles.current)) break preparedReplacement;

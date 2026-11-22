@@ -17,12 +17,12 @@ from music_app.services.musicbrainz_enrichment_postgres import (
     MATCHER_VERSION,
     _active_library_cte,
     _aware_utc,
-    _connect,
     _positive_id,
     _row_mapping,
     _transaction,
 )
 from music_app.services.musicbrainz_evidence import name_keys
+from music_app.services.postgres_connections import pooled_connection
 
 
 class MusicBrainzAlbumIdentityPostgresRepository:
@@ -36,7 +36,7 @@ class MusicBrainzAlbumIdentityPostgresRepository:
         self._database_url = str(config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()
         if not self._database_url:
             raise RuntimeError("Database configuration is required for album identities.")
-        self._connect = connect or _connect
+        self._connect = connect or (lambda url: pooled_connection(url))
         self._queue_album_releases = queue_album_releases or self._enqueue_album_releases
 
     def assign_suggested_artist(self, *, album_key: str, artist_mbid: str, actor_account_id: int,

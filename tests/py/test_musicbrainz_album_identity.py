@@ -186,3 +186,21 @@ def test_without_permission_nothing_is_written(actor):
     identities = _Identities()
     assert _put(identities, {"album_key": "ark", "artist_mbid": NORWAY}, actor)[0] == 403
     assert identities.calls == []
+
+
+def test_a_save_leases_from_the_request_pool_not_the_worker_s(monkeypatch):
+    from music_app.services import musicbrainz_album_identity_postgres as module
+
+    workloads = []
+
+    def lease(_url, **options):
+        workloads.append(options.get("workload", "default"))
+        return _Connection()
+
+    monkeypatch.setattr(module, "pooled_connection", lease, raising=False)
+    repository = module.MusicBrainzAlbumIdentityPostgresRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/album_haven_test"},
+        queue_album_releases=lambda **_values: None)
+    assert repository.assign_suggested_artist(
+        album_key="ark", artist_mbid=NORWAY, actor_account_id=3, observed_at=NOW, request_ref="r1") == "assigned"
+    assert workloads == ["default"]

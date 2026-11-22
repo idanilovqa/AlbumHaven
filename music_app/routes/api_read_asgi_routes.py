@@ -656,6 +656,9 @@ async def status(request: Request) -> JSONResponse:
             pass
 
     scope = await history_scope_for_request(request, required=False)
+    broker = getattr(request.app.state, "library_change_broker", None)
+    # Tabs whose event stream is not delivered catch up from here.
+    payload["live_events_head"] = broker.head if broker is not None else None
     payload['log_history_revision'] = ''
     if scope is not None:
         try:

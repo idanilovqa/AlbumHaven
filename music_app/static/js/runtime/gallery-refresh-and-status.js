@@ -2239,6 +2239,7 @@ async function pollStatus() {
     if (!ownsStatus()) return;
     updateStatusIndicator({ ...data, status_connection_lost: false });
     const normalizedStatus = state.status;
+    if (typeof observeLibraryLiveEventsHead === 'function') observeLibraryLiveEventsHead(data.live_events_head);
     const currentInventoryRevision = Number(
       normalizedStatus.inventory_mutation_revision || 0,
     );

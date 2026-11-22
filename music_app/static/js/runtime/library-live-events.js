@@ -12,6 +12,7 @@ const LIBRARY_LIVE_EVENTS_RETRY_MS = 30000;
 const libraryLiveEvents = {
   started: false,
   cursor: null,
+  laggingCursor: null,
   source: null,
   channel: null,
   pendingKinds: new Set(),
@@ -47,6 +48,24 @@ function noteLibraryLiveChange(message) {
     }
   }
   scheduleLibraryLiveEventsFlush(LIBRARY_LIVE_EVENTS_COALESCE_MS);
+}
+
+// The stream can stay open and deliver nothing (a tunnel that holds it back). The status check still gets
+// through: a tab still behind its head on a second check missed changes, and refreshes as after a resync.
+function observeLibraryLiveEventsHead(value) {
+  const head = readLibraryLiveEventsCursor(value);
+  if (!libraryLiveEvents.started || head === null) return;
+  const { cursor, laggingCursor } = libraryLiveEvents;
+  if (cursor === null) {
+    libraryLiveEvents.cursor = head;
+  } else if (head <= cursor) {
+    libraryLiveEvents.laggingCursor = null;
+  } else if (laggingCursor !== cursor) {
+    libraryLiveEvents.laggingCursor = cursor;
+  } else {
+    libraryLiveEvents.laggingCursor = null;
+    noteLibraryLiveChange({ type: 'resync', revision: head });
+  }
 }
 
 function scheduleLibraryLiveEventsFlush(delay) {

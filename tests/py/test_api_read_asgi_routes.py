@@ -80,6 +80,17 @@ def test_asgi_status_route_preserves_current_payload_shape(app):
     assert payload["log_history_revision"] == ""
 
 
+@pytest.mark.parametrize("head", [None, 10])
+def test_asgi_status_carries_the_newest_live_change(app, head):
+    asgi_app = _make_asgi_app()
+    asgi_app.state.library_change_broker = SimpleNamespace(head=head)
+
+    status, _headers, body = _run_asgi_request(asgi_app, "GET", "/status")
+
+    assert status == 200
+    assert _decode_json(body)["live_events_head"] == head
+
+
 @pytest.mark.parametrize("owner", [True, False])
 def test_asgi_status_allows_musicbrainz_sync_only_for_the_library_owner(app, owner):
     from music_app.services.current_actor import ActorState, CapabilityGrant, CurrentActor, LibraryRelationship

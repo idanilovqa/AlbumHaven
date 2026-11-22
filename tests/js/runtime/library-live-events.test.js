@@ -217,6 +217,57 @@ test('readers without library access or EventSource never connect', () => {
   assert.equal(FakeEventSource.instances[0].url, '/api/live/library-events', 'without a cursor the server follows from its current head');
 });
 
+// Owner 2026-11-22: "merged two albums. In another tab I checked - still two album cards were shown".
+// Their stream was open through a tunnel and never delivered the notice; the status check got through.
+test('a change the stream never delivered is caught up from the status check', () => {
+  const { context, calls, runTimers } = load();
+  context.startLibraryLiveEvents(9);
+
+  context.observeLibraryLiveEventsHead(10);
+  runTimers();
+  assert.equal(calls.viewRefreshes, 0, 'one check only leads a notice still on its way');
+
+  context.observeLibraryLiveEventsHead(10);
+  runTimers();
+  assert.equal(calls.viewRefreshes, 1);
+  assert.equal(vm.runInContext('libraryLiveEvents.cursor', context), 10);
+
+  context.observeLibraryLiveEventsHead(10);
+  context.observeLibraryLiveEventsHead(10);
+  runTimers();
+  assert.equal(calls.viewRefreshes, 1, 'caught up once');
+});
+
+test('a tab without the stream catches up by itself', () => {
+  const { context, calls, runTimers } = load({ locks: 'held-elsewhere' });
+  context.startLibraryLiveEvents(9);
+  context.observeLibraryLiveEventsHead(10);
+  context.observeLibraryLiveEventsHead(11);
+  runTimers();
+  assert.equal(calls.viewRefreshes, 1);
+});
+
+test('a status check adds no refresh when the stream delivers, or before live updates start', () => {
+  const { context, calls, runTimers } = load();
+  context.observeLibraryLiveEventsHead(5);
+  context.observeLibraryLiveEventsHead(5);
+  runTimers();
+  assert.equal(calls.viewRefreshes, 0);
+
+  context.startLibraryLiveEvents(9);
+  context.observeLibraryLiveEventsHead(10);
+  FakeEventSource.instances[0].emit('change', { kinds: ['loops'], refs: {} }, '10');
+  context.observeLibraryLiveEventsHead(10);
+  context.observeLibraryLiveEventsHead(null);
+  runTimers();
+  assert.equal(calls.viewRefreshes, 0);
+});
+
+test('every status poll hands the newest change to live updates', () => {
+  const poll = fs.readFileSync(path.join(path.dirname(sourcePath), 'gallery-refresh-and-status.js'), 'utf8');
+  assert.match(poll, /observeLibraryLiveEventsHead\(data\.live_events_head\)/);
+});
+
 test('a burst of changes refreshes the view at most once a second', () => {
   const { context, calls, runTimers, advance } = load();
   context.startLibraryLiveEvents(1);

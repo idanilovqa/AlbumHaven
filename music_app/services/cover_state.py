@@ -344,7 +344,6 @@ def serialize_cover_gallery_payload(
     stored_listings: Sequence[tuple[Path, Mapping[str, object]]] | None = None,
     listings_pending: bool = False,
 ) -> dict[str, object]:
-    album_root = restrict_album_root_to_represented_disc(album_root, track_paths)
     active_cover_path, active_cover_revision = _active_cover_state_for_track_paths(
         file_cache,
         track_paths,
@@ -357,6 +356,7 @@ def serialize_cover_gallery_payload(
             pending=listings_pending, image_dimensions=image_dimensions, is_squareish_cover=is_squareish_cover,
         )
     else:
+        album_root = restrict_album_root_to_represented_disc(album_root, track_paths)
         local_candidates = iter_local_cover_candidates(
             album_root,
             image_extensions=image_extensions,

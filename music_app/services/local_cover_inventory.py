@@ -2,17 +2,20 @@
 
 Ported from #65's local cover inventory (0125, same table) without its library-wide paths. An open reads that
 album's folders by primary key and shows them; its follow-up read, and each of the app's cover writes, refreshes
-those folders alone, so a change nobody reported heals on the next open. There is no worker: nothing polls
-Postgres, walks the library or runs at start (owner's large-data rule; freeze guard backlog case 50).
+those folders alone, so a change nobody reported heals on the next open. A walk gets its own short-lived thread,
+so a hung drive can hold a walk but never a request or a save. Nothing polls Postgres, walks the library or runs
+at start (owner's large-data rule; freeze guard backlog case 50).
 """
 from __future__ import annotations
 
+from collections import OrderedDict
 from collections.abc import Iterable
-from concurrent.futures import Future
+from concurrent.futures import Future, TimeoutError as FutureTimeoutError
 import logging
 import os
 from pathlib import Path
 import threading
+from time import monotonic
 
 from psycopg.types.json import Jsonb
 
@@ -24,8 +27,12 @@ where owners.owner_key = 'local-bootstrap-owner' and libraries.name = 'Local Lib
 and libraries.library_kind = 'local' limit 1"""
 
 STORAGE_UNAVAILABLE = "Local artwork could not be read. Showing the last known covers."
+STORAGE_SLOW = "Local artwork is taking too long to read. Showing the last known covers."
 # Folders read at the same time, whatever number of albums are opened.
 WALK_LIMIT = 4
+# Opens waiting for a walk; past this an open answers with what is stored. A write's walk is never refused.
+WAITING_LIMIT = 32
+WALK_WAIT_SECONDS = 8.0
 
 
 def root_key(root: Path | str) -> str:
@@ -134,9 +141,9 @@ class LocalCoverInventory:
         self.config = config
         self.repository = repository or LocalCoverInventoryRepository(config)
         self._logger = logger or logging.getLogger("music_app")
-        self._walks = threading.BoundedSemaphore(WALK_LIMIT)
-        self._running_lock = threading.Lock()
-        self._running: dict[str, Future] = {}
+        self._lock = threading.Lock()
+        self._walking: dict[str, Future] = {}
+        self._waiting: OrderedDict[str, tuple[Path, Future]] = OrderedDict()
 
     def stored(self, roots) -> dict[str, dict[str, object]]:
         try:
@@ -145,63 +152,133 @@ class LocalCoverInventory:
             self._logger.exception("Could not read stored local cover listings.")
             return {}
 
+    def listed_roots(self, album_root: Path, copy_roots: Iterable[Path], track_paths: set[str]) -> list[Path]:
+        """The folders the gallery lists for an album. A writer asks before it commits."""
+        from music_app.services.cover_workflow import restrict_album_root_to_represented_disc
+
+        return [restrict_album_root_to_represented_disc(album_root, track_paths), *copy_roots]
+
     def album_listings(
-        self, album_root: Path, copy_roots: Iterable[Path], track_paths: set[str], *, stored_first: bool,
+        self, roots: list[Path], track_paths: set[str], *, stored_first: bool,
     ) -> tuple[list[tuple[Path, dict[str, object]]], bool]:
         """The album's listings, and whether they are the stored ones that a follow-up read replaces."""
-        from music_app.services.cover_workflow import is_disc_like_folder, restrict_album_root_to_represented_disc
+        from music_app.services.cover_workflow import is_disc_like_folder
 
-        copy_roots = list(copy_roots)
-        roots = [restrict_album_root_to_represented_disc(album_root, track_paths), *copy_roots]
-        covered = [root_key(root) for root in (album_root, *copy_roots)]
+        covered = [root_key(root) for root in roots]
         # A copy whose files are away resolves to no folder, so it is looked up by its tracks' folders.
+        # Paths are compared as written: resolving one asks the drive.
         unresolved: dict[str, Path] = {}
         for track_path in track_paths:
-            folder = Path(track_path).resolve(strict=False).parent
+            folder = Path(track_path).parent
             key = root_key(folder)
             if any(key == root or key.startswith(root.rstrip(os.sep) + os.sep) for root in covered):
                 continue
             for candidate in (folder, folder.parent) if is_disc_like_folder(folder) else (folder,):
                 unresolved[root_key(candidate)] = candidate
         rows = self.stored([*roots, *unresolved.values()]) if stored_first or unresolved else {}
-        roots.extend(folder for key, folder in unresolved.items() if (rows.get(key) or {}).get("available"))
-        if stored_first and all((rows.get(root_key(root)) or {}).get("available") for root in roots):
-            return [(root, rows[root_key(root)]) for root in roots], True
-        return [(root, self.refresh(root)) for root in roots], False
+        shown = [*roots, *(folder for key, folder in unresolved.items() if (rows.get(key) or {}).get("available"))]
+        if stored_first and all((rows.get(root_key(root)) or {}).get("available") for root in shown):
+            return [(root, rows[root_key(root)]) for root in shown], True
+        return self.read_folders(shown), False
 
-    def refresh_after_write(self, album_root: Path, track_paths: set[str]) -> None:
-        """Update the listing the gallery shows for a cover write; a failure never fails the write."""
-        from music_app.services.cover_workflow import restrict_album_root_to_represented_disc
-
-        try:
-            self.refresh(restrict_album_root_to_represented_disc(album_root, track_paths), after_write=True)
-        except Exception:
-            self._logger.exception("Could not update the local cover listing after a cover write.")
+    def read_folders(self, roots, *, after_write: bool = False) -> list[tuple[Path, dict[str, object]]]:
+        """Read an album's folders within one bounded wait; a folder that is late keeps its stored covers."""
+        walks = [(root, self._ask(root, after_write=after_write)) for root in roots]
+        deadline = monotonic() + WALK_WAIT_SECONDS
+        listings = []
+        for root, walk in walks:
+            listing = None
+            if walk is not None:
+                try:
+                    listing = walk.result(timeout=max(0.0, deadline - monotonic()))
+                except FutureTimeoutError:
+                    listing = None
+            listings.append((root, listing or self._kept(root, STORAGE_SLOW)))
+        return listings
 
     def refresh(self, root, *, after_write: bool = False) -> dict[str, object]:
-        """Read one folder. Simultaneous opens share a walk; a write waits for one that began after it."""
-        key = root_key(root)
-        while True:
-            with self._running_lock:
-                running = self._running.get(key)
-                if running is None:
-                    mine = self._running[key] = Future()
-                    break
-            if not after_write:
-                return running.result()
-            running.exception()  # Waits for the walk that may have started before the write.
-            after_write = False  # Any walk from here on began after it.
+        return self.read_folders([root], after_write=after_write)[0][1]
+
+    def after_write(self, roots, *, removed=None) -> None:
+        """Follow a committed write without waiting on the drive or failing it.
+
+        A removed cover leaves its row now. Each folder gets a walk that begins after the write, which the next
+        read of the album waits for.
+        """
         try:
-            with self._walks:
-                listing = self._refresh(root, key)
-            mine.set_result(listing)
-            return listing
-        except BaseException as error:
-            mine.set_exception(error)
-            raise
+            if removed is not None:
+                for root in roots:
+                    self._drop(root, removed)
+        except Exception:
+            self._logger.exception("Could not drop a deleted cover from its stored listing.")
+        for root in roots:
+            self._ask(root, after_write=True)
+
+    def written_listings(self, roots, *, removed=None) -> list[tuple[Path, dict[str, object]]]:
+        """What a write answers with: the stored covers, less a removed one. The follow-up read replaces them."""
+        rows = self.stored(roots)
+        gone = root_key(removed) if removed is not None else None
+        return [
+            (root, {"error": None, "candidates": [
+                item for item in (rows.get(root_key(root)) or {}).get("candidates") or []
+                if root_key(item["path"]) != gone
+            ]})
+            for root in roots
+        ]
+
+    def _kept(self, root, error: str) -> dict[str, object]:
+        row = self.stored([root]).get(root_key(root)) or {}
+        return {"candidates": list(row.get("candidates") or []), "error": error}
+
+    def _drop(self, root, path) -> None:
+        for _attempt in range(3):
+            row = self.stored([root]).get(root_key(root))
+            stored = list((row or {}).get("candidates") or [])
+            kept = [item for item in stored if root_key(item["path"]) != root_key(path)]
+            if len(kept) == len(stored) or self.repository.publish(root, kept, expected_revision=row["revision"]):
+                return
+
+    def _ask(self, root, *, after_write: bool) -> Future | None:
+        key = root_key(root)
+        with self._lock:
+            waiting = self._waiting.get(key)
+            if waiting:
+                return waiting[1]  # Not started: it sees everything written so far.
+            if not after_write:
+                if key in self._walking:
+                    return self._walking[key]
+                if len(self._waiting) >= WAITING_LIMIT:
+                    return None
+            walk = Future()
+            self._waiting[key] = (Path(root), walk)
+            self._start_waiting_walks()
+            return walk
+
+    def _start_waiting_walks(self) -> None:
+        for key, (root, walk) in list(self._waiting.items()):
+            if len(self._walking) >= WALK_LIMIT:
+                return
+            if key in self._walking:
+                continue
+            del self._waiting[key]
+            self._walking[key] = walk
+            threading.Thread(
+                target=self._walk, args=(root, key, walk), name="albumhaven-local-cover-walk", daemon=True,
+            ).start()
+
+    def _walk(self, root: Path, key: str, walk: Future) -> None:
+        listing = None
+        try:
+            listing = self._refresh(root, key)
+        except Exception:
+            self._logger.exception("Could not read a local cover folder.")
+            listing = self._kept(root, STORAGE_UNAVAILABLE)
         finally:
-            with self._running_lock:
-                del self._running[key]
+            # The walk leaves the map before it completes: nobody who asks afterwards is handed its answer.
+            with self._lock:
+                del self._walking[key]
+                self._start_waiting_walks()
+            walk.set_result(listing)
 
     def _refresh(self, root, key: str) -> dict[str, object]:
         found: list[dict[str, object]] = []

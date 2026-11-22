@@ -167,6 +167,18 @@ test('a pre-mutation gallery response cannot restore the deleted cover', async (
   assert.ok(!h.context.state.coverLookup.modal.localCovers.some(card => card.candidate_cover_ref === '/A/deleted.jpg'));
 });
 
+test('a delete answered from stored covers is followed by the folders own read', async () => {
+  const h = harness(), a = album('A');
+  await h.open(a);
+  const pending = h.context.deleteLocalCoverFromLookup(a.cover_ref);
+  const reads = h.galleries.length;
+  h.requests[0].resolve({ ok: true, json: async () => ({ ok: true, updated_albums: [],
+    gallery: { ok: true, local_inventory_pending: true, local_covers: [], other_art: [] } }) });
+  await pending;
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.galleries.length, reads + 1, 'a write never waits on the drive, so one read follows it');
+});
+
 test('closing without reopening settles the local deletion without a new gallery read', async () => {
   const h = harness(), a = album('A');
   await h.open(a);

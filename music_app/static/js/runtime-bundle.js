@@ -40856,6 +40856,8 @@ async function deleteLocalCoverFromLookup(sourceRef) {
       if (data.gallery && typeof data.gallery === 'object') {
         applyCoverLookupGalleryPayload(data.gallery);
         renderCoverLookupModal();
+        // A write never waits on the drive: it answers from the stored covers, and this read follows it.
+        if (data.gallery.local_inventory_pending) void refreshCoverLookupGallery(false);
       } else {
         await refreshCoverLookupGallery(false);
       }

@@ -172,9 +172,18 @@ class PlaybackClaimOwner(
         return held
     }
 
-    /** The next heartbeat mirrors [claimTrack]. */
+    /** The claim mirrors [claimTrack] at once. */
     fun updateTrack(claimTrack: ClaimTrack) {
         track = claimTrack
+        publishNow()
+    }
+
+    /**
+     * The song or its place changed: the claim says so now, not up to ten seconds later, so a device
+     * that takes over without this one's answer starts there. One renewal is in flight at a time.
+     */
+    fun publishNow() {
+        if (token != null) nextRenewMs = minOf(nextRenewMs, clock())
     }
 
     /**
@@ -312,6 +321,7 @@ class PlaybackClaimOwner(
                 events(ClaimEvent.Lost)
             }
             // No answer is not a refusal, however long it lasts: retried two seconds after it was sent.
+            // That also holds back a publishNow: a dead network is not asked in a tight loop.
             ClaimResponse.Unreachable -> nextRenewMs = sentMs + RETRY_MS
         }
     }

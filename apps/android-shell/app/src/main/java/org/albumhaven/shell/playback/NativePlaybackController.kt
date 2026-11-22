@@ -480,6 +480,7 @@ class NativePlaybackController(
         var written = 0
         guarded {
             claims.tick()
+            maybeAnswerHandover()
             maybeReconnect()
             maybeRecoverStalledStart()
             // A stream may buffer while the claim is requested; only an owner is heard, and a pause
@@ -504,6 +505,7 @@ class NativePlaybackController(
         if (loaded && mayBeHeard()) return RENDER_WAIT_MS
         val next = listOfNotNull(
             claims.nextDeadlineMs(),
+            handoverAnswer?.atMs,
             reconnectAtMs,
             shutdownDeadlineMs,
             warmUntilMs?.let { minOf(it, lastWarmMs + KEEP_WARM_MS) },
@@ -1021,6 +1023,7 @@ class NativePlaybackController(
             }
         }
         if (state == NativePlaybackState.ENDED) setState(NativePlaybackState.PAUSED)
+        claims.publishNow()
         emit { NativePlaybackEvent.Position(it) }
     }
 
@@ -1126,9 +1129,11 @@ class NativePlaybackController(
     }
 
     /**
-     * Play here on another device asks this one over the socket (owner, 2026-11-22): it stops, then
-     * answers the item it sounds and where. A skip silences the outgoing item at once and a gapless
-     * move changes the item at its boundary, so the queue's current item is the one that sounds.
+     * Play here on another device asks this one over the socket (owner, 2026-11-22): it falls silent
+     * at once and, once the paused output's last buffer has left the device, answers the item it
+     * sounded and where (owner, round 10: never both at once). A skip silences the outgoing item at
+     * once and a gapless move changes the item at its boundary, so the queue's current item is the one
+     * that sounds. With nothing sounding or wanted it says it is silent, and nobody waits for it.
      * True when [text] was the handover's and not the stream's.
      */
     private fun answerHandover(text: String): Boolean {
@@ -1139,9 +1144,18 @@ class NativePlaybackController(
             "handover" -> Unit
             else -> return false
         }
-        val item = queue.getOrNull(index) ?: return true
+        val requestId = message.optString("requestId")
+        val item = queue.getOrNull(index)
+        val token = if (item == null) null else claims.handOver()
+        if (item == null || token == null) {
+            if (!wantPlay) {
+                val silent = JSONObject().put("type", "handover-silent").put("requestId", requestId)
+                transport?.send(silent.toString())
+            }
+            return true
+        }
+        // Read once paused: what is still in the sink is not heard, so it is not skipped there.
         val heardMs = positionMs()
-        val token = claims.handOver() ?: return true
         val position = if (item.durationMs > 0) {
             JSONObject().put("ms", heardMs.coerceIn(0, item.durationMs)).put("durationMs", item.durationMs)
         } else {
@@ -1155,13 +1169,25 @@ class NativePlaybackController(
             .put("artworkUrl", item.artworkUrl ?: JSONObject.NULL)
         val answer = JSONObject()
             .put("type", "handover-answer")
-            .put("requestId", message.optString("requestId"))
+            .put("requestId", requestId)
             .put("claimToken", token)
             .put("track", track)
             .put("position", position)
-        transport?.send(answer.toString())
+        handoverAnswer = HandoverAnswer(clock() + HANDOVER_DRAIN_MS, answer.toString())
         return true
     }
+
+    /** Sends the answer once the output drained; none when it was played again meanwhile. */
+    private fun maybeAnswerHandover() {
+        val pending = handoverAnswer ?: return
+        if (clock() < pending.atMs) return
+        handoverAnswer = null
+        if (!wantPlay) transport?.send(pending.text)
+    }
+
+    private class HandoverAnswer(val atMs: Long, val text: String)
+
+    private var handoverAnswer: HandoverAnswer? = null
 
     private fun transportOpened() {
         transportOpen = true
@@ -1463,6 +1489,8 @@ class NativePlaybackController(
         /** How long connections stay warm after the handshake or after this client last owned playback. */
         const val KEEP_WARM_FOR_MS = 30L * 60 * 1000
         const val END_DRAIN_MARGIN_MS = 500L
+        /** What a paused output may still have in the device's own buffers; not measured on a device. */
+        const val HANDOVER_DRAIN_MS = 250L
         /** How long an owned start may wait for its first PCM before it is reopened, then failed. */
         const val START_STALL_MS = 15_000L
         /** How long a shutdown keeps the claim for the listen writes still in flight. */

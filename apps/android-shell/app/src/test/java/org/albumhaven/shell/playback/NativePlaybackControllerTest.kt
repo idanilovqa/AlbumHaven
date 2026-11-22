@@ -127,7 +127,7 @@ class ControllerHarness(
             else if (openOnConnect) socketListener.onOpen()
             object : PcmTransport {
                 override fun send(text: String) =
-                    if (text.contains("handover-answer")) handoverAnswers.add(text) else server.receive(text)
+                    if (text.contains("handover-")) handoverAnswers.add(text) else server.receive(text)
                 override fun close() {
                     closes += 1
                 }
@@ -261,6 +261,9 @@ class NativePlaybackControllerTest {
 
         checkNotNull(harness.listener).onText("""{"type":"handover","requestId":"request-1"}""")
         harness.step()
+        assertEquals(NativePlaybackState.PAUSED, harness.state())
+        assertEquals("no answer before the paused output drained", emptyList<String>(), harness.handoverAnswers)
+        harness.runUntil { harness.handoverAnswers.isNotEmpty() }
 
         val answer = org.json.JSONObject(harness.handoverAnswers.single())
         assertEquals("request-1", answer.getString("requestId"))

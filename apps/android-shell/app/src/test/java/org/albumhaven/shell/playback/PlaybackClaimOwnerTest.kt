@@ -57,6 +57,22 @@ class PlaybackClaimOwnerTest {
         assertEquals(ClaimPosition(71_000, 300_000), api.positions.last())
     }
 
+    // sandbox5, 2026-11-22: a takeover after a seek or a skip got the place of up to ten seconds before.
+    @Test
+    fun aSeekOrASkipIsPublishedAtOnceOneRenewalAtATime() {
+        owner.acquire(track) {}
+        drain()
+        now = 1_000
+        owner.publishNow()
+        assertEquals(1_000L, owner.nextDeadlineMs())
+        owner.tick()
+        assertNull("one in flight", owner.nextDeadlineMs())
+        now = 1_100
+        owner.updateTrack(track.copy(playbackRef = "next-ref"))
+        drain()
+        assertEquals("then the newest", 1_100L, owner.nextDeadlineMs())
+    }
+
     // Owner, 2026-11-22: the phone that just paused still answers Play here on another device.
     @Test
     fun handOverNamesTheHeldTokenOrTheOneJustGivenBack() {

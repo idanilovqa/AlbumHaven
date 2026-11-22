@@ -1427,3 +1427,52 @@ def test_live_problematic_index_follows_a_legacy_album_rule_revert(watcher_repai
     set_rule(False)
     assert "Missing year" in _indexed_by_name(database_url)["Legacy Album"]["problem_reasons"]
     assert _as_served(_indexed_problematic_items(database_url)) == _as_served(_evaluated_problematic_items(fixture.config))
+
+
+def test_live_problematic_index_follows_a_loose_group_exclusion_and_its_revert(watcher_repair_inventory):
+    """An excluded loose group leaves the list and its detail; reverting the exclusion brings both back."""
+    from music_app.services import library_browse_postgres as browse, problematic_index
+    from tests.e2e.support import isolatedPostgres
+
+    fixture = watcher_repair_inventory
+    database_url = fixture.config["ALBUM_HAVEN_APP_DATABASE_URL"]
+    # One stray copy in each of two folders: two groups, so the other one proves the rule is scoped.
+    fixture.seed(*(fixture.entry(f"Owner/{folder}/{track}.flac") for folder, track in (
+        ("Album", "01"), ("Album", "02"), ("Album", "03"), ("Strays A", "01"), ("Strays B", "02"),
+    )))
+    _ready_problematic_index(database_url)
+    repository = browse.PostgresLibraryBrowseRepository(
+        {**fixture.config, problematic_index.ENABLED_KEY: "1"})
+
+    def loose():
+        return {item["key"]: item for item in _indexed_problematic_items(database_url, limit=50)
+                if browse._is_problematic_loose_tracks_key(item["key"])}
+
+    before = loose()
+    assert len(before) == 2, "The fixture needs two loose groups."
+    key, other = sorted(before)
+    assert problematic_index.loose_group_detail(repository, key)
+    rule_keys = {
+        browse._problem_identity_row_key(identity, reason, scope=scope)
+        for reason in before[key]["problem_reasons"]
+        for scope, identities in (("album", [key]), ("file", before[key]["track_paths"]))
+        for identity in identities
+    }
+
+    def set_rules(present):
+        with isolatedPostgres._connect(fixture.setup_url) as connection:
+            library_id = connection.execute(
+                "select id from library.libraries where library_kind = 'local' limit 1").fetchone()["id"]
+            for rule_key in sorted(rule_keys):
+                if present:
+                    connection.execute("insert into library.ignored_repairs (library_id, repair_key) values (%s, %s)",
+                                       (library_id, rule_key))
+                else:
+                    connection.execute("delete from library.ignored_repairs where repair_key = %s", (rule_key,))
+
+    set_rules(True)
+    assert set(loose()) == {other}, "The excluded loose group is still listed."
+    assert problematic_index.loose_group_detail(repository, key) is None, "The excluded group still has a detail."
+    set_rules(False)
+    assert loose() == before
+    assert problematic_index.loose_group_detail(repository, key)

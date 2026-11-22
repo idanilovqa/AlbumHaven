@@ -282,3 +282,14 @@ test('sync adds a reviewable empty endpoint list when a request joins a static e
     [id, [click.key, request.key], { allowed: [], forbidden: [] }],
   ]);
 });
+
+test('a navigation entrypoint needs a request-capture contract with alreadyShown, and only navigation declares it', () => {
+  const navigating = { entrypoints: [entrypoint(KEY, { navigation: true })], hazards: [] };
+  const requestCapture = contractEntry({ requestOwnership: { allowed: ['/view-data'], forbidden: [] } });
+  assert.match(validateInventory(registry([contractEntry()]), navigating).join('\n'),
+    /^BI-H01-loose-track-drag: navigation entrypoint .*event:pointermove needs a request-capture contract with alreadyShown: /);
+  assert.match(validateInventory(registry([requestCapture]), navigating).join('\n'), /needs a request-capture contract with alreadyShown/);
+  assert.deepEqual(validateInventory(registry([{ ...requestCapture, alreadyShown: true }]), navigating), []);
+  assert.deepEqual(validateInventory(registry([{ ...requestCapture, alreadyShown: true }]), { entrypoints: [entrypoint()], hazards: [] }),
+    ['BI-H01-loose-track-drag: alreadyShown is declared but no entrypoint navigates']);
+});

@@ -1537,6 +1537,11 @@ async def albums_selected_covers_save(request: Request, album_ref: str) -> JSONR
         await authorize_current_selection()
         loop = asyncio.get_running_loop()
         track_paths = set(context["track_paths"])
+        if remote_read and lookup_task_id:
+            payload["references"] = await run_in_threadpool(
+                _references_in_saved_generation, config, payload["references"], lookup_task_id,
+                album_id=album_id, album_key=str(context.get("album_key") or ""), track_paths=track_paths,
+            )
         album_root = await run_in_threadpool(resolve_album_write_root_from_track_paths, config, track_paths)
 
         def commit_and_publish(commit):
@@ -1550,6 +1555,7 @@ async def albums_selected_covers_save(request: Request, album_ref: str) -> JSONR
                 ):
                     publish_ordered_cover_selection_for_tracks(
                         library_state, track_paths, committed["selected_covers"],
+                        cover_revision=committed.get("cover_revision"),
                     )
                 return committed
 
@@ -1679,6 +1685,43 @@ async def _answer_cover_lookup_with_ordered_save(
             lookup_task_id, config=config, selected_candidate_id=chosen,
         ),
     )
+
+
+def _references_in_saved_generation(
+    config, references: list[dict[str, object]], lookup_task_id: str,
+    *, album_id: int, album_key: str, track_paths: set[str],
+) -> list[dict[str, object]]:
+    """Name a lookup's cover by the album's saved search when that search lists the same cover.
+
+    A stopped or resumed lookup shows candidates saved under another search's id. Only this album's own lookup
+    qualifies, and only for a candidate with the same id and URL; anything else stays a changed-candidates conflict.
+    """
+    named_by_lookup = [
+        item for item in references
+        if item.get("kind") == "remote"
+        and _same_cover_lookup_generation(item.get("candidate_generation"), lookup_task_id)
+    ]
+    if not named_by_lookup:
+        return references
+    snapshot = AlbumCoverCandidateSnapshotRepository(config).get_for_album_context(album_id=album_id) or {}
+    generation = str(snapshot.get("search_generation") or "")
+    if not generation or _same_cover_lookup_generation(generation, lookup_task_id):
+        return references
+    task = cover_lookup_result(lookup_task_id) or load_cover_lookup_notification(dict(config), lookup_task_id) or {}
+    if not task or not _task_matches_album_context(
+        task, track_paths=track_paths, album_id=album_id, album_key=album_key,
+    ):
+        return references
+
+    def covers(candidates):
+        return {(item.get("id"), item.get("url")) for item in candidates or [] if isinstance(item, Mapping)}
+
+    same_ids = {cover[0] for cover in covers(task.get("possible_matches")) & covers(snapshot.get("candidates"))}
+    return [
+        {**item, "candidate_generation": generation}
+        if item in named_by_lookup and item["candidate_id"] in same_ids else item
+        for item in references
+    ]
 
 
 _COVER_SAVE_AUTHORIZATION_WAIT_SECONDS = 10.0

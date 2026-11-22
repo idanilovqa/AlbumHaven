@@ -4,6 +4,7 @@ These run the production repository but do not execute PostgreSQL. Real database
 rollback, constraints and multiprocess locking remain a separate required gate.
 """
 from copy import deepcopy
+from hashlib import sha256
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -383,6 +384,26 @@ def test_unchanged_save_records_latest_request_without_primary_projection_or_rev
     assert saved.connection.saved["metadata"]["selected_covers_last_request"]["mutation_id"] == MUTATION
     assert "projection" not in saved.connection.events and "revision" not in saved.connection.events
     assert saved.connection.revision == 0
+
+
+def test_a_saved_stack_keeps_its_main_cover_on_the_gallery_preview_path(saved):
+    # Owner 2026-11-22: "Load its default 1st cover at the same priority as any other gallery cards". Without a
+    # content revision the card's URL changed at each restart, expired in five minutes and read the original file.
+    revision = sha256(saved.second.read_bytes()).hexdigest()
+
+    first = saved.save()
+
+    assert first["cover_revision"] == revision
+    assert saved.connection.saved["metadata"]["cover_revision"] == revision
+    replay = saved.save()
+    assert replay["cover_revision"] == revision
+    assert replay["replay_publication_required"] is True
+
+
+def test_a_missing_main_cover_saves_without_a_revision(saved):
+    saved.second.unlink()
+    assert saved.save()["cover_revision"] is None
+    assert saved.connection.saved["metadata"]["cover_revision"] is None
 
 
 def test_precise_global_revision_only_changes_for_changed_selection(saved):

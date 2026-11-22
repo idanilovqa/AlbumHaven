@@ -62,6 +62,7 @@ def serialize_ordered_cover_selection_for_read(
 
 def publish_ordered_cover_selection_for_tracks(
     library_state: dict[str, object], track_paths: set[str], selection: list[dict[str, object]],
+    *, cover_revision: str | None = None,
 ) -> None:
     """Publish a committed primary under the caller's runtime/source locks.
 
@@ -77,7 +78,7 @@ def publish_ordered_cover_selection_for_tracks(
         **{"remote_cover_" + field: remote.get(field) for field in (
             "url", "thumbnail_url", "source", "source_label", "album_url", "width", "height",
         )},
-        cover_revision=None, manual_selection=True, local_cover_dimensions=(None, None),
+        cover_revision=cover_revision, manual_selection=True, local_cover_dimensions=(None, None),
         persist_cache_update=False, schedule_cache_updates_save=None,
         find_updated_albums=lambda paths: [], find_problematic_album=lambda paths: None,
     )

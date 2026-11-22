@@ -225,6 +225,33 @@ def test_save_from_a_lookup_answers_that_lookup_with_the_chosen_candidate(api, m
     assert "lookup_task_id" not in next(args for name, args in api.calls if name == "save")
 
 
+@pytest.mark.parametrize("album_id, url, accepted", [
+    (72, "https://images.example/private.jpg", True),
+    (72, "https://images.example/another.jpg", False),
+    (5, "https://images.example/private.jpg", False),
+])
+def test_a_cover_offered_by_a_stopped_lookup_saves_from_the_albums_own_list(
+    api, monkeypatch, album_id, url, accepted,
+):
+    # Owner 2026-11-22, Muse - Drones: "album or cover selection changed...". The stopped lookup listed the album's
+    # saved candidates, but the page named them by the lookup's id, so the Save was refused every time.
+    api.resolver.user = actor("library.covers.write", "library.covers.remote.read")
+    task_id = "11cfa4ca3a114390a537de7c28a2bdd4"
+    monkeypatch.setattr(routes, "cover_lookup_result", lambda value: {
+        "id": task_id, "status": "failed", "album_payload": {"album_id": album_id},
+        "possible_matches": [{"id": "candidate", "url": url}],
+    })
+    monkeypatch.setattr(routes, "mark_cover_lookup_task_notification_action_taken", lambda *args, **kwargs: None)
+    payload = {**BODY, "lookup_task_id": task_id,
+               "references": [{"kind": "remote", "candidate_id": "candidate", "candidate_generation": task_id}]}
+
+    status, _ = api.request(payload)
+
+    assert status == 200
+    saved = next(args for name, args in api.calls if name == "save")["references"][0]
+    assert saved["candidate_generation"] == (REMOTE_GENERATION if accepted else task_id)
+
+
 def test_lookup_of_another_album_is_never_answered(api, monkeypatch):
     marked = []
     monkeypatch.setattr(routes, "cover_lookup_result", lambda value: {

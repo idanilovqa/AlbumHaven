@@ -155,6 +155,9 @@ def test_a_committed_ordered_selection_is_published_to_the_running_library(selec
     path = "album/01.flac"
     library_state = {"file_cache": {path: {"cover_path": "album/old.jpg"}}, "albums": []}
 
-    publish_ordered_cover_selection_for_tracks(library_state, {path}, selection)
+    revision = "a" * 64 if selection else None
+
+    publish_ordered_cover_selection_for_tracks(library_state, {path}, selection, cover_revision=revision)
 
     assert library_state["file_cache"][path]["cover_path"] == expected
+    assert library_state["file_cache"][path].get("cover_revision") == revision

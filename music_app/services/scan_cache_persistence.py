@@ -1293,7 +1293,9 @@ class PostgresScanCacheAdapter:
         self, *, track_paths, album_root, expected_album_id, expected_revision,
         mutation_id, references, commit_guard=None, downloads=None,
     ):
-        from music_app.services.ordered_cover_selection import validate_save_request, prepare_selection
+        from music_app.services.ordered_cover_selection import (
+            prepare_selection, primary_cover_revision, primary_projection, validate_save_request,
+        )
 
         request = validate_save_request(
             expected_album_id=expected_album_id, expected_revision=expected_revision,
@@ -1320,10 +1322,14 @@ class PostgresScanCacheAdapter:
                 library_id=scope.get("library_id"), downloads=downloads,
             )
             value["inventory_mutation_revision"] = scope["inventory_mutation_revision"]
+            canonical = scope.get("metadata") or {}
+            value["cover_revision"] = (
+                primary_cover_revision(value["selected_covers"]) if value["changed"] else canonical.get("cover_revision")
+            )
             if value["replayed"]:
-                from music_app.services.ordered_cover_selection import primary_projection
-                cover_path, projection = primary_projection(value["selected_covers"])
-                canonical = scope.get("metadata") or {}
+                cover_path, projection = primary_projection(
+                    value["selected_covers"], cover_revision=value["cover_revision"],
+                )
                 # A replay of an unchanged Save must preserve legacy primary
                 # provenance just as its original transaction did. Only recover
                 # a primary that the database actually published explicitly.
@@ -1475,7 +1481,9 @@ class PostgresScanCacheAdapter:
                             ):
                                 raise OrderedCoverSelectionConflict("The saved source set changed. Reload and retry.")
                         from music_app.services.ordered_cover_selection import primary_projection
-                        cover_path, projection = primary_projection(effect.ordered_selection["selected_covers"])
+                        cover_path, projection = primary_projection(
+                            effect.ordered_selection["selected_covers"], cover_revision=effect.value.get("cover_revision"),
+                        )
                         if not effect.value["changed"]:
                             cover_path, projection = scope.get("cover_path"), {}
                         updated = _first_row(connection.execute(_persist_ordered_cover_selection_sql(), {

@@ -732,11 +732,22 @@ function queueVisibleTrackModalAlbumDetailsPrewarm(containerEl, scrollEl) {
 // Owner 2026-11-16: an album's other selected covers sit behind its main cover in Album Details. Their
 // previews load for the settled visible gallery cards, so opening the album shows them at once. Low
 // priority, once per URL, and paused while a search is being typed, like the Album Details prewarm.
+// They start only when no card is waiting for its own cover (owner 2026-11-22).
 const VISIBLE_SELECTED_COVER_PRELOAD_CARDS = 60;
 const preloadedAlbumDetailsCoverUrls = new Set();
+let selectedCoverPreloadWaiting = false;
 
 function preloadVisibleAlbumDetailsCovers(containerEl, scrollEl) {
   if (typeof Image !== 'function' || state?.busy || state?.ui?.albumDetailPrewarmSearchSuspended) return;
+  if (typeof galleryCoverLoadScheduler !== 'undefined' && !galleryCoverLoadScheduler.isForegroundIdle()) {
+    if (selectedCoverPreloadWaiting) return;
+    selectedCoverPreloadWaiting = true;
+    galleryCoverLoadScheduler.whenForegroundIdle().then(() => {
+      selectedCoverPreloadWaiting = false;
+      preloadVisibleAlbumDetailsCovers(containerEl, scrollEl);
+    });
+    return;
+  }
   visibleGalleryAlbumButtons(containerEl, scrollEl, VISIBLE_SELECTED_COVER_PRELOAD_CARDS).forEach((button) => {
     const album = getIndexedAlbum(String(button.getAttribute('data-album-key') || '').trim());
     resolveAlbumDetailsCoverSlots(album).slice(1).forEach((slot) => {

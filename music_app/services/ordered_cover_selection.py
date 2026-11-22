@@ -188,11 +188,24 @@ def prepare_selection(*, metadata, expected_revision, request, references, confi
     return patch, {**patch, "changed": changed, "replayed": False}
 
 
-def primary_projection(selection):
+def primary_cover_revision(selection):
+    """Content revision of the main cover, which keeps its gallery preview prebuilt and cached for good."""
+    from pathlib import Path
+    from music_app.services.cover_workflow import cover_revision_for_path
+
+    if not selection or selection[0]["kind"] != "local":
+        return None
+    try:
+        return cover_revision_for_path(Path(selection[0]["path"]))
+    except OSError:
+        return None  # A saved source may be offline; its selection is still valid.
+
+
+def primary_projection(selection, *, cover_revision=None):
     """The album's published primary; an empty selection publishes the explicit "no cover" choice."""
     primary = selection[0] if selection else {"kind": "none"}
     projection = {"cover_selection_origin": "user", "cover_selection_provenance": "explicit",
-                  "cover_revision": None, "cover_selection_repair_previous": None,
+                  "cover_revision": cover_revision, "cover_selection_repair_previous": None,
                   "local_cover_width": None, "local_cover_height": None}
     for key in ("url", "thumbnail_url", "source", "source_label", "album_url", "width", "height"):
         projection["remote_cover_" + key] = primary.get(key) if primary["kind"] == "remote" else None

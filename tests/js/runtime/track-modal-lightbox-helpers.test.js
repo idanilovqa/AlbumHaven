@@ -3497,7 +3497,7 @@ for (const interruption of ['cancel', 'pinch', 'zoom', 'close', 'remaining-touch
   });
 }
 
-test('visible gallery cards preload the extra selected covers Album Details shows behind the main cover', () => {
+test('visible gallery cards preload the extra selected covers Album Details shows behind the main cover', async () => {
   // Owner 2026-11-16: "when opening an album with 3 covers set in the artbox, those covers take some time to
   // load ... I would prefer their previews to also load while user is in the gallery".
   const { context } = loadHelper({
@@ -3523,8 +3523,19 @@ test('visible gallery cards preload the extra selected covers Album Details show
     selector === '.album-title-button[data-open-tracklist="1"][data-album-key]' ? [button] : []
   );
 
+  // Owner 2026-11-22: "2nfd and 3rd cover choices can load in the background after that": after the cards' covers.
+  let cardsLoaded;
+  let idle = false;
+  const cardCovers = new Promise((resolve) => { cardsLoaded = resolve; });
+  context.galleryCoverLoadScheduler = { isForegroundIdle: () => idle, whenForegroundIdle: () => cardCovers };
+
   context.preloadVisibleAlbumDetailsCovers(containerEl, scrollEl);
   context.preloadVisibleAlbumDetailsCovers(containerEl, scrollEl);
+  await Promise.resolve();
+  assert.deepEqual(loaded, [], 'no extra cover loads while a card still waits for its own');
+  idle = true;
+  cardsLoaded();
+  await new Promise((resolve) => setImmediate(resolve));
 
   // The rear covers (not the main one), at the exact URL Album Details renders, once each, low priority.
   assert.deepEqual(loaded.map((item) => item.src), [

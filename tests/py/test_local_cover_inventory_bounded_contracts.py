@@ -391,7 +391,9 @@ def test_a_full_rescan_hands_the_inventory_exactly_the_roots_it_read(tmp_path, m
             "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://inventory.invalid/contract", "IMAGE_EXTENSIONS": {".jpg"},
             "CACHE_PATH": tmp_path / "cache", "CACHE_MAX_AGE_SECONDS": 0,
             "_library_root_paths_snapshot": tuple(Path(root["path"]) for root in roots),
-            "_LOCAL_COVER_INVENTORY": SimpleNamespace(rescan=rescanned.append),
+            "_LOCAL_COVER_INVENTORY": SimpleNamespace(
+                rescan=lambda readable, *, configured: rescanned.append((readable, configured)),
+            ),
         },
         logger=SimpleNamespace(exception=lambda *_args: None, warning=lambda *_args: None),
         force=True,
@@ -403,7 +405,9 @@ def test_a_full_rescan_hands_the_inventory_exactly_the_roots_it_read(tmp_path, m
     )
 
     assert state["scan_outcome"] == "completed"
-    assert rescanned == [[roots[0]["path"]]], "exactly the readable root's folders are rebuilt"
+    assert rescanned == [([roots[0]["path"]], [root["path"] for root in roots])], (
+        "exactly the readable root's folders are rebuilt, beside the scan's own pinned roots"
+    )
 
 
 @pytest.mark.parametrize("unreadable", ["away", "incomplete"])
@@ -422,6 +426,9 @@ def test_a_full_rescan_keeps_an_unreadable_roots_stored_folders_and_survives_a_f
         return invalidate_all(*args, **kwargs)
 
     monkeypatch.setattr(worker.repository, "invalidate_all", attempt)
+    monkeypatch.setattr(worker.repository, "_roots", lambda: pytest.fail(
+        "a Full Rescan and its retry are handed the scan's roots; they never load the root settings (BI-15)"
+    ))
     worker._logger = SimpleNamespace(exception=lambda *_args: None)
 
     _scan(monkeypatch, library, {}, full_rescan=True, **{unreadable: "extra"})
@@ -497,7 +504,9 @@ def test_local_cover_inventory_contract_relists_only_changed_folders_at_producti
         elif change == "watcher reports a moved folder":
             worker.invalidate_paths([album, moved], subtree_paths=[album, moved], context_changed=True)
         elif change.startswith("removal while"):
-            worker.rescan([root["path"] for root in library.roots])
+            worker.rescan(
+                [root["path"] for root in library.roots], configured=[root["path"] for root in library.roots],
+            )
             for row in list(tables.contexts.values()):
                 worker.request_context(row["paths"])
             tables.written = tables.values_sent = 0

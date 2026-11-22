@@ -543,6 +543,7 @@ function buildProblematicAlbumDetail(album) {
     ${moveActionsHtml ? buildUtilityCollapsibleSection('moves', 'Move Album', moveActionsHtml) : ''}
     ${buildDetectedProblemsHtml(album)}
     ${album.musicbrainz_album_key ? buildMusicBrainzAlbumLookupHtml(album) : ''}
+    ${album.musicbrainz_artist_undecided ? buildMusicBrainzArtistUndecidedHtml(album) : ''}
     ${album.musicbrainz_correction ? buildMusicBrainzCorrectionHtml(album) : ''}
   `;
 }
@@ -3605,16 +3606,124 @@ function buildMusicBrainzAlbumLookupHtml(album) {
 
 function buildMusicBrainzAlbumProblemDetail(item) {
   const title = String(item.name || 'Unknown Album');
+  const undecided = item.musicbrainz_artist_undecided;
+  const noInfo = !undecided || Boolean(item.problem_reasons?.includes(MUSICBRAINZ_HAS_NO_INFO_LABEL));
   return `<div class="utility-detail-header">
       <div class="utility-detail-cover">${buildUtilityAlbumArtbox(item, { label: `Album cover for ${title}` })}</div>
       <div class="utility-detail-summary">
         <h3 class="utility-detail-title">${escapeHtml(title)}</h3>
         <div class="utility-detail-meta">${escapeHtml(item.album_artist || 'Unknown Artist')}</div>
         <div class="utility-detail-meta">Year: ${escapeHtml(item.year ?? 'Unknown')}</div>
+        ${undecided?.track_count ? `<div class="utility-detail-meta">Tracks: ${escapeHtml(undecided.track_count)}</div>` : ''}
       </div>
     </div>
+    ${undecided ? buildMusicBrainzArtistUndecidedLabelHtml() : ''}
     <h4 class="utility-detail-section-title">Detected problems</h4>
-    ${buildMusicBrainzAlbumLookupHtml(item)}`;
+    ${undecided ? buildMusicBrainzArtistUndecidedBodyHtml(item) : ''}
+    ${noInfo ? buildMusicBrainzAlbumLookupHtml(item) : ''}`;
+}
+
+// A split name's album the evidence could not decide (owner-approved P1, P2): the favoured
+// artist is proposed, and only Assign artist files the album.
+const MUSICBRAINZ_ARTIST_UNDECIDED_LABEL = 'MusicBrainz: artist undecided';
+const MUSICBRAINZ_ARTIST_COUNT_WORDS = ['', '', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine'];
+
+function canAssignMusicBrainzAlbumArtist() {
+  return window.AlbumHavenCapabilities?.allows?.('library.metadata_matches.review') === true;
+}
+
+function getMusicBrainzArtistUndecidedSelection(item) {
+  const chosen = item.musicbrainz_undecided_ui?.selectedMbid;
+  return chosen || item.musicbrainz_artist_undecided.candidates.find((artist) => artist.favoured)?.artist_mbid || null;
+}
+
+function describeMusicBrainzArtistUndecided({ artist_name: name, candidates }) {
+  const count = MUSICBRAINZ_ARTIST_COUNT_WORDS[candidates.length] || String(candidates.length);
+  const onEvery = candidates.every((artist) => Number(artist.found) > 0);
+  const why = onEvery
+    ? `this album’s recordings appear on releases of ${candidates.length === 2 ? 'both' : 'each'}`
+    : 'no release proves which one made this album';
+  return `${count} MusicBrainz artists are named ${name}, and ${why}. Choose the artist to file it under; nothing changes until you do.`;
+}
+
+function buildMusicBrainzArtistUndecidedLabelHtml() {
+  return `<div class="utility-album-problem-labels">${buildAlertLabelHtml({ severity: 'warning', message: MUSICBRAINZ_ARTIST_UNDECIDED_LABEL })}</div>`;
+}
+
+function buildMusicBrainzArtistUndecidedBodyHtml(item) {
+  const undecided = item.musicbrainz_artist_undecided;
+  const ui = item.musicbrainz_undecided_ui || {};
+  const selectedMbid = getMusicBrainzArtistUndecidedSelection(item);
+  const rows = undecided.candidates.map((artist) => ({
+    mbid: artist.artist_mbid,
+    name: artist.canonical_name || 'Unknown artist',
+    prefix: artist.favoured ? 'Suggested: ' : '',
+    facts: artist.disambiguation || [artist.country, artist.artist_kind].filter(Boolean).join(' · '),
+    evidence: [
+      Number(artist.found) > 0 ? `${artist.found} of ${artist.sampled} sampled recordings` : 'No sampled recordings',
+      artist.folder_album ? `same folder as ${artist.folder_album}` : '',
+    ].filter(Boolean).join('; '),
+    url: artist.musicbrainz_url,
+  }));
+  const table = buildMusicBrainzIdentityTableHtml({
+    rows, selectedMbid, ariaLabel: 'MusicBrainz artist candidates', targetLabel: 'Candidate artist / MBID',
+  });
+  const assign = ButtonComponent.renderButton({
+    label: 'Assign artist', variant: 'primary',
+    disabled: !selectedMbid || ui.busy || !canAssignMusicBrainzAlbumArtist(),
+    attributes: { 'data-musicbrainz-assign-album-artist': '1' },
+  });
+  return `<p class="utility-detail-meta">${escapeHtml(describeMusicBrainzArtistUndecided(undecided))}</p>
+    <h4 class="utility-detail-section-title">Candidate artists</h4>
+    <div class="utility-detected-table">${table}</div>
+    ${ui.error ? buildOnPageAlertHtml({ severity: 'error', title: 'MusicBrainz action failed', message: ui.error }) : ''}
+    <div class="utility-detected-actions">${assign}</div>`;
+}
+
+// An album already listed shows it beneath its detected problems.
+function buildMusicBrainzArtistUndecidedHtml(album) {
+  return `${buildMusicBrainzArtistUndecidedLabelHtml()}${buildMusicBrainzArtistUndecidedBodyHtml(album)}`;
+}
+
+async function assignMusicBrainzAlbumArtist(item) {
+  const artistMbid = getMusicBrainzArtistUndecidedSelection(item);
+  const ui = item.musicbrainz_undecided_ui || (item.musicbrainz_undecided_ui = {});
+  if (!artistMbid || ui.busy || !canAssignMusicBrainzAlbumArtist()) return;
+  ui.busy = true;
+  ui.error = '';
+  renderProblematicFiles({ preserveProblematicTree: true });
+  try {
+    const response = await fetch('/api/musicbrainz/albums/artist', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ album_key: item.musicbrainz_artist_undecided.album_key, artist_mbid: artistMbid }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload?.detail || 'MusicBrainz action failed.');
+    if (typeof showToast === 'function') showToast('Artist assigned.', 'info', 2600);
+    await loadProblematicFiles(true);
+    void refreshGalleryArtistMusicBrainzStatus({ force: true });
+  } catch (error) {
+    ui.error = error?.message || 'MusicBrainz action failed.';
+  } finally {
+    ui.busy = false;
+    renderProblematicFiles({ preserveProblematicTree: true });
+  }
+}
+
+function handleMusicBrainzArtistUndecidedEvent(event) {
+  const item = getSelectedProblematicAlbum();
+  if (!item?.musicbrainz_artist_undecided) return false;
+  if (event.type === 'change' && event.target?.matches?.('[data-musicbrainz-select-identity]')) {
+    const ui = item.musicbrainz_undecided_ui || (item.musicbrainz_undecided_ui = {});
+    ui.selectedMbid = event.target.value;
+    renderProblematicFiles({ preserveProblematicTree: true });
+    return true;
+  }
+  if (event.type !== 'click' || !event.target?.closest?.('[data-musicbrainz-assign-album-artist]')) return false;
+  event.preventDefault();
+  void assignMusicBrainzAlbumArtist(item);
+  return true;
 }
 
 async function loadMusicBrainzArtistProblemDetail(item, { force = false, render = true } = {}) {
@@ -3758,6 +3867,7 @@ function handleMusicBrainzArtistProblemEvent(event) {
     if (url && /^https:\/\/musicbrainz\.org\//.test(url)) window.open(url, '_blank', 'noopener,noreferrer');
     return true;
   }
+  if (handleMusicBrainzArtistUndecidedEvent(event)) return true;
   const item = getSelectedMusicBrainzArtistProblem();
   if (!item) return false;
   const ui = item.musicbrainz_ui || (item.musicbrainz_ui = {});

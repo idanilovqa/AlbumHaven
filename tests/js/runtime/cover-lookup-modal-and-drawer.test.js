@@ -3793,11 +3793,14 @@ require('node:test')('remote optimistic selection reuses the selected preview un
     'C:/music/Remote/cover.jpg',
   );
 
+  // The URL of the card the user selected: the cached 480 px preview, already on screen (FTC-COVERS-013).
   const expectedPreview = context.buildRemoteCoverLookupDisplayUrl(
     selectedMatch,
     selectedMatch.thumbnail_url,
     selectedMatch.id,
+    { preview: true },
   );
+  assert.match(expectedPreview, /[?&]size=480$/);
   assert.equal(updatedAlbum.cover_ref, null);
   assert.equal(updatedAlbum.remote_cover_url, selectedMatch.url);
   assert.equal(refreshedAlbums[0].cover_ref, null);
@@ -5712,7 +5715,7 @@ for (const status of ['pending', 'running']) {
 
   assert.equal(
     context.state.coverLookup.optimisticAlbumCovers['C:/music/Kaipa/01.mp3'].src,
-    '/utilities/cover-lookup/remote-image?url=https%3A%2F%2Fimages.example%2Fkaipa-thumbnail.jpg&key=kaipa-candidate',
+    '/utilities/cover-lookup/remote-image?url=https%3A%2F%2Fimages.example%2Fkaipa-thumbnail.jpg&key=kaipa-candidate&size=480',
     'remote selection should reuse the already-rendered candidate preview instead of refetching a new full image',
   );
 }

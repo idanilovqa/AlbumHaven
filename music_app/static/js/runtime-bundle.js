@@ -37645,7 +37645,7 @@ function applyOptimisticRemoteCoverSelection(album, selectedMatch, coverRef) {
   if (!imageUrl) return;
   const signature = getAlbumPathSignature(updatedAlbum) || `${updatedAlbum?.key || ''}::${updatedAlbum?.name || ''}::${updatedAlbum?.album_artist || ''}`;
   state.coverLookup.optimisticAlbumCovers[signature] = {
-    src: buildRemoteCoverLookupDisplayUrl(selectedMatch, previewImageUrl, previewKey),
+    src: buildRemoteCoverLookupDisplayUrl(selectedMatch, previewImageUrl, previewKey, { preview: true }),
     coverRef: nextCoverRef,
   };
   syncCoverLookupAlbumReferences([updatedAlbum]);

@@ -3,6 +3,7 @@
   "requiredPaths": [
     "music_app/services/problematic_index.py",
     "migrations/postgres/0268_create_album_duplicate_results.sql",
+    "migrations/postgres/0269_index_stray_decision_lookups.sql",
     "music_app/routes/api_wave_a_asgi_routes.py",
     "music_app/services/edit_state.py",
     "music_app/services/edit_tag_timings.py",
@@ -111,7 +112,8 @@
     {
       "paths": [
         "music_app/services/problematic_index.py",
-        "migrations/postgres/0268_create_album_duplicate_results.sql"
+        "migrations/postgres/0268_create_album_duplicate_results.sql",
+        "migrations/postgres/0269_index_stray_decision_lookups.sql"
       ],
       "targets": [
         "selected-artist",

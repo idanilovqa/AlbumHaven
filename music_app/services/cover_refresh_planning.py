@@ -8,6 +8,49 @@ from music_app.services.cover_refresh_provider import local_cover_requires_upgra
 from music_app.services.cover_refresh_policy import automatic_cover_repair_minimum_edge
 
 
+def _album_identity_resolver(file_cache, rejected_paths):
+    """The job of an entry without an album id.
+
+    It joins its folder's identified album of the same artist and album when there is exactly one. Otherwise entries
+    of the same artist and album are one job unless they state different editions or years.
+    """
+    album_ids, editions, years = {}, {}, {}
+    for raw_path, entry in file_cache.items():
+        if raw_path in rejected_paths or entry.get("local_album_membership_problem"):
+            continue
+        try:
+            folder_key = str(Path(raw_path).parent)
+        except Exception:
+            continue  # the planner skips it too
+        tags = (
+            folder_key,
+            str(entry.get("album_artist") or entry.get("artist") or "").strip().casefold(),
+            str(entry.get("album") or "").strip().casefold(),
+        )
+        album_id = entry.get("album_id")
+        if isinstance(album_id, int) and album_id > 0:
+            album_ids.setdefault(tags, set()).add(album_id)
+            continue
+        if edition := str(entry.get("edition") or "").strip().casefold():
+            editions.setdefault(tags, set()).add(edition)
+        if isinstance(entry.get("year"), int):
+            years.setdefault(tags, set()).add(entry["year"])
+
+    def identity(folder_key, artist, album, edition, year):
+        tags = (folder_key, artist.casefold(), album.casefold())
+        identified = album_ids.get(tags, ())
+        if artist and album and len(identified) == 1:
+            return ("id", *identified)
+        edition = edition.casefold()
+        if not edition and len(stated := editions.get(tags, ())) == 1:
+            edition, = stated
+        if year is None and len(stated := years.get(tags, ())) == 1:
+            year, = stated
+        return ("tags", *tags[1:], edition, year)
+
+    return identity
+
+
 def build_cover_refresh_jobs(
     file_cache: dict[str, dict[str, object]],
     *,
@@ -23,6 +66,7 @@ def build_cover_refresh_jobs(
         {**entry, "path": raw_path} for raw_path, entry in file_cache.items()
     )
 
+    album_identity_for = _album_identity_resolver(file_cache, rejected_paths)
     for raw_path, entry in file_cache.items():
         if raw_path in rejected_paths or entry.get("local_album_membership_problem"):
             continue
@@ -44,13 +88,7 @@ def build_cover_refresh_jobs(
         album_identity = (
             ("id", entry_album_id)
             if entry_album_id is not None
-            else (
-                "tags",
-                entry_artist.casefold(),
-                entry_album.casefold(),
-                entry_edition.casefold(),
-                entry_year,
-            )
+            else album_identity_for(folder_key, entry_artist, entry_album, entry_edition, entry_year)
         )
         job = jobs_by_folder.setdefault(
             (folder_key, *album_identity),
@@ -78,6 +116,10 @@ def build_cover_refresh_jobs(
         track_paths = job.get("track_paths")
         if isinstance(track_paths, list):
             track_paths.append(raw_path)
+        if not job.get("edition"):
+            job["edition"] = entry_edition
+        if job.get("year") is None:
+            job["year"] = entry_year
         if job.get("album_id") is None and entry_album_id is not None:
             for field in (
                 "selected_cover_path",

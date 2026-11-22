@@ -278,6 +278,37 @@ def test_cover_jobs_keep_different_albums_in_one_folder_separate(tmp_path):
     }
 
 
+def test_an_entry_without_an_id_joins_neither_of_two_identified_albums_with_its_tags(tmp_path):
+    folder = tmp_path / "Album"
+    entries = {
+        str(folder / f"{index}.mp3"): {"album_artist": "Artist", "album": "Album", "album_id": album_id}
+        for index, album_id in enumerate((12, None, 13), start=1)
+    }
+
+    jobs = cover_refresh_planning.build_cover_refresh_jobs(entries)
+
+    assert {(job["album_id"], tuple(job["track_paths"])) for job in jobs} == {
+        (album_id, (str(folder / f"{index}.mp3"),)) for index, album_id in enumerate((12, None, 13), start=1)
+    }
+
+
+def test_entries_without_an_id_never_join_a_different_album(tmp_path):
+    folder = tmp_path / "Unsorted Music"
+    entries = {
+        str(folder / f"{index}.mp3"): {"album_artist": artist, "album": album, "album_id": album_id}
+        for index, (artist, album, album_id) in enumerate(
+            (("Kansas", "Leftoverture", 12), ("Iona", "Beyond These Shores", None), ("Kansas", "Monolith", None)),
+            start=1,
+        )
+    }
+
+    jobs = cover_refresh_planning.build_cover_refresh_jobs(entries)
+
+    assert {(job["album"], job["album_id"], len(job["track_paths"])) for job in jobs} == {
+        ("Leftoverture", 12, 1), ("Beyond These Shores", None, 1), ("Monolith", None, 1),
+    }
+
+
 def test_build_cover_refresh_jobs_groups_folder_tracks_and_logs_summary(tmp_path: Path):
     logger = _LoggerStub()
     album_folder = tmp_path / "Artist" / "Album"

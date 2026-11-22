@@ -74,6 +74,7 @@ from music_app.services.library_settings import (
 from music_app.services.log_history import append_log_history
 from music_app.services.manual_versions import load_manual_version_links, save_manual_version_links
 from music_app.services.metadata import build_text_repairs_for_entry, normalize_exception_value
+from music_app.services.stray_fold_decision import decide_stray_folds_for_save
 from music_app.services.tag_editor_folder import load_tag_editor_folder_files
 from music_app.services.move_executor import AlbumMoveError, execute_album_move
 from music_app.services.problem_exclusions import (
@@ -1825,6 +1826,30 @@ async def tag_editor_folder_files(request: Request) -> JSONResponse:
     except (FileNotFoundError, OSError, ValueError):
         return JSONResponse({"ok": False, "error": "Unable to load source folder"}, status_code=400)
     return JSONResponse({"ok": True, **result}, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/utilities/tag-editor/fold-decision")
+async def tag_editor_fold_decision(request: Request) -> JSONResponse:
+    """Which cards these exact updates fold or unfold (owner, 2026-11-22: cards change at the Save click).
+
+    Asked when the confirmation opens. Read-only; a refusal never holds or fails the save.
+    """
+    payload = await _json_payload(request)
+    updates = (payload or {}).get("updates")
+    if not isinstance(updates, dict) or not updates or not all(
+        str(path).strip() and isinstance(values, dict) for path, values in updates.items()
+    ):
+        return _json_response(({"ok": False, "error": "No tag edits were provided"}, 400))
+    if not _is_selected_postgres_library_browse_request(request):
+        return _json_response(({"ok": False, "code": "unavailable"}, 409))
+    try:
+        decision = await run_in_threadpool(decide_stray_folds_for_save, _app_config(request), updates)
+    except Exception:
+        _asgi_logger(request).exception("The stray fold decision failed.")
+        return _json_response(({"ok": False, "code": "failed"}, 503))
+    return JSONResponse(
+        decision, status_code=200 if decision["ok"] else 409, headers={"Cache-Control": "no-store"},
+    )
 
 
 @router.get("/utilities/edit-tags/requests/{client_request_id}")

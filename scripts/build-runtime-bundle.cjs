@@ -77,6 +77,7 @@ const RUNTIME_SCRIPT_PATHS = [
   'js/runtime/cover-lookup-modal-and-drawer.js',
   'js/runtime/preview-move-attention.js',
   'js/runtime/pending-tag-edits.js',
+  'js/runtime/save-fold-decisions.js',
   'js/runtime/tag-editor-and-optimistic-updates.js',
   'js/runtime/player-state-persistence-helpers.js',
   'js/runtime/player-listen-session-helpers.js',

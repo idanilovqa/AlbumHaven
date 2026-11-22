@@ -445,6 +445,7 @@ function openTagEditConfirmModal() {
     : null;
   els.overlay.hidden = false;
   document.body.classList.add('modal-open');
+  if (typeof saveFoldDecisions !== 'undefined') saveFoldDecisions.prepare(updates);
 }
 
 function closeTagEditConfirmModal() {
@@ -866,6 +867,17 @@ async function confirmManualTagEdit() {
       tagEdits: updates,
     },
   );
+  // Before the first render, so no frame shows both cards of a fold that is already decided.
+  const saveFolds = typeof saveFoldDecisions !== 'undefined'
+    ? saveFoldDecisions.start({
+      album,
+      updates,
+      stillOwns: () => tagEditOriginStillOwnsView(originatingViewStateRevision)
+        && tagEditViewMutationStillOwnsResources(tagEditMutationClaim),
+      render: () => renderView(renderOptions),
+    })
+    : null;
+  saveFolds?.keep();
   const coverLookupOptimisticSplit = typeof recordCoverLookupOptimisticSplit === 'function'
     ? recordCoverLookupOptimisticSplit(album, optimisticUpdatedAlbums)
     : null;
@@ -909,6 +921,7 @@ async function confirmManualTagEdit() {
     2000,
     { title: 'Saving tags', dismissible: false },
   );
+  saveFolds?.follow();
   try {
     const response = await responsePromise;
     const data = await response.json().catch(() => ({}));
@@ -966,6 +979,8 @@ async function confirmManualTagEdit() {
         },
       );
       updateOpenTrackModalAfterTagEdit(album, reconciledUpdatedAlbums);
+      saveFolds?.finish();
+      saveFolds?.keep();
       renderView(renderOptions);
     }
     const saveTaskWatchOptions = {
@@ -1041,6 +1056,7 @@ async function confirmManualTagEdit() {
       }
     }
   } catch (error) {
+    saveFolds?.fail();
     if (
       coverLookupOptimisticSplit
       && tagEditViewMutationStillOwnsResources(tagEditMutationClaim)
@@ -1118,6 +1134,8 @@ async function confirmManualTagEdit() {
     ) {
       await refreshCurrentViewAfterBackgroundCompletion();
     }
+  } finally {
+    saveFolds?.finish();
   }
 }
 

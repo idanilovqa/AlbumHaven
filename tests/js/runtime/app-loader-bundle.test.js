@@ -108,6 +108,7 @@ const expectedRuntimeOrder = [
   'cover-lookup-modal-and-drawer.js',
   'preview-move-attention.js',
   'pending-tag-edits.js',
+  'save-fold-decisions.js',
   'tag-editor-and-optimistic-updates.js',
   'player-state-persistence-helpers.js',
   'player-listen-session-helpers.js',

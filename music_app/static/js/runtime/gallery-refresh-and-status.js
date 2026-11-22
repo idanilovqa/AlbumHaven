@@ -873,6 +873,8 @@ function scheduleSidebarRender() {
 }
 
 function renderView(options = {}) {
+  // A save still being written shows as it will leave the library, in every render.
+  if (typeof saveFoldDecisions !== 'undefined') saveFoldDecisions.show();
   const renderOptions = { ...options };
   const galleryScroll = document.getElementById('albums-scroll');
   if (

@@ -410,53 +410,9 @@ def _validate_pending_scan_receipt(connection, context, state, metadata, retaine
         raise RuntimeError('Retained legacy relations differ from the pending scan baseline.')
 
 
-def _refresh_stray_duplicate_ownership(connection, library_id, album_ids):
-    album_ids = sorted({int(value) for value in album_ids if value and int(value) > 0})
-    if not album_ids:
-        return set()
-    rows = connection.execute("""
-        with seed_albums as materialized (
-          select albums.id, library.duplicate_identity_text(albums.title) as title_identity
-          from library.local_albums albums
-          where albums.library_id=%(library_id)s
-            and (
-              albums.id=any(%(album_ids)s::bigint[])
-              or albums.metadata #>> '{stray_duplicate_of,album_id}'
-                   = any(%(album_id_texts)s::text[])
-            )
-        ), title_identities as materialized (
-          select distinct title_identity from seed_albums where title_identity <> ''
-        ), scoped_albums as materialized (
-            select albums.id, albums.album_key, albums.title, albums.release_year,
-                   library.duplicate_identity_text(albums.title) as title_identity,
-                   library.duplicate_identity_text(
-                     coalesce(nullif(albums.metadata ->> 'album_artist', ''), artists.name)
-                   ) as artist_identity
-          from library.local_albums albums
-            join library.local_artists artists on artists.id=albums.artist_id
-          join title_identities
-            on title_identities.title_identity=library.duplicate_identity_text(albums.title)
-          where albums.library_id=%(library_id)s
-        ), active_tracks as materialized (
-          select tracks.id, tracks.album_id,
-            library.duplicate_identity_text(tracks.title) as title_identity,
-            tracks.duration_seconds,
-            row_number() over (
-              partition by tracks.album_id
-              order by coalesce(tracks.disc_number, 1),
-                coalesce(tracks.track_number, 2147483647), tracks.id
-            ) as track_position
-          from library.local_tracks tracks
-          -- Through the scoped albums' tracks: a join lets the planner read every track
-          -- and file in the library for the few albums a save touches.
-          where tracks.album_id = any(array(select id from scoped_albums))
-            and tracks.library_id=%(library_id)s
-            and (
-              select true from library.local_track_files files
-              where files.track_id=tracks.id and files.scan_cache_stale is false
-              limit 1
-            )
-        ), album_sizes as materialized (
+# The stray-copy rule, over any scoped_albums and active_tracks: the stored ones at publication,
+# the proposed ones for a save that has not been written (stray_fold_decision).
+STRAY_RULE_CTES = """        ), album_sizes as materialized (
           select album_id, count(*) as track_count
           from active_tracks group by album_id
         ), candidate_sources as materialized (
@@ -526,7 +482,56 @@ def _refresh_stray_duplicate_ownership(connection, library_id, album_ids):
           from scoped_albums
           left join chosen_sources
             on chosen_sources.stray_album_id=scoped_albums.id
-        ), changed as (
+"""
+
+
+def _refresh_stray_duplicate_ownership(connection, library_id, album_ids):
+    album_ids = sorted({int(value) for value in album_ids if value and int(value) > 0})
+    if not album_ids:
+        return set()
+    rows = connection.execute("""
+        with seed_albums as materialized (
+          select albums.id, library.duplicate_identity_text(albums.title) as title_identity
+          from library.local_albums albums
+          where albums.library_id=%(library_id)s
+            and (
+              albums.id=any(%(album_ids)s::bigint[])
+              or albums.metadata #>> '{stray_duplicate_of,album_id}'
+                   = any(%(album_id_texts)s::text[])
+            )
+        ), title_identities as materialized (
+          select distinct title_identity from seed_albums where title_identity <> ''
+        ), scoped_albums as materialized (
+            select albums.id, albums.album_key, albums.title, albums.release_year,
+                   library.duplicate_identity_text(albums.title) as title_identity,
+                   library.duplicate_identity_text(
+                     coalesce(nullif(albums.metadata ->> 'album_artist', ''), artists.name)
+                   ) as artist_identity
+          from library.local_albums albums
+            join library.local_artists artists on artists.id=albums.artist_id
+          join title_identities
+            on title_identities.title_identity=library.duplicate_identity_text(albums.title)
+          where albums.library_id=%(library_id)s
+        ), active_tracks as materialized (
+          select tracks.id, tracks.album_id,
+            library.duplicate_identity_text(tracks.title) as title_identity,
+            tracks.duration_seconds,
+            row_number() over (
+              partition by tracks.album_id
+              order by coalesce(tracks.disc_number, 1),
+                coalesce(tracks.track_number, 2147483647), tracks.id
+            ) as track_position
+          from library.local_tracks tracks
+          -- Through the scoped albums' tracks: a join lets the planner read every track
+          -- and file in the library for the few albums a save touches.
+          where tracks.album_id = any(array(select id from scoped_albums))
+            and tracks.library_id=%(library_id)s
+            and (
+              select true from library.local_track_files files
+              where files.track_id=tracks.id and files.scan_cache_stale is false
+              limit 1
+            )
+""" + STRAY_RULE_CTES + """        ), changed as (
           update library.local_albums albums
           set metadata=case when desired.ownership is null
             then coalesce(albums.metadata, '{}'::jsonb)-'stray_duplicate_of'

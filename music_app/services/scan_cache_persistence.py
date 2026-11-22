@@ -6459,6 +6459,23 @@ def _persist_targeted_inventory_tag_edit_sql() -> str:
     """
 
 
+def _same_release_sql(album: str, source_artist_id: str, source_year: str) -> str:
+    """The save's destination besides an exact album key; stray_fold_decision resolves with it too."""
+    return f"""(
+                      {album}.artist_id is not distinct from {source_artist_id}
+                      and lower(btrim({album}.title)) =
+                        lower(btrim(%(destination_album_title)s))
+                      and {album}.release_year is not distinct from
+                        case
+                          when %(updates_release_year)s::boolean
+                          then %(destination_release_year)s
+                          else {source_year}
+                        end
+                      and lower(btrim(coalesce({album}.metadata ->> 'edition', '')))
+                        = lower(btrim(%(destination_edition)s))
+                    )"""
+
+
 def _persist_structural_album_tag_edit_sql(
     *,
     updates_release_year: bool = False,
@@ -6625,26 +6642,7 @@ def _persist_structural_album_tag_edit_sql(
            and (
                  library.local_albums.id = selection_scope.source_album_id
                  or library.local_albums.album_key = %(destination_album_key)s
-                 or (
-                      library.local_albums.artist_id is not distinct from
-                        source_album_identity.artist_id
-                      and lower(btrim(library.local_albums.title)) =
-                        lower(btrim(%(destination_album_title)s))
-                      and library.local_albums.release_year is not distinct from
-                        case
-                          when %(updates_release_year)s::boolean
-                          then %(destination_release_year)s
-                          else source_album_identity.release_year
-                        end
-                      and lower(
-                            btrim(
-                              coalesce(
-                                library.local_albums.metadata ->> 'edition',
-                                ''
-                              )
-                            )
-                          ) = lower(btrim(%(destination_edition)s))
-                    )
+                 or """ + _same_release_sql("library.local_albums", 'source_album_identity.artist_id', 'source_album_identity.release_year') + """
                )
           order by library.local_albums.id
           for update of local_albums
@@ -6664,29 +6662,7 @@ def _persist_structural_album_tag_edit_sql(
                 )
             and (
                   locked_album_scope.album_key = %(destination_album_key)s
-                  or (
-                       locked_album_scope.artist_id is not distinct from
-                         (select artist_id from source_album_identity)
-                       and lower(btrim(locked_album_scope.title)) =
-                         lower(btrim(%(destination_album_title)s))
-                       and locked_album_scope.release_year is not distinct from
-                         case
-                           when %(updates_release_year)s::boolean
-                           then %(destination_release_year)s
-                           else (
-                             select release_year
-                             from source_album_identity
-                           )
-                         end
-                       and lower(
-                             btrim(
-                               coalesce(
-                                 locked_album_scope.metadata ->> 'edition',
-                                 ''
-                               )
-                             )
-                           ) = lower(btrim(%(destination_edition)s))
-                     )
+                  or """ + _same_release_sql("locked_album_scope", '(select artist_id from source_album_identity)', '(select release_year from source_album_identity)') + """
                 )
           order by
             case

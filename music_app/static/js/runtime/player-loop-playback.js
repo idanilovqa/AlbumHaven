@@ -276,10 +276,7 @@ function setCurrentPlayerTrack(track, options = {}) {
   state.player.timelineDragging = false;
   state.player.timelineDragPreviewSeconds = null;
   if (typeof loadPlayingWaveformPeaks === 'function') {
-    const playingWaveform = loadPlayingWaveformPeaks(
-      String(track?.path || ''),
-      Number(state.player.streaming?.generation) || 0,
-    );
+    const playingWaveform = loadPlayingWaveformPeaks(String(track?.path || ''));
     if (playingWaveform && typeof playingWaveform.catch === 'function') {
       void playingWaveform.catch(() => {});
     }
@@ -388,7 +385,9 @@ async function playTrackFromPayload(track, options = {}) {
   if (shouldAutoplay && requestedTrackPath && currentTrackPath
       && requestedTrackPath !== currentTrackPath
       && typeof cancelStreamingWaveformGeneration === 'function') {
-    cancelStreamingWaveformGeneration(Number(state.player.streaming?.generation) || 0);
+    cancelStreamingWaveformGeneration(
+      Number(getPlayerPlaybackSnapshot().generation ?? state.player.streaming?.generation) || 0,
+    );
   }
   const ownershipAlreadyClaimed = options.ownershipClaimed === true
     && typeof isActivePlaybackOwner === 'function' && isActivePlaybackOwner();
@@ -513,6 +512,8 @@ async function handleStreamingPlaybackFirstFrame(event = {}) {
   const selectedTrackPath = String(state.player.current?.path || '');
   const renderedTrackPath = String(event.trackPath || '');
   if (renderedTrackPath && renderedTrackPath !== selectedTrackPath) return;
+  // An engine can start a restored track without Play (Android's autoplay reports no start).
+  if (typeof playRestingTrackWaveform === 'function') playRestingTrackWaveform();
   const identity = [
     Number(event.generation) || 0,
     Number(event.streamId) || 0,
@@ -992,6 +993,7 @@ function togglePlayerPlayback(options = {}) {
   if (typeof resumeStreamingPlayback !== 'function'
       || typeof pauseStreamingPlayback !== 'function') return false;
   if (playback.paused) {
+    if (typeof playRestingTrackWaveform === 'function') playRestingTrackWaveform();
     const track = state.player.current;
     const selectionToken = ++playerTrackSelectionToken;
     Promise.resolve().then(async () => {

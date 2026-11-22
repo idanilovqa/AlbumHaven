@@ -301,6 +301,7 @@ function restorePlayerState() {
     const completeRestoredAutoplay = () => {
       if (!canResumePlayback || autoplayCompletionHandled) return;
       autoplayCompletionHandled = true;
+      if (typeof playRestingTrackWaveform === 'function') playRestingTrackWaveform();
       if (typeof beginStreamingPlayerListenSession === 'function') {
         beginStreamingPlayerListenSession(track, boundedTime);
       }
@@ -321,6 +322,7 @@ function restorePlayerState() {
       } : {}),
       });
     };
+    if (typeof restTrackWaveform === 'function') restTrackWaveform(track.path);
     const startRestoredRole = () => ownershipResult && typeof ownershipResult.then === 'function'
       ? ownershipResult.then(startWithOwnership) : startWithOwnership(ownershipResult);
     const restoredRolePromise = !savedPaused

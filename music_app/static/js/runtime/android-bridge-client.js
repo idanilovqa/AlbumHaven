@@ -639,6 +639,7 @@ function adoptAndroidNativePlayback(persistedState) {
     const album = resolveAlbumForPlayerTrack(track);
     if (album) setAlbumPlaybackQueue(album, track.path);
   }
+  if (!playing && typeof restTrackWaveform === 'function') restTrackWaveform(track.path);
   if (typeof setCurrentPlayerTrack === 'function') setCurrentPlayerTrack(track, { persist: false });
   // A reload restores loops inactive, so Android's loop ends with the old document.
   clearAndroidNativeLoop();

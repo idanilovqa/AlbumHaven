@@ -64,11 +64,12 @@ class _ConnectState:
                 self._error = error
                 self._changed.notify_all()
 
-    def require_connection(self, pool, timeout_seconds: float) -> None:
-        """Return once the pool has a live connection; raise if it cannot open one."""
+    def require_connection(self, pool, timeout_seconds: float) -> bool:
+        """Return once the pool has a live connection, and whether that meant waiting; raise if it
+        cannot open one."""
         with self._changed:
             if self._has_live_connection():
-                return
+                return False
             now = perf_counter()
             if now - self._error_seen_at > _RECONNECT_GIVE_UP_SECONDS:
                 self._error = None
@@ -83,6 +84,7 @@ class _ConnectState:
                 error = self._error
         if error is not None:
             raise OperationalError(f"Postgres is unreachable: {error}") from error
+        return True
 
 
 # Leases each thread holds right now, by thread id. A lease taken while the thread already holds one
@@ -241,7 +243,10 @@ def _lease_connection(
     acquired_at = 0.0
     try:
         if connect_state is not None:
-            connect_state.require_connection(pool, timeout_seconds or pool.timeout)
+            timeout = timeout_seconds or pool.timeout
+            if connect_state.require_connection(pool, timeout):
+                # Connecting and leasing share one timeout: lease with what connecting left of it.
+                checkout = pool.connection(timeout=max(0.001, timeout - (perf_counter() - wait_started)))
         with checkout as connection:
             acquired_at = perf_counter()
             acquired = True
@@ -282,12 +287,28 @@ def _lease_connection(
             )
 
 
+class _ReleasedConnection:
+    """What a released lease holds in place of the connection its next borrower may be using."""
+
+    closed = True
+
+    def __getattr__(self, name: str):
+        raise OperationalError("the connection is closed")
+
+    def __setattr__(self, name: str, value) -> None:
+        raise OperationalError("the connection is closed")
+
+
+_RELEASED = _ReleasedConnection()
+
+
 class _LeasedConnection:
     """A pool lease used like a `psycopg.connect()` connection.
 
     `with` commits on success and rolls back on error, then returns the
     connection to the pool; `close()` rolls back what was not committed and
-    returns it. Everything else is the leased connection itself."""
+    returns it. Everything else is the leased connection itself, until it is
+    returned: from then on the lease is a closed connection."""
 
     def __init__(self, database_url: str, workload: str):
         self._lease = pooled_connection(database_url, workload=workload)
@@ -304,6 +325,8 @@ class _LeasedConnection:
             setattr(self._connection, name, value)
 
     def __enter__(self):
+        if self._lease is None:
+            raise OperationalError("the connection is closed")
         return self
 
     def __exit__(self, exc_type, exc, traceback):
@@ -318,6 +341,8 @@ class _LeasedConnection:
 
     def _release(self, exc_type, exc, traceback) -> None:
         lease, self._lease = self._lease, None
+        # Before the pool can hand the connection on, not after.
+        self._connection = _RELEASED
         if lease is not None:
             lease.__exit__(exc_type, exc, traceback)
 

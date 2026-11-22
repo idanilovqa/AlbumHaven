@@ -182,6 +182,12 @@ class _DriverConnection:
     def rollback(self):
         pass
 
+    def execute(self, *statement):
+        if self.closed:
+            raise psycopg.OperationalError("the connection is closed")
+        self.executed = statement
+        return self
+
     def close(self):
         self.closed = True
 
@@ -420,3 +426,69 @@ def test_the_tag_edit_lock_holds_a_session_lease():
     repository = PostgresTagEditIntentRepository({"ALBUM_HAVEN_APP_DATABASE_URL": _URL})
 
     assert repository._lock_connect is postgres_connections.session_connection
+
+
+@pytest.mark.parametrize("released_by", ["close", "with"])
+@pytest.mark.parametrize(
+    "late_use",
+    [
+        lambda released: released.execute("select 1"),
+        lambda released: setattr(released, "autocommit", True),
+        lambda released: released.__enter__(),
+        lambda released: released.cursor,
+    ],
+    ids=["execute", "set-autocommit", "with-again", "read-attribute"],
+)
+def test_a_released_lease_cannot_drive_the_next_borrowers_connection(driver, released_by, late_use):
+    released = postgres_connections.leased_connection(_URL)
+    if released_by == "close":
+        released.close()
+    else:
+        with released:
+            pass
+
+    with postgres_connections.pooled_connection(_URL) as following:
+        with pytest.raises(psycopg.OperationalError, match="the connection is closed"):
+            late_use(released)
+        assert following.autocommit is False
+        assert not hasattr(following, "executed")
+
+
+def test_a_released_lease_reports_closed_and_closes_again_quietly(driver):
+    released = postgres_connections.leased_connection(_URL)
+    assert released.closed is False
+    with released:
+        released.close()
+
+    released.close()
+
+    assert released.closed is True
+
+
+def test_a_checkout_spends_one_timeout_on_connecting_and_leasing_together(driver, monkeypatch):
+    waits = []
+    lease_from_pool = postgres_connections.ConnectionPool.connection
+
+    def record_wait(pool, timeout=None):
+        waits.append(timeout)
+        return lease_from_pool(pool, timeout=timeout)
+
+    monkeypatch.setattr(postgres_connections.ConnectionPool, "connection", record_wait)
+    driver.delay = 1.0
+
+    _checkout(3.0)
+
+    assert waits[-1] <= 2.1, "connecting took about 1 s of the 3 s"
+
+
+def test_a_cover_runs_shared_connection_never_leases_again_after_the_run(driver):
+    from music_app.services.scan_cache_persistence import _SharedConnection
+
+    leased = []
+    shared = _SharedConnection(_URL, lambda: leased.append(True) or postgres_connections.leased_connection(_URL))
+    shared.close()
+
+    with pytest.raises(RuntimeError, match="closed"):
+        with shared.transaction():
+            pass
+    assert leased == []

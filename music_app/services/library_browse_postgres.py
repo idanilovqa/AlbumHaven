@@ -10842,6 +10842,18 @@ def _search_preview_sql(
              or (library.local_albums.corrected_album_artist is not null
                  and lower(btrim(coalesce(library.local_albums.corrected_album_artist, '')))
                  like lower(%(query_like)s) escape '')
+          -- And by the name the album's release credits, where that isn't the main one ("Shaman" on
+          -- Korpiklaani), written as 0275 indexes it: only the matching releases' albums are read.
+          union
+          select albums.library_id, albums.id
+          from integration.musicbrainz_releases releases
+          join library.local_album_musicbrainz_releases decision
+            on decision.release_mbid = releases.mbid and decision.state = 'release'
+          join library.local_albums albums
+            on albums.library_id = decision.library_id and albums.album_key = decision.album_key
+          where lower(btrim(coalesce(releases.artist_credit -> 0 ->> 'name', ''))) like lower(%(query_like)s) escape ''
+            and jsonb_array_length(releases.artist_credit) = 1
+            and releases.artist_credit -> 0 ->> 'name' is distinct from releases.artist_credit -> 0 ->> 'artist_name'
         ),
         credited_raw_artist_matches as materialized (
           select

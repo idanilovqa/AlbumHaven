@@ -10817,8 +10817,11 @@ def test_postgres_direct_search_scans_each_indexed_base_table_once_before_album_
     # Eight indexed base-table scans, plus the small MusicBrainz series table (Delivery 2, S6):
     # a series' name finds its albums through their release decisions. The same scans also
     # match applied MusicBrainz corrections (S4): album title and album artist, and track title
-    # and track artist, four predicates more, no extra scan.
-    assert sql.count("like lower(%(query_like)s)") == 13
+    # and track artist, four predicates more, no extra scan. One more indexed scan is of the few
+    # releases credited under another name than the artist's main one (0275), never of the albums.
+    assert sql.count("like lower(%(query_like)s)") == 14
+    assert sql.count("from library.local_albums where") == sql.count("from library.local_albums where lower(btrim(coalesce(")
+    assert sql.count("from integration.musicbrainz_releases releases") == 1
     assert sql.count("from library.local_tracks where") == 1
     assert "where lower(btrim(integration.musicbrainz_series.name)) like lower(%(query_like)s)" in sql
     assert "album_title_matches as materialized (" in sql
